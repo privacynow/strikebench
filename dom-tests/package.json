@@ -1,0 +1,13 @@
+{
+  "name": "options-lab-dom-tests",
+  "version": "1.0.0",
+  "description": "Playwright DOM tests driving the Options Lab jar end-to-end",
+  "scripts": {
+    "test": "node --test dom.test.js"
+  },
+  "type": "commonjs",
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  },
+  "private": true
+}

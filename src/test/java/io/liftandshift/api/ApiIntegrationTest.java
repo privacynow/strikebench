@@ -1,0 +1,599 @@
+package io.liftandshift.api;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import io.javalin.Javalin;
+import io.liftandshift.config.AppConfig;
+import io.liftandshift.util.Json;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/** Full-stack tests: real Javalin on a random port, fixture data, temp SQLite. */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+class ApiIntegrationTest {
+
+    private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("America/New_York"));
+
+    private static ApiServer server;
+    private static Javalin app;
+    private static HttpClient http;
+    private static String base;
+    private static Path tmpDir;
+
+    @BeforeAll
+    static void startServer() throws IOException {
+        tmpDir = Files.createTempDirectory("strikebench-it");
+        AppConfig cfg = new AppConfig(Map.of(
+                "DB_PATH", tmpDir.resolve("it.db").toString(),
+                "FIXTURES_ONLY", "true"));
+        server = ApiServer.create(cfg, CLOCK);
+        app = server.start(0);
+        base = "http://localhost:" + app.port();
+        http = HttpClient.newHttpClient();
+    }
+
+    @AfterAll
+    static void stopServer() {
+        if (server != null) server.stop();
+    }
+
+    private static HttpResponse<String> get(String path) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(base + path)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> post(String path, String body) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(base + path))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> put(String path, String body) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(base + path))
+                .header("Content-Type", "application/json")
+                .PUT(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> delete(String path) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(base + path)).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
+    @Order(1)
+    void statusIs200WithNoKeys() throws Exception {
+        HttpResponse<String> res = get("/api/status");
+        assertThat(res.statusCode()).isEqualTo(200);
+        JsonNode json = Json.parse(res.body());
+        assertThat(json.get("ok").asBoolean()).isTrue();
+        assertThat(json.get("domains").has("QUOTES")).isTrue();
+        assertThat(json.get("fixturesOnly").asBoolean()).isTrue();
+    }
+
+    @Test
+    @Order(2)
+    void configExposesFeesAndDisclaimer() throws Exception {
+        JsonNode json = Json.parse(get("/api/config").body());
+        assertThat(json.get("feePerContractCents").asLong()).isEqualTo(65);
+        assertThat(json.get("disclaimer").asText()).containsIgnoringCase("not financial advice");
+    }
+
+    @Test
+    @Order(3)
+    void accountStartsAt100k() throws Exception {
+        JsonNode json = Json.parse(get("/api/account").body());
+        assertThat(json.at("/account/cashCents").asLong()).isEqualTo(10_000_000L);
+        assertThat(json.at("/account/buyingPowerCents").asLong()).isEqualTo(10_000_000L);
+        assertThat(json.at("/ledger/0/type").asText()).isEqualTo("DEPOSIT");
+    }
+
+    @Test
+    @Order(4)
+    void researchFlowAcrossTickers() throws Exception {
+        JsonNode aapl = Json.parse(get("/api/research/AAPL").body());
+        assertThat(aapl.at("/quote/last").decimalValue()).isEqualByComparingTo("255.30");
+        assertThat(aapl.get("optionable").asBoolean()).isTrue();
+        assertThat(aapl.get("ivAtm").asDouble()).isBetween(0.05, 2.0);
+        assertThat(aapl.get("hv30").asDouble()).isGreaterThan(0.01);
+        assertThat(aapl.get("expirations").size()).isEqualTo(8);
+        assertThat(aapl.get("benchmarks").size()).isEqualTo(2);
+
+        // Ticker change: research another symbol immediately after
+        JsonNode spy = Json.parse(get("/api/research/SPY").body());
+        assertThat(spy.at("/quote/symbol").asText()).isEqualTo("SPY");
+
+        String exp = aapl.get("expirations").get(0).asText();
+        JsonNode chain = Json.parse(get("/api/research/AAPL/chain?expiration=" + exp).body());
+        assertThat(chain.get("calls").size()).isEqualTo(21);
+
+        JsonNode vtsax = Json.parse(get("/api/research/VTSAX").body());
+        assertThat(vtsax.get("optionable").asBoolean()).isFalse();
+        assertThat(vtsax.get("expirations").size()).isZero();
+
+        assertThat(get("/api/research/NOPE").statusCode()).isEqualTo(404);
+    }
+
+    @Test
+    @Order(5)
+    void recommendReturnsCandidatesAndRejectsNaked() throws Exception {
+        HttpResponse<String> res = post("/api/recommend",
+                "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"conservative\"}");
+        assertThat(res.statusCode()).isEqualTo(200);
+        JsonNode json = Json.parse(res.body());
+        assertThat(json.get("candidates").size()).isGreaterThan(0);
+        assertThat(json.get("disclaimer").asText()).containsIgnoringCase("educational");
+        JsonNode first = json.get("candidates").get(0);
+        assertThat(first.get("maxLossCents").asLong()).isPositive();
+        assertThat(first.get("beginnerExplanation").asText()).isNotBlank();
+    }
+
+    @Test
+    @Order(5)
+    void autoScoutReturnsPicksWithSignalsAndTargets() throws Exception {
+        HttpResponse<String> res = post("/api/recommend/auto", """
+                {"horizons":["week","month"],"targetProfitCents":25000,"riskMode":"balanced"}""");
+        assertThat(res.statusCode()).isEqualTo(200);
+        JsonNode json = Json.parse(res.body());
+        assertThat(json.get("picks").size()).isGreaterThan(0);
+        JsonNode pick = json.get("picks").get(0);
+        assertThat(pick.at("/signals/thesis").asText()).isIn("BULLISH", "BEARISH", "NEUTRAL", "VOLATILE");
+        assertThat(pick.at("/signals/rationale").size()).isGreaterThan(0);
+        assertThat(pick.get("horizons").size()).isEqualTo(2);
+        JsonNode candidates = pick.get("horizons").get(0).get("candidates");
+        if (candidates.size() > 0) {
+            assertThat(candidates.get(0).get("targetFit").asText()).isNotBlank();
+            assertThat(candidates.get(0).at("/candidate/maxLossCents").asLong()).isPositive();
+        }
+        assertThat(json.get("disclaimer").asText()).containsIgnoringCase("not predictions");
+        // Empty body works with defaults too
+        assertThat(post("/api/recommend/auto", "").statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    @Order(6)
+    void unsafeNakedCallIs422AndAccountUnchanged() throws Exception {
+        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
+        HttpResponse<String> res = post("/api/trades", """
+                {"symbol":"AAPL","strategy":"NAKED_CALL","qty":1,
+                 "legs":[{"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1}]}""".formatted(exp));
+        assertThat(res.statusCode()).isEqualTo(422);
+        JsonNode json = Json.parse(res.body());
+        assertThat(json.get("error").asText()).isEqualTo("trade_rejected");
+        assertThat(json.get("reasons").toString()).containsIgnoringCase("undefined risk");
+
+        JsonNode account = Json.parse(get("/api/account").body());
+        assertThat(account.at("/account/cashCents").asLong()).isEqualTo(10_000_000L);
+        assertThat(account.at("/account/hasTraded").asBoolean()).isFalse();
+    }
+
+    @Test
+    @Order(7)
+    void createUnwindLifecycle() throws Exception {
+        // Preview first: no mutation
+        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
+        String spreadBody = """
+                {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,"thesis":"bullish","horizon":"month","riskMode":"conservative",
+                 "legs":[{"action":"SELL","type":"PUT","strike":"250","expiration":"%s","ratio":1},
+                         {"action":"BUY","type":"PUT","strike":"245","expiration":"%s","ratio":1}]}""".formatted(exp, exp);
+        HttpResponse<String> previewRes = post("/api/trades/preview", spreadBody);
+        assertThat(previewRes.statusCode()).isEqualTo(200);
+        JsonNode preview = Json.parse(previewRes.body());
+        assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
+        assertThat(preview.at("/preview/entryNetPremiumCents").asLong()).isPositive(); // credit
+        JsonNode before = Json.parse(get("/api/account").body());
+        assertThat(before.at("/account/hasTraded").asBoolean()).isFalse();
+
+        // Create
+        HttpResponse<String> createRes = post("/api/trades", spreadBody);
+        assertThat(createRes.statusCode()).isEqualTo(201);
+        JsonNode created = Json.parse(createRes.body());
+        String tradeId = created.at("/trade/id").asText();
+        assertThat(created.at("/trade/status").asText()).isEqualTo("ACTIVE");
+        long maxLoss = created.at("/trade/maxLossCents").asLong();
+        long feesOpen = created.at("/trade/feesOpenCents").asLong();
+        assertThat(maxLoss).isPositive();
+
+        JsonNode after = Json.parse(get("/api/account").body());
+        assertThat(after.at("/account/buyingPowerCents").asLong())
+                .isEqualTo(10_000_000L - maxLoss - feesOpen); // BP reduced by exactly maxLoss+fees
+
+        // List / detail
+        JsonNode list = Json.parse(get("/api/trades?status=ACTIVE").body());
+        assertThat(list.get("total").asLong()).isEqualTo(1);
+        JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
+        assertThat(detail.at("/trade/id").asText()).isEqualTo(tradeId);
+        assertThat(detail.get("payoff").size()).isGreaterThan(30);
+        assertThat(detail.at("/current/popNow").asDouble()).isBetween(0.0, 1.0);
+
+        // Refresh writes a mark
+        assertThat(post("/api/trades/" + tradeId + "/refresh", "{}").statusCode()).isEqualTo(200);
+        JsonNode detail2 = Json.parse(get("/api/trades/" + tradeId).body());
+        assertThat(detail2.get("marksHistory").size()).isEqualTo(1);
+
+        // Unwind without confirm -> 400; with confirm -> realized P/L and reserve released
+        assertThat(post("/api/trades/" + tradeId + "/unwind", "{}").statusCode()).isEqualTo(400);
+        HttpResponse<String> unwindRes = post("/api/trades/" + tradeId + "/unwind", "{\"confirm\":true}");
+        assertThat(unwindRes.statusCode()).isEqualTo(200);
+        JsonNode unwound = Json.parse(unwindRes.body());
+        assertThat(unwound.at("/trade/status").asText()).isEqualTo("CLOSED");
+        assertThat(unwound.get("realizedPnlCents").isNumber()).isTrue();
+
+        JsonNode finalAccount = Json.parse(get("/api/account").body());
+        assertThat(finalAccount.at("/account/reservedCents").asLong()).isZero();
+    }
+
+    @Test
+    @Order(8)
+    void deleteRequiresConfirmAndVoidsTrade() throws Exception {
+        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
+        String body = """
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
+        String tradeId = Json.parse(post("/api/trades", body).body()).at("/trade/id").asText();
+
+        assertThat(delete("/api/trades/" + tradeId).statusCode()).isEqualTo(400); // no confirm
+        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+        JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
+        assertThat(detail.at("/trade/status").asText()).isEqualTo("DELETED");
+    }
+
+    @Test
+    @Order(9)
+    void settleRequiresExplicitConfirmAndBadDatesAre400() throws Exception {
+        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
+        String body = """
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
+        String tradeId = Json.parse(post("/api/trades", body).body()).at("/trade/id").asText();
+
+        // No/empty body or missing confirm flag must NOT settle (was auto-confirming)
+        assertThat(post("/api/trades/" + tradeId + "/settle", "").statusCode()).isEqualTo(400);
+        assertThat(post("/api/trades/" + tradeId + "/settle", "{}").statusCode()).isEqualTo(400);
+        // With confirm it advances to the domain check (legs not expired -> 422)
+        assertThat(post("/api/trades/" + tradeId + "/settle", "{\"confirm\":true}").statusCode()).isEqualTo(422);
+        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+
+        // Malformed dates are client errors, not 500s
+        assertThat(get("/api/research/AAPL/chain?expiration=garbage").statusCode()).isEqualTo(400);
+        HttpResponse<String> badBt = post("/api/backtest", "{\"symbol\":\"AAPL\",\"strategy\":\"LONG_CALL\",\"from\":\"nope\",\"to\":\"2026-06-30\"}");
+        assertThat(badBt.statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    @Order(8)
+    void portfolioGreeksAggregateActivePositions() throws Exception {
+        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
+        String body = """
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
+        String tradeId = Json.parse(post("/api/trades", body).body()).at("/trade/id").asText();
+
+        JsonNode greeks = Json.parse(get("/api/portfolio/greeks").body());
+        assertThat(greeks.get("deltaShares").asDouble()).isGreaterThan(0); // long call = positive delta
+        assertThat(greeks.get("thetaPerDay").asDouble()).isLessThan(0);    // long premium decays
+        assertThat(greeks.get("positions").size()).isGreaterThanOrEqualTo(1);
+        assertThat(greeks.get("note").asText()).containsIgnoringCase("model");
+
+        // detail carries the same greeks + per-leg rows
+        JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
+        assertThat(detail.at("/current/greeks/deltaShares").asDouble()).isGreaterThan(0);
+        assertThat(detail.at("/current/legGreeks").size()).isEqualTo(1);
+
+        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    @Order(9)
+    void auditTrailIsQueryable() throws Exception {
+        JsonNode json = Json.parse(get("/api/audit").body());
+        assertThat(json.get("entries").size()).isGreaterThan(0);
+    }
+
+    @Test
+    @Order(10)
+    void resetBlockedThenForced() throws Exception {
+        HttpResponse<String> blocked = post("/api/account/reset", "{\"startingCashCents\":5000000,\"confirm\":true}");
+        assertThat(blocked.statusCode()).isEqualTo(409); // has traded
+        HttpResponse<String> forced = post("/api/account/reset", "{\"startingCashCents\":5000000,\"confirm\":true,\"force\":true}");
+        assertThat(forced.statusCode()).isEqualTo(200);
+        assertThat(Json.parse(forced.body()).at("/account/cashCents").asLong()).isEqualTo(5_000_000L);
+    }
+
+    @Test
+    @Order(13)
+    void backtestRunsAndPersists() throws Exception {
+        HttpResponse<String> res = post("/api/backtest", """
+                {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","from":"2026-03-02","to":"2026-06-30"}""");
+        assertThat(res.statusCode()).isEqualTo(200);
+        JsonNode report = Json.parse(res.body());
+        assertThat(report.get("sampleSize").asInt()).isGreaterThan(0);
+        assertThat(report.get("daysCovered").asInt()).isGreaterThan(0);
+        assertThat(report.get("pricingMode").asText()).isEqualTo("MODELED_FROM_UNDERLYING");
+        assertThat(report.get("assumptions").has("slippagePctPerLeg")).isTrue();
+        assertThat(report.get("skipped").isArray()).isTrue();
+        assertThat(report.get("confidence").asText()).isNotBlank();
+        assertThat(report.get("disclaimer").asText()).containsIgnoringCase("educational");
+
+        JsonNode list = Json.parse(get("/api/backtests").body());
+        assertThat(list.get("backtests").size()).isGreaterThanOrEqualTo(1);
+        String id = report.get("id").asText();
+        JsonNode loaded = Json.parse(get("/api/backtests/" + id).body());
+        assertThat(loaded.get("id").asText()).isEqualTo(id);
+
+        // Undefined-risk strategy rejected with 400
+        HttpResponse<String> naked = post("/api/backtest", """
+                {"symbol":"AAPL","strategy":"NAKED_CALL","from":"2026-03-02","to":"2026-06-30"}""");
+        assertThat(naked.statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    @Order(14)
+    void brokerStatusReportsUnconfigured() throws Exception {
+        JsonNode json = Json.parse(get("/api/broker/status").body());
+        assertThat(json.get("configured").asBoolean()).isFalse();
+        assertThat(json.get("connected").asBoolean()).isFalse();
+        // And live-order endpoints refuse politely
+        assertThat(post("/api/broker/connect/start", "{}").statusCode()).isEqualTo(409);
+    }
+
+    @Test
+    @Order(15)
+    void malformedBodiesAreClientErrorsNever500() throws Exception {
+        for (String path : java.util.List.of("/api/trades", "/api/trades/preview", "/api/recommend", "/api/backtest", "/api/recommend/auto")) {
+            assertThat(post(path, "{").statusCode()).as(path + " invalid json").isEqualTo(400);
+            assertThat(post(path, "").statusCode()).as(path + " empty body").isIn(200, 400); // auto allows empty
+        }
+        assertThat(post("/api/trades", "{\"symbol\":\"AAPL\",\"qty\":\"abc\"}").statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    @Order(15)
+    void missingResourcesAre404NotButchered() throws Exception {
+        assertThat(get("/api/trades/tr_doesnotexist").statusCode()).isEqualTo(404);
+        assertThat(get("/api/backtests/bt_doesnotexist").statusCode()).isEqualTo(404);
+        assertThat(post("/api/trades/tr_doesnotexist/refresh", "{}").statusCode()).isEqualTo(404);
+        // handler-written 404 bodies survive (not clobbered by the generic mapper)
+        JsonNode research = Json.parse(get("/api/research/NOPE").body());
+        assertThat(research.get("error").asText()).isEqualTo("unknown_symbol");
+        // chains only exist for listed expirations — nothing fabricated
+        assertThat(get("/api/research/AAPL/chain?expiration=2026-07-09").statusCode()).isEqualTo(404);
+        // expired contracts cannot be opened
+        HttpResponse<String> past = post("/api/trades", """
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"2020-01-17","ratio":1}]}""");
+        assertThat(past.statusCode()).isEqualTo(422);
+        assertThat(past.body()).contains("expired");
+    }
+
+    @Test
+    @Order(16)
+    void debitDiagonalWithoutEntryPricesCreates() throws Exception {
+        JsonNode exps = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations");
+        String near = exps.get(2).asText();
+        String far = exps.get(6).asText();
+        String body = """
+                {"symbol":"AAPL","strategy":"DIAGONAL_CALL","qty":1,
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1},
+                         {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1}]}""".formatted(far, near);
+        JsonNode preview = Json.parse(post("/api/trades/preview", body).body());
+        assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
+        HttpResponse<String> created = post("/api/trades", body);
+        assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
+        JsonNode trade = Json.parse(created.body()).get("trade");
+        assertThat(trade.get("entryNetPremiumCents").asLong()).isNegative(); // debit
+        assertThat(trade.path("maxProfitCents").isMissingNode()).isTrue();   // null = omitted (model-dependent)
+        assertThat(delete("/api/trades/" + trade.get("id").asText() + "?confirm=true").statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    @Order(11)
+    void staticIndexServed() throws Exception {
+        HttpResponse<String> res = get("/");
+        assertThat(res.statusCode()).isEqualTo(200);
+        assertThat(res.body()).containsIgnoringCase("strikebench");
+    }
+
+    @Test
+    @Order(12)
+    void unknownApiPathIs404Json() throws Exception {
+        HttpResponse<String> res = get("/api/nonexistent");
+        assertThat(res.statusCode()).isEqualTo(404);
+        assertThat(Json.parse(res.body()).get("error").asText()).isEqualTo("not_found");
+    }
+    @Test
+    @Order(17)
+    void positionsAndCoveredCallLifecycleViaApi() throws Exception {
+        // Buy 100 AAPL at the fixture ask
+        long cashBefore = Json.parse(get("/api/account").body()).at("/account/cashCents").asLong();
+        HttpResponse<String> buy = post("/api/positions/buy", "{\"symbol\":\"AAPL\",\"shares\":100}");
+        assertThat(buy.statusCode()).as(buy.body()).isEqualTo(201);
+        JsonNode bought = Json.parse(buy.body());
+        assertThat(bought.at("/position/shares").asLong()).isEqualTo(100);
+        assertThat(bought.at("/position/freeShares").asLong()).isEqualTo(100);
+        long cost = bought.get("totalCents").asLong();
+        assertThat(Json.parse(get("/api/account").body()).at("/account/cashCents").asLong())
+                .isEqualTo(cashBefore - cost);
+
+        // EXIT-intent ideas read the real position and propose a covered call on the held shares
+        JsonNode rec = Json.parse(post("/api/recommend",
+                "{\"symbol\":\"AAPL\",\"intent\":\"exit\",\"riskMode\":\"balanced\"}").body());
+        assertThat(rec.get("intent").asText()).isEqualTo("EXIT");
+        JsonNode cc = null;
+        for (JsonNode c : rec.get("candidates")) if (c.get("strategy").asText().equals("COVERED_CALL")) cc = c;
+        assertThat(cc).as("covered call candidate present: " + rec.get("candidates")).isNotNull();
+        assertThat(cc.get("usesHeldShares").asBoolean()).isTrue();
+        assertThat(cc.get("maxLossCents").asLong()).isZero();
+        assertThat(cc.get("combinedMaxLossCents").asLong()).isPositive();
+        assertThat(cc.get("intentNote").asText()).contains("sell");
+
+        // Place it through the normal ticket pipeline with useHeldShares
+        StringBuilder legs = new StringBuilder("[");
+        for (JsonNode l : cc.get("legs")) {
+            if (legs.length() > 1) legs.append(',');
+            legs.append("{\"action\":\"").append(l.get("action").asText())
+                .append("\",\"type\":\"").append(l.get("type").asText())
+                .append("\",\"strike\":\"").append(l.get("strike").asText())
+                .append("\",\"expiration\":\"").append(l.get("expiration").asText())
+                .append("\",\"ratio\":1}");
+        }
+        legs.append(']');
+        String body = "{\"symbol\":\"AAPL\",\"strategy\":\"COVERED_CALL\",\"qty\":1,\"intent\":\"exit\","
+                + "\"useHeldShares\":true,\"legs\":" + legs + "}";
+        JsonNode preview = Json.parse(post("/api/trades/preview", body).body());
+        assertThat(preview.at("/preview/ok").asBoolean()).as(preview.toString()).isTrue();
+        assertThat(preview.at("/preview/reserveCents").asLong()).isZero();
+        assertThat(preview.at("/guardrails/level").asText()).isNotEqualTo("BLOCK");
+        HttpResponse<String> created = post("/api/trades", body);
+        assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
+        JsonNode trade = Json.parse(created.body()).get("trade");
+        assertThat(trade.get("sharesLocked").asLong()).isEqualTo(100);
+        assertThat(trade.get("intent").asText()).isEqualTo("EXIT");
+        String tradeId = trade.get("id").asText();
+
+        // Locked shares cannot be sold; the filterable list finds the trade by intent
+        HttpResponse<String> sellLocked = post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}");
+        assertThat(sellLocked.statusCode()).isEqualTo(422);
+        assertThat(sellLocked.body()).contains("locked");
+        JsonNode byIntent = Json.parse(get("/api/trades?symbol=AAPL&intent=EXIT&status=ACTIVE").body());
+        assertThat(byIntent.get("total").asLong()).isEqualTo(1);
+        assertThat(Json.parse(get("/api/trades?symbol=AAPL&intent=INCOME&status=ACTIVE").body()).get("total").asLong()).isZero();
+
+        // Void the call, sell the shares back — clean slate for later tests
+        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+        HttpResponse<String> sold = post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}");
+        assertThat(sold.statusCode()).as(sold.body()).isEqualTo(200);
+        assertThat(Json.parse(sold.body()).get("realizedPnlCents").isNumber()).isTrue();
+        assertThat(Json.parse(get("/api/positions").body()).get("positions")).isEmpty();
+    }
+
+    @Test
+    @Order(18)
+    void stockOrderValidationAndUnknownSymbols() throws Exception {
+        assertThat(post("/api/positions/buy", "{\"symbol\":\"AAPL\"}").statusCode()).isEqualTo(400);
+        assertThat(post("/api/positions/buy", "{\"symbol\":\"AAPL\",\"shares\":-5}").statusCode()).isEqualTo(400);
+        HttpResponse<String> unknown = post("/api/positions/buy", "{\"symbol\":\"ZZZZ\",\"shares\":10}");
+        assertThat(unknown.statusCode()).isEqualTo(422);
+        assertThat(post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":10}").statusCode()).isEqualTo(422);
+        // Filters flow through recommend: an impossible POP floor rejects everything, loudly
+        JsonNode rec = Json.parse(post("/api/recommend",
+                "{\"symbol\":\"AAPL\",\"intent\":\"income\",\"filters\":{\"minPop\":0.99}}").body());
+        assertThat(rec.get("candidates")).isEmpty();
+        assertThat(rec.get("rejected").toString()).contains("below your minimum");
+        // Unknown intent is a 400, not a 500
+        assertThat(post("/api/recommend", "{\"symbol\":\"AAPL\",\"intent\":\"yolo\"}").statusCode()).isEqualTo(400);
+    }
+    @Test
+    @Order(19)
+    void acquireIgnoresExistingSharesAndNullBodiesAre400s() throws Exception {
+        // Owning shares must not scale NEW purchases: acquire defaults to one 100-share lot
+        assertThat(post("/api/positions/buy", "{\"symbol\":\"AAPL\",\"shares\":100}").statusCode()).isEqualTo(201);
+        JsonNode rec = Json.parse(post("/api/recommend",
+                "{\"symbol\":\"AAPL\",\"intent\":\"acquire\",\"riskMode\":\"balanced\"}").body());
+        for (JsonNode c : rec.get("candidates")) {
+            if (c.get("strategy").asText().equals("CASH_SECURED_PUT")) {
+                assertThat(c.get("qty").asInt()).isEqualTo(1);
+            }
+        }
+        assertThat(post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}").statusCode()).isEqualTo(200);
+
+        // The literal JSON document "null" is client error territory, never a 500
+        assertThat(post("/api/positions/buy", "null").statusCode()).isEqualTo(400);
+        assertThat(post("/api/recommend", "null").statusCode()).isEqualTo(400);
+        assertThat(post("/api/recommend/auto", "null").statusCode()).isEqualTo(200); // defaults, like empty
+        assertThat(post("/api/trades/preview", "null").statusCode()).isEqualTo(400);
+
+        // Covered call without the shares: the reason names the shortfall, not "add a wing"
+        JsonNode exps = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations");
+        String exp = exps.get(2).asText();
+        HttpResponse<String> noShares = post("/api/trades",
+                "{\"symbol\":\"AAPL\",\"strategy\":\"COVERED_CALL\",\"useHeldShares\":true,"
+                + "\"legs\":[{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"265\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}");
+        assertThat(noShares.statusCode()).isEqualTo(422);
+        assertThat(noShares.body()).contains("free shares");
+    }
+
+    @Test
+    @Order(20)
+    void healthBeaconAndBrandConfig() throws Exception {
+        JsonNode health = Json.parse(get("/api/health").body());
+        assertThat(health.get("ok").asBoolean()).isTrue();
+        assertThat(health.get("jarChangedSinceBoot").asBoolean()).isFalse();
+        assertThat(health.get("startedAt").asText()).isNotBlank();
+
+        JsonNode cfg = Json.parse(get("/api/config").body());
+        assertThat(cfg.at("/brand/name").asText()).isEqualTo("StrikeBench");
+        assertThat(cfg.at("/brand/tagline").asText()).isNotBlank();
+
+        // Brand is plain config — a rename never needs a rebuild
+        io.liftandshift.config.AppConfig custom = new io.liftandshift.config.AppConfig(
+                java.util.Map.of("BRAND_NAME", "Strike Bench", "BRAND_TAGLINE", "test tagline"));
+        assertThat(custom.brandName()).isEqualTo("Strike Bench");
+        assertThat(custom.brandTagline()).isEqualTo("test tagline");
+    }
+
+    @Test
+    @Order(21)
+    void universeSelectionQuotesBatchAndHistoryRanges() throws Exception {
+        // Default in fixture mode is the DEMO sector
+        JsonNode u = Json.parse(get("/api/universe").body());
+        assertThat(u.at("/active/symbols").toString()).contains("AAPL").contains("SPY");
+        assertThat(u.get("sectors").size()).isGreaterThanOrEqualTo(10);
+
+        // Sector selection persists in settings and drives the batch-quotes default
+        HttpResponse<String> put = put("/api/universe", "{\"sector\":\"DEFENSE\"}");
+        assertThat(put.statusCode()).isEqualTo(200);
+        assertThat(Json.parse(put.body()).at("/active/sectorKey").asText()).isEqualTo("DEFENSE");
+        assertThat(Json.parse(get("/api/universe").body()).at("/active/label").asText()).contains("Defense");
+        assertThat(put("/api/universe", "{\"sector\":\"NOPE\"}").statusCode()).isEqualTo(400);
+
+        // Custom list wins over the sector; junk symbols are 400s
+        assertThat(put("/api/universe", "{\"symbols\":[\"aapl\",\"tsla\",\"AAPL\"]}").statusCode()).isEqualTo(200);
+        JsonNode active = Json.parse(get("/api/universe").body()).get("active");
+        assertThat(active.get("source").asText()).isEqualTo("custom");
+        assertThat(active.get("symbols").size()).isEqualTo(2); // deduped, uppercased
+        assertThat(put("/api/universe", "{\"symbols\":[\"bad symbol!\"]}").statusCode()).isEqualTo(400);
+
+        // Batch quotes: light rows for whatever has data, silently skipping the unknown
+        JsonNode quotes = Json.parse(get("/api/quotes?symbols=AAPL,TSLA,ZZZZ").body()).get("quotes");
+        assertThat(quotes.size()).isEqualTo(2);
+        assertThat(quotes.get(0).get("last").asText()).isNotBlank();
+        // No symbols param -> the active universe
+        assertThat(Json.parse(get("/api/quotes").body()).get("quotes").size()).isEqualTo(2);
+
+        // The scout's default scan list is the selected universe
+        JsonNode scan = Json.parse(post("/api/recommend/auto", "{}").body());
+        for (JsonNode pick : scan.get("picks")) {
+            assertThat(pick.get("symbol").asText()).isIn("AAPL", "TSLA");
+        }
+
+        // History range pills: ytd/5y/max normalize and answer with whatever data exists
+        for (String range : new String[]{"ytd", "5y", "max"}) {
+            JsonNode h = Json.parse(get("/api/research/AAPL/history?range=" + range).body());
+            assertThat(h.get("range").asText()).isEqualTo(range);
+            assertThat(h.get("candles").size()).isGreaterThan(50);
+        }
+        assertThat(Json.parse(get("/api/research/AAPL/history?range=bogus").body()).get("range").asText()).isEqualTo("1y");
+
+        // Restore the demo universe for other tests
+        assertThat(put("/api/universe", "{\"sector\":\"DEMO\"}").statusCode()).isEqualTo(200);
+    }
+
+}

@@ -1,0 +1,12 @@
+target/
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+optionslab.properties
+.idea/
+*.iml
+.vscode/
+node_modules/
+nohup.out
