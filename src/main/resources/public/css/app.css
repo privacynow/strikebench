@@ -854,3 +854,83 @@ body.lvl-expert .page-sub { display: none; }
   #app[data-route="home"] .qa-hint { display: none; }
   #app[data-route="home"] .qa-tile { padding: 10px 12px; }
 }
+
+/* ---------- Candlestick chart (D3-scaled, vendored — no CDN) ---------- */
+.candles .candle-wick { stroke: var(--text-faint); stroke-width: 1; }
+.candles .candle-up { fill: var(--gain); }
+.candles .candle-down { fill: var(--loss); }
+.candles .grid { stroke: var(--border); stroke-width: 1; }
+.candles .tick { fill: var(--text-faint); font-size: 11px; }
+.tabs .tabs-aside { margin-left: auto; align-self: center; font-size: 12.5px; padding: 6px 4px; }
+
+/* ---------- Welcome: the whole pitch on ONE desktop screen ---------- */
+.welcome-top { display: grid; gap: 20px; grid-template-columns: 1fr; align-items: start; }
+.welcome-meta { display: grid; gap: 20px; grid-template-columns: 1fr; }
+.caps-list { display: grid; gap: 10px; }
+.caps-item { display: flex; gap: 10px; align-items: flex-start; }
+.caps-item b { display: block; font-size: 13.5px; }
+.caps-d { font-size: 12.5px; line-height: 1.45; display: block; }
+.welcome-footer { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.welcome-footer .cta-banner { flex: 1 1 420px; margin: 0; }
+@media (min-width: 1100px) {
+  .welcome-top { grid-template-columns: 1.05fr 0.95fr; }
+  #app[data-route="welcome"] .hero { padding: 10px 18px 12px; margin: 0; }
+  #app[data-route="welcome"] .hero-title { font-size: clamp(26px, 2.4vw, 32px); margin: 8px 0 0; }
+  #app[data-route="welcome"] .hero-sub { margin: 10px 0 14px; font-size: 14.5px; }
+  #app[data-route="welcome"] .hero-ctas { margin-bottom: 10px; }
+  #app[data-route="welcome"] .trust-row { margin: 4px 0 0; }
+  #app[data-route="welcome"] .welcome-section { margin: 12px 0 0; }
+  #app[data-route="welcome"] .welcome-h2 { font-size: 16px; margin: 2px 0 8px; }
+  #app[data-route="welcome"] .eyebrow { font-size: 10.5px; }
+  /* Level doors: horizontal, one line of blurb */
+  #app[data-route="welcome"] .welcome-card { padding: 10px 14px; margin-bottom: 0;
+    display: grid; grid-template-columns: 42px 1fr auto; gap: 4px 12px; align-items: center; }
+  #app[data-route="welcome"] .welcome-card h3 { margin: 0; grid-column: 2; }
+  #app[data-route="welcome"] .welcome-card p { font-size: 12.5px; margin: 0; grid-column: 2; grid-row: 2;
+    display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  #app[data-route="welcome"] .welcome-card .btn { grid-column: 3; grid-row: 1 / span 2; }
+  #app[data-route="welcome"] .welcome-card .icon-tile { grid-row: 1 / span 2; }
+  .welcome-bottom { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 16px; align-items: start; }
+  .welcome-bottom #welcome-levels { grid-template-columns: 1fr; gap: 8px; }
+  .welcome-meta { grid-template-columns: 1fr; align-items: start; }
+  /* Toolkit: titles with hover detail — no text litter on the fold */
+  #app[data-route="welcome"] .caps-list { grid-template-columns: 1fr 1fr; gap: 8px; }
+  #app[data-route="welcome"] .caps-item { align-items: center; }
+  #app[data-route="welcome"] .caps-d { display: none; }
+  .stepper-compact { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+  .stepper-compact .step-block { padding: 0; display: flex; align-items: center; gap: 8px; }
+  .stepper-compact .step-block::after { display: none; }
+  .stepper-compact .step-num { font-size: 16px; line-height: 1; min-width: 24px; }
+  .stepper-compact .step-text span { display: none; } /* the verb carries it; detail on the doing */
+  .stepper-compact .step-text b { font-size: 13px; }
+  .welcome-meta .welcome-section { margin: 6px 0 0; }
+  #app[data-route="welcome"] .caps-item .icon-tile-sm { width: 28px; height: 28px; }
+  #app[data-route="welcome"] .welcome-bottom { gap: 12px; }
+  /* The live candidate is proof, not reading material — clamp it and fade the tail */
+  .welcome-live-col .showcase-frame { max-height: 250px; overflow: hidden; position: relative;
+    -webkit-mask-image: linear-gradient(to bottom, #000 75%, transparent 100%);
+            mask-image: linear-gradient(to bottom, #000 75%, transparent 100%); }
+  #app[data-route="welcome"] .showcase-caption { margin: 4px 0 0; font-size: 12px;
+    display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  /* Meta strip: content over chrome — the h2s carry it, eyebrows rest */
+  .welcome-meta .welcome-section { margin: 8px 0 0; }
+  .welcome-meta .eyebrow { display: none; }
+  .welcome-meta .welcome-h2 { font-size: 15px; margin: 0 0 8px; }
+  #app[data-route="welcome"] .welcome-footer { margin-top: 8px; }
+  #app[data-route="welcome"] .cta-banner { padding: 7px 14px; }
+  #app[data-route="welcome"] .cta-banner p { display: none; }
+  #app[data-route="welcome"] .welcome-top { gap: 16px; }
+  #app[data-route="welcome"].app { padding-top: 10px; padding-bottom: 16px; }
+}
+@media (min-width: 1100px) and (max-width: 1365px) {
+  #app[data-route="welcome"] .hero-title { font-size: 24px; margin-top: 4px; }
+  #app[data-route="welcome"] .hero { padding: 6px 16px 8px; }
+  #app[data-route="welcome"] .hero-sub { font-size: 13.5px; margin: 8px 0 10px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .welcome-live-col .showcase-frame { max-height: 200px; }
+  #app[data-route="welcome"] .btn-lg { min-height: 38px; padding: 0 20px; }
+  #app[data-route="welcome"] .welcome-h2 { font-size: 14px; margin: 0 0 6px; }
+  #app[data-route="welcome"] .welcome-card { padding: 8px 12px; }
+  #app[data-route="welcome"] .caps-list { gap: 6px; }
+  #app[data-route="welcome"].app { padding-top: 8px; padding-bottom: 12px; }
+}

@@ -177,6 +177,24 @@
       lose: 'A rally; capped at the net debit.',
       watch: 'Same two-clock complexity as the call diagonal.'
     },
+    LONG_STRADDLE: {
+      story: 'A bet on turbulence itself: you own both directions, so a big move either way pays — a quiet market is the enemy.',
+      how: ['Buy the at-the-money call AND the at-the-money put, same strike, same expiration.',
+            'A large move in either direction makes one side worth more than both cost.',
+            'Worst case: the stock pins the strike and both premiums decay to nothing.'],
+      win: 'The stock moves far from the strike — in either direction — before expiration.',
+      lose: 'The stock sits still: both options bleed value every day (double theta).',
+      watch: 'Straddles are priciest right before known events (earnings) — the move you expect may already be paid for.'
+    },
+    LONG_STRANGLE: {
+      story: 'The straddle\u2019s cheaper cousin: both directions again, but with out-of-the-money strikes — less cost, needs a bigger move.',
+      how: ['Buy an out-of-the-money call and an out-of-the-money put, same expiration.',
+            'Costs less than a straddle because both options start worthless.',
+            'The stock must clear one of the strikes by more than the total premium to profit.'],
+      win: 'A violent move beyond either strike before time runs out.',
+      lose: 'The stock stays between the strikes: both premiums expire worthless.',
+      watch: 'The wider the strikes, the cheaper the ticket — and the rarer the move that pays it off.'
+    },
     COVERED_CALL: {
       story: 'Own the shares, rent out the upside: steady income in exchange for a capped rally.',
       how: ['Own (or buy) 100 shares.', 'Sell one call above the current price and pocket the premium.',

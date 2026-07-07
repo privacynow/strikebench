@@ -345,7 +345,9 @@
         if (selected !== (data.range || selected)) return; // superseded
         host.innerHTML = '';
         summary.innerHTML = '';
-        var series = data.series || [];
+        var series = data.series || (data.candles || []).map(function (c) {
+          return { date: String(c.date), value: parseFloat(c.close) };
+        });
         if (series.length < 2) {
           host.appendChild(el('p', { class: 'muted' }, 'Not enough data for this window.'));
           return;
@@ -363,7 +365,9 @@
             + ' (' + (chgPct >= 0 ? '+' : '') + chgPct.toFixed(1) + '%)')));
         summary.appendChild(el('span', { class: 'chip' }, 'High ', el('b', {}, fmtV(hi)), ' · Low ', el('b', {}, fmtV(lo))));
         if (data.badge) summary.appendChild(data.badge);
-        host.appendChild(lineChart(series, { money: opts.money, baseline: first }));
+        host.appendChild(data.candles
+          ? candleChart(data.candles, { baseline: first })
+          : lineChart(series, { money: opts.money, baseline: first }));
         if (data.note) host.appendChild(data.note);
       } catch (e) {
         host.innerHTML = '';
@@ -372,6 +376,90 @@
     }
     load();
     return node;
+  }
+
+  /**
+   * OHLC candlestick chart (D3 scales/ticks; our own crosshair). Falls back to the plain
+   * close line when the vendored D3 failed to load or the window is too thin — graceful,
+   * never blank. Windows beyond ~160 bars aggregate to weekly candles for readability.
+   */
+  function candleChart(candles, opts) {
+    opts = opts || {};
+    var closesOnly = (candles || []).map(function (c) { return { date: String(c.date), value: parseFloat(c.close) }; });
+    if (!window.d3 || !candles || candles.length < 2) {
+      return lineChart(closesOnly, { baseline: closesOnly.length ? closesOnly[0].value : undefined });
+    }
+    var bars = candles.map(function (c) {
+      return { date: String(c.date), o: parseFloat(c.open), h: parseFloat(c.high),
+               l: parseFloat(c.low), c: parseFloat(c.close), v: Number(c.volume) || 0 };
+    });
+    if (bars.length > 160) {
+      var byWeek = [], cur = null, curKey = null;
+      bars.forEach(function (b) {
+        var dt = new Date(b.date + 'T12:00:00');
+        var key = dt.getUTCFullYear() + '-' + Math.floor((dt.getTime() / 86400000 + 4) / 7);
+        if (key !== curKey) {
+          curKey = key;
+          cur = { date: b.date, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v };
+          byWeek.push(cur);
+        } else {
+          cur.h = Math.max(cur.h, b.h); cur.l = Math.min(cur.l, b.l);
+          cur.c = b.c; cur.v += b.v; cur.date = b.date; // bar dated at its last session
+        }
+      });
+      bars = byWeek;
+    }
+    var W = 680, H = 300, padL = 62, padR = 14, padT = 16, padB = 32;
+    var x = d3.scaleBand().domain(bars.map(function (b) { return b.date; }))
+      .range([padL, W - padR]).paddingInner(0.35).paddingOuter(0.2);
+    var y = d3.scaleLinear()
+      .domain([d3.min(bars, function (b) { return b.l; }), d3.max(bars, function (b) { return b.h; })])
+      .nice().range([H - padB, padT]);
+    var svg = d3.create('svg').attr('viewBox', '0 0 ' + W + ' ' + H).attr('class', 'chart candles');
+
+    y.ticks(5).forEach(function (t) {
+      svg.append('line').attr('class', 'grid')
+        .attr('x1', padL).attr('x2', W - padR).attr('y1', y(t)).attr('y2', y(t));
+      svg.append('text').attr('class', 'tick').attr('x', padL - 8).attr('y', y(t) + 4)
+        .attr('text-anchor', 'end').text(fmtNum(t, t >= 1000 ? 0 : 2));
+    });
+    var labelEvery = Math.max(1, Math.round(bars.length / 5));
+    bars.forEach(function (b, i) {
+      if (i % labelEvery !== 0 && i !== bars.length - 1) return;
+      svg.append('text').attr('class', 'tick')
+        .attr('x', x(b.date) + x.bandwidth() / 2).attr('y', H - 10)
+        .attr('text-anchor', 'middle').text(b.date);
+    });
+    bars.forEach(function (b) {
+      var cx = x(b.date) + x.bandwidth() / 2;
+      var up = b.c >= b.o;
+      svg.append('line').attr('class', 'candle-wick')
+        .attr('x1', cx).attr('x2', cx).attr('y1', y(b.h)).attr('y2', y(b.l));
+      svg.append('rect').attr('class', up ? 'candle candle-up' : 'candle candle-down')
+        .attr('x', x(b.date)).attr('width', Math.max(1, x.bandwidth()))
+        .attr('y', y(Math.max(b.o, b.c)))
+        .attr('height', Math.max(1, Math.abs(y(b.o) - y(b.c))));
+    });
+
+    var first = bars[0].c;
+    function probe(frac) {
+      var px = padL + frac * (W - padL - padR);
+      var i = Math.max(0, Math.min(bars.length - 1,
+        Math.round((px - padL - x.bandwidth() / 2) / x.step())));
+      var b = bars[i];
+      var pct = first ? (b.c - first) / Math.abs(first) * 100 : 0;
+      return {
+        x: x(b.date) + x.bandwidth() / 2, y: y(b.c),
+        lines: [
+          b.date,
+          'O ' + fmtNum(b.o, 2) + '  H ' + fmtNum(b.h, 2),
+          'L ' + fmtNum(b.l, 2) + '  C ' + fmtNum(b.c, 2),
+          { text: (pct >= 0 ? '+' : '') + pct.toFixed(1) + '% in window', cls: pct >= 0 ? 'gain' : 'loss' },
+          b.v ? 'Vol ' + (b.v >= 1e6 ? (b.v / 1e6).toFixed(1) + 'M' : b.v >= 1e3 ? Math.round(b.v / 1e3) + 'k' : b.v) : null
+        ].filter(Boolean)
+      };
+    }
+    return interactiveChart(svg.node(), { W: W, H: H, padL: padL, padR: padR, padT: padT, padB: padB }, probe);
   }
 
   function payoffChart(points, opts) {
@@ -597,6 +685,7 @@
     confirmModal: confirmModal,
     payoffChart: payoffChart,
     lineChart: lineChart,
+    candleChart: candleChart,
     expandable: expandable,
     term: term
   };

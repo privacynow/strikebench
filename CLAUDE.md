@@ -523,6 +523,50 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     test's custom-flow segment now drives the expert terminal end-to-end to a placed paper trade.
   - Suites: 222 JUnit + 21 fixture + 4 seeded + 8 live + 3 audit — ALL GREEN. Screenshots
     shots/v3-{home-desktop,wizard-goal,wizard-shape,wizard-leg1,catalog,terminal}.png.
+- D3 CANDLESTICKS SHIPPED (same session, "finish the work"): d3.v7.9.0.min.js VENDORED at
+  public/vendor/d3.min.js (ISC, no CDN — jar-served like everything else; script tag before
+  learn.js). UI.candleChart(candles, opts): real OHLC bars (d3.scaleBand/scaleLinear/.nice
+  ticks; green up / red down + wicks; >160 bars aggregate to WEEKLY candles), standard
+  crosshair tooltip (date, O/H/L/C, ±% in window, volume), GRACEFUL FALLBACK to the close
+  line when window.d3 is absent or <2 candles — never blank. UI.rangeChart gained a candles
+  mode (fetch returns {candles} instead of {series}; summary chips computed from closes);
+  research /history now feeds raw candles. CSS .candles .candle-up/.candle-down/.candle-wick.
+  Test pins: >=20 rect.candle + .candle-up present + OHLC tooltip text (dom.test 'interactive
+  charts'). ALL SUITES GREEN after: 222 JUnit + 21 fixture + 4 seeded + 8 live + 3 audit.
+  Screenshot shots/v3-candles.png. Payoff/equity charts stay hand-rolled SVG (already
+  interactive); D3 is available app-wide for future visuals.
+- OPENING-SCREEN FOLD + FULL STRATEGY OFFERING + PIPELINE STREAMLINE (2026-07-07, user
+  clarified "home" meant the HERO/OPENING screen; also: offer all strategy types product-wide,
+  streamline discovery->construction):
+  - WELCOME FITS ONE DESKTOP SCREEN (measured content-bottom 835/900 @1440, 799/800 @1280;
+    mobile keeps the stacked scroll): .welcome-top grid = pitch LEFT (eyebrow/H1/sub/CTAs/trust)
+    | LIVE engine proof RIGHT (showcase clamped ~250px w/ bottom fade mask — proof, not reading
+    material); .welcome-bottom grid = the two altitude door cards (horizontal: icon|title+
+    one-line blurb|button) LEFT | toolkit (2x2 icon+title chips, blurbs dropped at desktop) +
+    4-step stepper (2x2, verb-only) RIGHT; slim footer row = sector cta-banner + Skip. A
+    1100-1365px laptop band tightens hero/showcase further (btn-lg 38px there — the audit's
+    sanctioned heights are [38,30,46]). All ids/copy the boot test pins survive (#welcome-live,
+    #welcome-levels, #welcome-skip, "How do you want to start?", #how-it-works anchor).
+  - LONG_STRADDLE + LONG_STRANGLE ARE FIRST-CLASS FAMILIES (StrategyFamily riskRank 2, VOLATILE
+    thesis, DIRECTIONAL; StrategyBuilder.straddle(ATM call+put)/strangle(~30d both sides,
+    degenerate-chain guard)); the engine iterates values() so a volatile view now OFFERS them
+    automatically (pinned: volatileThesisOffersStraddlesAndStrangles — 2 legs, debit, maxLoss=
+    debit, uncapped, 2 breakevens); backtest menu carries them under Trade a view (expert;
+    beginner list unchanged); builder templates switched from CUSTOM to the real families so
+    STRATEGY_GUIDE attaches; learn.js gained LONG_STRADDLE/LONG_STRANGLE guides.
+  - PIPELINE STREAMLINE: every candidate card now has "Open in builder" (maps candidate legs
+    incl. stock:true -> builderForm, step 4 = straight to Where-you-stand) — discovery feeds
+    construction/analysis; Ideas tab row gained "All strategies →" (#all-strategies-link, sets
+    builderForm goal:'BROWSE' step 2 -> the shape-card catalog). Flow is now: Ideas (discover)
+    -> Builder (construct/analyze per-leg) -> Ticket review (execute) -> Backtest (verify).
+  - Home dashboard re-verified with a GROWN account (200 shares + covered call + 2 spreads):
+    content fits 1440x900 AND 1280x800 with real trade rows (shots/v3-home-grown.png).
+  - Pinned after the fact (interrupted mid-pass, then finished): dom.test 'pipeline streamline'
+    — expert candidate "Open in builder" loads its legs into the terminal and prices them;
+    beginner "All strategies" link from Ideas lands on the shape-card catalog (>=24 cards).
+    Dead-code sweep of all 5 JS files: zero unused functions/constants.
+  - Suites: 223 JUnit + 22 fixture + 4 seeded + 8 live + 3 audit — ALL GREEN. Screenshots
+    shots/v3-welcome-fold.png, v3-welcome-1280.png, v3-home-grown.png.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode).

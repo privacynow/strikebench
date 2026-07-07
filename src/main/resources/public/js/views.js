@@ -16,68 +16,43 @@
    * ours leads with a landing page wired to LIVE local data (the tape above it already ticks).
    */
   async function welcome(root) {
-    var brand = (App.state.brand && App.state.brand.name) || 'StrikeBench';
-
-    // ---- Hero: one promise, two doors, quiet proof ----
     var stepsAnchorId = 'how-it-works';
-    root.appendChild(el('section', { class: 'hero', id: 'welcome-hero' },
-      el('div', { class: 'hero-inner' },
-        el('div', { class: 'eyebrow' }, 'PAPER TRADING \u00B7 LOCAL-FIRST \u00B7 FREE'),
-        el('h1', { class: 'hero-title' }, 'Learn options by ', el('span', { class: 'grad' }, 'doing'), ',', el('br', {}),
-          'with honest numbers.'),
-        el('p', { class: 'hero-sub' },
-          'Screen real strategies against your goal, practice them with a $100,000 paper account, and backtest without look-ahead \u2014 entirely on your machine.'),
-        el('div', { class: 'hero-ctas' },
-          el('button', {
-            class: 'btn btn-lg', onclick: function () {
-              try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
-              App.navigate('#/recommend/manual');
-            }
-          }, 'Find my first idea'),
-          el('button', {
-            class: 'btn btn-lg btn-ghost', onclick: function () {
-              var t = document.getElementById(stepsAnchorId);
-              if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
-          }, 'See how it works')),
-        el('div', { class: 'trust-row' },
-          ['No signup', 'No cloud', 'Fills at real bid/ask', 'Undefined risk blocked by default']
-            .map(function (t, i) {
-              return el('span', {}, i ? el('span', { class: 'dot-sep' }, '\u00B7') : null, t);
-            })))));
 
-    // ---- Three doors, by experience ----
-    var LEVEL_CARDS = [
-      { level: 'beginner', title: 'Teach me', ic: 'sprout',
-        blurb: 'Question-driven flows, plain language, tap-to-define terms \u2014 and every idea explains how it wins and loses.',
-        cta: 'Start as a beginner', go: '#/recommend/manual' },
-      { level: 'expert', title: 'Give me the terminal', ic: 'bolt',
-        blurb: 'Dense tables, position greeks, multi-leg construction with per-leg impact, inline filters.',
-        cta: 'Open the terminal', go: '#/research/AAPL' }
-    ];
-    root.appendChild(section('CHOOSE YOUR ALTITUDE', 'How do you want to start?',
-      el('div', { class: 'welcome-grid', id: 'welcome-levels' }, LEVEL_CARDS.map(function (c) {
-        return el('div', { class: 'card welcome-card' },
-          el('div', { class: 'icon-tile' }, icon(c.ic)),
-          el('h3', {}, c.title),
-          el('p', {}, c.blurb),
-          el('button', {
-            class: 'btn', 'data-welcome-level': c.level, onclick: function () {
-              Learn.setLevel(c.level);
-              try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
-              App.navigate(c.go);
-            }
-          }, c.cta));
-      }))));
-
-    // ---- Live proof: the engine, thinking, right now ----
+    // ---- Top fold: the pitch on the left, LIVE proof on the right — promise, evidence,
+    // and both primary actions land above the fold on a desktop ----
     var liveHost = el('div', { class: 'showcase-frame', id: 'welcome-live' },
       el('div', { class: 'showcase-loading' }, UI.spinner('Asking the engine for a live example\u2026')));
-    root.appendChild(section('LIVE FROM THE ENGINE', 'See it think',
-      el('div', { class: 'showcase' },
-        liveHost,
-        el('p', { class: 'showcase-caption' },
-          'A real screened idea \u2014 generated this second for a bullish month on AAPL at the conservative risk budget. Refusals, odds, and assumptions included, like every idea here.'))));
+    root.appendChild(el('div', { class: 'welcome-top' },
+      el('section', { class: 'hero', id: 'welcome-hero' },
+        el('div', { class: 'hero-inner' },
+          el('div', { class: 'eyebrow' }, 'PAPER TRADING \u00B7 LOCAL-FIRST \u00B7 FREE'),
+          el('h1', { class: 'hero-title' }, 'Learn options by ', el('span', { class: 'grad' }, 'doing'), ',', el('br', {}),
+            'with honest numbers.'),
+          el('p', { class: 'hero-sub' },
+            'Screen real strategies against your goal, practice them with a $100,000 paper account, and backtest without look-ahead \u2014 entirely on your machine.'),
+          el('div', { class: 'hero-ctas' },
+            el('button', {
+              class: 'btn btn-lg', onclick: function () {
+                try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
+                App.navigate('#/recommend/manual');
+              }
+            }, 'Find my first idea'),
+            el('button', {
+              class: 'btn btn-lg btn-ghost', onclick: function () {
+                var t = document.getElementById(stepsAnchorId);
+                if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            }, 'See how it works')),
+          el('div', { class: 'trust-row' },
+            ['No signup', 'No cloud', 'Fills at real bid/ask', 'Undefined risk blocked by default']
+              .map(function (t, i) {
+                return el('span', {}, i ? el('span', { class: 'dot-sep' }, '\u00B7') : null, t);
+              })))),
+      el('section', { class: 'welcome-section welcome-live-col' },
+        el('div', { class: 'eyebrow' }, 'LIVE FROM THE ENGINE'),
+        el('div', { class: 'showcase' }, liveHost,
+          el('p', { class: 'showcase-caption' },
+            'A real screened idea \u2014 generated this second, refusals, odds, and assumptions included, like every idea here.')))));
     (async function () {
       try {
         var r = await API.post('/api/recommend', { symbol: 'AAPL', thesis: 'bullish', horizon: 'month', riskMode: 'conservative' });
@@ -91,45 +66,69 @@
       }
     })();
 
-    // ---- What lives here ----
+    // ---- Two doors, by experience ----
+    var LEVEL_CARDS = [
+      { level: 'beginner', title: 'Teach me', ic: 'sprout',
+        blurb: 'Question-driven flows, plain language, tap-to-define terms \u2014 and every idea explains how it wins and loses.',
+        cta: 'Start as a beginner', go: '#/recommend/manual' },
+      { level: 'expert', title: 'Give me the terminal', ic: 'bolt',
+        blurb: 'Dense tables, position greeks, multi-leg construction with per-leg impact, inline filters.',
+        cta: 'Open the terminal', go: '#/research/AAPL' }
+    ];
+    var altitude = section('CHOOSE YOUR ALTITUDE', 'How do you want to start?',
+      el('div', { class: 'welcome-grid', id: 'welcome-levels' }, LEVEL_CARDS.map(function (c) {
+        return el('div', { class: 'card welcome-card' },
+          el('div', { class: 'icon-tile' }, icon(c.ic)),
+          el('h3', {}, c.title),
+          el('p', {}, c.blurb),
+          el('button', {
+            class: 'btn', 'data-welcome-level': c.level, onclick: function () {
+              Learn.setLevel(c.level);
+              try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
+              App.navigate(c.go);
+            }
+          }, c.cta));
+      })));
+
+    // ---- Toolkit + how-it-works, side by side on desktop ----
     var CAPS = [
       { ic: 'target', t: 'Goal-first ideas', d: 'Trade a view, earn income, buy at a discount, sell at your target, or protect what you hold.' },
       { ic: 'flask', t: 'Real mechanics', d: 'Executable fills, contracts die at 4pm ET, covered calls lock shares, assignment delivers them.' },
       { ic: 'chart', t: 'Honest backtests', d: 'Day-by-day replay, no look-ahead, and reports that label how much is modeled.' },
       { ic: 'scope', t: 'A market scout', d: 'Momentum, news sentiment, and IV-vs-realized signals \u2014 with their evidence attached.' }
     ];
-    root.appendChild(section('THE TOOLKIT', 'What you can do here',
-      el('div', { class: 'welcome-grid caps-grid' }, CAPS.map(function (c) {
-        return el('div', { class: 'card welcome-card' },
-          el('div', { class: 'icon-tile' }, icon(c.ic)),
-          el('h3', {}, c.t),
-          el('p', {}, c.d));
-      }))));
-
-    // ---- How it works: a real stepper, not a text pile ----
     var STEPS = [
       ['Pick a goal', 'or a ticker you care about'],
       ['Screen ideas', 'refusals explained, risk capped'],
       ['Practice the trade', 'with the $100k paper account'],
       ['Review honestly', 'marks, P/L, what changed']
     ];
-    var stepper = el('div', { class: 'stepper' }, STEPS.map(function (s, i) {
+    var capsList = el('div', { class: 'caps-list' }, CAPS.map(function (c) {
+      return el('div', { class: 'caps-item' },
+        el('div', { class: 'icon-tile icon-tile-sm' }, icon(c.ic, 18)),
+        el('div', {}, el('b', {}, c.t), el('span', { class: 'muted caps-d' }, c.d)));
+    }));
+    var stepper = el('div', { class: 'stepper stepper-compact' }, STEPS.map(function (s, i) {
       return el('div', { class: 'step-block' },
         el('div', { class: 'step-num' }, '0' + (i + 1)),
         el('div', { class: 'step-text' }, el('b', {}, s[0]), el('span', {}, s[1])));
     }));
     var how = section('HOW IT WORKS', 'Four steps, no account required', stepper);
     how.id = stepsAnchorId;
-    root.appendChild(how);
+    // Doors on the left, toolkit + steps on the right: one bottom band, no stack
+    root.appendChild(el('div', { class: 'welcome-bottom' },
+      altitude,
+      el('div', { class: 'welcome-meta' },
+        section('THE TOOLKIT', 'What you can do here', capsList),
+        how)));
 
-    // ---- One banner, one action ----
-    root.appendChild(el('div', { class: 'cta-banner' },
-      el('div', {},
-        el('b', {}, 'Thirteen sector universes, one flick away.'),
-        el('p', { class: 'muted' }, 'Tech, semiconductors, healthcare, defense, staples and more \u2014 feeding the ticker, the scout, and every symbol box.')),
-      el('button', { class: 'btn', onclick: function () { App.navigate('#/research'); } }, 'Open the sector explorer')));
-
-    root.appendChild(el('div', { class: 'welcome-exit' },
+    // ---- One slim footer row: the sector hook + the exit ----
+    root.appendChild(el('div', { class: 'welcome-footer' },
+      el('div', { class: 'cta-banner' },
+        el('div', {},
+          el('b', {}, 'Thirteen sector universes, one flick away.'),
+          el('p', { class: 'muted' }, 'Tech, semiconductors, healthcare, defense and more \u2014 feeding the ticker, the scout, and every symbol box.')),
+        el('button', { class: 'btn', onclick: function () { App.navigate('#/research'); } }, 'Open the sector explorer')),
       el('button', { class: 'btn btn-ghost', id: 'welcome-skip', onclick: function () {
         try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
         App.navigate('#/home');
@@ -465,16 +464,15 @@
         initial: '1y',
         fetch: async function (range) {
           var hist = await API.get('/api/research/' + symbol + '/history?range=' + range);
-          var series = (hist.candles || []).map(function (c) { return { date: c.date, value: parseFloat(c.close) }; });
           return {
             range: hist.range,
-            series: series,
+            candles: hist.candles || [],
             badge: hist.demo ? el('span', { class: 'badge badge-warn' }, 'DEMO DATA') : null,
             note: hist.demo ? explain('This price history is built-in DEMO DATA — no live candle source is configured. Add a Polygon or Alpha Vantage key for real history.') : null
           };
         }
       }),
-      explain('Slide across the chart to read the exact date, close, and change for that point. Pills change the window; MAX shows everything the data source has.')));
+      explain('Real OHLC candles: green closed up, red closed down; slide across for open/high/low/close, change, and volume. Pills change the window; long windows aggregate to weekly candles.')));
 
     if (r.optionable && r.expirations && r.expirations.length) {
       var showAll = false;
@@ -810,6 +808,20 @@
             App.navigate('#/ticket');
           }
         }, 'Use in trade ticket'),
+        el('button', {
+          class: 'btn btn-sm btn-secondary', onclick: function () {
+            App.state.builderForm = {
+              symbol: symbolForTicket || App.state.lastRecommendSymbol,
+              qty: c.qty || 1, goal: null, templateKey: null, step: 4, legIdx: 0, excluded: {},
+              legs: (c.legs || []).map(function (l) {
+                return { action: l.action, type: l.stock ? 'STOCK' : l.type,
+                         strike: l.stock ? null : String(l.strike),
+                         expiration: l.stock ? null : l.expiration, ratio: l.ratio || 1 };
+              })
+            };
+            App.navigate('#/ticket/builder');
+          }
+        }, 'Open in builder'),
         BACKTESTABLE.indexOf(c.strategy) >= 0 ? el('button', {
           class: 'btn btn-sm btn-secondary', onclick: function () {
             App.state.backtestPrefill = { symbol: symbolForTicket || App.state.lastRecommendSymbol, strategy: c.strategy };
@@ -902,7 +914,13 @@
     root.appendChild(el('p', { class: 'page-sub' }, 'Risk-screened educational candidates — sized to your risk budget, never advice.'));
     root.appendChild(el('div', { class: 'tabs' },
       el('button', { class: tab === 'scout' ? 'active' : '', id: 'tab-scout', onclick: function () { App.navigate('#/recommend/scout'); } }, 'Scout for me'),
-      el('button', { class: tab === 'manual' ? 'active' : '', id: 'tab-manual', onclick: function () { App.navigate('#/recommend/manual'); } }, 'My own idea')));
+      el('button', { class: tab === 'manual' ? 'active' : '', id: 'tab-manual', onclick: function () { App.navigate('#/recommend/manual'); } }, 'My own idea'),
+      el('a', {
+        class: 'tabs-aside', id: 'all-strategies-link', href: '#/ticket/builder', onclick: function () {
+          App.state.builderForm = { symbol: App.state.lastRecommendSymbol || 'AAPL', qty: 1,
+            goal: 'BROWSE', templateKey: null, step: 2, legIdx: 0, legs: [], excluded: {} };
+        }
+      }, 'All strategies \u2192')));
     if (tab === 'scout') renderScout(root); else renderManual(root);
   }
 
@@ -2244,6 +2262,7 @@
     // premium selling, Pro sees everything backtestable.
     var BT_GROUPS = [
       { label: 'Trade a view', families: ['LONG_CALL', 'LONG_PUT', 'DEBIT_CALL_SPREAD', 'DEBIT_PUT_SPREAD',
+                                          'LONG_STRADDLE', 'LONG_STRANGLE',
                                           'LONG_CALL_BUTTERFLY', 'LONG_PUT_BUTTERFLY'] },
       { label: 'Earn income', families: ['CREDIT_CALL_SPREAD', 'CREDIT_PUT_SPREAD', 'IRON_CONDOR',
                                          'IRON_BUTTERFLY', 'COVERED_CALL'] },

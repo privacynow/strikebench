@@ -96,11 +96,11 @@
       blurb: 'The put-side twin — far-dated put anchors, near puts collect premium.',
       build: function (c) { return [leg('BUY', 'PUT', c.pick(c.far, 0), c.far), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; } },
 
-    { key: 'LONG_STRADDLE', group: 'Volatility', name: 'Long straddle', family: 'CUSTOM',
+    { key: 'LONG_STRADDLE', group: 'Volatility', name: 'Long straddle', family: 'LONG_STRADDLE',
       shape: '2,4 32,24 62,4',
       blurb: 'Buy both at the money — direction unknown, the size of the move is the bet.',
       build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.near, 0), c.near)]; } },
-    { key: 'LONG_STRANGLE', group: 'Volatility', name: 'Long strangle', family: 'CUSTOM',
+    { key: 'LONG_STRANGLE', group: 'Volatility', name: 'Long strangle', family: 'LONG_STRANGLE',
       shape: '2,6 22,24 42,24 62,6',
       blurb: 'Buy both sides out of the money — cheaper than a straddle, needs a bigger move.',
       build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; } },

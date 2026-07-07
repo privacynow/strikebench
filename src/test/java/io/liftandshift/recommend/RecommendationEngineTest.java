@@ -272,4 +272,22 @@ class RecommendationEngineTest {
         }
         assertThat(c).hasSizeLessThanOrEqualTo(5);
     }
+
+    @Test
+    void volatileThesisOffersStraddlesAndStrangles() {
+        // "Big move, direction unknown" must offer the canonical structures for it —
+        // long straddle/strangle are first-class families, defined risk (the debit).
+        RecommendationEngine.Result result = engine.recommend(req("AAPL", "volatile", "month", "balanced"), BP);
+        Set<String> offered = new java.util.HashSet<>();
+        for (Candidate c : result.candidates()) offered.add(c.strategy());
+        assertThat(offered).containsAnyOf("LONG_STRADDLE", "LONG_STRANGLE");
+        for (Candidate c : result.candidates()) {
+            if (!c.strategy().equals("LONG_STRADDLE") && !c.strategy().equals("LONG_STRANGLE")) continue;
+            assertThat(c.legs()).hasSize(2);
+            assertThat(c.entryNetPremiumCents()).isNegative();              // both legs bought
+            assertThat(c.maxLossCents()).isEqualTo(-c.entryNetPremiumCents()); // risk = the debit
+            assertThat(c.maxProfitCents()).isNull();                        // uncapped either way
+            assertThat(c.breakevens()).hasSize(2);                          // one below, one above
+        }
+    }
 }

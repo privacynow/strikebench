@@ -511,12 +511,17 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   const summary = await page.textContent('#history-card .chart-summary');
   assert.match(summary, /Change/);
   assert.match(summary, /High .* Low/);
-  // Crosshair: hover the middle of the chart -> tooltip with a date and % readout
+  // Real OHLC candles render (vendored D3, not the fallback close line)
+  assert.ok(await page.locator('#history-card svg.candles rect.candle').count() >= 20, 'candlestick bars rendered');
+  assert.ok(await page.locator('#history-card svg.candles .candle-up').count() >= 1, 'up candles colored');
+  // Crosshair: hover the middle of the chart -> OHLC + % readout
   await page.locator('#history-card svg.chart').scrollIntoViewIfNeeded();
   const box = await page.locator('#history-card svg.chart').boundingBox();
   await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.4);
   await page.waitForSelector('#history-card .chart-tip:not([style*="display: none"])');
-  assert.match(await page.textContent('#history-card .chart-tip'), /% in window/);
+  const tip = await page.textContent('#history-card .chart-tip');
+  assert.match(tip, /% in window/);
+  assert.match(tip, /O .*H /); // open/high/low/close readout
   // MAX pill answers with everything the fixture has (~3y)
   await page.click('#history-card .pill[data-range="max"]');
   await page.waitForSelector('#history-card .pill.active[data-range="max"]');
@@ -786,6 +791,35 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
+});
+
+test('pipeline streamline: candidates open in the builder; Ideas links the full catalog', async () => {
+  // Expert: a screened candidate's exact legs load straight into the builder terminal
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
+  await go('#/recommend/manual');
+  await page.fill('#rec-symbol', 'AAPL');
+  await page.click('#rec-go');
+  await page.waitForSelector('#compare-table tbody tr.clickable', { timeout: 30000 });
+  await page.click('#compare-table tbody tr.clickable');
+  await page.waitForSelector('.compare-detail .candidate');
+  await page.locator('.compare-detail .candidate button:has-text("Open in builder")').first().click();
+  await page.waitForSelector('#app[data-route="ticket"][data-ready="true"]');
+  await page.waitForSelector('#builder-legs .leg-row', { timeout: 20000 });
+  assert.ok(await page.locator('#builder-legs .leg-row').count() >= 1, 'candidate legs loaded into the terminal');
+  await page.waitForFunction(() =>
+    /ALLOW|WARN|BLOCKED/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 20000 });
+
+  // Beginner: "All strategies" on Ideas lands on the browsable shape-card catalog
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+  await go('#/recommend/manual');
+  await page.waitForSelector('#all-strategies-link');
+  await page.click('#all-strategies-link');
+  await page.waitForSelector('#builder-catalog .tpl', { timeout: 20000 });
+  assert.ok(await page.locator('#builder-catalog .tpl').count() >= 24, 'full catalog one tap from Ideas');
+  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
 });
 
 test('smooth pipeline: GET cache, skeleton on slow loads, tape refresh keeps its animation', async () => {

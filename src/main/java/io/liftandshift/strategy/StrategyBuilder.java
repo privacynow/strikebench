@@ -45,6 +45,8 @@ public final class StrategyBuilder {
             return switch (family) {
                 case LONG_CALL -> single(chain, OptionType.CALL, LegAction.BUY, 0.50);
                 case LONG_PUT -> single(chain, OptionType.PUT, LegAction.BUY, 0.50);
+                case LONG_STRADDLE -> straddle(chain, spot);
+                case LONG_STRANGLE -> strangle(chain);
                 case NAKED_CALL -> single(chain, OptionType.CALL, LegAction.SELL, 0.30);
                 case NAKED_PUT -> single(chain, OptionType.PUT, LegAction.SELL, 0.30);
                 case DEBIT_CALL_SPREAD -> vertical(chain, OptionType.CALL, LegAction.BUY, 0.50, +2);
@@ -92,6 +94,31 @@ public final class StrategyBuilder {
         List<Leg> legs = new ArrayList<>(a.legs()); legs.addAll(b.legs());
         List<OptionQuote> quotes = new ArrayList<>(a.quotes()); quotes.addAll(b.quotes());
         return new Built(legs, quotes, a.label() + " + " + b.label());
+    }
+
+    /** Buy the ATM call AND put: a defined-risk bet on a big move in EITHER direction. */
+    private static Built straddle(OptionChain chain, BigDecimal spot) {
+        BigDecimal atm = nearestStrike(chain, spot);
+        OptionQuote call = at(chain, OptionType.CALL, atm);
+        OptionQuote put = at(chain, OptionType.PUT, atm);
+        if (call == null || put == null) return null;
+        return new Built(
+                List.of(leg(LegAction.BUY, call), leg(LegAction.BUY, put)),
+                List.of(call, put),
+                "BUY " + atm.stripTrailingZeros().toPlainString() + " straddle " + chain.expiration());
+    }
+
+    /** Buy an OTM call and an OTM put (~30 delta): cheaper than a straddle, needs a bigger move. */
+    private static Built strangle(OptionChain chain) {
+        OptionQuote call = byDelta(chain, OptionType.CALL, 0.30);
+        OptionQuote put = byDelta(chain, OptionType.PUT, 0.30);
+        if (call == null || put == null
+                || call.strike().compareTo(put.strike()) <= 0) return null; // degenerate chain
+        return new Built(
+                List.of(leg(LegAction.BUY, call), leg(LegAction.BUY, put)),
+                List.of(call, put),
+                "BUY " + put.strike().stripTrailingZeros().toPlainString() + "/"
+                        + call.strike().stripTrailingZeros().toPlainString() + " strangle " + chain.expiration());
     }
 
     private static Built ironButterfly(OptionChain chain, BigDecimal spot) {
