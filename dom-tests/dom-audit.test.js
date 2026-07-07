@@ -61,7 +61,7 @@ after(async () => {
 });
 
 const ROUTES = ['#/home', '#/welcome', '#/research', '#/research/AAPL', '#/recommend/scout',
-  '#/recommend/manual', '#/recommend/builder', '#/ticket', '#/portfolio', '#/backtest', '#/account', '#/status'];
+  '#/recommend/manual', '#/ticket/builder', '#/ticket', '#/portfolio', '#/backtest', '#/account', '#/status'];
 const WIDTHS = [1280, 1000, 375];
 
 // Sanctioned control heights: --ctl-h (38), --ctl-h-sm / --ctl-h-xs (30), plus the

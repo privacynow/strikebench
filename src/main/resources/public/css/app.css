@@ -818,3 +818,39 @@ body.lvl-expert .page-sub { display: none; }
 @media (min-width: 640px) and (max-width: 1099px) {
   .home-actions { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---------- Builder v2: shape glyphs, expert bar, leg toggles ---------- */
+.tpl-shape { flex: none; display: inline-flex; }
+.tpl-shape svg { display: block; }
+.tpl-shape-zero { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 2 3; }
+.tpl-shape-line { stroke: var(--accent); stroke-width: 2; fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.tpl-shape-risky { stroke: var(--risk-danger-solid); }
+.builder-bar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.builder-bar .field { min-width: 0; }
+.builder-bar-grow { flex: 1 1 180px; }
+.builder-bar-end { margin-left: auto; }
+.leg-on { accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
+.leg-off { opacity: .5; }
+.leg-off .leg-mkt { text-decoration: line-through; }
+.leg-mkt { font-size: 12px; white-space: nowrap; }
+#builder-catalog .tpl-grid { margin-bottom: 4px; }
+
+/* Home desktop compaction: a dashboard, not a document — every card on one screen. */
+@media (min-width: 1100px) {
+  #app[data-route="home"] .stat .explain { display: none; }
+  #app[data-route="home"] .card { padding: 13px 15px; margin-bottom: 12px; }
+  #app[data-route="home"] .stat { padding: 9px 12px; }
+  #app[data-route="home"] .grid.grid-4 { margin-bottom: 12px; gap: 10px; }
+  #app[data-route="home"] .tile { padding: 9px 11px; }
+  #app[data-route="home"] .t-px { font-size: 19px; }
+  #app[data-route="home"] .t-nm { display: none; }
+  #app[data-route="home"] .home-actions { gap: 8px; }
+  #app[data-route="home"] .home-actions .card { margin-bottom: 0; }
+  #app[data-route="home"] .empty { padding: 14px; }
+}
+@media (min-width: 1100px) {
+  /* Dashboard headline is the nav highlight itself; action hints live in tooltips */
+  #app[data-route="home"] > h1 { display: none; }
+  #app[data-route="home"] .qa-hint { display: none; }
+  #app[data-route="home"] .qa-tile { padding: 10px 12px; }
+}

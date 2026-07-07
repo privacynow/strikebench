@@ -70,7 +70,7 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   const hero = await page.textContent('#app');
   assert.match(hero, /Learn options by doing/); // the H1 sells the value; the brand lives in the header
   assert.match(hero, /How do you want to start\?/);
-  assert.ok((await page.locator('#welcome-levels .welcome-card').count()) === 3, 'three level paths');
+  assert.ok((await page.locator('#welcome-levels .welcome-card').count()) === 2, 'two level paths: Beginner and Expert');
   // The universe ticker tape ticks above the welcome page too
   await page.waitForSelector('#tape .tape-item');
   // Show-don't-tell: a REAL engine-generated candidate renders on the welcome page
@@ -154,7 +154,7 @@ test('recommendations render candidates and blocked examples', async () => {
   const appText = await page.textContent('#app');
   assert.match(appText, /BLOCKED/);
   assert.match(appText, /undefined risk/i);
-  assert.match(appText, /Most you can lose|Max loss/); // learning vs confident/pro wording
+  assert.match(appText, /Most you can lose|Max loss/); // beginner vs expert wording
   assert.match(appText, /not financial advice/i);
 });
 
@@ -268,20 +268,24 @@ test('backtest runs and reports mode, coverage, assumptions', async () => {
 
 test('candidate cards cross-link into backtest with the form pre-answered', async () => {
   await go('#/recommend/manual');
-  await page.click('#level-switch button[data-level="confident"]');
+  await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#app[data-ready="true"]');
   await go('#/recommend/manual');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#rec-go');
-  await page.waitForSelector('#rec-results .candidate', { timeout: 30000 });
-  const card = page.locator('#rec-results .candidate:has(button:has-text("Backtest this"))').first();
+  // Expert results are a comparison table — the full card (with its Backtest link) lives
+  // in the expandable detail row
+  await page.waitForSelector('#compare-table tbody tr.clickable', { timeout: 30000 });
+  await page.click('#compare-table tbody tr.clickable');
+  await page.waitForSelector('.compare-detail .candidate');
+  const card = page.locator('.compare-detail .candidate:has(button:has-text("Backtest this"))').first();
   assert.ok(await card.count(), 'candidates offer Backtest this');
   const strategy = await card.getAttribute('data-strategy');
   await card.locator('button:has-text("Backtest this")').click();
   await page.waitForSelector('#bt-symbol');
   assert.equal(await page.inputValue('#bt-symbol'), 'AAPL');
   assert.equal(await page.inputValue('#bt-strategy'), strategy, 'strategy carried over');
-  await page.click('#level-switch button[data-level="learning"]');
+  await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
 });
 
@@ -296,7 +300,7 @@ test('data status lists providers per domain', async () => {
 test('pro depth: comparison table, custom builder, position greeks', async () => {
   // Comparison table on Ideas at Pro
   await go('#/recommend/manual');
-  await page.click('#level-switch button[data-level="pro"]');
+  await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#app[data-ready="true"]');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#rec-go');
@@ -308,25 +312,25 @@ test('pro depth: comparison table, custom builder, position greeks', async () =>
   await page.click('#compare-table tbody tr.clickable'); // expand detail row
   await page.waitForSelector('.compare-detail .candidate');
 
-  // Custom multi-leg builder: build a 255/260 call spread from scratch
-  await go('#/ticket');
-  await page.waitForSelector('#custom-builder-btn');
-  await page.fill('#ticket-symbol', 'AAPL');
-  await page.click('#custom-builder-btn');
-  await page.waitForSelector('#custom-legs .custom-leg');
-  const strike0 = page.locator('.custom-leg').nth(0).locator('select').nth(3);
-  const values = await strike0.locator('option').evaluateAll(os => os.map(o => o.value));
+  // Expert terminal: build a call spread by hand, place it through the standard review
+  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
+  await go('#/ticket/builder');
+  await page.waitForSelector('#builder-add-leg');
+  await page.click('#builder-add-leg');
+  await page.waitForSelector('#builder-legs .leg-row');
+  await page.click('#builder-add-leg');
+  await page.waitForFunction(() => document.querySelectorAll('#builder-legs .leg-row').length === 2);
+  await page.locator('#builder-legs .leg-row').nth(1).locator('.leg-action').selectOption('SELL');
+  const strikeSel = page.locator('#builder-legs .leg-row').nth(1).locator('.leg-strike');
+  const values = await strikeSel.locator('option').evaluateAll(os => os.map(o => o.value));
   assert.ok(values.length >= 4, 'strike list populated from the chain');
-  const mid = Math.floor(values.length / 2);
-  await strike0.selectOption(values[mid]);
-  await page.click('#add-leg');
-  await page.waitForFunction(() => document.querySelectorAll('.custom-leg').length === 2);
-  await page.locator('.custom-leg').nth(1).locator('select').nth(0).selectOption('SELL');
-  await page.locator('.custom-leg').nth(1).locator('select').nth(3).selectOption(values[mid + 2]);
-  await page.click('#to-review');
+  await strikeSel.selectOption(values[Math.floor(values.length / 2) + 2]);
+  await page.waitForFunction(() =>
+    /ALLOW|WARN/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 20000 });
+  assert.match(await page.textContent('#builder-panel'), /Net Δ sh/); // net greeks in the terminal
+  await page.click('#builder-review');
   await page.waitForSelector('#to-confirm', { timeout: 30000 });
-  const review = await page.textContent('#ticket-body');
-  assert.match(review, /Safety check/);
+  assert.match(await page.textContent('#ticket-body'), /Safety check/);
   await page.click('#to-confirm');
   await page.waitForSelector('#place-trade');
   await page.click('#place-trade');
@@ -350,7 +354,7 @@ test('pro depth: comparison table, custom builder, position greeks', async () =>
   await page.waitForSelector('#modal-confirm');
   await page.click('#modal-confirm');
   await page.waitForSelector('#app[data-ready="true"]');
-  await page.click('#level-switch button[data-level="learning"]'); // restore default
+  await page.click('#level-switch button[data-level="beginner"]'); // restore default
   await page.waitForSelector('#app[data-ready="true"]');
 });
 
@@ -379,7 +383,7 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   const card = await page.textContent('.candidate');
   assert.match(card, /HELD SHARES/i);
   assert.match(card, /sell 100 shares/i);           // intent note frames assignment as the goal
-  assert.match(card, /Chance you sell/i);           // learning-level fact framing
+  assert.match(card, /Chance you sell/i);           // beginner-level fact framing
   await page.waitForSelector('#rec-holdings-hint .chip-row'); // real position surfaced
 
   // 3. Place it through the ticket — no new buying power, shares get locked
@@ -579,7 +583,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
 test('intent-native UX: discount ladder, exit rungs, income board, symbol actions', async () => {
   // ACQUIRE at Learning: the ladder reads as sentences with a recommended rung
   await go('#/recommend/manual');
-  await page.click('#level-switch button[data-level="learning"]');
+  await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
   await page.click('#intent-choices .choice[data-intent="ACQUIRE"]');
   await page.fill('#rec-symbol', 'AAPL');
@@ -596,7 +600,7 @@ test('intent-native UX: discount ladder, exit rungs, income board, symbol action
   assert.ok(await page.locator('#ladder-view .ladder-row.recommended').count() === 1, 'one recommended rung');
 
   // Same intent at Pro: a dense rung table with a Cash-set-aside column
-  await page.click('#level-switch button[data-level="pro"]');
+  await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#app[data-ready="true"]');
   await page.click('#rec-go');
   await page.waitForSelector('#ladder-view .ladder-tbl');
@@ -637,17 +641,17 @@ test('intent-native UX: discount ladder, exit rungs, income board, symbol action
   // Clean up: void the ticket trade if placed? (none placed) — sell the shares back
   await page.evaluate(() => API.post('/api/positions/sell', { symbol: 'AAPL', shares: 100 }));
   App_reset: {
-    await page.click('#level-switch button[data-level="learning"]');
+    await page.click('#level-switch button[data-level="beginner"]');
     await page.waitForSelector('#app[data-ready="true"]');
   }
 });
 
 test('experience ladder reshapes the UI per level', async () => {
   await go('#/account');
-  await page.click('#level-switch button[data-level="learning"]');
+  await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
   // Learning — explainers fully visible, glossary terms clickable
-  assert.ok(await page.evaluate(() => document.body.classList.contains('lvl-learning')));
+  assert.ok(await page.evaluate(() => document.body.classList.contains('lvl-beginner')));
   assert.ok(await page.locator('.explain').first().isVisible(), 'explainers visible at Learning');
 
   // Learning candidate cards use plain language and expandable mechanics.
@@ -667,20 +671,20 @@ test('experience ladder reshapes the UI per level', async () => {
   assert.ok(await page.locator('#glossary-popover').isVisible(), 'glossary popover opens');
 
   // Learning: filters expandable exposes ONLY the two plain limits (money + odds)
-  assert.ok(await page.locator('#rec-filters .xp-head').count(), 'learning filters live behind an expandable');
+  assert.ok(await page.locator('#rec-filters .xp-head').count(), 'beginner filters live behind an expandable');
   await page.click('#rec-filters .xp-head');
-  assert.ok(await page.locator('#rec-f-maxloss').isVisible(), 'max-loss limit at learning');
-  assert.ok(await page.locator('#rec-f-pop').isVisible(), 'POP limit at learning');
-  assert.equal(await page.locator('#rec-f-yield').count(), 0, 'yield/assignment filters hidden at learning');
+  assert.ok(await page.locator('#rec-f-maxloss').isVisible(), 'max-loss limit at beginner');
+  assert.ok(await page.locator('#rec-f-pop').isVisible(), 'POP limit at beginner');
+  assert.equal(await page.locator('#rec-f-yield').count(), 0, 'yield/assignment filters hidden at beginner');
   // Learning: backtest strategy menu is the beginner subset
   await go('#/backtest');
-  assert.equal(await page.locator('#bt-strategy option[value="IRON_CONDOR"]').count(), 0, 'condor locked at learning');
-  assert.ok(await page.locator('#bt-strategy option[value="COVERED_CALL"]').count(), 'covered call available at learning');
+  assert.equal(await page.locator('#bt-strategy option[value="IRON_CONDOR"]').count(), 0, 'condor locked at beginner');
+  assert.ok(await page.locator('#bt-strategy option[value="COVERED_CALL"]').count(), 'covered call available at beginner');
 
   // Pro: dense body class, explainers gone, cards show metric chips
-  await page.click('#level-switch button[data-level="pro"]');
+  await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#app[data-ready="true"]');
-  assert.ok(await page.evaluate(() => document.body.classList.contains('lvl-pro')));
+  assert.ok(await page.evaluate(() => document.body.classList.contains('lvl-expert')));
   await go('#/account');
   assert.ok(!(await page.locator('.explain').first().isVisible()), 'explainers hidden at Pro');
   // Pro: compact intent segments, filters inline (no expandable), full backtest menu
@@ -691,82 +695,97 @@ test('experience ladder reshapes the UI per level', async () => {
   await go('#/backtest');
   assert.ok(await page.locator('#bt-strategy option[value="IRON_BUTTERFLY"]').count(), 'full strategy menu at Pro');
 
-  // Confident: back to balanced — story cards return, filters behind an expandable again
-  await page.click('#level-switch button[data-level="confident"]');
-  await page.waitForSelector('#app[data-ready="true"]');
-  assert.ok(await page.evaluate(() => document.body.classList.contains('lvl-confident')));
-  await go('#/recommend/manual');
-  assert.equal(await page.locator('#intent-choices.intent-compact').count(), 0, 'story cards at Confident');
-  assert.ok(await page.locator('#rec-filters .xp-head').count(), 'filters expandable at Confident');
+  // Exactly two levels exist — the middle tier is gone for good
+  assert.equal(await page.locator('#level-switch button').count(), 2, 'Beginner and Expert only');
   // restore default for other runs
-  await page.click('#level-switch button[data-level="learning"]');
+  await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
 });
 
-test('strategy builder: templates, live risk panel, leg insight, blocked education, handoff', async () => {
-  await page.click('#level-switch button[data-level="learning"]');
+test('strategy builder: beginner wizard walks legs with impact; expert terminal analyzes', async () => {
+  // ---- BEGINNER: goal -> shape -> leg-by-leg walkthrough -> whole position ----
+  await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
-  await go('#/recommend/builder');
-  await page.waitForSelector('#builder-templates .tpl');
-  // Catalog breadth: a real broker-grade menu, grouped, with honest risk labels
-  assert.ok(await page.locator('#builder-templates .tpl').count() >= 20, 'broker-grade template catalog');
-  assert.ok(await page.locator('.tpl .badge:has-text("USUALLY BLOCKED")').count() >= 2, 'undefined-risk templates labeled up front');
-
-  // Pick an iron condor: 4 legs, catalog collapses, live panel prices it
-  await page.click('.tpl[data-tpl="IRON_CONDOR"]');
-  await page.waitForSelector('#builder-legs .leg-row');
-  assert.equal(await page.locator('#builder-legs .leg-row').count(), 4, 'condor builds 4 legs');
-  await page.waitForSelector('#tpl-selected');
-  await page.waitForSelector('#builder-panel .stat', { timeout: 15000 });
-  const panel = await page.textContent('#builder-panel');
-  assert.match(panel, /Passes the safety screens|Allowed, with cautions/);
-  assert.match(panel, /Most you can lose/);
-  assert.match(panel, /Assignment odds|Chance of any profit/);
-  assert.ok(await page.locator('#builder-panel .chart-wrap').count(), 'live payoff chart in the panel');
-
-  // Hover a leg: floating market insight, zero layout shift
-  const legsBefore = await page.locator('#builder-legs').boundingBox();
-  await page.locator('#builder-legs .leg-row').first().hover();
-  await page.waitForSelector('.leg-pop', { timeout: 5000 });
-  assert.match(await page.textContent('.leg-pop'), /Bid .+Ask/s);
-  const legsAfter = await page.locator('#builder-legs').boundingBox();
-  assert.equal(legsBefore.height, legsAfter.height, 'hover must not shift layout');
-
-  // Click Details: the leg opens with its contribution and remove-this-leg impact
-  await page.locator('#builder-legs .leg-row .leg-info').first().click();
+  await go('#/ticket/builder');
+  await page.waitForSelector('#bw-goals .choice');
+  // Q&A, not text: goal cards -> one shaping question -> the structure
+  await page.click('#bw-goals .choice[data-goal="DIRECTIONAL"]');
+  await page.waitForSelector('#bw-shape .choice');
+  await page.click('#bw-shape .choice[data-tpl="IRON_CONDOR"]');
+  // Walkthrough: each leg narrated, impact measured, payoff morphing
+  await page.waitForSelector('#bw-walk');
   await page.waitForFunction(() =>
-    /Without this leg/.test(document.querySelector('#builder-legs .leg-detail').textContent), { timeout: 15000 });
-  const detail = await page.textContent('#builder-legs .leg-detail');
-  assert.match(detail, /Brings in|Costs/);
-  assert.match(detail, /max loss .+ → /);
-
-  // Add + remove a leg by hand: still prices, template claim dropped
-  await page.click('#builder-add-leg');
-  assert.equal(await page.locator('#builder-legs .leg-row').count(), 5);
-  await page.locator('#builder-legs .leg-row').nth(4).locator('.leg-remove').click();
-  assert.equal(await page.locator('#builder-legs .leg-row').count(), 4);
-
-  // Short straddle: previews honestly, then blocked — the payoff cliff still charts
-  await page.click('#tpl-change');
-  await page.click('.tpl[data-tpl="SHORT_STRADDLE"]');
+    /Collected so far|Paid so far/.test((document.getElementById('bw-impact') || {}).textContent || ''), { timeout: 20000 });
+  assert.match(await page.textContent('#bw-leg-story'), /Sell the \$\d+/);
+  assert.match(await page.textContent('#bw-impact'), /Worst case/);
+  for (let legN = 2; legN <= 4; legN++) {
+    await page.click('#bw-next');
+    await page.waitForFunction(n =>
+      new RegExp('leg ' + n + ' of 4').test(document.querySelector('#bw-walk .field-label').textContent), legN, { timeout: 20000 });
+    await page.waitForFunction(() =>
+      /Collected so far|Paid so far|unlimited risk/.test((document.getElementById('bw-impact') || {}).textContent || ''), { timeout: 20000 });
+  }
+  // Leg 3 (sell call over a put spread) is the teaching moment: unlimited alone, capped next
+  const walk3 = await page.textContent('#bw-walk');
+  assert.match(walk3, /leg 4 of 4/);
+  await page.click('#bw-next'); // -> whole position
+  await page.waitForSelector('#bw-final');
   await page.waitForFunction(() =>
-    /would be refused/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 15000 });
-  assert.match(await page.textContent('#builder-panel'), /Undefined|unlimited/i);
-  assert.ok(await page.locator('#builder-panel .chart-wrap').count(), 'blocked position still charts its cliff');
-  assert.ok(await page.locator('#builder-review[disabled]').count(), 'review disabled while blocked');
-
-  // Back to the condor and hand off to the ticket review (same pipeline as everything)
-  await page.click('#tpl-change');
-  await page.click('.tpl[data-tpl="IRON_CONDOR"]');
-  await page.waitForFunction(() =>
-    /Passes the safety screens|Allowed/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 15000 });
+    /Passes the safety screens|Allowed/.test((document.getElementById('bw-panel') || {}).textContent || ''), { timeout: 20000 });
+  const finalText = await page.textContent('#bw-final');
+  assert.match(finalText, /Most you can lose/);
+  assert.match(finalText, /Assignment odds/);
+  assert.ok(await page.locator('#bw-panel .chart-wrap').count(), 'payoff chart on the final step');
+  // Hand off into the standard ticket review
   await page.click('#builder-review');
   await page.waitForSelector('#app[data-route="ticket"][data-ready="true"]');
-  const ticket = await page.textContent('#app');
-  assert.match(ticket, /Safety check/);
-  assert.match(ticket, /Most you can lose|max loss/i);
-  await page.evaluate(() => { App.state.ticket = null; App.state.builderForm = null; });
+  await page.waitForSelector('#to-confirm', { timeout: 30000 });
+  assert.match(await page.textContent('#ticket-body'), /Safety check/);
+  await page.evaluate(() => { App.state.ticket = null; });
+
+  // Browse-all catalog: every structure with its payoff shape, risky ones labeled
+  await page.evaluate(() => { App.state.builderForm = null; });
+  await go('#/ticket/builder');
+  await page.waitForSelector('#bw-goals .choice');
+  await page.click('#bw-browse');
+  await page.waitForSelector('#builder-catalog .tpl');
+  assert.ok(await page.locator('#builder-catalog .tpl').count() >= 24, 'full broker-grade catalog');
+  assert.ok(await page.locator('#builder-catalog .tpl-shape svg').count() >= 24, 'payoff-shape sketch per structure');
+  assert.ok(await page.locator('#builder-catalog .tpl .badge:has-text("BLOCKED")').count() >= 3, 'undefined-risk structures labeled');
+
+  // ---- EXPERT: terminal with inline market data, per-leg toggles, net greeks ----
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+  await page.evaluate(() => { App.state.builderForm = null; });
+  await go('#/ticket/builder');
+  await page.waitForSelector('#builder-template');
+  await page.selectOption('#builder-template', 'IRON_CONDOR');
+  await page.waitForFunction(() => document.querySelectorAll('#builder-legs .leg-row').length === 4, { timeout: 20000 });
+  // Inline market data on every leg row (no hover needed)
+  await page.waitForFunction(() =>
+    Array.from(document.querySelectorAll('#builder-legs .leg-mkt')).some(m => /\d/.test(m.textContent)), { timeout: 20000 });
+  await page.waitForFunction(() =>
+    /ALLOW|WARN/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 20000 });
+  const panel = await page.textContent('#builder-panel');
+  assert.match(panel, /Net Δ sh/);
+  assert.ok(await page.locator('#builder-panel .chart-wrap').count(), 'payoff chart in the terminal');
+  // Hover a row: floating market insight, zero layout shift
+  const before = await page.locator('#builder-legs').boundingBox();
+  await page.locator('#builder-legs .leg-row').first().hover();
+  await page.waitForSelector('.leg-pop', { timeout: 5000 });
+  const after = await page.locator('#builder-legs').boundingBox();
+  assert.equal(before.height, after.height, 'hover must not shift layout');
+  // Per-leg impact: exclude the protective put -> the panel re-prices and flags a leg off
+  await page.locator('#builder-legs .leg-row').nth(1).locator('.leg-on').setChecked(false);
+  await page.waitForFunction(() =>
+    /1 LEG OFF/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 20000 });
+  await page.locator('#builder-legs .leg-row').nth(1).locator('.leg-on').setChecked(true);
+  await page.waitForFunction(() =>
+    !/LEG OFF/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 20000 });
+  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.waitForSelector('#app[data-ready="true"]');
 });
 
 test('smooth pipeline: GET cache, skeleton on slow loads, tape refresh keeps its animation', async () => {

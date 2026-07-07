@@ -466,6 +466,63 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   - Suites: 222 JUnit + 21 fixture DOM + 5 seeded + 8 live + 3 audit (builder route added to the
     audit walk) — ALL GREEN. Screenshots shots/sm-builder-{learning,confident,pro,dark,mobile}.png,
     sm-home.png, sm-scout-hints.png, bld-*.png.
+- TWO-LEVEL LADDER + BUILDER V2 + DESKTOP HOME (2026-07-07, user: confident tier killed
+  ("neither here nor there"), rename learning->Beginner / pro->Expert; desktop home must not
+  scroll; builder was "too busy for a learner" and expert was "beginner minus text"; full broker
+  strategy menu w/ education; SVG graphics; investigate "market data not loading"):
+  - LEVELS: exactly TWO — beginner/expert (learn.js LEVELS/META; localStorage one-time map
+    learning->beginner, confident->beginner, pro->expert; body classes lvl-beginner/lvl-expert;
+    .beginner-only/.expert-only/.not-expert CSS helpers; 2-button header switch; welcome = 2 door
+    cards). ALL confident branches deleted: explain() clamp CSS + boot click handler, filterPanel
+    (beginner: 2 plain limits in expandable / expert: 5 inline), ladderView, intent chooser,
+    holdings columns, BT_LEVEL_ALLOWED {beginner: 7 families} else everything. STANDING RULE in
+    memory: never reintroduce a middle tier; expert = structurally deeper tool, not fewer words.
+  - BUILDER V2 (js/builder.js rewritten; moved to the TRADE screen: #/ticket pills "Guided
+    ticket | Strategy builder", #/ticket/builder; Ideas back to 2 tabs; ticket() step-5 custom
+    flow + renderCustomBuilder DELETED — quick-start's #custom-builder-btn now navigates to the
+    builder; builder hands off to ticket review step 6 as before):
+    * Beginner = question wizard: Goal (intent cards) -> Shape (one question per goal, choice
+      cards, e.g. DIRECTIONAL: rise-a-lot/rise-somewhat/fall/big-move/calm) -> Build-it: legs
+      arrive ONE AT A TIME, each with a plain-language story w/ live fill dollars ("Sell the
+      $250 put (you collect about $362) — you promise to buy 100 shares at $250 if asked"),
+      impact chips showing before->after (worst case, best case, POP), the payoff chart morphing,
+      and the undefined-risk teaching moment ("alone this leg has unlimited risk — the next leg
+      caps it") -> Where-you-stand: recap + full panel + review handoff. "Browse all structures"
+      from steps 1/2 opens the FULL catalog.
+    * Expert = terminal: symbol/qty/structure-select bar, leg grid w/ INLINE market data per row
+      (bid/ask Δ Θ, .leg-mkt), per-leg include CHECKBOXES (untick = instant position-without-leg
+      analysis, "N LEG OFF" badge), hover pop w/ full greeks/OI, net greeks chips (Δsh/Γ/Θ$day/
+      Vega$pt from preview p.legs), dense panel, payoff chart.
+    * Catalog: 26 structures incl. verticals (named), married put, risk reversal, backspreads,
+      calendars/diagonals, iron condor/fly, straddles/strangles, AND blocked-by-design naked
+      call/put + short straddle/strangle in an "Undefined risk (blocked)" group — selecting one
+      previews honestly then blocks with the cliff. EVERY card carries a payoff-SHAPE sketch
+      (tpl-shape: inline SVG polyline vs a dashed zero line — educational shape, not live data).
+  - DESKTOP HOME FITS ONE SCREEN: .home-cols 2fr/1fr >=1100px (left: Markets + Open trades;
+    right: Sector pulse + 4 quick actions incl. Build a strategy); home-desktop compaction CSS
+    (@media >=1100px: stat explainers/h1/t-nm/qa-hints hidden — hints become title tooltips,
+    tighter paddings); Markets capped at 4 tiles (explorer has the rest). Measured: content
+    bottom 835/900 @1440, 744/800 @1280 (only the boilerplate disclaimer sits below the fold).
+  - "MARKET DATA NOT LOADING" INVESTIGATED, NOT REPRODUCIBLE ON CURRENT BUILD: dom-live.test.js
+    ran 8/8 GREEN against real Cboe/EDGAR mid-investigation (every screen incl. trade + scout at
+    real marks). No data source lost; graceful fallbacks unchanged (provider chain w/ labeled
+    freshness, honest empty states + Retry, tape hides on error). Diagnosis: almost certainly the
+    documented stale-server failure (jar rebuilt under a running JVM — the red RESTART banner +
+    /api/health exist for exactly this). User action: stop the process, java -jar target/
+    strikebench.jar, reload; then check the Data screen if anything still looks empty.
+  - CHARTING LIBRARY RESEARCH (user asked; integration is the NEXT pass): recommendation D3 v7,
+    vendored into /public/vendor (no build step, no CDN): SVG-native (matches the existing
+    hand-rolled SVG chart system + the user's explicit "svg based" ask), MIT, API frozen since
+    2021 w/ maintenance releases — the stability profile requested. Chart.js = easier but canvas
+    + general-purpose; Highcharts = commercial license (ruled out); lightweight-charts = canvas,
+    finance-native (fallback candidate if candlesticks become the priority).
+  - Tests swept to 2 levels (dom.test data-level selectors, ladder test asserts exactly 2 buttons,
+    seeded walks beginner+expert => 4 tests, audit walks #/ticket/builder). Builder test rewritten:
+    wizard leg-walk w/ impact chips + browse-all catalog (>=24 tpl, shape SVGs, BLOCKED badges) +
+    expert terminal (inline mkt data, LEG OFF toggle, net greeks, hover no-layout-shift). Pro-depth
+    test's custom-flow segment now drives the expert terminal end-to-end to a placed paper trade.
+  - Suites: 222 JUnit + 21 fixture + 4 seeded + 8 live + 3 audit — ALL GREEN. Screenshots
+    shots/v3-{home-desktop,wizard-goal,wizard-shape,wizard-leg1,catalog,terminal}.png.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode).

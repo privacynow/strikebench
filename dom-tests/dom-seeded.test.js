@@ -143,7 +143,7 @@ after(async () => {
 const ROUTES = ['#/home', '#/research/AAPL', '#/recommend/scout', '#/recommend/manual',
   '#/ticket', '#/portfolio', '#/portfolio/closed', '#/backtest', '#/account', '#/status'];
 
-for (const level of ['learning', 'confident', 'pro']) {
+for (const level of ['beginner', 'expert']) {
   test(`grown DB: every route renders clean at ${level}`, async () => {
     await page.click(`#level-switch button[data-level="${level}"]`);
     await page.waitForSelector('#app[data-ready="true"]');
@@ -188,6 +188,6 @@ test('grown DB: locked shares and filters behave with real mixed data', async ()
   assertClean('portfolio filters');
 
   // Restore default level for other suites
-  await page.click('#level-switch button[data-level="learning"]');
+  await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
 });

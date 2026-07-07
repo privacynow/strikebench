@@ -249,7 +249,8 @@
     // Markets: shell now, tiles when the ONE batch-quotes call answers (this used to be
     // eight sequential full-research calls that blocked the whole dashboard).
     var uni = App.state.universe && App.state.universe.active;
-    var marketSymbols = uni && uni.symbols && uni.symbols.length ? uni.symbols.slice(0, 8) : CORE_SYMBOLS;
+    // Four tiles keeps the dashboard on one desktop screen; the sector explorer has the rest
+    var marketSymbols = uni && uni.symbols && uni.symbols.length ? uni.symbols.slice(0, 4) : CORE_SYMBOLS;
     var tiles = el('div', { class: 'tile-row' });
     colL.appendChild(el('div', { class: 'card' },
       UI.cardHeader('Markets' + (uni ? ' — ' + uni.label : ''),
@@ -316,9 +317,9 @@
   }
 
   function quickAction(title, hint, hash) {
-    return el('div', { class: 'tile', onclick: function () { App.navigate(hash); } },
+    return el('div', { class: 'tile qa-tile', title: hint, onclick: function () { App.navigate(hash); } },
       el('div', { class: 't-sym' }, title),
-      el('div', { class: 'muted', style: 'margin-top:4px' }, hint));
+      el('div', { class: 'muted qa-hint', style: 'margin-top:4px' }, hint));
   }
 
   // ---------- 2. Research ----------
@@ -896,17 +897,13 @@
   }
 
   async function recommend(root, params) {
-    var tab = params && params[0] === 'manual' ? 'manual'
-      : params && params[0] === 'builder' ? 'builder' : 'scout';
+    var tab = params && params[0] === 'manual' ? 'manual' : 'scout';
     root.appendChild(el('h1', {}, 'Trade ideas'));
     root.appendChild(el('p', { class: 'page-sub' }, 'Risk-screened educational candidates — sized to your risk budget, never advice.'));
     root.appendChild(el('div', { class: 'tabs' },
       el('button', { class: tab === 'scout' ? 'active' : '', id: 'tab-scout', onclick: function () { App.navigate('#/recommend/scout'); } }, 'Scout for me'),
-      el('button', { class: tab === 'manual' ? 'active' : '', id: 'tab-manual', onclick: function () { App.navigate('#/recommend/manual'); } }, 'My own idea'),
-      el('button', { class: tab === 'builder' ? 'active' : '', id: 'tab-builder', onclick: function () { App.navigate('#/recommend/builder'); } }, 'Build a strategy')));
-    if (tab === 'scout') renderScout(root);
-    else if (tab === 'builder') await Builder.render(root);
-    else renderManual(root);
+      el('button', { class: tab === 'manual' ? 'active' : '', id: 'tab-manual', onclick: function () { App.navigate('#/recommend/manual'); } }, 'My own idea')));
+    if (tab === 'scout') renderScout(root); else renderManual(root);
   }
 
   // ---- Shared intent + filter controls ----
@@ -1588,7 +1585,17 @@
 
   var STEPS = ['Thesis', 'Horizon', 'Risk', 'Strategy', 'Strikes', 'Review', 'Confirm'];
 
-  async function ticket(root) {
+  async function ticket(root, params) {
+    // Two ways to trade, one screen: the guided wizard, or the multi-leg builder.
+    var mode = params && params[0] === 'builder' ? 'builder' : 'guided';
+    root.appendChild(el('h1', {}, 'Trade'));
+    root.appendChild(el('div', { class: 'tabs' },
+      el('button', { class: mode === 'guided' ? 'active' : '', id: 'tab-guided',
+        onclick: function () { App.navigate('#/ticket'); } }, 'Guided ticket'),
+      el('button', { class: mode === 'builder' ? 'active' : '', id: 'tab-builder',
+        onclick: function () { App.navigate('#/ticket/builder'); } }, 'Strategy builder')));
+    if (mode === 'builder') { await Builder.render(root); return; }
+
     var t = App.state.ticket = App.state.ticket || {};
     t.step = t.step || 1;
     t.symbol = t.symbol || App.state.lastRecommendSymbol || 'AAPL';
@@ -1603,7 +1610,7 @@
       t.step = Math.min(t.step, 2);
     }
 
-    root.appendChild(el('h1', {}, 'Guided trade ticket'));
+
     root.appendChild(el('div', { class: 'wizard-steps' }, STEPS.map(function (s, i) {
       var n = i + 1;
       var cls = n === t.step ? ' active' : (n < t.step ? ' done' : '');
@@ -1655,14 +1662,10 @@
         }, 'Screen strategies \u2192'),
         el('button', {
           class: 'btn btn-secondary', id: 'custom-builder-btn', onclick: function () {
-            t.symbol = qsSym.value.trim().toUpperCase();
-            t.custom = true;
-            t.candidate = null;
-            t.legs = t.legs && t.customFor === t.symbol ? t.legs : [];
-            t.customFor = t.symbol;
-            nav(5);
+            App.state.lastRecommendSymbol = qsSym.value.trim().toUpperCase();
+            App.navigate('#/ticket/builder');
           }
-        }, 'Custom builder')));
+        }, 'Strategy builder')));
       return;
     }
 
@@ -1727,11 +1730,6 @@
         body.appendChild(alertBox('danger', e.message));
         body.appendChild(backNext(3));
       }
-    }
-
-    if (t.step === 5 && t.custom) {
-      await renderCustomBuilder(body, t, nav);
-      return;
     }
 
     if (t.step === 5) {
@@ -1881,113 +1879,6 @@
     }
   }
 
-  /** Pro: freeform multi-leg construction. Server-side guardrails do the safety work. */
-  async function renderCustomBuilder(body, t, nav) {
-    body.appendChild(el('h2', { class: 'mt0' }, 'Custom builder — ' + t.symbol));
-    body.appendChild(el('p', { class: 'muted' },
-      'Any structure you can express, the guardrails still judge: undefined risk, uncovered shorts, dead quotes and books are blocked at preview.'));
-    var backOut = function () {
-      return el('div', { class: 'btn-row' },
-        el('button', { class: 'btn btn-secondary', id: 'custom-back', onclick: function () {
-          t.custom = false; t.step = 1; App.render();
-        } }, '\u2190 Back to the guided ticket'));
-    };
-    var research;
-    try { research = await API.get('/api/research/' + t.symbol); }
-    catch (e) {
-      body.appendChild(alertBox('danger', 'No data for ' + t.symbol));
-      body.appendChild(backOut());
-      return;
-    }
-    var expirations = research.expirations || [];
-    if (!expirations.length) {
-      body.appendChild(alertBox('danger', t.symbol + ' has no listed options'));
-      body.appendChild(backOut());
-      return;
-    }
-    var chains = {};
-    async function strikesFor(exp) {
-      if (!chains[exp]) {
-        try { chains[exp] = (await API.get('/api/research/' + t.symbol + '/chain?expiration=' + exp)).calls.map(function (q) { return q.strike; }); }
-        catch (e) { chains[exp] = []; }
-      }
-      return chains[exp];
-    }
-    var legsHost = el('div', { id: 'custom-legs' });
-    body.appendChild(legsHost);
-
-    async function legRow(leg) {
-      var action = el('select', {}, ['BUY', 'SELL'].map(function (a) { return el('option', { value: a, selected: a === leg.action ? '' : null }, a); }));
-      var type = el('select', {}, ['CALL', 'PUT', 'STOCK'].map(function (x) { return el('option', { value: x, selected: x === leg.type ? '' : null }, x.toLowerCase()); }));
-      var exp = el('select', {}, expirations.map(function (d) { return el('option', { value: d, selected: d === leg.expiration ? '' : null }, d); }));
-      var strike = el('select', { style: 'max-width:110px' });
-      var ratio = el('input', { type: 'number', min: '1', max: '10', value: String(leg.ratio || 1), style: 'max-width:64px' });
-      async function fillStrikes() {
-        var ks = await strikesFor(exp.value);
-        strike.innerHTML = '';
-        ks.forEach(function (k) {
-          strike.appendChild(el('option', { value: k, selected: parseFloat(k) === parseFloat(leg.strike) ? '' : null }, stripZeros(k)));
-        });
-      }
-      await fillStrikes();
-      function sync() {
-        leg.action = action.value;
-        leg.type = type.value;
-        leg.expiration = type.value === 'STOCK' ? null : exp.value;
-        leg.strike = type.value === 'STOCK' ? null : strike.value;
-        leg.ratio = Math.max(1, parseInt(ratio.value || '1', 10));
-        var opt = type.value !== 'STOCK';
-        exp.style.display = opt ? '' : 'none';
-        strike.style.display = opt ? '' : 'none';
-      }
-      [action, type, ratio].forEach(function (n) { n.addEventListener('change', sync); });
-      exp.addEventListener('change', function () { fillStrikes().then(sync); });
-      strike.addEventListener('change', sync);
-      sync();
-      var row = el('div', { class: 'btn-row custom-leg', style: 'margin-top:6px' },
-        action, type, ratio, el('span', { class: 'muted' }, 'x'), exp, strike,
-        el('button', {
-          class: 'btn btn-sm btn-danger', onclick: function () {
-            t.legs.splice(t.legs.indexOf(leg), 1);
-            row.remove();
-          }
-        }, '\u2715'));
-      return row;
-    }
-
-    async function addLeg(preset) {
-      var leg = preset || { action: 'BUY', type: 'CALL', expiration: expirations[2] || expirations[0], strike: null, ratio: 1 };
-      t.legs.push(leg);
-      legsHost.appendChild(await legRow(leg));
-    }
-    if (!t.legs.length) await addLeg();
-    else {
-      var existing = t.legs.slice(); t.legs = [];
-      for (var i = 0; i < existing.length; i++) await addLeg(existing[i]);
-    }
-
-    var qtyInput = el('input', { type: 'number', id: 'ticket-qty', min: '1', max: '100', value: t.qty || 1, style: 'max-width:100px' });
-    body.appendChild(el('div', { class: 'btn-row' },
-      el('button', { class: 'btn btn-secondary btn-sm', id: 'add-leg', onclick: function () { addLeg(); } }, '+ Add leg')));
-    body.appendChild(el('div', { class: 'field', style: 'margin-top:10px' }, el('label', {}, 'Quantity'), qtyInput));
-    body.appendChild(el('div', { class: 'btn-row' },
-      el('button', { class: 'btn btn-secondary', onclick: function () { t.custom = false; nav(1); } }, '\u2190 Back'),
-      el('button', {
-        class: 'btn', id: 'to-review', onclick: function () {
-          if (!t.legs.length) return;
-          t.qty = Math.max(1, parseInt(qtyInput.value || '1', 10));
-          t.legs = t.legs.map(function (l) {
-            return { action: l.action, type: l.type, strike: l.type === 'STOCK' ? null : l.strike,
-                     expiration: l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio };
-          });
-          nav(6);
-        }
-      }, 'Review \u2192')));
-  }
-
-  // ---------- 5. Portfolio ----------
-
-  /** Buy/sell shares in a modal; fills at the executable ask/bid. */
   function stockOrderModal(side, symbol, maxShares) {
     var symInput = el('input', { type: 'text', id: 'stock-symbol', value: symbol || '' });
     var qty = el('input', { type: 'number', id: 'stock-shares', min: '1',
