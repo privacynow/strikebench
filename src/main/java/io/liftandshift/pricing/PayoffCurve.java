@@ -98,6 +98,29 @@ public final class PayoffCurve {
     public boolean maxProfitUnbounded() { return maxProfitUnbounded; }
     public boolean maxLossUnbounded() { return maxLossUnbounded; }
 
+    /** One sampled point of the expiration payoff, for charting. */
+    public record ChartPoint(BigDecimal price, long profitCents) {}
+
+    /**
+     * Chart-ready samples over spot×[0.70, 1.30]: a 60-step grid plus every knot and
+     * breakeven inside the window, sorted ascending. The payoff is piecewise linear, so
+     * a renderer may interpolate between points exactly.
+     */
+    public List<ChartPoint> chartPoints(BigDecimal spot) {
+        if (spot == null || spot.signum() <= 0) return List.of();
+        java.util.TreeSet<BigDecimal> prices = new java.util.TreeSet<>();
+        BigDecimal lo = spot.multiply(new BigDecimal("0.70")).setScale(2, java.math.RoundingMode.HALF_UP);
+        BigDecimal hi = spot.multiply(new BigDecimal("1.30")).setScale(2, java.math.RoundingMode.HALF_UP);
+        BigDecimal step = hi.subtract(lo).divide(BigDecimal.valueOf(60), 2, java.math.RoundingMode.HALF_UP);
+        if (step.signum() <= 0) step = new BigDecimal("0.01");
+        for (BigDecimal p = lo; p.compareTo(hi) <= 0; p = p.add(step)) prices.add(p);
+        for (BigDecimal k : knots) if (k.compareTo(lo) >= 0 && k.compareTo(hi) <= 0) prices.add(k.setScale(2, java.math.RoundingMode.HALF_UP));
+        for (BigDecimal b : breakevens) if (b.compareTo(lo) >= 0 && b.compareTo(hi) <= 0) prices.add(b.setScale(2, java.math.RoundingMode.HALF_UP));
+        List<ChartPoint> out = new ArrayList<>();
+        for (BigDecimal p : prices) out.add(new ChartPoint(p, profitAtCents(p)));
+        return out;
+    }
+
     /** Max profit in cents; only meaningful when !maxProfitUnbounded(). */
     public long maxProfitCents() { return Money.toCents(maxProfit); }
 

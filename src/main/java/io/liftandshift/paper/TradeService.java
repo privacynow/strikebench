@@ -100,7 +100,7 @@ public final class TradeService {
                 acct.cashCents(), blocks.isEmpty() ? cashAfter : acct.cashCents(),
                 acct.reservedCents(), blocks.isEmpty() ? reservedAfter : acct.reservedCents(),
                 acct.buyingPowerCents(), blocks.isEmpty() ? cashAfter - reservedAfter : acct.buyingPowerCents(),
-                p.freshness.name());
+                p.freshness.name(), p.underlyingCents, p.assignmentProb(), p.legDetails(), p.payoff());
     }
 
     /** Opens the trade or throws TradeRejectedException (audit row only, zero mutation). */
@@ -565,12 +565,21 @@ public final class TradeService {
     private record Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
                         Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
                         Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
-                        long sharesToLock) {
+                        long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
+                        List<Map<String, Object>> payoff) {
         Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
              Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson) {
             this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens, pop, ev,
-                    underlyingCents, freshness, blocks, warnings, snapshotJson, 0);
+                    underlyingCents, freshness, blocks, warnings, snapshotJson, 0, List.of(), null, List.of());
+        }
+
+        Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
+             Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
+             Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
+             long sharesToLock) {
+            this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens, pop, ev,
+                    underlyingCents, freshness, blocks, warnings, snapshotJson, sharesToLock, List.of(), null, List.of());
         }
     }
 
@@ -601,6 +610,7 @@ public final class TradeService {
         List<Map<String, Object>> snapshotLegs = new ArrayList<>();
         Freshness worst = Freshness.FIXTURE;
         List<Double> ivs = new ArrayList<>();
+        List<Double> legIvs = new ArrayList<>(); // index-aligned with filled (nulls kept)
         for (Leg leg : req.legs()) {
             var mark = marks.legMark(req.symbol(), leg).orElse(null);
             if (mark == null || mark.mid() == null) {
@@ -633,15 +643,25 @@ public final class TradeService {
             }
             worst = worse(worst, mark.freshness());
             if (mark.iv() != null) ivs.add(mark.iv());
+            legIvs.add(mark.iv());
             Leg filledLeg = new Leg(leg.action(), leg.type(), leg.strike(), leg.expiration(), leg.ratio(), fill);
             filled.add(filledLeg);
             Map<String, Object> snap = new LinkedHashMap<>();
             snap.put("leg", legDesc(filledLeg));
+            snap.put("action", leg.action().name());
+            snap.put("type", leg.isStock() ? "STOCK" : leg.type().name());
+            snap.put("strike", leg.isStock() || leg.strike() == null ? null : leg.strike().stripTrailingZeros().toPlainString());
+            snap.put("expiration", leg.expiration() == null ? null : leg.expiration().toString());
+            snap.put("ratio", leg.ratio());
             snap.put("fill", fill.toPlainString());
             snap.put("bid", mark.bid() == null ? null : mark.bid().toPlainString());
             snap.put("ask", mark.ask() == null ? null : mark.ask().toPlainString());
             snap.put("mid", mark.mid().toPlainString());
             snap.put("iv", mark.iv());
+            snap.put("delta", mark.delta());
+            snap.put("gamma", mark.gamma());
+            snap.put("theta", mark.theta());
+            snap.put("vega", mark.vega());
             snap.put("freshness", mark.freshness().name());
             snapshotLegs.add(snap);
         }
@@ -670,6 +690,12 @@ public final class TradeService {
         PayoffCurve curve = PayoffCurve.of(filled, req.qty());
         long entryNet = curve.entryNetPremiumCents();
 
+        // Same math the recommendation engine shows on candidates — the builder's live
+        // panel must not disagree with the Ideas screen about the same structure.
+        Double assignProb = io.liftandshift.recommend.RecommendationEngine.assignmentProbabilityFromIvs(
+                filled, legIvs, underlying, java.time.LocalDate.ofInstant(nowInstant, io.liftandshift.market.MarketHours.EASTERN),
+                FALLBACK_IV);
+
         // Calendars/diagonals: the expiration payoff curve is meaningless across mixed
         // expirations. Debit versions risk exactly the debit; credit versions can carry
         // undefined risk once the near leg expires, so they are blocked.
@@ -696,7 +722,8 @@ public final class TradeService {
             snapCal.put("asOf", now());
             snapCal.put("legs", snapshotLegs);
             return new Plan(filled, entryNet, feesCal, 0, maxLossCal, null, List.of(), null, null,
-                    Money.toCents(underlying), worst, blocks, warnings, Json.write(snapCal), sharesToLock);
+                    Money.toCents(underlying), worst, blocks, warnings, Json.write(snapCal), sharesToLock,
+                    snapshotLegs, assignProb, List.of());
         }
 
         // Held-shares trades are risk-shaped as the COMBINED position (option legs + the held
@@ -718,15 +745,20 @@ public final class TradeService {
                     : "Risk figures include " + (100L * contextLots * req.qty()) + " held shares at today's price. "
                         + "Long options do not lock shares — selling the shares later turns this into a plain option position");
         }
+        // Chart-ready payoff samples: computed even for blocked plans so the builder can
+        // SHOW the cliff (an uncapped short call's curve teaches more than the block text).
+        List<Map<String, Object>> payoff = chartPointMaps(riskCurve, underlying);
         if (riskCurve.maxLossUnbounded()) {
             blocks.add("Undefined (unlimited) risk: this position can lose more than any amount reserved. Add a protective leg to cap the loss.");
-            return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying), worst, blocks, warnings, "{}");
+            return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                    worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff);
         }
         long combinedMaxLoss = riskCurve.maxLossCents();
         if (combinedMaxLoss <= 0 && !shareContext) {
             blocks.add("Computed max loss is $0.00 — a risk-free position does not exist in real markets. "
                     + "The quotes feeding this trade are unreliable (stale, crossed, or expired book); refusing to fill.");
-            return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying), worst, blocks, warnings, "{}");
+            return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                    worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff);
         }
         long maxLoss = shareContext ? Math.max(0, -entryNet) : combinedMaxLoss;
         Long maxProfit = riskCurve.maxProfitUnbounded() ? null : riskCurve.maxProfitCents();
@@ -752,7 +784,19 @@ public final class TradeService {
 
         return new Plan(filled, entryNet, fees, reserve, maxLoss, maxProfit,
                 riskCurve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
-                pop, ev, Money.toCents(underlying), worst, blocks, warnings, Json.write(snapshot), sharesToLock);
+                pop, ev, Money.toCents(underlying), worst, blocks, warnings, Json.write(snapshot), sharesToLock,
+                snapshotLegs, assignProb, payoff);
+    }
+
+    private static List<Map<String, Object>> chartPointMaps(PayoffCurve curve, BigDecimal spot) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (PayoffCurve.ChartPoint p : curve.chartPoints(spot)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("price", p.price().toPlainString());
+            m.put("profitCents", p.profitCents());
+            out.add(m);
+        }
+        return out;
     }
 
     // ---- Shared helpers ----

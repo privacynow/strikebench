@@ -305,6 +305,167 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   charts, range pills, universe picker, tape' test (scrollIntoView before chart hover — below-fold
   hover silently no-ops); dom-live boot skips welcome if present. 220 JUnit + 17 fixture + 5 seeded +
   8 live DOM green.
+- HOLISTIC PASS 2 (2026-07-08, user: "you only focused on the two areas I pointed out… improve the
+  product holistically" — feedback saved to memory as a standing rule): TAPE SEAM FIXED (root cause:
+  fixed 40s duration + -50% on a strip whose halves were narrower than the viewport; now one sequence
+  is measured, cloned until each half >= viewport, duration = halfWidth/55px/s; DOM test pins even
+  sequence count + halves >= 2x viewport; VISUALLY verified mid-loop screenshot); tape gained the
+  SECTOR SWITCHER (#tape-sector, PUTs the global universe — sectors reachable from every tab);
+  BRAND CLICK -> #/welcome (the product page); welcome enriched: live engine-generated candidate
+  ("See it think", POST /api/recommend at render, DOM-pinned) + sector-explorer entry; SECTOR
+  EXPLORER (views.sectorExplorer, #/research index): 13 sector chips -> live quote tiles (batch
+  /api/quotes) w/ Research/Ideas actions, missing-data honesty line, "Make this my universe" +
+  "Scout this sector" (prefills scoutForm.universe); HOME SECTOR PULSE (#sector-pulse: per-sector
+  ETF-proxy day change chips -> explorer; async, replaces an anchor div); HEADER GLOBAL SEARCH
+  (#global-search, universe datalist, Enter -> research, "/" focuses, hidden <900px). Test-order
+  gotchas fixed: boot test must end at #/home; explorer set-universe assert must use a sector that
+  is NOT active; text= selectors flaky for badges — use .quote-hero .badge:has-text(). 220 JUnit +
+  17 fixture + 5 seeded + 8 live DOM green. Screenshots: shots/ux2-*.png.
+- INTENT-NATIVE UX (2026-07-08, user: intents "just change the labels… not thought through from a
+  user's lens, and certainly not novice/confident/pro"): each hold-based goal now has its OWN
+  interaction, not a generic candidate list:
+  - Engine.ladder(Request, bp) -> LadderResult{rungs: List<Candidate>}: 4-6 strikes of ONE family
+    (ACQUIRE->CSP stepping DOWN from spot, EXIT->CC climbing UP, HEDGE->PP floors DOWN), built via
+    BuildHints(targetPrice=strike) so each rung snaps exactly; every rung is a full Candidate
+    (executable pricing, assignmentProb, yield, effectivePrice, held-shares sizing) and goes
+    straight to the ticket. POST /api/recommend/ladder (holdings auto-injected except ACQUIRE).
+    Pinned: strikes monotonic per intent, credits positive, effective<strike (CSP), EXIT rungs
+    usesHeldShares w/ maxLoss=0, DIRECTIONAL->400.
+  - Ideas result views by intent: ladderView() — ACQUIRE "Name your price" / EXIT "Pick your exit" /
+    HEDGE "Pick your floor"; LADDER-SHAPED PER LEVEL: Learning = sentence rows + one highlighted
+    "A SANE MIDDLE" (or closest-to-target) rung + Practice buttons; Confident = rung table w/
+    tap-to-expand cards; Pro = dense table (+Cash-set-aside / Yield/yr / POP-w-shares columns).
+    EXIT table shows "vs your basis" when holdings known. Engine cards demoted below the ladder as
+    "Other structures for this goal". INCOME renders incomeBoard(): YOUR capital (free cash, shares
+    to rent out, best idea pays $X at Y%/yr) above the candidates.
+  - Forms: EXIT/HEDGE show YOUR HOLDINGS as one-tap chips (#holdings-chips w/ gain badges); target
+    gets live %-preset buttons (#target-presets: EXIT +5/+10/+20%, ACQUIRE/HEDGE -5/-10/-15% off the
+    live quote).
+  - Research symbol page: "What you can do with SYM" (#symbol-actions) — per-goal action cards with
+    LIVE one-liners computed from real ladder rungs ("Get paid $839 now to buy at $255…"), holdings-
+    aware (exit/hedge cards only when held; acquire card when not), one-tap prefilled handoff;
+    Learning caps at 3 cards. Scout groups picks under intent headers when scanning multiple goals.
+  - 226 JUnit + 18 fixture + 5 seeded + 8 live DOM green. Screenshots shots/intent2-*.png. DOM test
+    covers acquire-learning sentences, exit-pro table, preset buttons, holdings chips, income board,
+    symbol actions, rung->ticket.
+- VISUAL DESIGN PASS (2026-07-08, user: hero "looks very much like a dim AI generated it… text
+  littered… follow real UX patterns"; sector selector colliding with the tape): welcome REDESIGNED —
+  hero = eyebrow (PAPER TRADING · LOCAL-FIRST · FREE) + display H1 w/ gradient span ("Learn options
+  by *doing*, with honest numbers." — the H1 sells the VALUE; the brand stays in the header, boot
+  test updated accordingly) + short sub + two CTAs (Find my first idea / See how it works → smooth-
+  scrolls to #how-it-works) + QUIET trust row (dot-separated small text, not emoji chips); sections
+  get eyebrow labels; EMOJI REPLACED with a hand-drawn stroke-SVG icon system (views.js ICON_PATHS +
+  icon(name) — 12 icons, currentColor, .icon-tile accent squares); capability copy tightened; steps
+  are a real horizontal stepper (ghost 01-04 numerals + connectors); live example framed in a
+  .showcase-frame w/ gradient panel + caption; single .cta-banner (sector explorer) + ghost skip.
+  CSS: hero radial gradient, type scale via clamp, btn-lg/btn-ghost, eyebrow, icon-tile, stepper,
+  showcase, cta-banner. TAPE FIX: sector select restyled as a self-contained pill (flex sibling, not
+  a hard-bordered column) + .tape-scroll gets mask-image edge fades (56px in / 40px out) so items
+  dissolve instead of clipping into the control; item borders softened. Verified via screenshots
+  (design-hero{,-dark}.png, design-lower.png, design-tape2.png) light+dark. 226 JUnit + 18 fixture +
+  5 seeded + 8 live DOM green. (COUNT CORRECTION 2026-07-07: the "226 JUnit" here and in the
+  intent-native entry was a bookkeeping slip — the surefire total at that snapshot was 220; nothing
+  was ever lost. Verified via git snapshot d290c43 + per-class surefire counts.)
+- DESIGN-LANGUAGE UNIFICATION (2026-07-07, user: select heights inconsistent; sector clicks dead-end;
+  scout overflows + confusing multi-intent checkboxes; emojis remain; backtest an afterthought;
+  charts missing there; "one sane design language everywhere"):
+  - UNIFIED CONTROL SCALE (app.css tail section): --ctl-h 38px for all content inputs/selects/date
+    pickers and .btn (inline-flex centered); --ctl-h-sm 30px for .btn-sm/.sym-chip/.sector-chip;
+    header controls pinned to one 30px scale (#global-search/.risk-select select/.theme-toggle);
+    .btn-lg 46px. Overflow hygiene: .form-grid .field/.grid>*/.compact-filters .field min-width:0,
+    #app overflow-x: clip.
+  - MOBILE OVERFLOW ROOT CAUSE was NOT the tape: .topbar-controls was an unwrappable flex row
+    (~458px at 375px viewport) pushing document.scrollWidth wide on EVERY route. Fix: flex-wrap on
+    .topbar-controls + compact level-switch under 640px. (The audit's naive "widest element" blamed
+    tape-strip because getBoundingClientRect ignores ancestor clipping — check clipping before
+    blaming.)
+  - EMOJI FULLY RETIRED → shared SVG icon set moved views.js→ui.js as UI.icon(name,size)+ICON_PATHS
+    (added sun/moon/halftone/warn/pen/grid/magnifier): bottom-nav (inline SVGs in index.html),
+    Learn.INTENTS.icon now holds icon NAMES (compass/coins/tag/flag/shield), ideas intent chooser
+    (.choice-head), research actionCards (.icon-tile-sm), theme toggle (SVG+text), stale banner,
+    safety-check warn mark. learn.js stores \uXXXX escapes literally — Edit tool can't match them;
+    use perl/python for such swaps.
+  - SCOUT RETHOUGHT AS A QUESTION: five intent checkboxes → single-select goal chips (#scout-goal,
+    radio semantics, .goal-chip w/ icon) + "Everything" (grid icon) that scans all five grouped;
+    live blurb (#scout-goal-blurb) restates the selected goal in a sentence. scoutForm.goal persists
+    (back-compat maps old intents[]). Layout order: goal → budget/universe grid → expirations →
+    filters → explain → scan.
+  - EXPLORER NEVER DEAD-ENDS: sector grid renders EVERY symbol as an actionable tile; quote-less
+    tiles show "NO LIVE DATA" badge + em-dash price but keep Research/Ideas buttons (.tile-nodata).
+    This was the "clicking sectors shows nothing clickable" complaint — demo mode showed an empty
+    state for 12 of 13 sectors.
+  - BACKTEST AS A PRODUCT: window pills (3M/6M/1Y/2Y reusing .range-pills/.pill; hand-editing dates
+    clears the active pill), DTE preset chips (Weekly/Monthly/Quarterly), learning-level intro copy,
+    equity curve now leads with the standard .chart-summary chip row (window, change $/%, high/low,
+    max drawdown) above the interactive crosshair chart; candidate cards (confident/pro) gained
+    "Backtest this" → App.state.backtestPrefill {symbol,strategy} prefills the form (prefill extends
+    the level-gated menu rather than silently swapping strategy). Candidate cards carry
+    data-strategy for deterministic tests. Trade detail marks history now draws UI.lineChart of
+    unrealized P/L when ≥3 marks (marks come newest-first; reverse before charting).
+  - PERMANENT REGRESSION NET: dom-tests/dom-audit.test.js walks 11 routes × {1280,1000,375}px
+    asserting (1) zero horizontal page overflow, (2) zero emoji text nodes (range regex incl.
+    U+2600-27BF), (3) every control height ∈ {38,30,46}±1.5px. Run it with the other suites.
+  - Suites: 221 JUnit + 19 fixture DOM + 5 seeded + 8 live + 3 audit — ALL GREEN. Screenshots
+    dom-tests/shots/d2-*.png (scout learning/pro/dark/mobile, ideas chooser, explorer TECH,
+    backtest form/report/equity, mobile home).
+- SMOOTH PIPELINE + MULTI-LEG BUILDER (2026-07-07, user: abrupt view/level/ticker transitions;
+  home blank 1-2s; "middle ground" caching not a memory hog; learning = scattered sentences; and a
+  broker-grade multi-leg builder for ALL levels w/ live risk/probabilities and leg hover/click insight):
+  - GET CACHE (api.js): 20s-TTL, 40-entry-LRU read-through cache on API.get; ANY successful
+    mutation (POST/PUT/DELETE) flushes it EXCEPT pure-compute POSTs (/api/recommend*, /api/trades/
+    preview — the builder previews constantly); /api/health + /api/status never cached; failures
+    never cached; API.getFresh + API.flushCache exposed. GOTCHA: DOM tests seeding state via raw
+    page fetch() bypass the flush — use API.post/put inside page.evaluate instead (3 sites fixed).
+  - RENDER PIPELINE (app.js _renderOnce): data-ready drops SYNCHRONOUSLY at render start (the
+    crossfade is async — tests catching the OLD screen's data-ready=true was the entire first wave
+    of failures); swap (clear + UI.skeleton paint) runs inside document.startViewTransition when
+    available + motion allowed (#app has view-transition-name: app-main; root old/new animation
+    DISABLED so the ticker never freezes inside a snapshot); skeleton removed by MutationObserver
+    on the view's first real append (and in finally). CSS: .skel shimmer, card-in fade-rise on
+    #app .card/.candidate/.tile, all reduced-motion guarded.
+  - TAPE: refreshTape with an UNCHANGED symbol set updates prices/deltas IN PLACE (data-symbols
+    attr on the strip, per-item data-sym) — the marquee no longer restarts at 0% every 45s tick;
+    rebuilds only on genuine universe change. App.refreshTape exported for tests.
+  - HOME: h1 + stats appended before ANY await; account fetch decides welcome redirect + fills
+    stats; Markets uses ONE /api/quotes batch (was 8 sequential full-research calls — /api/quotes
+    rows gained "description"); trades card fills async; every section fails visibly.
+  - LEARNING LANGUAGE: explain() gained a fixed info icon (absolutely positioned so the confident
+    line-clamp override still works); mid-form explainers moved to ONE slot (top of card, under
+    header): scout, manual ideas, backtest, chain card, stock modal. Card ORDER is identical
+    across levels — level switches morph instead of reshuffling.
+  - PREVIEW ENRICHMENT (server): TradePreview gained underlyingCents, assignmentProb (engine's
+    N(d2) math via new public RecommendationEngine.assignmentProbabilityFromIvs — preview and
+    Ideas can never disagree), legs[] (action/type/strike/exp/ratio/fill/bid/ask/mid/iv/Δ/Γ/Θ/vega/
+    freshness — snapshotLegs enriched, so persisted snapshots improve too), payoff[] (PayoffCurve.
+    chartPoints(spot): 60-step grid + knots + breakevens, shared with ApiServer.payoffPoints).
+    Blocked undefined-risk plans still carry legs+payoff (the builder charts the cliff as the
+    lesson). Calendars: payoff honestly empty. NON_NULL mapper: assignmentProb absent when no
+    shorts (tests assert .has()==false). Pinned in ApiIntegrationTest order(23).
+  - STRATEGY BUILDER (js/builder.js, window.Builder; third Ideas tab "Build a strategy" =
+    #/recommend/builder; ticket()'s pro-only custom guard REMOVED — custom tickets legit at every
+    level): 26-template catalog grouped by job (bullish/bearish/neutral-income/volatility/pinpoint/
+    shares) incl. buy-write, risk reversal, straddles/strangles (short versions labeled "USUALLY
+    BLOCKED" — selecting one previews honestly, then blocks with the cliff chart: deliberate
+    education), backspreads, calendars/diagonals, collar, blank custom. Templates build from LIVE
+    strikes (ctx.pick(exp, ATM-offset)); catalog COLLAPSES to a one-line summary + "Change
+    structure" after selection so legs+panel are in view. Leg rows: buy/sell, call/put/100-shares,
+    exp+strike selects (chain-fed), ratio 1-10, Details button, remove. HOVER = .leg-pop floating
+    market tip (bid/ask/IV/Δ/Θ/OI/vol/DTE/moneyness, zero layout shift); DETAILS = inline card w/
+    per-leg cash effect (fill×100×100×ratio×qty CENTS — the ×100-twice is dollars-per-contract
+    then cents, pinned by a fixed bug) + greeks + lazy "without this leg" impact (one extra
+    preview; maxLoss/maxProfit/POP before→after). Live panel (sticky ≥1000px): verdict banner
+    (refused/cautions/passes), You collect|pay, max loss/profit, POP, assignment odds, fees,
+    breakevens, BP after, reserve, payoff chart from p.payoff, "Review & place (paper)" →
+    App.state.ticket={custom, step:6} into the standard ticket review (disabled while blocked).
+    Per level: learning gets stories (STRATEGY_GUIDE expandable, open) + full blurbs; confident
+    clamps blurbs; pro compact grid w/ title tooltips. builderForm persists in App.state.
+  - Playwright gotchas added this pass: waiting for '#app[data-ready="true"]' after clicking a
+    NAV affordance must scope to the target route ([data-route="ticket"]) — data-ready may still
+    be true for the outgoing screen; tape-item clicks should target nth>=4 (left-edge items slide
+    under the sector select); re-navigating to the SAME hash needs App.navigate (no hashchange).
+  - Suites: 222 JUnit + 21 fixture DOM + 5 seeded + 8 live + 3 audit (builder route added to the
+    audit walk) — ALL GREEN. Screenshots shots/sm-builder-{learning,confident,pro,dark,mobile}.png,
+    sm-home.png, sm-scout-hints.png, bld-*.png.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode).

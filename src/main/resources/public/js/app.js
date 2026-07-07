@@ -32,8 +32,10 @@
 
     _renderOnce: async function () {
       var root = document.getElementById('app');
+      // The readiness flag drops SYNCHRONOUSLY on render start — the crossfade below is
+      // async, and anything watching data-ready (tests, tooling) must never catch the
+      // outgoing screen still claiming to be ready for the new route.
       root.setAttribute('data-ready', 'false');
-      root.innerHTML = '';
 
       var hash = window.location.hash || '#/home';
       var parts = hash.replace(/^#\//, '').split('/').filter(function (p) { return p.length; });
@@ -51,12 +53,46 @@
           || (route === 'trade' && a.getAttribute('data-route') === 'portfolio'));
       });
 
+      // Swap = clear + paint a skeleton so the screen is never blank while data loads.
+      // Wrapped in a View Transition when the browser has one (Chromium): the old screen
+      // crossfades out instead of vanishing. #app carries its own view-transition-name so
+      // the header/tape stay out of the animation (a frozen ticker snapshot reads as a jump).
+      var skeleton = UI.skeleton();
+      var swap = function () {
+        root.setAttribute('data-ready', 'false');
+        root.innerHTML = '';
+        root.appendChild(skeleton);
+      };
+      var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (document.startViewTransition && !reduced) {
+        try { await document.startViewTransition(swap).updateCallbackDone; } catch (e) { /* swap already ran */ }
+      } else {
+        swap();
+      }
+      // The skeleton leaves the moment the view appends its first real element — views
+      // render progressively, so first content usually lands within a frame or two.
+      var mo = new MutationObserver(function (muts) {
+        for (var i = 0; i < muts.length; i++) {
+          for (var j = 0; j < muts[i].addedNodes.length; j++) {
+            if (muts[i].addedNodes[j] !== skeleton) {
+              if (skeleton.parentNode === root) root.removeChild(skeleton);
+              mo.disconnect();
+              return;
+            }
+          }
+        }
+      });
+      mo.observe(root, { childList: true });
+
       try {
         await view(root, params);
       } catch (e) {
         root.innerHTML = '';
         root.appendChild(renderRouteError(route, e));
         checkServerHealth(); // a failing screen is the moment to look for a stale server
+      } finally {
+        mo.disconnect();
+        if (skeleton.parentNode === root) root.removeChild(skeleton);
       }
       root.setAttribute('data-ready', 'true');
       root.setAttribute('data-route', route);
@@ -86,7 +122,8 @@
       if (h && h.jarChangedSinceBoot) {
         if (!existing) {
           var banner = UI.el('div', { id: 'stale-banner' },
-            '\u26A0 The app was rebuilt after this server started \u2014 screens will misbehave until you restart it: stop the process, run ',
+            UI.icon('warn', 15),
+            ' The app was rebuilt after this server started \u2014 screens will misbehave until you restart it: stop the process, run ',
             UI.el('code', {}, 'java -jar target/strikebench.jar'),
             ' and reload this page.');
           document.body.insertBefore(banner, document.body.firstChild);
@@ -103,7 +140,7 @@
   window.App = App;
 
   function initHeader() {
-    // Experience ladder: Learning / Confident / Pro
+    // Experience ladder: Beginner / Expert
     Learn.applyLevel(Learn.currentLevel());
     document.querySelectorAll('#level-switch button').forEach(function (b) {
       b.addEventListener('click', function () {
@@ -123,25 +160,18 @@
   }
 
   function applyLevelSideEffects() {
-    // Learning users don't get the aggressive risk mode
+    // Beginners don't get the aggressive risk mode
     var risk = document.getElementById('risk-mode');
     var aggressive = risk.querySelector('option[value="aggressive"]');
-    var learning = document.body.classList.contains('lvl-learning');
-    aggressive.hidden = learning;
-    aggressive.disabled = learning;
-    if (learning && risk.value === 'aggressive') risk.value = 'conservative';
+    var beginner = document.body.classList.contains('lvl-beginner');
+    aggressive.hidden = beginner;
+    aggressive.disabled = beginner;
+    if (beginner && risk.value === 'aggressive') risk.value = 'conservative';
   }
 
   async function boot() {
     initHeader();
     applyLevelSideEffects();
-    // Confident level clamps explainers to one line; tap to expand
-    document.addEventListener('click', function (e) {
-      if (document.body.classList.contains('lvl-confident')
-          && e.target.classList && e.target.classList.contains('explain')) {
-        e.target.classList.toggle('expanded');
-      }
-    });
     initTheme();
     initSearch();
     try {
@@ -160,6 +190,7 @@
   // ---- Universe: one global setting feeding the tape, the scout, and symbol suggestions ----
 
   App.refreshUniverse = refreshUniverse;
+  App.refreshTape = refreshTape; // exposed so tests can pin the no-rebuild behavior
   async function refreshUniverse() {
     try {
       var u = await API.get('/api/universe');
@@ -192,13 +223,32 @@
       renderTapeSector();
       if (!quotes.length) { tape.hidden = true; return; }
 
+      // Same symbols as the strip already shows? Update the numbers IN PLACE and leave
+      // the marquee running \u2014 a rebuild restarts the animation at 0%, which reads as the
+      // whole ticker jumping every refresh. Rebuild only when the symbol set changes.
+      var symbolsKey = quotes.map(function (q) { return q.symbol; }).join(',');
+      if (strip.getAttribute('data-symbols') === symbolsKey && strip.children.length) {
+        quotes.forEach(function (q) {
+          var last = parseFloat(q.last), prev = parseFloat(q.prevClose);
+          var pct = prev ? (last - prev) / prev * 100 : 0;
+          strip.querySelectorAll('.tape-item[data-sym="' + q.symbol + '"]').forEach(function (item) {
+            item.children[1].textContent = last.toFixed(2);
+            var d = item.children[2];
+            d.className = pct >= 0 ? 'gain' : 'loss';
+            d.textContent = (pct >= 0 ? '\u25B2' : '\u25BC') + Math.abs(pct).toFixed(2) + '%';
+          });
+        });
+        tape.hidden = false;
+        return;
+      }
+
       function sequence(interactive) {
         var seq = UI.el('span', { class: 'tape-seq', 'aria-hidden': interactive ? null : 'true' });
         quotes.forEach(function (q) {
           var last = parseFloat(q.last), prev = parseFloat(q.prevClose);
           var pct = prev ? (last - prev) / prev * 100 : 0;
           seq.appendChild(UI.el('button', {
-            class: 'tape-item', type: 'button', tabindex: interactive ? '0' : '-1',
+            class: 'tape-item', type: 'button', tabindex: interactive ? '0' : '-1', 'data-sym': q.symbol,
             onclick: function () { App.navigate('#/research/' + q.symbol); }
           },
             UI.el('b', {}, q.symbol),
@@ -219,6 +269,7 @@
       var perHalf = Math.max(1, Math.ceil(containerW / seqW));
       for (var i = 1; i < perHalf * 2; i++) strip.appendChild(sequence(false));
       var halfW = seqW * perHalf;
+      strip.setAttribute('data-symbols', symbolsKey);
       strip.style.animation = '';
       strip.style.animationDuration = Math.max(20, Math.round(halfW / 55)) + 's'; // ~55 px/s
     } catch (e) { tape.hidden = true; }
@@ -281,7 +332,8 @@
   // ---- Theme: system / light / dark, persisted; html[data-theme] is set pre-paint ----
 
   var THEME_MODES = ['system', 'light', 'dark'];
-  var THEME_LABEL = { system: '\u25D0 Auto', light: '\u2600\uFE0E Light', dark: '\u263E Dark' };
+  var THEME_LABEL = { system: 'Auto', light: 'Light', dark: 'Dark' };
+  var THEME_ICON = { system: 'halftone', light: 'sun', dark: 'moon' };
   var mediaDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
   function themeMode() {
@@ -296,7 +348,9 @@
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
     var btn = document.getElementById('theme-toggle');
     if (btn) {
-      btn.textContent = THEME_LABEL[mode];
+      btn.innerHTML = '';
+      btn.appendChild(UI.icon(THEME_ICON[mode], 14));
+      btn.appendChild(document.createTextNode(' ' + THEME_LABEL[mode]));
       btn.title = 'Theme: ' + (mode === 'system' ? 'follows your system' : mode) + '. Click to cycle Auto / Light / Dark.';
     }
   }

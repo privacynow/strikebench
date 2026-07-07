@@ -596,4 +596,121 @@ class ApiIntegrationTest {
         assertThat(put("/api/universe", "{\"sector\":\"DEMO\"}").statusCode()).isEqualTo(200);
     }
 
+    @Test
+    @Order(22)
+    void strikeLaddersAreIntentNative() throws Exception {
+        // ACQUIRE: rungs step DOWN from spot; each rung names your price with full honesty metrics
+        JsonNode acq = Json.parse(post("/api/recommend/ladder",
+                "{\"symbol\":\"AAPL\",\"intent\":\"acquire\",\"riskMode\":\"balanced\"}").body());
+        assertThat(acq.get("intent").asText()).isEqualTo("ACQUIRE");
+        assertThat(acq.get("rungs").size()).isGreaterThanOrEqualTo(4);
+        double prev = Double.MAX_VALUE;
+        for (JsonNode r : acq.get("rungs")) {
+            double strike = Double.parseDouble(r.get("legs").get(0).get("strike").asText());
+            assertThat(strike).isLessThanOrEqualTo(255.30 + 0.01); // at or below fixture spot
+            assertThat(strike).isLessThan(prev);
+            prev = strike;
+            assertThat(r.get("entryNetPremiumCents").asLong()).isPositive(); // paid to wait
+            assertThat(Double.parseDouble(r.get("effectivePrice").asText())).isLessThan(strike);
+            assertThat(r.get("assignmentProb").isNumber()).isTrue();
+            assertThat(r.get("annualizedYieldPct").isNumber()).isTrue();
+        }
+
+        // EXIT with held shares: rungs climb ABOVE spot, sized to the shares, no new cash
+        assertThat(post("/api/positions/buy", "{\"symbol\":\"AAPL\",\"shares\":100}").statusCode()).isEqualTo(201);
+        JsonNode exit = Json.parse(post("/api/recommend/ladder",
+                "{\"symbol\":\"AAPL\",\"intent\":\"exit\"}").body());
+        assertThat(exit.get("rungs").size()).isGreaterThanOrEqualTo(4);
+        double prevUp = 0;
+        for (JsonNode r : exit.get("rungs")) {
+            double strike = Double.parseDouble(r.get("legs").get(0).get("strike").asText());
+            assertThat(strike).isGreaterThanOrEqualTo(255.29);
+            assertThat(strike).isGreaterThan(prevUp);
+            prevUp = strike;
+            assertThat(r.get("usesHeldShares").asBoolean()).isTrue();
+            assertThat(r.get("qty").asInt()).isEqualTo(1); // the one held lot
+            assertThat(r.get("maxLossCents").asLong()).isZero();
+        }
+
+        // HEDGE: floors below spot, each rung costs its premium
+        JsonNode hedge = Json.parse(post("/api/recommend/ladder",
+                "{\"symbol\":\"AAPL\",\"intent\":\"hedge\"}").body());
+        assertThat(hedge.get("rungs").size()).isGreaterThanOrEqualTo(3);
+        for (JsonNode r : hedge.get("rungs")) {
+            assertThat(r.get("maxLossCents").asLong()).isPositive();
+            assertThat(r.get("intentNote").asText()).contains("Guarantees");
+        }
+        assertThat(post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}").statusCode()).isEqualTo(200);
+
+        // Directional has no ladder — clean 400, not a mystery
+        assertThat(post("/api/recommend/ladder", "{\"symbol\":\"AAPL\",\"intent\":\"directional\"}").statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    @Order(23)
+    void previewCarriesLegMarksAssignmentAndPayoff() throws Exception {
+        // The builder's live panel runs entirely off the preview response: it needs per-leg
+        // executable marks + greeks, the engine's assignment probability, and chartable payoff.
+        JsonNode research = Json.parse(get("/api/research/AAPL").body());
+        String exp = research.get("expirations").get(3).asText();
+
+        String spread = "{\"symbol\":\"AAPL\",\"strategy\":\"CREDIT_PUT_SPREAD\",\"qty\":1,\"legs\":["
+                + "{\"action\":\"SELL\",\"type\":\"PUT\",\"strike\":\"250\",\"expiration\":\"" + exp + "\",\"ratio\":1},"
+                + "{\"action\":\"BUY\",\"type\":\"PUT\",\"strike\":\"245\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}";
+        JsonNode p = Json.parse(post("/api/trades/preview", spread).body()).get("preview");
+        assertThat(p.get("ok").asBoolean()).isTrue();
+        assertThat(p.get("underlyingCents").asLong()).isGreaterThan(0);
+
+        // Per-leg marks aligned with the request: fills at executable sides, greeks present
+        assertThat(p.get("legs").size()).isEqualTo(2);
+        JsonNode shortLeg = p.get("legs").get(0);
+        assertThat(shortLeg.get("action").asText()).isEqualTo("SELL");
+        assertThat(shortLeg.get("type").asText()).isEqualTo("PUT");
+        assertThat(shortLeg.get("strike").asText()).isEqualTo("250");
+        assertThat(shortLeg.get("bid").asText()).isNotBlank();
+        assertThat(shortLeg.get("ask").asText()).isNotBlank();
+        assertThat(shortLeg.get("fill").asText()).isEqualTo(shortLeg.get("bid").asText()); // SELL fills at bid
+        assertThat(shortLeg.get("delta").isNumber()).isTrue();
+        assertThat(shortLeg.get("theta").isNumber()).isTrue();
+
+        // Assignment probability: one short strike, engine math, in (0,1]
+        double assign = p.get("assignmentProb").asDouble();
+        assertThat(assign).isGreaterThan(0.0).isLessThanOrEqualTo(1.0);
+
+        // Payoff samples: sorted ascending, spanning below and above the strikes
+        JsonNode payoff = p.get("payoff");
+        assertThat(payoff.size()).isGreaterThan(30);
+        double prevPrice = -1;
+        for (JsonNode pt : payoff) {
+            double px = Double.parseDouble(pt.get("price").asText());
+            assertThat(px).isGreaterThan(prevPrice);
+            prevPrice = px;
+        }
+
+        // A long call has no short strike: assignmentProb is null, upside uncapped
+        String longCall = "{\"symbol\":\"AAPL\",\"strategy\":\"LONG_CALL\",\"qty\":1,\"legs\":["
+                + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}";
+        JsonNode lc = Json.parse(post("/api/trades/preview", longCall).body()).get("preview");
+        assertThat(lc.has("assignmentProb")).isFalse(); // NON_NULL mapper: no shorts -> field absent
+        assertThat(lc.get("payoff").size()).isGreaterThan(30);
+
+        // Undefined risk is BLOCKED but the payoff still charts the cliff (education, not a dead end)
+        String naked = "{\"symbol\":\"AAPL\",\"strategy\":\"CUSTOM\",\"qty\":1,\"legs\":["
+                + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"260\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}";
+        JsonNode nk = Json.parse(post("/api/trades/preview", naked).body()).get("preview");
+        assertThat(nk.get("ok").asBoolean()).isFalse();
+        assertThat(nk.get("blockReasons").toString()).contains("Undefined");
+        assertThat(nk.get("payoff").size()).isGreaterThan(30);
+        assertThat(nk.get("legs").size()).isEqualTo(1);
+
+        // Calendars: no expiration payoff curve (model-dependent), honestly empty
+        String exp2 = research.get("expirations").get(5).asText();
+        String calendar = "{\"symbol\":\"AAPL\",\"strategy\":\"CALENDAR_CALL\",\"qty\":1,\"legs\":["
+                + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp + "\",\"ratio\":1},"
+                + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp2 + "\",\"ratio\":1}]}";
+        JsonNode cal = Json.parse(post("/api/trades/preview", calendar).body()).get("preview");
+        assertThat(cal.get("payoff").size()).isZero();
+        assertThat(cal.get("legs").size()).isEqualTo(2);
+    }
+
 }

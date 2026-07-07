@@ -125,7 +125,7 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
 }
 .nav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
 .nav a.active { background: var(--accent-soft); color: var(--accent); }
-.topbar-controls { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.topbar-controls { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 12px; min-width: 0; }
 .risk-select { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-dim); }
 .risk-select select { padding: 4px 8px; font-size: 12.5px; border-radius: 7px; }
 /* Experience ladder: segmented control */
@@ -218,31 +218,31 @@ h3 { font-size: 14.5px; margin: 12px 0 8px; }
 /* ---------- Explainers adapt to the ladder ---------- */
 .explain {
   display: block; font-size: 12.5px; color: var(--text-dim); background: var(--accent-soft);
-  border-left: 3px solid var(--accent); border-radius: 6px; padding: 7px 11px; margin: 8px 0; line-height: 1.45;
+  border-left: 3px solid var(--accent); border-radius: 6px; padding: 7px 11px 7px 30px; margin: 8px 0; line-height: 1.45;
+  position: relative;
 }
-body.lvl-learning .explain { font-size: 13px; }
-body.lvl-confident .explain {
-  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical;
-  overflow: hidden; cursor: pointer; opacity: .85;
+.explain .explain-ico {
+  position: absolute; left: 9px; top: 8px; color: var(--accent); display: inline-flex;
 }
-body.lvl-confident .explain.expanded { -webkit-line-clamp: unset; opacity: 1; }
-body.lvl-pro .explain { display: none; }
+.explain .explain-ico svg { display: block; }
+body.lvl-beginner .explain { font-size: 13px; }
+body.lvl-expert .explain { display: none; }
 
 /* Level-scoped elements */
-body:not(.lvl-learning) .learning-only { display: none !important; }
-body:not(.lvl-pro) .pro-only { display: none !important; }
-body.lvl-pro .not-pro { display: none !important; }
+body:not(.lvl-beginner) .beginner-only { display: none !important; }
+body:not(.lvl-expert) .expert-only { display: none !important; }
+body.lvl-expert .not-expert { display: none !important; }
 
 /* Pro density: tighter everything, data first */
-body.lvl-pro .card { padding: 12px 14px; margin-bottom: 10px; }
-body.lvl-pro .stat { padding: 8px 10px; }
-body.lvl-pro .stat .value { font-size: 16px; }
-body.lvl-pro .tbl th { padding: 5px 8px; }
-body.lvl-pro .tbl td { padding: 5px 8px; font-size: 13px; }
-body.lvl-pro .chip { padding: 3px 9px; font-size: 12px; }
-body.lvl-pro .candidate { padding: 10px 14px; margin-bottom: 8px; }
-body.lvl-pro h1 { font-size: 18px; margin-bottom: 10px; }
-body.lvl-pro .page-sub { display: none; }
+body.lvl-expert .card { padding: 12px 14px; margin-bottom: 10px; }
+body.lvl-expert .stat { padding: 8px 10px; }
+body.lvl-expert .stat .value { font-size: 16px; }
+body.lvl-expert .tbl th { padding: 5px 8px; }
+body.lvl-expert .tbl td { padding: 5px 8px; font-size: 13px; }
+body.lvl-expert .chip { padding: 3px 9px; font-size: 12px; }
+body.lvl-expert .candidate { padding: 10px 14px; margin-bottom: 8px; }
+body.lvl-expert h1 { font-size: 18px; margin-bottom: 10px; }
+body.lvl-expert .page-sub { display: none; }
 
 /* ---------- Expandable disclosure ---------- */
 .xp { border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 8px 0; background: var(--surface); }
@@ -455,8 +455,6 @@ body.lvl-pro .page-sub { display: none; }
 .intent-compact .choice { padding: 6px 12px; flex: 0 0 auto; }
 .intent-compact .choice b { display: inline; margin: 0; font-size: 13px; }
 /* Confident: blurbs clamp to one line (tap a card to select; the title attr has the rest) */
-body.lvl-confident #intent-choices .choice .muted {
-  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 /* Pro: filters sit inline, no card chrome doubling */
 .compact-filters { padding: 10px 14px; margin: 8px 0; }
 .compact-filters .form-grid.grid-5 { grid-template-columns: repeat(5, 1fr); gap: 8px; }
@@ -478,6 +476,8 @@ body.lvl-confident #intent-choices .choice .muted {
 @media (max-width: 640px) {
   .nav { display: none; }
   .topbar { gap: 6px 10px; }
+  .topbar-controls { gap: 6px 8px; }
+  .level-switch button { padding: 4px 8px; font-size: 11.5px; }
   .app { padding: 14px 10px 84px; }
   .card { padding: 14px; }
   .quote-hero .px { font-size: 28px; }
@@ -492,15 +492,19 @@ body.lvl-confident #intent-choices .choice .muted {
     font-size: 10.5px; font-weight: 700; color: var(--text-faint); padding: 3px 10px; border-radius: 8px;
   }
   .bottom-nav a.active { color: var(--accent); }
-  .bottom-nav .bn-ico { font-size: 17px; line-height: 1.1; }
+  .bottom-nav .bn-ico { line-height: 1; }
   .disclaimer { padding-bottom: 76px; }
 }
 
 /* ---- Ticker tape: seamless marquee of the active universe ---- */
-.tape { display: flex; align-items: stretch; background: var(--surface); border-bottom: 1px solid var(--border); }
-.tape-sector { border: 0; border-right: 1px solid var(--border-strong); background: var(--surface-2);
-  color: var(--text); font-size: 12px; font-weight: 700; padding: 0 10px; cursor: pointer; max-width: 190px; }
-.tape-scroll { overflow: hidden; white-space: nowrap; flex: 1; }
+.tape { display: flex; align-items: center; gap: 4px; background: var(--surface); border-bottom: 1px solid var(--border); padding-left: 8px; }
+.tape-sector { flex: 0 0 auto; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text-dim); font-size: 11.5px; font-weight: 700; padding: 3px 8px; cursor: pointer;
+  border-radius: 999px; max-width: 170px; margin: 4px 0; }
+.tape-sector:hover { color: var(--text); border-color: var(--border-strong); }
+.tape-scroll { overflow: hidden; white-space: nowrap; flex: 1; min-width: 0; margin-left: 8px;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 56px, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(90deg, transparent 0, #000 56px, #000 calc(100% - 40px), transparent); }
 .tape-seq { display: inline-flex; }
 .tape-strip { display: inline-flex; gap: 0; animation: tape-scroll linear infinite; will-change: transform; }
 .tape:hover .tape-strip { animation-play-state: paused; }
@@ -520,7 +524,7 @@ body.lvl-confident #intent-choices .choice .muted {
 .sector-tile { min-width: 150px; }
 .welcome-live-card { max-width: 720px; margin: 0 auto; }
 .tape-item { display: inline-flex; gap: 7px; align-items: baseline; padding: 6px 14px; border: 0; background: none;
-  color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; border-right: 1px solid var(--border); }
+  color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
 .tape-item b { font-weight: 700; }
 .tape-item:hover { background: var(--surface-2); }
 @keyframes tape-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
@@ -547,18 +551,56 @@ body.lvl-confident #intent-choices .choice .muted {
 .chart.chart-down .line { stroke: var(--loss); }
 .chart.chart-down .area-line { fill: var(--risk-danger-bg); }
 
-/* ---- Welcome / opening page ---- */
-.welcome-hero { text-align: center; padding: 44px 16px 26px; }
-.welcome-hero h1 { font-size: 42px; margin: 0 0 6px; letter-spacing: -0.5px; }
-.welcome-hero .hero-tag { font-size: 17px; color: var(--text-dim); margin: 0 0 16px; }
-.hero-points { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
-.welcome-h2 { text-align: center; margin: 26px 0 12px; }
-.welcome-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
-.welcome-card { text-align: center; padding: 20px 16px; }
-.welcome-card .w-icon { font-size: 30px; margin-bottom: 6px; }
-.welcome-card h3 { margin: 0 0 6px; }
-.welcome-steps { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; margin-top: 22px; }
-.w-step .w-num { color: var(--accent); font-weight: 800; margin-right: 6px; font-family: var(--mono); }
+/* ---- Welcome / opening page: designed, not typed ---- */
+.hero { position: relative; padding: 68px 16px 46px; overflow: hidden; }
+.hero::before { content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(900px 420px at 50% -12%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%); }
+.hero-inner { position: relative; max-width: 780px; margin: 0 auto; text-align: center; }
+.eyebrow { font-size: 11.5px; font-weight: 800; letter-spacing: 0.14em; color: var(--accent); margin-bottom: 14px; }
+.hero-title { font-size: clamp(34px, 5.2vw, 54px); line-height: 1.08; letter-spacing: -0.02em; margin: 0 0 16px; }
+.hero-title .grad { background: linear-gradient(92deg, var(--accent), #8b5cf6);
+  -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero-sub { font-size: 17px; line-height: 1.6; color: var(--text-dim); max-width: 620px; margin: 0 auto 24px; }
+.hero-ctas { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 22px; }
+.btn-lg { padding: 12px 26px; font-size: 15px; border-radius: 12px; }
+.btn-ghost { background: transparent; border: 1px solid var(--border-strong); color: var(--text); }
+.btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+.trust-row { font-size: 13px; color: var(--text-faint); }
+.trust-row .dot-sep { margin: 0 10px; }
+
+.welcome-section { max-width: 980px; margin: 0 auto; padding: 34px 8px 6px; text-align: center; }
+.welcome-h2 { margin: 0 0 20px; font-size: 26px; letter-spacing: -0.01em; }
+.welcome-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; text-align: left; }
+.welcome-card { padding: 22px 20px; }
+.welcome-card h3 { margin: 12px 0 6px; font-size: 16.5px; }
+.welcome-card p { margin: 0 0 14px; color: var(--text-dim); font-size: 13.5px; line-height: 1.55; }
+.icon-tile { width: 42px; height: 42px; border-radius: 11px; display: flex; align-items: center;
+  justify-content: center; background: var(--accent-soft); color: var(--accent); }
+.icon { display: inline-flex; }
+
+.showcase { max-width: 760px; margin: 0 auto; }
+.showcase-frame { border: 1px solid var(--border); border-radius: 16px; padding: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, var(--surface)), var(--surface));
+  box-shadow: var(--shadow-lg); text-align: left; }
+.showcase-frame .candidate { margin: 0; box-shadow: none; }
+.showcase-caption { font-size: 13px; color: var(--text-faint); margin: 12px auto 0; max-width: 560px; }
+.showcase-loading { padding: 24px; }
+
+.stepper { display: flex; gap: 0; justify-content: center; flex-wrap: wrap; text-align: left; }
+.step-block { display: flex; align-items: flex-start; gap: 12px; padding: 8px 26px 8px 0; position: relative; }
+.step-block:not(:last-child)::after { content: ''; position: absolute; right: 6px; top: 26px;
+  width: 14px; height: 2px; background: var(--border-strong); }
+.step-num { font-family: var(--mono); font-size: 26px; font-weight: 700; line-height: 1.2;
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-faint)); }
+.step-text { display: flex; flex-direction: column; max-width: 170px; }
+.step-text b { font-size: 14.5px; }
+.step-text span { font-size: 12.5px; color: var(--text-dim); }
+
+.cta-banner { display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  max-width: 900px; margin: 34px auto 0; padding: 20px 24px; border-radius: 16px;
+  border: 1px solid var(--border); background: var(--accent-soft); flex-wrap: wrap; }
+.cta-banner p { margin: 4px 0 0; font-size: 13.5px; }
+.welcome-exit { text-align: center; margin: 26px 0 10px; }
 
 /* ---- Micro-polish: motion that respects the user's settings ---- */
 .card { transition: box-shadow .18s ease, transform .18s ease; }
@@ -569,4 +611,210 @@ body.lvl-confident #intent-choices .choice .muted {
 @media (prefers-reduced-motion: reduce) {
   .card, .btn, .tile, .pick-card, .range-pills .pill { transition: none; }
   .tile:hover, .pick-card:hover, .btn:active { transform: none; }
+}
+
+/* ---- Intent-native ladders & action cards ---- */
+.ladder-sentences { display: flex; flex-direction: column; gap: 8px; }
+.ladder-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); flex-wrap: wrap; }
+.ladder-row.recommended { border-color: var(--accent); background: var(--accent-soft); }
+.ladder-tbl tr.ladder-recommended > td { background: var(--accent-soft); }
+.action-grid .action-card { text-align: left; padding: 14px; }
+.action-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.action-line { min-height: 38px; }
+.scout-group { margin: 18px 0 8px; }
+.sym-chip.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+/* ==================================================================================
+   UNIFIED CONTROL SCALE — one design language for every interactive element.
+   Standard controls (inputs, selects, date pickers, buttons) share --ctl-h; chips and
+   small buttons share --ctl-h-sm; header controls share --ctl-h-xs. Nothing freelances.
+   ================================================================================== */
+:root { --ctl-h: 38px; --ctl-h-sm: 30px; --ctl-h-xs: 30px; }
+
+.app input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.app select {
+  height: var(--ctl-h); padding: 0 11px; box-sizing: border-box; font-size: 14px;
+}
+.app select { padding-right: 26px; }
+.app textarea { padding: 8px 11px; box-sizing: border-box; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: var(--ctl-h); padding: 0 16px; box-sizing: border-box;
+}
+.btn-sm { min-height: var(--ctl-h-sm); padding: 0 12px; }
+.btn-lg { min-height: 46px; padding: 0 26px; }
+
+/* Chips are one scale, whatever they select. */
+.sym-chip, .sector-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: var(--ctl-h-sm); padding: 0 12px; box-sizing: border-box;
+}
+
+/* Header controls: intentionally compact, but identical to EACH OTHER. */
+.topbar-controls #global-search, .risk-select select, .theme-toggle {
+  height: var(--ctl-h-xs); box-sizing: border-box;
+}
+.theme-toggle { display: inline-flex; align-items: center; gap: 5px; }
+.theme-toggle .icon { display: inline-flex; }
+.theme-toggle .icon svg { display: block; }
+
+/* ---------- Scout goal selector (single choice, radio semantics) ---------- */
+.field-label {
+  font-size: 12px; font-weight: 700; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: .04em; margin: 2px 0 6px;
+}
+.goal-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.goal-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: var(--ctl-h); padding: 0 15px; box-sizing: border-box; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-dim);
+  font-weight: 650; font-size: 13.5px; transition: border-color .12s, color .12s, background .12s;
+}
+.goal-chip .icon { display: inline-flex; }
+.goal-chip .icon svg { display: block; }
+.goal-chip:hover { border-color: var(--accent); color: var(--accent); }
+.goal-chip.selected { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.goal-blurb { margin: 8px 2px 14px; font-size: 13px; min-height: 1.2em; }
+
+/* ---------- Icon plumbing (SVG everywhere; emoji are banned) ---------- */
+.choice-head { display: flex; align-items: center; gap: 8px; }
+.choice-head .icon { display: inline-flex; color: var(--accent); }
+.choice-head .icon svg { display: block; }
+.icon-tile-sm { width: 34px; height: 34px; border-radius: 9px; flex: none; }
+.icon-tile-sm .icon svg { width: 18px; height: 18px; }
+.action-head { display: flex; align-items: center; gap: 10px; }
+.bn-ico svg { width: 18px; height: 18px; display: block; margin: 0 auto 1px; }
+#stale-banner .icon { display: inline-flex; vertical-align: -2px; margin-right: 3px; }
+#stale-banner .icon svg { display: block; }
+
+/* ---------- Sector explorer: every tile actionable, even without a quote ---------- */
+.tile-nodata { opacity: .8; }
+.tile-nodata .t-px { color: var(--text-dim); }
+
+/* ---------- Overflow hygiene: grids and flex rows must never push the page wide ---------- */
+.form-grid .field, .grid > *, .compact-filters .field { min-width: 0; }
+.field input, .field select { max-width: 100%; }
+.btn-row { min-width: 0; }
+#app { overflow-x: clip; }
+
+/* ==================================================================================
+   SMOOTH RENDER PIPELINE — skeletons, route crossfade, progressive card arrival.
+   ================================================================================== */
+
+/* Route crossfade: only #app participates; header/tape/footer swap instantly so the
+   marquee never appears frozen inside a transition snapshot. */
+#app { view-transition-name: app-main; }
+::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+::view-transition-old(app-main) { animation: sb-fade-out .14s ease both; }
+::view-transition-new(app-main) { animation: sb-fade-in .16s ease both; }
+@keyframes sb-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes sb-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Skeleton: a quiet placeholder, never a blank void. */
+.skel-screen { padding-top: 4px; }
+.skel {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(100deg, var(--surface-2) 40%, var(--surface-3) 50%, var(--surface-2) 60%);
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.3s ease-in-out infinite;
+}
+.skel-title { height: 30px; width: 240px; max-width: 60%; margin: 8px 0 16px; }
+.skel-row { display: grid; gap: 12px; grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; }
+@media (max-width: 700px) { .skel-row { grid-template-columns: 1fr 1fr; } }
+.skel-stat { height: 72px; }
+.skel-card { height: 180px; margin-bottom: 16px; }
+.skel-card-short { height: 110px; }
+@keyframes skel-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* Progressive arrival: cards fade-rise as views append them, so async fills read as
+   content arriving rather than the page snapping. */
+#app .card, #app .candidate, #app .tile {
+  animation: card-in .18s ease both;
+}
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skel { animation: none; }
+  #app .card, #app .candidate, #app .tile { animation: none; }
+  ::view-transition-old(app-main), ::view-transition-new(app-main) { animation: none; }
+}
+
+/* ==================================================================================
+   STRATEGY BUILDER — template catalog, leg editor, live "where you stand" panel.
+   ================================================================================== */
+.builder-cols { display: grid; gap: 16px; grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1000px) {
+  .builder-cols { grid-template-columns: minmax(0, 1fr) 400px; }
+  .builder-panel { position: sticky; top: 74px; max-height: calc(100vh - 90px); overflow-y: auto; }
+}
+
+.tpl-group-label {
+  font-size: 11.5px; font-weight: 700; color: var(--text-faint); text-transform: uppercase;
+  letter-spacing: .05em; margin: 12px 0 6px;
+}
+.tpl-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+.tpl-grid.compact { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.tpl {
+  text-align: left; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface); padding: 9px 11px; display: flex; flex-direction: column; gap: 4px;
+  transition: border-color .12s, background .12s; min-width: 0;
+}
+.tpl:hover { border-color: var(--accent); }
+.tpl.selected { border-color: var(--accent); background: var(--accent-soft); }
+.tpl-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tpl-head b { font-size: 13.5px; }
+.tpl-blurb { font-size: 12px; line-height: 1.4; }
+
+.leg-row {
+  border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px;
+  background: var(--surface); transition: border-color .12s;
+}
+.leg-row:hover { border-color: var(--border-strong); }
+.leg-row.open { border-color: var(--accent); }
+.leg-controls { display: flex; gap: 7px; padding: 8px 10px; align-items: center; flex-wrap: wrap; cursor: pointer; }
+.leg-controls select, .leg-controls input { min-width: 0; }
+.leg-action { width: 76px; }
+.leg-type { width: 110px; }
+.leg-exp { flex: 1 1 120px; }
+.leg-strike { width: 96px; }
+.leg-ratio { width: 62px; }
+.leg-info { margin-left: auto; }
+.leg-remove { flex: none; }
+.leg-detail { padding: 2px 12px 10px; border-top: 1px dashed var(--border); }
+.leg-impact { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; margin-top: 4px; }
+.impact-bit b { font-variant-numeric: tabular-nums; }
+
+/* Hover tip: fixed-position insight, zero layout shift (same look as chart tips). */
+.leg-pop {
+  position: absolute; z-index: 40; background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px 11px;
+  box-shadow: var(--shadow-lg); font-size: 12.5px; line-height: 1.5; min-width: 220px; max-width: 300px;
+  pointer-events: none;
+}
+.leg-pop .tt-title { font-weight: 700; margin-bottom: 3px; }
+
+.builder-panel.updating { opacity: .65; transition: opacity .15s; }
+.panel-stats { margin: 10px 0; }
+.tpl-selected {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  border: 1px solid var(--accent); background: var(--accent-soft);
+  border-radius: var(--radius-sm); padding: 9px 12px;
+}
+.tpl-selected .tpl-blurb { font-size: 12.5px; }
+
+/* ---------- Desktop home: everything important on ONE screen ---------- */
+.home-cols { display: grid; gap: 0 16px; grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1100px) {
+  .home-cols { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+  /* Tighter dashboard rhythm on large screens so the fold never hides an action */
+  #app[data-route="home"] .stat .explain { margin: 4px 0 0; }
+  #app[data-route="home"] h1 { margin-bottom: 10px; }
+}
+.home-actions { display: grid; gap: 12px; grid-template-columns: 1fr; margin-bottom: 16px; }
+@media (min-width: 640px) and (max-width: 1099px) {
+  .home-actions { grid-template-columns: repeat(2, 1fr); }
 }

@@ -1,0 +1,122 @@
+/*
+ * DESIGN-LANGUAGE AUDIT: the defects the owner kept re-reporting (mismatched control
+ * heights, horizontal overflow, emoji instead of SVG icons) are exactly the kind that
+ * slip past feature tests. This suite walks every route at desktop, laptop, and phone
+ * widths and asserts three invariants mechanically:
+ *   1. The page NEVER scrolls horizontally.
+ *   2. No emoji anywhere in rendered text — pictograms are the shared SVG icon set.
+ *   3. Form controls come in exactly the sanctioned sizes (--ctl-h / --ctl-h-sm / --ctl-h-xs).
+ *
+ * Run:  node --test dom-audit.test.js
+ */
+'use strict';
+
+const { test, before, after } = require('node:test');
+const assert = require('node:assert');
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { chromium } = require('playwright');
+
+const PORT = process.env.PORT || '7181';
+const BASE = `http://localhost:${PORT}`;
+const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
+const JAVA = process.env.JAVA_BIN || 'java';
+
+let server, browser, page;
+
+async function waitForServer(tries = 60) {
+  for (let i = 0; i < tries; i++) {
+    try { if ((await fetch(`${BASE}/api/status`)).ok) return; } catch (e) { /* not up */ }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  throw new Error('server did not start');
+}
+
+async function go(hash) {
+  await page.evaluate(h => { window.location.hash = h; }, hash);
+  await page.waitForSelector('#app[data-ready="true"]', { timeout: 30000 });
+  await page.waitForTimeout(400); // async cards (explorer tiles, ladders) settle
+}
+
+before(async () => {
+  const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strikebench-audit-'));
+  server = spawn(JAVA, ['-jar', JAR], {
+    env: { ...process.env, PORT, DB_PATH: path.join(dbDir, 'audit.db'), FIXTURES_ONLY: 'true' },
+    stdio: 'ignore'
+  });
+  await waitForServer();
+  browser = await chromium.launch();
+  page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  await page.goto(BASE + '/');
+  await page.waitForSelector('#app[data-ready="true"]', { timeout: 30000 });
+  const skip = await page.locator('#welcome-skip').count();
+  if (skip) { await page.click('#welcome-skip'); await page.waitForSelector('#app[data-ready="true"]'); }
+});
+
+after(async () => {
+  if (browser) await browser.close();
+  if (server) server.kill();
+});
+
+const ROUTES = ['#/home', '#/welcome', '#/research', '#/research/AAPL', '#/recommend/scout',
+  '#/recommend/manual', '#/recommend/builder', '#/ticket', '#/portfolio', '#/backtest', '#/account', '#/status'];
+const WIDTHS = [1280, 1000, 375];
+
+// Sanctioned control heights: --ctl-h (38), --ctl-h-sm / --ctl-h-xs (30), plus the
+// tape/level-switch micro scale (<=28) which is exempted by selector below.
+const ALLOWED_HEIGHTS = [38, 30, 46]; // 46 = .btn-lg on the welcome hero
+const TOLERANCE = 1.5;
+
+function auditInPage() {
+  const out = { overflow: [], emoji: [], controls: [] };
+  const doc = document.documentElement;
+  if (doc.scrollWidth > doc.clientWidth + 2) {
+    // name the widest offender to make failures actionable
+    let worst = null, worstW = 0;
+    document.querySelectorAll('body *').forEach(el => {
+      const r = el.getBoundingClientRect();
+      if (r.right > worstW) { worstW = r.right; worst = el; }
+    });
+    out.overflow.push('page ' + doc.scrollWidth + '>' + doc.clientWidth + ' widest=' +
+      (worst ? (worst.id || worst.className || worst.tagName).toString().slice(0, 60) : '?'));
+  }
+  const emojiRe = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/u;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let n;
+  while ((n = walker.nextNode())) {
+    if (emojiRe.test(n.textContent)) {
+      const p = n.parentElement;
+      out.emoji.push((p.id || p.className || p.tagName).toString().slice(0, 40) + '::' + n.textContent.trim().slice(0, 20));
+    }
+  }
+  document.querySelectorAll(
+    '#app input:not([type=checkbox]):not([type=radio]), #app select, #app .btn, #app .goal-chip'
+  ).forEach(el => {
+    const h = el.getBoundingClientRect().height;
+    if (h > 0 && !window.__allowedHeights.some(a => Math.abs(h - a) <= window.__tolerance)) {
+      out.controls.push((el.id || el.className || el.tagName).toString().slice(0, 50) + '=' + h.toFixed(1) + 'px');
+    }
+  });
+  return out;
+}
+
+for (const width of WIDTHS) {
+  test(`design audit at ${width}px: no overflow, no emoji, one control scale`, async () => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(([a, t]) => { window.__allowedHeights = a; window.__tolerance = t; },
+      [ALLOWED_HEIGHTS, TOLERANCE]);
+    const failures = [];
+    for (const route of ROUTES) {
+      await go(route);
+      await page.evaluate(([a, t]) => { window.__allowedHeights = a; window.__tolerance = t; },
+        [ALLOWED_HEIGHTS, TOLERANCE]);
+      const res = await page.evaluate(auditInPage);
+      for (const o of res.overflow) failures.push(`${route}@${width}: OVERFLOW ${o}`);
+      for (const e of res.emoji) failures.push(`${route}@${width}: EMOJI ${e}`);
+      for (const c of res.controls) failures.push(`${route}@${width}: CONTROL-HEIGHT ${c}`);
+    }
+    assert.deepEqual(failures, [], failures.join('\n'));
+  });
+}

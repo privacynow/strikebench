@@ -14,14 +14,18 @@
       }
       if (legacy !== null) window.localStorage.removeItem(oldKey);
     });
+    // 2026-07: the three-tier ladder collapsed to two. Returning users map onto the new
+    // names; 'confident' lands on beginner (education-first default — expert is one click).
+    var LEVEL_RENAME = { learning: 'beginner', confident: 'beginner', pro: 'expert' };
+    var storedLevel = window.localStorage.getItem('strikebench.level');
+    if (LEVEL_RENAME[storedLevel]) window.localStorage.setItem('strikebench.level', LEVEL_RENAME[storedLevel]);
   } catch (e) { /* storage unavailable — defaults apply */ }
 
-  // ---- The experience ladder ----
-  var LEVELS = ['learning', 'confident', 'pro'];
+  // ---- The experience ladder: exactly TWO shapes, never a middle tier ----
+  var LEVELS = ['beginner', 'expert'];
   var LEVEL_META = {
-    learning: { label: 'Learning', hint: 'Plain language, extra safety context, simpler screens' },
-    confident: { label: 'Confident', hint: 'Balanced detail — explanations one tap away' },
-    pro: { label: 'Pro', hint: 'Dense, data-first screens for experienced traders' }
+    beginner: { label: 'Beginner', hint: 'Question-driven flows, plain language, extra safety context' },
+    expert: { label: 'Expert', hint: 'Dense, data-first screens with deeper analytics' }
   };
 
   // ---- Glossary: tap-to-define for terms of art ----
@@ -205,17 +209,18 @@
     }
   };
 
-  /** Why-are-you-trading choices, in display order. Keys match StrategyIntent names. */
+  /** Why-are-you-trading choices, in display order. Keys match StrategyIntent names.
+   *  `icon` is a UI.icon() name from the shared SVG set - never an emoji. */
   var INTENTS = [
-    { key: 'DIRECTIONAL', label: 'Trade a view', icon: '\uD83C\uDFAF',
+    { key: 'DIRECTIONAL', label: 'Trade a view', icon: 'compass',
       blurb: 'I expect a move (up, down, calm, or wild) and want defined-risk exposure to it.' },
-    { key: 'INCOME', label: 'Earn income', icon: '\uD83D\uDCB0',
+    { key: 'INCOME', label: 'Earn income', icon: 'coins',
       blurb: 'Collect option premium against cash or shares I hold. Assignment is the trade-off.' },
-    { key: 'ACQUIRE', label: 'Buy at a discount', icon: '\uD83D\uDECD\uFE0F',
+    { key: 'ACQUIRE', label: 'Buy at a discount', icon: 'tag',
       blurb: 'Get paid to wait for my price: sell a put at the level I would happily buy.' },
-    { key: 'EXIT', label: 'Sell at a target', icon: '\uD83C\uDFC1',
+    { key: 'EXIT', label: 'Sell at a target', icon: 'flag',
       blurb: 'I hold shares that have run up — get paid to be patient about selling them at my price.' },
-    { key: 'HEDGE', label: 'Protect my shares', icon: '\uD83D\uDEE1\uFE0F',
+    { key: 'HEDGE', label: 'Protect my shares', icon: 'shield',
       blurb: 'Cap the downside of shares I hold, for a premium or by giving up some upside.' }
   ];
 
@@ -223,8 +228,8 @@
   function currentLevel() {
     try {
       var v = window.localStorage.getItem('strikebench.level');
-      return LEVELS.indexOf(v) >= 0 ? v : 'learning';
-    } catch (e) { return 'learning'; }
+      return LEVELS.indexOf(v) >= 0 ? v : 'beginner';
+    } catch (e) { return 'beginner'; }
   }
 
   function setLevel(level) {

@@ -282,6 +282,84 @@ public final class RecommendationEngine {
         return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, top, rejected, notes, DISCLAIMER);
     }
 
+    /**
+     * A STRIKE LADDER for the hold-based intents — the intent-native view: several rungs of
+     * the same structure at different strikes, so "buy at a discount" reads like naming your
+     * price, "sell at a target" like picking your exit, "protect" like insurance quotes.
+     * Every rung is a full Candidate (same executable pricing, same honesty metrics) and can
+     * be sent straight to the ticket.
+     */
+    public record LadderResult(String symbol, String intent, List<Candidate> rungs,
+                               List<String> notes, String disclaimer) {}
+
+    public LadderResult ladder(Request req, long buyingPowerCents) {
+        StrategyIntent intent = StrategyIntent.parse(req.intent());
+        StrategyFamily family = switch (intent) {
+            case ACQUIRE -> StrategyFamily.CASH_SECURED_PUT;
+            case EXIT -> StrategyFamily.COVERED_CALL;
+            case HEDGE -> StrategyFamily.PROTECTIVE_PUT;
+            default -> throw new IllegalArgumentException(
+                    "Ladders exist for acquire, exit, and hedge — '" + req.intent() + "' has no strike ladder");
+        };
+        String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
+        List<String> notes = new ArrayList<>();
+        Holdings holdings = req.holdings();
+        int freeShares = holdings != null && holdings.sharesOwned() != null ? Math.max(0, holdings.sharesOwned()) : 0;
+        boolean sharesHeld = freeShares >= 100 && intent != StrategyIntent.ACQUIRE;
+
+        Quote quote = market.quote(symbol).orElse(null);
+        if (quote == null || !quote.optionable() || market.expirations(symbol).isEmpty()) {
+            notes.add(quote == null ? "No market data available for " + symbol
+                    : symbol + " has no listed options");
+            return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
+        }
+        LocalDate today = LocalDate.now(clock);
+        LocalDate near = pickExpiration(market.expirations(symbol), req.horizon(), today, false, notes);
+        OptionChain chain = near == null ? null : market.chain(symbol, near).orElse(null);
+        if (chain == null || chain.isEmpty()) {
+            notes.add("Option chain unavailable for " + symbol);
+            return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
+        }
+        BigDecimal spot = chain.underlyingPrice();
+        // ACQUIRE budget follows the recommend() rule: strike cash is the design, not a breach
+        RiskMode mode = RiskMode.parse(req.riskMode());
+        double riskPct = req.maxRiskPctOfAccount() != null ? Math.clamp(req.maxRiskPctOfAccount(), 0.001, 0.5) : mode.defaultRiskPct;
+        long budget = intent == StrategyIntent.ACQUIRE && req.maxRiskPctOfAccount() == null && req.maxLossCents() == null
+                ? buyingPowerCents
+                : Math.min(Math.round(buyingPowerCents * riskPct) == 0 ? buyingPowerCents : Math.round(buyingPowerCents * riskPct),
+                           req.maxLossCents() != null && req.maxLossCents() > 0 ? req.maxLossCents() : Long.MAX_VALUE);
+        if (intent == StrategyIntent.HEDGE || intent == StrategyIntent.EXIT) budget = Math.max(budget, buyingPowerCents / 10);
+
+        // Rung strikes: EXIT climbs above spot, ACQUIRE/HEDGE step below it
+        List<BigDecimal> strikes = new ArrayList<>();
+        List<BigDecimal> all = chain.strikes();
+        if (intent == StrategyIntent.EXIT) {
+            for (BigDecimal k : all) if (k.compareTo(spot) >= 0 && strikes.size() < 6) strikes.add(k);
+        } else {
+            for (int i = all.size() - 1; i >= 0 && strikes.size() < 6; i--) {
+                if (all.get(i).compareTo(spot) <= 0) strikes.add(all.get(i));
+            }
+        }
+        List<Candidate> rungs = new ArrayList<>();
+        for (BigDecimal k : strikes) {
+            StrategyBuilder.Built built = StrategyBuilder.build(family, chain, null, spot,
+                    new StrategyBuilder.BuildHints(k, sharesHeld));
+            if (built == null) continue;
+            // Only accept the rung whose short/long strike is EXACTLY k (target snapping can dedupe)
+            boolean exact = built.legs().stream().anyMatch(l -> !l.isStock() && l.strike().compareTo(k) == 0);
+            if (!exact) continue;
+            int coverLots = sharesHeld ? Math.max(0, io.liftandshift.strategy.CoverageCheck.callCoverLotsNeeded(built.legs())) : 0;
+            Candidate c = toCandidate(family, built, Verdict.of(List.of(), List.of()), spot, today, budget,
+                    buyingPowerCents, chain.freshness(), true, StrategyFamily.Thesis.NEUTRAL,
+                    intent, holdings, sharesHeld ? coverLots : 0, sharesHeld ? freeShares : 0);
+            if (c == null) continue;
+            if (rungs.stream().noneMatch(r -> r.label().equals(c.label()))) rungs.add(c);
+        }
+        if (rungs.isEmpty()) notes.add("No tradable strikes for this ladder right now");
+        if (sharesHeld) notes.add("Sized against your " + freeShares + " free shares");
+        return new LadderResult(symbol, intent.name(), rungs, notes, DISCLAIMER);
+    }
+
     // ---- Scoring & explanation ----
 
     private Candidate toCandidate(StrategyFamily family, StrategyBuilder.Built built, Verdict verdict, BigDecimal spot,
@@ -530,6 +608,21 @@ public final class RecommendationEngine {
      */
     private static Double assignmentProbability(List<Leg> legs, List<OptionQuote> quotes,
                                                 BigDecimal spot, LocalDate today, double ivFallback) {
+        List<Double> ivs = new ArrayList<>();
+        for (int i = 0; i < legs.size(); i++) {
+            OptionQuote q = quotes != null && i < quotes.size() ? quotes.get(i) : null;
+            ivs.add(q == null ? null : q.iv());
+        }
+        return assignmentProbabilityFromIvs(legs, ivs, spot, today, ivFallback);
+    }
+
+    /**
+     * N(d2)/N(-d2) per DISTINCT short strike, summed and capped at 1 -- shared with the
+     * trade-preview path so the builder shows the same number the engine would.
+     * {@code ivsAligned} is index-aligned with {@code legs} (null entries fall back).
+     */
+    public static Double assignmentProbabilityFromIvs(List<Leg> legs, List<Double> ivsAligned,
+                                                      BigDecimal spot, LocalDate today, double ivFallback) {
         if (spot == null || spot.signum() <= 0) return null;
         java.util.Set<String> seen = new java.util.HashSet<>();
         double total = 0;
@@ -540,8 +633,8 @@ public final class RecommendationEngine {
             String key = l.type() + "|" + l.strike().stripTrailingZeros().toPlainString() + "|" + l.expiration();
             if (!seen.add(key)) continue; // ratio>1 on the same contract is one event
             any = true;
-            OptionQuote q = quotes != null && i < quotes.size() ? quotes.get(i) : null;
-            double sigma = q != null && q.iv() != null && q.iv() > 0 ? q.iv() : ivFallback;
+            Double iv = ivsAligned != null && i < ivsAligned.size() ? ivsAligned.get(i) : null;
+            double sigma = iv != null && iv > 0 ? iv : ivFallback;
             double t = Math.max(ChronoUnit.DAYS.between(today, l.expiration()), 0.5) / 365.0;
             double d1 = BlackScholes.d1(spot.doubleValue(), l.strike().doubleValue(), t, 0, 0, sigma);
             double d2 = d1 - sigma * Math.sqrt(t);

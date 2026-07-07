@@ -1,6 +1,7 @@
 package io.liftandshift.paper;
 
 import java.util.List;
+import java.util.Map;
 
 /** Dry-run of a trade: validation verdict plus exact before/after balances. Never mutates. */
 public record TradePreview(
@@ -21,5 +22,9 @@ public record TradePreview(
         long reservedAfterCents,
         long buyingPowerBeforeCents,
         long buyingPowerAfterCents,
-        String freshness
+        String freshness,
+        long underlyingCents,          // spot used for fills/curve (0 when unavailable)
+        Double assignmentProb,         // chance ANY short strike finishes ITM; null if no shorts
+        List<Map<String, Object>> legs,    // per-leg fills: action/type/strike/expiration/ratio/fill/bid/ask/mid/iv/greeks/freshness
+        List<Map<String, Object>> payoff   // expiration P/L samples {price, profitCents}; empty for multi-expiration
 ) {}

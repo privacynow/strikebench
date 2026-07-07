@@ -196,6 +196,7 @@ public final class ApiServer {
 
             c.routes.post("/api/recommend", this::recommend);
             c.routes.post("/api/recommend/auto", this::recommendAuto);
+            c.routes.post("/api/recommend/ladder", this::recommendLadder);
 
             c.routes.post("/api/trades/preview", this::tradePreview);
             c.routes.post("/api/trades", this::tradeCreate);
@@ -387,6 +388,7 @@ public final class ApiServer {
             if (q == null || q.last() == null) continue;
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("symbol", q.symbol());
+            row.put("description", q.description());
             row.put("last", q.last().toPlainString());
             row.put("prevClose", q.prevClose() == null ? null : q.prevClose().toPlainString());
             row.put("optionable", q.optionable());
@@ -566,6 +568,27 @@ public final class ApiServer {
             } catch (java.util.NoSuchElementException ignored) { /* no position — engine handles it */ }
         }
         ctx.json(engine.recommend(req, acct.buyingPowerCents()));
+    }
+
+    private void recommendLadder(Context ctx) {
+        RecommendationEngine.Request req = bodyOrNull(ctx, RecommendationEngine.Request.class);
+        if (req == null || req.symbol() == null || req.symbol().isBlank()) {
+            throw new IllegalArgumentException("symbol is required");
+        }
+        Account acct = accounts.getOrCreateDefault();
+        StrategyIntent intent = StrategyIntent.parse(req.intent());
+        if (req.holdings() == null && intent != StrategyIntent.DIRECTIONAL && intent != StrategyIntent.ACQUIRE) {
+            try {
+                PositionsService.PositionView pos = positions.get(acct.id(), req.symbol());
+                req = new RecommendationEngine.Request(req.symbol(), req.thesis(), req.horizon(), req.riskMode(),
+                        req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
+                        req.avoidEarnings(), req.allow0dte(), req.intent(),
+                        new RecommendationEngine.Holdings((int) Math.min(Integer.MAX_VALUE, pos.freeShares()),
+                                pos.avgCostCents(), null),
+                        req.filters());
+            } catch (java.util.NoSuchElementException ignored) { /* buy-write ladder */ }
+        }
+        ctx.json(engine.ladder(req, acct.buyingPowerCents()));
     }
 
     private void recommendAuto(Context ctx) {
@@ -777,17 +800,9 @@ public final class ApiServer {
             chartLegs.add(Leg.stock(io.liftandshift.model.LegAction.BUY, lotsPerUnit, spot));
         }
         PayoffCurve curve = PayoffCurve.of(chartLegs, t.qty());
-        java.util.TreeSet<BigDecimal> prices = new java.util.TreeSet<>();
-        BigDecimal lo = spot.multiply(new BigDecimal("0.70")).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal hi = spot.multiply(new BigDecimal("1.30")).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal step = hi.subtract(lo).divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP);
-        if (step.signum() <= 0) step = new BigDecimal("0.01");
-        for (BigDecimal p = lo; p.compareTo(hi) <= 0; p = p.add(step)) prices.add(p);
-        for (BigDecimal k : curve.knots()) if (k.compareTo(lo) >= 0 && k.compareTo(hi) <= 0) prices.add(k.setScale(2, RoundingMode.HALF_UP));
-        for (BigDecimal b : curve.breakevens()) if (b.compareTo(lo) >= 0 && b.compareTo(hi) <= 0) prices.add(b.setScale(2, RoundingMode.HALF_UP));
         List<Map<String, Object>> out = new ArrayList<>();
-        for (BigDecimal p : prices) {
-            out.add(Map.of("price", p.toPlainString(), "profitCents", curve.profitAtCents(p)));
+        for (PayoffCurve.ChartPoint p : curve.chartPoints(spot)) {
+            out.add(Map.of("price", p.price().toPlainString(), "profitCents", p.profitCents()));
         }
         return out;
     }

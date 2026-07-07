@@ -68,7 +68,7 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   // Fresh account -> the opening page: hero, level paths, capability grid
   await page.waitForSelector('#welcome-hero');
   const hero = await page.textContent('#app');
-  assert.match(hero, /StrikeBench/);
+  assert.match(hero, /Learn options by doing/); // the H1 sells the value; the brand lives in the header
   assert.match(hero, /How do you want to start\?/);
   assert.ok((await page.locator('#welcome-levels .welcome-card').count()) === 3, 'three level paths');
   // The universe ticker tape ticks above the welcome page too
@@ -105,7 +105,7 @@ test('research AAPL: hero quote, focused chain, show-all toggle', async () => {
   await page.click('#symbol-go');
   await page.waitForSelector('#research-symbol');
   assert.match(await page.textContent('#research-symbol'), /AAPL/);
-  assert.ok(await page.isVisible('text=DEMO DATA'));
+  await page.waitForSelector('.quote-hero .badge:has-text("DEMO DATA")');
   await page.waitForSelector('#expiration-select');
   await page.waitForSelector('.tbl tbody tr.atm'); // ATM row highlighted
   const focused = await page.locator('.tbl tbody tr').count();
@@ -242,8 +242,15 @@ test('account shows balances, ledger, and guarded reset', async () => {
 
 test('backtest runs and reports mode, coverage, assumptions', async () => {
   await go('#/backtest');
+  // Product form: period pills set the window; a hand-edited date clears the pill claim
+  await page.click('#bt-periods .pill[data-days="365"]');
+  assert.equal(await page.locator('#bt-periods .pill.active').count(), 1);
   await page.fill('#bt-from', '2026-03-02');
   await page.fill('#bt-to', '2026-06-30');
+  await page.evaluate(() => { document.getElementById('bt-from').dispatchEvent(new Event('change')); });
+  assert.equal(await page.locator('#bt-periods .pill.active').count(), 0, 'custom dates claim no pill');
+  await page.click('#bt-dte-presets .sym-chip:has-text("Monthly")');
+  assert.equal(await page.inputValue('#bt-dte'), '30');
   await page.click('#bt-run');
   await page.waitForSelector('#bt-results .stat', { timeout: 30000 });
   const text = await page.textContent('#bt-results');
@@ -252,6 +259,30 @@ test('backtest runs and reports mode, coverage, assumptions', async () => {
   assert.match(text, /Coverage/);
   assert.match(text, /slippagePctPerLeg/);
   assert.match(text, /Equity curve/);
+  // Equity curve speaks the same chart language as research: summary chips + crosshair
+  assert.match(text, /Change/);
+  assert.match(text, /Max drawdown/);
+  assert.ok(await page.locator('#bt-results .chart-summary .chip').count() >= 3, 'equity summary chips');
+  assert.ok(await page.locator('#bt-results .chart-wrap').count() >= 1, 'interactive equity chart');
+});
+
+test('candidate cards cross-link into backtest with the form pre-answered', async () => {
+  await go('#/recommend/manual');
+  await page.click('#level-switch button[data-level="confident"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+  await go('#/recommend/manual');
+  await page.fill('#rec-symbol', 'AAPL');
+  await page.click('#rec-go');
+  await page.waitForSelector('#rec-results .candidate', { timeout: 30000 });
+  const card = page.locator('#rec-results .candidate:has(button:has-text("Backtest this"))').first();
+  assert.ok(await card.count(), 'candidates offer Backtest this');
+  const strategy = await card.getAttribute('data-strategy');
+  await card.locator('button:has-text("Backtest this")').click();
+  await page.waitForSelector('#bt-symbol');
+  assert.equal(await page.inputValue('#bt-symbol'), 'AAPL');
+  assert.equal(await page.inputValue('#bt-strategy'), strategy, 'strategy carried over');
+  await page.click('#level-switch button[data-level="learning"]');
+  await page.waitForSelector('#app[data-ready="true"]');
 });
 
 test('data status lists providers per domain', async () => {
@@ -407,9 +438,14 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   const results = await page.textContent('#rec-results');
   assert.match(results, /below your minimum/);
 
-  // 7. Scout exposes intent checkboxes
+  // 7. Scout goal selector: ONE goal at a time (radio semantics) plus "Everything"
   await go('#/recommend/scout');
-  await page.waitForSelector('#auto-i-income');
+  await page.waitForSelector('#scout-goal');
+  await page.click('#scout-goal .goal-chip[data-intent="INCOME"]');
+  assert.equal(await page.locator('#scout-goal .goal-chip.selected').count(), 1, 'exactly one goal selected');
+  assert.match(await page.textContent('#scout-goal-blurb'), /premium/i);
+  await page.click('#scout-goal .goal-chip[data-intent="ALL"]');
+  assert.equal(await page.locator('#scout-goal .goal-chip.selected').count(), 1, 'ALL replaces, never adds');
 });
 
 test('theme toggle, brand, health banner, route error boundary', async () => {
@@ -514,11 +550,16 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.waitForSelector('#sector-grid .sector-tile');
   const grid = await page.textContent('#sector-grid');
   assert.match(grid, /AAPL/);
-  assert.match(grid, /No data right now/); // fixture mode: non-demo symbols honestly labeled
+  assert.match(grid, /NO LIVE DATA/); // fixture mode: non-demo symbols honestly labeled
+  // EVERY sector symbol is an actionable tile, with or without a quote
+  const tiles = await page.locator('#sector-grid .sector-tile').count();
+  assert.ok(tiles >= 10, 'all TECH symbols render as tiles, got ' + tiles);
+  assert.ok(await page.locator('#sector-grid .tile-nodata button:has-text("Research")').count() >= 1,
+    'quote-less tiles still offer Research');
   assert.ok(await page.locator('#set-universe-btn').count(), 'one-click make-this-my-universe');
   await page.click('#sector-explorer .btn-row button:has-text("Scout this sector")');
   await page.waitForSelector('#auto-universe');
-  assert.ok((await page.inputValue('#auto-universe')).includes('SPY'), 'scout prefilled with the sector');
+  assert.ok((await page.inputValue('#auto-universe')).includes('AAPL'), 'scout prefilled with the sector');
 
   // Header search: "/" focuses, Enter researches
   await page.keyboard.press('/');
@@ -529,11 +570,76 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
 
   // Tape click-through navigates to research (hovering pauses the marquee — same as a user)
   await page.hover('#tape');
-  await page.click('#tape .tape-item');
+  await page.click('#tape .tape-item >> nth=4');
   await page.waitForSelector('#app[data-route="research"][data-ready="true"]');
   // Restore demo universe for other tests
-  await page.evaluate(() => fetch('/api/universe', { method: 'PUT',
-    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sector: 'DEMO' }) }));
+  await page.evaluate(() => API.put('/api/universe', { sector: 'DEMO' }));
+});
+
+test('intent-native UX: discount ladder, exit rungs, income board, symbol actions', async () => {
+  // ACQUIRE at Learning: the ladder reads as sentences with a recommended rung
+  await go('#/recommend/manual');
+  await page.click('#level-switch button[data-level="learning"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+  await page.click('#intent-choices .choice[data-intent="ACQUIRE"]');
+  await page.fill('#rec-symbol', 'AAPL');
+  // live %-presets anchored to the quote fill the target with one tap
+  await page.waitForSelector('#target-presets .sym-chip', { timeout: 15000 });
+  await page.click('#target-presets .sym-chip:has-text("-10%")');
+  assert.ok(parseFloat(await page.inputValue('#rec-target')) < 255.30);
+  await page.click('#rec-go');
+  await page.waitForSelector('#ladder-view');
+  const ladder = await page.textContent('#ladder-view');
+  assert.match(ladder, /Name your price/);
+  assert.match(ladder, /paid/i);
+  assert.ok(await page.locator('#ladder-view .ladder-row').count() >= 4, 'sentence rungs at Learning');
+  assert.ok(await page.locator('#ladder-view .ladder-row.recommended').count() === 1, 'one recommended rung');
+
+  // Same intent at Pro: a dense rung table with a Cash-set-aside column
+  await page.click('#level-switch button[data-level="pro"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+  await page.click('#rec-go');
+  await page.waitForSelector('#ladder-view .ladder-tbl');
+  assert.match(await page.textContent('#ladder-view thead'), /Cash set aside/);
+  assert.match(await page.textContent('#ladder-view thead'), /Effective price/);
+
+  // EXIT with holdings: buy shares, holdings chip appears, exit rungs sized to the lot
+  await page.evaluate(() => API.post('/api/positions/buy', { symbol: 'AAPL', shares: 100 }));
+  await page.click('#intent-choices .choice[data-intent="EXIT"]');
+  await page.waitForSelector('#holdings-chips .sym-chip', { timeout: 15000 });
+  await page.click('#rec-go');
+  await page.waitForSelector('#ladder-view .ladder-tbl');
+  assert.match(await page.textContent('#ladder-view'), /Pick your exit/);
+  assert.match(await page.textContent('#ladder-view thead'), /You.d sell at/);
+
+  // A rung is a real candidate: Use -> ticket
+  await page.click('#ladder-view tbody tr.clickable .btn');
+  await page.waitForSelector('#to-review', { timeout: 30000 });
+
+  // INCOME: the board shows YOUR capital, not an abstract list
+  await go('#/recommend/manual');
+  await page.click('#intent-choices .choice[data-intent="INCOME"]');
+  await page.fill('#rec-symbol', 'AAPL');
+  await page.click('#rec-go');
+  await page.waitForSelector('#income-board');
+  const board = await page.textContent('#income-board');
+  assert.match(board, /Free cash/);
+  assert.match(board, /Shares to rent out/);
+
+  // Research symbol page: per-goal action cards with live rung numbers
+  await go('#/research/AAPL');
+  await page.waitForSelector('#symbol-actions .action-card', { timeout: 20000 });
+  const actions = await page.textContent('#symbol-actions');
+  assert.match(actions, /Sell your 100 shares higher/);
+  assert.match(actions, /Protect what you hold/);
+  assert.match(actions, /You hold 100 sh/);
+
+  // Clean up: void the ticket trade if placed? (none placed) — sell the shares back
+  await page.evaluate(() => API.post('/api/positions/sell', { symbol: 'AAPL', shares: 100 }));
+  App_reset: {
+    await page.click('#level-switch button[data-level="learning"]');
+    await page.waitForSelector('#app[data-ready="true"]');
+  }
 });
 
 test('experience ladder reshapes the UI per level', async () => {
@@ -595,4 +701,115 @@ test('experience ladder reshapes the UI per level', async () => {
   // restore default for other runs
   await page.click('#level-switch button[data-level="learning"]');
   await page.waitForSelector('#app[data-ready="true"]');
+});
+
+test('strategy builder: templates, live risk panel, leg insight, blocked education, handoff', async () => {
+  await page.click('#level-switch button[data-level="learning"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
+  await go('#/recommend/builder');
+  await page.waitForSelector('#builder-templates .tpl');
+  // Catalog breadth: a real broker-grade menu, grouped, with honest risk labels
+  assert.ok(await page.locator('#builder-templates .tpl').count() >= 20, 'broker-grade template catalog');
+  assert.ok(await page.locator('.tpl .badge:has-text("USUALLY BLOCKED")').count() >= 2, 'undefined-risk templates labeled up front');
+
+  // Pick an iron condor: 4 legs, catalog collapses, live panel prices it
+  await page.click('.tpl[data-tpl="IRON_CONDOR"]');
+  await page.waitForSelector('#builder-legs .leg-row');
+  assert.equal(await page.locator('#builder-legs .leg-row').count(), 4, 'condor builds 4 legs');
+  await page.waitForSelector('#tpl-selected');
+  await page.waitForSelector('#builder-panel .stat', { timeout: 15000 });
+  const panel = await page.textContent('#builder-panel');
+  assert.match(panel, /Passes the safety screens|Allowed, with cautions/);
+  assert.match(panel, /Most you can lose/);
+  assert.match(panel, /Assignment odds|Chance of any profit/);
+  assert.ok(await page.locator('#builder-panel .chart-wrap').count(), 'live payoff chart in the panel');
+
+  // Hover a leg: floating market insight, zero layout shift
+  const legsBefore = await page.locator('#builder-legs').boundingBox();
+  await page.locator('#builder-legs .leg-row').first().hover();
+  await page.waitForSelector('.leg-pop', { timeout: 5000 });
+  assert.match(await page.textContent('.leg-pop'), /Bid .+Ask/s);
+  const legsAfter = await page.locator('#builder-legs').boundingBox();
+  assert.equal(legsBefore.height, legsAfter.height, 'hover must not shift layout');
+
+  // Click Details: the leg opens with its contribution and remove-this-leg impact
+  await page.locator('#builder-legs .leg-row .leg-info').first().click();
+  await page.waitForFunction(() =>
+    /Without this leg/.test(document.querySelector('#builder-legs .leg-detail').textContent), { timeout: 15000 });
+  const detail = await page.textContent('#builder-legs .leg-detail');
+  assert.match(detail, /Brings in|Costs/);
+  assert.match(detail, /max loss .+ → /);
+
+  // Add + remove a leg by hand: still prices, template claim dropped
+  await page.click('#builder-add-leg');
+  assert.equal(await page.locator('#builder-legs .leg-row').count(), 5);
+  await page.locator('#builder-legs .leg-row').nth(4).locator('.leg-remove').click();
+  assert.equal(await page.locator('#builder-legs .leg-row').count(), 4);
+
+  // Short straddle: previews honestly, then blocked — the payoff cliff still charts
+  await page.click('#tpl-change');
+  await page.click('.tpl[data-tpl="SHORT_STRADDLE"]');
+  await page.waitForFunction(() =>
+    /would be refused/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 15000 });
+  assert.match(await page.textContent('#builder-panel'), /Undefined|unlimited/i);
+  assert.ok(await page.locator('#builder-panel .chart-wrap').count(), 'blocked position still charts its cliff');
+  assert.ok(await page.locator('#builder-review[disabled]').count(), 'review disabled while blocked');
+
+  // Back to the condor and hand off to the ticket review (same pipeline as everything)
+  await page.click('#tpl-change');
+  await page.click('.tpl[data-tpl="IRON_CONDOR"]');
+  await page.waitForFunction(() =>
+    /Passes the safety screens|Allowed/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 15000 });
+  await page.click('#builder-review');
+  await page.waitForSelector('#app[data-route="ticket"][data-ready="true"]');
+  const ticket = await page.textContent('#app');
+  assert.match(ticket, /Safety check/);
+  assert.match(ticket, /Most you can lose|max loss/i);
+  await page.evaluate(() => { App.state.ticket = null; App.state.builderForm = null; });
+});
+
+test('smooth pipeline: GET cache, skeleton on slow loads, tape refresh keeps its animation', async () => {
+  // Read-through cache: same GET inside the TTL returns the SAME promise
+  const cached = await page.evaluate(() => {
+    API.flushCache();
+    const a = API.get('/api/universe');
+    const b = API.get('/api/universe');
+    return a === b;
+  });
+  assert.ok(cached, 'GET cache coalesces identical reads');
+
+  // Mutations flush it; pure-compute POSTs (preview/recommend) must NOT
+  const flushed = await page.evaluate(async () => {
+    const a = API.get('/api/universe');
+    await API.post('/api/trades/preview', { symbol: 'AAPL', legs: [] }).catch(() => null); // pure POST
+    const b = API.get('/api/universe');
+    await API.put('/api/universe', { sector: 'DEMO' }); // mutation
+    const c = API.get('/api/universe');
+    return { pureKept: a === b, mutationFlushed: b !== c };
+  });
+  assert.ok(flushed.pureKept, 'preview POST keeps the cache');
+  assert.ok(flushed.mutationFlushed, 'mutations flush the cache');
+
+  // Skeleton: with cold cache and a slowed endpoint, the shimmer shows instead of a void
+  await page.route('**/api/account*', async r => {
+    await new Promise(res => setTimeout(res, 600));
+    r.fallback ? await r.fallback() : r.continue();
+  });
+  await page.evaluate(() => { API.flushCache(); location.hash = '#/account'; });
+  await page.waitForSelector('.skel-screen', { timeout: 3000 });
+  await page.waitForSelector('#app[data-ready="true"]', { timeout: 15000 });
+  assert.equal(await page.locator('.skel-screen').count(), 0, 'skeleton leaves when content lands');
+  await page.unroute('**/api/account*');
+
+  // Tape: refresh with unchanged symbols updates numbers IN PLACE — no rebuild, no restart
+  const stable = await page.evaluate(async () => {
+    await App.refreshTape(); // settle to the current universe (may legitimately rebuild)
+    const strip = document.getElementById('tape-strip');
+    if (!strip || !strip.firstChild) return 'no-tape';
+    const before = strip.firstChild;
+    await App.refreshTape(); // same symbols -> must update in place
+    return strip.firstChild === before && strip.getAttribute('data-symbols').length > 0;
+  });
+  assert.equal(stable, true, 'tape strip not rebuilt when symbols unchanged');
 });

@@ -89,7 +89,11 @@
   }
 
   function explain(text) {
-    return el('span', { class: 'explain' }, text);
+    var node = el('span', { class: 'explain' }, text);
+    var i = icon('info', 13);
+    i.className = 'icon explain-ico';
+    node.insertBefore(i, node.firstChild);
+    return node;
   }
 
   function alertBox(kind, title, items) {
@@ -166,7 +170,7 @@
   /** A term of art with tap-to-define glossary popover (Learning/Confident levels). */
   function term(word, display) {
     var def = window.Learn && Learn.GLOSSARY[word.toLowerCase()];
-    if (!def || (window.Learn && Learn.currentLevel() === 'pro')) {
+    if (!def || (window.Learn && Learn.currentLevel() === 'expert')) {
       return el('span', {}, display || word);
     }
     var node = el('button', { class: 'term', type: 'button' }, display || word);
@@ -523,8 +527,56 @@
     });
   }
 
+  // ---- SVG icon system: the ONLY pictographic language in the app (no emoji, ever). ----
+  var ICON_PATHS = {
+    target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.5" fill="currentColor"/>',
+    shield: '<path d="M12 3l7 3v5c0 4.6-3 8.1-7 10-4-1.9-7-5.4-7-10V6z"/><path d="M9 12l2 2 4-4"/>',
+    coins: '<ellipse cx="12" cy="6" rx="7" ry="2.6"/><path d="M5 6v6c0 1.5 3.1 2.6 7 2.6s7-1.1 7-2.6V6"/><path d="M5 12v6c0 1.5 3.1 2.6 7 2.6s7-1.1 7-2.6v-6"/>',
+    chart: '<path d="M4 19h16"/><path d="M5 15l4-5 3 3 6-8"/><circle cx="18" cy="5" r="1.2"/>',
+    flask: '<path d="M10 3h4"/><path d="M11 3v6l-5 9a2 2 0 0 0 1.8 3h8.4a2 2 0 0 0 1.8-3l-5-9V3"/><path d="M8.5 15h7"/>',
+    scope: '<circle cx="12" cy="12" r="3.5"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/>',
+    sprout: '<path d="M12 21v-8"/><path d="M12 13c0-4 3-6.5 8-6.5 0 4.7-3 6.5-8 6.5z"/><path d="M12 13c0-3-2.4-4.8-6-4.8 0 3.6 2.4 4.8 6 4.8z"/>',
+    compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
+    bolt: '<path d="M13 2.5L5.5 13H11l-1 8.5L17.5 11H12z"/>',
+    tag: '<path d="M3.5 12L12 3.5h6a2 2 0 0 1 2 2v6L11.5 20a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8z"/><circle cx="15.5" cy="8.5" r="1.4"/>',
+    flag: '<path d="M5.5 21V4"/><path d="M5.5 4.5h12l-2.5 3.7 2.5 3.8h-12"/>',
+    home: '<path d="M4 11l8-7 8 7"/><path d="M6.5 9.5V20h11V9.5"/>',
+    pen: '<path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19z"/><path d="M13.5 7.5l3 3"/>',
+    grid: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/>',
+    moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>',
+    halftone: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17A8.5 8.5 0 0 0 12 3.5z" fill="currentColor" stroke="none"/>',
+    warn: '<path d="M12 3.5L21.5 20h-19z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.2" r="0.6" fill="currentColor"/>',
+    info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/>'
+  };
+  function icon(name, size) {
+    var span = el('span', { class: 'icon' });
+    span.innerHTML = '<svg viewBox="0 0 24 24" width="' + (size || 22) + '" height="' + (size || 22)
+      + '" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      + (ICON_PATHS[name] || '') + '</svg>';
+    return span;
+  }
+
+  /**
+   * Route skeleton painted synchronously while a screen's data loads: a title bar, a
+   * stat row, and two card blocks with a quiet shimmer. Generic on purpose — it exists
+   * so no screen is ever a blank void, not to mimic each layout.
+   */
+  function skeleton() {
+    var wrap = el('div', { class: 'skel-screen', 'aria-hidden': 'true' },
+      el('div', { class: 'skel skel-title' }),
+      el('div', { class: 'skel-row' },
+        el('div', { class: 'skel skel-stat' }), el('div', { class: 'skel skel-stat' }),
+        el('div', { class: 'skel skel-stat' }), el('div', { class: 'skel skel-stat' })),
+      el('div', { class: 'skel skel-card' }),
+      el('div', { class: 'skel skel-card skel-card-short' }));
+    return wrap;
+  }
+
   window.UI = {
     el: el,
+    icon: icon,
+    skeleton: skeleton,
     rangeChart: rangeChart,
     fmtMoney: fmtMoney,
     fmtMoneyCompact: fmtMoneyCompact,
