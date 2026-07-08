@@ -205,51 +205,28 @@
       statsAnchor.appendChild(alertBox('warn', 'Account unavailable right now', ['Retry from the Account screen.']));
     }
 
-    // Sector pulse: one ETF proxy per sector, day change at a glance, click to dig in
-    var SECTOR_ETF = { TECH: 'XLK', SEMICONDUCTORS: 'SMH', HEALTHCARE: 'XLV', DEFENSE: 'ITA',
-      STAPLES: 'XLP', DISCRETIONARY: 'XLY', ENERGY: 'XLE', FINANCIALS: 'XLF', INDUSTRIALS: 'XLI',
-      COMMUNICATIONS: 'XLC', UTILITIES: 'XLU', CORE: 'SPY', ETFS: 'QQQ', DEMO: 'SPY' };
-    (async function sectorPulse() {
-      try {
-        var uniData = App.state.universe;
-        if (!uniData) return;
-        var pairs = uniData.sectors
-          .filter(function (s) { return SECTOR_ETF[s.key]; })
-          .map(function (s) { return { sector: s, etf: SECTOR_ETF[s.key] }; });
-        var etfs = pairs.map(function (p) { return p.etf; }).filter(function (v, i, a) { return a.indexOf(v) === i; });
-        var data = await API.get('/api/quotes?symbols=' + etfs.join(','));
-        var byEtf = {};
-        (data.quotes || []).forEach(function (q) { byEtf[q.symbol] = q; });
-        var chips = [];
-        var seen = {};
-        pairs.forEach(function (p) {
-          var q = byEtf[p.etf];
-          if (!q || seen[p.sector.key]) return;
-          seen[p.sector.key] = true;
-          var pct = q.prevClose ? (parseFloat(q.last) - parseFloat(q.prevClose)) / parseFloat(q.prevClose) * 100 : 0;
-          chips.push(el('button', {
-            class: 'sector-chip', onclick: function () {
-              App.state.explorerSector = p.sector.key;
-              App.navigate('#/research');
-            }
-          }, p.sector.label + ' ', el('b', { class: pct >= 0 ? 'gain' : 'loss' },
-            (pct >= 0 ? '\u25B2' : '\u25BC') + Math.abs(pct).toFixed(2) + '%')));
-        });
-        if (chips.length) {
-          var pulse = el('div', { class: 'card', id: 'sector-pulse' },
-            UI.cardHeader('Sector pulse',
-              el('a', { href: '#/research', class: 'muted', style: 'font-size:12.5px' }, 'Explore sectors \u2192')),
-            el('div', { class: 'sector-chips' }, chips),
-            explain('Day change of each sector\u2019s ETF proxy. Tap a sector to open its symbols in the explorer.'));
-          var anchor = document.getElementById('sector-pulse-anchor');
-          if (anchor) anchor.replaceWith(pulse);
-        }
-      } catch (e) { /* pulse is decorative */ }
-    })();
     var colL = el('div', { class: 'home-col' });
     var colR = el('div', { class: 'home-col' });
     root.appendChild(el('div', { class: 'home-cols' }, colL, colR));
     colR.appendChild(el('div', { id: 'sector-pulse-anchor' }));
+    // Sector pulse: the shared sector rail — same affordance as Research and Trade.
+    // Renders instantly (usable before quotes answer); day moves fill in async.
+    (function sectorPulse() {
+      if (!App.state.universe) return;
+      var pulse = el('div', { class: 'card', id: 'sector-pulse' },
+        UI.cardHeader('Sector pulse',
+          el('a', { href: '#/research', class: 'muted', style: 'font-size:12.5px' }, 'Explore sectors \u2192')),
+        sectorRail({
+          onPick: function (sec) {
+            App.state.explorerSector = sec.key;
+            App.navigate('#/research');
+          }
+        }),
+        explain('Day change of each sector\u2019s ETF proxy. Tap a sector to open its symbols in the explorer.'));
+      var anchor = document.getElementById('sector-pulse-anchor');
+      if (anchor) anchor.replaceWith(pulse);
+    })();
+
 
     // Markets: shell now, tiles when the ONE batch-quotes call answers (this used to be
     // eight sequential full-research calls that blocked the whole dashboard).
@@ -469,18 +446,7 @@
     // but with the honesty badge when the data is demo.
     root.appendChild(el('div', { class: 'card', id: 'history-card' },
       UI.cardHeader('Price history'),
-      UI.rangeChart({
-        initial: '1y',
-        fetch: async function (range) {
-          var hist = await API.get('/api/research/' + symbol + '/history?range=' + range);
-          return {
-            range: hist.range,
-            candles: hist.candles || [],
-            badge: hist.demo ? el('span', { class: 'badge badge-warn' }, 'DEMO DATA') : null,
-            note: hist.demo ? explain('This price history is built-in DEMO DATA — no live candle source is configured. Add a Polygon or Alpha Vantage key for real history.') : null
-          };
-        }
-      }),
+      UI.rangeChart({ initial: '1y', fetch: historyFetch(symbol) }),
       explain('Real OHLC candles: green closed up, red closed down; slide across for open/high/low/close, change, and volume. Pills change the window; long windows aggregate to weekly candles.')));
 
     if (r.optionable && r.expirations && r.expirations.length) {
@@ -655,6 +621,143 @@
   }
 
   /**
+   * History fetcher shared by Research and every symbolPanel: same ranges, same badges,
+   * and an HONEST reason when a symbol has no candles — "not enough data for this window"
+   * blamed the window when the truth is there is no daily-candle source without a key
+   * (Cboe covers quotes/chains only; Stooq blocks non-browser clients).
+   */
+  function historyFetch(symbol) {
+    return async function (range) {
+      var hist = await API.get('/api/research/' + symbol + '/history?range=' + range);
+      var candles = hist.candles || [];
+      return {
+        range: hist.range, candles: candles,
+        badge: hist.demo ? el('span', { class: 'badge badge-warn' }, 'DEMO DATA') : null,
+        note: hist.demo ? explain('This price history is built-in DEMO DATA \u2014 no live candle source is configured. Add a Polygon or Alpha Vantage key for real history.') : null,
+        emptyText: candles.length ? null
+          : 'No daily price history available for ' + symbol + '. Quotes and option chains are live (Cboe), '
+            + 'but historical candles need a free Polygon or Alpha Vantage key \u2014 set POLYGON_API_KEY or '
+            + 'ALPHAVANTAGE_API_KEY (or polygon.api.key in strikebench.properties) and restart. '
+            + 'The Data screen shows per-source health.'
+      };
+    };
+  }
+
+  // One ETF proxy per sector — used anywhere a sector shows its day move
+  var SECTOR_ETF_MAP = { TECH: 'XLK', SEMICONDUCTORS: 'SMH', HEALTHCARE: 'XLV', DEFENSE: 'ITA',
+    STAPLES: 'XLP', DISCRETIONARY: 'XLY', ENERGY: 'XLE', FINANCIALS: 'XLF', INDUSTRIALS: 'XLI',
+    COMMUNICATIONS: 'XLC', UTILITIES: 'XLU', CORE: 'SPY', ETFS: 'QQQ', DEMO: 'SPY' };
+
+  /**
+   * THE sector affordance, everywhere: one horizontally-scrolling rail of pills — sector
+   * name + its ETF-proxy day move — with a single active state. Home's pulse, Research's
+   * explorer, and Trade's scan scope all render THIS, so sectors look and behave the same
+   * on every screen. Renders instantly; the day moves fill in when quotes answer.
+   * opts: { id, active, onPick(sector) }
+   */
+  function sectorRail(opts) {
+    opts = opts || {};
+    var u = App.state.universe;
+    var rail = el('div', { class: 'sector-rail', id: opts.id || null, role: 'tablist' });
+    if (!u) return rail;
+    var sectors = u.sectors.filter(function (sec) { return sec.key !== 'DEMO' || u.note; });
+    var deltas = {};
+    sectors.forEach(function (sec) {
+      var d = el('span', { class: 'sr-delta' });
+      deltas[sec.key] = d;
+      rail.appendChild(el('button', {
+        class: 'sector-chip' + (opts.active === sec.key ? ' active' : ''),
+        'data-sector': sec.key, type: 'button', role: 'tab',
+        'aria-selected': opts.active === sec.key ? 'true' : 'false',
+        title: sec.symbols.length + ' symbols',
+        onclick: function () {
+          var me = this;
+          rail.querySelectorAll('.sector-chip').forEach(function (x) {
+            x.classList.toggle('active', x === me);
+            x.setAttribute('aria-selected', x === me ? 'true' : 'false');
+          });
+          opts.onPick(sec);
+        }
+      }, el('span', {}, sec.label), d));
+    });
+    (async function fillDeltas() {
+      try {
+        var pairs = sectors.filter(function (sec) { return SECTOR_ETF_MAP[sec.key]; });
+        var etfs = pairs.map(function (sec) { return SECTOR_ETF_MAP[sec.key]; })
+          .filter(function (v, i, a) { return a.indexOf(v) === i; });
+        var data = await API.get('/api/quotes?symbols=' + etfs.join(','));
+        var byEtf = {};
+        (data.quotes || []).forEach(function (q) { byEtf[q.symbol] = q; });
+        pairs.forEach(function (sec) {
+          var q = byEtf[SECTOR_ETF_MAP[sec.key]];
+          if (!q || !q.prevClose) return;
+          var pct = (parseFloat(q.last) - parseFloat(q.prevClose)) / parseFloat(q.prevClose) * 100;
+          var d = deltas[sec.key];
+          d.className = 'sr-delta ' + (pct >= 0 ? 'gain' : 'loss');
+          d.textContent = (pct >= 0 ? '\u25B2' : '\u25BC') + Math.abs(pct).toFixed(2) + '%';
+        });
+      } catch (e) { /* the rail works without the decoration */ }
+    })();
+    return rail;
+  }
+
+  /**
+   * Rich symbol context in one reusable block: live quote row, the SAME interactive
+   * range-pill candle chart Research uses, the coming-up events strip, and top headlines.
+   * Expands from sector-explorer tiles and sits behind a quiet expandable in Trade —
+   * one chart-and-news language everywhere.
+   */
+  function symbolPanel(symbol, opts) {
+    opts = opts || {};
+    symbol = symbol.toUpperCase();
+    var panel = el('div', { class: 'symbol-panel', 'data-symbol': symbol });
+    var qrow = el('div', { class: 'sp-quote' }, el('b', { class: 'sp-sym' }, symbol));
+    panel.appendChild(qrow);
+    (async function fillQuote() {
+      try {
+        var q = ((await API.get('/api/quotes?symbols=' + symbol)).quotes || [])[0];
+        if (!q) return;
+        qrow.appendChild(el('span', { class: 'sp-px' }, fmtNum(q.last)));
+        qrow.appendChild(UI.delta(q.last, q.prevClose));
+        if (q.freshness) qrow.appendChild(badge(q.freshness));
+        if (q.description) qrow.appendChild(el('span', { class: 'muted sp-nm' }, q.description));
+      } catch (e) { /* chart + news still render */ }
+    })();
+    panel.appendChild(UI.rangeChart({ initial: opts.range || '6m', fetch: historyFetch(symbol) }));
+    panel.appendChild(comingUp(symbol, true));
+    var newsBox = el('div', { class: 'sp-news' });
+    panel.appendChild(newsBox);
+    (async function fillNews() {
+      try {
+        var items = ((await API.get('/api/research/' + symbol + '/news')).items || []).slice(0, opts.newsCount || 3);
+        if (!items.length) {
+          newsBox.appendChild(el('p', { class: 'muted' }, 'No headlines right now.'));
+          return;
+        }
+        items.forEach(function (n) {
+          newsBox.appendChild(el('div', { class: 'status-item' },
+            el('a', { href: n.url, target: '_blank', rel: 'noopener' }, n.headline),
+            el('span', { class: 'spacer' }),
+            el('span', { class: 'muted' }, n.source)));
+        });
+      } catch (e) {
+        newsBox.appendChild(el('p', { class: 'muted' }, 'Headlines unavailable right now.'));
+      }
+    })();
+    if (!opts.noActions) {
+      panel.appendChild(el('div', { class: 'btn-row' },
+        el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/' + symbol); } }, 'Full research'),
+        el('button', {
+          class: 'btn btn-sm btn-secondary', onclick: function () {
+            App.state.ideasPrefill = { symbol: symbol };
+            App.navigate('#/recommend/manual');
+          }
+        }, 'Trade ideas')));
+    }
+    return panel;
+  }
+
+  /**
    * Sector explorer: dig into any sector from any tab — live quote tiles per symbol with
    * one-tap actions (Research / Ideas / Trade), and a one-click "make this my universe".
    * `context` seeds which action leads (research vs ideas).
@@ -665,28 +768,19 @@
     if (!u) { root.appendChild(UI.emptyState('Universe unavailable', 'Check the Data screen.')); return; }
     var selectedKey = App.state.explorerSector || u.active.sectorKey || u.sectors[0].key;
 
-    var chipRow = el('div', { class: 'sector-chips', id: 'sector-chips' });
+    var rail = sectorRail({
+      id: 'sector-chips', active: selectedKey,
+      onPick: function (sec) { selectedKey = sec.key; App.state.explorerSector = sec.key; load(); }
+    });
     var grid = el('div', { class: 'tile-row', id: 'sector-grid' });
     var head = el('div', { class: 'btn-row', style: 'margin-top:0' });
     var card = el('div', { class: 'card', id: 'sector-explorer' },
-      UI.cardHeader('Explore by sector'), chipRow, head, grid,
-      explain('Live quotes per sector. Tap a symbol to research it, or point the scout at a whole sector. '
+      UI.cardHeader('Explore by sector'), rail, head, grid,
+      explain('Live quotes per sector. Tap a symbol for its chart and headlines right here, or point the scout at a whole sector. '
         + (u.note ? u.note : '')));
     root.appendChild(card);
 
-    function renderChips() {
-      chipRow.innerHTML = '';
-      u.sectors.forEach(function (s) {
-        if (s.key === 'DEMO' && !u.note) return; // demo sector only matters in demo mode
-        chipRow.appendChild(el('button', {
-          class: 'sector-chip' + (s.key === selectedKey ? ' active' : ''), 'data-sector': s.key,
-          onclick: function () { selectedKey = s.key; App.state.explorerSector = s.key; load(); }
-        }, s.label));
-      });
-    }
-
     async function load() {
-      renderChips();
       head.innerHTML = '';
       grid.innerHTML = '';
       grid.appendChild(UI.spinner('Loading sector quotes…'));
@@ -721,12 +815,25 @@
         // clickable. Symbols without a live quote say so honestly but still link onward.
         var bySym = {};
         (data.quotes || []).forEach(function (q) { bySym[q.symbol] = q; });
+        // Tap a tile -> it expands IN PLACE to the full symbol panel (chart with range
+        // pills, coming-up events, headlines) — one expanded at a time, accordion-style.
+        var openExpand = null;
+        function toggleExpand(symq, tile) {
+          var was = openExpand && openExpand.getAttribute('data-symbol') === symq;
+          if (openExpand) { openExpand.remove(); openExpand = null; }
+          grid.querySelectorAll('.sector-tile.open').forEach(function (t) { t.classList.remove('open'); });
+          if (was) return;
+          openExpand = el('div', { class: 'tile-expand', 'data-symbol': symq }, symbolPanel(symq));
+          tile.classList.add('open');
+          tile.after(openExpand);
+        }
         sector.symbols.forEach(function (s) {
           var q = bySym[s];
           var last = q ? parseFloat(q.last) : null;
           var prev = q ? parseFloat(q.prevClose) : null;
           var pct = q && prev ? (last - prev) / prev * 100 : null;
-          grid.appendChild(el('div', { class: 'tile sector-tile' + (q ? '' : ' tile-nodata') },
+          var tile = el('div', { class: 'tile sector-tile clickable' + (q ? '' : ' tile-nodata'),
+            title: 'Tap for chart, events and headlines' },
             el('div', { class: 't-sym' }, s,
               q && !q.optionable ? el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO OPTIONS') : null,
               q ? null : el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO LIVE DATA')),
@@ -739,7 +846,12 @@
               (!q || q.optionable) ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
                 App.state.ideasPrefill = { symbol: s };
                 App.navigate('#/recommend/manual');
-              } }, 'Ideas') : null)));
+              } }, 'Ideas') : null));
+          tile.addEventListener('click', function (e) {
+            if (e.target.closest('button, a')) return; // the tile's own actions win
+            toggleExpand(s, tile);
+          });
+          grid.appendChild(tile);
         });
         if (!(data.quotes || []).length && u.note) {
           grid.appendChild(explain('Demo mode carries data only for the built-in symbols \u2014 each ticker still links to research and ideas so you can explore the flow.'));
@@ -1007,7 +1119,6 @@
         source: m0.symbol ? 'single' : 'scan',
         symbol: m0.symbol || '', target: m0.target || '',
         universe: s0.universe || '', scanTarget: s0.target || '',
-        maxRisk: m0.maxRisk || s0.maxRisk || '',
         h0: !!s0.h0, hW: s0.hW !== false, hM: s0.hM !== false
       };
     }
@@ -1037,8 +1148,6 @@
     var horizons = beginner ? ['week', 'month', 'quarter'] : ['week', 'month', 'quarter', '0DTE'];
     var horizon = el('select', { id: 'rec-horizon' },
       horizons.map(function (h) { return el('option', { value: h, selected: h === 'month' ? '' : null }, h); }));
-    var maxRisk = el('input', { type: 'number', id: 'rec-maxrisk', min: '0.1', max: '50', step: '0.1',
-      placeholder: 'default by mode', value: saved.maxRisk || '' });
     var allow0 = el('input', { type: 'checkbox', id: 'rec-0dte' });
     var target = el('input', { type: 'number', id: 'rec-target', min: '0', step: '0.5', placeholder: 'optional',
       value: prefill.symbol ? '' : (saved.target || '') });
@@ -1074,17 +1183,15 @@
     var universe = el('input', { type: 'text', id: 'auto-universe',
       placeholder: 'override just this scan (comma-separated)', value: saved.universe || '' });
     var uniData = App.state.universe;
-    var sectorSel = el('select', { id: 'universe-sector' },
-      (uniData ? uniData.sectors : []).map(function (s2) {
-        return el('option', { value: s2.key, selected: uniData.active.sectorKey === s2.key ? '' : null },
-          s2.label + ' (' + s2.symbols.length + ')');
-      }));
-    sectorSel.addEventListener('change', async function () {
-      try {
-        await API.put('/api/universe', { sector: sectorSel.value });
-        await App.refreshUniverse();
-        App.render(); // header tape + labels update everywhere
-      } catch (e) { alert(e.message); }
+    var sectorSel = sectorRail({
+      id: 'universe-sector', active: uniData ? uniData.active.sectorKey : null,
+      onPick: async function (sec) {
+        try {
+          await API.put('/api/universe', { sector: sec.key });
+          await App.refreshUniverse();
+          App.render(); // header tape + labels update everywhere
+        } catch (e) { alert(e.message); }
+      }
     });
     var scanTarget = el('input', { type: 'number', id: 'auto-target', min: '0', step: '50',
       placeholder: 'optional', value: saved.scanTarget || '' });
@@ -1096,7 +1203,6 @@
     });
     universe.addEventListener('change', function () { remember({ universe: universe.value }); });
     scanTarget.addEventListener('change', function () { remember({ scanTarget: scanTarget.value }); });
-    maxRisk.addEventListener('change', function () { remember({ maxRisk: maxRisk.value }); });
     thesis.addEventListener('change', function () { remember({ thesis: thesis.value }); });
 
     var filters = filterPanel('rec');
@@ -1153,17 +1259,48 @@
              : el('span', { class: 'choice-head' }, icon(o.icon, 17), el('b', {}, o.label)),
            expertChooser ? null : el('span', { class: 'muted' }, o.blurb));
       }));
+    // The active universe/sector stays visible as one-tap chips even while a symbol
+    // sits in the box (the datalist only helps when typing — this is always there).
+    var symChips = el('div', { class: 'sym-chips', id: 'universe-sym-chips' });
+    function renderSymChips() {
+      symChips.innerHTML = '';
+      var syms = (App.state.universe && App.state.universe.active.symbols) || [];
+      var cur = sym.value.trim().toUpperCase();
+      syms.forEach(function (s2) {
+        symChips.appendChild(el('button', {
+          class: 'sym-chip' + (s2 === cur ? ' active' : ''), type: 'button',
+          onclick: function () {
+            sym.value = s2;
+            App.state.lastRecommendSymbol = s2;
+            remember({ symbol: s2 });
+            sync();
+          }
+        }, s2));
+      });
+    }
     var symField = el('div', { class: 'field' },
-      el('label', {}, beginner ? 'Which stock?' : 'Symbol'), sym);
+      el('label', {}, beginner ? 'Which stock?' : 'Symbol'), sym, symChips);
+    // Chart + headlines for the underlying, one tap away — informative, never in the way
+    var ctxAnchor = el('div', { id: 'symbol-context' });
+    var ctxSym = null;
+    function renderSymbolContext() {
+      var v = source === 'single' ? sym.value.trim().toUpperCase() : '';
+      if (v === ctxSym) return;
+      ctxSym = v;
+      ctxAnchor.innerHTML = '';
+      if (!v) return;
+      ctxAnchor.appendChild(UI.expandable('What\u2019s happening with ' + v + ' \u2014 chart, events & news',
+        function () { return symbolPanel(v, { noActions: true }); }));
+    }
     var thesisField = el('div', { class: 'field' }, el('label', {}, 'Your view'), thesis);
     var targetField = el('div', { class: 'field', style: 'display:none' },
       el('label', { id: 'rec-target-label' }, 'Target price ($/sh)'), target, targetPresets);
     var sharesField = el('div', { class: 'field', style: 'display:none' }, el('label', {}, 'Shares you want'), wantShares);
     var horizonField = el('div', { class: 'field' }, el('label', {}, 'Horizon'), horizon);
-    var riskField = el('div', { class: 'field' }, el('label', {}, 'Max risk, % of account'), maxRisk);
     var zeroField = el('div', { class: 'field inline-check', style: 'align-self:end' + (beginner ? ';display:none' : '') },
       allow0, el('label', { for: 'rec-0dte', style: 'text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500' }, 'Allow same-day (0DTE) expiry'));
-    var sectorField = el('div', { class: 'field' }, el('label', {}, 'Universe (applies everywhere)'), sectorSel);
+    var sectorField = el('div', { class: 'field', style: 'grid-column: 1 / -1' },
+      el('label', {}, 'Universe (applies everywhere)'), sectorSel);
     var oneOffField = el('div', { class: 'field', style: 'grid-column: 1 / -1' },
       el('label', {}, 'One-off universe for this scan only'), universe);
     var scanTargetField = el('div', { class: 'field' }, el('label', {}, 'Target profit ($)'), scanTarget);
@@ -1197,6 +1334,8 @@
       }
       if (goBtn) goBtn.textContent = scan ? 'Scan for opportunities' : 'Find ideas';
       if (!scan && (goal === 'EXIT' || goal === 'ACQUIRE' || goal === 'HEDGE')) renderTargetPresets();
+      renderSymChips();
+      renderSymbolContext();
       refreshHoldingsHint();
     }
 
@@ -1293,11 +1432,11 @@
         horizonField,
         sectorField,
         scanTargetField,
-        riskField,
         zeroField,
         oneOffField),
       expiryRow,
       holdingsHint,
+      ctxAnchor,
       filters.node,
       el('div', { class: 'btn-row' }, goBtn)));
     root.appendChild(results);
@@ -1325,7 +1464,6 @@
         if (source === 'single' && symVal) body.universe = [symVal]; // "Everything" for one named stock
         else if (universe.value.trim()) body.universe = universe.value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
         if (scanTarget.value) body.targetProfitCents = Math.round(parseFloat(scanTarget.value) * 100);
-        if (maxRisk.value) body.maxRiskPctOfAccount = parseFloat(maxRisk.value) / 100;
         var scan = await API.post('/api/recommend/auto', body);
         App.state.scoutResults = scan;
         renderScoutResults(results, scan);
@@ -1345,7 +1483,6 @@
           intent: goal
         };
         if (goal === 'DIRECTIONAL') body.thesis = thesis.value;
-        if (maxRisk.value) body.maxRiskPctOfAccount = parseFloat(maxRisk.value) / 100;
         var f = filters.value();
         if (f) body.filters = f;
         var flMax = filters.maxLossCents();
@@ -1547,13 +1684,26 @@
           explain('Ideas outside your limits are not hidden silently — the results call them out with the exact reason, so you can see what you are screening out.'));
       });
     } else {
+      // Plain trader language, units in the label, the fine print one hover away.
+      // "Worst case ≤ $" IS the per-idea risk budget (the old % -of-account knob merged
+      // into it; the header risk mode still sizes ideas when this is blank).
+      var f = function (label, input, tip) {
+        return el('div', { class: 'field', title: tip }, el('label', {}, label), input);
+      };
       node = el('div', { class: 'card compact-filters' },
         el('div', { class: 'form-grid grid-5' },
-          el('div', { class: 'field' }, el('label', {}, 'Min POP %'), minPop),
-          el('div', { class: 'field' }, el('label', {}, 'Max assign %'), maxAssign),
-          el('div', { class: 'field' }, el('label', {}, 'Min yield %/yr'), minYield),
-          el('div', { class: 'field' }, el('label', {}, 'Max cost $'), maxCost),
-          el('div', { class: 'field' }, el('label', {}, 'Max loss $'), maxLoss)));
+          f('Chance of profit \u2265 %', minPop,
+            'POP — the modeled probability the trade ends with ANY profit. 70 keeps only ideas with at least a 70% chance. Model output, pre-commission.'),
+          f('Assignment risk \u2264 %', maxAssign,
+            'Probability of ending up assigned shares on the short leg(s). For sell-at-target and buy-at-discount goals assignment IS the point — leave blank there.'),
+          f('Income rate \u2265 %/yr', minYield,
+            'Share-backed income only (covered calls, cash-secured puts, collars). Annualized so a 2-week and a 2-month trade compare fairly — 0.5% over two weeks is about 13%/yr. Blank = no floor.'),
+          f('Cash outlay \u2264 $', maxCost,
+            'The most you pay up front (debit trades). Credit trades collect cash instead — cap those with the worst case.'),
+          f('Worst case \u2264 $', maxLoss,
+            'Hard cap on the modeled maximum loss — your per-idea risk budget in dollars. Blank = sized by the header risk mode.')),
+        el('p', { class: 'muted', style: 'margin:6px 0 0; font-size:12px' },
+          'Blank = no limit. Hover a label for exactly what it means; refused ideas always say which limit they broke.'));
     }
     node.id = idPrefix + '-filters';
     return {

@@ -383,10 +383,10 @@
       return beginnerShape
         ? [limitField('maxLoss', UI.term ? 'The most I am willing to lose ($)' : 'Max loss ($)', '50'),
            limitField('minPop', 'Minimum chance of any profit (%)', '5')]
-        : [limitField('maxLoss', 'Max loss $', '50'),
-           limitField('target', 'Profit target $', '50'),
-           limitField('minPop', 'Min POP %', '5'),
-           limitField('maxAssign', 'Max assign %', '5')];
+        : [limitField('maxLoss', 'Worst case \u2264 $', '50'),
+           limitField('target', 'Profit target \u2265 $', '50'),
+           limitField('minPop', 'Chance of profit \u2265 %', '5'),
+           limitField('maxAssign', 'Assignment risk \u2264 %', '5')];
     }
 
     /** Pass/fail chips judging the CURRENT preview against each set limit. */

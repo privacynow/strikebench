@@ -98,6 +98,16 @@ test('live: research handles unknown and non-optionable symbols gracefully', asy
   assert.match(await page.textContent('#app'), /No data for ZZZZQQ/i);
   await go('#/research/VTSAX');
   assert.match(await page.textContent('#app'), /no listed options/i);
+  // A real, established stock with NO candle source (keyless: Stooq blocks bots, no
+  // Polygon/AV key) must say WHY the chart is empty — never blame the window
+  await go('#/research/PG');
+  await page.waitForSelector('#history-card');
+  await page.waitForFunction(() => {
+    const t = (document.getElementById('history-card') || {}).textContent || '';
+    return /Polygon or Alpha Vantage|DEMO DATA|High/.test(t); // honest no-source note, or real/demo data if a key exists
+  }, { timeout: 30000 });
+  const hist = await page.textContent('#history-card');
+  assert.doesNotMatch(hist, /Not enough data for this window/);
   assertClean('research-edge');
 });
 

@@ -483,6 +483,19 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   await page.fill('#rec-symbol', 'QQQ');
   assert.match(await page.textContent('#rec-go'), /Find ideas/);
   assert.ok(await page.locator('#rec-target').isVisible(), 'the buy-price field appears for a named stock');
+  // The universe's stocks stay ONE TAP away even with a symbol already in the box
+  assert.ok(await page.locator('#universe-sym-chips .sym-chip').count() >= 3,
+    'sector stocks visible as chips while the box holds QQQ');
+  await page.click('#universe-sym-chips .sym-chip:has-text("TSLA")');
+  assert.equal(await page.inputValue('#rec-symbol'), 'TSLA');
+  await page.fill('#rec-symbol', 'QQQ');
+  // The underlying's chart & news sit behind a quiet expandable, never in the way
+  await page.waitForSelector('#symbol-context .xp-head');
+  assert.match(await page.textContent('#symbol-context .xp-head'), /QQQ/);
+  await page.click('#symbol-context .xp-head');
+  await page.waitForSelector('#symbol-context .symbol-panel .chart-wrap svg.chart', { timeout: 15000 });
+  assert.ok(await page.locator('#symbol-context .symbol-panel .range-pills .pill').count() >= 5,
+    'same range pills as Research');
   // The working symbol FOLLOWS across stages (the QQQ->AAPL amnesia bug)
   await go('#/trade/verify');
   assert.equal(await page.inputValue('#bt-symbol'), 'QQQ', 'Backtest picks up the ticker you just typed');
@@ -567,10 +580,10 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.waitForSelector('#history-card .chart-wrap svg.chart');
 
   // Payoff crosshair: place nothing new — reuse any active trade? Instead assert on preview later.
-  // Universe: sector picker on the scout changes it globally
+  // Universe: the SAME sector rail as home/research picks the scan scope, globally
   await go('#/recommend/scout');
-  await page.waitForSelector('#universe-sector');
-  await page.selectOption('#universe-sector', 'CORE');
+  await page.waitForSelector('#universe-sector .sector-chip');
+  await page.click('#universe-sector .sector-chip[data-sector="CORE"]');
   await page.waitForSelector('#app[data-ready="true"]');
   const uni = await page.evaluate(() => fetch('/api/universe').then(r => r.json()));
   assert.equal(uni.active.sectorKey, 'CORE');
@@ -605,6 +618,15 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   assert.ok(tiles >= 10, 'all TECH symbols render as tiles, got ' + tiles);
   assert.ok(await page.locator('#sector-grid .tile-nodata button:has-text("Research")').count() >= 1,
     'quote-less tiles still offer Research');
+  // Tap a tile -> it expands IN PLACE: quote row, the standard range-pill chart, headlines
+  await page.locator('#sector-grid .sector-tile:has-text("AAPL")').first().click();
+  await page.waitForSelector('.tile-expand .symbol-panel .range-pills .pill');
+  await page.waitForSelector('.tile-expand .symbol-panel .chart-wrap svg.chart', { timeout: 15000 });
+  assert.ok(await page.locator('.tile-expand .symbol-panel .sp-news .status-item').count() >= 1,
+    'headlines inside the expanded tile');
+  // Accordion: tapping again collapses
+  await page.locator('#sector-grid .sector-tile:has-text("AAPL")').first().click();
+  assert.equal(await page.locator('.tile-expand').count(), 0, 'second tap collapses');
   assert.ok(await page.locator('#set-universe-btn').count(), 'one-click make-this-my-universe');
   await page.click('#sector-explorer .btn-row button:has-text("Scout this sector")');
   await page.waitForSelector('#auto-universe');
@@ -737,6 +759,10 @@ test('experience ladder reshapes the UI per level', async () => {
   await page.waitForSelector('#intent-choices.intent-compact');
   assert.ok(await page.locator('#rec-f-yield').isVisible(), 'all five filters inline at Pro');
   assert.equal(await page.locator('#rec-filters .xp-head').count(), 0, 'no expandable around Pro filters');
+  const filterText = await page.textContent('#rec-filters');
+  assert.match(filterText, /Chance of profit/);
+  assert.match(filterText, /Worst case/);
+  assert.doesNotMatch(filterText, /Min POP|Max assign %|% of account/i); // the old jargon is gone
   await go('#/backtest');
   assert.ok(await page.locator('#bt-strategy option[value="IRON_BUTTERFLY"]').count(), 'full strategy menu at Pro');
 

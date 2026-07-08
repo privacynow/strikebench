@@ -349,7 +349,9 @@
           return { date: String(c.date), value: parseFloat(c.close) };
         });
         if (series.length < 2) {
-          host.appendChild(el('p', { class: 'muted' }, 'Not enough data for this window.'));
+          // The caller knows WHY it's empty (no source vs narrow window) — say that, honestly
+          host.appendChild(el('p', { class: 'muted' }, data.emptyText || 'Not enough data for this window.'));
+          if (data.note) host.appendChild(data.note);
           return;
         }
         var first = series[0].value, last = series[series.length - 1].value;

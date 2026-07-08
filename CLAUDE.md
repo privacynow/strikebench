@@ -794,6 +794,56 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     results (vanishes quietly if empty — decoration there). Pinned in the research test.
   - Ex-div/true earnings CALENDAR still has no keyless source (documented gap; headlines
     are the honest proxy).
+- SECTOR LANGUAGE + SYMBOL CONTEXT + FILTER VOCABULARY (2026-07-07, user: sector pills
+  "littered" on home+research, trade's sector <select> "meh"; explorer tiles should expand to
+  charts+news; universe stocks must stay visible with a symbol in the box; filters "make no
+  sense… wtf is min pop… why annual yield… max risk and max loss overlap"; wants an expandable
+  underlying chart/news card in Trade. Suites: 223 JUnit + 22 fixture + 3 audit + 4 seeded +
+  8 live ALL GREEN; shots/r3-*.png):
+  - `sectorRail(opts)` is THE sector affordance everywhere: one horizontally-scrolling rail
+    (mask-fade edges like the tape) of .sector-chip pills w/ ETF-proxy day moves (.sr-delta
+    fills async via SECTOR_ETF_MAP; :empty hides). Used by Home pulse (renders instantly now,
+    not after quotes), Research explorer (#sector-chips), and Trade's scan scope
+    (#universe-sector — REPLACED the <select>; onPick still PUTs /api/universe globally).
+    Explorer's chip wall and home's ad-hoc chips are gone.
+  - `symbolPanel(symbol, opts)` = quote row + THE SAME UI.rangeChart as Research (1M…MAX
+    pills, candles, DEMO badge) + comingUp strip + top-3 headlines (+ Full research / Trade
+    ideas actions unless noActions). Used twice: sector-explorer tiles now EXPAND IN PLACE
+    (accordion, .tile-expand grid-column 1/-1, tile.open border; tile buttons still win via
+    closest('button,a') guard) and Trade one-stock mode gets a collapsed expandable
+    "#symbol-context — What's happening with SYM" (rebuilt when the symbol changes). NO
+    intraday ranges (1d/5d) — keyless daily candles only; ranges match Research exactly.
+  - One-stock mode: #universe-sym-chips under the symbol box keeps the active universe's
+    stocks one tap away EVEN when the box is filled (the datalist only helps mid-typing —
+    that was the "had to delete AAPL to see the list" complaint). Seeded symbol behavior kept.
+  - FILTERS SPEAK TRADER, NOT SCHEMA: expert row is now `Chance of profit ≥ %` /
+    `Assignment risk ≤ %` / `Income rate ≥ %/yr` / `Cash outlay ≤ $` / `Worst case ≤ $`,
+    each with a hover tooltip that explains honestly (POP is a model output pre-commission;
+    assignment is the GOAL for exit/acquire; yield is share-backed income only and
+    annualized so different-length trades compare — 0.5%/2wk ≈ 13%/yr; outlay=debit vs
+    worst-case=risk budget) + a "Blank = no limit" footer. Builder limit labels aligned.
+    Pinned: old jargon (Min POP/Max assign %/% of account) asserted ABSENT.
+  - "MAX RISK, % OF ACCOUNT" REMOVED from both modes — it overlapped `Worst case ≤ $`
+    (the user's "why percent? why not a fixed amount?"). maxRiskPctOfAccount no longer sent;
+    the header risk mode still sizes by default; the $ cap is the per-idea budget. Engine
+    API unchanged (field simply omitted).
+  - Tests: rail click replaces selectOption in the charts test; new pins for tile
+    expand/collapse, trade context expandable (same range pills), sym-chips beside a filled
+    box, filter vocabulary. GOTCHA reaffirmed: any async fill of a shared container needs a
+    supersede token (presets/holdings got theirs last pass; sectorRail deltas mutate only
+    their own spans so they're safe).
+- "PG/BA PRICE HISTORY EMPTY" (2026-07-07, user report): NOT a data bug — keyless live mode has
+  NO candle source for non-demo symbols (Cboe = quotes/chains only; Stooq STILL serves its
+  JS anti-bot wall, re-verified; no Polygon/AV key in the user's strikebench.properties —
+  it holds only brand.*). The BUG was the message: rangeChart said "Not enough data for this
+  window" (blames the window) for a no-source symbol. FIX: shared `historyFetch(symbol)`
+  (research #history-card + every symbolPanel now use it) returns `emptyText` explaining
+  exactly what's live, what's missing, and which key to set; rangeChart renders
+  data.emptyText over the generic line. Pinned in dom-live (research/PG must NOT say "Not
+  enough data", must say Polygon/Alpha Vantage — or show real/demo data when a key exists).
+  USER ACTION for real PG/BA candles: add `polygon.api.key=...` (or alphavantage.api.key)
+  to strikebench.properties, or export POLYGON_API_KEY, and restart. Suites: 22 fixture +
+  8 live green after.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
