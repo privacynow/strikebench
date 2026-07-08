@@ -71,6 +71,11 @@ UNIT
 
 setup_timer() {
   echo "== auto-deploy: poll origin/${BRANCH} every 5 min, deploy only when it moves"
+  # systemd's default PATH misses login-shell tools (mvn was /opt/maven/bin here) —
+  # bake the resolving shell's tool dirs into the unit so the build can actually run
+  local mvndir gitdir
+  mvndir="$(dirname "$(command -v mvn)")"
+  gitdir="$(dirname "$(command -v git)")"
   sudo tee "/etc/systemd/system/${SERVICE}-autodeploy.service" > /dev/null <<UNIT
 [Unit]
 Description=StrikeBench auto-deploy (git poll)
@@ -79,6 +84,7 @@ Description=StrikeBench auto-deploy (git poll)
 Type=oneshot
 User=${RUN_USER}
 Environment=REPO=${REPO} APP_DIR=${APP_DIR} SERVICE=${SERVICE} PORT=${PORT} BRANCH=${BRANCH}
+Environment=PATH=${mvndir}:${gitdir}:/usr/local/bin:/usr/bin:/bin
 ExecStart=${REPO}/scripts/deploy.sh --if-changed
 UNIT
   sudo tee "/etc/systemd/system/${SERVICE}-autodeploy.timer" > /dev/null <<UNIT
@@ -112,6 +118,9 @@ deploy() {
     sleep 1
     if health > /dev/null 2>&1; then
       echo "deployed OK: $(health)"
+      # the marker records SUCCESS — --if-changed compares origin against this, never
+      # against local HEAD (a deploy that failed after its pull must retry, not go quiet)
+      git rev-parse HEAD | sudo tee "${APP_DIR}/.deployed-rev" > /dev/null
       return 0
     fi
   done
@@ -124,9 +133,13 @@ case "${1:-}" in
   --setup-timer) setup_timer ;;
   --if-changed)
     cd "$REPO"
-    git fetch -q origin "$BRANCH"
-    if [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/${BRANCH}")" ]; then
-      exit 0  # nothing new
+    remote="$(git ls-remote origin "refs/heads/${BRANCH}" | cut -f1)"
+    if [ -z "$remote" ]; then
+      echo "cannot read origin/${BRANCH}" >&2
+      exit 1
+    fi
+    if [ -f "${APP_DIR}/.deployed-rev" ] && [ "$(cat "${APP_DIR}/.deployed-rev")" = "$remote" ]; then
+      exit 0  # the running deploy IS the remote tip
     fi
     deploy ;;
   "")            deploy ;;

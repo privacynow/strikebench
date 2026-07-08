@@ -998,6 +998,18 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   measurements (widths/heights/tops), not by eyeballing a screenshot — the 12px offender was
   `#app:has(.welcome-page) .welcome-section { margin: 12px 0 0 }` leaking into the grid
   child, killed via `.welcome-top > .welcome-section { margin: 0 }`.
+- AUTO-DEPLOY INCIDENT + FIX (2026-07-08, caught while confirming a push): the timer's FIRST
+  tick pulled the repo then died with `mvn: command not found` (systemd's minimal PATH lacks
+  /opt/maven/bin) — and because the pull had already moved HEAD, every later tick compared
+  HEAD==origin and exited 0 "nothing new". A FAILED DEPLOY POISONED ALL FUTURE CHECKS while
+  the timer looked healthy. FIXES in deploy.sh: (1) --setup-timer bakes the resolving shell's
+  mvn/git dirs into the unit's PATH; (2) freshness is now a SUCCESS MARKER — deploy() writes
+  $APP_DIR/.deployed-rev only after the health check passes, and --if-changed compares
+  `git ls-remote origin refs/heads/BRANCH` (no local side effects) against that marker, so a
+  half-failed deploy retries next tick instead of going quiet. LESSONS: never gate retries on
+  state mutated by the failed attempt itself; verify a new automation's FIRST real run in the
+  journal, not just that its timer ticks; systemd units need explicit PATHs for login-shell
+  toolchains.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
