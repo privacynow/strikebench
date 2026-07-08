@@ -707,6 +707,52 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     Beginner/Expert ('unlock at Expert'), comments updated. Two levels ONLY, everywhere.
     Screenshots: dom-tests/shots/wb-{discover-beginner,discover-results,place-strikes,place-empty,
     verify,shape-expert}.png.
+- UX-REGRESSION REPAIR (2026-07-07, user was FURIOUS about the IA restructure — six confirmed
+  regressions, all fixed; suites after: 224 JUnit + 23 fixture + 3 audit + 4 seeded + 4 assist +
+  8 live, ALL GREEN; screenshots shots/fix-*.png; standing lesson saved to memory
+  feedback-streamline-not-remove):
+  - NAV DOUBLE-HIGHLIGHT: app.js literally marked Portfolio active whenever route==='trade'
+    (leftover clause). Removed — exactly one nav item highlights.
+  - HERO WAS DELETED, NOT STREAMLINED ("hero page was a beautiful, non intimidating opening…
+    I said streamline it with home"): the dashboard now opens with a .home-hero band carrying
+    the welcome DNA — gradient, eyebrow, "Learn options by *doing*." title, the four account
+    stats inside the band, and CTAs "Find an idea" + "Take the tour" (#home-tour-link →
+    #/home/tour, the full welcome page, still the boot experience for fresh accounts). Desktop
+    ≥1100px collapses the band to one row (sub OMITTED, stats nowrap-compact) — home content
+    bottom measured 790px at BOTH 1440x900 and 1280x800 (no scroll). Markets-card "Welcome
+    tour" link removed (the band CTA is the single affordance).
+  - DOUBLE SUB-NAV KILLED: the Scout/My-own-idea TAB ROW under the stage pills is GONE.
+    discoverStage is now ONE unified form (renderScout + renderManual deleted): goal chips
+    (#intent-choices, 5 intents + "Everything"/ALL) + ONE symbol box (#rec-symbol, "blank =
+    scan for me") + goal-aware fields. Blank symbol OR goal ALL → scout scan (universe/
+    expirations/target-profit fields appear, POST /api/recommend/auto, grouped results);
+    named symbol → single-symbol ideas (thesis/target/shares/horizon fields, POST
+    /api/recommend + ladder extras). ALL+symbol scans universe=[symbol]. Holdings chips still
+    one-tap for EXIT/HEDGE. State = App.state.discoverForm (one-time migration from
+    ideasForm/scoutForm; explorer "Scout this sector" writes it). Route aliases preserved:
+    /recommend/manual seeds a symbol, /recommend/scout clears it. REMOVED ids: #tab-scout,
+    #tab-manual, #auto-go, #auto-results, #scout-goal, #scout-goal-blurb, #auto-maxrisk
+    (#auto-target/#auto-universe/#auto-h-*/#universe-sector live on in scan mode; button is
+    always #rec-go, label swaps Find ideas / Scan for opportunities).
+  - "BUY AT A DISCOUNT DOESN'T LET ME CHOOSE A TICKER": direct consequence of the unified
+    form — every goal now has the symbol box + target-price presets; pinned in dom.test
+    (ACQUIRE+QQQ shows the buy-price field) and shots/fix-discover-acquire.png.
+  - DEAD-END NAV GATED: the Place stage pill is disabled (with an honest tooltip) until a
+    working idea exists; direct #/trade/place still renders the empty state.
+  - "THE AI IS DUMB" ("I think qqq will go down further, I want to buy some more" → "Earn
+    income · 21%", Apply did nothing): (1) assist.js GOAL_RULES — deterministic, explainable
+    keyword rules run BEFORE the model (buy/add…more/cheaper→ACQUIRE, sell/trim…shares +
+    take profits→EXIT, protect/hedge/insure→HEDGE, income/premium/get paid→INCOME); the chip
+    quotes the matched words ("your words: “buy some more”"), no fake confidence. (2) Lowercase
+    tickers resolve against the universe datalist ("qqq"→QQQ); unknown symbols still require
+    CAPS. (3) No keyword + goalScore<0.45 → goalUncertain: the chip says "not sure — pick the
+    goal yourself" and Apply does NOT click a goal. (4) Apply now targets the unified form (one
+    form = nothing to miss), calls sync(), and scrolls/focuses #rec-go. dom-assist gained the
+    exact user sentence as a regression test (4 assist tests now). Research "Get ideas" sets
+    ideasPrefill so its symbol always lands in the form.
+  - Boot test now pins the hero band + #home-tour-link; scan test pins blank-symbol mode +
+    button relabel; goal-radio test pins ALL-replaces + ACQUIRE-with-ticker showing the
+    buy-price field.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Verify stage prefill from the working idea (symbol/family land in the form; window/DTE

@@ -165,9 +165,26 @@
     // Paint the frame FIRST, fill every card as its data arrives: the screen must never
     // be a blank void while accounts and quotes load. Each section fills independently
     // and fails visibly (empty state), never silently.
-    root.appendChild(el('h1', {}, 'Overview'));
+    // The opening page's DNA is folded INTO the dashboard — a welcoming hero band with
+    // the account numbers in it, and the full tour one visible click away. Streamlined,
+    // not discarded: fresh accounts still open on the full hero page.
     var statsAnchor = el('div', { class: 'grid grid-4', id: 'home-stats' });
-    root.appendChild(statsAnchor);
+    var brand = App.state.brand || {};
+    root.appendChild(el('section', { class: 'home-hero' },
+      el('div', { class: 'home-hero-top' },
+        el('div', { class: 'home-hero-text' },
+          el('div', { class: 'eyebrow' }, 'PAPER TRADING \u00B7 LOCAL-FIRST \u00B7 HONEST NUMBERS'),
+          el('h1', { class: 'home-hero-title' }, 'Learn options by ', el('span', { class: 'grad' }, 'doing'), '.'),
+          el('p', { class: 'home-hero-sub' },
+            brand.tagline || 'Screen ideas against your goal, practice with paper money, and backtest honestly \u2014 all on your machine.')),
+        statsAnchor,
+        el('div', { class: 'home-hero-ctas' },
+          el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find an idea'),
+          el('button', {
+            class: 'btn btn-ghost', id: 'home-tour-link',
+            title: 'The full opening page: how it works, the live engine demo, the two ways to start',
+            onclick: function () { App.navigate('#/home/tour'); }
+          }, 'Take the tour')))));
 
     // First contact: a fresh account that hasn't dismissed the welcome gets the opening
     // page instead — decided by the same account fetch that fills the stat row.
@@ -241,8 +258,7 @@
     var marketSymbols = uni && uni.symbols && uni.symbols.length ? uni.symbols.slice(0, 4) : CORE_SYMBOLS;
     var tiles = el('div', { class: 'tile-row' });
     colL.appendChild(el('div', { class: 'card' },
-      UI.cardHeader('Markets' + (uni ? ' — ' + uni.label : ''),
-        el('a', { href: '#/home/tour', class: 'muted', style: 'font-size:12.5px' }, 'Welcome tour')),
+      UI.cardHeader('Markets' + (uni ? ' — ' + uni.label : '')),
       tiles,
       explain('Tap a symbol to research it: chart, option chain, expected vs realized volatility, news.')));
     var marketsFill = (async function fillMarkets() {
@@ -357,6 +373,7 @@
         r.optionable ? el('button', {
           class: 'btn btn-sm', onclick: function () {
             App.state.lastRecommendSymbol = symbol;
+            App.state.ideasPrefill = { symbol: symbol }; // lands in the Discover form even over a saved symbol
             App.navigate('#/recommend/manual');
           }
         }, 'Get ideas for ' + symbol) : null),
@@ -621,7 +638,8 @@
       }
       head.appendChild(el('button', {
         class: 'btn btn-sm', onclick: function () {
-          App.state.scoutForm = Object.assign({}, App.state.scoutForm || {}, { universe: sector.symbols.join(',') });
+          App.state.discoverForm = Object.assign({}, App.state.discoverForm || {},
+            { universe: sector.symbols.join(','), symbol: '' });
           App.navigate('#/recommend/scout');
         }
       }, 'Scout this sector'));
@@ -903,17 +921,433 @@
   }
 
   async function discoverStage(root, params) {
-    var tab = params && params[0] === 'manual' ? 'manual' : 'scout';
-    root.appendChild(el('div', { class: 'tabs' },
-      el('button', { class: tab === 'scout' ? 'active' : '', id: 'tab-scout', onclick: function () { App.navigate('#/trade/discover'); } }, 'Scout for me'),
-      el('button', { class: tab === 'manual' ? 'active' : '', id: 'tab-manual', onclick: function () { App.navigate('#/trade/discover/manual'); } }, 'My own idea'),
-      el('a', {
-        class: 'tabs-aside', id: 'all-strategies-link', href: '#/trade/shape', onclick: function () {
-          App.state.builderForm = { symbol: App.state.lastRecommendSymbol || 'AAPL', qty: 1,
-            goal: 'BROWSE', templateKey: null, step: 2, legIdx: 0, legs: [], excluded: {} };
+    // ONE form, no second nav row: the goal chips ask WHY you are here, the symbol box asks
+    // WHERE to look — and leaving it blank means "scan for me". The old Scout / My-own-idea
+    // tab split stacked a second row of tabs under the stage pills and hid the ticker box
+    // from the share-based goals ("Buy at a discount" could not even name a stock).
+    var saved = App.state.discoverForm;
+    if (!saved) {
+      // one-time migration from the pre-merge two-tab state
+      var m0 = App.state.ideasForm || {};
+      var s0 = App.state.scoutForm || {};
+      saved = App.state.discoverForm = {
+        goal: m0.intent || s0.goal || 'DIRECTIONAL',
+        symbol: m0.symbol || '', target: m0.target || '',
+        universe: s0.universe || '', scanTarget: s0.target || '',
+        maxRisk: m0.maxRisk || s0.maxRisk || '',
+        h0: !!s0.h0, hW: s0.hW !== false, hM: s0.hM !== false
+      };
+    }
+    var prefill = App.state.ideasPrefill || {};
+    App.state.ideasPrefill = null;
+    if (prefill.symbol) saved.symbol = prefill.symbol;
+    if (prefill.intent) saved.goal = prefill.intent;
+    // Route seeds keep every old link honest: /manual guarantees a symbol, /scout a scan
+    if (params && params[0] === 'manual' && !saved.symbol) {
+      saved.symbol = App.state.lastRecommendSymbol || 'AAPL';
+    }
+    if (params && params[0] === 'scout') saved.symbol = '';
+    var goal = saved.goal || 'DIRECTIONAL';
+    function remember(patch) {
+      saved = App.state.discoverForm = Object.assign({}, App.state.discoverForm, patch || {});
+    }
+    remember({ goal: goal });
+
+    var level = Learn.currentLevel();
+    var beginner = level === 'beginner';
+    var sym = el('input', { type: 'text', id: 'rec-symbol', list: 'universe-symbols',
+      placeholder: beginner ? 'AAPL — or leave blank to scan for me' : 'blank = scan',
+      value: saved.symbol || '' });
+    var thesis = el('select', { id: 'rec-thesis' },
+      ['bullish', 'bearish', 'neutral', 'volatile'].map(function (t) {
+        return el('option', { value: t, selected: t === saved.thesis ? '' : null }, t);
+      }));
+    var horizons = beginner ? ['week', 'month', 'quarter'] : ['week', 'month', 'quarter', '0DTE'];
+    var horizon = el('select', { id: 'rec-horizon' },
+      horizons.map(function (h) { return el('option', { value: h, selected: h === 'month' ? '' : null }, h); }));
+    var maxRisk = el('input', { type: 'number', id: 'rec-maxrisk', min: '0.1', max: '50', step: '0.1',
+      placeholder: 'default by mode', value: saved.maxRisk || '' });
+    var allow0 = el('input', { type: 'checkbox', id: 'rec-0dte' });
+    var target = el('input', { type: 'number', id: 'rec-target', min: '0', step: '0.5', placeholder: 'optional',
+      value: prefill.symbol ? '' : (saved.target || '') });
+    target.addEventListener('change', function () { remember({ target: target.value }); });
+    // One-tap targets anchored to the live price: +5/+10/+20% for exits, -5/-10/-15% for buys/floors
+    var targetPresets = el('div', { class: 'chip-row', id: 'target-presets', style: 'margin-top:4px' });
+    async function renderTargetPresets() {
+      targetPresets.innerHTML = '';
+      if (!sym.value.trim()) return;
+      var offsets = goal === 'EXIT' ? [5, 10, 20] : [-5, -10, -15];
+      try {
+        var q = await API.get('/api/quotes?symbols=' + sym.value.trim().toUpperCase());
+        if (!q.quotes.length) return;
+        var last = parseFloat(q.quotes[0].last);
+        offsets.forEach(function (o) {
+          var px = last * (1 + o / 100);
+          targetPresets.appendChild(el('button', {
+            class: 'sym-chip', type: 'button', onclick: function () {
+              target.value = px.toFixed(2);
+              remember({ target: target.value });
+            }
+          }, (o > 0 ? '+' : '') + o + '% \u2192 $' + px.toFixed(2)));
+        });
+      } catch (e) { /* presets are sugar */ }
+    }
+    var wantShares = el('input', { type: 'number', id: 'rec-shares', min: '100', step: '100', placeholder: '100' });
+
+    // Scan-scope fields (shown when there is no symbol): universe, expirations, $ goal
+    var universe = el('input', { type: 'text', id: 'auto-universe',
+      placeholder: 'override just this scan (comma-separated)', value: saved.universe || '' });
+    var uniData = App.state.universe;
+    var sectorSel = el('select', { id: 'universe-sector' },
+      (uniData ? uniData.sectors : []).map(function (s2) {
+        return el('option', { value: s2.key, selected: uniData.active.sectorKey === s2.key ? '' : null },
+          s2.label + ' (' + s2.symbols.length + ')');
+      }));
+    sectorSel.addEventListener('change', async function () {
+      try {
+        await API.put('/api/universe', { sector: sectorSel.value });
+        await App.refreshUniverse();
+        App.render(); // header tape + labels update everywhere
+      } catch (e) { alert(e.message); }
+    });
+    var scanTarget = el('input', { type: 'number', id: 'auto-target', min: '0', step: '50',
+      placeholder: 'optional', value: saved.scanTarget || '' });
+    var h0 = el('input', { type: 'checkbox', id: 'auto-h-0dte', checked: saved.h0 ? '' : null });
+    var hW = el('input', { type: 'checkbox', id: 'auto-h-week', checked: saved.hW === false ? null : '' });
+    var hM = el('input', { type: 'checkbox', id: 'auto-h-month', checked: saved.hM === false ? null : '' });
+    [h0, hW, hM].forEach(function (n) {
+      n.addEventListener('change', function () { remember({ h0: h0.checked, hW: hW.checked, hM: hM.checked }); });
+    });
+    universe.addEventListener('change', function () { remember({ universe: universe.value }); });
+    scanTarget.addEventListener('change', function () { remember({ scanTarget: scanTarget.value }); });
+    maxRisk.addEventListener('change', function () { remember({ maxRisk: maxRisk.value }); });
+    thesis.addEventListener('change', function () { remember({ thesis: thesis.value }); });
+
+    var filters = filterPanel('rec');
+    var results = el('div', { id: 'rec-results' });
+    var holdingsHint = el('div', { id: 'rec-holdings-hint' });
+
+    // 1. WHY are you here — the goal decides which questions even make sense.
+    // Beginner gets story cards; Expert gets a compact segmented row.
+    var GOAL_CHOICES = (Learn.INTENTS || []).concat([{
+      key: 'ALL', label: 'Everything', icon: 'grid',
+      blurb: 'Scan every goal at once — ideas come back grouped by goal.'
+    }]);
+    var expertChooser = !beginner;
+    var intentRow = el('div', {
+      class: 'choice-row' + (expertChooser ? ' intent-compact' : ''), id: 'intent-choices'
+    }, GOAL_CHOICES.map(function (i) {
+        return el('button', {
+          class: 'choice' + (goal === i.key ? ' selected' : ''), 'data-intent': i.key,
+          title: i.blurb,
+          onclick: function () {
+            goal = i.key;
+            remember({ goal: goal });
+            intentRow.querySelectorAll('.choice').forEach(function (b) { b.classList.remove('selected'); });
+            this.classList.add('selected');
+            sync();
+          }
+        }, expertChooser
+             ? el('b', {}, i.label)
+             : el('span', { class: 'choice-head' }, icon(i.icon, 17), el('b', {}, i.label)),
+           expertChooser ? null : el('span', { class: 'muted' }, i.blurb));
+      }));
+
+    var symField = el('div', { class: 'field' },
+      el('label', {}, beginner ? 'Which stock? (blank = scan for me)' : 'Symbol (blank = scan)'), sym);
+    var thesisField = el('div', { class: 'field' }, el('label', {}, 'Your view'), thesis);
+    var targetField = el('div', { class: 'field', style: 'display:none' },
+      el('label', { id: 'rec-target-label' }, 'Target price ($/sh)'), target, targetPresets);
+    var sharesField = el('div', { class: 'field', style: 'display:none' }, el('label', {}, 'Shares you want'), wantShares);
+    var horizonField = el('div', { class: 'field' }, el('label', {}, 'Horizon'), horizon);
+    var riskField = el('div', { class: 'field' }, el('label', {}, 'Max risk, % of account'), maxRisk);
+    var zeroField = el('div', { class: 'field inline-check', style: 'align-self:end' + (beginner ? ';display:none' : '') },
+      allow0, el('label', { for: 'rec-0dte', style: 'text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500' }, 'Allow same-day (0DTE) expiry'));
+    var sectorField = el('div', { class: 'field' }, el('label', {}, 'Universe (applies everywhere)'), sectorSel);
+    var oneOffField = el('div', { class: 'field', style: 'grid-column: 1 / -1' },
+      el('label', {}, 'One-off universe for this scan only'), universe);
+    var scanTargetField = el('div', { class: 'field' }, el('label', {}, 'Target profit ($)'), scanTarget);
+    var expiryRow = el('div', { class: 'btn-row' },
+      el('span', { class: 'muted' }, 'Expirations:'),
+      beginner ? null : el('label', { class: 'inline-check' }, h0, ' 0DTE'),
+      el('label', { class: 'inline-check' }, hW, ' Weekly'),
+      el('label', { class: 'inline-check' }, hM, ' Monthly'));
+    var goBtn; // created below; sync() relabels it
+
+    function scanMode() { return goal === 'ALL' || !sym.value.trim(); }
+
+    function sync() {
+      var scan = scanMode();
+      var symVal = sym.value.trim();
+      thesisField.style.display = !scan && goal === 'DIRECTIONAL' ? '' : 'none';
+      targetField.style.display = !scan && (goal === 'EXIT' || goal === 'ACQUIRE' || goal === 'HEDGE') ? '' : 'none';
+      sharesField.style.display = !scan && goal === 'ACQUIRE' ? '' : 'none';
+      horizonField.style.display = scan ? 'none' : '';
+      zeroField.style.display = scan || beginner ? 'none' : '';
+      sectorField.style.display = scan && !symVal ? '' : 'none';
+      oneOffField.style.display = scan && !symVal ? '' : 'none';
+      scanTargetField.style.display = scan ? '' : 'none';
+      expiryRow.style.display = scan ? '' : 'none';
+      var lbl = document.getElementById('rec-target-label');
+      if (lbl) {
+        lbl.textContent = goal === 'EXIT' ? 'Price you would happily sell at ($/sh)'
+          : goal === 'ACQUIRE' ? 'Price you would happily pay ($/sh)'
+          : 'Protect below ($/sh, optional)';
+      }
+      if (goBtn) goBtn.textContent = scan ? 'Scan for opportunities' : 'Find ideas';
+      if (!scan && (goal === 'EXIT' || goal === 'ACQUIRE' || goal === 'HEDGE')) renderTargetPresets();
+      refreshHoldingsHint();
+    }
+
+    async function refreshHoldingsHint() {
+      holdingsHint.innerHTML = '';
+      if (goal === 'DIRECTIONAL' || goal === 'ALL') return;
+      try {
+        var all = (await API.get('/api/positions')).positions || [];
+        // EXIT/HEDGE start from what you OWN: your holdings as one-tap chips
+        if ((goal === 'EXIT' || goal === 'HEDGE') && all.length) {
+          holdingsHint.appendChild(el('div', { class: 'chip-row', id: 'holdings-chips' },
+            el('span', { class: 'muted' }, 'Your holdings:'),
+            all.map(function (p) {
+              var g = p.gainPct !== null && p.gainPct !== undefined
+                ? el('b', { class: p.gainPct >= 0 ? 'gain' : 'loss' }, ' ' + (p.gainPct >= 0 ? '+' : '') + p.gainPct.toFixed(1) + '%')
+                : null;
+              return el('button', {
+                class: 'sym-chip' + (p.symbol === sym.value.trim().toUpperCase() ? ' active' : ''),
+                onclick: function () {
+                  sym.value = p.symbol;
+                  remember({ symbol: p.symbol });
+                  sync();
+                }
+              }, p.symbol + ' \u00B7 ' + p.shares + ' sh', g);
+            })));
         }
-      }, 'All strategies \u2192')));
-    if (tab === 'scout') renderScout(root); else renderManual(root);
+        if (!sym.value.trim()) {
+          if (goal === 'EXIT' || goal === 'HEDGE') {
+            holdingsHint.appendChild(explain(all.length
+              ? 'No symbol picked — the scan covers every holding above.'
+              : 'You hold no shares yet — buy shares first, or type a symbol to see buy-write style ideas.'));
+          }
+          return;
+        }
+        var mine = all.find(function (x) { return x.symbol === sym.value.trim().toUpperCase(); });
+        if (mine) {
+          holdingsHint.appendChild(el('div', { class: 'chip-row' },
+            chip('You hold', mine.shares + ' sh'),
+            chip('Free', mine.freeShares + ' sh'),
+            chip(UI.term('cost basis', 'Avg basis'), fmtMoney(mine.avgCostCents) + '/sh'),
+            mine.gainPct !== null && mine.gainPct !== undefined
+              ? chip('Since purchase', el('span', { class: mine.gainPct >= 0 ? 'gain' : 'loss' },
+                  (mine.gainPct >= 0 ? '+' : '') + mine.gainPct.toFixed(1) + '%')) : null));
+        } else if (goal === 'EXIT' || goal === 'HEDGE') {
+          holdingsHint.appendChild(explain('You do not hold ' + (sym.value.trim().toUpperCase() || 'this symbol')
+            + ' — ideas below include buying the shares first (buy-write style). Options work in 100-share lots.'));
+        }
+      } catch (e) { /* hint only */ }
+    }
+    sym.addEventListener('input', function () {
+      remember({ symbol: sym.value.trim().toUpperCase() });
+      sync();
+    });
+
+    var assistAnchor = el('div', { id: 'assist-anchor' });
+    root.appendChild(assistAnchor);
+    (async function intake() {
+      if (!window.Assist) return;
+      var card = await Assist.intakeCard(function (p) {
+        if (p.symbol) { sym.value = p.symbol; remember({ symbol: p.symbol }); }
+        if (p.goal && !p.goalUncertain && p.goal !== goal) {
+          var btn = intentRow.querySelector('.choice[data-intent="' + p.goal + '"]');
+          if (btn) btn.click();
+        }
+        if (p.thesis) { thesis.value = p.thesis; remember({ thesis: p.thesis }); }
+        if (p.horizon && horizon.querySelector('option[value="' + p.horizon + '"]')) horizon.value = p.horizon;
+        if (p.maxLoss) {
+          var ml = document.getElementById('rec-f-maxloss');
+          if (!ml) {
+            var head = document.querySelector('#rec-filters .xp-head');
+            if (head) { head.click(); ml = document.getElementById('rec-f-maxloss'); }
+          }
+          if (ml) { ml.value = String(p.maxLoss); ml.dispatchEvent(new Event('change')); }
+        }
+        sync();
+        var go = document.getElementById('rec-go');
+        if (go) { go.focus(); go.scrollIntoView({ block: 'center' }); }
+      });
+      if (card && assistAnchor.isConnected) assistAnchor.replaceWith(card);
+    })();
+
+    goBtn = el('button', {
+      class: 'btn', id: 'rec-go', onclick: async function () {
+        results.innerHTML = '';
+        if (scanMode()) return runScan();
+        return runSingle();
+      }
+    }, 'Find ideas');
+
+    root.appendChild(el('div', { class: 'card' },
+      UI.cardHeader('What are you trying to do?',
+        el('a', {
+          class: 'muted', id: 'all-strategies-link', href: '#/trade/shape', style: 'font-size:12.5px',
+          onclick: function () {
+            App.state.builderForm = { symbol: App.state.lastRecommendSymbol || 'AAPL', qty: 1,
+              goal: 'BROWSE', templateKey: null, step: 2, legIdx: 0, legs: [], excluded: {} };
+          }
+        }, 'All strategies \u2192')),
+      explain('Pick a goal, then either name a stock or leave the box blank and the scout scans for you — momentum, news sentiment, and IV vs realized volatility, with the evidence shown. Only strategies whose worst case is known and capped pass the screens, and refusals are always explained.'),
+      intentRow,
+      el('div', { class: 'form-grid', style: 'margin-top:10px' },
+        symField,
+        thesisField,
+        targetField,
+        sharesField,
+        horizonField,
+        sectorField,
+        scanTargetField,
+        riskField,
+        zeroField,
+        oneOffField),
+      expiryRow,
+      holdingsHint,
+      filters.node,
+      el('div', { class: 'btn-row' }, goBtn)));
+    root.appendChild(results);
+    sync();
+    // A finished scan survives navigation — losing a 20-second scan to a header click
+    // was rightly a complaint. (Single-symbol results are instant; they just re-run.)
+    if (scanMode() && App.state.scoutResults) renderScoutResults(results, App.state.scoutResults);
+
+    async function runScan() {
+      results.appendChild(UI.spinner('Scanning and deriving views\u2026'));
+      try {
+        var horizonsSel = [];
+        if (h0.checked && !beginner) horizonsSel.push('0DTE');
+        if (hW.checked) horizonsSel.push('week');
+        if (hM.checked) horizonsSel.push('month');
+        var body = { horizons: horizonsSel, riskMode: riskMode(), allow0dte: h0.checked && !beginner };
+        body.intents = goal === 'ALL'
+          ? (Learn.INTENTS || []).map(function (i) { return i.key; })
+          : [goal];
+        var f = filters.value();
+        if (f) body.filters = f;
+        var flMax = filters.maxLossCents();
+        if (flMax) body.maxLossCents = flMax;
+        var symVal = sym.value.trim().toUpperCase();
+        if (symVal) body.universe = [symVal]; // "Everything" for one named stock
+        else if (universe.value.trim()) body.universe = universe.value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+        if (scanTarget.value) body.targetProfitCents = Math.round(parseFloat(scanTarget.value) * 100);
+        if (maxRisk.value) body.maxRiskPctOfAccount = parseFloat(maxRisk.value) / 100;
+        var scan = await API.post('/api/recommend/auto', body);
+        App.state.scoutResults = scan;
+        renderScoutResults(results, scan);
+      } catch (e) {
+        results.innerHTML = '';
+        results.appendChild(alertBox('danger', e.message));
+      }
+    }
+
+    async function runSingle() {
+      results.appendChild(UI.spinner('Screening strategies\u2026'));
+      try {
+        App.state.lastRecommendSymbol = sym.value.trim().toUpperCase();
+        var body = {
+          symbol: sym.value.trim(), horizon: horizon.value,
+          riskMode: riskMode(), allow0dte: allow0.checked, avoidEarnings: true,
+          intent: goal
+        };
+        if (goal === 'DIRECTIONAL') body.thesis = thesis.value;
+        if (maxRisk.value) body.maxRiskPctOfAccount = parseFloat(maxRisk.value) / 100;
+        var f = filters.value();
+        if (f) body.filters = f;
+        var flMax = filters.maxLossCents();
+        if (flMax) body.maxLossCents = flMax;
+        // Holdings context: real position (if any) + the user's target price.
+        if (goal !== 'DIRECTIONAL') {
+          var holdings = {};
+          var targetApplies = goal === 'EXIT' || goal === 'ACQUIRE' || goal === 'HEDGE';
+          if (targetApplies && target.value) holdings.targetPriceCents = Math.round(parseFloat(target.value) * 100);
+          if (goal === 'ACQUIRE' && wantShares.value) holdings.sharesOwned = parseInt(wantShares.value, 10);
+          if (goal !== 'ACQUIRE') {
+            try {
+              var all = (await API.get('/api/positions')).positions || [];
+              var mine = all.find(function (x) { return x.symbol === sym.value.trim().toUpperCase(); });
+              if (mine) {
+                holdings.sharesOwned = mine.freeShares;
+                holdings.costBasisCents = mine.avgCostCents;
+              }
+            } catch (e) { /* engine copes without */ }
+          }
+          if (Object.keys(holdings).length) body.holdings = holdings;
+        }
+        var r = await API.post('/api/recommend', body);
+        var extras = {};
+        if (goal === 'ACQUIRE' || goal === 'EXIT' || goal === 'HEDGE') {
+          // The intent-native view: rungs of the same structure across strikes
+          try { extras.ladder = await API.post('/api/recommend/ladder', body); } catch (e2) { /* cards still render */ }
+          try {
+            var q = await API.get('/api/quotes?symbols=' + body.symbol.toUpperCase());
+            extras.spot = q.quotes.length ? parseFloat(q.quotes[0].last) : null;
+          } catch (e3) { /* fine */ }
+        }
+        if (goal === 'INCOME') {
+          try {
+            extras.acct = (await API.get('/api/account')).account;
+            extras.held = (await API.get('/api/positions')).positions;
+          } catch (e4) { /* board is optional */ }
+        }
+        renderResults(r, goal, body, extras);
+      } catch (e) {
+        results.innerHTML = '';
+        results.appendChild(alertBox('danger', e.message));
+      }
+    }
+
+    function renderResults(r, intentKey, body, extras) {
+      extras = extras || {};
+      results.innerHTML = '';
+      // Intent-native lead view first: the ladder IS the product for these goals
+      if (extras.ladder && extras.ladder.rungs && extras.ladder.rungs.length) {
+        results.appendChild(ladderView(extras.ladder, intentKey, {
+          symbol: (body && body.symbol ? body.symbol : r.symbol).toUpperCase(),
+          spot: extras.spot,
+          targetPrice: body && body.holdings && body.holdings.targetPriceCents ? body.holdings.targetPriceCents / 100 : null,
+          basisCents: body && body.holdings ? body.holdings.costBasisCents : null
+        }));
+      }
+      if (intentKey === 'INCOME' && extras.acct) {
+        results.appendChild(incomeBoard(r, extras.acct, extras.held));
+      }
+      results.appendChild(el('div', { class: 'chip-row' },
+        chip('Risk budget', fmtMoney(r.riskBudgetCents)),
+        chip('Mode', r.riskMode.toLowerCase()),
+        chip('Candidates', String(r.candidates.length))));
+      (r.notes || []).forEach(function (n) { results.appendChild(alertBox('warn', n)); });
+      if (!r.candidates.length) {
+        results.appendChild(UI.emptyState('Nothing passed the risk screens',
+          'Try a different horizon, a wider risk budget, or another symbol.'));
+      }
+      var hasLadder = extras.ladder && extras.ladder.rungs && extras.ladder.rungs.length;
+      if (hasLadder && r.candidates.length) {
+        results.appendChild(el('h3', {}, 'Other structures for this goal'));
+      }
+      if (Learn.currentLevel() === 'expert' && r.candidates.length > 1) {
+        results.appendChild(comparisonTable(r.candidates));
+      } else {
+        r.candidates.forEach(function (c) { results.appendChild(candidateCard(c, true)); });
+      }
+      if (r.rejected && r.rejected.length) {
+        var rej = el('div', { class: 'card' },
+          UI.cardHeader('Looked at and refused'),
+          explain('Learning what gets blocked — and why — matters as much as what gets suggested.'));
+        r.rejected.forEach(function (x) {
+          rej.appendChild(el('div', { class: 'status-item' },
+            el('span', { class: 'badge badge-danger' }, 'BLOCKED'),
+            el('span', {}, el('b', {}, x.displayName), ' \u2014 ', (x.reasons || []).join(' '))));
+        });
+        results.appendChild(rej);
+      }
+      results.appendChild(el('p', { class: 'muted' }, r.disclaimer));
+    }
   }
 
   /**
@@ -956,9 +1390,16 @@
     var stage = 'discover';
     WB_STAGES.forEach(function (s2) { if (params[0] === s2.key) stage = s2.key; });
     root.appendChild(el('h1', {}, 'Trade'));
+    // Place is GATED until an idea exists: a clickable stage that lands on an empty
+    // screen reads as broken, not as guidance.
+    var t0 = App.state.ticket;
+    var hasPlaceable = !!(t0 && (t0.candidate || (t0.custom && t0.legs && t0.legs.length)));
     root.appendChild(el('div', { class: 'tabs wb-stages' }, WB_STAGES.map(function (s2, i) {
+      var gated = s2.key === 'place' && !hasPlaceable && stage !== 'place';
       return el('button', {
-        class: (s2.key === stage ? 'active' : ''), id: 'wb-' + s2.key, title: s2.hint,
+        class: (s2.key === stage ? 'active' : ''), id: 'wb-' + s2.key,
+        disabled: gated ? '' : null,
+        title: gated ? 'Nothing to place yet — pick an idea in Discover or build one in Shape' : s2.hint,
         onclick: function () { App.navigate('#/trade/' + s2.key); }
       }, el('b', { class: 'wb-num' }, String(i + 1)), ' ' + s2.label);
     })));
@@ -1038,121 +1479,6 @@
   }
 
   // ---- Scout: the auto-recommender ----
-
-  function renderScout(root) {
-    // Scout form + last scan survive re-renders (level switch, tab hop) the same way the
-    // manual form does — losing a 20-second scan to a header click was rightly a complaint.
-    var saved = App.state.scoutForm || {};
-    // ONE goal at a time (or "Everything"): the old row of five checkboxes read like a
-    // database form, not a question — and multi-ticking mixed unrelated result groups.
-    // "Everything" keeps the multi-goal scan; back-compat maps a saved intents[] onto it.
-    var goal = saved.goal
-      || (saved.intents && saved.intents.length > 1 ? 'ALL' : null)
-      || (saved.intents && saved.intents.length === 1 ? saved.intents[0] : 'DIRECTIONAL');
-    var GOAL_CHOICES = (Learn.INTENTS || []).concat([{
-      key: 'ALL', label: 'Everything', icon: 'grid',
-      blurb: 'Scan all goals at once — results come back grouped by goal.'
-    }]);
-    function remember() {
-      App.state.scoutForm = {
-        universe: universe.value, target: target.value, maxRisk: maxRisk.value,
-        h0: h0.checked, hW: hW.checked, hM: hM.checked, goal: goal
-      };
-    }
-    var universe = el('input', { type: 'text', id: 'auto-universe', placeholder: 'override just this scan (comma-separated)', value: saved.universe || '' });
-    var uniData = App.state.universe;
-    var sectorSel = el('select', { id: 'universe-sector' },
-      (uniData ? uniData.sectors : []).map(function (s) {
-        return el('option', { value: s.key, selected: uniData.active.sectorKey === s.key ? '' : null },
-          s.label + ' (' + s.symbols.length + ')');
-      }));
-    sectorSel.addEventListener('change', async function () {
-      try {
-        await API.put('/api/universe', { sector: sectorSel.value });
-        await App.refreshUniverse();
-        App.render(); // header tape + labels update everywhere
-      } catch (e) { alert(e.message); }
-    });
-    var target = el('input', { type: 'number', id: 'auto-target', min: '0', step: '50', placeholder: 'optional', value: saved.target || '' });
-    var maxRisk = el('input', { type: 'number', id: 'auto-maxrisk', min: '0.1', max: '50', step: '0.1', placeholder: 'default by mode', value: saved.maxRisk || '' });
-    var h0 = el('input', { type: 'checkbox', id: 'auto-h-0dte', checked: saved.h0 ? '' : null });
-    var showZeroDte = Learn.currentLevel() !== 'beginner';
-    var hW = el('input', { type: 'checkbox', id: 'auto-h-week', checked: saved.hW === false ? null : '' });
-    var hM = el('input', { type: 'checkbox', id: 'auto-h-month', checked: saved.hM === false ? null : '' });
-    [universe, target, maxRisk, h0, hW, hM].forEach(function (n) { n.addEventListener('change', remember); });
-    var filters = filterPanel('auto');
-    var results = el('div', { id: 'auto-results' });
-
-    // Goal selector: one tap answers "what am I hunting for?"; the blurb under it
-    // restates the selected goal in a sentence so nobody has to guess what a scan will do.
-    var goalBlurb = el('p', { class: 'muted goal-blurb', id: 'scout-goal-blurb' });
-    var goalRow = el('div', { class: 'goal-row', id: 'scout-goal', role: 'radiogroup' },
-      GOAL_CHOICES.map(function (g) {
-        return el('button', {
-          class: 'goal-chip' + (goal === g.key ? ' selected' : ''), 'data-intent': g.key,
-          type: 'button', role: 'radio', 'aria-checked': goal === g.key ? 'true' : 'false',
-          onclick: function () {
-            goal = g.key;
-            remember();
-            goalRow.querySelectorAll('.goal-chip').forEach(function (b) {
-              var on = b.getAttribute('data-intent') === g.key;
-              b.classList.toggle('selected', on);
-              b.setAttribute('aria-checked', on ? 'true' : 'false');
-            });
-            goalBlurb.textContent = g.blurb;
-          }
-        }, icon(g.icon, 15), el('span', {}, g.label));
-      }));
-    goalBlurb.textContent = (GOAL_CHOICES.find(function (g) { return g.key === goal; }) || GOAL_CHOICES[0]).blurb;
-
-    root.appendChild(el('div', { class: 'card' },
-      explain('The scout scans the universe, reads price momentum, news sentiment (simple keyword scoring), and IV vs realized volatility, then derives a view per symbol and proposes structures that fit your goal — "Sell at a target" and "Protect my shares" scan the shares you actually hold. Every pick shows its evidence.'),
-      el('div', { class: 'field-label' }, 'I’m looking to…'),
-      goalRow, goalBlurb,
-      el('div', { class: 'form-grid' },
-        el('div', { class: 'field' }, el('label', {}, 'Target profit ($)'), target),
-        el('div', { class: 'field' }, el('label', {}, 'Max risk, % of account'), maxRisk),
-        el('div', { class: 'field' }, el('label', {}, 'Universe (applies everywhere)'), sectorSel),
-        el('div', { class: 'field', style: 'grid-column: 1 / -1' }, el('label', {}, 'One-off universe for this scan only'), universe)),
-      el('div', { class: 'btn-row' },
-        el('span', { class: 'muted' }, 'Expirations:'),
-        showZeroDte ? el('label', { class: 'inline-check' }, h0, ' 0DTE') : null,
-        el('label', { class: 'inline-check' }, hW, ' Weekly'),
-        el('label', { class: 'inline-check' }, hM, ' Monthly')),
-      filters.node,
-      el('div', { class: 'btn-row' },
-        el('button', {
-          class: 'btn', id: 'auto-go', onclick: async function () {
-            results.innerHTML = '';
-            results.appendChild(UI.spinner('Scanning universe and deriving views…'));
-            try {
-              var horizons = [];
-              if (h0.checked) horizons.push('0DTE');
-              if (hW.checked) horizons.push('week');
-              if (hM.checked) horizons.push('month');
-              var body = { horizons: horizons, riskMode: riskMode(), allow0dte: h0.checked };
-              body.intents = goal === 'ALL'
-                ? (Learn.INTENTS || []).map(function (i) { return i.key; })
-                : [goal];
-              var f = filters.value();
-              if (f) body.filters = f;
-              var flMax = filters.maxLossCents();
-              if (flMax) body.maxLossCents = flMax;
-              if (universe.value.trim()) body.universe = universe.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-              if (target.value) body.targetProfitCents = Math.round(parseFloat(target.value) * 100);
-              if (maxRisk.value) body.maxRiskPctOfAccount = parseFloat(maxRisk.value) / 100;
-              var scan = await API.post('/api/recommend/auto', body);
-              App.state.scoutResults = scan;
-              renderScoutResults(results, scan);
-            } catch (e) {
-              results.innerHTML = '';
-              results.appendChild(alertBox('danger', e.message));
-            }
-          }
-        }, 'Scan for opportunities'))));
-    root.appendChild(results);
-    if (App.state.scoutResults) renderScoutResults(results, App.state.scoutResults);
-  }
 
   function renderScoutResults(results, r) {
     results.innerHTML = '';
@@ -1391,289 +1717,6 @@
   }
 
   // ---- Manual: "I have a view" ----
-
-  function renderManual(root) {
-    // Form state lives in App.state so a level switch (which re-renders the route) or a
-    // "Sell at a target…" prefill from the portfolio survives instead of resetting to defaults.
-    var saved = App.state.ideasForm || {};
-    var prefill = App.state.ideasPrefill || {};
-    App.state.ideasPrefill = null;
-    var intent = prefill.intent || saved.intent || 'DIRECTIONAL';
-    function remember(patch) {
-      App.state.ideasForm = Object.assign({}, App.state.ideasForm || {}, patch);
-    }
-    remember({ intent: intent });
-    var sym = el('input', { type: 'text', id: 'rec-symbol', placeholder: 'AAPL', list: 'universe-symbols',
-      value: prefill.symbol || saved.symbol || App.state.lastRecommendSymbol || 'AAPL' });
-    var thesis = el('select', { id: 'rec-thesis' },
-      ['bullish', 'bearish', 'neutral', 'volatile'].map(function (t) { return el('option', { value: t }, t); }));
-    var horizons = Learn.currentLevel() === 'beginner' ? ['week', 'month', 'quarter'] : ['week', 'month', 'quarter', '0DTE'];
-    var horizon = el('select', { id: 'rec-horizon' },
-      horizons.map(function (h) { return el('option', { value: h, selected: h === 'month' ? '' : null }, h); }));
-    var maxRisk = el('input', { type: 'number', id: 'rec-maxrisk', min: '0.1', max: '50', step: '0.1', placeholder: 'default by mode' });
-    var allow0 = el('input', { type: 'checkbox', id: 'rec-0dte' });
-    var target = el('input', { type: 'number', id: 'rec-target', min: '0', step: '0.5', placeholder: 'optional',
-      value: prefill.symbol ? '' : (saved.target || '') });
-    target.addEventListener('change', function () { remember({ target: target.value }); });
-    // One-tap targets anchored to the live price: +5/+10/+20% for exits, -5/-10/-15% for buys/floors
-    var targetPresets = el('div', { class: 'chip-row', id: 'target-presets', style: 'margin-top:4px' });
-    async function renderTargetPresets() {
-      targetPresets.innerHTML = '';
-      var offsets = intent === 'EXIT' ? [5, 10, 20] : [-5, -10, -15];
-      try {
-        var q = await API.get('/api/quotes?symbols=' + sym.value.trim().toUpperCase());
-        if (!q.quotes.length) return;
-        var last = parseFloat(q.quotes[0].last);
-        offsets.forEach(function (o) {
-          var px = last * (1 + o / 100);
-          targetPresets.appendChild(el('button', {
-            class: 'sym-chip', type: 'button', onclick: function () {
-              target.value = px.toFixed(2);
-              remember({ target: target.value });
-            }
-          }, (o > 0 ? '+' : '') + o + '% \u2192 $' + px.toFixed(2)));
-        });
-      } catch (e) { /* presets are sugar */ }
-    }
-    var wantShares = el('input', { type: 'number', id: 'rec-shares', min: '100', step: '100', placeholder: '100' });
-    var filters = filterPanel('rec');
-    var results = el('div', { id: 'rec-results' });
-    var holdingsHint = el('div', { id: 'rec-holdings-hint' });
-
-    // 1. WHY are you here — the intent decides which questions even make sense.
-    // Beginner gets story cards (what each goal means); Expert gets a compact
-    // segmented row — a pro knows what a covered call is for and wants the pixels back.
-    var expertChooser = Learn.currentLevel() === 'expert';
-    var intentRow = el('div', {
-      class: 'choice-row' + (expertChooser ? ' intent-compact' : ''), id: 'intent-choices'
-    }, (Learn.INTENTS || []).map(function (i) {
-        return el('button', {
-          class: 'choice' + (intent === i.key ? ' selected' : ''), 'data-intent': i.key,
-          title: i.blurb,
-          onclick: function () {
-            intent = i.key;
-            remember({ intent: intent });
-            intentRow.querySelectorAll('.choice').forEach(function (b) { b.classList.remove('selected'); });
-            this.classList.add('selected');
-            syncIntentFields();
-          }
-        }, expertChooser
-             ? el('b', {}, i.label)
-             : el('span', { class: 'choice-head' }, icon(i.icon, 17), el('b', {}, i.label)),
-           expertChooser ? null : el('span', { class: 'muted' }, i.blurb));
-      }));
-
-    var thesisField = el('div', { class: 'field' }, el('label', {}, 'Your view'), thesis);
-    var targetField = el('div', { class: 'field', style: 'display:none' }, el('label', { id: 'rec-target-label' }, 'Target price ($/sh)'), target, targetPresets);
-    var sharesField = el('div', { class: 'field', style: 'display:none' }, el('label', {}, 'Shares you want'), wantShares);
-
-    function syncIntentFields() {
-      thesisField.style.display = intent === 'DIRECTIONAL' ? '' : 'none';
-      targetField.style.display = intent === 'EXIT' || intent === 'ACQUIRE' || intent === 'HEDGE' ? '' : 'none';
-      sharesField.style.display = intent === 'ACQUIRE' ? '' : 'none';
-      var lbl = document.getElementById('rec-target-label');
-      if (lbl) {
-        lbl.textContent = intent === 'EXIT' ? 'Price you would happily sell at ($/sh)'
-          : intent === 'ACQUIRE' ? 'Price you would happily pay ($/sh)'
-          : 'Protect below ($/sh, optional)';
-      }
-      if (intent === 'EXIT' || intent === 'ACQUIRE' || intent === 'HEDGE') renderTargetPresets();
-      refreshHoldingsHint();
-    }
-
-    async function refreshHoldingsHint() {
-      holdingsHint.innerHTML = '';
-      if (intent === 'DIRECTIONAL') return;
-      try {
-        var all = (await API.get('/api/positions')).positions || [];
-        // EXIT/HEDGE start from what you OWN: your holdings as one-tap chips
-        if ((intent === 'EXIT' || intent === 'HEDGE') && all.length) {
-          holdingsHint.appendChild(el('div', { class: 'chip-row', id: 'holdings-chips' },
-            el('span', { class: 'muted' }, 'Your holdings:'),
-            all.map(function (p) {
-              var g = p.gainPct !== null && p.gainPct !== undefined
-                ? el('b', { class: p.gainPct >= 0 ? 'gain' : 'loss' }, ' ' + (p.gainPct >= 0 ? '+' : '') + p.gainPct.toFixed(1) + '%')
-                : null;
-              return el('button', {
-                class: 'sym-chip' + (p.symbol === sym.value.trim().toUpperCase() ? ' active' : ''),
-                onclick: function () {
-                  sym.value = p.symbol;
-                  remember({ symbol: p.symbol });
-                  refreshHoldingsHint();
-                }
-              }, p.symbol + ' \u00B7 ' + p.shares + ' sh', g);
-            })));
-        }
-        var mine = all.find(function (x) { return x.symbol === sym.value.trim().toUpperCase(); });
-        if (mine) {
-          holdingsHint.appendChild(el('div', { class: 'chip-row' },
-            chip('You hold', mine.shares + ' sh'),
-            chip('Free', mine.freeShares + ' sh'),
-            chip(UI.term('cost basis', 'Avg basis'), fmtMoney(mine.avgCostCents) + '/sh'),
-            mine.gainPct !== null && mine.gainPct !== undefined
-              ? chip('Since purchase', el('span', { class: mine.gainPct >= 0 ? 'gain' : 'loss' },
-                  (mine.gainPct >= 0 ? '+' : '') + mine.gainPct.toFixed(1) + '%')) : null));
-        } else if (intent === 'EXIT' || intent === 'HEDGE') {
-          holdingsHint.appendChild(explain('You do not hold ' + (sym.value.trim().toUpperCase() || 'this symbol')
-            + ' — ideas below include buying the shares first (buy-write style). Options work in 100-share lots.'));
-        }
-      } catch (e) { /* hint only */ }
-    }
-    sym.addEventListener('change', function () {
-      remember({ symbol: sym.value.trim().toUpperCase() });
-      if (intent !== 'DIRECTIONAL') renderTargetPresets();
-      refreshHoldingsHint();
-    });
-
-    var assistAnchor = el('div', { id: 'assist-anchor' });
-    root.appendChild(assistAnchor);
-    (async function intake() {
-      if (!window.Assist) return;
-      var card = await Assist.intakeCard(function (p) {
-        if (p.symbol) { sym.value = p.symbol; remember({ symbol: p.symbol }); }
-        if (p.goal && p.goal !== intent) {
-          var btn = intentRow.querySelector('.choice[data-intent="' + p.goal + '"]');
-          if (btn) btn.click();
-        }
-        if (p.thesis) thesis.value = p.thesis;
-        if (p.horizon && horizon.querySelector('option[value="' + p.horizon + '"]')) horizon.value = p.horizon;
-        if (p.maxLoss) {
-          var ml = document.getElementById('rec-f-maxloss');
-          if (!ml) {
-            var head = document.querySelector('#rec-filters .xp-head');
-            if (head) { head.click(); ml = document.getElementById('rec-f-maxloss'); }
-          }
-          if (ml) { ml.value = String(p.maxLoss); ml.dispatchEvent(new Event('change')); }
-        }
-        var go = document.getElementById('rec-go');
-        if (go) go.focus();
-      });
-      if (card && assistAnchor.isConnected) assistAnchor.replaceWith(card);
-    })();
-
-    root.appendChild(el('div', { class: 'card' },
-      el('h3', { class: 'mt0' }, 'What are you trying to do?'),
-      explain('The engine only shows strategies whose worst case is known and capped up front, and it always explains what it refused and why. Goals that involve your shares read your real holdings.'),
-      intentRow,
-      el('div', { class: 'form-grid', style: 'margin-top:10px' },
-        el('div', { class: 'field' }, el('label', {}, 'Symbol'), sym),
-        thesisField,
-        targetField,
-        sharesField,
-        el('div', { class: 'field' }, el('label', {}, 'Horizon'), horizon),
-        el('div', { class: 'field' }, el('label', {}, 'Max risk, % of account'), maxRisk),
-        el('div', { class: 'field inline-check not-beginner', style: 'align-self:end' + (Learn.currentLevel() === 'beginner' ? ';display:none' : '') }, allow0, el('label', { for: 'rec-0dte', style: 'text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500' }, 'Allow same-day (0DTE) expiry'))),
-      holdingsHint,
-      filters.node,
-      el('div', { class: 'btn-row' },
-        el('button', {
-          class: 'btn', id: 'rec-go', onclick: async function () {
-            results.innerHTML = '';
-            results.appendChild(UI.spinner('Screening strategies…'));
-            try {
-              App.state.lastRecommendSymbol = sym.value.trim().toUpperCase();
-              var body = {
-                symbol: sym.value.trim(), horizon: horizon.value,
-                riskMode: riskMode(), allow0dte: allow0.checked, avoidEarnings: true,
-                intent: intent
-              };
-              if (intent === 'DIRECTIONAL') body.thesis = thesis.value;
-              if (maxRisk.value) body.maxRiskPctOfAccount = parseFloat(maxRisk.value) / 100;
-              var f = filters.value();
-              if (f) body.filters = f;
-              var flMax = filters.maxLossCents();
-              if (flMax) body.maxLossCents = flMax;
-              // Holdings context: real position (if any) + the user's target price.
-              if (intent !== 'DIRECTIONAL') {
-                var holdings = {};
-                var targetApplies = intent === 'EXIT' || intent === 'ACQUIRE' || intent === 'HEDGE';
-                if (targetApplies && target.value) holdings.targetPriceCents = Math.round(parseFloat(target.value) * 100);
-                if (intent === 'ACQUIRE' && wantShares.value) holdings.sharesOwned = parseInt(wantShares.value, 10);
-                if (intent !== 'ACQUIRE') {
-                  try {
-                    var all = (await API.get('/api/positions')).positions || [];
-                    var mine = all.find(function (x) { return x.symbol === sym.value.trim().toUpperCase(); });
-                    if (mine) {
-                      holdings.sharesOwned = mine.freeShares;
-                      holdings.costBasisCents = mine.avgCostCents;
-                    }
-                  } catch (e) { /* engine copes without */ }
-                }
-                if (Object.keys(holdings).length) body.holdings = holdings;
-              }
-              var r = await API.post('/api/recommend', body);
-              var extras = {};
-              if (intent === 'ACQUIRE' || intent === 'EXIT' || intent === 'HEDGE') {
-                // The intent-native view: rungs of the same structure across strikes
-                try { extras.ladder = await API.post('/api/recommend/ladder', body); } catch (e2) { /* cards still render */ }
-                try {
-                  var q = await API.get('/api/quotes?symbols=' + body.symbol.toUpperCase());
-                  extras.spot = q.quotes.length ? parseFloat(q.quotes[0].last) : null;
-                } catch (e3) { /* fine */ }
-              }
-              if (intent === 'INCOME') {
-                try {
-                  extras.acct = (await API.get('/api/account')).account;
-                  extras.held = (await API.get('/api/positions')).positions;
-                } catch (e4) { /* board is optional */ }
-              }
-              renderResults(r, intent, body, extras);
-            } catch (e) {
-              results.innerHTML = '';
-              results.appendChild(alertBox('danger', e.message));
-            }
-          }
-        }, 'Find ideas'))));
-    root.appendChild(results);
-    syncIntentFields();
-
-    function renderResults(r, intentKey, body, extras) {
-      extras = extras || {};
-      results.innerHTML = '';
-      // Intent-native lead view first: the ladder IS the product for these goals
-      if (extras.ladder && extras.ladder.rungs && extras.ladder.rungs.length) {
-        results.appendChild(ladderView(extras.ladder, intentKey, {
-          symbol: (body && body.symbol ? body.symbol : r.symbol).toUpperCase(),
-          spot: extras.spot,
-          targetPrice: body && body.holdings && body.holdings.targetPriceCents ? body.holdings.targetPriceCents / 100 : null,
-          basisCents: body && body.holdings ? body.holdings.costBasisCents : null
-        }));
-      }
-      if (intentKey === 'INCOME' && extras.acct) {
-        results.appendChild(incomeBoard(r, extras.acct, extras.held));
-      }
-      results.appendChild(el('div', { class: 'chip-row' },
-        chip('Risk budget', fmtMoney(r.riskBudgetCents)),
-        chip('Mode', r.riskMode.toLowerCase()),
-        chip('Candidates', String(r.candidates.length))));
-      (r.notes || []).forEach(function (n) { results.appendChild(alertBox('warn', n)); });
-      if (!r.candidates.length) {
-        results.appendChild(UI.emptyState('Nothing passed the risk screens',
-          'Try a different horizon, a wider risk budget, or another symbol.'));
-      }
-      var hasLadder = extras.ladder && extras.ladder.rungs && extras.ladder.rungs.length;
-      if (hasLadder && r.candidates.length) {
-        results.appendChild(el('h3', {}, 'Other structures for this goal'));
-      }
-      if (Learn.currentLevel() === 'expert' && r.candidates.length > 1) {
-        results.appendChild(comparisonTable(r.candidates));
-      } else {
-        r.candidates.forEach(function (c) { results.appendChild(candidateCard(c, true)); });
-      }
-      if (r.rejected && r.rejected.length) {
-        var rej = el('div', { class: 'card' },
-          UI.cardHeader('Looked at and refused'),
-          explain('Learning what gets blocked — and why — matters as much as what gets suggested.'));
-        r.rejected.forEach(function (x) {
-          rej.appendChild(el('div', { class: 'status-item' },
-            el('span', { class: 'badge badge-danger' }, 'BLOCKED'),
-            el('span', {}, el('b', {}, x.displayName), ' — ', (x.reasons || []).join(' '))));
-        });
-        results.appendChild(rej);
-      }
-      results.appendChild(el('p', { class: 'muted' }, r.disclaimer));
-    }
-  }
 
   // ---------- 4. Guided ticket ----------
 

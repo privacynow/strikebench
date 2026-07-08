@@ -79,8 +79,9 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await page.click('#welcome-skip');
   await page.waitForSelector('.tile-row .tile');
   const app = await page.textContent('#app');
-  assert.match(app, /Overview/);
+  assert.match(app, /Learn options by/); // the hero band lives ON the dashboard now
   assert.match(app, /Buying power/);
+  assert.ok(await page.locator('#home-tour-link').isVisible(), 'the full tour is one visible click away');
   assert.ok((await page.locator('.tile-row .tile').count()) === 4, 'four market tiles');
   const footer = await page.textContent('#disclaimer');
   assert.match(footer, /not financial advice/i);
@@ -93,7 +94,7 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await page.waitForSelector('.tile-row .tile');
   await page.click('.brand');
   await page.waitForSelector('.tile-row .tile');
-  await page.click('a[href="#/home/tour"]');
+  await page.click('#home-tour-link'); // the hero band's own CTA
   await page.waitForSelector('#welcome-hero');
   // Home: sector pulse chips dig into the explorer
   await go('#/home');
@@ -129,15 +130,17 @@ test('research VTSAX warns about missing options', async () => {
   assert.match(text, /no listed options/i);
 });
 
-test('scout tab auto-recommends with evidence and targets', async () => {
-  await go('#/recommend');
-  await page.waitForSelector('#auto-go'); // scout is the default tab
+test('discover scan: a blank symbol box auto-recommends with evidence and targets', async () => {
+  await go('#/recommend/scout'); // legacy alias — forces the blank-symbol scan mode
+  await page.waitForSelector('#auto-target'); // scan-scope fields visible when symbol is blank
+  assert.equal(await page.inputValue('#rec-symbol'), '', 'scan mode = blank symbol');
+  assert.match(await page.textContent('#rec-go'), /Scan for opportunities/);
   await page.fill('#auto-target', '250');
-  await page.click('#auto-go');
+  await page.click('#rec-go');
   await page.waitForSelector('.pick-card', { timeout: 30000 });
   const picks = await page.locator('.pick-card').count();
   assert.ok(picks >= 1 && picks <= 3, `1-3 picks, got ${picks}`);
-  const text = await page.textContent('#auto-results');
+  const text = await page.textContent('#rec-results');
   assert.match(text, /Confidence/);
   assert.match(text, /20d move|Sentiment/);
   assert.match(text, /About a week|About a month/);
@@ -452,14 +455,21 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   const results = await page.textContent('#rec-results');
   assert.match(results, /below your minimum/);
 
-  // 7. Scout goal selector: ONE goal at a time (radio semantics) plus "Everything"
+  // 7. Goal chooser: ONE goal at a time (radio semantics) plus "Everything" for scans
   await go('#/recommend/scout');
-  await page.waitForSelector('#scout-goal');
-  await page.click('#scout-goal .goal-chip[data-intent="INCOME"]');
-  assert.equal(await page.locator('#scout-goal .goal-chip.selected').count(), 1, 'exactly one goal selected');
-  assert.match(await page.textContent('#scout-goal-blurb'), /premium/i);
-  await page.click('#scout-goal .goal-chip[data-intent="ALL"]');
-  assert.equal(await page.locator('#scout-goal .goal-chip.selected').count(), 1, 'ALL replaces, never adds');
+  await page.waitForSelector('#intent-choices');
+  await page.click('#intent-choices .choice[data-intent="INCOME"]');
+  assert.equal(await page.locator('#intent-choices .choice.selected').count(), 1, 'exactly one goal selected');
+  assert.match(await page.textContent('#intent-choices .choice[data-intent="INCOME"]'), /premium/i);
+  await page.click('#intent-choices .choice[data-intent="ALL"]');
+  assert.equal(await page.locator('#intent-choices .choice.selected').count(), 1, 'ALL replaces, never adds');
+  // a symbol turns the SAME form into single-stock ideas — "Buy at a discount" can name QQQ
+  await page.click('#intent-choices .choice[data-intent="ACQUIRE"]');
+  await page.fill('#rec-symbol', 'QQQ');
+  assert.match(await page.textContent('#rec-go'), /Find ideas/);
+  assert.ok(await page.locator('#rec-target').isVisible(), 'the buy-price field appears for a named stock');
+  await page.fill('#rec-symbol', '');
+  await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
 });
 
 test('theme toggle, brand, health banner, route error boundary', async () => {

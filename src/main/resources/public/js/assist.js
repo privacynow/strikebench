@@ -126,6 +126,18 @@
   var NOT_TICKERS = { A: 1, I: 1, MAX: 1, MIN: 1, CALL: 1, PUT: 1, ETF: 1, USD: 1, DTE: 1, POP: 1, OK: 1, VS: 1, ON: 1, THE: 1, AND: 1, BUY: 1, SELL: 1, HOLD: 1, LOSE: 1, RISK: 1 };
 
   /**
+   * Deterministic goal rules run BEFORE the model: when the user's own words name the goal
+   * ("I want to buy some more"), no classifier gets to overrule them — and the chip shows
+   * exactly which words matched, not a fake confidence. First match wins.
+   */
+  var GOAL_RULES = [
+    { intent: 'ACQUIRE', re: /\b(?:buy|add|pick\s+up|accumulate|grab)(?:\s+\w+){0,3}?\s+(?:more|shares|stock|the\s+dip|cheaper|at\s+a\s+discount|lower)\b|\bbuy\s+(?:some|it|a\s+bit)?\s*more\b|\bget\s+in\s+(?:cheaper|lower)\b|\baverage\s+(?:down|in)\b|\bown\s+more\b/i },
+    { intent: 'EXIT', re: /\b(?:sell|trim|unload|offload|lighten)(?:\s+\w+){0,3}?\s+(?:shares|stock|position|holdings?)\b|\btake\s+profits?\b|\bget\s+out\s+at\b/i },
+    { intent: 'HEDGE', re: /\b(?:protect|hedge|insure|insurance)\b|\bdownside\s+protection\b|\b(?:floor|cap)\s+(?:my\s+)?loss(?:es)?\b/i },
+    { intent: 'INCOME', re: /\b(?:income|premium|get\s+paid|rent\s+(?:out\s+)?(?:my\s+)?shares|yield)\b/i }
+  ];
+
+  /**
    * Parses free text into a structured idea. Numbers come ONLY from the user's own words
    * (regex extraction); the model contributes classification (goal, thesis) — never figures.
    */
@@ -145,29 +157,40 @@
     var dollarSym = text.match(/\$([A-Za-z]{1,5})\b/);
     if (dollarSym && !/^\d/.test(dollarSym[1])) out.symbol = dollarSym[1].toUpperCase();
     if (!out.symbol) {
-      var tokens = text.match(/\b[A-Z]{2,5}\b/g) || [];
-      out.symbol = tokens.find(function (t) { return known[t]; })
-        || tokens.find(function (t) { return !NOT_TICKERS[t]; }) || null;
+      // Known tickers match case-insensitively ("qqq" is QQQ); unknown ones must be
+      // written in caps — lowercase words are too easily ordinary English.
+      var anyCase = (text.match(/\b[A-Za-z]{2,5}\b/g) || []).map(function (t) { return t.toUpperCase(); });
+      var caps = text.match(/\b[A-Z]{2,5}\b/g) || [];
+      out.symbol = anyCase.find(function (t) { return known[t]; })
+        || caps.find(function (t) { return !NOT_TICKERS[t]; }) || null;
+    }
+    // Goal keywords beat the model — the user's own verbs are the ground truth.
+    for (var ri = 0; ri < GOAL_RULES.length; ri++) {
+      var hit = text.match(GOAL_RULES[ri].re);
+      if (hit) { out.goal = GOAL_RULES[ri].intent; out.goalRule = hit[0].trim(); break; }
     }
     // --- model classification (labels only, never numbers) ---
     var zs = await pipe('zero-shot-classification', 'nli-deberta-v3-xsmall');
-    var goalRes = await zs(text, GOAL_LABELS.map(function (g) { return g.label; }),
-      { hypothesis_template: 'This person primarily wants to {}.' });
-    var g = GOAL_LABELS.find(function (x) { return x.label === goalRes.labels[0]; });
-    out.goal = g ? g.intent : 'DIRECTIONAL';
-    out.goalScore = goalRes.scores[0];
     var thesisRes = await zs(text, THESIS_LABELS.map(function (t) { return t.label; }),
       { hypothesis_template: 'The person believes {}.' });
     var t = THESIS_LABELS.find(function (x) { return x.label === thesisRes.labels[0]; });
     out.thesis = t ? t.thesis : null;
     out.thesisScore = thesisRes.scores[0];
-    // Explainable tie-break: a WEAK goal verdict beside a STRONG directional view means the
-    // sentence is a price call, not a holdings plan ("TSLA drops hard, max $400" ≠ hedging).
-    // The chip shows the low confidence either way — the human always gets the last word.
-    if (out.goalScore < 0.35 && out.thesis && out.thesis !== 'neutral' && out.thesisScore >= 0.5
-        && out.goal !== 'DIRECTIONAL') {
-      out.goal = 'DIRECTIONAL';
-      out.goalAdjusted = true;
+    if (!out.goal) {
+      var goalRes = await zs(text, GOAL_LABELS.map(function (g) { return g.label; }),
+        { hypothesis_template: 'This person primarily wants to {}.' });
+      var g = GOAL_LABELS.find(function (x) { return x.label === goalRes.labels[0]; });
+      out.goal = g ? g.intent : 'DIRECTIONAL';
+      out.goalScore = goalRes.scores[0];
+      // Explainable tie-break: a WEAK goal verdict beside a STRONG directional view means the
+      // sentence is a price call, not a holdings plan ("TSLA drops hard, max $400" ≠ hedging).
+      if (out.goalScore < 0.35 && out.thesis && out.thesis !== 'neutral' && out.thesisScore >= 0.5
+          && out.goal !== 'DIRECTIONAL') {
+        out.goal = 'DIRECTIONAL';
+        out.goalAdjusted = true;
+      }
+      // Still murky? Say so — a 21% "confidence" applied silently is worse than asking.
+      if (!out.goalAdjusted && out.goalScore < 0.45) out.goalUncertain = true;
     }
     return out;
   }
@@ -243,10 +266,18 @@
         parsed = await parseIdea(text);
         chips.innerHTML = '';
         var g = (window.Learn && Learn.INTENTS.find(function (i) { return i.key === parsed.goal; })) || null;
-        chips.appendChild(UI.chip('Goal', (g ? g.label : parsed.goal)
-          + ' · ' + Math.round(parsed.goalScore * 100) + '%'
-          + (parsed.goalAdjusted ? ' (leaned directional — check me)' : '')));
-        if (parsed.goal === 'DIRECTIONAL' && parsed.thesis) {
+        var gLabel = g ? g.label : parsed.goal;
+        if (parsed.goalRule) {
+          chips.appendChild(UI.chip('Goal', gLabel + ' — your words: “' + parsed.goalRule + '”'));
+        } else if (parsed.goalUncertain) {
+          chips.appendChild(UI.chip('Goal', 'not sure — best guess ' + gLabel + ' ('
+            + Math.round(parsed.goalScore * 100) + '%), pick the goal yourself'));
+        } else {
+          chips.appendChild(UI.chip('Goal', gLabel
+            + ' · ' + Math.round(parsed.goalScore * 100) + '%'
+            + (parsed.goalAdjusted ? ' (leaned directional — check me)' : '')));
+        }
+        if (parsed.thesis && (parsed.goal === 'DIRECTIONAL' || parsed.thesisScore >= 0.5)) {
           chips.appendChild(UI.chip('View', parsed.thesis + ' · ' + Math.round(parsed.thesisScore * 100) + '%'));
         }
         if (parsed.symbol) chips.appendChild(UI.chip('Symbol', parsed.symbol));

@@ -113,10 +113,10 @@ test('live: manual ideas return candidates for a real chain', async () => {
 });
 
 test('live: scout scans and reports with evidence within budget', async () => {
-  await go('#/recommend');
-  await page.waitForSelector('#auto-go');
+  await go('#/recommend/scout');
+  await page.waitForSelector('#auto-target');
   const t0 = Date.now();
-  await page.click('#auto-go');
+  await page.click('#rec-go');
   await page.waitForSelector('.pick-card, .empty', { timeout: 60000 });
   const elapsed = Date.now() - t0;
   assert.ok(elapsed < 20000, `scout under 20s, took ${elapsed}ms`);

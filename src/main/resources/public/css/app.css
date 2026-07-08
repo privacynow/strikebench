@@ -551,6 +551,32 @@ body.lvl-expert .page-sub { display: none; }
 .chart.chart-down .line { stroke: var(--loss); }
 .chart.chart-down .area-line { fill: var(--risk-danger-bg); }
 
+/* ---- Home hero band: the opening page's DNA folded into the dashboard ---- */
+.home-hero { position: relative; overflow: hidden; padding: 18px 20px 14px; margin-bottom: 14px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.home-hero::before { content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(900px 320px at 10% -50%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 70%); }
+.home-hero > * { position: relative; }
+.home-hero-top { display: flex; gap: 14px 18px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.home-hero-top #home-stats { flex: 1 1 460px; max-width: 560px; margin: 0; }
+.home-hero .eyebrow { margin-bottom: 6px; }
+.home-hero-title { margin: 0; font-size: clamp(22px, 2.6vw, 30px); line-height: 1.15; letter-spacing: -0.02em; }
+.home-hero-title .grad { background: linear-gradient(92deg, var(--accent), #8b5cf6);
+  -webkit-background-clip: text; background-clip: text; color: transparent; }
+.home-hero-sub { margin: 4px 0 0; font-size: 13.5px; color: var(--text-dim); }
+.home-hero-ctas { display: flex; gap: 8px; flex-wrap: wrap; }
+.home-hero .stat { background: color-mix(in srgb, var(--surface-2) 78%, transparent); }
+
+@media (min-width: 1100px) {
+  #app[data-route="home"] .home-hero { padding: 12px 18px; margin-bottom: 12px; }
+  #app[data-route="home"] .home-hero-sub { display: none; } /* the title carries it at desktop */
+  #app[data-route="home"] .home-hero .eyebrow { margin-bottom: 2px; font-size: 10.5px; }
+  #app[data-route="home"] .home-hero-title { font-size: 21px; white-space: nowrap; }
+  #app[data-route="home"] .home-hero .stat { padding: 7px 10px; }
+  #app[data-route="home"] .home-hero .stat .value { font-size: 14.5px; white-space: nowrap; }
+  #app[data-route="home"] .home-hero .stat .label { white-space: nowrap; }
+}
+
 /* ---- Welcome / opening page: designed, not typed ---- */
 .hero { position: relative; padding: 68px 16px 46px; overflow: hidden; }
 .hero::before { content: ''; position: absolute; inset: 0; pointer-events: none;
@@ -563,6 +589,7 @@ body.lvl-expert .page-sub { display: none; }
 .hero-sub { font-size: 17px; line-height: 1.6; color: var(--text-dim); max-width: 620px; margin: 0 auto 24px; }
 .hero-ctas { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 22px; }
 .btn-lg { padding: 12px 26px; font-size: 15px; border-radius: 12px; }
+.wb-stages button[disabled] { opacity: .45; cursor: not-allowed; }
 .btn-ghost { background: transparent; border: 1px solid var(--border-strong); color: var(--text); }
 .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
 .trust-row { font-size: 13px; color: var(--text-faint); }

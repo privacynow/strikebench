@@ -91,6 +91,30 @@ test('free-text intake: model classifies, regex extracts, human confirms', { ski
   assert.equal(await page.locator('#rec-results .candidate').count(), 0, 'no auto-submit, ever');
 });
 
+test('keyword goals beat the model: "buy some more" = Buy at a discount, lowercase ticker', { skip: !available }, async () => {
+  // The exact user-reported failure: a bearish sentence about ADDING shares was read as
+  // "Earn income · 21%" and Apply changed nothing. Now the user's own verbs win, the chip
+  // quotes them, lowercase "qqq" resolves against the universe, and Apply visibly fills.
+  await page.evaluate(() => { location.hash = '#/trade/discover'; });
+  await page.waitForSelector('#app[data-ready="true"]');
+  await page.waitForSelector('#assist-text', { timeout: 20000 });
+  await page.fill('#assist-text', 'I think qqq will go down further, I want to buy some more');
+  await page.click('#assist-parse');
+  await page.waitForSelector('#assist-chips .chip', { timeout: 240000 });
+  const chips = await page.textContent('#assist-chips');
+  assert.match(chips, /Buy at a discount/);
+  assert.match(chips, /your words/);
+  assert.match(chips, /buy some more/);
+  assert.match(chips, /QQQ/);
+  assert.doesNotMatch(chips, /Earn income/);
+  await page.click('#assist-apply');
+  assert.equal(await page.inputValue('#rec-symbol'), 'QQQ');
+  assert.ok(await page.locator('#intent-choices .choice[data-intent="ACQUIRE"].selected').count(),
+    'the goal chip is actually applied');
+  assert.ok(await page.locator('#rec-target').isVisible(), 'the buy-price question appears');
+  assert.equal(await page.locator('#rec-results .candidate').count(), 0, 'still no auto-submit');
+});
+
 test('news sentiment badges: real model output, display-only', { skip: !available }, async () => {
   await page.evaluate(() => { location.hash = '#/research/AAPL'; });
   await page.waitForSelector('#app[data-ready="true"]');

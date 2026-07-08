@@ -59,8 +59,7 @@
       }
 
       document.querySelectorAll('#nav a, #bottom-nav a').forEach(function (a) {
-        a.classList.toggle('active', a.getAttribute('data-route') === route
-          || (route === 'trade' && a.getAttribute('data-route') === 'portfolio'));
+        a.classList.toggle('active', a.getAttribute('data-route') === route);
       });
 
       // Swap = clear + paint a skeleton so the screen is never blank while data loads.
