@@ -987,6 +987,17 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     soon): `deploy.sh --setup-timer` → strikebench-autodeploy.timer polls origin/main every
     5 min and deploys only when it moves. A push is now live within ~5 minutes. Disable:
     `sudo systemctl disable --now strikebench-autodeploy.timer`.
+- WELCOME SYMMETRY (2026-07-08, user: "the welcome/hero page lacks symmetry still"; commit
+  57c5290, 26 fixture + 3 audit green, auto-deployed): the top fold was 1.05fr/0.95fr with
+  only the hero framed (the live column floated, offset by a stray 12px section margin), the
+  hero mixed a left brandline with centered title/sub/CTAs, and the steps were a wrapping
+  flex rag. NOW: `.welcome-top > *` share ONE frame and stretch to one grid row (measured
+  504/504 wide, 354/354 tall, tops aligned, fold 889/900 at 1440), columns exactly 1fr 1fr,
+  hero left-aligned throughout, eyebrow rows of both panels on the same line, steps a strict
+  repeat(4,1fr) grid of mirrored cells. LESSON: prove symmetry with getBoundingClientRect
+  measurements (widths/heights/tops), not by eyeballing a screenshot — the 12px offender was
+  `#app:has(.welcome-page) .welcome-section { margin: 12px 0 0 }` leaking into the grid
+  child, killed via `.welcome-top > .welcome-section { margin: 0 }`.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
