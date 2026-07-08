@@ -23,7 +23,6 @@
     <postgresql.version>42.7.4</postgresql.version>
     <hikaricp.version>6.2.1</hikaricp.version>
     <flyway.version>11.1.0</flyway.version>
-    <testcontainers.version>1.20.4</testcontainers.version>
     <caffeine.version>3.2.0</caffeine.version>
     <slf4j.version>2.0.17</slf4j.version>
     <logback.version>1.5.18</logback.version>
@@ -116,19 +115,6 @@
       <groupId>com.squareup.okhttp3</groupId>
       <artifactId>mockwebserver</artifactId>
       <version>${mockwebserver.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <!-- Ephemeral Postgres for the JUnit integration suite -->
-    <dependency>
-      <groupId>org.testcontainers</groupId>
-      <artifactId>postgresql</artifactId>
-      <version>${testcontainers.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.testcontainers</groupId>
-      <artifactId>junit-jupiter</artifactId>
-      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

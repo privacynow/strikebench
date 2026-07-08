@@ -1,12 +1,13 @@
 package io.liftandshift.db;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import io.liftandshift.config.AppConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
+import javax.sql.DataSource;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -16,39 +17,48 @@ import java.util.List;
 import java.util.function.Function;
 
 /**
- * Thin JDBC helper around a SQLite database.
- * One connection per operation; WAL mode; foreign keys on; busy timeout for concurrent handlers.
+ * Thin JDBC helper around a HikariCP-pooled PostgreSQL database. One pooled connection per
+ * operation; transactions via {@link #tx}. The public query/exec/Row surface is unchanged from
+ * the previous SQLite helper so the services above are untouched by the storage swap.
+ *
+ * Money stays exact: integer cents columns map to Java {@code long}, per-share prices to
+ * {@code numeric} / {@link java.math.BigDecimal}. Doubles appear only for non-money ratios
+ * (IV, greeks, probabilities). Boolean flags are stored as integer 0/1 (see {@link #prep} and
+ * {@link Row#bool}) so the existing call sites bind and read them unchanged.
  */
-public final class Db {
+public final class Db implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(Db.class);
-    private final String url;
+    private final HikariDataSource ds;
 
-    public Db(String path) {
-        if (!":memory:".equals(path)) {
-            Path p = Path.of(path).toAbsolutePath();
-            try {
-                if (p.getParent() != null) Files.createDirectories(p.getParent());
-            } catch (Exception e) {
-                throw new IllegalStateException("Cannot create database directory for " + p, e);
-            }
-            this.url = "jdbc:sqlite:" + p;
-        } else {
-            this.url = "jdbc:sqlite::memory:";
-        }
+    public Db(String jdbcUrl, String user, String password) {
+        HikariConfig cfg = new HikariConfig();
+        cfg.setJdbcUrl(jdbcUrl);
+        cfg.setUsername(user);
+        cfg.setPassword(password);
+        cfg.setMaximumPoolSize(10);
+        cfg.setMinimumIdle(1);
+        cfg.setPoolName("strikebench");
+        cfg.setConnectionTimeout(10_000);
+        this.ds = new HikariDataSource(cfg);
+        log.info("Postgres pool ready ({})", jdbcUrl.replaceAll("password=[^&]*", "password=***"));
     }
+
+    /** Builds a pool from app config (env > sysprops > properties > local-dev default). */
+    public static Db forConfig(AppConfig cfg) {
+        return new Db(cfg.dbUrl(), cfg.dbUser(), cfg.dbPassword());
+    }
+
+    /** The underlying pool — used by {@link Migrations} (Flyway) and nothing else. */
+    public DataSource dataSource() { return ds; }
+
+    @Override public void close() { ds.close(); }
 
     public interface SqlFn<T> { T apply(Connection c) throws SQLException; }
     public interface SqlConsumer { void accept(Connection c) throws SQLException; }
 
     public Connection open() throws SQLException {
-        Connection c = DriverManager.getConnection(url);
-        try (Statement st = c.createStatement()) {
-            st.execute("PRAGMA foreign_keys = ON");
-            st.execute("PRAGMA busy_timeout = 5000");
-            st.execute("PRAGMA journal_mode = WAL");
-        }
-        return c;
+        return ds.getConnection();
     }
 
     public <T> T with(SqlFn<T> fn) {
@@ -59,7 +69,8 @@ public final class Db {
         }
     }
 
-    /** Runs fn inside a transaction; rolls back on any exception. */
+    /** Runs fn inside a transaction; rolls back on any exception. Hikari resets the connection
+     *  (autocommit, etc.) when it returns to the pool. */
     public <T> T tx(SqlFn<T> fn) {
         try (Connection c = open()) {
             c.setAutoCommit(false);
@@ -120,6 +131,8 @@ public final class Db {
         PreparedStatement ps = c.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
         for (int i = 0; i < params.length; i++) {
             Object p = params[i];
+            // Boolean flags live in integer 0/1 columns (kept from the SQLite schema for
+            // zero call-site churn); bind them as ints.
             if (p instanceof Boolean b) ps.setInt(i + 1, b ? 1 : 0);
             else ps.setObject(i + 1, p);
         }

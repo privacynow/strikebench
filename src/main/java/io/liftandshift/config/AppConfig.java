@@ -86,7 +86,12 @@ public final class AppConfig {
         return get("BRAND_TAGLINE", "Learn, paper-trade, and backtest options — with honest numbers.");
     }
 
-    /** Default DB file. A legacy data/options-lab.db is moved here once at boot (see Main). */
+    /** Postgres connection. Local-dev default points at the docker-compose db (localhost:5432). */
+    public String dbUrl() { return get("DB_URL", "jdbc:postgresql://localhost:5432/strikebench_dev"); }
+    public String dbUser() { return get("DB_USER", "strikebench"); }
+    public String dbPassword() { return get("DB_PASSWORD", "strikebench"); }
+
+    /** Legacy SQLite file path — used only by the one-time SQLite->Postgres migration tool. */
     public String dbPath() { return get("DB_PATH", "data/strikebench.db"); }
 
     /** When true, only deterministic fixture data is served; no network calls are made. */

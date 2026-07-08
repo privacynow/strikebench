@@ -3,6 +3,7 @@ package io.liftandshift.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.javalin.Javalin;
 import io.liftandshift.config.AppConfig;
+import io.liftandshift.support.TestDb;
 import io.liftandshift.util.Json;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -39,10 +40,9 @@ class ApiIntegrationTest {
 
     @BeforeAll
     static void startServer() throws IOException {
-        tmpDir = Files.createTempDirectory("strikebench-it");
-        AppConfig cfg = new AppConfig(Map.of(
-                "DB_PATH", tmpDir.resolve("it.db").toString(),
-                "FIXTURES_ONLY", "true"));
+        java.util.Map<String, String> conf = new java.util.HashMap<>(TestDb.freshConfig());
+        conf.put("FIXTURES_ONLY", "true");
+        AppConfig cfg = new AppConfig(conf);
         server = ApiServer.create(cfg, CLOCK);
         app = server.start(0);
         base = "http://localhost:" + app.port();

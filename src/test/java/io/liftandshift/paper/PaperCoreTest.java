@@ -2,11 +2,12 @@ package io.liftandshift.paper;
 
 import io.liftandshift.config.AppConfig;
 import io.liftandshift.db.Db;
-import io.liftandshift.db.Migrations;
+import io.liftandshift.support.TestDb;
 import io.liftandshift.model.Freshness;
 import io.liftandshift.model.Leg;
 import io.liftandshift.model.LegAction;
 import io.liftandshift.model.OptionType;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -72,14 +73,18 @@ class PaperCoreTest {
 
     @BeforeEach
     void setUp() {
-        db = new Db(tmp.resolve("test.db").toString());
-        Migrations.run(db);
+        db = TestDb.fresh();
         cfg = new AppConfig(tmp.resolve("none.properties"));
         audit = new AuditLog(db, CLOCK);
         accounts = new AccountService(db, cfg, audit, CLOCK);
         marks = new StubMarks();
         trades = new TradeService(db, cfg, marks, audit, CLOCK);
         positions = new PositionsService(db, marks, audit, CLOCK);
+    }
+
+    @AfterEach
+    void closeDb() {
+        if (db != null) db.close();
     }
 
     private TradeService.OpenRequest coveredCallOnHeldShares(String accountId) {

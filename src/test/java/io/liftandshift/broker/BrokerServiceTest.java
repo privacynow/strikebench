@@ -1,9 +1,10 @@
 package io.liftandshift.broker;
 
 import io.liftandshift.db.Db;
-import io.liftandshift.db.Migrations;
+import io.liftandshift.support.TestDb;
 import io.liftandshift.market.ports.BrokerageProvider;
 import io.liftandshift.paper.AuditLog;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -52,10 +53,14 @@ class BrokerServiceTest {
 
     @BeforeEach
     void setUp() {
-        db = new Db(tmp.resolve("broker.db").toString());
-        Migrations.run(db);
+        db = TestDb.fresh();
         fake = new FakeBroker();
         service = new BrokerService(fake, db, new AuditLog(db, CLOCK), CLOCK);
+    }
+
+    @AfterEach
+    void closeDb() {
+        if (db != null) db.close();
     }
 
     private static final Map<String, Object> ORDER = Map.of("orderType", "SPREADS");

@@ -2,9 +2,10 @@ package io.liftandshift.backtest;
 
 import io.liftandshift.config.AppConfig;
 import io.liftandshift.db.Db;
-import io.liftandshift.db.Migrations;
+import io.liftandshift.support.TestDb;
 import io.liftandshift.market.MarketDataService;
 import io.liftandshift.market.providers.FixtureProvider;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -30,11 +31,15 @@ class BacktesterTest {
 
     @BeforeEach
     void setUp() {
-        db = new Db(tmp.resolve("bt.db").toString());
-        Migrations.run(db);
+        db = TestDb.fresh();
         FixtureProvider fixture = new FixtureProvider(CLOCK);
         MarketDataService market = new MarketDataService(List.of(fixture), List.of(fixture), List.of(fixture));
         backtester = new Backtester(market, List.of(fixture), new AppConfig(Map.of("FIXTURES_ONLY", "true")), db, CLOCK);
+    }
+
+    @AfterEach
+    void closeDb() {
+        if (db != null) db.close();
     }
 
     private static Backtester.BacktestRequest req(String strategy, String from, String to) {

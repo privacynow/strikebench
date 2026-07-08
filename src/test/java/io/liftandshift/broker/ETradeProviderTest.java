@@ -2,7 +2,7 @@ package io.liftandshift.broker;
 
 import io.liftandshift.config.AppConfig;
 import io.liftandshift.db.Db;
-import io.liftandshift.db.Migrations;
+import io.liftandshift.support.TestDb;
 import io.liftandshift.model.OptionChain;
 import io.liftandshift.model.OptionType;
 import io.liftandshift.model.Quote;
@@ -34,13 +34,13 @@ class ETradeProviderTest {
     private MockWebServer server;
     private ETradeProvider provider;
     private SecretsStore secrets;
+    private Db db;
 
     @BeforeEach
     void setUp() throws Exception {
         server = new MockWebServer();
         server.start();
-        Db db = new Db(tmp.resolve("etrade.db").toString());
-        Migrations.run(db);
+        db = TestDb.fresh();
         secrets = new SecretsStore(db, CLOCK);
         AppConfig cfg = new AppConfig(Map.of(
                 "ETRADE_CONSUMER_KEY", "ck",
@@ -52,6 +52,7 @@ class ETradeProviderTest {
     @AfterEach
     void tearDown() throws Exception {
         server.shutdown();
+        if (db != null) db.close();
     }
 
     private void connect() throws Exception {

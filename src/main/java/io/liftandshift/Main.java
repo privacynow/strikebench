@@ -15,11 +15,10 @@ public final class Main {
     public static void main(String[] args) {
         preloadAllClasses();
         AppConfig cfg = new AppConfig();
-        migrateLegacyDefaultDb(cfg);
         ApiServer server = ApiServer.create(cfg, Clock.systemDefaultZone());
         server.start(cfg.port());
         log.info("StrikeBench is up: http://localhost:{}  (db={}, fixturesOnly={})",
-                cfg.port(), cfg.dbPath(), cfg.fixturesOnly());
+                cfg.port(), cfg.dbUrl(), cfg.fixturesOnly());
         log.info("Educational tool only — paper trading by default, never financial advice.");
     }
 

@@ -83,6 +83,7 @@ public final class ApiServer {
     private final PositionsService positions;
     private final io.liftandshift.market.UniverseService universe;
     private Javalin app;
+    private Db db;   // owned pool; closed on stop()
     private final String startedAt = java.time.Instant.now().toString();
 
     public ApiServer(AppConfig cfg, Clock clock, MarketDataService market, AuditLog audit,
@@ -105,7 +106,7 @@ public final class ApiServer {
 
     /** Wires the whole app from config: DB + migrations + provider chain + services. */
     public static ApiServer create(AppConfig cfg, Clock clock) {
-        Db db = new Db(cfg.dbPath());
+        Db db = Db.forConfig(cfg);
         Migrations.run(db);
         FixtureProvider fixture = new FixtureProvider(clock);
         List<MarketDataProvider> providers = new ArrayList<>();
@@ -149,7 +150,9 @@ public final class ApiServer {
         }
         Backtester backtester = new Backtester(market, historical, cfg, db, clock);
         io.liftandshift.market.UniverseService universe = new io.liftandshift.market.UniverseService(db, cfg, clock);
-        return new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe);
+        ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe);
+        server.db = db;
+        return server;
     }
 
     public Javalin start(int port) {
@@ -312,6 +315,7 @@ public final class ApiServer {
 
     public void stop() {
         if (app != null) app.stop();
+        if (db != null) db.close();
     }
 
     // ---- Status / config ----
