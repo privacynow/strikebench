@@ -89,12 +89,15 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await go('#/welcome');
   await page.waitForSelector('#welcome-hero');
   assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'home');
-  // The brand is Home: dashboard once welcomed; the tour stays one click away
+  // The brand mark ALWAYS brings the welcome back — skipping it once is not goodbye
   await go('#/home');
   await page.waitForSelector('.tile-row .tile');
   await page.click('.brand');
+  await page.waitForSelector('#welcome-hero');
+  assert.ok(await page.locator('.brand .brand-mark').count(), 'the SVG mark renders in the header');
+  await go('#/home');
   await page.waitForSelector('.tile-row .tile');
-  await page.click('#home-tour-link'); // the hero band's own CTA
+  await page.click('#home-tour-link'); // the hero band CTA is the second way back
   await page.waitForSelector('#welcome-hero');
   // Home: sector pulse chips dig into the explorer
   await go('#/home');

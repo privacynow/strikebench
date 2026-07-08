@@ -25,10 +25,26 @@
     // and both primary actions land above the fold on a desktop ----
     var liveHost = el('div', { class: 'showcase-frame', id: 'welcome-live' },
       el('div', { class: 'showcase-loading' }, UI.spinner('Asking the engine for a live example\u2026')));
+    var deco = (function () {
+      var svgNS = 'http://www.w3.org/2000/svg';
+      var d = document.createElementNS(svgNS, 'svg');
+      d.setAttribute('class', 'hero-deco');
+      d.setAttribute('viewBox', '0 0 340 150');
+      d.setAttribute('aria-hidden', 'true');
+      var zero = document.createElementNS(svgNS, 'path');
+      zero.setAttribute('class', 'deco-zero');
+      zero.setAttribute('d', 'M0 96 H340');
+      var tent = document.createElementNS(svgNS, 'path');
+      tent.setAttribute('d', 'M0 128 H70 L128 34 H208 L266 128 H340'); // an iron condor, quietly
+      d.appendChild(zero); d.appendChild(tent);
+      return d;
+    })();
     root.appendChild(el('div', { class: 'welcome-top' },
       el('section', { class: 'hero', id: 'welcome-hero' },
+        deco,
         el('div', { class: 'hero-inner' },
-          el('div', { class: 'eyebrow' }, 'PAPER TRADING \u00B7 LOCAL-FIRST \u00B7 FREE'),
+          el('div', { class: 'hero-brandline' }, UI.brandMark(30),
+            el('span', { class: 'eyebrow' }, 'PAPER TRADING \u00B7 LOCAL-FIRST \u00B7 FREE')),
           el('h1', { class: 'hero-title' }, 'Learn options by ', el('span', { class: 'grad' }, 'doing'), ',', el('br', {}),
             'with honest numbers.'),
           el('p', { class: 'hero-sub' },

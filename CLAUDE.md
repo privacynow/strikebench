@@ -938,6 +938,33 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   - UPDATE LOOP DECISION: manual `scripts/deploy.sh` on the server after a push (deliberate,
     simple); the poll timer exists but is NOT enabled — enabling it means unreviewed pushes
     go straight to prod.
+- LEARN-BY-TOUCHING BUILDER (2026-07-08, user: beginner autopilot "chooses everything…
+  how else do we learn?"; wants the CHART as the tweaking tool + a numeric escape hatch +
+  actionable breadcrumb steps. Suites 224 JUnit + 26 fixture + 3 audit + 4 seeded + 8 live;
+  deployed live; shots/bld-chart-handles.png, bld-stand-tune.png):
+  - UI.payoffChart gains opts.handles [{id,strike,label,strikes[],onChange}]: draggable
+    grips (SVG circles + dashed strike lines) that snap to the leg's REAL chain strikes
+    while dragging and fire onChange on release → the owner re-prices; worst case/best
+    case/odds move live. Each handle gets its OWN row (hi % 4 stagger — shared rows mash
+    condor labels), labels ride BESIDE the grip (anchor flips near the right edge), the
+    'now' spot label moved to the plot BOTTOM (the top strip belongs to handles). Grip
+    pointer events stopPropagation so the crosshair stays quiet; .xhair pointer-events:none.
+  - builder.js strikeHandles(indices, onMoved) builds them from st.legs + ensureChain;
+    wired into ALL THREE charts: beginner step-3 walkthrough (tweak WHILE learning the leg),
+    beginner Where-you-stand (onMoved=repaint), expert panel (onMoved=onLegsReplaced so the
+    leg grid re-renders too; excluded legs get no handle). renderVerdictAndStats gained a
+    5th `handles` param.
+  - Beginner escape hatch: 'Fine-tune each leg — exact strikes and dates' expandable
+    (#bw-tune) on Where-you-stand: per-leg strike + expiration selects (chain-fed; expiry
+    change snaps to the nearest strike on the new chain), stock legs honestly labeled.
+  - Wizard steps are BUTTONS now (.step-link when earned, disabled+title when not):
+    Goal always, Structure needs a goal, Build-it/Where-you-stand need legs. CSS keeps the
+    old look (bg none) — audit only measures input/select/.btn/.goal-chip so step buttons
+    are exempt.
+  - TEST GOTCHAS reconfirmed: <option> is never "visible" to waitForSelector (wait on
+    querySelectorAll().length); mouse events on below-fold elements silently no-op
+    (scrollIntoViewIfNeeded BEFORE boundingBox); tune-row index must match the LEG index
+    asserted.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

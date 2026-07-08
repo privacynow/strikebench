@@ -111,6 +111,27 @@
       explainText ? explain(explainText) : null);
   }
 
+  var _bmSeq = 0;
+  /** The StrikeBench mark: a bench that kinks upward at the strike — the payoff story. */
+  function brandMark(size) {
+    var gid = 'bmk' + (++_bmSeq);
+    var svg = svgEl('svg', { viewBox: '0 0 24 24', width: size || 22, height: size || 22,
+      class: 'brand-mark', 'aria-hidden': 'true' });
+    var defs = svgEl('defs', {});
+    var grad = svgEl('linearGradient', { id: gid, x1: '0', y1: '0', x2: '1', y2: '1' });
+    grad.appendChild(svgEl('stop', { offset: '0', 'stop-color': '#2f6bde' }));
+    grad.appendChild(svgEl('stop', { offset: '1', 'stop-color': '#7c4fe0' }));
+    defs.appendChild(grad);
+    svg.appendChild(defs);
+    svg.appendChild(svgEl('rect', { width: '24', height: '24', rx: '6', fill: 'url(#' + gid + ')' }));
+    svg.appendChild(svgEl('path', { d: 'M5 19h14', stroke: 'rgba(255,255,255,.4)',
+      'stroke-width': '1.2', 'stroke-linecap': 'round', 'stroke-dasharray': '1.4 2.6' }));
+    svg.appendChild(svgEl('path', { d: 'M5 15.5h6l7.5-8.5', stroke: '#fff', 'stroke-width': '2.2',
+      fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+    svg.appendChild(svgEl('circle', { cx: '11', cy: '15.5', r: '1.9', fill: '#fff' }));
+    return svg;
+  }
+
   function chip(label, valueNode) {
     return el('span', { class: 'chip' }, el('span', { class: 'chip-label' }, label), el('b', {}, valueNode));
   }
@@ -726,6 +747,7 @@
     icon: icon,
     skeleton: skeleton,
     rangeChart: rangeChart,
+    brandMark: brandMark,
     fmtMoney: fmtMoney,
     fmtMoneyCompact: fmtMoneyCompact,
     pnlSpan: pnlSpan,

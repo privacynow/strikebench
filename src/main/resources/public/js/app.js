@@ -351,7 +351,13 @@
     App.state.brand = brand;
     document.title = brand.name;
     var el = document.querySelector('.brand');
-    if (el) el.textContent = brand.name;
+    if (el) {
+      // Replace only the TEXT node — the SVG mark stays (textContent wiped it once)
+      for (var i = el.childNodes.length - 1; i >= 0; i--) {
+        if (el.childNodes[i].nodeType === 3) el.removeChild(el.childNodes[i]);
+      }
+      el.appendChild(document.createTextNode(brand.name));
+    }
   }
 
   // ---- Theme: system / light / dark, persisted; html[data-theme] is set pre-paint ----
