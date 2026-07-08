@@ -788,6 +788,56 @@ test('experience ladder reshapes the UI per level', async () => {
   await page.waitForSelector('#app[data-ready="true"]');
 });
 
+test('levels share ONE geometry: toggling Beginner/Expert never reflows spacing', async () => {
+  // Levels differ by CONTENT (explainers, columns, features) — never by padding or font
+  // size alone. A screen showing the same data must not shift when the level toggles.
+  await go('#/home');
+  const geometry = () => page.evaluate(() => {
+    const card = document.querySelector('.home-col .card');
+    const stat = document.querySelector('#home-stats .stat');
+    const cs = getComputedStyle(card), ss = getComputedStyle(stat);
+    return [cs.padding, cs.marginBottom, ss.padding,
+      getComputedStyle(stat.querySelector('.value')).fontSize].join('|');
+  });
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+  await page.waitForSelector('.home-col .card');
+  const beginnerGeo = await geometry();
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+  await page.waitForSelector('.home-col .card');
+  assert.equal(await geometry(), beginnerGeo, 'identical spacing at both levels');
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+});
+
+test('tape rebuilds when the window grows past its built half-length (no wrap gap)', async () => {
+  await go('#/home');
+  await page.setViewportSize({ width: 900, height: 720 });
+  await page.evaluate(() => {
+    document.getElementById('tape-strip').removeAttribute('data-symbols');
+    return App.refreshTape();
+  });
+  await page.waitForFunction(() => {
+    const s = document.getElementById('tape-strip');
+    return s.hasAttribute('data-halfw') && s.children.length > 0;
+  });
+  const halfSmall = await page.evaluate(() => parseFloat(document.getElementById('tape-strip').getAttribute('data-halfw')));
+  await page.setViewportSize({ width: 1600, height: 720 });
+  // ResizeObserver debounce is 250ms; the rebuild re-measures and re-clones
+  await page.waitForFunction(prev => {
+    const s = document.getElementById('tape-strip');
+    return parseFloat(s.getAttribute('data-halfw')) > prev;
+  }, halfSmall, { timeout: 10000 });
+  const check = await page.evaluate(() => {
+    const s = document.getElementById('tape-strip');
+    const view = document.querySelector('.tape-scroll').clientWidth;
+    return { half: parseFloat(s.getAttribute('data-halfw')), view };
+  });
+  assert.ok(check.half >= check.view - 5, 'rebuilt halves cover the wider viewport — no blank wrap region');
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
 test('strategy builder: beginner wizard walks legs with impact; expert terminal analyzes', async () => {
   // ---- BEGINNER: goal -> shape -> leg-by-leg walkthrough -> whole position ----
   await page.click('#level-switch button[data-level="beginner"]');

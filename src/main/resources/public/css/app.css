@@ -234,15 +234,9 @@ body:not(.lvl-expert) .expert-only { display: none !important; }
 body.lvl-expert .not-expert { display: none !important; }
 
 /* Pro density: tighter everything, data first */
-body.lvl-expert .card { padding: 12px 14px; margin-bottom: 10px; }
-body.lvl-expert .stat { padding: 8px 10px; }
-body.lvl-expert .stat .value { font-size: 16px; }
-body.lvl-expert .tbl th { padding: 5px 8px; }
-body.lvl-expert .tbl td { padding: 5px 8px; font-size: 13px; }
-body.lvl-expert .chip { padding: 3px 9px; font-size: 12px; }
-body.lvl-expert .candidate { padding: 10px 14px; margin-bottom: 8px; }
-body.lvl-expert h1 { font-size: 18px; margin-bottom: 10px; }
-body.lvl-expert .page-sub { display: none; }
+/* Levels differ by CONTENT (explainers, columns, features) — NEVER by padding or font
+   size alone. Toggling Beginner/Expert must not reflow a screen that shows the same data;
+   the old expert "density" overrides did exactly that and are gone. */
 
 /* ---------- Expandable disclosure ---------- */
 .xp { border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 8px 0; background: var(--surface); }

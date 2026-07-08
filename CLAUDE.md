@@ -884,6 +884,23 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     strings) with \\uXXXX ESCAPES (greek chips) — grep the exact bytes before writing python
     old-strings, and put each independent replace in its own assert so one mismatch can't
     discard sibling edits.
+- LEVEL-GEOMETRY SYMMETRY + TAPE RESIZE (2026-07-07, user: home spacing changed between
+  Beginner/Expert — "the sort of bad UI and UX we want to avoid, probably lurking everywhere";
+  ticker "ends with a gap and then the wrap around comes back". Suites: 25 fixture + 3 audit +
+  4 seeded + 8 live green):
+  - STANDING LAW (also in memory): levels differ by CONTENT (explainers, columns, features),
+    NEVER by padding/font-size alone. The global `body.lvl-expert` density block (.card/.stat/
+    .tbl/.chip/.candidate/h1 padding+font overrides) was pure reflow with identical data —
+    DELETED; both levels share one geometry everywhere. PERMANENT PIN: dom.test 'levels share
+    ONE geometry' compares computed padding/margins/font-size on home across the toggle.
+  - TAPE WRAP GAP root cause: the marquee halves are sized ONCE at build; growing the window
+    past the built half-length leaves a blank region each cycle before the wrap re-enters
+    (the seam itself was verified exact — six equal sequences, strip = 2× half to the pixel).
+    FIX: strip stores data-halfw; a debounced ResizeObserver on .tape-scroll forces a full
+    rebuild (clears data-symbols so the in-place path can't skip re-measuring) whenever the
+    container outgrows the halves. PIN: build at 900px, grow to 1600px → data-halfw grows and
+    covers the viewport. Note: tiny universes (4 symbols) necessarily repeat symbols to span
+    wide screens — duplication is the minimum needed to cover the viewport.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

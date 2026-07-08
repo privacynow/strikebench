@@ -295,9 +295,36 @@
       for (var i = 1; i < perHalf * 2; i++) strip.appendChild(sequence(false));
       var halfW = seqW * perHalf;
       strip.setAttribute('data-symbols', symbolsKey);
+      strip.setAttribute('data-halfw', String(Math.round(halfW)));
       strip.style.animation = '';
       strip.style.animationDuration = Math.max(20, Math.round(halfW / 55)) + 's'; // ~55 px/s
+      wireTapeResize();
     } catch (e) { tape.hidden = true; }
+  }
+
+  // A tape built at one width leaves a BLANK region each cycle if the window later grows
+  // past its half-length (nothing re-measured it — that read as "the ticker ends in a gap,
+  // then the wrap-around gets attached"). Rebuild when the container outgrows the halves.
+  var tapeResizeWired = false;
+  function wireTapeResize() {
+    if (tapeResizeWired || !window.ResizeObserver) return;
+    var scrollEl = document.querySelector('.tape-scroll');
+    if (!scrollEl) return;
+    tapeResizeWired = true;
+    var t = null;
+    new ResizeObserver(function () {
+      clearTimeout(t);
+      t = setTimeout(function () {
+        var tape = document.getElementById('tape');
+        var strip = document.getElementById('tape-strip');
+        if (!tape || !strip || tape.hidden || tape.classList.contains('tape-offroute')) return;
+        var half = parseFloat(strip.getAttribute('data-halfw') || '0');
+        if (half && scrollEl.clientWidth > half) {
+          strip.removeAttribute('data-symbols'); // skip the in-place path: full re-measure
+          refreshTape();
+        }
+      }, 250);
+    }).observe(scrollEl);
   }
 
   /** Header symbol search: type-ahead from the universe, Enter to research, "/" to focus. */
