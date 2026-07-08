@@ -167,7 +167,7 @@
     return wrap;
   }
 
-  /** A term of art with tap-to-define glossary popover (Learning/Confident levels). */
+  /** A term of art with tap-to-define glossary popover (Beginner level). */
   function term(word, display) {
     var def = window.Learn && Learn.GLOSSARY[word.toLowerCase()];
     if (!def || (window.Learn && Learn.currentLevel() === 'expert')) {

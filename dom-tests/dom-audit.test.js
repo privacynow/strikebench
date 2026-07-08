@@ -60,8 +60,9 @@ after(async () => {
   if (server) server.kill();
 });
 
-const ROUTES = ['#/home', '#/welcome', '#/research', '#/research/AAPL', '#/recommend/scout',
-  '#/recommend/manual', '#/ticket/builder', '#/ticket', '#/portfolio', '#/backtest', '#/account', '#/status'];
+const ROUTES = ['#/home', '#/home/tour', '#/research', '#/research/AAPL', '#/trade/discover',
+  '#/trade/discover/manual', '#/trade/shape', '#/trade/place', '#/trade/verify',
+  '#/portfolio', '#/portfolio/activity', '#/portfolio/account', '#/status'];
 const WIDTHS = [1280, 1000, 375];
 
 // Sanctioned control heights: --ctl-h (38), --ctl-h-sm / --ctl-h-xs (30), plus the

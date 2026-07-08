@@ -127,20 +127,19 @@ test('live: scout scans and reports with evidence within budget', async () => {
 });
 
 test('live: full ticket flow places and unwinds a paper trade at real marks', async () => {
-  await go('#/ticket');
-  await page.fill('#ticket-symbol', 'AAPL');
-  await page.click('#thesis-choices button:has-text("Bullish")');
-  await page.waitForSelector('#horizon-choices');
-  await page.click('#horizon-choices button:has-text("About a month")');
-  await page.waitForSelector('#risk-next');
-  await page.click('#risk-next');
-  await page.waitForSelector('.candidate button:has-text("Choose this"), .alert-warn', { timeout: 60000 });
-  if (!(await page.locator('.candidate button:has-text("Choose this")').count())) {
+  await go('#/trade/discover/manual');
+  await page.fill('#rec-symbol', 'AAPL');
+  await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
+  await page.selectOption('#rec-thesis', 'bullish');
+  await page.click('#rec-go');
+  const useBtn = '#rec-results .candidate button:has-text("Practice this trade"), #rec-results .candidate button:has-text("Use in trade ticket")';
+  await page.waitForSelector(useBtn + ', .alert-warn', { timeout: 60000 });
+  if (!(await page.locator(useBtn).count())) {
     assert.ok(true, 'no candidates passed screens right now — graceful, not a failure');
     assertClean('ticket-nocandidates');
     return;
   }
-  await page.click('.candidate button:has-text("Choose this")');
+  await page.locator(useBtn).first().click();
   await page.waitForSelector('#to-review', { timeout: 30000 });
   await page.click('#to-review');
   await page.waitForSelector('#to-confirm', { timeout: 60000 });
@@ -148,7 +147,7 @@ test('live: full ticket flow places and unwinds a paper trade at real marks', as
   await page.click('#to-confirm');
   await page.waitForSelector('#place-trade');
   await page.click('#place-trade');
-  await page.waitForSelector('#app[data-route="trade"][data-ready="true"]', { timeout: 60000 });
+  await page.waitForSelector('#refresh-btn', { timeout: 60000 }); // detail landmark
   assert.match(await page.textContent('#app'), /ACTIVE/);
 
   await page.click('#refresh-btn');
@@ -174,7 +173,7 @@ test('live: backtest discloses demo underlying when no candle source', async () 
 test('live: status, account, portfolio render', async () => {
   await go('#/status');
   assert.match(await page.textContent('#app'), /QUOTES/);
-  await go('#/account');
+  await go('#/account'); // legacy URL -> Portfolio Account section
   assert.match(await page.textContent('#app'), /Buying power/);
   await go('#/portfolio/closed');
   await page.waitForSelector('.tbl tbody tr, .empty', { timeout: 30000 });

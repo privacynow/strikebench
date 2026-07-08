@@ -84,12 +84,16 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   assert.ok((await page.locator('.tile-row .tile').count()) === 4, 'four market tiles');
   const footer = await page.textContent('#disclaimer');
   assert.match(footer, /not financial advice/i);
-  // #/welcome stays reachable after skipping — and the BRAND opens the product page
+  // Legacy #/welcome redirects into the adaptive Home's tour view
   await go('#/welcome');
   await page.waitForSelector('#welcome-hero');
+  assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'home');
+  // The brand is Home: dashboard once welcomed; the tour stays one click away
   await go('#/home');
   await page.waitForSelector('.tile-row .tile');
   await page.click('.brand');
+  await page.waitForSelector('.tile-row .tile');
+  await page.click('a[href="#/home/tour"]');
   await page.waitForSelector('#welcome-hero');
   // Home: sector pulse chips dig into the explorer
   await go('#/home');
@@ -160,22 +164,23 @@ test('recommendations render candidates and blocked examples', async () => {
 
 let tradeUrlHash = null;
 
-test('guided ticket end-to-end places a paper trade', async () => {
-  await go('#/ticket');
-  // Step 1: thesis
-  await page.fill('#ticket-symbol', 'AAPL');
-  await page.click('#thesis-choices button:has-text("Bullish")');
-  // Step 2: horizon
-  await page.waitForSelector('#horizon-choices');
-  await page.click('#horizon-choices button:has-text("About a month")');
-  // Step 3: risk
-  await page.waitForSelector('#risk-next');
-  await page.click('#risk-next');
-  // Step 4: pick first screened strategy
-  await page.waitForSelector('.candidate button:has-text("Choose this")');
-  await page.click('.candidate button:has-text("Choose this")');
-  // Step 5: strikes & size
+test('discover-to-place: screening happens ONCE, in Discover; Place is strikes/review/confirm', async () => {
+  // Place without an idea = an honest empty state, never a duplicate wizard
+  await page.evaluate(() => { App.state.ticket = null; });
+  await go('#/trade/place');
+  assert.match(await page.textContent('#app'), /Nothing to place yet/);
+  // Discover: the ONE screening flow (this replaced the old ticket steps 1-4 outright)
+  await go('#/trade/discover/manual');
+  await page.fill('#rec-symbol', 'AAPL');
+  await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
+  await page.selectOption('#rec-thesis', 'bullish');
+  await page.click('#rec-go');
+  await page.waitForSelector('#rec-results .candidate', { timeout: 30000 });
+  // Button label differs by level (beginner: Practice this trade / expert: Use in trade ticket)
+  await page.locator('#rec-results .candidate button:has-text("Practice this trade"), #rec-results .candidate button:has-text("Use in trade ticket")').first().click();
+  // Place opens at Strikes with the idea in the bar
   await page.waitForSelector('#to-review');
+  assert.match(await page.textContent('#idea-bar'), /AAPL/);
   assert.ok(await page.isVisible('#ticket-qty'));
   await page.click('#to-review');
   // Step 6: review shows exact money effects and the safety checklist
@@ -191,7 +196,7 @@ test('guided ticket end-to-end places a paper trade', async () => {
   const confirmText = await page.textContent('#ticket-body');
   assert.match(confirmText, /PAPER trade/);
   await page.click('#place-trade');
-  await page.waitForSelector('#app[data-route="trade"][data-ready="true"]');
+  await page.waitForSelector('#refresh-btn'); // detail page landmark (route names collapsed)
   const detail = await page.textContent('#app');
   assert.match(detail, /ACTIVE/);
   assert.match(detail, /Payoff at expiration/);
@@ -227,12 +232,17 @@ test('portfolio tabs show the closed trade', async () => {
   assert.match(rowText, /CLOSED/);
 });
 
-test('account shows balances, ledger, and guarded reset', async () => {
-  await go('#/account');
+test('portfolio absorbs account: sections, ledger under Activity, guarded reset', async () => {
+  await go('#/account'); // legacy URL -> Portfolio's Account section
   const text = await page.textContent('#app');
   assert.match(text, /Buying power/);
-  assert.match(text, /PREMIUM_OPEN/);
-  assert.match(text, /RESERVE_RELEASE/);
+  assert.match(text, /Reset account/);
+  assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'portfolio');
+  await go('#/portfolio/activity');
+  const ledger = await page.textContent('#app');
+  assert.match(ledger, /PREMIUM_OPEN/);
+  assert.match(ledger, /RESERVE_RELEASE/);
+  await go('#/portfolio/account');
   await page.click('#reset-btn');
   await page.waitForSelector('#modal-confirm');
   assert.match(await page.textContent('.modal'), /cannot be undone/i);
@@ -334,7 +344,7 @@ test('pro depth: comparison table, custom builder, position greeks', async () =>
   await page.click('#to-confirm');
   await page.waitForSelector('#place-trade');
   await page.click('#place-trade');
-  await page.waitForSelector('#app[data-route="trade"][data-ready="true"]', { timeout: 30000 });
+  await page.waitForSelector('#refresh-btn', { timeout: 30000 }); // detail landmark
 
   // Position greeks on the detail page at Pro
   await page.waitForSelector('#greeks-card');
@@ -396,7 +406,7 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   await page.click('#to-confirm');
   await page.waitForSelector('#place-trade');
   await page.click('#place-trade');
-  await page.waitForSelector('#app[data-route="trade"][data-ready="true"]', { timeout: 30000 });
+  await page.waitForSelector('#refresh-btn', { timeout: 30000 }); // detail landmark
   const detail = await page.textContent('#app');
   assert.match(detail, /Covered by/);
   assert.match(detail, /100 held sh/);
@@ -528,8 +538,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.waitForSelector('#history-card .chart-wrap svg.chart');
 
   // Payoff crosshair: place nothing new — reuse any active trade? Instead assert on preview later.
-  // Universe: tape exists, sector picker on the scout changes it globally
-  await page.waitForSelector('#tape .tape-item');
+  // Universe: sector picker on the scout changes it globally
   await go('#/recommend/scout');
   await page.waitForSelector('#universe-sector');
   await page.selectOption('#universe-sector', 'CORE');
@@ -538,6 +547,13 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   assert.equal(uni.active.sectorKey, 'CORE');
   // Datalist feeds symbol inputs everywhere
   assert.ok(await page.evaluate(() => document.querySelectorAll('#universe-symbols option').length) >= 4);
+  // The ticker is CONTEXT now: hidden on non-market screens like the scout
+  assert.ok(await page.locator('#tape.tape-offroute').count(), 'tape hidden on the scout');
+
+  // Sector explorer: chips per sector, live tiles, scout handoff
+  await go('#/research');
+  assert.ok(await page.locator('#tape.tape-offroute').count() === 0, 'tape visible on research');
+  await page.waitForSelector('#tape .tape-item');
   // Tape is SEAMLESS: two identical halves, each at least as wide as the scroll viewport
   const tape = await page.evaluate(() => {
     const strip = document.getElementById('tape-strip');
@@ -547,11 +563,6 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   });
   assert.ok(tape.seqs >= 2 && tape.seqs % 2 === 0, 'even number of sequences: ' + tape.seqs);
   assert.ok(tape.stripW >= tape.viewW * 2 - 5, 'each half covers the viewport (no gap at wrap)');
-  // The sector switcher lives IN the tape — universes reachable from every tab
-  assert.ok(await page.locator('#tape-sector option').count() >= 10, 'sector switcher in the tape');
-
-  // Sector explorer: chips per sector, live tiles, scout handoff
-  await go('#/research');
   await page.waitForSelector('#sector-explorer .sector-chip');
   assert.ok(await page.locator('#sector-chips .sector-chip').count() >= 10, 'all sectors explorable');
   // TECH is NOT the active universe (CORE is, set above) — the set-universe action must show
@@ -652,7 +663,7 @@ test('intent-native UX: discount ladder, exit rungs, income board, symbol action
 });
 
 test('experience ladder reshapes the UI per level', async () => {
-  await go('#/account');
+  await go('#/portfolio/account');
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
   // Learning — explainers fully visible, glossary terms clickable
@@ -690,7 +701,7 @@ test('experience ladder reshapes the UI per level', async () => {
   await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#app[data-ready="true"]');
   assert.ok(await page.evaluate(() => document.body.classList.contains('lvl-expert')));
-  await go('#/account');
+  await go('#/portfolio/account');
   assert.ok(!(await page.locator('.explain').first().isVisible()), 'explainers hidden at Pro');
   // Pro: compact intent segments, filters inline (no expandable), full backtest menu
   await go('#/recommend/manual');
@@ -717,6 +728,12 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   // Q&A, not text: goal cards -> one shaping question -> the structure
   await page.click('#bw-goals .choice[data-goal="DIRECTIONAL"]');
   await page.waitForSelector('#bw-shape .choice');
+  // Two-tier Q&A: direction first, then the refinement — the full catalog is reachable
+  assert.ok(await page.locator('#bw-shape .choice[data-next]').count() >= 4, 'nested questions per direction');
+  await page.click('#bw-shape .choice:has-text("Stay calm in a range")');
+  await page.waitForSelector('#bw-shape .choice[data-tpl="IRON_CONDOR"]');
+  assert.ok(await page.locator('#bw-shape .choice[data-tpl="SHORT_STRADDLE"] .badge:has-text("BLOCKED")').count(),
+    'blocked structures are offered as lessons, labeled');
   await page.click('#bw-shape .choice[data-tpl="IRON_CONDOR"]');
   // Walkthrough: each leg narrated, impact measured, payoff morphing
   await page.waitForSelector('#bw-walk');
@@ -742,10 +759,19 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   assert.match(finalText, /Most you can lose/);
   assert.match(finalText, /Assignment odds/);
   assert.ok(await page.locator('#bw-panel .chart-wrap').count(), 'payoff chart on the final step');
+  // Your limits: judged live against the priced position
+  await page.fill('#bl-maxLoss', '50');
+  await page.locator('#bl-maxLoss').blur();
+  await page.waitForSelector('#builder-limit-chips', { timeout: 20000 });
+  assert.match(await page.textContent('#builder-limit-chips'), /Max loss/);
+  assert.ok(await page.locator('#builder-limit-chips .limit-fail').count(), 'a $50 cap fails honestly on a condor');
+  assert.ok(await page.locator('#builder-fit').count(), 'Fit to my limits is offered');
+  await page.fill('#bl-maxLoss', '');
+  await page.locator('#bl-maxLoss').blur();
+  await page.waitForSelector('#builder-review', { timeout: 20000 });
   // Hand off into the standard ticket review
   await page.click('#builder-review');
-  await page.waitForSelector('#app[data-route="ticket"][data-ready="true"]');
-  await page.waitForSelector('#to-confirm', { timeout: 30000 });
+  await page.waitForSelector('#to-confirm', { timeout: 30000 }); // the review step IS the landmark
   assert.match(await page.textContent('#ticket-body'), /Safety check/);
   await page.evaluate(() => { App.state.ticket = null; });
 
@@ -775,6 +801,11 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   const panel = await page.textContent('#builder-panel');
   assert.match(panel, /Net Δ sh/);
   assert.ok(await page.locator('#builder-panel .chart-wrap').count(), 'payoff chart in the terminal');
+  // Depth on demand at Expert: structure guide + per-leg purpose, collapsed by default
+  assert.ok(await page.locator('#builder-edu .xp-head:has-text("About this structure")').count(), 'structure education at expert');
+  await page.click('#builder-edu .xp-head:has-text("What each leg is for")');
+  assert.match(await page.textContent('#builder-edu'), /Leg 1:/);
+  assert.ok(await page.locator('#bl-target').count(), 'full limits row in the terminal');
   // Hover a row: floating market insight, zero layout shift
   const before = await page.locator('#builder-legs').boundingBox();
   await page.locator('#builder-legs .leg-row').first().hover();
@@ -805,8 +836,7 @@ test('pipeline streamline: candidates open in the builder; Ideas links the full 
   await page.click('#compare-table tbody tr.clickable');
   await page.waitForSelector('.compare-detail .candidate');
   await page.locator('.compare-detail .candidate button:has-text("Open in builder")').first().click();
-  await page.waitForSelector('#app[data-route="ticket"][data-ready="true"]');
-  await page.waitForSelector('#builder-legs .leg-row', { timeout: 20000 });
+  await page.waitForSelector('#builder-legs .leg-row', { timeout: 30000 }); // Shape-stage landmark
   assert.ok(await page.locator('#builder-legs .leg-row').count() >= 1, 'candidate legs loaded into the terminal');
   await page.waitForFunction(() =>
     /ALLOW|WARN|BLOCKED/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 20000 });
@@ -820,6 +850,21 @@ test('pipeline streamline: candidates open in the builder; Ideas links the full 
   await page.waitForSelector('#builder-catalog .tpl', { timeout: 20000 });
   assert.ok(await page.locator('#builder-catalog .tpl').count() >= 24, 'full catalog one tap from Ideas');
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
+});
+
+test('on-device AI ships no bytes: the enable card offers a user-initiated install', async () => {
+  // This suite's server has an EMPTY models dir — the assist layer must offer, not act
+  await go('#/recommend/manual');
+  await page.waitForSelector('#assist-enable', { timeout: 15000 });
+  const card = await page.textContent('#assist-enable');
+  assert.match(card, /~1\d\d MB/);                 // honest size disclosure
+  assert.match(card, /Apache-2\.0/);               // licenses named up front
+  assert.match(card, /nothing you type ever leaves/i);
+  assert.ok(await page.locator('#assist-install').count(), 'install is a button, never automatic');
+  // And no AI features exist until the user acts
+  assert.equal(await page.locator('#assist-text').count(), 0);
+  const st = await page.evaluate(() => API.getFresh('/api/assist/status'));
+  assert.equal(st.installed, false);
 });
 
 test('smooth pipeline: GET cache, skeleton on slow loads, tape refresh keeps its animation', async () => {
@@ -844,16 +889,20 @@ test('smooth pipeline: GET cache, skeleton on slow loads, tape refresh keeps its
   assert.ok(flushed.pureKept, 'preview POST keeps the cache');
   assert.ok(flushed.mutationFlushed, 'mutations flush the cache');
 
-  // Skeleton: with cold cache and a slowed endpoint, the shimmer shows instead of a void
-  await page.route('**/api/account*', async r => {
+  // Skeleton: with cold cache and a slowed endpoint, the shimmer shows instead of a void.
+  // Trade detail is the natural probe: it must fetch before it can paint anything.
+  const anyTrade = await page.evaluate(() =>
+    API.getFresh('/api/trades?status=CLOSED&size=1').then(r => r.trades[0] && r.trades[0].id));
+  assert.ok(anyTrade, 'a closed trade exists from earlier tests');
+  await page.route('**/api/trades/tr_*', async r => {
     await new Promise(res => setTimeout(res, 600));
     r.fallback ? await r.fallback() : r.continue();
   });
-  await page.evaluate(() => { API.flushCache(); location.hash = '#/account'; });
+  await page.evaluate(id => { API.flushCache(); location.hash = '#/trade/' + id; }, anyTrade);
   await page.waitForSelector('.skel-screen', { timeout: 3000 });
   await page.waitForSelector('#app[data-ready="true"]', { timeout: 15000 });
   assert.equal(await page.locator('.skel-screen').count(), 0, 'skeleton leaves when content lands');
-  await page.unroute('**/api/account*');
+  await page.unroute('**/api/trades/tr_*');
 
   // Tape: refresh with unchanged symbols updates numbers IN PLACE — no rebuild, no restart
   const stable = await page.evaluate(async () => {

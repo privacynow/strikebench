@@ -567,9 +567,150 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     Dead-code sweep of all 5 JS files: zero unused functions/constants.
   - Suites: 223 JUnit + 22 fixture + 4 seeded + 8 live + 3 audit — ALL GREEN. Screenshots
     shots/v3-welcome-fold.png, v3-welcome-1280.png, v3-home-grown.png.
+- BUILDER LIMITS + WIZARD BREADTH + EXPERT EDUCATION + ELEGANCE REPAIR (2026-07-07, user:
+  expert needs expandable strategy/leg education; "why only four?" wizard options; compacted
+  home/hero "look like crap" — usability/elegance/responsiveness top of the NFR pyramid,
+  saved to memory: fit via OMISSION and HIERARCHY, never shrinking; builder lacked max-loss/
+  profit/POP/assignment targeting — "did we miss streamlining this?"):
+  - BUILDER "YOUR LIMITS" (both levels; builderForm.limits persists): beginner = 2 plain fields
+    on Where-you-stand (max loss $, min POP %); expert = 4 inline in the bar (max loss, profit
+    target, min POP, max assign). The live panel judges the priced position against each set
+    limit (#builder-limit-chips, .limit-ok/.limit-fail — an impossible $150 cap on a $2.50-wide
+    fixture spread fails HONESTLY). "Fit to my limits" (#builder-fit) calls POST /api/recommend
+    {allowedStrategies:[family], maxLossCents, filters:{minPop,maxAssignmentProb}} and swaps in
+    the engine-sized candidate (verified live: 250/245 credit put spread -> 242.5/240 under a
+    $300 cap, 0 fail chips); CUSTOM/blocked structures get an honest refusal. This closes the
+    streamline gap: the same screens as Ideas filters, wired into construction.
+  - EXPERT EDUCATION: #builder-edu in the Legs card — "About this structure" (STRATEGY_GUIDE
+    story/how/win/lose/watch) + "What each leg is for" (legStory per leg), UI.expandable,
+    COLLAPSED by default (naked until asked). Refreshed on every legs render.
+  - WIZARD BREADTH: WIZARD options may carry next:{prompt,options} — two-tier Q&A (st.wizNode,
+    transient). DIRECTIONAL: Rise/Fall/Big-move/Calm/Land-on-a-price, each with 2-5 refinements;
+    INCOME adds calendar + diagonal sub-questions (call/put twins); HEDGE adds the put-spread
+    partial hedge. ALL 26 catalog structures now reachable via Q&A incl. naked put/call and
+    short straddle/strangle as labeled BLOCKED lessons (badge on the choice card).
+  - ELEGANCE REPAIR (measured AND eyeballed): welcome = hero|live top fold (sub copy SHORTENED
+    to fit 2 lines rather than clip), two horizontal door cards, single-line step strip w/ ghost
+    numerals, slim sector banner; Skip moved to a quiet top-right .btn-link in the live column
+    (#welcome-skip id preserved); TOOLKIT SECTION DELETED (its copy duplicated hero+doors —
+    omission, not compression). Home: normal paddings restored, company names back on tiles,
+    quick actions iconified (.qa-head icon-tile + title + hint), self-evident card explainers
+    hidden at desktop only. Fits: welcome 899/900 @1440 + 800/800 @1280; home 835 + 779.
+    GOTCHA: fresh-DB "home" measurements actually measure WELCOME (hasTraded redirect) — click
+    #welcome-skip first.
+  - Tests updated/added (dom.test 22): two-tier wizard path (data-next choices, BLOCKED badge on
+    short straddle), limits fail-chip at beginner + limits row/education expandables at expert.
+  - Suites: 223 JUnit + 22 fixture + 4 seeded + 8 live + 3 audit — ALL GREEN. Screenshots
+    shots/v4-{welcome,home,builder-limits}.png.
+- ON-DEVICE AI ASSIST LAYER SHIPPED (2026-07-07, user: "all in on the web based llm approach…
+  correctness remains paramount"; browser-first for deployment simplicity + WebGPU):
+  - ARCHITECTURE: transformers.js 3.7.6 vendored (876KB min.js + 21.6MB ort jsep wasm) + two
+    quantized ONNX models — Xenova/finbert (q8, 110MB, financial sentiment) and
+    Xenova/nli-deberta-v3-xsmall (q8, 87MB, zero-shot) — ALL ON DISK at data/models (242MB
+    total, NEVER in the jar). New AppConfig.modelsDir() (MODELS_DIR, default data/models);
+    ApiServer mounts it EXTERNAL at /models only when the dir exists, with
+    Cache-Control: public,max-age=604800,immutable (app assets stay no-store). js/assist.js
+    (in jar, ~230 lines): detect via /models/manifest.json (absent -> features simply don't
+    render), lazy dynamic-import of the runtime, env.allowRemoteModels=false (NOTHING ever
+    fetched from a CDN), WebGPU when navigator.gpu offers an adapter, WASM otherwise
+    (headless/test path = wasm = deterministic).
+  - CORRECTNESS CONTRACT (enforced in code + tests): models NEVER produce a number the engine
+    uses. Intake numbers come only from the user's own words via regex ($400, horizons,
+    tickers vs the universe datalist + stopword filter); the model contributes CLASSIFICATION
+    only (goal via 5 intent labels, thesis via 4 view labels, hypothesis-templated); an
+    EXPLAINABLE tie-break (goalScore<0.35 + strong non-neutral thesis>=0.5 -> DIRECTIONAL,
+    chip says "leaned directional — check me") fixes composite sentences like "TSLA drops
+    hard, max $400" that zero-shot reads as hedging (29%). Apply FILLS the visible form
+    (intent click, symbol, thesis, horizon, max-loss filter — opening the beginner expandable
+    if needed) and focuses Find ideas — NOTHING auto-submits, pinned by test. Server
+    SignalEngine/scout/backtester untouched: sentiment badges are display-only decoration.
+  - FEATURES: (1) Ideas "Say it in your own words" card (#assist-intake, ON-DEVICE AI badge,
+    dashed accent) -> Understand it -> parsed chips w/ confidences -> Fill the form. (2)
+    Research news card: FinBERT badges per headline (label + confidence + title tooltip
+    "display only — the engine's signals are unchanged"). Real-model behavior note: fixture
+    "Apple beats expectations…" -> POSITIVE 82%; the regulatory-probe headline -> NEUTRAL 72%
+    (defensible FinBERT verdict — do NOT pin model opinions in tests, pin the robust case +
+    the format contract).
+  - NEW SUITE dom-assist.test.js (3 tests, SKIPS wholesale when data/models absent): /models
+    served w/ immutable caching; intake end-to-end (TSLA/bearish/month/$400 parsed + applied,
+    zero candidates rendered = no auto-submit); news badges = valid label+confidence format +
+    beats-headline positive + display-only note. First-run inference budget 240s (models load
+    from localhost + wasm compile); subsequent runs ~4-8s/test.
+  - ALL OTHER SUITES UNAFFECTED (models absent from their temp cwds -> /models 404 -> assist
+    hidden): 223 JUnit + 22 fixture + 4 seeded + 8 live + 3 audit + 3 assist — ALL GREEN.
+    Screenshots shots/ai-{intake,news}.png. Licenses: transformers.js Apache-2.0; deberta
+    conversion cross-encoder/MIT-ish; ProsusAI FinBERT — verify license before any public
+    distribution (fine for personal local use). Next AI steps live in memory
+    project-browser-llm-direction (candidate re-ranking, filing reader, WebLLM tier).
+- AI LICENSING FIX: SHIP NO MODEL BYTES + FINBERT REMOVED (2026-07-07, user approved recs 1+2;
+  product is FOR DISTRIBUTION): FinBERT DELETED from data/models (HF weights repo has NO license
+  tag; fine-tuned on Financial PhraseBank CC BY-NC-SA 3.0 — never redistribute). Sentiment now
+  runs on the SAME Apache-2.0 zero-shot model (labels good/bad/neutral news for the stock price;
+  the beats-headline robust pin still passes). ONE model total.
+  - api/AssistInstaller.java: user-initiated server-side download of 11 pinned assets
+    (jsdelivr transformers.js 3.7.6 + HF Xenova/nli-deberta-v3-xsmall, ~121MB) with per-file
+    SHA-256 verification (upstream drift fails LOUDLY, .part temp + atomic move, manifest.json
+    written LAST as the installed marker); virtual-thread run, AtomicReference progress;
+    GET /api/assist/status + POST /api/assist/install (202). The release artifact contains
+    ZERO model bytes — pinned by ApiIntegrationTest order(24) (fresh MODELS_DIR: installed=false,
+    filesTotal=11, honest bytesTotal, /models/manifest.json 404).
+  - /models is now an EXPLICIT ROUTE (serveModelAsset), NOT staticFiles: Jetty caches not-found
+    lookups, so files installed after boot 404'd until restart. GOTCHA #2: do NOT set manual
+    Content-Length — Javalin gzips text responses → ERR_CONTENT_LENGTH_MISMATCH killed the
+    dynamic import of transformers.min.js. Path-traversal guarded (normalize + startsWith),
+    immutable cache headers, correct MIME for .mjs/.wasm.
+  - assist.js: detect() via /api/assist/status → 'available' | 'installable' | 'absent';
+    'installable' renders the ENABLE card (#assist-enable: size + licenses disclosed, install
+    button, live progress polling, App.render() on completion — no restart needed, verified by
+    smoke: empty dir -> UI install -> intake parse in the same session).
+  - dom.test 23rd test pins the no-bytes contract (enable card w/ ~1xx MB + Apache-2.0 text +
+    no #assist-text until installed); dom-assist re-pinned to zeroshot manifest.
+  - Suites: 224 JUnit + 23 fixture + 4 seeded + 8 live + 3 audit + 3 assist — ALL GREEN.
+    data/models on THIS machine now holds only runtime + the Apache-2.0 model (finbert gone).
+- IA RESTRUCTURE (2026-07-07, user answered the four questions: Single workbench / Backtest folds
+  under Trade / Ticker contextual only / Adaptive Home + Portfolio absorbs Account). Both stages
+  shipped and green: 224 JUnit + 23 fixture + 3 audit + 4 seeded + 3 assist + 8 live.
+  - STAGE 1 — merges + chrome: top nav is FIVE items (Home/Research/Trade/Portfolio/Data);
+    welcome route KILLED — home(root,params) renders the tour for fresh accounts (hasTraded=false
+    && !welcomed) or params[0]==='tour' (brand + Markets link → #/home/tour; welcome content
+    wrapped in .welcome-page, CSS scoped via `#app:has(.welcome-page)` since data-route="welcome"
+    no longer exists). Portfolio gained section pills #pf-sec-{positions,activity,account}:
+    Activity = ledger table, Account = reset card (old #/account aliased). Tape is CONTEXTUAL
+    (home+research only): app.js toggles .tape-offroute; NEVER rebuild the marquee while hidden —
+    display:none measures zero widths → data-stale attr + rebuild on next visibility. Sector
+    selector left the tape entirely.
+  - STAGE 2 — single Trade workbench, four numbered stages `Discover | Shape | Verify | Place`
+    (WB_STAGES pills + ideaBar under one h1 'Trade'): Discover hosts scout/manual tabs +
+    "All strategies" link (→ Shape w/ goal BROWSE); Shape = Builder.render; Verify = backtest
+    (h1 removed, idea bar keeps context); Place = ticket. `trade(root,params)` dispatches
+    `/^tr_/` → tradeDetail, else workbench. Route ALIASES in app.js keep every old hash working:
+    recommend→trade/discover, backtest→trade/verify, ticket→trade/place, ticket/builder→
+    trade/shape, account→portfolio/account, welcome→home/tour.
+  - IDEA BAR (#idea-bar): reads App.state.ticket — chip = symbol + structure + qty, 'Place →'
+    on non-Place stages, #idea-clear; honest muted line when empty. Candidate buttons set
+    {candidate, symbol, step:5} and navigate #/trade/place.
+  - TICKET DEDUP (the point of the merge): steps 1–4 (thesis/horizon/risk/strategy) DELETED from
+    ticket() — Discover IS that flow. Place = 3 steps Strikes/Review/Confirm (internal t.step
+    stays 5..7 so review/confirm code is untouched; displayed dot = i+1). No working idea →
+    emptyState 'Nothing to place yet' + Discover CTA + builder button; custom legs skip the
+    strike picker (t.step=6). nav(step<5) routes back to #/trade/discover/manual. Expert
+    quick-start block + choices() helper deleted with it.
+  - TEST REWRITES: dom.test 'discover-to-place' pins empty-state + the one-flow contract
+    (discover manual → candidate button → Strikes/Review/Confirm → detail); dom-live ticket flow
+    same shape. Candidate button LABEL DIFFERS BY LEVEL — select
+    'button:has-text("Practice this trade"), button:has-text("Use in trade ticket")'. Playwright
+    must wait on LANDMARKS not data-route (routes collapsed under 'trade'): detail=#refresh-btn,
+    place=#to-confirm, shape=#builder-legs .leg-row. Screenshot scripts must waitForTimeout ~900ms
+    after waitForSelector or View Transitions produce mid-crossfade frames; playwright module only
+    resolves from dom-tests/ (run scripts from there).
+  - Copy sweep: killed lingering three-tier language — backtest strategy-menu note now says
+    Beginner/Expert ('unlock at Expert'), comments updated. Two levels ONLY, everywhere.
+    Screenshots: dom-tests/shots/wb-{discover-beginner,discover-results,place-strikes,place-empty,
+    verify,shape-expert}.png.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
-  live mode).
+  live mode), Verify stage prefill from the working idea (symbol/family land in the form; window/DTE
+  defaults could too).
 
 ## Non-negotiable decisions (from user)
 1. Java package root: **`io.liftandshift`** (groupId `io.liftandshift`, artifact `strikebench` — renamed

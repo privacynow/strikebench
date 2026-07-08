@@ -140,8 +140,9 @@ after(async () => {
   if (server) server.kill();
 });
 
-const ROUTES = ['#/home', '#/research/AAPL', '#/recommend/scout', '#/recommend/manual',
-  '#/ticket', '#/portfolio', '#/portfolio/closed', '#/backtest', '#/account', '#/status'];
+const ROUTES = ['#/home', '#/research/AAPL', '#/trade/discover', '#/trade/discover/manual',
+  '#/trade/shape', '#/trade/place', '#/trade/verify', '#/portfolio', '#/portfolio/closed',
+  '#/portfolio/activity', '#/portfolio/account', '#/status'];
 
 for (const level of ['beginner', 'expert']) {
   test(`grown DB: every route renders clean at ${level}`, async () => {

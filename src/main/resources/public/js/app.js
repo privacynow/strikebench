@@ -41,6 +41,16 @@
       var parts = hash.replace(/^#\//, '').split('/').filter(function (p) { return p.length; });
       var route = parts[0] || 'home';
       var params = parts.slice(1);
+      // IA merges keep old URLs alive: the tour lives inside Home, Account inside Portfolio,
+      // and Ideas/Ticket/Backtest are stages of the Trade workbench
+      if (route === 'welcome') { route = 'home'; params = ['tour']; }
+      if (route === 'account') { route = 'portfolio'; params = ['account']; }
+      if (route === 'recommend') { route = 'trade'; params = ['discover'].concat(params); }
+      if (route === 'backtest') { route = 'trade'; params = ['verify']; }
+      if (route === 'ticket') {
+        route = 'trade';
+        params = params[0] === 'builder' ? ['shape'] : ['place'];
+      }
       var view = window.Views[route];
       if (!view) {
         route = 'home';
@@ -96,6 +106,16 @@
       }
       root.setAttribute('data-ready', 'true');
       root.setAttribute('data-route', route);
+      // The ticker is CONTEXT, not chrome: it accompanies market-facing screens only
+      var tape = document.getElementById('tape');
+      if (tape) {
+        var showTape = route === 'home' || route === 'research';
+        tape.classList.toggle('tape-offroute', !showTape);
+        var strip = document.getElementById('tape-strip');
+        if (showTape && strip && (!strip.children.length || strip.hasAttribute('data-stale'))) {
+          refreshTape(); // deferred build: universe changed (or first build) while hidden
+        }
+      }
     }
   };
 
@@ -217,10 +237,16 @@
     var tape = document.getElementById('tape');
     var strip = document.getElementById('tape-strip');
     if (!tape || !strip || !App.state.universe) return;
+    // NEVER build while hidden: display:none measures zero widths and produces a broken
+    // marquee. Mark stale; the route toggle rebuilds the moment the tape is visible again.
+    if (tape.classList.contains('tape-offroute')) {
+      strip.setAttribute('data-stale', '1');
+      return;
+    }
+    strip.removeAttribute('data-stale');
     try {
       var data = await API.get('/api/quotes');
       var quotes = data.quotes || [];
-      renderTapeSector();
       if (!quotes.length) { tape.hidden = true; return; }
 
       // Same symbols as the strip already shows? Update the numbers IN PLACE and leave
@@ -273,33 +299,6 @@
       strip.style.animation = '';
       strip.style.animationDuration = Math.max(20, Math.round(halfW / 55)) + 's'; // ~55 px/s
     } catch (e) { tape.hidden = true; }
-  }
-
-  /** The sector dropdown living inside the tape — the global universe control. */
-  function renderTapeSector() {
-    var sel = document.getElementById('tape-sector');
-    var u = App.state.universe;
-    if (!sel || !u) return;
-    sel.innerHTML = '';
-    u.sectors.forEach(function (s) {
-      sel.appendChild(UI.el('option', {
-        value: s.key, selected: u.active.sectorKey === s.key ? '' : null
-      }, s.label));
-    });
-    if (u.active.source === 'custom' || u.active.source === 'env') {
-      sel.appendChild(UI.el('option', { value: '', selected: '' }, u.active.label));
-    }
-    if (!sel._wired) {
-      sel._wired = true;
-      sel.addEventListener('change', async function () {
-        if (!sel.value) return;
-        try {
-          await API.put('/api/universe', { sector: sel.value });
-          await refreshUniverse();
-          App.render();
-        } catch (e) { /* keep the old selection */ }
-      });
-    }
   }
 
   /** Header symbol search: type-ahead from the universe, Enter to research, "/" to focus. */

@@ -17,6 +17,9 @@
    */
   async function welcome(root) {
     var stepsAnchorId = 'how-it-works';
+    var outer = root;
+    root = el('div', { class: 'welcome-page' });
+    outer.appendChild(root);
 
     // ---- Top fold: the pitch on the left, LIVE proof on the right — promise, evidence,
     // and both primary actions land above the fold on a desktop ----
@@ -29,7 +32,7 @@
           el('h1', { class: 'hero-title' }, 'Learn options by ', el('span', { class: 'grad' }, 'doing'), ',', el('br', {}),
             'with honest numbers.'),
           el('p', { class: 'hero-sub' },
-            'Screen real strategies against your goal, practice them with a $100,000 paper account, and backtest without look-ahead \u2014 entirely on your machine.'),
+            'Screen strategies against your goal, practice with $100,000 in paper money, and backtest honestly \u2014 all on your machine.'),
           el('div', { class: 'hero-ctas' },
             el('button', {
               class: 'btn btn-lg', onclick: function () {
@@ -49,7 +52,12 @@
                 return el('span', {}, i ? el('span', { class: 'dot-sep' }, '\u00B7') : null, t);
               })))),
       el('section', { class: 'welcome-section welcome-live-col' },
-        el('div', { class: 'eyebrow' }, 'LIVE FROM THE ENGINE'),
+        el('div', { class: 'live-head' },
+          el('div', { class: 'eyebrow' }, 'LIVE FROM THE ENGINE'),
+          el('button', { class: 'btn-link', id: 'welcome-skip', onclick: function () {
+            try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
+            App.navigate('#/home');
+          } }, 'Skip \u2192 dashboard')),
         el('div', { class: 'showcase' }, liveHost,
           el('p', { class: 'showcase-caption' },
             'A real screened idea \u2014 generated this second, refusals, odds, and assumptions included, like every idea here.')))));
@@ -69,13 +77,13 @@
     // ---- Two doors, by experience ----
     var LEVEL_CARDS = [
       { level: 'beginner', title: 'Teach me', ic: 'sprout',
-        blurb: 'Question-driven flows, plain language, tap-to-define terms \u2014 and every idea explains how it wins and loses.',
+        blurb: 'Question-driven flows, plain language \u2014 every idea explains itself.',
         cta: 'Start as a beginner', go: '#/recommend/manual' },
       { level: 'expert', title: 'Give me the terminal', ic: 'bolt',
-        blurb: 'Dense tables, position greeks, multi-leg construction with per-leg impact, inline filters.',
+        blurb: 'Dense tables, greeks, per-leg impact, inline filters.',
         cta: 'Open the terminal', go: '#/research/AAPL' }
     ];
-    var altitude = section('CHOOSE YOUR ALTITUDE', 'How do you want to start?',
+    root.appendChild(section('CHOOSE YOUR ALTITUDE', 'How do you want to start?',
       el('div', { class: 'welcome-grid', id: 'welcome-levels' }, LEVEL_CARDS.map(function (c) {
         return el('div', { class: 'card welcome-card' },
           el('div', { class: 'icon-tile' }, icon(c.ic)),
@@ -88,39 +96,23 @@
               App.navigate(c.go);
             }
           }, c.cta));
-      })));
+      }))));
 
-    // ---- Toolkit + how-it-works, side by side on desktop ----
-    var CAPS = [
-      { ic: 'target', t: 'Goal-first ideas', d: 'Trade a view, earn income, buy at a discount, sell at your target, or protect what you hold.' },
-      { ic: 'flask', t: 'Real mechanics', d: 'Executable fills, contracts die at 4pm ET, covered calls lock shares, assignment delivers them.' },
-      { ic: 'chart', t: 'Honest backtests', d: 'Day-by-day replay, no look-ahead, and reports that label how much is modeled.' },
-      { ic: 'scope', t: 'A market scout', d: 'Momentum, news sentiment, and IV-vs-realized signals \u2014 with their evidence attached.' }
-    ];
+    // ---- How it works: the four-step promise, full width, original ghost numerals ----
     var STEPS = [
       ['Pick a goal', 'or a ticker you care about'],
       ['Screen ideas', 'refusals explained, risk capped'],
       ['Practice the trade', 'with the $100k paper account'],
       ['Review honestly', 'marks, P/L, what changed']
     ];
-    var capsList = el('div', { class: 'caps-list' }, CAPS.map(function (c) {
-      return el('div', { class: 'caps-item' },
-        el('div', { class: 'icon-tile icon-tile-sm' }, icon(c.ic, 18)),
-        el('div', {}, el('b', {}, c.t), el('span', { class: 'muted caps-d' }, c.d)));
-    }));
-    var stepper = el('div', { class: 'stepper stepper-compact' }, STEPS.map(function (s, i) {
+    var stepper = el('div', { class: 'stepper' }, STEPS.map(function (st, i) {
       return el('div', { class: 'step-block' },
         el('div', { class: 'step-num' }, '0' + (i + 1)),
-        el('div', { class: 'step-text' }, el('b', {}, s[0]), el('span', {}, s[1])));
+        el('div', { class: 'step-text' }, el('b', {}, st[0]), el('span', {}, st[1])));
     }));
     var how = section('HOW IT WORKS', 'Four steps, no account required', stepper);
     how.id = stepsAnchorId;
-    // Doors on the left, toolkit + steps on the right: one bottom band, no stack
-    root.appendChild(el('div', { class: 'welcome-bottom' },
-      altitude,
-      el('div', { class: 'welcome-meta' },
-        section('THE TOOLKIT', 'What you can do here', capsList),
-        how)));
+    root.appendChild(how);
 
     // ---- One slim footer row: the sector hook + the exit ----
     root.appendChild(el('div', { class: 'welcome-footer' },
@@ -128,11 +120,7 @@
         el('div', {},
           el('b', {}, 'Thirteen sector universes, one flick away.'),
           el('p', { class: 'muted' }, 'Tech, semiconductors, healthcare, defense and more \u2014 feeding the ticker, the scout, and every symbol box.')),
-        el('button', { class: 'btn', onclick: function () { App.navigate('#/research'); } }, 'Open the sector explorer')),
-      el('button', { class: 'btn btn-ghost', id: 'welcome-skip', onclick: function () {
-        try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
-        App.navigate('#/home');
-      } }, 'Skip \u2014 take me to the dashboard')));
+        el('button', { class: 'btn', onclick: function () { App.navigate('#/research'); } }, 'Open the sector explorer'))));
 
     function section(eyebrow, title, contentNode) {
       return el('section', { class: 'welcome-section' },
@@ -172,7 +160,8 @@
 
   // ---------- 0. Home dashboard ----------
 
-  async function home(root) {
+  async function home(root, params) {
+    if (params && params[0] === 'tour') return welcome(root);
     // Paint the frame FIRST, fill every card as its data arrives: the screen must never
     // be a blank void while accounts and quotes load. Each section fills independently
     // and fails visibly (empty state), never silently.
@@ -253,7 +242,7 @@
     var tiles = el('div', { class: 'tile-row' });
     colL.appendChild(el('div', { class: 'card' },
       UI.cardHeader('Markets' + (uni ? ' — ' + uni.label : ''),
-        el('a', { href: '#/welcome', class: 'muted', style: 'font-size:12.5px' }, 'Welcome tour')),
+        el('a', { href: '#/home/tour', class: 'muted', style: 'font-size:12.5px' }, 'Welcome tour')),
       tiles,
       explain('Tap a symbol to research it: chart, option chain, expected vs realized volatility, news.')));
     var marketsFill = (async function fillMarkets() {
@@ -306,19 +295,21 @@
     })();
 
     colR.appendChild(el('div', { class: 'home-actions' },
-      quickAction('Research a symbol', 'Quotes, chains, IV vs HV, history, news.', '#/research'),
-      quickAction('Scout opportunities', 'Auto-derived views from momentum, sentiment, and volatility.', '#/recommend'),
-      quickAction('Build a strategy', 'Multi-leg construction with live risk and per-leg impact.', '#/ticket/builder'),
-      quickAction('Backtest a strategy', 'How a rule would have behaved — honestly labeled.', '#/backtest')));
+      quickAction('Research a symbol', 'Quotes, chains, IV vs HV, history, news.', '#/research', 'scope'),
+      quickAction('Scout opportunities', 'Momentum, sentiment, and volatility views.', '#/trade/discover', 'compass'),
+      quickAction('Build a strategy', 'Multi-leg construction with live risk.', '#/trade/shape', 'target'),
+      quickAction('Backtest a strategy', 'How a rule would have behaved.', '#/trade/verify', 'chart')));
 
     // Wait for the fills so data-ready means READY (tests and users agree on that).
     await Promise.all([marketsFill, tradesFill]);
   }
 
-  function quickAction(title, hint, hash) {
-    return el('div', { class: 'tile qa-tile', title: hint, onclick: function () { App.navigate(hash); } },
-      el('div', { class: 't-sym' }, title),
-      el('div', { class: 'muted qa-hint', style: 'margin-top:4px' }, hint));
+  function quickAction(title, hint, hash, ic) {
+    return el('div', { class: 'tile qa-tile', onclick: function () { App.navigate(hash); } },
+      el('div', { class: 'qa-head' },
+        el('div', { class: 'icon-tile icon-tile-sm' }, icon(ic || 'compass', 18)),
+        el('div', {}, el('div', { class: 't-sym' }, title),
+          el('div', { class: 'muted qa-hint' }, hint))));
   }
 
   // ---------- 2. Research ----------
@@ -560,14 +551,17 @@
     try {
       var news = await API.get('/api/research/' + symbol + '/news');
       if (news.items && news.items.length) {
-        root.appendChild(el('div', { class: 'card' },
+        var shown = news.items.slice(0, 8);
+        var newsCard = el('div', { class: 'card', id: 'news-card' },
           UI.cardHeader('News & filings'),
-          news.items.slice(0, 8).map(function (n) {
+          shown.map(function (n) {
             return el('div', { class: 'status-item' },
               el('a', { href: n.url, target: '_blank', rel: 'noopener' }, n.headline),
               el('span', { class: 'spacer' }),
               el('span', { class: 'muted' }, n.source));
-          })));
+          }));
+        root.appendChild(newsCard);
+        if (window.Assist) Assist.enhanceNews(newsCard, shown); // display-only; absent models = no-op
       }
     } catch (e) { /* optional */ }
   }
@@ -757,7 +751,7 @@
       withUse ? el('button', {
         class: 'btn', onclick: function () {
           App.state.ticket = { candidate: c, symbol: symbolForTicket || App.state.lastRecommendSymbol, step: 5 };
-          App.navigate('#/ticket');
+          App.navigate('#/trade/place');
         }
       }, 'Practice this trade') : null));
     return card;
@@ -805,7 +799,7 @@
         el('button', {
           class: 'btn', onclick: function () {
             App.state.ticket = { candidate: c, symbol: symbolForTicket || App.state.lastRecommendSymbol, step: 5 };
-            App.navigate('#/ticket');
+            App.navigate('#/trade/place');
           }
         }, 'Use in trade ticket'),
         el('button', {
@@ -819,13 +813,13 @@
                          expiration: l.stock ? null : l.expiration, ratio: l.ratio || 1 };
               })
             };
-            App.navigate('#/ticket/builder');
+            App.navigate('#/trade/shape');
           }
         }, 'Open in builder'),
         BACKTESTABLE.indexOf(c.strategy) >= 0 ? el('button', {
           class: 'btn btn-sm btn-secondary', onclick: function () {
             App.state.backtestPrefill = { symbol: symbolForTicket || App.state.lastRecommendSymbol, strategy: c.strategy };
-            App.navigate('#/backtest');
+            App.navigate('#/trade/verify');
           }
         }, 'Backtest this') : null));
     }
@@ -891,7 +885,7 @@
             class: 'btn btn-sm', onclick: function (e) {
               e.stopPropagation();
               App.state.ticket = { candidate: c, symbol: App.state.lastRecommendSymbol, step: 5 };
-              App.navigate('#/ticket');
+              App.navigate('#/trade/place');
             }
           }, 'Use'))]));
         body.appendChild(row);
@@ -908,20 +902,76 @@
     return wrap;
   }
 
-  async function recommend(root, params) {
+  async function discoverStage(root, params) {
     var tab = params && params[0] === 'manual' ? 'manual' : 'scout';
-    root.appendChild(el('h1', {}, 'Trade ideas'));
-    root.appendChild(el('p', { class: 'page-sub' }, 'Risk-screened educational candidates — sized to your risk budget, never advice.'));
     root.appendChild(el('div', { class: 'tabs' },
-      el('button', { class: tab === 'scout' ? 'active' : '', id: 'tab-scout', onclick: function () { App.navigate('#/recommend/scout'); } }, 'Scout for me'),
-      el('button', { class: tab === 'manual' ? 'active' : '', id: 'tab-manual', onclick: function () { App.navigate('#/recommend/manual'); } }, 'My own idea'),
+      el('button', { class: tab === 'scout' ? 'active' : '', id: 'tab-scout', onclick: function () { App.navigate('#/trade/discover'); } }, 'Scout for me'),
+      el('button', { class: tab === 'manual' ? 'active' : '', id: 'tab-manual', onclick: function () { App.navigate('#/trade/discover/manual'); } }, 'My own idea'),
       el('a', {
-        class: 'tabs-aside', id: 'all-strategies-link', href: '#/ticket/builder', onclick: function () {
+        class: 'tabs-aside', id: 'all-strategies-link', href: '#/trade/shape', onclick: function () {
           App.state.builderForm = { symbol: App.state.lastRecommendSymbol || 'AAPL', qty: 1,
             goal: 'BROWSE', templateKey: null, step: 2, legIdx: 0, legs: [], excluded: {} };
         }
       }, 'All strategies \u2192')));
     if (tab === 'scout') renderScout(root); else renderManual(root);
+  }
+
+  /**
+   * THE TRADE WORKBENCH: one place, four stages — Discover (scout / my idea), Shape (the
+   * builder), Verify (backtest), Place (strikes -> review -> confirm). A persistent idea bar
+   * carries the working idea between stages so nothing is lost crossing them.
+   * #/trade/tr_* stays the trade DETAIL page (dispatcher below).
+   */
+  var WB_STAGES = [
+    { key: 'discover', label: 'Discover', hint: 'find or describe an idea' },
+    { key: 'shape', label: 'Shape', hint: 'build and analyze the legs' },
+    { key: 'verify', label: 'Verify', hint: 'backtest the rule honestly' },
+    { key: 'place', label: 'Place', hint: 'review and paper-trade it' }
+  ];
+
+  function ideaBar(stage) {
+    var t = App.state.ticket;
+    var b = App.state.builderForm;
+    var label = null, symbol = null;
+    if (t && t.candidate) { symbol = t.symbol; label = t.candidate.displayName + ' · qty ' + (t.qty || t.candidate.qty || 1); }
+    else if (t && t.custom && t.legs && t.legs.length) { symbol = t.symbol; label = t.legs.length + '-leg custom · qty ' + (t.qty || 1); }
+    else if (b && b.legs && b.legs.length) { symbol = b.symbol; label = b.legs.length + ' leg' + (b.legs.length > 1 ? 's' : '') + ' in the builder'; }
+    var bar = el('div', { class: 'idea-bar', id: 'idea-bar' });
+    if (label) {
+      bar.appendChild(el('span', { class: 'idea-chip' }, icon('target', 14), el('b', {}, symbol), ' ', label));
+      if (stage !== 'place' && t && (t.candidate || (t.custom && t.legs && t.legs.length))) {
+        bar.appendChild(el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/place'); } }, 'Place \u2192'));
+      }
+      bar.appendChild(el('button', {
+        class: 'btn btn-sm btn-secondary', id: 'idea-clear', title: 'Drop the working idea',
+        onclick: function () { App.state.ticket = null; App.state.builderForm = null; App.render(); }
+      }, 'Clear'));
+    } else {
+      bar.appendChild(el('span', { class: 'muted' }, 'No working idea yet \u2014 find one in Discover or build one in Shape.'));
+    }
+    return bar;
+  }
+
+  async function workbench(root, params) {
+    var stage = 'discover';
+    WB_STAGES.forEach(function (s2) { if (params[0] === s2.key) stage = s2.key; });
+    root.appendChild(el('h1', {}, 'Trade'));
+    root.appendChild(el('div', { class: 'tabs wb-stages' }, WB_STAGES.map(function (s2, i) {
+      return el('button', {
+        class: (s2.key === stage ? 'active' : ''), id: 'wb-' + s2.key, title: s2.hint,
+        onclick: function () { App.navigate('#/trade/' + s2.key); }
+      }, el('b', { class: 'wb-num' }, String(i + 1)), ' ' + s2.label);
+    })));
+    root.appendChild(ideaBar(stage));
+    if (stage === 'discover') await discoverStage(root, params.slice(1));
+    else if (stage === 'shape') await Builder.render(root);
+    else if (stage === 'verify') await backtest(root);
+    else await ticket(root);
+  }
+
+  async function trade(root, params) {
+    if (params[0] && /^tr_/.test(params[0])) return tradeDetail(root, params);
+    return workbench(root, params);
   }
 
   // ---- Shared intent + filter controls ----
@@ -937,7 +987,7 @@
 
   /**
    * Screen-by-what-matters panel, reshaped per experience level (structure, not captions):
-   * Learning gets two plain-language limits behind a friendly expandable; Confident gets the
+   * Beginner gets two plain-language limits behind a friendly expandable; Expert gets the
    * full five behind an expandable; Pro gets all five inline — no clicks, maximum density.
    * Returns {node, value()} where value() is the engine Filters object (fractions for
    * probabilities) or null when everything is blank.
@@ -1185,7 +1235,7 @@
    *   ACQUIRE  -> a discount ladder ("name your price")
    *   EXIT     -> exit rungs vs your basis ("pick where you're happy to sell")
    *   HEDGE    -> insurance quotes ("pick your floor, see the premium")
-   * Shaped per level: Learning reads as sentences with a recommended rung, Confident gets the
+   * Shaped per level: Beginner reads as sentences with a recommended rung, Expert gets the
    * table with tap-to-expand cards, Pro gets every rung dense with all columns.
    */
   function ladderView(result, intent, ctx) {
@@ -1254,7 +1304,7 @@
           el('button', {
             class: 'btn btn-sm', style: 'margin-left:auto', onclick: function () {
               App.state.ticket = { candidate: c, symbol: ctx.symbol, step: 5 };
-              App.navigate('#/ticket');
+              App.navigate('#/trade/place');
             }
           }, 'Practice this'));
         list.appendChild(row);
@@ -1296,7 +1346,7 @@
           class: 'btn btn-sm', onclick: function (e) {
             e.stopPropagation();
             App.state.ticket = { candidate: c, symbol: ctx.symbol, step: 5 };
-            App.navigate('#/ticket');
+            App.navigate('#/trade/place');
           }
         }, 'Use')));
         var detail = el('tr', { class: 'compare-detail', style: 'display:none' },
@@ -1391,7 +1441,7 @@
     var holdingsHint = el('div', { id: 'rec-holdings-hint' });
 
     // 1. WHY are you here — the intent decides which questions even make sense.
-    // Learning/Confident get story cards (what each goal means); Pro gets a compact
+    // Beginner gets story cards (what each goal means); Expert gets a compact
     // segmented row — a pro knows what a covered call is for and wants the pixels back.
     var expertChooser = Learn.currentLevel() === 'expert';
     var intentRow = el('div', {
@@ -1474,6 +1524,32 @@
       if (intent !== 'DIRECTIONAL') renderTargetPresets();
       refreshHoldingsHint();
     });
+
+    var assistAnchor = el('div', { id: 'assist-anchor' });
+    root.appendChild(assistAnchor);
+    (async function intake() {
+      if (!window.Assist) return;
+      var card = await Assist.intakeCard(function (p) {
+        if (p.symbol) { sym.value = p.symbol; remember({ symbol: p.symbol }); }
+        if (p.goal && p.goal !== intent) {
+          var btn = intentRow.querySelector('.choice[data-intent="' + p.goal + '"]');
+          if (btn) btn.click();
+        }
+        if (p.thesis) thesis.value = p.thesis;
+        if (p.horizon && horizon.querySelector('option[value="' + p.horizon + '"]')) horizon.value = p.horizon;
+        if (p.maxLoss) {
+          var ml = document.getElementById('rec-f-maxloss');
+          if (!ml) {
+            var head = document.querySelector('#rec-filters .xp-head');
+            if (head) { head.click(); ml = document.getElementById('rec-f-maxloss'); }
+          }
+          if (ml) { ml.value = String(p.maxLoss); ml.dispatchEvent(new Event('change')); }
+        }
+        var go = document.getElementById('rec-go');
+        if (go) go.focus();
+      });
+      if (card && assistAnchor.isConnected) assistAnchor.replaceWith(card);
+    })();
 
     root.appendChild(el('div', { class: 'card' },
       el('h3', { class: 'mt0' }, 'What are you trying to do?'),
@@ -1601,53 +1677,42 @@
 
   // ---------- 4. Guided ticket ----------
 
-  var STEPS = ['Thesis', 'Horizon', 'Risk', 'Strategy', 'Strikes', 'Review', 'Confirm'];
+  // Screening lives in Discover now — Place is purely: Strikes -> Review -> Confirm.
+  var STEPS = ['Strikes', 'Review', 'Confirm']; // displayed; internal t.step stays 5/6/7
 
-  async function ticket(root, params) {
-    // Two ways to trade, one screen: the guided wizard, or the multi-leg builder.
-    var mode = params && params[0] === 'builder' ? 'builder' : 'guided';
-    root.appendChild(el('h1', {}, 'Trade'));
-    root.appendChild(el('div', { class: 'tabs' },
-      el('button', { class: mode === 'guided' ? 'active' : '', id: 'tab-guided',
-        onclick: function () { App.navigate('#/ticket'); } }, 'Guided ticket'),
-      el('button', { class: mode === 'builder' ? 'active' : '', id: 'tab-builder',
-        onclick: function () { App.navigate('#/ticket/builder'); } }, 'Strategy builder')));
-    if (mode === 'builder') { await Builder.render(root); return; }
-
+  async function ticket(root) {
     var t = App.state.ticket = App.state.ticket || {};
-    t.step = t.step || 1;
     t.symbol = t.symbol || App.state.lastRecommendSymbol || 'AAPL';
     // The engine sizes candidates (qty may be 3 for "cover all 300 shares") — never
     // silently reset that to 1; the user can still change it on the Strikes step.
     t.qty = t.qty || (t.candidate && t.candidate.qty) || 1;
-    // Ladder guard on persisted state: Learning users inheriting a 0DTE horizon fall
-    // back to the guided flow. (Custom tickets are legitimate at EVERY level now — the
-    // strategy builder hands off here for all three.)
-    if (Learn.currentLevel() === 'beginner' && t.horizon === '0DTE') {
-      t.horizon = null;
-      t.step = Math.min(t.step, 2);
+    var hasIdea = !!(t.candidate || (t.custom && t.legs && t.legs.length));
+    if (!hasIdea) {
+      root.appendChild(el('div', { class: 'card' },
+        UI.emptyState('Nothing to place yet',
+          'Pick an idea in Discover or build one leg-by-leg in Shape — it lands here for the strike check, the honest review, and the paper confirm.',
+          'Find an idea in Discover', function () { App.navigate('#/trade/discover'); }),
+        el('div', { class: 'btn-row', style: 'justify-content:center' },
+          el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { App.navigate('#/trade/shape'); } },
+            'Or open the builder'))));
+      return;
     }
-
+    t.step = Math.max(5, Math.min(7, t.step || 5));
 
     root.appendChild(el('div', { class: 'wizard-steps' }, STEPS.map(function (s, i) {
-      var n = i + 1;
+      var n = i + 5; // internal numbering
       var cls = n === t.step ? ' active' : (n < t.step ? ' done' : '');
       return el('span', { class: 'step' + cls },
-        el('span', { class: 'dot' }, n < t.step ? '✓' : String(n)), s);
+        el('span', { class: 'dot' }, n < t.step ? '✓' : String(i + 1)), s);
     })));
     var body = el('div', { class: 'card', id: 'ticket-body' });
     root.appendChild(body);
 
     function rerender() { App.render(); }
-    function nav(step) { t.step = step; rerender(); }
-
-    function choices(id, options, selected, onPick) {
-      return el('div', { class: 'choice-row', id: id }, options.map(function (o) {
-        return el('button', {
-          class: 'choice' + (selected === o.value ? ' selected' : ''),
-          onclick: function () { onPick(o.value); }
-        }, o.label, o.hint ? el('small', {}, o.hint) : null);
-      }));
+    function nav(step) {
+      if (step < 5) { App.navigate('#/trade/discover/manual'); return; } // back past Strikes = re-discover
+      t.step = step;
+      rerender();
     }
 
     function backNext(backStep, nextNode) {
@@ -1656,103 +1721,9 @@
         nextNode || null);
     }
 
-    if (t.step <= 3 && Learn.currentLevel() === 'expert') {
-      // Pro quick-start: symbol + view + horizon in one screen
-      var qsSym = el('input', { type: 'text', id: 'ticket-symbol', value: t.symbol, style: 'max-width:140px', list: 'universe-symbols' });
-      var qsThesis = el('select', { id: 'qs-thesis' },
-        ['bullish', 'bearish', 'neutral', 'volatile'].map(function (x) {
-          return el('option', { value: x, selected: x === (t.thesis || 'bullish') ? '' : null }, x);
-        }));
-      var qsHorizon = el('select', { id: 'qs-horizon' },
-        ['week', 'month', 'quarter', '0DTE'].map(function (x) {
-          return el('option', { value: x, selected: x === (t.horizon || 'month') ? '' : null }, x);
-        }));
-      body.appendChild(el('h2', { class: 'mt0' }, 'Quick start'));
-      body.appendChild(el('div', { class: 'btn-row', style: 'margin-top:4px' },
-        qsSym, qsThesis, qsHorizon,
-        el('button', {
-          class: 'btn', id: 'risk-next', onclick: function () {
-            t.symbol = qsSym.value.trim().toUpperCase();
-            t.thesis = qsThesis.value;
-            t.horizon = qsHorizon.value;
-            nav(4);
-          }
-        }, 'Screen strategies \u2192'),
-        el('button', {
-          class: 'btn btn-secondary', id: 'custom-builder-btn', onclick: function () {
-            App.state.lastRecommendSymbol = qsSym.value.trim().toUpperCase();
-            App.navigate('#/ticket/builder');
-          }
-        }, 'Strategy builder')));
-      return;
-    }
-
-    if (t.step === 1) {
-      var symInput = el('input', { type: 'text', id: 'ticket-symbol', value: t.symbol, list: 'universe-symbols' });
-      body.appendChild(el('h2', { class: 'mt0' }, 'What do you expect, and where?'));
-      body.appendChild(el('div', { class: 'field', style: 'max-width:260px' }, el('label', {}, 'Symbol'), symInput));
-      body.appendChild(explain('Pick the stock or ETF, then your honest expectation. Every later screen bends around this answer.'));
-      body.appendChild(choices('thesis-choices', [
-        { value: 'bullish', label: 'Bullish', hint: 'I expect it to go up' },
-        { value: 'bearish', label: 'Bearish', hint: 'I expect it to go down' },
-        { value: 'neutral', label: 'Neutral', hint: 'Mostly sideways from here' },
-        { value: 'volatile', label: 'Volatile', hint: 'Big move coming, unsure which way' }
-      ], t.thesis, function (v) { t.thesis = v; t.symbol = symInput.value.trim().toUpperCase(); nav(2); }));
-    }
-
-    if (t.step === 2) {
-      body.appendChild(el('h2', { class: 'mt0' }, 'How long do you give the idea?'));
-      body.appendChild(explain('Options lose value as time passes. Shorter horizons are cheaper but must be right faster. 0DTE expires TODAY — expert territory.'));
-      var horizonOptions = [
-        { value: 'week', label: 'About a week', hint: 'Fast, cheap, unforgiving' },
-        { value: 'month', label: 'About a month', hint: 'The classic balance' },
-        { value: 'quarter', label: 'A quarter', hint: 'Room to be early' }
-      ];
-      if (Learn.currentLevel() !== 'beginner') {
-        horizonOptions.push({ value: '0DTE', label: 'Today (0DTE)', hint: 'Expires in hours. Extreme gamma.' });
-      }
-      body.appendChild(choices('horizon-choices', horizonOptions, t.horizon, function (v) { t.horizon = v; nav(3); }));
-      body.appendChild(backNext(1));
-    }
-
-    if (t.step === 3) {
-      body.appendChild(el('h2', { class: 'mt0' }, 'How much can this trade lose?'));
-      body.appendChild(explain('The header risk mode caps your budget per trade. Everything shown later keeps the worst case inside that number.'));
-      body.appendChild(el('div', { class: 'chip-row' },
-        chip('Risk mode', riskMode()),
-        chip('Budget', ({ learning: '1%', conservative: '1%', balanced: '2%', aggressive: '5%' }[riskMode()] || '1%') + ' of buying power')));
-      body.appendChild(el('p', { class: 'muted' }, 'Change the risk mode in the header if this is not what you want.'));
-      body.appendChild(backNext(2, el('button', { class: 'btn', id: 'risk-next', onclick: function () { nav(4); } }, 'Continue →')));
-    }
-
-    if (t.step === 4) {
-      body.appendChild(el('h2', { class: 'mt0' }, 'Pick a strategy'));
-      body.appendChild(UI.spinner('Screening strategies for ' + t.symbol + '…'));
-      try {
-        var r = await API.post('/api/recommend', {
-          symbol: t.symbol, thesis: t.thesis || 'neutral', horizon: t.horizon || 'month',
-          riskMode: riskMode(), allow0dte: t.horizon === '0DTE', avoidEarnings: true
-        });
-        body.innerHTML = '';
-        body.appendChild(el('h2', { class: 'mt0' }, 'Pick a strategy'));
-        if (!r.candidates.length) body.appendChild(alertBox('warn', 'Nothing passed the risk screens. Go back and change the horizon or symbol.'));
-        r.candidates.forEach(function (c) {
-          var card = candidateCard(c, false);
-          card.appendChild(el('div', { class: 'btn-row' },
-            el('button', { class: 'btn', onclick: function () { t.candidate = c; nav(5); } }, 'Choose this')));
-          body.appendChild(card);
-        });
-        body.appendChild(backNext(3));
-      } catch (e) {
-        body.innerHTML = '';
-        body.appendChild(alertBox('danger', e.message));
-        body.appendChild(backNext(3));
-      }
-    }
-
     if (t.step === 5) {
       var c = t.candidate;
-      if (!c) { nav(4); return; }
+      if (!c) { t.step = 6; rerender(); return; } // custom legs skip the strike picker
       t.legs = t.legs && t.legsFor === c.label ? t.legs : JSON.parse(JSON.stringify(c.legs));
       t.legsFor = c.label;
       body.appendChild(el('h2', { class: 'mt0' }, 'Strikes & size'));
@@ -1917,15 +1888,67 @@
   }
 
   async function portfolio(root, params) {
+    // One money home: Positions (holdings + trades) | Activity (the ledger) | Account
+    // (starting cash, reset). The old #/account URL lands on the Account section.
+    var section = params[0] === 'activity' ? 'activity' : params[0] === 'account' ? 'account' : 'positions';
     var tab = params[0] === 'closed' ? 'closed' : 'active';
     var page = parseInt(params[1] || '0', 10);
     root.appendChild(el('h1', {}, 'Portfolio'));
 
-    var acct = (await API.get('/api/account')).account;
-    root.appendChild(el('div', { class: 'grid grid-3', style: 'margin-bottom:14px' },
+    var acctData = await API.get('/api/account');
+    var acct = acctData.account;
+    root.appendChild(el('div', { class: 'grid grid-4', style: 'margin-bottom:14px' },
       stat('Cash', fmtMoney(acct.cashCents)),
       stat('Reserved', fmtMoney(acct.reservedCents)),
-      stat('Buying power', fmtMoney(acct.buyingPowerCents))));
+      stat('Buying power', fmtMoney(acct.buyingPowerCents)),
+      stat('Started with', fmtMoney(acct.startingCashCents))));
+    root.appendChild(el('div', { class: 'tabs' },
+      el('button', { class: section === 'positions' ? 'active' : '', id: 'pf-sec-positions',
+        onclick: function () { App.navigate('#/portfolio'); } }, 'Positions'),
+      el('button', { class: section === 'activity' ? 'active' : '', id: 'pf-sec-activity',
+        onclick: function () { App.navigate('#/portfolio/activity'); } }, 'Activity'),
+      el('button', { class: section === 'account' ? 'active' : '', id: 'pf-sec-account',
+        onclick: function () { App.navigate('#/portfolio/account'); } }, 'Account')));
+
+    if (section === 'activity') {
+      root.appendChild(el('div', { class: 'card' },
+        UI.cardHeader('Ledger'),
+        explain('Every cash or reserve movement, newest first. The ledger is append-only: nothing is ever erased.'),
+        table(['Date', 'Type', 'Amount', 'Cash after', 'Reserved after', 'Memo'],
+          (acctData.ledger || []).map(function (r) {
+            return el('tr', {},
+              el('td', { class: 'muted' }, r.ts ? r.ts.slice(0, 10) : ''),
+              el('td', {}, el('span', { class: 'badge badge-dim' }, r.type)),
+              el('td', {}, pnlSpan(r.amountCents)),
+              el('td', {}, fmtMoney(r.cashAfterCents)),
+              el('td', {}, fmtMoney(r.reservedAfterCents)),
+              el('td', { class: 'muted' }, r.memo || ''));
+          }))));
+      return;
+    }
+    if (section === 'account') {
+      var cashInput = el('input', { type: 'number', id: 'reset-cash', value: Math.round(acct.startingCashCents / 100), min: '1000', step: '1000', style: 'max-width:150px' });
+      root.appendChild(el('div', { class: 'card' },
+        UI.cardHeader('Reset account'),
+        explain('Resetting voids open practice trades, removes ALL share holdings, and sets cash to the amount below. History stays in the ledger and audit log.'),
+        el('div', { class: 'btn-row' },
+          el('label', { class: 'muted' }, 'Starting cash ($) '), cashInput,
+          el('button', {
+            class: 'btn btn-danger', id: 'reset-btn', onclick: function () {
+              var cents = Math.round(parseFloat(cashInput.value || '0') * 100);
+              UI.confirmModal('Reset paper account?',
+                el('div', {},
+                  el('p', {}, 'Cash will be set to ' + fmtMoney(cents) + '. ' + (acct.hasTraded ? 'Your open practice trades will be voided.' : '')),
+                  explain('This cannot be undone, but it never touches real money.')),
+                'Reset account',
+                async function () {
+                  await API.post('/api/account/reset', { startingCashCents: cents, confirm: true, force: acct.hasTraded });
+                  App.navigate('#/portfolio/account');
+                }, true);
+            }
+          }, 'Reset…'))));
+      return;
+    }
 
     if (Learn.currentLevel() === 'expert' && tab === 'active') {
       try {
@@ -2037,7 +2060,7 @@
     }
     if (!data.trades.length) {
       root.appendChild(el('div', { class: 'card' }, tab === 'active'
-        ? UI.emptyState('No open practice trades', 'Walk the guided ticket to build one with capped, pre-known risk.', 'Open the trade ticket', function () { App.navigate('#/ticket'); })
+        ? UI.emptyState('No open practice trades', 'Walk the guided ticket to build one with capped, pre-known risk.', 'Open the trade ticket', function () { App.navigate('#/trade/place'); })
         : UI.emptyState('Nothing closed yet', 'Closed, settled, and voided trades land here.')));
       return;
     }
@@ -2251,14 +2274,13 @@
     // A candidate card's "Backtest this" lands here with the form pre-answered.
     var prefill = App.state.backtestPrefill || {};
     App.state.backtestPrefill = null;
-    root.appendChild(el('h1', {}, 'Backtest a strategy'));
     root.appendChild(el('p', { class: 'page-sub' },
       Learn.currentLevel() === 'beginner'
         ? 'Before risking even paper money on a rule like “sell a monthly covered call”, see how it would actually have gone — trade by trade, with honest labels on what is modeled.'
         : 'Replays a strategy rule day by day with no look-ahead — and labels exactly how much of its pricing is modeled.'));
     var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || 'AAPL', list: 'universe-symbols' });
     // The strategy menu climbs the ladder with the user: Learning sees the beginner
-    // families (mirroring the engine's learning risk rank), Confident adds defined-risk
+    // families (mirroring the engine's learning risk rank), Expert unlocks defined-risk
     // premium selling, Pro sees everything backtestable.
     var BT_GROUPS = [
       { label: 'Trade a view', families: ['LONG_CALL', 'LONG_PUT', 'DEBIT_CALL_SPREAD', 'DEBIT_PUT_SPREAD',
@@ -2327,7 +2349,7 @@
 
     root.appendChild(el('div', { class: 'card' },
       btLevel === 'beginner'
-        ? explain('The strategy list matches your Learning level — credit spreads, condors and collars unlock at Confident, everything at Pro (the level switch is in the header). Target DTE is how far out each trade’s expiration is: Monthly (30 days) is the classic starting point.')
+        ? explain('The strategy list matches your Beginner level — credit spreads, condors, collars and the rest unlock at Expert (the level switch is in the header). Target DTE is how far out each trade’s expiration is: Monthly (30 days) is the classic starting point.')
         : null,
       el('div', { class: 'form-grid' },
         el('div', { class: 'field' }, el('label', {}, 'Symbol'), sym),
@@ -2486,62 +2508,11 @@
 
   // ---------- 1. Account ----------
 
-  async function account(root) {
-    var data = await API.get('/api/account');
-    var acct = data.account;
-    root.appendChild(el('h1', {}, 'Paper account'));
-    root.appendChild(el('div', { class: 'grid grid-4' },
-      stat('Cash', fmtMoney(acct.cashCents), 'Practice money available. Nothing here is real dollars.'),
-      stat('Reserved', fmtMoney(acct.reservedCents), 'Held aside to cover the worst case of your open trades.'),
-      stat('Buying power', fmtMoney(acct.buyingPowerCents), 'Cash minus reserves — what you can still put at risk.'),
-      stat('Started with', fmtMoney(acct.startingCashCents))));
-
-    var cashInput = el('input', { type: 'number', id: 'reset-cash', value: Math.round(acct.startingCashCents / 100), min: '1000', step: '1000', style: 'max-width:150px' });
-    root.appendChild(el('div', { class: 'card' },
-      UI.cardHeader('Reset account'),
-      explain('Resetting voids open practice trades, removes ALL share holdings, and sets cash to the amount below. History stays in the ledger and audit log.'),
-      el('div', { class: 'btn-row' },
-        el('label', { class: 'muted' }, 'Starting cash ($) '), cashInput,
-        el('button', {
-          class: 'btn btn-danger', id: 'reset-btn', onclick: function () {
-            var cents = Math.round(parseFloat(cashInput.value || '0') * 100);
-            UI.confirmModal('Reset paper account?',
-              el('div', {},
-                el('p', {}, 'Cash will be set to ' + fmtMoney(cents) + '. ' + (acct.hasTraded ? 'Your open practice trades will be voided.' : '')),
-                explain('This cannot be undone, but it never touches real money.')),
-              'Reset account',
-              async function () {
-                await API.post('/api/account/reset', { startingCashCents: cents, confirm: true, force: acct.hasTraded });
-                App.navigate('#/account');
-              }, true);
-          }
-        }, 'Reset…'))));
-
-    var rows = (data.ledger || []).map(function (r) {
-      return el('tr', {},
-        el('td', { class: 'muted' }, r.ts ? r.ts.slice(0, 10) : ''),
-        el('td', {}, el('span', { class: 'badge badge-dim' }, r.type)),
-        el('td', {}, pnlSpan(r.amountCents)),
-        el('td', {}, fmtMoney(r.cashAfterCents)),
-        el('td', {}, fmtMoney(r.reservedAfterCents)),
-        el('td', { class: 'muted' }, r.memo || ''));
-    });
-    root.appendChild(el('div', { class: 'card' },
-      UI.cardHeader('Recent ledger'),
-      explain('Every cash or reserve movement, newest first. The ledger is append-only: nothing is ever erased.'),
-      table(['Date', 'Type', 'Amount', 'Cash after', 'Reserved after', 'Memo'], rows)));
-  }
-
   window.Views = {
     home: home,
-    welcome: welcome,
-    account: account,
     research: research,
-    recommend: recommend,
-    ticket: ticket,
+    trade: trade,
     portfolio: portfolio,
-    trade: tradeDetail,
-    backtest: backtest,
     status: status
   };
 })();

@@ -168,12 +168,45 @@
     DIRECTIONAL: {
       prompt: 'What do you expect the stock to do?',
       options: [
-        { label: 'Rise a lot', blurb: 'Uncapped upside, pay a premium', tpl: 'LONG_CALL' },
-        { label: 'Rise somewhat', blurb: 'Cheaper, capped bullish bet', tpl: 'DEBIT_CALL_SPREAD' },
-        { label: 'Fall a lot', blurb: 'Profit from a drop, premium at risk', tpl: 'LONG_PUT' },
-        { label: 'Fall somewhat', blurb: 'Cheaper, capped bearish bet', tpl: 'DEBIT_PUT_SPREAD' },
-        { label: 'Move big — direction unknown', blurb: 'Own both sides, needs a real move', tpl: 'LONG_STRADDLE' },
-        { label: 'Stay calm and sideways', blurb: 'Get paid for a range holding', tpl: 'IRON_CONDOR' }
+        { label: 'Rise', blurb: 'Own the upside, four ways to pay for it', next: {
+          prompt: 'How do you want to play the rise?',
+          options: [
+            { label: 'It will rise a lot', blurb: 'Uncapped upside, pay a premium', tpl: 'LONG_CALL' },
+            { label: 'It will rise somewhat', blurb: 'Cheaper, capped bullish bet', tpl: 'DEBIT_CALL_SPREAD' },
+            { label: 'Paid unless it falls', blurb: 'Collect a credit, keep it above your strike', tpl: 'CREDIT_PUT_SPREAD' },
+            { label: 'Boldly — a put pays for the call', blurb: 'Risk reversal: big reserve if wrong', tpl: 'RISK_REVERSAL' },
+            { label: 'Paid, with nothing backing it', blurb: 'The naked put — walk through WHY it is refused', tpl: 'NAKED_PUT' }
+          ] } },
+        { label: 'Fall', blurb: 'Profit from a drop, three shapes', next: {
+          prompt: 'How do you want to play the fall?',
+          options: [
+            { label: 'It will fall a lot', blurb: 'Premium at risk, gains as it drops', tpl: 'LONG_PUT' },
+            { label: 'It will fall somewhat', blurb: 'Cheaper, capped bearish bet', tpl: 'DEBIT_PUT_SPREAD' },
+            { label: 'Paid unless it rises', blurb: 'Collect a credit, keep it below your strike', tpl: 'CREDIT_CALL_SPREAD' },
+            { label: 'Paid, with nothing backing it', blurb: 'The naked call — walk through WHY it is refused', tpl: 'NAKED_CALL' }
+          ] } },
+        { label: 'Move big — direction unknown', blurb: 'Own both sides or bet on violence', next: {
+          prompt: 'How big, and which flavor?',
+          options: [
+            { label: 'Big move either way', blurb: 'Straddle: both at the money', tpl: 'LONG_STRADDLE' },
+            { label: 'HUGE move either way', blurb: 'Strangle: cheaper, needs more', tpl: 'LONG_STRANGLE' },
+            { label: 'A violent rally', blurb: 'Call backspread: sell one, own two above', tpl: 'CALL_BACKSPREAD' },
+            { label: 'A crash', blurb: 'Put backspread: pays in a plunge', tpl: 'PUT_BACKSPREAD' }
+          ] } },
+        { label: 'Stay calm in a range', blurb: 'Get paid while nothing happens', next: {
+          prompt: 'How do you want to rent out the calm?',
+          options: [
+            { label: 'A comfortable range', blurb: 'Iron condor: wings cap the damage', tpl: 'IRON_CONDOR' },
+            { label: 'Pinned near today', blurb: 'Iron butterfly: richer, narrower', tpl: 'IRON_BUTTERFLY' },
+            { label: 'Maximum premium, no wings', blurb: 'Short straddle — see WHY it is refused', tpl: 'SHORT_STRADDLE' },
+            { label: 'Wider, still no wings', blurb: 'Short strangle — same refusal, more room', tpl: 'SHORT_STRANGLE' }
+          ] } },
+        { label: 'Land on a specific price', blurb: 'Pinpoint bets with tiny cost', next: {
+          prompt: 'Built from calls or puts?',
+          options: [
+            { label: 'Call butterfly', blurb: 'Big payoff exactly at the target', tpl: 'LONG_CALL_BUTTERFLY' },
+            { label: 'Put butterfly', blurb: 'Same bet when puts price better', tpl: 'LONG_PUT_BUTTERFLY' }
+          ] } }
       ]
     },
     INCOME: {
@@ -182,7 +215,19 @@
         { label: 'Cash — and I would own the stock', blurb: 'Sell a put at a price you would pay', tpl: 'CASH_SECURED_PUT' },
         { label: '100 shares bought alongside', blurb: 'Buy-write: shares plus a rented-out call', tpl: 'BUY_WRITE' },
         { label: 'A defined-risk range bet', blurb: 'Iron condor: paid while price stays inside', tpl: 'IRON_CONDOR' },
-        { label: 'A tight pin near today’s price', blurb: 'Iron butterfly: richer credit, narrower window', tpl: 'IRON_BUTTERFLY' }
+        { label: 'A tight pin near today’s price', blurb: 'Iron butterfly: richer credit, narrower window', tpl: 'IRON_BUTTERFLY' },
+        { label: 'Time itself — near decays faster', blurb: 'Calendar: sell the near month, own the far', next: {
+          prompt: 'Calls or puts?',
+          options: [
+            { label: 'Calendar with calls', blurb: 'The classic', tpl: 'CALENDAR_CALL' },
+            { label: 'Calendar with puts', blurb: 'Same clock, put side', tpl: 'CALENDAR_PUT' }
+          ] } },
+        { label: 'A long option I rent against', blurb: 'Diagonal: covered call without the shares', next: {
+          prompt: 'Calls or puts?',
+          options: [
+            { label: 'Diagonal with calls', blurb: 'Far-dated call anchors', tpl: 'DIAGONAL_CALL' },
+            { label: 'Diagonal with puts', blurb: 'The put-side twin', tpl: 'DIAGONAL_PUT' }
+          ] } }
       ]
     },
     ACQUIRE: {
@@ -205,7 +250,8 @@
       note: 'Already hold the shares? The Ideas screen prices floors for your actual lot — this builds shares + protection together.',
       options: [
         { label: 'A hard floor, whatever it costs', blurb: 'Married put: pay for insurance', tpl: 'MARRIED_PUT' },
-        { label: 'A cheap floor, capped upside', blurb: 'Collar: the sold call funds the put', tpl: 'COLLAR' }
+        { label: 'A cheap floor, capped upside', blurb: 'Collar: the sold call funds the put', tpl: 'COLLAR' },
+        { label: 'Partial insurance, cheaper still', blurb: 'Put spread: covers a fall down to a floor, not past it', tpl: 'DEBIT_PUT_SPREAD' }
       ]
     }
   };
@@ -244,7 +290,8 @@
       step: saved.step || 1,
       legIdx: saved.legIdx || 0,
       legs: saved.legs ? saved.legs.map(function (l) { return Object.assign({}, l); }) : [],
-      excluded: saved.excluded || {}
+      excluded: saved.excluded || {},
+      limits: saved.limits || {}
     };
     function remember() { App.state.builderForm = st; }
 
@@ -316,13 +363,120 @@
     function activeLegs() {
       return st.legs.filter(function (_, i) { return !st.excluded[i]; });
     }
+    // ---- Your limits: the same screens Ideas offers, wired into the builder ----
+    // Set a number and the panel judges the live position against it; "Fit to my limits"
+    // asks the ENGINE to size/strike this structure so the limits hold (same math as Ideas).
+    function limitField(key, label, step, placeholder) {
+      var input = el('input', { type: 'number', id: 'bl-' + key, min: '0', step: step,
+        placeholder: placeholder || 'any', value: st.limits[key] || '' });
+      input.addEventListener('change', function () {
+        st.limits[key] = input.value;
+        remember();
+        schedulePreviewIfAny();
+      });
+      return el('div', { class: 'field' }, el('label', {}, label), input);
+    }
+    var schedulePreviewHook = null; // set by whichever surface renders (repaint or debounce)
+    function schedulePreviewIfAny() { if (schedulePreviewHook) schedulePreviewHook(); }
+
+    function limitsFields(beginnerShape) {
+      return beginnerShape
+        ? [limitField('maxLoss', UI.term ? 'The most I am willing to lose ($)' : 'Max loss ($)', '50'),
+           limitField('minPop', 'Minimum chance of any profit (%)', '5')]
+        : [limitField('maxLoss', 'Max loss $', '50'),
+           limitField('target', 'Profit target $', '50'),
+           limitField('minPop', 'Min POP %', '5'),
+           limitField('maxAssign', 'Max assign %', '5')];
+    }
+
+    /** Pass/fail chips judging the CURRENT preview against each set limit. */
+    function limitChips(p) {
+      var checks = [];
+      function judge(label, ok, actual) {
+        checks.push(el('span', { class: 'chip limit-chip ' + (ok ? 'limit-ok' : 'limit-fail') },
+          el('span', { class: 'chip-label' }, label), el('b', {}, actual)));
+      }
+      var v = st.limits;
+      if (v.maxLoss) {
+        var cap = Math.round(parseFloat(v.maxLoss) * 100);
+        var unbounded = !p.ok && (p.blockReasons || []).some(function (r) { return /undefined|unlimited/i.test(r); });
+        judge('Max loss ≤ ' + fmtMoney(cap), !unbounded && p.maxLossCents > 0 && p.maxLossCents <= cap,
+          unbounded ? 'UNLIMITED' : fmtMoney(p.maxLossCents));
+      }
+      if (v.target) {
+        var tgt = Math.round(parseFloat(v.target) * 100);
+        var uncapped = p.maxProfitCents === null || p.maxProfitCents === undefined;
+        judge('Profit target ≥ ' + fmtMoney(tgt), uncapped || p.maxProfitCents >= tgt,
+          uncapped ? 'Uncapped' : fmtMoney(p.maxProfitCents));
+      }
+      if (v.minPop) {
+        var pop = p.popEntry;
+        judge('POP ≥ ' + v.minPop + '%', pop !== null && pop !== undefined && pop * 100 >= parseFloat(v.minPop),
+          pop === null || pop === undefined ? '—' : fmtPct(pop));
+      }
+      if (v.maxAssign) {
+        var ap = p.assignmentProb;
+        judge('Assign ≤ ' + v.maxAssign + '%', ap === null || ap === undefined || ap * 100 <= parseFloat(v.maxAssign),
+          ap === null || ap === undefined ? 'n/a' : fmtPct(ap));
+      }
+      if (!checks.length) return null;
+      return el('div', { class: 'chip-row', id: 'builder-limit-chips' },
+        el('span', { class: 'muted' }, 'Against your limits:'), checks);
+    }
+
+    /** Asks the engine to size/strike the CURRENT structure so the limits hold. */
+    async function fitToLimits(statusHost) {
+      var t = TEMPLATES.find(function (x) { return x.key === st.templateKey; });
+      if (!t || t.family === 'CUSTOM' || t.risky) {
+        statusHost.appendChild(alertBox('warn', 'The engine can fit named structures only',
+          [t && t.risky ? 'Undefined-risk structures are never recommended — that is the point.'
+                        : 'Pick a structure from the catalog first (custom leg piles have no engine template).']));
+        return;
+      }
+      statusHost.innerHTML = '';
+      statusHost.appendChild(UI.spinner('Asking the engine to fit your limits…'));
+      try {
+        var body = {
+          symbol: st.symbol, riskMode: document.getElementById('risk-mode').value,
+          horizon: 'month', allowedStrategies: [t.family]
+        };
+        if (st.limits.maxLoss) body.maxLossCents = Math.round(parseFloat(st.limits.maxLoss) * 100);
+        var f = {};
+        if (st.limits.minPop) f.minPop = parseFloat(st.limits.minPop) / 100;
+        if (st.limits.maxAssign) f.maxAssignmentProb = parseFloat(st.limits.maxAssign) / 100;
+        if (Object.keys(f).length) body.filters = f;
+        var r = await API.post('/api/recommend', body);
+        statusHost.innerHTML = '';
+        var c = (r.candidates || [])[0];
+        if (!c) {
+          var reasons = (r.rejected || []).slice(0, 3).map(function (x) { return x.reason || x.blockReasons && x.blockReasons[0]; }).filter(Boolean);
+          statusHost.appendChild(alertBox('warn', 'No ' + t.name + ' fits those limits right now',
+            reasons.length ? reasons : ['Loosen a limit or pick a different structure.']));
+          return;
+        }
+        st.legs = (c.legs || []).map(function (l) {
+          return { action: l.action, type: l.stock ? 'STOCK' : l.type,
+                   strike: l.stock ? null : String(l.strike),
+                   expiration: l.stock ? null : l.expiration, ratio: l.ratio || 1 };
+        });
+        st.qty = c.qty || 1;
+        st.excluded = {};
+        remember();
+        if (typeof onLegsReplaced === 'function') onLegsReplaced();
+      } catch (e) {
+        statusHost.innerHTML = '';
+        statusHost.appendChild(alertBox('danger', 'Could not fit', [e.message]));
+      }
+    }
+    var onLegsReplaced = null; // each surface wires its own re-render
+
     function handoff() {
       App.state.ticket = {
         symbol: st.symbol, custom: true, customFor: st.symbol,
         legs: wireLegs(activeLegs()), qty: st.qty, step: 6,
         thesis: 'neutral', horizon: 'month'
       };
-      App.navigate('#/ticket');
+      App.navigate('#/trade/place');
     }
 
     try {
@@ -429,21 +583,30 @@
                 el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.step = 1; repaint(); } }, '← Back'))));
             return;
           }
-          var w = WIZARD[st.goal] || WIZARD.DIRECTIONAL;
+          var w = st.wizNode || WIZARD[st.goal] || WIZARD.DIRECTIONAL;
           host.appendChild(el('div', { class: 'card' },
             el('h3', { class: 'mt0' }, w.prompt),
             w.note ? explain(w.note) : null,
             el('div', { class: 'choice-row', id: 'bw-shape' }, w.options.map(function (o) {
-              var t = TEMPLATES.find(function (x) { return x.key === o.tpl; });
+              var t = o.tpl ? TEMPLATES.find(function (x) { return x.key === o.tpl; }) : null;
               return el('button', {
-                class: 'choice' + (st.templateKey === o.tpl ? ' selected' : ''), 'data-tpl': o.tpl,
-                onclick: function () { pickTemplate(t, o.offset); }
-              }, el('span', { class: 'choice-head' }, t ? shapeGlyph(t) : null, el('b', {}, o.label)),
+                class: 'choice' + (st.templateKey === o.tpl ? ' selected' : ''),
+                'data-tpl': o.tpl || null, 'data-next': o.next ? '' : null,
+                onclick: function () {
+                  if (o.next) { st.wizNode = o.next; repaint(); }
+                  else { st.wizNode = null; pickTemplate(t, o.offset); }
+                }
+              }, el('span', { class: 'choice-head' }, t ? shapeGlyph(t) : null, el('b', {}, o.label),
+                   t && t.risky ? el('span', { class: 'badge badge-danger' }, 'BLOCKED') : null,
+                   o.next ? el('span', { class: 'muted choice-more' }, '›') : null),
                  el('span', { class: 'muted' }, o.blurb));
             })),
             el('div', { class: 'btn-row' },
-              el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.step = 1; repaint(); } }, '← Back'),
-              el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.goal = 'BROWSE'; repaint(); } }, 'Browse all structures'))));
+              el('button', { class: 'btn btn-secondary btn-sm', onclick: function () {
+                if (st.wizNode) { st.wizNode = null; } else { st.step = 1; }
+                repaint();
+              } }, '← Back'),
+              el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.wizNode = null; st.goal = 'BROWSE'; repaint(); } }, 'Browse all structures'))));
           return;
         }
 
@@ -522,6 +685,7 @@
         }
 
         // Step 4: the whole position
+        var fitStatus = el('div', { id: 'builder-fit-status' });
         host.appendChild(el('div', { class: 'card', id: 'bw-final' },
           el('h3', { class: 'mt0' }, 'Where you stand'),
           el('div', { id: 'bw-legs-recap' },
@@ -530,7 +694,12 @@
                 el('span', {}, el('b', {}, 'Leg ' + (idx + 1) + ': '), legStory(l)));
             })),
           el('div', { class: 'form-grid', style: 'margin-top:8px' },
-            el('div', { class: 'field' }, el('label', {}, 'Contracts (qty)'), qtyInput())),
+            [el('div', { class: 'field' }, el('label', {}, 'Contracts (qty)'), qtyInput())].concat(limitsFields(true))),
+          el('div', { class: 'btn-row', style: 'margin-top:2px' },
+            el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-fit', onclick: function () { fitToLimits(fitStatus); } },
+              'Fit to my limits'),
+            el('span', { class: 'muted' }, 'The engine re-picks strikes and size so your limits hold — same math as Ideas.')),
+          fitStatus,
           el('div', { id: 'bw-panel' }, UI.spinner('Pricing the whole position…')),
           el('div', { class: 'btn-row' },
             el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.legIdx = st.legs.length - 1; st.step = 3; repaint(); } }, '← Walk the legs again'),
@@ -543,6 +712,8 @@
             if (!panel || !panel.isConnected) return;
             panel.innerHTML = '';
             renderVerdictAndStats(panel, res.preview, res.guardrails, true);
+            var lc = limitChips(res.preview);
+            if (lc) panel.insertBefore(lc, panel.firstChild);
             var btn = document.getElementById('builder-review');
             if (btn && !res.preview.ok) { btn.disabled = true; btn.title = 'Fix the blocking issues first'; }
           } catch (e) {
@@ -566,6 +737,8 @@
         return chip(label, val);
       }
 
+      schedulePreviewHook = function () { if (st.step === 4) repaint(); };
+      onLegsReplaced = function () { st.step = 4; repaint(); };
       paint();
       remember();
     }
@@ -594,13 +767,46 @@
       } }, 'Clear');
       var panel = el('div', { class: 'card builder-panel', id: 'builder-panel' });
 
+      var fitStatus = el('div', { id: 'builder-fit-status' });
       root.appendChild(el('div', { class: 'card' },
         el('div', { class: 'builder-bar' },
           el('div', { class: 'field' }, el('label', {}, 'Symbol'), symInput),
           el('div', { class: 'field' }, el('label', {}, 'Qty'), qtyIn),
           el('div', { class: 'field builder-bar-grow' }, el('label', {}, 'Structure'), tplSel),
-          el('div', { class: 'field builder-bar-end' }, el('div', { class: 'btn-row', style: 'margin:0' }, addBtn, clearBtn)))));
-      var legsCard = el('div', { class: 'card' }, UI.cardHeader('Legs'), legsHost);
+          el('div', { class: 'field builder-bar-end' }, el('div', { class: 'btn-row', style: 'margin:0' }, addBtn, clearBtn))),
+        el('div', { class: 'builder-bar', style: 'margin-top:8px' },
+          limitsFields(false),
+          el('div', { class: 'field builder-bar-end' },
+            el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-fit', title: 'Engine re-picks strikes/size so the limits hold',
+              onclick: function () { fitToLimits(fitStatus); } }, 'Fit to my limits'))),
+        fitStatus));
+      // Depth on demand, even at Expert: what the structure does and what each leg is FOR —
+      // collapsed by default so the terminal stays naked until asked.
+      var eduHost = el('div', { id: 'builder-edu' });
+      function renderEducation() {
+        eduHost.innerHTML = '';
+        var t = TEMPLATES.find(function (x) { return x.key === st.templateKey; });
+        var g = t && Learn.STRATEGY_GUIDE[t.family];
+        if (g) {
+          eduHost.appendChild(UI.expandable('About this structure — how it wins, loses, and surprises', function () {
+            return el('div', {},
+              el('p', {}, el('i', {}, g.story)),
+              el('ol', {}, (g.how || []).map(function (step) { return el('li', {}, step); })),
+              el('div', { class: 'fact-row' }, el('span', {}, el('b', { class: 'gain' }, 'You win when: '), g.win)),
+              el('div', { class: 'fact-row' }, el('span', {}, el('b', { class: 'loss' }, 'You lose when: '), g.lose)),
+              el('p', {}, el('b', {}, 'Easy to miss: '), g.watch));
+          }));
+        }
+        if (st.legs.length) {
+          eduHost.appendChild(UI.expandable('What each leg is for', function () {
+            return el('div', {}, st.legs.map(function (l, i) {
+              return el('div', { class: 'fact-row' },
+                el('span', {}, el('b', {}, 'Leg ' + (i + 1) + ': '), legStory(l)));
+            }));
+          }));
+        }
+      }
+      var legsCard = el('div', { class: 'card' }, UI.cardHeader('Legs'), eduHost, legsHost);
       root.appendChild(el('div', { class: 'builder-cols' }, legsCard, panel));
 
       var legPop = null;
@@ -717,6 +923,7 @@
       }
       async function renderLegs() {
         hideLegPop();
+        renderEducation();
         legsHost.innerHTML = '';
         if (!st.legs.length) {
           legsHost.appendChild(UI.emptyState('No legs', 'Pick a structure or add legs by hand.'));
@@ -758,6 +965,8 @@
         var offCount = Object.keys(st.excluded).length;
         panel.appendChild(UI.cardHeader('Position',
           offCount ? el('span', { class: 'badge badge-caution' }, offCount + ' LEG OFF') : null));
+        var lc = limitChips(p);
+        if (lc) panel.appendChild(lc);
         renderVerdictAndStats(panel, p, guard, false);
         var g = netGreeks(p);
         if (g) {
@@ -828,6 +1037,8 @@
         remember(); schedulePreview();
       });
 
+      schedulePreviewHook = schedulePreview;
+      onLegsReplaced = async function () { await renderLegs(); schedulePreview(); };
       if (!expirations.length) {
         legsHost.appendChild(UI.emptyState(st.symbol + ' has no listed options', 'Pick an optionable symbol (try AAPL or SPY).'));
         panelEmpty();

@@ -57,6 +57,7 @@ Environment variables (or the same keys lowercase-dotted in `./strikebench.prope
 | `BRAND_NAME` | `StrikeBench` | Product name shown in the header and page title |
 | `BRAND_TAGLINE` | *(built-in)* | One-line subtitle available to the UI |
 | `DB_PATH` | `data/strikebench.db` | SQLite file (a legacy `data/options-lab.db` is auto-migrated once at boot) |
+| `MODELS_DIR` | `data/models` | On-device AI assets. The app ships NO model bytes: the user clicks "Enable on-device AI" and the server downloads checksum-pinned Apache-2.0/MIT assets (~121MB) here. Empty = an enable card; absent server support = features hidden. |
 | `FIXTURES_ONLY` | `false` | Demo data only, zero network |
 | `FEE_PER_CONTRACT_CENTS` | `65` | Commission per contract per leg |
 | `FEE_PER_ORDER_CENTS` | `0` | Flat fee per order |
