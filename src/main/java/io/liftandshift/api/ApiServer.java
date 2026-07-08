@@ -210,6 +210,7 @@ public final class ApiServer {
             c.routes.get("/api/positions", this::positionsList);
             c.routes.post("/api/positions/buy", this::positionsBuy);
             c.routes.post("/api/positions/sell", this::positionsSell);
+            c.routes.get("/api/portfolio/summary", this::portfolioSummary);
             c.routes.get("/api/portfolio/greeks", ctx ->
                     ctx.json(trades.portfolioGreeks(accounts.getOrCreateDefault().id())));
 
@@ -804,6 +805,40 @@ public final class ApiServer {
             out.add(Map.of("price", p.price().toPlainString(), "profitCents", p.profitCents()));
         }
         return out;
+    }
+
+    /** One honest headline: cash + share value + what closing every open trade pays now.
+     *  Reserve is a lien INSIDE cash (never added twice); all marks pre-close-fee. */
+    private void portfolioSummary(Context ctx) {
+        var acct = accounts.getOrCreateDefault();
+        long sharesValue = 0;
+        int sharesCount = 0;
+        boolean complete = true;
+        for (var p : positions.list(acct.id())) {
+            sharesCount++;
+            if (p.marketValueCents() == null) { complete = false; continue; }
+            sharesValue += p.marketValueCents();
+        }
+        Map<String, Object> open = trades.openPositionsValue(acct.id());
+        long openValue = (long) open.get("valueCents");
+        if (!(boolean) open.get("complete")) complete = false;
+        long total = acct.cashCents() + sharesValue + openValue;
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("cashCents", acct.cashCents());
+        out.put("reservedCents", acct.reservedCents());
+        out.put("buyingPowerCents", acct.buyingPowerCents());
+        out.put("startingCashCents", acct.startingCashCents());
+        out.put("sharesValueCents", sharesValue);
+        out.put("sharesPositions", sharesCount);
+        out.put("openTradesCount", open.get("openTradesCount"));
+        out.put("openTradesValueCents", openValue);
+        out.put("openTradesUnrealizedCents", open.get("unrealizedCents"));
+        out.put("totalValueCents", total);
+        out.put("totalPnlCents", total - acct.startingCashCents());
+        out.put("complete", complete);
+        out.put("freshness", open.get("freshness"));
+        out.put("note", "Liquidation view at current marks: cash + shares + closing every open trade at executable prices, BEFORE close fees. Reserve is part of cash, never double-counted.");
+        ctx.json(out);
     }
 
     private void tradeRefresh(Context ctx) {

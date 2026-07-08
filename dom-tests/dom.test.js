@@ -253,6 +253,22 @@ test('portfolio tabs show the closed trade', async () => {
   assert.match(rowText, /CLOSED/);
 });
 
+test('portfolio headline: total value + P/L at current marks', async () => {
+  await go('#/portfolio');
+  await page.waitForSelector('#pf-stats .stat');
+  const stats = await page.textContent('#pf-stats');
+  assert.match(stats, /Portfolio value/);
+  assert.match(stats, /P\/L since start/);
+  assert.match(stats, /%\)/); // P/L carries its percent
+  // identity check straight against the API
+  const ok = await page.evaluate(async () => {
+    const s = await API.getFresh('/api/portfolio/summary');
+    return s.totalValueCents === s.cashCents + s.sharesValueCents + s.openTradesValueCents
+      && s.totalPnlCents === s.totalValueCents - s.startingCashCents;
+  });
+  assert.ok(ok, 'summary adds up');
+});
+
 test('portfolio absorbs account: sections, ledger under Activity, guarded reset', async () => {
   await go('#/account'); // legacy URL -> Portfolio's Account section
   const text = await page.textContent('#app');

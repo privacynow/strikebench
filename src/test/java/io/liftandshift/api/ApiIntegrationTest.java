@@ -713,4 +713,22 @@ class ApiIntegrationTest {
         assertThat(cal.get("legs").size()).isEqualTo(2);
     }
 
+    @Test
+    @Order(24)
+    void portfolioSummaryIsAnHonestLiquidationView() throws Exception {
+        JsonNode acct = Json.parse(get("/api/account").body()).get("account");
+        JsonNode sum = Json.parse(get("/api/portfolio/summary").body());
+        // identity: total = cash + shares + open-trade liquidation; P/L measured vs start
+        assertThat(sum.get("cashCents").asLong()).isEqualTo(acct.get("cashCents").asLong());
+        long total = sum.get("totalValueCents").asLong();
+        assertThat(total).isEqualTo(sum.get("cashCents").asLong()
+                + sum.get("sharesValueCents").asLong()
+                + sum.get("openTradesValueCents").asLong());
+        assertThat(sum.get("totalPnlCents").asLong())
+                .isEqualTo(total - sum.get("startingCashCents").asLong());
+        // reserve stays a lien inside cash — the note must say so, and fees must be disclosed
+        assertThat(sum.get("note").asText()).contains("BEFORE close fees");
+        assertThat(sum.get("freshness").asText()).isNotEmpty();
+        assertThat(sum.has("complete")).isTrue();
+    }
 }

@@ -901,6 +901,24 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     container outgrows the halves. PIN: build at 900px, grow to 1600px → data-halfw grows and
     covers the viewport. Note: tiny universes (4 symbols) necessarily repeat symbols to span
     wide screens — duplication is the minimum needed to cover the viewport.
+- DEPLOYED TO strikebench.com (2026-07-08): EC2 (Amazon Linux 2023, x86_64, Corretto 25 +
+  Maven preinstalled), repo clone at /home/ec2-user/output/strikebench
+  (github.com/privacynow/strikebench — byte-identical to the local tree at deploy time).
+  App runs from a DEDICATED dir /opt/strikebench (jar + strikebench.properties [brand only;
+  polygon/AV keys go here] + data/strikebench.db), systemd unit `strikebench.service`
+  (User=ec2-user, PORT=7070 localhost-only, DB_PATH under /opt, -Xmx768m, Restart=on-failure).
+  nginx server block /etc/nginx/conf.d/strikebench.conf proxies :80/:443 → 127.0.0.1:7070
+  (other domains live inline in nginx.conf — untouched); Let's Encrypt cert via
+  `certbot --nginx -d strikebench.com --redirect` (auto-renew timer active; expires Oct 6).
+  WWW NOT covered: Let's Encrypt got DNS SERVFAIL for www.strikebench.com (apex validated
+  fine) — fix the www record/DNSSEC at the registrar, then
+  `sudo certbot --nginx -d strikebench.com -d www.strikebench.com --redirect`.
+  REDEPLOY = run scripts/deploy.sh ON the server (git pull → mvn package → atomic jar swap
+  → systemctl restart → health check). SSH: `ssh -i /Users/tinker/output/output/flinkey.pem
+  ec2-user@strikebench.com`. Verified live: HTTPS health OK, http→https 301, REAL delayed
+  Cboe quotes through the proxy (AAPL $311.39 DELAYED). CAVEAT (flagged to user): the app
+  has NO authentication — every visitor shares the single paper account; nginx basic auth
+  is the quick lock if wanted.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

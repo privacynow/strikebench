@@ -2245,11 +2245,31 @@
 
     var acctData = await API.get('/api/account');
     var acct = acctData.account;
-    root.appendChild(el('div', { class: 'grid grid-4', style: 'margin-bottom:14px' },
-      stat('Cash', fmtMoney(acct.cashCents)),
-      stat('Reserved', fmtMoney(acct.reservedCents)),
-      stat('Buying power', fmtMoney(acct.buyingPowerCents)),
-      stat('Started with', fmtMoney(acct.startingCashCents))));
+    // The headline this page exists for: total value + P/L at current marks (liquidation
+    // view, pre-close-fees). Falls back to plain account stats if marks are unavailable.
+    var statsRow = el('div', { class: 'grid grid-4', id: 'pf-stats', style: 'margin-bottom:14px' });
+    root.appendChild(statsRow);
+    try {
+      var sum = await API.get('/api/portfolio/summary');
+      var pct = sum.startingCashCents ? (sum.totalPnlCents / sum.startingCashCents) * 100 : 0;
+      statsRow.appendChild(stat('Portfolio value',
+        el('span', {}, fmtMoney(sum.totalValueCents),
+          sum.complete ? null : el('span', { class: 'badge badge-caution', style: 'margin-left:6px' }, 'PARTIAL')),
+        'Cash + your shares + what closing every open trade would pay right now, before close fees.'));
+      statsRow.appendChild(stat('P/L since start',
+        el('span', { class: sum.totalPnlCents >= 0 ? 'gain' : 'loss' },
+          fmtMoney(sum.totalPnlCents, { plus: true }) + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)'),
+        'Everything measured against the ' + fmtMoney(sum.startingCashCents) + ' you started with.'));
+      statsRow.appendChild(stat('Cash', fmtMoney(sum.cashCents),
+        fmtMoney(sum.reservedCents) + ' of it is reserved to cover open-trade worst cases.'));
+      statsRow.appendChild(stat('Buying power', fmtMoney(sum.buyingPowerCents),
+        'Cash minus reserves — what you can still put at risk.'));
+    } catch (e) {
+      statsRow.appendChild(stat('Cash', fmtMoney(acct.cashCents)));
+      statsRow.appendChild(stat('Reserved', fmtMoney(acct.reservedCents)));
+      statsRow.appendChild(stat('Buying power', fmtMoney(acct.buyingPowerCents)));
+      statsRow.appendChild(stat('Started with', fmtMoney(acct.startingCashCents)));
+    }
     root.appendChild(el('div', { class: 'tabs' },
       el('button', { class: section === 'positions' ? 'active' : '', id: 'pf-sec-positions',
         onclick: function () { App.navigate('#/portfolio'); } }, 'Positions'),

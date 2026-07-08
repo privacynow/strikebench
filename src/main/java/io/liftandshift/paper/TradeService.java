@@ -474,7 +474,35 @@ public final class TradeService {
     private static Double round2(double v) { return Math.round(v * 100.0) / 100.0; }
     private static Double round4(double v) { return Math.round(v * 10000.0) / 10000.0; }
 
-    /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Never touches money. */
+    /** Liquidation view of all ACTIVE trades: what unwinding everything now would pay
+     *  (executable sides, BEFORE close fees). Sums computeMark per trade; incomplete marks
+     *  make the whole answer honest-partial rather than silently wrong. */
+    public Map<String, Object> openPositionsValue(String accountId) {
+        List<TradeRecord> active = list(accountId, TradeRecord.ACTIVE, 0, 200).trades();
+        long value = 0, unrealized = 0;
+        int counted = 0;
+        boolean complete = true;
+        Freshness worst = Freshness.FIXTURE;
+        for (TradeRecord t : active) {
+            MarkView view;
+            try { view = computeMark(t); } catch (RuntimeException e) { complete = false; continue; }
+            if (view.closeCostCents() == null) { complete = false; continue; }
+            value += view.closeCostCents();
+            unrealized += view.unrealizedCents() == null ? 0 : view.unrealizedCents();
+            worst = worse(worst, Freshness.valueOf(view.freshness()));
+            counted++;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("openTradesCount", active.size());
+        out.put("markedTradesCount", counted);
+        out.put("valueCents", value);
+        out.put("unrealizedCents", unrealized);
+        out.put("complete", complete);
+        out.put("freshness", worst.name());
+        return out;
+    }
+
+    /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Never touches money. */    /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Never touches money. */
     public Map<String, Object> portfolioGreeks(String accountId) {
         List<TradeRecord> active = list(accountId, TradeRecord.ACTIVE, 0, 200).trades();
         double delta = 0, gamma = 0, theta = 0, vega = 0;
