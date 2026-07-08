@@ -862,6 +862,28 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   - Research symbol pages get `#back-to-sectors` ("← All sectors") beside Look up.
   - TEST GOTCHA (hit again): go(sameHash) renders NOTHING (no hashchange) — leave the route
     first or drive App.render() and wait on STATE, not on selectors that already exist.
+- RECENTS + EXPLORER FOCUS + PORTFOLIO CONSISTENCY (2026-07-07, user: lookup chips "never
+  change, why are they special?"; mid-grid tile expansion "strange and random"; portfolio
+  "left behind… weird spacing… not consistent". Suites: 23 fixture + 3 audit + 4 seeded +
+  8 live green; shots/pf-after-*.png, explorer-focus.png):
+  - Research lookup chips are now RECENTLY RESEARCHED symbols (#recent-symbols, labeled
+    "Recent:", localStorage strikebench.recent, max 6, current highlighted) — recorded after
+    a symbol loads and re-rendered immediately (renderRecents(); first visit shows itself).
+    No recents = no chips. The frozen universe slice is gone.
+  - Explorer tiles now open the symbol panel in ONE FIXED slot (#explorer-focus, between the
+    sector head and the grid) with a 30px ✕ close (.focus-wrap/.focus-close, xp-in animation,
+    reduced-motion guarded); source tile gets .open highlight; sector switch clears the
+    focus. Mid-grid .tile-expand accordion (shoved tiles around) is gone.
+  - PORTFOLIO PASS: Book greeks = slim one-line strip (.card-slim, chips + PARTIAL inline);
+    trades are ONE #trades-card — cardHeader('Practice trades', .seg Active|Closed segmented
+    control [ids #tab-active/#tab-closed kept]) + explain at top + #pf-filters INSIDE the
+    card + table + btn-sm pagination + empty state, all in the card. The second .tabs row,
+    the floating filter strip, and the orphaned pager are gone. Empty-state CTA now goes to
+    #/trade/discover (Place is gated when idea-less). .seg CSS = 30px pill toggle (audit-safe).
+  - GOTCHA (cost one lost edit batch): views.js mixes LITERAL unicode (…, ←, →, Δ in most
+    strings) with \\uXXXX ESCAPES (greek chips) — grep the exact bytes before writing python
+    old-strings, and put each independent replace in its own assert so one mismatch can't
+    discard sibling edits.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

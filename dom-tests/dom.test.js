@@ -115,6 +115,9 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   assert.match(await page.textContent('#events-card'), /Expiry/);
   // From a symbol page, the sector explorer is one visible click away
   assert.ok(await page.locator('#back-to-sectors').isVisible(), 'All sectors link on symbol pages');
+  // The lookup shortcuts are YOUR recent symbols, not four frozen tickers
+  assert.match(await page.textContent('#recent-symbols'), /Recent:/);
+  assert.ok(await page.locator('#recent-symbols .sym-chip:has-text("AAPL")').count(), 'AAPL just researched');
   // News NEVER silently vanishes — card renders with items or an honest empty state
   await page.waitForSelector('#news-card');
   assert.match(await page.textContent('#news-card'), /News & filings/);
@@ -629,15 +632,16 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   assert.ok(tiles >= 10, 'all TECH symbols render as tiles, got ' + tiles);
   assert.ok(await page.locator('#sector-grid .tile-nodata button:has-text("Research")').count() >= 1,
     'quote-less tiles still offer Research');
-  // Tap a tile -> it expands IN PLACE: quote row, the standard range-pill chart, headlines
+  // Tap a tile -> the symbol panel opens in ONE predictable slot above the grid
   await page.locator('#sector-grid .sector-tile:has-text("AAPL")').first().click();
-  await page.waitForSelector('.tile-expand .symbol-panel .range-pills .pill');
-  await page.waitForSelector('.tile-expand .symbol-panel .chart-wrap svg.chart', { timeout: 15000 });
-  assert.ok(await page.locator('.tile-expand .symbol-panel .sp-news .status-item').count() >= 1,
-    'headlines inside the expanded tile');
-  // Accordion: tapping again collapses
-  await page.locator('#sector-grid .sector-tile:has-text("AAPL")').first().click();
-  assert.equal(await page.locator('.tile-expand').count(), 0, 'second tap collapses');
+  await page.waitForSelector('#explorer-focus .symbol-panel .range-pills .pill');
+  await page.waitForSelector('#explorer-focus .symbol-panel .chart-wrap svg.chart', { timeout: 15000 });
+  assert.ok(await page.locator('#explorer-focus .symbol-panel .sp-news .status-item').count() >= 1,
+    'headlines inside the focus panel');
+  assert.ok(await page.locator('#sector-grid .sector-tile.open').count() === 1, 'source tile highlighted');
+  // Close: the panel's own X, or tapping the tile again
+  await page.click('#explorer-focus .focus-close');
+  assert.equal(await page.locator('#explorer-focus .symbol-panel').count(), 0, 'X closes the panel');
   assert.ok(await page.locator('#set-universe-btn').count(), 'one-click make-this-my-universe');
   await page.click('#sector-explorer .btn-row button:has-text("Scout this sector")');
   await page.waitForSelector('#auto-universe');

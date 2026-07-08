@@ -314,16 +314,25 @@
     input.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
 
     root.appendChild(el('h1', {}, 'Research'));
+    var recentBox = el('span', { class: 'sym-chips', id: 'recent-symbols' });
     root.appendChild(el('div', { class: 'card' },
       el('div', { class: 'btn-row', style: 'margin-top:0' },
         input, el('button', { class: 'btn', id: 'symbol-go', onclick: go }, 'Look up'),
         symbol ? el('a', { href: '#/research', class: 'muted', id: 'back-to-sectors',
           style: 'font-size:12.5px; white-space:nowrap' }, '\u2190 All sectors') : null,
         el('span', { class: 'spacer' }),
-        el('span', { class: 'sym-chips' },
-          ((App.state.universe && App.state.universe.active.symbols) || CORE_SYMBOLS).slice(0, 6).map(function (s) {
-            return el('button', { class: 'sym-chip', onclick: function () { App.navigate('#/research/' + s); } }, s);
-          })))));
+        recentBox)));
+    function renderRecents() {
+      recentBox.innerHTML = '';
+      var list = recentSymbols();
+      if (!list.length) return;
+      recentBox.appendChild(el('span', { class: 'muted', style: 'font-size:12px' }, 'Recent:'));
+      list.forEach(function (s) {
+        recentBox.appendChild(el('button', { class: 'sym-chip' + (s === symbol ? ' active' : ''),
+          onclick: function () { App.navigate('#/research/' + s); } }, s));
+      });
+    }
+    renderRecents();
 
     if (!symbol) {
       await sectorExplorer(root, 'research');
@@ -336,6 +345,8 @@
       root.appendChild(alertBox('danger', 'No data for ' + symbol + '. Check the ticker.'));
       return;
     }
+    rememberRecent(symbol);
+    renderRecents();
     var q = r.quote;
 
     var hero = el('div', { class: 'card' },
@@ -801,14 +812,17 @@
     });
     var grid = el('div', { class: 'tile-row', id: 'sector-grid' });
     var head = el('div', { class: 'btn-row', style: 'margin-top:0' });
+    var focus = el('div', { id: 'explorer-focus' });
     var card = el('div', { class: 'card', id: 'sector-explorer' },
-      UI.cardHeader('Explore by sector'), rail, head, grid,
+      UI.cardHeader('Explore by sector'), rail, head, focus, grid,
       explain('Live quotes per sector. Tap a symbol for its chart and headlines right here, or point the scout at a whole sector. '
         + (u.note ? u.note : '')));
     root.appendChild(card);
 
     async function load() {
       head.innerHTML = '';
+      focus.innerHTML = '';
+      focus.removeAttribute('data-symbol');
       grid.innerHTML = '';
       grid.appendChild(UI.spinner('Loading sector quotes…'));
       var sector = u.sectors.find(function (s) { return s.key === selectedKey; }) || u.sectors[0];
@@ -842,17 +856,24 @@
         // clickable. Symbols without a live quote say so honestly but still link onward.
         var bySym = {};
         (data.quotes || []).forEach(function (q) { bySym[q.symbol] = q; });
-        // Tap a tile -> it expands IN PLACE to the full symbol panel (chart with range
-        // pills, coming-up events, headlines) — one expanded at a time, accordion-style.
-        var openExpand = null;
+        // Tap a tile -> the full symbol panel (range-pill chart, events, headlines)
+        // opens in ONE predictable place: the focus slot above the grid. Mid-grid
+        // expansion shoved tiles around and felt random.
         function toggleExpand(symq, tile) {
-          var was = openExpand && openExpand.getAttribute('data-symbol') === symq;
-          if (openExpand) { openExpand.remove(); openExpand = null; }
+          var was = focus.getAttribute('data-symbol') === symq;
+          focus.innerHTML = '';
+          focus.removeAttribute('data-symbol');
           grid.querySelectorAll('.sector-tile.open').forEach(function (t) { t.classList.remove('open'); });
           if (was) return;
-          openExpand = el('div', { class: 'tile-expand', 'data-symbol': symq }, symbolPanel(symq));
+          focus.setAttribute('data-symbol', symq);
           tile.classList.add('open');
-          tile.after(openExpand);
+          focus.appendChild(el('div', { class: 'focus-wrap' },
+            el('button', {
+              class: 'focus-close', type: 'button', 'aria-label': 'Close ' + symq + ' details',
+              onclick: function () { toggleExpand(symq, tile); }
+            }, '\u00D7'),
+            symbolPanel(symq)));
+          focus.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
         sector.symbols.forEach(function (s) {
           var q = bySym[s];
@@ -889,6 +910,19 @@
       }
     }
     await load();
+  }
+
+  /** Recently researched symbols — the lookup shortcuts that actually mean something. */
+  function recentSymbols() {
+    try { return JSON.parse(window.localStorage.getItem('strikebench.recent') || '[]'); }
+    catch (e) { return []; }
+  }
+  function rememberRecent(sym) {
+    try {
+      var list = recentSymbols().filter(function (s2) { return s2 !== sym; });
+      list.unshift(sym);
+      window.localStorage.setItem('strikebench.recent', JSON.stringify(list.slice(0, 6)));
+    } catch (e) { /* cosmetic */ }
   }
 
   function daysUntil(iso) {
@@ -2268,13 +2302,14 @@
       try {
         var pg = await API.get('/api/portfolio/greeks');
         if (pg.positions && pg.positions.length) {
-          root.appendChild(el('div', { class: 'card', id: 'portfolio-greeks' },
-            UI.cardHeader('Book greeks', pg.complete ? null : el('span', { class: 'badge badge-caution' }, 'PARTIAL')),
-            el('div', { class: 'chip-row' },
+          root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-greeks' },
+            el('div', { class: 'chip-row', style: 'align-items:center' },
+              el('b', { style: 'margin-right:4px' }, 'Book greeks'),
               chip('Net \u0394', fmtNum(pg.deltaShares, 0) + ' sh'),
               chip('\u0393', fmtNum(pg.gammaShares, 2) + ' sh/$'),
               chip('\u0398/day', pnlSpan(pg.thetaPerDay * 100)),
-              chip('Vega/pt', pnlSpan(pg.vegaPerPoint * 100)))));
+              chip('Vega/pt', pnlSpan(pg.vegaPerPoint * 100)),
+              pg.complete ? null : el('span', { class: 'badge badge-caution' }, 'PARTIAL'))));
         }
       } catch (e) { /* advisory only */ }
     }
@@ -2335,11 +2370,14 @@
           el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { App.render(); } }, 'Retry'))));
     }
 
-    root.appendChild(el('div', { class: 'tabs' },
-      el('button', { class: tab === 'active' ? 'active' : '', id: 'tab-active', onclick: function () { App.navigate('#/portfolio/active'); } }, 'Active'),
-      el('button', { class: tab === 'closed' ? 'active' : '', id: 'tab-closed', onclick: function () { App.navigate('#/portfolio/closed'); } }, 'Closed')));
-
-    // Filter the trade list by the values that matter (symbol, goal)
+    // ONE trades card: segmented Active|Closed in the header, filters inside, then the
+    // table (or an honest empty state) and pagination — no second tab row, no floating
+    // filter strip, no orphaned pager.
+    var seg = el('div', { class: 'seg' },
+      el('button', { class: tab === 'active' ? 'active' : '', id: 'tab-active', type: 'button',
+        onclick: function () { App.navigate('#/portfolio/active'); } }, 'Active'),
+      el('button', { class: tab === 'closed' ? 'active' : '', id: 'tab-closed', type: 'button',
+        onclick: function () { App.navigate('#/portfolio/closed'); } }, 'Closed'));
     var fSym = el('input', { type: 'text', id: 'pf-symbol', placeholder: 'symbol', style: 'max-width:110px' });
     var fIntent = el('select', { id: 'pf-intent', style: 'max-width:170px' },
       [el('option', { value: '' }, 'any goal')].concat((Learn.INTENTS || []).map(function (i) {
@@ -2355,8 +2393,12 @@
     fIntent.value = pf.intent || '';
     fSym.addEventListener('change', applyFilters);
     fIntent.addEventListener('change', applyFilters);
-    root.appendChild(el('div', { class: 'btn-row', id: 'pf-filters' },
-      el('span', { class: 'muted' }, 'Filter:'), fSym, fIntent));
+    var tradesCard = el('div', { class: 'card', id: 'trades-card' },
+      UI.cardHeader('Practice trades', seg),
+      explain('Click any row for the payoff chart, live marks, and close/settle actions.'),
+      el('div', { class: 'btn-row', id: 'pf-filters', style: 'margin-top:0' },
+        el('span', { class: 'muted' }, 'Filter:'), fSym, fIntent));
+    root.appendChild(tradesCard);
 
     var statusParam = tab === 'active' ? 'ACTIVE' : 'CLOSED';
     var fq = '';
@@ -2373,9 +2415,9 @@
       data.trades = data.trades.concat(extra[0].trades, extra[1].trades);
     }
     if (!data.trades.length) {
-      root.appendChild(el('div', { class: 'card' }, tab === 'active'
-        ? UI.emptyState('No open practice trades', 'Walk the guided ticket to build one with capped, pre-known risk.', 'Open the trade ticket', function () { App.navigate('#/trade/place'); })
-        : UI.emptyState('Nothing closed yet', 'Closed, settled, and voided trades land here.')));
+      tradesCard.appendChild(tab === 'active'
+        ? UI.emptyState('No open practice trades', 'Find a risk-screened idea and practice it — the worst case is known before you commit.', 'Find an idea', function () { App.navigate('#/trade/discover'); })
+        : UI.emptyState('Nothing closed yet', 'Closed, settled, and voided trades land here.'));
       return;
     }
     var rows = data.trades.map(function (t) {
@@ -2390,13 +2432,11 @@
         el('td', {}, tab === 'active' ? el('span', { class: 'muted' }, (t.createdAt || '').slice(0, 10)) : pnlSpan(t.realizedPnlCents)),
         el('td', {}, el('span', { class: 'badge ' + (t.status === 'ACTIVE' ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, t.status)));
     });
-    root.appendChild(el('div', { class: 'card' },
-      table(['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Max loss', tab === 'active' ? 'Opened' : 'Realized P/L', 'Status'], rows),
-      explain('Click any row for the payoff chart, live marks, and close/settle actions.')));
+    tradesCard.appendChild(table(['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Max loss', tab === 'active' ? 'Opened' : 'Realized P/L', 'Status'], rows));
     if (data.total > 15) {
-      root.appendChild(el('div', { class: 'btn-row' },
-        page > 0 ? el('button', { class: 'btn btn-secondary', onclick: function () { App.navigate('#/portfolio/' + tab + '/' + (page - 1)); } }, '← Newer') : null,
-        (page + 1) * 15 < data.total ? el('button', { class: 'btn btn-secondary', onclick: function () { App.navigate('#/portfolio/' + tab + '/' + (page + 1)); } }, 'Older →') : null));
+      tradesCard.appendChild(el('div', { class: 'btn-row' },
+        page > 0 ? el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { App.navigate('#/portfolio/' + tab + '/' + (page - 1)); } }, '← Newer') : null,
+        (page + 1) * 15 < data.total ? el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { App.navigate('#/portfolio/' + tab + '/' + (page + 1)); } }, 'Older →') : null));
     }
   }
 
