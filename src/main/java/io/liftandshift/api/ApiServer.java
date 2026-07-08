@@ -84,7 +84,6 @@ public final class ApiServer {
     private final io.liftandshift.market.UniverseService universe;
     private Javalin app;
     private final String startedAt = java.time.Instant.now().toString();
-    private final AssistInstaller assist;
 
     public ApiServer(AppConfig cfg, Clock clock, MarketDataService market, AuditLog audit,
                      AccountService accounts, TradeService trades, RecommendationEngine engine,
@@ -102,7 +101,6 @@ public final class ApiServer {
         this.auto = auto;
         this.broker = broker;
         this.backtester = backtester;
-        this.assist = new AssistInstaller(java.nio.file.Path.of(cfg.modelsDir()));
     }
 
     /** Wires the whole app from config: DB + migrations + provider chain + services. */
@@ -178,14 +176,6 @@ public final class ApiServer {
                     sf.headers = Map.of("Cache-Control", "no-store");
                 });
             }
-            // On-device AI assets live on DISK (multi-MB, user-installed) — never in the jar
-            // and never in a release artifact. Served by an explicit route (NOT staticFiles:
-            // Jetty caches not-found lookups, which would 404 freshly-installed files until a
-            // restart). Written only by the user-initiated, checksum-verified installer.
-            c.routes.get("/models/<path>", this::serveModelAsset);
-
-            c.routes.get("/api/assist/status", ctx -> ctx.json(assist.status()));
-            c.routes.post("/api/assist/install", ctx -> ctx.status(202).json(assist.install()));
             c.routes.get("/api/status", this::status);
             c.routes.get("/api/config", this::config);
             c.routes.get("/api/health", this::health);
@@ -814,27 +804,6 @@ public final class ApiServer {
             out.add(Map.of("price", p.price().toPlainString(), "profitCents", p.profitCents()));
         }
         return out;
-    }
-
-    /** Disk-backed, immutable-cached serving of the user-installed AI assets. */
-    private void serveModelAsset(Context ctx) throws java.io.IOException {
-        java.nio.file.Path root = java.nio.file.Path.of(cfg.modelsDir()).toAbsolutePath().normalize();
-        java.nio.file.Path file = root.resolve(ctx.pathParam("path")).normalize();
-        if (!file.startsWith(root) || !java.nio.file.Files.isRegularFile(file)) {
-            ctx.status(404).json(Map.of("error", "not_found"));
-            return;
-        }
-        String name = file.getFileName().toString();
-        String type = name.endsWith(".js") || name.endsWith(".mjs") ? "text/javascript"
-                : name.endsWith(".json") ? "application/json"
-                : name.endsWith(".wasm") ? "application/wasm"
-                : "application/octet-stream";
-        ctx.contentType(type);
-        // No manual Content-Length: Javalin may gzip text responses, and a mismatched length
-        // hard-kills module imports (ERR_CONTENT_LENGTH_MISMATCH).
-        // Immutable blobs (checksum-pinned): unlike the no-store app assets, cache these hard.
-        ctx.header("Cache-Control", "public, max-age=604800, immutable");
-        ctx.result(java.nio.file.Files.newInputStream(file));
     }
 
     private void tradeRefresh(Context ctx) {

@@ -390,6 +390,7 @@
         return chip(b.symbol, fmtNum(b.last));
       })) : null);
     root.appendChild(hero);
+    root.appendChild(comingUp(symbol, false)); // dated events: expirations, earnings, filings
 
     if (!r.optionable) {
       root.appendChild(alertBox('warn', symbol + ' has no listed options (mutual funds and some securities cannot be option-traded). You can still study its price history below.'));
@@ -565,22 +566,92 @@
       loadChain(r.expirations[0]);
     }
 
+    // News & filings ALWAYS render — an optional card that silently vanishes reads as
+    // "where has news gone?", not as an empty feed.
+    var newsCard = el('div', { class: 'card', id: 'news-card' }, UI.cardHeader('News & filings'));
+    root.appendChild(newsCard);
+    var newsItems = [];
     try {
-      var news = await API.get('/api/research/' + symbol + '/news');
-      if (news.items && news.items.length) {
-        var shown = news.items.slice(0, 8);
-        var newsCard = el('div', { class: 'card', id: 'news-card' },
-          UI.cardHeader('News & filings'),
-          shown.map(function (n) {
-            return el('div', { class: 'status-item' },
-              el('a', { href: n.url, target: '_blank', rel: 'noopener' }, n.headline),
-              el('span', { class: 'spacer' }),
-              el('span', { class: 'muted' }, n.source));
-          }));
-        root.appendChild(newsCard);
-        if (window.Assist) Assist.enhanceNews(newsCard, shown); // display-only; absent models = no-op
+      newsItems = ((await API.get('/api/research/' + symbol + '/news')).items || []);
+    } catch (e) { /* empty state below */ }
+    if (!newsItems.length) {
+      newsCard.appendChild(UI.emptyState('No headlines right now',
+        'No news source answered for ' + symbol + '. See the Data screen for per-source health.',
+        'Check data status', function () { App.navigate('#/status'); }));
+    } else {
+      var isFiling = function (n) { return /edgar|sec/i.test(n.source || '') || /filing$/i.test(n.headline || ''); };
+      var headlines = newsItems.filter(function (n) { return !isFiling(n); }).slice(0, 8);
+      var filings = newsItems.filter(isFiling).slice(0, 5);
+      var row = function (n) {
+        var when = n.publishedEpochMs ? new Date(n.publishedEpochMs).toISOString().slice(0, 10) : '';
+        return el('div', { class: 'status-item' },
+          el('a', { href: n.url, target: '_blank', rel: 'noopener' }, n.headline),
+          el('span', { class: 'spacer' }),
+          when ? el('span', { class: 'muted' }, when + ' \u00B7 ') : null,
+          el('span', { class: 'muted' }, n.source));
+      };
+      headlines.forEach(function (n) { newsCard.appendChild(row(n)); });
+      if (filings.length) {
+        newsCard.appendChild(el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Corporate filings (SEC)'));
+        if (Learn.currentLevel() === 'beginner') {
+          newsCard.appendChild(explain('Official documents companies must file: 10-K (annual report), 10-Q (quarterly), 8-K (something important just happened). Big moves often start here.'));
+        }
+        filings.forEach(function (n) { newsCard.appendChild(row(n)); });
       }
-    } catch (e) { /* optional */ }
+    }
+  }
+
+  var EARNINGS_RE = /earnings|quarterly results|guidance|earnings call/i;
+
+  /**
+   * "Coming up" — the dated events that can move a symbol: option expirations, earnings
+   * signals from headlines, and the latest SEC filing. One helper, two shapes: a full card
+   * on Research, a slim strip above single-symbol trade ideas. Fills itself; never blank —
+   * the card form shows an honest note when nothing dated is known.
+   */
+  function comingUp(symbol, asStrip) {
+    var body = el('div', { class: 'chip-row' });
+    var host = asStrip
+      ? el('div', { class: 'events-strip', id: 'events-strip' }, body)
+      : el('div', { class: 'card', id: 'events-card' }, UI.cardHeader('Coming up for ' + symbol), body,
+          Learn.currentLevel() === 'beginner'
+            ? explain('Dates that can move the stock and its options: expiration days (contracts die at 4pm ET), earnings mentions from headlines, and official SEC filings.')
+            : null);
+    (async function fill() {
+      var had = false;
+      try {
+        var ex = (await API.get('/api/research/' + symbol + '/expirations')).expirations || [];
+        var now = Date.now();
+        ex.slice(0, 3).forEach(function (d) {
+          var dte = Math.max(0, Math.round((new Date(d + 'T16:00:00') - now) / 86400000));
+          body.appendChild(chip('Expiry', d + ' \u00B7 ' + dte + 'd'));
+          had = true;
+        });
+      } catch (e) { /* chips below may still land */ }
+      try {
+        var items = (await API.get('/api/research/' + symbol + '/news')).items || [];
+        var earn = items.find(function (n) { return EARNINGS_RE.test(n.headline || ''); });
+        if (earn) {
+          body.appendChild(el('a', { href: earn.url, target: '_blank', rel: 'noopener', class: 'chip', title: earn.headline },
+            el('span', { class: 'chip-label' }, 'Earnings'), el('b', {}, 'in the news')));
+          had = true;
+        }
+        var filings = items.filter(function (n) { return /edgar|sec/i.test(n.source || '') || /filing$/i.test(n.headline || ''); })
+          .sort(function (a, b) { return (b.publishedEpochMs || 0) - (a.publishedEpochMs || 0); });
+        if (filings.length) {
+          var f = filings[0];
+          var when = f.publishedEpochMs ? new Date(f.publishedEpochMs).toISOString().slice(0, 10) : '';
+          body.appendChild(el('a', { href: f.url, target: '_blank', rel: 'noopener', class: 'chip', title: f.headline },
+            el('span', { class: 'chip-label' }, 'Last filing'), el('b', {}, f.headline.replace(/ filing$/i, '') + (when ? ' \u00B7 ' + when : ''))));
+          had = true;
+        }
+      } catch (e) { /* fine */ }
+      if (!had) {
+        if (asStrip) { host.remove(); return; } // decoration in Trade — vanish quietly
+        body.appendChild(el('span', { class: 'muted' }, 'No dated events known right now \u2014 demo mode carries limited news.'));
+      }
+    })();
+    return host;
   }
 
   /**
@@ -921,10 +992,11 @@
   }
 
   async function discoverStage(root, params) {
-    // ONE form, no second nav row: the goal chips ask WHY you are here, the symbol box asks
-    // WHERE to look — and leaving it blank means "scan for me". The old Scout / My-own-idea
-    // tab split stacked a second row of tabs under the stage pills and hid the ticker box
-    // from the share-based goals ("Buy at a discount" could not even name a stock).
+    // ONE form, no second nav row. Two questions, in the user's own order: WHAT are you
+    // trying to do (goal chips), and WHERE should ideas come from — an EXPLICIT choice
+    // between "Scan the market for me" (the scout) and "I have a stock in mind", exactly
+    // the two experiences the old tabs held, minus the second navigation level. Every
+    // goal keeps the ticker box, so "Buy at a discount" can name a stock.
     var saved = App.state.discoverForm;
     if (!saved) {
       // one-time migration from the pre-merge two-tab state
@@ -932,6 +1004,7 @@
       var s0 = App.state.scoutForm || {};
       saved = App.state.discoverForm = {
         goal: m0.intent || s0.goal || 'DIRECTIONAL',
+        source: m0.symbol ? 'single' : 'scan',
         symbol: m0.symbol || '', target: m0.target || '',
         universe: s0.universe || '', scanTarget: s0.target || '',
         maxRisk: m0.maxRisk || s0.maxRisk || '',
@@ -940,14 +1013,13 @@
     }
     var prefill = App.state.ideasPrefill || {};
     App.state.ideasPrefill = null;
-    if (prefill.symbol) saved.symbol = prefill.symbol;
+    if (prefill.symbol) { saved.symbol = prefill.symbol; saved.source = 'single'; }
     if (prefill.intent) saved.goal = prefill.intent;
-    // Route seeds keep every old link honest: /manual guarantees a symbol, /scout a scan
-    if (params && params[0] === 'manual' && !saved.symbol) {
-      saved.symbol = App.state.lastRecommendSymbol || 'AAPL';
-    }
-    if (params && params[0] === 'scout') saved.symbol = '';
+    // Route seeds keep every old link honest: /manual = one-stock mode, /scout = scan mode
+    if (params && params[0] === 'manual') saved.source = 'single';
+    if (params && params[0] === 'scout') saved.source = 'scan';
     var goal = saved.goal || 'DIRECTIONAL';
+    var source = saved.source || 'scan';
     function remember(patch) {
       saved = App.state.discoverForm = Object.assign({}, App.state.discoverForm, patch || {});
     }
@@ -956,8 +1028,8 @@
     var level = Learn.currentLevel();
     var beginner = level === 'beginner';
     var sym = el('input', { type: 'text', id: 'rec-symbol', list: 'universe-symbols',
-      placeholder: beginner ? 'AAPL — or leave blank to scan for me' : 'blank = scan',
-      value: saved.symbol || '' });
+      placeholder: 'AAPL',
+      value: saved.symbol || App.state.lastRecommendSymbol || 'AAPL' });
     var thesis = el('select', { id: 'rec-thesis' },
       ['bullish', 'bearish', 'neutral', 'volatile'].map(function (t) {
         return el('option', { value: t, selected: t === saved.thesis ? '' : null }, t);
@@ -973,12 +1045,16 @@
     target.addEventListener('change', function () { remember({ target: target.value }); });
     // One-tap targets anchored to the live price: +5/+10/+20% for exits, -5/-10/-15% for buys/floors
     var targetPresets = el('div', { class: 'chip-row', id: 'target-presets', style: 'margin-top:4px' });
+    var presetSeq = 0; // sequence token: a slow response for the PREVIOUS symbol must never win
     async function renderTargetPresets() {
+      var seq = ++presetSeq;
       targetPresets.innerHTML = '';
       if (!sym.value.trim()) return;
       var offsets = goal === 'EXIT' ? [5, 10, 20] : [-5, -10, -15];
       try {
         var q = await API.get('/api/quotes?symbols=' + sym.value.trim().toUpperCase());
+        if (seq !== presetSeq) return; // superseded by a newer symbol/goal
+        targetPresets.innerHTML = '';
         if (!q.quotes.length) return;
         var last = parseFloat(q.quotes[0].last);
         offsets.forEach(function (o) {
@@ -1053,8 +1129,32 @@
            expertChooser ? null : el('span', { class: 'muted' }, i.blurb));
       }));
 
+    var SOURCES = [
+      { key: 'scan', label: beginner ? 'Scan the market for me' : 'Scan for me', icon: 'magnifier',
+        blurb: 'The scout reads momentum, news and volatility across your universe and brings back ideas with evidence.' },
+      { key: 'single', label: beginner ? 'I have a stock in mind' : 'One stock', icon: 'tag',
+        blurb: 'Name the ticker and every idea is built for it.' }
+    ];
+    var sourceRow = el('div', {
+      class: 'choice-row' + (expertChooser ? ' intent-compact' : ''), id: 'idea-source'
+    }, SOURCES.map(function (o) {
+        return el('button', {
+          class: 'choice' + (source === o.key ? ' selected' : ''), 'data-source': o.key,
+          title: o.blurb,
+          onclick: function () {
+            source = o.key;
+            remember({ source: source });
+            sourceRow.querySelectorAll('.choice').forEach(function (b) { b.classList.remove('selected'); });
+            this.classList.add('selected');
+            sync();
+          }
+        }, expertChooser
+             ? el('b', {}, o.label)
+             : el('span', { class: 'choice-head' }, icon(o.icon, 17), el('b', {}, o.label)),
+           expertChooser ? null : el('span', { class: 'muted' }, o.blurb));
+      }));
     var symField = el('div', { class: 'field' },
-      el('label', {}, beginner ? 'Which stock? (blank = scan for me)' : 'Symbol (blank = scan)'), sym);
+      el('label', {}, beginner ? 'Which stock?' : 'Symbol'), sym);
     var thesisField = el('div', { class: 'field' }, el('label', {}, 'Your view'), thesis);
     var targetField = el('div', { class: 'field', style: 'display:none' },
       el('label', { id: 'rec-target-label' }, 'Target price ($/sh)'), target, targetPresets);
@@ -1074,18 +1174,19 @@
       el('label', { class: 'inline-check' }, hM, ' Monthly'));
     var goBtn; // created below; sync() relabels it
 
-    function scanMode() { return goal === 'ALL' || !sym.value.trim(); }
+    // scan = the scout pipeline; "Everything" on one named stock also scans (universe = [it])
+    function scanMode() { return source === 'scan' || goal === 'ALL'; }
 
     function sync() {
       var scan = scanMode();
-      var symVal = sym.value.trim();
+      symField.style.display = source === 'single' ? '' : 'none';
       thesisField.style.display = !scan && goal === 'DIRECTIONAL' ? '' : 'none';
       targetField.style.display = !scan && (goal === 'EXIT' || goal === 'ACQUIRE' || goal === 'HEDGE') ? '' : 'none';
       sharesField.style.display = !scan && goal === 'ACQUIRE' ? '' : 'none';
       horizonField.style.display = scan ? 'none' : '';
       zeroField.style.display = scan || beginner ? 'none' : '';
-      sectorField.style.display = scan && !symVal ? '' : 'none';
-      oneOffField.style.display = scan && !symVal ? '' : 'none';
+      sectorField.style.display = scan && source === 'scan' ? '' : 'none';
+      oneOffField.style.display = scan && source === 'scan' ? '' : 'none';
       scanTargetField.style.display = scan ? '' : 'none';
       expiryRow.style.display = scan ? '' : 'none';
       var lbl = document.getElementById('rec-target-label');
@@ -1099,11 +1200,15 @@
       refreshHoldingsHint();
     }
 
+    var holdingsSeq = 0;
     async function refreshHoldingsHint() {
+      var seq = ++holdingsSeq;
       holdingsHint.innerHTML = '';
       if (goal === 'DIRECTIONAL' || goal === 'ALL') return;
       try {
         var all = (await API.get('/api/positions')).positions || [];
+        if (seq !== holdingsSeq) return; // superseded
+        holdingsHint.innerHTML = '';
         // EXIT/HEDGE start from what you OWN: your holdings as one-tap chips
         if ((goal === 'EXIT' || goal === 'HEDGE') && all.length) {
           holdingsHint.appendChild(el('div', { class: 'chip-row', id: 'holdings-chips' },
@@ -1116,17 +1221,22 @@
                 class: 'sym-chip' + (p.symbol === sym.value.trim().toUpperCase() ? ' active' : ''),
                 onclick: function () {
                   sym.value = p.symbol;
-                  remember({ symbol: p.symbol });
+                  source = 'single';
+                  App.state.lastRecommendSymbol = p.symbol;
+                  remember({ symbol: p.symbol, source: 'single' });
+                  sourceRow.querySelectorAll('.choice').forEach(function (b) {
+                    b.classList.toggle('selected', b.getAttribute('data-source') === 'single');
+                  });
                   sync();
                 }
               }, p.symbol + ' \u00B7 ' + p.shares + ' sh', g);
             })));
         }
-        if (!sym.value.trim()) {
+        if (scanMode()) {
           if (goal === 'EXIT' || goal === 'HEDGE') {
             holdingsHint.appendChild(explain(all.length
-              ? 'No symbol picked — the scan covers every holding above.'
-              : 'You hold no shares yet — buy shares first, or type a symbol to see buy-write style ideas.'));
+              ? 'The scan covers every holding above — tap one to focus on it.'
+              : 'You hold no shares yet — buy shares first, or name a stock to see buy-write style ideas.'));
           }
           return;
         }
@@ -1146,36 +1256,13 @@
       } catch (e) { /* hint only */ }
     }
     sym.addEventListener('input', function () {
-      remember({ symbol: sym.value.trim().toUpperCase() });
+      var v = sym.value.trim().toUpperCase();
+      remember({ symbol: v });
+      // The working symbol follows you: Builder, Backtest and the ticket all seed from it.
+      if (v) App.state.lastRecommendSymbol = v;
       sync();
     });
 
-    var assistAnchor = el('div', { id: 'assist-anchor' });
-    root.appendChild(assistAnchor);
-    (async function intake() {
-      if (!window.Assist) return;
-      var card = await Assist.intakeCard(function (p) {
-        if (p.symbol) { sym.value = p.symbol; remember({ symbol: p.symbol }); }
-        if (p.goal && !p.goalUncertain && p.goal !== goal) {
-          var btn = intentRow.querySelector('.choice[data-intent="' + p.goal + '"]');
-          if (btn) btn.click();
-        }
-        if (p.thesis) { thesis.value = p.thesis; remember({ thesis: p.thesis }); }
-        if (p.horizon && horizon.querySelector('option[value="' + p.horizon + '"]')) horizon.value = p.horizon;
-        if (p.maxLoss) {
-          var ml = document.getElementById('rec-f-maxloss');
-          if (!ml) {
-            var head = document.querySelector('#rec-filters .xp-head');
-            if (head) { head.click(); ml = document.getElementById('rec-f-maxloss'); }
-          }
-          if (ml) { ml.value = String(p.maxLoss); ml.dispatchEvent(new Event('change')); }
-        }
-        sync();
-        var go = document.getElementById('rec-go');
-        if (go) { go.focus(); go.scrollIntoView({ block: 'center' }); }
-      });
-      if (card && assistAnchor.isConnected) assistAnchor.replaceWith(card);
-    })();
 
     goBtn = el('button', {
       class: 'btn', id: 'rec-go', onclick: async function () {
@@ -1194,8 +1281,10 @@
               goal: 'BROWSE', templateKey: null, step: 2, legIdx: 0, legs: [], excluded: {} };
           }
         }, 'All strategies \u2192')),
-      explain('Pick a goal, then either name a stock or leave the box blank and the scout scans for you — momentum, news sentiment, and IV vs realized volatility, with the evidence shown. Only strategies whose worst case is known and capped pass the screens, and refusals are always explained.'),
+      explain('Two questions: what are you trying to do, and where should ideas come from. "Scan the market for me" is the scout — momentum, news sentiment, and IV vs realized volatility across your universe, evidence shown. Only strategies whose worst case is known and capped pass the screens, and refusals are always explained.'),
       intentRow,
+      el('div', { class: 'field-label', style: 'margin-top:12px' }, 'Where should ideas come from?'),
+      sourceRow,
       el('div', { class: 'form-grid', style: 'margin-top:10px' },
         symField,
         thesisField,
@@ -1233,7 +1322,7 @@
         var flMax = filters.maxLossCents();
         if (flMax) body.maxLossCents = flMax;
         var symVal = sym.value.trim().toUpperCase();
-        if (symVal) body.universe = [symVal]; // "Everything" for one named stock
+        if (source === 'single' && symVal) body.universe = [symVal]; // "Everything" for one named stock
         else if (universe.value.trim()) body.universe = universe.value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
         if (scanTarget.value) body.targetProfitCents = Math.round(parseFloat(scanTarget.value) * 100);
         if (maxRisk.value) body.maxRiskPctOfAccount = parseFloat(maxRisk.value) / 100;
@@ -1305,6 +1394,8 @@
     function renderResults(r, intentKey, body, extras) {
       extras = extras || {};
       results.innerHTML = '';
+      // What's coming up for this symbol — the dates that can invalidate an idea
+      if (body && body.symbol) results.appendChild(comingUp(body.symbol.toUpperCase(), true));
       // Intent-native lead view first: the ladder IS the product for these goals
       if (extras.ladder && extras.ladder.rungs && extras.ladder.rungs.length) {
         results.appendChild(ladderView(extras.ladder, intentKey, {
@@ -1356,11 +1447,14 @@
    * carries the working idea between stages so nothing is lost crossing them.
    * #/trade/tr_* stays the trade DETAIL page (dispatcher below).
    */
+  // Plain words only — "Shape" and "Verify" read as jargon to anyone who didn't build
+  // this app. The keys stay stable (they live in URLs and tests); the LABELS say what
+  // each section actually is.
   var WB_STAGES = [
-    { key: 'discover', label: 'Discover', hint: 'find or describe an idea' },
-    { key: 'shape', label: 'Shape', hint: 'build and analyze the legs' },
-    { key: 'verify', label: 'Verify', hint: 'backtest the rule honestly' },
-    { key: 'place', label: 'Place', hint: 'review and paper-trade it' }
+    { key: 'discover', label: 'Ideas', hint: 'find or describe a trade idea' },
+    { key: 'shape', label: 'Builder', hint: 'build multi-leg strategies with live risk' },
+    { key: 'verify', label: 'Backtest', hint: 'how the strategy would have gone, honestly' },
+    { key: 'place', label: 'Place', hint: 'strikes, review, paper confirm' }
   ];
 
   function ideaBar(stage) {
@@ -1381,7 +1475,7 @@
         onclick: function () { App.state.ticket = null; App.state.builderForm = null; App.render(); }
       }, 'Clear'));
     } else {
-      bar.appendChild(el('span', { class: 'muted' }, 'No working idea yet \u2014 find one in Discover or build one in Shape.'));
+      bar.appendChild(el('span', { class: 'muted' }, 'No working idea yet \u2014 pick one from Ideas or make one in the Builder.'));
     }
     return bar;
   }
@@ -1399,9 +1493,9 @@
       return el('button', {
         class: (s2.key === stage ? 'active' : ''), id: 'wb-' + s2.key,
         disabled: gated ? '' : null,
-        title: gated ? 'Nothing to place yet — pick an idea in Discover or build one in Shape' : s2.hint,
+        title: gated ? 'Nothing to place yet — pick one from Ideas or make one in the Builder' : s2.hint,
         onclick: function () { App.navigate('#/trade/' + s2.key); }
-      }, el('b', { class: 'wb-num' }, String(i + 1)), ' ' + s2.label);
+      }, s2.label);
     })));
     root.appendChild(ideaBar(stage));
     if (stage === 'discover') await discoverStage(root, params.slice(1));
@@ -1733,8 +1827,8 @@
     if (!hasIdea) {
       root.appendChild(el('div', { class: 'card' },
         UI.emptyState('Nothing to place yet',
-          'Pick an idea in Discover or build one leg-by-leg in Shape — it lands here for the strike check, the honest review, and the paper confirm.',
-          'Find an idea in Discover', function () { App.navigate('#/trade/discover'); }),
+          'Pick an idea on the Ideas tab or build one leg-by-leg in the Builder — it lands here for the strike check, the honest review, and the paper confirm.',
+          'Find an idea', function () { App.navigate('#/trade/discover'); }),
         el('div', { class: 'btn-row', style: 'justify-content:center' },
           el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { App.navigate('#/trade/shape'); } },
             'Or open the builder'))));
@@ -2321,7 +2415,7 @@
       Learn.currentLevel() === 'beginner'
         ? 'Before risking even paper money on a rule like “sell a monthly covered call”, see how it would actually have gone — trade by trade, with honest labels on what is modeled.'
         : 'Replays a strategy rule day by day with no look-ahead — and labels exactly how much of its pricing is modeled.'));
-    var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || 'AAPL', list: 'universe-symbols' });
+    var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
     // The strategy menu climbs the ladder with the user: Learning sees the beginner
     // families (mirroring the engine's learning risk rank), Expert unlocks defined-risk
     // premium selling, Pro sees everything backtestable.

@@ -496,7 +496,7 @@
       function repaint() { host.innerHTML = ''; paint(); remember(); }
 
       function stepHeader() {
-        var names = ['Goal', 'Shape', 'Build it', 'Where you stand'];
+        var names = ['Goal', 'Structure', 'Build it', 'Where you stand'];
         return el('div', { class: 'wizard-steps' }, names.map(function (n, i) {
           var cls = i + 1 === st.step ? ' active' : (i + 1 < st.step ? ' done' : '');
           return el('span', { class: 'step' + cls }, el('b', {}, String(i + 1)), ' ', n);

@@ -104,12 +104,19 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await go('#/home'); // leave the suite on the dashboard for the next test
 });
 
-test('research AAPL: hero quote, focused chain, show-all toggle', async () => {
+test('research AAPL: hero quote, events, news, focused chain, show-all toggle', async () => {
   await go('#/research');
   await page.fill('#symbol-input', 'AAPL');
   await page.click('#symbol-go');
   await page.waitForSelector('#research-symbol');
   assert.match(await page.textContent('#research-symbol'), /AAPL/);
+  // Coming up: expirations (and any earnings/filing signals) as dated chips
+  await page.waitForSelector('#events-card .chip');
+  assert.match(await page.textContent('#events-card'), /Expiry/);
+  // News NEVER silently vanishes — card renders with items or an honest empty state
+  await page.waitForSelector('#news-card');
+  assert.match(await page.textContent('#news-card'), /News & filings/);
+  assert.ok((await page.locator('#news-card .status-item').count()) >= 1, 'fixture headlines render');
   await page.waitForSelector('.quote-hero .badge:has-text("DEMO DATA")');
   await page.waitForSelector('#expiration-select');
   await page.waitForSelector('.tbl tbody tr.atm'); // ATM row highlighted
@@ -131,9 +138,11 @@ test('research VTSAX warns about missing options', async () => {
 });
 
 test('discover scan: a blank symbol box auto-recommends with evidence and targets', async () => {
-  await go('#/recommend/scout'); // legacy alias — forces the blank-symbol scan mode
-  await page.waitForSelector('#auto-target'); // scan-scope fields visible when symbol is blank
-  assert.equal(await page.inputValue('#rec-symbol'), '', 'scan mode = blank symbol');
+  await go('#/recommend/scout'); // legacy alias — forces scan mode
+  await page.waitForSelector('#auto-target'); // scan-scope fields visible in scan mode
+  assert.ok(await page.locator('#idea-source .choice[data-source="scan"].selected').count(),
+    '"Scan the market for me" is an explicit, visible choice');
+  assert.ok(!(await page.locator('#rec-symbol').isVisible()), 'no ticker box while scanning');
   assert.match(await page.textContent('#rec-go'), /Scan for opportunities/);
   await page.fill('#auto-target', '250');
   await page.click('#rec-go');
@@ -172,8 +181,12 @@ test('discover-to-place: screening happens ONCE, in Discover; Place is strikes/r
   await page.evaluate(() => { App.state.ticket = null; });
   await go('#/trade/place');
   assert.match(await page.textContent('#app'), /Nothing to place yet/);
-  // Discover: the ONE screening flow (this replaced the old ticket steps 1-4 outright)
+  // The four Trade sections carry PLAIN names — no invented jargon
   await go('#/trade/discover/manual');
+  assert.equal(await page.textContent('#wb-discover'), 'Ideas');
+  assert.equal(await page.textContent('#wb-shape'), 'Builder');
+  assert.equal(await page.textContent('#wb-verify'), 'Backtest');
+  assert.equal(await page.textContent('#wb-place'), 'Place');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
   await page.selectOption('#rec-thesis', 'bullish');
@@ -463,12 +476,18 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   assert.match(await page.textContent('#intent-choices .choice[data-intent="INCOME"]'), /premium/i);
   await page.click('#intent-choices .choice[data-intent="ALL"]');
   assert.equal(await page.locator('#intent-choices .choice.selected').count(), 1, 'ALL replaces, never adds');
-  // a symbol turns the SAME form into single-stock ideas — "Buy at a discount" can name QQQ
+  // "I have a stock in mind" turns the SAME form into single-stock ideas —
+  // "Buy at a discount" can name QQQ
   await page.click('#intent-choices .choice[data-intent="ACQUIRE"]');
+  await page.click('#idea-source .choice[data-source="single"]');
   await page.fill('#rec-symbol', 'QQQ');
   assert.match(await page.textContent('#rec-go'), /Find ideas/);
   assert.ok(await page.locator('#rec-target').isVisible(), 'the buy-price field appears for a named stock');
-  await page.fill('#rec-symbol', '');
+  // The working symbol FOLLOWS across stages (the QQQ->AAPL amnesia bug)
+  await go('#/trade/verify');
+  assert.equal(await page.inputValue('#bt-symbol'), 'QQQ', 'Backtest picks up the ticker you just typed');
+  await go('#/recommend/scout');
+  await page.waitForSelector('#intent-choices');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
 });
 
@@ -862,20 +881,6 @@ test('pipeline streamline: candidates open in the builder; Ideas links the full 
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
 });
 
-test('on-device AI ships no bytes: the enable card offers a user-initiated install', async () => {
-  // This suite's server has an EMPTY models dir — the assist layer must offer, not act
-  await go('#/recommend/manual');
-  await page.waitForSelector('#assist-enable', { timeout: 15000 });
-  const card = await page.textContent('#assist-enable');
-  assert.match(card, /~1\d\d MB/);                 // honest size disclosure
-  assert.match(card, /Apache-2\.0/);               // licenses named up front
-  assert.match(card, /nothing you type ever leaves/i);
-  assert.ok(await page.locator('#assist-install').count(), 'install is a button, never automatic');
-  // And no AI features exist until the user acts
-  assert.equal(await page.locator('#assist-text').count(), 0);
-  const st = await page.evaluate(() => API.getFresh('/api/assist/status'));
-  assert.equal(st.installed, false);
-});
 
 test('smooth pipeline: GET cache, skeleton on slow loads, tape refresh keeps its animation', async () => {
   // Read-through cache: same GET inside the TTL returns the SAME promise

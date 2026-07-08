@@ -42,7 +42,6 @@ class ApiIntegrationTest {
         tmpDir = Files.createTempDirectory("strikebench-it");
         AppConfig cfg = new AppConfig(Map.of(
                 "DB_PATH", tmpDir.resolve("it.db").toString(),
-                "MODELS_DIR", tmpDir.resolve("models").toString(),
                 "FIXTURES_ONLY", "true"));
         server = ApiServer.create(cfg, CLOCK);
         app = server.start(0);
@@ -712,19 +711,6 @@ class ApiIntegrationTest {
         JsonNode cal = Json.parse(post("/api/trades/preview", calendar).body()).get("preview");
         assertThat(cal.get("payoff").size()).isZero();
         assertThat(cal.get("legs").size()).isEqualTo(2);
-    }
-
-    @Test
-    @Order(24)
-    void assistShipsNoModelBytesAndReportsInstallableState() throws Exception {
-        // The app distributes ZERO model bytes: a fresh install reports not-installed with an
-        // honest size for the user-initiated download; /models is mounted but empty.
-        JsonNode st = Json.parse(get("/api/assist/status").body());
-        assertThat(st.get("installed").asBoolean()).isFalse();
-        assertThat(st.get("phase").asText()).isEqualTo("idle");
-        assertThat(st.get("bytesTotal").asLong()).isGreaterThan(100_000_000L); // honest ~112MB disclosure
-        assertThat(st.get("filesTotal").asInt()).isEqualTo(11);
-        assertThat(get("/models/manifest.json").statusCode()).isEqualTo(404);
     }
 
 }

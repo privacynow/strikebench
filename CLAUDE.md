@@ -753,10 +753,51 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   - Boot test now pins the hero band + #home-tour-link; scan test pins blank-symbol mode +
     button relabel; goal-radio test pins ALL-replaces + ACQUIRE-with-ticker showing the
     buy-price field.
+- UX-REGRESSION REPAIR ROUND 2 (2026-07-07, user: unified Discover lost the scout's feel; "what
+  the heck is Shape… how has backtesting died and gotten replaced with verify?"; ticker amnesia
+  across stages (qqq→AAPL); "the AI… is bad… get rid of that"; "where has news gone?" + demand:
+  news/corporate actions/events integrated in research AND trade at both levels. ALL SHIPPED;
+  suites: 223 JUnit + 22 fixture + 3 audit + 4 seeded + 8 live — ALL GREEN; shots/r2-*.png):
+  - STAGE NAMES ARE PLAIN WORDS: labels now `Ideas | Builder | Backtest | Place` (keys/URLs
+    stay discover/shape/verify/place for stability), wizard numbers dropped, every "Discover/
+    Shape/Verify" string swept from copy (builder beginner wizard step 2 renamed 'Structure').
+    RULE: section names must be words a first-time user already knows.
+  - SCOUT FEEL RESTORED: the blank-symbol-means-scan idiom was too clever. Discover asks two
+    explicit questions: goal chips, then "Where should ideas come from?" — `#idea-source`
+    choice chips `Scan the market for me` / `I have a stock in mind` (the two old tabs as
+    in-card form controls, both levels; beginner cards w/ blurbs, expert compact). Source
+    drives mode; symbol box only in one-stock mode (always seeded, never blank); holdings
+    chips switch to one-stock mode when tapped; goal "Everything" still scans (one stock →
+    universe=[symbol]). discoverForm gains `source`; /recommend/manual → single,
+    /recommend/scout → scan.
+  - TICKER FOLLOWS YOU: typing in the Ideas symbol box updates App.state.lastRecommendSymbol
+    immediately (not only on submit); Backtest's #bt-symbol and the Builder seed from it.
+    Pinned in dom.test (type QQQ in Ideas → #/trade/verify shows QQQ).
+  - STALE-ASYNC RACE FIXED (found via an order-dependent test failure): renderTargetPresets +
+    refreshHoldingsHint now carry sequence tokens — a slow quote response for the PREVIOUS
+    symbol could overwrite the new symbol's %-preset prices (same class as the chain-load
+    token). Pattern: EVERY async fill of a shared container needs a supersede guard.
+  - AI ASSIST FULLY REMOVED (user decision, recorded in memory): assist.js, intake/enable
+    cards, news badges, /api/assist/* + /models routes, AssistInstaller.java,
+    AppConfig.modelsDir(), MODELS_DIR docs, dom-assist suite, the fixture AI test, and
+    data/models on disk (~109MB freed) — all deleted. JUnit drops to 223 (assist no-bytes
+    test gone with the feature). Do NOT reintroduce AI UI without an explicit ask.
+  - NEWS NEVER VANISHES: research #news-card ALWAYS renders — items w/ dates or an honest
+    empty state + "Check data status" (it was silently skipped when the fetch failed/empty —
+    that's what read as "where has news gone"). Filings (source SEC EDGAR / headline "…
+    filing") group under a 'Corporate filings (SEC)' subheader w/ beginner explainer
+    (10-K/10-Q/8-K in plain words).
+  - EVENTS INTEGRATED: shared `comingUp(symbol, asStrip)` — expiration chips w/ DTE, an
+    "Earnings in the news" chip (EARNINGS_RE on headlines), latest-SEC-filing chip (all
+    link out). Research gets the card (#events-card, beginner explainer, honest note when
+    nothing dated); single-symbol trade ideas get the slim strip (#events-strip) above
+    results (vanishes quietly if empty — decoration there). Pinned in the research test.
+  - Ex-div/true earnings CALENDAR still has no keyless source (documented gap; headlines
+    are the honest proxy).
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
-  live mode), Verify stage prefill from the working idea (symbol/family land in the form; window/DTE
-  defaults could too).
+  live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
+  defaults could too), a real earnings/ex-div calendar if a keyless source appears.
 
 ## Non-negotiable decisions (from user)
 1. Java package root: **`io.liftandshift`** (groupId `io.liftandshift`, artifact `strikebench` — renamed

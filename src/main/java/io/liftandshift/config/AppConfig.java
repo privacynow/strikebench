@@ -89,9 +89,6 @@ public final class AppConfig {
     /** Default DB file. A legacy data/options-lab.db is moved here once at boot (see Main). */
     public String dbPath() { return get("DB_PATH", "data/strikebench.db"); }
 
-    /** On-device AI assets (transformers.js runtime + ONNX models), served at /models when present. */
-    public String modelsDir() { return get("MODELS_DIR", "data/models"); }
-
     /** When true, only deterministic fixture data is served; no network calls are made. */
     public boolean fixturesOnly() { return getBool("FIXTURES_ONLY", false); }
 

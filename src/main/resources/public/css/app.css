@@ -551,6 +551,11 @@ body.lvl-expert .page-sub { display: none; }
 .chart.chart-down .line { stroke: var(--loss); }
 .chart.chart-down .area-line { fill: var(--risk-danger-bg); }
 
+/* "Coming up" events: chips are the unit; links stay chip-shaped */
+.events-strip { margin: 2px 0 10px; }
+#events-card .chip-row a.chip, .events-strip a.chip { text-decoration: none; }
+#events-card .chip-row a.chip:hover b, .events-strip a.chip:hover b { color: var(--accent); }
+
 /* ---- Home hero band: the opening page's DNA folded into the dashboard ---- */
 .home-hero { position: relative; overflow: hidden; padding: 18px 20px 14px; margin-bottom: 14px;
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
@@ -958,12 +963,6 @@ body.lvl-expert .page-sub { display: none; }
   #app.app:has(.welcome-page) { padding-top: 8px; padding-bottom: 6px; }
 }
 
-/* ---------- On-device assist (optional /models assets; hidden when absent) ---------- */
-.assist-card { border: 1px dashed var(--accent); }
-.assist-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-.assist-card textarea { width: 100%; resize: vertical; font-size: 14px; }
-.assist-note { display: block; font-size: 12px; margin-top: 6px; }
-.assist-sent { margin-left: 8px; flex: none; }
 
 /* Contextual ticker: market context on Home + Research, absent elsewhere */
 .tape.tape-offroute { display: none; }
