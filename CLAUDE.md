@@ -965,6 +965,28 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     querySelectorAll().length); mouse events on below-fold elements silently no-op
     (scrollIntoViewIfNeeded BEFORE boundingBox); tune-row index must match the LEG index
     asserted.
+- BRAND MARK + RECOVERABLE WELCOME + DOCS SPLIT + AUTO-DEPLOY (2026-07-08; suites 224 JUnit
+  + 26 fixture + 3 audit + 4 seeded + 8 live; deployed; shots/welcome-v2.png):
+  - NEW MARK: gradient tile, a flat "bench" line kinking upward at a strike dot over a dashed
+    baseline (the name, drawn). Inline SVG in the header brand anchor, URL-encoded SVG
+    favicon in index.html, `UI.brandMark(size)` (unique gradient id per call) for the hero.
+    GOTCHA FIXED: applyBrand did `el.textContent = name` which WIPED the inline SVG — it now
+    replaces only text nodes.
+  - Brand anchor href → #/home/tour: the mark ALWAYS reopens the welcome page ("skip" is not
+    goodbye). Boot test pins brand→#welcome-hero + the mark's presence; #home-tour-link on
+    the dashboard hero band remains the second path.
+  - Welcome polish: .hero-brandline (mark beside the eyebrow — inline, adds no height),
+    .hero-deco quiet condor-tent SVG motif behind the pitch (aria-hidden, opacity .10),
+    accent-topped door cards (blue/violet). Fold verified: 885/900 at 1440.
+  - DOCS: README.md rewritten for END USERS (two-minute start, what you can do, honest
+    numbers, optional keys table, good-to-know); everything developer-facing moved to NEW
+    DEVELOPER.md (build, principles, architecture tree, all four DOM suites w/ commands,
+    full config table, deploy.sh usage). The old README described dead UI (3-tier ladder,
+    tape sector switcher, 7-step ticket).
+  - AUTO-DEPLOY ENABLED on strikebench.com (user approved; main will be branch-protected/PR
+    soon): `deploy.sh --setup-timer` → strikebench-autodeploy.timer polls origin/main every
+    5 min and deploys only when it moves. A push is now live within ~5 minutes. Disable:
+    `sudo systemctl disable --now strikebench-autodeploy.timer`.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
