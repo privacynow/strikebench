@@ -18,13 +18,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7181';
 const BASE = `http://localhost:${PORT}`;
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
-let server, browser, page;
+let server, browser, page, pg;
 
 async function waitForServer(tries = 60) {
   for (let i = 0; i < tries; i++) {
@@ -41,9 +42,9 @@ async function go(hash) {
 }
 
 before(async () => {
-  const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strikebench-audit-'));
+  pg = freshDb();
   server = spawn(JAVA, ['-jar', JAR], {
-    env: { ...process.env, PORT, DB_PATH: path.join(dbDir, 'audit.db'), FIXTURES_ONLY: 'true' },
+    env: { ...process.env, PORT, ...pg.env, FIXTURES_ONLY: 'true' },
     stdio: 'ignore'
   });
   await waitForServer();
@@ -58,6 +59,7 @@ before(async () => {
 after(async () => {
   if (browser) await browser.close();
   if (server) server.kill();
+  if (pg) pg.drop();
 });
 
 const ROUTES = ['#/home', '#/home/tour', '#/research', '#/research/AAPL', '#/trade/discover',

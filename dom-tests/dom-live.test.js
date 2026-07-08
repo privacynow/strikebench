@@ -15,13 +15,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7093';
 const BASE = `http://localhost:${PORT}`;
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
-let server, browser, page;
+let server, browser, page, pg;
 const pageErrors = [];
 const serverErrors = [];
 
@@ -47,9 +48,9 @@ function assertClean(label) {
 }
 
 before(async () => {
-  const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strikebench-live-'));
+  pg = freshDb();
   server = spawn(JAVA, ['-jar', JAR], {
-    env: { ...process.env, PORT, DB_PATH: path.join(dbDir, 'live.db') }, // NO FIXTURES_ONLY
+    env: { ...process.env, PORT, ...pg.env }, // NO FIXTURES_ONLY
     stdio: 'ignore'
   });
   await waitForServer();
@@ -64,6 +65,7 @@ before(async () => {
 after(async () => {
   if (browser) await browser.close();
   if (server) server.kill();
+  if (pg) pg.drop();
 });
 
 test('live: dashboard renders market tiles', async () => {

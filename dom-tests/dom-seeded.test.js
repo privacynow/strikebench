@@ -19,13 +19,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7171';
 const BASE = `http://localhost:${PORT}`;
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
-let server, browser, page, dbPath;
+let server, browser, page, pg;
 const pageErrors = [];
 const serverErrors = [];
 
@@ -52,12 +53,6 @@ function isoDaysFromNow(days) {
   return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
 }
 
-function sqlite(sql) {
-  const out = spawnSync('sqlite3', [dbPath, sql], { encoding: 'utf8' });
-  if (out.status !== 0) throw new Error('sqlite3 failed: ' + out.stderr);
-  return out.stdout.trim();
-}
-
 async function go(hash) {
   await page.evaluate(h => { window.location.hash = h; }, hash);
   await page.waitForSelector('#app[data-ready="true"]', { timeout: 30000 });
@@ -69,10 +64,9 @@ function assertClean(label) {
 }
 
 before(async () => {
-  const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strikebench-seeded-'));
-  dbPath = path.join(dbDir, 'seeded.db');
+  pg = freshDb();
   server = spawn(JAVA, ['-jar', JAR], {
-    env: { ...process.env, PORT, DB_PATH: dbPath, FIXTURES_ONLY: 'true' },
+    env: { ...process.env, PORT, ...pg.env, FIXTURES_ONLY: 'true' },
     stdio: 'ignore'
   });
   await waitForServer();
@@ -119,7 +113,7 @@ before(async () => {
     { action: 'BUY', type: 'PUT', strike: 417.5, expiration: dead, ratio: 1, entryPrice: 0.005, stock: false },
     { action: 'SELL', type: 'CALL', strike: 420, expiration: dead, ratio: 1, entryPrice: 3.10, stock: false }
   ]).replaceAll("'", "''");
-  sqlite(`INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
+  pg.sql(`INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
       entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,pop_entry,
       fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,is_live,
       created_at,closed_at,updated_at,intent,shares_locked)
@@ -138,6 +132,7 @@ before(async () => {
 after(async () => {
   if (browser) await browser.close();
   if (server) server.kill();
+  if (pg) pg.drop();
 });
 
 const ROUTES = ['#/home', '#/research/AAPL', '#/trade/discover', '#/trade/discover/manual',
