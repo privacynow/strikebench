@@ -975,7 +975,16 @@ body.lvl-expert .not-expert { display: none !important; }
 .tabs .tabs-aside { margin-left: auto; align-self: center; font-size: 12.5px; padding: 6px 4px; }
 
 /* ---------- Welcome: the whole pitch on ONE desktop screen — comfortable, not crammed ---------- */
-.welcome-top { display: grid; gap: 20px; grid-template-columns: 1fr; align-items: start; }
+.welcome-top { display: grid; gap: 20px; grid-template-columns: 1fr; align-items: stretch; }
+/* SYMMETRY: both top-fold columns share one frame — same border, radius, padding, height.
+   The hero keeps its gradient fill; the live column keeps a calm surface. */
+.welcome-top > * { border: 1px solid var(--border); border-radius: 16px;
+  background: var(--surface); position: relative; overflow: hidden; margin: 0; }
+.welcome-top .welcome-live-col { padding: 14px 22px 16px; text-align: left; }
+.welcome-top .live-head { min-height: 30px; align-items: center; margin-bottom: 10px; }
+.welcome-top .welcome-live-col .showcase-frame { border: 0; background: none; padding: 0; }
+.welcome-top .showcase { max-width: none; }
+.welcome-top .showcase-caption { text-align: left; margin: 10px 0 0; max-width: none; }
 .live-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .btn-link { background: none; border: none; color: var(--text-dim); font-size: 12.5px;
   padding: 2px 4px; text-decoration: underline; text-underline-offset: 3px; }
@@ -983,13 +992,17 @@ body.lvl-expert .not-expert { display: none !important; }
 .welcome-footer { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
 .welcome-footer .cta-banner { flex: 1 1 420px; margin: 0; }
 @media (min-width: 1100px) {
-  .welcome-top { grid-template-columns: 1.05fr 0.95fr; }
+  .welcome-top { grid-template-columns: 1fr 1fr; }
   #app:has(.welcome-page) .hero { padding: 14px 22px 16px; margin: 0; }
+  #app:has(.welcome-page) .hero-inner { text-align: left; margin: 0; max-width: none; }
+  #app:has(.welcome-page) .hero-ctas { justify-content: flex-start; }
+  #app:has(.welcome-page) .trust-row { text-align: left; }
   #app:has(.welcome-page) .hero-title { font-size: clamp(27px, 2.3vw, 31px); margin: 8px 0 0; }
   #app:has(.welcome-page) .hero-ctas .btn-lg { min-height: 42px; }
-  #app:has(.welcome-page) .hero-sub { margin: 12px 0 16px;
+  #app:has(.welcome-page) .hero-sub { margin: 12px 0 16px; max-width: none;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   #app:has(.welcome-page) .welcome-section { margin: 12px 0 0; }
+  #app:has(.welcome-page) .welcome-top > .welcome-section { margin: 0; } /* grid rows align */
   #app:has(.welcome-page) .welcome-section .eyebrow { display: none; } /* the h2 carries it */
   #app:has(.welcome-page) .welcome-live-col .eyebrow { display: block; } /* except the live label */
   #app:has(.welcome-page) .welcome-h2 { font-size: 17px; margin: 0 0 8px; }
@@ -1001,14 +1014,15 @@ body.lvl-expert .not-expert { display: none !important; }
   #app:has(.welcome-page) .welcome-card p { margin: 0; grid-column: 2; grid-row: 2; font-size: 13px; }
   #app:has(.welcome-page) .welcome-card .btn { grid-column: 3; grid-row: 1 / span 2; }
   #app:has(.welcome-page) .welcome-card .icon-tile { grid-row: 1 / span 2; }
-  /* Steps: one line each, ghost numeral + verb + quiet detail — a process strip, not a wall */
-  #app:has(.welcome-page) .stepper { display: flex; gap: 26px; flex-wrap: wrap; }
-  #app:has(.welcome-page) .step-block { flex-direction: row; align-items: baseline; gap: 9px; padding: 0; }
+  /* Steps: four IDENTICAL columns — ghost numeral + verb, detail beneath. A grid, not a rag. */
+  #app:has(.welcome-page) .stepper { display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 14px; text-align: left; }
+  #app:has(.welcome-page) .step-block { flex-direction: row; align-items: baseline; gap: 10px; padding: 0; }
   #app:has(.welcome-page) .step-block::after { display: none; }
   #app:has(.welcome-page) .step-num { font-size: 21px; }
-  #app:has(.welcome-page) .step-text { display: flex; gap: 7px; align-items: baseline; }
-  #app:has(.welcome-page) .step-text b { font-size: 14px; white-space: nowrap; }
-  #app:has(.welcome-page) .step-text span { font-size: 12.5px; white-space: nowrap; }
+  #app:has(.welcome-page) .step-text { display: block; }
+  #app:has(.welcome-page) .step-text b { display: block; font-size: 14px; white-space: nowrap; }
+  #app:has(.welcome-page) .step-text span { font-size: 12.5px; }
   /* The live candidate is proof, not reading material — clamp it and fade the tail */
   .welcome-top .welcome-section { margin: 0; } /* grid children align to the hero top */
   #app:has(.welcome-page) .showcase-caption {
