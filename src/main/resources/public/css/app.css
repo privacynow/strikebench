@@ -602,6 +602,29 @@ body.lvl-expert .not-expert { display: none !important; }
 .focus-close:hover { border-color: var(--accent); color: var(--accent); }
 @media (prefers-reduced-motion: reduce) { .focus-wrap { animation: none; } }
 
+/* Wizard steps are now <button>s; earned steps are live links */
+.wizard-steps button.step { background: none; border: 0; font: inherit; padding: 0;
+  display: inline-flex; align-items: center; }
+.wizard-steps .step-link { cursor: pointer; }
+.wizard-steps .step-link:hover { color: var(--accent); }
+.wizard-steps .step[disabled] { cursor: not-allowed; opacity: .55; }
+
+/* Fine-tune rows on the builder's Where-you-stand */
+.tune-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0;
+  border-bottom: 1px solid var(--border); }
+.tune-row:last-child { border-bottom: 0; }
+.tune-row select { max-width: 130px; }
+.tune-row label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+
+/* Draggable strike handles on the payoff chart */
+.strike-line { stroke: var(--accent); stroke-dasharray: 4 4; stroke-width: 1.4; opacity: .75; }
+.strike-grip { fill: var(--surface); stroke: var(--accent); stroke-width: 2.2; cursor: grab;
+  touch-action: none; }
+.strike-grip:hover { fill: var(--accent-soft); }
+.strike-grip.dragging { cursor: grabbing; fill: var(--accent-soft); r: 10; }
+.strike-grip-label { font-size: 10.5px; font-weight: 800; fill: var(--accent); pointer-events: none; }
+.xhair, .xhair-dot { pointer-events: none; } /* the crosshair is decoration, never a target */
+
 /* ---- Home hero band: the opening page's DNA folded into the dashboard ---- */
 .home-hero { position: relative; overflow: hidden; padding: 18px 20px 14px; margin-bottom: 14px;
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }

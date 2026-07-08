@@ -344,6 +344,39 @@
       return t.build(ctx).filter(function (l) { return l.type === 'STOCK' || l.strike; });
     }
 
+    /**
+     * Drag-handles for the payoff chart: one per OPTION leg (indices into st.legs),
+     * snapping to that leg's real chain strikes. onMoved = level-appropriate re-price.
+     */
+    async function strikeHandles(indices, onMoved) {
+      var out = [];
+      for (var n = 0; n < indices.length; n++) {
+        var i = indices[n];
+        var l = st.legs[i];
+        if (!l || l.type === 'STOCK' || !l.strike || !l.expiration) continue;
+        var chain = await ensureChain(l.expiration);
+        var ks = ((l.type === 'CALL' ? chain.calls : chain.puts) || [])
+          .map(function (q) { return parseFloat(q.strike); })
+          .sort(function (a, b) { return a - b; });
+        if (ks.length < 2) continue;
+        out.push((function (idx, strikes) {
+          var leg = st.legs[idx];
+          return {
+            id: 'leg' + idx,
+            strike: parseFloat(leg.strike),
+            label: (leg.action === 'SELL' ? 'SELL ' : 'BUY ') + leg.type.charAt(0) + ' ' + parseFloat(leg.strike),
+            strikes: strikes,
+            onChange: function (ns) {
+              st.legs[idx].strike = String(ns);
+              remember();
+              onMoved();
+            }
+          };
+        })(i, ks));
+      }
+      return out;
+    }
+
     function wireLegs(legs) {
       return legs
         .filter(function (l) { return l.type === 'STOCK' || (l.strike && l.expiration); })
@@ -520,10 +553,25 @@
       function repaint() { host.innerHTML = ''; paint(); remember(); }
 
       function stepHeader() {
+        // Every step you have EARNED is a live link — go back to change your mind, jump
+        // forward to where you were. Unreached steps say what unlocks them.
         var names = ['Goal', 'Structure', 'Build it', 'Where you stand'];
+        var reachable = [true, !!st.goal, st.legs.length > 0, st.legs.length > 0];
+        var why = [null, 'Pick a goal first', 'Choose a structure first', 'Choose a structure first'];
         return el('div', { class: 'wizard-steps' }, names.map(function (n, i) {
-          var cls = i + 1 === st.step ? ' active' : (i + 1 < st.step ? ' done' : '');
-          return el('span', { class: 'step' + cls }, el('b', {}, String(i + 1)), ' ', n);
+          var here = i + 1 === st.step;
+          var cls = here ? ' active' : (i + 1 < st.step ? ' done' : '');
+          var can = reachable[i] && !here;
+          return el('button', {
+            class: 'step' + cls + (can ? ' step-link' : ''), type: 'button', 'data-step': i + 1,
+            disabled: reachable[i] ? null : '',
+            title: reachable[i] ? null : why[i],
+            onclick: can ? function () {
+              st.step = i + 1;
+              if (st.step === 3) st.legIdx = Math.max(0, st.legs.length - 1);
+              repaint();
+            } : null
+          }, el('b', {}, String(i + 1)), ' ', n);
         }));
       }
       function symbolInput() {
@@ -695,8 +743,17 @@
                       return x.popEntry === null || x.popEntry === undefined ? '—' : fmtPct(x.popEntry);
                     }, false) : null));
               if (p.payoff && p.payoff.length > 1) {
+                var walkIdx = [];
+                for (var wi = 0; wi <= i; wi++) walkIdx.push(wi);
+                var walkHandles = await strikeHandles(walkIdx, function () { repaint(); });
+                if (!impact.isConnected) return;
+                if (walkHandles.length) {
+                  impact.appendChild(el('p', { class: 'muted', style: 'margin:6px 0 2px; font-size:12.5px' },
+                    'Try it: drag a strike marker and watch this leg\u2019s numbers move.'));
+                }
                 impact.appendChild(UI.payoffChart(p.payoff, {
-                  breakevens: p.breakevens, spot: p.underlyingCents ? p.underlyingCents / 100 : null
+                  breakevens: p.breakevens, spot: p.underlyingCents ? p.underlyingCents / 100 : null,
+                  handles: walkHandles
                 }));
               }
             } catch (e) {
@@ -717,6 +774,55 @@
               return el('div', { class: 'fact-row' },
                 el('span', {}, el('b', {}, 'Leg ' + (idx + 1) + ': '), legStory(l)));
             })),
+          UI.expandable('Fine-tune each leg \u2014 exact strikes and dates', function () {
+            var box = el('div', { id: 'bw-tune' });
+            box.appendChild(el('p', { class: 'muted', style: 'margin:0 0 8px; font-size:12.5px' },
+              'Autopilot picked these; every one is yours to change. The chart and the numbers below re-price on every change \u2014 that is the fastest way to FEEL what a strike or an extra week does.'));
+            st.legs.forEach(function (l, idx) {
+              if (l.type === 'STOCK') {
+                box.appendChild(el('div', { class: 'tune-row' },
+                  el('b', {}, l.action + ' ' + (100 * (l.ratio || 1)) + ' shares'),
+                  el('span', { class: 'muted' }, 'stock legs have no strike or expiry')));
+                return;
+              }
+              var expSel = el('select', { class: 'tune-exp' }, expirations.map(function (d) {
+                return el('option', { value: d, selected: d === l.expiration ? '' : null }, d);
+              }));
+              var strikeSel = el('select', { class: 'tune-strike' });
+              async function fillStrikes(keep) {
+                var chain = await ensureChain(st.legs[idx].expiration);
+                var ks = ((st.legs[idx].type === 'CALL' ? chain.calls : chain.puts) || [])
+                  .map(function (q) { return parseFloat(q.strike); })
+                  .sort(function (a, b) { return a - b; });
+                strikeSel.innerHTML = '';
+                var want = parseFloat(keep);
+                var best = ks[0], bd = Infinity;
+                ks.forEach(function (k) { var d = Math.abs(k - want); if (d < bd) { bd = d; best = k; } });
+                ks.forEach(function (k) {
+                  strikeSel.appendChild(el('option', { value: String(k), selected: k === best ? '' : null }, String(k)));
+                });
+                if (String(best) !== String(st.legs[idx].strike)) {
+                  st.legs[idx].strike = String(best); // nearest strike on the new expiry
+                }
+              }
+              fillStrikes(l.strike);
+              expSel.addEventListener('change', async function () {
+                st.legs[idx].expiration = expSel.value;
+                await fillStrikes(st.legs[idx].strike);
+                remember(); repaint();
+              });
+              strikeSel.addEventListener('change', function () {
+                st.legs[idx].strike = strikeSel.value;
+                remember(); repaint();
+              });
+              box.appendChild(el('div', { class: 'tune-row' },
+                el('span', { class: 'badge ' + (l.action === 'SELL' ? 'badge-warn' : 'badge-ok') }, l.action),
+                el('b', {}, l.type),
+                el('label', { class: 'muted' }, 'strike'), strikeSel,
+                el('label', { class: 'muted' }, 'expires'), expSel));
+            });
+            return box;
+          }),
           el('div', { class: 'form-grid', style: 'margin-top:8px' },
             [el('div', { class: 'field' }, el('label', {}, 'Contracts (qty)'), qtyInput())].concat(limitsFields(true))),
           el('div', { class: 'btn-row', style: 'margin-top:2px' },
@@ -733,9 +839,11 @@
           var panel = document.getElementById('bw-panel');
           try {
             var res = await previewLegs(st.legs);
+            var allIdx = st.legs.map(function (_, k) { return k; });
+            var handles = await strikeHandles(allIdx, function () { repaint(); });
             if (!panel || !panel.isConnected) return;
             panel.innerHTML = '';
-            renderVerdictAndStats(panel, res.preview, res.guardrails, true);
+            renderVerdictAndStats(panel, res.preview, res.guardrails, true, handles);
             var lc = limitChips(res.preview);
             if (lc) panel.insertBefore(lc, panel.firstChild);
             var btn = document.getElementById('builder-review');
@@ -974,7 +1082,11 @@
         try {
           var res = await previewLegs(legsNow);
           if (seq !== previewSeq) return;
-          renderPanelExpert(res.preview, res.guardrails);
+          var dragIdx = st.legs.map(function (_, k) { return k; })
+            .filter(function (k) { return !st.excluded[k]; });
+          var dragHandles = await strikeHandles(dragIdx, function () { onLegsReplaced(); });
+          if (seq !== previewSeq) return;
+          renderPanelExpert(res.preview, res.guardrails, dragHandles);
         } catch (e) {
           if (seq !== previewSeq) return;
           panel.innerHTML = '';
@@ -984,14 +1096,14 @@
           panel.classList.remove('updating');
         }
       }
-      function renderPanelExpert(p, guard) {
+      function renderPanelExpert(p, guard, handles) {
         panel.innerHTML = '';
         var offCount = Object.keys(st.excluded).length;
         panel.appendChild(UI.cardHeader('Position',
           offCount ? el('span', { class: 'badge badge-caution' }, offCount + ' LEG OFF') : null));
         var lc = limitChips(p);
         if (lc) panel.appendChild(lc);
-        renderVerdictAndStats(panel, p, guard, false);
+        renderVerdictAndStats(panel, p, guard, false, handles);
         var g = netGreeks(p);
         if (g) {
           panel.appendChild(el('div', { class: 'chip-row' },
@@ -1074,7 +1186,7 @@
     }
 
     // ---- Shared panel body ----
-    function renderVerdictAndStats(hostEl, p, guard, beginnerWording) {
+    function renderVerdictAndStats(hostEl, p, guard, beginnerWording, handles) {
       if (!p.ok) {
         hostEl.appendChild(alertBox('danger', beginnerWording ? 'This position would be refused' : 'BLOCKED', p.blockReasons));
       } else if (guard && guard.level === 'WARN') {
@@ -1111,8 +1223,13 @@
         chip('Buying power after', fmtMoney(p.buyingPowerAfterCents)),
         p.reserveCents ? chip(UI.term('reserve', 'Set aside'), fmtMoney(p.reserveCents)) : null));
       if (p.payoff && p.payoff.length > 1) {
+        if (handles && handles.length) {
+          hostEl.appendChild(el('p', { class: 'muted', style: 'margin:6px 0 2px; font-size:12.5px' },
+            'Drag a strike marker on the chart \u2014 watch the worst case, best case and odds move with it.'));
+        }
         hostEl.appendChild(UI.payoffChart(p.payoff, {
-          breakevens: p.breakevens, spot: p.underlyingCents ? p.underlyingCents / 100 : null
+          breakevens: p.breakevens, spot: p.underlyingCents ? p.underlyingCents / 100 : null,
+          handles: handles || null
         }));
       } else if (p.legs && p.legs.length) {
         hostEl.appendChild(explain('Mixed expirations: the at-expiry chart does not exist for this position — its value depends on volatility after the near leg dies.'));

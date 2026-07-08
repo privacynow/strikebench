@@ -895,6 +895,43 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   assert.match(finalText, /Most you can lose/);
   assert.match(finalText, /Assignment odds/);
   assert.ok(await page.locator('#bw-panel .chart-wrap').count(), 'payoff chart on the final step');
+
+  // --- Learn by touching #1: the wizard steps are LIVE — go back, come forward ---
+  await page.click('.wizard-steps button[data-step="1"]');
+  await page.waitForSelector('#bw-goals .choice');
+  await page.click('.wizard-steps button[data-step="4"]');
+  await page.waitForSelector('#bw-final');
+  await page.waitForFunction(() =>
+    /Most you can lose/.test((document.getElementById('bw-panel') || {}).textContent || ''), { timeout: 20000 });
+
+  // --- Learn by touching #2: the escape hatch — exact strikes/dates as real controls ---
+  await page.click('#bw-final .xp-head:has-text("Fine-tune")');
+  await page.waitForFunction(() => document.querySelectorAll('#bw-tune .tune-strike option').length > 0);
+  const beforeStrike = await page.evaluate(() => App.state.builderForm.legs[0].strike);
+  const options = await page.locator('#bw-tune .tune-row').first().locator('.tune-strike option')
+    .evaluateAll(os => os.map(o => o.value));
+  const other = options.find(v => v !== String(parseFloat(beforeStrike)));
+  await page.locator('#bw-tune .tune-row').first().locator('.tune-strike').selectOption(other);
+  await page.waitForFunction(prev => App.state.builderForm.legs[0].strike !== prev, beforeStrike, { timeout: 10000 });
+  await page.waitForFunction(() =>
+    /Most you can lose/.test((document.getElementById('bw-panel') || {}).textContent || ''), { timeout: 20000 });
+
+  // --- Learn by touching #3: DRAG a strike marker on the payoff chart itself ---
+  await page.waitForSelector('#bw-panel .strike-grip', { timeout: 20000 });
+  const grip = page.locator('#bw-panel .strike-grip').first();
+  await grip.scrollIntoViewIfNeeded(); // below-fold mouse events silently no-op
+  const gripId = await grip.getAttribute('data-handle'); // 'legN'
+  const legIdx = parseInt(gripId.replace('leg', ''), 10);
+  const dragBefore = await page.evaluate(k => App.state.builderForm.legs[k].strike, legIdx);
+  const box = await grip.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForFunction(([k, prev]) => App.state.builderForm.legs[k].strike !== prev,
+    [legIdx, dragBefore], { timeout: 10000 });
+  await page.waitForFunction(() =>
+    /Most you can lose/.test((document.getElementById('bw-panel') || {}).textContent || ''), { timeout: 20000 });
   // Your limits: judged live against the priced position
   await page.fill('#bl-maxLoss', '50');
   await page.locator('#bl-maxLoss').blur();

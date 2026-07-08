@@ -527,11 +527,69 @@
       var sx = X(opts.spot);
       if (sx >= padL && sx <= W - padR) {
         svg.appendChild(svgEl('line', { class: 'marker', x1: sx, y1: padT, x2: sx, y2: H - padB }));
-        var st = svgEl('text', { x: sx + 5, y: padT + 11 });
+        // bottom of the plot: the top strip belongs to the strike handles
+        var st = svgEl('text', { x: sx + 5, y: H - padB - 8 });
         st.textContent = 'now ' + opts.spot.toFixed(2);
         svg.appendChild(st);
       }
     }
+
+    // Draggable strike handles: grab a marker, slide it along real chain strikes, and the
+    // owner re-prices the position. THE learning tool — move the strike, watch the worst
+    // case, best case and odds change. opts.handles: [{id,strike,label,strikes[],onChange}]
+    (opts.handles || []).forEach(function (h, hi) {
+      if (!h.strikes || !h.strikes.length) return;
+      var cur = h.strike;
+      if (cur < xMin || cur > xMax) return; // off the payoff grid — the selects still work
+      var hx = X(cur);
+      // Every handle gets its OWN row (condor strikes sit close together — shared rows
+      // mash the labels), and its label rides BESIDE the grip, flipping near the right edge.
+      var gy = padT + 10 + (hi % 4) * 22;
+      var lineEl = svgEl('line', { class: 'strike-line', x1: hx, y1: padT, x2: hx, y2: H - padB });
+      var grip = svgEl('circle', { class: 'strike-grip', cx: hx, cy: gy, r: 8, 'data-handle': h.id });
+      var lbl = svgEl('text', { class: 'strike-grip-label', y: gy + 4 });
+      function placeLabel(nx, text) {
+        var flip = nx > W - 130;
+        lbl.setAttribute('x', flip ? nx - 13 : nx + 13);
+        lbl.setAttribute('text-anchor', flip ? 'end' : 'start');
+        lbl.textContent = text;
+      }
+      placeLabel(hx, h.label);
+      svg.appendChild(lineEl); svg.appendChild(grip); svg.appendChild(lbl);
+
+      var snapped = cur;
+      function moveTo(k) {
+        var nx = X(k);
+        lineEl.setAttribute('x1', nx); lineEl.setAttribute('x2', nx);
+        grip.setAttribute('cx', nx);
+        placeLabel(nx, k === cur ? h.label : h.label.replace(/[\d.]+$/, '') + k);
+      }
+      grip.addEventListener('pointerdown', function (ev) {
+        ev.stopPropagation(); ev.preventDefault();
+        grip.setPointerCapture(ev.pointerId);
+        grip.classList.add('dragging');
+      });
+      grip.addEventListener('pointermove', function (ev) {
+        if (!grip.classList.contains('dragging')) return;
+        ev.stopPropagation();
+        var box = svg.getBoundingClientRect();
+        if (!box.width) return;
+        var vx = (ev.clientX - box.left) / box.width * W;
+        var price = xMin + (vx - padL) / (W - padL - padR) * (xMax - xMin);
+        var best = h.strikes[0], bd = Infinity;
+        h.strikes.forEach(function (k) { var d = Math.abs(k - price); if (d < bd) { bd = d; best = k; } });
+        if (best !== snapped) { snapped = best; moveTo(best); }
+      });
+      grip.addEventListener('pointerup', function (ev) {
+        ev.stopPropagation();
+        grip.classList.remove('dragging');
+        if (snapped !== cur && h.onChange) h.onChange(snapped);
+      });
+      grip.addEventListener('pointercancel', function () {
+        grip.classList.remove('dragging');
+        snapped = cur; moveTo(cur);
+      });
+    });
 
     // Slide anywhere on the curve: "at $price -> P/L" (exact — the payoff is piecewise linear)
     return interactiveChart(svg, { W: W, H: H, padL: padL, padR: padR, padT: padT, padB: padB }, function (frac) {

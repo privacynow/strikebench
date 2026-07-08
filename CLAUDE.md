@@ -919,6 +919,25 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   Cboe quotes through the proxy (AAPL $311.39 DELAYED). CAVEAT (flagged to user): the app
   has NO authentication — every visitor shares the single paper account; nginx basic auth
   is the quick lock if wanted.
+- PORTFOLIO HEADLINE + GENERIC DEPLOY + UPDATE LOOP (2026-07-08; suites 224 JUnit + 26
+  fixture + 3 audit + 4 seeded + 8 live green; deployed live, commit d54b37c):
+  - `GET /api/portfolio/summary` — the honest liquidation view: cash (+reserve is a lien
+    INSIDE cash, never added twice) + Σ positions.marketValueCents + Σ closeCostCents of all
+    ACTIVE trades (TradeService.openPositionsValue: computeMark per trade, executable sides,
+    PRE-close-fee; partial marks → complete:false + worst-of freshness). totalPnlCents =
+    totalValue − startingCash. Identity pinned in ApiIntegrationTest Order(24) and in the
+    dom.test portfolio-headline test (asserts the sum via API.getFresh from the page).
+  - Portfolio header now leads with `Portfolio value` (PARTIAL badge when marks incomplete)
+    + `P/L since start` ($ and %, gain/loss colored) + Cash (reserve named in the explainer)
+    + Buying power; falls back to plain account stats when the summary call fails.
+  - scripts/deploy.sh is now MACHINE-GENERIC: env overrides REPO/APP_DIR/SERVICE/PORT/
+    BRANCH/RUN_USER/JAVA_BIN/JAVA_HEAP (+SKIP_PULL=1 for tree-as-is), `--install` bootstraps
+    APP_DIR/properties/systemd unit, `--setup-timer` installs an OPTIONAL systemd timer that
+    polls origin/BRANCH every 5 min and deploys only on new commits (`--if-changed`),
+    nginx/certbot stay outside (documented in the header comment).
+  - UPDATE LOOP DECISION: manual `scripts/deploy.sh` on the server after a push (deliberate,
+    simple); the poll timer exists but is NOT enabled — enabling it means unreviewed pushes
+    go straight to prod.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
