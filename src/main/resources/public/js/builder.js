@@ -283,7 +283,10 @@
     var level = Learn.currentLevel();
     var saved = App.state.builderForm || {};
     var st = {
-      symbol: (saved.symbol || App.state.lastRecommendSymbol || 'AAPL').toUpperCase(),
+      // An in-progress build owns its symbol; an EMPTY builder follows the working
+      // symbol from Ideas/Research ("I chose another stock" must not reload the old one)
+      symbol: ((saved.legs && saved.legs.length ? saved.symbol : null)
+        || App.state.lastRecommendSymbol || saved.symbol || 'AAPL').toUpperCase(),
       qty: saved.qty || 1,
       goal: saved.goal || null,
       templateKey: saved.templateKey || null,
@@ -482,9 +485,30 @@
     try {
       await loadSymbol();
     } catch (e) {
-      root.appendChild(alertBox('danger', 'Could not load ' + st.symbol, [e.message]));
+      // Never a dead end: say what failed, offer the universe one tap away, and retry
+      var failInput = el('input', { type: 'text', id: 'builder-symbol', list: 'universe-symbols', value: st.symbol });
+      var retryWith = function (sym) {
+        st.symbol = (sym || failInput.value.trim() || st.symbol).toUpperCase();
+        App.state.lastRecommendSymbol = st.symbol;
+        st.legs = []; st.legIdx = 0; if (st.step > 2) st.step = st.goal ? 2 : 1;
+        remember();
+        App.render();
+      };
+      failInput.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') retryWith(); });
+      var uniSyms = (App.state.universe && App.state.universe.active.symbols) || [];
+      root.appendChild(el('div', { class: 'card', id: 'builder-load-error' },
+        alertBox('danger', 'Could not load ' + st.symbol, [e.message,
+          'The builder needs a live quote and an option chain. Pick another symbol or retry.']),
+        el('div', { class: 'btn-row' },
+          failInput,
+          el('button', { class: 'btn', id: 'builder-retry', onclick: function () { retryWith(); } }, 'Retry')),
+        uniSyms.length ? el('div', { class: 'sym-chips', style: 'margin-top:8px' }, uniSyms.map(function (s2) {
+          return el('button', { class: 'sym-chip', type: 'button', onclick: function () { retryWith(s2); } }, s2);
+        })) : null));
       return;
     }
+
+    remember(); // the (possibly followed) symbol is now this builder's state
 
     if (level === 'beginner') renderBeginner(root);
     else await renderExpert(root);

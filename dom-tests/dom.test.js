@@ -113,6 +113,8 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   // Coming up: expirations (and any earnings/filing signals) as dated chips
   await page.waitForSelector('#events-card .chip');
   assert.match(await page.textContent('#events-card'), /Expiry/);
+  // From a symbol page, the sector explorer is one visible click away
+  assert.ok(await page.locator('#back-to-sectors').isVisible(), 'All sectors link on symbol pages');
   // News NEVER silently vanishes — card renders with items or an honest empty state
   await page.waitForSelector('#news-card');
   assert.match(await page.textContent('#news-card'), /News & filings/);
@@ -607,6 +609,15 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   assert.ok(tape.stripW >= tape.viewW * 2 - 5, 'each half covers the viewport (no gap at wrap)');
   await page.waitForSelector('#sector-explorer .sector-chip');
   assert.ok(await page.locator('#sector-chips .sector-chip').count() >= 10, 'all sectors explorable');
+  // The rail never just "ends": when it overflows, an arrow says there is more
+  assert.ok(await page.locator('#sector-chips.can-right .rail-arrow-right').isVisible(),
+    'overflowing rail shows a right arrow');
+  const before = await page.evaluate(() => document.querySelector('#sector-chips .sector-rail').scrollLeft);
+  await page.click('#sector-chips .rail-arrow-right');
+  await page.waitForFunction(prev =>
+    document.querySelector('#sector-chips .sector-rail').scrollLeft > prev + 50, before);
+  assert.ok(await page.locator('#sector-chips.can-left .rail-arrow-left').isVisible(),
+    'after scrolling, the way back is visible too');
   // TECH is NOT the active universe (CORE is, set above) — the set-universe action must show
   await page.click('#sector-chips .sector-chip[data-sector="TECH"]');
   await page.waitForSelector('#sector-grid .sector-tile');
@@ -877,6 +888,24 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
+});
+
+test('builder recovers from a failing symbol and follows the working symbol', async () => {
+  // The reported trap: builder stuck on a symbol that fails to load, retrying forever
+  await go('#/home'); // same-hash navigation renders nothing — leave the route first
+  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; App.state.lastRecommendSymbol = 'ZZZZQQ'; });
+  await go('#/ticket/builder');
+  await page.waitForSelector('#builder-load-error');
+  assert.match(await page.textContent('#builder-load-error'), /Could not load ZZZZQQ/);
+  assert.ok(await page.locator('#builder-retry').isVisible(), 'retry is right there');
+  // One tap on a universe chip recovers — no dead end, no manual URL surgery
+  await page.click('#builder-load-error .sym-chip:has-text("AAPL")');
+  await page.waitForSelector('#builder', { timeout: 20000 });
+  assert.equal(await page.locator('#builder-load-error').count(), 0, 'error state cleared');
+  // An EMPTY builder follows the working symbol picked elsewhere
+  await page.evaluate(() => { App.state.builderForm = null; App.state.lastRecommendSymbol = 'TSLA'; App.render(); });
+  await page.waitForFunction(() => App.state.builderForm && App.state.builderForm.symbol === 'TSLA', { timeout: 20000 });
+  await page.evaluate(() => { App.state.builderForm = null; App.state.lastRecommendSymbol = 'AAPL'; });
 });
 
 test('pipeline streamline: candidates open in the builder; Ideas links the full catalog', async () => {

@@ -844,6 +844,24 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   USER ACTION for real PG/BA candles: add `polygon.api.key=...` (or alphavantage.api.key)
   to strikebench.properties, or export POLYGON_API_KEY, and restart. Suites: 22 fixture +
   8 live green after.
+- RAIL OVERFLOW + BUILDER RECOVERY + SECTOR PATH (2026-07-07, user: rail "vanishes into the
+  horizontal end everywhere"; beginner builder "failed to load aapl and keeps trying" after
+  choosing another stock; no way to switch sector from a research symbol page). Suites:
+  23 fixture + 3 audit + 4 seeded + 8 live green; shots/r4-*.png:
+  - sectorRail now returns a `.sector-rail-wrap` (the id moves to the WRAPPER — descendant
+    test selectors unchanged) with 30px circular scroll arrows that appear ONLY when content
+    is off-screen in that direction (.can-left/.can-right via scroll listener +
+    ResizeObserver; deltas re-measure after filling); the edge fade also applies only on
+    overflowing sides. A fade with no affordance read as "the list just ends".
+  - Builder symbol-load failure is a RECOVERABLE state (#builder-load-error: honest alert +
+    symbol input + Retry + one-tap universe chips), never a dead-end alert. And st.symbol
+    precedence fixed: an EMPTY builder follows App.state.lastRecommendSymbol (the working
+    symbol from Ideas/Research); only an in-progress build (legs.length) keeps its own —
+    the "keeps trying to load AAPL" trap was saved builderForm.symbol always winning.
+    render() now calls remember() after a successful load so the followed symbol persists.
+  - Research symbol pages get `#back-to-sectors` ("← All sectors") beside Look up.
+  - TEST GOTCHA (hit again): go(sameHash) renders NOTHING (no hashchange) — leave the route
+    first or drive App.render() and wait on STATE, not on selectors that already exist.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

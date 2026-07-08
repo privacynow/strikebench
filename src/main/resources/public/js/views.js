@@ -317,6 +317,8 @@
     root.appendChild(el('div', { class: 'card' },
       el('div', { class: 'btn-row', style: 'margin-top:0' },
         input, el('button', { class: 'btn', id: 'symbol-go', onclick: go }, 'Look up'),
+        symbol ? el('a', { href: '#/research', class: 'muted', id: 'back-to-sectors',
+          style: 'font-size:12.5px; white-space:nowrap' }, '\u2190 All sectors') : null,
         el('span', { class: 'spacer' }),
         el('span', { class: 'sym-chips' },
           ((App.state.universe && App.state.universe.active.symbols) || CORE_SYMBOLS).slice(0, 6).map(function (s) {
@@ -658,8 +660,32 @@
   function sectorRail(opts) {
     opts = opts || {};
     var u = App.state.universe;
-    var rail = el('div', { class: 'sector-rail', id: opts.id || null, role: 'tablist' });
-    if (!u) return rail;
+    var rail = el('div', { class: 'sector-rail', role: 'tablist' });
+    var wrap = el('div', { class: 'sector-rail-wrap', id: opts.id || null });
+    if (!u) return wrap;
+    // Overflow must be VISIBLE: arrows appear whenever there is more rail off-screen
+    // (a fade with no affordance reads as "the list just ends here").
+    function arrow(dir) {
+      return el('button', {
+        class: 'rail-arrow rail-arrow-' + dir, type: 'button',
+        'aria-label': dir === 'left' ? 'Scroll sectors left' : 'Scroll sectors right',
+        onclick: function () {
+          rail.scrollBy({ left: (dir === 'left' ? -1 : 1) * Math.max(160, rail.clientWidth * 0.7), behavior: 'smooth' });
+        }
+      }, dir === 'left' ? '\u2039' : '\u203A');
+    }
+    function syncOverflow() {
+      var canLeft = rail.scrollLeft > 4;
+      var canRight = rail.scrollLeft + rail.clientWidth < rail.scrollWidth - 4;
+      wrap.classList.toggle('can-left', canLeft);
+      wrap.classList.toggle('can-right', canRight);
+    }
+    rail.addEventListener('scroll', syncOverflow, { passive: true });
+    if (window.ResizeObserver) new ResizeObserver(syncOverflow).observe(rail);
+    setTimeout(syncOverflow, 0);
+    wrap.appendChild(arrow('left'));
+    wrap.appendChild(rail);
+    wrap.appendChild(arrow('right'));
     var sectors = u.sectors.filter(function (sec) { return sec.key !== 'DEMO' || u.note; });
     var deltas = {};
     sectors.forEach(function (sec) {
@@ -697,8 +723,9 @@
           d.textContent = (pct >= 0 ? '\u25B2' : '\u25BC') + Math.abs(pct).toFixed(2) + '%';
         });
       } catch (e) { /* the rail works without the decoration */ }
+      syncOverflow(); // deltas widen the chips — re-measure
     })();
-    return rail;
+    return wrap;
   }
 
   /**
