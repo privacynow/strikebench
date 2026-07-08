@@ -4,6 +4,14 @@ Standalone local-first options strategy **education, paper-trading, backtesting,
 Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of truth for decisions already made.
 **Work style: build incrementally and run `mvn -q test` after every module. Never write large amounts of unverified code.**
 
+## Standing Product & Execution Rules
+- Never frame meaningful product scope as "for later", "deferred", "out of scope", or similar exclusionary language
+  during brainstorming, planning, or execution. Sequence work by impact and dependency order, then keep moving through the
+  sequence until the requested scope is genuinely handled. Do not avoid hard work because it is hard.
+- Do not remove product capabilities. Existing features, including StrikeBench's trade recommendation and idea-generation
+  workflows, must be retained and improved. The research, backtesting, education, and simulation agenda should make
+  recommendations more accurate, explainable, and confidence-building, not replace them.
+
 ## Status (2026-07-06, second session — BUILD COMPLETE)
 - **All 12 build-order milestones done on the user's Mac** (not the sandbox; network was open).
   Full backend + frontend + tests: **146 JUnit tests green** (`mvn -q test`), **12 Playwright DOM tests green**
@@ -1010,6 +1018,58 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   state mutated by the failed attempt itself; verify a new automation's FIRST real run in the
   journal, not just that its timer ticks; systemd units need explicit PATHs for login-shell
   toolchains.
+- RESEARCH-PLATFORM DIRECTION + PHASE 1 STORAGE MIGRATION (2026-07-08, feature branch
+  `feature/research-platform` off `feature/volatility_lab`; NOT deployed — strikebench.com stays
+  on main until merge). Product reframed (both reviewers + user aligned): StrikeBench becomes an
+  evidence-first, portfolio-aware, capital-efficient **trade-discovery & recommendation** engine —
+  recommendations stay THE product; the scanner/backtester/vol-analytics/optimizer/notebook are
+  the machinery that makes each recommendation better. Organizing idea: **recommendations-as-a-
+  competition** (rank viable alternatives, show why one wins + what could fail + the management
+  plan). Standing rules reinforced (in memory): never defer/exclude — sequence by IMPACT not ease,
+  finish everything; never remove features. Honesty non-negotiable: per-dimension evidence badges
+  (Observed/Modeled/Paper/Live, worst-of rollup — generalizes the existing Freshness pattern);
+  annualized-ROC is a labeled component, never the primary rank; single score never stands alone.
+  5-phase plan (all being built, impact-ordered): P1 data foundation (Postgres + reworked model +
+  Flyway + faithful migration + forward snapshots + auth) · P2 StrategyEvaluation backbone
+  (StrategySpec + producer modules: Capital[incr+economic]/Volatility[IV rank/percentile/VRP/
+  expected move]/Risk[+tail+scenario]/Evidence/ManagementPlan/Score[gate→normalize→risk-adjusted]/
+  Explanation) · P3 recommendations-as-competition (OpportunityScanner + comparison UI + ordered
+  decision page + scrubbable management plan) · P4 real evidence (owned CSV-bulk historical options
+  + backtester rewrite [portfolio/rolls/exits/delta-selection] + calibration loop) · P5 research lab
+  (portfolio optimizer + hypothesis tester + notebook + ETF replication).
+  DATA DECISIONS: local dev = Docker Postgres via compose (bare Postgres on the box for prod;
+  off-box backups); own the past via one-time CSV-bulk historical options (commercial/internal-use
+  license, NOT redistribution — derived output only) + own the future via forward snapshots;
+  subscriptions rent (lose the data on cancel) so they're optional add-ons; Flyway for migrations;
+  one user now via Google OIDC (pac4j) on a multi-user schema; user count doesn't affect data cost.
+  PHASE 1 STORAGE MIGRATION DONE + VERIFIED (commits a7ff865, 3db7b74, 49b80e4):
+  - SQLite -> **PostgreSQL 16** everywhere. `Db` is now a HikariCP-pooled Postgres helper keeping
+    the exact with/tx/exec/query/Row API (all ~25 call sites untouched), AutoCloseable, exposes
+    dataSource() for Flyway; ApiServer owns+closes the pool on stop(). Booleans stay integer 0/1
+    (zero churn); paper-domain timestamps stay ISO-TEXT; new tables use timestamptz/date/numeric/jsonb.
+  - `Migrations` -> **Flyway** (classpath:db/migrations). Flyway accepts Java 25 cleanly.
+  - Schema V1 (Postgres) collapses old SQLite V1+V2+V3 final state + adds the product's new core
+    entities: `users`(+user_id FKs), `option_bar` & `underlying_bar` (ONE table each holds our
+    forward snapshots AND vendor history, per-dimension evidence cols, date-indexed),
+    `strategy_evaluation` (typed rank columns score/ev/roc/pop/capital/tail + jsonb sub-profiles),
+    `recommendation` (+outcome fields for calibration). BIGINT cents, NUMERIC(19,4) prices, DOUBLE
+    only for ratios. App SQL was already Postgres-ready (ON CONFLICT/excluded upserts; no OR REPLACE).
+  - LOCAL DEV: `docker-compose.yml` (pinned Postgres 16, localhost only, dev+test dbs via init
+    script; optional `app` profile + Dockerfile for full-stack smoke). App runs NATIVELY for the
+    inner loop; AppConfig gains DB_URL/DB_USER/DB_PASSWORD (default = compose db).
+  - TESTS ON POSTGRES: `src/test/.../support/TestDb.java` creates a fresh isolated Flyway-migrated
+    database per JUnit test in the running dev Postgres (Testcontainers proved UNRELIABLE on
+    Java 25 + Docker 29 socket detection — even pointed at the socket it "Could not find a valid
+    Docker environment"; the compose Postgres is simpler and robust; TEST_DB_* overrides for CI).
+    `dom-tests/pgtest.js` does the same per spawned jar (jar migrates via Flyway on boot); the
+    seeded suite's legacy-collar injection moved sqlite3-on-file -> psql-on-Postgres. PREREQ:
+    `docker compose up -d db` before tests. FULL MATRIX GREEN ON POSTGRES: 224 JUnit + 26 fixture
+    + 3 audit + 4 seeded + 8 live DOM.
+  - REMAINING PHASE 1 (being built next, in order): faithful SQLite->Postgres ETL + verification
+    rehearsed on a prod-DB copy (the merge-day cutover); forward chain-snapshot recording (the moat);
+    Google OIDC auth (pac4j) + per-user scoping; prod Postgres provisioning + off-box backups +
+    deploy.sh/systemd for Postgres. Main.migrateLegacyDefaultDb (SQLite file-move) is dormant but
+    retained+tested; the ETL supersedes it as the forward-migration path.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
