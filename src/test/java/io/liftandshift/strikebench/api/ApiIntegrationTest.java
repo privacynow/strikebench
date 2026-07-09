@@ -731,4 +731,29 @@ class ApiIntegrationTest {
         assertThat(sum.get("freshness").asText()).isNotEmpty();
         assertThat(sum.has("complete")).isTrue();
     }
+
+    @Test
+    @Order(25)
+    void dataCenterOverviewSourcesAndGuardedReset() throws Exception {
+        // Overview never 500s and carries engine + coverage + job kinds.
+        HttpResponse<String> ov = get("/api/data/overview");
+        assertThat(ov.statusCode()).isEqualTo(200);
+        JsonNode j = Json.parse(ov.body());
+        assertThat(j.has("engine")).isTrue();
+        assertThat(j.get("jobKinds").toString()).contains("backfill_underlying");
+        // Source cards disclose license/use mode (Yahoo = personal-only).
+        JsonNode sources = Json.parse(get("/api/data/sources").body()).get("sources");
+        assertThat(sources.toString()).contains("Yahoo Finance").contains("PERSONAL");
+        // Coverage responds with a matrix + summary.
+        assertThat(get("/api/data/coverage").statusCode()).isEqualTo(200);
+        // Reset without confirm is refused.
+        assertThat(post("/api/data/reset", "{\"tier\":\"MARKET_DATA\"}").statusCode()).isEqualTo(400);
+        // A backfill job can be started and is listed.
+        HttpResponse<String> start = post("/api/data/jobs",
+                "{\"kind\":\"backfill_underlying\",\"params\":{\"symbols\":[\"AAPL\"],\"from\":\"2026-04-01\",\"to\":\"2026-06-30\"}}");
+        assertThat(start.statusCode()).isEqualTo(200);
+        String jobId = Json.parse(start.body()).get("id").asText();
+        assertThat(jobId).isNotBlank();
+        assertThat(get("/api/data/jobs").body()).contains(jobId);
+    }
 }

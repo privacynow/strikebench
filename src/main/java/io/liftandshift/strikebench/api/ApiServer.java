@@ -90,6 +90,9 @@ public final class ApiServer {
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
+    private io.liftandshift.strikebench.db.DataJobService dataJobs;             // Data Center background jobs
+    private io.liftandshift.strikebench.db.DataCoverage dataCoverage;           // Data Center coverage matrix
+    private io.liftandshift.strikebench.db.DataResetService dataReset;          // Data Center tiered wipe
     private java.util.concurrent.ScheduledExecutorService streamScheduler;     // pushes SSE market frames
     private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
     private final String startedAt = java.time.Instant.now().toString();
@@ -174,6 +177,11 @@ public final class ApiServer {
         io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, engine, db, clock);
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
         server.db = db;
+        // Data Center services (need db, which is set above; reuse the constructor-built engine).
+        var backfill = new io.liftandshift.strikebench.db.UnderlyingBackfill(market, db, clock);
+        server.dataJobs = new io.liftandshift.strikebench.db.DataJobService(db, clock, server.marketEngine, snapshots, backfill, universe, cfg);
+        server.dataCoverage = new io.liftandshift.strikebench.db.DataCoverage(db);
+        server.dataReset = new io.liftandshift.strikebench.db.DataResetService(db, accounts);
         return server;
     }
 
@@ -258,6 +266,17 @@ public final class ApiServer {
             c.routes.get("/api/quotes", this::quotesBatch);
             c.routes.get("/api/market/engine", ctx -> ctx.json(marketEngine.status())); // Data Center: engine health
             c.routes.sse("/api/market/stream", this::marketStream);                     // live-ish quote deltas from memory
+
+            // ---- Data Center ----
+            c.routes.get("/api/data/overview", this::dataOverview);
+            c.routes.get("/api/data/coverage", this::dataCoverageRoute);
+            c.routes.get("/api/data/sources", this::dataSources);
+            c.routes.get("/api/data/jobs", this::dataJobsList);
+            c.routes.get("/api/data/jobs/{id}", this::dataJobGet);
+            c.routes.post("/api/data/jobs", this::dataJobStart);
+            c.routes.post("/api/data/jobs/{id}/cancel", this::dataJobCancel);
+            c.routes.post("/api/data/jobs/{id}/retry", this::dataJobRetry);
+            c.routes.post("/api/data/reset", this::dataResetRoute);
 
             c.routes.get("/api/account", this::account);
             c.routes.post("/api/account/reset", this::accountReset);
@@ -369,6 +388,7 @@ public final class ApiServer {
         streamScheduler = java.util.concurrent.Executors.newScheduledThreadPool(2, r -> {
             Thread t = new Thread(r, "market-stream"); t.setDaemon(true); return t;
         });
+        if (dataJobs != null) dataJobs.reconcileOnBoot(); // fail orphaned jobs from a prior run so they can retry
         if (marketEngine != null) marketEngine.start(); // warm the universe + background refresh
         log.info("StrikeBench listening on http://localhost:{} (fixturesOnly={})", app.port(), cfg.fixturesOnly());
         return app;
@@ -445,6 +465,7 @@ public final class ApiServer {
     }
 
     public void stop() {
+        if (dataJobs != null) dataJobs.shutdown();
         if (marketEngine != null) marketEngine.stop();
         if (streamScheduler != null) streamScheduler.shutdownNow();
         if (snapshotScheduler != null) snapshotScheduler.shutdownNow();
@@ -619,6 +640,93 @@ public final class ApiServer {
         int interval = Math.max(1, cfg.engineStreamIntervalSeconds());
         var task = streamScheduler.scheduleWithFixedDelay(push, interval, interval, java.util.concurrent.TimeUnit.SECONDS);
         client.onClose(() -> task.cancel(true));
+    }
+
+    // ---- Data Center ----
+
+    /** One call for the Data Center header: engine health + coverage summary + mode. Never 500s. */
+    private void dataOverview(Context ctx) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        try { out.put("engine", marketEngine.status()); } catch (Exception e) { out.put("engine", null); }
+        try { out.put("coverage", dataCoverage.summary()); } catch (Exception e) { out.put("coverage", null); }
+        try { out.put("jobs", dataJobs.recent(8)); } catch (Exception e) { out.put("jobs", List.of()); }
+        out.put("fixturesOnly", cfg.fixturesOnly());
+        out.put("marketOpen", io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()));
+        out.put("jobKinds", io.liftandshift.strikebench.db.DataJobService.KINDS);
+        ctx.json(out);
+    }
+
+    private void dataCoverageRoute(Context ctx) {
+        ctx.json(Map.of("symbols", dataCoverage.bySymbol(), "summary", dataCoverage.summary()));
+    }
+
+    /** Connector setup cards: what each source covers, whether it's on, and its license/use mode. */
+    private void dataSources(Context ctx) {
+        List<Map<String, Object>> sources = new ArrayList<>();
+        boolean fx = cfg.fixturesOnly();
+        sources.add(source("Cboe (delayed chains)", "Option chains + greeks", !fx, "keyless · delayed · display-only",
+                "Keyless. Current option chains with bid/ask/IV/greeks (15-min delayed). Always on in live mode."));
+        sources.add(source("Yahoo Finance", "Equity/ETF/index candles", cfg.yahooEnabled(), "keyless · PERSONAL / local-clone only",
+                "Underlying OHLCV for backtesting (NOT options). Off by default; set YAHOO_ENABLED=true to opt in — you own Yahoo's terms."));
+        sources.add(source("Alpha Vantage", "Equity candles + historical options", !cfg.alphaVantageApiKey().isBlank(),
+                "keyed · internal-use", "Set ALPHAVANTAGE_API_KEY. 15+ years of historical options with IV/greeks (premium tier)."));
+        sources.add(source("Polygon", "Historical option chains", !cfg.polygonApiKey().isBlank(),
+                "keyed · internal-use", "Set POLYGON_API_KEY for real historical chains used by the backtester's observed tier."));
+        sources.add(source("Stooq", "Equity EOD candles", !fx, "keyless (bot-blocked for us)",
+                "Keyless CSV, but Stooq serves an anti-bot wall to non-browser clients — usually falls through."));
+        sources.add(source("SEC EDGAR", "Filings (10-K/10-Q/8-K)", !fx, "keyless · public", "Keyless with a contact User-Agent. Corporate filings for the news feed."));
+        sources.add(source("Google News RSS", "Headlines", !fx && !cfg.newsRssBaseUrl().isBlank(), "keyless · public", "Keyless per-symbol headlines."));
+        sources.add(source("Treasury / FRED", "Risk-free rates", !fx, "keyless / keyed", "Treasury is keyless; FRED needs FRED_API_KEY."));
+        sources.add(source("Historical options CSV", "Owned options history", true, "licensed · internal-use (no redistribution)",
+                "Import a licensed vendor CSV (ORATS / Cboe DataShop / Databento) via a backfill job — the 'own the past' path."));
+        sources.add(source("Built-in fixtures", "Deterministic demo data", fx, "demo", "The offline demo dataset. Serves when nothing real answers."));
+        ctx.json(Map.of("sources", sources, "fixturesOnly", fx));
+    }
+
+    private static Map<String, Object> source(String name, String covers, boolean enabled, String license, String hint) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("name", name); m.put("covers", covers); m.put("enabled", enabled);
+        m.put("license", license); m.put("hint", hint);
+        return m;
+    }
+
+    private void dataJobsList(Context ctx) { ctx.json(Map.of("jobs", dataJobs.recent(30))); }
+
+    private void dataJobGet(Context ctx) {
+        var v = dataJobs.get(ctx.pathParam("id"));
+        if (v.job() == null) throw new java.util.NoSuchElementException("no such job");
+        ctx.json(Map.of("job", v.job(), "items", v.items()));
+    }
+
+    public record JobRequest(String kind, Map<String, Object> params) {}
+
+    private void dataJobStart(Context ctx) {
+        JobRequest b = requireBody(bodyOrNull(ctx, JobRequest.class));
+        ctx.json(dataJobs.start(b.kind(), b.params(), ownerId(ctx)));
+    }
+
+    private void dataJobCancel(Context ctx) {
+        dataJobs.cancel(ctx.pathParam("id"));
+        ctx.json(Map.of("ok", true));
+    }
+
+    private void dataJobRetry(Context ctx) {
+        ctx.json(dataJobs.retry(ctx.pathParam("id"), ownerId(ctx)));
+    }
+
+    public record DataResetRequest(String tier, Boolean confirm) {}
+
+    private void dataResetRoute(Context ctx) {
+        DataResetRequest b = requireBody(bodyOrNull(ctx, DataResetRequest.class));
+        if (b.confirm() == null || !b.confirm()) {
+            ctx.status(400).json(Map.of("error", "confirm_required", "detail", "Reset requires confirm:true"));
+            return;
+        }
+        var tier = io.liftandshift.strikebench.db.DataResetService.parseTier(b.tier());
+        var result = dataReset.reset(tier);
+        try { audit.log(null, null, "DATA_RESET", "WARN", Map.of("tier", result.tier(), "tables", result.tablesCleared())); }
+        catch (Exception e) { /* best-effort; the reset itself succeeded */ }
+        ctx.json(result);
     }
 
     // ---- Account ----
