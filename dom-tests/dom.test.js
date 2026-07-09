@@ -289,6 +289,9 @@ test('portfolio absorbs account: sections, ledger under Activity, guarded reset'
 
 test('backtest runs and reports mode, coverage, assumptions', async () => {
   await go('#/backtest');
+  // The portfolio engine + full family menu are Expert-only; pin this test there.
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForSelector('#bt-engine');
   // Product form: period pills set the window; a hand-edited date clears the pill claim
   await page.click('#bt-periods .pill[data-days="365"]');
   assert.equal(await page.locator('#bt-periods .pill.active').count(), 1);
@@ -311,6 +314,13 @@ test('backtest runs and reports mode, coverage, assumptions', async () => {
   assert.match(text, /Max drawdown/);
   assert.ok(await page.locator('#bt-results .chart-summary .chip').count() >= 3, 'equity summary chips');
   assert.ok(await page.locator('#bt-results .chart-wrap').count() >= 1, 'interactive equity chart');
+
+  // D4: Expert unlocks the PORTFOLIO engine (concurrent positions). Run it on a supported family.
+  await page.selectOption('#bt-strategy', 'CREDIT_PUT_SPREAD');
+  await page.selectOption('#bt-engine', 'portfolio');
+  await page.click('#bt-run');
+  await page.waitForSelector('#bt-results:has-text("Concurrent peak")', { timeout: 30000 });
+  assert.match(await page.textContent('#bt-results'), /Portfolio engine/, 'portfolio report rendered');
 });
 
 test('candidate cards cross-link into backtest with the form pre-answered', async () => {

@@ -2868,6 +2868,16 @@
         return el('button', { class: 'sym-chip', type: 'button', onclick: function () { dte.value = String(p.v); bf.dte = dte.value; } }, p.label);
       }));
 
+    // D4: Expert unlocks the PORTFOLIO engine (concurrent positions + mechanical exits) — the deeper
+    // tool, not fewer words. Beginner stays on the single-position engine.
+    var engine = null;
+    if (btLevel !== 'beginner') {
+      engine = el('select', { id: 'bt-engine' },
+        el('option', { value: 'single' }, 'Single position (one trade at a time)'),
+        el('option', { value: 'portfolio' }, 'Portfolio (concurrent positions, mechanical exits)'));
+      engine.value = bf.engine || 'single';
+      engine.addEventListener('change', function () { bf.engine = engine.value; });
+    }
     root.appendChild(el('div', { class: 'card' },
       btLevel === 'beginner'
         ? explain('The strategy list matches your Beginner level — credit spreads, condors, collars and the rest unlock at Expert (the level switch is in the header). Target DTE is how far out each trade’s expiration is: Monthly (30 days) is the classic starting point.')
@@ -2875,10 +2885,12 @@
       el('div', { class: 'form-grid' },
         el('div', { class: 'field' }, el('label', {}, 'Symbol'), sym),
         el('div', { class: 'field' }, el('label', {}, 'Strategy'), strat),
+        engine ? el('div', { class: 'field' }, el('label', {}, 'Engine'), engine) : null,
         el('div', { class: 'field' }, el('label', {}, 'Target DTE'), dte, dtePresets),
         el('div', { class: 'field' }, el('label', {}, 'Window'), periodRow),
         el('div', { class: 'field' }, el('label', {}, 'From'), from),
         el('div', { class: 'field' }, el('label', {}, 'To'), to)),
+      engine ? explain('Portfolio engine currently backtests CREDIT_PUT_SPREAD and DEBIT_CALL_SPREAD (delta-selected strikes, profit-target/stop/time exits, capital-gated concurrency).') : null,
       el('div', { class: 'btn-row' },
         el('button', {
           class: 'btn', id: 'bt-run', onclick: async function () {
@@ -2887,11 +2899,20 @@
             out.innerHTML = '';
             out.appendChild(UI.spinner('Running backtest…'));
             try {
-              var report = await API.post('/api/backtest', {
-                symbol: sym.value.trim(), strategy: strat.value,
-                from: from.value, to: to.value, targetDte: parseInt(dte.value, 10)
-              });
-              renderReport(report);
+              if (engine && engine.value === 'portfolio') {
+                var preport = await API.post('/api/backtest/portfolio', {
+                  symbol: sym.value.trim(), strategy: strat.value, from: from.value, to: to.value,
+                  targetDte: parseInt(dte.value, 10), entryEveryDays: 5, maxConcurrent: 4, qty: 1,
+                  shortDelta: 0.30, widthPct: 0.05, profitTargetPct: 0.5, stopFraction: 0.8,
+                  rollDte: 7, startingCashCents: 10000000
+                });
+                renderPortfolioReport(preport);
+              } else {
+                renderReport(await API.post('/api/backtest', {
+                  symbol: sym.value.trim(), strategy: strat.value,
+                  from: from.value, to: to.value, targetDte: parseInt(dte.value, 10)
+                }));
+              }
             } catch (e) {
               out.innerHTML = '';
               out.appendChild(alertBox('danger', e.message));
@@ -3001,6 +3022,46 @@
         assume.appendChild(el('div', { class: 'status-item' }, el('b', {}, k), el('span', { class: 'spacer' }), el('span', { class: 'muted' }, String(r.assumptions[k]))));
       });
       out.appendChild(assume);
+      (r.notes || []).forEach(function (n) { out.appendChild(alertBox('warn', n)); });
+      out.appendChild(el('p', { class: 'muted' }, r.disclaimer));
+    }
+
+    // D4: the Expert portfolio engine's report (concurrent positions + mechanical exits).
+    function renderPortfolioReport(r) {
+      out.innerHTML = '';
+      if (r.demoUnderlying) {
+        out.appendChild(alertBox('danger', 'Demo price data — NOT the real market. ' + r.symbol
+          + '’s price history here is placeholder data, so every result below is anchored to fake '
+          + 'prices. Add a Polygon or Alpha Vantage key for a real backtest.'));
+      }
+      var modeKind = r.pricingMode === 'OBSERVED_FROM_HISTORY' ? 'ok' : r.pricingMode === 'MODELED_FROM_UNDERLYING' ? 'warn' : 'danger';
+      out.appendChild(alertBox(modeKind, 'Portfolio engine · pricing mode ' + r.pricingMode + ' — confidence '
+        + r.confidence + '. Concurrent positions with mechanical profit-target / stop / time exits.'));
+      out.appendChild(el('div', { class: 'grid grid-4' },
+        stat('Sample size', String(r.sampleSize), 'Completed trades.'),
+        stat('Win rate', fmtPct(r.winRate)),
+        stat('Avg return on risk', fmtPct(r.avgReturnOnRisk)),
+        stat('Max drawdown', fmtPct(r.maxDrawdownPct)),
+        stat('Concurrent peak', String(r.concurrentPeak), 'Most positions open at once.'),
+        stat('Start → end', UI.fmtMoneyCompact(r.startingCents) + ' → ' + UI.fmtMoneyCompact(r.endingCents))));
+      if (r.equityCurve && r.equityCurve.length > 1) {
+        var eq = r.equityCurve.map(function (p) { return { date: p.date, value: p.equityCents }; });
+        out.appendChild(el('div', { class: 'card' }, UI.cardHeader('Equity curve'), UI.lineChart(eq, { money: true })));
+      }
+      if (r.trades && r.trades.length) {
+        out.appendChild(el('div', { class: 'card' },
+          UI.cardHeader('Trades (' + r.trades.length + ')'),
+          table(['Entry', 'Exit', 'Strategy', 'Credit/Debit', 'P/L', 'Max loss', 'Why closed'],
+            r.trades.map(function (t) {
+              return el('tr', {},
+                el('td', { class: 'muted' }, t.entryDate), el('td', { class: 'muted' }, t.exitDate),
+                el('td', {}, prettyStrategy(t.strategy)),
+                el('td', {}, fmtMoney(t.creditCents, { plus: true })),
+                el('td', {}, pnlSpan(t.pnlCents)),
+                el('td', { class: 'loss' }, fmtMoney(t.maxLossCents)),
+                el('td', { class: 'muted' }, t.exitReason));
+            }))));
+      }
       (r.notes || []).forEach(function (n) { out.appendChild(alertBox('warn', n)); });
       out.appendChild(el('p', { class: 'muted' }, r.disclaimer));
     }

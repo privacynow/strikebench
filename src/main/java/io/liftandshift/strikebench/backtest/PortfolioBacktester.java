@@ -73,7 +73,7 @@ public final class PortfolioBacktester {
             String pricingMode, String confidence, int daysCovered, int sampleSize, int concurrentPeak,
             Double winRate, Double avgReturnOnRisk, long startingCents, long endingCents,
             double maxDrawdownPct, List<PortfolioTrade> trades,
-            List<Map<String, Object>> equityCurve, List<String> notes, String disclaimer) {}
+            List<Map<String, Object>> equityCurve, List<String> notes, boolean demoUnderlying, String disclaimer) {}
 
     // A concrete leg of a modeled position.
     private record Leg(boolean call, boolean shortLeg, double strike) {}
@@ -122,7 +122,7 @@ public final class PortfolioBacktester {
             notes.add("No underlying data for " + symbol + " in the window");
             return new PortfolioReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                     "PAYOFF_ONLY", "none", 0, 0, 0, null, null, startingCash, startingCash, 0,
-                    trades, equity, notes, DISCLAIMER);
+                    trades, equity, notes, demo, DISCLAIMER);
         }
 
         List<Position> openPositions = new ArrayList<>();
@@ -209,7 +209,7 @@ public final class PortfolioBacktester {
         String confidence = demo ? "none (demo data)" : usedObserved ? "observed" : "modeled";
         return new PortfolioReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                 mode, confidence, window.size(), sample, concurrentPeak, winRate, avgRoR,
-                startingCash, ending, round(maxDd * 100), trades, equity, notes, DISCLAIMER);
+                startingCash, ending, round(maxDd * 100), trades, equity, notes, demo, DISCLAIMER);
     }
 
     // ---- position construction (delta-based) ----
