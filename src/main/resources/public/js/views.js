@@ -3133,6 +3133,9 @@
   }
 
   // ---- Research lab (Phase 5): optimizer, hypothesis tester, ETF replicator, notebook ----
+  // Built to the same design language as Trade/Research: a hero band, ONE shared research
+  // context every tool reads from, conclusion-first results (the answer leads), stat/fact
+  // tiles, icon-tile accents, and interactive SVG charts.
 
   var LAB_PALETTE = ['#2f6bde', '#7c4fe0', '#3aa76d', '#e0912f', '#d64545', '#2ba3b8', '#b8556f', '#6b8e23'];
   function labColor(i) { return LAB_PALETTE[i % LAB_PALETTE.length]; }
@@ -3141,17 +3144,85 @@
     return el('div', { class: 'field' }, el('label', {}, label), input);
   }
 
-  /** Horizontal stacked composition bar (SVG) + a color legend. */
+  /** A stat/fact tile (label over value), matching the tiles the recommendation pages use. */
+  function labFact(label, value, cls) {
+    return el('div', { class: 'fact' + (cls ? ' ' + cls : '') },
+      el('div', { class: 'f-label' }, label),
+      el('div', { class: 'f-value' }, value));
+  }
+
+  /** Hero band for the lab — same DNA as the home hero (eyebrow + gradient title + sub). */
+  function labHero(level) {
+    return el('section', { class: 'lab-hero' },
+      el('div', { class: 'lab-hero-text' },
+        el('div', { class: 'eyebrow' }, 'RESEARCH LAB'),
+        el('h1', { class: 'lab-hero-title' }, 'Research before you ', el('span', { class: 'grad' }, 'risk'), '.'),
+        el('p', { class: 'lab-hero-sub' }, level === 'beginner'
+          ? 'Four honest tools: build a diversified portfolio, test whether a signal is real, replicate an exposure for less capital, and keep your notes.'
+          : 'Portfolio construction, signal-significance testing, capital-efficient replication, and a notebook — all on the same evidence the recommendations use.')),
+      el('div', { class: 'lab-hero-tools' },
+        [['grid', 'Portfolio'], ['magnifier', 'Signal test'], ['coins', 'Replicate'], ['pen', 'Notebook']].map(function (t) {
+          return el('span', { class: 'lab-hero-chip' },
+            el('span', { class: 'icon-tile icon-tile-sm' }, icon(t[0])), el('b', {}, t[1]));
+        })));
+  }
+
+  /**
+   * ONE shared research context the four tools default from: the working stock (feeds the
+   * signal test + replicator), the account size (feeds the optimizer budget), and — at Expert —
+   * the history window (feeds the signal test). Editing it live-syncs the tool inputs without a
+   * re-render, so in-progress results are never wiped.
+   */
+  function labContextBar(ctx, level) {
+    var sym = el('input', { type: 'text', id: 'lab-ctx-sym', list: 'universe-symbols',
+      value: ctx.symbol || App.state.lastRecommendSymbol || 'AAPL' });
+    var acct = el('input', { type: 'number', id: 'lab-ctx-acct', min: '0', step: '1000',
+      value: ctx.accountCents ? Math.round(ctx.accountCents / 100) : 25000 });
+    ctx.symbol = (sym.value || '').toUpperCase();
+    ctx.accountCents = Math.round((+acct.value || 0) * 100);
+    sym.addEventListener('input', function () {
+      ctx.symbol = sym.value.trim().toUpperCase();
+      if (ctx.symbol) App.state.lastRecommendSymbol = ctx.symbol;
+      ['lab-hyp-sym', 'lab-rep-sym'].forEach(function (id) { var e = document.getElementById(id); if (e) e.value = ctx.symbol; });
+    });
+    acct.addEventListener('input', function () {
+      ctx.accountCents = Math.round((+acct.value || 0) * 100);
+      var b = document.getElementById('lab-budget'); if (b) b.value = +acct.value || 0;
+    });
+    var fields = [labField('Working stock', sym), labField('Account size ($)', acct)];
+    if (level === 'expert') {
+      var from = el('input', { type: 'date', id: 'lab-ctx-from', value: ctx.from || '2023-01-01' });
+      var to = el('input', { type: 'date', id: 'lab-ctx-to', value: ctx.to || new Date().toISOString().slice(0, 10) });
+      ctx.from = from.value; ctx.to = to.value;
+      from.addEventListener('change', function () { ctx.from = from.value; });
+      to.addEventListener('change', function () { ctx.to = to.value; });
+      fields.push(labField('History from', from), labField('to', to));
+    }
+    return el('div', { class: 'card lab-context' },
+      el('div', { class: 'lab-context-head' },
+        el('span', { class: 'eyebrow' }, 'SHARED RESEARCH CONTEXT'),
+        el('span', { class: 'muted small' }, 'Every tool below starts here.')),
+      el('div', { class: 'form-grid lab-context-grid' }, fields));
+  }
+
+  /** A card header with an icon-tile accent, like the recommendation surfaces. */
+  function labHeader(iconName, title, right) {
+    return UI.cardHeader(
+      el('span', { class: 'lab-title' }, el('span', { class: 'icon-tile icon-tile-sm' }, icon(iconName)), el('b', {}, title)),
+      right || null);
+  }
+
+  /** Horizontal stacked composition bar (SVG, hover per segment) + a value legend. */
   function compositionChart(segments) {
     var total = segments.reduce(function (s, x) { return s + Math.max(0, x.value); }, 0) || 1;
     var x = 0, rects = '';
     segments.forEach(function (s, i) {
       var w = Math.max(0, s.value) / total * 100;
-      rects += '<rect x="' + x.toFixed(3) + '" y="0" width="' + w.toFixed(3) + '" height="18" fill="'
-        + labColor(i) + '"><title>' + s.label + '</title></rect>';
+      rects += '<rect x="' + x.toFixed(3) + '" y="0" width="' + Math.max(0, w - 0.4).toFixed(3) + '" height="22" rx="1.5" fill="'
+        + labColor(i) + '"><title>' + s.label + ' — ' + fmtMoney(s.value) + ' (' + w.toFixed(0) + '%)</title></rect>';
       x += w;
     });
-    var svg = '<svg viewBox="0 0 100 18" preserveAspectRatio="none" width="100%" height="18" role="img" aria-label="Allocation by symbol">' + rects + '</svg>';
+    var svg = '<svg viewBox="0 0 100 22" preserveAspectRatio="none" width="100%" height="22" role="img" aria-label="Allocation by symbol">' + rects + '</svg>';
     var legend = el('div', { class: 'lab-legend' }, segments.map(function (s, i) {
       return el('span', { class: 'lab-legend-item' },
         el('span', { class: 'lab-swatch', style: 'background:' + labColor(i) }),
@@ -3160,26 +3231,28 @@
     return el('div', {}, el('div', { class: 'lab-chart', html: svg }), legend);
   }
 
-  /** A 0..1 bar with a baseline marker; fill greens above baseline, reds below (SVG). */
+  /** A 0..1 bar with a baseline marker; fill greens above baseline, reds below (SVG, hover). */
   function gaugeChart(value01, baseline01, caption) {
     var v = Math.max(0, Math.min(1, value01)) * 100, b = Math.max(0, Math.min(1, baseline01)) * 100;
     var col = value01 >= baseline01 ? 'var(--risk-ok-solid,#3aa76d)' : 'var(--risk-danger-solid,#d64545)';
-    var svg = '<svg viewBox="0 0 100 14" preserveAspectRatio="none" width="100%" height="14" role="img">'
-      + '<rect x="0" y="4" width="100" height="6" rx="3" fill="var(--line)"/>'
-      + '<rect x="0" y="4" width="' + v.toFixed(2) + '" height="6" rx="3" fill="' + col + '"/>'
-      + '<line x1="' + b.toFixed(2) + '" y1="1.5" x2="' + b.toFixed(2) + '" y2="12.5" stroke="var(--fg)" stroke-width="0.7"/></svg>';
+    var svg = '<svg viewBox="0 0 100 16" preserveAspectRatio="none" width="100%" height="16" role="img">'
+      + '<rect x="0" y="5" width="100" height="6" rx="3" fill="var(--line)"/>'
+      + '<rect x="0" y="5" width="' + v.toFixed(2) + '" height="6" rx="3" fill="' + col + '"><title>' + Math.round(v) + '%</title></rect>'
+      + '<line x1="' + b.toFixed(2) + '" y1="1.5" x2="' + b.toFixed(2) + '" y2="14.5" stroke="var(--fg)" stroke-width="0.8"/>'
+      + '<circle cx="' + v.toFixed(2) + '" cy="8" r="2.4" fill="' + col + '" stroke="var(--surface)" stroke-width="0.8"/></svg>';
     return el('div', {}, el('div', { class: 'lab-chart', html: svg }),
       caption ? el('div', { class: 'muted small' }, caption) : null);
   }
 
   // ---- Optimizer ----
-  function optimizerCard(level) {
+  function optimizerCard(level, ctx) {
     var f = App.state.labForm.opt = App.state.labForm.opt || {};
+    var defaultBudget = f.budget || (ctx && ctx.accountCents ? Math.round(ctx.accountCents / 100) : 25000);
     var card = el('div', { class: 'card lab-card lab-optimizer' });
-    card.appendChild(UI.cardHeader(el('span', { class: 'lab-title' }, UI.icon('grid', 18), ' Build a portfolio')));
-    card.appendChild(explain('Allocate a budget across the strongest ideas in your universe — diversified by symbol and capped per position. Only ideas that pass the risk screens are funded.'));
+    card.appendChild(labHeader('grid', 'Build a portfolio'));
+    card.appendChild(explain('Allocate your account across the strongest ideas in your universe — diversified by symbol and capped per position. Only ideas that pass the risk screens are funded.'));
 
-    var budget = el('input', { type: 'number', id: 'lab-budget', value: f.budget || 25000, min: '0', step: '1000' });
+    var budget = el('input', { type: 'number', id: 'lab-budget', value: defaultBudget, min: '0', step: '1000' });
     var goal = el('select', { id: 'lab-goal' },
       el('option', { value: '' }, 'Any goal'), el('option', { value: 'INCOME' }, 'Income'),
       el('option', { value: 'DIRECTIONAL' }, 'Directional'));
@@ -3225,14 +3298,22 @@
       out.appendChild(UI.emptyState('Nothing funded', (o.notes && o.notes[0]) || 'No viable ideas fit the budget. Raise it or widen the goal.'));
       return;
     }
-    out.appendChild(el('div', { class: 'chip-row', id: 'lab-opt-summary' },
-      chip('Capital used', fmtMoney(o.capitalUsedCents)),
-      chip('Positions', String(allocs.length)),
-      chip('Exp. value', pnlSpan(o.expectedValueCents)),
-      chip('Tail risk', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0)))),
-      chip('Avg score', String(Math.round(o.avgScore || 0)))));
-
     var perSym = o.perSymbolCents || {};
+    var nSym = Object.keys(perSym).length;
+    // Conclusion first: what this portfolio IS, in one sentence.
+    out.appendChild(el('div', { class: 'lab-verdict' },
+      el('b', {}, 'Funded ' + allocs.length + ' position' + (allocs.length === 1 ? '' : 's')
+        + ' across ' + nSym + ' symbol' + (nSym === 1 ? '' : 's') + ' for ' + fmtMoney(o.capitalUsedCents) + '.'),
+      ' Expected value ', pnlSpan(o.expectedValueCents),
+      ', worst-case tail ', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0))), '.'));
+
+    out.appendChild(el('div', { class: 'fact-grid', id: 'lab-opt-summary' },
+      labFact('Capital used', fmtMoney(o.capitalUsedCents)),
+      labFact('Positions', String(allocs.length)),
+      labFact('Expected value', pnlSpan(o.expectedValueCents), o.expectedValueCents >= 0 ? 'f-ok' : 'f-danger'),
+      labFact('Tail risk', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0))), 'f-danger'),
+      labFact('Avg score', String(Math.round(o.avgScore || 0)))));
+
     var segments = Object.keys(perSym).map(function (k) { return { label: k, value: perSym[k] }; });
     if (segments.length) {
       out.appendChild(el('div', { class: 'decision-sub' }, 'How the capital is spread'));
@@ -3260,13 +3341,13 @@
   }
 
   // ---- Hypothesis tester ----
-  function hypothesisCard(level) {
+  function hypothesisCard(level, ctx) {
     var f = App.state.labForm.hyp = App.state.labForm.hyp || {};
     var card = el('div', { class: 'card lab-card' });
-    card.appendChild(UI.cardHeader(el('span', { class: 'lab-title' }, UI.icon('magnifier', 18), ' Test an idea')));
+    card.appendChild(labHeader('magnifier', 'Test an idea'));
     card.appendChild(explain('Does a signal actually predict what it claims, or is it just chance? We replay it over history and give an honest verdict.'));
 
-    var symbol = el('input', { type: 'text', id: 'lab-hyp-sym', value: f.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
+    var symbol = el('input', { type: 'text', id: 'lab-hyp-sym', value: f.symbol || (ctx && ctx.symbol) || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
     var fields = [labField('Stock', symbol)];
     var lookback = null, threshold = null, forward = null;
     if (level === 'expert') {
@@ -3286,9 +3367,9 @@
       f.symbol = symbol.value.toUpperCase();
       if (lookback) { f.lookback = +lookback.value; f.threshold = +threshold.value; f.forward = +forward.value; }
       run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Replaying history…'));
-      var to = new Date().toISOString().slice(0, 10);
+      var to = (ctx && ctx.to) || new Date().toISOString().slice(0, 10);
       var body = {
-        symbol: symbol.value, from: '2023-01-01', to: to,
+        symbol: symbol.value, from: (ctx && ctx.from) || '2023-01-01', to: to,
         lookbackDays: lookback ? +lookback.value : 20,
         thresholdPct: threshold ? +threshold.value : 0,
         forwardDays: forward ? +forward.value : 10
@@ -3304,28 +3385,29 @@
 
   function renderHypothesis(out, r, level) {
     out.innerHTML = '';
+    // Conclusion first: the verdict banner IS the answer.
     var kind = r.significant ? (r.winRate > 0.5 ? 'ok' : 'danger') : (r.sample < 20 ? 'warn' : 'caution');
     out.appendChild(alertBox(kind, r.verdict));
     out.appendChild(el('p', { class: 'muted small' }, r.hypothesis));
     out.appendChild(gaugeChart(r.winRate, 0.5,
       'Win rate ' + fmtPct(r.winRate) + ' vs 50% by chance — over ' + r.sample + ' signals'));
-    var chips = el('div', { class: 'chip-row' },
-      chip('Signals', String(r.sample)),
-      chip('Wins', String(r.wins)),
-      chip('Edge', (r.edgePct >= 0 ? '+' : '') + r.edgePct + ' pts'));
-    if (level === 'expert') chips.appendChild(chip('z-score', String(r.zScore)));
-    out.appendChild(chips);
+    var facts = el('div', { class: 'fact-grid' },
+      labFact('Signals', String(r.sample)),
+      labFact('Wins', String(r.wins), r.wins > r.sample - r.wins ? 'f-ok' : null),
+      labFact('Edge', (r.edgePct >= 0 ? '+' : '') + r.edgePct + ' pts', r.edgePct >= 0 ? 'f-ok' : 'f-danger'));
+    if (level === 'expert') facts.appendChild(labFact('z-score', String(r.zScore)));
+    out.appendChild(facts);
     (r.notes || []).forEach(function (n) { out.appendChild(el('div', { class: 'muted small' }, n)); });
   }
 
   // ---- ETF / exposure replicator ----
-  function replicateCard(level) {
+  function replicateCard(level, ctx) {
     var f = App.state.labForm.rep = App.state.labForm.rep || {};
     var card = el('div', { class: 'card lab-card' });
-    card.appendChild(UI.cardHeader(el('span', { class: 'lab-title' }, UI.icon('coins', 18), ' Replicate an exposure')));
+    card.appendChild(labHeader('coins', 'Replicate an exposure'));
     card.appendChild(explain('Get the price exposure of owning shares — for far less capital — with a synthetic options position.'));
 
-    var symbol = el('input', { type: 'text', id: 'lab-rep-sym', value: f.symbol || 'SPY', list: 'universe-symbols' });
+    var symbol = el('input', { type: 'text', id: 'lab-rep-sym', value: f.symbol || (ctx && ctx.symbol) || 'SPY', list: 'universe-symbols' });
     var target = el('input', { type: 'number', id: 'lab-rep-tgt', value: f.target || 50000, min: '0', step: '1000' });
     var dir = el('select', { id: 'lab-rep-dir' }, el('option', { value: 'long' }, 'Bullish (long)'), el('option', { value: 'short' }, 'Bearish (short)'));
     dir.value = f.dir || 'long';
@@ -3366,7 +3448,7 @@
   async function notebookCard() {
     var card = el('div', { class: 'card lab-card lab-notebook' });
     var newBtn = el('button', { class: 'btn btn-sm', id: 'lab-note-new' }, 'New note');
-    card.appendChild(UI.cardHeader(el('span', { class: 'lab-title' }, UI.icon('pen', 18), ' Your research notes'), newBtn));
+    card.appendChild(labHeader('pen', 'Your research notes', newBtn));
     var list = el('div', { id: 'lab-notes', class: 'lab-out' });
     card.appendChild(list);
 
@@ -3424,16 +3506,15 @@
   async function lab(root) {
     App.state.labForm = App.state.labForm || {};
     var level = Learn.currentLevel();
-    root.appendChild(el('h1', {}, 'Research lab'));
-    if (level === 'beginner') {
-      root.appendChild(explain('Four tools to research before you trade: build a diversified portfolio, test whether a signal is real, replicate an exposure cheaply, and keep notes.'));
-    }
+    var ctx = App.state.labForm.ctx = App.state.labForm.ctx || {};
+    root.appendChild(labHero(level));
+    root.appendChild(labContextBar(ctx, level));
     var grid = el('div', { class: 'lab-grid' });
     root.appendChild(grid);
-    grid.appendChild(optimizerCard(level));   // spans full width on desktop
-    grid.appendChild(hypothesisCard(level));
-    grid.appendChild(replicateCard(level));
-    grid.appendChild(await notebookCard());    // spans full width on desktop
+    grid.appendChild(optimizerCard(level, ctx));   // spans full width on desktop
+    grid.appendChild(hypothesisCard(level, ctx));
+    grid.appendChild(replicateCard(level, ctx));
+    grid.appendChild(await notebookCard());        // spans full width on desktop
   }
 
   window.Views = {
