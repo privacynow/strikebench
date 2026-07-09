@@ -631,36 +631,53 @@ public final class ApiServer {
         }
         Quote q = quote.get();
         LocalDate today = LocalDate.now(clock);
-        List<LocalDate> exps = market.expirations(symbol);
 
-        Double ivAtm = null;
-        if (!exps.isEmpty()) {
-            ivAtm = market.chain(symbol, exps.getFirst())
-                    .flatMap(ch -> atmIv(ch))
-                    .orElse(null);
+        // The three remaining pieces are independent provider calls — the old serial waterfall
+        // (expirations→chain→candles→SPY→QQQ) made the endpoint as slow as the SUM of them, which in
+        // live mode meant several multi-MB Cboe downloads back-to-back. Run them CONCURRENTLY on
+        // virtual threads so the endpoint costs the slowest ONE, not the sum.
+        record IvExp(List<LocalDate> exps, Double ivAtm) {}
+        try (var exec = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var ivExpF = exec.submit(() -> {
+                List<LocalDate> e = market.expirations(symbol);
+                Double iv = e.isEmpty() ? null : market.chain(symbol, e.getFirst()).flatMap(ch -> atmIv(ch)).orElse(null);
+                return new IvExp(e, iv);
+            });
+            var candlesF = exec.submit(() -> market.candleSeries(symbol, today.minusDays(120), today));
+            var benchF = exec.submit(() -> {
+                List<Map<String, Object>> b = new ArrayList<>();
+                for (String bench : List.of("SPY", "QQQ")) {
+                    if (bench.equals(symbol)) continue;
+                    market.quote(bench).ifPresent(x -> b.add(Map.of(
+                            "symbol", x.symbol(), "last", x.last(), "freshness", x.freshness().name())));
+                }
+                return b;
+            });
+
+            IvExp ie = ivExpF.get();
+            var candleSeries = candlesF.get();
+            double hv30 = HistoricalVol.annualized(candleSeries.candles(), 30);
+            boolean demoHistory = candleSeries.isFixture() && !cfg.fixturesOnly();
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("symbol", symbol);
+            out.put("quote", q);
+            out.put("optionable", q.optionable());
+            out.put("ivAtm", ie.ivAtm());
+            out.put("hv30", Double.isNaN(hv30) ? null : hv30);
+            out.put("historyDemo", demoHistory);
+            out.put("expirations", ie.exps().stream().map(LocalDate::toString).toList());
+            out.put("benchmarks", benchF.get());
+            out.put("freshness", q.freshness().name());
+            ctx.json(out);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable c = e.getCause();
+            if (c instanceof RuntimeException re) throw re;
+            throw new RuntimeException(c == null ? e : c);
         }
-        var candleSeries = market.candleSeries(symbol, today.minusDays(120), today);
-        double hv30 = HistoricalVol.annualized(candleSeries.candles(), 30);
-        boolean demoHistory = candleSeries.isFixture() && !cfg.fixturesOnly();
-
-        List<Map<String, Object>> benchmarks = new ArrayList<>();
-        for (String bench : List.of("SPY", "QQQ")) {
-            if (bench.equals(symbol)) continue;
-            market.quote(bench).ifPresent(b -> benchmarks.add(Map.of(
-                    "symbol", b.symbol(), "last", b.last(), "freshness", b.freshness().name())));
-        }
-
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("symbol", symbol);
-        out.put("quote", q);
-        out.put("optionable", q.optionable());
-        out.put("ivAtm", ivAtm);
-        out.put("hv30", Double.isNaN(hv30) ? null : hv30);
-        out.put("historyDemo", demoHistory);
-        out.put("expirations", exps.stream().map(LocalDate::toString).toList());
-        out.put("benchmarks", benchmarks);
-        out.put("freshness", q.freshness().name());
-        ctx.json(out);
     }
 
     private static Optional<Double> atmIv(OptionChain chain) {

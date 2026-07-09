@@ -355,10 +355,69 @@
       return;
     }
 
+    // PROGRESSIVE PAINT: the shell + independent sections (events, price history, news) render
+    // immediately; the hero, "what you can do", and the chain fill when /api/research lands (now a
+    // parallelized, faster call). No more all-or-nothing blank page behind one request.
+    var heroCard = el('div', { class: 'card', id: 'research-hero' }, UI.spinner('Loading ' + symbol + '…'));
+    root.appendChild(heroCard);
+    var researchP = API.get('/api/research/' + symbol);
+
+    root.appendChild(comingUp(symbol, false)); // dated events; self-fetches (never waits on the hero call)
+    var actionsAnchor = el('div', { id: 'symbol-actions-anchor' }); // filled after r: the action cards, or the no-options warning
+    root.appendChild(actionsAnchor);
+
+    // Price history — its own endpoint, independent of /api/research.
+    root.appendChild(el('div', { class: 'card', id: 'history-card' },
+      UI.cardHeader('Price history'),
+      UI.rangeChart({ initial: '1y', fetch: historyFetch(symbol) }),
+      explain('Real OHLC candles: green closed up, red closed down; slide across for open/high/low/close, change, and volume. Pills change the window; long windows aggregate to weekly candles.')));
+
+    var chainAnchor = el('div', { id: 'chain-anchor' });
+    root.appendChild(chainAnchor);
+
+    // News & filings ALWAYS render (independent endpoint) — a card that silently vanishes reads as
+    // "where has news gone?", not as an empty feed.
+    var newsCard = el('div', { class: 'card', id: 'news-card' }, UI.cardHeader('News & filings'), UI.spinner('Loading news…'));
+    root.appendChild(newsCard);
+    (async function fillNews() {
+      var newsItems = [];
+      try { newsItems = ((await API.get('/api/research/' + symbol + '/news')).items || []); }
+      catch (e) { /* empty state below */ }
+      newsCard.innerHTML = '';
+      newsCard.appendChild(UI.cardHeader('News & filings'));
+      if (!newsItems.length) {
+        newsCard.appendChild(UI.emptyState('No headlines right now',
+          'No news source answered for ' + symbol + '. See the Data screen for per-source health.',
+          'Check data status', function () { App.navigate('#/status'); }));
+        return;
+      }
+      var isFiling = function (n) { return /edgar|sec/i.test(n.source || '') || /filing$/i.test(n.headline || ''); };
+      var headlines = newsItems.filter(function (n) { return !isFiling(n); }).slice(0, 8);
+      var filings = newsItems.filter(isFiling).slice(0, 5);
+      var row = function (n) {
+        var when = n.publishedEpochMs ? new Date(n.publishedEpochMs).toISOString().slice(0, 10) : '';
+        return el('div', { class: 'status-item' },
+          el('a', { href: n.url, target: '_blank', rel: 'noopener' }, n.headline),
+          el('span', { class: 'spacer' }),
+          when ? el('span', { class: 'muted' }, when + ' · ') : null,
+          el('span', { class: 'muted' }, n.source));
+      };
+      headlines.forEach(function (n) { newsCard.appendChild(row(n)); });
+      if (filings.length) {
+        newsCard.appendChild(el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Corporate filings (SEC)'));
+        if (Learn.currentLevel() === 'beginner') {
+          newsCard.appendChild(explain('Official documents companies must file: 10-K (annual report), 10-Q (quarterly), 8-K (something important just happened). Big moves often start here.'));
+        }
+        filings.forEach(function (n) { newsCard.appendChild(row(n)); });
+      }
+    })();
+
+    // Hero + option-dependent sections fill when the (parallelized) research call resolves.
     var r;
-    try { r = await API.get('/api/research/' + symbol); }
+    try { r = await researchP; }
     catch (e) {
-      root.appendChild(alertBox('danger', 'No data for ' + symbol + '. Check the ticker.'));
+      heroCard.replaceWith(alertBox('danger', 'No data for ' + symbol + '. Check the ticker.'));
+      actionsAnchor.remove(); chainAnchor.remove();
       return;
     }
     rememberRecent(symbol);
@@ -395,18 +454,15 @@
       (r.benchmarks && r.benchmarks.length) ? el('div', { class: 'chip-row' }, r.benchmarks.map(function (b) {
         return chip(b.symbol, fmtNum(b.last));
       })) : null);
-    root.appendChild(hero);
-    root.appendChild(comingUp(symbol, false, r.expirations)); // dated events; reuse the expirations already loaded with the quote
+    heroCard.replaceWith(hero);
 
     if (!r.optionable) {
-      root.appendChild(alertBox('warn', symbol + ' has no listed options (mutual funds and some securities cannot be option-traded). You can still study its price history below.'));
+      actionsAnchor.replaceWith(alertBox('warn', symbol + ' has no listed options (mutual funds and some securities cannot be option-traded). You can still study its price history below.'));
     }
 
     // What you can do with this symbol — each GOAL gets its own live one-liner, computed
     // from real ladder rungs (not marketing copy), with one-tap handoff into that flow.
     if (r.optionable) {
-      var actionsAnchor = el('div', { id: 'symbol-actions-anchor' });
-      root.appendChild(actionsAnchor);
       (async function symbolActions() {
         try {
           var level = Learn.currentLevel();
@@ -474,17 +530,19 @@
               held ? el('span', { class: 'muted' }, 'You hold ' + held.shares + ' sh @ ' + fmtMoney(held.avgCostCents) + '/sh') : null),
             el('div', { class: 'welcome-grid action-grid' }, cards));
           actionsAnchor.replaceWith(section);
-        } catch (e) { /* the section is additive */ }
+        } catch (e) {
+          // Additive, but a silent disappearance reads as inconsistent — leave a quiet retry.
+          if (actionsAnchor.isConnected) {
+            actionsAnchor.replaceWith(el('div', { class: 'card', id: 'symbol-actions' },
+              alertBox('warn', 'Couldn’t load actions for ' + symbol + ' right now.'),
+              el('div', { class: 'btn-row' },
+                el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.render(); } }, 'Retry'))));
+          }
+        }
       })();
     }
 
-    // Price history: range pills (1M…MAX) + slide-to-read crosshair, like any finance site —
-    // but with the honesty badge when the data is demo.
-    root.appendChild(el('div', { class: 'card', id: 'history-card' },
-      UI.cardHeader('Price history'),
-      UI.rangeChart({ initial: '1y', fetch: historyFetch(symbol) }),
-      explain('Real OHLC candles: green closed up, red closed down; slide across for open/high/low/close, change, and volume. Pills change the window; long windows aggregate to weekly candles.')));
-
+    // Option chain (fills the anchor placed above the news card, so page order is preserved).
     if (r.optionable && r.expirations && r.expirations.length) {
       var showAll = false;
       var chainBody = el('div', {});
@@ -502,7 +560,7 @@
         explain('Each row is one strike: calls on the left, puts on the right. Green-tinted cells are in the money; the highlighted row is closest to the current price.'),
         el('div', { class: 'btn-row', style: 'margin-top:0' }, el('label', { class: 'muted' }, 'Expiration '), select),
         chainBody);
-      root.appendChild(chainCard);
+      chainAnchor.replaceWith(chainCard);
 
       var chainSeq = 0;
       var loadChain = async function (exp) {
@@ -566,40 +624,6 @@
                    : ['Call bid/ask', 'Call Δ', 'Call IV', 'Strike', 'Put IV', 'Put Δ', 'Put bid/ask'], rows));
       };
       loadChain(r.expirations[0]);
-    }
-
-    // News & filings ALWAYS render — an optional card that silently vanishes reads as
-    // "where has news gone?", not as an empty feed.
-    var newsCard = el('div', { class: 'card', id: 'news-card' }, UI.cardHeader('News & filings'));
-    root.appendChild(newsCard);
-    var newsItems = [];
-    try {
-      newsItems = ((await API.get('/api/research/' + symbol + '/news')).items || []);
-    } catch (e) { /* empty state below */ }
-    if (!newsItems.length) {
-      newsCard.appendChild(UI.emptyState('No headlines right now',
-        'No news source answered for ' + symbol + '. See the Data screen for per-source health.',
-        'Check data status', function () { App.navigate('#/status'); }));
-    } else {
-      var isFiling = function (n) { return /edgar|sec/i.test(n.source || '') || /filing$/i.test(n.headline || ''); };
-      var headlines = newsItems.filter(function (n) { return !isFiling(n); }).slice(0, 8);
-      var filings = newsItems.filter(isFiling).slice(0, 5);
-      var row = function (n) {
-        var when = n.publishedEpochMs ? new Date(n.publishedEpochMs).toISOString().slice(0, 10) : '';
-        return el('div', { class: 'status-item' },
-          el('a', { href: n.url, target: '_blank', rel: 'noopener' }, n.headline),
-          el('span', { class: 'spacer' }),
-          when ? el('span', { class: 'muted' }, when + ' \u00B7 ') : null,
-          el('span', { class: 'muted' }, n.source));
-      };
-      headlines.forEach(function (n) { newsCard.appendChild(row(n)); });
-      if (filings.length) {
-        newsCard.appendChild(el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Corporate filings (SEC)'));
-        if (Learn.currentLevel() === 'beginner') {
-          newsCard.appendChild(explain('Official documents companies must file: 10-K (annual report), 10-Q (quarterly), 8-K (something important just happened). Big moves often start here.'));
-        }
-        filings.forEach(function (n) { newsCard.appendChild(row(n)); });
-      }
     }
   }
 
