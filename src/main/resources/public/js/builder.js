@@ -132,6 +132,14 @@
       shape: '2,18 20,18 44,8 62,8',
       blurb: 'Floor below, ceiling above — the sold call pays for most of the insurance.',
       build: function (c) { return [stockLeg('BUY', 1), leg('BUY', 'PUT', c.pick(c.near, -2), c.near), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
+    { key: 'SYNTHETIC_LONG', group: 'Shares & protection', name: 'Synthetic long (stock replacement)', family: 'CUSTOM',
+      shape: '2,26 62,4',
+      blurb: 'Long call + short put at the same strike ≈ owning 100 shares, for a fraction of the cash. Same delta-1 exposure, margin instead of full share cost.',
+      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near)]; } },
+    { key: 'SYNTHETIC_SHORT', group: 'Shares & protection', name: 'Synthetic short', family: 'CUSTOM',
+      shape: '2,4 62,26',
+      blurb: 'Long put + short call at the same strike ≈ shorting 100 shares — delta-1 downside exposure without borrowing stock.',
+      build: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near)]; } },
 
     { key: 'SHORT_STRADDLE', group: 'Undefined risk (blocked)', name: 'Short straddle', family: 'SHORT_STRADDLE', risky: true,
       shape: '2,24 32,4 62,24',
@@ -542,6 +550,15 @@
     }
 
     remember(); // the (possibly followed) symbol is now this builder's state
+
+    // Hand-off from elsewhere (e.g. the Lab replicator) can seed a templateKey with no legs —
+    // build it from the live chain now so the user lands ON the structure, not an empty catalog.
+    if (st.templateKey && !st.legs.length) {
+      try {
+        var seeded = await buildFromTemplate(st.templateKey);
+        if (seeded.length) { st.legs = seeded; st.legIdx = 0; if (st.step < 3) st.step = 3; remember(); }
+      } catch (e) { /* fall through to the catalog */ }
+    }
 
     if (level === 'beginner') renderBeginner(root);
     else await renderExpert(root);

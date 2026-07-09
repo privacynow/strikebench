@@ -1171,6 +1171,15 @@ test('research lab: optimizer builds a portfolio, hypothesis + replicator run, n
   await page.waitForSelector('#lab-rep-out .chip-row', { timeout: 20000 });
   assert.match(await page.locator('#lab-rep-out .decision-why').first().innerText(), /Synthetic/);
 
+  // D1: the replicator hands off to the Trade builder (no dead-end) — the synthetic template
+  // builds from the live chain into a 2-leg position the user can analyze + place.
+  await page.click('#lab-rep-build');
+  await page.waitForFunction(() => location.hash.indexOf('/trade/shape') >= 0);
+  await page.waitForFunction(() => document.querySelectorAll('#builder-legs .leg-row').length === 2, { timeout: 20000 });
+  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
+  await page.evaluate(() => { window.location.hash = '#/lab'; });
+  await page.waitForSelector('.lab-grid');
+
   // Notebook: create a note, it persists into the list.
   await page.click('#lab-note-new');
   await page.fill('.note-editor input[placeholder="Title"]', 'My hypothesis');

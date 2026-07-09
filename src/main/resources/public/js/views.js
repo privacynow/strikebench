@@ -3493,6 +3493,21 @@
     var eff = r.shareCostCents > 0 ? r.estMarginCents / r.shareCostCents : 0;
     out.appendChild(gaugeChart(eff, 1, 'Ties up about ' + fmtPct(eff) + ' of the share cost'));
     (r.notes || []).forEach(function (n) { out.appendChild(el('div', { class: 'muted small' }, n)); });
+    // Hand-off: a synthetic IS a placeable multi-leg structure — build it in the Trade builder with
+    // live risk and a path to Place. (No more dead-end: this construction capability lives in Trade.)
+    out.appendChild(el('div', { class: 'btn-row' },
+      el('button', {
+        class: 'btn btn-sm', id: 'lab-rep-build', onclick: function () {
+          App.state.lastRecommendSymbol = (r.symbol || '').toUpperCase();
+          App.state.builderForm = {
+            symbol: (r.symbol || '').toUpperCase(),
+            qty: r.contracts || 1, goal: 'DIRECTIONAL',
+            templateKey: (r.deltaExposureCents >= 0) ? 'SYNTHETIC_LONG' : 'SYNTHETIC_SHORT',
+            step: 3, legIdx: 0, excluded: {}, legs: []
+          };
+          App.navigate('#/trade/shape');
+        }
+      }, 'Build & place in the Trade builder')));
   }
 
   // ---- Notebook ----
