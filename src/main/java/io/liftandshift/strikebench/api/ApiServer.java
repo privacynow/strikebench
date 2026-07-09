@@ -265,6 +265,17 @@ public final class ApiServer {
             c.routes.post("/api/evaluate", this::evaluate);
             c.routes.post("/api/opportunities", this::opportunities);
             c.routes.post("/api/optimize", this::optimize);
+            c.routes.post("/api/lab/hypothesis", ctx ->
+                    ctx.json(new io.liftandshift.strikebench.research.HypothesisTester(market)
+                            .test(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.HypothesisTester.HypothesisRequest.class)))));
+            c.routes.post("/api/lab/replicate", ctx ->
+                    ctx.json(new io.liftandshift.strikebench.research.ETFReplicator(market)
+                            .replicate(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ETFReplicator.ReplicationRequest.class)))));
+            c.routes.post("/api/lab/notes", this::noteCreate);
+            c.routes.get("/api/lab/notes", this::noteList);
+            c.routes.get("/api/lab/notes/{id}", this::noteGet);
+            c.routes.put("/api/lab/notes/{id}", this::noteUpdate);
+            c.routes.delete("/api/lab/notes/{id}", this::noteDelete);
             c.routes.get("/api/evaluations", ctx -> {
                 String uid = auth.currentUserId(ctx);
                 String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
@@ -440,6 +451,39 @@ public final class ApiServer {
     /** The paper account for the current request's user (the single local account when auth is off). */
     private Account currentAccount(Context ctx) {
         return accounts.getOrCreateDefaultForUser(auth.currentUserId(ctx));
+    }
+
+    /** The persistence owner id for the current user (null = local/anonymous). */
+    private String ownerId(Context ctx) {
+        String uid = auth.currentUserId(ctx);
+        return io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+    }
+
+    public record NoteRequest(String title, String body, String tags) {}
+
+    private void noteCreate(Context ctx) {
+        NoteRequest b = requireBody(bodyOrNull(ctx, NoteRequest.class));
+        ctx.json(new io.liftandshift.strikebench.research.NotebookService(db, clock)
+                .create(ownerId(ctx), b.title(), b.body(), b.tags()));
+    }
+
+    private void noteList(Context ctx) {
+        ctx.json(Map.of("notes", new io.liftandshift.strikebench.research.NotebookService(db, clock).list(ownerId(ctx))));
+    }
+
+    private void noteGet(Context ctx) {
+        ctx.json(new io.liftandshift.strikebench.research.NotebookService(db, clock).get(ownerId(ctx), ctx.pathParam("id")));
+    }
+
+    private void noteUpdate(Context ctx) {
+        NoteRequest b = requireBody(bodyOrNull(ctx, NoteRequest.class));
+        ctx.json(new io.liftandshift.strikebench.research.NotebookService(db, clock)
+                .update(ownerId(ctx), ctx.pathParam("id"), b.title(), b.body(), b.tags()));
+    }
+
+    private void noteDelete(Context ctx) {
+        new io.liftandshift.strikebench.research.NotebookService(db, clock).delete(ownerId(ctx), ctx.pathParam("id"));
+        ctx.json(Map.of("ok", true));
     }
 
     /**
