@@ -3379,7 +3379,8 @@
       var del = el('button', { class: 'btn btn-sm btn-danger' }, 'Delete');
       del.addEventListener('click', async function () {
         del.disabled = true;
-        try { await API.delete('/api/lab/notes/' + n.id); await reload(); } catch (e) { del.disabled = false; }
+        try { await API.del('/api/lab/notes/' + n.id); await reload(); }
+        catch (e) { del.disabled = false; wrap.appendChild(alertBox('danger', 'Could not delete', [String((e && e.message) || e)])); }
       });
       row.appendChild(del);
     }

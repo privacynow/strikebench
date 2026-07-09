@@ -1157,4 +1157,28 @@ test('research lab: optimizer builds a portfolio, hypothesis + replicator run, n
   await page.fill('.note-editor textarea', 'SPY put spreads only at high IV rank');
   await page.click('.note-editor button:has-text("Save")');
   await page.waitForSelector('.lab-notebook:has-text("My hypothesis")', { timeout: 10000 });
+
+  // Delete it (regression: the button called the non-existent API.delete and silently no-op'd).
+  await page.locator('.lab-notebook').getByText('My hypothesis').click();       // expand the row
+  await page.locator('.lab-notebook').getByRole('button', { name: 'Delete' }).click();
+  await page.waitForFunction(
+    () => { var nb = document.querySelector('.lab-notebook'); return nb && nb.textContent.indexOf('My hypothesis') < 0; },
+    { timeout: 8000 });
+});
+
+test('cache: read-only compute POST (/api/evaluate) keeps the GET cache warm', async () => {
+  await go('#/home');
+  const r = await page.evaluate(async () => {
+    let n = 0;
+    const orig = window.fetch;
+    window.fetch = function (u) { if (String(u).indexOf('/api/config') >= 0) n++; return orig.apply(this, arguments); };
+    try {
+      await API.get('/api/config');           // warm (or already cached from boot)
+      const before = n;
+      await API.post('/api/evaluate', { symbol: 'AAPL', thesis: 'bullish', horizon: 'month', riskMode: 'balanced' });
+      await API.get('/api/config');           // must be served from cache — the compute POST must not flush it
+      return { added: n - before };
+    } finally { window.fetch = orig; }
+  });
+  assert.equal(r.added, 0, '/api/config was refetched after /api/evaluate — the cache was wrongly flushed');
 });

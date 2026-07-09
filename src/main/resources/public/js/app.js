@@ -213,24 +213,30 @@
   }
 
   async function boot() {
-    // Auth gate: when the server requires sign-in and we are not signed in, show ONLY the
-    // sign-in screen. When auth is off (the default) /me reports authenticated -> normal boot.
-    try {
-      var me = await API.get('/api/auth/me');
-      App._me = me;
-      if (me && me.authEnabled && !me.authenticated) { renderSignIn(me); return; }
-      App.authUser = (me && me.user) || null;
-    } catch (e) { /* if /me is unreachable, fall through to the normal app */ }
+    // Synchronous shell first — no network gates the header, theme, or search box.
     initHeader();
-    addSignOut();
     applyLevelSideEffects();
     initTheme();
     initSearch();
-    try {
-      var cfg = await API.get('/api/config');
-      if (cfg && cfg.disclaimer) document.getElementById('disclaimer').textContent = cfg.disclaimer;
-      if (cfg && cfg.brand && cfg.brand.name) applyBrand(cfg.brand);
-    } catch (e) { /* footer keeps its static text */ }
+    // Instant feedback: paint a skeleton into #app while the bootstrap loads (App.render swaps it).
+    var app = document.getElementById('app');
+    if (app && !app.firstChild) app.appendChild(UI.skeleton());
+
+    // ONE parallel round-trip for auth + config — not two serial ones. Route data is never
+    // fetched before auth state is known: App.render() runs only AFTER this resolves, and an
+    // enabled-but-unauthenticated session swaps straight to the sign-in screen (no 401 flashes).
+    var pair = await Promise.all([
+      API.get('/api/auth/me').catch(function () { return null; }),
+      API.get('/api/config').catch(function () { return null; })
+    ]);
+    var me = pair[0], cfg = pair[1];
+    App._me = me;
+    if (cfg && cfg.disclaimer) document.getElementById('disclaimer').textContent = cfg.disclaimer;
+    if (cfg && cfg.brand && cfg.brand.name) applyBrand(cfg.brand);
+    if (me && me.authEnabled && !me.authenticated) { renderSignIn(me); return; }
+    App.authUser = (me && me.user) || null;
+    addSignOut();
+
     checkServerHealth();
     setInterval(checkServerHealth, 5 * 60 * 1000);
     refreshUniverse();

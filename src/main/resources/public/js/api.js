@@ -50,27 +50,48 @@
 
   function flushCache() { cache.clear(); }
 
-  // POSTs that are pure computations (no server state change) must not nuke the cache —
-  // the builder previews on every keystroke and would otherwise defeat caching entirely.
-  var PURE_POST = /^\/api\/(recommend($|\/)|trades\/preview$)/;
+  /** Drop only cache keys under the given path prefixes (targeted invalidation). */
+  function invalidate(prefixes) {
+    Array.from(cache.keys()).forEach(function (k) {
+      for (var i = 0; i < prefixes.length; i++) {
+        if (k.indexOf(prefixes[i]) === 0) { cache.delete(k); return; }
+      }
+    });
+  }
+
+  // POSTs that change NO server state — never touch the cache (the builder previews on every
+  // keystroke; the lab hypothesis/replicate tools are pure math).
+  var PURE_COMPUTE = /^\/api\/(recommend($|\/)|trades\/preview$|lab\/(hypothesis|replicate)$)/;
+  // POSTs that ONLY write evaluation/recommendation history — read back solely by /api/evaluations
+  // and /api/calibration. Invalidate JUST those views so market/account/quote caches stay warm.
+  var HISTORY_WRITER = /^\/api\/(evaluate$|opportunities$|optimize$)/;
+  var HISTORY_KEYS = ['/api/evaluations', '/api/calibration'];
 
   function mutate(method) {
     return function (path, body) {
       return request(method, path, body === undefined ? {} : body).then(function (out) {
-        if (!(method === 'POST' && PURE_POST.test(path))) {
-          flushCache(); // server state changed — no GET answer given before is trustworthy
+        if (method === 'POST' && PURE_COMPUTE.test(path)) {
+          /* no server state changed — leave the cache warm */
+        } else if (method === 'POST' && HISTORY_WRITER.test(path)) {
+          invalidate(HISTORY_KEYS); // targeted, not blanket
+        } else {
+          flushCache(); // genuine mutation — no GET answer given before is trustworthy
         }
         return out;
       });
     };
   }
 
+  function del(path) { return request('DELETE', path).then(function (out) { flushCache(); return out; }); }
+
   window.API = {
     get: cachedGet,
     getFresh: function (path) { cache.delete(path); return cachedGet(path); },
     post: mutate('POST'),
     put: mutate('PUT'),
-    del: function (path) { return request('DELETE', path).then(function (out) { flushCache(); return out; }); },
+    del: del,
+    'delete': del,          // alias so an API.delete(...) typo can't silently no-op
+    invalidate: invalidate,
     flushCache: flushCache
   };
 })();
