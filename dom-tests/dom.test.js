@@ -1126,3 +1126,35 @@ test('decision page: recommendations-as-a-competition — the pick, evidence, sc
   // Reset shared state so later tests' assumptions hold.
   await page.evaluate(() => { App.state.ticket = null; App.state.discoverForm = null; });
 });
+
+test('research lab: optimizer builds a portfolio, hypothesis + replicator run, notebook saves', async () => {
+  await page.evaluate(() => Learn.setLevel('expert'));
+  await page.evaluate(() => { window.location.hash = '#/home'; });
+  await page.waitForSelector('#app[data-ready="true"]');
+  await go('#/lab');
+  await page.waitForSelector('.lab-grid');
+
+  // Optimizer: build a portfolio -> SVG composition chart + allocations table.
+  await page.click('#lab-opt-run');
+  await page.waitForSelector('#lab-opt-summary', { timeout: 20000 });
+  assert.ok((await page.locator('.lab-optimizer .lab-chart svg rect').count()) >= 1, 'composition chart bars');
+  assert.ok((await page.locator('.lab-optimizer table tbody tr').count()) >= 1, 'allocations table rows');
+
+  // Hypothesis tester: verdict banner + win-rate gauge (SVG).
+  await page.click('#lab-hyp-run');
+  await page.waitForSelector('#lab-hyp-out .alert', { timeout: 20000 });
+  assert.ok((await page.locator('#lab-hyp-out .lab-chart svg').count()) >= 1, 'win-rate gauge');
+  assert.ok((await page.locator('#lab-hyp-out:has-text("Signals")').count()) >= 1, 'sample chip');
+
+  // ETF replicator: synthetic structure.
+  await page.click('#lab-rep-run');
+  await page.waitForSelector('#lab-rep-out .chip-row', { timeout: 20000 });
+  assert.match(await page.locator('#lab-rep-out .decision-why').first().innerText(), /Synthetic/);
+
+  // Notebook: create a note, it persists into the list.
+  await page.click('#lab-note-new');
+  await page.fill('.note-editor input[placeholder="Title"]', 'My hypothesis');
+  await page.fill('.note-editor textarea', 'SPY put spreads only at high IV rank');
+  await page.click('.note-editor button:has-text("Save")');
+  await page.waitForSelector('.lab-notebook:has-text("My hypothesis")', { timeout: 10000 });
+});

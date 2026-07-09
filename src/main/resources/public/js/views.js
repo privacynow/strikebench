@@ -3097,12 +3097,316 @@
     }
   }
 
+  // ---- Research lab (Phase 5): optimizer, hypothesis tester, ETF replicator, notebook ----
+
+  var LAB_PALETTE = ['#2f6bde', '#7c4fe0', '#3aa76d', '#e0912f', '#d64545', '#2ba3b8', '#b8556f', '#6b8e23'];
+  function labColor(i) { return LAB_PALETTE[i % LAB_PALETTE.length]; }
+
+  function labField(label, input) {
+    return el('div', { class: 'field' }, el('label', {}, label), input);
+  }
+
+  /** Horizontal stacked composition bar (SVG) + a color legend. */
+  function compositionChart(segments) {
+    var total = segments.reduce(function (s, x) { return s + Math.max(0, x.value); }, 0) || 1;
+    var x = 0, rects = '';
+    segments.forEach(function (s, i) {
+      var w = Math.max(0, s.value) / total * 100;
+      rects += '<rect x="' + x.toFixed(3) + '" y="0" width="' + w.toFixed(3) + '" height="18" fill="'
+        + labColor(i) + '"><title>' + s.label + '</title></rect>';
+      x += w;
+    });
+    var svg = '<svg viewBox="0 0 100 18" preserveAspectRatio="none" width="100%" height="18" role="img" aria-label="Allocation by symbol">' + rects + '</svg>';
+    var legend = el('div', { class: 'lab-legend' }, segments.map(function (s, i) {
+      return el('span', { class: 'lab-legend-item' },
+        el('span', { class: 'lab-swatch', style: 'background:' + labColor(i) }),
+        el('b', {}, s.label), ' ', el('span', { class: 'muted' }, fmtMoney(s.value)));
+    }));
+    return el('div', {}, el('div', { class: 'lab-chart', html: svg }), legend);
+  }
+
+  /** A 0..1 bar with a baseline marker; fill greens above baseline, reds below (SVG). */
+  function gaugeChart(value01, baseline01, caption) {
+    var v = Math.max(0, Math.min(1, value01)) * 100, b = Math.max(0, Math.min(1, baseline01)) * 100;
+    var col = value01 >= baseline01 ? 'var(--risk-ok-solid,#3aa76d)' : 'var(--risk-danger-solid,#d64545)';
+    var svg = '<svg viewBox="0 0 100 14" preserveAspectRatio="none" width="100%" height="14" role="img">'
+      + '<rect x="0" y="4" width="100" height="6" rx="3" fill="var(--line)"/>'
+      + '<rect x="0" y="4" width="' + v.toFixed(2) + '" height="6" rx="3" fill="' + col + '"/>'
+      + '<line x1="' + b.toFixed(2) + '" y1="1.5" x2="' + b.toFixed(2) + '" y2="12.5" stroke="var(--fg)" stroke-width="0.7"/></svg>';
+    return el('div', {}, el('div', { class: 'lab-chart', html: svg }),
+      caption ? el('div', { class: 'muted small' }, caption) : null);
+  }
+
+  // ---- Optimizer ----
+  function optimizerCard(level) {
+    var f = App.state.labForm.opt = App.state.labForm.opt || {};
+    var card = el('div', { class: 'card lab-card lab-optimizer' });
+    card.appendChild(UI.cardHeader(el('span', { class: 'lab-title' }, UI.icon('grid', 18), ' Build a portfolio')));
+    card.appendChild(explain('Allocate a budget across the strongest ideas in your universe — diversified by symbol and capped per position. Only ideas that pass the risk screens are funded.'));
+
+    var budget = el('input', { type: 'number', id: 'lab-budget', value: f.budget || 25000, min: '0', step: '1000' });
+    var goal = el('select', { id: 'lab-goal' },
+      el('option', { value: '' }, 'Any goal'), el('option', { value: 'INCOME' }, 'Income'),
+      el('option', { value: 'DIRECTIONAL' }, 'Directional'));
+    if (f.goal) goal.value = f.goal;
+    var fields = [labField('Budget ($)', budget), labField('Goal', goal)];
+    var objective = null, maxPos = null, maxSym = null;
+    if (level === 'expert') {
+      objective = el('select', { id: 'lab-obj' }, el('option', { value: 'score' }, 'Best score'), el('option', { value: 'ev' }, 'Best expected value'));
+      if (f.objective) objective.value = f.objective;
+      maxPos = el('input', { type: 'number', id: 'lab-maxpos', value: f.maxPos || 8, min: '1', max: '20' });
+      maxSym = el('input', { type: 'number', id: 'lab-maxsym', value: f.maxSym || 40, min: '5', max: '100', step: '5' });
+      fields.push(labField('Rank by', objective), labField('Max positions', maxPos), labField('Max % per symbol', maxSym));
+    }
+    card.appendChild(el('div', { class: 'form-grid' }, fields));
+
+    var out = el('div', { id: 'lab-opt-out', class: 'lab-out' });
+    var run = el('button', { class: 'btn', id: 'lab-opt-run' }, 'Build portfolio');
+    run.addEventListener('click', async function () {
+      f.budget = +budget.value; f.goal = goal.value;
+      if (objective) { f.objective = objective.value; f.maxPos = +maxPos.value; f.maxSym = +maxSym.value; }
+      run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Scanning the universe and allocating…'));
+      var body = {
+        totalCapitalCents: Math.round((+budget.value || 0) * 100),
+        intent: goal.value || null,
+        objective: objective ? objective.value : 'score',
+        maxPositions: maxPos ? +maxPos.value : null,
+        maxSymbolPct: maxSym ? +maxSym.value / 100 : null
+      };
+      try { renderOptimization(out, await API.post('/api/optimize', body), level); }
+      catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Optimize failed', [String((e && e.message) || e)])); }
+      finally { run.disabled = false; }
+    });
+    card.appendChild(el('div', { class: 'btn-row' }, run));
+    card.appendChild(out);
+    return card;
+  }
+
+  function renderOptimization(out, data, level) {
+    out.innerHTML = '';
+    var o = (data && data.optimization) || {};
+    var allocs = o.allocations || [];
+    if (!allocs.length) {
+      out.appendChild(UI.emptyState('Nothing funded', (o.notes && o.notes[0]) || 'No viable ideas fit the budget. Raise it or widen the goal.'));
+      return;
+    }
+    out.appendChild(el('div', { class: 'chip-row', id: 'lab-opt-summary' },
+      chip('Capital used', fmtMoney(o.capitalUsedCents)),
+      chip('Positions', String(allocs.length)),
+      chip('Exp. value', pnlSpan(o.expectedValueCents)),
+      chip('Tail risk', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0)))),
+      chip('Avg score', String(Math.round(o.avgScore || 0)))));
+
+    var perSym = o.perSymbolCents || {};
+    var segments = Object.keys(perSym).map(function (k) { return { label: k, value: perSym[k] }; });
+    if (segments.length) {
+      out.appendChild(el('div', { class: 'decision-sub' }, 'How the capital is spread'));
+      out.appendChild(compositionChart(segments));
+    }
+
+    var rows = allocs.map(function (a) {
+      var e = a.eval || {}, sp = e.spec || {}, cand = e.candidate || {}, sc = e.score || {};
+      var name = cand.displayName || sp.family || '—';
+      if (level === 'expert') {
+        return el('tr', {},
+          el('td', {}, sp.symbol || '—'), el('td', {}, name),
+          el('td', {}, String(a.units)), el('td', {}, fmtMoney(a.capitalCents)),
+          el('td', {}, UI.scoreBar(sc.riskAdjustedScore || 0)));
+      }
+      return el('tr', {},
+        el('td', {}, el('b', {}, sp.symbol || '—')),
+        el('td', {}, name),
+        el('td', {}, a.units + '×  ' + fmtMoney(a.capitalCents)));
+    });
+    out.appendChild(level === 'expert'
+      ? UI.table(['Symbol', 'Structure', 'Units', 'Capital', 'Score'], rows)
+      : UI.table(['Symbol', 'Idea', 'Allocation'], rows));
+    (o.notes || []).forEach(function (n) { out.appendChild(el('div', { class: 'muted small' }, n)); });
+  }
+
+  // ---- Hypothesis tester ----
+  function hypothesisCard(level) {
+    var f = App.state.labForm.hyp = App.state.labForm.hyp || {};
+    var card = el('div', { class: 'card lab-card' });
+    card.appendChild(UI.cardHeader(el('span', { class: 'lab-title' }, UI.icon('magnifier', 18), ' Test an idea')));
+    card.appendChild(explain('Does a signal actually predict what it claims, or is it just chance? We replay it over history and give an honest verdict.'));
+
+    var symbol = el('input', { type: 'text', id: 'lab-hyp-sym', value: f.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
+    var fields = [labField('Stock', symbol)];
+    var lookback = null, threshold = null, forward = null;
+    if (level === 'expert') {
+      lookback = el('input', { type: 'number', id: 'lab-hyp-lb', value: f.lookback || 20, min: '1', max: '250' });
+      threshold = el('input', { type: 'number', id: 'lab-hyp-th', value: f.threshold == null ? 0 : f.threshold, step: '1' });
+      forward = el('input', { type: 'number', id: 'lab-hyp-fw', value: f.forward || 10, min: '1', max: '120' });
+      fields.push(labField('Momentum look-back (days)', lookback),
+        labField('Trigger threshold (%)', threshold), labField('Hold forward (days)', forward));
+    } else {
+      card.appendChild(el('div', { class: 'muted small' }, 'Using a 20-day up-momentum signal, held 10 days.'));
+    }
+    card.appendChild(el('div', { class: 'form-grid' }, fields));
+
+    var out = el('div', { id: 'lab-hyp-out', class: 'lab-out' });
+    var run = el('button', { class: 'btn', id: 'lab-hyp-run' }, 'Run the test');
+    run.addEventListener('click', async function () {
+      f.symbol = symbol.value.toUpperCase();
+      if (lookback) { f.lookback = +lookback.value; f.threshold = +threshold.value; f.forward = +forward.value; }
+      run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Replaying history…'));
+      var to = new Date().toISOString().slice(0, 10);
+      var body = {
+        symbol: symbol.value, from: '2023-01-01', to: to,
+        lookbackDays: lookback ? +lookback.value : 20,
+        thresholdPct: threshold ? +threshold.value : 0,
+        forwardDays: forward ? +forward.value : 10
+      };
+      try { renderHypothesis(out, await API.post('/api/lab/hypothesis', body), level); }
+      catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Test failed', [String((e && e.message) || e)])); }
+      finally { run.disabled = false; }
+    });
+    card.appendChild(el('div', { class: 'btn-row' }, run));
+    card.appendChild(out);
+    return card;
+  }
+
+  function renderHypothesis(out, r, level) {
+    out.innerHTML = '';
+    var kind = r.significant ? (r.winRate > 0.5 ? 'ok' : 'danger') : (r.sample < 20 ? 'warn' : 'caution');
+    out.appendChild(alertBox(kind, r.verdict));
+    out.appendChild(el('p', { class: 'muted small' }, r.hypothesis));
+    out.appendChild(gaugeChart(r.winRate, 0.5,
+      'Win rate ' + fmtPct(r.winRate) + ' vs 50% by chance — over ' + r.sample + ' signals'));
+    var chips = el('div', { class: 'chip-row' },
+      chip('Signals', String(r.sample)),
+      chip('Wins', String(r.wins)),
+      chip('Edge', (r.edgePct >= 0 ? '+' : '') + r.edgePct + ' pts'));
+    if (level === 'expert') chips.appendChild(chip('z-score', String(r.zScore)));
+    out.appendChild(chips);
+    (r.notes || []).forEach(function (n) { out.appendChild(el('div', { class: 'muted small' }, n)); });
+  }
+
+  // ---- ETF / exposure replicator ----
+  function replicateCard(level) {
+    var f = App.state.labForm.rep = App.state.labForm.rep || {};
+    var card = el('div', { class: 'card lab-card' });
+    card.appendChild(UI.cardHeader(el('span', { class: 'lab-title' }, UI.icon('coins', 18), ' Replicate an exposure')));
+    card.appendChild(explain('Get the price exposure of owning shares — for far less capital — with a synthetic options position.'));
+
+    var symbol = el('input', { type: 'text', id: 'lab-rep-sym', value: f.symbol || 'SPY', list: 'universe-symbols' });
+    var target = el('input', { type: 'number', id: 'lab-rep-tgt', value: f.target || 50000, min: '0', step: '1000' });
+    var dir = el('select', { id: 'lab-rep-dir' }, el('option', { value: 'long' }, 'Bullish (long)'), el('option', { value: 'short' }, 'Bearish (short)'));
+    dir.value = f.dir || 'long';
+    card.appendChild(el('div', { class: 'form-grid' },
+      labField('Underlying', symbol), labField('Target exposure ($)', target), labField('Direction', dir)));
+
+    var out = el('div', { id: 'lab-rep-out', class: 'lab-out' });
+    var run = el('button', { class: 'btn', id: 'lab-rep-run' }, 'Size it');
+    run.addEventListener('click', async function () {
+      f.symbol = symbol.value.toUpperCase(); f.target = +target.value; f.dir = dir.value;
+      run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Sizing…'));
+      var body = { symbol: symbol.value, targetExposureCents: Math.round((+target.value || 0) * 100), bullish: dir.value === 'long' };
+      try { renderReplication(out, await API.post('/api/lab/replicate', body)); }
+      catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Replicate failed', [String((e && e.message) || e)])); }
+      finally { run.disabled = false; }
+    });
+    card.appendChild(el('div', { class: 'btn-row' }, run));
+    card.appendChild(out);
+    return card;
+  }
+
+  function renderReplication(out, r) {
+    out.innerHTML = '';
+    if (!r.contracts) { out.appendChild(alertBox('warn', (r.notes && r.notes[0]) || 'Could not size a replication.')); return; }
+    out.appendChild(el('p', { class: 'decision-why' }, r.structure));
+    out.appendChild(el('div', { class: 'chip-row' },
+      chip('Contracts', String(r.contracts)),
+      chip('Delta exposure', pnlSpan(r.deltaExposureCents)),
+      chip('Shares would cost', fmtMoney(r.shareCostCents)),
+      chip('Est. margin', fmtMoney(r.estMarginCents))));
+    // Capital efficiency: margin vs full share cost.
+    var eff = r.shareCostCents > 0 ? r.estMarginCents / r.shareCostCents : 0;
+    out.appendChild(gaugeChart(eff, 1, 'Ties up about ' + fmtPct(eff) + ' of the share cost'));
+    (r.notes || []).forEach(function (n) { out.appendChild(el('div', { class: 'muted small' }, n)); });
+  }
+
+  // ---- Notebook ----
+  async function notebookCard() {
+    var card = el('div', { class: 'card lab-card lab-notebook' });
+    var newBtn = el('button', { class: 'btn btn-sm', id: 'lab-note-new' }, 'New note');
+    card.appendChild(UI.cardHeader(el('span', { class: 'lab-title' }, UI.icon('pen', 18), ' Your research notes'), newBtn));
+    var list = el('div', { id: 'lab-notes', class: 'lab-out' });
+    card.appendChild(list);
+
+    async function reload() {
+      list.innerHTML = ''; list.appendChild(UI.spinner('Loading notes…'));
+      try {
+        var notes = (await API.get('/api/lab/notes')).notes || [];
+        list.innerHTML = '';
+        if (!notes.length) list.appendChild(el('div', { class: 'muted small' }, 'No notes yet — save your hypotheses and conclusions here.'));
+        notes.forEach(function (n) { list.appendChild(noteRow(n, reload)); });
+      } catch (e) { list.innerHTML = ''; list.appendChild(alertBox('danger', 'Could not load notes', [String((e && e.message) || e)])); }
+    }
+    newBtn.addEventListener('click', function () {
+      list.insertBefore(noteEditor(null, reload), list.firstChild);
+    });
+    await reload();
+    return card;
+  }
+
+  function noteRow(n, reload) {
+    return UI.expandable(
+      el('span', {}, el('b', {}, n.title), '  ', el('span', { class: 'muted small' }, (n.updatedAt || '').slice(0, 10) + (n.tags ? '  · ' + n.tags : ''))),
+      function () { return noteEditor(n, reload); });
+  }
+
+  function noteEditor(n, reload) {
+    var title = el('input', { type: 'text', placeholder: 'Title', value: (n && n.title) || '' });
+    var body = el('textarea', { rows: '4', placeholder: 'Your analysis…' }, (n && n.body) || '');
+    var tags = el('input', { type: 'text', placeholder: 'tags (comma-separated)', value: (n && n.tags) || '' });
+    var wrap = el('div', { class: 'note-editor' },
+      labField('Title', title), labField('Notes', body), labField('Tags', tags));
+    var save = el('button', { class: 'btn btn-sm' }, 'Save');
+    save.addEventListener('click', async function () {
+      save.disabled = true;
+      try {
+        if (n && n.id) await API.put('/api/lab/notes/' + n.id, { title: title.value, body: body.value, tags: tags.value });
+        else await API.post('/api/lab/notes', { title: title.value, body: body.value, tags: tags.value });
+        await reload();
+      } catch (e) { save.disabled = false; wrap.appendChild(alertBox('danger', String((e && e.message) || e))); }
+    });
+    var row = el('div', { class: 'btn-row' }, save);
+    if (n && n.id) {
+      var del = el('button', { class: 'btn btn-sm btn-danger' }, 'Delete');
+      del.addEventListener('click', async function () {
+        del.disabled = true;
+        try { await API.delete('/api/lab/notes/' + n.id); await reload(); } catch (e) { del.disabled = false; }
+      });
+      row.appendChild(del);
+    }
+    wrap.appendChild(row);
+    return wrap;
+  }
+
+  async function lab(root) {
+    App.state.labForm = App.state.labForm || {};
+    var level = Learn.currentLevel();
+    root.appendChild(el('h1', {}, 'Research lab'));
+    if (level === 'beginner') {
+      root.appendChild(explain('Four tools to research before you trade: build a diversified portfolio, test whether a signal is real, replicate an exposure cheaply, and keep notes.'));
+    }
+    var grid = el('div', { class: 'lab-grid' });
+    root.appendChild(grid);
+    grid.appendChild(optimizerCard(level));   // spans full width on desktop
+    grid.appendChild(hypothesisCard(level));
+    grid.appendChild(replicateCard(level));
+    grid.appendChild(await notebookCard());    // spans full width on desktop
+  }
+
   window.Views = {
     home: home,
     research: research,
     trade: trade,
     portfolio: portfolio,
     status: status,
-    decision: decision
+    decision: decision,
+    lab: lab
   };
 })();
