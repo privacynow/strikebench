@@ -1160,9 +1160,32 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     CREDIT_PUT_SPREAD + DEBIT_CALL_SPREAD. POST /api/backtest/portfolio. +4 JUnit. Observed
     option_bar pricing per-day is the documented next step (needs a loaded dataset).
   - PHASE 4 COMPLETE. Suite: 258 JUnit + 27 fixture + 3 audit + 4 seeded + 8 live DOM.
-  - NEXT: Phase 5 research lab — portfolio optimizer (allocate capital across the competition's
-    winners under constraints), hypothesis tester (backtest a rule + significance), notebook (saved
-    analyses), ETF replication (options structure for a target exposure).
+- PHASE 5 COMPLETE — research lab (branch; NOT deployed). New `research` package, all API-exposed:
+  - PortfolioOptimizer: greedy capital allocation across the competition's winners by objective
+    DENSITY (score or EV per unit capital) under total budget + per-position cap + per-symbol
+    concentration cap + max positions; only viable evals, every skip explained. POST /api/optimize
+    (scans a universe, then allocates). +2 JUnit.
+  - HypothesisTester: "after N-day momentum >= threshold, is the next M-day return positive more
+    often than chance?" over candles with a two-sided z-test; honest verdict (too-few / not-
+    significant / supported / rejected). POST /api/lab/hypothesis. +2 JUnit.
+  - ETFReplicator: delta-1 synthetic (long call + short put, or reverse) sized to a target dollar
+    exposure; reports contracts / delta exposure / share cost / est. margin + honest caveats.
+    POST /api/lab/replicate. +2 JUnit.
+  - NotebookService + Flyway **V2** (research_note): per-user saved analyses, full CRUD, per-user
+    isolation (ownership-checked; ?::text null-safe filter). /api/lab/notes[/{id}]. +2 JUnit.
+    (V2 is APPENDED — V1 unchanged, so fresh + existing DBs migrate cleanly, no checksum churn.)
+  - ownerId(ctx) helper added for per-user persistence scoping.
+  - A dedicated research-lab UI page is the optional follow-up; the four tools are complete +
+    tested + exposed. Suite: 266 JUnit + 27 fixture + 3 audit + 4 seeded + 8 live DOM.
+  ===============================================================================================
+  ALL FIVE PHASES OF THE RESEARCH-PLATFORM PROGRAM ARE IMPLEMENTED + VERIFIED ON feature/research-
+  platform (NOT deployed; main/strikebench.com unchanged until a deliberate merge). P1 data
+  foundation · P2 StrategyEvaluation backbone · P3 recommendations-as-a-competition (+decision UI)
+  · P4 real evidence (ingest + calibration + portfolio backtester) · P5 research lab. Remaining
+  follow-ups are the merge-day cutover (ETL rehearsal on a prod copy, prod Postgres provisioning),
+  auto-resolution of recommendation outcomes from paper-trade closes, observed-option_bar pricing
+  in the portfolio backtester once a licensed dataset is loaded, and optional lab/lab-notebook UI.
+  ===============================================================================================
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
