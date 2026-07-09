@@ -1154,3 +1154,11 @@ body.lvl-expert .not-expert { display: none !important; }
 textarea { font: inherit; color: var(--text); background: var(--bg-input, var(--bg)); border: 1px solid var(--border);
   border-radius: 8px; padding: 8px 10px; min-height: 38px; }
 textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---- Data Center ---- */
+.dc-bar { height: 6px; background: var(--border); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+.dc-bar-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width .3s ease; }
+.dc-job { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.dc-job:last-child { border-bottom: none; }
+.dc-source { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
+.dc-source.on { border-color: var(--accent); }

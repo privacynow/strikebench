@@ -3089,34 +3089,228 @@
 
   var STATE_BADGE = { OK: 'badge-ok', ERROR: 'badge-danger', EMPTY: 'badge-caution', UNKNOWN: 'badge-dim', UNCONFIGURED: 'badge-dim' };
 
+  var JOB_BADGE = { DONE: 'badge-ok', RUNNING: 'badge-caution', QUEUED: 'badge-dim', FAILED: 'badge-danger', CANCELLED: 'badge-dim' };
+  function dcProgress(done, total) {
+    var pct = total > 0 ? Math.round(done / total * 100) : 0;
+    return el('div', { class: 'dc-bar' }, el('div', { class: 'dc-bar-fill', style: 'width:' + pct + '%' }));
+  }
+
+  // The Data Center: where data comes from, how fresh it is, what we hold, and the jobs + resets
+  // that manage it. A real operational hub, ladder-tuned. Progressive paint; each section fills
+  // its own captured card (token-guarded so leaving the route never paints stale data).
   async function status(root) {
-    root.appendChild(el('h1', {}, 'Data sources'));
-    var s = await API.get('/api/status');
-    root.appendChild(explain(brandName() + ' chains several data sources per domain and falls back gracefully. DEMO DATA means the built-in deterministic fixture is serving.'));
-    if (s.fixturesOnly) root.appendChild(alertBox('warn', 'Running in fixtures-only mode: all data is simulated demo data.'));
-    var grid = el('div', { class: 'grid grid-2' });
-    Object.keys(s.domains || {}).forEach(function (domain) {
-      var items = s.domains[domain];
-      var card = el('div', { class: 'card', style: 'margin-bottom:0' }, UI.cardHeader(domain));
-      if (!items.length) card.appendChild(el('p', { class: 'muted' }, 'No providers registered.'));
-      items.forEach(function (p) {
-        card.appendChild(el('div', { class: 'status-item' },
-          el('span', { class: 'badge ' + (STATE_BADGE[p.state] || 'badge-dim') }, p.state),
-          el('b', {}, p.provider),
-          el('span', { class: 'spacer' }),
-          el('span', { class: 'muted' }, p.detail || '')));
+    var level = Learn.currentLevel();
+    var token = App.navToken;
+    root.appendChild(el('h1', {}, 'Data center'));
+    root.appendChild(explain('Where your market data comes from, how fresh it is, and what you can pull in. '
+      + brandName() + ' chains several sources per job and falls back gracefully — DEMO DATA means the built-in fixture is serving.'));
+
+    var engineCard = el('div', { class: 'card', id: 'dc-engine' }, UI.spinner('Checking the market engine…'));
+    var coverageCard = el('div', { class: 'card', id: 'dc-coverage' }, UI.cardHeader('What data we hold'), UI.spinner('Loading coverage…'));
+    var jobsCard = el('div', { class: 'card', id: 'dc-jobs' }, UI.cardHeader('Jobs'), UI.spinner('Loading jobs…'));
+    var sourcesCard = el('div', { class: 'card', id: 'dc-sources' }, UI.cardHeader('Data sources'), UI.spinner('Loading sources…'));
+    var healthCard = el('div', { class: 'card', id: 'dc-health' });
+    var resetCard = el('div', { class: 'card', id: 'dc-reset' });
+    [engineCard, coverageCard, jobsCard, sourcesCard, healthCard, resetCard].forEach(function (c) { root.appendChild(c); });
+
+    // --- Jobs (declared first: engine/coverage actions start jobs and refresh this panel) ---
+    var jobsTimer = null;
+    async function loadJobs() {
+      var data;
+      try { data = await API.getFresh('/api/data/jobs'); } catch (e) { return; }
+      if (!App.alive(token)) { if (jobsTimer) clearTimeout(jobsTimer); return; }
+      var jobs = data.jobs || [];
+      jobsCard.innerHTML = '';
+      jobsCard.appendChild(UI.cardHeader('Jobs', el('button', { class: 'btn btn-sm btn-secondary', onclick: loadJobs }, 'Refresh')));
+      if (level === 'beginner') jobsCard.appendChild(explain('Background tasks that fetch or refresh data. Progress and results show here.'));
+      if (!jobs.length) { jobsCard.appendChild(UI.emptyState('No jobs yet', 'Warm the engine or backfill history to create one.')); return; }
+      var anyRunning = false;
+      jobs.forEach(function (j) {
+        if (j.status === 'RUNNING' || j.status === 'QUEUED') anyRunning = true;
+        var row = el('div', { class: 'dc-job' },
+          el('div', { class: 'chip-row', style: 'align-items:center;margin:0' },
+            el('span', { class: 'badge ' + (JOB_BADGE[j.status] || 'badge-dim') }, j.status),
+            el('b', {}, j.kind),
+            el('span', { class: 'muted' }, j.done + '/' + j.total + ' · ' + j.rowsWritten + ' rows'),
+            el('span', { class: 'spacer' }),
+            (j.status === 'RUNNING' || j.status === 'QUEUED')
+              ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { API.post('/api/data/jobs/' + j.id + '/cancel', {}).then(loadJobs); } }, 'Cancel')
+              : (j.status === 'FAILED' || j.status === 'CANCELLED')
+                ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { API.post('/api/data/jobs/' + j.id + '/retry', {}).then(loadJobs); } }, 'Retry')
+                : null),
+          dcProgress(j.done, j.total),
+          j.message ? el('div', { class: 'muted small' }, j.message) : (j.error ? el('div', { class: 'loss small' }, j.error) : null));
+        jobsCard.appendChild(row);
       });
-      grid.appendChild(card);
-    });
-    root.appendChild(grid);
-    try {
-      var cfg = await API.get('/api/config');
-      root.appendChild(el('div', { class: 'card', style: 'margin-top:16px' },
-        UI.cardHeader('Configuration'),
-        el('div', { class: 'status-item' }, el('b', {}, 'Fees'), el('span', { class: 'spacer' }), el('span', {}, fmtMoney(cfg.feePerContractCents) + ' per contract per leg + ' + fmtMoney(cfg.feePerOrderCents) + ' per order')),
-        el('div', { class: 'status-item' }, el('b', {}, 'Port'), el('span', { class: 'spacer' }), el('span', {}, String(cfg.port))),
-        el('div', { class: 'status-item' }, el('b', {}, 'Fixtures only'), el('span', { class: 'spacer' }), el('span', {}, String(cfg.fixturesOnly)))));
-    } catch (e) { /* optional */ }
+      if (anyRunning && App.alive(token)) jobsTimer = setTimeout(loadJobs, 2000); // live progress while a job runs
+    }
+
+    function startJob(kind, params) {
+      return API.post('/api/data/jobs', { kind: kind, params: params || {} }).then(function () { loadJobs(); });
+    }
+
+    // --- Engine status ---
+    (async function fillEngine() {
+      var ov;
+      try { ov = await API.get('/api/data/overview'); } catch (e) {
+        if (!App.alive(token)) return;
+        engineCard.innerHTML = ''; engineCard.appendChild(UI.cardHeader('Market engine'));
+        engineCard.appendChild(alertBox('warn', 'Engine status unavailable.')); return;
+      }
+      if (!App.alive(token)) return;
+      var e = ov.engine || {};
+      engineCard.innerHTML = '';
+      engineCard.appendChild(UI.cardHeader('Market engine',
+        el('button', { class: 'btn btn-sm', id: 'dc-refresh-now', onclick: function () { startJob('refresh_now', {}); } }, 'Refresh now')));
+      if (ov.fixturesOnly) engineCard.appendChild(alertBox('warn', 'Fixtures-only mode: all data is simulated demo data.'));
+      if (level === 'beginner') engineCard.appendChild(explain('An in-memory feed keeps your tickers fresh in the background so screens load instantly, instead of downloading on every click.'));
+      engineCard.appendChild(el('div', { class: 'chip-row' },
+        chip('Market', ov.marketOpen ? 'Open' : 'Closed'),
+        chip('Warmed', (e.warmed || 0) + ' / ' + (e.tracked || 0)),
+        chip('Refreshing', String(e.inFlight || 0)),
+        chip('Stale', String(e.stale || 0)),
+        chip('Refresh every', (e.refreshInterval || 0) + 's'),
+        chip('Avg latency', (e.avgLatencyMs || 0) + ' ms'),
+        e.errors ? chip('Errors', String(e.errors)) : null));
+      if (level === 'expert' && e.symbols && e.symbols.length) {
+        engineCard.appendChild(UI.expandable('Per-symbol engine state', function () {
+          return table(['Symbol', 'Fresh', 'Source', 'Age', 'State'], e.symbols.map(function (s) {
+            return el('tr', {},
+              el('td', {}, el('b', {}, s.symbol)),
+              el('td', {}, badge(s.freshness)),
+              el('td', { class: 'muted' }, s.source || '—'),
+              el('td', { class: 'muted' }, s.ageMs >= 0 ? Math.round(s.ageMs / 1000) + 's' : '—'),
+              el('td', {}, s.refreshing ? el('span', { class: 'badge badge-caution' }, 'refreshing') : (s.error ? el('span', { class: 'badge badge-danger', title: s.error }, 'error') : el('span', { class: 'muted' }, 'ok'))));
+          }));
+        }));
+      }
+    })();
+
+    // --- Coverage ---
+    (async function fillCoverage() {
+      var data;
+      try { data = await API.get('/api/data/coverage'); } catch (e) {
+        if (!App.alive(token)) return;
+        coverageCard.innerHTML = ''; coverageCard.appendChild(UI.cardHeader('What data we hold'));
+        coverageCard.appendChild(alertBox('warn', 'Coverage unavailable.')); return;
+      }
+      if (!App.alive(token)) return;
+      var sum = data.summary || {}, syms = data.symbols || [];
+      coverageCard.innerHTML = '';
+      var uni = (App.state.universe && App.state.universe.active && App.state.universe.active.symbols) || [];
+      coverageCard.appendChild(UI.cardHeader('What data we hold',
+        el('button', { class: 'btn btn-sm', id: 'dc-backfill', title: 'Pull daily history for your universe',
+          onclick: function () { startJob('backfill_underlying', { symbols: uni, years: 5 }); } }, 'Backfill history')));
+      if (level === 'beginner') coverageCard.appendChild(explain('The price history we’ve stored, and whether it’s real (observed) or demo. Backfill pulls daily history for your universe so backtests use real data.'));
+      coverageCard.appendChild(el('div', { class: 'chip-row' },
+        chip('Underlying symbols', String(sum.underlyingSymbols || 0)),
+        chip('Daily bars', String(sum.underlyingBars || 0)),
+        chip('Option symbols', String(sum.optionSymbols || 0)),
+        chip('Option rows', String(sum.optionRows || 0)),
+        chip('Observed', (sum.observedUnderlyingSymbols || 0) + ' symbols')));
+      if (!syms.length) {
+        coverageCard.appendChild(UI.emptyState('No stored history yet',
+          'Backfill history (above) to store daily bars. In live mode set YAHOO_ENABLED, or a Polygon/Alpha Vantage key, for real data.'));
+        return;
+      }
+      var rows = syms.slice(0, level === 'beginner' ? 12 : syms.length).map(function (s) {
+        return el('tr', {},
+          el('td', {}, el('b', {}, s.symbol)),
+          el('td', { class: 'muted' }, s.underlyingBars ? (s.underlyingFrom + ' → ' + s.underlyingTo) : '—'),
+          el('td', {}, s.underlyingBars
+            ? el('span', { class: 'badge ' + (s.underlyingObserved ? 'badge-ok' : 'badge-dim') }, s.underlyingObserved ? 'observed' : 'demo')
+            : el('span', { class: 'muted' }, '—')),
+          el('td', { class: 'muted' }, String(s.underlyingBars || 0)),
+          el('td', { class: 'muted' }, s.optionRows ? (s.optionDays + ' days / ' + s.optionRows + ' rows') : '—'));
+      });
+      coverageCard.appendChild(table(['Symbol', 'Underlying range', 'Evidence', 'Bars', 'Options'], rows));
+    })();
+
+    // --- Sources ---
+    (async function fillSources() {
+      var data;
+      try { data = await API.get('/api/data/sources'); } catch (e) {
+        if (!App.alive(token)) return;
+        sourcesCard.innerHTML = ''; sourcesCard.appendChild(UI.cardHeader('Data sources'));
+        sourcesCard.appendChild(alertBox('warn', 'Sources unavailable.')); return;
+      }
+      if (!App.alive(token)) return;
+      sourcesCard.innerHTML = '';
+      sourcesCard.appendChild(UI.cardHeader('Data sources'));
+      if (level === 'beginner') sourcesCard.appendChild(explain('Where data can come from. Free/keyless sources work out of the box; keyed and licensed ones unlock more history. Each shows how it may be used.'));
+      var grid = el('div', { class: 'grid grid-2' });
+      (data.sources || []).forEach(function (s) {
+        grid.appendChild(el('div', { class: 'dc-source' + (s.enabled ? ' on' : '') },
+          el('div', { class: 'chip-row', style: 'align-items:center;margin:0' },
+            el('span', { class: 'badge ' + (s.enabled ? 'badge-ok' : 'badge-dim') }, s.enabled ? 'ON' : 'off'),
+            el('b', {}, s.name),
+            el('span', { class: 'spacer' }),
+            el('span', { class: 'muted small' }, s.covers)),
+          el('div', { class: 'muted small', style: 'margin-top:4px' }, s.license),
+          el('div', { class: 'small', style: 'margin-top:4px' }, s.hint)));
+      });
+      sourcesCard.appendChild(grid);
+    })();
+
+    // --- Provider health (the old status view, kept as detail) ---
+    (async function fillHealth() {
+      var s;
+      try { s = await API.get('/api/status'); } catch (e) { return; }
+      if (!App.alive(token)) return;
+      healthCard.innerHTML = '';
+      var body = el('div', {});
+      var grid = el('div', { class: 'grid grid-2' });
+      Object.keys(s.domains || {}).forEach(function (domain) {
+        var items = s.domains[domain];
+        var card = el('div', { class: 'card', style: 'margin-bottom:0' }, UI.cardHeader(domain));
+        if (!items.length) card.appendChild(el('p', { class: 'muted' }, 'No providers registered.'));
+        items.forEach(function (p) {
+          card.appendChild(el('div', { class: 'status-item' },
+            el('span', { class: 'badge ' + (STATE_BADGE[p.state] || 'badge-dim') }, p.state),
+            el('b', {}, p.provider), el('span', { class: 'spacer' }), el('span', { class: 'muted' }, p.detail || '')));
+        });
+        grid.appendChild(card);
+      });
+      body.appendChild(grid);
+      healthCard.appendChild(UI.cardHeader('Provider health'));
+      healthCard.appendChild(level === 'beginner' ? UI.expandable('Per-source status', function () { return body; }) : body);
+    })();
+
+    // --- Reset (danger) ---
+    (function fillReset() {
+      resetCard.innerHTML = '';
+      resetCard.appendChild(UI.cardHeader('Reset data'));
+      resetCard.appendChild(explain('Wipe stored data back toward a fresh install. This never touches real money, but it cannot be undone. History and jobs are cleared per the tier you pick.'));
+      var TIERS = [
+        { key: 'MARKET_DATA', label: 'Market history only', blurb: 'Clears stored price/option history + data jobs. Keeps your paper account and research.' },
+        { key: 'RESEARCH', label: 'Research & backtests', blurb: 'Clears saved evaluations, recommendations, backtests, and notes.' },
+        { key: 'PAPER', label: 'Paper account & trades', blurb: 'Voids trades and positions and re-funds a fresh account.' },
+        { key: 'EVERYTHING', label: 'Everything (fresh start)', blurb: 'Wipes ALL stored data and re-seeds a brand-new funded account.' }
+      ];
+      var choices = level === 'beginner' ? TIERS.filter(function (t) { return t.key === 'PAPER' || t.key === 'EVERYTHING'; }) : TIERS;
+      var sel = el('select', { id: 'dc-reset-tier' }, choices.map(function (t) { return el('option', { value: t.key }, t.label); }));
+      var blurb = el('div', { class: 'muted small', id: 'dc-reset-blurb', style: 'margin-top:4px' });
+      function syncBlurb() { var t = choices.find(function (x) { return x.key === sel.value; }); blurb.textContent = t ? t.blurb : ''; }
+      sel.addEventListener('change', syncBlurb); syncBlurb();
+      resetCard.appendChild(el('div', { class: 'btn-row' },
+        el('label', { class: 'muted' }, 'What to clear '), sel,
+        el('button', { class: 'btn btn-danger', id: 'dc-reset-btn', onclick: function () {
+          var tier = sel.value;
+          var conf = el('input', { type: 'text', id: 'dc-reset-confirm', placeholder: 'type RESET', style: 'max-width:140px' });
+          UI.confirmModal('Reset ' + (choices.find(function (x) { return x.key === tier; }) || {}).label + '?',
+            el('div', {},
+              el('p', {}, 'This permanently clears the data for this tier. Type ', el('b', {}, 'RESET'), ' to confirm.'),
+              el('div', { class: 'btn-row' }, conf)),
+            'Reset', async function () {
+              if ((conf.value || '').trim().toUpperCase() !== 'RESET') throw new Error('Type RESET to confirm.');
+              await API.post('/api/data/reset', { tier: tier, confirm: true });
+              App.render();
+            }, true);
+        } }, 'Reset…')));
+      resetCard.appendChild(blurb);
+    })();
+
+    loadJobs();
   }
 
   // ---------- 1. Account ----------

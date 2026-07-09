@@ -395,12 +395,49 @@ test('candidate cards cross-link into backtest with the form pre-answered', asyn
   await page.waitForSelector('#app[data-ready="true"]');
 });
 
-test('data status lists providers per domain', async () => {
+test('data center: engine status, sources with license modes, coverage, jobs, tiered reset', async () => {
   await go('#/status');
-  const text = await page.textContent('#app');
-  assert.match(text, /QUOTES/);
-  assert.match(text, /fixture/);
-  assert.match(text, /fixtures-only mode/i);
+  await page.click('#level-switch button[data-level="expert"]');
+  // Engine status card
+  await page.waitForSelector('#dc-engine .chip-row');
+  assert.match(await page.textContent('#dc-engine'), /Market engine/);
+  assert.match(await page.textContent('#dc-engine'), /Warmed/);
+  // Source cards disclose each connector's license/use mode (Yahoo = personal-only)
+  await page.waitForSelector('#dc-sources .dc-source');
+  const sources = await page.textContent('#dc-sources');
+  assert.match(sources, /Yahoo Finance/);
+  assert.match(sources, /PERSONAL/);
+  assert.match(sources, /licensed · internal-use/); // the owned-CSV path
+  // Coverage + provider health (kept) render (health fills detached — wait for it)
+  await page.waitForSelector('#dc-coverage');
+  await page.waitForSelector('#dc-health:has-text("QUOTES")', { timeout: 15000 });
+  assert.match(await page.textContent('#app'), /Fixtures-only|simulated demo/i);
+  // Jobs: backfill the universe → a job row appears
+  await page.click('#dc-backfill');
+  await page.waitForSelector('#dc-jobs .dc-job', { timeout: 15000 });
+  assert.match(await page.textContent('#dc-jobs'), /backfill_underlying/);
+  // Expert reset exposes all four tiers; the confirm needs the typed word
+  const tiers = await page.$$eval('#dc-reset-tier option', os => os.map(o => o.value));
+  assert.ok(tiers.includes('MARKET_DATA') && tiers.includes('EVERYTHING'), 'expert reset tiers');
+  await page.click('#dc-reset-btn');
+  await page.waitForSelector('#dc-reset-confirm');
+  await page.click('#modal-confirm'); // empty confirm -> refused, modal stays
+  assert.ok(await page.locator('#dc-reset-confirm').count(), 'reset refused without typing RESET');
+  await page.click('.modal button:has-text("Cancel")');
+});
+
+test('data center reset tiers are reduced for Beginner', async () => {
+  await go('#/status');
+  await page.click('#level-switch button[data-level="beginner"]');
+  // Wait for the BEGINNER re-render (2-tier select), not the lingering expert one mid-transition.
+  await page.waitForFunction(() => {
+    const s = document.getElementById('dc-reset-tier');
+    return s && s.options.length === 2;
+  }, { timeout: 15000 });
+  const tiers = await page.$$eval('#dc-reset-tier option', os => os.map(o => o.value));
+  assert.ok(!tiers.includes('MARKET_DATA'), 'beginner hides the granular market-data tier');
+  assert.ok(tiers.includes('PAPER') && tiers.includes('EVERYTHING'), 'beginner keeps the plain resets');
+  await page.click('#level-switch button[data-level="expert"]'); // restore for later tests
 });
 
 test('pro depth: comparison table, custom builder, position greeks', async () => {
@@ -610,22 +647,24 @@ test('theme toggle, brand, health banner, route error boundary', async () => {
     body: JSON.stringify({ ok: true, startedAt: 'x', jarChangedSinceBoot: true })
   }));
   await page.evaluate(() => fetch('/api/health')); // ensure the route is active
-  // Trigger the health check via a route error: break one API call so the boundary fires
-  await page.route('**/api/status', r => r.abort());
-  await page.evaluate(() => { location.hash = '#/status'; });
+  // Trigger the health check via a route error: Portfolio awaits /api/account uncaught, so
+  // aborting it fires the route boundary (the Data Center is deliberately resilient now).
+  await page.evaluate(() => API.flushCache()); // else a cached /api/account masks the abort
+  await page.route('**/api/account', r => r.abort());
+  await page.evaluate(() => { location.hash = '#/portfolio'; });
   await page.waitForSelector('#route-error', { timeout: 15000 });
   const boundary = await page.textContent('#route-error');
-  assert.match(boundary, /status screen failed to load/i);
+  assert.match(boundary, /portfolio screen failed to load/i);
   assert.ok(await page.locator('#route-retry').count(), 'retry button present');
   await page.waitForSelector('#stale-banner', { timeout: 15000 });
   assert.match(await page.textContent('#stale-banner'), /rebuilt after this server started/i);
 
   // Un-break everything: retry renders the screen and the banner clears on healthy report
-  await page.unroute('**/api/status');
+  await page.unroute('**/api/account');
   await page.unroute('**/api/health');
   await page.click('#route-retry');
   await page.waitForSelector('#app[data-ready="true"]');
-  assert.match(await page.textContent('#app'), /QUOTES/);
+  assert.match(await page.textContent('#app'), /Buying power|Portfolio value/); // portfolio recovered
   await page.evaluate(() => fetch('/api/health'));
   // banner clears on the next periodic/error check; force one by navigating with a fresh check
   await page.evaluate(() => window.App && window.App.render());

@@ -184,7 +184,8 @@ test('live: backtest discloses demo underlying when no candle source', async () 
 
 test('live: status, account, portfolio render', async () => {
   await go('#/status');
-  assert.match(await page.textContent('#app'), /QUOTES/);
+  await page.waitForSelector('#dc-engine .chip-row', { timeout: 30000 }); // Data Center engine card
+  assert.match(await page.textContent('#dc-engine'), /Market engine/);
   await go('#/account'); // legacy URL -> Portfolio Account section
   assert.match(await page.textContent('#app'), /Buying power/);
   await go('#/portfolio/closed');

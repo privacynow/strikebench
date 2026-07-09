@@ -63,7 +63,7 @@ public final class MarketDataEngine {
 
     private final Map<String, MarketSnapshot> snapshots = new ConcurrentHashMap<>();
     private final Map<String, Long> lastAccess = new ConcurrentHashMap<>();   // for LRU eviction of tracked symbols
-    private final Map<String, Boolean> inFlight = new ConcurrentHashMap<>();  // singleflight guard
+    private final Map<String, java.util.concurrent.CompletableFuture<Void>> inFlight = new ConcurrentHashMap<>(); // singleflight: callers JOIN the in-flight refresh
     private final AtomicLong refreshCount = new AtomicLong();
     private final AtomicLong refreshLatencyTotalMs = new AtomicLong();
     private volatile long lastRefreshEpochMs = 0L;
@@ -166,32 +166,39 @@ public final class MarketDataEngine {
         }
     }
 
-    /** Singleflight: at most one in-flight refresh per symbol; extra callers no-op. */
-    private void refreshAsync(String symbol) {
-        if (refreshPool == null || refreshPool.isShutdown()) return;
-        if (inFlight.putIfAbsent(symbol, Boolean.TRUE) != null) return;
-        markRefreshing(symbol, true);
-        try {
-            refreshPool.submit(() -> { try { doRefresh(symbol); } finally { inFlight.remove(symbol); markRefreshing(symbol, false); } });
-        } catch (Exception e) {
-            inFlight.remove(symbol);
-            markRefreshing(symbol, false);
+    /**
+     * Singleflight: exactly one in-flight refresh per symbol, shared by every caller. computeIfAbsent
+     * is atomic, so a warm-on-boot refresh and a concurrent request for the same symbol join ONE
+     * provider call instead of racing (and a blocking caller can await the warm's future).
+     */
+    private java.util.concurrent.CompletableFuture<Void> refreshFuture(String symbol) {
+        if (refreshPool == null || refreshPool.isShutdown()) {
+            try { doRefresh(symbol); } catch (Exception e) { /* recorded on the snapshot */ }
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
         }
+        return inFlight.computeIfAbsent(symbol, s -> {
+            markRefreshing(s, true);
+            return java.util.concurrent.CompletableFuture
+                    .runAsync(() -> { try { doRefresh(s); } finally { markRefreshing(s, false); } }, refreshPool)
+                    .whenComplete((v, e) -> inFlight.remove(s));
+        });
     }
 
-    /** Blocking parallel fill for cold symbols so a first request returns complete data. */
+    private void refreshAsync(String symbol) {
+        try { refreshFuture(symbol); } catch (Exception e) { /* pool rejected; next tick retries */ }
+    }
+
+    /** Blocking parallel fill for cold symbols: JOINS any in-flight (e.g. warm) refresh, never skips. */
     private void fetchBlocking(List<String> symbols) {
-        if (refreshPool == null || refreshPool.isShutdown()) { symbols.forEach(this::doRefresh); return; }
-        List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+        List<java.util.concurrent.CompletableFuture<Void>> futures = new ArrayList<>();
         for (String s : symbols) {
-            if (inFlight.putIfAbsent(s, Boolean.TRUE) != null) continue; // someone else is fetching it
-            markRefreshing(s, true);
-            futures.add(refreshPool.submit(() -> { try { doRefresh(s); } finally { inFlight.remove(s); markRefreshing(s, false); } }));
+            try { futures.add(refreshFuture(s)); } catch (Exception e) { /* skip; snapshot may stay cold */ }
         }
-        for (var f : futures) {
-            try { f.get(cfg.httpTimeoutMs() + 2000L, TimeUnit.MILLISECONDS); }
-            catch (Exception e) { /* leave whatever we have; snapshot carries the error */ }
-        }
+        try {
+            java.util.concurrent.CompletableFuture
+                    .allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
+                    .get(cfg.httpTimeoutMs() + 5000L, TimeUnit.MILLISECONDS);
+        } catch (Exception e) { /* leave whatever we have; snapshots carry any error */ }
     }
 
     private void doRefresh(String symbol) {
