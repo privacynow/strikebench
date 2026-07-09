@@ -4,6 +4,15 @@
 
   var App = {
     state: { ticket: null, lastRecommendSymbol: null },
+    navToken: 0,
+
+    /**
+     * True while `token` is still the current route generation. Slow views paint their shell,
+     * return immediately (so a new navigation is never blocked behind a slow fetch), and fill
+     * their captured child elements from a detached async block guarded by this — a stale fill
+     * from a route the user already left simply bails instead of painting over the new screen.
+     */
+    alive: function (token) { return token === App.navToken; },
 
     navigate: function (hash) {
       if (window.location.hash === hash) {
@@ -32,6 +41,10 @@
 
     _renderOnce: async function () {
       var root = document.getElementById('app');
+      // Every render is a new route generation. A slow view returns after painting its shell
+      // and fills the rest from a detached block guarded by App.alive(token); a later
+      // navigation bumps the token so that stale fill bails instead of painting the wrong screen.
+      var token = ++App.navToken;
       // The readiness flag drops SYNCHRONOUSLY on render start — the crossfade below is
       // async, and anything watching data-ready (tests, tooling) must never catch the
       // outgoing screen still claiming to be ready for the new route.

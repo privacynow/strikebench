@@ -97,9 +97,9 @@ test('live: research a real symbol end to end', async () => {
 
 test('live: research handles unknown and non-optionable symbols gracefully', async () => {
   await go('#/research/ZZZZQQ');
-  assert.match(await page.textContent('#app'), /No data for ZZZZQQ/i);
+  await page.waitForSelector('text=/No data for ZZZZQQ/i', { timeout: 30000 }); // hero fills detached
   await go('#/research/VTSAX');
-  assert.match(await page.textContent('#app'), /no listed options/i);
+  await page.waitForSelector('text=/no listed options/i', { timeout: 30000 });
   // A real, established stock with NO candle source (keyless: Stooq blocks bots, no
   // Polygon/AV key) must say WHY the chart is empty — never blame the window
   await go('#/research/PG');

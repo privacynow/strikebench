@@ -138,8 +138,33 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
 
 test('research VTSAX warns about missing options', async () => {
   await go('#/research/VTSAX');
-  const text = await page.textContent('#app');
-  assert.match(text, /no listed options/i);
+  await page.waitForSelector('text=/no listed options/i'); // hero/actions now fill detached
+});
+
+test('navigation is NEVER trapped behind a slow route (Research does not block moving away)', async () => {
+  // Gate /api/research/AAPL so it hangs; the shell must still paint AND we must be able to leave.
+  let release;
+  const gate = new Promise(r => { release = r; });
+  await page.route('**/api/research/AAPL', async route => {
+    await gate;
+    try { await route.abort(); } catch (e) { /* request abandoned when we navigated away */ }
+  });
+  try {
+    await page.evaluate(() => { API.flushCache(); window.location.hash = '#/home'; });
+    await page.waitForFunction(() => document.getElementById('app').getAttribute('data-route') === 'home');
+    await page.evaluate(() => { API.flushCache(); window.location.hash = '#/research/AAPL'; });
+    await page.waitForSelector('#research-hero', { timeout: 4000 }); // shell paints before the fetch
+    // Now leave immediately — with the old serialized render this hung until the fetch resolved.
+    await page.evaluate(() => { window.location.hash = '#/portfolio'; });
+    await page.waitForFunction(
+      () => document.getElementById('app').getAttribute('data-route') === 'portfolio',
+      { timeout: 4000 });
+  } finally {
+    release();
+    await page.waitForTimeout(50); // let the gated handler settle before unrouting
+    await page.unroute('**/api/research/AAPL');
+    await page.evaluate(() => API.flushCache());
+  }
 });
 
 test('discover scan: a blank symbol box auto-recommends with evidence and targets', async () => {

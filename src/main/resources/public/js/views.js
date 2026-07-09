@@ -351,8 +351,16 @@
     renderRecents();
 
     if (!symbol) {
-      await sectorExplorer(root, 'research');
-      root.appendChild(await studyToolsSection()); // Stage E: the Lab's STUDY tools live in Research
+      // Non-blocking: paint into a captured child and fill it detached, so the route returns
+      // immediately (navigating away is never trapped behind the sector-quote batch).
+      var idxBody = el('div', { id: 'research-index-body' });
+      root.appendChild(idxBody);
+      var _it = App.navToken;
+      (async function fillIndex() {
+        await sectorExplorer(idxBody, 'research');
+        if (!App.alive(_it)) return;
+        idxBody.appendChild(await studyToolsSection()); // Stage E: the Lab's STUDY tools live in Research
+      })();
       return;
     }
 
@@ -413,17 +421,15 @@
       }
     })();
 
-    // Hero + option-dependent sections fill when the (parallelized) research call resolves.
-    var r;
-    try { r = await researchP; }
-    catch (e) {
-      heroCard.replaceWith(alertBox('danger', 'No data for ' + symbol + '. Check the ticker.'));
-      actionsAnchor.remove(); chainAnchor.remove();
-      return;
-    }
-    rememberRecent(symbol);
-    renderRecents();
-    var q = r.quote;
+    // Hero + option-dependent sections fill WITHOUT blocking the route: research() returns after
+    // painting the shell above, so a new navigation is never trapped behind this fetch. A stale
+    // fill (the user already navigated away) bails on the render token.
+    var _rt = App.navToken;
+    researchP.then(function (r) {
+      if (!App.alive(_rt)) return;
+      rememberRecent(symbol);
+      renderRecents();
+      var q = r.quote;
 
     var hero = el('div', { class: 'card' },
       el('div', { class: 'quote-hero' },
@@ -626,6 +632,11 @@
       };
       loadChain(r.expirations[0]);
     }
+    }, function (e) {
+      if (!App.alive(_rt)) return;
+      heroCard.replaceWith(alertBox('danger', 'No data for ' + symbol + '. Check the ticker.'));
+      actionsAnchor.remove(); chainAnchor.remove();
+    });
   }
 
   var EARNINGS_RE = /earnings|quarterly results|guidance|earnings call/i;
@@ -3334,7 +3345,9 @@
 
     var host = el('div', { id: 'decision-host' });
     root.appendChild(host);
-    await renderCompetition(host, symbol);
+    // Detached: renderCompetition fills the captured host, so the route returns immediately and
+    // a new navigation is never trapped behind the evaluation call.
+    renderCompetition(host, symbol).catch(function () { /* handled inside */ });
   }
 
   // ---- Research lab (Phase 5): optimizer, hypothesis tester, ETF replicator, notebook ----
