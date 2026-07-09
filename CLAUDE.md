@@ -1181,10 +1181,26 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   ALL FIVE PHASES OF THE RESEARCH-PLATFORM PROGRAM ARE IMPLEMENTED + VERIFIED ON feature/research-
   platform (NOT deployed; main/strikebench.com unchanged until a deliberate merge). P1 data
   foundation · P2 StrategyEvaluation backbone · P3 recommendations-as-a-competition (+decision UI)
-  · P4 real evidence (ingest + calibration + portfolio backtester) · P5 research lab. Remaining
-  follow-ups are the merge-day cutover (ETL rehearsal on a prod copy, prod Postgres provisioning),
-  auto-resolution of recommendation outcomes from paper-trade closes, observed-option_bar pricing
-  in the portfolio backtester once a licensed dataset is loaded, and optional lab/lab-notebook UI.
+  · P4 real evidence (ingest + calibration + portfolio backtester) · P5 research lab.
+  ===============================================================================================
+- FINISH-THE-BUILD PASS (2026-07-08, user "finish it all" + standard UI drill; the 3 buildable follow-ups):
+  - RESEARCH-LAB UI (#/lab, Views.lab; new Lab nav item desktop + mobile bottom-nav w/ stroke-SVG flask
+    icon; #/lab added to the dom-audit walk). Four tools, ladder-tuned + responsive: Optimizer (budget/
+    goal + expert knobs -> summary chips, SVG composition bar+legend, allocations table), Hypothesis
+    tester (momentum form -> verdict banner + SVG win-rate gauge vs the 50% baseline + z/edge chips),
+    ETF replicator (target-exposure -> synthetic structure + delta/cost/margin chips + efficiency gauge),
+    Notebook (inline CRUD). Desktop uses the real estate (optimizer+notebook full-width, hypothesis|
+    replicate 2-up); mobile stacks; hand-rolled theme-aware SVG (compositionChart/gaugeChart via el
+    html:); no emoji (UI.icon); Beginner=plain+fewer knobs / Expert=dense+z-scores. Shots p5-lab-*.png.
+  - AUTO-RESOLVE (calibration loop closes end-to-end): V3 migration recommendation.trade_id;
+    /api/evaluate returns the pick's recommendationId; decision -> ticket -> trade-create body threads
+    it; tradeCreate linkTrade; unwind/settle resolveByTrade (idempotent, WHERE outcome_status IS NULL).
+  - OBSERVED BACKTEST PRICING: PortfolioBacktester(market,cfg,clock,db) marks each leg from option_bar
+    (mark/mid) when a dataset is loaded, else BSM; report tier OBSERVED_FROM_HISTORY vs
+    MODELED_FROM_UNDERLYING; /api/backtest/portfolio passes the pool. observedMarkDollars pkg-visible+tested.
+  - Suite: 268 JUnit + 28 fixture + 3 audit + 4 seeded + 8 live DOM, all green. New memory
+    [[feedback-standard-ui-bar]] + [[feedback-no-false-scarcity]]. ONLY remaining now: the merge-day
+    prod cutover (needs the real prod DB + the box) and turning auth on (needs a Google OIDC client secret).
   ===============================================================================================
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
