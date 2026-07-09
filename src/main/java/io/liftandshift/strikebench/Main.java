@@ -13,6 +13,7 @@ public final class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
 
     public static void main(String[] args) {
+        if (args.length > 0 && "etl".equals(args[0])) { runEtl(args); return; }
         preloadAllClasses();
         AppConfig cfg = new AppConfig();
         ApiServer server = ApiServer.create(cfg, Clock.systemDefaultZone());
@@ -20,6 +21,33 @@ public final class Main {
         log.info("StrikeBench is up: http://localhost:{}  (db={}, fixturesOnly={})",
                 cfg.port(), cfg.dbUrl(), cfg.fixturesOnly());
         log.info("Educational tool only — paper trading by default, never financial advice.");
+    }
+
+    /**
+     * One-time cutover: {@code java -jar strikebench.jar etl <legacy-sqlite-path>} migrates the
+     * legacy SQLite paper database into the configured Postgres (DB_URL). The target must be a
+     * freshly-migrated, EMPTY database — run this BEFORE the app first boots against it.
+     */
+    static void runEtl(String[] args) {
+        if (args.length < 2) {
+            System.err.println("usage: java -jar strikebench.jar etl <path-to-legacy-sqlite.db>");
+            System.exit(2);
+            return;
+        }
+        AppConfig cfg = new AppConfig();
+        try (io.liftandshift.strikebench.db.Db db = io.liftandshift.strikebench.db.Db.forConfig(cfg)) {
+            io.liftandshift.strikebench.db.Migrations.run(db);   // ensure the target schema exists (idempotent)
+            var result = io.liftandshift.strikebench.db.SqliteToPostgresEtl.runFromFile(args[1], db);
+            result.checks().forEach(c -> log.info("  check: {}", c));
+            log.info("ETL migrated {} rows across {} tables from {}",
+                    result.totalRows(), result.tables().size(), args[1]);
+            if (!result.ok()) {
+                result.problems().forEach(p -> log.error("  PROBLEM: {}", p));
+                System.exit(1);
+                return;
+            }
+            log.info("ETL verified clean — Postgres at {} is ready; start the app now.", cfg.dbUrl());
+        }
     }
 
     /**
