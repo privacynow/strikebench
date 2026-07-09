@@ -233,6 +233,7 @@
     App._me = me;
     if (cfg && cfg.disclaimer) document.getElementById('disclaimer').textContent = cfg.disclaimer;
     if (cfg && cfg.brand && cfg.brand.name) applyBrand(cfg.brand);
+    App.config = cfg || {}; // expose config (marketOpen, fixturesOnly, fees…) to views
     // Fail CLOSED: /api/config is always readable (auth-open allowlist), so it's the reliable
     // "is auth on?" signal. If auth is enabled and we don't have a confirmed authenticated session
     // (me null from a transient /auth/me failure, or explicitly not authenticated) → sign-in, not a

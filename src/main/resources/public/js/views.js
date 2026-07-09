@@ -1282,6 +1282,9 @@
         targetPresets.innerHTML = '';
         if (!q.quotes.length) return;
         var last = parseFloat(q.quotes[0].last);
+        // Pre-open/after-hours the "last" price is the PRIOR CLOSE, not a live quote \u2014 say so instead
+        // of implying it's today's price (a trader taps "+10% exit" thinking it's off the live price).
+        var closed = App.config && App.config.marketOpen === false;
         offsets.forEach(function (o) {
           var px = last * (1 + o / 100);
           targetPresets.appendChild(el('button', {
@@ -1291,6 +1294,8 @@
             }
           }, (o > 0 ? '+' : '') + o + '% \u2192 $' + px.toFixed(2)));
         });
+        if (closed) targetPresets.appendChild(el('span', { class: 'muted', style: 'font-size:11.5px' },
+          'vs the prior close $' + last.toFixed(2) + ' \u2014 market closed'));
       } catch (e) { /* presets are sugar */ }
     }
     var wantShares = el('input', { type: 'number', id: 'rec-shares', min: '100', step: '100', placeholder: '100',

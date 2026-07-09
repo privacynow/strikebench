@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.recommend;
 
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
@@ -139,6 +140,10 @@ public final class RecommendationEngine {
         double minConfidence = req.minConfidence() == null ? 0 : req.minConfidence();
 
         List<String> notes = new ArrayList<>();
+        if (!MarketHours.isRegularSession(clock.instant())) {
+            notes.add("The market is closed — prices and strikes here are anchored to the PRIOR CLOSE, "
+                    + "not a live quote, and can shift at the next open.");
+        }
         // Buying shares at a discount commits the full purchase price by design — a cash-secured
         // put reserves strike x 100. Capping that by a small risk-% would reject every candidate,
         // so the ACQUIRE flow caps by available cash instead (unless the user set explicit limits).
@@ -303,6 +308,9 @@ public final class RecommendationEngine {
         };
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         List<String> notes = new ArrayList<>();
+        if (!MarketHours.isRegularSession(clock.instant())) {
+            notes.add("The market is closed — these rungs are measured off the PRIOR CLOSE and can shift at the open.");
+        }
         Holdings holdings = req.holdings();
         int freeShares = holdings != null && holdings.sharesOwned() != null ? Math.max(0, holdings.sharesOwned()) : 0;
         boolean sharesHeld = freeShares >= 100 && intent != StrategyIntent.ACQUIRE;

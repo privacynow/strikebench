@@ -521,6 +521,7 @@ public final class ApiServer {
         ctx.json(Map.of(
                 "port", cfg.port(),
                 "fixturesOnly", cfg.fixturesOnly(),
+                "marketOpen", io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()),
                 "authEnabled", auth.enabled(),  // always-readable auth signal (config is in the auth-open allowlist)
                 "feePerContractCents", cfg.feePerContractCents(),
                 "feePerOrderCents", cfg.feePerOrderCents(),
