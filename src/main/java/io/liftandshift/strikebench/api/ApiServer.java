@@ -773,16 +773,19 @@ public final class ApiServer {
         String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
         var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
                 result.riskMode(), result.candidates(), acct.buyingPowerCents(), ownerId, true);
-        // Record the surfaced pick as a calibration sample (outcome resolved later).
+        // Record the surfaced pick as a calibration sample; its id lets a placed trade link back.
+        String recommendationId = null;
         if (!evals.isEmpty()) {
-            try { evaluations.recordSurfaced(evals.getFirst().id(), ownerId); }
+            try { recommendationId = evaluations.recordSurfaced(evals.getFirst().id(), ownerId); }
             catch (RuntimeException e) { log.warn("could not record recommendation: {}", e.toString()); }
         }
-        ctx.json(Map.of(
-                "symbol", result.symbol(),
-                "intent", String.valueOf(result.intent()),
-                "evaluations", evals,
-                "rejected", result.rejected()));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("symbol", result.symbol());
+        out.put("intent", String.valueOf(result.intent()));
+        out.put("evaluations", evals);
+        out.put("rejected", result.rejected());
+        if (recommendationId != null) out.put("recommendationId", recommendationId);
+        ctx.json(out);
     }
 
     public record OpportunitiesRequest(List<String> universe, String thesis, String horizon,
@@ -891,7 +894,7 @@ public final class ApiServer {
 
     public record TradeOpenRequest(String symbol, String strategy, Integer qty, List<LegView> legs,
                                    String thesis, String horizon, String riskMode,
-                                   String intent, Boolean useHeldShares) {}
+                                   String intent, Boolean useHeldShares, String recommendationId) {}
 
     public record ConfirmRequest(Boolean confirm) {}
 
@@ -994,7 +997,8 @@ public final class ApiServer {
 
     private void tradeCreate(Context ctx) {
         Account acct = currentAccount(ctx);
-        TradeService.OpenRequest req = toOpenRequest(bodyOrNull(ctx, TradeOpenRequest.class), acct);
+        TradeOpenRequest body = bodyOrNull(ctx, TradeOpenRequest.class);
+        TradeService.OpenRequest req = toOpenRequest(body, acct);
         Verdict verdict = guardrailCheck(req, acct);
         if (verdict.blocked()) {
             audit.log(acct.id(), null, "TRADE_REJECTED", "BLOCK",
@@ -1002,6 +1006,11 @@ public final class ApiServer {
             throw new TradeRejectedException(verdict.blockReasons());
         }
         TradeRecord t = trades.create(req);
+        // Close the calibration loop: link the placed trade to the recommendation it came from.
+        if (body != null && body.recommendationId() != null && !body.recommendationId().isBlank()) {
+            try { evaluations.linkTrade(body.recommendationId(), t.id()); }
+            catch (RuntimeException e) { log.warn("could not link recommendation: {}", e.toString()); }
+        }
         ctx.status(201).json(Map.of("trade", TradeView.of(t), "warnings", verdict.warnings()));
     }
 
@@ -1128,6 +1137,7 @@ public final class ApiServer {
         ConfirmRequest req = bodyOrNull(ctx, ConfirmRequest.class);
         TradeService.CloseResult result = trades.unwind(ctx.pathParam("id"),
                 req != null && Boolean.TRUE.equals(req.confirm()));
+        resolveRecommendationForTrade(ctx.pathParam("id"), "CLOSED", result.realizedPnlCents());
         ctx.json(Map.of("trade", TradeView.of(result.trade()), "realizedPnlCents", result.realizedPnlCents()));
     }
 
@@ -1136,7 +1146,14 @@ public final class ApiServer {
         ConfirmRequest req = bodyOrNull(ctx, ConfirmRequest.class);
         TradeService.CloseResult result = trades.settle(ctx.pathParam("id"),
                 req != null && Boolean.TRUE.equals(req.confirm()));
+        resolveRecommendationForTrade(ctx.pathParam("id"), "SETTLED", result.realizedPnlCents());
         ctx.json(Map.of("trade", TradeView.of(result.trade()), "realizedPnlCents", result.realizedPnlCents()));
+    }
+
+    /** Best-effort: auto-resolve any recommendation tied to a trade that just closed. */
+    private void resolveRecommendationForTrade(String tradeId, String status, Long pnlCents) {
+        try { evaluations.resolveByTrade(tradeId, status, pnlCents); }
+        catch (RuntimeException e) { log.warn("could not resolve recommendation for {}: {}", tradeId, e.toString()); }
     }
 
     private void tradeDelete(Context ctx) {

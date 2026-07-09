@@ -2224,7 +2224,9 @@
           var btn = document.getElementById('place-trade');
           btn.disabled = true;
           try {
-            var res = await API.post('/api/trades', t.previewReq);
+            var placeBody = Object.assign({}, t.previewReq);
+            if (t.recommendationId) placeBody.recommendationId = t.recommendationId; // close the calibration loop
+            var res = await API.post('/api/trades', placeBody);
             App.state.ticket = null;
             App.navigate('#/trade/' + res.trade.id);
           } catch (e) {
@@ -2966,12 +2968,12 @@
     return wrap;
   }
 
-  function useEval(c, symbol) {
-    App.state.ticket = { candidate: c, symbol: symbol, step: 5 };
+  function useEval(c, symbol, recId) {
+    App.state.ticket = { candidate: c, symbol: symbol, step: 5, recommendationId: recId || null };
     App.navigate('#/trade/place');
   }
 
-  function decisionTop(e, symbol, level) {
+  function decisionTop(e, symbol, level, recId) {
     var c = e.candidate, risk = e.risk, capital = e.capital, sc = e.score;
     var card = el('div', { class: 'card decision-pick', 'data-strategy': c.strategy });
     card.appendChild(UI.cardHeader(
@@ -3010,7 +3012,7 @@
       }));
     }
     card.appendChild(el('div', { class: 'btn-row' },
-      el('button', { class: 'btn', id: 'decision-use', onclick: function () { useEval(c, symbol); } }, 'Practice this trade')));
+      el('button', { class: 'btn', id: 'decision-use', onclick: function () { useEval(c, symbol, recId); } }, 'Practice this trade')));
     return card;
   }
 
@@ -3090,7 +3092,7 @@
         'Back to ideas', function () { App.navigate('#/trade/discover'); }));
       return;
     }
-    host.appendChild(decisionTop(evals[0], symbol, level));
+    host.appendChild(decisionTop(evals[0], symbol, level, data && data.recommendationId));
     if (evals.length > 1) {
       host.appendChild(el('h2', { class: 'section-h' }, level === 'beginner' ? 'Other ways to play it' : 'The full field'));
       host.appendChild(level === 'beginner' ? decisionAltList(evals.slice(1), symbol) : decisionTable(evals, symbol));

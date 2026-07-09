@@ -62,6 +62,26 @@ class CalibrationServiceTest {
         assertThat((double) lo.get("realizedWinRate")).isEqualTo(0.0);
     }
 
+    @Test void autoResolvesWhenALinkedTradeCloses() {
+        db = TestDb.fresh();
+        CalibrationService cal = new CalibrationService(db, CLOCK);
+        insertEval("e1", 0.6);
+        String rec = cal.record("e1", null, "evaluate");
+        cal.linkTrade(rec, "tr_123");
+
+        assertThat(cal.report(null).get("resolved")).isEqualTo(0); // open -> not yet resolved
+
+        cal.resolveByTrade("tr_123", "CLOSED", 750L);              // the trade closes with a profit
+        var rep = cal.report(null);
+        assertThat(rep.get("resolved")).isEqualTo(1);
+        assertThat((double) rep.get("overallWinRate")).isEqualTo(1.0);
+
+        // Idempotent: a second close never double-resolves (WHERE outcome_status IS NULL).
+        cal.resolveByTrade("tr_123", "CLOSED", -999L);
+        assertThat((long) rep.get("totalPnlCents")).isEqualTo(750L);
+        assertThat((long) cal.report(null).get("totalPnlCents")).isEqualTo(750L);
+    }
+
     @Test void emptyWhenNothingResolved() {
         db = TestDb.fresh();
         Map<String, Object> rep = new CalibrationService(db, CLOCK).report(null);

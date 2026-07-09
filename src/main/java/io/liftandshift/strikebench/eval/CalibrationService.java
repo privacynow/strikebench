@@ -33,6 +33,20 @@ public final class CalibrationService {
         return id;
     }
 
+    /** Links a placed paper trade to the recommendation it came from (so its close auto-resolves). */
+    public void linkTrade(String recommendationId, String tradeId) {
+        if (recommendationId == null || tradeId == null) return;
+        db.exec("UPDATE recommendation SET trade_id=? WHERE id=?", tradeId, recommendationId);
+    }
+
+    /** Resolves any (unresolved) recommendation tied to a trade that just closed. */
+    public void resolveByTrade(String tradeId, String status, Long pnlCents) {
+        if (tradeId == null) return;
+        db.exec("UPDATE recommendation SET outcome_status=?, outcome_pnl_cents=?, outcome_asof=? "
+                + "WHERE trade_id=? AND outcome_status IS NULL",
+                status, pnlCents, java.time.OffsetDateTime.now(clock), tradeId);
+    }
+
     /** Resolves a recommendation's outcome (WIN/LOSS/EXPIRED/ASSIGNED/CLOSED + realized P/L). */
     public void resolveOutcome(String recommendationId, String status, Long pnlCents) {
         // outcome_asof is TIMESTAMPTZ (new-schema table) — bind a temporal type, not an ISO string.

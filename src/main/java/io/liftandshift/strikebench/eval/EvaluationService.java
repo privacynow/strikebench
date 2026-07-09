@@ -55,6 +55,15 @@ public final class EvaluationService {
         calibration.resolveOutcome(recommendationId, status, pnlCents);
     }
 
+    public void linkTrade(String recommendationId, String tradeId) {
+        calibration.linkTrade(recommendationId, tradeId);
+    }
+
+    /** Auto-resolves any recommendation tied to a closed trade (best-effort). */
+    public void resolveByTrade(String tradeId, String status, Long pnlCents) {
+        calibration.resolveByTrade(tradeId, status, pnlCents);
+    }
+
     public java.util.Map<String, Object> calibrationReport(String userId) {
         return calibration.report(userId);
     }
