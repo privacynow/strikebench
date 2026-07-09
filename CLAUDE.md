@@ -1100,9 +1100,36 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     * FULL MATRIX GREEN throughout: 239 JUnit (+15 for snapshot/etl/auth) + 26 fixture + 3 audit + 4
       seeded + 8 live DOM. New config keys: SNAPSHOT_*, AUTH_ENABLED, OIDC_*, AUTH_ALLOWED_EMAILS,
       AUTH_POST_LOGIN_URL, AUTH_COOKIE_SECURE.
-  - NEXT: Phase 2 — StrategyEvaluation backbone (StrategySpec + producer modules Capital/Volatility/Risk/
-    Evidence/ManagementPlan/Score/Explanation + unified contract), then P3 competition UI, P4 real
-    evidence/backtester rewrite, P5 research lab.
+- PHASE 2 COMPLETE + PHASE 3 BACKEND (branch feature/research-platform; NOT deployed). The
+  StrategyEvaluation backbone that powers recommendations-as-a-competition:
+  - `eval` package. Immutable contracts: EvidenceLevel (worst-of rollup, generalizes Freshness) +
+    EvidenceProfile, CapitalProfile (incremental vs economic capital + LABELED annualized ROC),
+    VolatilityProfile (IV rank/percentile from observed history/null-when-thin, VRP, expected move),
+    RiskProfile (real payoff grid via PayoffCurve + stressed tail loss; nested Scenario),
+    ManagementPlan (+Rule), ScoreBreakdown (gate->normalize->risk-adjust; +Component), Explanation,
+    StrategySpec, StrategyEvaluation (aggregate w/ typed rank accessors). Candidate stays the concrete
+    candidate (no duplication).
+  - Seven producer modules (Capital/Volatility/Risk/Evidence/Management/Score/Explainer) + a pure,
+    deterministic StrategyEvaluator (evaluate + evaluateAndRank: viable-first then risk-adjusted desc).
+    RiskProfiler folds share-backed coverage in as a synthetic stock leg so scenarios reflect the
+    COMBINED position. ScoreComposer: hard gate (finite risk / evidence!=UNKNOWN / buying power),
+    weighted 6-component normalize, risk-adjust haircut by evidence uncertainty + tail. Demo/fixture
+    data is haircut AND labeled DEMO_FIXTURE — never masquerades as observed.
+  - EvaluationStore persists to strategy_evaluation (typed rank cols + JSONB sub-profiles; ?::jsonb
+    binds; recent() casts ::text for the nullable-user filter). EvaluationService assembles the live
+    EvalContext (underlying, DTE from front expiration, ATM IV from the chain, realized vol via
+    HistoricalVol, and OBSERVED IV history from option_bar snapshots [iv_source='vendor' only, so a
+    fresh/demo DB honestly yields null IV rank]) and ranks/persists.
+  - APIs: POST /api/evaluate (one symbol -> ranked competition of full evaluations + rejected),
+    GET /api/evaluations (recent per user), POST /api/opportunities (P3: universe-scale scan -> each
+    symbol's best viable idea ranked cross-symbol; defaults to the active universe). recommend
+    refactored to a shared resolveAndRecommend so evaluate reuses the holdings-injection path.
+  - Verified: 248 JUnit (StrategyEvaluatorTest, EvaluationStoreTest, EvaluateIntegrationTest incl.
+    opportunities) + 26 fixture + 3 audit + 4 seeded + 8 live DOM. New config keys: none.
+  - REMAINING P3 (next): the decision/comparison UI — render /api/evaluate + /api/opportunities as a
+    side-by-side competition (why-one-wins, per-dimension evidence badges, capital incremental/economic,
+    risk scenario chart, scrubbable management plan), ladder-tuned Beginner/Expert, with DOM tests.
+    Then P4 (owned historical options CSV + backtester rewrite + calibration) and P5 (research lab).
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
