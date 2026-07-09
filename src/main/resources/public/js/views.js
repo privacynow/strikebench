@@ -352,6 +352,7 @@
 
     if (!symbol) {
       await sectorExplorer(root, 'research');
+      root.appendChild(await studyToolsSection()); // Stage E: the Lab's STUDY tools live in Research
       return;
     }
 
@@ -3666,6 +3667,22 @@
     grid.appendChild(hypothesisCard(level, ctx));
     grid.appendChild(replicateCard(level, ctx));
     grid.appendChild(await notebookCard());        // spans full width on desktop
+  }
+
+  /** The Lab's STUDY tools (signal test + notebook), rendered inside Research where studying lives. */
+  async function studyToolsSection() {
+    App.state.labForm = App.state.labForm || {};
+    var level = Learn.currentLevel();
+    var ctx = App.state.labForm.ctx = App.state.labForm.ctx || {};
+    if (!ctx.symbol) ctx.symbol = App.state.lastRecommendSymbol || 'AAPL';
+    var wrap = el('div', { id: 'research-study-tools' });
+    wrap.appendChild(el('h2', { class: 'section-h' }, 'Research tools'));
+    if (level === 'beginner') wrap.appendChild(explain('Test whether a price signal is real before you trust it, and keep notes on what you learn.'));
+    var grid = el('div', { class: 'lab-grid' });
+    grid.appendChild(hypothesisCard(level, ctx));
+    grid.appendChild(await notebookCard());
+    wrap.appendChild(grid);
+    return wrap;
   }
 
   window.Views = {
