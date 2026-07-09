@@ -1138,12 +1138,25 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     side' entry from Discover; winner hands off to Place. CSS .decision-pick/.scenario-strip/etc.
   - Verified: 248 JUnit + 27 fixture (new decision DOM test) + 3 audit + 4 seeded + 8 live DOM; both
     levels screenshotted (shots/p3-decision-{expert,beginner}.png) — coherent, honest, no overflow.
-  - NEXT: Phase 4 — real evidence. (a) Owned historical-options CSV bulk ingest into option_bar
-    (source=vendor, evidence-tagged) so IV rank/backtests become OBSERVED when data is loaded; the
-    dataset itself is a licensed purchase (internal-use, derived-output only) — build the ingest +
-    test with a synthetic CSV. (b) Backtester rewrite (portfolio-level, rolls, exits, delta-selection).
-    (c) Calibration loop: recommendation.outcome_* vs strategy_evaluation predictions -> accuracy.
-    Then P5 research lab (optimizer, hypothesis tester, notebook, ETF replication).
+- PHASE 4 IN PROGRESS — real evidence (2 of 3 shipped; branch, NOT deployed):
+  - (a) DONE — Historical-options CSV bulk ingest: db/HistoricalOptionsIngest, header-mapped +
+    vendor-agnostic (ORATS/Cboe/Databento aliases), loads a LICENSED CSV into option_bar tagged
+    source=<vendor> + OBSERVED (bid_ask_observed=1, iv_source/greeks_source='vendor') + per-(symbol,
+    date) underlying_bar; idempotent upserts, skips/reports bad rows. CLI `ingest-options <csv>
+    [source]`. Once loaded, EvaluationService's observed-IV history query finds it -> IV rank real.
+    Only derived rows stored (license: internal-use, no redistribution). +3 JUnit.
+  - (c) DONE — Calibration loop: eval/CalibrationService records surfaced evals as recommendations
+    (recommendation table), resolves outcomes, reports RELIABILITY (resolved recs bucketed by
+    predicted POP vs realized win rate; well-calibrated == predicted~realized) + overall win rate +
+    total P/L. /api/evaluate records the pick; GET /api/calibration; POST /api/calibration/resolve.
+    outcome_asof bound as OffsetDateTime (TIMESTAMPTZ). +3 JUnit. (Auto-resolution from paper-trade
+    closes needs a trade<->recommendation link — the manual/API resolve is the seam; follow-up.)
+  - (b) REMAINING — Backtester rewrite: portfolio-level (concurrent positions), mechanical rolls +
+    exits (matching the ManagementPlan), delta-based strike selection, driven off the owned
+    option_bar history when present. The existing Backtester (daily loop, no-look-ahead, tiered
+    pricing, coverage) stays until the rewrite lands.
+  - Suite at this point: 254 JUnit + 27 fixture + 3 audit + 4 seeded + 8 live DOM.
+  - Then P5 research lab (portfolio optimizer, hypothesis tester, notebook, ETF replication).
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
