@@ -47,9 +47,26 @@ class BacktesterTest {
     }
 
     @Test
+    void demoUnderlyingIsFlaggedInLiveModeAndTradesCarryTheEntryUnderlying() {
+        // Fixture provider WITHOUT fixtures-only = the prod "no candle key" case: the underlying is
+        // demo data, so the report must flag it and each trade must expose the (fake) entry price the
+        // strikes were chosen around — this is exactly what a trader needs to see 210 strikes in context.
+        FixtureProvider fixture = new FixtureProvider(CLOCK);
+        MarketDataService market = new MarketDataService(List.of(fixture), List.of(fixture), List.of(fixture));
+        Backtester live = new Backtester(market, List.of(fixture), new AppConfig(Map.of()), db, CLOCK); // no FIXTURES_ONLY
+        Backtester.BacktestReport report = live.run(req("DEBIT_CALL_SPREAD", "2026-01-05", "2026-06-30"));
+
+        assertThat(report.demoUnderlying()).isTrue();
+        assertThat(report.confidence()).contains("demo");
+        assertThat(report.trades()).isNotEmpty();
+        assertThat(report.trades()).allSatisfy(t -> assertThat(t.entryUnderlyingCents()).isGreaterThan(0));
+    }
+
+    @Test
     void debitSpreadBacktestProducesFullReport() {
         Backtester.BacktestReport report = backtester.run(req("DEBIT_CALL_SPREAD", "2026-01-05", "2026-06-30"));
 
+        assertThat(report.demoUnderlying()).isFalse(); // fixtures-only = fixtures are legit, not "demo"
         assertThat(report.sampleSize()).isGreaterThanOrEqualTo(3);
         // sampleSize counts completed (EXPIRED) trades only; a window-end model exit may add one more row
         long expired = report.trades().stream().filter(t -> "EXPIRED".equals(t.exitReason())).count();

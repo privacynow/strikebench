@@ -2900,6 +2900,15 @@
 
     function renderReport(r) {
       out.innerHTML = '';
+      // LOUD, FIRST: demo underlying. The strikes are anchored to a FAKE price series, so they can
+      // look absurd next to the real quote (a trader saw 210 strikes on AAPL-at-$315). Say so before
+      // anything reads as a real result.
+      if (r.demoUnderlying) {
+        out.appendChild(alertBox('danger',
+          'Demo price data — NOT the real market. ' + r.symbol + '’s price history here is built-in placeholder data, '
+          + 'so the strikes and every result below are anchored to fake prices and do not reflect the real market. '
+          + 'For a real backtest, add a free Polygon or Alpha Vantage key (see the Data screen) and re-run.'));
+      }
       var modeKind = r.pricingMode === 'HISTORICAL_CHAIN' ? 'ok' : r.pricingMode === 'MODELED_FROM_UNDERLYING' ? 'warn' : 'danger';
       out.appendChild(alertBox(modeKind, 'Pricing mode: ' + r.pricingMode + ' — confidence ' + r.confidence + '. ' +
         (r.pricingMode !== 'HISTORICAL_CHAIN' ? 'These are modeled option prices, not observed ones.' : '')));
@@ -2933,12 +2942,16 @@
           UI.lineChart(eq, { money: true })));
       }
       if (r.trades && r.trades.length) {
+        // "Underlying @ entry" gives the strikes context — 210-strike legs make sense next to
+        // "underlying $212 that day", and it makes demo prices vs the real quote obvious.
         out.appendChild(el('div', { class: 'card' },
           UI.cardHeader('Trades'),
-          table(['Entry', 'Exit', 'Position', 'Premium', 'Exit value', 'Fees', 'P/L', 'Why closed'],
+          table(['Entry', 'Underlying @ entry', 'Exit', 'Position', 'Premium', 'Exit value', 'Fees', 'P/L', 'Why closed'],
             r.trades.map(function (t) {
               return el('tr', {},
-                el('td', { class: 'muted' }, t.entryDate), el('td', { class: 'muted' }, t.exitDate),
+                el('td', { class: 'muted' }, t.entryDate),
+                el('td', { class: 'muted' }, t.entryUnderlyingCents ? fmtMoney(t.entryUnderlyingCents) : '—'),
+                el('td', { class: 'muted' }, t.exitDate),
                 el('td', { class: 'mono' }, t.label),
                 el('td', {}, fmtMoney(t.entryNetPremiumCents, { plus: true })),
                 el('td', {}, fmtMoney(t.exitValueCents, { plus: true })),

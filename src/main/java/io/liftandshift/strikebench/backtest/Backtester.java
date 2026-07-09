@@ -85,7 +85,7 @@ public final class Backtester {
     public record TradeResult(String entryDate, String exitDate, String label,
                               long entryNetPremiumCents, long exitValueCents, long feesCents,
                               long pnlCents, long maxLossCents, Double returnOnRisk, String exitReason,
-                              Boolean assigned) {}
+                              Boolean assigned, long entryUnderlyingCents) {}
 
     public record BacktestReport(
             String id, String symbol, String strategy, String from, String to,
@@ -101,6 +101,7 @@ public final class Backtester {
             List<Map<String, Object>> equityCurve,
             List<String> notes,
             Integer assignments,
+            boolean demoUnderlying,
             String disclaimer
     ) {}
 
@@ -145,7 +146,7 @@ public final class Backtester {
             notes.add("No underlying data available for " + symbol + " in the requested window");
             return persist(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                     "PAYOFF_ONLY", "none", daysRequested, 0, 0, null, null, startingCash, startingCash,
-                    0, null, trades, skipped, assumptions(slippage, notes, family), equityCurve, notes, 0, DISCLAIMER), req);
+                    0, null, trades, skipped, assumptions(slippage, notes, family), equityCurve, notes, 0, demoUnderlying, DISCLAIMER), req);
         }
         // Weekday count includes market holidays (~10/yr); only flag a real shortfall.
         if (daysCovered < daysRequested * 0.9) {
@@ -260,7 +261,7 @@ public final class Backtester {
         return persist(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                 pricingMode, confidence, daysRequested, daysCovered, n, winRate, avgRoR,
                 startingCash, cash, maxDrawdownPct(equityCurve), worst, trades, skipped,
-                assumptions(slippage, notes, family), equityCurve, notes, assignments, DISCLAIMER), req);
+                assumptions(slippage, notes, family), equityCurve, notes, assignments, demoUnderlying, DISCLAIMER), req);
     }
 
     // ---- Entry ----
@@ -273,6 +274,7 @@ public final class Backtester {
         long entryNetCents;
         long feesCents;
         long maxLossCents;
+        long entryUnderlyingCents;   // the underlying price the strikes were chosen around, at entry
         String label;
     }
 
@@ -350,6 +352,7 @@ public final class Backtester {
         pos.entryNetCents = entryNet;
         pos.feesCents = feesFor(legs, qty);
         pos.maxLossCents = curve.maxLossCents();
+        pos.entryUnderlyingCents = chain.underlyingPrice() == null ? 0 : Money.toCents(chain.underlyingPrice());
         pos.label = built.label();
         return new EntryAttempt(pos, mode, null);
     }
@@ -368,7 +371,8 @@ public final class Backtester {
         long pnl = pos.entryNetCents - pos.feesCents + exitValue;
         Double ror = pos.maxLossCents > 0 ? pnl / (double) pos.maxLossCents : null;
         return new TradeResult(pos.entryDate.toString(), exitDate.toString(), pos.label,
-                pos.entryNetCents, exitValue, pos.feesCents, pnl, pos.maxLossCents, ror, reason, assigned);
+                pos.entryNetCents, exitValue, pos.feesCents, pnl, pos.maxLossCents, ror, reason, assigned,
+                pos.entryUnderlyingCents);
     }
 
     // ---- Valuation ----
