@@ -131,6 +131,8 @@ public final class AppConfig {
     public String fredBaseUrl() { return get("FRED_BASE_URL", "https://api.stlouisfed.org"); }
     public String polygonBaseUrl() { return get("POLYGON_BASE_URL", "https://api.polygon.io"); }
     public String alphaVantageBaseUrl() { return get("ALPHAVANTAGE_BASE_URL", "https://www.alphavantage.co"); }
+    /** Keyless per-symbol news headlines via the Google News RSS search feed. Blank disables it. */
+    public String newsRssBaseUrl() { return get("NEWS_RSS_BASE_URL", "https://news.google.com/rss/search"); }
 
     // ---- Authentication (Google OIDC; OFF by default so local/keyless use is unchanged) ----
     /** When true, /api/* requires a signed-in user (Google OIDC). Off = single shared local account. */

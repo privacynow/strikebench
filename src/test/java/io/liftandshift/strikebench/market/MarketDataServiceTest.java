@@ -107,4 +107,33 @@ class MarketDataServiceTest {
         assertThat(svc.riskFreeRate(30)).isEqualTo(0.04);
         assertThat(svc.lookup("apple")).extracting(SymbolMatch::symbol).contains("AAPL");
     }
+
+    /** A canned news source (headlines OR filings), to exercise aggregation vs winner-take-all. */
+    record FakeNews(String name, List<NewsItem> items) implements io.liftandshift.strikebench.market.ports.NewsFilingsProvider {
+        @Override public List<NewsItem> news(String symbol) { return items; }
+    }
+
+    @Test
+    void newsAggregatesEveryRealProviderSoFilingsAndHeadlinesCoexist() {
+        FixtureProvider fixture = new FixtureProvider(CLOCK);
+        var headline = new NewsItem("AAPL", "Apple beats earnings", "Reuters", "http://r/1", 3_000);
+        var filing = new NewsItem("AAPL", "10-Q filing", "SEC EDGAR", "http://sec/1", 1_000);
+        var svc = new MarketDataService(List.of(fixture),
+                List.of(new FakeNews("news-rss", List.of(headline)), new FakeNews("edgar", List.of(filing)), fixture),
+                List.of(fixture));
+
+        List<NewsItem> news = svc.news("AAPL");
+        // Both real sources are present (the old winner-take-all would have returned only the first),
+        // newest first, and the fixture's demo headlines are NOT mixed in.
+        assertThat(news).extracting(NewsItem::headline).containsExactly("Apple beats earnings", "10-Q filing");
+        assertThat(news).extracting(NewsItem::source).doesNotContain("fixture");
+    }
+
+    @Test
+    void newsFallsBackToFixtureOnlyWhenNoRealSourceHasAnything() {
+        FixtureProvider fixture = new FixtureProvider(CLOCK);
+        var svc = new MarketDataService(List.of(fixture),
+                List.of(new FakeNews("edgar", List.of()), fixture), List.of(fixture)); // real source empty
+        assertThat(svc.news("SPY")).isNotEmpty(); // fixture demo news is the last resort
+    }
 }

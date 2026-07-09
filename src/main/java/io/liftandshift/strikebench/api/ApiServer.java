@@ -22,6 +22,7 @@ import io.liftandshift.strikebench.market.providers.CboeProvider;
 import io.liftandshift.strikebench.market.providers.EdgarProvider;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.market.providers.FredProvider;
+import io.liftandshift.strikebench.market.providers.NewsRssProvider;
 import io.liftandshift.strikebench.market.providers.PolygonProvider;
 import io.liftandshift.strikebench.market.providers.StooqProvider;
 import io.liftandshift.strikebench.market.providers.TreasuryRatesProvider;
@@ -134,7 +135,8 @@ public final class ApiServer {
             if (!cfg.alphaVantageApiKey().isBlank()) providers.add(new AlphaVantageProvider(cfg));
             if (!cfg.polygonApiKey().isBlank()) providers.add(new PolygonProvider(cfg));
             providers.add(new StooqProvider(cfg));
-            newsProviders.add(new EdgarProvider(cfg));
+            if (!cfg.newsRssBaseUrl().isBlank()) newsProviders.add(new NewsRssProvider(cfg)); // keyless headlines
+            newsProviders.add(new EdgarProvider(cfg));                                          // SEC filings
             if (!cfg.fredApiKey().isBlank()) ratesProviders.add(new FredProvider(cfg));
             ratesProviders.add(new TreasuryRatesProvider(cfg));
         }

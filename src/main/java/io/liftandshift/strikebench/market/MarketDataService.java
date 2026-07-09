@@ -137,30 +137,60 @@ public final class MarketDataService {
         return r == null ? CandleSeries.EMPTY : r;
     }
 
+    private static final String FIXTURE = "fixture";
+
+    /**
+     * AGGREGATES every real news provider so filings (EDGAR) and headlines (RSS) COEXIST — the old
+     * winner-take-all returned the first non-empty provider, which let EDGAR filings suppress every
+     * headline in live mode. The fixture stays a strict last-resort fallback, so its demo headlines
+     * never mix into real data (the "fixture masquerading as real" rule).
+     */
     public List<NewsItem> news(String symbol) {
         String sym = norm(symbol);
         List<NewsItem> r = newsCache.get(sym, s -> {
+            List<NewsItem> real = new ArrayList<>();
             for (NewsFilingsProvider p : newsProviders) {
-                try {
-                    List<NewsItem> items = p.news(s);
-                    if (items != null && !items.isEmpty()) { recordOk(p.name(), Domain.NEWS); return items; }
-                    recordEmpty(p.name(), Domain.NEWS);
-                } catch (Exception e) {
-                    recordError(p.name(), Domain.NEWS, e);
-                }
+                if (FIXTURE.equals(p.name())) continue;
+                gatherNews(p.name(), () -> p.news(s), real);
             }
             for (MarketDataProvider p : providersFor(Domain.NEWS)) {
-                try {
-                    List<NewsItem> items = p.news(s);
-                    if (items != null && !items.isEmpty()) { recordOk(p.name(), Domain.NEWS); return items; }
-                    recordEmpty(p.name(), Domain.NEWS);
-                } catch (Exception e) {
-                    recordError(p.name(), Domain.NEWS, e);
-                }
+                if (FIXTURE.equals(p.name())) continue;
+                gatherNews(p.name(), () -> p.news(s), real);
+            }
+            if (!real.isEmpty()) return dedupSortedNews(real);
+
+            // No real news anywhere — fall back to the fixture (demo) provider.
+            for (NewsFilingsProvider p : newsProviders) {
+                if (!FIXTURE.equals(p.name())) continue;
+                List<NewsItem> demo = new ArrayList<>();
+                gatherNews(p.name(), () -> p.news(s), demo);
+                if (!demo.isEmpty()) return dedupSortedNews(demo);
             }
             return null;
         });
         return r == null ? List.of() : r;
+    }
+
+    private void gatherNews(String provider, java.util.function.Supplier<List<NewsItem>> call, List<NewsItem> acc) {
+        try {
+            List<NewsItem> items = call.get();
+            if (items != null && !items.isEmpty()) { recordOk(provider, Domain.NEWS); acc.addAll(items); }
+            else recordEmpty(provider, Domain.NEWS);
+        } catch (Exception e) {
+            recordError(provider, Domain.NEWS, e);
+        }
+    }
+
+    /** Dedup by url (fallback source|headline), newest first. */
+    private static List<NewsItem> dedupSortedNews(List<NewsItem> items) {
+        Map<String, NewsItem> byKey = new LinkedHashMap<>();
+        for (NewsItem n : items) {
+            String key = (n.url() != null && !n.url().isBlank()) ? n.url() : (n.source() + "|" + n.headline());
+            byKey.putIfAbsent(key, n);
+        }
+        List<NewsItem> out = new ArrayList<>(byKey.values());
+        out.sort(java.util.Comparator.comparingLong(NewsItem::publishedEpochMs).reversed());
+        return out;
     }
 
     /** Annualized risk-free rate for the horizon; falls back to a 4% educational default. */
