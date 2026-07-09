@@ -264,6 +264,7 @@ public final class ApiServer {
             c.routes.post("/api/recommend/ladder", this::recommendLadder);
             c.routes.post("/api/evaluate", this::evaluate);
             c.routes.post("/api/opportunities", this::opportunities);
+            c.routes.post("/api/optimize", this::optimize);
             c.routes.get("/api/evaluations", ctx -> {
                 String uid = auth.currentUserId(ctx);
                 String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
@@ -762,6 +763,31 @@ public final class ApiServer {
                 req.riskMode() != null ? req.riskMode() : "balanced",
                 acct.buyingPowerCents(), ownerId, topN);
         ctx.json(Map.of("ranked", result.ranked(), "notes", result.notes(), "scanned", result.scanned()));
+    }
+
+    public record OptimizeRequest(List<String> universe, String thesis, String horizon, String riskMode,
+                                  String intent, Long totalCapitalCents, Long maxPerPositionCents,
+                                  Integer maxPositions, Double maxSymbolPct, String objective) {}
+
+    /** Research lab: scan a universe, then allocate a budget across the winners under constraints. */
+    private void optimize(Context ctx) {
+        OptimizeRequest req = bodyOrNull(ctx, OptimizeRequest.class);
+        if (req == null) req = new OptimizeRequest(null, null, null, null, null, null, null, null, null, null);
+        List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
+                ? req.universe() : universe.active().symbols();
+        Account acct = currentAccount(ctx);
+        String uid = auth.currentUserId(ctx);
+        String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+        var scan = evaluations.scan(symbols, req.intent(),
+                req.thesis() != null ? req.thesis() : "neutral",
+                req.horizon() != null ? req.horizon() : "month",
+                req.riskMode() != null ? req.riskMode() : "balanced",
+                acct.buyingPowerCents(), ownerId, Math.max(1, symbols.size()));
+        long budget = req.totalCapitalCents() != null ? req.totalCapitalCents() : acct.buyingPowerCents();
+        var result = new io.liftandshift.strikebench.research.PortfolioOptimizer().optimize(scan.ranked(),
+                new io.liftandshift.strikebench.research.PortfolioOptimizer.Constraints(
+                        budget, req.maxPerPositionCents(), req.maxPositions(), req.maxSymbolPct(), req.objective()));
+        ctx.json(Map.of("optimization", result, "scanned", scan.scanned(), "scanNotes", scan.notes()));
     }
 
     public record ResolveRequest(String recommendationId, String status, Long pnlCents) {}
