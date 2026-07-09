@@ -753,7 +753,8 @@ test('experience ladder reshapes the UI per level', async () => {
   assert.ok(await page.locator('.explain').first().isVisible(), 'explainers visible at Learning');
 
   // Learning candidate cards use plain language and expandable mechanics.
-  // The ideas form persists intent/symbol/target across renders by design — reset it here.
+  // The ideas form persists intent/symbol/target/filters across renders by design — reset here.
+  await page.evaluate(() => { App.state.filterState = {}; App.state.discoverForm = null; });
   await go('#/recommend/manual');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
   await page.fill('#rec-symbol', 'AAPL');
@@ -1027,7 +1028,8 @@ test('pipeline streamline: candidates open in the builder; Ideas links the full 
   // Expert: a screened candidate's exact legs load straight into the builder terminal
   await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#app[data-ready="true"]');
-  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
+  // Filters persist by design now — clear them so a prior test's limits don't reject everything.
+  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; App.state.filterState = {}; App.state.discoverForm = null; });
   await go('#/recommend/manual');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#rec-go');

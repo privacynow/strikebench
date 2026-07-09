@@ -1261,8 +1261,10 @@
       }));
     var horizons = beginner ? ['week', 'month', 'quarter'] : ['week', 'month', 'quarter', '0DTE'];
     var horizon = el('select', { id: 'rec-horizon' },
-      horizons.map(function (h) { return el('option', { value: h, selected: h === 'month' ? '' : null }, h); }));
-    var allow0 = el('input', { type: 'checkbox', id: 'rec-0dte' });
+      horizons.map(function (h) { return el('option', { value: h, selected: h === (saved.horizon || 'month') ? '' : null }, h); }));
+    horizon.addEventListener('change', function () { remember({ horizon: horizon.value }); });
+    var allow0 = el('input', { type: 'checkbox', id: 'rec-0dte', checked: saved.allow0 ? '' : null });
+    allow0.addEventListener('change', function () { remember({ allow0: allow0.checked }); });
     var target = el('input', { type: 'number', id: 'rec-target', min: '0', step: '0.5', placeholder: 'optional',
       value: prefill.symbol ? '' : (saved.target || '') });
     target.addEventListener('change', function () { remember({ target: target.value }); });
@@ -1291,7 +1293,9 @@
         });
       } catch (e) { /* presets are sugar */ }
     }
-    var wantShares = el('input', { type: 'number', id: 'rec-shares', min: '100', step: '100', placeholder: '100' });
+    var wantShares = el('input', { type: 'number', id: 'rec-shares', min: '100', step: '100', placeholder: '100',
+      value: saved.wantShares || '' });
+    wantShares.addEventListener('change', function () { remember({ wantShares: wantShares.value }); });
 
     // Scan-scope fields (shown when there is no symbol): universe, expirations, $ goal
     var universe = el('input', { type: 'text', id: 'auto-universe',
@@ -1791,11 +1795,21 @@
    */
   function filterPanel(idPrefix) {
     var level = Learn.currentLevel();
-    var minPop = el('input', { type: 'number', id: idPrefix + '-f-pop', min: '0', max: '100', step: '5', placeholder: 'any' });
-    var maxAssign = el('input', { type: 'number', id: idPrefix + '-f-assign', min: '0', max: '100', step: '5', placeholder: 'any' });
-    var minYield = el('input', { type: 'number', id: idPrefix + '-f-yield', min: '0', step: '1', placeholder: 'any' });
-    var maxCost = el('input', { type: 'number', id: idPrefix + '-f-cost', min: '0', step: '50', placeholder: 'any' });
-    var maxLoss = el('input', { type: 'number', id: idPrefix + '-f-maxloss', min: '0', step: '50', placeholder: 'any' });
+    // Persist the five limits per surface so they survive a re-render / level switch / tab hop
+    // (single-owner + seed + write-back — the state-ownership convention).
+    App.state.filterState = App.state.filterState || {};
+    var saved = App.state.filterState[idPrefix] = App.state.filterState[idPrefix] || {};
+    var mkFilter = function (key, attrs) {
+      var input = el('input', Object.assign({ type: 'number', placeholder: 'any' }, attrs));
+      if (saved[key] !== undefined && saved[key] !== '') input.value = saved[key];
+      input.addEventListener('input', function () { saved[key] = input.value; });
+      return input;
+    };
+    var minPop = mkFilter('minPop', { id: idPrefix + '-f-pop', min: '0', max: '100', step: '5' });
+    var maxAssign = mkFilter('maxAssign', { id: idPrefix + '-f-assign', min: '0', max: '100', step: '5' });
+    var minYield = mkFilter('minYield', { id: idPrefix + '-f-yield', min: '0', step: '1' });
+    var maxCost = mkFilter('maxCost', { id: idPrefix + '-f-cost', min: '0', step: '50' });
+    var maxLoss = mkFilter('maxLoss', { id: idPrefix + '-f-maxloss', min: '0', step: '50' });
     var node;
     if (level === 'beginner') {
       // Two limits a first-time trader actually has: money and odds. The rest unlocks at Expert.
@@ -2731,11 +2745,19 @@
     // A candidate card's "Backtest this" lands here with the form pre-answered.
     var prefill = App.state.backtestPrefill || {};
     App.state.backtestPrefill = null;
+    // Persist the form per the state-ownership convention: symbol/strategy/window/dte survive nav
+    // and level switches instead of resetting to defaults. Prefill (an explicit ask) wins over it.
+    var bf = App.state.backtestForm = App.state.backtestForm || {};
     root.appendChild(el('p', { class: 'page-sub' },
       Learn.currentLevel() === 'beginner'
         ? 'Before risking even paper money on a rule like “sell a monthly covered call”, see how it would actually have gone — trade by trade, with honest labels on what is modeled.'
         : 'Replays a strategy rule day by day with no look-ahead — and labels exactly how much of its pricing is modeled.'));
-    var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
+    var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || bf.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
+    // Typing a symbol here makes it the working symbol app-wide (Backtest → Builder carries it).
+    sym.addEventListener('input', function () {
+      bf.symbol = sym.value;
+      var s = sym.value.trim().toUpperCase(); if (s) App.state.lastRecommendSymbol = s;
+    });
     // The strategy menu climbs the ladder with the user: Learning sees the beginner
     // families (mirroring the engine's learning risk rank), Expert unlocks defined-risk
     // premium selling, Pro sees everything backtestable.
@@ -2759,21 +2781,25 @@
     if (btAllowed && prefill.strategy && btAllowed.indexOf(prefill.strategy) < 0) {
       btAllowed = btAllowed.concat([prefill.strategy]);
     }
+    var btDefaultStrat = prefill.strategy || bf.strategy || 'DEBIT_CALL_SPREAD';
     var strat = el('select', { id: 'bt-strategy' },
       BT_GROUPS.map(function (g) {
         var fams = btAllowed ? g.families.filter(function (s) { return btAllowed.indexOf(s) >= 0; }) : g.families;
         if (!fams.length) return null;
         return el('optgroup', { label: g.label }, fams.map(function (s) {
-          var pick = prefill.strategy ? s === prefill.strategy : s === 'DEBIT_CALL_SPREAD';
-          return el('option', { value: s, selected: pick ? '' : null }, prettyStrategy(s));
+          return el('option', { value: s, selected: s === btDefaultStrat ? '' : null }, prettyStrategy(s));
         }));
       }));
+    strat.addEventListener('change', function () { bf.strategy = strat.value; });
     var today = new Date();
     var toDefault = today.toISOString().slice(0, 10);
     var fromDefault = new Date(today.getTime() - 182 * 86400000).toISOString().slice(0, 10);
-    var from = el('input', { type: 'date', id: 'bt-from', value: fromDefault });
-    var to = el('input', { type: 'date', id: 'bt-to', value: toDefault });
-    var dte = el('input', { type: 'number', id: 'bt-dte', value: '30', min: '1', max: '365' });
+    var from = el('input', { type: 'date', id: 'bt-from', value: bf.from || fromDefault });
+    var to = el('input', { type: 'date', id: 'bt-to', value: bf.to || toDefault });
+    var dte = el('input', { type: 'number', id: 'bt-dte', value: bf.dte || '30', min: '1', max: '365' });
+    from.addEventListener('change', function () { bf.from = from.value; });
+    to.addEventListener('change', function () { bf.to = to.value; });
+    dte.addEventListener('change', function () { bf.dte = dte.value; });
     var out = el('div', { id: 'bt-results' });
 
     // Period pills: the same range language as every chart in the app. Dates stay
