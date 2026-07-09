@@ -1221,3 +1221,51 @@ test('cache: read-only compute POST (/api/evaluate) keeps the GET cache warm', a
   });
   assert.equal(r.added, 0, '/api/config was refetched after /api/evaluate — the cache was wrongly flushed');
 });
+
+test('level-leak: hidden Expert filters + 0DTE do not reach the engine at Beginner', async () => {
+  // Set Expert-only filters + 0DTE in persisted state, then run ideas AS BEGINNER. The engine
+  // request must NOT carry the hidden constraints (invisible rejections were the bug).
+  await page.evaluate(() => {
+    App.state.filterState = { rec: { minPop: '', maxAssign: '80', minYield: '5', maxCost: '300' } };
+    App.state.discoverForm = { goal: 'DIRECTIONAL', source: 'single', symbol: 'AAPL', horizon: '0DTE', allow0: true };
+  });
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+
+  let body = null;
+  await page.route('**/api/recommend', route => {
+    try { body = JSON.parse(route.request().postData() || '{}'); } catch (e) {}
+    route.continue();
+  });
+  await go('#/recommend/manual');
+  await page.fill('#rec-symbol', 'AAPL');
+  await page.click('#rec-go');
+  await page.waitForFunction(() => window.__lastRec !== undefined || true); // let the request fire
+  await page.waitForTimeout(1200);
+  await page.unroute('**/api/recommend');
+
+  assert.ok(body, 'recommend request captured');
+  // Hidden Expert filters must be absent; 0DTE must be sanitized off for Beginner.
+  const f = body.filters || {};
+  assert.ok(!('maxAssignmentProb' in f), 'hidden assignment filter must not leak to Beginner');
+  assert.ok(!('minAnnualizedYieldPct' in f), 'hidden yield filter must not leak to Beginner');
+  assert.ok(!('maxCostCents' in f), 'hidden cost filter must not leak to Beginner');
+  assert.equal(body.allow0dte, false, '0DTE must be off at Beginner even if persisted from Expert');
+  assert.notEqual(body.horizon, '0DTE', 'a persisted 0DTE horizon must be sanitized at Beginner');
+  await page.evaluate(() => { App.state.filterState = {}; App.state.discoverForm = null; });
+});
+
+test('undefined-risk framing: synthetic short is BLOCKED, synthetic long is not', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
+  await go('#/trade/shape');
+  await page.waitForSelector('#bw-goals .choice, #builder-catalog', { timeout: 15000 });
+  // Open the full catalog (browse-all) and find the two synthetics.
+  const browse = page.locator('#bw-browse, button:has-text("Browse all structures")').first();
+  if (await browse.count()) { await browse.click(); }
+  await page.waitForSelector('.tpl[data-tpl="SYNTHETIC_SHORT"]', { timeout: 15000 });
+  assert.ok(await page.locator('.tpl[data-tpl="SYNTHETIC_SHORT"] .badge:has-text("BLOCKED")').count(),
+    'synthetic short must carry the BLOCKED (undefined-risk) badge');
+  assert.ok(!(await page.locator('.tpl[data-tpl="SYNTHETIC_LONG"] .badge:has-text("BLOCKED")').count()),
+    'synthetic long is defined-risk — no BLOCKED badge');
+});

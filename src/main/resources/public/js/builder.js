@@ -136,9 +136,9 @@
       shape: '2,26 62,4',
       blurb: 'Long call + short put at the same strike ≈ owning 100 shares, for a fraction of the cash. Same delta-1 exposure, margin instead of full share cost.',
       build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near)]; } },
-    { key: 'SYNTHETIC_SHORT', group: 'Shares & protection', name: 'Synthetic short', family: 'CUSTOM',
+    { key: 'SYNTHETIC_SHORT', group: 'Undefined risk (blocked)', name: 'Synthetic short', family: 'CUSTOM', risky: true,
       shape: '2,4 62,26',
-      blurb: 'Long put + short call at the same strike ≈ shorting 100 shares — delta-1 downside exposure without borrowing stock.',
+      blurb: 'Long put + short call at the same strike ≈ shorting 100 shares. The short call is UNCOVERED — losses grow without limit if the stock rallies, so it is blocked here (build it to see exactly why).',
       build: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near)]; } },
 
     { key: 'SHORT_STRADDLE', group: 'Undefined risk (blocked)', name: 'Short straddle', family: 'SHORT_STRADDLE', risky: true,

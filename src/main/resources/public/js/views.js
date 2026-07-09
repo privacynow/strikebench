@@ -1595,9 +1595,12 @@
       results.appendChild(UI.spinner('Screening strategies\u2026'));
       try {
         App.state.lastRecommendSymbol = sym.value.trim().toUpperCase();
+        // Beginner never exposes 0DTE (the control is hidden) \u2014 a persisted Expert allow0dte
+        // (or a stale '0DTE' horizon) must not leak same-day expiries into Beginner ideas.
+        var hz = (beginner && horizon.value === '0DTE') ? 'month' : horizon.value;
         var body = {
-          symbol: sym.value.trim(), horizon: horizon.value,
-          riskMode: riskMode(), allow0dte: allow0.checked, avoidEarnings: true,
+          symbol: sym.value.trim(), horizon: hz,
+          riskMode: riskMode(), allow0dte: !beginner && allow0.checked, avoidEarnings: true,
           intent: goal
         };
         if (goal === 'DIRECTIONAL') body.thesis = thesis.value;
@@ -1848,11 +1851,16 @@
     return {
       node: node,
       value: function () {
+        // Only submit filters VISIBLE at the current level. Beginner shows just minPop (+ maxLoss);
+        // a persisted Expert value for maxAssign/minYield/maxCost must NOT silently constrain a
+        // Beginner's ideas (they're hidden, so they'd be invisible rejections).
         var f = {};
         if (minPop.value) f.minPop = parseFloat(minPop.value) / 100;
-        if (maxAssign.value) f.maxAssignmentProb = parseFloat(maxAssign.value) / 100;
-        if (minYield.value) f.minAnnualizedYieldPct = parseFloat(minYield.value);
-        if (maxCost.value) f.maxCostCents = Math.round(parseFloat(maxCost.value) * 100);
+        if (level !== 'beginner') {
+          if (maxAssign.value) f.maxAssignmentProb = parseFloat(maxAssign.value) / 100;
+          if (minYield.value) f.minAnnualizedYieldPct = parseFloat(minYield.value);
+          if (maxCost.value) f.maxCostCents = Math.round(parseFloat(maxCost.value) * 100);
+        }
         return Object.keys(f).length ? f : null;
       },
       maxLossCents: function () {
@@ -2812,6 +2820,7 @@
           onclick: function () {
             from.value = new Date(Date.now() - p.days * 86400000).toISOString().slice(0, 10);
             to.value = new Date().toISOString().slice(0, 10);
+            bf.from = from.value; bf.to = to.value; // persist what the pill changed
             periodRow.querySelectorAll('.pill').forEach(function (b) {
               b.classList.toggle('active', b.getAttribute('data-days') === String(p.days));
             });
@@ -2827,7 +2836,7 @@
     var DTE_PRESETS = [{ label: 'Weekly', v: 7 }, { label: 'Monthly', v: 30 }, { label: 'Quarterly', v: 90 }];
     var dtePresets = el('div', { class: 'chip-row', id: 'bt-dte-presets', style: 'margin-top:4px' },
       DTE_PRESETS.map(function (p) {
-        return el('button', { class: 'sym-chip', type: 'button', onclick: function () { dte.value = String(p.v); } }, p.label);
+        return el('button', { class: 'sym-chip', type: 'button', onclick: function () { dte.value = String(p.v); bf.dte = dte.value; } }, p.label);
       }));
 
     root.appendChild(el('div', { class: 'card' },
@@ -3519,8 +3528,15 @@
     var eff = r.shareCostCents > 0 ? r.estMarginCents / r.shareCostCents : 0;
     out.appendChild(gaugeChart(eff, 1, 'Ties up about ' + fmtPct(eff) + ' of the share cost'));
     (r.notes || []).forEach(function (n) { out.appendChild(el('div', { class: 'muted small' }, n)); });
-    // Hand-off: a synthetic IS a placeable multi-leg structure — build it in the Trade builder with
-    // live risk and a path to Place. (No more dead-end: this construction capability lives in Trade.)
+    // Hand-off into the Trade builder for live risk. A BEARISH synthetic (long put + short call) has
+    // an uncovered short call — unlimited upside risk — so the builder will BLOCK placement and show
+    // the cliff. Label honestly per direction: "place" only when it's actually placeable.
+    var isShort = r.deltaExposureCents < 0;
+    if (isShort) {
+      out.appendChild(el('div', { class: 'muted small', style: 'margin-top:6px' },
+        el('b', { class: 'loss' }, 'Advanced / undefined risk: '),
+        'the short synthetic’s uncovered call has unlimited upside risk — the builder will block placing it and show why.'));
+    }
     out.appendChild(el('div', { class: 'btn-row' },
       el('button', {
         class: 'btn btn-sm', id: 'lab-rep-build', onclick: function () {
@@ -3528,12 +3544,12 @@
           App.state.builderForm = {
             symbol: (r.symbol || '').toUpperCase(),
             qty: r.contracts || 1, goal: 'DIRECTIONAL',
-            templateKey: (r.deltaExposureCents >= 0) ? 'SYNTHETIC_LONG' : 'SYNTHETIC_SHORT',
+            templateKey: isShort ? 'SYNTHETIC_SHORT' : 'SYNTHETIC_LONG',
             step: 3, legIdx: 0, excluded: {}, legs: []
           };
           App.navigate('#/trade/shape');
         }
-      }, 'Build & place in the Trade builder')));
+      }, isShort ? 'Build & inspect in the Trade builder' : 'Build & place in the Trade builder')));
   }
 
   // ---- Notebook ----
