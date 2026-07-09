@@ -1126,10 +1126,24 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     refactored to a shared resolveAndRecommend so evaluate reuses the holdings-injection path.
   - Verified: 248 JUnit (StrategyEvaluatorTest, EvaluationStoreTest, EvaluateIntegrationTest incl.
     opportunities) + 26 fixture + 3 audit + 4 seeded + 8 live DOM. New config keys: none.
-  - REMAINING P3 (next): the decision/comparison UI — render /api/evaluate + /api/opportunities as a
-    side-by-side competition (why-one-wins, per-dimension evidence badges, capital incremental/economic,
-    risk scenario chart, scrubbable management plan), ladder-tuned Beginner/Expert, with DOM tests.
-    Then P4 (owned historical options CSV + backtester rewrite + calibration) and P5 (research lab).
+- PHASE 3 COMPLETE — recommendations-as-a-competition, backend + UI (branch; NOT deployed):
+  - OpportunityScanner: EvaluationService.scan evaluates a universe, keeps each symbol's best VIABLE
+    idea, ranks cross-symbol; POST /api/opportunities (defaults to the active universe).
+  - Decision/comparison UI: new #/decision route + Views.decision renders /api/evaluate as a ranked
+    competition. THE PICK card = why-it-wins + honest capital pair (buying power used vs full economic
+    exposure) + real payoff scenario strip (from RiskProfile.scenarios) + POP/assignment + co-equal
+    management plan + (Expert) evidence-by-dimension + score breakdown + what-could-go-wrong. Ladder-
+    tuned: Beginner = plain intro, plan OPEN, simple alt-rows; Expert = full dimensions + comparison
+    table of the whole field. Demo data labeled 'Demo data' + honesty-haircut score. 'Compare side by
+    side' entry from Discover; winner hands off to Place. CSS .decision-pick/.scenario-strip/etc.
+  - Verified: 248 JUnit + 27 fixture (new decision DOM test) + 3 audit + 4 seeded + 8 live DOM; both
+    levels screenshotted (shots/p3-decision-{expert,beginner}.png) — coherent, honest, no overflow.
+  - NEXT: Phase 4 — real evidence. (a) Owned historical-options CSV bulk ingest into option_bar
+    (source=vendor, evidence-tagged) so IV rank/backtests become OBSERVED when data is loaded; the
+    dataset itself is a licensed purchase (internal-use, derived-output only) — build the ingest +
+    test with a synthetic CSV. (b) Backtester rewrite (portfolio-level, rolls, exits, delta-selection).
+    (c) Calibration loop: recommendation.outcome_* vs strategy_evaluation predictions -> accuracy.
+    Then P5 research lab (optimizer, hypothesis tester, notebook, ETF replication).
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
