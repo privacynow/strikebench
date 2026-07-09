@@ -131,6 +131,13 @@ public final class AppConfig {
     public String fredBaseUrl() { return get("FRED_BASE_URL", "https://api.stlouisfed.org"); }
     public String polygonBaseUrl() { return get("POLYGON_BASE_URL", "https://api.polygon.io"); }
     public String alphaVantageBaseUrl() { return get("ALPHAVANTAGE_BASE_URL", "https://www.alphavantage.co"); }
+
+    // ---- Yahoo Finance keyless equity candles (PERSONAL / LOCAL-CLONE ONLY) ----
+    // Yahoo's chart API is a public JSON endpoint, but its terms restrict automated/commercial reuse.
+    // OFF by default so strikebench.com never enables it implicitly; a self-hosting user opts in and
+    // owns the source terms. Covers EQUITY/ETF/index OHLCV only — NOT options.
+    public boolean yahooEnabled() { return getBool("YAHOO_ENABLED", false); }
+    public String yahooBaseUrl() { return get("YAHOO_BASE_URL", "https://query1.finance.yahoo.com"); }
     /** Keyless per-symbol news headlines via the Google News RSS search feed. Blank disables it. */
     public String newsRssBaseUrl() { return get("NEWS_RSS_BASE_URL", "https://news.google.com/rss/search"); }
 

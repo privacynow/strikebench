@@ -137,6 +137,9 @@ public final class ApiServer {
             providers.add(new CboeProvider(cfg));
             if (!cfg.alphaVantageApiKey().isBlank()) providers.add(new AlphaVantageProvider(cfg));
             if (!cfg.polygonApiKey().isBlank()) providers.add(new PolygonProvider(cfg));
+            // Yahoo keyless equity candles — PERSONAL/LOCAL-CLONE opt-in only (see AppConfig.yahooEnabled).
+            // Ahead of Stooq (which is bot-blocked for us) so a self-hoster gets real underlying history.
+            if (cfg.yahooEnabled()) providers.add(new io.liftandshift.strikebench.market.providers.YahooFinanceProvider(cfg));
             providers.add(new StooqProvider(cfg));
             if (!cfg.newsRssBaseUrl().isBlank()) newsProviders.add(new NewsRssProvider(cfg)); // keyless headlines
             newsProviders.add(new EdgarProvider(cfg));                                          // SEC filings
