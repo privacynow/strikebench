@@ -1066,11 +1066,43 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     seeded suite's legacy-collar injection moved sqlite3-on-file -> psql-on-Postgres. PREREQ:
     `docker compose up -d db` before tests. FULL MATRIX GREEN ON POSTGRES: 224 JUnit + 26 fixture
     + 3 audit + 4 seeded + 8 live DOM.
-  - REMAINING PHASE 1 (being built next, in order): faithful SQLite->Postgres ETL + verification
-    rehearsed on a prod-DB copy (the merge-day cutover); forward chain-snapshot recording (the moat);
-    Google OIDC auth (pac4j) + per-user scoping; prod Postgres provisioning + off-box backups +
-    deploy.sh/systemd for Postgres. Main.migrateLegacyDefaultDb (SQLite file-move) is dormant but
-    retained+tested; the ETL supersedes it as the forward-migration path.
+  - PHASE 1 COMPLETE (all shipped + verified on this branch; NOT deployed — main stays SQLite until merge):
+    * Package moved io.liftandshift -> **io.liftandshift.strikebench** (Java package only; Maven groupId
+      stays io.liftandshift). Shade mainClass io.liftandshift.strikebench.Main. 99 files git-mv'd.
+    * Forward chain-snapshot recorder (the moat): market/SnapshotService writes a daily EOD snapshot of
+      the active universe's chains + underlying into option_bar/underlying_bar (source='snapshot', honest
+      per-dimension evidence: observed/bid_ask_observed/iv_source/greeks_source — fixtures flagged
+      not-observed so they never masquerade as real). Off by default (SNAPSHOT_ENABLED); daily scheduler
+      + POST /api/admin/snapshot. The two new evidence cols are INTEGER 0/1 (Db-helper boolean convention).
+    * SQLite->Postgres ETL: db/SqliteToPostgresEtl introspects both schemas, copies the column INTERSECTION
+      in one tx (PG-only cols like user_id keep defaults), coerces to exact PG types, preserves ids +
+      resets IDENTITY sequences, verifies row counts + the ledger invariant. `java -jar strikebench.jar
+      etl <sqlite>` (Main dispatch). Supersedes the dormant Main.migrateLegacyDefaultDb.
+    * Google OIDC auth (Nimbus oauth2-oidc-sdk, NOT pac4j — no Javalin-7 adapter exists; Nimbus is pac4j's
+      own OIDC engine so crypto still isn't hand-rolled) + per-user scoping. OFF by default (AUTH_ENABLED)
+      so local/keyless + the whole suite are byte-identical. auth/{AuthService,GoogleOidcProvider,
+      IdentityProvider,VerifiedIdentity,UnauthorizedException}; session gate on /api/* (health/config/
+      status/auth open); users provisioning; AccountService.getOrCreateDefaultForUser (owner claims the
+      legacy account, others get fresh); SPA sign-in screen + header sign-out. Jetty ee10 SessionHandler
+      wired only when enabled.
+    * ADVERSARIAL SECURITY REVIEW (5 lenses x verifiers, 6 confirmed findings, ALL FIXED): (1) IDOR on
+      trade-by-id routes -> ensureOwnedTrade ownership check (404); (2) session cookie HttpOnly; (3)
+      /api/account/reset scoped to caller (AccountService.resetAccount by id, was global-oldest); (4)
+      cookie Secure behind the TLS proxy via ForwardedRequestCustomizer honoring X-Forwarded-Proto
+      (AUTH_COOKIE_SECURE; nginx must send proxy_set_header X-Forwarded-Proto $scheme); (5) /api/audit
+      scoped to caller's account when auth on (AuditLog.pageForAccount); (6) orphan-claim TOCTOU ->
+      guarded UPDATE ... WHERE user_id IS NULL + rowcount. Plus session-fixation rotation, constant-time
+      state, nonce, verified-email + allowlist, fail-closed on missing OIDC creds.
+    * Prod Postgres: scripts/provision-postgres.sh (PG16 localhost/scram, role+db), scripts/
+      backup-postgres.sh (pg_dump->gzip->S3 + nightly timer), deploy.sh systemd unit passes DB_URL/DB_USER
+      (password in strikebench.properties chmod 600), DEVELOPER.md cutover runbook. Scripts bash -n only
+      (real runs are cutover-day ops on the box).
+    * FULL MATRIX GREEN throughout: 239 JUnit (+15 for snapshot/etl/auth) + 26 fixture + 3 audit + 4
+      seeded + 8 live DOM. New config keys: SNAPSHOT_*, AUTH_ENABLED, OIDC_*, AUTH_ALLOWED_EMAILS,
+      AUTH_POST_LOGIN_URL, AUTH_COOKIE_SECURE.
+  - NEXT: Phase 2 — StrategyEvaluation backbone (StrategySpec + producer modules Capital/Volatility/Risk/
+    Evidence/ManagementPlan/Score/Explanation + unified contract), then P3 competition UI, P4 real
+    evidence/backtester rewrite, P5 research lab.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
