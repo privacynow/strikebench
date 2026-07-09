@@ -285,6 +285,14 @@ test('portfolio absorbs account: sections, ledger under Activity, guarded reset'
   assert.match(await page.textContent('.modal'), /cannot be undone/i);
   await page.click('.modal button:has-text("Cancel")');
   assert.equal(await page.locator('#modal-confirm').count(), 0, 'modal dismissed');
+
+  // A typed starting-cash draft survives a cosmetic re-render (level flip) instead of
+  // snapping back to the account's current value.
+  await page.fill('#reset-cash', '250000');
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.waitForSelector('#reset-cash');
+  assert.equal(await page.inputValue('#reset-cash'), '250000', 'reset-cash draft persists across level flip');
+  await page.evaluate(() => { App.state.resetCashDraft = null; Learn.setLevel('expert'); });
 });
 
 test('backtest runs and reports mode, coverage, assumptions', async () => {
@@ -1145,6 +1153,35 @@ test('decision page: recommendations-as-a-competition — the pick, evidence, sc
 
   // Reset shared state so later tests' assumptions hold.
   await page.evaluate(() => { App.state.ticket = null; App.state.discoverForm = null; });
+});
+
+test('decision caching: a cosmetic level flip does NOT re-POST /api/evaluate (no double-recorded pick)', async () => {
+  await page.evaluate(() => {
+    App.state.decisionCache = null;
+    Learn.setLevel('expert');
+    App.state.discoverForm = { symbol: 'AAPL', thesis: 'bullish', horizon: 'month' };
+  });
+  let evalPosts = 0;
+  const counter = (req) => { if (req.method() === 'POST' && req.url().indexOf('/api/evaluate') >= 0) evalPosts++; };
+  page.on('request', counter);
+  try {
+    await go('#/decision/AAPL');
+    await page.waitForSelector('.decision-pick');
+    assert.equal(evalPosts, 1, 'first render evaluates once');
+    // Flip the level: the page re-renders but the inputs are unchanged — must reuse the cache.
+    await page.click('#level-switch button[data-level="beginner"]');
+    await page.waitForSelector('.decision-pick');
+    await page.waitForTimeout(300);
+    assert.equal(evalPosts, 1, 'level flip reuses the cached evaluation — no second POST');
+    // Refresh is an explicit "re-evaluate" — it busts the cache.
+    await page.click('#decision-refresh');
+    await page.waitForSelector('.decision-pick');
+    await page.waitForTimeout(300);
+    assert.equal(evalPosts, 2, 'Refresh re-POSTs');
+  } finally {
+    page.off('request', counter);
+  }
+  await page.evaluate(() => { App.state.discoverForm = null; App.state.decisionCache = null; Learn.setLevel('expert'); });
 });
 
 test('consolidated Lab tools live in their homes: optimizer on Decision, study tools on Research', async () => {

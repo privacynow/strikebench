@@ -2415,7 +2415,13 @@
       return;
     }
     if (section === 'account') {
-      var cashInput = el('input', { type: 'number', id: 'reset-cash', value: Math.round(acct.startingCashCents / 100), min: '1000', step: '1000', style: 'max-width:150px' });
+      // Keep a typed starting-cash draft across re-renders (e.g. a level flip) instead of
+      // snapping back to the account's current value and silently discarding the edit.
+      var draftCash = App.state.resetCashDraft;
+      var cashInput = el('input', { type: 'number', id: 'reset-cash',
+        value: draftCash != null ? draftCash : Math.round(acct.startingCashCents / 100),
+        min: '1000', step: '1000', style: 'max-width:150px' });
+      cashInput.addEventListener('input', function () { App.state.resetCashDraft = cashInput.value; });
       root.appendChild(el('div', { class: 'card' },
         UI.cardHeader('Reset account'),
         explain('Resetting voids open practice trades, removes ALL share holdings, and sets cash to the amount below. History stays in the ledger and audit log.'),
@@ -2431,6 +2437,7 @@
                 'Reset account',
                 async function () {
                   await API.post('/api/account/reset', { startingCashCents: cents, confirm: true, force: acct.hasTraded });
+                  App.state.resetCashDraft = null;
                   App.navigate('#/portfolio/account');
                 }, true);
             }
@@ -3248,8 +3255,6 @@
   async function renderCompetition(host, symbol) {
     var level = Learn.currentLevel();
     var form = App.state.discoverForm || {};
-    host.innerHTML = '';
-    host.appendChild(UI.spinner('Scoring the alternatives…'));
     var riskMode = 'balanced';
     try { var rm = document.getElementById('risk-mode'); if (rm && rm.value) riskMode = rm.value; } catch (e) { /* default */ }
     var body = {
@@ -3259,12 +3264,35 @@
       riskMode: riskMode,
       intent: form.goal || form.intent || null
     };
+    // Level flips and re-renders must NOT re-POST /api/evaluate: the endpoint records the
+    // pick as a recommendation for calibration, so a cosmetic re-render would double-record.
+    // Cache by the exact inputs; an in-flight guard also collapses the nav+render double-call
+    // (and view-transition re-renders) onto ONE request. Refresh busts the cache.
+    var cacheKey = JSON.stringify(body);
+    var cached = App.state.decisionCache;
     var data;
-    try { data = await API.post('/api/evaluate', body); }
-    catch (e) {
+    if (cached && cached.key === cacheKey) {
+      data = cached.data;
+    } else {
       host.innerHTML = '';
-      host.appendChild(alertBox('error', 'Could not compare ideas', [String((e && e.message) || e)]));
-      return;
+      host.appendChild(UI.spinner('Scoring the alternatives…'));
+      var inflight = App.state.decisionInflight;
+      var promise;
+      if (inflight && inflight.key === cacheKey) {
+        promise = inflight.promise;                       // a concurrent render already asked
+      } else {
+        promise = API.post('/api/evaluate', body);
+        App.state.decisionInflight = { key: cacheKey, promise: promise };
+      }
+      try { data = await promise; }
+      catch (e) {
+        if (App.state.decisionInflight && App.state.decisionInflight.key === cacheKey) App.state.decisionInflight = null;
+        host.innerHTML = '';
+        host.appendChild(alertBox('error', 'Could not compare ideas', [String((e && e.message) || e)]));
+        return;
+      }
+      if (App.state.decisionInflight && App.state.decisionInflight.key === cacheKey) App.state.decisionInflight = null;
+      App.state.decisionCache = { key: cacheKey, data: data };
     }
     host.innerHTML = '';
     var evals = (data && data.evaluations) || [];
@@ -3302,7 +3330,7 @@
     }
     root.appendChild(el('div', { class: 'idea-source-row' },
       el('span', { class: 'muted' }, 'For '), el('b', {}, symbol),
-      el('button', { class: 'btn btn-sm btn-secondary', id: 'decision-refresh', onclick: function () { App.render(); } }, 'Refresh')));
+      el('button', { class: 'btn btn-sm btn-secondary', id: 'decision-refresh', onclick: function () { App.state.decisionCache = null; App.render(); } }, 'Refresh')));
 
     var host = el('div', { id: 'decision-host' });
     root.appendChild(host);
