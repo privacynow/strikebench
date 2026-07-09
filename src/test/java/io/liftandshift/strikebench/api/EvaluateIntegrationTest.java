@@ -111,6 +111,16 @@ class EvaluateIntegrationTest {
         assertThat(symbols).isNotEmpty(); // at least one symbol's best idea surfaced
     }
 
+    @Test void calibrationEndpointReports() throws Exception {
+        post("/api/evaluate", "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"balanced\"}");
+        HttpResponse<String> r = get("/api/calibration");
+        assertThat(r.statusCode()).isEqualTo(200);
+        JsonNode rep = Json.MAPPER.readTree(r.body());
+        assertThat(rep.has("resolved")).isTrue();     // a recommendation was recorded; no outcome yet
+        assertThat(rep.has("reliability")).isTrue();
+        assertThat(rep.has("note")).isTrue();
+    }
+
     @Test void evaluationsArePersistedAndListable() throws Exception {
         post("/api/evaluate", "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"balanced\"}");
         JsonNode listed = Json.MAPPER.readTree(get("/api/evaluations").body()).get("evaluations");

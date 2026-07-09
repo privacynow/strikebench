@@ -269,6 +269,12 @@ public final class ApiServer {
                 String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
                 ctx.json(Map.of("evaluations", evaluations.recent(ownerId, 50)));
             });
+            c.routes.get("/api/calibration", ctx -> {
+                String uid = auth.currentUserId(ctx);
+                String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+                ctx.json(evaluations.calibrationReport(ownerId));
+            });
+            c.routes.post("/api/calibration/resolve", this::calibrationResolve);
 
             c.routes.post("/api/trades/preview", this::tradePreview);
             c.routes.post("/api/trades", this::tradeCreate);
@@ -719,6 +725,11 @@ public final class ApiServer {
         String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
         var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
                 result.riskMode(), result.candidates(), acct.buyingPowerCents(), ownerId, true);
+        // Record the surfaced pick as a calibration sample (outcome resolved later).
+        if (!evals.isEmpty()) {
+            try { evaluations.recordSurfaced(evals.getFirst().id(), ownerId); }
+            catch (RuntimeException e) { log.warn("could not record recommendation: {}", e.toString()); }
+        }
         ctx.json(Map.of(
                 "symbol", result.symbol(),
                 "intent", String.valueOf(result.intent()),
@@ -748,6 +759,18 @@ public final class ApiServer {
                 req.riskMode() != null ? req.riskMode() : "balanced",
                 acct.buyingPowerCents(), ownerId, topN);
         ctx.json(Map.of("ranked", result.ranked(), "notes", result.notes(), "scanned", result.scanned()));
+    }
+
+    public record ResolveRequest(String recommendationId, String status, Long pnlCents) {}
+
+    /** Records the realized outcome of a surfaced recommendation (feeds the calibration report). */
+    private void calibrationResolve(Context ctx) {
+        ResolveRequest req = requireBody(bodyOrNull(ctx, ResolveRequest.class));
+        if (req.recommendationId() == null || req.recommendationId().isBlank()) {
+            throw new IllegalArgumentException("recommendationId is required");
+        }
+        evaluations.resolveOutcome(req.recommendationId(), req.status(), req.pnlCents());
+        ctx.json(Map.of("ok", true));
     }
 
     private void recommendLadder(Context ctx) {

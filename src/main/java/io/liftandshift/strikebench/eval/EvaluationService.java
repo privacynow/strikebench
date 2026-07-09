@@ -35,6 +35,7 @@ public final class EvaluationService {
     private final Clock clock;
     private final StrategyEvaluator evaluator = new StrategyEvaluator();
     private final EvaluationStore store;
+    private final CalibrationService calibration;
 
     public EvaluationService(MarketDataService market, RecommendationEngine engine, Db db, Clock clock) {
         this.market = market;
@@ -42,6 +43,20 @@ public final class EvaluationService {
         this.db = db;
         this.clock = clock;
         this.store = new EvaluationStore(db);
+        this.calibration = new CalibrationService(db, clock);
+    }
+
+    /** Records that an evaluation was surfaced (the calibration sample); requires it to be persisted. */
+    public String recordSurfaced(String evaluationId, String userId) {
+        return calibration.record(evaluationId, userId, "evaluate");
+    }
+
+    public void resolveOutcome(String recommendationId, String status, Long pnlCents) {
+        calibration.resolveOutcome(recommendationId, status, pnlCents);
+    }
+
+    public java.util.Map<String, Object> calibrationReport(String userId) {
+        return calibration.report(userId);
     }
 
     /** One symbol's competition, across the top opportunities of a universe scan. */
