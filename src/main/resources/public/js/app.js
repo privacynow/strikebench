@@ -233,7 +233,12 @@
     App._me = me;
     if (cfg && cfg.disclaimer) document.getElementById('disclaimer').textContent = cfg.disclaimer;
     if (cfg && cfg.brand && cfg.brand.name) applyBrand(cfg.brand);
-    if (me && me.authEnabled && !me.authenticated) { renderSignIn(me); return; }
+    // Fail CLOSED: /api/config is always readable (auth-open allowlist), so it's the reliable
+    // "is auth on?" signal. If auth is enabled and we don't have a confirmed authenticated session
+    // (me null from a transient /auth/me failure, or explicitly not authenticated) → sign-in, not a
+    // protected route that would 401 into a route error.
+    var authOn = (cfg && cfg.authEnabled) || (me && me.authEnabled);
+    if (authOn && !(me && me.authenticated)) { renderSignIn(me); return; }
     App.authUser = (me && me.user) || null;
     addSignOut();
 

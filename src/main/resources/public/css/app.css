@@ -290,6 +290,7 @@ body.lvl-expert .not-expert { display: none !important; }
 .alert { border-radius: var(--radius-sm); padding: 10px 13px; margin: 10px 0; font-size: 13.5px; line-height: 1.45; }
 .alert-danger { background: var(--risk-danger-bg); color: var(--risk-danger); }
 .alert-warn { background: var(--risk-warn-bg); color: var(--risk-warn); }
+.alert-caution { background: var(--risk-caution-bg); color: var(--risk-caution); }
 .alert-ok { background: var(--risk-ok-bg); color: var(--risk-ok); }
 .alert ul { margin: 5px 0 0 18px; padding: 0; }
 
@@ -1084,7 +1085,7 @@ body.lvl-expert .not-expert { display: none !important; }
 .decision-sub { font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
 .row-gap { display: inline-flex; align-items: center; gap: 10px; }
 .scenario-strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
-.scenario-cell { flex: 1 0 auto; min-width: 58px; text-align: center; padding: 6px 8px; border: 1px solid var(--line);
+.scenario-cell { flex: 1 0 auto; min-width: 58px; text-align: center; padding: 6px 8px; border: 1px solid var(--border);
   border-radius: 8px; background: var(--card-2, transparent); }
 .scenario-cell .sc-move { font-size: 12px; color: var(--muted); }
 .scenario-cell .sc-pnl { font-weight: 700; font-size: 14px; }
@@ -1094,9 +1095,9 @@ body.lvl-expert .not-expert { display: none !important; }
 .plan-summary { font-weight: 600; margin: 0 0 8px; }
 .plan-rules { margin: 0; padding-left: 18px; }
 .plan-rules li { margin: 4px 0; }
-.plan-action { color: var(--fg); }
+.plan-action { color: var(--text); }
 .alt-list { display: flex; flex-direction: column; gap: 8px; }
-.alt-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.alt-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
 .alt-row .alt-main { flex: 1; min-width: 0; }
 .alt-row .alt-facts { display: flex; gap: 8px; flex-shrink: 0; }
 .section-h { font-size: 16px; margin: 20px 0 10px; }
@@ -1146,8 +1147,10 @@ body.lvl-expert .not-expert { display: none !important; }
 .lab-legend-item { display: inline-flex; align-items: center; gap: 5px; }
 .lab-swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
 .lab-out .fact-grid { margin: 10px 0 6px; }
+.lab-check { display: inline-flex; align-items: center; gap: 8px; margin: 2px 0 4px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; }
+.lab-check input { flex: none; }
 .note-editor { padding: 8px 0; }
 .note-editor textarea { width: 100%; resize: vertical; }
-textarea { font: inherit; color: var(--fg); background: var(--bg-input, var(--bg)); border: 1px solid var(--line);
+textarea { font: inherit; color: var(--text); background: var(--bg-input, var(--bg)); border: 1px solid var(--border);
   border-radius: 8px; padding: 8px 10px; min-height: 38px; }
 textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

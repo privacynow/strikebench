@@ -23,7 +23,8 @@ public final class PortfolioOptimizer {
             Long maxPerPositionCents,   // null -> 25% of budget
             Integer maxPositions,       // null -> 10
             Double maxSymbolPct,        // null -> 0.40 of budget per symbol
-            String objective            // "score" (default) | "ev"
+            String objective,           // "score" (default) | "ev"
+            boolean diagnostic          // false (default): fund only positive-EV ideas; true: least-bad set, LABELED
     ) {}
 
     public record Allocation(StrategyEvaluation eval, int units, long capitalCents) {}
@@ -35,6 +36,7 @@ public final class PortfolioOptimizer {
             long expectedValueCents,
             double avgScore,
             Map<String, Long> perSymbolCents,
+            boolean diagnostic,         // true when this is a least-bad (possibly negative-EV) diagnostic set
             List<String> notes
     ) {}
 
@@ -45,10 +47,19 @@ public final class PortfolioOptimizer {
         double maxSymbolPct = c.maxSymbolPct() != null ? Math.clamp(c.maxSymbolPct(), 0.05, 1.0) : 0.40;
         long perSymbolCap = (long) (budget * maxSymbolPct);
         boolean byEv = "ev".equalsIgnoreCase(c.objective());
+        boolean diagnostic = c.diagnostic();
 
-        List<StrategyEvaluation> fundable = evals.stream()
+        // Viable + capital-shaped candidates. In NORMAL mode we additionally require a POSITIVE modeled
+        // expected value — an optimizer must not present a portfolio the model expects to LOSE money on as
+        // an answer (the project's honesty non-negotiable). null-EV = "unknown value", not fundable in
+        // normal mode. Diagnostic mode keeps the old least-bad behavior but is LABELED as such.
+        List<StrategyEvaluation> capitalOk = evals.stream()
                 .filter(StrategyEvaluation::viable)
                 .filter(e -> e.capitalIncrementalCents() != null && e.capitalIncrementalCents() > 0)
+                .toList();
+        long rejectedNonPositive = capitalOk.stream().filter(e -> !hasPositiveEv(e)).count();
+        List<StrategyEvaluation> fundable = capitalOk.stream()
+                .filter(e -> diagnostic || hasPositiveEv(e))
                 .sorted(Comparator.comparingDouble((StrategyEvaluation e) -> density(e, byEv)).reversed())
                 .toList();
 
@@ -79,8 +90,23 @@ public final class PortfolioOptimizer {
         }
 
         double avgScore = allocations.isEmpty() ? 0 : Math.round(scoreSum / allocations.size() * 100) / 100.0;
-        if (allocations.isEmpty()) notes.add("Nothing funded — no viable evaluations fit the budget.");
-        return new OptimizationResult(allocations, used, tail, ev, avgScore, perSymbol, notes);
+        if (allocations.isEmpty()) {
+            if (!diagnostic && rejectedNonPositive > 0) {
+                notes.add("No idea in this universe has positive modeled expected value at current marks — nothing funded. "
+                        + rejectedNonPositive + " viable idea" + (rejectedNonPositive == 1 ? " was" : "s were")
+                        + " rejected as negative or unknown EV. Switch to Expert diagnostic mode to inspect the least-bad set.");
+            } else {
+                notes.add("Nothing funded — no viable evaluations fit the budget.");
+            }
+        } else if (diagnostic && ev < 0) {
+            notes.add("DIAGNOSTIC set: this is the least-bad allocation, not a recommendation — its modeled expected value is negative.");
+        }
+        return new OptimizationResult(allocations, used, tail, ev, avgScore, perSymbol, diagnostic, notes);
+    }
+
+    /** An idea is fundable in normal mode only if its modeled expected value is affirmatively positive. */
+    private static boolean hasPositiveEv(StrategyEvaluation e) {
+        return e.evCents() != null && e.evCents() > 0;
     }
 
     /** Objective value per cent of capital — the greedy ranking key. */

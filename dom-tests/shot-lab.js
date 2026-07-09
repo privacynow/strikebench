@@ -42,8 +42,15 @@ async function waitForServer(tries = 60) {
       await page.waitForSelector('.lab-hero');
       if (run) {
         // Exercise the optimizer + hypothesis so results (verdict/facts/charts) are visible.
+        // Diagnostic mode (Expert) funds the least-bad set on the fixture universe; normal mode
+        // honestly funds nothing (no positive-EV idea) — either is a valid thing to screenshot.
+        if (await page.locator('#lab-opt-diag').count()) await page.check('#lab-opt-diag');
         await page.click('#lab-opt-run');
-        await page.waitForSelector('#lab-opt-summary', { timeout: 20000 });
+        await page.waitForFunction(() => {
+          const out = document.querySelector('#lab-opt-out');
+          return out && (out.querySelector('#lab-opt-summary')
+            || /positive modeled expected value|Nothing funded/.test(out.textContent));
+        }, { timeout: 20000 });
         await page.click('#lab-hyp-run');
         await page.waitForSelector('#lab-hyp-out .alert', { timeout: 20000 });
       }

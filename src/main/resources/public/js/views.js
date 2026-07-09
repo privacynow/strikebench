@@ -3236,9 +3236,9 @@
     var v = Math.max(0, Math.min(1, value01)) * 100, b = Math.max(0, Math.min(1, baseline01)) * 100;
     var col = value01 >= baseline01 ? 'var(--risk-ok-solid,#3aa76d)' : 'var(--risk-danger-solid,#d64545)';
     var svg = '<svg viewBox="0 0 100 16" preserveAspectRatio="none" width="100%" height="16" role="img">'
-      + '<rect x="0" y="5" width="100" height="6" rx="3" fill="var(--line)"/>'
+      + '<rect x="0" y="5" width="100" height="6" rx="3" fill="var(--border)"/>'
       + '<rect x="0" y="5" width="' + v.toFixed(2) + '" height="6" rx="3" fill="' + col + '"><title>' + Math.round(v) + '%</title></rect>'
-      + '<line x1="' + b.toFixed(2) + '" y1="1.5" x2="' + b.toFixed(2) + '" y2="14.5" stroke="var(--fg)" stroke-width="0.8"/>'
+      + '<line x1="' + b.toFixed(2) + '" y1="1.5" x2="' + b.toFixed(2) + '" y2="14.5" stroke="var(--text)" stroke-width="0.8"/>'
       + '<circle cx="' + v.toFixed(2) + '" cy="8" r="2.4" fill="' + col + '" stroke="var(--surface)" stroke-width="0.8"/></svg>';
     return el('div', {}, el('div', { class: 'lab-chart', html: svg }),
       caption ? el('div', { class: 'muted small' }, caption) : null);
@@ -3257,7 +3257,12 @@
       el('option', { value: '' }, 'Any goal'), el('option', { value: 'INCOME' }, 'Income'),
       el('option', { value: 'DIRECTIONAL' }, 'Directional'));
     if (f.goal) goal.value = f.goal;
-    var fields = [labField('Budget ($)', budget), labField('Goal', goal)];
+    // Scan scope: honor the shared context's Working stock — "my whole universe" or just that stock.
+    var scope = el('select', { id: 'lab-opt-scope' },
+      el('option', { value: 'universe' }, 'My whole universe'),
+      el('option', { value: 'symbol' }, 'Just the working stock'));
+    scope.value = f.scope || 'universe';
+    var fields = [labField('Budget ($)', budget), labField('Ideas from', scope), labField('Goal', goal)];
     var objective = null, maxPos = null, maxSym = null;
     if (level === 'expert') {
       objective = el('select', { id: 'lab-obj' }, el('option', { value: 'score' }, 'Best score'), el('option', { value: 'ev' }, 'Best expected value'));
@@ -3268,19 +3273,34 @@
     }
     card.appendChild(el('div', { class: 'form-grid' }, fields));
 
+    // Expert-only diagnostic mode: normally the optimizer funds ONLY positive-expected-value ideas
+    // (it must not present a money-losing portfolio as an answer). Diagnostic mode surfaces the
+    // least-bad set anyway, clearly labeled — for inspecting a weak universe, not for acting on.
+    var diag = null;
+    if (level === 'expert') {
+      diag = el('input', { type: 'checkbox', id: 'lab-opt-diag' });
+      if (f.diagnostic) diag.checked = true;
+      card.appendChild(el('label', { class: 'lab-check' }, diag,
+        el('span', {}, ' Diagnostic mode — show the least-bad set even if no idea has positive expected value')));
+    }
+
     var out = el('div', { id: 'lab-opt-out', class: 'lab-out' });
     var run = el('button', { class: 'btn', id: 'lab-opt-run' }, 'Build portfolio');
     run.addEventListener('click', async function () {
-      f.budget = +budget.value; f.goal = goal.value;
+      f.budget = +budget.value; f.goal = goal.value; f.scope = scope.value;
       if (objective) { f.objective = objective.value; f.maxPos = +maxPos.value; f.maxSym = +maxSym.value; }
+      if (diag) f.diagnostic = diag.checked;
       run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Scanning the universe and allocating…'));
+      var sym = (ctx && ctx.symbol) || (App.state.lastRecommendSymbol || '').toUpperCase();
       var body = {
         totalCapitalCents: Math.round((+budget.value || 0) * 100),
         intent: goal.value || null,
         objective: objective ? objective.value : 'score',
         maxPositions: maxPos ? +maxPos.value : null,
-        maxSymbolPct: maxSym ? +maxSym.value / 100 : null
+        maxSymbolPct: maxSym ? +maxSym.value / 100 : null,
+        diagnostic: diag ? diag.checked : false
       };
+      if (scope.value === 'symbol' && sym) body.universe = [sym];   // A5: the working stock actually scopes the optimizer
       try { renderOptimization(out, await API.post('/api/optimize', body), level); }
       catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Optimize failed', [String((e && e.message) || e)])); }
       finally { run.disabled = false; }
@@ -3300,9 +3320,16 @@
     }
     var perSym = o.perSymbolCents || {};
     var nSym = Object.keys(perSym).length;
-    // Conclusion first: what this portfolio IS, in one sentence.
+    // Diagnostic sets are NOT a recommendation — say so loudly before anything reads as an answer.
+    if (o.diagnostic) {
+      out.appendChild(alertBox('caution', 'Diagnostic set — NOT a recommendation. '
+        + 'No idea in this universe has positive modeled expected value; this is the least-bad allocation, shown for inspection only.'));
+    }
+    // Conclusion first: what this portfolio IS, in one sentence. In diagnostic mode it is the
+    // "least-bad set", never "Funded" (which reads as an endorsement).
+    var lead = o.diagnostic ? 'Least-bad set: ' : 'Funded ';
     out.appendChild(el('div', { class: 'lab-verdict' },
-      el('b', {}, 'Funded ' + allocs.length + ' position' + (allocs.length === 1 ? '' : 's')
+      el('b', {}, lead + allocs.length + ' position' + (allocs.length === 1 ? '' : 's')
         + ' across ' + nSym + ' symbol' + (nSym === 1 ? '' : 's') + ' for ' + fmtMoney(o.capitalUsedCents) + '.'),
       ' Expected value ', pnlSpan(o.expectedValueCents),
       ', worst-case tail ', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0))), '.'));

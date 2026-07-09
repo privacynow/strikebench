@@ -36,7 +36,7 @@ class PortfolioOptimizerTest {
         var dead = eval("TSLA", "CREDIT_PUT_SPREAD", 90, 4_000, 999, 400, false); // gate FAILED -> never funded
 
         var res = optimizer.optimize(List.of(a, b, c, dead),
-                new PortfolioOptimizer.Constraints(30_000, 15_000L, 10, 0.5, "score")); // per-symbol cap = 15,000
+                new PortfolioOptimizer.Constraints(30_000, 15_000L, 10, 0.5, "score", false)); // per-symbol cap = 15,000
 
         // A (3 units, $150) and C (1 unit, $100) fund; B blocked by AAPL's symbol cap; dead excluded.
         assertThat(res.allocations()).hasSize(2);
@@ -60,9 +60,44 @@ class PortfolioOptimizerTest {
     @Test void fundsNothingWhenBudgetTooSmall() {
         var a = eval("AAPL", "CREDIT_PUT_SPREAD", 80, 50_000, 100, 500, true);
         var res = optimizer.optimize(List.of(a),
-                new PortfolioOptimizer.Constraints(10_000, null, null, null, "score"));
+                new PortfolioOptimizer.Constraints(10_000, null, null, null, "score", false));
         assertThat(res.allocations()).isEmpty();
         assertThat(res.capitalUsedCents()).isZero();
         assertThat(res.notes()).anyMatch(n -> n.contains("Nothing funded"));
+    }
+
+    @Test void normalModeFundsNothingWhenEveryIdeaHasNegativeEv() {
+        // A universe of viable-but-negative-EV ideas (the fixture iron-butterfly case). An optimizer
+        // must NOT present a portfolio the model expects to lose money on as an answer.
+        var a = eval("AAPL", "IRON_BUTTERFLY", 80, 5_000, -300, 500, true);
+        var b = eval("MSFT", "IRON_BUTTERFLY", 70, 5_000, -200, 500, true);
+        var res = optimizer.optimize(List.of(a, b),
+                new PortfolioOptimizer.Constraints(30_000, null, null, null, "score", false));
+        assertThat(res.allocations()).isEmpty();
+        assertThat(res.capitalUsedCents()).isZero();
+        assertThat(res.diagnostic()).isFalse();
+        assertThat(res.notes()).anyMatch(n -> n.contains("positive modeled expected value"));
+    }
+
+    @Test void diagnosticModeFundsTheLeastBadSetButLabelsItNegative() {
+        var a = eval("AAPL", "IRON_BUTTERFLY", 80, 5_000, -300, 500, true);
+        var b = eval("MSFT", "IRON_BUTTERFLY", 70, 5_000, -200, 500, true);
+        var res = optimizer.optimize(List.of(a, b),
+                new PortfolioOptimizer.Constraints(30_000, null, null, null, "score", true));
+        assertThat(res.allocations()).isNotEmpty();
+        assertThat(res.diagnostic()).isTrue();
+        assertThat(res.expectedValueCents()).isNegative();
+        assertThat(res.notes()).anyMatch(n -> n.contains("DIAGNOSTIC"));
+    }
+
+    @Test void normalModeFundsOnlyThePositiveEvIdeasInAMixedField() {
+        var good = eval("AAPL", "CREDIT_PUT_SPREAD", 60, 5_000, 250, 500, true);   // positive EV -> funded
+        var bad = eval("MSFT", "IRON_BUTTERFLY", 90, 5_000, -400, 500, true);      // higher score but negative EV -> excluded
+        var unknown = eval("QQQ", "CALENDAR_CALL", 85, 5_000, 0, 500, true);       // ev 0 is not > 0 -> excluded
+        var res = optimizer.optimize(List.of(good, bad, unknown),
+                new PortfolioOptimizer.Constraints(30_000, null, null, null, "score", false));
+        assertThat(res.allocations()).hasSize(1);
+        assertThat(res.allocations().get(0).eval().symbol()).isEqualTo("AAPL");
+        assertThat(res.expectedValueCents()).isPositive();
     }
 }

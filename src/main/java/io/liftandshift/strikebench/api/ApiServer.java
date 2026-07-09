@@ -519,6 +519,7 @@ public final class ApiServer {
         ctx.json(Map.of(
                 "port", cfg.port(),
                 "fixturesOnly", cfg.fixturesOnly(),
+                "authEnabled", auth.enabled(),  // always-readable auth signal (config is in the auth-open allowlist)
                 "feePerContractCents", cfg.feePerContractCents(),
                 "feePerOrderCents", cfg.feePerOrderCents(),
                 "defaultStartingCashCents", cfg.defaultStartingCashCents(),
@@ -814,12 +815,12 @@ public final class ApiServer {
 
     public record OptimizeRequest(List<String> universe, String thesis, String horizon, String riskMode,
                                   String intent, Long totalCapitalCents, Long maxPerPositionCents,
-                                  Integer maxPositions, Double maxSymbolPct, String objective) {}
+                                  Integer maxPositions, Double maxSymbolPct, String objective, Boolean diagnostic) {}
 
     /** Research lab: scan a universe, then allocate a budget across the winners under constraints. */
     private void optimize(Context ctx) {
         OptimizeRequest req = bodyOrNull(ctx, OptimizeRequest.class);
-        if (req == null) req = new OptimizeRequest(null, null, null, null, null, null, null, null, null, null);
+        if (req == null) req = new OptimizeRequest(null, null, null, null, null, null, null, null, null, null, null);
         List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
                 ? req.universe() : universe.active().symbols();
         Account acct = currentAccount(ctx);
@@ -833,7 +834,8 @@ public final class ApiServer {
         long budget = req.totalCapitalCents() != null ? req.totalCapitalCents() : acct.buyingPowerCents();
         var result = new io.liftandshift.strikebench.research.PortfolioOptimizer().optimize(scan.ranked(),
                 new io.liftandshift.strikebench.research.PortfolioOptimizer.Constraints(
-                        budget, req.maxPerPositionCents(), req.maxPositions(), req.maxSymbolPct(), req.objective()));
+                        budget, req.maxPerPositionCents(), req.maxPositions(), req.maxSymbolPct(), req.objective(),
+                        Boolean.TRUE.equals(req.diagnostic())));
         ctx.json(Map.of("optimization", result, "scanned", scan.scanned(), "scanNotes", scan.notes()));
     }
 

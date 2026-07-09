@@ -1134,17 +1134,37 @@ test('research lab: optimizer builds a portfolio, hypothesis + replicator run, n
   await go('#/lab');
   await page.waitForSelector('.lab-grid');
 
-  // Optimizer: build a portfolio -> SVG composition chart + allocations table.
+  // Optimizer, DIAGNOSTIC mode: guarantees a funded (least-bad) set on the fixture universe and
+  // MUST label it "not a recommendation" (the honesty gate — normal mode funds only positive-EV).
+  await page.check('#lab-opt-diag');
   await page.click('#lab-opt-run');
   await page.waitForSelector('#lab-opt-summary', { timeout: 20000 });
   assert.ok((await page.locator('.lab-optimizer .lab-chart svg rect').count()) >= 1, 'composition chart bars');
   assert.ok((await page.locator('.lab-optimizer table tbody tr').count()) >= 1, 'allocations table rows');
+  assert.ok((await page.locator('#lab-opt-out .alert-caution').count()) >= 1, 'diagnostic set labeled not-a-recommendation');
+  assert.ok((await page.locator('#lab-opt-out:has-text("Least-bad set")').count()) >= 1, 'diagnostic verdict not "Funded"');
+
+  // Normal mode (honesty gate): the fixture universe has no positive-EV idea, so it must show the
+  // honest empty state — NOT a funded portfolio. (Robust to either branch if a positive-EV idea exists.)
+  await page.uncheck('#lab-opt-diag');
+  await page.click('#lab-opt-run');
+  await page.waitForFunction(() => {
+    const out = document.querySelector('#lab-opt-out');
+    return out && (out.querySelector('#lab-opt-summary')
+      || /positive modeled expected value|Nothing funded/.test(out.textContent));
+  }, { timeout: 20000 });
 
   // Hypothesis tester: verdict banner + win-rate gauge (SVG).
   await page.click('#lab-hyp-run');
   await page.waitForSelector('#lab-hyp-out .alert', { timeout: 20000 });
   assert.ok((await page.locator('#lab-hyp-out .lab-chart svg').count()) >= 1, 'win-rate gauge');
   assert.ok((await page.locator('#lab-hyp-out:has-text("Signals")').count()) >= 1, 'sample chip');
+  // Icons must render (magnifier was missing from ICON_PATHS -> empty box).
+  const sigChip = page.locator('.lab-hero-chip', { hasText: 'Signal test' });
+  assert.ok((await sigChip.locator('svg > *').count()) >= 1, 'Signal-test magnifier icon renders a path');
+  // Gauge must use resolved design tokens, not the undefined --line/--fg (which rendered black).
+  const gaugeHtml = await page.locator('#lab-hyp-out .lab-chart').first().innerHTML();
+  assert.ok(gaugeHtml.indexOf('var(--line)') < 0 && gaugeHtml.indexOf('var(--fg)') < 0, 'gauge uses no unresolved CSS vars');
 
   // ETF replicator: synthetic structure.
   await page.click('#lab-rep-run');
