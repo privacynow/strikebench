@@ -297,6 +297,12 @@ public final class ApiServer {
             c.routes.post("/api/lab/hypothesis", ctx ->
                     ctx.json(new io.liftandshift.strikebench.research.HypothesisTester(market)
                             .test(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.HypothesisTester.HypothesisRequest.class)))));
+            // Research-question workbench (replaces the degenerate momentum toy in the UI).
+            c.routes.get("/api/lab/questions", ctx ->
+                    ctx.json(Map.of("questions", new io.liftandshift.strikebench.research.ResearchQuestionEngine(market).catalog())));
+            c.routes.post("/api/lab/question", ctx ->
+                    ctx.json(new io.liftandshift.strikebench.research.ResearchQuestionEngine(market)
+                            .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest.class)))));
             c.routes.post("/api/lab/replicate", ctx ->
                     ctx.json(new io.liftandshift.strikebench.research.ETFReplicator(market)
                             .replicate(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ETFReplicator.ReplicationRequest.class)))));

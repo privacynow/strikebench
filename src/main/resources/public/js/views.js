@@ -3781,64 +3781,143 @@
   }
 
   // ---- Hypothesis tester ----
+  // A distribution histogram of forward returns — green bars for gaining outcomes, red for losing.
+  function distChart(buckets) {
+    if (!buckets || !buckets.length) return null;
+    var max = 1; buckets.forEach(function (b) { max = Math.max(max, b.count); });
+    var n = buckets.length, bw = 100 / n;
+    var bars = buckets.map(function (b, i) {
+      var h = b.count / max * 30;
+      var mid = (b.fromPct + b.toPct) / 2;
+      var col = mid >= 0 ? 'var(--risk-ok-solid,#3aa76d)' : 'var(--risk-danger-solid,#d64545)';
+      var x = i * bw + bw * 0.12, w = bw * 0.76;
+      return '<rect x="' + x.toFixed(2) + '" y="' + (34 - h).toFixed(2) + '" width="' + w.toFixed(2)
+        + '" height="' + h.toFixed(2) + '" rx="0.6" fill="' + col + '"><title>' + b.fromPct + '% to ' + b.toPct + '%: ' + b.count + '</title></rect>';
+    }).join('');
+    var svg = '<svg viewBox="0 0 100 40" preserveAspectRatio="none" width="100%" height="70" role="img">'
+      + '<line x1="0" y1="34" x2="100" y2="34" stroke="var(--border)" stroke-width="0.5"/>' + bars + '</svg>';
+    return el('div', {}, el('div', { class: 'lab-chart', html: svg }),
+      el('div', { class: 'muted small' }, 'Forward-return distribution after the signal (each bar = a return range)'));
+  }
+
+  // "Test an idea" — a real research-question workbench: pick a question, and we compare what happened
+  // AFTER the signal against the stock's own normal behavior (baseline), with sample size, a win-rate
+  // edge, a significance test, a bootstrap confidence interval, a distribution, and example dates.
   function hypothesisCard(level, ctx) {
     var f = App.state.labForm.hyp = App.state.labForm.hyp || {};
     var card = el('div', { class: 'card lab-card' });
     card.appendChild(labHeader('magnifier', 'Test an idea'));
-    card.appendChild(explain('Does a signal actually predict what it claims, or is it just chance? We replay it over history and give an honest verdict.'));
+    card.appendChild(explain('Pick a market question. We replay it over history and compare what happened after the signal to what this stock does normally — with an honest verdict, sample size, and confidence.'));
 
-    // The shared context is the owner — it wins over a stale per-tool run symbol on re-render.
     var symbol = el('input', { type: 'text', id: 'lab-hyp-sym', value: (ctx && ctx.symbol) || f.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
-    var fields = [labField('Stock', symbol)];
-    var lookback = null, threshold = null, forward = null;
-    if (level === 'expert') {
-      lookback = el('input', { type: 'number', id: 'lab-hyp-lb', value: f.lookback || 20, min: '1', max: '250' });
-      threshold = el('input', { type: 'number', id: 'lab-hyp-th', value: f.threshold == null ? 0 : f.threshold, step: '1' });
-      forward = el('input', { type: 'number', id: 'lab-hyp-fw', value: f.forward || 10, min: '1', max: '120' });
-      fields.push(labField('Momentum look-back (days)', lookback),
-        labField('Trigger threshold (%)', threshold), labField('Hold forward (days)', forward));
-    } else {
-      card.appendChild(el('div', { class: 'muted small' }, 'Using a 20-day up-momentum signal, held 10 days.'));
-    }
-    card.appendChild(el('div', { class: 'form-grid' }, fields));
+    card.appendChild(el('div', { class: 'form-grid' }, labField('Stock', symbol)));
 
+    var picker = el('div', { id: 'lab-q-picker' }, UI.spinner('Loading questions…'));
+    card.appendChild(picker);
     var out = el('div', { id: 'lab-hyp-out', class: 'lab-out' });
-    var run = el('button', { class: 'btn', id: 'lab-hyp-run' }, 'Run the test');
+    var run = el('button', { class: 'btn', id: 'lab-hyp-run', disabled: 'disabled' }, 'Run the test');
+    card.appendChild(el('div', { class: 'btn-row' }, run));
+    card.appendChild(out);
+
+    var paramInputs = {}; // key -> input (expert)
+    function selectedQuestion(cat) { return cat.find(function (q) { return q.key === f.questionKey; }) || cat[0]; }
+
+    function buildPicker(cat) {
+      picker.innerHTML = '';
+      paramInputs = {};
+      if (!f.questionKey) f.questionKey = cat[0].key;
+      if (level === 'beginner') {
+        // Question cards — pick one (consistent with the intent chooser)
+        var grid = el('div', { class: 'q-grid' });
+        cat.forEach(function (q) {
+          var b = el('button', { class: 'q-card' + (q.key === f.questionKey ? ' active' : ''), type: 'button',
+            onclick: function () { f.questionKey = q.key; buildPicker(cat); } },
+            el('b', {}, q.title), el('div', { class: 'muted small' }, q.plain));
+          grid.appendChild(b);
+        });
+        picker.appendChild(grid);
+      } else {
+        // Question select + its parameters
+        var sel = el('select', { id: 'lab-q-select' }, cat.map(function (q) { return el('option', { value: q.key }, q.title); }));
+        sel.value = f.questionKey;
+        sel.addEventListener('change', function () { f.questionKey = sel.value; buildPicker(cat); });
+        var q = selectedQuestion(cat);
+        var fields = [labField('Question', sel)];
+        (q.params || []).forEach(function (pr) {
+          var saved = (f.params && f.params[q.key] && f.params[q.key][pr.key]);
+          var inp = el('input', { type: 'number', id: 'lab-q-' + pr.key, value: saved == null ? pr.def : saved, min: String(pr.min), max: String(pr.max), step: '1' });
+          paramInputs[pr.key] = inp;
+          fields.push(labField(pr.label + ' (' + pr.unit + ')', inp));
+        });
+        picker.appendChild(el('div', { class: 'form-grid' }, fields));
+        picker.appendChild(el('p', { class: 'muted small', id: 'lab-q-desc' }, q.description));
+      }
+      run.disabled = false;
+    }
+
     run.addEventListener('click', async function () {
+      var cat = App.state.labForm.questions || [];
+      var q = selectedQuestion(cat);
+      if (!q) return;
       f.symbol = symbol.value.toUpperCase();
-      if (lookback) { f.lookback = +lookback.value; f.threshold = +threshold.value; f.forward = +forward.value; }
+      var params = {};
+      (q.params || []).forEach(function (pr) { params[pr.key] = paramInputs[pr.key] ? +paramInputs[pr.key].value : pr.def; });
+      f.params = f.params || {}; f.params[q.key] = params;
       run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Replaying history…'));
       var to = (ctx && ctx.to) || new Date().toISOString().slice(0, 10);
-      var body = {
-        symbol: symbol.value, from: (ctx && ctx.from) || '2023-01-01', to: to,
-        lookbackDays: lookback ? +lookback.value : 20,
-        thresholdPct: threshold ? +threshold.value : 0,
-        forwardDays: forward ? +forward.value : 10
-      };
-      try { var _d = await API.post('/api/lab/hypothesis', body); f.result = _d; renderHypothesis(out, _d, level); }
+      var body = { key: q.key, symbol: symbol.value, from: (ctx && ctx.from) || '', to: to, params: params };
+      try { var _d = await API.post('/api/lab/question', body); f.result = _d; renderQuestion(out, _d, level); }
       catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Test failed', [String((e && e.message) || e)])); }
       finally { run.disabled = false; }
     });
-    card.appendChild(el('div', { class: 'btn-row' }, run));
-    card.appendChild(out);
-    if (f.result) renderHypothesis(out, f.result, level); // survive a level flip / nav
+
+    // Load the catalog (cached), build the picker, restore a prior result.
+    (async function loadCatalog() {
+      var cat = App.state.labForm.questions;
+      if (!cat) {
+        try { cat = (await API.get('/api/lab/questions')).questions || []; App.state.labForm.questions = cat; }
+        catch (e) { picker.innerHTML = ''; picker.appendChild(alertBox('warn', 'Could not load questions.')); return; }
+      }
+      if (!cat.length) { picker.innerHTML = ''; picker.appendChild(alertBox('warn', 'No questions available.')); return; }
+      buildPicker(cat);
+      if (f.result) renderQuestion(out, f.result, level); // survive a level flip / nav
+    })();
+
     return card;
   }
 
-  function renderHypothesis(out, r, level) {
+  function renderQuestion(out, r, level) {
     out.innerHTML = '';
-    // Conclusion first: the verdict banner IS the answer.
-    var kind = r.significant ? (r.winRate > 0.5 ? 'ok' : 'danger') : (r.sample < 20 ? 'warn' : 'caution');
+    var few = r.conditioned.sample < 15;
+    var kind = few ? 'warn' : (r.significant ? (r.winRateEdgePct > 0 ? 'ok' : 'danger') : 'caution');
     out.appendChild(alertBox(kind, r.verdict));
-    out.appendChild(el('p', { class: 'muted small' }, r.hypothesis));
-    out.appendChild(gaugeChart(r.winRate, 0.5,
-      'Win rate ' + fmtPct(r.winRate) + ' vs 50% by chance — over ' + r.sample + ' signals'));
+    out.appendChild(el('p', { class: 'muted small' }, r.question));
+    out.appendChild(el('div', { class: 'chip-row', style: 'margin-top:2px' }, evidenceBadge(r.evidence)));
+    // Conditioned win rate vs the baseline (the baseline bar marker) — the honest comparison.
+    out.appendChild(gaugeChart(r.conditioned.winRatePct / 100, r.baseline.winRatePct / 100,
+      'Positive ' + Math.round(r.conditioned.winRatePct) + '% of the time after the signal vs ' + Math.round(r.baseline.winRatePct) + '% normally — over ' + r.conditioned.sample + ' signals'));
     var facts = el('div', { class: 'fact-grid' },
-      labFact('Signals', String(r.sample)),
-      labFact('Wins', String(r.wins), r.wins > r.sample - r.wins ? 'f-ok' : null),
-      labFact('Edge', (r.edgePct >= 0 ? '+' : '') + r.edgePct + ' pts', r.edgePct >= 0 ? 'f-ok' : 'f-danger'));
-    if (level === 'expert') facts.appendChild(labFact('z-score', String(r.zScore)));
+      labFact('After the signal', Math.round(r.conditioned.winRatePct) + '% up', r.winRateEdgePct >= 0 ? 'f-ok' : 'f-danger'),
+      labFact('Normally', Math.round(r.baseline.winRatePct) + '% up'),
+      labFact('Edge', (r.winRateEdgePct >= 0 ? '+' : '') + r.winRateEdgePct + ' pts', r.winRateEdgePct >= 0 ? 'f-ok' : 'f-danger'));
     out.appendChild(facts);
+    var mean = el('div', { class: 'fact-grid' },
+      labFact('Avg return', (r.conditioned.meanReturnPct >= 0 ? '+' : '') + r.conditioned.meanReturnPct + '%', r.meanEdgePct >= 0 ? 'f-ok' : 'f-danger'),
+      labFact('Worst case', r.conditioned.worstPct + '%', 'f-danger'),
+      labFact('Best case', '+' + r.conditioned.bestPct + '%', 'f-ok'));
+    out.appendChild(mean);
+    var dc = distChart(r.distribution);
+    if (dc) out.appendChild(dc);
+    if (level === 'expert') {
+      out.appendChild(el('div', { class: 'chip-row' },
+        chip('z-score', String(r.zScore)),
+        chip('90% CI (avg)', r.ciLowPct + '% … ' + r.ciHighPct + '%'),
+        chip('Baseline avg', (r.baseline.meanReturnPct >= 0 ? '+' : '') + r.baseline.meanReturnPct + '%'),
+        chip('Significant', r.significant ? 'yes' : 'no')));
+    }
+    if (r.exampleDates && r.exampleDates.length) {
+      out.appendChild(el('div', { class: 'muted small', style: 'margin-top:4px' }, 'Example signal dates: ' + r.exampleDates.join(', ')));
+    }
     (r.notes || []).forEach(function (n) { out.appendChild(el('div', { class: 'muted small' }, n)); });
   }
 

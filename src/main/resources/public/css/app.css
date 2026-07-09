@@ -1162,3 +1162,12 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 .dc-job:last-child { border-bottom: none; }
 .dc-source { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
 .dc-source.on { border-color: var(--accent); }
+
+/* ---- Research-question workbench ---- */
+.q-grid { display: grid; grid-template-columns: 1fr; gap: 8px; margin: 8px 0; }
+@media (min-width: 560px) { .q-grid { grid-template-columns: 1fr 1fr; } }
+.q-card { text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); cursor: pointer; height: auto; display: block; }
+.q-card:hover { border-color: var(--border-strong); }
+.q-card.active { border-color: var(--accent); background: var(--accent-soft); }
+.q-card b { display: block; margin-bottom: 2px; }

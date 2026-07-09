@@ -1292,11 +1292,15 @@ test('consolidated Lab tools live in their homes: optimizer on Decision, study t
   await page.waitForSelector('#research-study-tools .lab-grid', { timeout: 15000 });
   // Icons render (magnifier was missing from ICON_PATHS -> empty box) — now in the study-tool header.
   assert.ok((await page.locator('#research-study-tools .lab-title .icon svg > *').count()) >= 1, 'study-tool icons render paths');
+  // Research-question workbench: a REAL question (not the degenerate 20-day-momentum toy), run and
+  // reported baseline-relative. The run button enables once the question catalog loads.
+  await page.waitForSelector('#lab-hyp-run:not([disabled])', { timeout: 15000 });
+  assert.ok((await page.locator('#lab-q-picker').count()) >= 1, 'question picker present');
   await page.click('#lab-hyp-run');
   await page.waitForSelector('#lab-hyp-out .alert', { timeout: 20000 });
-  assert.ok((await page.locator('#lab-hyp-out .lab-chart svg').count()) >= 1, 'win-rate gauge');
-  assert.ok((await page.locator('#lab-hyp-out:has-text("Signals")').count()) >= 1, 'sample chip');
-  // Gauge uses resolved design tokens, not the undefined --line/--fg (which rendered black).
+  assert.ok((await page.locator('#lab-hyp-out .lab-chart svg').count()) >= 2, 'win-rate gauge + distribution histogram');
+  assert.match(await page.textContent('#lab-hyp-out'), /After the signal|Normally/); // baseline-relative, not "vs 50% chance"
+  // Charts use resolved design tokens, not the undefined --line/--fg (which rendered black).
   const gaugeHtml = await page.locator('#lab-hyp-out .lab-chart').first().innerHTML();
   assert.ok(gaugeHtml.indexOf('var(--line)') < 0 && gaugeHtml.indexOf('var(--fg)') < 0, 'gauge uses no unresolved CSS vars');
 
