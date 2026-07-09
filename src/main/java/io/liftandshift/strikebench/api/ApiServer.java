@@ -163,7 +163,7 @@ public final class ApiServer {
         io.liftandshift.strikebench.market.UniverseService universe = new io.liftandshift.strikebench.market.UniverseService(db, cfg, clock);
         io.liftandshift.strikebench.market.SnapshotService snapshots = new io.liftandshift.strikebench.market.SnapshotService(market, universe, db, clock);
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
-        io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, db, clock);
+        io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, engine, db, clock);
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
         server.db = db;
         return server;
@@ -263,6 +263,7 @@ public final class ApiServer {
             c.routes.post("/api/recommend/auto", this::recommendAuto);
             c.routes.post("/api/recommend/ladder", this::recommendLadder);
             c.routes.post("/api/evaluate", this::evaluate);
+            c.routes.post("/api/opportunities", this::opportunities);
             c.routes.get("/api/evaluations", ctx -> {
                 String uid = auth.currentUserId(ctx);
                 String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
@@ -723,6 +724,30 @@ public final class ApiServer {
                 "intent", String.valueOf(result.intent()),
                 "evaluations", evals,
                 "rejected", result.rejected()));
+    }
+
+    public record OpportunitiesRequest(List<String> universe, String thesis, String horizon,
+                                       String riskMode, String intent, Integer topN) {}
+
+    /**
+     * Universe-scale competition: scans a universe (the active one by default), keeps each symbol's
+     * best viable idea, and ranks them cross-symbol so the strongest opportunities surface first.
+     */
+    private void opportunities(Context ctx) {
+        OpportunitiesRequest req = bodyOrNull(ctx, OpportunitiesRequest.class);
+        if (req == null) req = new OpportunitiesRequest(null, null, null, null, null, null);
+        List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
+                ? req.universe() : universe.active().symbols();
+        Account acct = currentAccount(ctx);
+        String uid = auth.currentUserId(ctx);
+        String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+        int topN = req.topN() != null ? req.topN() : 8;
+        var result = evaluations.scan(symbols, req.intent(),
+                req.thesis() != null ? req.thesis() : "neutral",
+                req.horizon() != null ? req.horizon() : "month",
+                req.riskMode() != null ? req.riskMode() : "balanced",
+                acct.buyingPowerCents(), ownerId, topN);
+        ctx.json(Map.of("ranked", result.ranked(), "notes", result.notes(), "scanned", result.scanned()));
     }
 
     private void recommendLadder(Context ctx) {

@@ -89,6 +89,28 @@ class EvaluateIntegrationTest {
         }
     }
 
+    @Test void opportunitiesScanRanksAcrossTheUniverse() throws Exception {
+        HttpResponse<String> r = post("/api/opportunities",
+                "{\"thesis\":\"neutral\",\"horizon\":\"month\",\"riskMode\":\"balanced\",\"topN\":5}");
+        assertThat(r.statusCode()).isEqualTo(200);
+        JsonNode body = Json.MAPPER.readTree(r.body());
+        assertThat(body.get("scanned").asInt()).isGreaterThan(0); // scanned the active demo universe
+        JsonNode ranked = body.get("ranked");
+        assertThat(ranked.isArray()).isTrue();
+        assertThat(ranked).isNotEmpty();
+
+        // Each winner is a full evaluation carrying its symbol; the list ranks cross-symbol.
+        double prev = Double.MAX_VALUE;
+        java.util.Set<String> symbols = new java.util.HashSet<>();
+        for (JsonNode e : ranked) {
+            symbols.add(e.get("spec").get("symbol").asText());
+            double s = e.get("score").get("riskAdjustedScore").asDouble();
+            assertThat(s).isLessThanOrEqualTo(prev);
+            prev = s;
+        }
+        assertThat(symbols).isNotEmpty(); // at least one symbol's best idea surfaced
+    }
+
     @Test void evaluationsArePersistedAndListable() throws Exception {
         post("/api/evaluate", "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"balanced\"}");
         JsonNode listed = Json.MAPPER.readTree(get("/api/evaluations").body()).get("evaluations");
