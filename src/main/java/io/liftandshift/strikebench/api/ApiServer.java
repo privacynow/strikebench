@@ -85,6 +85,7 @@ public final class ApiServer {
     private final io.liftandshift.strikebench.market.UniverseService universe;
     private final io.liftandshift.strikebench.market.SnapshotService snapshots;
     private final io.liftandshift.strikebench.auth.AuthService auth;
+    private final io.liftandshift.strikebench.eval.EvaluationService evaluations;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
@@ -95,11 +96,13 @@ public final class ApiServer {
                      AutoRecommender auto, BrokerService broker, Backtester backtester,
                      PositionsService positions, io.liftandshift.strikebench.market.UniverseService universe,
                      io.liftandshift.strikebench.market.SnapshotService snapshots,
-                     io.liftandshift.strikebench.auth.AuthService auth) {
+                     io.liftandshift.strikebench.auth.AuthService auth,
+                     io.liftandshift.strikebench.eval.EvaluationService evaluations) {
         this.positions = positions;
         this.universe = universe;
         this.snapshots = snapshots;
         this.auth = auth;
+        this.evaluations = evaluations;
         this.cfg = cfg;
         this.clock = clock;
         this.market = market;
@@ -160,7 +163,8 @@ public final class ApiServer {
         io.liftandshift.strikebench.market.UniverseService universe = new io.liftandshift.strikebench.market.UniverseService(db, cfg, clock);
         io.liftandshift.strikebench.market.SnapshotService snapshots = new io.liftandshift.strikebench.market.SnapshotService(market, universe, db, clock);
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
-        ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth);
+        io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, db, clock);
+        ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
         server.db = db;
         return server;
     }
@@ -258,6 +262,12 @@ public final class ApiServer {
             c.routes.post("/api/recommend", this::recommend);
             c.routes.post("/api/recommend/auto", this::recommendAuto);
             c.routes.post("/api/recommend/ladder", this::recommendLadder);
+            c.routes.post("/api/evaluate", this::evaluate);
+            c.routes.get("/api/evaluations", ctx -> {
+                String uid = auth.currentUserId(ctx);
+                String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+                ctx.json(Map.of("evaluations", evaluations.recent(ownerId, 50)));
+            });
 
             c.routes.post("/api/trades/preview", this::tradePreview);
             c.routes.post("/api/trades", this::tradeCreate);
@@ -667,6 +677,11 @@ public final class ApiServer {
     // ---- Recommendations ----
 
     private void recommend(Context ctx) {
+        ctx.json(resolveAndRecommend(ctx));
+    }
+
+    /** Parses the recommend request (injecting real holdings for hold-based intents) and runs the engine. */
+    private RecommendationEngine.Result resolveAndRecommend(Context ctx) {
         RecommendationEngine.Request req = bodyOrNull(ctx, RecommendationEngine.Request.class);
         if (req == null || req.symbol() == null || req.symbol().isBlank()) {
             throw new IllegalArgumentException("symbol is required");
@@ -688,7 +703,26 @@ public final class ApiServer {
                         req.filters());
             } catch (java.util.NoSuchElementException ignored) { /* no position — engine handles it */ }
         }
-        ctx.json(engine.recommend(req, acct.buyingPowerCents()));
+        return engine.recommend(req, acct.buyingPowerCents());
+    }
+
+    /**
+     * Recommendations-as-a-competition: runs the engine, then wraps each candidate in a full
+     * StrategyEvaluation (capital / volatility / risk / evidence / management / score / explanation),
+     * ranks them, and persists the competition for later review. Feeds the Phase-3 decision UI.
+     */
+    private void evaluate(Context ctx) {
+        RecommendationEngine.Result result = resolveAndRecommend(ctx);
+        Account acct = currentAccount(ctx);
+        String uid = auth.currentUserId(ctx);
+        String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+        var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
+                result.riskMode(), result.candidates(), acct.buyingPowerCents(), ownerId, true);
+        ctx.json(Map.of(
+                "symbol", result.symbol(),
+                "intent", String.valueOf(result.intent()),
+                "evaluations", evals,
+                "rejected", result.rejected()));
     }
 
     private void recommendLadder(Context ctx) {
