@@ -1700,13 +1700,15 @@
         chip('Risk budget', fmtMoney(r.riskBudgetCents)),
         chip('Mode', r.riskMode.toLowerCase()),
         chip('Candidates', String(r.candidates.length))));
-      // Recommendations-as-a-competition: score these side by side on the decision page.
+      // Recommendations-as-a-competition: score these side by side INLINE (D3 — no orphan surface).
       if (body && body.symbol && r.candidates.length > 1) {
+        var compareHost = el('div', { id: 'decision-host', style: 'margin-top:8px' });
         results.appendChild(el('div', { class: 'btn-row', style: 'margin:8px 0' },
           el('button', {
             class: 'btn btn-secondary', id: 'compare-ideas-btn',
-            onclick: function () { App.navigate('#/decision/' + body.symbol.toUpperCase()); }
+            onclick: function () { renderCompetition(compareHost, body.symbol.toUpperCase()); }
           }, 'Compare these side by side →')));
+        results.appendChild(compareHost);
       }
       (r.notes || []).forEach(function (n) { results.appendChild(alertBox('warn', n)); });
       if (!r.candidates.length) {
@@ -3178,28 +3180,15 @@
       UI.table(['Structure', 'Score', 'Evidence', 'Cost', 'Max loss', 'Max profit', 'POP', 'Tail loss', ''], rows));
   }
 
-  async function decision(root, params) {
+  /**
+   * The recommendations-as-a-competition render, reusable both as the standalone #/decision page
+   * and INLINE inside the Ideas results (D3 — it is no longer an orphan surface). Fills `host`.
+   */
+  async function renderCompetition(host, symbol) {
     var level = Learn.currentLevel();
     var form = App.state.discoverForm || {};
-    var symbol = (params[0] || form.symbol || App.state.lastRecommendSymbol || '').toUpperCase();
-
-    root.appendChild(el('h1', {}, 'Compare ideas'));
-    if (level === 'beginner') {
-      root.appendChild(explain('The same goal, a few different ways — scored side by side. The top one is our pick; we show WHY it wins, what could go wrong, and how to manage it after you enter.'));
-    }
-    if (!symbol) {
-      root.appendChild(UI.emptyState('No stock chosen yet', 'Pick a stock and a goal first, then compare the ideas.',
-        'Find ideas', function () { App.navigate('#/trade/discover'); }));
-      return;
-    }
-    root.appendChild(el('div', { class: 'idea-source-row' },
-      el('span', { class: 'muted' }, 'For '), el('b', {}, symbol),
-      el('button', { class: 'btn btn-sm btn-secondary', id: 'decision-refresh', onclick: function () { App.render(); } }, 'Refresh')));
-
-    var host = el('div', { id: 'decision-host' });
-    root.appendChild(host);
+    host.innerHTML = '';
     host.appendChild(UI.spinner('Scoring the alternatives…'));
-
     var riskMode = 'balanced';
     try { var rm = document.getElementById('risk-mode'); if (rm && rm.value) riskMode = rm.value; } catch (e) { /* default */ }
     var body = {
@@ -3220,8 +3209,7 @@
     var evals = (data && data.evaluations) || [];
     if (!evals.length) {
       host.appendChild(UI.emptyState('No comparable ideas',
-        'The engine found nothing viable for this goal on ' + symbol + '. Try another goal or stock.',
-        'Back to ideas', function () { App.navigate('#/trade/discover'); }));
+        'The engine found nothing viable for this goal on ' + symbol + '. Try another goal or stock.'));
       return;
     }
     host.appendChild(decisionTop(evals[0], symbol, level, data && data.recommendationId));
@@ -3229,12 +3217,35 @@
       host.appendChild(el('h2', { class: 'section-h' }, level === 'beginner' ? 'Other ways to play it' : 'The full field'));
       host.appendChild(level === 'beginner' ? decisionAltList(evals.slice(1), symbol) : decisionTable(evals, symbol));
     }
-    // D2: the portfolio optimizer — "size the strongest ideas across a budget" — lives with the
+    // The portfolio optimizer — "size the strongest ideas across a budget" — lives with the
     // competition it operates on (construction belongs in the Trade family, not a separate Lab).
     App.state.labForm = App.state.labForm || {};
     var octx = App.state.labForm.ctx = App.state.labForm.ctx || {};
     host.appendChild(el('h2', { class: 'section-h' }, 'Size the strongest ideas across a budget'));
     host.appendChild(optimizerCard(level, octx));
+  }
+
+  async function decision(root, params) {
+    var level = Learn.currentLevel();
+    var form = App.state.discoverForm || {};
+    var symbol = (params[0] || form.symbol || App.state.lastRecommendSymbol || '').toUpperCase();
+
+    root.appendChild(el('h1', {}, 'Compare ideas'));
+    if (level === 'beginner') {
+      root.appendChild(explain('The same goal, a few different ways — scored side by side. The top one is our pick; we show WHY it wins, what could go wrong, and how to manage it after you enter.'));
+    }
+    if (!symbol) {
+      root.appendChild(UI.emptyState('No stock chosen yet', 'Pick a stock and a goal first, then compare the ideas.',
+        'Find ideas', function () { App.navigate('#/trade/discover'); }));
+      return;
+    }
+    root.appendChild(el('div', { class: 'idea-source-row' },
+      el('span', { class: 'muted' }, 'For '), el('b', {}, symbol),
+      el('button', { class: 'btn btn-sm btn-secondary', id: 'decision-refresh', onclick: function () { App.render(); } }, 'Refresh')));
+
+    var host = el('div', { id: 'decision-host' });
+    root.appendChild(host);
+    await renderCompetition(host, symbol);
   }
 
   // ---- Research lab (Phase 5): optimizer, hypothesis tester, ETF replicator, notebook ----

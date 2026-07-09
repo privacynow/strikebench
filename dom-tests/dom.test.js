@@ -1250,3 +1250,18 @@ test('undefined-risk framing: synthetic short is BLOCKED, synthetic long is not'
   assert.ok(!(await page.locator('.tpl[data-tpl="SYNTHETIC_LONG"] .badge:has-text("BLOCKED")').count()),
     'synthetic long is defined-risk — no BLOCKED badge');
 });
+
+test('D3: the competition renders INLINE in Ideas (no orphan Decision page navigation)', async () => {
+  await page.evaluate(() => Learn.setLevel('expert'));
+  await page.evaluate(() => { App.state.filterState = {}; App.state.discoverForm = null; App.state.recommendResults = null; });
+  await go('#/recommend/manual');
+  await page.fill('#rec-symbol', 'AAPL');
+  await page.click('#rec-go');
+  await page.waitForSelector('#compare-ideas-btn', { timeout: 25000 });
+  const hashBefore = await page.evaluate(() => location.hash);
+  await page.click('#compare-ideas-btn');
+  // The ranked competition (the pick) appears inline in the Ideas results, same hash.
+  await page.waitForSelector('#decision-host .decision-pick', { timeout: 20000 });
+  assert.equal(await page.evaluate(() => location.hash), hashBefore, 'stayed on Ideas — no navigation to a separate Decision page');
+  await page.evaluate(() => { App.state.discoverForm = null; App.state.recommendResults = null; });
+});
