@@ -358,12 +358,14 @@
 
     async function load() {
       renderPills();
+      var reqKey = selected; // supersede token: guards BOTH success and error paths (a rejected fetch
+                             // for an old window must not wipe the window the user is now looking at)
       host.innerHTML = '';
       summary.innerHTML = '';
       host.appendChild(spinner('Loading ' + selected.toUpperCase() + '…'));
       try {
         var data = await opts.fetch(selected);
-        if (selected !== (data.range || selected)) return; // superseded
+        if (reqKey !== selected) return; // a newer pill was picked while this loaded
         host.innerHTML = '';
         summary.innerHTML = '';
         var series = data.series || (data.candles || []).map(function (c) {
@@ -393,6 +395,7 @@
           : lineChart(series, { money: opts.money, baseline: first }));
         if (data.note) host.appendChild(data.note);
       } catch (e) {
+        if (reqKey !== selected) return; // don't let an old window's failure wipe the current chart
         host.innerHTML = '';
         host.appendChild(el('div', { class: 'alert alert-warn' }, 'Could not load this window: ' + e.message));
       }

@@ -872,7 +872,9 @@
         + (u.note ? u.note : '')));
     root.appendChild(card);
 
+    var loadSeq = 0; // supersede token: a slow quote batch for a PREVIOUS sector must not paint over the current one
     async function load() {
+      var seq = ++loadSeq;
       head.innerHTML = '';
       focus.innerHTML = '';
       focus.removeAttribute('data-symbol');
@@ -904,6 +906,7 @@
       }, 'Scout this sector'));
       try {
         var data = await API.get('/api/quotes?symbols=' + sector.symbols.join(','));
+        if (seq !== loadSeq) return; // a newer sector was picked while this loaded
         grid.innerHTML = '';
         // EVERY symbol gets an actionable tile \u2014 a sector click must always land somewhere
         // clickable. Symbols without a live quote say so honestly but still link onward.
@@ -958,6 +961,7 @@
           grid.appendChild(explain('Demo mode carries data only for the built-in symbols \u2014 each ticker still links to research and ideas so you can explore the flow.'));
         }
       } catch (e) {
+        if (seq !== loadSeq) return;
         grid.innerHTML = '';
         grid.appendChild(alertBox('warn', 'Could not load sector quotes', [e.message]));
       }
@@ -1564,11 +1568,22 @@
       el('div', { class: 'btn-row' }, goBtn)));
     root.appendChild(results);
     sync();
-    // A finished scan survives navigation — losing a 20-second scan to a header click
-    // was rightly a complaint. (Single-symbol results are instant; they just re-run.)
-    if (scanMode() && App.state.scoutResults) renderScoutResults(results, App.state.scoutResults);
+    // A finished scan OR single-symbol result survives navigation / level switch — losing a scan
+    // (or having to re-click "Find ideas") was rightly a complaint. Restore from cache when it
+    // matches the current symbol+goal; the render fns already take the level, so a level flip
+    // re-renders the cached payload instead of re-fetching.
+    if (scanMode() && App.state.scoutResults) {
+      renderScoutResults(results, App.state.scoutResults);
+    } else if (!scanMode() && App.state.recommendResults
+        && App.state.recommendResults.symbol === (sym.value || '').trim().toUpperCase()
+        && App.state.recommendResults.goal === goal) {
+      var rr = App.state.recommendResults;
+      renderResults(rr.r, rr.goal, rr.body, rr.extras);
+    }
 
+    var goSeq = 0; // supersede token: a slow scan/ideas run must not overwrite (or persist) fresher results
     async function runScan() {
+      var seq = ++goSeq;
       results.appendChild(UI.spinner('Scanning and deriving views\u2026'));
       try {
         var horizonsSel = [];
@@ -1588,15 +1603,18 @@
         else if (universe.value.trim()) body.universe = universe.value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
         if (scanTarget.value) body.targetProfitCents = Math.round(parseFloat(scanTarget.value) * 100);
         var scan = await API.post('/api/recommend/auto', body);
+        if (seq !== goSeq) return; // a newer run superseded this
         App.state.scoutResults = scan;
         renderScoutResults(results, scan);
       } catch (e) {
+        if (seq !== goSeq) return;
         results.innerHTML = '';
         results.appendChild(alertBox('danger', e.message));
       }
     }
 
     async function runSingle() {
+      var seq = ++goSeq;
       results.appendChild(UI.spinner('Screening strategies\u2026'));
       try {
         App.state.lastRecommendSymbol = sym.value.trim().toUpperCase();
@@ -1650,8 +1668,11 @@
           var ac = await acctP; if (ac) extras.acct = ac.account;
           var hd = await incHeldP; if (hd) extras.held = hd.positions;           // board is optional
         }
+        if (seq !== goSeq) return; // a newer run superseded this
+        App.state.recommendResults = { symbol: (body.symbol || '').toUpperCase(), goal: goal, r: r, body: body, extras: extras };
         renderResults(r, goal, body, extras);
       } catch (e) {
+        if (seq !== goSeq) return;
         results.innerHTML = '';
         results.appendChild(alertBox('danger', e.message));
       }
@@ -3378,12 +3399,13 @@
         diagnostic: diag ? diag.checked : false
       };
       if (scope.value === 'symbol' && sym) body.universe = [sym];   // A5: the working stock actually scopes the optimizer
-      try { renderOptimization(out, await API.post('/api/optimize', body), level); }
+      try { var _d = await API.post('/api/optimize', body); f.result = _d; renderOptimization(out, _d, level); }
       catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Optimize failed', [String((e && e.message) || e)])); }
       finally { run.disabled = false; }
     });
     card.appendChild(el('div', { class: 'btn-row' }, run));
     card.appendChild(out);
+    if (f.result) renderOptimization(out, f.result, level); // survive a level flip / nav without re-scanning
     return card;
   }
 
@@ -3478,12 +3500,13 @@
         thresholdPct: threshold ? +threshold.value : 0,
         forwardDays: forward ? +forward.value : 10
       };
-      try { renderHypothesis(out, await API.post('/api/lab/hypothesis', body), level); }
+      try { var _d = await API.post('/api/lab/hypothesis', body); f.result = _d; renderHypothesis(out, _d, level); }
       catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Test failed', [String((e && e.message) || e)])); }
       finally { run.disabled = false; }
     });
     card.appendChild(el('div', { class: 'btn-row' }, run));
     card.appendChild(out);
+    if (f.result) renderHypothesis(out, f.result, level); // survive a level flip / nav
     return card;
   }
 
@@ -3524,12 +3547,13 @@
       f.symbol = symbol.value.toUpperCase(); f.target = +target.value; f.dir = dir.value;
       run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Sizing…'));
       var body = { symbol: symbol.value, targetExposureCents: Math.round((+target.value || 0) * 100), bullish: dir.value === 'long' };
-      try { renderReplication(out, await API.post('/api/lab/replicate', body)); }
+      try { var _d = await API.post('/api/lab/replicate', body); f.result = _d; renderReplication(out, _d); }
       catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Replicate failed', [String((e && e.message) || e)])); }
       finally { run.disabled = false; }
     });
     card.appendChild(el('div', { class: 'btn-row' }, run));
     card.appendChild(out);
+    if (f.result) renderReplication(out, f.result); // survive a level flip / nav
     return card;
   }
 
