@@ -1092,3 +1092,37 @@ test('smooth pipeline: GET cache, skeleton on slow loads, tape refresh keeps its
   });
   assert.equal(stable, true, 'tape strip not rebuilt when symbols unchanged');
 });
+
+test('decision page: recommendations-as-a-competition — the pick, evidence, scenarios, plan, handoff', async () => {
+  await page.evaluate(() => {
+    Learn.setLevel('expert');
+    App.state.discoverForm = { symbol: 'AAPL', thesis: 'bullish', horizon: 'month' };
+  });
+  await go('#/decision/AAPL');
+
+  // The pick, with its honesty badges and score.
+  await page.waitForSelector('.decision-pick');
+  assert.ok(await page.locator('.decision-pick .pick-badge').first().isVisible(), 'THE PICK badge');
+  const evBadge = (await page.locator('.decision-pick .row-gap .badge').first().innerText()).trim();
+  assert.match(evBadge, /Demo data|Observed|Modeled|Unknown/, 'evidence badge is labeled honestly');
+  assert.ok(await page.locator('.decision-pick .score-wrap').first().isVisible(), 'risk-adjusted score meter');
+
+  // Real risk scenarios + the honest capital pair + the co-equal management plan.
+  assert.ok((await page.locator('.decision-pick .scenario-strip .scenario-cell').count()) >= 3, 'payoff scenario strip');
+  assert.ok((await page.locator('.decision-pick:has-text("Buying power used")').count()) > 0, 'incremental capital');
+  assert.ok((await page.locator('.decision-pick:has-text("Full exposure")').count()) > 0, 'economic capital');
+  assert.ok((await page.locator('.decision-pick:has-text("The plan after you enter")').count()) > 0, 'management plan');
+
+  // When there is a field of alternatives, Expert ranks them in a comparison table.
+  if ((await page.locator('.section-h').count()) > 0) {
+    assert.ok((await page.locator('#decision-table').count()) > 0, 'expert comparison table for the field');
+  }
+
+  // Handing the winner off to the Place stage carries the working idea.
+  await page.click('#decision-use');
+  await page.waitForFunction(() => location.hash.indexOf('/trade/place') >= 0);
+  await page.waitForSelector('#app[data-ready="true"]');
+
+  // Reset shared state so later tests' assumptions hold.
+  await page.evaluate(() => { App.state.ticket = null; App.state.discoverForm = null; });
+});

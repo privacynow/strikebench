@@ -1075,3 +1075,28 @@ body.lvl-expert .not-expert { display: none !important; }
 /* Private-instance sign-in screen (only rendered when AUTH_ENABLED and signed out). */
 .signin-card { max-width: 420px; margin: 15vh auto; text-align: center; }
 .signin-card .btn-lg { margin-top: 12px; }
+
+/* ---- Decision: recommendations-as-a-competition (Phase 3) ---- */
+.decision-pick { border-left: 3px solid var(--accent); }
+.pick-badge { display: inline-block; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+  letter-spacing: .04em; padding: 2px 7px; border-radius: 6px; vertical-align: middle; }
+.decision-why { font-size: 15px; margin: 8px 0 12px; }
+.decision-sub { font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+.row-gap { display: inline-flex; align-items: center; gap: 10px; }
+.scenario-strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.scenario-cell { flex: 1 0 auto; min-width: 58px; text-align: center; padding: 6px 8px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--card-2, transparent); }
+.scenario-cell .sc-move { font-size: 12px; color: var(--muted); }
+.scenario-cell .sc-pnl { font-weight: 700; font-size: 14px; }
+.evidence-grid { display: flex; flex-direction: column; gap: 6px; }
+.evidence-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.evidence-row .ev-dim { text-transform: capitalize; color: var(--muted); }
+.plan-summary { font-weight: 600; margin: 0 0 8px; }
+.plan-rules { margin: 0; padding-left: 18px; }
+.plan-rules li { margin: 4px 0; }
+.plan-action { color: var(--fg); }
+.alt-list { display: flex; flex-direction: column; gap: 8px; }
+.alt-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.alt-row .alt-main { flex: 1; min-width: 0; }
+.alt-row .alt-facts { display: flex; gap: 8px; flex-shrink: 0; }
+.section-h { font-size: 16px; margin: 20px 0 10px; }

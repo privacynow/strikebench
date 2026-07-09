@@ -1626,6 +1626,14 @@
         chip('Risk budget', fmtMoney(r.riskBudgetCents)),
         chip('Mode', r.riskMode.toLowerCase()),
         chip('Candidates', String(r.candidates.length))));
+      // Recommendations-as-a-competition: score these side by side on the decision page.
+      if (body && body.symbol && r.candidates.length > 1) {
+        results.appendChild(el('div', { class: 'btn-row', style: 'margin:8px 0' },
+          el('button', {
+            class: 'btn btn-secondary', id: 'compare-ideas-btn',
+            onclick: function () { App.navigate('#/decision/' + body.symbol.toUpperCase()); }
+          }, 'Compare these side by side →')));
+      }
       (r.notes || []).forEach(function (n) { results.appendChild(alertBox('warn', n)); });
       if (!r.candidates.length) {
         results.appendChild(UI.emptyState('Nothing passed the risk screens',
@@ -2898,11 +2906,203 @@
 
   // ---------- 1. Account ----------
 
+  // ---- Decision: recommendations-as-a-competition (Phase 3) ----
+
+  var EVIDENCE_BADGE = {
+    OBSERVED_LIVE: ['badge-ok', 'Observed · live'],
+    OBSERVED_DELAYED: ['badge-ok', 'Observed · delayed'],
+    OBSERVED_EOD: ['badge-caution', 'Observed · EOD'],
+    MODELED: ['badge-caution', 'Modeled'],
+    DEMO_FIXTURE: ['badge-dim', 'Demo data'],
+    UNKNOWN: ['badge-danger', 'Unknown']
+  };
+  function evidenceBadge(level) {
+    var m = EVIDENCE_BADGE[level] || EVIDENCE_BADGE.UNKNOWN;
+    return el('span', { class: 'badge ' + m[0], title: 'The least-certain data dimension sets this badge' }, m[1]);
+  }
+  function cap1(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+  function scenarioStrip(risk, symbol) {
+    var scen = (risk && risk.scenarios) || [];
+    if (!scen.length) return null;
+    return el('div', { class: 'scenario-strip' }, scen.map(function (s) {
+      var move = Math.round(s.underlyingMovePct * 100);
+      return el('div', { class: 'scenario-cell' },
+        el('div', { class: 'sc-move' }, (move > 0 ? '+' : '') + move + '%'),
+        el('div', { class: 'sc-pnl ' + (s.pnlCents >= 0 ? 'gain' : 'loss') }, UI.fmtMoneyCompact(s.pnlCents)));
+    }));
+  }
+
+  function evidenceGrid(ev) {
+    var dims = ev.perDimension || {};
+    var rows = Object.keys(dims).map(function (k) {
+      return el('div', { class: 'evidence-row' }, el('span', { class: 'ev-dim' }, k), evidenceBadge(dims[k]));
+    });
+    if (ev.note) rows.push(el('p', { class: 'muted small' }, ev.note));
+    return el('div', { class: 'evidence-grid' }, rows);
+  }
+
+  function scoreGrid(sc) {
+    var wrap = el('div', {});
+    if (!sc.gatePassed && sc.gateFailures && sc.gateFailures.length) {
+      wrap.appendChild(alertBox('warn', 'Failed a hard check', sc.gateFailures));
+    }
+    wrap.appendChild(UI.table(['Factor', 'Score', 'Weight'], (sc.components || []).map(function (co) {
+      return el('tr', {}, el('td', {}, co.name), el('td', {}, Math.round(co.value * 100) + '%'),
+        el('td', {}, Math.round(co.weight * 100) + '%'));
+    })));
+    wrap.appendChild(el('p', { class: 'muted small' },
+      'Normalized ' + Math.round(sc.normalizedScore) + ' → risk-adjusted ' + Math.round(sc.riskAdjustedScore)
+      + ' (haircut for evidence + tail risk).'));
+    return wrap;
+  }
+
+  function planList(mgmt) {
+    var wrap = el('div', {});
+    if (mgmt && mgmt.summary) wrap.appendChild(el('p', { class: 'plan-summary' }, mgmt.summary));
+    wrap.appendChild(el('ul', { class: 'plan-rules' }, ((mgmt && mgmt.rules) || []).map(function (r) {
+      return el('li', {}, el('b', {}, cap1(r.kind) + ': '), r.trigger, ' → ', el('span', { class: 'plan-action' }, r.action));
+    })));
+    return wrap;
+  }
+
+  function useEval(c, symbol) {
+    App.state.ticket = { candidate: c, symbol: symbol, step: 5 };
+    App.navigate('#/trade/place');
+  }
+
+  function decisionTop(e, symbol, level) {
+    var c = e.candidate, risk = e.risk, capital = e.capital, sc = e.score;
+    var card = el('div', { class: 'card decision-pick', 'data-strategy': c.strategy });
+    card.appendChild(UI.cardHeader(
+      el('span', {}, el('span', { class: 'pick-badge' }, 'THE PICK'), ' ', c.displayName),
+      el('span', { class: 'row-gap' }, evidenceBadge(e.evidence.rollup), UI.scoreBar(sc.riskAdjustedScore))));
+    if (e.explanation && (e.explanation.whySelected || e.explanation.headline)) {
+      card.appendChild(el('p', { class: 'decision-why' }, e.explanation.whySelected || e.explanation.headline));
+    }
+    card.appendChild(el('div', { class: 'chip-row' },
+      chip('Cost/credit', fmtMoney(c.entryNetPremiumCents, { plus: true })),
+      chip('Max loss', el('span', { class: 'loss' }, fmtMoney(risk.maxLossCents))),
+      chip('Max profit', risk.maxProfitCents === null || risk.maxProfitCents === undefined
+        ? 'uncapped' : el('span', { class: 'gain' }, fmtMoney(risk.maxProfitCents))),
+      chip('Chance of profit', fmtPct(risk.pop)),
+      c.assignmentProb !== null && c.assignmentProb !== undefined ? chip('Assignment', fmtPct(c.assignmentProb)) : null));
+    // The honest capital pair — buying power used vs full economic exposure.
+    card.appendChild(el('div', { class: 'chip-row' },
+      chip('Buying power used', fmtMoney(capital.incrementalCents)),
+      chip('Full exposure', fmtMoney(capital.economicCents)),
+      capital.returnOnCapitalPct != null ? chip('Best-case return', Math.round(capital.returnOnCapitalPct) + '%') : null,
+      capital.annualizedRocPct != null ? chip('annualized', Math.round(capital.annualizedRocPct) + '%/yr') : null));
+    var strip = scenarioStrip(risk, symbol);
+    if (strip) {
+      card.appendChild(el('div', { class: 'decision-sub' }, 'If ' + symbol + ' moves by expiry'));
+      card.appendChild(strip);
+    }
+    if (level === 'expert') {
+      card.appendChild(UI.expandable('Evidence by dimension', function () { return evidenceGrid(e.evidence); }));
+      card.appendChild(UI.expandable('How this score was built', function () { return scoreGrid(sc); }));
+    }
+    card.appendChild(UI.expandable('The plan after you enter', function () { return planList(e.management); },
+      { open: level === 'beginner' }));
+    if (e.explanation && e.explanation.failureModes && e.explanation.failureModes.length) {
+      card.appendChild(UI.expandable('What could go wrong', function () {
+        return el('ul', {}, e.explanation.failureModes.map(function (f) { return el('li', {}, f); }));
+      }));
+    }
+    card.appendChild(el('div', { class: 'btn-row' },
+      el('button', { class: 'btn', id: 'decision-use', onclick: function () { useEval(c, symbol); } }, 'Practice this trade')));
+    return card;
+  }
+
+  function decisionAltList(evals, symbol) {
+    return el('div', { class: 'alt-list' }, evals.map(function (e) {
+      var c = e.candidate;
+      return el('div', { class: 'alt-row', 'data-strategy': c.strategy },
+        el('div', { class: 'alt-main' }, el('b', {}, c.displayName), el('span', { class: 'muted' }, '  ' + c.label)),
+        el('div', { class: 'alt-facts' },
+          chip('Score', Math.round(e.score.riskAdjustedScore)),
+          chip('Max loss', el('span', { class: 'loss' }, fmtMoney(e.risk.maxLossCents)))),
+        el('button', { class: 'btn btn-sm', onclick: function () { useEval(c, symbol); } }, 'Use'));
+    }));
+  }
+
+  function decisionTable(evals, symbol) {
+    var rows = evals.map(function (e) {
+      var c = e.candidate, r = e.risk;
+      return el('tr', { 'data-strategy': c.strategy },
+        el('td', {}, c.displayName),
+        el('td', {}, UI.scoreBar(e.score.riskAdjustedScore)),
+        el('td', {}, evidenceBadge(e.evidence.rollup)),
+        el('td', {}, fmtMoney(c.entryNetPremiumCents, { plus: true })),
+        el('td', {}, el('span', { class: 'loss' }, fmtMoney(r.maxLossCents))),
+        el('td', {}, r.maxProfitCents == null ? 'uncapped' : fmtMoney(r.maxProfitCents)),
+        el('td', {}, fmtPct(r.pop)),
+        el('td', {}, el('span', { class: 'loss' }, fmtMoney(r.tailLossCents))),
+        el('td', {}, el('button', { class: 'btn btn-sm', onclick: function () { useEval(c, symbol); } }, 'Use')));
+    });
+    return el('div', { id: 'decision-table' },
+      UI.table(['Structure', 'Score', 'Evidence', 'Cost', 'Max loss', 'Max profit', 'POP', 'Tail loss', ''], rows));
+  }
+
+  async function decision(root, params) {
+    var level = Learn.currentLevel();
+    var form = App.state.discoverForm || {};
+    var symbol = (params[0] || form.symbol || App.state.lastRecommendSymbol || '').toUpperCase();
+
+    root.appendChild(el('h1', {}, 'Compare ideas'));
+    if (level === 'beginner') {
+      root.appendChild(explain('The same goal, a few different ways — scored side by side. The top one is our pick; we show WHY it wins, what could go wrong, and how to manage it after you enter.'));
+    }
+    if (!symbol) {
+      root.appendChild(UI.emptyState('No stock chosen yet', 'Pick a stock and a goal first, then compare the ideas.',
+        'Find ideas', function () { App.navigate('#/trade/discover'); }));
+      return;
+    }
+    root.appendChild(el('div', { class: 'idea-source-row' },
+      el('span', { class: 'muted' }, 'For '), el('b', {}, symbol),
+      el('button', { class: 'btn btn-sm btn-secondary', id: 'decision-refresh', onclick: function () { App.render(); } }, 'Refresh')));
+
+    var host = el('div', { id: 'decision-host' });
+    root.appendChild(host);
+    host.appendChild(UI.spinner('Scoring the alternatives…'));
+
+    var riskMode = 'balanced';
+    try { var rm = document.getElementById('risk-mode'); if (rm && rm.value) riskMode = rm.value; } catch (e) { /* default */ }
+    var body = {
+      symbol: symbol,
+      thesis: form.thesis || 'neutral',
+      horizon: form.horizon || 'month',
+      riskMode: riskMode,
+      intent: form.goal || form.intent || null
+    };
+    var data;
+    try { data = await API.post('/api/evaluate', body); }
+    catch (e) {
+      host.innerHTML = '';
+      host.appendChild(alertBox('error', 'Could not compare ideas', [String((e && e.message) || e)]));
+      return;
+    }
+    host.innerHTML = '';
+    var evals = (data && data.evaluations) || [];
+    if (!evals.length) {
+      host.appendChild(UI.emptyState('No comparable ideas',
+        'The engine found nothing viable for this goal on ' + symbol + '. Try another goal or stock.',
+        'Back to ideas', function () { App.navigate('#/trade/discover'); }));
+      return;
+    }
+    host.appendChild(decisionTop(evals[0], symbol, level));
+    if (evals.length > 1) {
+      host.appendChild(el('h2', { class: 'section-h' }, level === 'beginner' ? 'Other ways to play it' : 'The full field'));
+      host.appendChild(level === 'beginner' ? decisionAltList(evals.slice(1), symbol) : decisionTable(evals, symbol));
+    }
+  }
+
   window.Views = {
     home: home,
     research: research,
     trade: trade,
     portfolio: portfolio,
-    status: status
+    status: status,
+    decision: decision
   };
 })();
