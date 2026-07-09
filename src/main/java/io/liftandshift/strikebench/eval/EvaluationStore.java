@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.eval;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.util.Json;
 
+import java.sql.PreparedStatement;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,21 +15,23 @@ import java.util.Map;
  */
 public final class EvaluationStore {
 
+    private static final String INSERT_SQL = """
+            INSERT INTO strategy_evaluation
+              (id, user_id, symbol, strategy, objective, score, ev_cents, roc, ann_roc, pop,
+               assignment_prob, capital_incremental_cents, capital_economic_cents, max_loss_cents,
+               tail_loss_cents, evidence_level, spec_json, candidate_json, capital_json,
+               volatility_json, risk_json, management_json, score_json, evidence_json, explanation_json)
+            VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,
+                    ?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb)
+            """;
+
     private final Db db;
 
     public EvaluationStore(Db db) { this.db = db; }
 
-    /** Saves one evaluation for a user (userId may be null for the local/anonymous account). */
-    public void save(StrategyEvaluation e, String userId) {
-        db.exec("""
-                INSERT INTO strategy_evaluation
-                  (id, user_id, symbol, strategy, objective, score, ev_cents, roc, ann_roc, pop,
-                   assignment_prob, capital_incremental_cents, capital_economic_cents, max_loss_cents,
-                   tail_loss_cents, evidence_level, spec_json, candidate_json, capital_json,
-                   volatility_json, risk_json, management_json, score_json, evidence_json, explanation_json)
-                VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,
-                        ?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb)
-                """,
+    /** The bind values for one row, in INSERT_SQL column order. */
+    private static Object[] params(StrategyEvaluation e, String userId) {
+        return new Object[] {
                 e.id(), userId, e.symbol(), e.family(),
                 e.spec() == null ? null : e.spec().objective(),
                 e.rankScore(), e.evCents(), e.roc(), e.annRoc(), e.pop(),
@@ -36,12 +39,33 @@ public final class EvaluationStore {
                 e.tailLossCents(), e.evidenceLevel().name(),
                 Json.write(e.spec()), Json.write(e.candidate()), Json.write(e.capital()),
                 Json.write(e.volatility()), Json.write(e.risk()), Json.write(e.management()),
-                Json.write(e.score()), Json.write(e.evidence()), Json.write(e.explanation()));
+                Json.write(e.score()), Json.write(e.evidence()), Json.write(e.explanation()) };
     }
 
-    /** Saves a whole ranked competition in one call. */
+    /** Saves one evaluation for a user (userId may be null for the local/anonymous account). */
+    public void save(StrategyEvaluation e, String userId) {
+        db.exec(INSERT_SQL, params(e, userId));
+    }
+
+    /**
+     * Saves a whole ranked competition as one batched transaction — a single pooled connection,
+     * one round-trip via {@code executeBatch}, one commit — instead of N separate connection
+     * checkouts (the old per-row save() in a loop).
+     */
     public void saveAll(List<StrategyEvaluation> evals, String userId) {
-        for (StrategyEvaluation e : evals) save(e, userId);
+        if (evals == null || evals.isEmpty()) return;
+        if (evals.size() == 1) { save(evals.getFirst(), userId); return; }
+        db.tx(c -> {
+            try (PreparedStatement ps = c.prepareStatement(INSERT_SQL)) {
+                for (StrategyEvaluation e : evals) {
+                    Object[] p = params(e, userId);
+                    for (int i = 0; i < p.length; i++) ps.setObject(i + 1, p[i]);
+                    ps.addBatch();
+                }
+                ps.executeBatch();
+            }
+            return null;
+        });
     }
 
     /** Recent evaluations for a user (summary rows for a history list). Newest first. */

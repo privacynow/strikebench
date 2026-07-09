@@ -12,14 +12,23 @@ import io.liftandshift.strikebench.recommend.LegView;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.util.Money;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 
 /**
  * Turns a set of engine candidates into a ranked competition of {@link StrategyEvaluation}s by
@@ -36,6 +45,16 @@ public final class EvaluationService {
     private final StrategyEvaluator evaluator = new StrategyEvaluator();
     private final EvaluationStore store;
     private final CalibrationService calibration;
+
+    /** Concurrency cap for a universe scan — I/O-bound, so a small cap overlaps provider calls
+     *  without hammering them. */
+    private static final int SCAN_CONCURRENCY = 8;
+
+    /** Memoizes the one uncached read in {@link #buildContext}: the observed-IV-history DB
+     *  aggregation. Everything else it needs (quote, chain, candles) is already Caffeine-cached
+     *  inside {@link MarketDataService}. Date-stable, so a 60s TTL is safe; keyed by symbol. */
+    private final Cache<String, List<Double>> ivHistoryCache =
+            Caffeine.newBuilder().maximumSize(256).expireAfterWrite(Duration.ofSeconds(60)).build();
 
     public EvaluationService(MarketDataService market, RecommendationEngine engine, Db db, Clock clock) {
         this.market = market;
@@ -87,24 +106,53 @@ public final class EvaluationService {
      */
     public ScanResult scan(List<String> symbols, String intent, String thesis, String horizon, String riskMode,
                            long buyingPowerCents, String userId, int topN) {
+        List<String> syms = new ArrayList<>();
+        for (String raw : symbols == null ? List.<String>of() : symbols) {
+            String sym = raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
+            if (!sym.isEmpty()) syms.add(sym);
+        }
+        int scanned = syms.size();
+        if (syms.isEmpty()) return new ScanResult(List.of(), List.of(), 0);
+
+        // Per-symbol evaluation is independent and I/O-bound (provider calls). Run the symbols on
+        // virtual threads under a small concurrency cap so a universe scan overlaps instead of
+        // stacking into a serial waterfall; one symbol throwing only drops that symbol (isolation).
+        // Results are reassembled in INPUT ORDER, so the ranked outcome is deterministic regardless
+        // of which symbol happens to finish first.
+        record PerSym(StrategyEvaluation best, String note) {}
+        Semaphore gate = new Semaphore(Math.min(SCAN_CONCURRENCY, syms.size()));
+        List<PerSym> out = new ArrayList<>(Collections.nCopies(syms.size(), null));
+        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<PerSym>> futures = new ArrayList<>();
+            for (String sym : syms) {
+                futures.add(exec.submit(() -> {
+                    gate.acquire();
+                    try {
+                        var req = new RecommendationEngine.Request(sym, thesis, horizon, riskMode, null, null, null,
+                                null, false, false, intent, null, null);
+                        var result = engine.recommend(req, buyingPowerCents);
+                        if (result.candidates().isEmpty()) return new PerSym(null, sym + ": no candidates");
+                        StrategyEvaluation top = rank(sym, result.intent(), result.thesis(), result.horizon(),
+                                result.riskMode(), result.candidates(), buyingPowerCents).stream()
+                                .filter(StrategyEvaluation::viable).findFirst().orElse(null);
+                        return new PerSym(top, null); // no-viable is silently dropped, as before
+                    } catch (RuntimeException e) {
+                        return new PerSym(null, sym + ": " + e.getClass().getSimpleName());
+                    } finally { gate.release(); }
+                }));
+            }
+            for (int i = 0; i < futures.size(); i++) {
+                try { out.set(i, futures.get(i).get()); }
+                catch (Exception e) { out.set(i, new PerSym(null, syms.get(i) + ": " + e.getClass().getSimpleName())); }
+            }
+        }
+
         List<StrategyEvaluation> best = new ArrayList<>();
         List<String> notes = new ArrayList<>();
-        int scanned = 0;
-        for (String raw : symbols == null ? List.<String>of() : symbols) {
-            String sym = raw == null ? "" : raw.trim().toUpperCase(java.util.Locale.ROOT);
-            if (sym.isEmpty()) continue;
-            scanned++;
-            try {
-                var req = new RecommendationEngine.Request(sym, thesis, horizon, riskMode, null, null, null,
-                        null, false, false, intent, null, null);
-                var result = engine.recommend(req, buyingPowerCents);
-                if (result.candidates().isEmpty()) { notes.add(sym + ": no candidates"); continue; }
-                rank(sym, result.intent(), result.thesis(), result.horizon(), result.riskMode(),
-                        result.candidates(), buyingPowerCents).stream()
-                        .filter(StrategyEvaluation::viable).findFirst().ifPresent(best::add);
-            } catch (RuntimeException e) {
-                notes.add(sym + ": " + e.getClass().getSimpleName());
-            }
+        for (PerSym p : out) {
+            if (p == null) continue;
+            if (p.best() != null) best.add(p.best());
+            if (p.note() != null) notes.add(p.note());
         }
         best.sort(Comparator.comparingDouble(StrategyEvaluation::rankScore).reversed());
         List<StrategyEvaluation> top = best.stream().limit(Math.max(1, topN)).toList();
@@ -184,6 +232,10 @@ public final class EvaluationService {
      * IV rank/percentile stay null rather than fabricated).
      */
     private List<Double> ivHistory(String symbol) {
+        return ivHistoryCache.get(symbol, this::queryIvHistory);
+    }
+
+    private List<Double> queryIvHistory(String symbol) {
         return db.query("""
                 SELECT avg(iv) AS iv FROM option_bar
                 WHERE symbol = ? AND iv IS NOT NULL AND iv_source = 'vendor'

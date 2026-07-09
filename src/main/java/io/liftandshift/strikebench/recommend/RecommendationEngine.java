@@ -156,13 +156,13 @@ public final class RecommendationEngine {
             notes.add("No market data available for " + symbol);
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
         }
-        if (!quote.optionable() || market.expirations(symbol).isEmpty()) {
+        List<LocalDate> expirations = market.expirations(symbol);
+        if (!quote.optionable() || expirations.isEmpty()) {
             notes.add(symbol + " has no listed options (mutual funds and some securities cannot be traded with options)");
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
         }
 
         LocalDate today = LocalDate.now(clock);
-        List<LocalDate> expirations = market.expirations(symbol);
         LocalDate near = pickExpiration(expirations, req.horizon(), today, allow0dte, notes);
         if (near == null) {
             notes.add("No expiration matches the requested horizon");
@@ -308,13 +308,14 @@ public final class RecommendationEngine {
         boolean sharesHeld = freeShares >= 100 && intent != StrategyIntent.ACQUIRE;
 
         Quote quote = market.quote(symbol).orElse(null);
-        if (quote == null || !quote.optionable() || market.expirations(symbol).isEmpty()) {
+        List<LocalDate> expirations = quote == null ? List.of() : market.expirations(symbol);
+        if (quote == null || !quote.optionable() || expirations.isEmpty()) {
             notes.add(quote == null ? "No market data available for " + symbol
                     : symbol + " has no listed options");
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
         LocalDate today = LocalDate.now(clock);
-        LocalDate near = pickExpiration(market.expirations(symbol), req.horizon(), today, false, notes);
+        LocalDate near = pickExpiration(expirations, req.horizon(), today, false, notes);
         OptionChain chain = near == null ? null : market.chain(symbol, near).orElse(null);
         if (chain == null || chain.isEmpty()) {
             notes.add("Option chain unavailable for " + symbol);
