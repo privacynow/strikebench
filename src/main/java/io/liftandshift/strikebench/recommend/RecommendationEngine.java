@@ -168,7 +168,7 @@ public final class RecommendationEngine {
         }
 
         LocalDate today = LocalDate.now(clock);
-        LocalDate near = pickExpiration(expirations, req.horizon(), today, allow0dte, notes);
+        LocalDate near = pickExpiration(expirations, req.horizon(), today, allow0dte, clock.instant(), notes);
         if (near == null) {
             notes.add("No expiration matches the requested horizon");
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
@@ -323,7 +323,7 @@ public final class RecommendationEngine {
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
         LocalDate today = LocalDate.now(clock);
-        LocalDate near = pickExpiration(expirations, req.horizon(), today, false, notes);
+        LocalDate near = pickExpiration(expirations, req.horizon(), today, false, clock.instant(), notes);
         OptionChain chain = near == null ? null : market.chain(symbol, near).orElse(null);
         if (chain == null || chain.isEmpty()) {
             notes.add("Option chain unavailable for " + symbol);
@@ -527,9 +527,14 @@ public final class RecommendationEngine {
         }
 
         double freshScore = switch (freshness) {
-            case REALTIME, FIXTURE -> 1.0;
+            case REALTIME -> 1.0;
             case DELAYED -> 0.85;
             case EOD -> 0.70;
+            // FIXTURE is simulated data — NOT real-time. Scoring it 1.0 inflated the composite score
+            // and confidence % on any live-mode demo-fallback candidate. In whole-app demo mode every
+            // candidate is FIXTURE so relative ranking is unchanged; in live mode a fixture fallback is
+            // now correctly penalized below real DELAYED data.
+            case FIXTURE -> 0.45;
             default -> 0.40;
         };
         double rr = maxProfit == null ? 0.6 : Math.min(3.0, maxProfit / (double) Math.max(1, maxLoss)) / 3.0;
@@ -787,7 +792,7 @@ public final class RecommendationEngine {
     }
 
     private static LocalDate pickExpiration(List<LocalDate> expirations, String horizon, LocalDate today,
-                                            boolean allow0dte, List<String> notes) {
+                                            boolean allow0dte, java.time.Instant now, List<String> notes) {
         int targetDays = switch (horizon == null ? "month" : horizon.trim().toLowerCase(Locale.ROOT)) {
             case "0dte" -> 0;
             case "week" -> 7;
@@ -796,6 +801,9 @@ public final class RecommendationEngine {
         };
         List<LocalDate> usable = expirations.stream()
                 .filter(d -> !d.isBefore(today))
+                // A contract whose final bell (4pm ET on expiration day) has passed is DEAD — never
+                // recommend it, matching the placement-time guard in TradeService.
+                .filter(d -> !MarketHours.contractDead(d, now))
                 .filter(d -> allow0dte || !d.equals(today))
                 .toList();
         if (usable.isEmpty()) return null;

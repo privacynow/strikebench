@@ -449,13 +449,16 @@
           el('span', { class: 'chip-label' }, label), el('b', {}, actual)));
       }
       var v = st.limits;
+      // Profit-target and assignment limits are Expert-only controls — a persisted Expert value must
+      // not judge (or later constrain) a Beginner who can't see or clear them.
+      var expertLimits = Learn.currentLevel() !== 'beginner';
       if (v.maxLoss) {
         var cap = Math.round(parseFloat(v.maxLoss) * 100);
         var unbounded = !p.ok && (p.blockReasons || []).some(function (r) { return /undefined|unlimited/i.test(r); });
         judge('Max loss ≤ ' + fmtMoney(cap), !unbounded && p.maxLossCents > 0 && p.maxLossCents <= cap,
           unbounded ? 'UNLIMITED' : fmtMoney(p.maxLossCents));
       }
-      if (v.target) {
+      if (expertLimits && v.target) {
         var tgt = Math.round(parseFloat(v.target) * 100);
         var uncapped = p.maxProfitCents === null || p.maxProfitCents === undefined;
         judge('Profit target ≥ ' + fmtMoney(tgt), uncapped || p.maxProfitCents >= tgt,
@@ -466,7 +469,7 @@
         judge('POP ≥ ' + v.minPop + '%', pop !== null && pop !== undefined && pop * 100 >= parseFloat(v.minPop),
           pop === null || pop === undefined ? '—' : fmtPct(pop));
       }
-      if (v.maxAssign) {
+      if (expertLimits && v.maxAssign) {
         var ap = p.assignmentProb;
         judge('Assign ≤ ' + v.maxAssign + '%', ap === null || ap === undefined || ap * 100 <= parseFloat(v.maxAssign),
           ap === null || ap === undefined ? 'n/a' : fmtPct(ap));
@@ -495,7 +498,8 @@
         if (st.limits.maxLoss) body.maxLossCents = Math.round(parseFloat(st.limits.maxLoss) * 100);
         var f = {};
         if (st.limits.minPop) f.minPop = parseFloat(st.limits.minPop) / 100;
-        if (st.limits.maxAssign) f.maxAssignmentProb = parseFloat(st.limits.maxAssign) / 100;
+        // Assignment limit is Expert-only — don't send a persisted value on a Beginner fit.
+        if (Learn.currentLevel() !== 'beginner' && st.limits.maxAssign) f.maxAssignmentProb = parseFloat(st.limits.maxAssign) / 100;
         if (Object.keys(f).length) body.filters = f;
         var fitSeq = ++buildSeq;                 // the fitted legs replace the structure — same supersede rule
         var r = await API.post('/api/recommend', body);
