@@ -167,6 +167,22 @@ test('navigation is NEVER trapped behind a slow route (Research does not block m
   }
 });
 
+test('market stream (SSE): the browser receives live quote frames from the engine', async () => {
+  await go('#/home');
+  const symbols = await page.evaluate(() => new Promise((resolve) => {
+    const es = new EventSource('/api/market/stream?symbols=AAPL,SPY');
+    const timer = setTimeout(() => { es.close(); resolve(null); }, 9000);
+    es.addEventListener('quotes', (ev) => {
+      try {
+        const d = JSON.parse(ev.data);
+        if (d && d.quotes && d.quotes.length) { clearTimeout(timer); es.close(); resolve(d.quotes.map(q => q.symbol)); }
+      } catch (e) { /* ignore */ }
+    });
+    es.onerror = () => { /* keep waiting until timeout */ };
+  }));
+  assert.ok(symbols && symbols.includes('AAPL'), 'SSE delivered a quote frame incl. AAPL, got ' + JSON.stringify(symbols));
+});
+
 test('discover scan: a blank symbol box auto-recommends with evidence and targets', async () => {
   await go('#/recommend/scout'); // legacy alias — forces scan mode
   await page.waitForSelector('#auto-target'); // scan-scope fields visible in scan mode

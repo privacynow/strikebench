@@ -90,6 +90,7 @@ public final class ApiServer {
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
+    private java.util.concurrent.ScheduledExecutorService streamScheduler;     // pushes SSE market frames
     private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
     private final String startedAt = java.time.Instant.now().toString();
 
@@ -253,6 +254,7 @@ public final class ApiServer {
             c.routes.put("/api/universe", this::universeSelect);
             c.routes.get("/api/quotes", this::quotesBatch);
             c.routes.get("/api/market/engine", ctx -> ctx.json(marketEngine.status())); // Data Center: engine health
+            c.routes.sse("/api/market/stream", this::marketStream);                     // live-ish quote deltas from memory
 
             c.routes.get("/api/account", this::account);
             c.routes.post("/api/account/reset", this::accountReset);
@@ -361,6 +363,9 @@ public final class ApiServer {
         }).start();
         warmUpErrorPipeline(app.port());
         startSnapshotScheduler();
+        streamScheduler = java.util.concurrent.Executors.newScheduledThreadPool(2, r -> {
+            Thread t = new Thread(r, "market-stream"); t.setDaemon(true); return t;
+        });
         if (marketEngine != null) marketEngine.start(); // warm the universe + background refresh
         log.info("StrikeBench listening on http://localhost:{} (fixturesOnly={})", app.port(), cfg.fixturesOnly());
         return app;
@@ -438,6 +443,7 @@ public final class ApiServer {
 
     public void stop() {
         if (marketEngine != null) marketEngine.stop();
+        if (streamScheduler != null) streamScheduler.shutdownNow();
         if (snapshotScheduler != null) snapshotScheduler.shutdownNow();
         if (app != null) app.stop();
         if (db != null) db.close();
@@ -582,6 +588,34 @@ public final class ApiServer {
             out.add(io.liftandshift.strikebench.market.MarketDataEngine.toRow(snap));
         }
         ctx.json(Map.of("quotes", out, "requested", symbols.size()));
+    }
+
+    /**
+     * Server-Sent Events stream of live-ish quote/freshness frames straight from engine memory —
+     * the tape and market-facing screens subscribe instead of polling. Each frame is the current
+     * snapshot of the requested symbols (default: active universe); the browser falls back to
+     * /api/quotes polling if EventSource fails. Cheap: reads warm memory, never a per-tick download.
+     */
+    private void marketStream(io.javalin.http.sse.SseClient client) {
+        String raw = client.ctx().queryParam("symbols");
+        final List<String> symbols = raw == null || raw.isBlank()
+                ? universe.active().symbols()
+                : java.util.Arrays.stream(raw.split(",")).map(s -> s.trim().toUpperCase(Locale.ROOT))
+                    .filter(s -> !s.isBlank()).distinct().limit(60).toList();
+        client.keepAlive();
+        Runnable push = () -> {
+            try {
+                List<Map<String, Object>> rows = new ArrayList<>();
+                for (var snap : marketEngine.quotes(symbols)) {
+                    rows.add(io.liftandshift.strikebench.market.MarketDataEngine.toRow(snap));
+                }
+                client.sendEvent("quotes", Map.of("quotes", rows, "asOf", clock.millis()));
+            } catch (Exception e) { /* client gone or engine hiccup — the scheduled task keeps trying */ }
+        };
+        push.run(); // immediate first frame so the UI paints without waiting a full interval
+        int interval = Math.max(1, cfg.engineStreamIntervalSeconds());
+        var task = streamScheduler.scheduleWithFixedDelay(push, interval, interval, java.util.concurrent.TimeUnit.SECONDS);
+        client.onClose(() -> task.cancel(true));
     }
 
     // ---- Account ----

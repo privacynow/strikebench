@@ -262,6 +262,7 @@
     checkServerHealth();
     setInterval(checkServerHealth, 5 * 60 * 1000);
     refreshUniverse();
+    subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
     setInterval(refreshTape, 45 * 1000);
     window.addEventListener('hashchange', App.render);
     App.render();
@@ -283,6 +284,7 @@
         });
       }
       await refreshTape();
+      subscribeMarketStream(); // re-subscribe: the stream's default symbol set follows the new universe
     } catch (e) { /* the tape is decorative; screens still work */ }
   }
 
@@ -314,16 +316,7 @@
       // whole ticker jumping every refresh. Rebuild only when the symbol set changes.
       var symbolsKey = quotes.map(function (q) { return q.symbol; }).join(',');
       if (strip.getAttribute('data-symbols') === symbolsKey && strip.children.length) {
-        quotes.forEach(function (q) {
-          var last = parseFloat(q.last), prev = parseFloat(q.prevClose);
-          var pct = prev ? (last - prev) / prev * 100 : 0;
-          strip.querySelectorAll('.tape-item[data-sym="' + q.symbol + '"]').forEach(function (item) {
-            item.children[1].textContent = last.toFixed(2);
-            var d = item.children[2];
-            d.className = pct >= 0 ? 'gain' : 'loss';
-            d.textContent = (pct >= 0 ? '\u25B2' : '\u25BC') + Math.abs(pct).toFixed(2) + '%';
-          });
-        });
+        updateTapePrices(quotes);
         tape.hidden = false;
         return;
       }
@@ -362,6 +355,55 @@
       wireTapeResize();
     } catch (e) { tape.hidden = true; }
   }
+
+  /**
+   * In-place price/delta update for the tape strip — used by both the /api/quotes poll and the
+   * SSE market stream. Only touches symbols already on the strip (no marquee restart). Returns
+   * true if the incoming set matches the strip (so the SSE path knows whether it applied).
+   */
+  function updateTapePrices(quotes) {
+    var strip = document.getElementById('tape-strip');
+    if (!strip || !strip.children.length) return false;
+    var symbolsKey = quotes.map(function (q) { return q.symbol; }).join(',');
+    if (strip.getAttribute('data-symbols') !== symbolsKey) return false;
+    quotes.forEach(function (q) {
+      var last = parseFloat(q.last), prev = parseFloat(q.prevClose);
+      if (!isFinite(last)) return;
+      var pct = prev ? (last - prev) / prev * 100 : 0;
+      strip.querySelectorAll('.tape-item[data-sym="' + q.symbol + '"]').forEach(function (item) {
+        item.children[1].textContent = last.toFixed(2);
+        var d = item.children[2];
+        d.className = pct >= 0 ? 'gain' : 'loss';
+        d.textContent = (pct >= 0 ? '▲' : '▼') + Math.abs(pct).toFixed(2) + '%';
+      });
+    });
+    return true;
+  }
+
+  /**
+   * Subscribe to the backend market engine's SSE stream so the tape is live-ish (a few seconds)
+   * from server memory instead of a 45s poll. Pure enhancement: if EventSource is unavailable or
+   * the stream errors, the poll (below) keeps the tape fresh. Reconnects on universe change.
+   */
+  function subscribeMarketStream() {
+    if (!window.EventSource) return; // older engines fall back to polling
+    try { if (App._marketES) { App._marketES.close(); App._marketES = null; } } catch (e) { /* ignore */ }
+    var es;
+    try { es = new EventSource('/api/market/stream'); } catch (e) { return; }
+    App._marketES = es;
+    es.addEventListener('quotes', function (ev) {
+      try {
+        var data = JSON.parse(ev.data);
+        if (data && data.quotes) updateTapePrices(data.quotes);
+      } catch (e) { /* ignore a malformed frame */ }
+    });
+    es.onerror = function () {
+      // Let it retry a couple of times; if it keeps failing, drop to polling only.
+      App._marketESerrors = (App._marketESerrors || 0) + 1;
+      if (App._marketESerrors > 3) { try { es.close(); } catch (e) {} App._marketES = null; }
+    };
+  }
+  App.subscribeMarketStream = subscribeMarketStream;
 
   // A tape built at one width leaves a BLANK region each cycle if the window later grows
   // past its half-length (nothing re-measured it — that read as "the ticker ends in a gap,

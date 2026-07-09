@@ -174,6 +174,8 @@ public final class AppConfig {
     public int engineQuoteRefreshClosedSeconds() { return getInt("ENGINE_QUOTE_REFRESH_CLOSED_SECONDS", 300); }
     /** Max symbols the engine keeps warm at once (active universe + recently-viewed, LRU-evicted). */
     public int engineMaxTracked() { return getInt("ENGINE_MAX_TRACKED", 160); }
+    /** Seconds between SSE pushes on /api/market/stream (live-ish tape from engine memory). */
+    public int engineStreamIntervalSeconds() { return getInt("ENGINE_STREAM_INTERVAL_SECONDS", 3); }
 
     /** Symbols the auto-scout scans when the caller does not supply a universe. */
     public java.util.List<String> autoUniverse() {
