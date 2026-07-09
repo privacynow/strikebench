@@ -14,6 +14,7 @@ public final class Main {
 
     public static void main(String[] args) {
         if (args.length > 0 && "etl".equals(args[0])) { runEtl(args); return; }
+        if (args.length > 0 && "ingest-options".equals(args[0])) { runIngestOptions(args); return; }
         preloadAllClasses();
         AppConfig cfg = new AppConfig();
         ApiServer server = ApiServer.create(cfg, Clock.systemDefaultZone());
@@ -79,6 +80,31 @@ public final class Main {
             // Never brick the boot over a rename: fall back to the legacy file untouched.
             log.warn("Could not migrate legacy database {} -> {}: {} — continuing without the move",
                     legacy, target, e.toString());
+        }
+    }
+
+    /**
+     * Bulk-ingests a LICENSED historical-options CSV into option_bar (the "own the past" moat):
+     * {@code java -jar strikebench.jar ingest-options <csv> [source]} (source defaults to "vendor").
+     * Only derived rows are stored; never redistribute the vendor file.
+     */
+    static void runIngestOptions(String[] args) {
+        if (args.length < 2) {
+            System.err.println("usage: java -jar strikebench.jar ingest-options <csv> [source]");
+            System.exit(2);
+            return;
+        }
+        String source = args.length >= 3 ? args[2] : "vendor";
+        AppConfig cfg = new AppConfig();
+        try (io.liftandshift.strikebench.db.Db db = io.liftandshift.strikebench.db.Db.forConfig(cfg)) {
+            io.liftandshift.strikebench.db.Migrations.run(db);
+            var result = io.liftandshift.strikebench.db.HistoricalOptionsIngest.runFromFile(args[1], source, db);
+            result.problems().forEach(p -> log.warn("  {}", p));
+            log.info("ingested {} option bars + {} underlying bars ({} skipped) from {} as source '{}'",
+                    result.optionRows(), result.underlyingRows(), result.skipped(), args[1], source);
+        } catch (Exception e) {
+            log.error("ingest failed: {}", e.toString());
+            System.exit(1);
         }
     }
 
