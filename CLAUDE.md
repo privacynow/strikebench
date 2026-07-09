@@ -1151,12 +1151,18 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     total P/L. /api/evaluate records the pick; GET /api/calibration; POST /api/calibration/resolve.
     outcome_asof bound as OffsetDateTime (TIMESTAMPTZ). +3 JUnit. (Auto-resolution from paper-trade
     closes needs a trade<->recommendation link — the manual/API resolve is the seam; follow-up.)
-  - (b) REMAINING — Backtester rewrite: portfolio-level (concurrent positions), mechanical rolls +
-    exits (matching the ManagementPlan), delta-based strike selection, driven off the owned
-    option_bar history when present. The existing Backtester (daily loop, no-look-ahead, tiered
-    pricing, coverage) stays until the rewrite lands.
-  - Suite at this point: 254 JUnit + 27 fixture + 3 audit + 4 seeded + 8 live DOM.
-  - Then P5 research lab (portfolio optimizer, hypothesis tester, notebook, ETF replication).
+  - (b) DONE — PortfolioBacktester (additive; the single-position Backtester stays): CONCURRENT
+    positions (capacity + capital gated), DELTA-based strike selection (short put ~0.30d / long call
+    ~0.50d), mechanical management mirroring the ManagementPlan (profit-target / stop as a fraction of
+    max loss / time-roll), intrinsic settle at expiry, no look-ahead (each day uses only candles <=
+    that day). Portfolio equity = starting + realized + open unrealized; report has concurrentPeak,
+    per-trade exit reasons, win rate, avg RoR, max drawdown, coverage, modeled confidence.
+    CREDIT_PUT_SPREAD + DEBIT_CALL_SPREAD. POST /api/backtest/portfolio. +4 JUnit. Observed
+    option_bar pricing per-day is the documented next step (needs a loaded dataset).
+  - PHASE 4 COMPLETE. Suite: 258 JUnit + 27 fixture + 3 audit + 4 seeded + 8 live DOM.
+  - NEXT: Phase 5 research lab — portfolio optimizer (allocate capital across the competition's
+    winners under constraints), hypothesis tester (backtest a rule + significance), notebook (saved
+    analyses), ETF replication (options structure for a target exposure).
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
