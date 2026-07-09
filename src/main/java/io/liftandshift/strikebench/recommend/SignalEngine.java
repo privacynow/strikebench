@@ -156,10 +156,13 @@ public final class SignalEngine {
             rationale.add("No clearly positive or negative headlines — sentiment neutral");
         }
         if (ivHv != null) {
-            rationale.add(String.format("IV %.0f%% vs realized %.0f%% — options look %s%s",
+            // The realized-vol side comes from the candle history — if that's demo, say so (the IV
+            // side is live from the chain, but the comparison is only as real as the weaker input).
+            rationale.add(String.format("IV %.0f%% vs realized %.0f%% — options look %s%s%s",
                     ivAtm * 100, hv30 * 100, volSignal.toLowerCase(Locale.ROOT),
                     "RICH".equals(volSignal) ? " (favors collecting premium)"
-                            : "CHEAP".equals(volSignal) ? " (favors buying premium)" : ""));
+                            : "CHEAP".equals(volSignal) ? " (favors buying premium)" : "",
+                    demoHistory ? " — realized vol is from DEMO price history" : ""));
         }
         if (eventRisk) rationale.add("Event risk: an earnings/guidance-type headline is in the news window");
 

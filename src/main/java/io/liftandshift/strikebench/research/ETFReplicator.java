@@ -53,6 +53,10 @@ public final class ETFReplicator {
 
         notes.add("Delta-1 replication only — it tracks price moves, not dividends or exact ETF composition.");
         notes.add("The short leg carries assignment risk; margin is an estimate, not a broker quote.");
+        if (!bullish) {
+            notes.add("UNDEFINED RISK: the synthetic short's sold call is UNCOVERED — losses grow without limit "
+                    + "if the stock rallies. This is not a defined-risk position and is blocked from placement here.");
+        }
         return new ReplicationResult(symbol, target, underlyingCents, contracts, structure,
                 deltaExposure, shareCost, estMargin, notes);
     }
