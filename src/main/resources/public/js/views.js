@@ -3473,7 +3473,8 @@
     card.appendChild(labHeader('magnifier', 'Test an idea'));
     card.appendChild(explain('Does a signal actually predict what it claims, or is it just chance? We replay it over history and give an honest verdict.'));
 
-    var symbol = el('input', { type: 'text', id: 'lab-hyp-sym', value: f.symbol || (ctx && ctx.symbol) || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
+    // The shared context is the owner — it wins over a stale per-tool run symbol on re-render.
+    var symbol = el('input', { type: 'text', id: 'lab-hyp-sym', value: (ctx && ctx.symbol) || f.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
     var fields = [labField('Stock', symbol)];
     var lookback = null, threshold = null, forward = null;
     if (level === 'expert') {
@@ -3534,7 +3535,7 @@
     card.appendChild(labHeader('coins', 'Replicate an exposure'));
     card.appendChild(explain('Get the price exposure of owning shares — for far less capital — with a synthetic options position.'));
 
-    var symbol = el('input', { type: 'text', id: 'lab-rep-sym', value: f.symbol || (ctx && ctx.symbol) || 'SPY', list: 'universe-symbols' });
+    var symbol = el('input', { type: 'text', id: 'lab-rep-sym', value: (ctx && ctx.symbol) || f.symbol || 'SPY', list: 'universe-symbols' });
     var target = el('input', { type: 'number', id: 'lab-rep-tgt', value: f.target || 50000, min: '0', step: '1000' });
     var dir = el('select', { id: 'lab-rep-dir' }, el('option', { value: 'long' }, 'Bullish (long)'), el('option', { value: 'short' }, 'Bearish (short)'));
     dir.value = f.dir || 'long';
