@@ -3229,6 +3229,12 @@
       host.appendChild(el('h2', { class: 'section-h' }, level === 'beginner' ? 'Other ways to play it' : 'The full field'));
       host.appendChild(level === 'beginner' ? decisionAltList(evals.slice(1), symbol) : decisionTable(evals, symbol));
     }
+    // D2: the portfolio optimizer — "size the strongest ideas across a budget" — lives with the
+    // competition it operates on (construction belongs in the Trade family, not a separate Lab).
+    App.state.labForm = App.state.labForm || {};
+    var octx = App.state.labForm.ctx = App.state.labForm.ctx || {};
+    host.appendChild(el('h2', { class: 'section-h' }, 'Size the strongest ideas across a budget'));
+    host.appendChild(optimizerCard(level, octx));
   }
 
   // ---- Research lab (Phase 5): optimizer, hypothesis tester, ETF replicator, notebook ----
