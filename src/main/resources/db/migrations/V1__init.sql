@@ -158,7 +158,7 @@ CREATE TABLE underlying_bar (
   close       NUMERIC(19,4) NOT NULL,
   volume      BIGINT,
   source      TEXT NOT NULL,               -- provider name, e.g. 'polygon', 'stooq', 'fixture', 'snapshot'
-  observed    BOOLEAN NOT NULL DEFAULT TRUE, -- FALSE for modeled/demo
+  observed    INTEGER NOT NULL DEFAULT 1,  -- 0 for modeled/demo (booleans are 0/1 per the Db helper convention)
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (symbol, d, source)
 );
@@ -183,8 +183,8 @@ CREATE TABLE option_bar (
   volume        BIGINT,
   underlying    NUMERIC(19,4),
   source        TEXT NOT NULL,             -- 'snapshot' (ours) | vendor name | 'model'
-  -- per-dimension evidence (rolls up to a worst-of badge in the app)
-  bid_ask_observed BOOLEAN NOT NULL DEFAULT FALSE,
+  -- per-dimension evidence (rolls up to a worst-of badge in the app); 0/1 per the Db helper convention
+  bid_ask_observed INTEGER NOT NULL DEFAULT 0,
   iv_source     TEXT,                      -- 'vendor' | 'model' | null
   greeks_source TEXT,                      -- 'vendor' | 'model' | null
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),

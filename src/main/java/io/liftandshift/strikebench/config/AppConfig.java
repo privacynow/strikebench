@@ -132,6 +132,14 @@ public final class AppConfig {
     public String polygonBaseUrl() { return get("POLYGON_BASE_URL", "https://api.polygon.io"); }
     public String alphaVantageBaseUrl() { return get("ALPHAVANTAGE_BASE_URL", "https://www.alphavantage.co"); }
 
+    // ---- Forward chain snapshots (the historical-evidence moat) ----
+    /** When true, a background job records a daily EOD snapshot of the active universe's chains. */
+    public boolean snapshotEnabled() { return getBool("SNAPSHOT_ENABLED", false); }
+    /** Hours between scheduled snapshots (default daily). */
+    public int snapshotIntervalHours() { return getInt("SNAPSHOT_INTERVAL_HOURS", 24); }
+    /** Delay before the first scheduled snapshot after boot, seconds (lets providers warm). */
+    public int snapshotInitialDelaySeconds() { return getInt("SNAPSHOT_INITIAL_DELAY_SECONDS", 60); }
+
     /** Symbols the auto-scout scans when the caller does not supply a universe. */
     public java.util.List<String> autoUniverse() {
         String raw = fixturesOnly()

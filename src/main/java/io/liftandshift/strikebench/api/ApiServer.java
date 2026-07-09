@@ -13,6 +13,7 @@ import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.db.Migrations;
 import io.liftandshift.strikebench.market.MarketDataMarks;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.SnapshotService;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
@@ -82,16 +83,20 @@ public final class ApiServer {
     private final Backtester backtester;
     private final PositionsService positions;
     private final io.liftandshift.strikebench.market.UniverseService universe;
+    private final io.liftandshift.strikebench.market.SnapshotService snapshots;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
+    private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
     private final String startedAt = java.time.Instant.now().toString();
 
     public ApiServer(AppConfig cfg, Clock clock, MarketDataService market, AuditLog audit,
                      AccountService accounts, TradeService trades, RecommendationEngine engine,
                      AutoRecommender auto, BrokerService broker, Backtester backtester,
-                     PositionsService positions, io.liftandshift.strikebench.market.UniverseService universe) {
+                     PositionsService positions, io.liftandshift.strikebench.market.UniverseService universe,
+                     io.liftandshift.strikebench.market.SnapshotService snapshots) {
         this.positions = positions;
         this.universe = universe;
+        this.snapshots = snapshots;
         this.cfg = cfg;
         this.clock = clock;
         this.market = market;
@@ -150,7 +155,8 @@ public final class ApiServer {
         }
         Backtester backtester = new Backtester(market, historical, cfg, db, clock);
         io.liftandshift.strikebench.market.UniverseService universe = new io.liftandshift.strikebench.market.UniverseService(db, cfg, clock);
-        ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe);
+        io.liftandshift.strikebench.market.SnapshotService snapshots = new io.liftandshift.strikebench.market.SnapshotService(market, universe, db, clock);
+        ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots);
         server.db = db;
         return server;
     }
@@ -209,6 +215,8 @@ public final class ApiServer {
             c.routes.post("/api/trades/{id}/settle", this::tradeSettle);
             c.routes.delete("/api/trades/{id}", this::tradeDelete);
 
+            c.routes.post("/api/admin/snapshot", this::adminSnapshot);
+
             c.routes.get("/api/audit", this::auditPage);
             c.routes.get("/api/positions", this::positionsList);
             c.routes.post("/api/positions/buy", this::positionsBuy);
@@ -260,8 +268,30 @@ public final class ApiServer {
             });
         }).start();
         warmUpErrorPipeline(app.port());
+        startSnapshotScheduler();
         log.info("StrikeBench listening on http://localhost:{} (fixturesOnly={})", app.port(), cfg.fixturesOnly());
         return app;
+    }
+
+    /**
+     * Starts the daily forward-snapshot job when SNAPSHOT_ENABLED is set. Off by default so
+     * tests and the keyless demo never hammer live providers; production turns it on to build
+     * the historical-evidence moat. A failing run is logged and the schedule continues.
+     */
+    private void startSnapshotScheduler() {
+        if (!cfg.snapshotEnabled()) return;
+        snapshotScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "snapshot-scheduler");
+            t.setDaemon(true);
+            return t;
+        });
+        long initial = Math.max(0, cfg.snapshotInitialDelaySeconds());
+        long periodSec = Math.max(1, (long) cfg.snapshotIntervalHours()) * 3600L;
+        snapshotScheduler.scheduleWithFixedDelay(() -> {
+            try { snapshots.snapshotActiveUniverse(); }
+            catch (RuntimeException e) { log.warn("scheduled snapshot failed: {}", e.toString()); }
+        }, initial, periodSec, java.util.concurrent.TimeUnit.SECONDS);
+        log.info("snapshot scheduler on — first run in {}s, then every {}h", initial, cfg.snapshotIntervalHours());
     }
 
     /**
@@ -314,8 +344,21 @@ public final class ApiServer {
     }
 
     public void stop() {
+        if (snapshotScheduler != null) snapshotScheduler.shutdownNow();
         if (app != null) app.stop();
         if (db != null) db.close();
+    }
+
+    /** Manually records a forward snapshot of the active universe. Returns per-run counts. */
+    private void adminSnapshot(Context ctx) {
+        SnapshotService.SnapshotResult r = snapshots.snapshotActiveUniverse();
+        ctx.json(Map.of(
+                "asof", r.asof().toString(),
+                "symbols", r.symbols(),
+                "underlyingRows", r.underlyingRows(),
+                "optionRows", r.optionRows(),
+                "errors", r.errors(),
+                "elapsedMs", r.elapsedMs()));
     }
 
     // ---- Status / config ----
