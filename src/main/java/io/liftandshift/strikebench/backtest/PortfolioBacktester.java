@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.backtest;
 
 import io.liftandshift.strikebench.config.AppConfig;
+import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Candle;
@@ -40,11 +41,21 @@ public final class PortfolioBacktester {
     private final MarketDataService market;
     private final AppConfig cfg;
     private final Clock clock;
+    private final Db db;                 // optional: enables OBSERVED pricing from option_bar
+
+    // Per-run state (a fresh instance per request, single-threaded per run).
+    private String runSymbol;
+    private boolean usedObserved;
 
     public PortfolioBacktester(MarketDataService market, AppConfig cfg, Clock clock) {
+        this(market, cfg, clock, null);
+    }
+
+    public PortfolioBacktester(MarketDataService market, AppConfig cfg, Clock clock, Db db) {
         this.market = market;
         this.cfg = cfg;
         this.clock = clock;
+        this.db = db;
     }
 
     public record PortfolioRequest(
@@ -79,6 +90,8 @@ public final class PortfolioBacktester {
     public PortfolioReport run(PortfolioRequest req) {
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
+        this.runSymbol = symbol;
+        this.usedObserved = false;
         Family family = Family.parse(req.strategy());
         LocalDate from = LocalDate.parse(req.from());
         LocalDate to = LocalDate.parse(req.to());
@@ -137,7 +150,7 @@ public final class PortfolioBacktester {
                     openPositions.remove(p);
                     continue;
                 }
-                long markValue = modelValueCents(p, spot, iv, tte);
+                long markValue = valueCents(p, spot, iv, tte, date);
                 long unrealized = markValue - p.entryValueCents;
                 String exit = null;
                 if (p.maxProfitCents > 0 && unrealized >= profitTarget * p.maxProfitCents) exit = "PROFIT_TARGET";
@@ -163,7 +176,7 @@ public final class PortfolioBacktester {
             long openUnreal = 0;
             for (Position p : openPositions) {
                 double tte = Math.max(0, ChronoUnit.DAYS.between(date, p.expiration)) / 365.0;
-                openUnreal += modelValueCents(p, spot, iv, tte) - p.entryValueCents;
+                openUnreal += valueCents(p, spot, iv, tte, date) - p.entryValueCents;
             }
             long eq = startingCash + realized + openUnreal;
             equity.add(Map.of("date", date.toString(), "equityCents", eq));
@@ -177,8 +190,8 @@ public final class PortfolioBacktester {
         Candle last = window.getLast();
         for (Position p : new ArrayList<>(openPositions)) {
             double tte = Math.max(0, ChronoUnit.DAYS.between(last.date(), p.expiration)) / 365.0;
-            long unreal = modelValueCents(p, last.close().doubleValue(),
-                    Math.max(DEFAULT_IV, hvOn(all, last.date())), tte) - p.entryValueCents;
+            long unreal = valueCents(p, last.close().doubleValue(),
+                    Math.max(DEFAULT_IV, hvOn(all, last.date())), tte, last.date()) - p.entryValueCents;
             realized += unreal;
             trades.add(close(p, last.date(), unreal, "WINDOW_END"));
         }
@@ -192,8 +205,8 @@ public final class PortfolioBacktester {
                         .mapToDouble(PortfolioTrade::returnOnRisk).average().orElse(0));
         long ending = startingCash + realized;
 
-        String mode = demo ? "PAYOFF_ONLY" : "MODELED_FROM_UNDERLYING";
-        String confidence = demo ? "none (demo data)" : "modeled";
+        String mode = demo ? "PAYOFF_ONLY" : usedObserved ? "OBSERVED_FROM_HISTORY" : "MODELED_FROM_UNDERLYING";
+        String confidence = demo ? "none (demo data)" : usedObserved ? "observed" : "modeled";
         return new PortfolioReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                 mode, confidence, window.size(), sample, concurrentPeak, winRate, avgRoR,
                 startingCash, ending, round(maxDd * 100), trades, equity, notes, DISCLAIMER);
@@ -224,7 +237,7 @@ public final class PortfolioBacktester {
 
         Position p = new Position();
         p.entryDate = date; p.expiration = exp; p.legs = legs; p.qty = qty;
-        p.entryValueCents = modelValueCents(p, spot, iv, tte);
+        p.entryValueCents = valueCents(p, spot, iv, tte, date);
         p.creditCents = -p.entryValueCents;
         // Max profit/loss from the intrinsic payoff at extreme spots + the strikes.
         long best = Long.MIN_VALUE, worst = Long.MAX_VALUE;
@@ -259,13 +272,36 @@ public final class PortfolioBacktester {
 
     // ---- valuation ----
 
-    private static long modelValueCents(Position p, double spot, double iv, double tte) {
+    /**
+     * Mark-to-market of a position. Each leg is priced from OBSERVED option_bar history when a Db is
+     * configured and a matching bar exists for that date/expiration/strike; otherwise Black-Scholes
+     * from realized vol. Setting {@link #usedObserved} lets the report label its pricing honestly.
+     */
+    private long valueCents(Position p, double spot, double iv, double tte, java.time.LocalDate date) {
         long v = 0;
         for (Leg l : p.legs) {
-            double price = tte <= 0 ? intrinsic(l, spot) : BlackScholes.price(l.call(), spot, l.strike(), tte, R, 0, iv);
+            Double observed = db == null ? null : observedMarkDollars(runSymbol, date, p.expiration, l.strike(), l.call());
+            double price;
+            if (observed != null) { price = observed; usedObserved = true; }
+            else price = tte <= 0 ? intrinsic(l, spot) : BlackScholes.price(l.call(), spot, l.strike(), tte, R, 0, iv);
             v += (l.shortLeg() ? -1 : 1) * Math.round(price * 10_000) * p.qty; // price$/sh * 100sh * 100¢
         }
         return v;
+    }
+
+    /** The observed per-share mark (mark, else bid/ask midpoint) from option_bar, or null if none. */
+    Double observedMarkDollars(String symbol, java.time.LocalDate date, java.time.LocalDate exp, double strike, boolean call) {
+        var rows = db.query(
+                "SELECT mark, bid, ask FROM option_bar WHERE symbol=? AND asof=? AND expiration=? AND strike=? "
+              + "AND opt_type=? ORDER BY bid_ask_observed DESC LIMIT 1",
+                r -> {
+                    Double m = r.dblOrNull("mark");
+                    if (m != null) return m;
+                    Double b = r.dblOrNull("bid"), a = r.dblOrNull("ask");
+                    return (b != null && a != null) ? (b + a) / 2.0 : null;
+                },
+                symbol, date, exp, java.math.BigDecimal.valueOf(strike), call ? "CALL" : "PUT");
+        return rows.isEmpty() ? null : rows.getFirst();
     }
 
     private static long intrinsicValueCents(Position p, double spot) {

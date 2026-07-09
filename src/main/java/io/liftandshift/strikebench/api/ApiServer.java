@@ -310,7 +310,7 @@ public final class ApiServer {
             c.routes.post("/api/backtest", ctx ->
                     ctx.json(backtester.run(requireBody(bodyOrNull(ctx, Backtester.BacktestRequest.class)))));
             c.routes.post("/api/backtest/portfolio", ctx ->
-                    ctx.json(new io.liftandshift.strikebench.backtest.PortfolioBacktester(market, cfg, clock)
+                    ctx.json(new io.liftandshift.strikebench.backtest.PortfolioBacktester(market, cfg, clock, db)
                             .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.backtest.PortfolioBacktester.PortfolioRequest.class)))));
             c.routes.get("/api/backtests", ctx -> ctx.json(Map.of("backtests", backtester.list())));
             c.routes.get("/api/backtests/{id}", ctx -> ctx.json(backtester.get(ctx.pathParam("id"))));

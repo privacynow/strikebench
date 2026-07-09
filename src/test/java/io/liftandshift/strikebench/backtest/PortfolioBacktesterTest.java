@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.backtest;
 
 import io.liftandshift.strikebench.config.AppConfig;
+import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
@@ -79,5 +80,30 @@ class PortfolioBacktesterTest {
         var capped = backtester().run(new PortfolioBacktester.PortfolioRequest("AAPL", "CREDIT_PUT_SPREAD",
                 "2026-01-02", "2026-06-01", 45, 3, 2, 1, 0.30, 0.05, 0.5, 0.8, 7, 100_000_00L));
         assertThat(capped.concurrentPeak()).isLessThanOrEqualTo(2);
+    }
+
+    @Test void observedPricingReadsFromOptionBarWhenLoaded() {
+        Db db = io.liftandshift.strikebench.support.TestDb.fresh();
+        try {
+            db.exec("INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,mark,source,bid_ask_observed,iv_source) "
+                    + "VALUES (?,?,?,?,?,?,?,?,?,1,'vendor')",
+                    "AAPL", java.time.LocalDate.parse("2026-03-02"), java.time.LocalDate.parse("2026-04-17"),
+                    new java.math.BigDecimal("250"), "CALL",
+                    new java.math.BigDecimal("5.00"), new java.math.BigDecimal("5.20"), new java.math.BigDecimal("5.10"), "orats");
+            FixtureProvider f = new FixtureProvider(CLOCK);
+            MarketDataService market = new MarketDataService(
+                    List.<MarketDataProvider>of(f), List.<NewsFilingsProvider>of(f), List.<RatesProvider>of(f));
+            var bt = new PortfolioBacktester(market, new AppConfig(Map.of("FIXTURES_ONLY", "true")), CLOCK, db);
+
+            // Exact match -> the observed mark; near miss -> null (so the caller falls back to BSM).
+            assertThat(bt.observedMarkDollars("AAPL", java.time.LocalDate.parse("2026-03-02"),
+                    java.time.LocalDate.parse("2026-04-17"), 250.0, true)).isEqualTo(5.10);
+            assertThat(bt.observedMarkDollars("AAPL", java.time.LocalDate.parse("2026-03-03"),
+                    java.time.LocalDate.parse("2026-04-17"), 250.0, true)).isNull();
+
+            // A db-backed run still produces a valid report (falls back to BSM where no bar exists).
+            var rep = bt.run(req("CREDIT_PUT_SPREAD"));
+            assertThat(rep.trades()).isNotEmpty();
+        } finally { db.close(); }
     }
 }
