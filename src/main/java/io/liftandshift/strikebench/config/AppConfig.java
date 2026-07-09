@@ -165,6 +165,16 @@ public final class AppConfig {
     /** Delay before the first scheduled snapshot after boot, seconds (lets providers warm). */
     public int snapshotInitialDelaySeconds() { return getInt("SNAPSHOT_INITIAL_DELAY_SECONDS", 60); }
 
+    // ---- In-memory market-data engine (warm cache + background refresh + streaming) ----
+    /** When true (default), the engine warms the active universe on boot and refreshes in the background. */
+    public boolean engineEnabled() { return getBool("ENGINE_ENABLED", true); }
+    /** Quote refresh interval during regular trading hours, seconds. */
+    public int engineQuoteRefreshSeconds() { return getInt("ENGINE_QUOTE_REFRESH_SECONDS", 20); }
+    /** Quote refresh interval when the market is closed, seconds (slower — nothing is moving). */
+    public int engineQuoteRefreshClosedSeconds() { return getInt("ENGINE_QUOTE_REFRESH_CLOSED_SECONDS", 300); }
+    /** Max symbols the engine keeps warm at once (active universe + recently-viewed, LRU-evicted). */
+    public int engineMaxTracked() { return getInt("ENGINE_MAX_TRACKED", 160); }
+
     /** Symbols the auto-scout scans when the caller does not supply a universe. */
     public java.util.List<String> autoUniverse() {
         String raw = fixturesOnly()

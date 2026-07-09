@@ -89,6 +89,7 @@ public final class ApiServer {
     private final io.liftandshift.strikebench.eval.EvaluationService evaluations;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
+    private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
     private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
     private final String startedAt = java.time.Instant.now().toString();
 
@@ -114,6 +115,7 @@ public final class ApiServer {
         this.auto = auto;
         this.broker = broker;
         this.backtester = backtester;
+        this.marketEngine = new io.liftandshift.strikebench.market.MarketDataEngine(market, universe, cfg, clock);
     }
 
     /** Wires the whole app from config: DB + migrations + provider chain + services. */
@@ -250,6 +252,7 @@ public final class ApiServer {
             c.routes.get("/api/universe", ctx -> ctx.json(universe.describe()));
             c.routes.put("/api/universe", this::universeSelect);
             c.routes.get("/api/quotes", this::quotesBatch);
+            c.routes.get("/api/market/engine", ctx -> ctx.json(marketEngine.status())); // Data Center: engine health
 
             c.routes.get("/api/account", this::account);
             c.routes.post("/api/account/reset", this::accountReset);
@@ -358,6 +361,7 @@ public final class ApiServer {
         }).start();
         warmUpErrorPipeline(app.port());
         startSnapshotScheduler();
+        if (marketEngine != null) marketEngine.start(); // warm the universe + background refresh
         log.info("StrikeBench listening on http://localhost:{} (fixturesOnly={})", app.port(), cfg.fixturesOnly());
         return app;
     }
@@ -433,6 +437,7 @@ public final class ApiServer {
     }
 
     public void stop() {
+        if (marketEngine != null) marketEngine.stop();
         if (snapshotScheduler != null) snapshotScheduler.shutdownNow();
         if (app != null) app.stop();
         if (db != null) db.close();
@@ -570,18 +575,11 @@ public final class ApiServer {
                 : java.util.Arrays.stream(raw.split(",")).map(s -> s.trim().toUpperCase(Locale.ROOT))
                     .filter(s -> !s.isBlank()).distinct().toList();
         if (symbols.size() > 40) symbols = symbols.subList(0, 40);
+        // Served from the in-memory engine: warm symbols answer instantly, cold ones are fetched in
+        // parallel, and stale ones refresh in the background — no per-symbol sequential download.
         List<Map<String, Object>> out = new ArrayList<>();
-        for (String s : symbols) {
-            var q = market.quote(s).orElse(null);
-            if (q == null || q.last() == null) continue;
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("symbol", q.symbol());
-            row.put("description", q.description());
-            row.put("last", q.last().toPlainString());
-            row.put("prevClose", q.prevClose() == null ? null : q.prevClose().toPlainString());
-            row.put("optionable", q.optionable());
-            row.put("freshness", q.freshness().name());
-            out.add(row);
+        for (var snap : marketEngine.quotes(symbols)) {
+            out.add(io.liftandshift.strikebench.market.MarketDataEngine.toRow(snap));
         }
         ctx.json(Map.of("quotes", out, "requested", symbols.size()));
     }
