@@ -396,7 +396,7 @@
         return chip(b.symbol, fmtNum(b.last));
       })) : null);
     root.appendChild(hero);
-    root.appendChild(comingUp(symbol, false)); // dated events: expirations, earnings, filings
+    root.appendChild(comingUp(symbol, false, r.expirations)); // dated events; reuse the expirations already loaded with the quote
 
     if (!r.optionable) {
       root.appendChild(alertBox('warn', symbol + ' has no listed options (mutual funds and some securities cannot be option-traded). You can still study its price history below.'));
@@ -434,7 +434,16 @@
                 }
               }, cta));
           }
-          var acq = await rung('acquire');
+          // Fetch only the ladders this holding-state actually renders, in parallel \u2014
+          // a holder never pays for the acquire ladder it would discard, and exit+hedge
+          // stop stacking into a serial chain.
+          var needExitHedge = held && held.freeShares >= 100;
+          var ladders = await Promise.all([
+            !held ? rung('acquire') : null,
+            needExitHedge ? rung('exit') : null,
+            needExitHedge ? rung('hedge') : null
+          ]);
+          var acq = ladders[0], ex = ladders[1], hg = ladders[2];
           if (acq && !held) {
             var kA = parseFloat(acq.legs[0].strike);
             cards.push(actionCard('tag', 'Own it cheaper',
@@ -442,15 +451,13 @@
                 ' now to buy at $' + kA + ' \u2014 effectively $' + acq.effectivePrice + '/sh.'),
               'ACQUIRE', 'Name your price'));
           }
-          if (held && held.freeShares >= 100) {
-            var ex = await rung('exit');
+          if (needExitHedge) {
             if (ex) {
               cards.push(actionCard('flag', 'Sell your ' + held.shares + ' shares higher',
                 el('span', {}, 'Get paid ', el('b', { class: 'gain' }, fmtMoney(ex.entryNetPremiumCents)),
                   ' now to sell at $' + parseFloat(ex.legs[0].strike) + ' (effectively $' + ex.effectivePrice + '/sh).'),
                 'EXIT', 'Pick your exit'));
             }
-            var hg = await rung('hedge');
             if (hg) {
               cards.push(actionCard('shield', 'Protect what you hold',
                 el('span', {}, 'A floor at $' + parseFloat(hg.legs[0].strike) + ' costs ',
@@ -604,7 +611,7 @@
    * on Research, a slim strip above single-symbol trade ideas. Fills itself; never blank —
    * the card form shows an honest note when nothing dated is known.
    */
-  function comingUp(symbol, asStrip) {
+  function comingUp(symbol, asStrip, preExpirations) {
     var body = el('div', { class: 'chip-row' });
     var host = asStrip
       ? el('div', { class: 'events-strip', id: 'events-strip' }, body)
@@ -614,8 +621,14 @@
             : null);
     (async function fill() {
       var had = false;
+      // Expirations + news are independent \u2014 fetch them together. If the caller already
+      // has the expirations (the research page loads them with the quote), skip that call.
+      var exP = (preExpirations && preExpirations.length)
+        ? Promise.resolve({ expirations: preExpirations })
+        : API.get('/api/research/' + symbol + '/expirations').catch(function () { return { expirations: [] }; });
+      var newsP = API.get('/api/research/' + symbol + '/news').catch(function () { return { items: [] }; });
       try {
-        var ex = (await API.get('/api/research/' + symbol + '/expirations')).expirations || [];
+        var ex = (await exP).expirations || [];
         var now = Date.now();
         ex.slice(0, 3).forEach(function (d) {
           var dte = Math.max(0, Math.round((new Date(d + 'T16:00:00') - now) / 86400000));
@@ -624,7 +637,7 @@
         });
       } catch (e) { /* chips below may still land */ }
       try {
-        var items = (await API.get('/api/research/' + symbol + '/news')).items || [];
+        var items = (await newsP).items || [];
         var earn = items.find(function (n) { return EARNINGS_RE.test(n.headline || ''); });
         if (earn) {
           body.appendChild(el('a', { href: earn.url, target: '_blank', rel: 'noopener', class: 'chip', title: earn.headline },
@@ -1582,21 +1595,24 @@
           }
           if (Object.keys(holdings).length) body.holdings = holdings;
         }
-        var r = await API.post('/api/recommend', body);
+        // recommend + the goal-native ladder + spot quote all depend only on `body` — the
+        // ladder does NOT need the recommend result — so fire them together instead of chaining.
+        var isLadderGoal = goal === 'ACQUIRE' || goal === 'EXIT' || goal === 'HEDGE';
+        var recP = API.post('/api/recommend', body);
+        var ladderP = isLadderGoal ? API.post('/api/recommend/ladder', body).catch(function () { return null; }) : null;
+        var quotesP = isLadderGoal ? API.get('/api/quotes?symbols=' + body.symbol.toUpperCase()).catch(function () { return null; }) : null;
+        var acctP = goal === 'INCOME' ? API.get('/api/account').catch(function () { return null; }) : null;
+        var incHeldP = goal === 'INCOME' ? API.get('/api/positions').catch(function () { return null; }) : null;
+
+        var r = await recP;
         var extras = {};
-        if (goal === 'ACQUIRE' || goal === 'EXIT' || goal === 'HEDGE') {
-          // The intent-native view: rungs of the same structure across strikes
-          try { extras.ladder = await API.post('/api/recommend/ladder', body); } catch (e2) { /* cards still render */ }
-          try {
-            var q = await API.get('/api/quotes?symbols=' + body.symbol.toUpperCase());
-            extras.spot = q.quotes.length ? parseFloat(q.quotes[0].last) : null;
-          } catch (e3) { /* fine */ }
+        if (isLadderGoal) {
+          var lad = await ladderP; if (lad) extras.ladder = lad;                 // rungs across strikes
+          var q = await quotesP; if (q) extras.spot = q.quotes.length ? parseFloat(q.quotes[0].last) : null;
         }
         if (goal === 'INCOME') {
-          try {
-            extras.acct = (await API.get('/api/account')).account;
-            extras.held = (await API.get('/api/positions')).positions;
-          } catch (e4) { /* board is optional */ }
+          var ac = await acctP; if (ac) extras.acct = ac.account;
+          var hd = await incHeldP; if (hd) extras.held = hd.positions;           // board is optional
         }
         renderResults(r, goal, body, extras);
       } catch (e) {
@@ -2269,6 +2285,8 @@
     var page = parseInt(params[1] || '0', 10);
     root.appendChild(el('h1', {}, 'Portfolio'));
 
+    // Account + summary are both needed on every section — fetch them together, not in series.
+    var summaryP = API.get('/api/portfolio/summary').catch(function () { return null; });
     var acctData = await API.get('/api/account');
     var acct = acctData.account;
     // The headline this page exists for: total value + P/L at current marks (liquidation
@@ -2276,7 +2294,8 @@
     var statsRow = el('div', { class: 'grid grid-4', id: 'pf-stats', style: 'margin-bottom:14px' });
     root.appendChild(statsRow);
     try {
-      var sum = await API.get('/api/portfolio/summary');
+      var sum = await summaryP;
+      if (!sum) throw new Error('summary unavailable');
       var pct = sum.startingCashCents ? (sum.totalPnlCents / sum.startingCashCents) * 100 : 0;
       statsRow.appendChild(stat('Portfolio value',
         el('span', {}, fmtMoney(sum.totalValueCents),
@@ -2344,10 +2363,28 @@
       return;
     }
 
-    if (Learn.currentLevel() === 'expert' && tab === 'active') {
+    // Positions view: greeks (expert), holdings, and the trades page are independent —
+    // fire them all now and await each where it renders, so they overlap on the wire
+    // instead of stacking into a five-request waterfall.
+    var pff = App.state.portfolioFilter || {};
+    var statusParamEarly = tab === 'active' ? 'ACTIVE' : 'CLOSED';
+    var fqEarly = '';
+    if (pff.symbol) fqEarly += '&symbol=' + encodeURIComponent(pff.symbol);
+    if (pff.intent) fqEarly += '&intent=' + encodeURIComponent(pff.intent);
+    var greeksP = (Learn.currentLevel() === 'expert' && tab === 'active')
+      ? API.get('/api/portfolio/greeks').catch(function () { return null; }) : null;
+    var positionsP = API.get('/api/positions').catch(function (e) { return { error: e }; });
+    var tradesP = API.get('/api/trades?status=' + statusParamEarly + '&page=' + page + '&size=15' + fqEarly);
+    var tradesExtraP = (tab === 'closed' && page === 0)
+      ? Promise.all([
+          API.get('/api/trades?status=EXPIRED&page=0&size=50' + fqEarly),
+          API.get('/api/trades?status=DELETED&page=0&size=50' + fqEarly)
+        ]) : null;
+
+    if (greeksP) {
       try {
-        var pg = await API.get('/api/portfolio/greeks');
-        if (pg.positions && pg.positions.length) {
+        var pg = await greeksP;
+        if (pg && pg.positions && pg.positions.length) {
           root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-greeks' },
             el('div', { class: 'chip-row', style: 'align-items:center' },
               el('b', { style: 'margin-right:4px' }, 'Book greeks'),
@@ -2362,7 +2399,9 @@
 
     // Equity holdings: first-class shares with basis, lock state, and a covered-call nudge.
     try {
-      var held = (await API.get('/api/positions')).positions || [];
+      var posRes = await positionsP;
+      if (posRes && posRes.error) throw posRes.error;
+      var held = (posRes && posRes.positions) || [];
       var holdCard = el('div', { class: 'card', id: 'holdings-card' },
         UI.cardHeader('Shares you hold', el('button', {
           class: 'btn btn-sm btn-secondary', id: 'buy-shares-btn',
@@ -2446,18 +2485,12 @@
         el('span', { class: 'muted' }, 'Filter:'), fSym, fIntent));
     root.appendChild(tradesCard);
 
-    var statusParam = tab === 'active' ? 'ACTIVE' : 'CLOSED';
-    var fq = '';
-    if (pf.symbol) fq += '&symbol=' + encodeURIComponent(pf.symbol);
-    if (pf.intent) fq += '&intent=' + encodeURIComponent(pf.intent);
-    var data = await API.get('/api/trades?status=' + statusParam + '&page=' + page + '&size=15' + fq);
-    if (tab === 'closed' && page === 0) {
+    // Trades were prefetched (tradesP/tradesExtraP) alongside greeks + positions above.
+    var data = await tradesP;
+    if (tradesExtraP) {
       // Settled/voided trades ride along on the first page only (up to 50 each) —
       // repeating them on every page made them look like distinct trades.
-      var extra = await Promise.all([
-        API.get('/api/trades?status=EXPIRED&page=0&size=50' + fq),
-        API.get('/api/trades?status=DELETED&page=0&size=50' + fq)
-      ]);
+      var extra = await tradesExtraP;
       data.trades = data.trades.concat(extra[0].trades, extra[1].trades);
     }
     if (!data.trades.length) {
