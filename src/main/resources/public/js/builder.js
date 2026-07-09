@@ -300,13 +300,21 @@
       templateKey: saved.templateKey || null,
       step: saved.step || 1,
       legIdx: saved.legIdx || 0,
+      wizNode: saved.wizNode || null,   // rehydrate the mid-question wizard node across re-renders/level flips
       legs: saved.legs ? saved.legs.map(function (l) { return Object.assign({}, l); }) : [],
       excluded: saved.excluded || {},
       limits: saved.limits || {}
     };
+    // Cross-level coherence: a position built in the Expert terminal (or handed off) must not vanish
+    // into Beginner's step-1 goal chooser and get overwritten — land it on Beginner's recap instead.
+    if (level === 'beginner' && st.legs.length && st.step < 3) { st.step = 4; }
     function remember() { App.state.builderForm = st; }
 
     var research = null, chainCache = {}, expirations = [], spot = null;
+    // Monotonic supersede token: whenever the STRUCTURE changes (pick/seed/fit), bump this and drop any
+    // in-flight build that resolves late, so st.templateKey and st.legs can never end up disagreeing
+    // (legs from structure A paired with the strategy label of structure B).
+    var buildSeq = 0;
     async function loadSymbol() {
       research = await API.get('/api/research/' + st.symbol);
       expirations = research.expirations || [];
@@ -489,7 +497,9 @@
         if (st.limits.minPop) f.minPop = parseFloat(st.limits.minPop) / 100;
         if (st.limits.maxAssign) f.maxAssignmentProb = parseFloat(st.limits.maxAssign) / 100;
         if (Object.keys(f).length) body.filters = f;
+        var fitSeq = ++buildSeq;                 // the fitted legs replace the structure — same supersede rule
         var r = await API.post('/api/recommend', body);
+        if (fitSeq !== buildSeq) return;         // a newer pick/fit superseded this
         statusHost.innerHTML = '';
         var c = (r.candidates || [])[0];
         if (!c) {
@@ -554,9 +564,10 @@
     // Hand-off from elsewhere (e.g. the Lab replicator) can seed a templateKey with no legs —
     // build it from the live chain now so the user lands ON the structure, not an empty catalog.
     if (st.templateKey && !st.legs.length) {
+      var seedSeq = ++buildSeq;
       try {
         var seeded = await buildFromTemplate(st.templateKey);
-        if (seeded.length) { st.legs = seeded; st.legIdx = 0; if (st.step < 3) st.step = 3; remember(); }
+        if (seedSeq === buildSeq && seeded.length) { st.legs = seeded; st.legIdx = 0; if (st.step < 3) st.step = 3; remember(); }
       } catch (e) { /* fall through to the catalog */ }
     }
 
@@ -567,6 +578,7 @@
     function renderBeginner(root) {
       var host = el('div', { id: 'builder' });
       root.appendChild(host);
+      var walkSeq = 0; // supersede token for the async leg-walk / position preview (chart+stats)
       function repaint() { host.innerHTML = ''; paint(); remember(); }
 
       function stepHeader() {
@@ -584,8 +596,9 @@
             disabled: reachable[i] ? null : '',
             title: reachable[i] ? null : why[i],
             onclick: can ? function () {
+              // Jumping to 'Build it' RESUMES where you were (legIdx is clamped in paint) — it must
+              // NOT force the last leg, or the same step would show a different payoff than the walk.
               st.step = i + 1;
-              if (st.step === 3) st.legIdx = Math.max(0, st.legs.length - 1);
               repaint();
             } : null
           }, el('b', {}, String(i + 1)), ' ', n);
@@ -632,8 +645,10 @@
         return wrap;
       }
       async function pickTemplate(t, offset) {
-        st.templateKey = t.key;
-        st.legs = await buildFromTemplate(t.key, offset);
+        var seq = ++buildSeq;
+        var built = await buildFromTemplate(t.key, offset);
+        if (seq !== buildSeq) return;           // a newer pick won — drop this stale build
+        st.templateKey = t.key; st.legs = built; // assign TOGETHER so label + legs always agree
         st.legIdx = 0; st.step = 3;
         repaint();
       }
@@ -728,11 +743,12 @@
               } }, i < n - 1 ? 'Add the next leg →' : 'See the whole position →'))));
 
           (async function measure() {
+            var seq = ++walkSeq;
             var impact = document.getElementById('bw-impact');
             try {
               var nowRes = await previewLegs(soFar);
               var beforeRes = i > 0 ? await previewLegs(st.legs.slice(0, i)) : null;
-              if (!impact || !impact.isConnected) return;
+              if (seq !== walkSeq || !impact || !impact.isConnected) return;
               impact.innerHTML = '';
               var p = nowRes.preview;
               var b = beforeRes ? beforeRes.preview : null;
@@ -763,7 +779,7 @@
                 var walkIdx = [];
                 for (var wi = 0; wi <= i; wi++) walkIdx.push(wi);
                 var walkHandles = await strikeHandles(walkIdx, function () { repaint(); });
-                if (!impact.isConnected) return;
+                if (seq !== walkSeq || !impact.isConnected) return;
                 if (walkHandles.length) {
                   impact.appendChild(el('p', { class: 'muted', style: 'margin:6px 0 2px; font-size:12.5px' },
                     'Try it: drag a strike marker and watch this leg\u2019s numbers move.'));
@@ -774,7 +790,7 @@
                 }));
               }
             } catch (e) {
-              if (!impact || !impact.isConnected) return;
+              if (seq !== walkSeq || !impact || !impact.isConnected) return;
               impact.innerHTML = '';
               impact.appendChild(alertBox('danger', 'Could not price this leg', [e.message]));
             }
@@ -849,16 +865,17 @@
           fitStatus,
           el('div', { id: 'bw-panel' }, UI.spinner('Pricing the whole position…')),
           el('div', { class: 'btn-row' },
-            el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.legIdx = st.legs.length - 1; st.step = 3; repaint(); } }, '← Walk the legs again'),
+            el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.legIdx = 0; st.step = 3; repaint(); } }, '← Walk the legs again'),
             el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.step = 1; st.legs = []; st.templateKey = null; st.goal = null; repaint(); } }, 'Start over'),
             el('button', { class: 'btn', id: 'builder-review', onclick: handoff }, 'Review & place (paper) →'))));
         (async function price() {
+          var seq = ++walkSeq;
           var panel = document.getElementById('bw-panel');
           try {
             var res = await previewLegs(st.legs);
             var allIdx = st.legs.map(function (_, k) { return k; });
             var handles = await strikeHandles(allIdx, function () { repaint(); });
-            if (!panel || !panel.isConnected) return;
+            if (seq !== walkSeq || !panel || !panel.isConnected) return;
             panel.innerHTML = '';
             renderVerdictAndStats(panel, res.preview, res.guardrails, true, handles);
             var lc = limitChips(res.preview);
@@ -866,7 +883,7 @@
             var btn = document.getElementById('builder-review');
             if (btn && !res.preview.ok) { btn.disabled = true; btn.title = 'Fix the blocking issues first'; }
           } catch (e) {
-            if (!panel || !panel.isConnected) return;
+            if (seq !== walkSeq || !panel || !panel.isConnected) return;
             panel.innerHTML = '';
             panel.appendChild(alertBox('danger', 'Could not price the position', [e.message]));
           }

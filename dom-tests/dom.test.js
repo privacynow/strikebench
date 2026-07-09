@@ -877,6 +877,14 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
     /Collected so far|Paid so far/.test((document.getElementById('bw-impact') || {}).textContent || ''), { timeout: 20000 });
   assert.match(await page.textContent('#bw-leg-story'), /Sell the \$\d+/);
   assert.match(await page.textContent('#bw-impact'), /Worst case/);
+  // C1 (state determinism): from leg 1, jump to "Where you stand" then back to "Build it" — it must
+  // RESUME leg 1, not jump to the last leg. The same step showing a different payoff by navigation
+  // path was the "graph changes randomly to something else" bug.
+  await page.click('.wizard-steps button[data-step="4"]');
+  await page.waitForSelector('#bw-final');
+  await page.click('.wizard-steps button[data-step="3"]');
+  await page.waitForFunction(() =>
+    /leg 1 of 4/.test((document.querySelector('#bw-walk .field-label') || {}).textContent || ''), { timeout: 20000 });
   for (let legN = 2; legN <= 4; legN++) {
     await page.click('#bw-next');
     await page.waitForFunction(n =>
