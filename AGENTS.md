@@ -288,9 +288,8 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   strikebench.{level,riskMode,theme} with one-time migration in learn.js (+ legacy fallback in the
   index.html pre-paint theme script) — verified prefs survive; EDGAR User-Agent -> StrikeBench/1.0;
   static index.html title/brand/noscript, JS/CSS headers, log lines, dom-tests jar paths + brand/theme
-  assertions all renamed. KEPT DELIBERATELY BRAND-NEUTRAL (reviewed): io.liftandshift groupId
-  (owner namespace; the Java PACKAGE later moved to io.liftandshift.strikebench 2026-07-08 — see
-  Non-negotiable #1), env var names (PORT/DB_PATH/...), DB table names, id prefixes (tr_/acct_/...).
+  assertions all renamed. KEPT DELIBERATELY BRAND-NEUTRAL (reviewed): io.liftandshift package/groupId
+  (owner namespace), env var names (PORT/DB_PATH/...), DB table names, id prefixes (tr_/acct_/...).
   219 JUnit + 16 fixture + 5 seeded + 8 live DOM green on strikebench.jar.
 - PRODUCT UX PASS (2026-07-08, user: match/exceed optionslab.io — opening page, chart range pills w/
   mouse-slide readouts, universe/ticker everywhere): V3 settings table; market/Universes (13 curated
@@ -1019,69 +1018,14 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   state mutated by the failed attempt itself; verify a new automation's FIRST real run in the
   journal, not just that its timer ticks; systemd units need explicit PATHs for login-shell
   toolchains.
-- RESEARCH-PLATFORM DIRECTION + PHASE 1 STORAGE MIGRATION (2026-07-08, feature branch
-  `feature/research-platform` off `feature/volatility_lab`; NOT deployed — strikebench.com stays
-  on main until merge). Product reframed (both reviewers + user aligned): StrikeBench becomes an
-  evidence-first, portfolio-aware, capital-efficient **trade-discovery & recommendation** engine —
-  recommendations stay THE product; the scanner/backtester/vol-analytics/optimizer/notebook are
-  the machinery that makes each recommendation better. Organizing idea: **recommendations-as-a-
-  competition** (rank viable alternatives, show why one wins + what could fail + the management
-  plan). Standing rules reinforced (in memory): never defer/exclude — sequence by IMPACT not ease,
-  finish everything; never remove features. Honesty non-negotiable: per-dimension evidence badges
-  (Observed/Modeled/Paper/Live, worst-of rollup — generalizes the existing Freshness pattern);
-  annualized-ROC is a labeled component, never the primary rank; single score never stands alone.
-  5-phase plan (all being built, impact-ordered): P1 data foundation (Postgres + reworked model +
-  Flyway + faithful migration + forward snapshots + auth) · P2 StrategyEvaluation backbone
-  (StrategySpec + producer modules: Capital[incr+economic]/Volatility[IV rank/percentile/VRP/
-  expected move]/Risk[+tail+scenario]/Evidence/ManagementPlan/Score[gate→normalize→risk-adjusted]/
-  Explanation) · P3 recommendations-as-competition (OpportunityScanner + comparison UI + ordered
-  decision page + scrubbable management plan) · P4 real evidence (owned CSV-bulk historical options
-  + backtester rewrite [portfolio/rolls/exits/delta-selection] + calibration loop) · P5 research lab
-  (portfolio optimizer + hypothesis tester + notebook + ETF replication).
-  DATA DECISIONS: local dev = Docker Postgres via compose (bare Postgres on the box for prod;
-  off-box backups); own the past via one-time CSV-bulk historical options (commercial/internal-use
-  license, NOT redistribution — derived output only) + own the future via forward snapshots;
-  subscriptions rent (lose the data on cancel) so they're optional add-ons; Flyway for migrations;
-  one user now via Google OIDC (pac4j) on a multi-user schema; user count doesn't affect data cost.
-  PHASE 1 STORAGE MIGRATION DONE + VERIFIED (commits a7ff865, 3db7b74, 49b80e4):
-  - SQLite -> **PostgreSQL 16** everywhere. `Db` is now a HikariCP-pooled Postgres helper keeping
-    the exact with/tx/exec/query/Row API (all ~25 call sites untouched), AutoCloseable, exposes
-    dataSource() for Flyway; ApiServer owns+closes the pool on stop(). Booleans stay integer 0/1
-    (zero churn); paper-domain timestamps stay ISO-TEXT; new tables use timestamptz/date/numeric/jsonb.
-  - `Migrations` -> **Flyway** (classpath:db/migrations). Flyway accepts Java 25 cleanly.
-  - Schema V1 (Postgres) collapses old SQLite V1+V2+V3 final state + adds the product's new core
-    entities: `users`(+user_id FKs), `option_bar` & `underlying_bar` (ONE table each holds our
-    forward snapshots AND vendor history, per-dimension evidence cols, date-indexed),
-    `strategy_evaluation` (typed rank columns score/ev/roc/pop/capital/tail + jsonb sub-profiles),
-    `recommendation` (+outcome fields for calibration). BIGINT cents, NUMERIC(19,4) prices, DOUBLE
-    only for ratios. App SQL was already Postgres-ready (ON CONFLICT/excluded upserts; no OR REPLACE).
-  - LOCAL DEV: `docker-compose.yml` (pinned Postgres 16, localhost only, dev+test dbs via init
-    script; optional `app` profile + Dockerfile for full-stack smoke). App runs NATIVELY for the
-    inner loop; AppConfig gains DB_URL/DB_USER/DB_PASSWORD (default = compose db).
-  - TESTS ON POSTGRES: `src/test/.../support/TestDb.java` creates a fresh isolated Flyway-migrated
-    database per JUnit test in the running dev Postgres (Testcontainers proved UNRELIABLE on
-    Java 25 + Docker 29 socket detection — even pointed at the socket it "Could not find a valid
-    Docker environment"; the compose Postgres is simpler and robust; TEST_DB_* overrides for CI).
-    `dom-tests/pgtest.js` does the same per spawned jar (jar migrates via Flyway on boot); the
-    seeded suite's legacy-collar injection moved sqlite3-on-file -> psql-on-Postgres. PREREQ:
-    `docker compose up -d db` before tests. FULL MATRIX GREEN ON POSTGRES: 224 JUnit + 26 fixture
-    + 3 audit + 4 seeded + 8 live DOM.
-  - REMAINING PHASE 1 (being built next, in order): faithful SQLite->Postgres ETL + verification
-    rehearsed on a prod-DB copy (the merge-day cutover); forward chain-snapshot recording (the moat);
-    Google OIDC auth (pac4j) + per-user scoping; prod Postgres provisioning + off-box backups +
-    deploy.sh/systemd for Postgres. Main.migrateLegacyDefaultDb (SQLite file-move) is dormant but
-    retained+tested; the ETL supersedes it as the forward-migration path.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
   defaults could too), a real earnings/ex-div calendar if a keyless source appears.
 
 ## Non-negotiable decisions (from user)
-1. Java package root: **`io.liftandshift.strikebench`** (moved 2026-07-08 from `io.liftandshift` on the
-   research-platform branch, per user). Maven **groupId stays `io.liftandshift`** (owner namespace /
-   coordinate — NOT the Java package; deliberately brand-neutral). Artifact `strikebench` (renamed from
-   `options-lab` 2026-07-08 with the StrikeBench rebrand). The shade `mainClass` is
-   `io.liftandshift.strikebench.Main`.
+1. Java package root: **`io.liftandshift`** (groupId `io.liftandshift`, artifact `strikebench` — renamed
+   from `options-lab` 2026-07-08 with the StrikeBench rebrand).
 2. **Money is ONLY `BigDecimal` (per-share prices, scale ≤ 4) or `long` cents (ledger, balances, contract totals). Never float/double.**
    Doubles allowed only for non-money ratios (IV, greeks, probabilities) and inside the Black-Scholes numeric kernel; convert at boundary via `util/Money`.
 3. Backend: Java 25, Maven, fat jar: `mvn test package` → `java -jar target/strikebench.jar`. (pom has `-Djava.release=NN` override property.)
@@ -1125,7 +1069,7 @@ Project path in sandbox: `/sessions/<name>/mnt/optin/`.
 - `Javalin.start(cfg -> ...)` shortcut exists. `ctx.json/bodyAsClass/queryParam/pathParam` unchanged. Validators need `.required()` before `.get()`.
 - Keep API DTOs to plain types + BigDecimal (Jackson auto-detected). Avoid java.time types in DTOs — use ISO strings.
 
-## Architecture (packages under io.liftandshift.strikebench)
+## Architecture (packages under io.liftandshift)
 - `config.AppConfig` — env > sysprops > ./optionslab.properties > defaults. Provider base URLs overridable for tests (mock server).
 - `db.Db` (JDBC helper, WAL, per-op connections, tx), `db.Migrations` (ordered classpath list).
 - `util.{Json,Ids,Money}`.

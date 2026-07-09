@@ -35,9 +35,9 @@ candlesticks; everything else is hand-rolled SVG.
 ## Architecture
 
 ```
-io.liftandshift
+io.liftandshift.strikebench
 ├── config      AppConfig (env > sysprops > strikebench.properties > defaults)
-├── db          Db (per-op connections, WAL), Migrations (V1..V3)
+├── db          Db (HikariCP-pooled Postgres), Migrations (Flyway; classpath:db/migrations)
 ├── model       Quote, Candle, OptionQuote, OptionChain, Leg, Freshness, ...
 ├── pricing     BlackScholes, ImpliedVol, PayoffCurve, VolSurface, HistoricalVol
 ├── market      MarketDataService (provider chain + caches + status), Universes, providers/*
