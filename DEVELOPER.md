@@ -17,9 +17,9 @@ development and what most test suites use.
 
 ## Stack & principles
 
-Java 25 + Javalin 7 (Jetty 12) + SQLite (WAL, per-op connections) + Caffeine caches; plain
-HTML/CSS/JS frontend served from the jar — **no frontend build step**. D3 v7 is vendored for
-candlesticks; everything else is hand-rolled SVG.
+Java 25 + Javalin 7 (Jetty 12) + PostgreSQL (HikariCP pool, Flyway migrations) + Caffeine
+caches; plain HTML/CSS/JS frontend served from the jar — **no frontend build step**. D3 v7 is
+vendored for candlesticks; everything else is hand-rolled SVG. Local dev DB: `docker compose up -d db`.
 
 - **Money is exact**: `BigDecimal` for per-share prices, `long` integer cents for the ledger,
   balances, and contract totals. Doubles exist only inside the Black-Scholes kernel and model
@@ -81,8 +81,10 @@ Environment variables, or the same keys lowercase-dotted in `./strikebench.prope
 |---|---|---|
 | `PORT` | `7070` | HTTP port |
 | `BRAND_NAME` / `BRAND_TAGLINE` | `StrikeBench` / built-in | Header, title, hero |
-| `DB_PATH` | `data/strikebench.db` | SQLite file (legacy `options-lab.db` auto-migrates once) |
+| `DB_URL` / `DB_USER` / `DB_PASSWORD` | compose db | Postgres connection (`DB_PATH` is legacy, ETL-only) |
 | `FIXTURES_ONLY` | `false` | Demo data only, zero network |
+| `SNAPSHOT_ENABLED` | `false` | Record daily forward chain snapshots into `option_bar` |
+| `AUTH_ENABLED` + `OIDC_*` + `AUTH_ALLOWED_EMAILS` + `AUTH_COOKIE_SECURE` | off | Google sign-in + per-user scoping |
 | `FEE_PER_CONTRACT_CENTS` | `65` | Commission per contract per leg |
 | `FEE_PER_ORDER_CENTS` | `0` | Flat fee per order |
 | `DEFAULT_STARTING_CASH_CENTS` | `10000000` | New paper account ($100k) |
@@ -117,3 +119,35 @@ The app runs from `APP_DIR` (default `/opt/strikebench`), never from the source 
 Reverse proxy + TLS stay outside the script; a minimal nginx block plus
 `sudo certbot --nginx -d your.domain --redirect` is all it takes (example in the script
 header). Production reference deployment: https://strikebench.com
+
+## Postgres cutover runbook (SQLite → Postgres, done once at merge time)
+
+The app runs on PostgreSQL. Local dev uses the docker-compose `db` (`docker compose up -d db`);
+production runs a bare Postgres on the app box. To cut a running SQLite deployment over:
+
+1. **Provision Postgres** (once, on the box):
+   `DB_PASSWORD='…' scripts/provision-postgres.sh` — installs Postgres 16 (localhost-only,
+   scram-sha-256) and creates the `strikebench` role + database.
+2. **Set the password** in `/opt/strikebench/strikebench.properties`: `db.password=…` (chmod 600).
+3. **Deploy the Postgres-aware unit**: `scripts/deploy.sh --install` writes a systemd unit that
+   passes `DB_URL`/`DB_USER` (password stays in the properties file). Don't start it yet.
+4. **Migrate the data** into the *empty* Postgres before the first app boot:
+   `cd /opt/strikebench && DB_URL=jdbc:postgresql://localhost:5432/strikebench DB_USER=strikebench \
+     DB_PASSWORD='…' java -jar strikebench.jar etl /path/to/options-lab.db`
+   — introspective column-intersection copy in one transaction; verifies row counts + the ledger
+   invariant and exits non-zero on any problem. Rehearse it against a copy of the prod SQLite first.
+5. **Start**: `sudo systemctl restart strikebench` (Flyway migrates the schema on boot).
+6. **Backups**: `scripts/backup-postgres.sh --setup-timer` installs a nightly `pg_dump → gzip → S3`
+   timer (`BACKUP_BUCKET=s3://…` in `/opt/strikebench/backup.env`; keeps the last 14 locally).
+
+### Optional: require Google sign-in
+Set in `strikebench.properties`: `auth.enabled=true`, `oidc.client.id`, `oidc.client.secret`,
+`auth.allowed.emails=you@example.com`, `auth.cookie.secure=true`. Register the redirect URI
+`https://your.domain/auth/callback` in the Google console, and make nginx forward the scheme:
+`proxy_set_header X-Forwarded-Proto $scheme;` (so the Secure session cookie is emitted). Off by
+default — every visitor otherwise shares the single local paper account.
+
+### Forward chain snapshots (the historical-evidence moat)
+Set `snapshot.enabled=true` to record a daily EOD snapshot of the active universe's option chains
+into `option_bar`/`underlying_bar` (evidence-tagged). Off by default so the demo never hammers
+providers; `POST /api/admin/snapshot` triggers one on demand.
