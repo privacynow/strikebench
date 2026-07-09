@@ -1,0 +1,53 @@
+package io.liftandshift.strikebench.eval;
+
+import io.liftandshift.strikebench.model.Leg;
+import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.pricing.PayoffCurve;
+import io.liftandshift.strikebench.recommend.Candidate;
+import io.liftandshift.strikebench.recommend.LegView;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Builds the real payoff-vs-underlying grid (via {@link PayoffCurve}) plus the stressed tail loss.
+ * For share-backed candidates the locked shares are folded in as a synthetic stock leg valued at
+ * today's price, so the scenarios reflect the COMBINED position the trader actually holds.
+ */
+public final class RiskProfiler {
+
+    private static final double[] MOVES = {-0.20, -0.10, -0.05, 0.0, 0.05, 0.10, 0.20};
+    private static final double TAIL_MOVE = 0.20;
+
+    public RiskProfile profile(Candidate c, EvalContext ctx) {
+        long maxLoss = Math.max(0, c.maxLossCents());
+        Long maxProfit = c.maxProfitCents();
+
+        List<RiskProfile.Scenario> scenarios = new ArrayList<>();
+        long worstPnl = 0;
+        boolean have = false;
+        try {
+            List<Leg> legs = new ArrayList<>(c.legs().stream().map(LegView::toLeg).toList());
+            if (Boolean.TRUE.equals(c.usesHeldShares()) && c.sharesNeeded() != null && c.sharesNeeded() > 0) {
+                int lots = Math.max(1, c.sharesNeeded() / Leg.SHARES_PER_CONTRACT);
+                legs.add(Leg.stock(LegAction.BUY, lots, cents(ctx.underlyingCents())));
+            }
+            PayoffCurve pc = PayoffCurve.of(legs, Math.max(1, c.qty()));
+            BigDecimal spot = cents(ctx.underlyingCents());
+            for (double m : MOVES) {
+                BigDecimal s = spot.multiply(BigDecimal.valueOf(1.0 + m));
+                long pnl = pc.profitAtCents(s);
+                scenarios.add(new RiskProfile.Scenario(m, pnl));
+                worstPnl = have ? Math.min(worstPnl, pnl) : pnl;
+                have = true;
+            }
+        } catch (RuntimeException e) {
+            // Degrade to extremes-only rather than fail the whole evaluation.
+        }
+        long tailLoss = have ? Math.max(0, -worstPnl) : maxLoss;
+        return new RiskProfile(maxLoss, maxProfit, c.pop(), c.expectedValueCents(), tailLoss, TAIL_MOVE, scenarios);
+    }
+
+    private static BigDecimal cents(long c) { return BigDecimal.valueOf(c).movePointLeft(2); }
+}
