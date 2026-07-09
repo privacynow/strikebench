@@ -3116,6 +3116,7 @@
     // --- Jobs (declared first: engine/coverage actions start jobs and refresh this panel) ---
     var jobsTimer = null;
     async function loadJobs() {
+      if (jobsTimer) { clearTimeout(jobsTimer); jobsTimer = null; } // one live poll chain, never stacked
       var data;
       try { data = await API.getFresh('/api/data/jobs'); } catch (e) { return; }
       if (!App.alive(token)) { if (jobsTimer) clearTimeout(jobsTimer); return; }
@@ -3155,9 +3156,12 @@
       try { ov = await API.get('/api/data/overview'); } catch (e) {
         if (!App.alive(token)) return;
         engineCard.innerHTML = ''; engineCard.appendChild(UI.cardHeader('Market engine'));
-        engineCard.appendChild(alertBox('warn', 'Engine status unavailable.')); return;
+        engineCard.appendChild(alertBox('warn', 'Engine status unavailable.'));
+        renderReset(false); // fail closed on the destructive panel
+        return;
       }
       if (!App.alive(token)) return;
+      renderReset(!!ov.admin); // the reset panel is admin-gated
       var e = ov.engine || {};
       engineCard.innerHTML = '';
       engineCard.appendChild(UI.cardHeader('Market engine',
@@ -3276,10 +3280,14 @@
       healthCard.appendChild(level === 'beginner' ? UI.expandable('Per-source status', function () { return body; }) : body);
     })();
 
-    // --- Reset (danger) ---
-    (function fillReset() {
+    // --- Reset (danger; admin-gated) ---
+    function renderReset(admin) {
       resetCard.innerHTML = '';
       resetCard.appendChild(UI.cardHeader('Reset data'));
+      if (!admin) {
+        resetCard.appendChild(alertBox('warn', 'Resetting data requires admin access. On a public deployment, sign in as an admin (AUTH_ADMIN_EMAILS) or set ADMIN_TOKEN; locally it is enabled by default.'));
+        return;
+      }
       resetCard.appendChild(explain('Wipe stored data back toward a fresh install. This never touches real money, but it cannot be undone. History and jobs are cleared per the tier you pick.'));
       var TIERS = [
         { key: 'MARKET_DATA', label: 'Market history only', blurb: 'Clears stored price/option history + data jobs. Keeps your paper account and research.' },
@@ -3308,7 +3316,7 @@
             }, true);
         } }, 'Reset…')));
       resetCard.appendChild(blurb);
-    })();
+    }
 
     loadJobs();
   }

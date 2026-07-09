@@ -98,9 +98,11 @@ public final class DataJobService {
     }
 
     public void cancel(String jobId) {
-        cancelRequested.put(jobId, Boolean.TRUE);
-        db.exec("UPDATE data_job SET status='CANCELLED', message='cancelled by user', updated_at=now() "
-              + "WHERE id=? AND status IN ('QUEUED','RUNNING')", jobId);
+        // Only flag jobs that are actually active — a finished/unknown id must not leak into the map.
+        int updated = db.with(c -> Db.execOn(c,
+                "UPDATE data_job SET status='CANCELLED', message='cancelled by user', updated_at=now() "
+              + "WHERE id=? AND status IN ('QUEUED','RUNNING')", jobId));
+        if (updated > 0) cancelRequested.put(jobId, Boolean.TRUE);
     }
 
     /** Re-run a finished/failed job with the same kind + params (idempotent → effectively a resume). */
@@ -146,8 +148,8 @@ public final class DataJobService {
     private void run(String id, String kind, Map<String, Object> params, List<String> labels) {
         db.exec("UPDATE data_job SET status='RUNNING', updated_at=now() WHERE id=? AND status='QUEUED'", id);
         long totalRows = 0;
-        int done = 0;
-        boolean anyFail = false;
+        int done = 0;   // items actually processed (excludes cancel-skipped)
+        int failed = 0; // of those, how many threw
         try {
             for (int seq = 0; seq < labels.size(); seq++) {
                 if (Boolean.TRUE.equals(cancelRequested.get(id))) {
@@ -160,19 +162,23 @@ public final class DataJobService {
                     setItem(id, seq, res.rows > 0 || res.ok ? "DONE" : "SKIPPED", res.rows, res.note);
                     totalRows += res.rows;
                 } catch (Exception e) {
-                    anyFail = true;
+                    failed++;
                     setItem(id, seq, "FAILED", 0, e.getClass().getSimpleName() + ": " + e.getMessage());
                 }
                 done++;
                 db.exec("UPDATE data_job SET done=?, rows_written=?, updated_at=now() WHERE id=?", done, totalRows, id);
             }
-            boolean cancelled = Boolean.TRUE.equals(cancelRequested.get(id));
-            String status = cancelled ? "CANCELLED" : (anyFail && done == 0 ? "FAILED" : "DONE");
-            db.exec("UPDATE data_job SET status=?, message=?, updated_at=now() WHERE id=? AND status NOT IN ('CANCELLED')",
-                    status, summary(kind, done, totalRows, anyFail), id);
-            if (cancelled) db.exec("UPDATE data_job SET status='CANCELLED', updated_at=now() WHERE id=?", id);
+            if (Boolean.TRUE.equals(cancelRequested.get(id))) {
+                // Atomic: keep the cancel status AND the 'cancelled by user' message (no summary overwrite).
+                db.exec("UPDATE data_job SET status='CANCELLED', message='cancelled by user', updated_at=now() WHERE id=?", id);
+            } else {
+                // FAILED only when EVERY processed item failed; a partial failure stays DONE (message notes it).
+                String status = (done > 0 && failed == done) ? "FAILED" : "DONE";
+                db.exec("UPDATE data_job SET status=?, message=?, updated_at=now() WHERE id=? AND status <> 'CANCELLED'",
+                        status, summary(kind, done, totalRows, failed), id);
+            }
         } catch (Exception e) {
-            db.exec("UPDATE data_job SET status='FAILED', error=?, updated_at=now() WHERE id=?", e.toString(), id);
+            db.exec("UPDATE data_job SET status='FAILED', error=?, updated_at=now() WHERE id=? AND status <> 'CANCELLED'", e.toString(), id);
         } finally {
             cancelRequested.remove(id);
         }
@@ -245,8 +251,8 @@ public final class DataJobService {
                 status, rows, note, id, seq);
     }
 
-    private static String summary(String kind, int done, long rows, boolean anyFail) {
-        return kind + ": " + done + " items, " + rows + " rows written" + (anyFail ? " (some items failed)" : "");
+    private static String summary(String kind, int done, long rows, int failed) {
+        return kind + ": " + done + " items, " + rows + " rows written" + (failed > 0 ? " (" + failed + " failed)" : "");
     }
 
     private static String strParam(Map<String, Object> p, String key, String def) {

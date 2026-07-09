@@ -391,6 +391,7 @@
     var es;
     try { es = new EventSource('/api/market/stream'); } catch (e) { return; }
     App._marketES = es;
+    App._marketESerrors = 0; // fresh error budget per subscription (universe change / reconnect)
     es.addEventListener('quotes', function (ev) {
       try {
         var data = JSON.parse(ev.data);

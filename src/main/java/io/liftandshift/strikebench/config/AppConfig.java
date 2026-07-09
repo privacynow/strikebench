@@ -155,9 +155,16 @@ public final class AppConfig {
      *  false for plain-http local dev so login still works. */
     public boolean authCookieSecure() { return getBool("AUTH_COOKIE_SECURE", false); }
     /** Comma-separated allowlist of permitted emails. Empty = any Google account with a verified email. */
-    public java.util.List<String> authAllowedEmails() {
-        String raw = get("AUTH_ALLOWED_EMAILS", "");
-        return java.util.Arrays.stream(raw.split(","))
+    public java.util.List<String> authAllowedEmails() { return emailList("AUTH_ALLOWED_EMAILS"); }
+
+    /** Emails allowed to run destructive admin ops (data reset, CSV import). Empty = fall back to the entry allowlist. */
+    public java.util.List<String> authAdminEmails() { return emailList("AUTH_ADMIN_EMAILS"); }
+
+    /** Shared secret gating destructive admin ops when auth is OFF (sent as X-Admin-Token). Empty = local-only. */
+    public String adminToken() { return get("ADMIN_TOKEN", ""); }
+
+    private java.util.List<String> emailList(String key) {
+        return java.util.Arrays.stream(get(key, "").split(","))
                 .map(s -> s.trim().toLowerCase(Locale.ROOT))
                 .filter(s -> !s.isBlank())
                 .distinct()

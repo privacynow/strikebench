@@ -748,6 +748,12 @@ class ApiIntegrationTest {
         assertThat(get("/api/data/coverage").statusCode()).isEqualTo(200);
         // Reset without confirm is refused.
         assertThat(post("/api/data/reset", "{\"tier\":\"MARKET_DATA\"}").statusCode()).isEqualTo(400);
+        // Admin gate: a PROXIED request (X-Forwarded-For present, auth off) can't wipe — 401, not 200.
+        HttpResponse<String> proxied = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/reset"))
+                        .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
+                        .POST(HttpRequest.BodyPublishers.ofString("{\"tier\":\"EVERYTHING\",\"confirm\":true}")).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(proxied.statusCode()).isEqualTo(401);
         // A backfill job can be started and is listed.
         HttpResponse<String> start = post("/api/data/jobs",
                 "{\"kind\":\"backfill_underlying\",\"params\":{\"symbols\":[\"AAPL\"],\"from\":\"2026-04-01\",\"to\":\"2026-06-30\"}}");

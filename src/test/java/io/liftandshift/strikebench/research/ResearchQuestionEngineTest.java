@@ -53,13 +53,16 @@ class ResearchQuestionEngineTest {
         return new ResearchQuestionEngine(market);
     }
 
-    /** A steady uptrend: 400 bars rising 0.3%/day with a small oscillation. */
-    private List<Candle> uptrend() {
+    /** A DETERMINISTIC mild-drift random walk (seeded): realistic pullbacks so breakouts/new-highs are
+     *  a minority, and no exploitable structure so a signal shows no significant edge on it. */
+    private List<Candle> walk() {
         List<Candle> out = new ArrayList<>();
+        java.util.Random rnd = new java.util.Random(42);
         double px = 100;
         LocalDate d = LocalDate.parse("2023-01-02");
-        for (int i = 0; i < 400; i++) {
-            px *= (1 + 0.003 + 0.004 * Math.sin(i / 3.0)); // drift + wiggle
+        for (int i = 0; i < 520; i++) {
+            px *= (1 + 0.0003 + rnd.nextGaussian() * 0.012); // ~0.03%/day drift, ~1.2% daily vol
+            px = Math.max(1, px);
             BigDecimal c = BigDecimal.valueOf(Math.round(px * 100) / 100.0);
             out.add(new Candle(d, c, c, c, c, 1_000_000, false));
             d = d.plusDays(1);
@@ -69,7 +72,7 @@ class ResearchQuestionEngineTest {
 
     @Test
     void catalogOffersRealQuestionsNotAToy() {
-        var cat = engine(uptrend(), Freshness.EOD).catalog();
+        var cat = engine(walk(), Freshness.EOD).catalog();
         assertThat(cat).extracting(ResearchQuestionEngine.Question::key)
                 .contains("pullback_rebound", "breakout_followthrough", "oversold_bounce", "momentum", "up_streak");
         // Each carries a plain-language label and at least the forward-days param.
@@ -82,21 +85,33 @@ class ResearchQuestionEngineTest {
     @Test
     void momentumIsBaselineRelative_neverTheDegenerateAlwaysTrue() {
         // The old toy: "20-day momentum >= 0%" fired on ~every bar and compared to a bare 50%.
-        // Now a 0% threshold on a rising series conditions on nearly ALL bars, so the conditioned
-        // set ≈ the baseline and the verdict must be "no clear edge" — NOT a false ">= 0%" win.
-        var r = engine(uptrend(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+        // Now a 0% threshold on a rising series conditions on nearly ALL bars, so its COMPLEMENT
+        // (the baseline) is tiny/empty and the test cannot manufacture a false edge — the verdict is
+        // never a bogus "Supported". This is the anti-regression for the "≥ 0%" nonsense.
+        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
                 "momentum", "TEST", "2023-02-01", "2024-01-31",
                 Map.of("lookback", 20, "thresholdPct", 0, "forward", 10)));
         assertThat(r.conditioned().sample()).isGreaterThan(0);
-        assertThat(r.baseline().sample()).isGreaterThanOrEqualTo(r.conditioned().sample());
-        // conditioned ≈ baseline when the condition is nearly always true → tiny edge, not "supported"
-        assertThat(Math.abs(r.winRateEdgePct())).isLessThan(5.0);
+        assertThat(r.significant()).isFalse();               // an always-true signal is never "significant"
         assertThat(r.verdict()).doesNotContain("Supported");
     }
 
     @Test
+    void baselineIsTheNonSignalComplementNotAllBars() {
+        // Breakout fires on a minority of bars; the baseline (non-signal complement) is disjoint and
+        // is the majority — the two groups don't overlap (finding: a superset baseline biases to null).
+        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+                "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",
+                Map.of("lookback", 20, "forward", 10)));
+        assertThat(r.conditioned().sample()).isGreaterThan(0);
+        assertThat(r.baseline().sample()).isGreaterThan(0);
+        // disjoint groups: neither is a subset — a new-high day is never also a non-new-high day
+        assertThat(r.baseline().sample()).isNotEqualTo(r.conditioned().sample());
+    }
+
+    @Test
     void reportsSampleEdgeDistributionAndExamples() {
-        var r = engine(uptrend(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
                 "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",
                 Map.of("lookback", 20, "forward", 10)));
         assertThat(r.conditioned().sample()).isGreaterThanOrEqualTo(1);
@@ -111,7 +126,7 @@ class ResearchQuestionEngineTest {
 
     @Test
     void fixtureHistoryIsLabeledDemoNotObserved() {
-        var r = engine(uptrend(), Freshness.FIXTURE).run(new ResearchQuestionEngine.RunRequest(
+        var r = engine(walk(), Freshness.FIXTURE).run(new ResearchQuestionEngine.RunRequest(
                 "pullback_rebound", "TEST", "2023-02-01", "2024-01-31",
                 Map.of("lookback", 20, "dropPct", 3, "forward", 10)));
         assertThat(r.observed()).isFalse();
@@ -122,7 +137,7 @@ class ResearchQuestionEngineTest {
     @Test
     void tooFewSignalsIsHonest() {
         // A 35% one-day drop essentially never happens in the gentle series → too-few verdict.
-        var r = engine(uptrend(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
                 "oversold_bounce", "TEST", "2023-02-01", "2024-01-31",
                 Map.of("dropPct", 20, "forward", 10)));
         assertThat(r.conditioned().sample()).isLessThan(15);
@@ -132,7 +147,7 @@ class ResearchQuestionEngineTest {
 
     @Test
     void unknownQuestionRejected() {
-        assertThatThrownBy(() -> engine(uptrend(), Freshness.EOD).run(
+        assertThatThrownBy(() -> engine(walk(), Freshness.EOD).run(
                 new ResearchQuestionEngine.RunRequest("make_me_rich", "TEST", null, null, Map.of())))
                 .isInstanceOf(IllegalArgumentException.class);
     }

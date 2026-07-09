@@ -109,17 +109,27 @@ public final class ResearchQuestionEngine {
                     "Not enough price history for this window — widen the dates or shorten the hold.", notes);
         }
 
-        // Forward returns and the conditioning signal (no look-ahead: bar i uses closes[<= i]).
-        List<Double> baseFwd = new ArrayList<>();
+        // Align the analyzed window with the REQUESTED `from` (not just the array warm-up), so a
+        // large look-back doesn't silently shrink or shift the window the user asked about.
+        int startIdx = lookback;
+        for (int i = lookback; i < candles.size(); i++) {
+            if (!candles.get(i).date().isBefore(from)) { startIdx = Math.max(lookback, i); break; }
+        }
+
+        // Forward returns split into SIGNAL vs its COMPLEMENT (non-signal bars). The baseline is the
+        // complement, not all bars — so the win-rate edge compares disjoint groups (finding: a baseline
+        // that is a superset of the conditioned set biases the test toward "no edge"). No look-ahead:
+        // bar i's signal uses closes[<= i]; the forward return looks ahead only for the outcome.
+        List<Double> baseFwd = new ArrayList<>();  // non-signal complement = "normally"
         List<Double> condFwd = new ArrayList<>();
         List<String> examples = new ArrayList<>();
-        for (int i = 0; i + forward < n; i++) {
-            if (i < lookback) continue; // need the look-back warmed
+        for (int i = startIdx; i + forward < n; i++) {
             double fwd = closes[i + forward] / closes[i] - 1.0;
-            baseFwd.add(fwd);
             if (signal(key, closes, i, lookback, p)) {
                 condFwd.add(fwd);
                 if (examples.size() < 6) examples.add(candles.get(i).date().toString());
+            } else {
+                baseFwd.add(fwd);
             }
         }
 
@@ -127,9 +137,13 @@ public final class ResearchQuestionEngine {
         Stat conditioned = stat(condFwd);
         double winEdge = round(conditioned.winRatePct() - baseline.winRatePct());
         double meanEdge = round(conditioned.meanReturnPct() - baseline.meanReturnPct());
-        double z = twoPropZ(conditioned, baseline);
+        // Forward windows overlap by (forward-1) days, so adjacent observations are NOT independent —
+        // deflate the effective sample by ~forward for the z-test and use a block bootstrap for the CI,
+        // else significance is wildly overstated and the CI far too narrow.
+        double z = twoPropZ(conditioned, baseline, forward);
         boolean significant = conditioned.sample() >= MIN_SAMPLE && Math.abs(z) >= Z_95;
-        double[] ci = bootstrapMeanCi(condFwd, symbol.hashCode() ^ key.hashCode());
+        double[] ci = bootstrapMeanCi(condFwd, symbol.hashCode() ^ key.hashCode(), forward);
+        if (forward > 1) notes.add("Forward windows overlap; significance is corrected for that (effective sample ≈ signals ÷ hold).");
         List<Bucket> dist = histogram(condFwd);
 
         String verdict;
@@ -199,25 +213,38 @@ public final class ResearchQuestionEngine {
                 round(median * 100), round(worst * 100), round(best * 100));
     }
 
-    /** Two-proportion z-test on the conditioned vs baseline win rate (pooled). */
-    private static double twoPropZ(Stat cond, Stat base) {
+    /**
+     * Two-proportion z-test on the conditioned vs baseline win rate (pooled), with the effective
+     * sample deflated by the hold period because overlapping forward windows are not independent.
+     */
+    private static double twoPropZ(Stat cond, Stat base, int forward) {
         if (cond.sample() == 0 || base.sample() == 0) return 0;
         double p1 = cond.winRatePct() / 100.0, p2 = base.winRatePct() / 100.0;
-        int n1 = cond.sample(), n2 = base.sample();
+        int f = Math.max(1, forward);
+        int n1 = Math.max(1, cond.sample() / f);   // effective (near-independent) sample
+        int n2 = Math.max(1, base.sample() / f);
         double pooled = (p1 * n1 + p2 * n2) / (n1 + n2);
         double se = Math.sqrt(pooled * (1 - pooled) * (1.0 / n1 + 1.0 / n2));
         return se == 0 ? 0 : (p1 - p2) / se;
     }
 
-    /** Deterministic bootstrap 90% CI on the conditioned mean forward return (percent). */
-    private static double[] bootstrapMeanCi(List<Double> rs, long seed) {
-        if (rs.size() < 5) return new double[]{0, 0};
+    /**
+     * Deterministic MOVING-BLOCK bootstrap 90% CI on the conditioned mean forward return (percent).
+     * Blocks of length ~forward preserve the autocorrelation of overlapping windows, so the CI is
+     * honestly wide (an iid bootstrap of overlapping returns would be far too narrow).
+     */
+    private static double[] bootstrapMeanCi(List<Double> rs, long seed, int forward) {
+        int n = rs.size();
+        if (n < 5) return new double[]{0, 0};
+        int block = Math.max(1, Math.min(forward, n));
         Random rnd = new Random(seed);
         double[] means = new double[BOOTSTRAP];
-        int n = rs.size();
         for (int b = 0; b < BOOTSTRAP; b++) {
-            double s = 0;
-            for (int k = 0; k < n; k++) s += rs.get(rnd.nextInt(n));
+            double s = 0; int c = 0;
+            while (c < n) {
+                int start = rnd.nextInt(n);
+                for (int k = 0; k < block && c < n; k++) { s += rs.get((start + k) % n); c++; }
+            }
             means[b] = s / n;
         }
         java.util.Arrays.sort(means);

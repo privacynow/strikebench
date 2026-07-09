@@ -40,14 +40,27 @@ io.liftandshift.strikebench
 ├── db          Db (HikariCP-pooled Postgres), Migrations (Flyway; classpath:db/migrations)
 ├── model       Quote, Candle, OptionQuote, OptionChain, Leg, Freshness, ...
 ├── pricing     BlackScholes, ImpliedVol, PayoffCurve, VolSurface, HistoricalVol
-├── market      MarketDataService (provider chain + caches + status), Universes, providers/*
+├── market      MarketDataService (provider chain + caches + status), MarketDataEngine (in-memory
+│               feed: warm-on-boot + singleflight + stale-while-refresh + SSE), Universes, providers/*
 ├── strategy    StrategyFamily, StrategyBuilder, Guardrails, StrategyIntent, CoverageCheck
 ├── recommend   RecommendationEngine, AutoRecommender (scout), SignalEngine
+├── research    PortfolioOptimizer, ResearchQuestionEngine (workbench), ETFReplicator, NotebookService
 ├── paper       AccountService, TradeService, PositionsService, AuditLog
-├── backtest    Backtester (no-look-ahead daily loop, tiered pricing)
+├── backtest    Backtester, PortfolioBacktester (no-look-ahead daily loops, tiered pricing)
+├── db          + DataJobService (Data Center jobs), DataCoverage, DataResetService, UnderlyingBackfill
 ├── broker      OAuth1, ETradeProvider, BrokerService (live-order gates)
-└── api         ApiServer (Javalin routes), AssistInstaller-era code removed, Main
+└── api         ApiServer (Javalin routes incl. /api/market/{engine,stream} + /api/data/*), Main
 ```
+
+**Market data flow.** `MarketDataEngine` sits above the provider chain as the single owned "current
+market state": it warms the active universe on boot, refreshes tracked symbols in the background
+(RTH-aware cadence), serves the last snapshot instantly (stale-while-refresh), and collapses
+concurrent same-symbol fetches onto one provider call. `/api/quotes` + the SSE `/api/market/stream`
+serve from it; full chains stay on-demand. The **Data Center** (`/api/data/*` + the Data screen) is
+the operational hub: engine status, per-symbol coverage matrix, source setup cards (with each
+connector's license/use mode), cancellable/idempotent background jobs (warm / snapshot / backfill /
+CSV import), and a tiered, confirmation-gated reset. Best-source ladder for evidence:
+**owned CSV > licensed API > forward snapshots > personal underlying (Yahoo) + modeled > fixtures.**
 
 Provider priority per data domain: **E*TRADE → Cboe → AlphaVantage/Polygon → Stooq →
 fixtures**, per-domain health at `GET /api/status` (never 500s). Frontend:
@@ -84,7 +97,12 @@ Environment variables, or the same keys lowercase-dotted in `./strikebench.prope
 | `DB_URL` / `DB_USER` / `DB_PASSWORD` | compose db | Postgres connection (`DB_PATH` is legacy, ETL-only) |
 | `FIXTURES_ONLY` | `false` | Demo data only, zero network |
 | `SNAPSHOT_ENABLED` | `false` | Record daily forward chain snapshots into `option_bar` |
+| `ENGINE_ENABLED` | `true` | In-memory market engine: warm the active universe on boot + refresh in the background |
+| `ENGINE_QUOTE_REFRESH_SECONDS` / `ENGINE_QUOTE_REFRESH_CLOSED_SECONDS` | `20` / `300` | Engine refresh cadence (RTH / market-closed) |
+| `ENGINE_MAX_TRACKED` / `ENGINE_STREAM_INTERVAL_SECONDS` | `160` / `3` | Warm-set cap (LRU) / SSE push interval on `/api/market/stream` |
+| `YAHOO_ENABLED` | `false` | **PERSONAL / local-clone only** — keyless Yahoo daily equity candles for underlying backfill (NOT options; you own Yahoo's terms). Never a hosted default |
 | `AUTH_ENABLED` + `OIDC_*` + `AUTH_ALLOWED_EMAILS` + `AUTH_COOKIE_SECURE` | off | Google sign-in + per-user scoping |
+| `AUTH_ADMIN_EMAILS` / `ADMIN_TOKEN` | — | Who can run destructive ops (data reset, CSV import). With auth on: admin-email allowlist (else the entry allowlist). With auth off: `ADMIN_TOKEN` matched via `X-Admin-Token`, else LOCAL-only (blocked behind the TLS proxy) |
 | `FEE_PER_CONTRACT_CENTS` | `65` | Commission per contract per leg |
 | `FEE_PER_ORDER_CENTS` | `0` | Flat fee per order |
 | `DEFAULT_STARTING_CASH_CENTS` | `10000000` | New paper account ($100k) |

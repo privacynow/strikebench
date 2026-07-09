@@ -88,6 +88,18 @@ class DataCenterTest {
     }
 
     @Test
+    void aJobWhereEveryItemFailsIsReportedFAILEDNotDone() throws Exception {
+        // Regression for the review finding: the FAILED branch was unreachable, so a fully-failed job
+        // masqueraded as DONE. A CSV import of a nonexistent path fails its only item → status FAILED.
+        Ctx c = wire();
+        var job = c.jobs().start("import_options_csv",
+                Map.of("path", "/nonexistent/strikebench-does-not-exist.csv", "source", "test"), null);
+        var done = await(c.jobs(), job.id());
+        assertThat(done.status()).isEqualTo("FAILED");
+        assertThat(c.jobs().get(job.id()).items().getFirst().status()).isEqualTo("FAILED");
+    }
+
+    @Test
     void coverageReportsWhatWeHold() throws Exception {
         Ctx c = wire();
         c.backfill().backfill("AAPL", java.time.LocalDate.parse("2026-04-01"), java.time.LocalDate.parse("2026-06-30"));

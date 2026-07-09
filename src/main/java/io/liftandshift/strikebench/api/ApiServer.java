@@ -481,6 +481,7 @@ public final class ApiServer {
 
     /** Manually records a forward snapshot of the active universe. Returns per-run counts. */
     private void adminSnapshot(Context ctx) {
+        requireAdmin(ctx);
         SnapshotService.SnapshotResult r = snapshots.snapshotActiveUniverse();
         ctx.json(Map.of(
                 "asof", r.asof().toString(),
@@ -500,6 +501,42 @@ public final class ApiServer {
     private String ownerId(Context ctx) {
         String uid = auth.currentUserId(ctx);
         return io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+    }
+
+    /**
+     * Admin gate for DESTRUCTIVE / privileged operations (data reset, server-path CSV import).
+     * Fails CLOSED on a public deployment: with auth on, the caller must be an admin email
+     * (AUTH_ADMIN_EMAILS, or the entry allowlist if that's unset); with auth off, either a matching
+     * ADMIN_TOKEN header or a genuinely LOCAL request (not behind the TLS proxy — nginx sets
+     * X-Forwarded-*). This is why /api/data/reset can't be triggered by an anonymous internet visitor.
+     */
+    private boolean isAdmin(Context ctx) {
+        if (auth.enabled()) {
+            String uid = auth.currentUserId(ctx);
+            if (uid == null || io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid)) return false;
+            String email = db.query("SELECT email FROM users WHERE id=?", r -> r.str("email"), uid)
+                    .stream().findFirst().orElse(null);
+            if (email == null) return false;
+            java.util.List<String> admins = cfg.authAdminEmails();
+            if (admins.isEmpty()) admins = cfg.authAllowedEmails();
+            return admins.isEmpty() || admins.contains(email.toLowerCase(Locale.ROOT));
+        }
+        String token = cfg.adminToken();
+        if (!token.isBlank()) return token.equals(ctx.header("X-Admin-Token"));
+        return isLocalRequest(ctx);
+    }
+
+    private static boolean isLocalRequest(Context ctx) {
+        return blank(ctx.header("X-Forwarded-For")) && blank(ctx.header("X-Forwarded-Proto")) && blank(ctx.header("X-Real-IP"));
+    }
+
+    private static boolean blank(String s) { return s == null || s.isBlank(); }
+
+    private void requireAdmin(Context ctx) {
+        if (!isAdmin(ctx)) {
+            throw new io.liftandshift.strikebench.auth.UnauthorizedException(
+                "Admin access required. On a public deployment, enable AUTH (+ AUTH_ADMIN_EMAILS), or set ADMIN_TOKEN and send it as X-Admin-Token.");
+        }
     }
 
     public record NoteRequest(String title, String body, String tags) {}
@@ -659,6 +696,7 @@ public final class ApiServer {
         out.put("fixturesOnly", cfg.fixturesOnly());
         out.put("marketOpen", io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()));
         out.put("jobKinds", io.liftandshift.strikebench.db.DataJobService.KINDS);
+        out.put("admin", isAdmin(ctx)); // UI hides destructive controls when the caller isn't admin
         ctx.json(out);
     }
 
@@ -708,6 +746,8 @@ public final class ApiServer {
 
     private void dataJobStart(Context ctx) {
         JobRequest b = requireBody(bodyOrNull(ctx, JobRequest.class));
+        // Importing a server-side CSV path reads a local file — gate it like a destructive op.
+        if ("import_options_csv".equalsIgnoreCase(b.kind())) requireAdmin(ctx);
         ctx.json(dataJobs.start(b.kind(), b.params(), ownerId(ctx)));
     }
 
@@ -723,6 +763,7 @@ public final class ApiServer {
     public record DataResetRequest(String tier, Boolean confirm) {}
 
     private void dataResetRoute(Context ctx) {
+        requireAdmin(ctx); // destructive: never reachable by an anonymous internet visitor
         DataResetRequest b = requireBody(bodyOrNull(ctx, DataResetRequest.class));
         if (b.confirm() == null || !b.confirm()) {
             ctx.status(400).json(Map.of("error", "confirm_required", "detail", "Reset requires confirm:true"));

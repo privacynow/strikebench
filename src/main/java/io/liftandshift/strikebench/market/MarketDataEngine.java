@@ -178,9 +178,16 @@ public final class MarketDataEngine {
         }
         return inFlight.computeIfAbsent(symbol, s -> {
             markRefreshing(s, true);
-            return java.util.concurrent.CompletableFuture
-                    .runAsync(() -> { try { doRefresh(s); } finally { markRefreshing(s, false); } }, refreshPool)
-                    .whenComplete((v, e) -> inFlight.remove(s));
+            try {
+                return java.util.concurrent.CompletableFuture
+                        .runAsync(() -> { try { doRefresh(s); } finally { markRefreshing(s, false); } }, refreshPool)
+                        .whenComplete((v, e) -> inFlight.remove(s));
+            } catch (java.util.concurrent.RejectedExecutionException ex) {
+                // Pool shutting down between the isShutdown() check and submit — clear the flag and
+                // do NOT cache anything (computeIfAbsent stores nothing when the mapping throws).
+                markRefreshing(s, false);
+                throw ex;
+            }
         });
     }
 
@@ -214,11 +221,18 @@ public final class MarketDataEngine {
                 return;
             }
             Quote v = q.get();
-            snapshots.put(symbol, new MarketSnapshot(v.symbol(), v.description(), v.last(), v.bid(), v.ask(),
+            commit(symbol, new MarketSnapshot(v.symbol(), v.description(), v.last(), v.bid(), v.ask(),
                     v.prevClose(), v.optionable(), v.freshness(), v.source(), v.asOfEpochMs(), t1, false, null));
         } catch (Exception e) {
             putError(symbol, e.getClass().getSimpleName() + ": " + e.getMessage());
         }
+    }
+
+    /** Write a snapshot only if the symbol is still tracked — a refresh finishing after eviction must
+     *  not re-orphan the symbol (present in snapshots, absent from lastAccess). */
+    private void commit(String symbol, MarketSnapshot snap) {
+        if (lastAccess.containsKey(symbol)) snapshots.put(symbol, snap);
+        else snapshots.remove(symbol);
     }
 
     private void putError(String symbol, String error) {
@@ -226,11 +240,11 @@ public final class MarketDataEngine {
         long now = clock.millis();
         if (prev != null) {
             // keep the last good data, just record the failed refresh
-            snapshots.put(symbol, new MarketSnapshot(prev.symbol(), prev.description(), prev.last(), prev.bid(),
+            commit(symbol, new MarketSnapshot(prev.symbol(), prev.description(), prev.last(), prev.bid(),
                     prev.ask(), prev.prevClose(), prev.optionable(), prev.freshness(), prev.source(),
                     prev.asOfEpochMs(), now, false, error));
         } else {
-            snapshots.put(symbol, new MarketSnapshot(symbol, null, null, null, null, null, false,
+            commit(symbol, new MarketSnapshot(symbol, null, null, null, null, null, false,
                     Freshness.MISSING, null, 0L, now, false, error));
         }
     }
