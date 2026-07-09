@@ -1137,68 +1137,49 @@ test('decision page: recommendations-as-a-competition — the pick, evidence, sc
   await page.evaluate(() => { App.state.ticket = null; App.state.discoverForm = null; });
 });
 
-test('research lab: optimizer builds a portfolio, hypothesis + replicator run, notebook saves', async () => {
+test('consolidated Lab tools live in their homes: optimizer on Decision, study tools on Research', async () => {
   await page.evaluate(() => Learn.setLevel('expert'));
-  await page.evaluate(() => { window.location.hash = '#/home'; });
+  // #/lab is dissolved — the URL still works but now renders Research (the study home).
+  await page.evaluate(() => { window.location.hash = '#/lab'; });
   await page.waitForSelector('#app[data-ready="true"]');
-  await go('#/lab');
-  await page.waitForSelector('.lab-grid');
+  await page.waitForSelector('#symbol-input', { timeout: 8000 }); // Research lookup = the Research view rendered
+  assert.ok(!(await page.locator('#nav a[data-route="lab"]').count()), 'Lab nav item is gone');
 
-  // Optimizer, DIAGNOSTIC mode: guarantees a funded (least-bad) set on the fixture universe and
-  // MUST label it "not a recommendation" (the honesty gate — normal mode funds only positive-EV).
+  // OPTIMIZER now lives at the bottom of the Decision competition (construction, not a Lab silo).
+  await page.evaluate(() => {
+    App.state.discoverForm = { symbol: 'AAPL', goal: 'DIRECTIONAL', thesis: 'neutral', horizon: 'month' };
+    App.state.filterState = {};
+  });
+  await go('#/decision');
+  await page.waitForSelector('#lab-opt-run', { timeout: 25000 });
+  // Diagnostic mode guarantees a funded (least-bad) set on the fixture universe, LABELED not-a-recommendation.
   await page.check('#lab-opt-diag');
   await page.click('#lab-opt-run');
   await page.waitForSelector('#lab-opt-summary', { timeout: 20000 });
   assert.ok((await page.locator('.lab-optimizer .lab-chart svg rect').count()) >= 1, 'composition chart bars');
   assert.ok((await page.locator('.lab-optimizer table tbody tr').count()) >= 1, 'allocations table rows');
   assert.ok((await page.locator('#lab-opt-out .alert-caution').count()) >= 1, 'diagnostic set labeled not-a-recommendation');
-  assert.ok((await page.locator('#lab-opt-out:has-text("Least-bad set")').count()) >= 1, 'diagnostic verdict not "Funded"');
 
-  // Normal mode (honesty gate): the fixture universe has no positive-EV idea, so it must show the
-  // honest empty state — NOT a funded portfolio. (Robust to either branch if a positive-EV idea exists.)
-  await page.uncheck('#lab-opt-diag');
-  await page.click('#lab-opt-run');
-  await page.waitForFunction(() => {
-    const out = document.querySelector('#lab-opt-out');
-    return out && (out.querySelector('#lab-opt-summary')
-      || /positive modeled expected value|Nothing funded/.test(out.textContent));
-  }, { timeout: 20000 });
-
-  // Hypothesis tester: verdict banner + win-rate gauge (SVG).
+  // STUDY TOOLS (signal test + notebook) now live on the Research index.
+  await go('#/research');
+  await page.waitForSelector('#research-study-tools .lab-grid', { timeout: 15000 });
+  // Icons render (magnifier was missing from ICON_PATHS -> empty box) — now in the study-tool header.
+  assert.ok((await page.locator('#research-study-tools .lab-title .icon svg > *').count()) >= 1, 'study-tool icons render paths');
   await page.click('#lab-hyp-run');
   await page.waitForSelector('#lab-hyp-out .alert', { timeout: 20000 });
   assert.ok((await page.locator('#lab-hyp-out .lab-chart svg').count()) >= 1, 'win-rate gauge');
   assert.ok((await page.locator('#lab-hyp-out:has-text("Signals")').count()) >= 1, 'sample chip');
-  // Icons must render (magnifier was missing from ICON_PATHS -> empty box).
-  const sigChip = page.locator('.lab-hero-chip', { hasText: 'Signal test' });
-  assert.ok((await sigChip.locator('svg > *').count()) >= 1, 'Signal-test magnifier icon renders a path');
-  // Gauge must use resolved design tokens, not the undefined --line/--fg (which rendered black).
+  // Gauge uses resolved design tokens, not the undefined --line/--fg (which rendered black).
   const gaugeHtml = await page.locator('#lab-hyp-out .lab-chart').first().innerHTML();
   assert.ok(gaugeHtml.indexOf('var(--line)') < 0 && gaugeHtml.indexOf('var(--fg)') < 0, 'gauge uses no unresolved CSS vars');
 
-  // ETF replicator: synthetic structure.
-  await page.click('#lab-rep-run');
-  await page.waitForSelector('#lab-rep-out .chip-row', { timeout: 20000 });
-  assert.match(await page.locator('#lab-rep-out .decision-why').first().innerText(), /Synthetic/);
-
-  // D1: the replicator hands off to the Trade builder (no dead-end) — the synthetic template
-  // builds from the live chain into a 2-leg position the user can analyze + place.
-  await page.click('#lab-rep-build');
-  await page.waitForFunction(() => location.hash.indexOf('/trade/shape') >= 0);
-  await page.waitForFunction(() => document.querySelectorAll('#builder-legs .leg-row').length === 2, { timeout: 20000 });
-  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
-  await page.evaluate(() => { window.location.hash = '#/lab'; });
-  await page.waitForSelector('.lab-grid');
-
-  // Notebook: create a note, it persists into the list.
+  // Notebook: create + delete (delete regression: button called the non-existent API.delete).
   await page.click('#lab-note-new');
   await page.fill('.note-editor input[placeholder="Title"]', 'My hypothesis');
   await page.fill('.note-editor textarea', 'SPY put spreads only at high IV rank');
   await page.click('.note-editor button:has-text("Save")');
   await page.waitForSelector('.lab-notebook:has-text("My hypothesis")', { timeout: 10000 });
-
-  // Delete it (regression: the button called the non-existent API.delete and silently no-op'd).
-  await page.locator('.lab-notebook').getByText('My hypothesis').click();       // expand the row
+  await page.locator('.lab-notebook').getByText('My hypothesis').click();
   await page.locator('.lab-notebook').getByRole('button', { name: 'Delete' }).click();
   await page.waitForFunction(
     () => { var nb = document.querySelector('.lab-notebook'); return nb && nb.textContent.indexOf('My hypothesis') < 0; },

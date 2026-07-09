@@ -45,6 +45,9 @@
       // and Ideas/Ticket/Backtest are stages of the Trade workbench
       if (route === 'welcome') { route = 'home'; params = ['tour']; }
       if (route === 'account') { route = 'portfolio'; params = ['account']; }
+      // Lab dissolved: its tools moved to their natural homes (study→Research, optimizer→Decision,
+      // replicator→Builder template). #/lab* keeps working by redirecting to Research (the study home).
+      if (route === 'lab') { route = 'research'; params = []; }
       if (route === 'recommend') { route = 'trade'; params = ['discover'].concat(params); }
       if (route === 'backtest') { route = 'trade'; params = ['verify']; }
       if (route === 'ticket') {
