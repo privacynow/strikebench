@@ -24,6 +24,7 @@
     <hikaricp.version>6.2.1</hikaricp.version>
     <flyway.version>11.1.0</flyway.version>
     <caffeine.version>3.2.0</caffeine.version>
+    <nimbus-oidc.version>11.20.1</nimbus-oidc.version>
     <slf4j.version>2.0.17</slf4j.version>
     <logback.version>1.5.18</logback.version>
     <junit.version>5.11.4</junit.version>
@@ -84,6 +85,14 @@
       <groupId>com.github.ben-manes.caffeine</groupId>
       <artifactId>caffeine</artifactId>
       <version>${caffeine.version}</version>
+    </dependency>
+
+    <!-- Google OIDC login: Nimbus handles the authorization-code flow + ID-token/JWKS
+         validation (the same engine pac4j delegates to), so no crypto is hand-rolled. -->
+    <dependency>
+      <groupId>com.nimbusds</groupId>
+      <artifactId>oauth2-oidc-sdk</artifactId>
+      <version>${nimbus-oidc.version}</version>
     </dependency>
 
     <!-- Logging -->

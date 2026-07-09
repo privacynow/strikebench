@@ -35,6 +35,13 @@ public final class AuditLog {
         return db.query("SELECT * FROM audit ORDER BY id DESC LIMIT ? OFFSET ?", AuditLog::mapRow, size, offset);
     }
 
+    /** Audit rows for one account only (per-user scoping when auth is enabled). */
+    public List<Map<String, Object>> pageForAccount(String accountId, int page, int size) {
+        int offset = Math.max(0, page) * size;
+        return db.query("SELECT * FROM audit WHERE account_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
+                AuditLog::mapRow, accountId, size, offset);
+    }
+
     private static Map<String, Object> mapRow(Db.Row r) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", r.lng("id"));

@@ -132,6 +132,29 @@ public final class AppConfig {
     public String polygonBaseUrl() { return get("POLYGON_BASE_URL", "https://api.polygon.io"); }
     public String alphaVantageBaseUrl() { return get("ALPHAVANTAGE_BASE_URL", "https://www.alphavantage.co"); }
 
+    // ---- Authentication (Google OIDC; OFF by default so local/keyless use is unchanged) ----
+    /** When true, /api/* requires a signed-in user (Google OIDC). Off = single shared local account. */
+    public boolean authEnabled() { return getBool("AUTH_ENABLED", false); }
+    public String oidcIssuer() { return get("OIDC_ISSUER", "https://accounts.google.com"); }
+    public String oidcClientId() { return get("OIDC_CLIENT_ID", ""); }
+    public String oidcClientSecret() { return get("OIDC_CLIENT_SECRET", ""); }
+    /** The registered redirect URI; must match the Google console entry exactly. */
+    public String oidcCallbackUrl() { return get("OIDC_CALLBACK_URL", "http://localhost:" + port() + "/auth/callback"); }
+    /** Where to land after login/logout. */
+    public String authPostLoginUrl() { return get("AUTH_POST_LOGIN_URL", "/"); }
+    /** Mark the session cookie Secure (HTTPS-only). Set true in prod behind the TLS proxy;
+     *  false for plain-http local dev so login still works. */
+    public boolean authCookieSecure() { return getBool("AUTH_COOKIE_SECURE", false); }
+    /** Comma-separated allowlist of permitted emails. Empty = any Google account with a verified email. */
+    public java.util.List<String> authAllowedEmails() {
+        String raw = get("AUTH_ALLOWED_EMAILS", "");
+        return java.util.Arrays.stream(raw.split(","))
+                .map(s -> s.trim().toLowerCase(Locale.ROOT))
+                .filter(s -> !s.isBlank())
+                .distinct()
+                .toList();
+    }
+
     // ---- Forward chain snapshots (the historical-evidence moat) ----
     /** When true, a background job records a daily EOD snapshot of the active universe's chains. */
     public boolean snapshotEnabled() { return getBool("SNAPSHOT_ENABLED", false); }

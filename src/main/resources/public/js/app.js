@@ -188,8 +188,41 @@
     if (beginner && risk.value === 'aggressive') risk.value = 'conservative';
   }
 
+  /** Full-page sign-in screen shown only when the server requires auth and we're signed out. */
+  function renderSignIn(me) {
+    var app = document.getElementById('app');
+    if (!app) return;
+    app.innerHTML = '';
+    app.appendChild(UI.el('div', { class: 'card signin-card' }, [
+      UI.el('h1', {}, 'Sign in'),
+      UI.el('p', { class: 'muted' },
+        'This StrikeBench instance is private. Sign in with your Google account to continue.'),
+      UI.el('a', { class: 'btn btn-lg', href: (me && me.loginUrl) || '/auth/login' }, 'Sign in with Google')
+    ]));
+    app.setAttribute('data-ready', 'true');
+  }
+
+  /** Appends a Sign out link to the header — only when auth is enabled and a user is signed in. */
+  function addSignOut() {
+    if (!App._me || !App._me.authEnabled || !App.authUser) return;
+    var controls = document.querySelector('.topbar-controls');
+    if (!controls || document.getElementById('sign-out')) return;
+    controls.appendChild(UI.el('a',
+      { class: 'btn-link', id: 'sign-out', href: (App._me && App._me.logoutUrl) || '/auth/logout', title: 'Sign out' },
+      'Sign out'));
+  }
+
   async function boot() {
+    // Auth gate: when the server requires sign-in and we are not signed in, show ONLY the
+    // sign-in screen. When auth is off (the default) /me reports authenticated -> normal boot.
+    try {
+      var me = await API.get('/api/auth/me');
+      App._me = me;
+      if (me && me.authEnabled && !me.authenticated) { renderSignIn(me); return; }
+      App.authUser = (me && me.user) || null;
+    } catch (e) { /* if /me is unreachable, fall through to the normal app */ }
     initHeader();
+    addSignOut();
     applyLevelSideEffects();
     initTheme();
     initSearch();

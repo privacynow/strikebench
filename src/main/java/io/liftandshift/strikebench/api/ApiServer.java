@@ -84,6 +84,7 @@ public final class ApiServer {
     private final PositionsService positions;
     private final io.liftandshift.strikebench.market.UniverseService universe;
     private final io.liftandshift.strikebench.market.SnapshotService snapshots;
+    private final io.liftandshift.strikebench.auth.AuthService auth;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
@@ -93,10 +94,12 @@ public final class ApiServer {
                      AccountService accounts, TradeService trades, RecommendationEngine engine,
                      AutoRecommender auto, BrokerService broker, Backtester backtester,
                      PositionsService positions, io.liftandshift.strikebench.market.UniverseService universe,
-                     io.liftandshift.strikebench.market.SnapshotService snapshots) {
+                     io.liftandshift.strikebench.market.SnapshotService snapshots,
+                     io.liftandshift.strikebench.auth.AuthService auth) {
         this.positions = positions;
         this.universe = universe;
         this.snapshots = snapshots;
+        this.auth = auth;
         this.cfg = cfg;
         this.clock = clock;
         this.market = market;
@@ -156,9 +159,23 @@ public final class ApiServer {
         Backtester backtester = new Backtester(market, historical, cfg, db, clock);
         io.liftandshift.strikebench.market.UniverseService universe = new io.liftandshift.strikebench.market.UniverseService(db, cfg, clock);
         io.liftandshift.strikebench.market.SnapshotService snapshots = new io.liftandshift.strikebench.market.SnapshotService(market, universe, db, clock);
-        ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots);
+        io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
+        ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth);
         server.db = db;
         return server;
+    }
+
+    /** Builds the auth service; fails CLOSED if AUTH_ENABLED is set without OIDC credentials. */
+    private static io.liftandshift.strikebench.auth.AuthService buildAuth(AppConfig cfg, Db db, Clock clock) {
+        if (!cfg.authEnabled()) {
+            return new io.liftandshift.strikebench.auth.AuthService(cfg, db, clock, null);
+        }
+        if (cfg.oidcClientId().isBlank() || cfg.oidcClientSecret().isBlank()) {
+            throw new IllegalStateException("AUTH_ENABLED=true requires OIDC_CLIENT_ID and OIDC_CLIENT_SECRET");
+        }
+        var provider = new io.liftandshift.strikebench.auth.GoogleOidcProvider(
+                cfg.oidcIssuer(), cfg.oidcClientId(), cfg.oidcClientSecret(), cfg.oidcCallbackUrl());
+        return new io.liftandshift.strikebench.auth.AuthService(cfg, db, clock, provider);
     }
 
     public Javalin start(int port) {
@@ -166,6 +183,25 @@ public final class ApiServer {
         app = Javalin.create(c -> {
             c.jetty.port = port;
             c.router.ignoreTrailingSlashes = true;
+            // Server-side sessions are only needed for OIDC login; add the handler only when auth
+            // is enabled so the default (auth-off) request path is byte-identical to before.
+            // Harden the session cookie: HttpOnly (never readable by JS -> the fixation defense
+            // isn't undone by XSS), SameSite=Lax (CSRF), and Secure when behind the TLS proxy.
+            if (auth.enabled()) {
+                c.jetty.modifyServletContextHandler(h -> {
+                    var sh = new org.eclipse.jetty.ee10.servlet.SessionHandler();
+                    sh.setHttpOnly(true);
+                    sh.setSameSite(org.eclipse.jetty.http.HttpCookie.SameSite.LAX);
+                    sh.getSessionCookieConfig().setHttpOnly(true);
+                    sh.getSessionCookieConfig().setSecure(cfg.authCookieSecure());
+                    h.setSessionHandler(sh);
+                });
+                // Behind a TLS-terminating proxy the app sees plain HTTP; honor X-Forwarded-Proto
+                // so request.isSecure() is true and the Secure session cookie is actually emitted.
+                // (nginx must send: proxy_set_header X-Forwarded-Proto $scheme;)
+                c.jetty.modifyHttpConfiguration(httpConfig ->
+                        httpConfig.addCustomizer(new org.eclipse.jetty.server.ForwardedRequestCustomizer()));
+            }
             // Resident java.lang.Error handler: never throws, so Error storms (e.g. broken
             // classloading after the jar is rebuilt under a running JVM) end in a 500 instead
             // of wedging Javalin's task loop.
@@ -185,6 +221,23 @@ public final class ApiServer {
                     sf.headers = Map.of("Cache-Control", "no-store");
                 });
             }
+            // Auth: sign-in flow lives outside /api; /api/auth/me is always readable so the SPA
+            // can decide whether to show the sign-in screen.
+            c.routes.get("/auth/login", auth::startLogin);
+            c.routes.get("/auth/callback", auth::callback);
+            c.routes.get("/auth/logout", auth::logout);
+            c.routes.post("/auth/logout", auth::logout);
+            c.routes.get("/api/auth/me", ctx -> ctx.json(auth.me(ctx)));
+            // Gate every other /api route when auth is enabled. Health/config/status stay open so
+            // the SPA can bootstrap and show a login screen instead of a mystery failure.
+            c.routes.before("/api/*", ctx -> {
+                if (!auth.enabled()) return;
+                String p = ctx.path();
+                if (p.startsWith("/api/auth/") || p.equals("/api/health")
+                        || p.equals("/api/config") || p.equals("/api/status")) return;
+                auth.requireUser(ctx);
+            });
+
             c.routes.get("/api/status", this::status);
             c.routes.get("/api/config", this::config);
             c.routes.get("/api/health", this::health);
@@ -223,7 +276,7 @@ public final class ApiServer {
             c.routes.post("/api/positions/sell", this::positionsSell);
             c.routes.get("/api/portfolio/summary", this::portfolioSummary);
             c.routes.get("/api/portfolio/greeks", ctx ->
-                    ctx.json(trades.portfolioGreeks(accounts.getOrCreateDefault().id())));
+                    ctx.json(trades.portfolioGreeks(currentAccount(ctx).id())));
 
             c.routes.post("/api/backtest", ctx ->
                     ctx.json(backtester.run(requireBody(bodyOrNull(ctx, Backtester.BacktestRequest.class)))));
@@ -245,6 +298,8 @@ public final class ApiServer {
             c.routes.post("/api/broker/orders/place", this::brokerPlace);
             c.routes.put("/api/broker/orders/{id}/cancel", this::brokerCancel);
 
+            c.routes.exception(io.liftandshift.strikebench.auth.UnauthorizedException.class, (e, ctx) ->
+                    ctx.status(401).json(Map.of("error", "auth_required", "detail", String.valueOf(e.getMessage()), "loginUrl", "/auth/login")));
             c.routes.exception(TradeRejectedException.class, (e, ctx) ->
                     ctx.status(422).json(Map.of("error", "trade_rejected", "detail", e.getMessage(), "reasons", e.reasons())));
             c.routes.exception(IllegalArgumentException.class, (e, ctx) ->
@@ -361,6 +416,23 @@ public final class ApiServer {
                 "elapsedMs", r.elapsedMs()));
     }
 
+    /** The paper account for the current request's user (the single local account when auth is off). */
+    private Account currentAccount(Context ctx) {
+        return accounts.getOrCreateDefaultForUser(auth.currentUserId(ctx));
+    }
+
+    /**
+     * Ownership guard for trade-by-id routes: a signed-in user may only touch trades in their own
+     * account. Missing OR another user's trade both surface as 404 (never leak existence). A no-op
+     * when auth is off, since every trade belongs to the single local account.
+     */
+    private void ensureOwnedTrade(Context ctx, String tradeId) {
+        TradeRecord t = trades.get(tradeId); // NoSuchElementException -> 404 when absent
+        if (!t.accountId().equals(currentAccount(ctx).id())) {
+            throw new java.util.NoSuchElementException("no such trade " + tradeId);
+        }
+    }
+
     // ---- Status / config ----
 
     private void status(Context ctx) {
@@ -448,7 +520,7 @@ public final class ApiServer {
     // ---- Account ----
 
     private void account(Context ctx) {
-        Account acct = accounts.getOrCreateDefault();
+        Account acct = currentAccount(ctx);
         ctx.json(Map.of(
                 "account", accountView(acct),
                 "ledger", accounts.ledger(acct.id(), 0, 20)));
@@ -459,7 +531,9 @@ public final class ApiServer {
     private void accountReset(Context ctx) {
         ResetRequest req = requireBody(bodyOrNull(ctx, ResetRequest.class));
         long cash = req.startingCashCents() == null ? cfg.defaultStartingCashCents() : req.startingCashCents();
-        Account acct = accounts.reset(cash, Boolean.TRUE.equals(req.confirm()), Boolean.TRUE.equals(req.force()));
+        // Scope the reset to the CALLER's account so a user can never reset someone else's.
+        Account acct = accounts.resetAccount(currentAccount(ctx).id(), cash,
+                Boolean.TRUE.equals(req.confirm()), Boolean.TRUE.equals(req.force()));
         ctx.json(Map.of("account", accountView(acct)));
     }
 
@@ -597,7 +671,7 @@ public final class ApiServer {
         if (req == null || req.symbol() == null || req.symbol().isBlank()) {
             throw new IllegalArgumentException("symbol is required");
         }
-        Account acct = accounts.getOrCreateDefault();
+        Account acct = currentAccount(ctx);
         // Hold-based intents read the account's real position when the caller didn't supply
         // one: free shares + average basis feed strike selection and the intent framing.
         StrategyIntent intent = StrategyIntent.parse(req.intent());
@@ -622,7 +696,7 @@ public final class ApiServer {
         if (req == null || req.symbol() == null || req.symbol().isBlank()) {
             throw new IllegalArgumentException("symbol is required");
         }
-        Account acct = accounts.getOrCreateDefault();
+        Account acct = currentAccount(ctx);
         StrategyIntent intent = StrategyIntent.parse(req.intent());
         if (req.holdings() == null && intent != StrategyIntent.DIRECTIONAL && intent != StrategyIntent.ACQUIRE) {
             try {
@@ -649,7 +723,7 @@ public final class ApiServer {
                     req.targetProfitCents(), req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(),
                     req.riskMode(), req.allow0dte(), req.intents(), req.filters());
         }
-        Account acct = accounts.getOrCreateDefault();
+        Account acct = currentAccount(ctx);
         // Real holdings feed the EXIT/HEDGE scans and let INCOME write against held shares
         List<AutoRecommender.HoldingInfo> held = positions.list(acct.id()).stream()
                 .map(p -> new AutoRecommender.HoldingInfo(p.symbol(),
@@ -752,7 +826,7 @@ public final class ApiServer {
     }
 
     private void tradePreview(Context ctx) {
-        Account acct = accounts.getOrCreateDefault();
+        Account acct = currentAccount(ctx);
         TradeService.OpenRequest req = toOpenRequest(bodyOrNull(ctx, TradeOpenRequest.class), acct);
         Verdict verdict = guardrailCheck(req, acct);
         ctx.json(Map.of(
@@ -764,7 +838,7 @@ public final class ApiServer {
     }
 
     private void tradeCreate(Context ctx) {
-        Account acct = accounts.getOrCreateDefault();
+        Account acct = currentAccount(ctx);
         TradeService.OpenRequest req = toOpenRequest(bodyOrNull(ctx, TradeOpenRequest.class), acct);
         Verdict verdict = guardrailCheck(req, acct);
         if (verdict.blocked()) {
@@ -777,7 +851,7 @@ public final class ApiServer {
     }
 
     private void tradeList(Context ctx) {
-        Account acct = accounts.getOrCreateDefault();
+        Account acct = currentAccount(ctx);
         int page = intParam(ctx, "page", 0);
         int size = Math.clamp(intParam(ctx, "size", 20), 1, 100);
         TradeService.Page result = trades.list(acct.id(), ctx.queryParam("status"),
@@ -792,7 +866,7 @@ public final class ApiServer {
     public record StockOrderRequest(String symbol, Long shares) {}
 
     private void positionsList(Context ctx) {
-        Account acct = accounts.getOrCreateDefault();
+        Account acct = currentAccount(ctx);
         ctx.json(Map.of("positions", positions.list(acct.id()),
                 "note", "Shares locked as covered-call coverage cannot be sold until the covering trade closes"));
     }
@@ -800,14 +874,14 @@ public final class ApiServer {
     private void positionsBuy(Context ctx) {
         StockOrderRequest req = bodyOrNull(ctx, StockOrderRequest.class);
         validateStockOrder(req);
-        Account acct = accounts.getOrCreateDefault();
+        Account acct = currentAccount(ctx);
         ctx.status(201).json(positions.buy(acct.id(), req.symbol(), req.shares()));
     }
 
     private void positionsSell(Context ctx) {
         StockOrderRequest req = bodyOrNull(ctx, StockOrderRequest.class);
         validateStockOrder(req);
-        Account acct = accounts.getOrCreateDefault();
+        Account acct = currentAccount(ctx);
         ctx.json(positions.sell(acct.id(), req.symbol(), req.shares()));
     }
 
@@ -819,6 +893,7 @@ public final class ApiServer {
 
     private void tradeDetail(Context ctx) {
         String id = ctx.pathParam("id");
+        ensureOwnedTrade(ctx, id);
         TradeRecord t = trades.get(id);
         TradeService.MarkView current = null;
         if (TradeRecord.ACTIVE.equals(t.status())) {
@@ -857,7 +932,7 @@ public final class ApiServer {
     /** One honest headline: cash + share value + what closing every open trade pays now.
      *  Reserve is a lien INSIDE cash (never added twice); all marks pre-close-fee. */
     private void portfolioSummary(Context ctx) {
-        var acct = accounts.getOrCreateDefault();
+        var acct = currentAccount(ctx);
         long sharesValue = 0;
         int sharesCount = 0;
         boolean complete = true;
@@ -889,10 +964,12 @@ public final class ApiServer {
     }
 
     private void tradeRefresh(Context ctx) {
+        ensureOwnedTrade(ctx, ctx.pathParam("id"));
         ctx.json(trades.refresh(ctx.pathParam("id")));
     }
 
     private void tradeUnwind(Context ctx) {
+        ensureOwnedTrade(ctx, ctx.pathParam("id"));
         ConfirmRequest req = bodyOrNull(ctx, ConfirmRequest.class);
         TradeService.CloseResult result = trades.unwind(ctx.pathParam("id"),
                 req != null && Boolean.TRUE.equals(req.confirm()));
@@ -900,6 +977,7 @@ public final class ApiServer {
     }
 
     private void tradeSettle(Context ctx) {
+        ensureOwnedTrade(ctx, ctx.pathParam("id"));
         ConfirmRequest req = bodyOrNull(ctx, ConfirmRequest.class);
         TradeService.CloseResult result = trades.settle(ctx.pathParam("id"),
                 req != null && Boolean.TRUE.equals(req.confirm()));
@@ -907,6 +985,7 @@ public final class ApiServer {
     }
 
     private void tradeDelete(Context ctx) {
+        ensureOwnedTrade(ctx, ctx.pathParam("id"));
         boolean confirm = "true".equalsIgnoreCase(ctx.queryParam("confirm"));
         TradeRecord t = trades.delete(ctx.pathParam("id"), confirm);
         ctx.json(Map.of("trade", TradeView.of(t)));
@@ -950,7 +1029,12 @@ public final class ApiServer {
     // ---- Audit ----
 
     private void auditPage(Context ctx) {
-        ctx.json(Map.of("entries", audit.page(intParam(ctx, "page", 0), 50)));
+        int page = intParam(ctx, "page", 0);
+        // Per-user: show only the caller's account audit trail when auth is on; global when off.
+        var entries = auth.enabled()
+                ? audit.pageForAccount(currentAccount(ctx).id(), page, 50)
+                : audit.page(page, 50);
+        ctx.json(Map.of("entries", entries));
     }
 
     /**

@@ -41,6 +41,49 @@ public final class AccountService {
         });
     }
 
+    /**
+     * The paper account for a given signed-in user. When auth is off the userId is
+     * {@link io.liftandshift.strikebench.auth.AuthService#LOCAL_USER} (or null) and this is exactly
+     * {@link #getOrCreateDefault()} — the single shared account, unchanged. For a real user it
+     * returns their account; the FIRST real user to arrive claims the pre-auth (unclaimed) account
+     * so the owner keeps their history; later users get a fresh funded account.
+     */
+    public Account getOrCreateDefaultForUser(String userId) {
+        if (userId == null || io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(userId)) {
+            return getOrCreateDefault();
+        }
+        return db.tx(c -> {
+            List<Account> mine = Db.queryOn(c,
+                    "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
+                    AccountService::map, userId);
+            if (!mine.isEmpty()) return mine.getFirst();
+
+            String now = now();
+            List<String> orphan = Db.queryOn(c,
+                    "SELECT id FROM accounts WHERE user_id IS NULL AND type='PAPER' ORDER BY created_at LIMIT 1",
+                    r -> r.str("id"));
+            if (!orphan.isEmpty()) {
+                // Claim atomically: the WHERE user_id IS NULL guard + rowcount makes a concurrent
+                // first sign-in (which blocks on the row lock, then sees it claimed) fall through
+                // rather than double-adopt the same account.
+                int claimed = Db.execOn(c, "UPDATE accounts SET user_id=?, updated_at=? WHERE id=? AND user_id IS NULL",
+                        userId, now, orphan.getFirst());
+                if (claimed == 1) return get(c, orphan.getFirst());
+                List<Account> mineNow = Db.queryOn(c,
+                        "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
+                        AccountService::map, userId);
+                if (!mineNow.isEmpty()) return mineNow.getFirst();
+            }
+            String id = Ids.account();
+            long cash = cfg.defaultStartingCashCents();
+            Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
+                    id, userId, "Paper Account", "PAPER", cash, cash, 0, now, now);
+            Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+                    id, null, now, "DEPOSIT", cash, cash, 0, "initial paper funding");
+            return get(c, id);
+        });
+    }
+
     public Account get(String id) {
         return db.with(c -> get(c, id));
     }
@@ -56,11 +99,17 @@ public final class AccountService {
      * account has traded unless force. Ledger stays append-only: open trades are voided with
      * reserve releases, then a single RESET row absorbs the cash difference.
      */
+    /** Resets the single default account (legacy/no-scope entry — used when auth is off). */
     public Account reset(long startingCashCents, boolean confirm, boolean force) {
+        return resetAccount(getOrCreateDefault().id(), startingCashCents, confirm, force);
+    }
+
+    /** Resets a SPECIFIC account by id — the per-user entry so a user only ever resets their own. */
+    public Account resetAccount(String accountId, long startingCashCents, boolean confirm, boolean force) {
         if (!confirm) throw new IllegalArgumentException("reset requires confirm=true");
         if (startingCashCents <= 0) throw new IllegalArgumentException("startingCash must be positive");
         Account result = db.tx(c -> {
-            Account acct = getOrCreateDefaultOn(c);
+            Account acct = get(c, accountId);
             if (acct.hasTraded() && !force) {
                 throw new IllegalStateException("account has trades; pass force=true to reset anyway");
             }
@@ -93,12 +142,6 @@ public final class AccountService {
         });
         audit.log(result.id(), null, "ACCOUNT_RESET", "INFO", Map.of("startingCashCents", startingCashCents, "force", force));
         return result;
-    }
-
-    private Account getOrCreateDefaultOn(Connection c) throws SQLException {
-        List<Account> existing = Db.queryOn(c, "SELECT * FROM accounts WHERE type='PAPER' ORDER BY created_at LIMIT 1", AccountService::map);
-        if (!existing.isEmpty()) return existing.getFirst();
-        throw new IllegalStateException("no paper account exists yet");
     }
 
     public List<LedgerEntry> ledger(String accountId, int page, int size) {

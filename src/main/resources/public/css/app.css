@@ -1071,3 +1071,7 @@ body.lvl-expert .not-expert { display: none !important; }
 }
 .idea-chip { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; }
 .idea-chip .icon { color: var(--accent); display: inline-flex; }
+
+/* Private-instance sign-in screen (only rendered when AUTH_ENABLED and signed out). */
+.signin-card { max-width: 420px; margin: 15vh auto; text-align: center; }
+.signin-card .btn-lg { margin-top: 12px; }
