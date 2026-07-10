@@ -447,8 +447,9 @@
       UI.rangeChart({ initial: '1y', fetch: historyFetch(symbol) }),
       explain('Real OHLC candles: green closed up, red closed down; slide across for open/high/low/close, change, and volume. Pills change the window; long windows aggregate to weekly candles.')));
 
-    // The thesis workbench: "I think X happens next" → hundreds of simulated futures → a strategy
-    // test. This is where a view becomes something you can actually examine.
+    // The Research progression on a symbol: NOW (chart/news above) → HISTORICAL EVIDENCE
+    // (did this behavior happen before?) → POSSIBLE FUTURES (simulate the view) → express in Trade.
+    root.appendChild(hypothesisCard(Learn.currentLevel(), { symbol: symbol }));
     root.appendChild(whatIfCard(symbol));
 
     var chainAnchor = el('div', { id: 'chain-anchor' });
@@ -1541,7 +1542,7 @@
     var sectorField = el('div', { class: 'field', style: 'grid-column: 1 / -1' },
       el('label', {}, 'Universe (applies everywhere)'), sectorSel);
     var oneOffField = el('div', { class: 'field', style: 'grid-column: 1 / -1' },
-      el('label', {}, 'One-off universe for this scan only'), universe);
+      el('label', {}, 'Scan override'), universe);
     var scanTargetField = el('div', { class: 'field' }, el('label', {}, 'Target profit ($)'), scanTarget);
     var expiryRow = el('div', { class: 'btn-row' },
       el('span', { class: 'muted' }, 'Expirations:'),
@@ -3042,8 +3043,8 @@
     var card = el('div', { class: 'card', id: 'whatif-card' });
     card.appendChild(UI.cardHeader('What COULD happen next?'));
     card.appendChild(explain(level === 'beginner'
-      ? 'Pick the story you believe and we draw hundreds of realistic “possible futures” for ' + symbol + ' — so you can SEE the range of outcomes, then test a strategy against it. (Its partner card below, “What HAS happened”, checks your idea against the real past.)'
-      : 'Parameterize a scenario (model, drift, vol, jumps, IV path) and preview the Monte-Carlo fan; hand it to Verify to run a structure against it. The “What HAS happened” card below is the observed-history half of the pair.'));
+      ? 'Pick the story you believe and we draw hundreds of realistic “possible futures” for ' + symbol + ' — so you can SEE the range of outcomes, then test a strategy against it. (“Historical evidence” above checks the same belief against the real past.)'
+      : 'Parameterize a scenario (model, drift, vol, jumps, IV path) and preview the Monte-Carlo fan; hand it to Verify to run a structure against it. “Historical evidence” above is the observed-history half of the pair.'));
     var f = Scenario.form(level, symbol);
     card.appendChild(f.el);
     var out = el('div', { id: 'whatif-out' });
@@ -3080,27 +3081,33 @@
     vf.simSymbol = symbol;
     var card = el('div', { class: 'card', id: 'bt-scenario-card' });
 
-    // ANY symbol, visibly: an input + one-tap universe chips (it silently followed the working
-    // symbol before, which read as "hardcoded to AAPL").
+    // The MARKET CONTEXT SELECTOR: sector (the same polished rail as everywhere else) +
+    // searchable symbol + the FULL universe as one non-wrapping peer rail. The old version
+    // wrapped eight bare pills with no way to change sector — scattered, and a dead end.
     var symInput = el('input', { type: 'text', id: 'sc-symbol', value: symbol, list: 'universe-symbols', style: 'max-width:120px' });
     function switchSymbol(raw) {
       var s2 = (raw || '').trim().toUpperCase();
       if (!s2 || s2 === vf.simSymbol) return;
       vf.simSymbol = s2;
       App.state.lastRecommendSymbol = s2;
-      scenarioVerifyPanel(host); // self-rebuild: header, chips, working-idea eligibility all follow
+      scenarioVerifyPanel(host); // self-rebuild: header, peers, working-idea eligibility all follow
     }
     symInput.addEventListener('change', function () { switchSymbol(symInput.value); });
     symInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') switchSymbol(symInput.value); });
-    var uniChips = el('span', { class: 'sym-chips', id: 'sc-uni-chips' });
-    ((App.state.universe && App.state.universe.active && App.state.universe.active.symbols) || [])
-      .slice(0, 8).forEach(function (u) {
-        uniChips.appendChild(el('button', { type: 'button', class: 'sym-chip' + (u === symbol ? ' active' : ''),
-          onclick: function () { switchSymbol(u); } }, u));
-      });
     card.appendChild(UI.cardHeader('Imagine a future for ' + symbol,
       el('span', { class: 'btn-row', style: 'margin:0' }, symInput)));
-    card.appendChild(el('div', { class: 'field' }, uniChips));
+    // Sector first: picking one switches the shared universe (same behavior as Ideas/Research)
+    // and refreshes the peer rail below.
+    card.appendChild(el('div', { class: 'field' },
+      el('label', {}, 'Universe'),
+      sectorRail({ onPick: function () { setTimeout(function () { scenarioVerifyPanel(host); }, 250); } })));
+    var peerRail = el('div', { class: 'peer-rail', id: 'sc-uni-chips' });
+    ((App.state.universe && App.state.universe.active && App.state.universe.active.symbols) || [])
+      .forEach(function (u) {
+        peerRail.appendChild(el('button', { type: 'button', class: 'sym-chip' + (u === symbol ? ' active' : ''),
+          onclick: function () { switchSymbol(u); } }, u));
+      });
+    card.appendChild(el('div', { class: 'field' }, el('label', {}, 'Stocks in this universe'), peerRail));
     card.appendChild(explain(level === 'beginner'
       ? 'Three choices: which stock, what story you believe (the price path), and which position (the payoff shape). We run the position through hundreds of simulated futures and report, in plain dollars, how it tends to end — priced against today’s real option quotes when available.'
       : 'Monte-Carlo the position across the scenario paths. Entry is priced from LIVE market quotes (executable sides) when a chain matches; exits are BSM along the IV path (default: the chain’s ATM IV). The verdict measures your scenario against the market’s price.'));
@@ -3184,47 +3191,70 @@
     compareBtn.addEventListener('click', async function () {
       compareBtn.disabled = true; run.disabled = true;
       out.innerHTML = '';
-      var prog = el('div', { class: 'muted small' }, 'Running the catalog on identical paths…');
-      out.appendChild(prog);
+      out.appendChild(UI.spinner('Running every structure on one identical set of futures…'));
       try {
         var spec = f.getSpec(); // one spec, one seed — every structure sees the SAME futures
         var spot = await spotFor();
-        var iv = f.getIv();
-        var results = [];
-        for (var i = 0; i < Scenario.CATALOG.length; i++) {
-          var q2 = Scenario.CATALOG[i];
-          prog.textContent = 'Simulating ' + (i + 1) + '/' + Scenario.CATALOG.length + ' — ' + q2.label + '…';
-          try {
-            var rr = await API.post('/api/sim/strategy', { symbol: symbol, qty: 1, spec: spec, iv: iv,
-              legs: q2.legs(spot, spec.horizonDays + 10) });
-            results.push({ q: q2, r: rr });
-          } catch (e) { /* a structure that can't price here just doesn't rank */ }
-        }
+        var cmp = await API.post('/api/sim/compare', { symbol: symbol, qty: 1, spec: spec, iv: f.getIv(),
+          structures: Scenario.CATALOG.map(function (q2) {
+            return { key: q2.key, legs: q2.legs(spot, spec.horizonDays + 10) };
+          }) });
+        var results = (cmp.results || []).map(function (x) {
+          return { q: Scenario.CATALOG.find(function (c2) { return c2.key === x.key; }), r: x.result };
+        }).filter(function (x) { return x.q; });
         if (!results.length) throw new Error('Nothing could be priced for ' + symbol + '.');
-        results.sort(function (a, b) { return b.r.expectedPnlCents - a.r.expectedPnlCents; });
+        // FAIR ranking: expected P&L per dollar of realistic downside (|p5|) — raw dollars would
+        // let a 100-share CSP dwarf a small spread purely by size. EV stays visible alongside.
+        results.forEach(function (x) {
+          x.ror = x.r.p5Cents < 0 ? x.r.expectedPnlCents / Math.abs(x.r.p5Cents) : (x.r.expectedPnlCents > 0 ? 99 : 0);
+        });
+        results.sort(function (a, b) { return b.ror - a.ror; });
         out.innerHTML = '';
         out.appendChild(el('div', { class: 'muted small', style: 'margin:4px 0' },
-          f.describe() + ' — every structure ran on the SAME ' + results[0].r.paths + ' futures (seed-matched), entries at market quotes where available.'));
-        out.appendChild(UI.table(
-          level === 'beginner'
-            ? ['Strategy', 'Chance of profit', 'Typical outcome', 'Bad run (1 in 20)', 'Expected', '']
-            : ['Structure', 'Win %', 'p50', 'p5', 'E[P&L]', 'Entry', ''],
-          results.map(function (x) {
-            return el('tr', { class: 'clickable' },
-              el('td', {}, el('b', {}, x.q.label), ' ', el('span', { class: 'muted small' }, x.q.group)),
-              el('td', {}, Math.round(x.r.winRatePct) + '%'),
-              el('td', {}, pnlSpan(x.r.p50Cents)),
-              el('td', {}, pnlSpan(x.r.p5Cents)),
-              el('td', {}, pnlSpan(x.r.expectedPnlCents)),
-              level === 'beginner' ? null : el('td', {}, UI.fmtMoneyCompact(x.r.entryCostCents)),
-              el('td', {}, el('button', { class: 'btn btn-sm', onclick: (function (key) { return function () {
-                picked.key = key; vf.quick = key;
-                posWrap.querySelectorAll('.sc-card').forEach(function (b2) { b2.classList.toggle('active', b2.getAttribute('data-pos') === key); });
-                run.click();
-              }; })(x.q.key) }, 'Details')));
-          })));
+          f.describe() + ' — every structure ran on the SAME ' + results[0].r.paths
+          + ' futures (one seed-matched set), entries at market quotes where a listed contract matched. '
+          + 'Ranked by expected gain per dollar of realistic downside (1-in-20 bad run) so small and large positions compare fairly.'));
+        function rowFor(x) {
+          return el('tr', { class: 'clickable' },
+            el('td', {}, el('b', {}, x.q.label), ' ', el('span', { class: 'muted small' }, x.q.group)),
+            el('td', {}, Math.round(x.r.winRatePct) + '%'),
+            el('td', {}, pnlSpan(x.r.expectedPnlCents)),
+            el('td', {}, pnlSpan(x.r.p5Cents)),
+            el('td', { title: 'expected P&L per $1 of 1-in-20 downside' },
+              x.ror >= 99 ? '∞' : x.ror.toFixed(2)),
+            level === 'beginner' ? null : el('td', {}, UI.fmtMoneyCompact(x.r.entryCostCents)),
+            el('td', {}, el('button', { class: 'btn btn-sm', onclick: (function (key) { return function () {
+              picked.key = key; vf.quick = key;
+              posWrap.querySelectorAll('.sc-card').forEach(function (b2) { b2.classList.toggle('active', b2.getAttribute('data-pos') === key); });
+              run.click();
+            }; })(x.q.key) }, 'Details')));
+        }
+        var headers = level === 'beginner'
+          ? ['Strategy', 'Chance of profit', 'Expected', 'Bad run (1 in 20)', 'Gain per $ risked', '']
+          : ['Structure', 'Win %', 'E[P&L]', 'p5', 'RoR', 'Entry', ''];
+        if (level === 'beginner' && results.length > 3) {
+          // Progressive disclosure: the best three expressions first; the full field one tap away.
+          out.appendChild(el('div', { class: 'field-label' }, 'Best three fits for this story'));
+          out.appendChild(UI.table(headers, results.slice(0, 3).map(rowFor)));
+          var restSlot = el('div', {});
+          restSlot.appendChild(el('button', { class: 'btn btn-secondary btn-sm', onclick: function () {
+            restSlot.innerHTML = '';
+            restSlot.appendChild(UI.table(headers, results.slice(3).map(rowFor)));
+          } }, 'Show all ' + results.length + ' structures'));
+          out.appendChild(restSlot);
+        } else {
+          out.appendChild(UI.table(headers, results.map(rowFor)));
+        }
+        if (cmp.refused && cmp.refused.length) {
+          out.appendChild(el('div', { class: 'muted small' },
+            'Could not be priced here: ' + cmp.refused.map(function (x) {
+              var q3 = Scenario.CATALOG.find(function (c3) { return c3.key === x.key; });
+              return (q3 ? q3.label : x.key) + ' (' + x.reason + ')';
+            }).join('; ') + '.'));
+        }
         out.appendChild(el('div', { class: 'muted small' },
-          'Ranked by expected P&L under YOUR scenario — not a prediction. A different story re-ranks the whole table; the honest conclusion can be that nothing beats the baseline.'));
+          'Naked calls/puts and short straddles/strangles are not simulated — undefined risk is blocked by design across the app. '
+          + 'A different story re-ranks the whole table; the honest conclusion can be that nothing beats the baseline.'));
       } catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Comparison failed', [String((e && e.message) || e)])); }
       finally { compareBtn.disabled = false; run.disabled = false; }
     });
@@ -4352,10 +4382,11 @@
   // AFTER the signal against the stock's own normal behavior (baseline), with sample size, a win-rate
   // edge, a significance test, a bootstrap confidence interval, a distribution, and example dates.
   function hypothesisCard(level, ctx) {
+    App.state.labForm = App.state.labForm || {}; // also mounted on symbol pages now — no study-view prerequisite
     var f = App.state.labForm.hyp = App.state.labForm.hyp || {};
     var card = el('div', { class: 'card lab-card', id: 'what-has-happened' });
-    card.appendChild(labHeader('magnifier', 'What HAS happened — test an idea against history'));
-    card.appendChild(explain('The evidence half of the pair: "What could happen next?" above draws simulated futures; this replays a market question over the REAL past and compares what followed the signal to the stock\u2019s normal behavior — honest verdict, sample size, confidence.'));
+    card.appendChild(labHeader('magnifier', 'Historical evidence — did this happen before?'));
+    card.appendChild(explain('Tests a market belief against the REAL past: find every day the pattern occurred, measure what followed, and compare it with the stock\u2019s normal behavior — honest verdict, sample size, confidence. Its partner below simulates possible FUTURES under the same view. This is about the stock, not an options strategy (that lives in Trade).'));
 
     var symbol = el('input', { type: 'text', id: 'lab-hyp-sym', value: (ctx && ctx.symbol) || f.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
     card.appendChild(el('div', { class: 'form-grid' }, labField('Stock', symbol)));

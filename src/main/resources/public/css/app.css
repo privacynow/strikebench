@@ -1218,3 +1218,15 @@ body.lvl-expert .showcase-frame { max-height: 375px; }
 .journey-step.done { opacity: .75; }
 .journey-step.done .ck-mark { background: var(--risk-ok-solid, #3aa76d); color: #fff; border-color: transparent; }
 .journey-step.done .ck-mark::after { content: '✓'; }
+
+/* Peer rail: the universe's symbols as ONE horizontally-scrolling row — never a wrapping pile */
+.peer-rail { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 6px; scrollbar-width: thin;
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 36px), transparent); }
+.peer-rail .sym-chip { flex: none; }
+
+/* Stable field geometry: within a desktop form grid every label reserves the same height,
+   so a wrapping label never pushes ITS control below its neighbors' (broken symmetry). */
+@media (min-width: 640px) {
+  .form-grid .field > label { min-height: 2.35em; display: flex; align-items: flex-end; }
+}

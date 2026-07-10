@@ -226,7 +226,12 @@ public final class PortfolioBacktester {
 
     private Position buildPosition(Family family, double spot, double iv, LocalDate date,
                                    int targetDte, int qty, double shortDelta, double widthPct) {
-        LocalDate exp = date.plusDays(targetDte);
+        // HISTORICAL CONTRACT IDENTITY: when owned option history exists for this date, pick the
+        // LISTED expiration nearest the target — an invented date+targetDte almost never equals a
+        // real listing, so exact-match lookups missed and every mark silently fell back to the
+        // model even with a loaded dataset.
+        LocalDate exp = listedExpirationNear(date, targetDte);
+        if (exp == null) exp = date.plusDays(targetDte); // no history for this date — modeled world
         double tte = targetDte / 365.0;
         double step = strikeStep(spot);
         double width = Math.max(step, Math.round(spot * widthPct / step) * step);
@@ -274,6 +279,22 @@ public final class PortfolioBacktester {
             if (err < bestErr) { bestErr = err; best = k; }
         }
         return best;
+    }
+
+    /** The listed expiration (from owned option history) nearest date+targetDte, or null. */
+    private LocalDate listedExpirationNear(LocalDate date, int targetDte) {
+        if (db == null) return null;
+        try {
+            LocalDate target = date.plusDays(targetDte);
+            var rows = db.query(
+                    "SELECT DISTINCT expiration::text e FROM option_bar "
+                  + "WHERE symbol=? AND asof=? AND dataset_id='observed' AND expiration > ?",
+                    r -> LocalDate.parse(r.str("e")), runSymbol, date, date);
+            return rows.stream()
+                    .min(java.util.Comparator.comparingLong(e ->
+                            Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e, target))))
+                    .orElse(null);
+        } catch (Exception e) { return null; }
     }
 
     private static double strikeStep(double spot) {

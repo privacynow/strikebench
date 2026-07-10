@@ -30,7 +30,9 @@
       blurb: 'Earnings-style: a violent move either way, then IV deflates.' }
   ];
   var HORIZONS = [{ d: 5, label: '1 week' }, { d: 10, label: '2 weeks' }, { d: 21, label: '1 month' }, { d: 63, label: '3 months' }];
-  var MAGS = [{ key: 'calm', label: 'Calm', vol: 0.15 }, { key: 'typical', label: 'Typical', vol: 0.30 }, { key: 'wild', label: 'Wild', vol: 0.55 }];
+  // Wildness is a MULTIPLIER of the symbol's own recent volatility (calibrated per ticker at
+  // render time) — 'Typical' means typical FOR THIS STOCK, not a canned 30%.
+  var MAGS = [{ key: 'calm', label: 'Calm', mult: 0.6 }, { key: 'typical', label: 'Typical', mult: 1.0 }, { key: 'wild', label: 'Wild', mult: 2.0 }];
   var MODELS = [
     { v: 'GBM', label: 'GBM (lognormal)' }, { v: 'BROWNIAN_BRIDGE', label: 'Brownian bridge (pinned end)' },
     { v: 'BLOCK_BOOTSTRAP', label: 'Block bootstrap (real returns)' }, { v: 'STUDENT_T', label: 'Student-t (fat tails)' },
@@ -69,6 +71,35 @@
 
     function magPct(vol, days) { return Math.round(vol * Math.sqrt(days / 252) * 100); }
 
+    // Per-ticker calibration: annualized HV from the symbol's (usually prefetched) history.
+    // While unknown, magVolFor returns 0 — the server-side sentinel for "use market vol"
+    // (the chain's ATM IV) — so no symbol ever gets a hardcoded 30%.
+    var hvBase = { v: null };
+    function magVolFor(key) {
+      var m2 = MAGS.find(function (x) { return x.key === key; }) || MAGS[1];
+      return hvBase.v ? m2.mult * hvBase.v : 0;
+    }
+    function magVolForDisplay(key) {
+      var m2 = MAGS.find(function (x) { return x.key === key; }) || MAGS[1];
+      return m2.mult * (hvBase.v || 0.30); // display estimate only, until HV lands
+    }
+    if (symbol) {
+      API.get('/api/research/' + symbol + '/history?range=6m').then(function (h) {
+        var cs = h.candles || h.series || [];
+        var closes = cs.map(function (c) { return parseFloat(c.close != null ? c.close : c.value); })
+          .filter(function (v) { return isFinite(v) && v > 0; });
+        if (closes.length < 30) return;
+        var sum = 0, sum2 = 0, n = 0;
+        for (var i = 1; i < closes.length; i++) {
+          var r2 = Math.log(closes[i] / closes[i - 1]);
+          sum += r2; sum2 += r2 * r2; n++;
+        }
+        var sd = Math.sqrt(Math.max(0, sum2 / n - (sum / n) * (sum / n)));
+        var hv = sd * Math.sqrt(252);
+        if (isFinite(hv) && hv > 0.03 && hv < 3) { hvBase.v = hv; if (box._sync) box._sync(); onchange(); }
+      }).catch(function () { /* sentinel path stays */ });
+    }
+
     if (level === 'beginner') {
       // 1) The story — what do you think happens?
       box.appendChild(el('div', { class: 'field-label' }, 'What do you think ' + (symbol || 'it') + ' does?'));
@@ -102,10 +133,12 @@
           el('p', {}, 'Option prices along each path come from a standard pricing model, so time decay and volatility changes are included. Every run is labeled as simulated.'));
       }));
       function sync() {
-        var m = MAGS.find(function (x) { return x.key === f.mag; });
-        magNote.textContent = 'Typically within ±' + magPct(m.vol, f.horizon) + '% by the end — with occasional bigger surprises.';
+        magNote.textContent = 'Typically within ±' + magPct(magVolForDisplay(f.mag), f.horizon) + '% by the end'
+          + (hvBase.v ? ' — scaled to ' + (symbol || 'this stock') + '\u2019s own recent volatility.'
+                      : ' — calibrating to ' + (symbol || 'this stock') + '\u2019s real volatility\u2026');
         onchange();
       }
+      box._sync = sync;
       sync();
     } else {
       // Expert terminal — everything inline, math on demand.
@@ -133,8 +166,10 @@
         fld('Jumps /yr', jumps), fld('Jump size %', jumpSize), fld('Tail ν', tailNu)));
       box.appendChild(el('div', { class: 'form-grid compact-filters' },
         fld('Heston κ', hKappa), fld('Heston ξ', hXi), fld('Heston ρ', hRho),
-        fld('IV start %', ivStart), fld('IV event day (−1 none)', ivEvent), fld('IV shock % at event', ivShock),
+        fld('IV start %', ivStart), fld('Event day', ivEvent), fld('IV change %', ivShock),
         fld('Seed', seed), fld('Paths', paths)));
+      ivEvent.title = 'Trading day of the IV event (earnings-style shock). \u22121 = no event.';
+      ivShock.title = 'One-off IV change applied at the event day\u2019s close (e.g. \u221235 = a 35% crush).';
       // Only the selected model's knobs are live — a control that silently does nothing teaches
       // the wrong lesson. Irrelevant fields disable with an honest tooltip.
       function updateRelevance() {
@@ -186,11 +221,10 @@
     function getSpec() {
       var s = shapeOf(f.shape);
       if (level === 'beginner') {
-        var m = MAGS.find(function (x) { return x.key === f.mag; });
         var jumpy = s.model === 'JUMP_DIFFUSION';
         // 4 steps/day: real Brownian squiggle instead of connect-the-dots line segments.
       return { model: s.model, shape: f.shape, horizonDays: f.horizon, stepsPerDay: 4,
-          driftAnnual: s.drift, volAnnual: m.vol, jumpsPerYear: jumpy ? 8 : 0,
+          driftAnnual: s.drift, volAnnual: magVolFor(f.mag), jumpsPerYear: jumpy ? 8 : 0,
           jumpMean: f.shape === 'GAP_DOWN' ? -0.05 : (f.shape === 'GAP_UP' ? 0.05 : 0),
           jumpVol: jumpy ? 0.04 : 0, tailNu: 6, heston: null, seed: f.seed, paths: 200 };
       }
@@ -209,7 +243,7 @@
     function getIv() {
       if (level === 'beginner') {
         if (f.shape === 'EVENT_JUMP') { // earnings-style: IV rich into the event, crushed after
-          var mv = magVolFor(f.mag);
+          var mv = magVolForDisplay(f.mag); // IV SHAPE needs a level; the crush profile matters more than its exact base
           return { startIv: mv * 1.4, driftPerYear: 0, meanRevertSpeed: 1.5, longRunIv: mv,
             eventDay: Math.max(1, Math.round(f.horizon / 3)), eventShockPct: -0.35, minIv: 0.03, maxIv: 4 };
         }

@@ -60,11 +60,14 @@ public final class DataCoverage {
     }
 
     public CoverageSummary summary() {
+        // OBSERVED world only: synthetic scenario rows must never inflate the coverage story.
         long[] u = db.query("SELECT count(DISTINCT symbol) syms, count(*) bars, "
-                + "count(DISTINCT CASE WHEN observed=1 THEN symbol END) obs FROM underlying_bar",
+                + "count(DISTINCT CASE WHEN observed=1 THEN symbol END) obs FROM underlying_bar "
+                + "WHERE dataset_id='observed'",
                 r -> new long[]{r.lng("syms"), r.lng("bars"), r.lng("obs")}).getFirst();
         long[] o = db.query("SELECT count(DISTINCT symbol) syms, count(*) rows, "
-                + "count(DISTINCT CASE WHEN bid_ask_observed=1 THEN symbol END) obs FROM option_bar",
+                + "count(DISTINCT CASE WHEN bid_ask_observed=1 THEN symbol END) obs FROM option_bar "
+                + "WHERE dataset_id='observed'",
                 r -> new long[]{r.lng("syms"), r.lng("rows"), r.lng("obs")}).getFirst();
         return new CoverageSummary(u[0], u[1], o[0], o[1], u[2], o[2]);
     }

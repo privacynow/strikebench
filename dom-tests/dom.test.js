@@ -317,6 +317,101 @@ test('working view follows: idea bar carries the thesis; scenario studio opens o
   await page.evaluate(() => { App.state.scenarioForm = null; App.state.discoverForm.thesis = 'bullish'; });
 });
 
+test('every scenario story runs at both levels (the Big-news-shock crash class)', async () => {
+  // The magVolFor crash escaped a green matrix because tests only clicked ONE story.
+  // Run EVERY beginner story card end-to-end, then every expert shape via the select.
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = { mode: 'scenario' }; App.state.lastRecommendSymbol = 'AAPL'; });
+  await go('#/trade/verify');
+  await page.waitForSelector('#bt-scenario-card #sc-shapes .sc-card');
+  const shapes = await page.$$eval('#sc-shapes .sc-card', cs => cs.map(c => c.getAttribute('data-shape')));
+  assert.ok(shapes.length >= 7, 'all story cards render');
+  for (const shape of shapes) {
+    await page.click('#sc-shapes .sc-card[data-shape="' + shape + '"]');
+    await page.click('#sc-verify-run');
+    await page.waitForSelector('#sc-verify-out .alert', { timeout: 30000 });
+    const txt = await page.textContent('#sc-verify-out');
+    assert.match(txt, /futures like this|Win rate/, shape + ' produced a verdict');
+  }
+  // Expert: every model prices without error on one story.
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.evaluate(() => { App.state.scenarioForm = null; });
+  await go('#/trade/verify');
+  await page.waitForSelector('#sc-model');
+  for (const model of ['GBM', 'STUDENT_T', 'JUMP_DIFFUSION', 'HESTON', 'BLOCK_BOOTSTRAP', 'BROWNIAN_BRIDGE']) {
+    await page.selectOption('#sc-model', model);
+    await page.click('#sc-verify-run');
+    await page.waitForSelector('#sc-verify-out .alert', { timeout: 30000 });
+  }
+  // Cleanup for downstream tests.
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => { App.state.scenarioForm = null; if (App.state.verifyForm) App.state.verifyForm.mode = 'history'; });
+});
+
+test('fair comparison: one batch call, refusals named, ranked per dollar of downside', async () => {
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = { mode: 'scenario' }; App.state.lastRecommendSymbol = 'AAPL'; });
+  await go('#/trade/verify');
+  await page.waitForSelector('#sc-compare-all');
+  // Count network calls: the comparison must be ONE POST, not 18.
+  const calls = await page.evaluate(() => new Promise((resolve, reject) => {
+    let n = 0;
+    const orig = window.fetch;
+    window.fetch = function (u, o) { if (String(u).includes('/api/sim/')) n++; return orig.apply(window, arguments); };
+    document.getElementById('sc-compare-all').click();
+    const t0 = Date.now();
+    (function poll() {
+      if (document.querySelector('#sc-verify-out table')) { window.fetch = orig; resolve(n); }
+      else if (Date.now() - t0 > 60000) { window.fetch = orig; reject(new Error('no table')); }
+      else setTimeout(poll, 300);
+    })();
+  }));
+  assert.ok(calls <= 2, 'batched: ' + calls + ' sim calls (was 18 sequential)');
+  const txt = await page.textContent('#sc-verify-out');
+  assert.match(txt, /per dollar of realistic downside|RoR/i);
+  assert.match(txt, /undefined risk is blocked by design/i); // catalog completeness disclosed
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => { if (App.state.verifyForm) App.state.verifyForm.mode = 'history'; });
+});
+
+test('research symbol page: Historical evidence sits between the chart and the futures card', async () => {
+  await go('#/research/AAPL');
+  await page.waitForSelector('#what-has-happened');
+  const order = await page.evaluate(() => {
+    const ids = ['history-card', 'what-has-happened', 'whatif-card'];
+    const tops = ids.map(id => { const n = document.getElementById(id); return n ? n.getBoundingClientRect().top + window.scrollY : -1; });
+    return tops;
+  });
+  assert.ok(order.every(t => t >= 0), 'all three cards present: ' + order.join(','));
+  assert.ok(order[0] < order[1] && order[1] < order[2], 'NOW → evidence → futures order: ' + order.join(','));
+});
+
+test('form geometry: controls in one grid row share a vertical origin (labels never push them)', async () => {
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = { mode: 'scenario' }; });
+  await go('#/trade/verify');
+  await page.waitForSelector('#sc-model');
+  const misaligned = await page.evaluate(() => {
+    const out = [];
+    document.querySelectorAll('.form-grid').forEach(grid => {
+      const rows = {};
+      grid.querySelectorAll('.field').forEach(f => {
+        const ctl = f.querySelector('input, select');
+        if (!ctl || ctl.offsetParent === null) return;
+        const key = Math.round(f.getBoundingClientRect().top / 8);
+        (rows[key] = rows[key] || []).push(Math.round(ctl.getBoundingClientRect().top));
+      });
+      Object.values(rows).forEach(tops => {
+        if (Math.max(...tops) - Math.min(...tops) > 3) out.push(tops.join('/'));
+      });
+    });
+    return out;
+  });
+  assert.deepEqual(misaligned, [], 'misaligned control rows: ' + misaligned.join(' | '));
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => { if (App.state.verifyForm) App.state.verifyForm.mode = 'history'; });
+});
+
 test('event stream: job.complete reaches the browser; cooldown shows a calm header chip', async () => {
   await go('#/home');
   // End-to-end SSE: start a real job and wait for its completion EVENT (not a poll).

@@ -189,8 +189,8 @@
     // tolerate duplicates — two racing inserts once left an unremovable second banner.
     var existing = Array.prototype.slice.call(document.querySelectorAll('#scenario-banner'));
     if (cfg && cfg.scenarioMode) {
-      var label = 'SCENARIO MODE — analysis uses the synthetic dataset “'
-        + (cfg.activeDatasetName || cfg.activeDataset || '') + '”, not market data. ';
+      var label = 'SCENARIO MODE — “' + (cfg.activeDatasetName || cfg.activeDataset || '')
+        + '” replaces market data for ITS symbol; other symbols still show observed data. ';
       if (existing.length) {
         existing.forEach(function (b, i) { if (i === 0) b.childNodes[1].textContent = label; else b.remove(); });
         return;

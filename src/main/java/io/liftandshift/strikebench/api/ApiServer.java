@@ -350,6 +350,7 @@ public final class ApiServer {
             });
             c.routes.post("/api/sim/scenario", this::simScenario);   // pure compute: the fan preview
             c.routes.post("/api/sim/strategy", this::simStrategy);   // pure compute: strategy P&L distribution
+            c.routes.post("/api/sim/compare", this::simCompare);     // pure compute: ALL structures on ONE path set
             c.routes.post("/api/sim/dataset", this::simDataset);     // persists a synthetic dataset
 
             c.routes.get("/api/account", this::account);
@@ -998,16 +999,95 @@ public final class ApiServer {
                 "scenarioMode", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(datasets.activeId())));
     }
 
+    public record CompareStructure(String key, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs) {}
+    public record CompareRequest(String symbol, io.liftandshift.strikebench.sim.ScenarioSpec spec,
+                                 io.liftandshift.strikebench.sim.IvSpec iv, Integer qty,
+                                 List<CompareStructure> structures) {}
+
+    /**
+     * The comparative-evidence engine: every requested structure priced on the SAME seeded path
+     * set (one generation, one budget permit), entries resolved to exact listed contracts where a
+     * chain matches, refusals reported by name. This replaces N sequential /api/sim/strategy
+     * calls that each re-generated identical paths.
+     */
+    private void simCompare(Context ctx) {
+        CompareRequest b = requireBody(bodyOrNull(ctx, CompareRequest.class));
+        if (b.spec() == null) throw new IllegalArgumentException("spec is required");
+        if (b.structures() == null || b.structures().isEmpty()) throw new IllegalArgumentException("structures are required");
+        if (b.structures().size() > 30) throw new IllegalArgumentException("at most 30 structures");
+        String sym = b.symbol() == null ? "" : b.symbol().trim().toUpperCase(Locale.ROOT);
+        if (sym.isEmpty()) throw new IllegalArgumentException("symbol is required");
+        double spot = market.quote(sym)
+                .map(q -> q.mark()).filter(java.util.Objects::nonNull)
+                .map(java.math.BigDecimal::doubleValue).filter(v -> v > 0)
+                .orElseThrow(() -> new java.util.NoSuchElementException(
+                        "No price for " + sym + " — a simulation needs a real (or demo) quote to anchor on."));
+        int qty = b.qty() == null ? 1 : Math.clamp(b.qty(), 1, 100);
+        double r = market.riskFreeRate(Math.max(1, b.spec().sane().horizonDays()));
+        io.liftandshift.strikebench.sim.ScenarioSpec spec = calibrateVol(sym, b.spec());
+        io.liftandshift.strikebench.sim.IvSpec iv = b.iv();
+        if (iv == null) {
+            Double atm = atmIvOf(sym);
+            iv = io.liftandshift.strikebench.sim.IvSpec.flat(atm != null ? atm : spec.sane().volAnnual());
+        }
+        List<io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem> items = new ArrayList<>();
+        List<Map<String, Object>> refusedEarly = new ArrayList<>();
+        for (CompareStructure st : b.structures()) {
+            if (st.legs() == null || st.legs().isEmpty() || st.legs().size() > 8) {
+                refusedEarly.add(Map.of("key", st.key(), "reason", "invalid legs"));
+                continue;
+            }
+            MarketEntry me = marketEntry(sym, st.legs(), qty);
+            var legsToRun = me != null && me.resolvedLegs() != null ? me.resolvedLegs() : st.legs();
+            items.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem(
+                    st.key(), legsToRun,
+                    me == null ? null : me.entryCents(),
+                    me == null ? null : "entry at " + me.source() + " executable quotes"));
+        }
+        var report = new io.liftandshift.strikebench.sim.ScenarioSimulator()
+                .compare(spot, items, qty, spec, iv, r, simEngine.historicalLogReturns(sym));
+        List<Map<String, Object>> refused = new ArrayList<>(refusedEarly);
+        report.refused().forEach(x -> refused.add(Map.of("key", x.key(), "reason", x.reason())));
+        ctx.json(Map.of("results", report.results(), "refused", refused,
+                "volAnnual", spec.sane().volAnnual()));
+    }
+
     private void simScenario(Context ctx) {
         ScenarioRequest b = requireBody(bodyOrNull(ctx, ScenarioRequest.class));
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
-        ctx.json(simEngine.preview(b.symbol(), b.spec()));
+        ctx.json(simEngine.preview(b.symbol(), calibrateVol(b.symbol(), b.spec())));
+    }
+
+    /** volAnnual<=0 = "use market vol": the chain's ATM IV, so every symbol gets ITS OWN wildness. */
+    private io.liftandshift.strikebench.sim.ScenarioSpec calibrateVol(String symbol, io.liftandshift.strikebench.sim.ScenarioSpec spec) {
+        if (spec.volAnnual() > 0) return spec;
+        Double atm = atmIvOf(symbol);
+        return atm != null ? spec.withVol(atm) : spec; // sane() falls back to its own default if truly nothing
+    }
+
+    private Double atmIvOf(String symbol) {
+        try {
+            var exps = market.expirations(symbol);
+            if (exps.isEmpty()) return null;
+            // ~30d expiry is the conventional IV anchor.
+            java.time.LocalDate target = java.time.LocalDate.now(clock).plusDays(30);
+            java.time.LocalDate exp = exps.stream()
+                    .min(java.util.Comparator.comparingLong(e -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e, target))))
+                    .orElse(null);
+            var chain = exp == null ? null : market.chain(symbol, exp).orElse(null);
+            if (chain == null || chain.isEmpty() || chain.underlyingPrice() == null) return null;
+            final java.math.BigDecimal spot = chain.underlyingPrice();
+            return chain.calls().stream()
+                    .filter(o -> o.iv() != null && o.iv() > 0.01)
+                    .min(java.util.Comparator.comparingDouble(o -> Math.abs(o.strike().subtract(spot).doubleValue())))
+                    .map(io.liftandshift.strikebench.model.OptionQuote::iv).orElse(null);
+        } catch (Exception e) { return null; }
     }
 
     private void simDataset(Context ctx) {
         ScenarioRequest b = requireBody(bodyOrNull(ctx, ScenarioRequest.class));
-        if (b.spec() == null) throw new IllegalArgumentException("spec is required");
-        ctx.json(simEngine.toJson(simEngine.runAndPersist(b.symbol(), b.spec(), ownerId(ctx))));
+        if (calibrateVol(b.symbol(), b.spec()) == null) throw new IllegalArgumentException("spec is required");
+        ctx.json(simEngine.toJson(simEngine.runAndPersist(b.symbol(), calibrateVol(b.symbol(), b.spec()), ownerId(ctx))));
     }
 
     private void simStrategy(Context ctx) {
@@ -1029,6 +1109,13 @@ public final class ApiServer {
         // one. A model-priced entry simulated against the same model converges to a coin flip by
         // construction; a market-priced entry measures YOUR SCENARIO vs THE MARKET'S PRICE.
         int qty = b.qty() == null ? 1 : b.qty();
+        // Guard the FULL work product: paths×steps are capped in ScenarioSpec, but legs/qty/ratio
+        // multiply the pricing loop and the exposure — bound them here too.
+        if (b.legs().size() > 8) throw new IllegalArgumentException("at most 8 legs");
+        if (qty < 1 || qty > 100) throw new IllegalArgumentException("qty must be 1..100");
+        for (var lg : b.legs()) {
+            if (lg.ratio() > 10) throw new IllegalArgumentException("ratio must be 1..10");
+        }
         MarketEntry me = marketEntry(sym, b.legs(), qty);
         // CALIBRATION: volAnnual<=0 is the "use market vol" sentinel — replace with the chain's
         // ATM IV so a caller with no view on wildness gets THIS symbol's, not a canned 25%.
@@ -1039,21 +1126,42 @@ public final class ApiServer {
             double atm = me != null && me.atmIv() != null ? me.atmIv() : spec.sane().volAnnual();
             iv = io.liftandshift.strikebench.sim.IvSpec.flat(atm);
         }
+        // CONTRACT IDENTITY: when the entry was priced from listed contracts, SIMULATE THOSE
+        // CONTRACTS — pricing one strike/expiry and simulating another silently compared two
+        // different trades. The note names every snap so nothing shifts silently.
+        var legsToRun = me != null && me.resolvedLegs() != null ? me.resolvedLegs() : b.legs();
+        String entryNote = null;
+        if (me != null) {
+            String fresh = me.freshness() == null ? "" : me.freshness();
+            String quality = "FIXTURE".equals(fresh) ? "built-in DEMO quotes"
+                    : "DELAYED".equals(fresh) ? "delayed market quotes (~15 min)"
+                    : "REALTIME".equals(fresh) ? "real-time market quotes"
+                    : "market quotes" + (fresh.isEmpty() ? "" : " (" + fresh.toLowerCase(Locale.ROOT) + ")");
+            entryNote = "Entry priced from " + me.source() + " " + quality + " at executable sides (buy at ask, sell at bid)"
+                    + (me.snaps().isEmpty() ? "" : ". Snapped to listed contracts: " + String.join("; ", me.snaps()))
+                    + ".";
+        }
         var result = new io.liftandshift.strikebench.sim.ScenarioSimulator().run(
-                spot, b.legs(), qty, spec, iv, r,
+                spot, legsToRun, qty, spec, iv, r,
                 simEngine.historicalLogReturns(sym),
                 me == null ? null : me.entryCents(),
-                me == null ? null : "Entry priced from " + me.source() + " market quotes (buy at ask, sell at bid).");
+                entryNote);
         ctx.json(result);
     }
 
-    private record MarketEntry(long entryCents, Double atmIv, String source) {}
+    private record MarketEntry(long entryCents, Double atmIv, String source, String freshness,
+                               List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> resolvedLegs,
+                               List<String> snaps) {}
 
     /**
      * Prices the position's entry from the live chain at EXECUTABLE sides. Returns null when any
      * option leg can't be matched to a real quote (unknown expiration/strike, one-sided book) —
      * the simulator then falls back to a model-priced entry, honestly labeled.
      */
+    private static String trimNum(double v) {
+        return v == Math.rint(v) ? String.valueOf((long) v) : String.valueOf(v);
+    }
+
     private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs, int qty) {
         try {
             List<java.time.LocalDate> exps = market.expirations(symbol);
@@ -1062,13 +1170,17 @@ public final class ApiServer {
             double entryPerUnit = 0;
             Double atmIv = null;
             String source = null;
+            String freshness = null;
             java.math.BigDecimal spotBd = null;
+            List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> resolved = new ArrayList<>();
+            List<String> snaps = new ArrayList<>();
             for (var leg : legs) {
                 if ("STOCK".equalsIgnoreCase(leg.type())) {
                     var q = market.quote(symbol).orElse(null);
                     if (q == null || q.mark() == null) return null;
                     double sign = "SELL".equalsIgnoreCase(leg.action()) ? -1 : 1;
                     entryPerUnit += sign * Math.max(1, leg.ratio()) * 100 * q.mark().doubleValue();
+                    resolved.add(leg);
                     continue;
                 }
                 // Nearest listed expiration to the leg's trading-day horizon (~7/5 calendar days/step).
@@ -1091,6 +1203,7 @@ public final class ApiServer {
                 java.math.BigDecimal px = buy ? quote.ask() : quote.bid(); // executable sides
                 if (px == null || px.signum() <= 0) return null;
                 if (source == null) source = chain.source();
+                if (freshness == null && chain.freshness() != null) freshness = chain.freshness().name();
                 // ATM IV = the quote closest to spot (first leg's chain is fine for a default).
                 if (atmIv == null && spotBd != null) {
                     final java.math.BigDecimal spotF = spotBd;
@@ -1100,8 +1213,19 @@ public final class ApiServer {
                             .map(io.liftandshift.strikebench.model.OptionQuote::iv).orElse(null);
                 }
                 entryPerUnit += (buy ? 1 : -1) * Math.max(1, leg.ratio()) * 100 * px.doubleValue();
+                // THE SIMULATED LEG IS THE PRICED LEG: exact listed strike + that expiration's
+                // trading-day horizon. Anything that moved is named in the snap note.
+                double listedStrike = quote.strike().doubleValue();
+                int listedDays = (int) Math.max(1, Math.round(
+                        java.time.temporal.ChronoUnit.DAYS.between(today, exp) * 5.0 / 7.0));
+                resolved.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg(
+                        leg.action(), leg.type(), listedStrike, listedDays, leg.ratio()));
+                if (Math.abs(listedStrike - leg.strike()) > 1e-9 || Math.abs(listedDays - leg.expiryDay()) > 1) {
+                    snaps.add(leg.type() + " " + trimNum(leg.strike()) + "\u2192" + trimNum(listedStrike) + " exp " + exp);
+                }
             }
-            return new MarketEntry(Math.round(entryPerUnit * qty * 100), atmIv, source == null ? "live" : source);
+            return new MarketEntry(Math.round(entryPerUnit * qty * 100), atmIv,
+                    source == null ? "live" : source, freshness, resolved, snaps);
         } catch (Exception e) {
             return null; // no market pricing available — model entry, honestly labeled
         }

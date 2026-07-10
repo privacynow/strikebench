@@ -45,7 +45,9 @@ public final class ScenarioSimulator {
                          double riskFreeRate, double[] historicalLogReturns,
                          Long entryOverrideCents, String entryNote) {
         try (AutoCloseable permit = SimBudget.acquire()) {
-            return runInner(spot, legs, qty, spec, ivSpec, riskFreeRate, historicalLogReturns, entryOverrideCents, entryNote);
+            ScenarioSpec s = spec.sane();
+            double[][] paths = generator.generate(s, spot, historicalLogReturns);
+            return runInner(paths, spot, legs, qty, s, ivSpec, riskFreeRate, entryOverrideCents, entryNote);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -53,15 +55,52 @@ public final class ScenarioSimulator {
         }
     }
 
-    private SimResult runInner(double spot, List<SimLeg> legs, int qty, ScenarioSpec spec, IvSpec ivSpec,
-                               double riskFreeRate, double[] historicalLogReturns,
+    /** One structure to compare: resolved legs + an optional market-priced entry. */
+    public record CompareItem(String key, List<SimLeg> legs, Long entryOverrideCents, String entryNote) {}
+
+    public record CompareOutcome(String key, SimResult result) {}
+
+    public record CompareRefusal(String key, String reason) {}
+
+    public record CompareReport(List<CompareOutcome> results, List<CompareRefusal> refused) {}
+
+    /**
+     * FAIR comparison: every structure is priced along the SAME generated path set (one budget
+     * permit, one generation — not N re-generations), and a structure that cannot be priced is
+     * REPORTED as refused, never silently dropped ("all strategies" must mean all).
+     */
+    public CompareReport compare(double spot, List<CompareItem> items, int qty, ScenarioSpec spec,
+                                 IvSpec ivSpec, double riskFreeRate, double[] historicalLogReturns) {
+        try (AutoCloseable permit = SimBudget.acquire()) {
+            ScenarioSpec s = spec.sane();
+            double[][] paths = generator.generate(s, spot, historicalLogReturns);
+            List<CompareOutcome> out = new ArrayList<>();
+            List<CompareRefusal> refused = new ArrayList<>();
+            for (CompareItem item : items) {
+                try {
+                    out.add(new CompareOutcome(item.key(),
+                            runInner(paths, spot, item.legs(), qty, s, ivSpec, riskFreeRate,
+                                    item.entryOverrideCents(), item.entryNote())));
+                } catch (Exception e) {
+                    refused.add(new CompareRefusal(item.key(),
+                            e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+                }
+            }
+            return new CompareReport(out, refused);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private SimResult runInner(double[][] paths, double spot, List<SimLeg> legs, int qty, ScenarioSpec s,
+                               IvSpec ivSpec, double riskFreeRate,
                                Long entryOverrideCents, String entryNote) {
-        ScenarioSpec s = spec.sane();
         IvSpec iv = (ivSpec == null ? IvSpec.flat(s.volAnnual()) : ivSpec).sane();
         int steps = s.totalSteps();
         int spd = Math.max(1, s.stepsPerDay());
         double dt = s.dt();
-        double[][] paths = generator.generate(s, spot, historicalLogReturns);
         double[] ivPath = iv.path(steps, dt, spd);
 
         int q = Math.max(1, qty);
@@ -121,7 +160,7 @@ public final class ScenarioSimulator {
         List<String> notes = new ArrayList<>();
         if (entryOverrideCents != null && entryNote != null) notes.add(entryNote);
         notes.add(entryOverrideCents != null
-                ? "Exit values along each path are MODELED (Black-Scholes on the IV path); the ENTRY above is real."
+                ? "Exit values along each path are MODELED (Black-Scholes on the IV path); the entry reflects the quotes named above."
                 : "Synthetic scenario — entry AND exits are MODELED (Black-Scholes on the IV path), never observed market quotes.");
         notes.add("Seed " + s.seed() + " reproduces this exact run. Fills, commissions, and early assignment are not modeled here.");
         if (iv.eventDay() >= 0) notes.add("IV " + (iv.eventShockPct() < 0 ? "crush" : "expansion") + " of "
