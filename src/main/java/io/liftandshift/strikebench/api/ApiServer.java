@@ -448,6 +448,15 @@ public final class ApiServer {
             c.routes.post("/api/positions/buy", this::positionsBuy);
             c.routes.post("/api/positions/sell", this::positionsSell);
             c.routes.get("/api/portfolio/summary", this::portfolioSummary);
+            c.routes.get("/api/portfolio/heat", ctx ->
+                    ctx.json(trades.portfolioHeat(currentAccount(ctx).id())));
+            c.routes.get("/api/account/risk-context", ctx ->
+                    ctx.json(io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx))));
+            c.routes.put("/api/account/risk-context", ctx -> {
+                var rc = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.paper.AccountRiskContext.class));
+                io.liftandshift.strikebench.paper.AccountRiskContext.save(db, ownerId(ctx), rc);
+                ctx.json(rc);
+            });
             c.routes.get("/api/portfolio/greeks", ctx ->
                     ctx.json(trades.portfolioGreeks(currentAccount(ctx).id())));
 
@@ -1828,12 +1837,33 @@ public final class ApiServer {
         Account acct = currentAccount(ctx);
         TradeService.OpenRequest req = toOpenRequest(bodyOrNull(ctx, TradeOpenRequest.class), acct);
         Verdict verdict = guardrailCheck(req, acct);
-        ctx.json(Map.of(
-                "preview", trades.preview(req),
-                "guardrails", Map.of(
-                        "level", verdict.level().name(),
-                        "blockReasons", verdict.blockReasons(),
-                        "warnings", verdict.warnings())));
+        var preview = trades.preview(req);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("preview", preview);
+        out.put("guardrails", Map.of(
+                "level", verdict.level().name(),
+                "blockReasons", verdict.blockReasons(),
+                "warnings", verdict.warnings()));
+        // The REAL denominators, when the user declared them: risk judged against paper cash was
+        // the MU lesson's sizing blind spot ('sane vs \$100k paper' was 6.5% of the real account).
+        var rc = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
+        if (!rc.isEmpty() && preview.maxLossCents() > 0) {
+            Map<String, Object> fit = new LinkedHashMap<>();
+            if (rc.nlvCents() != null && rc.nlvCents() > 0)
+                fit.put("pctOfNlv", Math.round(1000.0 * preview.maxLossCents() / rc.nlvCents()) / 10.0);
+            if (rc.cashBpCents() != null && rc.cashBpCents() > 0)
+                fit.put("pctOfCashBp", Math.round(1000.0 * preview.maxLossCents() / rc.cashBpCents()) / 10.0);
+            if (rc.marginBpCents() != null && rc.marginBpCents() > 0)
+                fit.put("pctOfMarginBp", Math.round(1000.0 * preview.maxLossCents() / rc.marginBpCents()) / 10.0);
+            if (rc.riskCapitalCents() != null && rc.riskCapitalCents() > 0) {
+                fit.put("pctOfRiskCapital", Math.round(1000.0 * preview.maxLossCents() / rc.riskCapitalCents()) / 10.0);
+                if (preview.maxLossCents() > rc.riskCapitalCents()) {
+                    fit.put("overRiskCapital", true);
+                }
+            }
+            out.put("accountFit", fit);
+        }
+        ctx.json(out);
     }
 
     private void tradeCreate(Context ctx) {

@@ -822,4 +822,38 @@ class ApiIntegrationTest {
         // A normal request without the header is untouched by the governor.
         assertThat(get("/api/research/AAPL/expirations").statusCode()).isEqualTo(200);
     }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.Order(32)
+    void riskContextDrivesAccountFitAndHeatReports() throws Exception {
+        // Declare the REAL account: $19.3K cash BP, $1,000 risk capital (the MU sizing lesson).
+        var put = put("/api/account/risk-context", """
+                {"nlvCents": 2500000, "cashBpCents": 1932800, "riskCapitalCents": 100000}""");
+        assertThat(put.statusCode()).isEqualTo(200);
+
+        // A preview now judges size against MY denominators, not the paper account's.
+        var prev = post("/api/trades/preview", """
+                {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,"legs":[
+                  {"action":"SELL","type":"PUT","strike":"250","expiration":"2026-08-21","ratio":1},
+                  {"action":"BUY","type":"PUT","strike":"245","expiration":"2026-08-21","ratio":1}]}""");
+        assertThat(prev.statusCode()).isEqualTo(200);
+        var body = io.liftandshift.strikebench.util.Json.parse(prev.body());
+        assertThat(body.has("accountFit")).isTrue();
+        var fit = body.get("accountFit");
+        assertThat(fit.has("pctOfNlv")).isTrue();
+        assertThat(fit.has("pctOfCashBp")).isTrue();
+        assertThat(fit.has("pctOfRiskCapital")).isTrue();
+        // The analytics contract rides along on every preview.
+        var analytics = body.get("preview").get("analytics");
+        assertThat(analytics.has("probabilityMap")).isTrue();
+        assertThat(analytics.has("executionQuality")).isTrue();
+        assertThat(analytics.get("managementPlan").get("rules").size()).isGreaterThan(0);
+
+        // Portfolio heat never 500s and reports the book's aggregates.
+        var heat = get("/api/portfolio/heat");
+        assertThat(heat.statusCode()).isEqualTo(200);
+        var h = io.liftandshift.strikebench.util.Json.parse(heat.body());
+        assertThat(h.has("totalMaxLossCents")).isTrue();
+        assertThat(h.has("assignmentCashCents")).isTrue();
+    }
 }

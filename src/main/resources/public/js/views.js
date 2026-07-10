@@ -2422,6 +2422,20 @@
         body.appendChild(el('h2', { class: 'mt0' }, 'Review before you commit'));
         var vp = verdictPanel(p, Learn.currentLevel() === 'beginner');
         body.appendChild(vp.node);
+        if (res.accountFit) {
+          var af = res.accountFit;
+          body.appendChild(el('div', { class: 'chip-row', id: 'account-fit' },
+            el('b', { style: 'margin-right:4px' }, 'Your real account'),
+            af.pctOfNlv !== undefined ? chip('of NLV', af.pctOfNlv + '%') : null,
+            af.pctOfCashBp !== undefined ? chip('of cash BP', af.pctOfCashBp + '%') : null,
+            af.pctOfMarginBp !== undefined ? chip('of margin BP', af.pctOfMarginBp + '%') : null,
+            af.pctOfRiskCapital !== undefined ? chip('of risk capital',
+              el('span', { class: af.overRiskCapital ? 'loss' : '' }, af.pctOfRiskCapital + '%')) : null));
+          if (af.overRiskCapital) {
+            body.appendChild(alertBox('warn', 'Bigger than YOUR risk-capital line',
+              ['The worst case exceeds the per-trade risk capital you set for your real account.']));
+          }
+        }
         if (!p.ok) body.appendChild(alertBox('danger', 'Blocked', p.blockReasons));
         if (g && g.blockReasons && g.blockReasons.length) body.appendChild(alertBox('danger', 'Guardrails', g.blockReasons));
         var warns = (p.warnings || []).concat(g ? g.warnings || [] : []);
@@ -2683,6 +2697,46 @@
         value: draftCash != null ? draftCash : Math.round(acct.startingCashCents / 100),
         min: '1000', step: '1000', style: 'max-width:150px' });
       cashInput.addEventListener('input', function () { App.state.resetCashDraft = cashInput.value; });
+      // The REAL account, self-declared: size warnings and account-fit percentages use these
+      // denominators — paper cash was never the number that mattered (the MU sizing lesson).
+      var rcBeginner = Learn.currentLevel() === 'beginner';
+      var rcCard = el('div', { class: 'card', id: 'risk-context-card' },
+        UI.cardHeader('My real account (optional)'),
+        explain(rcBeginner
+          ? 'Tell StrikeBench about your REAL brokerage account and every trade review will show its worst case as a share of YOUR money, not the practice account.'
+          : 'Self-declared denominators for account-fit: % of NLV / cash BP / margin BP, and a hard per-trade risk-capital line. Never inferred from one broker field.'));
+      root.appendChild(rcCard);
+      (async function () {
+        var rc = {};
+        try { rc = await API.get('/api/account/risk-context'); } catch (e) { /* form still renders */ }
+        function fld(id, label, val) {
+          return el('div', { class: 'field' }, el('label', {}, label),
+            el('input', { type: 'number', id: id, step: '100', value: val != null ? Math.round(val / 100) : '' }));
+        }
+        var grid = el('div', { class: 'form-grid' },
+          fld('rc-nlv', 'Account value (NLV) $', rc.nlvCents),
+          fld('rc-cash', 'Cash buying power $', rc.cashBpCents),
+          rcBeginner ? null : fld('rc-margin', 'Margin buying power $', rc.marginBpCents),
+          rcBeginner ? null : fld('rc-maint', 'Maintenance req. $', rc.maintenanceCents),
+          fld('rc-risk', 'Risk capital per trade $', rc.riskCapitalCents));
+        var saveBtn = el('button', { class: 'btn btn-sm', id: 'rc-save', onclick: async function () {
+          saveBtn.disabled = true;
+          function cents(id) { var n = document.getElementById(id); if (!n || n.value === '') return null; return Math.round(parseFloat(n.value) * 100); }
+          try {
+            await API.put('/api/account/risk-context', {
+              nlvCents: cents('rc-nlv'), cashBpCents: cents('rc-cash'),
+              marginBpCents: cents('rc-margin'), maintenanceCents: cents('rc-maint'),
+              riskCapitalCents: cents('rc-risk') });
+            saveBtn.textContent = 'Saved';
+            setTimeout(function () { saveBtn.textContent = 'Save'; saveBtn.disabled = false; }, 1200);
+          } catch (e) {
+            saveBtn.disabled = false;
+            rcCard.appendChild(alertBox('danger', 'Could not save: ' + e.message));
+          }
+        } }, 'Save');
+        rcCard.appendChild(grid);
+        rcCard.appendChild(el('div', { class: 'btn-row' }, saveBtn));
+      })();
       root.appendChild(el('div', { class: 'card' },
         UI.cardHeader('Reset account'),
         explain('Resetting voids open practice trades, removes ALL share holdings, and sets cash to the amount below. History stays in the ledger and audit log.'),
@@ -2728,6 +2782,21 @@
       try {
         var pg = await greeksP;
         if (pg && pg.positions && pg.positions.length) {
+          try {
+            var heat = await API.get('/api/portfolio/heat');
+            if (heat && heat.activeTrades > 0) {
+              root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-heat' },
+                el('div', { class: 'chip-row' },
+                  el('b', { style: 'margin-right:4px' }, 'Book heat'),
+                  chip('Total worst case', fmtMoney(heat.totalMaxLossCents)),
+                  chip('Short-vol trades', String(heat.shortVolTrades)),
+                  chip('Top-symbol share', heat.concentrationPct + '%',
+                    'How much of the total worst case sits in ONE symbol.'),
+                  heat.assignmentCashCents > 0 ? chip('If every short put assigns', fmtMoney(heat.assignmentCashCents),
+                    'Cash needed to take delivery on ALL short puts at their strikes.') : null,
+                  heat.assignmentCashCents > 0 ? chip('BP after assignment', fmtMoney(heat.postAssignmentBuyingPowerCents)) : null)));
+            }
+          } catch (e) { /* heat is additive — the page never fails on it */ }
           root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-greeks' },
             el('div', { class: 'chip-row', style: 'align-items:center' },
               el('b', { style: 'margin-right:4px' }, 'Book greeks'),

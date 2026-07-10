@@ -205,6 +205,7 @@ public final class TradeService {
     public CloseResult unwind(String tradeId, boolean confirm) {
         requireConfirm(confirm, "unwind");
         markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
+        accountSnapshot.invalidateAll(); // the book changed — no consumer may see the old snapshot
         CloseResult result = db.tx(c -> {
             TradeRecord t = requireStatus(c, tradeId, TradeRecord.ACTIVE);
             Account acct = AccountService.get(c, t.accountId());
@@ -237,6 +238,7 @@ public final class TradeService {
     public CloseResult settle(String tradeId, boolean confirm) {
         requireConfirm(confirm, "settle");
         markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
+        accountSnapshot.invalidateAll(); // the book changed — no consumer may see the old snapshot
         CloseResult result = db.tx(c -> {
             TradeRecord t = requireStatus(c, tradeId, TradeRecord.ACTIVE);
             java.time.Instant now = clock.instant();
@@ -380,6 +382,7 @@ public final class TradeService {
     public TradeRecord delete(String tradeId, boolean confirm) {
         requireConfirm(confirm, "delete");
         markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
+        accountSnapshot.invalidateAll(); // the book changed — no consumer may see the old snapshot
         TradeRecord out = db.tx(c -> {
             TradeRecord t = requireStatus(c, tradeId, TradeRecord.ACTIVE);
             Account acct = AccountService.get(c, t.accountId());
@@ -443,6 +446,60 @@ public final class TradeService {
         MarkView view = computeMark(t);
         markMemo.put(t.id(), view);
         return view;
+    }
+
+    /**
+     * ONE ATOMIC portfolio snapshot: every ACTIVE trade marked in a single pass, memoized per
+     * account (~10s). Summary, greeks strip and table rows read the SAME map, so they can never
+     * show three different answers computed seconds apart.
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, Map<String, MarkView>> accountSnapshot =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .expireAfterWrite(java.time.Duration.ofSeconds(10)).maximumSize(50).build();
+
+    public Map<String, MarkView> accountMarkSnapshot(String accountId) {
+        return accountSnapshot.get(accountId, id -> {
+            Map<String, MarkView> out = new LinkedHashMap<>();
+            for (TradeRecord t : list(id, TradeRecord.ACTIVE, 0, 200).trades()) {
+                try { out.put(t.id(), memoizedMark(t)); } catch (RuntimeException ignored) { /* partial */ }
+            }
+            return out;
+        });
+    }
+
+    /**
+     * Portfolio heat: what the whole book is exposed to, not just per-trade risk — total worst
+     * case, per-symbol concentration, short-volatility count, and the CASH assignment would
+     * demand if every short put were exercised (the post-assignment picture).
+     */
+    public Map<String, Object> portfolioHeat(String accountId) {
+        List<TradeRecord> active = list(accountId, TradeRecord.ACTIVE, 0, 200).trades();
+        Account acct = db.with(c -> AccountService.get(c, accountId));
+        long totalMaxLoss = 0, assignmentCash = 0;
+        int shortVol = 0;
+        Map<String, Long> bySymbol = new LinkedHashMap<>();
+        for (TradeRecord t : active) {
+            totalMaxLoss += t.maxLossCents();
+            bySymbol.merge(t.symbol(), t.maxLossCents(), Long::sum);
+            boolean hasShort = t.legs().stream().anyMatch(l -> !l.isStock() && l.action() == LegAction.SELL);
+            if (hasShort && t.entryNetPremiumCents() > 0) shortVol++;
+            for (Leg l : t.legs()) {
+                if (!l.isStock() && l.action() == LegAction.SELL && l.type() == io.liftandshift.strikebench.model.OptionType.PUT) {
+                    assignmentCash += Money.centsFromPrice(l.strike(), (long) Leg.SHARES_PER_CONTRACT * l.ratio() * t.qty());
+                }
+            }
+        }
+        long worstSymbol = bySymbol.values().stream().mapToLong(Long::longValue).max().orElse(0);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("activeTrades", active.size());
+        out.put("totalMaxLossCents", totalMaxLoss);
+        out.put("reservedCents", acct.reservedCents());
+        out.put("shortVolTrades", shortVol);
+        out.put("bySymbolMaxLossCents", bySymbol);
+        out.put("concentrationPct", totalMaxLoss > 0 ? Math.round(100.0 * worstSymbol / totalMaxLoss) : 0);
+        out.put("assignmentCashCents", assignmentCash);
+        out.put("postAssignmentBuyingPowerCents", acct.buyingPowerCents() - assignmentCash);
+        return out;
     }
 
     private MarkView computeMark(TradeRecord t) {
@@ -521,13 +578,14 @@ public final class TradeService {
      *  make the whole answer honest-partial rather than silently wrong. */
     public Map<String, Object> openPositionsValue(String accountId) {
         List<TradeRecord> active = list(accountId, TradeRecord.ACTIVE, 0, 200).trades();
+        Map<String, MarkView> snap = accountMarkSnapshot(accountId); // ONE atomic snapshot for all consumers
         long value = 0, unrealized = 0;
         int counted = 0;
         boolean complete = true;
         Freshness worst = Freshness.FIXTURE;
         for (TradeRecord t : active) {
-            MarkView view;
-            try { view = memoizedMark(t); } catch (RuntimeException e) { complete = false; continue; }
+            MarkView view = snap.get(t.id());
+            if (view == null) { complete = false; continue; }
             if (view.closeCostCents() == null) { complete = false; continue; }
             value += view.closeCostCents();
             unrealized += view.unrealizedCents() == null ? 0 : view.unrealizedCents();
@@ -547,12 +605,13 @@ public final class TradeService {
     /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Never touches money. */    /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Never touches money. */
     public Map<String, Object> portfolioGreeks(String accountId) {
         List<TradeRecord> active = list(accountId, TradeRecord.ACTIVE, 0, 200).trades();
+        Map<String, MarkView> snap = accountMarkSnapshot(accountId); // same atomic snapshot as the summary
         double delta = 0, gamma = 0, theta = 0, vega = 0;
         boolean complete = true;
         List<Map<String, Object>> positions = new ArrayList<>();
         for (TradeRecord t : active) {
-            MarkView view;
-            try { view = memoizedMark(t); } catch (RuntimeException e) { complete = false; continue; }
+            MarkView view = snap.get(t.id());
+            if (view == null) { complete = false; continue; }
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", t.id());
             row.put("symbol", t.symbol());
