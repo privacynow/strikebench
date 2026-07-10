@@ -1202,6 +1202,51 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     [[feedback-standard-ui-bar]] + [[feedback-no-false-scarcity]]. ONLY remaining now: the merge-day
     prod cutover (needs the real prod DB + the box) and turning auth on (needs a Google OIDC client secret).
   ===============================================================================================
+- THESIS-WORKFLOW PROGRAM COMPLETE (2026-07-09, commits c391389→6d0a90e→533d1dc→069e4e9; branch, NOT
+  deployed). The app is reorganized around Thesis→Dataset→Scenario→Strategy→Simulation:
+  - SIM ENGINE (sim/): Rng (seeded, deterministic), ScenarioSpec (+Beginner presets), PathGenerator
+    (GBM/bridge/block-bootstrap/Student-t/Merton-jump/Heston full-truncation Euler; OHLC intraday
+    bridge), IvSpec (drift/mean-revert/event-crush IV paths), ScenarioSimulator (BSM legs along every
+    path → P&L percentiles/winRate/fan/histogram), SimulationEngine (preview fan + runAndPersist →
+    auto-saved synthetic dataset). V6 dataset registry + dataset_id on both bar tables; DatasetService
+    (active switch, observed untouchable, prune 25); StoredCandleStore serves the ACTIVE dataset
+    (synthetic → MODELED, never masquerades); StoredHistoricalOptionsProvider feeds the single
+    Backtester from owned option history. Routes: /api/datasets*, /api/sim/{scenario,strategy,dataset}.
+  - SCENARIO STUDIO UX (js/scenario.js): Beginner = story cards w/ SVG sketches + plain-dollar
+    verdicts; Expert = full model menu + IV knobs + seed/paths + "The math" expandable (real SDEs).
+    Research gains "What could happen next?" (fan preview + Re-roll + handoff); Trade→Verify gains
+    "Replay the past | Imagine a future" pills (working idea or quick picks through the Monte Carlo);
+    Data gains "Datasets & scenarios" (generate/activate/delete) + a loud app-wide SCENARIO MODE
+    banner whenever a synthetic dataset is active.
+  - WORKSPACE CONTINUITY: V8 workspace table + WorkspaceService + GET/PUT /api/workspace (client-
+    authoritative blob: draft forms/working idea/symbol/route; rev per write; 128KB cap; 'local' when
+    auth off); js/workspace.js persists localStorage-instantly + backend-debounced (+pagehide
+    keepalive); a bare open restores the exact route (explicit hash wins); hidden tabs adopt newer
+    revs and re-render on return. RESTORED TICKETS RE-ENTER AT THE STRIKES STEP w/ preview dropped
+    (never a reload-armed Confirm at stale prices). Home gains "Pick up where you left off" chips.
+  - EVENTS (SSE, not WebSockets — all realtime is server→browser; commands stay REST): util/EventBus
+    (async single pump thread — a stalled client never back-pressures a publisher; Last-Event-ID
+    replay ring; fresh clients start at NOW) + GET /api/events streaming job.progress/complete,
+    dataset.selected, provider.cooldown, workspace.updated as small HINTS (client refetches; GETs
+    stay truth). PER-USER SCOPED when auth on (job/workspace events carry their owner; the stream
+    filters — was an identity-enumeration leak). Jobs card updates live (poll drops to 10s fallback).
+  - GOVERNED PREFETCH: API.prefetch marks speculative GETs X-Priority: prefetch; server 204s them
+    when heavy providers lack budget (CboeProvider.prefetchBudget: never while cooling/contended;
+    fixtures always allowed); app warms likely-next-step (expirations/history for the working symbol)
+    on idle. GENERAL GOVERNOR: market/ProviderPoliteness (concurrency+spacing+429/999 breaker+
+    prefetch budget+cooldown events) — wired into Yahoo; Cboe keeps its inline test-pinned copy.
+    Cooldowns render as a CALM amber header chip (self-expiring), never a scary banner.
+  - THESIS SPINE: the working view (symbol · goal · thesis · horizon) VISIBLY follows — idea bar
+    shows it when no working idea exists ('QQQ · Trade a view: bearish · ~1 month' + Find ideas);
+    a fresh Scenario Studio opens on the thesis-matched story shape.
+  - ADVERSARIAL REVIEW (workflow fleet: 4 lenses × 2 refuters, 32 agents): 14 findings, 11 confirmed
+    + 1 contested — ALL FIXED (list above reflects the fixes); 2 refuted. Pinned gotchas: Db.prep's
+    RETURN_GENERATED_KEYS breaks INSERT..RETURNING via executeQuery (upsert+select in one tx);
+    concurrent refreshScenarioBanner (click + SSE) duplicated banners (supersede token + remove-all);
+    workspace PUT must NOT flush the GET cache (STATE_WRITER regex); `docker compose up -d db` down
+    ⇒ every DOM suite fails at 0ms in before() — check the container FIRST.
+  - FINAL MATRIX: 332 JUnit + 43 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
+  ===============================================================================================
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
