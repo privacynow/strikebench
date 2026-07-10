@@ -32,8 +32,20 @@ public final class ScenarioSimulator {
 
     public SimResult run(double spot, List<SimLeg> legs, int qty, ScenarioSpec spec, IvSpec ivSpec,
                          double riskFreeRate, double[] historicalLogReturns) {
+        return run(spot, legs, qty, spec, ivSpec, riskFreeRate, historicalLogReturns, null, null);
+    }
+
+    /**
+     * With an OBSERVED entry: when the caller priced the position from live market quotes
+     * (executable sides), the whole exercise measures YOUR SCENARIO vs THE MARKET'S PRICE —
+     * which is the actionable question. A model-priced entry against the same model's paths
+     * converges to a coin flip by construction.
+     */
+    public SimResult run(double spot, List<SimLeg> legs, int qty, ScenarioSpec spec, IvSpec ivSpec,
+                         double riskFreeRate, double[] historicalLogReturns,
+                         Long entryOverrideCents, String entryNote) {
         try (AutoCloseable permit = SimBudget.acquire()) {
-            return runInner(spot, legs, qty, spec, ivSpec, riskFreeRate, historicalLogReturns);
+            return runInner(spot, legs, qty, spec, ivSpec, riskFreeRate, historicalLogReturns, entryOverrideCents, entryNote);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -42,7 +54,8 @@ public final class ScenarioSimulator {
     }
 
     private SimResult runInner(double spot, List<SimLeg> legs, int qty, ScenarioSpec spec, IvSpec ivSpec,
-                               double riskFreeRate, double[] historicalLogReturns) {
+                               double riskFreeRate, double[] historicalLogReturns,
+                               Long entryOverrideCents, String entryNote) {
         ScenarioSpec s = spec.sane();
         IvSpec iv = (ivSpec == null ? IvSpec.flat(s.volAnnual()) : ivSpec).sane();
         int steps = s.totalSteps();
@@ -52,7 +65,9 @@ public final class ScenarioSimulator {
         double[] ivPath = iv.path(steps, dt, spd);
 
         int q = Math.max(1, qty);
-        double entry = portfolioValue(legs, paths[0], 0, steps, spd, dt, ivPath[0], riskFreeRate) * q;
+        double entry = entryOverrideCents != null
+                ? entryOverrideCents / 100.0
+                : portfolioValue(legs, paths[0], 0, steps, spd, dt, ivPath[0], riskFreeRate) * q;
 
         // Per-path P&L at every step (for the fan) and at the horizon (for the distribution).
         int n = paths.length;
@@ -104,7 +119,10 @@ public final class ScenarioSimulator {
         for (int day = 0; day <= steps / spd; day++) example.add(round2(paths[medianIdx][Math.min(steps, day * spd)]));
 
         List<String> notes = new ArrayList<>();
-        notes.add("Synthetic scenario — option prices are MODELED (Black-Scholes on the IV path you set), never observed market quotes.");
+        if (entryOverrideCents != null && entryNote != null) notes.add(entryNote);
+        notes.add(entryOverrideCents != null
+                ? "Exit values along each path are MODELED (Black-Scholes on the IV path); the ENTRY above is real."
+                : "Synthetic scenario — entry AND exits are MODELED (Black-Scholes on the IV path), never observed market quotes.");
         notes.add("Seed " + s.seed() + " reproduces this exact run. Fills, commissions, and early assignment are not modeled here.");
         if (iv.eventDay() >= 0) notes.add("IV " + (iv.eventShockPct() < 0 ? "crush" : "expansion") + " of "
                 + Math.round(Math.abs(iv.eventShockPct()) * 100) + "% applied at day " + iv.eventDay() + "'s close.");

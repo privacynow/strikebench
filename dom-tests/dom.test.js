@@ -187,9 +187,12 @@ test('scenario studio: beginner story cards → fan of futures → strategy verd
   await page.click('#whatif-verify');
   await page.waitForSelector('#bt-scenario-card', { timeout: 15000 });
   assert.ok(await page.locator('#bt-mode .pill.active[data-mode="scenario"]').count(), 'Verify opened in scenario mode');
-  // Beginner position quick-picks in plain words; run → verdict in dollars.
-  assert.match(await page.textContent('#sc-pos'), /Bet on a rise/);
-  await page.click('#sc-pos .sym-chip[data-pos="CALL_SPREAD"]');
+  // The FULL strategy catalog with payoff-shape sketches + a visible symbol picker.
+  assert.ok((await page.locator('#sc-pos .sc-card').count()) >= 16, 'full strategy catalog, not a subset');
+  assert.ok((await page.locator('#sc-pos .sc-sketch svg').count()) >= 16, 'payoff-shape sketches');
+  assert.ok(await page.locator('#sc-symbol').count(), 'symbol input exists');
+  await page.locator('#sc-pos .sc-card[data-pos="DEBIT_CALL_SPREAD"]').scrollIntoViewIfNeeded();
+  await page.click('#sc-pos .sc-card[data-pos="DEBIT_CALL_SPREAD"]');
   await page.click('#sc-verify-run');
   await page.waitForSelector('#sc-verify-out .alert', { timeout: 30000 });
   const verdict = await page.textContent('#sc-verify-out');

@@ -1196,3 +1196,10 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 #cooldown-chip svg { flex: none; }
 @media (max-width: 760px) { #cooldown-chip { display: none; } } /* Data screen still shows THROTTLED */
 #continue-row .chip-row { margin: 2px 0 0; }
+
+/* Scenario chart hover readout + greek-glyph label escape */
+.sc-tip { position: absolute; pointer-events: none; background: var(--bg-raised, var(--bg)); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 8px; font-size: 12px; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.12); z-index: 5; }
+.scenario-form label .glyph { text-transform: none; }
+.sc-pos-grid { grid-template-columns: repeat(3, 1fr); }
+@media (min-width: 900px) { .sc-pos-grid { grid-template-columns: repeat(6, 1fr); } }

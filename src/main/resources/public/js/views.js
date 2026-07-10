@@ -2860,10 +2860,10 @@
   function whatIfCard(symbol) {
     var level = Learn.currentLevel();
     var card = el('div', { class: 'card', id: 'whatif-card' });
-    card.appendChild(UI.cardHeader('What could happen next?'));
+    card.appendChild(UI.cardHeader('What COULD happen next?'));
     card.appendChild(explain(level === 'beginner'
-      ? 'Pick the story you believe and we draw hundreds of realistic “possible futures” for ' + symbol + ' — so you can SEE the range of outcomes, then test a strategy against it.'
-      : 'Parameterize a scenario (model, drift, vol, jumps, IV path) and preview the Monte-Carlo fan; hand it to Verify to run a structure against it.'));
+      ? 'Pick the story you believe and we draw hundreds of realistic “possible futures” for ' + symbol + ' — so you can SEE the range of outcomes, then test a strategy against it. (Its partner card below, “What HAS happened”, checks your idea against the real past.)'
+      : 'Parameterize a scenario (model, drift, vol, jumps, IV path) and preview the Monte-Carlo fan; hand it to Verify to run a structure against it. The “What HAS happened” card below is the observed-history half of the pair.'));
     var f = Scenario.form(level, symbol);
     card.appendChild(f.el);
     var out = el('div', { id: 'whatif-out' });
@@ -2893,31 +2893,67 @@
 
   /** Verify → "Imagine a future": run a position through the scenario's Monte Carlo. */
   function scenarioVerifyPanel(host) {
+    host.innerHTML = '';
     var level = Learn.currentLevel();
-    var symbol = (App.state.lastRecommendSymbol || 'AAPL').toUpperCase();
     var vf = App.state.verifyForm = App.state.verifyForm || {};
+    var symbol = ((vf.simSymbol || App.state.lastRecommendSymbol || 'AAPL') + '').toUpperCase();
+    vf.simSymbol = symbol;
     var card = el('div', { class: 'card', id: 'bt-scenario-card' });
-    card.appendChild(UI.cardHeader('Imagine a future for ' + symbol));
+
+    // ANY symbol, visibly: an input + one-tap universe chips (it silently followed the working
+    // symbol before, which read as "hardcoded to AAPL").
+    var symInput = el('input', { type: 'text', id: 'sc-symbol', value: symbol, list: 'universe-symbols', style: 'max-width:120px' });
+    function switchSymbol(raw) {
+      var s2 = (raw || '').trim().toUpperCase();
+      if (!s2 || s2 === vf.simSymbol) return;
+      vf.simSymbol = s2;
+      App.state.lastRecommendSymbol = s2;
+      scenarioVerifyPanel(host); // self-rebuild: header, chips, working-idea eligibility all follow
+    }
+    symInput.addEventListener('change', function () { switchSymbol(symInput.value); });
+    symInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') switchSymbol(symInput.value); });
+    var uniChips = el('span', { class: 'sym-chips', id: 'sc-uni-chips' });
+    ((App.state.universe && App.state.universe.active && App.state.universe.active.symbols) || [])
+      .slice(0, 8).forEach(function (u) {
+        uniChips.appendChild(el('button', { type: 'button', class: 'sym-chip' + (u === symbol ? ' active' : ''),
+          onclick: function () { switchSymbol(u); } }, u));
+      });
+    card.appendChild(UI.cardHeader('Imagine a future for ' + symbol,
+      el('span', { class: 'btn-row', style: 'margin:0' }, symInput)));
+    card.appendChild(el('div', { class: 'field' }, uniChips));
     card.appendChild(explain(level === 'beginner'
-      ? 'Pick a story and a position — we run it through hundreds of simulated futures and tell you, in plain dollars, how it tends to end. Time decay and volatility changes are included.'
-      : 'Monte-Carlo the position across the scenario paths; legs are BSM-priced along the deterministic IV path (theta + the vol view included), intrinsic at expiry.'));
+      ? 'Three choices: which stock, what story you believe (the price path), and which position (the payoff shape). We run the position through hundreds of simulated futures and report, in plain dollars, how it tends to end — priced against today’s real option quotes when available.'
+      : 'Monte-Carlo the position across the scenario paths. Entry is priced from LIVE market quotes (executable sides) when a chain matches; exits are BSM along the IV path (default: the chain’s ATM IV). The verdict measures your scenario against the market’s price.'));
     var f = Scenario.form(level, symbol);
     card.appendChild(f.el);
 
-    // The position: your working idea when one exists, else a plain-language quick pick.
+    // The position: your working idea (same symbol only) or the FULL strategy catalog —
+    // the same breadth as "All strategies", each with its payoff-shape sketch. The sketch is
+    // the strategy's profit-vs-price identity; the story cards above sketch the PRICE PATH.
     var working = Scenario.workingLegs();
-    var picked = { key: working ? (vf.quick === undefined ? 'WORKING' : vf.quick) : (vf.quick || 'LONG_CALL') };
-    var chipsRow = el('div', { class: 'chip-row', id: 'sc-pos' });
-    function posChip(key, label) {
-      return el('button', { type: 'button', class: 'sym-chip' + (picked.key === key ? ' active' : ''), 'data-pos': key,
+    var workingSymbol = App.state.ticket && App.state.ticket.symbol;
+    var workingHere = working && workingSymbol === symbol;
+    var picked = { key: workingHere ? (vf.quick === undefined ? 'WORKING' : vf.quick) : (vf.quick || 'DEBIT_CALL_SPREAD') };
+    if (!workingHere && picked.key === 'WORKING') picked.key = 'DEBIT_CALL_SPREAD';
+    var posWrap = el('div', { id: 'sc-pos' });
+    function posCard(key, label, pay, group) {
+      return el('button', { type: 'button', 'data-pos': key,
+        class: 'q-card sc-card' + (picked.key === key ? ' active' : ''),
         onclick: function () {
           picked.key = key; vf.quick = key;
-          chipsRow.querySelectorAll('.sym-chip').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-pos') === key); });
-        } }, label);
+          posWrap.querySelectorAll('.sc-card').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-pos') === key); });
+        } },
+        pay ? Scenario.sketch(pay) : null,
+        el('b', {}, label),
+        group ? el('div', { class: 'muted small' }, group) : null);
     }
-    if (working) chipsRow.appendChild(posChip('WORKING', 'Your working idea (' + working.length + ' leg' + (working.length > 1 ? 's' : '') + ')'));
-    Scenario.QUICKS.forEach(function (q) { chipsRow.appendChild(posChip(q.key, q.label)); });
-    card.appendChild(el('div', { class: 'field', style: 'margin-top:8px' }, el('label', {}, 'The position'), chipsRow));
+    posWrap.appendChild(el('div', { class: 'field-label', style: 'margin-top:10px' },
+      'The position — payoff shape at expiry' + (level === 'beginner' ? ' (what you make or lose at each price)' : '')));
+    var posGrid = el('div', { class: 'q-grid sc-grid sc-pos-grid' });
+    if (workingHere) posGrid.appendChild(posCard('WORKING', 'Your working idea', null, working.length + ' leg' + (working.length > 1 ? 's' : '') + ' from the ticket'));
+    Scenario.CATALOG.forEach(function (q) { posGrid.appendChild(posCard(q.key, q.label, q.pay, q.group)); });
+    posWrap.appendChild(posGrid);
+    card.appendChild(posWrap);
 
     var out = el('div', { id: 'sc-verify-out' });
     var run = el('button', { class: 'btn', id: 'sc-verify-run' }, level === 'beginner' ? 'Run it through the futures' : 'Run Monte Carlo');
@@ -2926,13 +2962,14 @@
       try {
         var spec = f.getSpec();
         var legs;
-        if (picked.key === 'WORKING' && working) {
+        if (picked.key === 'WORKING' && workingHere) {
           legs = working;
         } else {
           var qd = await API.get('/api/quotes?symbols=' + symbol);
           var row = (qd.quotes || [])[0] || {};
-          var spot = parseFloat(row.last || row.prevClose || 100);
-          var qk = Scenario.QUICKS.find(function (x) { return x.key === picked.key; }) || Scenario.QUICKS[0];
+          var spot = parseFloat(row.last || row.prevClose);
+          if (!isFinite(spot) || spot <= 0) throw new Error('No price for ' + symbol + ' — check the ticker.');
+          var qk = Scenario.CATALOG.find(function (x) { return x.key === picked.key; }) || Scenario.CATALOG[0];
           legs = qk.legs(spot, spec.horizonDays + 10);
         }
         var r = await API.post('/api/sim/strategy', { symbol: symbol, legs: legs, qty: 1, spec: spec, iv: f.getIv() });
@@ -4067,9 +4104,9 @@
   // edge, a significance test, a bootstrap confidence interval, a distribution, and example dates.
   function hypothesisCard(level, ctx) {
     var f = App.state.labForm.hyp = App.state.labForm.hyp || {};
-    var card = el('div', { class: 'card lab-card' });
-    card.appendChild(labHeader('magnifier', 'Test an idea'));
-    card.appendChild(explain('Pick a market question. We replay it over history and compare what happened after the signal to what this stock does normally — with an honest verdict, sample size, and confidence.'));
+    var card = el('div', { class: 'card lab-card', id: 'what-has-happened' });
+    card.appendChild(labHeader('magnifier', 'What HAS happened — test an idea against history'));
+    card.appendChild(explain('The evidence half of the pair: "What could happen next?" above draws simulated futures; this replays a market question over the REAL past and compares what followed the signal to the stock\u2019s normal behavior — honest verdict, sample size, confidence.'));
 
     var symbol = el('input', { type: 'text', id: 'lab-hyp-sym', value: (ctx && ctx.symbol) || f.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
     card.appendChild(el('div', { class: 'form-grid' }, labField('Stock', symbol)));

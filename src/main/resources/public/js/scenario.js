@@ -122,14 +122,34 @@
       var ivStart = num('sc-iv', f.ivStart != null ? f.ivStart : 30, 3, 400, function (v) { f.ivStart = v; onchange(); });
       var ivEvent = num('sc-ivday', f.ivEventDay != null ? f.ivEventDay : -1, -1, 756, function (v) { f.ivEventDay = v; onchange(); });
       var ivShock = num('sc-ivshock', f.ivShock != null ? f.ivShock : -35, -90, 300, function (v) { f.ivShock = v; onchange(); });
+      var spd = num('sc-spd', f.spd || 4, 1, 16, function (v) { f.spd = v; onchange(); });
+      var hKappa = num('sc-hkappa', f.hKappa != null ? f.hKappa : 3, 0.1, 20, function (v) { f.hKappa = v; onchange(); });
+      var hXi = num('sc-hxi', f.hXi != null ? f.hXi : 0.5, 0.01, 3, function (v) { f.hXi = v; onchange(); });
+      var hRho = num('sc-hrho', f.hRho != null ? f.hRho : -0.6, -0.99, 0.99, function (v) { f.hRho = v; onchange(); });
       expertInputs = { model: model, seed: seed };
       box.appendChild(el('div', { class: 'form-grid compact-filters' },
-        fld('Model', model), fld('Shape guide', shapeSel), fld('Days', horizon),
+        fld('Model', model), fld('Shape guide', shapeSel), fld('Days', horizon), fld('Steps/day', spd),
         fld('Vol σ %/yr', vol), fld('Drift μ %/yr', drift),
-        fld('Jumps /yr', jumps), fld('Jump size %', jumpSize), fld('Tail ν (t only)', tailNu)));
+        fld('Jumps /yr', jumps), fld('Jump size %', jumpSize), fld('Tail ν', tailNu)));
       box.appendChild(el('div', { class: 'form-grid compact-filters' },
+        fld('Heston κ', hKappa), fld('Heston ξ', hXi), fld('Heston ρ', hRho),
         fld('IV start %', ivStart), fld('IV event day (−1 none)', ivEvent), fld('IV shock % at event', ivShock),
         fld('Seed', seed), fld('Paths', paths)));
+      // Only the selected model's knobs are live — a control that silently does nothing teaches
+      // the wrong lesson. Irrelevant fields disable with an honest tooltip.
+      function updateRelevance() {
+        var m = model.value;
+        var offNote = 'Not used by ' + (MODELS.find(function (x) { return x.v === m; }) || { label: m }).label;
+        [[jumps, m === 'JUMP_DIFFUSION'], [jumpSize, m === 'JUMP_DIFFUSION'],
+         [tailNu, m === 'STUDENT_T'],
+         [hKappa, m === 'HESTON'], [hXi, m === 'HESTON'], [hRho, m === 'HESTON'],
+         [vol, m !== 'HESTON']].forEach(function (pair) {
+          pair[0].disabled = !pair[1];
+          pair[0].title = pair[1] ? '' : offNote;
+        });
+      }
+      model.addEventListener('change', updateRelevance);
+      updateRelevance();
       box.appendChild(UI.expandable('The math', function () {
         return el('div', { class: 'sc-math' },
           el('p', {}, el('b', {}, 'GBM / Student-t: '), 'd ln S = (μ − σ²/2)dt + σ√dt·ε, ε ~ N(0,1) or standardized t(ν).'),
@@ -152,22 +172,38 @@
       i.addEventListener('change', function () { on(+i.value); });
       return i;
     }
-    function fld(label, input) { return el('div', { class: 'field' }, el('label', {}, label), input); }
+    function fld(label, input) {
+      // Greek glyphs must survive the app-wide uppercase label transform (σ became Σ — the
+      // summation sign — which a quant reads as a bug). Wrap them in a no-transform span.
+      var lab = el('label', {});
+      label.split(/([σμκξρν])/).forEach(function (part) {
+        if (/^[σμκξρν]$/.test(part)) lab.appendChild(el('span', { class: 'glyph' }, part));
+        else if (part) lab.appendChild(document.createTextNode(part));
+      });
+      return el('div', { class: 'field' }, lab, input);
+    }
 
     function getSpec() {
       var s = shapeOf(f.shape);
       if (level === 'beginner') {
         var m = MAGS.find(function (x) { return x.key === f.mag; });
         var jumpy = s.model === 'JUMP_DIFFUSION';
-        return { model: s.model, shape: f.shape, horizonDays: f.horizon, stepsPerDay: 1,
+        // 4 steps/day: real Brownian squiggle instead of connect-the-dots line segments.
+      return { model: s.model, shape: f.shape, horizonDays: f.horizon, stepsPerDay: 4,
           driftAnnual: s.drift, volAnnual: m.vol, jumpsPerYear: jumpy ? 8 : 0,
           jumpMean: f.shape === 'GAP_DOWN' ? -0.05 : (f.shape === 'GAP_UP' ? 0.05 : 0),
           jumpVol: jumpy ? 0.04 : 0, tailNu: 6, heston: null, seed: f.seed, paths: 200 };
       }
-      return { model: f.model || s.model, shape: f.shape, horizonDays: f.horizon, stepsPerDay: 1,
-        driftAnnual: (f.drift != null ? f.drift : s.drift * 100) / 100, volAnnual: (f.vol != null ? f.vol : 30) / 100,
+      var vol = (f.vol != null ? f.vol : 30) / 100;
+      var wantHeston = (f.model || s.model) === 'HESTON';
+      return { model: f.model || s.model, shape: f.shape, horizonDays: f.horizon,
+        stepsPerDay: f.spd || 4,
+        driftAnnual: (f.drift != null ? f.drift : s.drift * 100) / 100, volAnnual: vol,
         jumpsPerYear: f.jumps || 0, jumpMean: (f.jumpSize || 0) / 100, jumpVol: Math.abs((f.jumpSize || 0) / 100) * 0.5,
-        tailNu: f.nu || 6, heston: null, seed: f.seed, paths: f.paths || 300 };
+        tailNu: f.nu || 6,
+        heston: wantHeston ? { kappa: f.hKappa != null ? f.hKappa : 3, theta: vol * vol,
+          xi: f.hXi != null ? f.hXi : Math.max(0.05, vol * 0.5), rho: f.hRho != null ? f.hRho : -0.6, v0: vol * vol } : null,
+        seed: f.seed, paths: f.paths || 300 };
     }
 
     function getIv() {
@@ -177,8 +213,9 @@
           return { startIv: m.vol * 1.4, driftPerYear: 0, meanRevertSpeed: 1.5, longRunIv: m.vol,
             eventDay: Math.max(1, Math.round(f.horizon / 3)), eventShockPct: -0.35, minIv: 0.03, maxIv: 4 };
         }
-        return { startIv: m.vol * 1.1, driftPerYear: 0, meanRevertSpeed: 0, longRunIv: m.vol * 1.1,
-          eventDay: -1, eventShockPct: 0, minIv: 0.03, maxIv: 4 };
+        // null on purpose: the server prices the IV path off the REAL chain's ATM IV, so the
+        // verdict measures the user's scenario against the market's actual option prices.
+        return null;
       }
       return { startIv: (f.ivStart != null ? f.ivStart : 30) / 100, driftPerYear: 0, meanRevertSpeed: 0.5,
         longRunIv: (f.ivStart != null ? f.ivStart : 30) / 100,
@@ -212,9 +249,14 @@
     var band = 'M' + p.bands.map(function (b) { return x(b.day).toFixed(1) + ',' + y(b.p90).toFixed(1); }).join(' L')
       + ' L' + p.bands.slice().reverse().map(function (b) { return x(b.day).toFixed(1) + ',' + y(b.p10).toFixed(1); }).join(' L') + ' Z';
     var median = p.bands.map(function (b, i) { return (i ? 'L' : 'M') + x(b.day).toFixed(1) + ',' + y(b.p50).toFixed(1); }).join(' ');
+    // Sample paths arrive at FULL step resolution (intraday) — map each by its own length so
+    // the squiggle spans the same time axis as the daily bands.
     var samples = (p.samples || []).map(function (s) {
-      return '<path d="' + s.map(function (v, i) { return (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(v).toFixed(1); }).join(' ')
-        + '" fill="none" stroke="var(--text-faint)" stroke-width="1" opacity="0.55"/>';
+      var n = Math.max(1, s.length - 1);
+      return '<path d="' + s.map(function (v, i) {
+        var px = padL + (W - padL - padR) * i / n;
+        return (i ? 'L' : 'M') + px.toFixed(1) + ',' + y(v).toFixed(1);
+      }).join(' ') + '" fill="none" stroke="var(--text-faint)" stroke-width="1" opacity="0.55"/>';
     }).join('');
     var gridY = [0.25, 0.5, 0.75].map(function (f2) {
       var v = lo + (hi - lo) * f2;
@@ -234,6 +276,28 @@
       + '<text x="' + (W - padR) + '" y="' + (H - 6) + '" text-anchor="end" font-size="10" fill="var(--text-dim)">+' + days + 'd</text>'
       + '</svg>';
     var wrap = el('div', { class: 'fan-chart' }, el('div', { html: svg }));
+    // Hover readout: day + the p10/median/p90 at that day (the chart must explain itself).
+    (function wireHover() {
+      var host = wrap.firstChild;
+      var tip = el('div', { class: 'sc-tip', style: 'display:none' });
+      wrap.style.position = 'relative';
+      wrap.appendChild(tip);
+      host.addEventListener('pointermove', function (ev) {
+        var svgEl = host.querySelector('svg');
+        if (!svgEl) return;
+        var r = svgEl.getBoundingClientRect();
+        var fx = (ev.clientX - r.left) / Math.max(1, r.width) * W;
+        var day = Math.round((fx - padL) / Math.max(1, W - padL - padR) * days);
+        if (day < 0 || day > days) { tip.style.display = 'none'; return; }
+        var b = p.bands[day];
+        tip.innerHTML = '<b>day ' + b.day + '</b> · low ' + b.p10 + ' · mid ' + b.p50 + ' · high ' + b.p90;
+        tip.style.display = '';
+        var left = Math.min(Math.max(0, ev.clientX - r.left + 10), r.width - 170);
+        tip.style.left = left + 'px';
+        tip.style.top = Math.max(0, ev.clientY - r.top - 34) + 'px';
+      });
+      host.addEventListener('pointerleave', function () { tip.style.display = 'none'; });
+    })();
     var pctDown = Math.round((p.endP10 / p.spot - 1) * 100), pctUp = Math.round((p.endP90 / p.spot - 1) * 100);
     wrap.appendChild(el('div', { class: 'chip-row chart-summary' },
       UI.chip('Futures drawn', String(p.paths)),
@@ -288,38 +352,92 @@
           : 'p10–p90 band with the median path; day granularity.'));
     }
 
-    // Terminal distribution histogram.
+    // Terminal distribution histogram — with a REAL dollar axis (edges + a $0 marker), because
+    // "green made money, red lost" cannot carry magnitude on its own.
     if (r.distribution && r.distribution.length) {
       var max = 1; r.distribution.forEach(function (b) { max = Math.max(max, b.count); });
-      var n = r.distribution.length, bw = 100 / n;
+      var n = r.distribution.length;
+      var HW = 640, HH = 96, hPadL = 8, hPadR = 8, base = 68;
+      var bw = (HW - hPadL - hPadR) / n;
+      var loC = r.distribution[0].fromCents, hiC = r.distribution[n - 1].toCents;
       var bars = r.distribution.map(function (b, i) {
-        var h = b.count / max * 30;
+        var h = b.count / max * 54;
         var mid = (b.fromCents + b.toCents) / 2;
         var col = mid >= 0 ? 'var(--risk-ok-solid,#3aa76d)' : 'var(--risk-danger-solid,#d64545)';
-        return '<rect x="' + (i * bw + bw * 0.12).toFixed(2) + '" y="' + (34 - h).toFixed(2) + '" width="' + (bw * 0.76).toFixed(2)
-          + '" height="' + h.toFixed(2) + '" rx="0.6" fill="' + col + '"><title>' + UI.fmtMoneyCompact(b.fromCents) + ' to ' + UI.fmtMoneyCompact(b.toCents) + ': ' + b.count + '</title></rect>';
+        return '<rect x="' + (hPadL + i * bw + bw * 0.1).toFixed(1) + '" y="' + (base - h).toFixed(1) + '" width="' + (bw * 0.8).toFixed(1)
+          + '" height="' + h.toFixed(1) + '" rx="2" fill="' + col + '"><title>' + UI.fmtMoneyCompact(b.fromCents) + ' to ' + UI.fmtMoneyCompact(b.toCents) + ': ' + b.count + ' futures</title></rect>';
       }).join('');
+      var zeroX = hiC > loC ? hPadL + (0 - loC) / (hiC - loC) * (HW - hPadL - hPadR) : null;
+      var zeroMark = zeroX != null && zeroX >= hPadL && zeroX <= HW - hPadR
+        ? '<line x1="' + zeroX.toFixed(1) + '" y1="8" x2="' + zeroX.toFixed(1) + '" y2="' + base + '" stroke="var(--text)" stroke-width="0.9" stroke-dasharray="4 3" opacity="0.55"/>'
+          + '<text x="' + zeroX.toFixed(1) + '" y="' + (base + 12) + '" text-anchor="middle" font-size="10" fill="var(--text-dim)">$0</text>'
+        : '';
       out.appendChild(el('div', { class: 'lab-chart', html:
-        '<svg viewBox="0 0 100 40" preserveAspectRatio="none" width="100%" height="72" role="img">'
-        + '<line x1="0" y1="34" x2="100" y2="34" stroke="var(--border)" stroke-width="0.5"/>' + bars + '</svg>' }));
+        '<svg viewBox="0 0 ' + HW + ' ' + HH + '" width="100%" role="img" aria-label="P&L distribution">'
+        + '<line x1="' + hPadL + '" y1="' + base + '" x2="' + (HW - hPadR) + '" y2="' + base + '" stroke="var(--border)" stroke-width="1"/>'
+        + bars + zeroMark
+        + '<text x="' + hPadL + '" y="' + (base + 12) + '" font-size="10" fill="var(--text-dim)">' + UI.fmtMoneyCompact(loC) + '</text>'
+        + '<text x="' + (HW - hPadR) + '" y="' + (base + 12) + '" text-anchor="end" font-size="10" fill="var(--text-dim)">' + UI.fmtMoneyCompact(hiC) + '</text>'
+        + '</svg>' }));
       out.appendChild(el('div', { class: 'muted small' },
-        level === 'beginner' ? 'Where the futures landed: green bars made money, red lost.' : 'Terminal P&L distribution.'));
+        level === 'beginner' ? 'Where the futures landed, in dollars: green bars made money, red lost; the dashed line is break-even.'
+          : 'Terminal P&L distribution ($ axis; dashed = break-even).'));
     }
     (r.notes || []).forEach(function (n) { out.appendChild(el('div', { class: 'muted small' }, n)); });
     return out;
   }
 
-  /* ---- Position quick-picks for Verify (plain names; strikes auto from spot, editable at Expert) */
-  var QUICKS = [
-    { key: 'LONG_CALL', label: 'Bet on a rise (long call)', legs: function (s, d) { return [L('BUY', 'CALL', rnd(s), d)]; } },
-    { key: 'LONG_PUT', label: 'Bet on a fall (long put)', legs: function (s, d) { return [L('BUY', 'PUT', rnd(s), d)]; } },
-    { key: 'CALL_SPREAD', label: 'Defined-risk rise (call spread)', legs: function (s, d) { return [L('BUY', 'CALL', rnd(s), d), L('SELL', 'CALL', rnd(s * 1.05), d)]; } },
-    { key: 'PUT_SPREAD', label: 'Defined-risk fall (put spread)', legs: function (s, d) { return [L('BUY', 'PUT', rnd(s), d), L('SELL', 'PUT', rnd(s * 0.95), d)]; } },
-    { key: 'CSP', label: 'Get paid to wait (short put)', legs: function (s, d) { return [L('SELL', 'PUT', rnd(s * 0.95), d)]; } },
-    { key: 'STRADDLE', label: 'Bet on a big move (straddle)', legs: function (s, d) { return [L('BUY', 'CALL', rnd(s), d), L('BUY', 'PUT', rnd(s), d)]; } }
-  ];
+  /* ---- The FULL position catalog for scenario testing — the same breadth as the builder's
+   * "All strategies", each with its payoff-shape sketch (profit at expiry vs price: the visual
+   * identity of the STRATEGY, distinct from the story cards' PRICE-PATH sketches). Strikes are
+   * derived from spot on the exchange step grid; Expert can fine-tune via the working idea. */
   function L(action, type, strike, expiryDay) { return { action: action, type: type, strike: strike, expiryDay: expiryDay, ratio: 1 }; }
-  function rnd(v) { return Math.round(v); }
+  function step(s) { return s < 25 ? 0.5 : s < 100 ? 1 : s < 300 ? 2.5 : 5; }
+  function grid(v, s) { var st = step(s); return Math.round(v / st) * st; }
+  var CATALOG = [
+    { key: 'LONG_CALL', group: 'Bullish', label: 'Long call', pay: '0,22 55,22 100,4',
+      legs: function (s, d) { return [L('BUY', 'CALL', grid(s, s), d)]; } },
+    { key: 'DEBIT_CALL_SPREAD', group: 'Bullish', label: 'Call spread (debit)', pay: '0,24 38,24 70,7 100,7',
+      legs: function (s, d) { return [L('BUY', 'CALL', grid(s, s), d), L('SELL', 'CALL', grid(s * 1.05, s), d)]; } },
+    { key: 'CREDIT_PUT_SPREAD', group: 'Bullish', label: 'Put spread (credit)', pay: '0,26 32,26 62,9 100,9',
+      legs: function (s, d) { return [L('SELL', 'PUT', grid(s * 0.97, s), d), L('BUY', 'PUT', grid(s * 0.92, s), d)]; } },
+    { key: 'CASH_SECURED_PUT', group: 'Bullish', label: 'Short put (CSP)', pay: '0,27 45,9 100,9',
+      legs: function (s, d) { return [L('SELL', 'PUT', grid(s * 0.95, s), d)]; } },
+    { key: 'LONG_PUT', group: 'Bearish', label: 'Long put', pay: '0,4 45,22 100,22',
+      legs: function (s, d) { return [L('BUY', 'PUT', grid(s, s), d)]; } },
+    { key: 'DEBIT_PUT_SPREAD', group: 'Bearish', label: 'Put spread (debit)', pay: '0,7 30,7 62,24 100,24',
+      legs: function (s, d) { return [L('BUY', 'PUT', grid(s, s), d), L('SELL', 'PUT', grid(s * 0.95, s), d)]; } },
+    { key: 'CREDIT_CALL_SPREAD', group: 'Bearish', label: 'Call spread (credit)', pay: '0,9 38,9 68,26 100,26',
+      legs: function (s, d) { return [L('SELL', 'CALL', grid(s * 1.03, s), d), L('BUY', 'CALL', grid(s * 1.08, s), d)]; } },
+    { key: 'IRON_CONDOR', group: 'Income', label: 'Iron condor', pay: '0,26 24,26 40,9 60,9 76,26 100,26',
+      legs: function (s, d) { return [L('SELL', 'PUT', grid(s * 0.95, s), d), L('BUY', 'PUT', grid(s * 0.90, s), d),
+                                       L('SELL', 'CALL', grid(s * 1.05, s), d), L('BUY', 'CALL', grid(s * 1.10, s), d)]; } },
+    { key: 'IRON_BUTTERFLY', group: 'Income', label: 'Iron butterfly', pay: '0,26 28,26 50,6 72,26 100,26',
+      legs: function (s, d) { return [L('SELL', 'PUT', grid(s, s), d), L('BUY', 'PUT', grid(s * 0.94, s), d),
+                                       L('SELL', 'CALL', grid(s, s), d), L('BUY', 'CALL', grid(s * 1.06, s), d)]; } },
+    { key: 'COVERED_CALL', group: 'Income', label: 'Covered call', pay: '0,29 55,9 100,9',
+      legs: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('SELL', 'CALL', grid(s * 1.05, s), d)]; } },
+    { key: 'CALENDAR_CALL', group: 'Volatility', label: 'Calendar (call)', pay: '0,25 34,15 50,7 66,15 100,25',
+      legs: function (s, d) { return [L('SELL', 'CALL', grid(s, s), Math.max(3, Math.round(d * 0.5))), L('BUY', 'CALL', grid(s, s), d + 21)]; } },
+    { key: 'DIAGONAL_CALL', group: 'Volatility', label: 'Diagonal (call)', pay: '0,26 36,16 58,7 78,13 100,17',
+      legs: function (s, d) { return [L('SELL', 'CALL', grid(s * 1.04, s), Math.max(3, Math.round(d * 0.5))), L('BUY', 'CALL', grid(s, s), d + 21)]; } },
+    { key: 'LONG_STRADDLE', group: 'Big move', label: 'Straddle', pay: '0,4 50,28 100,4',
+      legs: function (s, d) { return [L('BUY', 'CALL', grid(s, s), d), L('BUY', 'PUT', grid(s, s), d)]; } },
+    { key: 'LONG_STRANGLE', group: 'Big move', label: 'Strangle', pay: '0,6 32,26 68,26 100,6',
+      legs: function (s, d) { return [L('BUY', 'CALL', grid(s * 1.04, s), d), L('BUY', 'PUT', grid(s * 0.96, s), d)]; } },
+    { key: 'LONG_CALL_BUTTERFLY', group: 'Pinpoint', label: 'Call butterfly', pay: '0,24 34,24 50,5 66,24 100,24',
+      legs: function (s, d) { return [L('BUY', 'CALL', grid(s * 0.95, s), d), L('SELL', 'CALL', grid(s, s), d),
+                                       L('SELL', 'CALL', grid(s, s), d), L('BUY', 'CALL', grid(s * 1.05, s), d)]; } },
+    { key: 'LONG_PUT_BUTTERFLY', group: 'Pinpoint', label: 'Put butterfly', pay: '0,24 34,24 50,5 66,24 100,24',
+      legs: function (s, d) { return [L('BUY', 'PUT', grid(s * 1.05, s), d), L('SELL', 'PUT', grid(s, s), d),
+                                       L('SELL', 'PUT', grid(s, s), d), L('BUY', 'PUT', grid(s * 0.95, s), d)]; } },
+    { key: 'PROTECTIVE_PUT', group: 'Protection', label: 'Protective put', pay: '0,16 42,16 100,3',
+      legs: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('BUY', 'PUT', grid(s * 0.95, s), d)]; } },
+    { key: 'PROTECTIVE_COLLAR', group: 'Protection', label: 'Collar', pay: '0,19 30,19 66,7 100,7',
+      legs: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('BUY', 'PUT', grid(s * 0.95, s), d), L('SELL', 'CALL', grid(s * 1.05, s), d)]; } }
+  ];
+  // Back-compat alias: earlier callers/tests used QUICKS.
+  var QUICKS = CATALOG;
 
   /** Legs from the working idea (ticket candidate/custom), mapped to sim legs. Null if none. */
   function workingLegs() {
@@ -341,7 +459,7 @@
   }
 
   window.Scenario = {
-    SHAPES: SHAPES, QUICKS: QUICKS,
+    SHAPES: SHAPES, QUICKS: QUICKS, CATALOG: CATALOG,
     form: form, fanChart: fanChart, pnlView: pnlView, workingLegs: workingLegs, sketch: sketch
   };
 })();

@@ -1019,10 +1019,83 @@ public final class ApiServer {
                 .orElseThrow(() -> new java.util.NoSuchElementException(
                         "No price for " + sym + " — a simulation needs a real (or demo) quote to anchor on. Check the ticker."));
         double r = market.riskFreeRate(Math.max(1, b.spec().sane().horizonDays()));
+        // ACTIONABILITY: price the ENTRY from live market quotes (executable sides) when a chain
+        // is available, and default the IV path to the chain's ATM IV when the caller didn't set
+        // one. A model-priced entry simulated against the same model converges to a coin flip by
+        // construction; a market-priced entry measures YOUR SCENARIO vs THE MARKET'S PRICE.
+        int qty = b.qty() == null ? 1 : b.qty();
+        MarketEntry me = marketEntry(sym, b.legs(), qty);
+        io.liftandshift.strikebench.sim.IvSpec iv = b.iv();
+        if (iv == null) {
+            double atm = me != null && me.atmIv() != null ? me.atmIv() : b.spec().sane().volAnnual();
+            iv = io.liftandshift.strikebench.sim.IvSpec.flat(atm);
+        }
         var result = new io.liftandshift.strikebench.sim.ScenarioSimulator().run(
-                spot, b.legs(), b.qty() == null ? 1 : b.qty(), b.spec(), b.iv(), r,
-                simEngine.historicalLogReturns(sym));
+                spot, b.legs(), qty, b.spec(), iv, r,
+                simEngine.historicalLogReturns(sym),
+                me == null ? null : me.entryCents(),
+                me == null ? null : "Entry priced from " + me.source() + " market quotes (buy at ask, sell at bid).");
         ctx.json(result);
+    }
+
+    private record MarketEntry(long entryCents, Double atmIv, String source) {}
+
+    /**
+     * Prices the position's entry from the live chain at EXECUTABLE sides. Returns null when any
+     * option leg can't be matched to a real quote (unknown expiration/strike, one-sided book) —
+     * the simulator then falls back to a model-priced entry, honestly labeled.
+     */
+    private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs, int qty) {
+        try {
+            List<java.time.LocalDate> exps = market.expirations(symbol);
+            if (exps.isEmpty()) return null;
+            java.time.LocalDate today = java.time.LocalDate.now(clock);
+            double entryPerUnit = 0;
+            Double atmIv = null;
+            String source = null;
+            java.math.BigDecimal spotBd = null;
+            for (var leg : legs) {
+                if ("STOCK".equalsIgnoreCase(leg.type())) {
+                    var q = market.quote(symbol).orElse(null);
+                    if (q == null || q.mark() == null) return null;
+                    double sign = "SELL".equalsIgnoreCase(leg.action()) ? -1 : 1;
+                    entryPerUnit += sign * Math.max(1, leg.ratio()) * 100 * q.mark().doubleValue();
+                    continue;
+                }
+                // Nearest listed expiration to the leg's trading-day horizon (~7/5 calendar days/step).
+                java.time.LocalDate target = today.plusDays(Math.round(leg.expiryDay() * 7.0 / 5.0));
+                java.time.LocalDate exp = exps.stream()
+                        .min(java.util.Comparator.comparingLong(e2 -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e2, target))))
+                        .orElse(null);
+                if (exp == null) return null;
+                var chain = market.chain(symbol, exp).orElse(null);
+                if (chain == null || chain.isEmpty()) return null;
+                if (spotBd == null) spotBd = chain.underlyingPrice();
+                boolean call = "CALL".equalsIgnoreCase(leg.type());
+                var side = call ? chain.calls() : chain.puts();
+                var quote = side.stream()
+                        .min(java.util.Comparator.comparingDouble(o -> Math.abs(o.strike().doubleValue() - leg.strike())))
+                        .orElse(null);
+                // The nearest listed strike must be reasonably close, or this isn't the same trade.
+                if (quote == null || Math.abs(quote.strike().doubleValue() - leg.strike()) > Math.max(2.5, leg.strike() * 0.03)) return null;
+                boolean buy = !"SELL".equalsIgnoreCase(leg.action());
+                java.math.BigDecimal px = buy ? quote.ask() : quote.bid(); // executable sides
+                if (px == null || px.signum() <= 0) return null;
+                if (source == null) source = chain.source();
+                // ATM IV = the quote closest to spot (first leg's chain is fine for a default).
+                if (atmIv == null && spotBd != null) {
+                    final java.math.BigDecimal spotF = spotBd;
+                    atmIv = side.stream()
+                            .filter(o -> o.iv() != null && o.iv() > 0.01)
+                            .min(java.util.Comparator.comparingDouble(o -> Math.abs(o.strike().subtract(spotF).doubleValue())))
+                            .map(io.liftandshift.strikebench.model.OptionQuote::iv).orElse(null);
+                }
+                entryPerUnit += (buy ? 1 : -1) * Math.max(1, leg.ratio()) * 100 * px.doubleValue();
+            }
+            return new MarketEntry(Math.round(entryPerUnit * qty * 100), atmIv, source == null ? "live" : source);
+        } catch (Exception e) {
+            return null; // no market pricing available — model entry, honestly labeled
+        }
     }
 
     public record DataResetRequest(String tier, Boolean confirm) {}

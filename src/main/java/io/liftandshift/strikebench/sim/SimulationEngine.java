@@ -121,10 +121,12 @@ public final class SimulationEngine {
             java.util.Arrays.sort(sorted);
             bands.add(new PreviewBand(day, round2(q(sorted, 0.10)), round2(q(sorted, 0.50)), round2(q(sorted, 0.90))));
         }
+        // Sample futures render at FULL step resolution: daily points drawn as line segments
+        // read as connect-the-dots, not a market. Intraday steps make the squiggle honest.
         List<List<Double>> samples = new ArrayList<>();
         for (int p = 0; p < Math.min(3, paths.length); p++) {
             List<Double> sp = new ArrayList<>();
-            for (int day = 0; day <= days; day++) sp.add(round2(paths[p][Math.min(spec.totalSteps(), day * spd)]));
+            for (int i = 0; i <= spec.totalSteps(); i++) sp.add(round2(paths[p][i]));
             samples.add(sp);
         }
         PreviewBand end = bands.getLast();
