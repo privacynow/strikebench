@@ -435,6 +435,12 @@ public final class ApiServer {
             c.routes.post("/api/calibration/resolve", this::calibrationResolve);
 
             c.routes.post("/api/trades/preview", this::tradePreview);
+            c.routes.post("/api/trades/external", ctx -> {
+                Account acct = currentAccount(ctx);
+                TradeOpenRequest body = bodyOrNull(ctx, TradeOpenRequest.class);
+                var req = toOpenRequest(body, acct);
+                ctx.status(201).json(trades.createExternal(req));
+            });
             c.routes.post("/api/trades", this::tradeCreate);
             c.routes.get("/api/trades", this::tradeList);
             c.routes.get("/api/trades/{id}", this::tradeDetail);

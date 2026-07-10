@@ -2900,6 +2900,57 @@
     fIntent.value = pf.intent || '';
     fSym.addEventListener('change', applyFilters);
     fIntent.addEventListener('change', applyFilters);
+    // The learning loop's import path: record a trade you ACTUALLY placed at your broker.
+    // Structured legs against live contracts — no free-form text, no paper-cash mutation.
+    var extCard = el('div', { class: 'card', id: 'record-real-card' });
+    extCard.appendChild(UI.expandable('Record a real trade (from your broker)', (function () {
+      var box = el('div', {});
+      box.appendChild(explain('Enter the exact contracts and your ACTUAL net fill. The trade is tracked, marked and judged like any other — but your practice cash is never touched, and its outcome feeds Your record.'));
+      var sym = el('input', { type: 'text', id: 'ext-symbol', list: 'universe-symbols', placeholder: 'AAPL', style: 'max-width:110px' });
+      var qty = el('input', { type: 'number', id: 'ext-qty', min: '1', max: '100', value: '1', style: 'max-width:80px' });
+      var net = el('input', { type: 'number', id: 'ext-net', step: '0.01', placeholder: '+credit / \u2212debit $' });
+      var fees = el('input', { type: 'number', id: 'ext-fees', step: '0.01', placeholder: 'fees $' });
+      var legsBox = el('div', { id: 'ext-legs' });
+      function legRow() {
+        return el('div', { class: 'btn-row ext-leg', style: 'margin:4px 0' },
+          el('select', { class: 'x-act' }, el('option', {}, 'SELL'), el('option', {}, 'BUY')),
+          el('select', { class: 'x-type' }, el('option', {}, 'PUT'), el('option', {}, 'CALL')),
+          el('input', { class: 'x-strike', type: 'number', step: '0.5', placeholder: 'strike', style: 'max-width:100px' }),
+          el('input', { class: 'x-exp', type: 'date', style: 'max-width:150px' }),
+          el('button', { class: 'btn btn-sm', onclick: function (ev) { ev.target.closest('.ext-leg').remove(); } }, '\u00d7'));
+      }
+      legsBox.appendChild(legRow());
+      var msg = el('div', { class: 'muted small', id: 'ext-msg' });
+      var saveBtn = el('button', { class: 'btn btn-sm', id: 'ext-save', onclick: async function () {
+        saveBtn.disabled = true; msg.textContent = '';
+        try {
+          var legs = Array.prototype.map.call(legsBox.querySelectorAll('.ext-leg'), function (row) {
+            return { action: row.querySelector('.x-act').value, type: row.querySelector('.x-type').value,
+                     strike: row.querySelector('.x-strike').value, expiration: row.querySelector('.x-exp').value, ratio: 1 };
+          }).filter(function (l) { return l.strike && l.expiration; });
+          if (!legs.length) throw new Error('Add at least one leg (strike + expiration).');
+          if (net.value === '') throw new Error('The actual net fill is required.');
+          var t = await API.post('/api/trades/external', {
+            symbol: (sym.value || '').toUpperCase(), strategy: 'CUSTOM', qty: Math.max(1, parseInt(qty.value || '1', 10)),
+            legs: legs, proposedNetCents: Math.round(parseFloat(net.value) * 100),
+            feesOverrideCents: fees.value === '' ? null : Math.round(parseFloat(fees.value) * 100),
+            source: 'IMPORT' });
+          msg.textContent = 'Recorded ' + t.id + ' — it now appears below with an EXTERNAL badge.';
+          App.render();
+        } catch (e) { msg.textContent = 'Refused: ' + (e.message || e); }
+        saveBtn.disabled = false;
+      } }, 'Record trade');
+      box.appendChild(el('div', { class: 'btn-row' },
+        el('span', { class: 'muted small' }, 'Symbol'), sym,
+        el('span', { class: 'muted small' }, 'Qty'), qty, net, fees,
+        el('button', { class: 'btn btn-sm', onclick: function () { legsBox.appendChild(legRow()); } }, '+ Leg')));
+      box.appendChild(legsBox);
+      box.appendChild(el('div', { class: 'btn-row' }, saveBtn));
+      box.appendChild(msg);
+      return box;
+    })(), false));
+    root.appendChild(extCard);
+
     var tradesCard = el('div', { class: 'card', id: 'trades-card' },
       UI.cardHeader('Practice trades', seg),
       explain('Click any row for the payoff chart, live marks, and close/settle actions.'),
@@ -2926,7 +2977,9 @@
         class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); }
       },
         el('td', {}, el('b', {}, t.symbol)),
-        el('td', {}, prettyStrategy(t.strategy), t.intent && t.intent !== 'DIRECTIONAL' ? el('span', { style: 'margin-left:6px' }, intentBadge(t.intent)) : null),
+        el('td', {}, prettyStrategy(t.strategy),
+          t.origin === 'EXTERNAL' ? el('span', { class: 'badge badge-warn', style: 'margin-left:6px', title: 'A real trade you recorded — tracked and judged here, but your practice cash was never touched.' }, 'EXTERNAL') : null,
+          t.intent && t.intent !== 'DIRECTIONAL' ? el('span', { style: 'margin-left:6px' }, intentBadge(t.intent)) : null),
         el('td', {}, 'x' + t.qty),
         el('td', {}, pnlSpan(t.entryNetPremiumCents)),
         el('td', { class: 'loss' }, fmtMoney(t.maxLossCents)),
@@ -2963,6 +3016,7 @@
       el('div', { class: 'quote-hero' },
         el('span', { class: 'sym' }, t.symbol),
         el('span', { class: 'nm' }, prettyStrategy(t.strategy) + ' · x' + t.qty),
+        t.origin === 'EXTERNAL' ? el('span', { class: 'badge badge-warn', title: 'Real trade recorded from your broker — outcomes feed Your record; paper cash untouched.' }, 'EXTERNAL') : null,
         intentBadge(t.intent),
         el('span', { class: 'badge ' + (active ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, t.status),
         el('span', { class: 'spacer' }),

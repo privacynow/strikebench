@@ -160,6 +160,38 @@ class PaperCoreTest {
         assertThat((String) prob.get("timeBasis")).contains("trading sessions");
     }
 
+    @org.junit.jupiter.api.Test
+    void externalTradesNeverTouchPaperMoney() {
+        Account acct = accounts.getOrCreateDefault();
+        long cashBefore = acct.cashCents(), reservedBefore = acct.reservedCents();
+
+        // Record a REAL fill: the exact spread at MY price, with MY fees.
+        TradeService.OpenRequest real = new TradeService.OpenRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+                List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
+                "bullish", "month", "balanced", null, null, 173L * 100, 200L, "IMPORT");
+        TradeRecord t = trades.createExternal(real);
+        assertThat(t.external()).isTrue();
+        assertThat(t.entryNetPremiumCents()).isEqualTo(173_00);
+
+        // ZERO paper-money mutation: cash, reserve and the ledger are untouched.
+        Account after = accounts.get(acct.id());
+        assertThat(after.cashCents()).isEqualTo(cashBefore);
+        assertThat(after.reservedCents()).isEqualTo(reservedBefore);
+        long ledgerRows = db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?", r -> r.lng("n"), t.id()).getFirst();
+        assertThat(ledgerRows).isZero();
+
+        // Excluded from the paper-money aggregate (identity: totalValue = cash + shares + closes)...
+        Map<String, Object> open = trades.openPositionsValue(acct.id());
+        assertThat((Integer) open.get("openTradesCount")).isZero();
+
+        // ...but closing records the real outcome on the trade row — still zero ledger rows.
+        TradeService.CloseResult closed = trades.unwind(t.id(), true);
+        assertThat(closed.trade().status()).isEqualTo(TradeRecord.CLOSED);
+        assertThat(closed.trade().realizedPnlCents()).isNotNull();
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?", r -> r.lng("n"), t.id()).getFirst()).isZero();
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore);
+    }
+
     private TradeService.OpenRequest creditPutSpread(String accountId, int qty) {
         return new TradeService.OpenRequest(accountId, "AAPL", "CREDIT_PUT_SPREAD", qty,
                 List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),

@@ -34,8 +34,25 @@ public record TradeRecord(
         String closedAt,
         String updatedAt,
         String intent,        // StrategyIntent name the trade was placed under, nullable
-        long sharesLocked     // held shares pledged as short-call coverage while ACTIVE
+        long sharesLocked,    // held shares pledged as short-call coverage while ACTIVE
+        String origin         // PAPER | EXTERNAL (a real broker fill recorded for the learning loop)
 ) {
+    /** Pre-origin shape. */
+    public TradeRecord(String id, String accountId, String symbol, String strategy, String status,
+                       int qty, List<Leg> legs, String thesis, String horizon, String riskMode,
+                       long entryUnderlyingCents, long entryNetPremiumCents, long maxLossCents,
+                       Long maxProfitCents, List<String> breakevens, Double popEntry,
+                       long feesOpenCents, long feesCloseCents, Long realizedPnlCents,
+                       String closeReason, String entrySnapshotJson, boolean isLive,
+                       String createdAt, String closedAt, String updatedAt, String intent, long sharesLocked) {
+        this(id, accountId, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
+                entryUnderlyingCents, entryNetPremiumCents, maxLossCents, maxProfitCents, breakevens,
+                popEntry, feesOpenCents, feesCloseCents, realizedPnlCents, closeReason,
+                entrySnapshotJson, isLive, createdAt, closedAt, updatedAt, intent, sharesLocked, "PAPER");
+    }
+
+    public boolean external() { return "EXTERNAL".equals(origin); }
+
     public static final String ACTIVE = "ACTIVE";
     public static final String CLOSED = "CLOSED";
     public static final String EXPIRED = "EXPIRED";

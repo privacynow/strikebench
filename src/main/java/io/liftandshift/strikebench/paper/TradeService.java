@@ -123,6 +123,39 @@ public final class TradeService {
                 p.freshness.name(), p.underlyingCents, p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics());
     }
 
+    /**
+     * Records a REAL trade executed at a brokerage: identical evaluation (the plan runs at the
+     * ACTUAL fill via proposedNetCents), identical marks/plans/resolution — but paper cash, the
+     * ledger and reserves are NEVER touched. This is the learning loop's missing import path:
+     * the MU condor left zero trace because only paper placements existed.
+     */
+    public TradeRecord createExternal(OpenRequest req) {
+        if (req.proposedNetCents() == null) {
+            throw new IllegalArgumentException("recording a real trade requires proposedNetCents — the actual net fill");
+        }
+        Plan p = computePlan(req);
+        if (!p.blocks.isEmpty()) reject(req, p.blocks);
+        String tradeId = Ids.trade();
+        String now = now();
+        db.exec("""
+                INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
+                  entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,
+                  pop_entry,fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,
+                  is_live,created_at,closed_at,updated_at,intent,shares_locked,origin)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,0,'EXTERNAL')""",
+                tradeId, req.accountId(), req.symbol().toUpperCase(java.util.Locale.ROOT),
+                req.strategy(), TradeRecord.ACTIVE, req.qty(), Json.write(p.filledLegs),
+                req.thesis(), req.horizon(), req.riskMode(),
+                p.underlyingCents, p.entryNet, p.maxLoss, p.maxProfit, Json.write(p.breakevens),
+                p.pop, p.fees, p.snapshotJson, now, now,
+                req.intent() == null || req.intent().isBlank() ? null
+                        : io.liftandshift.strikebench.strategy.StrategyIntent.parse(req.intent()).name());
+        auditSafe(req.accountId(), tradeId, "EXTERNAL_TRADE_RECORDED", "INFO", Map.of(
+                "symbol", req.symbol(), "strategy", req.strategy(), "qty", req.qty(),
+                "fillNetCents", p.entryNet, "feesCents", p.fees));
+        return get(tradeId);
+    }
+
     /** Opens the trade or throws TradeRejectedException (audit row only, zero mutation). */
     public TradeRecord create(OpenRequest req) {
         Plan p = computePlan(req);
@@ -326,6 +359,14 @@ public final class TradeService {
             }
 
             String nowTs = now();
+            if (t.external()) {
+                // Real-trade lane: cash-settle the OUTCOME onto the trade row only — the paper
+                // ledger never held this money, and physical assignment belongs to the broker.
+                long realizedX = t.entryNetPremiumCents() - t.feesOpenCents() + settleValue;
+                Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=0, realized_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
+                        TradeRecord.EXPIRED, "SETTLED (external)" + memoSuffix, realizedX, nowTs, nowTs, t.id());
+                return new CloseResult(getOn(c, t.id()), realizedX);
+            }
             long cash = acct.cashCents(), reserved = acct.reservedCents();
             cash += settleValue;
             ledgerRow(c, acct.id(), t.id(), nowTs, "SETTLEMENT", settleValue, cash, reserved,
@@ -577,7 +618,10 @@ public final class TradeService {
      *  (executable sides, BEFORE close fees). Sums computeMark per trade; incomplete marks
      *  make the whole answer honest-partial rather than silently wrong. */
     public Map<String, Object> openPositionsValue(String accountId) {
-        List<TradeRecord> active = list(accountId, TradeRecord.ACTIVE, 0, 200).trades();
+        // EXTERNAL trades are excluded from paper-money math: their cash lives at the broker,
+        // so including their close value would break totalValue = cash + shares + open closes.
+        List<TradeRecord> active = list(accountId, TradeRecord.ACTIVE, 0, 200).trades().stream()
+                .filter(t -> !t.external()).toList();
         Map<String, MarkView> snap = accountMarkSnapshot(accountId); // ONE atomic snapshot for all consumers
         long value = 0, unrealized = 0;
         int counted = 0;
@@ -1177,6 +1221,14 @@ public final class TradeService {
     private CloseResult closeOut(Connection c, TradeRecord t, Account acct, String cashRowType,
                                  long closeValue, long feesClose, String newStatus, String closeReason) throws SQLException {
         String now = now();
+        if (t.external()) {
+            // A REAL trade recorded for the learning loop: the paper account never held its cash,
+            // so closing writes the outcome to the trade row ONLY — no ledger, no reserve, no cash.
+            long realizedX = t.entryNetPremiumCents() - t.feesOpenCents() + closeValue - feesClose;
+            Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=?, realized_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
+                    newStatus, closeReason, feesClose, realizedX, now, now, t.id());
+            return new CloseResult(getOn(c, t.id()), realizedX);
+        }
         long cash = acct.cashCents(), reserved = acct.reservedCents();
 
         cash += closeValue;
@@ -1271,7 +1323,7 @@ public final class TradeService {
                 r.dblOrNull("pop_entry"), r.lng("fees_open_cents"), r.lng("fees_close_cents"),
                 r.lngOrNull("realized_pnl_cents"), r.str("close_reason"), r.str("entry_snapshot_json"),
                 r.bool("is_live"), r.str("created_at"), r.str("closed_at"), r.str("updated_at"),
-                r.str("intent"), r.lng("shares_locked"));
+                r.str("intent"), r.lng("shares_locked"), r.str("origin"));
     }
 
     static String legDesc(Leg leg) {
