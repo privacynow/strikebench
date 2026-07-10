@@ -174,7 +174,7 @@ public final class ResearchQuestionEngine {
             verdict = "Supported — after this signal, " + symbol + " was positive " + pct(conditioned.winRatePct())
                     + " of the time over " + forward + " days, vs " + pct(baseline.winRatePct())
                     + " normally (mean " + signed(conditioned.meanReturnPct()) + " vs " + signed(baseline.meanReturnPct()) + ")."
-                    + ("held".equals(holdout) ? " The edge held in both halves of the window."
+                    + ("held".equals(holdout) ? " The edge was consistent across both halves of the window (an in-sample check, not out-of-sample validation)."
                        : "faded".equals(holdout) ? " CAUTION: the edge lived in only one half of the window \u2014 possibly one regime's story." : "");
         } else if (significant && winEdge < 0) {
             verdict = "Rejected — the signal preceded WORSE outcomes than normal (" + pct(conditioned.winRatePct())

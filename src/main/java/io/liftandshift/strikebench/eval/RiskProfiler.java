@@ -46,7 +46,25 @@ public final class RiskProfiler {
             // Degrade to extremes-only rather than fail the whole evaluation.
         }
         long tailLoss = have ? Math.max(0, -worstPnl) : maxLoss;
-        return new RiskProfile(maxLoss, maxProfit, c.pop(), c.expectedValueCents(), tailLoss, TAIL_MOVE, scenarios);
+        // The PHYSICAL-vol lane: the same EV integral at REALIZED volatility (zero drift). When
+        // implied >> realized, the market-implied EV of short premium is negative while the
+        // physical-vol EV is positive — that gap IS the volatility risk premium, and the two
+        // numbers must never be blended into one.
+        Long evPhysical = null;
+        String basisNote = null;
+        if (ctx.realizedVol30() != null && ctx.realizedVol30() > 0 && ctx.underlyingCents() > 0
+                && ctx.daysToExpiry() > 0 && c.legs() != null && !c.legs().isEmpty()) {
+            try {
+                List<Leg> plegs = new ArrayList<>(c.legs().stream().map(LegView::toLeg).toList());
+                PayoffCurve ppc = PayoffCurve.of(plegs, Math.max(1, c.qty()));
+                double t = ctx.daysToExpiry() / 365.0;
+                evPhysical = ppc.expectedValueCents(ctx.underlyingCents() / 100.0, ctx.realizedVol30(), t, 0);
+                basisNote = "expectedValueCents = market-implied (IV, risk-neutral); evPhysicalCents = realized-vol "
+                        + Math.round(ctx.realizedVol30() * 100) + "% (physical lane, zero drift). Both pre-commission.";
+            } catch (RuntimeException ignored) { /* lane stays honestly null */ }
+        }
+        return new RiskProfile(maxLoss, maxProfit, c.pop(), c.expectedValueCents(), tailLoss, TAIL_MOVE,
+                scenarios, evPhysical, basisNote);
     }
 
     private static BigDecimal cents(long c) { return BigDecimal.valueOf(c).movePointLeft(2); }

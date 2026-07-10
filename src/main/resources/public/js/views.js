@@ -3337,7 +3337,8 @@
         out.appendChild(el('div', { class: 'muted small', style: 'margin:4px 0' },
           f.describe() + ' — every structure ran on the SAME ' + results[0].r.paths
           + ' futures (one seed-matched set), entries at market quotes where a listed contract matched. '
-          + 'Ranked by expected gain per dollar of realistic downside (1-in-20 bad run) so small and large positions compare fairly.'));
+          + 'Ranked by expected gain per dollar of realistic downside (1-in-20 bad run) so small and large positions compare fairly. '
+          + 'The baseline every structure must beat: CASH \u2014 doing nothing risks nothing and costs nothing.'));
         function rowFor(x) {
           return el('tr', { class: 'clickable' },
             el('td', {}, el('b', {}, x.q.label), ' ', el('span', { class: 'muted small' }, x.q.group)),
@@ -4686,8 +4687,8 @@
     if (dc) out.appendChild(dc);
     if (r.holdout) {
       out.appendChild(el('div', { class: 'muted small' },
-        r.holdout === 'held' ? 'Out-of-sample check: the edge held in both halves of the window.'
-          : 'Out-of-sample check: the edge lived in only ONE half of the window \u2014 treat with caution.'));
+        r.holdout === 'held' ? 'Split-half consistency: the edge pointed the same way in both halves of the window.'
+          : 'Split-half consistency: the edge lived in only ONE half of the window \u2014 possibly one regime\u2019s story.'));
     }
     if (level === 'expert') {
       out.appendChild(el('div', { class: 'chip-row' },
@@ -4695,8 +4696,8 @@
         chip('90% CI (avg)', r.ciLowPct + '% … ' + r.ciHighPct + '%'),
         r.effectSize !== null && r.effectSize !== undefined
           ? chip('Effect size', String(r.effectSize), 'Cohen\u2019s d: the edge measured in units of the stock\u2019s normal noise. Under ~0.2 is negligible even when statistically significant.') : null,
-        r.holdout ? chip('Out-of-sample', r.holdout === 'held' ? 'held' : 'faded',
-          'Split-half walk-forward: did the edge point the same way in both halves of the window?') : null,
+        r.holdout ? chip('Consistency', r.holdout === 'held' ? 'held' : 'faded',
+          'Split-half check on the SAME window \u2014 in-sample consistency, not genuine out-of-sample validation.') : null,
         chip('Baseline avg', (r.baseline.meanReturnPct >= 0 ? '+' : '') + r.baseline.meanReturnPct + '%'),
         chip('Significant', r.significant ? 'yes' : 'no')));
     }

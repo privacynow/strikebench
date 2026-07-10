@@ -1144,7 +1144,11 @@ public final class ApiServer {
         List<Map<String, Object>> refused = new ArrayList<>(refusedEarly);
         report.refused().forEach(x -> refused.add(Map.of("key", x.key(), "reason", x.reason())));
         ctx.json(Map.of("results", report.results(), "refused", refused,
-                "volAnnual", spec.sane().volAnnual()));
+                "volAnnual", spec.sane().volAnnual(),
+                // The alternatives every structure must beat + the fairness contract, disclosed.
+                "cashBaseline", Map.of("key", "CASH", "note",
+                        "Doing nothing: $0 expected, $0 at risk, zero costs — any structure below a coin flip after costs loses to this."),
+                "fairness", "one quote snapshot, one seeded path set — every structure judged on identical futures"));
     }
 
     /** Uniform structural validation for simulation legs; null = fine, else the refusal reason. */
