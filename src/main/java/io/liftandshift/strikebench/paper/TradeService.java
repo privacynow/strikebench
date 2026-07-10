@@ -1065,7 +1065,7 @@ public final class TradeService {
             blocks.add("Undefined (unlimited) risk: this position can lose more than any amount reserved. Add a protective leg to cap the loss.");
             Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
                     snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
-                    0, null, null, null, worst);
+                    0, null, null, null, worst, marks.underlyingAsOfMs(req.symbol()).orElse(null));
             return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked);
         }
@@ -1094,7 +1094,7 @@ public final class TradeService {
 
         Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
                 snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
-                fees, maxLoss, maxProfit, ev, worst);
+                fees, maxLoss, maxProfit, ev, worst, marks.underlyingAsOfMs(req.symbol()).orElse(null));
         return new Plan(filled, entryNet, fees, reserve, maxLoss, maxProfit,
                 riskCurve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
                 pop, ev, Money.toCents(underlying), worst, blocks, warnings, Json.write(snapshot), sharesToLock,
@@ -1155,7 +1155,7 @@ public final class TradeService {
                                                List<Map<String, Object>> snaps, int qty,
                                                long entryNet, long executableNet, Long packageMid,
                                                Long proposedNet, long fees, Long maxLoss, Long maxProfit,
-                                               Long ev, Freshness freshness) {
+                                               Long ev, Freshness freshness, Long sourceAsOf) {
         Map<String, Object> out = new LinkedHashMap<>();
         var map = io.liftandshift.strikebench.pricing.ProbabilityMap.of(curve, spot, ivAvg, t, shortStrikes);
         Map<String, Object> prob = new LinkedHashMap<>();
@@ -1207,7 +1207,11 @@ public final class TradeService {
         em.put("highCents", Math.round(spot * Math.exp(sdMove) * 100));
         em.put("oneSessionCents", Math.round(spot * ivAvg * Math.sqrt(1.0 / 252.0) * 100));
         out.put("expectedMove", em);
-        out.put("asOfEpochMs", clock.millis());
+        // R3: three clocks, separately — the data's own stamp, and when WE judged it. (fetchedAt
+        // collapses into sourceAsOf for feeds without a distinct source stamp.)
+        out.put("sourceAsOfEpochMs", sourceAsOf);
+        out.put("evaluatedAtEpochMs", clock.millis());
+        out.put("asOfEpochMs", clock.millis()); // legacy key, kept for consumers
         out.put("freshness", freshness.name());
 
         // The assembled verdict: worst-triggered tier wins; the reason names the single biggest problem.

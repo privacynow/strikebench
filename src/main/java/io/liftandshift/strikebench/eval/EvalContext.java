@@ -14,9 +14,16 @@ public record EvalContext(
         Double realizedVol30,     // 30-day realized (annualized), null if no candles
         List<Double> ivHistory,   // trailing ATM-IV observations for rank/percentile (may be empty)
         long buyingPowerCents,    // for the capital gate
-        boolean marketOpen
+        boolean marketOpen,
+        long feePerContractCents  // so EV can be judged NET of commissions
 ) {
     public EvalContext {
         ivHistory = ivHistory == null ? List.of() : List.copyOf(ivHistory);
+    }
+
+    /** Pre-fee shape (tests, older call sites): default commission. */
+    public EvalContext(String symbol, long underlyingCents, int daysToExpiry, Double atmIv,
+                       Double realizedVol30, List<Double> ivHistory, long buyingPowerCents, boolean marketOpen) {
+        this(symbol, underlyingCents, daysToExpiry, atmIv, realizedVol30, ivHistory, buyingPowerCents, marketOpen, 65);
     }
 }

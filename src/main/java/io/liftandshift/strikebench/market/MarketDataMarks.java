@@ -30,6 +30,11 @@ public final class MarketDataMarks implements MarksSource {
     }
 
     @Override
+    public Optional<Long> underlyingAsOfMs(String symbol) {
+        return market.quote(symbol).map(io.liftandshift.strikebench.model.Quote::asOfEpochMs);
+    }
+
+    @Override
     public Optional<LegMark> legMark(String symbol, Leg leg) {
         if (leg.isStock()) {
             // A share behaves like a delta-1, greek-free contract

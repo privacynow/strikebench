@@ -59,6 +59,21 @@ class ApiIntegrationTest {
                 HttpResponse.BodyHandlers.ofString());
     }
 
+    /** Creates a trade the way a real client does: preview first, acknowledge the server's
+     *  material-risk contract (R2), then create with the signed token attached. */
+    private static HttpResponse<String> createAcknowledged(String body) throws Exception {
+        var prev = post("/api/trades/preview", body);
+        var pj = Json.parse(prev.body());
+        if (!pj.has("requiredAcks") || pj.get("requiredAcks").isEmpty()) {
+            return post("/api/trades", body);
+        }
+        var node = (com.fasterxml.jackson.databind.node.ObjectNode) Json.parse(body);
+        var acks = node.putArray("acknowledgedRisks");
+        pj.get("requiredAcks").forEach(a -> acks.add(a.get("id").asText()));
+        node.put("ackToken", pj.get("ackToken").asText());
+        return post("/api/trades", node.toString());
+    }
+
     private static HttpResponse<String> post(String path, String body) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(base + path))
                         .header("Content-Type", "application/json")
@@ -202,7 +217,7 @@ class ApiIntegrationTest {
         assertThat(before.at("/account/hasTraded").asBoolean()).isFalse();
 
         // Create
-        HttpResponse<String> createRes = post("/api/trades", spreadBody);
+        HttpResponse<String> createRes = createAcknowledged(spreadBody);
         assertThat(createRes.statusCode()).isEqualTo(201);
         JsonNode created = Json.parse(createRes.body());
         String tradeId = created.at("/trade/id").asText();
@@ -247,7 +262,7 @@ class ApiIntegrationTest {
         String body = """
                 {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
                  "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
-        String tradeId = Json.parse(post("/api/trades", body).body()).at("/trade/id").asText();
+        String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
         assertThat(delete("/api/trades/" + tradeId).statusCode()).isEqualTo(400); // no confirm
         assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
@@ -262,7 +277,7 @@ class ApiIntegrationTest {
         String body = """
                 {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
                  "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
-        String tradeId = Json.parse(post("/api/trades", body).body()).at("/trade/id").asText();
+        String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
         // No/empty body or missing confirm flag must NOT settle (was auto-confirming)
         assertThat(post("/api/trades/" + tradeId + "/settle", "").statusCode()).isEqualTo(400);
@@ -284,7 +299,7 @@ class ApiIntegrationTest {
         String body = """
                 {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
                  "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
-        String tradeId = Json.parse(post("/api/trades", body).body()).at("/trade/id").asText();
+        String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
         JsonNode greeks = Json.parse(get("/api/portfolio/greeks").body());
         assertThat(greeks.get("deltaShares").asDouble()).isGreaterThan(0); // long call = positive delta
@@ -376,7 +391,7 @@ class ApiIntegrationTest {
         // chains only exist for listed expirations — nothing fabricated
         assertThat(get("/api/research/AAPL/chain?expiration=2026-07-09").statusCode()).isEqualTo(404);
         // expired contracts cannot be opened
-        HttpResponse<String> past = post("/api/trades", """
+        HttpResponse<String> past = createAcknowledged("""
                 {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
                  "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"2020-01-17","ratio":1}]}""");
         assertThat(past.statusCode()).isEqualTo(422);
@@ -395,7 +410,7 @@ class ApiIntegrationTest {
                          {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1}]}""".formatted(far, near);
         JsonNode preview = Json.parse(post("/api/trades/preview", body).body());
         assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
-        HttpResponse<String> created = post("/api/trades", body);
+        HttpResponse<String> created = createAcknowledged(body);
         assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
         JsonNode trade = Json.parse(created.body()).get("trade");
         assertThat(trade.get("entryNetPremiumCents").asLong()).isNegative(); // debit
@@ -461,7 +476,7 @@ class ApiIntegrationTest {
         assertThat(preview.at("/preview/ok").asBoolean()).as(preview.toString()).isTrue();
         assertThat(preview.at("/preview/reserveCents").asLong()).isZero();
         assertThat(preview.at("/guardrails/level").asText()).isNotEqualTo("BLOCK");
-        HttpResponse<String> created = post("/api/trades", body);
+        HttpResponse<String> created = createAcknowledged(body);
         assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
         JsonNode trade = Json.parse(created.body()).get("trade");
         assertThat(trade.get("sharesLocked").asLong()).isEqualTo(100);

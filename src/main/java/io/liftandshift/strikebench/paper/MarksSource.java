@@ -12,6 +12,10 @@ import java.util.Optional;
  */
 public interface MarksSource {
 
+    /** The underlying quote's OWN timestamp (source stamp), when the feed provides one. */
+    default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.util.Optional.empty(); }
+
+
     /**
      * bid/ask are the EXECUTABLE sides (null/zero = no market on that side); mid is the
      * display/marking price. Paper fills must use the executable side, never the mid.

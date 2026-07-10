@@ -196,7 +196,8 @@ public final class ApiServer {
         io.liftandshift.strikebench.market.UniverseService universe = new io.liftandshift.strikebench.market.UniverseService(db, cfg, clock);
         io.liftandshift.strikebench.market.SnapshotService snapshots = new io.liftandshift.strikebench.market.SnapshotService(market, universe, db, clock);
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
-        io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, engine, db, clock);
+        io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, engine, db, clock)
+                .withFeePerContractCents(cfg.feePerContractCents()); // decision EV judged net of the REAL commission
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
         server.db = db;
         // Data Center services (need db, which is set above; reuse the constructor-built engine).
@@ -780,6 +781,72 @@ public final class ApiServer {
      * rewritten under this running server — the classic "some screens fail to load" cause —
      * and the UI turns it into a restart banner instead of a mystery. Never 500s.
      */
+    // ---- Material-risk acknowledgment contract (R2/R4) ----
+    private final byte[] ackSecret = new byte[32];
+    { new java.security.SecureRandom().nextBytes(ackSecret); }
+
+    /** The server's list of risks the user MUST acknowledge for this package (id + label). */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, String>> requiredAcksFor(io.liftandshift.strikebench.paper.TradePreview p,
+                                                      io.liftandshift.strikebench.paper.AccountRiskContext rc) {
+        List<Map<String, String>> out = new ArrayList<>();
+        if (p == null || p.analytics() == null) return out;
+        if (p.expectedValueCents() != null && p.expectedValueCents() < 0) {
+            out.add(Map.of("id", "ack-ev", "label", "The model expects this trade to LOSE "
+                    + io.liftandshift.strikebench.util.Money.fmt(-p.expectedValueCents())
+                    + " on average at the market's own volatility."));
+        }
+        Object execO = p.analytics().get("executionQuality");
+        if (execO instanceof Map<?, ?> exec) {
+            Object pct = exec.get("concessionPctOfMid");
+            if (pct instanceof Double d && Math.abs(d) > 0.10) {
+                out.add(Map.of("id", "ack-exec", "label", "Entering surrenders "
+                        + Math.round(Math.abs(d) * 100) + "% of the package midpoint to the bid/ask spread."));
+            }
+        }
+        Object planO = p.analytics().get("managementPlan");
+        if (planO instanceof Map<?, ?> plan && String.valueOf(plan.get("regime")).contains("near-expiry")) {
+            out.add(Map.of("id", "ack-dte", "label", "Only " + plan.get("sessions")
+                    + " trading session(s) remain — gamma, weekend gaps and pin risk dominate."));
+        }
+        if (rc != null && rc.riskCapitalCents() != null && rc.riskCapitalCents() > 0
+                && p.maxLossCents() > rc.riskCapitalCents()) {
+            out.add(Map.of("id", "ack-capital", "label", "The worst case exceeds the per-trade risk capital "
+                    + "you set for your REAL account ("
+                    + io.liftandshift.strikebench.util.Money.fmt(rc.riskCapitalCents()) + ")."));
+        }
+        return out;
+    }
+
+    /** Token = ts.hmac(package-identity + ts): proves a preview of THIS package was seen recently. */
+    private String ackToken(TradeService.OpenRequest req) {
+        long ts = clock.millis();
+        return ts + "." + ackHmac(req, ts);
+    }
+
+    private boolean verifyAckToken(String token, TradeService.OpenRequest req) {
+        if (token == null || !token.contains(".")) return false;
+        try {
+            long ts = Long.parseLong(token.substring(0, token.indexOf('.')));
+            if (Math.abs(clock.millis() - ts) > 15 * 60_000L) return false; // stale preview
+            String expect = ackHmac(req, ts);
+            return java.security.MessageDigest.isEqual(
+                    expect.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    token.substring(token.indexOf('.') + 1).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (RuntimeException e) { return false; }
+    }
+
+    private String ackHmac(TradeService.OpenRequest req, long ts) {
+        try {
+            var mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(ackSecret, "HmacSHA256"));
+            String payload = req.symbol() + "|" + req.strategy() + "|" + req.qty() + "|"
+                    + io.liftandshift.strikebench.util.Json.canonical(req.legs()) + "|"
+                    + req.proposedNetCents() + "|" + ts;
+            return java.util.HexFormat.of().formatHex(mac.doFinal(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (Exception e) { throw new IllegalStateException(e); }
+    }
+
     // ---- Operational metrics + throttle ----
     private final java.util.concurrent.atomic.AtomicLong apiRequests = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong apiErrors = new java.util.concurrent.atomic.AtomicLong();
@@ -1156,7 +1223,18 @@ public final class ApiServer {
                 .compare(spot, items, qty, spec, iv, r, simEngine.historicalLogReturns(sym, analysisCtx(ctx)));
         List<Map<String, Object>> refused = new ArrayList<>(refusedEarly);
         report.refused().forEach(x -> refused.add(Map.of("key", x.key(), "reason", x.reason())));
-        ctx.json(Map.of("results", report.results(), "refused", refused,
+        // R9: fees ride each outcome so the ranking can be judged NET of round-trip commissions.
+        List<Map<String, Object>> feeAware = new ArrayList<>();
+        for (var oc : report.results()) {
+            long legsN = items.stream().filter(it -> it.key().equals(oc.key()))
+                    .findFirst().map(it -> (long) it.legs().size()).orElse(0L);
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("key", oc.key());
+            m.put("result", oc.result());
+            m.put("feesCents", legsN * cfg.feePerContractCents() * 2L * qty);
+            feeAware.add(m);
+        }
+        ctx.json(Map.of("results", feeAware, "refused", refused,
                 "volAnnual", spec.sane().volAnnual(),
                 // The alternatives every structure must beat + the fairness contract, disclosed.
                 "cashBaseline", Map.of("key", "CASH", "note",
@@ -1618,6 +1696,15 @@ public final class ApiServer {
                         req.filters());
             } catch (java.util.NoSuchElementException ignored) { /* no position — engine handles it */ }
         }
+        // R4: the user's REAL risk-capital line governs sizing, not just chips — the engine's
+        // per-trade budget is capped by it when declared.
+        var rcGov = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
+        if (rcGov.riskCapitalCents() != null && rcGov.riskCapitalCents() > 0
+                && (req.maxLossCents() == null || req.maxLossCents() > rcGov.riskCapitalCents())) {
+            req = new RecommendationEngine.Request(req.symbol(), req.thesis(), req.horizon(), req.riskMode(),
+                    rcGov.riskCapitalCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
+                    req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
+        }
         return engine.recommend(req, acct.buyingPowerCents());
     }
 
@@ -1644,18 +1731,40 @@ public final class ApiServer {
         out.put("intent", String.valueOf(result.intent()));
         out.put("evaluations", evals);
         out.put("rejected", result.rejected());
-        // The alternatives every competition must beat: doing NOTHING, and just owning the stock.
+        // R10: the alternatives are EVALUATED, not described — real capital, real tail numbers,
+        // the same horizon, so 'nothing here beats cash/shares' is a first-class ranked outcome.
         List<Map<String, Object>> baselines = new ArrayList<>();
-        baselines.add(Map.of("key", "CASH",
-                "note", "Do nothing: $0 expected value, $0 at risk, zero costs. Any idea above must beat this after fees and spreads."));
+        Map<String, Object> cash = new LinkedHashMap<>();
+        cash.put("key", "CASH");
+        cash.put("evCents", 0L); cash.put("maxLossCents", 0L); cash.put("cvar95Cents", 0L);
+        cash.put("capitalCents", 0L); cash.put("viable", true);
+        cash.put("note", "Do nothing: $0 expected, $0 at risk, zero costs — every idea above must beat this after fees and spreads.");
+        baselines.add(cash);
         try {
             var q = market.quote(result.symbol()).orElse(null);
+            var evs0 = evals.isEmpty() ? null : evals.getFirst();
             if (q != null && q.mark() != null) {
-                long spotCents = io.liftandshift.strikebench.util.Money.toCents(q.mark());
-                long lot = spotCents * 100;
-                baselines.add(Map.of("key", "BUY_AND_HOLD",
-                        "note", "Own 100 shares (" + io.liftandshift.strikebench.util.Money.fmt(lot)
-                                + "): zero-drift model EV \u2248 $0 minus nothing to cross; full downside exposure, uncapped upside, no expiry."));
+                double spot = q.mark().doubleValue();
+                long lot = Math.round(spot * 100) * 100; // 100 shares, cents
+                int horizonDays = 30;
+                Double iv = null;
+                try { iv = atmIvOf(result.symbol()); } catch (RuntimeException ignored) { }
+                var stockLeg = io.liftandshift.strikebench.model.Leg.stock(
+                        io.liftandshift.strikebench.model.LegAction.BUY, 1, q.mark());
+                var curve = io.liftandshift.strikebench.pricing.PayoffCurve.of(List.of(stockLeg), 1);
+                var map = io.liftandshift.strikebench.pricing.ProbabilityMap.of(curve, spot,
+                        iv != null ? iv : 0.3, horizonDays / 365.0, List.of());
+                Map<String, Object> bh = new LinkedHashMap<>();
+                bh.put("key", "BUY_AND_HOLD");
+                bh.put("evCents", 0L); // zero-drift risk-neutral
+                bh.put("capitalCents", lot);
+                bh.put("cvar95Cents", map.cvar95Cents());
+                bh.put("stressLossCents", map.stressLossCents());
+                bh.put("pAnyProfit", map.pAnyProfit());
+                bh.put("viable", true);
+                bh.put("note", "Own 100 shares (" + io.liftandshift.strikebench.util.Money.fmt(lot)
+                        + "): EV \u2248 $0 at zero drift, no expiry, nothing to cross; the tail numbers above are its REAL 30-day downside at the chain's own vol.");
+                baselines.add(bh);
             }
         } catch (RuntimeException ignored) { /* baseline is advisory */ }
         out.put("baselines", baselines);
@@ -1743,7 +1852,34 @@ public final class ApiServer {
                         req.filters());
             } catch (java.util.NoSuchElementException ignored) { /* buy-write ladder */ }
         }
-        ctx.json(engine.ladder(req, acct.buyingPowerCents()));
+        var ladder = engine.ladder(req, acct.buyingPowerCents());
+        // R9: the SAME decision policy annotates every rung — no ranked surface escapes it.
+        try {
+            var rungEvals = evaluations.evaluate(req.symbol(), req.intent(), req.thesis(), req.horizon(),
+                    req.riskMode(), ladder.rungs(), acct.buyingPowerCents(), null, false,
+                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+            if (rungEvals.size() == ladder.rungs().size()) {
+                com.fasterxml.jackson.databind.node.ObjectNode out =
+                        (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(ladder);
+                com.fasterxml.jackson.databind.node.ArrayNode arr = out.putArray("rungs");
+                // ladder ORDER is the strike ladder (its meaning) — decision score is an annotation
+                var byCand = new java.util.IdentityHashMap<Object, io.liftandshift.strikebench.eval.StrategyEvaluation>();
+                for (var e : rungEvals) byCand.put(e.candidate(), e);
+                for (var c : ladder.rungs()) {
+                    com.fasterxml.jackson.databind.node.ObjectNode m =
+                            (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(c);
+                    var e = byCand.get(c);
+                    if (e != null) {
+                        m.put("decisionScore", Math.round(e.rankScore()));
+                        m.put("decisionViable", e.viable());
+                    }
+                    arr.add(m);
+                }
+                ctx.json(out);
+                return;
+            }
+        } catch (RuntimeException e) { log.warn("ladder decision annotation unavailable: {}", e.toString()); }
+        ctx.json(ladder);
     }
 
     private void recommendAuto(Context ctx) {
@@ -1772,7 +1908,8 @@ public final class ApiServer {
                                    String thesis, String horizon, String riskMode,
                                    String intent, Boolean useHeldShares, String recommendationId,
                                    Long proposedNetCents, Long feesOverrideCents, String source,
-                                   String executedAt, String broker, String orderRef, Boolean historical) {}
+                                   String executedAt, String broker, String orderRef, Boolean historical,
+                                   List<String> acknowledgedRisks, String ackToken) {}
 
     public record ConfirmRequest(Boolean confirm) {}
 
@@ -1897,6 +2034,14 @@ public final class ApiServer {
         // The REAL denominators, when the user declared them: risk judged against paper cash was
         // the MU lesson's sizing blind spot ('sane vs \$100k paper' was 6.5% of the real account).
         var rc = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
+        // R2: material-risk acknowledgments are a SERVER contract, not a UI courtesy — the same
+        // list is recomputed at create and enforced with a signed token proving the user saw
+        // a preview of THIS exact package.
+        List<Map<String, String>> requiredAcks = requiredAcksFor(preview, rc);
+        if (!requiredAcks.isEmpty()) {
+            out.put("requiredAcks", requiredAcks);
+            out.put("ackToken", ackToken(req));
+        }
         if (!rc.isEmpty() && preview.maxLossCents() > 0) {
             Map<String, Object> fit = new LinkedHashMap<>();
             if (rc.nlvCents() != null && rc.nlvCents() > 0)
@@ -1920,6 +2065,23 @@ public final class ApiServer {
         Account acct = currentAccount(ctx);
         TradeOpenRequest body = bodyOrNull(ctx, TradeOpenRequest.class);
         TradeService.OpenRequest req = toOpenRequest(body, acct);
+        // R2: recompute the material risks for THIS package and enforce acknowledgment + the
+        // signed token — a raw API call can no longer skip what the Review made explicit.
+        var rcAck = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
+        List<Map<String, String>> required = requiredAcksFor(trades.preview(req), rcAck);
+        if (!required.isEmpty()) {
+            java.util.Set<String> acked = body.acknowledgedRisks() == null
+                    ? java.util.Set.of() : new java.util.HashSet<>(body.acknowledgedRisks());
+            List<String> missing = required.stream().map(m -> m.get("id"))
+                    .filter(id -> !acked.contains(id)).toList();
+            if (!missing.isEmpty()) {
+                throw new TradeRejectedException(List.of("This trade carries material risks that must be "
+                        + "acknowledged first: " + String.join(", ", missing) + " — preview it to see them"));
+            }
+            if (!verifyAckToken(body.ackToken(), req)) {
+                throw new TradeRejectedException(List.of("Acknowledgment token missing or stale — preview this exact package again"));
+            }
+        }
         Verdict verdict = guardrailCheck(req, acct);
         if (verdict.blocked()) {
             audit.log(acct.id(), null, "TRADE_REJECTED", "BLOCK",

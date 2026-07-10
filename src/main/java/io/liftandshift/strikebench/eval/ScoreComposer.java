@@ -55,9 +55,14 @@ public final class ScoreComposer {
         String evNote;
         Long ev = risk.expectedValueCents();
         if (ev != null && risk.maxLossCents() > 0) {
-            evComp = clamp01(0.5 + (double) ev / (2.0 * risk.maxLossCents())); // -maxLoss -> 0, 0 -> .5, +maxLoss -> 1
-            evNote = String.format("model EV $%s vs max loss $%s (risk-neutral, pre-commission)",
-                    dollars(ev), dollars(risk.maxLossCents()));
+            // R9: judged NET of round-trip commissions — a thin edge that fees eat is no edge.
+            long contracts = c.legs() == null ? 0
+                    : c.legs().stream().mapToLong(l -> Math.max(1, l.ratio())).sum() * Math.max(1, c.qty());
+            long costs = contracts * ctx.feePerContractCents() * 2; // open + close
+            long evNet = ev - costs;
+            evComp = clamp01(0.5 + (double) evNet / (2.0 * risk.maxLossCents())); // -maxLoss -> 0, 0 -> .5, +maxLoss -> 1
+            evNote = String.format("model EV $%s net of ~$%s round-trip fees, vs max loss $%s (risk-neutral)",
+                    dollars(evNet), dollars(costs), dollars(risk.maxLossCents()));
         } else { evComp = 0.5; evNote = "EV not computable — assumed neutral"; }
         comps.add(comp("Expected value", 0.20, evComp, evNote));
 

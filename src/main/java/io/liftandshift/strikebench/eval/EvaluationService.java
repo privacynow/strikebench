@@ -56,6 +56,14 @@ public final class EvaluationService {
     private final Cache<String, List<Double>> ivHistoryCache =
             Caffeine.newBuilder().maximumSize(256).expireAfterWrite(Duration.ofSeconds(60)).build();
 
+    private long feePerContractCents = 65;
+
+    /** Wire the platform's real commission so decision EV is judged net of the ACTUAL fee. */
+    public EvaluationService withFeePerContractCents(long cents) {
+        this.feePerContractCents = Math.max(0, cents);
+        return this;
+    }
+
     public EvaluationService(MarketDataService market, RecommendationEngine engine, Db db, Clock clock) {
         this.market = market;
         this.engine = engine;
@@ -198,7 +206,8 @@ public final class EvaluationService {
         List<Double> ivHistory = ivHistory(symbol);
         boolean open = MarketHours.isRegularSession(Instant.now(clock));
 
-        return new EvalContext(symbol, underlyingCents, dte, atmIv, realizedVol, ivHistory, buyingPowerCents, open);
+        return new EvalContext(symbol, underlyingCents, dte, atmIv, realizedVol, ivHistory, buyingPowerCents, open,
+                feePerContractCents);
     }
 
     private static LocalDate frontExpiration(List<Candidate> candidates) {

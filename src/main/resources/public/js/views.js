@@ -2528,20 +2528,29 @@
               }, 'Re-price'))),
             el('div', { class: 'muted small' }, 'Max loss, breakevens, POP and EV all follow the price YOU set \u2014 use it to judge a limit order or a real fill.')));
         }
+        // The SERVER's required-acknowledgment list is the contract (client wording is a fallback);
+        // the signed token + checked ids travel with the create call, where they are ENFORCED.
+        var serverAcks = res.requiredAcks || vp.requiredAcks;
+        t.ackToken = res.ackToken || null;
         var ackState = {};
         var continueBtn = el('button', {
           class: 'btn', id: 'to-confirm', disabled: 'disabled',
-          onclick: function () { t.preview = p; nav(7); }
+          onclick: function () {
+            t.preview = p;
+            t.ackIds = serverAcks.filter(function (ak) { return ackState[ak.id]; })
+              .map(function (ak) { return ak.id; });
+            nav(7);
+          }
         }, 'Continue →');
         function refreshGate() {
-          var allAcked = vp.requiredAcks.every(function (ak) { return ackState[ak.id]; });
+          var allAcked = serverAcks.every(function (ak) { return ackState[ak.id]; });
           if (p.ok && allAcked) continueBtn.removeAttribute('disabled');
           else continueBtn.setAttribute('disabled', 'disabled');
         }
-        if (vp.requiredAcks.length) {
+        if (serverAcks.length) {
           body.appendChild(el('div', { class: 'card card-slim ack-gate', style: 'margin:8px 0' },
             el('h3', { class: 'mt0' }, 'Before you continue'),
-            vp.requiredAcks.map(function (ak) {
+            serverAcks.map(function (ak) {
               var cb = el('input', { type: 'checkbox', id: ak.id });
               cb.addEventListener('change', function () { ackState[ak.id] = cb.checked; refreshGate(); });
               return el('label', { class: 'ack-row', for: ak.id }, cb, el('span', {}, ak.label));
@@ -2570,6 +2579,7 @@
           try {
             var placeBody = Object.assign({}, t.previewReq);
             if (t.recommendationId) placeBody.recommendationId = t.recommendationId; // close the calibration loop
+            if (t.ackToken) { placeBody.ackToken = t.ackToken; placeBody.acknowledgedRisks = t.ackIds || []; }
             var res = await API.post('/api/trades', placeBody);
             App.state.ticket = null;
             App.navigate('#/trade/' + res.trade.id);
@@ -3409,13 +3419,16 @@
             return { key: q2.key, legs: q2.legs(spot, spec.horizonDays + 10) };
           }) });
         var results = (cmp.results || []).map(function (x) {
-          return { q: Scenario.CATALOG.find(function (c2) { return c2.key === x.key; }), r: x.result };
+          return { q: Scenario.CATALOG.find(function (c2) { return c2.key === x.key; }), r: x.result,
+                   fees: x.feesCents || 0 };
         }).filter(function (x) { return x.q; });
         if (!results.length) throw new Error('Nothing could be priced for ' + symbol + '.');
         // FAIR ranking: expected P&L per dollar of realistic downside (|p5|) — raw dollars would
         // let a 100-share CSP dwarf a small spread purely by size. EV stays visible alongside.
         results.forEach(function (x) {
-          x.ror = x.r.p5Cents < 0 ? x.r.expectedPnlCents / Math.abs(x.r.p5Cents) : (x.r.expectedPnlCents > 0 ? 99 : 0);
+          var evNet = x.r.expectedPnlCents - x.fees; // R9: judged net of round-trip commissions
+          x.evNet = evNet;
+          x.ror = x.r.p5Cents < 0 ? evNet / Math.abs(x.r.p5Cents) : (evNet > 0 ? 99 : 0);
         });
         results.sort(function (a, b) { return b.ror - a.ror; });
         out.innerHTML = '';
@@ -4737,10 +4750,17 @@
             el('h3', { class: 'mt0' }, 'Your plan for this trade (' + (plan.regime || '') + ')'), planBody)
         : UI.expandable('Management plan \u00b7 ' + (plan.regime || ''), planBody, false));
     }
-    if (a.asOfEpochMs) {
-      var ageMin = Math.max(0, Math.round((Date.now() - a.asOfEpochMs) / 60000));
+    if (a.evaluatedAtEpochMs || a.asOfEpochMs) {
+      var evalMs = a.evaluatedAtEpochMs || a.asOfEpochMs;
+      var ageMin = Math.max(0, Math.round((Date.now() - evalMs) / 60000));
+      var srcTxt = '';
+      if (a.sourceAsOfEpochMs) {
+        var srcAge = Math.max(0, Math.round((Date.now() - a.sourceAsOfEpochMs) / 60000));
+        srcTxt = 'Data stamped ' + (srcAge <= 1 ? 'just now' : srcAge + ' min ago') + ' \u00b7 ';
+      }
       wrap.appendChild(el('div', { class: 'muted small', id: 'quote-age' },
-        'Priced ' + (ageMin <= 1 ? 'just now' : ageMin + ' min ago') + ' on ' + (a.freshness || p.freshness) + ' quotes.'));
+        srcTxt + 'evaluated ' + (ageMin <= 1 ? 'just now' : ageMin + ' min ago')
+        + ' on ' + (a.freshness || p.freshness) + ' quotes.'));
     }
     // Material-risk acknowledgments: the trade stays PLACEABLE, but never silently.
     var acks = [];
