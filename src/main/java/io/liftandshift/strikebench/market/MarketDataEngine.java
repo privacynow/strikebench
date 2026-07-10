@@ -69,7 +69,20 @@ public final class MarketDataEngine {
     private final AtomicLong refreshLatencyTotalMs = new AtomicLong();
     private volatile long lastRefreshEpochMs = 0L;
 
-    private ExecutorService refreshPool;      // bounded — polite to providers
+    private java.util.concurrent.ThreadPoolExecutor refreshPool; // bounded + PRIORITY-ordered
+    /** interactive(0) > active-screen(1) > explicit job(2) > warm(3) — queued work executes in this order. */
+    static final int P_INTERACTIVE = 0, P_SCREEN = 1, P_JOB = 2, P_WARM = 3;
+    private final java.util.concurrent.atomic.AtomicLong taskSeq = new java.util.concurrent.atomic.AtomicLong();
+
+    /** A queued refresh with an explicit class: the queue drains user-facing work FIRST, always. */
+    private static final class PriorityTask implements Runnable, Comparable<PriorityTask> {
+        final int priority; final long seq; final Runnable body;
+        PriorityTask(int priority, long seq, Runnable body) { this.priority = priority; this.seq = seq; this.body = body; }
+        @Override public void run() { body.run(); }
+        @Override public int compareTo(PriorityTask o) {
+            return priority != o.priority ? Integer.compare(priority, o.priority) : Long.compare(seq, o.seq);
+        }
+    }
     /** How many user-blocking fetches are in flight — background work YIELDS while this is nonzero. */
     private final java.util.concurrent.atomic.AtomicInteger pendingInteractive = new java.util.concurrent.atomic.AtomicInteger();
     private ScheduledExecutorService scheduler;
@@ -93,7 +106,8 @@ public final class MarketDataEngine {
     public synchronized void start() {
         if (running) return;
         // The serving path (quotes()) always works; the scheduler + warm only run when enabled.
-        refreshPool = Executors.newFixedThreadPool(8, daemon("mkt-engine-refresh"));
+        refreshPool = new java.util.concurrent.ThreadPoolExecutor(8, 8, 30, TimeUnit.SECONDS,
+                new java.util.concurrent.PriorityBlockingQueue<>(), daemon("mkt-engine-refresh"));
         running = true;
         // Boot STALE-FIRST: seed memory from persisted last-known quotes so the tape/tiles paint
         // instantly (labeled stale), instead of waiting on a heavy/throttled provider to warm.
@@ -240,16 +254,26 @@ public final class MarketDataEngine {
      * provider call instead of racing (and a blocking caller can await the warm's future).
      */
     private java.util.concurrent.CompletableFuture<Void> refreshFuture(String symbol) {
+        return refreshFuture(symbol, P_SCREEN);
+    }
+
+    private java.util.concurrent.CompletableFuture<Void> refreshFuture(String symbol, int priority) {
         if (refreshPool == null || refreshPool.isShutdown()) {
             try { doRefresh(symbol); } catch (Exception e) { /* recorded on the snapshot */ }
             return java.util.concurrent.CompletableFuture.completedFuture(null);
         }
         return inFlight.computeIfAbsent(symbol, s -> {
             markRefreshing(s, true);
+            java.util.concurrent.CompletableFuture<Void> f = new java.util.concurrent.CompletableFuture<>();
             try {
-                return java.util.concurrent.CompletableFuture
-                        .runAsync(() -> { try { doRefresh(s); } finally { markRefreshing(s, false); } }, refreshPool)
-                        .whenComplete((v, e) -> inFlight.remove(s));
+                refreshPool.execute(new PriorityTask(priority, taskSeq.incrementAndGet(), () -> {
+                    try { doRefresh(s); } finally {
+                        markRefreshing(s, false);
+                        inFlight.remove(s);
+                        f.complete(null);
+                    }
+                }));
+                return f;
             } catch (java.util.concurrent.RejectedExecutionException ex) {
                 // Pool shutting down between the isShutdown() check and submit — clear the flag and
                 // do NOT cache anything (computeIfAbsent stores nothing when the mapping throws).
@@ -267,7 +291,7 @@ public final class MarketDataEngine {
     public boolean refreshBlocking(String symbol, long timeoutMs) {
         track(symbol);
         try {
-            refreshFuture(symbol).get(Math.max(1000, timeoutMs), TimeUnit.MILLISECONDS);
+            refreshFuture(symbol, P_JOB).get(Math.max(1000, timeoutMs), TimeUnit.MILLISECONDS);
             MarketSnapshot snap = snapshots.get(norm(symbol));
             return snap != null && snap.last() != null && snap.error() == null;
         } catch (Exception e) {
@@ -279,10 +303,10 @@ public final class MarketDataEngine {
         try { refreshFuture(symbol); } catch (Exception e) { /* pool rejected; next tick retries */ }
     }
 
-    /** Background variant: yields to any pending interactive fetch (the tick retries the symbol). */
+    /** Background variant: WARM class (drains last) + yields while a user fetch is in flight. */
     private void backgroundRefresh(String symbol) {
         if (pendingInteractive.get() > 0) return;
-        refreshAsync(symbol);
+        try { refreshFuture(symbol, P_WARM); } catch (Exception e) { /* pool rejected; next tick retries */ }
     }
 
     /** Blocking parallel fill for cold symbols: JOINS any in-flight (e.g. warm) refresh, never skips. */
@@ -291,7 +315,7 @@ public final class MarketDataEngine {
         try {
             List<java.util.concurrent.CompletableFuture<Void>> futures = new ArrayList<>();
             for (String s : symbols) {
-                try { futures.add(refreshFuture(s)); } catch (Exception e) { /* skip; snapshot may stay cold */ }
+                try { futures.add(refreshFuture(s, P_INTERACTIVE)); } catch (Exception e) { /* skip; snapshot may stay cold */ }
             }
             java.util.concurrent.CompletableFuture
                     .allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))

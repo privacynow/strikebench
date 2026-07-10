@@ -1435,7 +1435,7 @@
       placeholder: 'override just this scan (comma-separated)', value: saved.universe || '' });
     var uniData = App.state.universe;
     var sectorSel = sectorRail({
-      id: 'universe-sector', active: uniData ? uniData.active.sectorKey : null,
+      id: 'universe-sector', active: uniData && uniData.active ? uniData.active.sectorKey : null,
       onPick: async function (sec) {
         try {
           await API.put('/api/universe', { sector: sec.key });
@@ -1444,6 +1444,20 @@
         } catch (e) { alert(e.message); }
       }
     });
+    // The rail must SHOW the persisted selection even when this screen is the first one rendered
+    // (App.state.universe not warmed yet) — an unhighlighted rail reads as an inert control.
+    if (!uniData || !uniData.active) {
+      API.get('/api/universe').then(function (u2) {
+        App.state.universe = u2;
+        var k2 = u2 && u2.active && u2.active.sectorKey;
+        var chip2 = k2 && sectorSel.querySelector('.sector-chip[data-sector="' + k2 + '"]');
+        if (chip2) {
+          sectorSel.querySelectorAll('.sector-chip').forEach(function (x) { x.classList.remove('active'); });
+          chip2.classList.add('active');
+          chip2.setAttribute('aria-selected', 'true');
+        }
+      }).catch(function () { /* rail stays usable without the highlight */ });
+    }
     var scanTarget = el('input', { type: 'number', id: 'auto-target', min: '0', step: '50',
       placeholder: 'optional', value: saved.scanTarget || '' });
     var h0 = el('input', { type: 'checkbox', id: 'auto-h-0dte', checked: saved.h0 ? '' : null });

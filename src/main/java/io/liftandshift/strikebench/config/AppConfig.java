@@ -97,6 +97,9 @@ public final class AppConfig {
     /** When true, only deterministic fixture data is served; no network calls are made. */
     public boolean fixturesOnly() { return getBool("FIXTURES_ONLY", false); }
 
+    /** Trust X-Forwarded-For from ANY peer (set true only when a proxy fronts every request). */
+    public boolean trustedProxy() { return getBool("TRUSTED_PROXY", false); }
+
     public long httpTimeoutMs() { return getLong("HTTP_TIMEOUT_MS", 10_000L); }
 
     /** Per-contract, per-leg commission in cents (default $0.65). */

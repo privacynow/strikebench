@@ -322,8 +322,13 @@ public final class ApiServer {
                 String path = ctx.path();
                 if (path.equals("/api/health") || path.equals("/api/metrics")
                         || path.equals("/api/events") || path.equals("/api/market/stream")) return;
-                String ip = ctx.header("X-Forwarded-For") != null
-                        ? ctx.header("X-Forwarded-For").split(",")[0].trim() : ctx.ip();
+                // X-Forwarded-For is client-controlled: honor it ONLY when the direct peer is a
+                // trusted proxy (loopback, i.e. our nginx on the same box, or TRUSTED_PROXY=true).
+                String remote = ctx.ip();
+                boolean trustedProxy = cfg.trustedProxy()
+                        || "127.0.0.1".equals(remote) || "0:0:0:0:0:0:0:1".equals(remote) || "::1".equals(remote);
+                String xff = ctx.header("X-Forwarded-For");
+                String ip = trustedProxy && xff != null ? xff.split(",")[0].trim() : remote;
                 if (!throttle.tryAcquire(ip)) {
                     apiThrottled.incrementAndGet();
                     ctx.status(429);
