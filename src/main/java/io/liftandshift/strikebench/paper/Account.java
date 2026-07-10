@@ -10,7 +10,15 @@ public record Account(
         long reservedCents,
         boolean hasTraded,
         String createdAt,
-        String updatedAt
+        String updatedAt,
+        String worldId    // null = observed lanes; set = a SIMULATION account bound to one world
 ) {
+    /** Pre-world shape. */
+    public Account(String id, String name, String type, long startingCashCents, long cashCents,
+                   long reservedCents, boolean hasTraded, String createdAt, String updatedAt) {
+        this(id, name, type, startingCashCents, cashCents, reservedCents, hasTraded, createdAt, updatedAt, null);
+    }
+
     public long buyingPowerCents() { return cashCents - reservedCents; }
+    public boolean simulation() { return worldId != null && !worldId.isBlank(); }
 }

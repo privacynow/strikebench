@@ -1794,3 +1794,53 @@ test('D3: the competition renders INLINE in Ideas (no orphan Decision page navig
   assert.equal(await page.evaluate(() => location.hash), hashBefore, 'stayed on Ideas — no navigation to a separate Decision page');
   await page.evaluate(() => { App.state.discoverForm = null; App.state.recommendResults = null; });
 });
+
+test('simulated market: create session, loud band, world-routed research, instant return to real', async () => {
+  await page.evaluate(() => Learn.setLevel('expert'));
+  await go('#/data');
+  // The Data Center workbench card exists with its create form.
+  await page.waitForSelector('#dc-sim-market #sim-create');
+  // Create + start a deterministic session through the app's own API layer (flushes caches properly).
+  const created = await page.evaluate(async () => {
+    const res = await API.post('/api/sim/market', {
+      name: 'DOM sim', symbols: { ACME: 1.0 }, spots: { ACME: 100 },
+      scenario: 'CHOP', volAnnual: 0.3, seed: 99, speed: 10
+    });
+    await API.post('/api/sim/market/' + res.worldId + '/step', {});
+    return res;
+  });
+  assert.ok(created.worldId, 'session created');
+  assert.ok(created.accountId, 'a dedicated simulation account exists for the world');
+
+  // Switch worlds: the loud band appears, the observed-market tape goes away.
+  await page.evaluate(id => App.switchWorld(id), created.worldId);
+  await page.waitForSelector('#world-band');
+  const band = await page.$eval('#world-band', el => el.textContent);
+  assert.match(band, /SIMULATED MARKET/, 'band names the world loudly');
+  assert.match(band, /seed 99/, 'band shows the seed (reproducibility is a feature)');
+  assert.ok(await page.$('#world-exit'), 'one-command return to the real market');
+  assert.ok(await page.evaluate(() => document.body.classList.contains('in-sim-world')));
+
+  // Research is world-routed: the sim-only symbol resolves, labeled SIMULATED.
+  await go('#/research/ACME');
+  await page.waitForSelector('.quote-hero');
+  const badges = await page.$$eval('.quote-hero .badge', els => els.map(e => e.textContent).join(' '));
+  assert.match(badges, /SIMULATED/, 'sim quotes carry the SIMULATED label');
+  // The simulation account is the account inside the world — the practice account is untouched.
+  const simAcct = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);
+  assert.equal(simAcct, created.accountId, 'inside the world, the sim account IS the account');
+
+  // Return to real: band gone, world observed, real account back — instantly (observed never stopped).
+  await page.click('#world-exit');
+  await page.waitForSelector('#world-band', { state: 'detached' });
+  const after = await page.evaluate(async () => ({
+    world: (await API.getFresh('/api/world')).world,
+    acct: (await API.getFresh('/api/account')).account.id,
+    simBody: document.body.classList.contains('in-sim-world')
+  }));
+  assert.equal(after.world, 'observed');
+  assert.notEqual(after.acct, created.accountId, 'back on the real practice account');
+  assert.equal(after.simBody, false);
+  // Finish the session so later tests see a clean world list.
+  await page.evaluate(async id => { await API.del('/api/sim/market/' + id); }, created.worldId);
+});

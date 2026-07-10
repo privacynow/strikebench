@@ -49,6 +49,16 @@ async function api(method, p, body) {
   return text ? JSON.parse(text) : null;
 }
 
+/** Creates a trade the way a real client does: preview, acknowledge the server's
+ *  material-risk contract (R2), then create with the signed token attached. */
+async function createTrade(body) {
+  const prev = await api('POST', '/api/trades/preview', body);
+  if (prev.requiredAcks && prev.requiredAcks.length) {
+    body = { ...body, acknowledgedRisks: prev.requiredAcks.map(a => a.id), ackToken: prev.ackToken };
+  }
+  return api('POST', '/api/trades', body);
+}
+
 function isoDaysFromNow(days) {
   return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
 }
@@ -78,7 +88,7 @@ before(async () => {
   const rec = await api('POST', '/api/recommend', { symbol: 'AAPL', intent: 'exit', riskMode: 'balanced' });
   const cc = rec.candidates.find(c => c.strategy === 'COVERED_CALL');
   assert.ok(cc, 'covered-call candidate for seeding');
-  await api('POST', '/api/trades', {
+  await createTrade({
     symbol: 'AAPL', strategy: 'COVERED_CALL', qty: 1, intent: 'exit', useHeldShares: true,
     legs: cc.legs.map(l => ({ action: l.action, type: l.type, strike: l.strike, expiration: l.expiration, ratio: 1 }))
   });
@@ -93,8 +103,8 @@ before(async () => {
     ],
     thesis: 'bullish', horizon: 'month', riskMode: 'balanced'
   });
-  await api('POST', '/api/trades', spread(1));
-  const toClose = (await api('POST', '/api/trades', spread(1))).trade.id;
+  await createTrade(spread(1));
+  const toClose = (await createTrade(spread(1))).trade.id;
   await api('POST', `/api/trades/${toClose}/unwind`, { confirm: true });
 
   // A persisted backtest (previous-runs list data)

@@ -101,6 +101,50 @@ public final class MarketDataService {
         return merged;
     }
 
+    /** Resolves a simulated world by id; null resolver or unknown world = observed (fail-safe). */
+    private volatile java.util.function.Function<String, java.util.Optional<io.liftandshift.strikebench.market.sim.SimulatedWorld>> worldResolver;
+
+    public void setWorldResolver(java.util.function.Function<String, java.util.Optional<io.liftandshift.strikebench.market.sim.SimulatedWorld>> r) {
+        this.worldResolver = r;
+    }
+
+    private java.util.Optional<io.liftandshift.strikebench.market.sim.SimulatedWorld> world(String worldId) {
+        if (worldId == null || worldId.isBlank() || "observed".equals(worldId) || worldResolver == null) {
+            return java.util.Optional.empty();
+        }
+        try { return worldResolver.apply(worldId); } catch (RuntimeException e) { return java.util.Optional.empty(); }
+    }
+
+    /** World-aware quote: a simulated world serves ITS data (labeled SIMULATED); else observed. */
+    public Optional<Quote> quote(String symbol, String worldId) {
+        var w = world(worldId);
+        if (w.isPresent()) return w.get().quote(symbol);
+        return quote(symbol);
+    }
+
+    public List<LocalDate> expirations(String symbol, String worldId) {
+        var w = world(worldId);
+        if (w.isPresent()) return w.get().quote(symbol).isPresent() ? w.get().expirations() : List.of();
+        return expirations(symbol);
+    }
+
+    public Optional<OptionChain> chain(String symbol, LocalDate expiration, String worldId) {
+        var w = world(worldId);
+        if (w.isPresent()) return w.get().chain(symbol, expiration);
+        return chain(symbol, expiration);
+    }
+
+    public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to, String worldId,
+                                     io.liftandshift.strikebench.db.AnalysisContext actx) {
+        var w = world(worldId);
+        if (w.isPresent()) {
+            List<Candle> cs = w.get().candles(norm(symbol), from, to);
+            return cs.size() < 2 ? CandleSeries.EMPTY
+                    : new CandleSeries(cs, "simulated", Freshness.SIMULATED);
+        }
+        return candleSeries(symbol, from, to, actx);
+    }
+
     public Optional<Quote> quote(String symbol) {
         String sym = norm(symbol);
         Quote q = quoteCache.get(sym, s ->

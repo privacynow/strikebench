@@ -321,7 +321,7 @@ public final class TradeService {
             long closeValue = 0;
             Freshness worst = Freshness.FIXTURE;
             for (Leg leg : t.legs()) {
-                MarksSource.LegMark mark = marks.legMark(t.symbol(), leg)
+                MarksSource.LegMark mark = marks.legMark(t.symbol(), leg, worldOf(t.accountId()))
                         .orElseThrow(() -> new TradeRejectedException(List.of("No current mark for leg " + legDesc(leg) + "; cannot value the close")));
                 if (!mark.freshness().tradable() && mark.freshness() != Freshness.EOD) {
                     throw new TradeRejectedException(List.of("Marks are " + mark.freshness() + " for " + legDesc(leg) + "; refresh data before closing"));
@@ -369,7 +369,7 @@ public final class TradeService {
             for (Leg leg : t.legs()) {
                 LocalDate exp = leg.isStock() ? lastExpiry : leg.expiration();
                 if (!closes.containsKey(exp)) {
-                    closes.put(exp, marks.closeOn(t.symbol(), exp).orElse(null));
+                    closes.put(exp, marks.closeOn(t.symbol(), exp, worldOf(t.accountId())).orElse(null));
                 }
                 if (closes.get(exp) == null) anyCloseMissing = true;
             }
@@ -382,7 +382,7 @@ public final class TradeService {
                     throw new TradeRejectedException(List.of("The expiration-day closing price is not available yet — retry after the next session"
                             + " (or configure a candle source for exact settlement)"));
                 }
-                BigDecimal fallback = marks.underlyingMark(t.symbol())
+                BigDecimal fallback = marks.underlyingMark(t.symbol(), worldOf(t.accountId()))
                         .orElseThrow(() -> new TradeRejectedException(List.of("No underlying price available to settle against")));
                 for (LocalDate d : closes.keySet()) closes.putIfAbsent(d, null);
                 closes.replaceAll((d, v) -> v == null ? fallback : v);
@@ -538,6 +538,12 @@ public final class TradeService {
             com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
                     .expireAfterWrite(java.time.Duration.ofSeconds(10)).maximumSize(500).build();
 
+    /** The world a trade's marks live in: its ACCOUNT's binding (null = observed lanes). */
+    private String worldOf(String accountId) {
+        try { return db.with(c -> AccountService.get(c, accountId)).worldId(); }
+        catch (RuntimeException e) { return null; }
+    }
+
     /** Recomputes marks and writes a trade_marks row. NEVER touches cash or the reserve. */
     public MarkView refresh(String tradeId) {
         TradeRecord t = get(tradeId);
@@ -621,7 +627,8 @@ public final class TradeService {
 
     private MarkView computeMark(TradeRecord t) {
         String now = now();
-        Long underlyingCents = marks.underlyingMark(t.symbol()).map(Money::toCents).orElse(null);
+        String world = worldOf(t.accountId());
+        Long underlyingCents = marks.underlyingMark(t.symbol(), world).map(Money::toCents).orElse(null);
 
         long closeValue = 0;
         boolean complete = true;
@@ -631,7 +638,7 @@ public final class TradeService {
         boolean greeksComplete = true;
         List<Map<String, Object>> legGreeks = new ArrayList<>();
         for (Leg leg : t.legs()) {
-            var mark = marks.legMark(t.symbol(), leg).orElse(null);
+            var mark = marks.legMark(t.symbol(), leg, world).orElse(null);
             if (mark == null) { complete = false; worst = Freshness.MISSING; break; }
             worst = worse(worst, mark.freshness());
             if (mark.iv() != null) ivs.add(mark.iv());
@@ -850,7 +857,8 @@ public final class TradeService {
         if (req.legs() == null || req.legs().isEmpty()) blocks.add("At least one leg is required");
         if (!blocks.isEmpty()) return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0, Freshness.MISSING, blocks, warnings, "{}");
 
-        BigDecimal underlying = marks.underlyingMark(req.symbol()).orElse(null);
+        String world = worldOf(req.accountId());
+        BigDecimal underlying = marks.underlyingMark(req.symbol(), world).orElse(null);
         if (underlying == null) blocks.add("No current price for " + req.symbol());
 
         java.time.Instant nowInstant = clock.instant();
@@ -871,7 +879,7 @@ public final class TradeService {
         List<Double> ivs = new ArrayList<>();
         List<Double> legIvs = new ArrayList<>(); // index-aligned with filled (nulls kept)
         for (Leg leg : req.legs()) {
-            var mark = marks.legMark(req.symbol(), leg).orElse(null);
+            var mark = marks.legMark(req.symbol(), leg, world).orElse(null);
             if (mark == null || mark.mid() == null) {
                 blocks.add("No tradable mark for " + legDesc(leg) + " — symbol may have no listed options");
                 continue;

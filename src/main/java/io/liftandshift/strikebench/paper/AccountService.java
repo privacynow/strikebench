@@ -150,10 +150,23 @@ public final class AccountService {
                 AccountService::mapLedger, accountId, size, offset);
     }
 
+    /** The SIMULATION account for a world — the ONLY lane allowed to trade against it. */
+    public Account getOrCreateForWorld(String worldId, String name) {
+        var rows = db.query("SELECT * FROM accounts WHERE world_id=? LIMIT 1", AccountService::map, worldId);
+        if (!rows.isEmpty()) return rows.getFirst();
+        String id = io.liftandshift.strikebench.util.Ids.newId("acct");
+        String now = java.time.Instant.now().toString();
+        db.exec("INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at,world_id) "
+                        + "VALUES (?,?,?,?,?,?,0,?,?,?)",
+                id, name == null ? "Simulation" : name, "SIMULATION",
+                10_000_000L, 10_000_000L, 0L, now, now, worldId);
+        return get(id);
+    }
+
     static Account map(Db.Row r) {
         return new Account(r.str("id"), r.str("name"), r.str("type"),
                 r.lng("starting_cash_cents"), r.lng("cash_cents"), r.lng("reserved_cents"),
-                r.bool("has_traded"), r.str("created_at"), r.str("updated_at"));
+                r.bool("has_traded"), r.str("created_at"), r.str("updated_at"), r.str("world_id"));
     }
 
     static LedgerEntry mapLedger(Db.Row r) {

@@ -30,6 +30,39 @@ public final class MarketDataMarks implements MarksSource {
     }
 
     @Override
+    public Optional<java.math.BigDecimal> underlyingMark(String symbol, String worldId) {
+        if (worldId == null) return underlyingMark(symbol);
+        return market.quote(symbol, worldId).map(io.liftandshift.strikebench.model.Quote::mark)
+                .filter(m -> m != null && m.signum() > 0);
+    }
+
+    @Override
+    public Optional<LegMark> legMark(String symbol, io.liftandshift.strikebench.model.Leg leg, String worldId) {
+        if (worldId == null) return legMark(symbol, leg);
+        if (leg.isStock()) {
+            return market.quote(symbol, worldId).map(q ->
+                    new LegMark(q.bid(), q.ask(), q.mark(), null, q.freshness(), 1.0, 0.0, 0.0, 0.0))
+                    .filter(m -> m.mid() != null);
+        }
+        return market.chain(symbol, leg.expiration(), worldId)
+                .flatMap(chain -> chain.find(leg.type(), leg.strike())
+                        .filter(io.liftandshift.strikebench.model.OptionQuote::hasMark)
+                        .map(q -> new LegMark(q.bid(), q.ask(), q.mid(), q.iv(), q.freshness(),
+                                q.delta(), q.gamma(), q.theta(), q.vega())));
+    }
+
+    @Override
+    public Optional<java.math.BigDecimal> closeOn(String symbol, java.time.LocalDate date, String worldId) {
+        if (worldId == null) return closeOn(symbol, date);
+        // Settlement INSIDE a simulated world uses that world's own closes — its account is the
+        // only one allowed here, so a synthetic close can never mint real-lane paper cash.
+        var series = market.candleSeries(symbol, date.minusDays(7), date, worldId, null);
+        if (series.isEmpty()) return Optional.empty();
+        var last = series.candles().getLast();
+        return last.date().equals(date) ? Optional.of(last.close()) : Optional.empty();
+    }
+
+    @Override
     public Optional<Long> underlyingAsOfMs(String symbol) {
         return market.quote(symbol).map(io.liftandshift.strikebench.model.Quote::asOfEpochMs);
     }

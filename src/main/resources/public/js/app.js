@@ -206,6 +206,61 @@
   }
   App.refreshScenarioBanner = refreshScenarioBanner;
 
+  // ---- Block S8: the SIMULATED MARKET band + per-user world switch ----
+  var worldBandSeq = 0;
+  App.state.world = App.state.world || 'observed';
+  App.state.worldGen = App.state.worldGen || 0; // stale-event token: bump on every switch
+
+  async function refreshWorldBand() {
+    var seq = ++worldBandSeq;
+    var world = App.state.world;
+    document.body.classList.toggle('in-sim-world', !!world && world !== 'observed');
+    var existing = Array.prototype.slice.call(document.querySelectorAll('#world-band'));
+    if (!world || world === 'observed') { existing.forEach(function (b) { b.remove(); }); return; }
+    var sess = null;
+    try {
+      var all = (await API.getFresh('/api/sim/market')).sessions || [];
+      sess = all.find(function (x) { return x.id === world; });
+    } catch (e) { /* band still renders minimal */ }
+    if (seq !== worldBandSeq) return;
+    existing.forEach(function (b) { b.remove(); });
+    var cfg = sess && sess.config ? sess.config : {};
+    var label = 'SIMULATED MARKET \u00b7 ' + (cfg.scenario || '') + ' \u00b7 '
+      + (sess && sess.simTime ? sess.simTime.replace('T', ' ') + ' ET' : '')
+      + (sess && sess.speed ? ' \u00b7 ' + sess.speed + '\u00d7' : '')
+      + (cfg.seed !== undefined ? ' \u00b7 seed ' + cfg.seed : '');
+    var playing = !!(sess && sess.running);
+    var band = UI.el('div', { id: 'world-band' },
+      UI.icon('warn', 15),
+      UI.el('b', { style: 'margin:0 6px' }, label),
+      UI.el('button', { class: 'btn btn-sm', id: 'world-toggle', onclick: async function () {
+        try {
+          await API.post('/api/sim/market/' + world + '/' + (playing ? 'pause' : 'start'), {});
+          refreshWorldBand();
+        } catch (e) { alert(e.message); }
+      } }, playing ? 'Pause' : 'Play'),
+      UI.el('button', { class: 'btn btn-sm', onclick: async function () {
+        try { await API.post('/api/sim/market/' + world + '/step', {}); refreshWorldBand(); }
+        catch (e) { alert(e.message); }
+      } }, 'Step'),
+      UI.el('button', { class: 'btn btn-sm', id: 'world-exit', onclick: function () { App.switchWorld('observed'); } },
+        'Return to real market'));
+    document.body.insertBefore(band, document.getElementById('tape') || document.body.firstChild);
+  }
+  App.refreshWorldBand = refreshWorldBand;
+
+  /** The one-command world switch: preserves route/symbol/level — it changes the MARKET, not you. */
+  App.switchWorld = async function (worldId) {
+    try {
+      await API.put('/api/world', { world: worldId });
+      App.state.world = worldId;
+      App.state.worldGen++;         // discard SSE/stale fills from the world we just left
+      API.flushCache();             // every cached GET belonged to the old world
+      refreshWorldBand();
+      App.render();                 // same screen, new market under it — observed engine never stopped
+    } catch (e) { alert(e.message); }
+  };
+
   window.App = App;
 
   function initHeader() {
@@ -309,6 +364,15 @@
     checkServerHealth();
     setInterval(checkServerHealth, 5 * 60 * 1000);
     if (cfg && cfg.scenarioMode) refreshScenarioBanner(); // restore the loud banner across reloads
+    API.get('/api/world').then(function (w) {
+      App.state.world = (w && w.world) || 'observed';
+      if (App.state.world !== 'observed') refreshWorldBand();
+    }).catch(function () { /* observed */ });
+    App.onEvent('world.tick', function (type, data) {
+      if (!data || data.world !== App.state.world) return; // a world we already left — discard
+      var gen = App.state.worldGen;
+      setTimeout(function () { if (gen === App.state.worldGen) refreshWorldBand(); }, 50);
+    });
     refreshUniverse();
     subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
     subscribeEvents();                // typed workspace events (jobs, datasets, provider cooldowns)
@@ -496,7 +560,7 @@
     var es;
     try { es = new EventSource('/api/events'); } catch (e) { return; }
     App._eventsES = es;
-    ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated']
+    ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated', 'world.tick']
       .forEach(function (type) {
         es.addEventListener(type, function (ev) {
           var data = null;

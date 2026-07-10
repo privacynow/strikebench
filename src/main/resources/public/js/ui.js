@@ -81,7 +81,7 @@
   // ---- small components ----
 
   var FRESH_CLASS = {
-    REALTIME: 'badge-ok', FIXTURE: 'badge-dim', DELAYED: 'badge-warn',
+    REALTIME: 'badge-ok', FIXTURE: 'badge-dim', DELAYED: 'badge-warn', SIMULATED: 'badge-sim',
     EOD: 'badge-caution', MODELED: 'badge-caution', STALE: 'badge-danger', MISSING: 'badge-danger'
   };
   function freshnessBadge(freshness) {

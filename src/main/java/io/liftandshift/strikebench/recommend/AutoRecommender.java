@@ -81,6 +81,11 @@ public final class AutoRecommender {
     }
 
     public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings) {
+        return run(req, buyingPowerCents, holdings, null);
+    }
+
+    /** World-aware: a simulated session's scan reads and prices against THAT world. null = observed. */
+    public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings, String worldId) {
         boolean allow0dte = Boolean.TRUE.equals(req.allow0dte());
         List<String> universe = req.universe() != null && !req.universe().isEmpty()
                 ? req.universe().stream().map(s -> s.trim().toUpperCase(Locale.ROOT)).filter(s -> !s.isBlank()).distinct().toList()
@@ -105,7 +110,7 @@ public final class AutoRecommender {
             List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
             for (String symbol : universe) {
                 futures.add(executor.submit(() ->
-                        signals.analyze(symbol).ifPresent(s -> bySymbol.put(symbol, s))));
+                        signals.analyze(symbol, worldId).ifPresent(s -> bySymbol.put(symbol, s))));
             }
             for (var f : futures) {
                 try { f.get(); } catch (Exception e) { /* per-symbol failure -> treated as no data */ }
@@ -152,7 +157,7 @@ public final class AutoRecommender {
                     RecommendationEngine.Holdings ctx = new RecommendationEngine.Holdings(
                             h.freeShares(), h.avgCostCents(), null);
                     List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
-                            buyingPowerCents, riskBudget);
+                            buyingPowerCents, riskBudget, worldId);
                     picks.add(new Pick(sym, s, round2(opportunityScore(s)), perHorizon, intent.name()));
                 }
                 continue;
@@ -167,7 +172,7 @@ public final class AutoRecommender {
                         ? new RecommendationEngine.Holdings(held.freeShares(), held.avgCostCents(), null)
                         : null;
                 List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
-                        buyingPowerCents, riskBudget);
+                        buyingPowerCents, riskBudget, worldId);
                 picks.add(new Pick(s.symbol(), s, round2(top.score), perHorizon, intent.name()));
             }
         }
@@ -185,7 +190,7 @@ public final class AutoRecommender {
     private List<HorizonIdeas> horizonIdeas(SignalEngine.Signals s, List<String> horizons, boolean allow0dte,
                                             AutoRequest req, StrategyIntent intent,
                                             RecommendationEngine.Holdings holdingsCtx,
-                                            long buyingPowerCents, long[] riskBudget) {
+                                            long buyingPowerCents, long[] riskBudget, String worldId) {
         List<HorizonIdeas> perHorizon = new ArrayList<>();
         for (String horizon : horizons) {
             if ("0DTE".equals(horizon) && !allow0dte) continue;
@@ -196,7 +201,7 @@ public final class AutoRecommender {
                     s.symbol(), thesis, horizon, req.riskMode(),
                     req.maxLossCents(), req.maxRiskPctOfAccount(), null, null,
                     true, "0DTE".equals(horizon),
-                    intent.name(), holdingsCtx, req.filters()), buyingPowerCents);
+                    intent.name(), holdingsCtx, req.filters()), buyingPowerCents, worldId);
             riskBudget[0] = result.riskBudgetCents();
 
             List<String> hNotes = new ArrayList<>();

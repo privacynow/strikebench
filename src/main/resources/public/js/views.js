@@ -3836,6 +3836,95 @@
       + brandName() + ' chains several sources per job and falls back gracefully — DEMO DATA means the built-in fixture is serving.'));
 
     var engineCard = el('div', { class: 'card', id: 'dc-engine' }, UI.spinner('Checking the market engine…'));
+    // ---- Block S: the simulated-market workbench — configuration and operations, not a Lab ----
+    var simCard = el('div', { class: 'card', id: 'dc-sim-market' }, UI.cardHeader('Simulated market'),
+      explain(Learn.currentLevel() === 'beginner'
+        ? 'A practice market that MOVES: generated prices and option chains stream like the real thing, on any day, at any speed. Everything is loudly labeled — nothing here is real, and your practice account is untouched (a separate simulation account trades it).'
+        : 'Deterministic per-session worlds: factor-correlated dynamics over the model menu, a virtual exchange clock (sessions/holidays, speed), a full simulated option exchange, and an isolated simulation account. Identical seed = identical world.'));
+    root.appendChild(simCard);
+    (async function () {
+      function row(txt) { return el('div', { class: 'muted small' }, txt); }
+      async function refreshSim() {
+        var box = document.getElementById('dc-sim-sessions');
+        if (!box) return;
+        box.innerHTML = '';
+        var sessions = [];
+        try { sessions = (await API.getFresh('/api/sim/market')).sessions || []; }
+        catch (e) { box.appendChild(alertBox('warn', 'Could not load sessions: ' + e.message)); return; }
+        if (!sessions.length) { box.appendChild(row('No simulated sessions yet — create one below.')); return; }
+        sessions.forEach(function (sx) {
+          var cfg = sx.config || {};
+          var active = App.state.world === sx.id;
+          box.appendChild(el('div', { class: 'btn-row', style: 'margin:6px 0' },
+            el('b', {}, sx.name || sx.id),
+            el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : 'badge-warn') }, sx.running ? 'RUNNING' : (sx.status || '')),
+            el('span', { class: 'muted small' }, (cfg.scenario || '') + ' \u00b7 seed ' + cfg.seed
+              + (sx.simTime ? ' \u00b7 ' + sx.simTime.replace('T', ' ') : '')),
+            el('button', { class: 'btn btn-sm', onclick: function () { App.switchWorld(active ? 'observed' : sx.id); } },
+              active ? 'Back to real' : 'Enter this market'),
+            el('button', { class: 'btn btn-sm', onclick: async function () {
+              try { await API.post('/api/sim/market/' + sx.id + '/' + (sx.running ? 'pause' : 'start'), {}); refreshSim(); App.refreshWorldBand(); }
+              catch (e) { alert(e.message); } } }, sx.running ? 'Pause' : 'Start'),
+            el('button', { class: 'btn btn-sm', onclick: async function () {
+              var pct = parseFloat(prompt('Inject a move on ' + Object.keys(cfg.symbolBetas || {})[0] + ' (% e.g. -5):', '-5'));
+              if (isNaN(pct)) return;
+              try { await API.post('/api/sim/market/' + sx.id + '/event',
+                { symbol: Object.keys(cfg.symbolBetas || {})[0], movePct: pct / 100 }); }
+              catch (e) { alert(e.message); } } }, 'Inject event'),
+            el('button', { class: 'btn btn-sm', onclick: async function () {
+              var holder = document.getElementById('sim-report');
+              if (holder) holder.remove();
+              try {
+                var rep = await API.getFresh('/api/sim/market/' + sx.id + '/report');
+                holder = el('div', { id: 'sim-report', class: 'card-slim', style: 'margin:8px 0' },
+                  el('b', {}, 'Session report \u2014 ' + (sx.name || sx.id)),
+                  el('div', { class: 'chips' },
+                    el('span', { class: 'chip' }, 'Trades: ' + (rep.trades || []).length),
+                    el('span', { class: 'chip' }, 'Resolved: ' + rep.resolved),
+                    el('span', { class: 'chip' }, 'Win rate: ' + (rep.winRate == null ? '\u2014' : rep.winRate + '%')),
+                    el('span', { class: 'chip' }, 'Realized: ' + UI.fmtMoney(rep.realizedPnlCents))),
+                  el('div', { class: 'muted small' }, rep.note));
+                box.parentNode.insertBefore(holder, box.nextSibling);
+              } catch (e) { alert(e.message); } } }, 'Report'),
+            el('button', { class: 'btn btn-sm btn-danger', onclick: async function () {
+              if (!confirm('Finish and remove this session?')) return;
+              try { await API.del('/api/sim/market/' + sx.id); if (App.state.world === sx.id) App.state.world = 'observed'; refreshSim(); App.refreshWorldBand(); }
+              catch (e) { alert(e.message); } } }, 'Finish')));
+        });
+      }
+      simCard.appendChild(el('div', { id: 'dc-sim-sessions' }));
+      var nameIn = el('input', { type: 'text', id: 'sim-name', placeholder: 'Weekend review', style: 'max-width:160px' });
+      var symsIn = el('input', { type: 'text', id: 'sim-symbols', placeholder: 'ACME:1, BETA:0.6', style: 'max-width:220px',
+        title: 'symbol:beta pairs — beta correlates the symbol with the market factor' });
+      var scenSel = el('select', { id: 'sim-scenario' },
+        ['CHOP', 'TREND_UP', 'TREND_DOWN', 'SELLOFF_REBOUND', 'RALLY_FADE', 'VOL_EVENT'].map(function (x) {
+          return el('option', { value: x }, x.toLowerCase().replace('_', ' ')); }));
+      var volIn = el('input', { type: 'number', id: 'sim-vol', value: '30', min: '5', max: '200', style: 'max-width:80px', title: 'annualized vol %' });
+      var seedIn = el('input', { type: 'number', id: 'sim-seed', value: '4242', style: 'max-width:100px' });
+      var speedIn = el('input', { type: 'number', id: 'sim-speed', value: '10', min: '1', max: '600', style: 'max-width:80px', title: 'sim-time multiplier' });
+      var createBtn = el('button', { class: 'btn btn-sm', id: 'sim-create', onclick: async function () {
+        createBtn.disabled = true;
+        try {
+          var symbols = {}, spots = {};
+          (symsIn.value || 'ACME:1').split(',').forEach(function (part) {
+            var kv = part.trim().split(':');
+            if (kv[0]) { symbols[kv[0].toUpperCase()] = kv[1] ? parseFloat(kv[1]) : 1.0; spots[kv[0].toUpperCase()] = 100; }
+          });
+          var res = await API.post('/api/sim/market', {
+            name: nameIn.value || 'Simulated session', symbols: symbols, spots: spots,
+            scenario: scenSel.value, volAnnual: parseFloat(volIn.value) / 100,
+            seed: parseInt(seedIn.value || '4242', 10), speed: parseFloat(speedIn.value || '10') });
+          await API.post('/api/sim/market/' + res.worldId + '/start', {});
+          await App.switchWorld(res.worldId);
+          refreshSim();
+        } catch (e) { alert(e.message); }
+        createBtn.disabled = false;
+      } }, 'Create & enter');
+      simCard.appendChild(el('div', { class: 'btn-row', style: 'margin-top:8px' },
+        nameIn, symsIn, scenSel, volIn, seedIn, speedIn, createBtn));
+      refreshSim();
+    })();
+
     var datasetsCard = el('div', { class: 'card', id: 'dc-datasets' }, UI.cardHeader('Datasets & scenarios'), UI.spinner('Loading datasets…'));
     var coverageCard = el('div', { class: 'card', id: 'dc-coverage' }, UI.cardHeader('What data we hold'), UI.spinner('Loading coverage…'));
     var jobsCard = el('div', { class: 'card', id: 'dc-jobs' }, UI.cardHeader('Jobs'), UI.spinner('Loading jobs…'));

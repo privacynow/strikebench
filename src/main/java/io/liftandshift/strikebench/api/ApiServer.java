@@ -76,6 +76,7 @@ public final class ApiServer {
     private final Clock clock;
     private final MarketDataService market;
     private final io.liftandshift.strikebench.market.EventService eventCalendar;
+    private final io.liftandshift.strikebench.market.sim.SimulationSessions simSessions;
     private final AuditLog audit;
     private final AccountService accounts;
     private final TradeService trades;
@@ -120,6 +121,8 @@ public final class ApiServer {
         this.clock = clock;
         this.market = market;
         this.eventCalendar = new io.liftandshift.strikebench.market.EventService(market, clock);
+        this.simSessions = new io.liftandshift.strikebench.market.sim.SimulationSessions(db, events);
+        market.setWorldResolver(id -> simSessions.get(id));
         this.audit = audit;
         this.accounts = accounts;
         this.trades = trades;
@@ -200,6 +203,7 @@ public final class ApiServer {
                 .withFeePerContractCents(cfg.feePerContractCents()); // decision EV judged net of the REAL commission
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
         server.db = db;
+        server.simSessions.attachDb(db);
         // Data Center services (need db, which is set above; reuse the constructor-built engine).
         var backfill = new io.liftandshift.strikebench.db.UnderlyingBackfill(market, db, clock);
         server.dataJobs = new io.liftandshift.strikebench.db.DataJobService(db, clock, server.marketEngine, snapshots, backfill, universe, cfg);
@@ -440,6 +444,51 @@ public final class ApiServer {
             });
             c.routes.post("/api/calibration/resolve", this::calibrationResolve);
 
+            // ---- The simulated market (Block S): per-user runtime switch, never a boot flag ----
+            c.routes.get("/api/world", ctx -> ctx.json(Map.of("world", activeWorld(ctx))));
+            c.routes.put("/api/world", ctx -> {
+                var body = requireBody(bodyOrNull(ctx, java.util.Map.class));
+                String w = String.valueOf(body.getOrDefault("world", "observed"));
+                if (!"observed".equals(w)) {
+                    simSessions.getOrRestore(w, ownerId(ctx))
+                            .orElseThrow(() -> new java.util.NoSuchElementException("no such simulated session: " + w));
+                }
+                db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
+                                + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
+                        "active_world:" + ownerId(ctx), w, clock.instant().toString());
+                ctx.json(Map.of("world", w));
+            });
+            c.routes.get("/api/sim/market", ctx -> ctx.json(Map.of("sessions", simSessions.list(ownerId(ctx)))));
+            c.routes.post("/api/sim/market", this::simMarketCreate);
+            c.routes.post("/api/sim/market/{id}/start", ctx -> { simSessions.start(ctx.pathParam("id"), ownerId(ctx)); ctx.json(Map.of("ok", true)); });
+            c.routes.post("/api/sim/market/{id}/pause", ctx -> { simSessions.pause(ctx.pathParam("id"), ownerId(ctx)); ctx.json(Map.of("ok", true)); });
+            c.routes.post("/api/sim/market/{id}/step", ctx -> { simSessions.step(ctx.pathParam("id"), ownerId(ctx)); ctx.json(Map.of("ok", true)); });
+            c.routes.post("/api/sim/market/{id}/speed", ctx -> {
+                var b = requireBody(bodyOrNull(ctx, java.util.Map.class));
+                simSessions.setSpeed(ctx.pathParam("id"), ownerId(ctx), Double.parseDouble(String.valueOf(b.get("speed"))));
+                ctx.json(Map.of("ok", true));
+            });
+            c.routes.post("/api/sim/market/{id}/event", ctx -> {
+                var b = requireBody(bodyOrNull(ctx, java.util.Map.class));
+                if (b.containsKey("movePct") && b.containsKey("symbol")) {
+                    simSessions.injectMove(ctx.pathParam("id"), ownerId(ctx),
+                            String.valueOf(b.get("symbol")), Double.parseDouble(String.valueOf(b.get("movePct"))));
+                }
+                if (b.containsKey("volShift")) {
+                    simSessions.injectVol(ctx.pathParam("id"), ownerId(ctx),
+                            Double.parseDouble(String.valueOf(b.get("volShift"))));
+                }
+                ctx.json(Map.of("ok", true));
+            });
+            c.routes.delete("/api/sim/market/{id}", ctx -> {
+                simSessions.finish(ctx.pathParam("id"), ownerId(ctx));
+                // finishing the active world falls back to observed — the fail-safe, always
+                db.exec("UPDATE settings SET v='observed' WHERE k=? AND v=?",
+                        "active_world:" + ownerId(ctx), ctx.pathParam("id"));
+                ctx.json(Map.of("ok", true));
+            });
+            c.routes.get("/api/sim/market/{id}/report", this::simMarketReport);
+
             c.routes.post("/api/trades/preview", this::tradePreview);
             c.routes.post("/api/trades/external", ctx -> {
                 Account acct = currentAccount(ctx);
@@ -628,8 +677,14 @@ public final class ApiServer {
                 "elapsedMs", r.elapsedMs()));
     }
 
-    /** The paper account for the current request's user (the single local account when auth is off). */
+    /**
+     * The paper account for the current request's user (the single local account when auth is off).
+     * Inside a simulated world the SIMULATION account is the account — the real practice account is
+     * never visible from a sim session and vice versa, so neither can pollute the other.
+     */
     private Account currentAccount(Context ctx) {
+        String w = activeWorld(ctx);
+        if (!"observed".equals(w)) return accounts.getOrCreateForWorld(w, "Simulation account");
         return accounts.getOrCreateDefaultForUser(auth.currentUserId(ctx));
     }
 
@@ -639,6 +694,78 @@ public final class ApiServer {
      * and PASSED to engines — never stored in a ThreadLocal (virtual-thread fan-outs would lose it,
      * and background work must always read observed).
      */
+    /** The caller's active market world: 'observed' unless they switched to a sim session. */
+    private String activeWorld(Context ctx) {
+        var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), "active_world:" + ownerId(ctx));
+        String w = rows.isEmpty() || rows.getFirst() == null || rows.getFirst().isBlank() ? "observed" : rows.getFirst();
+        if (!"observed".equals(w) && simSessions.getOrRestore(w, ownerId(ctx)).isEmpty()) return "observed"; // fail-safe
+        return w;
+    }
+
+    public record SimMarketCreate(String name, java.util.Map<String, Double> symbols,
+                                  java.util.Map<String, Double> spots, String scenario,
+                                  Double volAnnual, Long seed, String startSimTime, Double speed) {}
+
+    private void simMarketCreate(Context ctx) {
+        SimMarketCreate b = requireBody(bodyOrNull(ctx, SimMarketCreate.class));
+        String start = b.startSimTime() != null && !b.startSimTime().isBlank() ? b.startSimTime()
+                : nextSimOpen().toString();
+        var cfg = new io.liftandshift.strikebench.market.sim.SimulatedWorld.Config(null,
+                b.name() == null ? "Simulated session" : b.name(),
+                b.symbols(), b.spots() == null ? java.util.Map.of() : b.spots(),
+                b.scenario() == null ? "CHOP" : b.scenario(),
+                b.volAnnual() == null || b.volAnnual() <= 0 ? 0.3 : b.volAnnual(),
+                b.seed() == null ? 4242L : b.seed(), start, b.speed() == null ? 1 : b.speed());
+        var w = simSessions.create(cfg, ownerId(ctx));
+        // The SIMULATION ACCOUNT: the only lane allowed to trade against this world.
+        var acct = accounts.getOrCreateForWorld(w.worldId(), (b.name() == null ? "Simulation" : b.name()) + " account");
+        ctx.status(201).json(Map.of("worldId", w.worldId(), "accountId", acct.id(),
+                "config", w.config(), "simTime", w.simTime().toString()));
+    }
+
+    /** The next sim session open: today 09:30 ET if a trading day and before close, else next open. */
+    private java.time.LocalDateTime nextSimOpen() {
+        java.time.LocalDate d = java.time.LocalDate.now(clock);
+        while (!io.liftandshift.strikebench.market.MarketHours.isTradingDay(d)) d = d.plusDays(1);
+        return java.time.LocalDateTime.of(d, java.time.LocalTime.of(9, 30));
+    }
+
+    /** The reviewer report: what was decided and how it went, inside this world. */
+    private void simMarketReport(Context ctx) {
+        String worldId = ctx.pathParam("id");
+        var w = simSessions.getOrRestore(worldId, ownerId(ctx))
+                .orElseThrow(() -> new java.util.NoSuchElementException("no such simulated session: " + worldId));
+        var acctRows = db.query("SELECT id FROM accounts WHERE world_id=?", r -> r.str("id"), worldId);
+        List<Map<String, Object>> tradeRows = new ArrayList<>();
+        long realized = 0; int wins = 0, resolved = 0;
+        if (!acctRows.isEmpty()) {
+            var page = trades.list(acctRows.getFirst(), null, 0, 200);
+            for (var t : page.trades()) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", t.id()); m.put("symbol", t.symbol()); m.put("strategy", t.strategy());
+                m.put("status", t.status()); m.put("realizedPnlCents", t.realizedPnlCents());
+                m.put("maxLossCents", t.maxLossCents()); m.put("popEntry", t.popEntry());
+                tradeRows.add(m);
+                if (t.realizedPnlCents() != null) {
+                    resolved++; realized += t.realizedPnlCents();
+                    if (t.realizedPnlCents() > 0) wins++;
+                }
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("worldId", worldId);
+        out.put("config", w.config());
+        out.put("simTime", w.simTime().toString());
+        out.put("ticks", w.ticks());
+        out.put("trades", tradeRows);
+        out.put("resolved", resolved);
+        out.put("winRate", resolved > 0 ? Math.round(100.0 * wins / resolved) : null);
+        out.put("realizedPnlCents", realized);
+        out.put("note", "Every price in this world was generated (seed " + w.config().seed()
+                + ", scenario " + w.config().scenario() + ") — outcomes measure DECISIONS, not the market.");
+        ctx.json(out);
+    }
+
     private io.liftandshift.strikebench.db.AnalysisContext analysisCtx(Context ctx) {
         String owner = ownerId(ctx);
         String ds = io.liftandshift.strikebench.db.DatasetService.OBSERVED;
@@ -1495,7 +1622,8 @@ public final class ApiServer {
 
     private void research(Context ctx) {
         String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
-        Optional<Quote> quote = market.quote(symbol);
+        String world = activeWorld(ctx);
+        Optional<Quote> quote = market.quote(symbol, world);
         if (quote.isEmpty()) {
             ctx.attribute("apiErrorWritten", true);
             ctx.status(404).json(Map.of("error", "unknown_symbol", "detail", "No data for " + symbol));
@@ -1511,17 +1639,20 @@ public final class ApiServer {
         record IvExp(List<LocalDate> exps, Double ivAtm) {}
         try (var exec = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             var ivExpF = exec.submit(() -> {
-                List<LocalDate> e = market.expirations(symbol);
-                Double iv = e.isEmpty() ? null : market.chain(symbol, e.getFirst()).flatMap(ch -> atmIv(ch)).orElse(null);
+                List<LocalDate> e = market.expirations(symbol, world);
+                Double iv = e.isEmpty() ? null : market.chain(symbol, e.getFirst(), world).flatMap(ch -> atmIv(ch)).orElse(null);
                 return new IvExp(e, iv);
             });
             var actx = analysisCtx(ctx); // capture BEFORE the fan-out: explicit context survives vthreads
-            var candlesF = exec.submit(() -> market.candleSeries(symbol, today.minusDays(120), today, actx));
+            var candlesF = exec.submit(() -> market.candleSeries(symbol, today.minusDays(120), today, world, actx));
             var benchF = exec.submit(() -> {
                 List<Map<String, Object>> b = new ArrayList<>();
                 for (String bench : List.of("SPY", "QQQ")) {
                     if (bench.equals(symbol)) continue;
-                    market.quote(bench).ifPresent(x -> b.add(Map.of(
+                    // Benchmarks come from the SAME world as the symbol — inside a simulated
+                    // session there is no observed SPY, and mixing markets would be a quiet lie.
+                    market.quote(bench, world).filter(x -> "observed".equals(world)
+                            || x.freshness() == Freshness.SIMULATED).ifPresent(x -> b.add(Map.of(
                             "symbol", x.symbol(), "last", x.last(), "freshness", x.freshness().name())));
                 }
                 return b;
@@ -1574,7 +1705,7 @@ public final class ApiServer {
     private void expirations(Context ctx) {
         String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
         ctx.json(Map.of("symbol", symbol,
-                "expirations", market.expirations(symbol).stream().map(LocalDate::toString).toList()));
+                "expirations", market.expirations(symbol, activeWorld(ctx)).stream().map(LocalDate::toString).toList()));
     }
 
     private void chain(Context ctx) {
@@ -1584,7 +1715,7 @@ public final class ApiServer {
             throw new IllegalArgumentException("expiration query parameter is required (YYYY-MM-DD)");
         }
         LocalDate exp = LocalDate.parse(expStr.trim());
-        Optional<OptionChain> chain = market.chain(symbol, exp);
+        Optional<OptionChain> chain = market.chain(symbol, exp, activeWorld(ctx));
         if (chain.isEmpty()) {
             ctx.attribute("apiErrorWritten", true);
             ctx.status(404).json(Map.of("error", "no_chain", "detail", "No option chain for " + symbol + " " + exp));
@@ -1611,7 +1742,7 @@ public final class ApiServer {
             case "max" -> 7300; // providers return what they actually have
             default -> 365;
         };
-        var series = market.candleSeries(symbol, today.minusDays(days), today, analysisCtx(ctx));
+        var series = market.candleSeries(symbol, today.minusDays(days), today, activeWorld(ctx), analysisCtx(ctx));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("symbol", symbol);
         out.put("range", range);
@@ -1705,7 +1836,7 @@ public final class ApiServer {
                     rcGov.riskCapitalCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
                     req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
         }
-        return engine.recommend(req, acct.buyingPowerCents());
+        return engine.recommend(req, acct.buyingPowerCents(), activeWorld(ctx));
     }
 
     /**
@@ -1852,7 +1983,7 @@ public final class ApiServer {
                         req.filters());
             } catch (java.util.NoSuchElementException ignored) { /* buy-write ladder */ }
         }
-        var ladder = engine.ladder(req, acct.buyingPowerCents());
+        var ladder = engine.ladder(req, acct.buyingPowerCents(), activeWorld(ctx));
         // R9: the SAME decision policy annotates every rung — no ranked surface escapes it.
         try {
             var rungEvals = evaluations.evaluate(req.symbol(), req.intent(), req.thesis(), req.horizon(),
@@ -1887,9 +2018,15 @@ public final class ApiServer {
         if (req == null) { // absent body (or the literal document "null") means defaults
             req = new AutoRecommender.AutoRequest(null, null, null, null, null, null, null, null, null, null, null);
         }
+        String world = activeWorld(ctx);
         if (req.universe() == null || req.universe().isEmpty()) {
-            // The globally selected universe (sector or custom) is the scout's default scan list
-            req = new AutoRecommender.AutoRequest(universe.active().symbols(), req.horizons(), req.maxPicks(),
+            // Default scan list: the selected universe — or, inside a simulated session, the
+            // world's OWN symbols (the observed universe does not exist in that market).
+            List<String> scan = "observed".equals(world) ? universe.active().symbols()
+                    : simSessions.getOrRestore(world, ownerId(ctx))
+                            .map(w -> List.copyOf(w.config().symbolBetas().keySet()))
+                            .orElseGet(() -> universe.active().symbols());
+            req = new AutoRecommender.AutoRequest(scan, req.horizons(), req.maxPicks(),
                     req.targetProfitCents(), req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(),
                     req.riskMode(), req.allow0dte(), req.intents(), req.filters());
         }
@@ -1899,7 +2036,7 @@ public final class ApiServer {
                 .map(p -> new AutoRecommender.HoldingInfo(p.symbol(),
                         (int) Math.min(Integer.MAX_VALUE, p.freeShares()), p.avgCostCents()))
                 .toList();
-        ctx.json(auto.run(req, acct.buyingPowerCents(), held));
+        ctx.json(auto.run(req, acct.buyingPowerCents(), held, world));
     }
 
     // ---- Trades ----
@@ -1946,7 +2083,7 @@ public final class ApiServer {
             String h = n.headline() == null ? "" : n.headline().toLowerCase(Locale.ROOT);
             return h.contains("earnings") || h.contains("guidance") || h.contains("results");
         });
-        BigDecimal spot = market.quote(req.symbol()).map(Quote::mark).orElse(null);
+        BigDecimal spot = market.quote(req.symbol(), acct.worldId()).map(Quote::mark).orElse(null);
         // Requests may omit entryPrice (the server fills at current mids) — price the legs
         // here too, or premium-sign rules (e.g. multi-expiration credit) misfire on zeros.
         List<Leg> priced = new ArrayList<>(req.legs().size());
@@ -1957,7 +2094,7 @@ public final class ApiServer {
                 priced.add(new Leg(leg.action(), null, null, null, leg.ratio(), px));
                 continue;
             }
-            OptionQuote q = market.chain(req.symbol(), leg.expiration())
+            OptionQuote q = market.chain(req.symbol(), leg.expiration(), acct.worldId())
                     .flatMap(ch -> ch.find(leg.type(), leg.strike())).orElse(null);
             quotes.add(q);
             if (q != null) worst = Freshness.worse(worst, q.freshness());

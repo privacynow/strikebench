@@ -13,7 +13,21 @@ import java.util.Optional;
 public interface MarksSource {
 
     /** The underlying quote's OWN timestamp (source stamp), when the feed provides one. */
-    default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.util.Optional.empty(); }
+        /** World-aware variants: a SIMULATION account's trades mark against ITS world. Defaults
+     *  ignore the world (observed) so existing implementations stay correct. */
+    default java.util.Optional<java.math.BigDecimal> underlyingMark(String symbol, String worldId) {
+        return underlyingMark(symbol);
+    }
+
+    default java.util.Optional<LegMark> legMark(String symbol, io.liftandshift.strikebench.model.Leg leg, String worldId) {
+        return legMark(symbol, leg);
+    }
+
+    default java.util.Optional<java.math.BigDecimal> closeOn(String symbol, java.time.LocalDate date, String worldId) {
+        return closeOn(symbol, date);
+    }
+
+default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.util.Optional.empty(); }
 
 
     /**

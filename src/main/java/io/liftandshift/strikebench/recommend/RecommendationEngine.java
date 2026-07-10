@@ -122,6 +122,27 @@ public final class RecommendationEngine {
     }
 
     public Result recommend(Request req, long buyingPowerCents) {
+        return recommend(req, buyingPowerCents, null);
+    }
+
+    /** World-aware: inside a SIMULATED session, recommendations price against THAT world —
+     *  the whole point of a reviewer market. null = observed (the real-lane rule stands). */
+    public Result recommend(Request req, long buyingPowerCents, String worldId) {
+        WORLD.set(worldId);
+        try {
+            return recommendInner(req, buyingPowerCents);
+        } finally {
+            WORLD.remove();
+        }
+    }
+
+    /** CALL-scoped (set and cleared inside ONE synchronous call on ONE thread — never crosses an
+     *  async boundary, unlike request-ambient state): concurrent scan threads each carry their
+     *  own value, so a simulated call can never leak into a parallel observed one. */
+    private static final ThreadLocal<String> WORLD = new ThreadLocal<>();
+    private String activeWorldId() { return WORLD.get(); }
+
+    private Result recommendInner(Request req, long buyingPowerCents) {
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         RiskMode mode = RiskMode.parse(req.riskMode());
         StrategyIntent intent = StrategyIntent.parse(req.intent());
@@ -156,12 +177,12 @@ public final class RecommendationEngine {
         List<Rejection> rejected = new ArrayList<>();
         List<Candidate> candidates = new ArrayList<>();
 
-        Quote quote = market.quote(symbol).orElse(null);
+        Quote quote = market.quote(symbol, activeWorldId()).orElse(null);
         if (quote == null) {
             notes.add("No market data available for " + symbol);
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
         }
-        List<LocalDate> expirations = market.expirations(symbol);
+        List<LocalDate> expirations = market.expirations(symbol, activeWorldId());
         if (!quote.optionable() || expirations.isEmpty()) {
             notes.add(symbol + " has no listed options (mutual funds and some securities cannot be traded with options)");
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
@@ -173,7 +194,7 @@ public final class RecommendationEngine {
             notes.add("No expiration matches the requested horizon");
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
         }
-        OptionChain chain = market.chain(symbol, near).orElse(null);
+        OptionChain chain = market.chain(symbol, near, activeWorldId()).orElse(null);
         if (chain == null || chain.isEmpty()) {
             notes.add("Option chain unavailable for " + symbol + " " + near);
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
@@ -182,7 +203,7 @@ public final class RecommendationEngine {
         int nearIdx = expirations.indexOf(near);
         LocalDate far = nearIdx >= 0 && nearIdx + 4 < expirations.size() ? expirations.get(nearIdx + 4)
                 : expirations.getLast().isAfter(near) ? expirations.getLast() : null;
-        OptionChain farChain = far == null ? null : market.chain(symbol, far).orElse(null);
+        OptionChain farChain = far == null ? null : market.chain(symbol, far, activeWorldId()).orElse(null);
 
         BigDecimal spot = chain.underlyingPrice();
         boolean earningsSoon = market.news(symbol).stream().anyMatch(n -> {
@@ -298,6 +319,20 @@ public final class RecommendationEngine {
                                List<String> notes, String disclaimer) {}
 
     public LadderResult ladder(Request req, long buyingPowerCents) {
+        return ladder(req, buyingPowerCents, null);
+    }
+
+    /** World-aware twin of recommend(req, bp, worldId) — same CALL-scoped discipline. */
+    public LadderResult ladder(Request req, long buyingPowerCents, String worldId) {
+        WORLD.set(worldId);
+        try {
+            return ladderInner(req, buyingPowerCents);
+        } finally {
+            WORLD.remove();
+        }
+    }
+
+    private LadderResult ladderInner(Request req, long buyingPowerCents) {
         StrategyIntent intent = StrategyIntent.parse(req.intent());
         StrategyFamily family = switch (intent) {
             case ACQUIRE -> StrategyFamily.CASH_SECURED_PUT;
@@ -315,8 +350,8 @@ public final class RecommendationEngine {
         int freeShares = holdings != null && holdings.sharesOwned() != null ? Math.max(0, holdings.sharesOwned()) : 0;
         boolean sharesHeld = freeShares >= 100 && intent != StrategyIntent.ACQUIRE;
 
-        Quote quote = market.quote(symbol).orElse(null);
-        List<LocalDate> expirations = quote == null ? List.of() : market.expirations(symbol);
+        Quote quote = market.quote(symbol, activeWorldId()).orElse(null);
+        List<LocalDate> expirations = quote == null ? List.of() : market.expirations(symbol, activeWorldId());
         if (quote == null || !quote.optionable() || expirations.isEmpty()) {
             notes.add(quote == null ? "No market data available for " + symbol
                     : symbol + " has no listed options");
@@ -324,7 +359,7 @@ public final class RecommendationEngine {
         }
         LocalDate today = LocalDate.now(clock);
         LocalDate near = pickExpiration(expirations, req.horizon(), today, false, clock.instant(), notes);
-        OptionChain chain = near == null ? null : market.chain(symbol, near).orElse(null);
+        OptionChain chain = near == null ? null : market.chain(symbol, near, activeWorldId()).orElse(null);
         if (chain == null || chain.isEmpty()) {
             notes.add("Option chain unavailable for " + symbol);
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);

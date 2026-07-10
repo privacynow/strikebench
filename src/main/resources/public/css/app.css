@@ -1266,3 +1266,13 @@ body.lvl-expert .showcase-frame { max-height: 375px; }
 @media (prefers-reduced-motion: no-preference) {
   .info-pop { animation: xp-in .12s ease-out; }
 }
+
+/* Block S8: the simulated-market band — loud but professionally restrained */
+#world-band { display: flex; align-items: center; gap: 8px; padding: 6px 14px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg)); border-bottom: 2px solid var(--accent);
+  font-size: 12.5px; letter-spacing: .02em; }
+#world-band b { font-weight: 600; }
+
+.badge-sim { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); color: var(--accent);
+  border: 1px solid var(--accent); }
+body.in-sim-world #tape { display: none; } /* the tape quotes the OBSERVED market — not this world */

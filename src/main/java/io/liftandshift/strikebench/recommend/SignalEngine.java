@@ -71,14 +71,17 @@ public final class SignalEngine {
         this.fixturesOnly = fixturesOnly;
     }
 
-    public Optional<Signals> analyze(String symbol) {
+    public Optional<Signals> analyze(String symbol) { return analyze(symbol, null); }
+
+    /** World-aware: a simulated session's scout reads THAT world's market. null = observed. */
+    public Optional<Signals> analyze(String symbol, String worldId) {
         String sym = symbol.trim().toUpperCase(Locale.ROOT);
-        Quote quote = market.quote(sym).orElse(null);
+        Quote quote = market.quote(sym, worldId).orElse(null);
         if (quote == null) return Optional.empty();
-        boolean optionable = quote.optionable() && !market.expirations(sym).isEmpty();
+        boolean optionable = quote.optionable() && !market.expirations(sym, worldId).isEmpty();
 
         LocalDate today = LocalDate.now(clock);
-        io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(sym, today.minusDays(120), today);
+        io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(sym, today.minusDays(120), today, worldId, null);
         List<Candle> candles = series.candles();
         boolean demoHistory = series.isFixture() && !fixturesOnly;
         Double ret5 = trailingReturn(candles, 5);
@@ -89,10 +92,10 @@ public final class SignalEngine {
         Double ivAtm = null;
         Double liquidity = null;
         if (optionable) {
-            LocalDate exp = market.expirations(sym).stream()
+            LocalDate exp = market.expirations(sym, worldId).stream()
                     .min(Comparator.comparingLong(d -> Math.abs(ChronoUnit.DAYS.between(today, d) - 30)))
                     .orElse(null);
-            OptionChain chain = exp == null ? null : market.chain(sym, exp).orElse(null);
+            OptionChain chain = exp == null ? null : market.chain(sym, exp, worldId).orElse(null);
             if (chain != null && !chain.isEmpty()) {
                 OptionQuote atm = chain.calls().stream()
                         .filter(q -> q.iv() != null && q.hasMark())
