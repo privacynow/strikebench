@@ -32,6 +32,17 @@ public final class ScenarioSimulator {
 
     public SimResult run(double spot, List<SimLeg> legs, int qty, ScenarioSpec spec, IvSpec ivSpec,
                          double riskFreeRate, double[] historicalLogReturns) {
+        try (AutoCloseable permit = SimBudget.acquire()) {
+            return runInner(spot, legs, qty, spec, ivSpec, riskFreeRate, historicalLogReturns);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private SimResult runInner(double spot, List<SimLeg> legs, int qty, ScenarioSpec spec, IvSpec ivSpec,
+                               double riskFreeRate, double[] historicalLogReturns) {
         ScenarioSpec s = spec.sane();
         IvSpec iv = (ivSpec == null ? IvSpec.flat(s.volAnnual()) : ivSpec).sane();
         int steps = s.totalSteps();
@@ -41,14 +52,14 @@ public final class ScenarioSimulator {
         double[] ivPath = iv.path(steps, dt, spd);
 
         int q = Math.max(1, qty);
-        double entry = portfolioValue(legs, spot, 0, steps, spd, dt, ivPath[0], riskFreeRate) * q;
+        double entry = portfolioValue(legs, paths[0], 0, steps, spd, dt, ivPath[0], riskFreeRate) * q;
 
         // Per-path P&L at every step (for the fan) and at the horizon (for the distribution).
         int n = paths.length;
         double[][] pnl = new double[n][steps + 1];
         for (int p = 0; p < n; p++) {
             for (int i = 0; i <= steps; i++) {
-                double v = portfolioValue(legs, paths[p][i], i, steps, spd, dt, ivPath[i], riskFreeRate) * q;
+                double v = portfolioValue(legs, paths[p], i, steps, spd, dt, ivPath[i], riskFreeRate) * q;
                 pnl[p][i] = v - entry;
             }
         }
@@ -106,9 +117,16 @@ public final class ScenarioSimulator {
                 0, bands, dist, example, notes);
     }
 
-    /** Signed portfolio value in DOLLARS for one unit (qty applied by the caller). */
-    private static double portfolioValue(List<SimLeg> legs, double underlying, int step, int steps,
+    /**
+     * Signed portfolio value in DOLLARS for one unit (qty applied by the caller), valued along
+     * ONE path at {@code step}. An expired leg settles ONCE — intrinsic at the underlying price
+     * ON ITS EXPIRATION STEP — and stays that cash amount forever after; it must never re-value
+     * against the post-expiration stock price (that minted impossible P&L for calendars and any
+     * horizon longer than a leg's DTE).
+     */
+    private static double portfolioValue(List<SimLeg> legs, double[] path, int step, int steps,
                                          int spd, double dt, double iv, double r) {
+        double underlying = path[Math.min(step, steps)];
         double v = 0;
         for (SimLeg leg : legs) {
             int ratio = Math.max(1, leg.ratio());
@@ -119,10 +137,14 @@ public final class ScenarioSimulator {
             }
             boolean call = "CALL".equalsIgnoreCase(leg.type());
             int expiryStep = Math.max(0, leg.expiryDay()) * spd;
-            double t = Math.max(0, (expiryStep - step) * dt);
-            double px = t <= 1e-9
-                    ? Math.max(0, call ? underlying - leg.strike() : leg.strike() - underlying) // expired: intrinsic
-                    : BlackScholes.price(call, underlying, leg.strike(), t, r, 0, Math.max(0.01, iv));
+            double px;
+            if (step >= expiryStep) {
+                double settle = path[Math.min(expiryStep, steps)]; // the price WHEN it expired
+                px = Math.max(0, call ? settle - leg.strike() : leg.strike() - settle);
+            } else {
+                double t = (expiryStep - step) * dt;
+                px = BlackScholes.price(call, underlying, leg.strike(), t, r, 0, Math.max(0.01, iv));
+            }
             v += sign * ratio * 100 * px;
         }
         return v;

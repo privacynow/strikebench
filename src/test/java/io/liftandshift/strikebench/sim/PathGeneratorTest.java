@@ -113,6 +113,104 @@ class PathGeneratorTest {
         assertThat(mn).isCloseTo(low, org.assertj.core.data.Offset.offset(1e-6));  // the low is touched
     }
 
+    @Test
+    void driftIsHonest_meanTerminalPriceSitsOnTheGuide() {
+        // E[S_T] must equal s0*exp(mu*T) — the Ito -sigma^2/2 correction keeps the mean ON the
+        // stated drift instead of biased above it. 12% annual vol over 1y, 4000 paths.
+        var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.GRIND_UP,
+                252, 1, 0.10, 0.12, 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.12), 21, 4000);
+        double[][] paths = gen.generate(spec, 100, null);
+        double mean = 0;
+        for (double[] path : paths) mean += path[path.length - 1];
+        mean /= paths.length;
+        double target = 100 * Math.exp(0.10);
+        assertThat(mean).isBetween(target * 0.98, target * 1.02); // within MC error, NOT +sigma^2/2 biased
+    }
+
+    @Test
+    void gbmIsGaussian_notFatTailed() {
+        // "GBM" must draw NORMAL innovations — excess kurtosis near 0 (t(3) sits far above).
+        double kurtG = excessKurtosis(gen.generate(gbm(5, 400), 100, null));
+        assertThat(kurtG).isBetween(-0.5, 0.8);
+    }
+
+    @Test
+    void gapShapesGuaranteeAGapOnEveryPath() {
+        for (var shape : new ScenarioSpec.Shape[]{ScenarioSpec.Shape.GAP_UP, ScenarioSpec.Shape.GAP_DOWN}) {
+            var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, shape,
+                    10, 1, 0, 0.20, 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.20), 13, 100);
+            double[][] paths = gen.generate(spec, 100, null);
+            boolean up = shape == ScenarioSpec.Shape.GAP_UP;
+            for (double[] path : paths) {
+                double biggest = 0; // most extreme single-step log move in the promised direction
+                for (int i = 1; i < path.length; i++) {
+                    double r = Math.log(path[i] / path[i - 1]);
+                    biggest = up ? Math.max(biggest, r) : Math.min(biggest, r);
+                }
+                // The deterministic gap (>=4% log) must dominate ordinary daily noise on EVERY path.
+                assertThat(Math.abs(biggest)).as(shape + " contains its gap").isGreaterThan(0.03);
+            }
+        }
+    }
+
+    @Test
+    void eventJumpShocksEveryPathWithMixedSigns() {
+        var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.EVENT_JUMP,
+                10, 1, 0, 0.20, 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.20), 17, 200);
+        double[][] paths = gen.generate(spec, 100, null);
+        int upCount = 0, shocked = 0;
+        for (double[] path : paths) {
+            double extreme = 0;
+            for (int i = 1; i < path.length; i++) {
+                double r = Math.log(path[i] / path[i - 1]);
+                if (Math.abs(r) > Math.abs(extreme)) extreme = r;
+            }
+            if (Math.abs(extreme) > 0.035) shocked++;
+            if (extreme > 0) upCount++;
+        }
+        assertThat(shocked).as("every path carries the promised violent move").isEqualTo(paths.length);
+        assertThat(upCount).as("the move goes EITHER way").isBetween(40, 160); // mixed signs
+    }
+
+    @Test
+    void bootstrapRespectsTheVolKnobAndTheStepSize() {
+        // History with ~50% annualized vol; the user asks for 20% — the knob must win.
+        Rng hr = new Rng(99);
+        double[] hist = new double[500];
+        double histDaily = 0.50 / Math.sqrt(252);
+        for (int i = 0; i < hist.length; i++) hist[i] = histDaily * hr.gaussian();
+        var spec = new ScenarioSpec(ScenarioSpec.PathModel.BLOCK_BOOTSTRAP, ScenarioSpec.Shape.CHOP,
+                60, 1, 0, 0.20, 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.20), 31, 300);
+        double realized = realizedPerStepVol(gen.generate(spec, 100, hist));
+        double target = 0.20 * Math.sqrt(1.0 / 252);
+        assertThat(realized).isBetween(target * 0.8, target * 1.2);
+
+        // Intraday: 4 steps/day must NOT apply full daily returns per step — per-step vol scales by sqrt(dt).
+        var intraday = new ScenarioSpec(ScenarioSpec.PathModel.BLOCK_BOOTSTRAP, ScenarioSpec.Shape.CHOP,
+                20, 4, 0, 0.20, 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.20), 33, 300);
+        double realizedIntraday = realizedPerStepVol(gen.generate(intraday, 100, hist));
+        double targetIntraday = 0.20 * Math.sqrt(1.0 / 252 / 4);
+        assertThat(realizedIntraday).isBetween(targetIntraday * 0.8, targetIntraday * 1.2);
+    }
+
+    @Test
+    void totalWorkIsCappedAsAProduct() {
+        // The reviewer's heap bomb: 756d x 96/day x 5000 paths ~ 363M points. sane() must cap the
+        // PRODUCT (paths shrink to fit), not just each field.
+        var greedy = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                756, 96, 0, 0.3, 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.3), 1, 5000).sane();
+        long points = (long) greedy.paths() * (greedy.totalSteps() + 1);
+        assertThat(points).isLessThanOrEqualTo(ScenarioSpec.MAX_TOTAL_POINTS);
+        assertThat(greedy.paths()).isGreaterThanOrEqualTo(20); // still a usable fan
+    }
+
+    private static double realizedPerStepVol(double[][] paths) {
+        double sumSq = 0; long n = 0;
+        for (double[] path : paths)
+            for (int i = 1; i < path.length; i++) { double r = Math.log(path[i] / path[i - 1]); sumSq += r * r; n++; }
+        return Math.sqrt(sumSq / n);
+    }
+
     // ---- helpers ----
 
     private static double terminalSpread(double[][] paths) {

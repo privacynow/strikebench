@@ -65,11 +65,22 @@ public record ScenarioSpec(
 
     // ---- guards ----
 
+    /**
+     * Hard cap on TOTAL work as a product (paths × steps), not just per-field clamps — the
+     * per-field maxima multiplied together (756d × 96/day × 5000 paths ≈ 363M points, ~6GB of
+     * matrices) would let one request exhaust the heap. 3M points ≈ 50MB peak per request.
+     */
+    public static final int MAX_TOTAL_POINTS = 3_000_000;
+
     public ScenarioSpec sane() {
+        int days = Math.clamp(horizonDays, 1, 756);
+        int spd = Math.clamp(stepsPerDay, 1, 96);
+        int stepsPlus1 = days * spd + 1;
+        int maxPaths = Math.max(20, MAX_TOTAL_POINTS / stepsPlus1);
         return new ScenarioSpec(model == null ? PathModel.GBM : model,
                 shape == null ? Shape.CHOP : shape,
-                Math.clamp(horizonDays, 1, 756),
-                Math.clamp(stepsPerDay, 1, 96),
+                days,
+                spd,
                 clampD(driftAnnual, -2, 2),
                 clampD(volAnnual <= 0 ? 0.25 : volAnnual, 0.01, 5),
                 clampD(jumpsPerYear, 0, 260),
@@ -77,7 +88,13 @@ public record ScenarioSpec(
                 clampD(jumpVol, 0, 1),
                 clampD(tailNu <= 0 ? 6 : tailNu, 2.5, 200),
                 heston == null ? Heston.fromVol(volAnnual <= 0 ? 0.25 : volAnnual) : heston,
-                seed, Math.clamp(paths <= 0 ? 200 : paths, 1, 5000));
+                seed, Math.clamp(paths <= 0 ? 200 : paths, 1, Math.min(5000, maxPaths)));
+    }
+
+    /** Same scenario, different path count (persisting a dataset needs exactly ONE path). */
+    public ScenarioSpec withPaths(int n) {
+        return new ScenarioSpec(model, shape, horizonDays, stepsPerDay, driftAnnual, volAnnual,
+                jumpsPerYear, jumpMean, jumpVol, tailNu, heston, seed, n);
     }
 
     private static double clampD(double v, double lo, double hi) { return Math.max(lo, Math.min(hi, v)); }

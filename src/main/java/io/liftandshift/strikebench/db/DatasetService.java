@@ -33,6 +33,16 @@ public final class DatasetService {
     public record DatasetRow(String id, String name, String kind, String symbol, Long seed,
                              String spec, long bars, String createdAt) {}
 
+    /**
+     * OWNERSHIP MODEL: every synthetic dataset belongs to its creator ('local' when auth is off);
+     * 'observed' is the shared system dataset. Listing, deletion, and retention pruning are scoped
+     * to the owner — one user can never enumerate, delete, or prune another user's runs. The
+     * ACTIVE selection stays a single app-level switch (it changes the global candle read path —
+     * the tape, the engine, backtests), so with auth on the API additionally gates switching to
+     * admins; here we enforce the ownership half: you may only activate observed or YOUR OWN run.
+     */
+    private static String owner(String userId) { return userId == null || userId.isBlank() ? "local" : userId; }
+
     public String activeId() {
         String a = activeCache;
         if (a != null) return a;
@@ -42,25 +52,32 @@ public final class DatasetService {
         return a;
     }
 
-    public void setActive(String id) {
-        if (!OBSERVED.equals(id) && !exists(id)) throw new java.util.NoSuchElementException("no such dataset: " + id);
+    public void setActive(String id, String userId) {
+        if (!OBSERVED.equals(id) && !ownedBy(id, userId)) {
+            throw new java.util.NoSuchElementException("no such dataset: " + id); // absent OR someone else's — same answer
+        }
         db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
                 ACTIVE_KEY, id, clock.instant().toString());
         activeCache = id;
         if (events != null) events.publish("dataset.selected", java.util.Map.of("active", id));
     }
 
-    public boolean exists(String id) {
-        return db.query("SELECT 1 x FROM dataset WHERE id=?", r -> 1, id).size() > 0;
+    /** True when the dataset exists AND belongs to this caller ('observed' belongs to everyone). */
+    public boolean ownedBy(String id, String userId) {
+        if (OBSERVED.equals(id)) return true;
+        return db.query("SELECT 1 x FROM dataset WHERE id=? AND user_id IS NOT DISTINCT FROM ?",
+                r -> 1, id, owner(userId)).size() > 0;
     }
 
-    public List<DatasetRow> list() {
+    /** The caller's datasets + the shared observed one — never anyone else's. */
+    public List<DatasetRow> list(String userId) {
         List<DatasetRow> out = new ArrayList<>();
         db.query("SELECT d.id, d.name, d.kind, d.symbol, d.seed, d.spec::text spec, d.created_at::text ca, "
               + "(SELECT count(*) FROM underlying_bar b WHERE b.dataset_id = d.id) bars "
-              + "FROM dataset d ORDER BY (d.id='observed') DESC, d.created_at DESC",
+              + "FROM dataset d WHERE d.id='observed' OR d.user_id IS NOT DISTINCT FROM ? "
+              + "ORDER BY (d.id='observed') DESC, d.created_at DESC",
                 r -> out.add(new DatasetRow(r.str("id"), r.str("name"), r.str("kind"), r.str("symbol"),
-                        r.lngOrNull("seed"), r.str("spec"), r.lng("bars"), r.str("ca"))));
+                        r.lngOrNull("seed"), r.str("spec"), r.lng("bars"), r.str("ca"))), owner(userId));
         return out;
     }
 
@@ -68,24 +85,29 @@ public final class DatasetService {
     public String create(String name, String kind, String symbol, long seed, Object spec, String userId) {
         String id = Ids.newId("ds");
         db.exec("INSERT INTO dataset (id, name, kind, symbol, seed, spec, user_id) VALUES (?,?,?,?,?,?::jsonb,?)",
-                id, name, kind, symbol, seed, Json.write(spec), userId);
-        prune();
+                id, name, kind, symbol, seed, Json.write(spec), owner(userId));
+        prune(userId);
         return id;
     }
 
-    /** Deletes a synthetic dataset (bars cascade). 'observed' is untouchable by design. */
-    public void delete(String id) {
+    /** Deletes a synthetic dataset the caller OWNS (bars cascade). 'observed' is untouchable. */
+    public void delete(String id, String userId) {
         if (OBSERVED.equals(id)) throw new IllegalArgumentException("The observed dataset cannot be deleted");
-        if (id.equals(activeId())) setActive(OBSERVED); // never leave the app pointed at a ghost
+        if (!ownedBy(id, userId)) throw new java.util.NoSuchElementException("no such dataset: " + id);
+        if (id.equals(activeId())) setActive(OBSERVED, userId); // never leave the app pointed at a ghost
         db.exec("DELETE FROM dataset WHERE id=?", id);
     }
 
-    private void prune() {
-        db.exec("DELETE FROM dataset WHERE id <> 'observed' AND id NOT IN "
-              + "(SELECT id FROM dataset WHERE id <> 'observed' ORDER BY created_at DESC LIMIT ?)", KEEP_SYNTHETIC);
+    /** Retention is PER OWNER — creating your 26th run must never prune someone else's. */
+    private void prune(String userId) {
+        // The globally active dataset is always retained: pruning the run the app is analyzing
+        // would silently flip everyone back to observed mid-thought.
+        db.exec("DELETE FROM dataset WHERE id <> 'observed' AND user_id IS NOT DISTINCT FROM ? AND id <> ? AND id NOT IN "
+              + "(SELECT id FROM dataset WHERE id <> 'observed' AND user_id IS NOT DISTINCT FROM ? "
+              + " ORDER BY created_at DESC LIMIT ?)", owner(userId), activeId(), owner(userId), KEEP_SYNTHETIC);
     }
 
-    public Map<String, Object> describe() {
-        return Map.of("active", activeId(), "datasets", list());
+    public Map<String, Object> describe(String userId) {
+        return Map.of("active", activeId(), "datasets", list(userId));
     }
 }

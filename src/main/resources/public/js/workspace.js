@@ -9,7 +9,12 @@
 (function () {
   'use strict';
 
-  var LS_KEY = 'strikebench.workspace';
+  // Namespaced PER SIGNED-IN SUBJECT: two profiles sharing a browser must never hydrate each
+  // other's symbols, forms, or working ticket from a shared local copy. Anonymous = '.local'.
+  var LS_KEY = 'strikebench.workspace.local';
+  function setUserKey(userKey) {
+    LS_KEY = 'strikebench.workspace.' + (userKey && String(userKey).trim() ? String(userKey).trim() : 'local');
+  }
   // Draft forms carry the user's thinking; results are refetched (fresh data beats stale payloads).
   var FORM_KEYS = ['discoverForm', 'builderForm', 'backtestForm', 'verifyForm', 'scenarioForm', 'ideasForm'];
 
@@ -82,7 +87,8 @@
    * Newest copy wins: both blobs carry a client-clock savedAt, so the comparison is honest
    * even though local saves don't bump the backend rev.
    */
-  function hydrate(remote) {
+  function hydrate(remote, userKey) {
+    if (userKey !== undefined) setUserKey(userKey);
     var local = readLocal();
     var localState = local && local.state && local.state.v === 1 ? local.state : null;
     var remoteState = remote && remote.state && remote.state.v === 1 ? remote.state : null;

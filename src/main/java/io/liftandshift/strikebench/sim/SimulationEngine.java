@@ -47,20 +47,26 @@ public final class SimulationEngine {
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
 
-        // Anchor on reality where we can: start at the latest real price; feed the bootstrap real returns.
-        double spot = market.quote(symbol).map(q -> q.mark() == null ? null : q.mark().doubleValue()).orElse(null) == null
-                ? 100.0 : market.quote(symbol).map(q -> q.mark().doubleValue()).orElse(100.0);
+        // Anchor on reality: the latest real (or explicit demo) price. NO silent fallback — a
+        // simulation anchored on an invented $100 stock would be the fixture-masquerade failure
+        // all over again. Missing quote = loud refusal (404 via the NoSuchElementException mapper).
+        double spot = anchorSpot(symbol);
         double[] hist = historicalLogReturns(symbol);
 
-        double[] path = generator.generate(spec, spot, hist)[0]; // a dataset is ONE concrete future (the seed's)
+        // A dataset is ONE concrete future (the seed's) — generate exactly one path, not the
+        // full Monte-Carlo fleet just to keep index [0].
+        double[] path = generator.generate(spec.withPaths(1).sane(), spot, hist)[0];
         int spd = Math.max(1, spec.stepsPerDay());
         int days = spec.totalSteps() / spd;
 
         String name = symbol + " · " + pretty(spec.shape()) + " · " + days + "d · seed " + spec.seed();
         String id = datasets.create(name, "SYNTHETIC_PURE", symbol, spec.seed(), spec, userId);
 
-        // Daily bars from the path: intraday steps give real O/H/L/C per day; daily steps give closes.
-        List<Candle> bars = toDailyBars(path, spd, nextTradingDay(LocalDate.now(clock)));
+        // FRAMING: the bars are written as the RECENT PAST, ending today — "imagine this had just
+        // happened". Future-dated bars satisfied nothing (Research asks for history ending today;
+        // backtests use historical windows), so activating a saved run changed only the banner.
+        // As the recent past, the active dataset genuinely drives charts, HV, and backtests.
+        List<Candle> bars = toDailyBars(path, spd, tradingDaysBack(LocalDate.now(clock), days - 1));
         db.tx(c -> {
             for (Candle b : bars) {
                 Db.execOn(c, "INSERT INTO underlying_bar (symbol, d, open, high, low, close, volume, source, observed, dataset_id) "
@@ -93,9 +99,16 @@ public final class SimulationEngine {
         String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
-        double spot = market.quote(symbol).map(q -> q.mark() == null ? 100.0 : q.mark().doubleValue()).orElse(100.0);
+        double spot = anchorSpot(symbol); // loud refusal on a missing quote — never a fake $100
         double[] hist = historicalLogReturns(symbol);
-        double[][] paths = generator.generate(spec, spot, hist);
+        double[][] paths;
+        try (AutoCloseable permit = SimBudget.acquire()) {
+            paths = generator.generate(spec, spot, hist);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
         int spd = Math.max(1, spec.stepsPerDay());
         int days = spec.totalSteps() / spd;
 
@@ -128,6 +141,17 @@ public final class SimulationEngine {
         return sorted[Math.max(0, Math.min(sorted.length - 1, (int) Math.floor(p * (sorted.length - 1))))];
     }
 
+    /** The real (or explicit demo) price a simulation anchors on. Missing quote = loud refusal. */
+    private double anchorSpot(String symbol) {
+        return market.quote(symbol)
+                .map(q -> q.mark())
+                .filter(java.util.Objects::nonNull)
+                .map(BigDecimal::doubleValue)
+                .filter(v -> v > 0)
+                .orElseThrow(() -> new java.util.NoSuchElementException(
+                        "No price for " + symbol + " — a simulation needs a real (or demo) quote to anchor on. Check the ticker."));
+    }
+
     /** Real mean-removed inputs for the bootstrap model, or null when no observed history exists. */
     public double[] historicalLogReturns(String symbol) {
         try {
@@ -158,6 +182,17 @@ public final class SimulationEngine {
 
     private static LocalDate nextTradingDay(LocalDate d) {
         while (d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY) d = d.plusDays(1);
+        return d;
+    }
+
+    /** The trading day {@code n} trading days before {@code end} (weekend-skipping). */
+    private static LocalDate tradingDaysBack(LocalDate end, int n) {
+        LocalDate d = end;
+        while (d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY) d = d.minusDays(1);
+        for (int i = 0; i < Math.max(0, n); i++) {
+            d = d.minusDays(1);
+            while (d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY) d = d.minusDays(1);
+        }
         return d;
     }
 

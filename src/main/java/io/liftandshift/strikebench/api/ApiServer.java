@@ -325,9 +325,12 @@ public final class ApiServer {
             c.routes.post("/api/data/reset", this::dataResetRoute);
 
             // ---- Datasets & scenario simulation ----
-            c.routes.get("/api/datasets", ctx -> ctx.json(datasets.describe()));
+            c.routes.get("/api/datasets", ctx -> ctx.json(datasets.describe(ownerId(ctx))));
             c.routes.put("/api/datasets/active", this::datasetSetActive);
-            c.routes.delete("/api/datasets/{id}", ctx -> { datasets.delete(ctx.pathParam("id")); ctx.json(Map.of("ok", true)); });
+            c.routes.delete("/api/datasets/{id}", ctx -> {
+                datasets.delete(ctx.pathParam("id"), ownerId(ctx)); // ownership enforced in the service
+                ctx.json(Map.of("ok", true));
+            });
             c.routes.post("/api/sim/scenario", this::simScenario);   // pure compute: the fan preview
             c.routes.post("/api/sim/strategy", this::simStrategy);   // pure compute: strategy P&L distribution
             c.routes.post("/api/sim/dataset", this::simDataset);     // persists a synthetic dataset
@@ -700,6 +703,11 @@ public final class ApiServer {
     public record UniverseSelectRequest(String sector, List<String> symbols) {}
 
     private void universeSelect(Context ctx) {
+        // The universe is a documented APP-LEVEL setting (it drives the tape, the engine warm set,
+        // and scan defaults for everyone) — with auth on, only an admin changes it. Making it a
+        // true per-user preference means threading user context through the engine; that is the
+        // follow-up recorded in DEVELOPER.md, and this gate closes the cross-user yank until then.
+        if (auth.enabled()) requireAdmin(ctx);
         UniverseSelectRequest req = requireBody(bodyOrNull(ctx, UniverseSelectRequest.class));
         if (req.sector() != null && !req.sector().isBlank()) {
             universe.selectSector(req.sector());
@@ -957,8 +965,12 @@ public final class ApiServer {
     public record ActiveDatasetRequest(String id) {}
 
     private void datasetSetActive(Context ctx) {
+        // The active dataset changes the APP-WIDE candle read path (tape, engine, backtests) —
+        // with auth on, only an admin flips it; the service additionally requires the caller to
+        // OWN the dataset being activated (or observed). Auth off = the single local user.
+        if (auth.enabled()) requireAdmin(ctx);
         ActiveDatasetRequest b = requireBody(bodyOrNull(ctx, ActiveDatasetRequest.class));
-        datasets.setActive(b.id());
+        datasets.setActive(b.id(), ownerId(ctx));
         ctx.json(Map.of("ok", true, "active", datasets.activeId(),
                 "scenarioMode", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(datasets.activeId())));
     }
@@ -980,7 +992,14 @@ public final class ApiServer {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
         if (b.legs() == null || b.legs().isEmpty()) throw new IllegalArgumentException("legs are required");
         String sym = b.symbol() == null ? "" : b.symbol().trim().toUpperCase(Locale.ROOT);
-        double spot = market.quote(sym).map(q -> q.mark() == null ? 100.0 : q.mark().doubleValue()).orElse(100.0);
+        if (sym.isEmpty()) throw new IllegalArgumentException("symbol is required");
+        // Loud refusal on a missing quote — a strategy simulated against an invented $100 stock
+        // would be fixture-masquerade all over again (404 via the NoSuchElementException mapper).
+        double spot = market.quote(sym)
+                .map(q -> q.mark()).filter(java.util.Objects::nonNull)
+                .map(java.math.BigDecimal::doubleValue).filter(v -> v > 0)
+                .orElseThrow(() -> new java.util.NoSuchElementException(
+                        "No price for " + sym + " — a simulation needs a real (or demo) quote to anchor on. Check the ticker."));
         double r = market.riskFreeRate(Math.max(1, b.spec().sane().horizonDays()));
         var result = new io.liftandshift.strikebench.sim.ScenarioSimulator().run(
                 spot, b.legs(), b.qty() == null ? 1 : b.qty(), b.spec(), b.iv(), r,

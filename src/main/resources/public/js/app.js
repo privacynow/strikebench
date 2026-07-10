@@ -294,8 +294,10 @@
 
     // Continuity: restore the saved workspace (forms, working idea, working symbol) and — on a
     // bare open only — the route the user was on. An explicit hash (bookmark/link) always wins.
+    // The local copy is namespaced per signed-in subject so shared browsers never cross-hydrate.
     if (window.Workspace) {
-      var ws = Workspace.hydrate(wsRemote);
+      var wsUser = (me && me.user && (me.user.id || me.user.email)) || 'local';
+      var ws = Workspace.hydrate(wsRemote, wsUser);
       if (ws && ws.route && (!window.location.hash || window.location.hash === '#')) {
         window.location.hash = ws.route;
       }

@@ -80,6 +80,22 @@ class SimulationStackTest {
     }
 
     @Test
+    void expiredLegsSettleOnceAndStayCash() {
+        // A leg expiring INSIDE the horizon settles at its expiration-day price and stays that
+        // cash amount — the P&L fan must be FLAT after expiry (it used to keep re-valuing the
+        // dead option against the post-expiration stock price).
+        var sim = new ScenarioSimulator();
+        var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 5, 1));
+        var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP, 20, 1, 0, 0.4,
+                0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.4), 77, 1); // ONE path -> bands ARE that path
+        var r = sim.run(100, legs, 1, spec, IvSpec.flat(0.4), 0.04, null);
+        long settled = r.bands().get(5).p50Cents();
+        for (int d = 6; d <= 20; d++) {
+            assertThat(r.bands().get(d).p50Cents()).as("day " + d + " stays at the settled value").isEqualTo(settled);
+        }
+    }
+
+    @Test
     void seedReproducesTheExactDistribution() {
         var sim = new ScenarioSimulator();
         var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
@@ -101,28 +117,55 @@ class SimulationStackTest {
 
         var run = engine.runAndPersist("AAPL", spec(ScenarioSpec.Shape.SELLOFF_REBOUND, 0, 3), null);
         assertThat(run.bars()).isGreaterThan(10);
-        assertThat(datasets.list()).anySatisfy(d -> assertThat(d.id()).isEqualTo(run.datasetId()));
+        assertThat(datasets.list(null)).anySatisfy(d -> assertThat(d.id()).isEqualTo(run.datasetId()));
         // Observed rows are untouched: the synthetic bars live ONLY under the new dataset_id.
         long observedRows = db.query("SELECT count(*) c FROM underlying_bar WHERE dataset_id='observed'",
                 r -> r.lng("c")).getFirst();
         assertThat(observedRows).isZero();
 
-        // Default read path = observed → the fixture provider serves (no stored observed bars).
-        LocalDate from = LocalDate.now(clock), to = from.plusDays(40);
-        assertThat(market.candleSeries("AAPL", from, to).source()).isEqualTo("fixture");
+        // Synthetic bars are the RECENT PAST ending today — the exact window production screens
+        // request (Research history, HV, backtests), so an ACTIVE dataset genuinely drives them.
+        LocalDate to = LocalDate.now(clock), from = to.minusDays(40);
+        assertThat(market.candleSeries("AAPL", from, to).source()).isEqualTo("fixture"); // observed default
 
         // Select the synthetic dataset → the read path serves it, labeled MODELED ('synthetic').
-        datasets.setActive(run.datasetId());
+        datasets.setActive(run.datasetId(), null);
         CandleSeries s = market.candleSeries("AAPL", from, to);
         assertThat(s.source()).isEqualTo("synthetic");
         assertThat(s.freshness()).isEqualTo(Freshness.MODELED); // scenario data never masquerades as real
 
         // Deleting the active dataset falls back to observed (and cascades its bars).
-        datasets.delete(run.datasetId());
+        datasets.delete(run.datasetId(), null);
         assertThat(datasets.activeId()).isEqualTo(DatasetService.OBSERVED);
         long orphans = db.query("SELECT count(*) c FROM underlying_bar WHERE dataset_id=?",
                 r -> r.lng("c"), run.datasetId()).getFirst();
         assertThat(orphans).isZero();
+    }
+
+    @Test
+    void datasetsAreIsolatedBetweenUsers() {
+        db = TestDb.fresh();
+        DatasetService datasets = new DatasetService(db, clock);
+        String mine = datasets.create("mine", "SYNTHETIC_PURE", "AAPL", 1, Map.of(), "user-a");
+        String theirs = datasets.create("theirs", "SYNTHETIC_PURE", "AAPL", 2, Map.of(), "user-b");
+        // Listing shows my runs + observed — never someone else's.
+        assertThat(datasets.list("user-a")).extracting(DatasetService.DatasetRow::id)
+                .contains(mine, "observed").doesNotContain(theirs);
+        // Activating or deleting another user's dataset reads as "no such dataset".
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> datasets.setActive(theirs, "user-a"))
+                .isInstanceOf(java.util.NoSuchElementException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> datasets.delete(theirs, "user-a"))
+                .isInstanceOf(java.util.NoSuchElementException.class);
+        // Owner semantics still allow the owner everything.
+        datasets.setActive(mine, "user-a");
+        assertThat(datasets.activeId()).isEqualTo(mine);
+        // Retention pruning is per owner AND spares the active run: user-a's churn must never
+        // evict user-b's dataset, and never the one the app is actively analyzing.
+        for (int i = 0; i < 30; i++) datasets.create("run" + i, "SYNTHETIC_PURE", "AAPL", 100 + i, Map.of(), "user-a");
+        assertThat(datasets.ownedBy(theirs, "user-b")).isTrue();
+        assertThat(datasets.ownedBy(mine, "user-a")).isTrue(); // survived its owner's churn (it is active)
+        datasets.delete(mine, "user-a");
+        assertThat(datasets.activeId()).isEqualTo(DatasetService.OBSERVED); // fell back, no ghost
     }
 
     @Test
