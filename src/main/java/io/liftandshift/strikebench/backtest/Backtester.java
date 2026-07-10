@@ -106,6 +106,11 @@ public final class Backtester {
     ) {}
 
     public BacktestReport run(BacktestRequest req) {
+        return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+    }
+
+    /** Context-aware variant: the replay runs over the caller's analysis dataset. */
+    public BacktestReport run(BacktestRequest req, io.liftandshift.strikebench.db.AnalysisContext actx) {
         String symbol = require(req.symbol(), "symbol").trim().toUpperCase(Locale.ROOT);
         StrategyFamily family = parseFamily(require(req.strategy(), "strategy"));
         LocalDate from = LocalDate.parse(require(req.from(), "from"));
@@ -131,7 +136,7 @@ public final class Backtester {
         List<Map<String, Object>> equityCurve = new ArrayList<>();
 
         // Lookback padding so HV is available on day one — filtered per-day to <= that day
-        io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(symbol, from.minusDays(200), to);
+        io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(symbol, from.minusDays(200), to, actx);
         List<Candle> allCandles = series.candles();
         boolean demoUnderlying = series.isFixture() && !cfg.fixturesOnly();
         if (demoUnderlying) {

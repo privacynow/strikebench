@@ -156,9 +156,14 @@ public final class SimulationEngine {
 
     /** Real mean-removed inputs for the bootstrap model, or null when no observed history exists. */
     public double[] historicalLogReturns(String symbol) {
+        return historicalLogReturns(symbol, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+    }
+
+    /** Context-aware variant: bootstrap inputs come from the caller's analysis dataset. */
+    public double[] historicalLogReturns(String symbol, io.liftandshift.strikebench.db.AnalysisContext actx) {
         try {
             LocalDate to = LocalDate.now(clock);
-            List<Candle> candles = market.candles(symbol, to.minusYears(2), to);
+            List<Candle> candles = market.candles(symbol, to.minusYears(2), to, actx);
             if (candles.size() < 30) return null;
             double[] rs = new double[candles.size() - 1];
             for (int i = 1; i < candles.size(); i++) {

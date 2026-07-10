@@ -305,16 +305,9 @@ public final class ApiServer {
                         || p.equals("/api/config") || p.equals("/api/status")) return;
                 auth.requireUser(ctx);
             });
-            // Per-request dataset context: the caller's active dataset drives the candle read
-            // path for THIS request only. Background threads never see it — scenario mode is
-            // personal, never ambient. Cleared in `after` so pooled threads can't leak worlds.
-            c.routes.before("/api/*", ctx -> {
-                if (datasets == null) return;
-                try {
-                    io.liftandshift.strikebench.db.DatasetContext.set(datasets.activeId(ownerId(ctx)));
-                } catch (Exception e) { io.liftandshift.strikebench.db.DatasetContext.clear(); }
-            });
-            c.routes.after("/api/*", ctx -> io.liftandshift.strikebench.db.DatasetContext.clear());
+            // The caller's analysis dataset travels as an EXPLICIT AnalysisContext parameter
+            // (analysisCtx(ctx)) — no ambient per-request state, so virtual-thread fan-outs keep
+            // the caller's world and background machinery always reads observed.
 
             // LIVE-MODE per-IP throttle: this app fronts real third-party feeds, so one runaway
             // client (a stuck retry loop, a scraper) must not translate into provider hammering.
@@ -410,13 +403,15 @@ public final class ApiServer {
             c.routes.post("/api/optimize", this::optimize);
             c.routes.post("/api/lab/hypothesis", ctx ->
                     ctx.json(new io.liftandshift.strikebench.research.HypothesisTester(market)
-                            .test(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.HypothesisTester.HypothesisRequest.class)))));
+                            .test(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.HypothesisTester.HypothesisRequest.class)),
+                                    analysisCtx(ctx))));
             // Research-question workbench (replaces the degenerate momentum toy in the UI).
             c.routes.get("/api/lab/questions", ctx ->
                     ctx.json(Map.of("questions", new io.liftandshift.strikebench.research.ResearchQuestionEngine(market).catalog())));
             c.routes.post("/api/lab/question", ctx ->
                     ctx.json(new io.liftandshift.strikebench.research.ResearchQuestionEngine(market)
-                            .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest.class)))));
+                            .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest.class)),
+                                    analysisCtx(ctx))));
             c.routes.post("/api/lab/replicate", ctx ->
                     ctx.json(new io.liftandshift.strikebench.research.ETFReplicator(market)
                             .replicate(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ETFReplicator.ReplicationRequest.class)))));
@@ -457,10 +452,11 @@ public final class ApiServer {
                     ctx.json(trades.portfolioGreeks(currentAccount(ctx).id())));
 
             c.routes.post("/api/backtest", ctx ->
-                    ctx.json(backtester.run(requireBody(bodyOrNull(ctx, Backtester.BacktestRequest.class)))));
+                    ctx.json(backtester.run(requireBody(bodyOrNull(ctx, Backtester.BacktestRequest.class)), analysisCtx(ctx))));
             c.routes.post("/api/backtest/portfolio", ctx ->
                     ctx.json(new io.liftandshift.strikebench.backtest.PortfolioBacktester(market, cfg, clock, db)
-                            .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.backtest.PortfolioBacktester.PortfolioRequest.class)))));
+                            .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.backtest.PortfolioBacktester.PortfolioRequest.class)),
+                                    analysisCtx(ctx))));
             c.routes.get("/api/backtests", ctx -> ctx.json(Map.of("backtests", backtester.list())));
             c.routes.get("/api/backtests/{id}", ctx -> ctx.json(backtester.get(ctx.pathParam("id"))));
 
@@ -613,6 +609,20 @@ public final class ApiServer {
     }
 
     /** The persistence owner id for the current user (null = local/anonymous). */
+    /**
+     * The caller's explicit analysis context: identity + their active dataset. Built per request
+     * and PASSED to engines — never stored in a ThreadLocal (virtual-thread fan-outs would lose it,
+     * and background work must always read observed).
+     */
+    private io.liftandshift.strikebench.db.AnalysisContext analysisCtx(Context ctx) {
+        String owner = ownerId(ctx);
+        String ds = io.liftandshift.strikebench.db.DatasetService.OBSERVED;
+        if (datasets != null) {
+            try { ds = datasets.activeId(owner); } catch (RuntimeException ignored) { /* observed */ }
+        }
+        return new io.liftandshift.strikebench.db.AnalysisContext(owner, ds);
+    }
+
     private String ownerId(Context ctx) {
         String uid = auth.currentUserId(ctx);
         return io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
@@ -1118,7 +1128,7 @@ public final class ApiServer {
                     me == null ? null : "entry at " + me.source() + " executable quotes"));
         }
         var report = new io.liftandshift.strikebench.sim.ScenarioSimulator()
-                .compare(spot, items, qty, spec, iv, r, simEngine.historicalLogReturns(sym));
+                .compare(spot, items, qty, spec, iv, r, simEngine.historicalLogReturns(sym, analysisCtx(ctx)));
         List<Map<String, Object>> refused = new ArrayList<>(refusedEarly);
         report.refused().forEach(x -> refused.add(Map.of("key", x.key(), "reason", x.reason())));
         ctx.json(Map.of("results", report.results(), "refused", refused,
@@ -1216,7 +1226,7 @@ public final class ApiServer {
         }
         var result = new io.liftandshift.strikebench.sim.ScenarioSimulator().run(
                 spot, legsToRun, qty, spec, iv, r,
-                simEngine.historicalLogReturns(sym),
+                simEngine.historicalLogReturns(sym, analysisCtx(ctx)),
                 me == null ? null : me.entryCents(),
                 entryNote);
         ctx.json(result);
@@ -1379,7 +1389,8 @@ public final class ApiServer {
                 Double iv = e.isEmpty() ? null : market.chain(symbol, e.getFirst()).flatMap(ch -> atmIv(ch)).orElse(null);
                 return new IvExp(e, iv);
             });
-            var candlesF = exec.submit(() -> market.candleSeries(symbol, today.minusDays(120), today));
+            var actx = analysisCtx(ctx); // capture BEFORE the fan-out: explicit context survives vthreads
+            var candlesF = exec.submit(() -> market.candleSeries(symbol, today.minusDays(120), today, actx));
             var benchF = exec.submit(() -> {
                 List<Map<String, Object>> b = new ArrayList<>();
                 for (String bench : List.of("SPY", "QQQ")) {
@@ -1464,7 +1475,7 @@ public final class ApiServer {
             case "max" -> 7300; // providers return what they actually have
             default -> 365;
         };
-        var series = market.candleSeries(symbol, today.minusDays(days), today);
+        var series = market.candleSeries(symbol, today.minusDays(days), today, analysisCtx(ctx));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("symbol", symbol);
         out.put("range", range);
@@ -1502,7 +1513,8 @@ public final class ApiServer {
         if (result.candidates() == null || result.candidates().size() < 2) return result;
         try {
             var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
-                    result.riskMode(), result.candidates(), acct.buyingPowerCents(), null, false);
+                    result.riskMode(), result.candidates(), acct.buyingPowerCents(), null, false,
+                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED); // recommendations always price observed
             if (evals.size() != result.candidates().size()) return result; // partial evaluation: keep screen order
             com.fasterxml.jackson.databind.node.ObjectNode out =
                     (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(result);

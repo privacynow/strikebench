@@ -94,7 +94,17 @@ public final class EvaluationService {
     public List<StrategyEvaluation> evaluate(String symbol, String intent, String thesis, String horizon,
                                              String riskMode, List<Candidate> candidates,
                                              long buyingPowerCents, String userId, boolean persist) {
-        List<StrategyEvaluation> ranked = rank(symbol, intent, thesis, horizon, riskMode, candidates, buyingPowerCents);
+        return evaluate(symbol, intent, thesis, horizon, riskMode, candidates, buyingPowerCents, userId, persist,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+    }
+
+    /** Context-aware variant: realized-vol history follows the caller's analysis dataset. */
+    public List<StrategyEvaluation> evaluate(String symbol, String intent, String thesis, String horizon,
+                                             String riskMode, List<Candidate> candidates,
+                                             long buyingPowerCents, String userId, boolean persist,
+                                             io.liftandshift.strikebench.db.AnalysisContext actx) {
+        List<StrategyEvaluation> ranked = rank(symbol, intent, thesis, horizon, riskMode, candidates,
+                buyingPowerCents, actx);
         if (persist && !ranked.isEmpty()) store.saveAll(ranked, userId);
         return ranked;
     }
@@ -133,7 +143,8 @@ public final class EvaluationService {
                         var result = engine.recommend(req, buyingPowerCents);
                         if (result.candidates().isEmpty()) return new PerSym(null, sym + ": no candidates");
                         StrategyEvaluation top = rank(sym, result.intent(), result.thesis(), result.horizon(),
-                                result.riskMode(), result.candidates(), buyingPowerCents).stream()
+                                result.riskMode(), result.candidates(), buyingPowerCents,
+                                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED).stream()
                                 .filter(StrategyEvaluation::viable).findFirst().orElse(null);
                         return new PerSym(top, null); // no-viable is silently dropped, as before
                     } catch (RuntimeException e) {
@@ -161,8 +172,9 @@ public final class EvaluationService {
     }
 
     private List<StrategyEvaluation> rank(String symbol, String intent, String thesis, String horizon,
-                                          String riskMode, List<Candidate> candidates, long buyingPowerCents) {
-        EvalContext ctx = buildContext(symbol, candidates, buyingPowerCents);
+                                          String riskMode, List<Candidate> candidates, long buyingPowerCents,
+                                          io.liftandshift.strikebench.db.AnalysisContext actx) {
+        EvalContext ctx = buildContext(symbol, candidates, buyingPowerCents, actx);
         String family = candidates.isEmpty() ? null : candidates.getFirst().strategy();
         StrategySpec spec = new StrategySpec(symbol, family, intent, horizon, thesis, riskMode, "risk_adjusted");
         return evaluator.evaluateAndRank(candidates, spec, ctx);
@@ -172,7 +184,8 @@ public final class EvaluationService {
         return store.recent(userId, limit);
     }
 
-    private EvalContext buildContext(String symbol, List<Candidate> candidates, long buyingPowerCents) {
+    private EvalContext buildContext(String symbol, List<Candidate> candidates, long buyingPowerCents,
+                                     io.liftandshift.strikebench.db.AnalysisContext actx) {
         LocalDate today = LocalDate.now(clock);
         long underlyingCents = market.quote(symbol)
                 .map(q -> q.mark() == null ? 0L : Money.toCents(q.mark())).orElse(0L);
@@ -181,7 +194,7 @@ public final class EvaluationService {
         int dte = frontExp != null ? Math.max(0, (int) ChronoUnit.DAYS.between(today, frontExp)) : 30;
 
         Double atmIv = atmIv(symbol, underlyingCents, frontExp);
-        Double realizedVol = realizedVol30(symbol, today);
+        Double realizedVol = realizedVol30(symbol, today, actx);
         List<Double> ivHistory = ivHistory(symbol);
         boolean open = MarketHours.isRegularSession(Instant.now(clock));
 
@@ -219,8 +232,9 @@ public final class EvaluationService {
                 .orElse(null);
     }
 
-    private Double realizedVol30(String symbol, LocalDate today) {
-        List<Candle> candles = market.candles(symbol, today.minusDays(60), today);
+    private Double realizedVol30(String symbol, LocalDate today,
+                                 io.liftandshift.strikebench.db.AnalysisContext actx) {
+        List<Candle> candles = market.candles(symbol, today.minusDays(60), today, actx);
         if (candles == null || candles.size() < 20) return null;
         double v = HistoricalVol.annualized(candles, 30);
         return Double.isFinite(v) && v > 0 ? v : null;

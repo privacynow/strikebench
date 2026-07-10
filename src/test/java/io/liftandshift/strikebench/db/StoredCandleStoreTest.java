@@ -78,7 +78,7 @@ class StoredCandleStoreTest {
         db.exec("INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,1)",
                 "AAPL", LocalDate.parse("2026-04-02"), new java.math.BigDecimal("252.00"), "yahoo");
         var store = new StoredCandleStore(db);
-        assertThat(store.candles("AAPL", LocalDate.parse("2026-03-01"), LocalDate.parse("2026-04-30"))).isEmpty();
+        assertThat(store.candles("AAPL", LocalDate.parse("2026-03-01"), LocalDate.parse("2026-04-30"), DatasetService.OBSERVED)).isEmpty();
     }
 
     @Test
@@ -90,7 +90,7 @@ class StoredCandleStoreTest {
         db.exec("INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,0)",
                 "AAPL", LocalDate.parse("2026-04-02"), new java.math.BigDecimal("252.00"), "fixture");
         var store = new StoredCandleStore(db);
-        var s = store.candles("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-04-02")).orElseThrow();
+        var s = store.candles("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-04-02"), DatasetService.OBSERVED).orElseThrow();
         assertThat(s.freshness()).isEqualTo(Freshness.FIXTURE); // worst-of, never best-of
     }
 

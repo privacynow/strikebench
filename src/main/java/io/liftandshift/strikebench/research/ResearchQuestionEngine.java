@@ -83,6 +83,11 @@ public final class ResearchQuestionEngine {
                                  Double effectSize, String holdout) {}
 
     public QuestionResult run(RunRequest req) {
+        return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+    }
+
+    /** Context-aware variant: the study runs over the caller's analysis dataset. */
+    public QuestionResult run(RunRequest req, io.liftandshift.strikebench.db.AnalysisContext actx) {
         String key = req.key() == null ? "" : req.key().trim();
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
@@ -96,7 +101,7 @@ public final class ResearchQuestionEngine {
         int lookback = clampParam(p, "lookback", 20, 1, 250);
 
         // Pull enough history to warm up the look-back before `from`.
-        CandleSeries series = market.candleSeries(symbol, from.minusDays(lookback + 20L), to);
+        CandleSeries series = market.candleSeries(symbol, from.minusDays(lookback + 20L), to, actx);
         List<Candle> candles = series.candles().stream().filter(c -> !c.date().isAfter(to)).toList();
         boolean observed = isObserved(series.freshness());
         List<String> notes = new ArrayList<>();

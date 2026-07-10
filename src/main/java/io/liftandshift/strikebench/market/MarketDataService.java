@@ -126,17 +126,34 @@ public final class MarketDataService {
         return candleSeries(symbol, from, to).candles();
     }
 
-    /** Candles WITH provenance — consumers must label demo (fixture) history in live mode. */
+    /** Context-aware variant: the caller's analysis dataset drives the stored-bar read. */
+    public List<Candle> candles(String symbol, LocalDate from, LocalDate to,
+                                io.liftandshift.strikebench.db.AnalysisContext actx) {
+        return candleSeries(symbol, from, to, actx).candles();
+    }
+
+    /** Observed-world candles — background machinery, paper-money paths and recommendations. */
     public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to) {
-        // The store's cacheKey (the active dataset id) is part of the key: switching datasets in the
-        // Data Center must never serve another dataset's cached candles.
-        String k = (candleStore == null ? "" : candleStore.cacheKey() + "|") + norm(symbol) + "|" + from + "|" + to;
+        return candleSeries(symbol, from, to, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+    }
+
+    /**
+     * Candles WITH provenance — consumers must label demo (fixture) history in live mode. The
+     * dataset comes from the EXPLICIT context (no ambient request state), so virtual-thread
+     * fan-outs keep the caller's world and background work always reads observed.
+     */
+    public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to,
+                                     io.liftandshift.strikebench.db.AnalysisContext actx) {
+        String dataset = actx == null ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : actx.datasetId();
+        // The dataset id is part of the cache key: switching datasets must never serve another
+        // dataset's cached candles.
+        String k = dataset + "|" + norm(symbol) + "|" + from + "|" + to;
         CandleSeries r = candlesCache.get(k, key -> {
             // Persisted bars (Data Center backfills / snapshots / CSV ingest) win over live provider
             // calls — the whole point of storing history is that the read path uses it.
             if (candleStore != null) {
                 try {
-                    Optional<CandleSeries> stored = candleStore.candles(norm(symbol), from, to);
+                    Optional<CandleSeries> stored = candleStore.candles(norm(symbol), from, to, dataset);
                     if (stored.isPresent() && !stored.get().candles().isEmpty()) return stored.get();
                 } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol, e.toString()); }
             }

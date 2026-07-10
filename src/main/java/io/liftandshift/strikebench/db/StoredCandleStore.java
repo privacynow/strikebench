@@ -20,29 +20,17 @@ import java.util.Optional;
 public final class StoredCandleStore implements CandleStore {
 
     private final Db db;
-    private final DatasetService datasets; // nullable: observed-only mode (unit tests)
 
-    public StoredCandleStore(Db db) { this(db, null); }
+    public StoredCandleStore(Db db) { this.db = db; }
 
-    public StoredCandleStore(Db db, DatasetService datasets) {
-        this.db = db;
-        this.datasets = datasets;
-    }
-
-    private String activeId() {
-        // The REQUESTING USER'S dataset (ThreadLocal set per request); background threads have
-        // no context and read observed — scenario mode is personal, never ambient.
-        String ctx = DatasetContext.current();
-        return ctx != null && datasets != null ? ctx : DatasetService.OBSERVED;
-    }
-
-    @Override public String cacheKey() { return activeId(); }
+    /** Back-compat ctor: the dataset now arrives per call, so the service handle is unused. */
+    public StoredCandleStore(Db db, DatasetService datasets) { this(db); }
 
     @Override
-    public Optional<CandleSeries> candles(String symbol, LocalDate from, LocalDate to) {
+    public Optional<CandleSeries> candles(String symbol, LocalDate from, LocalDate to, String datasetId) {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
         if (sym.isEmpty() || from == null || to == null || from.isAfter(to)) return Optional.empty();
-        String dataset = activeId();
+        String dataset = datasetId == null || datasetId.isBlank() ? DatasetService.OBSERVED : datasetId;
         // One row per day, preferring observed real data over demo, then a stable source order.
         List<Row> rows = db.query(
                 "SELECT DISTINCT ON (d) d::text d, open, high, low, close, volume, source, observed "

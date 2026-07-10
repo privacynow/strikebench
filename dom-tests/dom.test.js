@@ -196,6 +196,20 @@ test('scenario studio: beginner story cards → fan of futures → strategy verd
     return Scenario.CATALOG.map(c => c.key).filter(k => !fams.includes(k));
   });
   assert.deepEqual(familyCheck, [], 'catalog keys unknown to the backend: ' + familyCheck.join(','));
+  // ...and the Builder's template catalog: every template maps to a REGISTRY family (or CUSTOM),
+  // and the named coverage the product promises (PMCC, synthetics, calendars) actually exists.
+  const builderCheck = await page.evaluate(async () => {
+    const fams = (await (await fetch('/api/strategies')).json()).families.concat(['CUSTOM']);
+    const tpls = Builder.TEMPLATES || [];
+    return {
+      unknown: tpls.map(t => t.family).filter(f => !fams.includes(f)),
+      keys: tpls.map(t => t.key)
+    };
+  });
+  assert.deepEqual(builderCheck.unknown, [], 'builder template families unknown to the backend: ' + builderCheck.unknown.join(','));
+  for (const must of ['PMCC', 'SYNTHETIC_LONG', 'SYNTHETIC_SHORT', 'CALENDAR_CALL', 'DIAGONAL_CALL', 'IRON_CONDOR']) {
+    assert.ok(builderCheck.keys.includes(must), 'builder catalog missing ' + must);
+  }
   assert.ok((await page.locator('#sc-pos .sc-sketch svg').count()) >= 16, 'payoff-shape sketches');
   assert.ok(await page.locator('#sc-symbol').count(), 'symbol input exists');
   await page.locator('#sc-pos .sc-card[data-pos="DEBIT_CALL_SPREAD"]').scrollIntoViewIfNeeded();

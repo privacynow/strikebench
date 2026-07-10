@@ -128,15 +128,18 @@ class SimulationStackTest {
         LocalDate to = LocalDate.now(clock), from = to.minusDays(40);
         assertThat(market.candleSeries("AAPL", from, to).source()).isEqualTo("fixture"); // observed default
 
-        // Select the synthetic dataset AND enter the request context (per-user, per-request:
-        // background threads without a context always read observed) → the read path serves it.
+        // Select the synthetic dataset and read WITH the explicit analysis context — the store
+        // has no ambient state; a caller without a context always reads observed.
         datasets.setActive(run.datasetId(), null);
-        io.liftandshift.strikebench.db.DatasetContext.set(datasets.activeId(null));
-        CandleSeries s = market.candleSeries("AAPL", from, to);
+        var actx = new io.liftandshift.strikebench.db.AnalysisContext(null, datasets.activeId(null));
+        CandleSeries s = market.candleSeries("AAPL", from, to, actx);
         assertThat(s.source()).isEqualTo("synthetic");
         assertThat(s.freshness()).isEqualTo(Freshness.MODELED); // scenario data never masquerades as real
+        // The SAME read WITHOUT a context (background machinery, another user) stays observed —
+        // one user's scenario world can never become ambient.
+        CandleSeries plain = market.candleSeries("AAPL", from, to);
+        assertThat(plain.source()).isNotEqualTo("synthetic");
 
-        io.liftandshift.strikebench.db.DatasetContext.clear();
         // Deleting the active dataset falls back to observed (and cascades its bars).
         datasets.delete(run.datasetId(), null);
         assertThat(datasets.activeId(null)).isEqualTo(DatasetService.OBSERVED);

@@ -38,7 +38,7 @@ public final class DatasetService {
      * 'observed' is the shared system dataset. Listing, deletion, retention pruning, AND the active
      * selection are all scoped to the owner — one user can never enumerate, delete, prune, or flip
      * the read path of another user's world. The per-request candle read path resolves the CALLER'S
-     * selection (see DatasetContext); background machinery always reads observed.
+     * selection (see AnalysisContext); background machinery always reads observed.
      */
     private static String owner(String userId) { return userId == null || userId.isBlank() ? "local" : userId; }
 
@@ -53,9 +53,13 @@ public final class DatasetService {
         if (cached != null) return cached;
         var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), k);
         String a = rows.isEmpty() || rows.getFirst() == null || rows.getFirst().isBlank() ? null : rows.getFirst();
-        if (a == null) { // legacy global value (pre-per-user) applies to the local user once
+        if (a == null && "local".equals(owner(userId))) {
+            // Legacy global value (pre-per-user) applies to the LOCAL user only — an authenticated
+            // user must never inherit someone else's pre-migration dataset selection.
             var legacy = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), ACTIVE_KEY);
             a = legacy.isEmpty() || legacy.getFirst() == null || legacy.getFirst().isBlank() ? OBSERVED : legacy.getFirst();
+        } else if (a == null) {
+            a = OBSERVED;
         }
         // A dangling id (dataset pruned/deleted) silently means observed, never a ghost world.
         if (!OBSERVED.equals(a) && !exists(a)) a = OBSERVED;

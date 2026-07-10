@@ -89,6 +89,11 @@ public final class PortfolioBacktester {
     }
 
     public PortfolioReport run(PortfolioRequest req) {
+        return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+    }
+
+    /** Context-aware variant: the replay runs over the caller's analysis dataset. */
+    public PortfolioReport run(PortfolioRequest req, io.liftandshift.strikebench.db.AnalysisContext actx) {
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         this.runSymbol = symbol;
@@ -112,7 +117,7 @@ public final class PortfolioBacktester {
         if (startingCash <= 0) throw new IllegalArgumentException("startingCashCents must be positive");
 
         List<String> notes = new ArrayList<>();
-        CandleSeries series = market.candleSeries(symbol, from.minusDays(220), to);
+        CandleSeries series = market.candleSeries(symbol, from.minusDays(220), to, actx);
         List<Candle> all = series.candles();
         boolean demo = series.isFixture() && !cfg.fixturesOnly();
         if (demo) notes.add("Underlying history is built-in DEMO DATA — add a Polygon/Alpha Vantage key for real candles.");

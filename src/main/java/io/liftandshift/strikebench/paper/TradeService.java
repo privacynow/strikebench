@@ -52,13 +52,28 @@ public final class TradeService {
         this.clock = clock;
     }
 
+    /**
+     * THE canonical OrderPackage: every entry path — recommendations, builder, guided ticket,
+     * broker integration, external-fill recording — produces exactly this typed package, and the
+     * one evaluation pipeline consumes it. Package-level extras: {@code proposedNetCents} (signed:
+     * + credit received / − debit paid; null = price at executable sides), {@code feesOverrideCents}
+     * (null = platform default), {@code source} (RECOMMENDATION | BUILDER | TICKET | IMPORT | BROKER).
+     */
     public record OpenRequest(String accountId, String symbol, String strategy, int qty, List<Leg> legs,
                               String thesis, String horizon, String riskMode,
-                              String intent, Boolean useHeldShares) {
+                              String intent, Boolean useHeldShares,
+                              Long proposedNetCents, Long feesOverrideCents, String source) {
+        /** Pre-package 10-field shape (no proposed price / fees / source). */
+        public OpenRequest(String accountId, String symbol, String strategy, int qty, List<Leg> legs,
+                           String thesis, String horizon, String riskMode,
+                           String intent, Boolean useHeldShares) {
+            this(accountId, symbol, strategy, qty, legs, thesis, horizon, riskMode, intent, useHeldShares,
+                    null, null, null);
+        }
         /** Historical 8-field shape (no intent, buys any stock legs explicitly). */
         public OpenRequest(String accountId, String symbol, String strategy, int qty, List<Leg> legs,
                            String thesis, String horizon, String riskMode) {
-            this(accountId, symbol, strategy, qty, legs, thesis, horizon, riskMode, null, null);
+            this(accountId, symbol, strategy, qty, legs, thesis, horizon, riskMode, null, null, null, null, null);
         }
         public boolean heldShares() { return Boolean.TRUE.equals(useHeldShares); }
     }

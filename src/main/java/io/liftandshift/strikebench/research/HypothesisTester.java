@@ -32,6 +32,11 @@ public final class HypothesisTester {
                                    double zScore, boolean significant, String verdict, List<String> notes) {}
 
     public HypothesisResult test(HypothesisRequest req) {
+        return test(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+    }
+
+    /** Context-aware variant: the hypothesis runs over the caller's analysis dataset. */
+    public HypothesisResult test(HypothesisRequest req, io.liftandshift.strikebench.db.AnalysisContext actx) {
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         LocalDate from = LocalDate.parse(req.from());
@@ -40,7 +45,7 @@ public final class HypothesisTester {
         double threshold = req.thresholdPct() == null ? 0.0 : req.thresholdPct();
         int forward = Math.clamp(req.forwardDays() == null ? 10 : req.forwardDays(), 1, 120);
 
-        List<Candle> candles = market.candles(symbol, from.minusDays(lookback + 15L), to).stream()
+        List<Candle> candles = market.candles(symbol, from.minusDays(lookback + 15L), to, actx).stream()
                 .filter(c -> !c.date().isAfter(to)).toList();
         List<String> notes = new ArrayList<>();
 

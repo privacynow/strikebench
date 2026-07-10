@@ -11,13 +11,13 @@ import java.util.Optional;
  * feeds the read path — Research and the backtesters get stored history instead of silently
  * re-calling providers or falling to fixtures. Absent (null) in pure unit tests, which then use the
  * provider chain exactly as before.
+ *
+ * The dataset id is an EXPLICIT parameter (from the caller's {@code AnalysisContext}) — the store
+ * holds no ambient per-request state, so virtual-thread fan-outs and background jobs cannot read
+ * the wrong world by accident.
  */
 public interface CandleStore {
 
-    /** Stored daily candles for the symbol/range, or empty to fall through to the provider chain. */
-    Optional<CandleSeries> candles(String symbol, LocalDate from, LocalDate to);
-
-    /** A cache-key discriminator (e.g. the active dataset id) so switching datasets never serves
-     *  another dataset's cached candles. Default: none. */
-    default String cacheKey() { return ""; }
+    /** Stored daily candles for the symbol/range in the given dataset, or empty to fall through. */
+    Optional<CandleSeries> candles(String symbol, LocalDate from, LocalDate to, String datasetId);
 }
