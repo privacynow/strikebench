@@ -167,6 +167,78 @@ test('navigation is NEVER trapped behind a slow route (Research does not block m
   }
 });
 
+test('scenario studio: beginner story cards → fan of futures → strategy verdict in plain dollars', async () => {
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = null; });
+  await go('#/research/AAPL');
+  // The thesis workbench: story cards with shape sketches, plain horizon/wildness chips.
+  await page.waitForSelector('#whatif-card #sc-shapes .sc-card');
+  assert.ok((await page.locator('#whatif-card .sc-card').count()) >= 6, 'story cards');
+  assert.ok((await page.locator('#whatif-card .sc-sketch svg').count()) >= 6, 'shape sketches');
+  assert.match(await page.textContent('#whatif-card'), /Drops, then recovers/);
+  assert.match(await page.textContent('#sc-mag-note'), /±\d+%/); // live magnitude preview
+  await page.click('#whatif-card .sc-card[data-shape="SELLOFF_REBOUND"]');
+  await page.click('#whatif-run');
+  await page.waitForSelector('#whatif-out .fan-chart svg', { timeout: 20000 });
+  assert.match(await page.textContent('#whatif-out'), /8 in 10 end between/); // plain-language fan summary
+  assert.match(await page.textContent('#whatif-out'), /never a forecast/i);   // honesty note
+
+  // Handoff: "Test a strategy under this" opens Verify in scenario mode.
+  await page.click('#whatif-verify');
+  await page.waitForSelector('#bt-scenario-card', { timeout: 15000 });
+  assert.ok(await page.locator('#bt-mode .pill.active[data-mode="scenario"]').count(), 'Verify opened in scenario mode');
+  // Beginner position quick-picks in plain words; run → verdict in dollars.
+  assert.match(await page.textContent('#sc-pos'), /Bet on a rise/);
+  await page.click('#sc-pos .sym-chip[data-pos="CALL_SPREAD"]');
+  await page.click('#sc-verify-run');
+  await page.waitForSelector('#sc-verify-out .alert', { timeout: 30000 });
+  const verdict = await page.textContent('#sc-verify-out');
+  assert.match(verdict, /In \d+ of 100 futures like this/);
+  assert.match(verdict, /Chance of profit/);
+  assert.ok((await page.locator('#sc-verify-out .fan-chart svg').count()) >= 1, 'P&L fan');
+  assert.ok((await page.locator('#sc-verify-out .lab-chart svg rect').count()) >= 3, 'terminal histogram');
+});
+
+test('scenario studio expert: model menu incl. Heston, IV knobs, the math on demand', async () => {
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.evaluate(() => { App.state.scenarioForm = null; });
+  await go('#/research/AAPL');
+  await page.waitForSelector('#whatif-card #sc-model');
+  const models = await page.$$eval('#sc-model option', os => os.map(o => o.value));
+  assert.ok(models.includes('HESTON') && models.includes('BLOCK_BOOTSTRAP') && models.includes('JUMP_DIFFUSION'), 'full model menu');
+  assert.ok(await page.locator('#sc-iv').count(), 'IV start knob');
+  assert.ok(await page.locator('#sc-seed').count(), 'seed knob');
+  // The math is an expandable (.xp), not in-your-face.
+  await page.click('#whatif-card .xp-head');
+  assert.match(await page.textContent('#whatif-card'), /Heston/);
+  assert.match(await page.textContent('#whatif-card'), /κ|kappa/i);
+});
+
+test('data center: generate a scenario dataset, activate it (loud banner), switch back', async () => {
+  await page.click('#level-switch button[data-level="expert"]');
+  await go('#/status');
+  await page.waitForSelector('#dc-datasets .status-item');
+  assert.match(await page.textContent('#dc-datasets'), /Observed market data/);
+  // Generate a synthetic run.
+  await page.click('#dc-generate-btn');
+  await page.waitForSelector('#dc-gen-sym');
+  await page.fill('#dc-gen-sym', 'AAPL');
+  await page.click('#dc-gen-run');
+  await page.waitForSelector('#dc-datasets .status-item .badge:has-text("SYNTHETIC")', { timeout: 30000 });
+  // Activate it → the loud app-wide banner appears.
+  const useBtn = page.locator('#dc-datasets .status-item:has(.badge:has-text("SYNTHETIC")) button:has-text("Use")').first();
+  await useBtn.click();
+  await page.waitForSelector('#scenario-banner', { timeout: 15000 });
+  assert.match(await page.textContent('#scenario-banner'), /SCENARIO MODE/);
+  // Switch back to observed → banner clears.
+  await page.waitForSelector('#dc-datasets .status-item:has-text("Observed") button:has-text("Use")');
+  await page.click('#dc-datasets .status-item:has-text("Observed") button:has-text("Use")');
+  await page.waitForFunction(() => !document.getElementById('scenario-banner'), { timeout: 15000 });
+  // Cleanup: leave the shared page as downstream tests expect (Beginner level, history verify mode).
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => { if (App.state.verifyForm) App.state.verifyForm.mode = 'history'; App.state.verifyMode = null; });
+});
+
 test('market stream (SSE): the browser receives live quote frames from the engine', async () => {
   await go('#/home');
   const symbols = await page.evaluate(() => new Promise((resolve) => {

@@ -381,6 +381,10 @@
       UI.rangeChart({ initial: '1y', fetch: historyFetch(symbol) }),
       explain('Real OHLC candles: green closed up, red closed down; slide across for open/high/low/close, change, and volume. Pills change the window; long windows aggregate to weekly candles.')));
 
+    // The thesis workbench: "I think X happens next" → hundreds of simulated futures → a strategy
+    // test. This is where a view becomes something you can actually examine.
+    root.appendChild(whatIfCard(symbol));
+
     var chainAnchor = el('div', { id: 'chain-anchor' });
     root.appendChild(chainAnchor);
 
@@ -2794,6 +2798,100 @@
     }
   }
 
+  // ---------- 7b. Scenario surfaces (the thesis workbench + "imagine a future") ----------
+
+  /** Research: "I think X happens next" → hundreds of simulated futures → hand off to Verify. */
+  function whatIfCard(symbol) {
+    var level = Learn.currentLevel();
+    var card = el('div', { class: 'card', id: 'whatif-card' });
+    card.appendChild(UI.cardHeader('What could happen next?'));
+    card.appendChild(explain(level === 'beginner'
+      ? 'Pick the story you believe and we draw hundreds of realistic “possible futures” for ' + symbol + ' — so you can SEE the range of outcomes, then test a strategy against it.'
+      : 'Parameterize a scenario (model, drift, vol, jumps, IV path) and preview the Monte-Carlo fan; hand it to Verify to run a structure against it.'));
+    var f = Scenario.form(level, symbol);
+    card.appendChild(f.el);
+    var out = el('div', { id: 'whatif-out' });
+    var toVerify = el('button', { class: 'btn btn-secondary', id: 'whatif-verify', style: 'display:none' }, 'Test a strategy under this »');
+    var run = el('button', { class: 'btn', id: 'whatif-run' }, level === 'beginner' ? 'Show me 200 possible futures' : 'Preview the fan');
+    var reroll = el('button', { class: 'btn btn-sm btn-secondary', id: 'whatif-reroll', title: 'New random seed — a different set of futures' }, 'Re-roll');
+    run.addEventListener('click', async function () {
+      run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Drawing futures…'));
+      try {
+        var p = await API.post('/api/sim/scenario', { symbol: symbol, spec: f.getSpec() });
+        out.innerHTML = '';
+        out.appendChild(Scenario.fanChart(p));
+        toVerify.style.display = '';
+      } catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Could not simulate', [String((e && e.message) || e)])); }
+      finally { run.disabled = false; }
+    });
+    reroll.addEventListener('click', function () { f.reroll(); run.click(); });
+    toVerify.addEventListener('click', function () {
+      App.state.lastRecommendSymbol = symbol;
+      App.state.verifyMode = 'scenario'; // the handoff: Verify opens in "Imagine a future"
+      App.navigate('#/trade/verify');
+    });
+    card.appendChild(el('div', { class: 'btn-row' }, run, reroll, toVerify));
+    card.appendChild(out);
+    return card;
+  }
+
+  /** Verify → "Imagine a future": run a position through the scenario's Monte Carlo. */
+  function scenarioVerifyPanel(host) {
+    var level = Learn.currentLevel();
+    var symbol = (App.state.lastRecommendSymbol || 'AAPL').toUpperCase();
+    var vf = App.state.verifyForm = App.state.verifyForm || {};
+    var card = el('div', { class: 'card', id: 'bt-scenario-card' });
+    card.appendChild(UI.cardHeader('Imagine a future for ' + symbol));
+    card.appendChild(explain(level === 'beginner'
+      ? 'Pick a story and a position — we run it through hundreds of simulated futures and tell you, in plain dollars, how it tends to end. Time decay and volatility changes are included.'
+      : 'Monte-Carlo the position across the scenario paths; legs are BSM-priced along the deterministic IV path (theta + the vol view included), intrinsic at expiry.'));
+    var f = Scenario.form(level, symbol);
+    card.appendChild(f.el);
+
+    // The position: your working idea when one exists, else a plain-language quick pick.
+    var working = Scenario.workingLegs();
+    var picked = { key: working ? (vf.quick === undefined ? 'WORKING' : vf.quick) : (vf.quick || 'LONG_CALL') };
+    var chipsRow = el('div', { class: 'chip-row', id: 'sc-pos' });
+    function posChip(key, label) {
+      return el('button', { type: 'button', class: 'sym-chip' + (picked.key === key ? ' active' : ''), 'data-pos': key,
+        onclick: function () {
+          picked.key = key; vf.quick = key;
+          chipsRow.querySelectorAll('.sym-chip').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-pos') === key); });
+        } }, label);
+    }
+    if (working) chipsRow.appendChild(posChip('WORKING', 'Your working idea (' + working.length + ' leg' + (working.length > 1 ? 's' : '') + ')'));
+    Scenario.QUICKS.forEach(function (q) { chipsRow.appendChild(posChip(q.key, q.label)); });
+    card.appendChild(el('div', { class: 'field', style: 'margin-top:8px' }, el('label', {}, 'The position'), chipsRow));
+
+    var out = el('div', { id: 'sc-verify-out' });
+    var run = el('button', { class: 'btn', id: 'sc-verify-run' }, level === 'beginner' ? 'Run it through the futures' : 'Run Monte Carlo');
+    run.addEventListener('click', async function () {
+      run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Simulating…'));
+      try {
+        var spec = f.getSpec();
+        var legs;
+        if (picked.key === 'WORKING' && working) {
+          legs = working;
+        } else {
+          var qd = await API.get('/api/quotes?symbols=' + symbol);
+          var row = (qd.quotes || [])[0] || {};
+          var spot = parseFloat(row.last || row.prevClose || 100);
+          var qk = Scenario.QUICKS.find(function (x) { return x.key === picked.key; }) || Scenario.QUICKS[0];
+          legs = qk.legs(spot, spec.horizonDays + 10);
+        }
+        var r = await API.post('/api/sim/strategy', { symbol: symbol, legs: legs, qty: 1, spec: spec, iv: f.getIv() });
+        out.innerHTML = '';
+        out.appendChild(el('div', { class: 'muted small', style: 'margin:4px 0' },
+          f.describe() + ' · entry cost ' + UI.fmtMoneyCompact(r.entryCostCents)));
+        out.appendChild(Scenario.pnlView(r, level));
+      } catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Simulation failed', [String((e && e.message) || e)])); }
+      finally { run.disabled = false; }
+    });
+    card.appendChild(el('div', { class: 'btn-row' }, run));
+    card.appendChild(out);
+    host.appendChild(card);
+  }
+
   // ---------- 8. Backtest ----------
 
   async function backtest(root) {
@@ -2807,6 +2905,32 @@
       Learn.currentLevel() === 'beginner'
         ? 'Before risking even paper money on a rule like “sell a monthly covered call”, see how it would actually have gone — trade by trade, with honest labels on what is modeled.'
         : 'Replays a strategy rule day by day with no look-ahead — and labels exactly how much of its pricing is modeled.'));
+
+    // Two ways to verify, at BOTH levels: replay the PAST (historical backtest) or imagine a
+    // FUTURE (Monte-Carlo scenario). The scenario mode is often the friendlier one for beginners —
+    // "what if it drops then recovers?" needs no data plumbing to be a great lesson.
+    var vf = App.state.verifyForm = App.state.verifyForm || {};
+    if (App.state.verifyMode) { vf.mode = App.state.verifyMode; App.state.verifyMode = null; } // handoff wins
+    vf.mode = vf.mode || 'history';
+    var histWrap = el('div', { id: 'bt-history-mode' });
+    var scenWrap = el('div', { id: 'bt-scenario-mode' });
+    var modeRow = el('div', { class: 'range-pills', id: 'bt-mode' },
+      [{ m: 'history', label: 'Replay the past' }, { m: 'scenario', label: 'Imagine a future' }].map(function (o) {
+        return el('button', { type: 'button', class: 'pill' + (vf.mode === o.m ? ' active' : ''), 'data-mode': o.m,
+          onclick: function () {
+            vf.mode = o.m;
+            modeRow.querySelectorAll('.pill').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-mode') === o.m); });
+            histWrap.style.display = o.m === 'history' ? '' : 'none';
+            scenWrap.style.display = o.m === 'scenario' ? '' : 'none';
+            if (o.m === 'scenario' && !scenWrap.hasChildNodes()) scenarioVerifyPanel(scenWrap);
+          } }, o.label);
+      }));
+    root.appendChild(modeRow);
+    root.appendChild(scenWrap);
+    root.appendChild(histWrap);
+    if (vf.mode === 'scenario') { scenarioVerifyPanel(scenWrap); histWrap.style.display = 'none'; }
+    else { scenWrap.style.display = 'none'; }
+    root = histWrap; // everything below (the historical form + reports) lives in history mode
     var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || bf.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
     // Typing a symbol here makes it the working symbol app-wide (Backtest → Builder carries it).
     sym.addEventListener('input', function () {
@@ -3106,12 +3230,73 @@
       + brandName() + ' chains several sources per job and falls back gracefully — DEMO DATA means the built-in fixture is serving.'));
 
     var engineCard = el('div', { class: 'card', id: 'dc-engine' }, UI.spinner('Checking the market engine…'));
+    var datasetsCard = el('div', { class: 'card', id: 'dc-datasets' }, UI.cardHeader('Datasets & scenarios'), UI.spinner('Loading datasets…'));
     var coverageCard = el('div', { class: 'card', id: 'dc-coverage' }, UI.cardHeader('What data we hold'), UI.spinner('Loading coverage…'));
     var jobsCard = el('div', { class: 'card', id: 'dc-jobs' }, UI.cardHeader('Jobs'), UI.spinner('Loading jobs…'));
     var sourcesCard = el('div', { class: 'card', id: 'dc-sources' }, UI.cardHeader('Data sources'), UI.spinner('Loading sources…'));
     var healthCard = el('div', { class: 'card', id: 'dc-health' });
     var resetCard = el('div', { class: 'card', id: 'dc-reset' });
-    [engineCard, coverageCard, jobsCard, sourcesCard, healthCard, resetCard].forEach(function (c) { root.appendChild(c); });
+    [engineCard, datasetsCard, coverageCard, jobsCard, sourcesCard, healthCard, resetCard].forEach(function (c) { root.appendChild(c); });
+
+    // --- Datasets: observed vs saved synthetic runs; the ACTIVE analysis dataset switch ---
+    async function loadDatasets() {
+      var data;
+      try { data = await API.getFresh('/api/datasets'); } catch (e) {
+        if (!App.alive(token)) return;
+        datasetsCard.innerHTML = ''; datasetsCard.appendChild(UI.cardHeader('Datasets & scenarios'));
+        datasetsCard.appendChild(alertBox('warn', 'Datasets unavailable.')); return;
+      }
+      if (!App.alive(token)) return;
+      var active = data.active, rows = data.datasets || [];
+      datasetsCard.innerHTML = '';
+      datasetsCard.appendChild(UI.cardHeader('Datasets & scenarios'));
+      if (level === 'beginner') datasetsCard.appendChild(explain('“Observed” is real market data. Saved scenario runs are made-up futures you generated — pick one to explore the whole app as if that future happened. Real data is never overwritten.'));
+      if (active !== 'observed') datasetsCard.appendChild(alertBox('caution',
+        'SCENARIO MODE — analysis screens are using a synthetic dataset, not market data. Switch back to Observed below when done.'));
+      rows.forEach(function (d) {
+        var isActive = d.id === active;
+        datasetsCard.appendChild(el('div', { class: 'status-item', 'data-dataset': d.id },
+          el('span', { class: 'badge ' + (d.id === 'observed' ? 'badge-ok' : 'badge-caution') },
+            d.id === 'observed' ? 'OBSERVED' : 'SYNTHETIC'),
+          el('b', {}, d.name),
+          el('span', { class: 'muted small' }, d.id === 'observed' ? '' : (d.bars + ' bars')),
+          el('span', { class: 'spacer' }),
+          isActive ? el('span', { class: 'badge badge-ok' }, 'ACTIVE')
+            : el('button', { class: 'btn btn-sm btn-secondary', onclick: async function () {
+                await API.put('/api/datasets/active', { id: d.id });
+                App.refreshScenarioBanner && App.refreshScenarioBanner();
+                loadDatasets();
+              } }, 'Use'),
+          d.id !== 'observed' ? el('button', { class: 'btn btn-sm btn-secondary', title: 'Delete this run',
+            onclick: async function () { await API.del('/api/datasets/' + d.id); App.refreshScenarioBanner && App.refreshScenarioBanner(); loadDatasets(); } }, 'Delete') : null));
+      });
+      // Generate a new synthetic run right here (the same Scenario Studio as Research/Verify).
+      var genWrap = el('div', { id: 'dc-generate', style: 'margin-top:8px' });
+      var genOpen = el('button', { class: 'btn btn-sm', id: 'dc-generate-btn' }, 'Generate a scenario dataset…');
+      genOpen.addEventListener('click', function () {
+        genOpen.style.display = 'none';
+        var sym = el('input', { type: 'text', id: 'dc-gen-sym', value: App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols', style: 'max-width:110px' });
+        var f = Scenario.form(level, null);
+        var go = el('button', { class: 'btn', id: 'dc-gen-run' }, 'Generate & save');
+        var note = el('div', { class: 'muted small' });
+        go.addEventListener('click', async function () {
+          go.disabled = true; note.textContent = 'Generating…';
+          try {
+            var r = await API.post('/api/sim/dataset', { symbol: sym.value.toUpperCase(), spec: f.getSpec() });
+            note.textContent = 'Saved: ' + r.name + ' (' + r.bars + ' bars).';
+            loadDatasets();
+          } catch (e) { note.textContent = 'Failed: ' + ((e && e.message) || e); }
+          finally { go.disabled = false; }
+        });
+        genWrap.appendChild(el('div', { class: 'btn-row' }, el('label', { class: 'muted' }, 'Symbol '), sym));
+        genWrap.appendChild(f.el);
+        genWrap.appendChild(el('div', { class: 'btn-row' }, go));
+        genWrap.appendChild(note);
+      });
+      genWrap.appendChild(genOpen);
+      datasetsCard.appendChild(genWrap);
+    }
+    loadDatasets();
 
     // --- Jobs (declared first: engine/coverage actions start jobs and refresh this panel) ---
     var jobsTimer = null;

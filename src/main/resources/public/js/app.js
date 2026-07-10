@@ -172,6 +172,28 @@
     } catch (e) { /* health is best-effort; the error boundary already told the user */ }
   }
 
+  /**
+   * SCENARIO MODE banner: when a synthetic dataset is the active analysis dataset, every screen
+   * must say so loudly — simulated futures can never quietly masquerade as market data.
+   */
+  async function refreshScenarioBanner() {
+    var existing = document.getElementById('scenario-banner');
+    var cfg;
+    try { cfg = await API.getFresh('/api/config'); App.config = cfg || App.config; } catch (e) { return; }
+    if (cfg && cfg.scenarioMode) {
+      var label = 'SCENARIO MODE — analysis uses the synthetic dataset “' + (cfg.activeDataset || '') + '”, not market data. ';
+      if (existing) { existing.childNodes[1].textContent = label; return; }
+      var banner = UI.el('div', { id: 'scenario-banner' },
+        UI.icon('warn', 15),
+        document.createTextNode(label),
+        UI.el('a', { href: '#/status', onclick: function () { App.navigate('#/status'); } }, 'Switch back in Data'));
+      document.body.insertBefore(banner, document.getElementById('tape') || document.body.firstChild);
+    } else if (existing) {
+      existing.remove();
+    }
+  }
+  App.refreshScenarioBanner = refreshScenarioBanner;
+
   window.App = App;
 
   function initHeader() {
@@ -261,6 +283,7 @@
 
     checkServerHealth();
     setInterval(checkServerHealth, 5 * 60 * 1000);
+    if (cfg && cfg.scenarioMode) refreshScenarioBanner(); // restore the loud banner across reloads
     refreshUniverse();
     subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
     setInterval(refreshTape, 45 * 1000);
