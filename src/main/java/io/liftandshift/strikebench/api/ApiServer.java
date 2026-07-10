@@ -1544,6 +1544,9 @@ public final class ApiServer {
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(e.candidate());
                 m.put("decisionScore", Math.round(e.rankScore()));
                 m.put("decisionViable", e.viable());
+                if (e.evCents() != null && e.evCents() < 0) {
+                    m.put("negativeEv", true); // never an unlabeled recommendation
+                }
                 cands.add(m);
             }
             out.put("ranking", "decision"); // disclosed: what ordered this list
@@ -1603,6 +1606,21 @@ public final class ApiServer {
         out.put("intent", String.valueOf(result.intent()));
         out.put("evaluations", evals);
         out.put("rejected", result.rejected());
+        // The alternatives every competition must beat: doing NOTHING, and just owning the stock.
+        List<Map<String, Object>> baselines = new ArrayList<>();
+        baselines.add(Map.of("key", "CASH",
+                "note", "Do nothing: $0 expected value, $0 at risk, zero costs. Any idea above must beat this after fees and spreads."));
+        try {
+            var q = market.quote(result.symbol()).orElse(null);
+            if (q != null && q.mark() != null) {
+                long spotCents = io.liftandshift.strikebench.util.Money.toCents(q.mark());
+                long lot = spotCents * 100;
+                baselines.add(Map.of("key", "BUY_AND_HOLD",
+                        "note", "Own 100 shares (" + io.liftandshift.strikebench.util.Money.fmt(lot)
+                                + "): zero-drift model EV \u2248 $0 minus nothing to cross; full downside exposure, uncapped upside, no expiry."));
+            }
+        } catch (RuntimeException ignored) { /* baseline is advisory */ }
+        out.put("baselines", baselines);
         if (recommendationId != null) out.put("recommendationId", recommendationId);
         ctx.json(out);
     }

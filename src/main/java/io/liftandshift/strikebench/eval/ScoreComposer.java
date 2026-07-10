@@ -6,9 +6,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Turns a candidate + its sub-profiles into an explainable score: a hard GATE, a weighted NORMALIZE
- * over named 0..1 components, then a RISK-ADJUST haircut by evidence uncertainty and tail risk. The
- * single number never travels without this breakdown.
+ * THE DecisionPolicy: the one scorer behind every ranked surface (manual ideas, /api/recommend
+ * decision ordering, intent ladders, opportunity scans, the Decision page). A hard GATE, a
+ * weighted NORMALIZE over named 0..1 components — EXPECTED VALUE included as primary economics —
+ * then a RISK-ADJUST haircut by evidence uncertainty, tail risk and gamma/DTE concentration. The
+ * single number never travels without this breakdown, and negative-EV packages are never ranked
+ * as if the market were paying them.
  */
 public final class ScoreComposer {
 
@@ -21,12 +24,20 @@ public final class ScoreComposer {
         if (cap.incrementalCents() > ctx.buyingPowerCents())
             gateFailures.add("insufficient buying power ($" + dollars(cap.incrementalCents())
                     + " needed vs $" + dollars(ctx.buyingPowerCents()) + ")");
+        // EXECUTABLE MARKET: a structure sold as a credit must actually EARN a credit at the
+        // executable sides — a "credit spread" that pays nothing (or costs money) after crossing
+        // the books is the book telling you it cannot be traded politely this week.
+        String fam = c.strategy() == null ? "" : c.strategy();
+        boolean creditFamily = fam.contains("CREDIT") || fam.startsWith("IRON");
+        if (creditFamily && c.entryNetPremiumCents() <= 0) {
+            gateFailures.add("a credit structure that pays nothing at executable sides — the book is too wide to earn a credit");
+        }
         boolean gatePassed = gateFailures.isEmpty();
 
         // ---- NORMALIZE: weighted named components ----
         List<ScoreBreakdown.Component> comps = new ArrayList<>();
         double pop = c.pop() != null ? clamp01(c.pop()) : 0.5;
-        comps.add(comp("Probability of profit", 0.20, pop, c.pop() == null ? "model-dependent — assumed neutral" : "lognormal model"));
+        comps.add(comp("Probability of profit", 0.15, pop, c.pop() == null ? "model-dependent — assumed neutral" : "lognormal model"));
 
         double rr;
         String rrNote;
@@ -35,7 +46,20 @@ public final class ScoreComposer {
             rr = ratio / (ratio + 1.0); // 1:1 -> .5, 3:1 -> .75
             rrNote = String.format("reward:risk %.2f:1", ratio);
         } else { rr = 0.8; rrNote = "uncapped/model-dependent upside"; }
-        comps.add(comp("Reward vs risk", 0.20, rr, rrNote));
+        comps.add(comp("Reward vs risk", 0.15, rr, rrNote));
+
+        // EXPECTED VALUE is the primary economics: POP and reward:risk are its ingredients, and
+        // scoring them separately without EV let a low-POP/high-payout package double-dip (the MU
+        // condor scored 0.34 POP but 0.58 reward:risk while its EV was decidedly negative).
+        double evComp;
+        String evNote;
+        Long ev = risk.expectedValueCents();
+        if (ev != null && risk.maxLossCents() > 0) {
+            evComp = clamp01(0.5 + (double) ev / (2.0 * risk.maxLossCents())); // -maxLoss -> 0, 0 -> .5, +maxLoss -> 1
+            evNote = String.format("model EV $%s vs max loss $%s (risk-neutral, pre-commission)",
+                    dollars(ev), dollars(risk.maxLossCents()));
+        } else { evComp = 0.5; evNote = "EV not computable — assumed neutral"; }
+        comps.add(comp("Expected value", 0.20, evComp, evNote));
 
         comps.add(comp("Liquidity", 0.10, clamp01(c.liquidityScore()), "tighter spreads / more open interest score higher"));
 
@@ -45,23 +69,26 @@ public final class ScoreComposer {
             capComp = clamp01(cap.returnOnCapitalPct() / (cap.returnOnCapitalPct() + 50.0));
             capNote = String.format("%.0f%% best-case return on economic capital", cap.returnOnCapitalPct());
         } else { capComp = 0.4; capNote = "return on capital not defined"; }
-        comps.add(comp("Capital efficiency", 0.15, capComp, capNote));
+        comps.add(comp("Capital efficiency", 0.10, capComp, capNote));
 
-        double evComp = 1.0 - evidence.rollup().uncertainty() / 5.0; // LIVE=1.0 ... DEMO=0.2, UNKNOWN=0.0
-        comps.add(comp("Evidence quality", 0.15, evComp, evidence.rollup().label()));
+        double evidComp = 1.0 - evidence.rollup().uncertainty() / 5.0;
+        comps.add(comp("Evidence quality", 0.15, evidComp, evidence.rollup().label()));
 
-        comps.add(comp("Thesis confidence", 0.20, clamp01(c.confidence()), "engine confidence in the fit"));
+        comps.add(comp("Thesis confidence", 0.15, clamp01(c.confidence()), "engine confidence in the fit"));
 
         double weighted = 0, weight = 0;
         for (var k : comps) { weighted += k.contribution(); weight += k.weight(); }
         double normalized = weight > 0 ? 100.0 * weighted / weight : 0.0;
 
-        // ---- RISK-ADJUST: haircut by evidence + tail ----
-        double evidenceMult = 0.5 + 0.5 * evComp;                 // demo caps ~0.6, live keeps 1.0
+        // ---- RISK-ADJUST: haircut by evidence + tail + gamma/DTE concentration ----
+        double evidenceMult = 0.5 + 0.5 * evidComp;               // demo caps ~0.6, live keeps 1.0
         double tailRatio = cap.economicCents() > 0
                 ? Math.min(1.0, (double) risk.tailLossCents() / cap.economicCents()) : 0.0;
-        double tailMult = 1.0 - 0.2 * tailRatio;                  // mild penalty for a large tail vs capital
-        double riskAdjusted = gatePassed ? clamp(normalized * evidenceMult * tailMult, 0, 100) : 0.0;
+        double tailMult = 1.0 - 0.35 * tailRatio;                 // a full-tail structure loses a third
+        // Near-expiry positions concentrate gamma and remove the time to be wrong — the same
+        // numbers three sessions from expiry are a different (worse) trade.
+        double dteMult = ctx.daysToExpiry() <= 3 ? 0.8 : ctx.daysToExpiry() <= 7 ? 0.9 : 1.0;
+        double riskAdjusted = gatePassed ? clamp(normalized * evidenceMult * tailMult * dteMult, 0, 100) : 0.0;
 
         return new ScoreBreakdown(gatePassed, gateFailures, round(normalized), round(riskAdjusted), comps);
     }

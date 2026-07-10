@@ -65,7 +65,7 @@ class StrategyEvaluatorTest {
 
         // Score: gate passes; final score in range; six named components that never stand alone.
         assertThat(e.score().gatePassed()).isTrue();
-        assertThat(e.score().components()).hasSize(6);
+        assertThat(e.score().components()).hasSize(7); // +Expected value: the DecisionPolicy's primary economics
         assertThat(e.rankScore()).isBetween(0.0, 100.0);
 
         // Management: a real plan with a debit-trade summary and rules.
