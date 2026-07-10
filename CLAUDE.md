@@ -1290,6 +1290,32 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     follow-up); Cboe keeps its inline pinned governor (ProviderPoliteness generalizes for others).
   - Matrix: 342 JUnit + 43 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
   ===============================================================================================
+- UXR RECONCILIATION PROGRAM (2026-07-10, commit 85d28d4): the 67-finding UX-audit P1/P2s + my
+  strategic list + junior's one-workflow critique, executed. P1s: portfolio-backtest drawdown was
+  displayed 100x (fraction now); dual Score systems NAMED ('Screen score' vs 'Decision score' w/
+  which-wins tooltips). Reconciliation theme: unwind-vs-header explained (executable vs midpoint),
+  builder totals framing + set-aside vs worst-case in place, lots x ratio notation, per-flow
+  risk-budget chips, young-trade spread-cost explainer, LOCAL-timezone dates (UI.fmtDate). Jargon/
+  honesty: beginner blurbs plain-worded, POP spelled out, Unwind/Settle/Void/Roll subtitles,
+  pricing enums prettified, covered-call guided path ('buy practice shares ->'), tape DEMO chip,
+  demo/level-branched empty states, scenario card gated on quote, \$247.1600->\$247.16, -0.0% fix,
+  welcome clips, scan wall (jump nav + top-3/goal + Show-N-more), stale results cleared, #/data
+  alias. ONE WORKFLOW: 'Compare all strategies under this scenario' — full catalog on IDENTICAL
+  seeded paths ranked by E[P&L] (verified: 71% CSP..35% long put under one story — decisive, not
+  50% mush); buy-and-hold baseline on the same paths; HV-calibrated beginner wildness ('Typical'
+  = typical FOR THIS STOCK); volAnnual<=0 = server 'use market vol' sentinel; GET /api/strategies
+  + DOM anti-drift check pins frontend catalogs to StrategyFamily; named templates keep family
+  through handoff. EXPERT DEPTH: chain OI/Vol columns + per-strike Build buttons; Active table
+  live 'Now' P/L (enriched rows); IV-rank narrative chip; snapshots DEFAULT ON in live mode
+  (600s initial delay). LOOP CLOSED: Portfolio 'Your record' (calibration: predicted-POP buckets
+  vs realized); Roll on trade detail (close + rebuild ~1mo out, honestly two orders); calendars
+  get a MODELED sim P&L range in the builder; Home first-week journey checklist (beginner, fresh
+  accounts, CSS-glyph checkmarks — text ✓ trips the emoji audit). GOTCHA: a views.js helper used
+  in ticket() must not assume a 'beginner' var exists in that scope (broke Place; cascaded 10
+  tests). KNOWN-OPEN (P3): payoff-chart x-domain still spot±30% (verticals render thin) — needs a
+  careful knot-based trim around the drag-handle math; per-path click-inspection on the fan.
+  Matrix: 342 JUnit + 43 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
+  ===============================================================================================
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
