@@ -156,6 +156,7 @@ test('live: full ticket flow places and unwinds a paper trade at real marks', as
   await page.click('#to-review');
   await page.waitForSelector('#to-confirm', { timeout: 60000 });
   assert.match(await page.textContent('#ticket-body'), /Buying power after/);
+  await page.$$eval('.ack-gate input', els => els.forEach(e => { if (!e.checked) e.click(); })); // acknowledge material risks (CP-5 gate)
   await page.click('#to-confirm');
   await page.waitForSelector('#place-trade');
   await page.click('#place-trade');

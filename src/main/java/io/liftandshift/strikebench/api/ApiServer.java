@@ -1732,7 +1732,8 @@ public final class ApiServer {
 
     public record TradeOpenRequest(String symbol, String strategy, Integer qty, List<LegView> legs,
                                    String thesis, String horizon, String riskMode,
-                                   String intent, Boolean useHeldShares, String recommendationId) {}
+                                   String intent, Boolean useHeldShares, String recommendationId,
+                                   Long proposedNetCents, Long feesOverrideCents, String source) {}
 
     public record ConfirmRequest(Boolean confirm) {}
 
@@ -1747,7 +1748,9 @@ public final class ApiServer {
         return new TradeService.OpenRequest(acct.id(), body.symbol().trim().toUpperCase(Locale.ROOT),
                 body.strategy() == null ? "CUSTOM" : body.strategy().trim().toUpperCase(Locale.ROOT),
                 body.qty() == null ? 1 : body.qty(), legs, body.thesis(), body.horizon(), body.riskMode(),
-                body.intent(), body.useHeldShares());
+                body.intent(), body.useHeldShares(),
+                body.proposedNetCents(), body.feesOverrideCents(),
+                body.source() == null || body.source().isBlank() ? "TICKET" : body.source());
     }
 
     private Verdict guardrailCheck(TradeService.OpenRequest req, Account acct) {

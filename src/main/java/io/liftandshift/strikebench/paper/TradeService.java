@@ -63,6 +63,11 @@ public final class TradeService {
                               String thesis, String horizon, String riskMode,
                               String intent, Boolean useHeldShares,
                               Long proposedNetCents, Long feesOverrideCents, String source) {
+        /** Jackson must bind the CANONICAL constructor — with the compat overloads present it can
+         *  otherwise pick a shorter one and silently DROP the package-level fields. */
+        @com.fasterxml.jackson.annotation.JsonCreator
+        public OpenRequest {}
+
         /** Pre-package 10-field shape (no proposed price / fees / source). */
         public OpenRequest(String accountId, String symbol, String strategy, int qty, List<Leg> legs,
                            String thesis, String horizon, String riskMode,
@@ -1031,6 +1036,14 @@ public final class TradeService {
         out.put("executionQuality", exec);
 
         out.put("managementPlan", dtePlan(tte, entryNet >= 0));
+        // The ±1σ expected move to the nearest expiry (same vol/time basis as the map) — the UI
+        // draws it on the payoff chart so 'shorts inside the expected move' is VISIBLE, not prose.
+        double sdMove = ivAvg * Math.sqrt(t);
+        Map<String, Object> em = new LinkedHashMap<>();
+        em.put("lowCents", Math.round(spot * Math.exp(-sdMove) * 100));
+        em.put("highCents", Math.round(spot * Math.exp(sdMove) * 100));
+        em.put("oneSessionCents", Math.round(spot * ivAvg * Math.sqrt(1.0 / 252.0) * 100));
+        out.put("expectedMove", em);
         out.put("asOfEpochMs", clock.millis());
         out.put("freshness", freshness.name());
 

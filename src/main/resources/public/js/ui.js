@@ -522,6 +522,7 @@
       }
       if (!interesting.length) return; // linear (stock) — nothing to focus on
       (opts.breakevens || []).forEach(function (b) { var v = parseFloat(b); if (!isNaN(v)) interesting.push(v); });
+      if (opts.expectedMove) { interesting.push(opts.expectedMove.low); interesting.push(opts.expectedMove.high); }
       if (opts.spot !== undefined && opts.spot !== null) interesting.push(opts.spot);
       (opts.handles || []).forEach(function (h) { if (h && typeof h.strike === 'number') interesting.push(h.strike); });
       var iLo = Math.min.apply(null, interesting), iHi = Math.max.apply(null, interesting);
@@ -592,6 +593,18 @@
       svg.appendChild(t);
     });
 
+    // ±1σ expected-move band: the market's own likely range to expiry, drawn UNDER the curve so
+    // "your shorts sit inside the expected move" is visible geometry, not prose.
+    if (opts.expectedMove && opts.expectedMove.low < opts.expectedMove.high) {
+      var emL = Math.max(xMin, opts.expectedMove.low), emH = Math.min(xMax, opts.expectedMove.high);
+      if (emH > emL) {
+        svg.appendChild(svgEl('rect', { class: 'em-band', x: X(emL), y: padT,
+          width: Math.max(0, X(emH) - X(emL)), height: H - padT - padB }));
+        var emt = svgEl('text', { x: X(emL) + 4, y: padT + 12, class: 'em-label' });
+        emt.textContent = 'expected move';
+        svg.appendChild(emt);
+      }
+    }
     if (opts.spot !== undefined && opts.spot !== null) {
       var sx = X(opts.spot);
       if (sx >= padL && sx <= W - padR) {

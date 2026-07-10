@@ -1233,6 +1233,11 @@
 
     // ---- Shared panel body ----
     function renderVerdictAndStats(hostEl, p, guard, beginnerWording, handles) {
+      var an = p.analytics || {};
+      if (an.verdict && an.verdictReason) {
+        hostEl.appendChild(el('div', { class: 'muted small verdict-line verdict-' + an.verdict },
+          (an.verdict === 'favorable' ? '\u2713 ' : an.verdict === 'unfavorable' ? '\u2715 ' : '! ') + an.verdictReason));
+      }
       if (!p.ok) {
         hostEl.appendChild(alertBox('danger', beginnerWording ? 'This position would be refused' : 'BLOCKED', p.blockReasons));
       } else if (guard && guard.level === 'WARN') {
@@ -1272,13 +1277,24 @@
       // One line kills the "three different risk numbers" confusion: everything here is a TOTAL.
       hostEl.appendChild(el('div', { class: 'muted small' },
         'All figures are totals for this exact position and quantity. "Set aside" and "most you can lose" differ on credit trades because the set-aside is the gross width — the worst case lives inside it.'));
+      var prob = an.probabilityMap;
+      if (prob && prob.pAnyProfit !== undefined && p.ok) {
+        hostEl.appendChild(el('div', { class: 'chip-row', id: 'builder-prob-chips' },
+          chip(beginnerWording ? 'Any profit' : 'P(profit)', Math.round(prob.pAnyProfit * 100) + '%'),
+          chip(beginnerWording ? 'Full win' : 'P(max profit)', Math.round(prob.pMaxProfit * 100) + '%'),
+          chip(beginnerWording ? 'Worst case' : 'P(max loss)', Math.round(prob.pMaxLoss * 100) + '%'),
+          prob.cvar95Cents !== undefined && prob.cvar95Cents !== null
+            ? chip('CVaR95', UI.fmtMoneyCompact(prob.cvar95Cents)) : null));
+      }
       if (p.payoff && p.payoff.length > 1) {
         if (handles && handles.length) {
           hostEl.appendChild(el('p', { class: 'muted', style: 'margin:6px 0 2px; font-size:12.5px' },
             'Drag a strike marker on the chart \u2014 watch the worst case, best case and odds move with it.'));
         }
+        var em = an.expectedMove;
         hostEl.appendChild(UI.payoffChart(p.payoff, {
           breakevens: p.breakevens, spot: p.underlyingCents ? p.underlyingCents / 100 : null,
+          expectedMove: em ? { low: em.lowCents / 100, high: em.highCents / 100 } : undefined,
           handles: handles || null
         }));
       } else if (p.legs && p.legs.length) {

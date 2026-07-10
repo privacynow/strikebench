@@ -2413,11 +2413,15 @@
         };
         if (c6 && c6.intent && c6.intent !== 'DIRECTIONAL') previewReq.intent = c6.intent;
         if (c6 && c6.usesHeldShares) previewReq.useHeldShares = true;
+        if (t.proposedNetCents !== undefined && t.proposedNetCents !== null) previewReq.proposedNetCents = t.proposedNetCents;
+        if (t.feesOverrideCents !== undefined && t.feesOverrideCents !== null) previewReq.feesOverrideCents = t.feesOverrideCents;
         var res = await API.post('/api/trades/preview', previewReq);
         t.previewReq = previewReq;
         var p = res.preview, g = res.guardrails;
         body.innerHTML = '';
         body.appendChild(el('h2', { class: 'mt0' }, 'Review before you commit'));
+        var vp = verdictPanel(p, Learn.currentLevel() === 'beginner');
+        body.appendChild(vp.node);
         if (!p.ok) body.appendChild(alertBox('danger', 'Blocked', p.blockReasons));
         if (g && g.blockReasons && g.blockReasons.length) body.appendChild(alertBox('danger', 'Guardrails', g.blockReasons));
         var warns = (p.warnings || []).concat(g ? g.warnings || [] : []);
@@ -2465,10 +2469,48 @@
           stat('Breakevens', (p.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
           stat('Buying power after', fmtMoney(p.buyingPowerAfterCents), 'Drops by exactly max loss + fees.'),
           stat('Cash after', fmtMoney(p.cashAfterCents))));
-        body.appendChild(backNext(5, el('button', {
-          class: 'btn', id: 'to-confirm', disabled: p.ok ? null : 'disabled',
+        // Expert: judge the package at YOUR limit, not the model's executable assumption.
+        if (Learn.currentLevel() === 'expert') {
+          var netIn = el('input', { type: 'number', step: '0.01', id: 'proposed-net',
+            placeholder: 'e.g. ' + (p.entryNetPremiumCents / 100).toFixed(2),
+            value: t.proposedNetCents !== undefined && t.proposedNetCents !== null ? (t.proposedNetCents / 100).toFixed(2) : '' });
+          var feesIn = el('input', { type: 'number', step: '0.01', id: 'fees-override',
+            value: t.feesOverrideCents !== undefined && t.feesOverrideCents !== null ? (t.feesOverrideCents / 100).toFixed(2) : '' });
+          body.appendChild(el('div', { class: 'card card-slim', style: 'margin:8px 0' },
+            el('h3', { class: 'mt0' }, 'Evaluate at your price'),
+            el('div', { class: 'form-grid' },
+              el('div', { class: 'field' }, el('label', {}, 'Net price $ (+credit / \u2212debit)'), netIn),
+              el('div', { class: 'field' }, el('label', {}, 'Fees $ (blank = default)'), feesIn),
+              el('div', { class: 'field' }, el('label', {}, '\u00a0'), el('button', {
+                class: 'btn btn-sm', id: 'reprice-btn', onclick: function () {
+                  t.proposedNetCents = netIn.value === '' ? null : Math.round(parseFloat(netIn.value) * 100);
+                  t.feesOverrideCents = feesIn.value === '' ? null : Math.round(parseFloat(feesIn.value) * 100);
+                  nav(6);
+                }
+              }, 'Re-price'))),
+            el('div', { class: 'muted small' }, 'Max loss, breakevens, POP and EV all follow the price YOU set \u2014 use it to judge a limit order or a real fill.')));
+        }
+        var ackState = {};
+        var continueBtn = el('button', {
+          class: 'btn', id: 'to-confirm', disabled: 'disabled',
           onclick: function () { t.preview = p; nav(7); }
-        }, 'Continue →')));
+        }, 'Continue →');
+        function refreshGate() {
+          var allAcked = vp.requiredAcks.every(function (ak) { return ackState[ak.id]; });
+          if (p.ok && allAcked) continueBtn.removeAttribute('disabled');
+          else continueBtn.setAttribute('disabled', 'disabled');
+        }
+        if (vp.requiredAcks.length) {
+          body.appendChild(el('div', { class: 'card card-slim ack-gate', style: 'margin:8px 0' },
+            el('h3', { class: 'mt0' }, 'Before you continue'),
+            vp.requiredAcks.map(function (ak) {
+              var cb = el('input', { type: 'checkbox', id: ak.id });
+              cb.addEventListener('change', function () { ackState[ak.id] = cb.checked; refreshGate(); });
+              return el('label', { class: 'ack-row', for: ak.id }, cb, el('span', {}, ak.label));
+            })));
+        }
+        body.appendChild(backNext(5, continueBtn));
+        refreshGate();
       } catch (e) {
         body.innerHTML = '';
         body.appendChild(alertBox('danger', e.message));
@@ -4466,6 +4508,79 @@
     })();
 
     return card;
+  }
+
+  /**
+   * The assembled pre-trade judgment (CP-5): one conclusion-first banner + the probability map +
+   * execution cost + the plan — same truth at both levels, beginner gets sentences, expert density.
+   * Returns {node, requiredAcks: [{id, label}]} so the caller can gate the Continue button.
+   */
+  function verdictPanel(p, beginner) {
+    var a = p.analytics || {};
+    var prob = a.probabilityMap || {};
+    var exec = a.executionQuality || {};
+    var plan = a.managementPlan || {};
+    var wrap = el('div', { id: 'verdict-panel' });
+    var kind = a.verdict === 'favorable' ? 'ok' : a.verdict === 'unfavorable' ? 'danger' : 'caution';
+    if (a.verdict) {
+      wrap.appendChild(alertBox(kind, (a.verdict === 'favorable' ? 'Looks reasonable'
+        : a.verdict === 'unfavorable' ? 'The odds are against this trade' : 'Mixed picture'),
+        [a.verdictReason || '']));
+    }
+    if (prob.pAnyProfit !== undefined) {
+      wrap.appendChild(el('div', { class: 'grid grid-4', id: 'prob-map' },
+        stat(beginner ? 'Chance of making anything' : 'P(any profit)', fmtPct(prob.pAnyProfit),
+          beginner ? 'Out of 100 futures the options market itself prices, how many end with ANY profit.' : null),
+        stat(beginner ? 'Chance of the FULL win' : 'P(max profit)', fmtPct(prob.pMaxProfit)),
+        stat(beginner ? 'Chance of the WORST case' : 'P(max loss)',
+          el('span', { class: prob.pMaxLoss > 0.4 ? 'loss' : '' }, fmtPct(prob.pMaxLoss))),
+        stat(beginner ? 'A very bad run costs' : 'CVaR 95%',
+          el('span', { class: 'loss' }, fmtMoney(prob.cvar95Cents)),
+          beginner ? 'The average result of the worst 1-in-20 outcomes.' : 'Expected P/L across the worst 5% of outcomes.')));
+      wrap.appendChild(el('div', { class: 'muted small' },
+        (prob.basis || '') + (prob.timeBasis ? ' \u00b7 time: ' + prob.timeBasis : '')));
+    }
+    if (exec.midNetCents !== undefined && exec.midNetCents !== null) {
+      var ladder = el('div', { class: 'chip-row', id: 'exec-ladder' },
+        chip('Midpoint', fmtMoney(exec.midNetCents, { plus: true }), 'The package priced at every leg\u2019s midpoint — rarely fully fillable, but the honest reference.'),
+        chip('Executable now', fmtMoney(exec.executableNetCents, { plus: true }), 'Crossing every book: buys at the ask, sells at the bid.'),
+        exec.proposedNetCents !== undefined ? chip('Your price', fmtMoney(exec.proposedNetCents, { plus: true })) : null,
+        exec.concessionVsMidCents !== undefined ? chip(beginner ? 'Cost of entering' : 'Concession vs mid',
+          el('span', { class: 'loss' }, fmtMoney(exec.concessionVsMidCents)
+            + (exec.concessionPctOfMid !== undefined ? ' (' + Math.round(Math.abs(exec.concessionPctOfMid) * 100) + '% of mid)' : '')),
+          'Dollars surrendered to the market makers crossing the bid/ask, before the trade even starts.') : null,
+        exec.exitSpreadEstimateCents !== undefined ? chip('Exit will cost ~', fmtMoney(exec.exitSpreadEstimateCents),
+          'Half the package spread again, on the way out.') : null);
+      wrap.appendChild(el('div', { class: 'card card-slim', style: 'margin:8px 0' },
+        el('h3', { class: 'mt0' }, beginner ? 'What entering actually costs' : 'Execution quality'), ladder));
+    }
+    if (plan.rules && plan.rules.length) {
+      var planBody = el('ul', { class: 'plan-rules' }, plan.rules.map(function (r) { return el('li', {}, r); }));
+      wrap.appendChild(beginner
+        ? el('div', { class: 'card card-slim', style: 'margin:8px 0' },
+            el('h3', { class: 'mt0' }, 'Your plan for this trade (' + (plan.regime || '') + ')'), planBody)
+        : UI.expandable('Management plan \u00b7 ' + (plan.regime || ''), planBody, false));
+    }
+    if (a.asOfEpochMs) {
+      var ageMin = Math.max(0, Math.round((Date.now() - a.asOfEpochMs) / 60000));
+      wrap.appendChild(el('div', { class: 'muted small', id: 'quote-age' },
+        'Priced ' + (ageMin <= 1 ? 'just now' : ageMin + ' min ago') + ' on ' + (a.freshness || p.freshness) + ' quotes.'));
+    }
+    // Material-risk acknowledgments: the trade stays PLACEABLE, but never silently.
+    var acks = [];
+    if (p.expectedValueCents !== null && p.expectedValueCents !== undefined && p.expectedValueCents < 0) {
+      acks.push({ id: 'ack-ev', label: 'I understand the model expects this trade to LOSE '
+        + fmtMoney(-p.expectedValueCents) + ' on average at the market\u2019s own volatility.' });
+    }
+    if (exec.concessionPctOfMid !== undefined && Math.abs(exec.concessionPctOfMid) > 0.10) {
+      acks.push({ id: 'ack-exec', label: 'I understand entering surrenders '
+        + Math.round(Math.abs(exec.concessionPctOfMid) * 100) + '% of the package midpoint to the bid/ask spread.' });
+    }
+    if ((plan.regime || '').indexOf('near-expiry') >= 0) {
+      acks.push({ id: 'ack-dte', label: 'I understand only ' + plan.sessions + ' trading session'
+        + (plan.sessions === 1 ? '' : 's') + ' remain\u2014gamma, weekend gaps and pin risk dominate.' });
+    }
+    return { node: wrap, requiredAcks: acks };
   }
 
   function renderQuestion(out, r, level) {

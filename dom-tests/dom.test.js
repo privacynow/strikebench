@@ -554,6 +554,7 @@ test('discover-to-place: screening happens ONCE, in Discover; Place is strikes/r
   assert.match(review, /Buying power after/);
   assert.match(review, /Safety check/);
   assert.match(review, /Worst case is known and capped/);
+  await page.$$eval('.ack-gate input', els => els.forEach(e => { if (!e.checked) e.click(); })); // acknowledge material risks (CP-5 gate)
   await page.click('#to-confirm');
   // Step 7: confirm
   await page.waitForSelector('#place-trade');
@@ -636,6 +637,48 @@ test('portfolio absorbs account: sections, ledger under Activity, guarded reset'
   await page.waitForSelector('#reset-cash');
   assert.equal(await page.inputValue('#reset-cash'), '250000', 'reset-cash draft persists across level flip');
   await page.evaluate(() => { App.state.resetCashDraft = null; Learn.setLevel('expert'); });
+});
+
+test('review verdict panel: probability map, execution ladder, expert repricing', async () => {
+  // Build a fresh idea at Beginner (candidate CARDS; expert renders the comparison table),
+  // then switch to Expert AT Review — the ladder re-renders the same screen with deeper controls.
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => { App.state.ticket = null; App.state.discoverForm = null; });
+  await go('#/home');
+  await go('#/trade/discover/manual');
+  await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
+  await page.fill('#rec-symbol', 'AAPL');
+  await page.selectOption('#rec-thesis', 'bullish');
+  await page.click('#rec-go');
+  await page.waitForSelector('#rec-results .candidate', { timeout: 30000 });
+  await page.locator('#rec-results .candidate button:has-text("Practice this trade"), #rec-results .candidate button:has-text("Use in trade ticket")').first().click();
+  await page.waitForSelector('#to-review');
+  await page.click('#to-review');
+  await page.waitForSelector('#to-confirm');
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForSelector('#proposed-net', { timeout: 15000 }); // review re-rendered with expert controls
+  // The assembled judgment: verdict banner + full probability map + execution ladder + quote age.
+  await page.waitForSelector('#verdict-panel');
+  const panel = await page.textContent('#verdict-panel');
+  assert.match(panel, /P\(any profit\)|Chance of making anything/);
+  assert.match(panel, /P\(max loss\)|Chance of the WORST case/);
+  assert.match(panel, /CVaR|very bad run/);
+  assert.match(panel, /risk-neutral/i);           // the basis is disclosed, always
+  await page.waitForSelector('#exec-ladder');
+  assert.match(await page.textContent('#exec-ladder'), /Midpoint/);
+  assert.match(await page.textContent('#quote-age'), /quotes/);
+  // Expert repricing: judge the SAME package at MY price — max loss follows the number I set.
+  const before = await page.textContent('#ticket-body');
+  await page.fill('#proposed-net', '-9.99');       // a debit I choose
+  await page.click('#reprice-btn');
+  await page.waitForSelector('#verdict-panel');    // re-rendered
+  await page.waitForSelector('#exec-ladder:has-text("Your price")');
+  const after = await page.textContent('#ticket-body');
+  assert.match(after, /YOUR net price/);
+  assert.notEqual(before, after, 'repricing must change the review');
+  // Leave a clean state for downstream tests.
+  await page.evaluate(() => { App.state.ticket = null; });
+  await page.click('#level-switch button[data-level="beginner"]');
 });
 
 test('backtest runs and reports mode, coverage, assumptions', async () => {
@@ -776,6 +819,7 @@ test('pro depth: comparison table, custom builder, position greeks', async () =>
   await page.click('#builder-review');
   await page.waitForSelector('#to-confirm', { timeout: 30000 });
   assert.match(await page.textContent('#ticket-body'), /Safety check/);
+  await page.$$eval('.ack-gate input', els => els.forEach(e => { if (!e.checked) e.click(); })); // acknowledge material risks (CP-5 gate)
   await page.click('#to-confirm');
   await page.waitForSelector('#place-trade');
   await page.click('#place-trade');
@@ -838,6 +882,7 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   await page.waitForSelector('#to-confirm', { timeout: 30000 });
   const review = await page.textContent('#ticket-body');
   assert.match(review, /Covered by shares you already hold/);
+  await page.$$eval('.ack-gate input', els => els.forEach(e => { if (!e.checked) e.click(); })); // acknowledge material risks (CP-5 gate)
   await page.click('#to-confirm');
   await page.waitForSelector('#place-trade');
   await page.click('#place-trade');
