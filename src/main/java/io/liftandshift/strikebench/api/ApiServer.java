@@ -1116,8 +1116,9 @@ public final class ApiServer {
         List<io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem> items = new ArrayList<>();
         List<Map<String, Object>> refusedEarly = new ArrayList<>();
         for (CompareStructure st : b.structures()) {
-            if (st.legs() == null || st.legs().isEmpty() || st.legs().size() > 8) {
-                refusedEarly.add(Map.of("key", st.key(), "reason", "invalid legs"));
+            String legProblem = validateSimLegs(st.legs());
+            if (legProblem != null) {
+                refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(), "reason", legProblem));
                 continue;
             }
             MarketEntry me = marketEntry(sym, st.legs(), qty);
@@ -1133,6 +1134,24 @@ public final class ApiServer {
         report.refused().forEach(x -> refused.add(Map.of("key", x.key(), "reason", x.reason())));
         ctx.json(Map.of("results", report.results(), "refused", refused,
                 "volAnnual", spec.sane().volAnnual()));
+    }
+
+    /** Uniform structural validation for simulation legs; null = fine, else the refusal reason. */
+    private String validateSimLegs(List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs) {
+        if (legs == null || legs.isEmpty()) return "no legs";
+        if (legs.size() > 8) return "more than 8 legs";
+        for (var l : legs) {
+            if (l == null) return "null leg";
+            if (l.ratio() < 1 || l.ratio() > 10) return "leg ratio out of 1..10";
+            boolean stock = "STOCK".equalsIgnoreCase(l.type());
+            if (!stock) {
+                if (l.strike() <= 0) return "non-positive strike";
+                if (l.expiryDay() < 0) return "negative expiry day";
+                if (!"CALL".equalsIgnoreCase(l.type()) && !"PUT".equalsIgnoreCase(l.type())) return "unknown leg type";
+            }
+            if (!"BUY".equalsIgnoreCase(l.action()) && !"SELL".equalsIgnoreCase(l.action())) return "unknown leg action";
+        }
+        return null;
     }
 
     private void simScenario(Context ctx) {
@@ -1169,8 +1188,9 @@ public final class ApiServer {
 
     private void simDataset(Context ctx) {
         ScenarioRequest b = requireBody(bodyOrNull(ctx, ScenarioRequest.class));
-        if (calibrateVol(b.symbol(), b.spec()) == null) throw new IllegalArgumentException("spec is required");
-        ctx.json(simEngine.toJson(simEngine.runAndPersist(b.symbol(), calibrateVol(b.symbol(), b.spec()), ownerId(ctx))));
+        if (b.spec() == null) throw new IllegalArgumentException("spec is required");
+        io.liftandshift.strikebench.sim.ScenarioSpec spec = calibrateVol(b.symbol(), b.spec()); // resolve ONCE
+        ctx.json(simEngine.toJson(simEngine.runAndPersist(b.symbol(), spec, ownerId(ctx))));
     }
 
     private void simStrategy(Context ctx) {

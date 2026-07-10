@@ -33,4 +33,33 @@ class MarketHoursTest {
         assertThat(MarketHours.contractDead(expiry, Instant.parse("2026-07-10T12:00:00Z"))).isTrue();  // days later
         assertThat(MarketHours.contractDead(LocalDate.of(2026, 8, 21), Instant.parse("2026-07-07T01:24:46Z"))).isFalse();
     }
+
+    @org.junit.jupiter.api.Test
+    void nyseHolidaysAreNotTradingDays() {
+        // Rule-computed calendar: fixed, floating, observed-shift and Easter-derived cases.
+        org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 1, 1))).isFalse();   // New Year's
+        org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 1, 19))).isFalse();  // MLK (3rd Mon)
+        org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 4, 3))).isFalse();   // Good Friday
+        org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 7, 3))).isFalse();   // Jul 4 observed (Sat -> Fri)
+        org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 7, 4))).isFalse();   // Saturday anyway
+        org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 11, 26))).isFalse(); // Thanksgiving
+        org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 12, 25))).isFalse(); // Christmas
+        org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 7, 10))).isTrue();   // ordinary Friday
+        // A holiday weekday is NOT a regular session even at noon ET.
+        java.time.Instant noonOnMlk = java.time.LocalDate.of(2026, 1, 19).atTime(12, 0)
+                .atZone(MarketHours.EASTERN).toInstant();
+        org.assertj.core.api.Assertions.assertThat(MarketHours.isRegularSession(noonOnMlk)).isFalse();
+    }
+
+    @org.junit.jupiter.api.Test
+    void tradingDaysBetweenCountsSessionsNotCalendarDays() {
+        // The MU condor case: sold Friday 2026-07-10, expiring Monday 2026-07-13 — ONE session away.
+        org.assertj.core.api.Assertions.assertThat(MarketHours.tradingDaysBetween(
+                java.time.LocalDate.of(2026, 7, 10), java.time.LocalDate.of(2026, 7, 13))).isEqualTo(1);
+        // A week spanning July-4th-observed loses a session: Mon Jun 29 -> Mon Jul 6 = 4 sessions.
+        org.assertj.core.api.Assertions.assertThat(MarketHours.tradingDaysBetween(
+                java.time.LocalDate.of(2026, 6, 29), java.time.LocalDate.of(2026, 7, 6))).isEqualTo(4);
+        org.assertj.core.api.Assertions.assertThat(MarketHours.tradingDaysBetween(
+                java.time.LocalDate.of(2026, 7, 10), java.time.LocalDate.of(2026, 7, 10))).isZero();
+    }
 }

@@ -46,6 +46,7 @@ public final class PortfolioBacktester {
     // Per-run state (a fresh instance per request, single-threaded per run).
     private String runSymbol;
     private long observedMarks;
+    private long modeledStrikePositions; // entries whose strikes had NO listed contracts (grid-modeled)
     private long totalMarks;
 
     public PortfolioBacktester(MarketDataService market, AppConfig cfg, Clock clock) {
@@ -98,6 +99,7 @@ public final class PortfolioBacktester {
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         this.runSymbol = symbol;
         this.observedMarks = 0;
+        this.modeledStrikePositions = 0;
         this.totalMarks = 0;
         Family family = Family.parse(req.strategy());
         LocalDate from = LocalDate.parse(req.from());
@@ -214,6 +216,11 @@ public final class PortfolioBacktester {
 
         // OBSERVED means observed: the run earns the historical label only when at least 90% of
         // leg marks came from real option history — one observed mark must not upgrade the run.
+        if (modeledStrikePositions > 0) {
+            notes.add(modeledStrikePositions + " of " + sample + " entries had no listed option contracts for "
+                    + "their date/expiration in owned history — their strikes are grid-MODELED, not contracts "
+                    + "that existed. Load historical options data for contract-true entries.");
+        }
         boolean mostlyObserved = totalMarks > 0 && observedMarks * 10 >= totalMarks * 9;
         String mode = demo ? "PAYOFF_ONLY" : mostlyObserved ? "OBSERVED_FROM_HISTORY" : "MODELED_FROM_UNDERLYING";
         String confidence = demo ? "none (demo data)"
@@ -241,19 +248,26 @@ public final class PortfolioBacktester {
         double step = strikeStep(spot);
         double width = Math.max(step, Math.round(spot * widthPct / step) * step);
 
+        // HISTORICAL STRIKE IDENTITY: like expirations, strikes must be contracts that actually
+        // existed. When owned history lists this (date, expiration), delta targets SELECT AMONG the
+        // listed strikes; only a truly modeled world may use the round-strike grid, and every such
+        // substitution is counted so the report can say how much of the run was invented.
+        List<Double> listed = listedStrikes(date, exp);
         List<Leg> legs = new ArrayList<>();
         if (family == Family.CREDIT_PUT_SPREAD) {
-            double shortK = strikeForDelta(false, spot, tte, iv, -shortDelta, step); // short put ~ -shortDelta
-            double longK = shortK - width;
-            if (longK <= 0) return null;
+            double shortK = snapStrike(strikeForDelta(false, spot, tte, iv, -shortDelta, step), listed);
+            double longK = snapStrike(shortK - width, listed);
+            if (longK <= 0 || longK >= shortK) return null;
             legs.add(new Leg(false, true, shortK));
             legs.add(new Leg(false, false, longK));
         } else { // DEBIT_CALL_SPREAD
-            double longK = strikeForDelta(true, spot, tte, iv, 0.50, step);          // long call ~ ATM
-            double shortK = longK + width;
+            double longK = snapStrike(strikeForDelta(true, spot, tte, iv, 0.50, step), listed);
+            double shortK = snapStrike(longK + width, listed);
+            if (shortK <= longK) return null;
             legs.add(new Leg(true, false, longK));
             legs.add(new Leg(true, true, shortK));
         }
+        if (listed.isEmpty()) modeledStrikePositions++; // no listed contracts for this entry — grid strikes
 
         Position p = new Position();
         p.entryDate = date; p.expiration = exp; p.legs = legs; p.qty = qty;
@@ -284,6 +298,25 @@ public final class PortfolioBacktester {
             if (err < bestErr) { bestErr = err; best = k; }
         }
         return best;
+    }
+
+    /** Nearest LISTED strike when history exists; the modeled value unchanged otherwise. */
+    private static double snapStrike(double modeled, List<Double> listed) {
+        if (listed == null || listed.isEmpty()) return modeled;
+        double best = listed.getFirst();
+        for (double k : listed) if (Math.abs(k - modeled) < Math.abs(best - modeled)) best = k;
+        return best;
+    }
+
+    /** DISTINCT listed strikes from owned observed history for (symbol, asof, expiration). */
+    private List<Double> listedStrikes(LocalDate date, LocalDate exp) {
+        if (db == null || exp == null) return List.of();
+        try {
+            return db.query(
+                    "SELECT DISTINCT strike FROM option_bar "
+                  + "WHERE symbol=? AND asof=? AND expiration=? AND dataset_id='observed' ORDER BY strike",
+                    r -> r.bd("strike").doubleValue(), runSymbol, date, exp);
+        } catch (Exception e) { return List.of(); }
     }
 
     /** The listed expiration (from owned option history) nearest date+targetDte, or null. */

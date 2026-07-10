@@ -46,6 +46,7 @@ public final class ScenarioSimulator {
                          Long entryOverrideCents, String entryNote) {
         try (AutoCloseable permit = SimBudget.acquire()) {
             ScenarioSpec s = spec.sane();
+            requireWorkBudget((long) s.paths() * (s.totalSteps() + 1) * Math.max(1, legs.size()));
             double[][] paths = generator.generate(s, spot, historicalLogReturns);
             return runInner(paths, spot, legs, qty, s, ivSpec, riskFreeRate, entryOverrideCents, entryNote);
         } catch (RuntimeException e) {
@@ -73,6 +74,10 @@ public final class ScenarioSimulator {
                                  IvSpec ivSpec, double riskFreeRate, double[] historicalLogReturns) {
         try (AutoCloseable permit = SimBudget.acquire()) {
             ScenarioSpec s = spec.sane();
+            // Total valuation work is budgeted as paths x steps x TOTAL LEGS across the whole
+            // comparison — one path set does not make thirty structures free.
+            long totalLegs = items.stream().mapToLong(it -> Math.max(1, it.legs().size())).sum();
+            requireWorkBudget((long) s.paths() * (s.totalSteps() + 1) * Math.max(1, totalLegs));
             double[][] paths = generator.generate(s, spot, historicalLogReturns);
             List<CompareOutcome> out = new ArrayList<>();
             List<CompareRefusal> refused = new ArrayList<>();
@@ -91,6 +96,19 @@ public final class ScenarioSimulator {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * Valuation work = paths x (steps+1) x option legs. The per-spec point cap bounds path
+     * GENERATION; this bounds leg-by-leg VALUATION, which comparisons multiply.
+     */
+    private static final long MAX_VALUATION_WORK = 40_000_000L;
+
+    private static void requireWorkBudget(long work) {
+        if (work > MAX_VALUATION_WORK) {
+            throw new IllegalArgumentException("Simulation too large (" + work + " leg-steps > "
+                    + MAX_VALUATION_WORK + ") — reduce paths, steps per day, or the number of structures.");
         }
     }
 
