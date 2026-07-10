@@ -57,12 +57,27 @@ public final class CboeProvider implements MarketDataProvider {
     private final long cooldownMs;
     /** After a 429/1015, ALL Cboe requests short-circuit until this time (a shared circuit breaker). */
     private volatile long cooldownUntilMs = 0;
+    // Politeness governor for this HEAVY keyless source: cap concurrency and space requests so the
+    // background warm + interactive loads never burst the CDN. Cached (warmed) symbols skip both.
+    private final java.util.concurrent.Semaphore concurrency;
+    private final long spacingMs;
+    private long nextAllowedMs = 0;
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CboeProvider.class);
 
     public CboeProvider(AppConfig cfg) {
         this.http = new Http(cfg.httpTimeoutMs());
         this.baseUrl = Http.normalizeBase(cfg.cboeBaseUrl());
         this.cooldownMs = Math.max(1, cfg.cboeCooldownMinutes()) * 60_000L;
+        this.concurrency = new java.util.concurrent.Semaphore(Math.max(1, cfg.cboeMaxConcurrency()), true);
+        this.spacingMs = Math.max(0, cfg.cboeMinSpacingMs());
+    }
+
+    /** Serialize a minimum gap between network requests (rate cap), shared across all threads. */
+    private synchronized void pace() {
+        long now = System.currentTimeMillis();
+        long wait = nextAllowedMs - now;
+        if (wait > 0) { try { Thread.sleep(wait); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }
+        nextAllowedMs = Math.max(now, nextAllowedMs) + spacingMs;
     }
 
     /** True while Cboe is in a rate-limit cooldown — surfaced to the Data Center. */
@@ -195,8 +210,16 @@ public final class CboeProvider implements MarketDataProvider {
     private Optional<JsonNode> fetchDataUncached(String symbol) {
         String url = baseUrl + "/api/global/delayed_quotes/options/" + symbol + ".json";
         String body;
+        boolean acquired = false;
         try {
+            concurrency.acquire();      // cap concurrent heavy downloads
+            acquired = true;
+            pace();                     // and space them out so we never burst the CDN
+            if (coolingDown()) return Optional.empty(); // a 429 may have tripped while we waited
             body = http.get(url);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return Optional.empty();
         } catch (Http.ProviderHttpException e) {
             // Cboe's CDN answers 404 OR S3-style "403 AccessDenied" for symbols it does not
             // know — both mean "definitively no data", not a provider failure.
@@ -211,6 +234,8 @@ public final class CboeProvider implements MarketDataProvider {
                         cooldownMs / 60000);
             }
             throw e;
+        } finally {
+            if (acquired) concurrency.release();
         }
         JsonNode data = Json.parse(body).path("data");
         return data.isObject() ? Optional.of(data) : Optional.empty();

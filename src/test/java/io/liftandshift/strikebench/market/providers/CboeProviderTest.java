@@ -50,7 +50,8 @@ class CboeProviderTest {
     void setUp() throws Exception {
         server = new MockWebServer();
         server.start();
-        AppConfig cfg = new AppConfig(Map.of("CBOE_BASE_URL", server.url("/").toString()));
+        AppConfig cfg = new AppConfig(Map.of("CBOE_BASE_URL", server.url("/").toString(),
+                "CBOE_MIN_SPACING_MS", "0")); // no artificial pacing delay in unit tests
         provider = new CboeProvider(cfg);
     }
 

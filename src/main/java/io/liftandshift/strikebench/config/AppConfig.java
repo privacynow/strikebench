@@ -195,6 +195,10 @@ public final class AppConfig {
     public boolean engineWarmFullUniverse() { return getBool("ENGINE_WARM_FULL_UNIVERSE", false); }
     /** After a Cboe 429/1015 (rate limit), stop calling Cboe globally for this many minutes. */
     public int cboeCooldownMinutes() { return getInt("CBOE_COOLDOWN_MINUTES", 15); }
+    /** Max concurrent Cboe downloads (heavy option-chain payloads — keep it small). */
+    public int cboeMaxConcurrency() { return getInt("CBOE_MAX_CONCURRENCY", 2); }
+    /** Minimum spacing between Cboe requests, ms — caps requests/sec so we stay polite to the CDN. */
+    public long cboeMinSpacingMs() { return getLong("CBOE_MIN_SPACING_MS", 1200); }
     /** Seconds between SSE pushes on /api/market/stream (live-ish tape from engine memory). */
     public int engineStreamIntervalSeconds() { return getInt("ENGINE_STREAM_INTERVAL_SECONDS", 3); }
 
