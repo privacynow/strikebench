@@ -29,6 +29,75 @@
   };
 
   // ---- Glossary: tap-to-define for terms of art ----
+
+  /**
+   * THE definitions catalog (Block E): every technical label's explanation lives HERE, once —
+   * screens reference keys, so a term can never mean different things on different pages.
+   * short = the one-liner every bubble opens with; beginner/expert = the expanded detail.
+   */
+  var INFO = {
+    pop: { short: 'The modeled chance this position ends with ANY profit at expiration.',
+      beginner: 'Out of 100 futures the options market itself prices, roughly this many end with you making something — even $1. It is a model number, before commissions, not a promise.',
+      expert: 'Risk-neutral P(profit) under a lognormal terminal distribution at the chain\u2019s own IV, calendar-time de-annualization, pre-commission, zero drift. Not a physical-measure forecast.' },
+    ev: { short: 'What this trade earns ON AVERAGE across the market\u2019s own priced futures.',
+      beginner: 'Imagine running this exact trade in every future the market thinks is possible, and averaging the results. Negative means the market charges more than the position is worth by its own odds.',
+      expert: 'Risk-neutral expectation of the expiration payoff at chain IV, zero drift, integrated numerically over the terminal distribution. The Decision score judges it NET of round-trip commissions.' },
+    evhistvol: { short: 'The same average, but at the stock\u2019s RECENT realized volatility instead of the option-implied one.',
+      beginner: 'If the stock keeps moving the way it recently has (rather than the bigger move options are pricing), this is the average outcome. The gap between the two numbers is what option sellers get paid for.',
+      expert: 'Historical-vol SCENARIO EV: the identical integral at 30-day realized \u03c3, zero drift. NOT the physical measure (no drift estimate); the spread vs risk-neutral EV visualizes the volatility risk premium.' },
+    cvar: { short: 'The average result of your worst 1-in-20 outcomes — the \u201cbad night\u201d number.',
+      beginner: 'Ignore the typical case: if you only look at the worst 5% of ways this can go, this is what an average one of THOSE costs you.',
+      expert: 'CVaR(95%): E[P&L | P&L \u2264 5th percentile] under the risk-neutral terminal distribution. Bounded by max loss for defined-risk structures; for undefined risk see the stress figure instead.' },
+    pmaxloss: { short: 'The chance this position ends at its FULL worst case.',
+      beginner: 'Not just \u201closing something\u201d — this is the chance you lose the entire stated maximum. If it is the biggest number on the card, the most likely single outcome is the worst one.',
+      expert: 'Probability mass on the max-loss plateau (within 0.5% of the extreme) under the risk-neutral terminal distribution. Undefined-risk structures report 0 here — no plateau exists; see stress/CVaR.' },
+    pmaxprofit: { short: 'The chance you keep the FULL maximum profit.',
+      beginner: 'The best case, exactly: for a credit trade this is the chance every short option expires worthless and you keep it all.',
+      expert: 'Probability mass on the max-profit plateau. Uncapped structures report 0 by construction.' },
+    touch: { short: 'The chance the stock TOUCHES this strike before expiration, not just finishes there.',
+      beginner: 'Prices wander: even a trade that ends fine often visits the scary strike first. Touching usually forces a decision.',
+      expert: '\u2248 2\u00d7 the expire-beyond probability (reflection heuristic), capped at 1. A rough planning number, not a barrier-exact price.' },
+    concession: { short: 'Dollars surrendered to the bid/ask spread just to ENTER.',
+      beginner: 'The books have a gap between buyers and sellers; crossing it costs real money before the trade even starts — and you pay again on the way out.',
+      expert: 'Package midpoint minus your (proposed or executable) net, in $ and as % of mid / max profit / max risk. Exit estimate = half the summed package spread again.' },
+    decisionscore: { short: 'The risk-adjusted composite that ORDERS every list in the product.',
+      beginner: 'One number combining the odds, the payoff, the costs, the evidence quality and the tail risk. Higher is better; a zero means a hard gate failed.',
+      expert: 'Gates (finite risk, executable market, evidence, buying power) \u2192 weighted components (POP .15, R:R .15, EV-net-of-fees .20, liquidity .10, capital .10, evidence .15, thesis .15) \u2192 haircuts (evidence \u00d7 tail \u00d7 gamma/DTE). Never travels without its breakdown.' },
+    screenscore: { short: 'The quick idea-screen ranking — a component, not the judge.',
+      beginner: 'A fast first-pass score used while scanning. The Decision score re-judges with costs, evidence and tail risk — when both are shown, the Decision score ordered the list.',
+      expert: 'Engine composite (freshness/liquidity/R:R/POP/thesis-fit weights) computed per candidate at screen time; disclosed alongside the DecisionPolicy score that actually ranks.' },
+    evidence: { short: 'How REAL the data behind this number is.',
+      beginner: 'Observed = a real market quote. Modeled = a formula\u2019s output. Demo = built-in practice data. Weakest link wins: one demo input marks the whole answer.',
+      expert: 'Per-dimension provenance (quotes/IV/greeks/history) rolled up worst-of. DEMO_FIXTURE never masquerades; UNKNOWN gates the decision score to non-viable.' },
+    ivrank: { short: 'Where today\u2019s option prices sit vs their own past year.',
+      beginner: 'High rank = options are expensive by this stock\u2019s own standards (good for sellers); low = cheap (good for buyers).',
+      expert: '(IV \u2212 52w min)/(52w max \u2212 min) over OUR observed snapshot history; null until \u226510 observations — never fabricated.' },
+    vrp: { short: 'The gap between what options charge and how much the stock actually moves.',
+      beginner: 'Options usually price MORE movement than happens — that overcharge is what disciplined sellers harvest, and it is also what buyers pay for protection.',
+      expert: 'Implied vs realized vol (30d). Positive VRP favors short-premium IF realized stays put; the evHistVol lane shows the same trade under realized \u03c3.' },
+    nlv: { short: 'Net liquidation value — what your whole account is worth if closed right now.',
+      beginner: 'Cash plus everything you hold, marked at current prices. The truest \u201chow much money do I have\u201d number.',
+      expert: 'Self-declared here (never inferred from one broker field); used as a sizing denominator for account-fit percentages.' },
+    riskcapital: { short: 'YOUR line: the most you allow one trade to lose.',
+      beginner: 'You set it once for your real account; every review then shows the worst case against it and makes you acknowledge crossing it.',
+      expert: 'Caps the engine\u2019s per-trade budget when declared and adds a required server-side acknowledgment above it.' },
+    expectedmove: { short: 'The range the options market expects the stock to stay inside (\u00b11\u03c3).',
+      beginner: 'About 2 out of 3 futures end inside this band. Selling strikes INSIDE it means betting the market has overpriced its own move.',
+      expert: 'spot \u00b7 exp(\u00b1\u03c3\u221aT) at the position\u2019s vol/time basis; drawn on the payoff chart and included in the domain window.' },
+    sessions: { short: 'Trading days left — weekends and holidays don\u2019t move prices the same way.',
+      beginner: 'A Friday-to-Monday trade has ONE day of real trading, not three. Less time to be right, and a weekend gap you cannot react to.',
+      expert: 'NYSE-calendar sessions to nearest expiry; drives the near-expiry regime (\u22645 sessions) and plans. Model T stays calendar-basis to match chain-IV annualization.' },
+    seed: { short: 'The number that makes a simulated market exactly reproducible.',
+      beginner: 'Two people using the same seed see the identical market — useful for comparing decisions on the same tape.',
+      expert: 'Deterministic RNG seed for path generation; identical (seed, model, config) regenerates identical ticks.' },
+    world: { short: 'Which market these numbers come from: the REAL one, or a simulated session.',
+      beginner: 'In a simulated market everything moves and trades like the real thing, but every price is generated. The banner tells you which world you are in, always.',
+      expert: 'worldId keys every quote/chain/candle cache and stream; observed is the default and the fail-safe; simulation is a separate account lane.' },
+    assignment: { short: 'The chance a short option finishes in-the-money and you are assigned.',
+      beginner: 'For covered calls and cash-secured puts this is often the GOAL (your shares sell / you buy at your price). For other trades it is the chance of ending up with a stock position.',
+      expert: 'N(d2)/N(\u2212d2) per distinct short strike, summed and capped at 1, at per-leg smile IVs.' }
+  };
+
   var GLOSSARY = {
     'premium': 'The price of an option, per share. One contract covers 100 shares, so a $1.50 premium costs $150.',
     'strike': 'The price at which an option lets you buy (call) or sell (put) the stock.',
@@ -268,6 +337,7 @@
   }
 
   window.Learn = {
+    INFO: INFO,
     LEVELS: LEVELS,
     LEVEL_META: LEVEL_META,
     INTENTS: INTENTS,

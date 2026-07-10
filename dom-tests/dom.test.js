@@ -681,6 +681,57 @@ test('review verdict panel: probability map, execution ladder, expert repricing'
   await page.click('#level-switch button[data-level="beginner"]');
 });
 
+test('explanation system: visible triggers, registry-backed bubbles, both levels, no title dups', async () => {
+  // The review from the previous test is still on the trade detail... navigate to a fresh review.
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => { App.state.ticket = null; App.state.discoverForm = null; });
+  await go('#/home');
+  await go('#/trade/discover/manual');
+  await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
+  await page.fill('#rec-symbol', 'AAPL');
+  await page.selectOption('#rec-thesis', 'bullish');
+  await page.click('#rec-go');
+  await page.waitForSelector('#rec-results .candidate', { timeout: 30000 });
+  await page.locator('#rec-results .candidate button:has-text("Practice this trade"), #rec-results .candidate button:has-text("Use in trade ticket")').first().click();
+  await page.waitForSelector('#to-review');
+  await page.click('#to-review');
+  await page.waitForSelector('#verdict-panel .info-trigger', { timeout: 20000 });
+  // AUDIT 1: every used term key resolves in the registry (anti-drift).
+  const missing = await page.evaluate(() =>
+    (window.__usedInfoTerms || []).filter(k => !(window.Learn && Learn.INFO && Learn.INFO[k])));
+  assert.deepEqual(missing, [], 'info terms missing from the registry: ' + missing.join(','));
+  // AUDIT 2: triggers are VISIBLE (quiet but discoverable) and carry no competing native title.
+  const trig = page.locator('#verdict-panel .info-trigger').first();
+  assert.ok(await trig.isVisible(), 'info trigger must be visible without hovering');
+  const dup = await page.$$eval('#verdict-panel .info-trigger', els =>
+    els.filter(e => e.closest('[title]')).length);
+  assert.equal(dup, 0, 'a bubble label must not also carry a native title tooltip');
+  // AUDIT 3: click opens immediately; one-liner first; [+] expands the BEGINNER detail.
+  await trig.click();
+  await page.waitForSelector('#info-pop');
+  const shortText = await page.textContent('#info-pop .info-short');
+  assert.ok(shortText.length > 20, 'one-liner present');
+  assert.equal(await page.isVisible('#info-pop .info-detail'), false, 'detail starts collapsed');
+  await page.click('#info-pop .info-expand');
+  const begDetail = await page.textContent('#info-pop .info-detail');
+  assert.ok(begDetail.length > 40, 'beginner detail present');
+  // Escape closes.
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#info-pop').count(), 0, 'Escape closes the bubble');
+  // AUDIT 4: the SAME trigger at Expert level yields the expert detail (same truth, deeper words).
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForSelector('#verdict-panel .info-trigger', { timeout: 20000 });
+  await page.locator('#verdict-panel .info-trigger').first().click();
+  await page.waitForSelector('#info-pop');
+  await page.click('#info-pop .info-expand');
+  const expDetail = await page.textContent('#info-pop .info-detail');
+  assert.ok(expDetail !== begDetail, 'expert detail differs from beginner detail');
+  await page.keyboard.press('Escape');
+  // Hygiene for downstream tests.
+  await page.evaluate(() => { App.state.ticket = null; });
+  await page.click('#level-switch button[data-level="beginner"]');
+});
+
 test('backtest runs and reports mode, coverage, assumptions', async () => {
   await go('#/backtest');
   // The portfolio engine + full family menu are Expert-only; pin this test there.

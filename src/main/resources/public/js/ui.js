@@ -827,7 +827,82 @@
     return wrap;
   }
 
+
+  /**
+   * Block E: the ONE explanation primitive. A small, always-visible, quiet trigger beside a
+   * technical label; hover opens the bubble after ~550ms, focus/click/tap opens immediately.
+   * One-sentence summary first; a small [+] expands the level-appropriate detail in place.
+   * One bubble at a time; Escape/outside-click/blur closes; edge-aware; zero layout shift.
+   */
+  var infoPop = null;
+  var infoUsed = window.__usedInfoTerms = window.__usedInfoTerms || [];
+  function closeInfo() {
+    if (infoPop) { infoPop.remove(); infoPop = null; }
+    document.removeEventListener('click', onDocClickInfo, true);
+    document.removeEventListener('keydown', onDocKeyInfo, true);
+  }
+  function onDocClickInfo(ev) { if (infoPop && !infoPop.contains(ev.target)) closeInfo(); }
+  function onDocKeyInfo(ev) { if (ev.key === 'Escape') closeInfo(); }
+  function openInfo(trigger, key) {
+    closeInfo();
+    var def = window.Learn && Learn.INFO && Learn.INFO[key];
+    if (!def) return;
+    var beginner = window.Learn && Learn.currentLevel && Learn.currentLevel() === 'beginner';
+    var detail = beginner ? def.beginner : def.expert;
+    infoPop = el('div', { class: 'info-pop', role: 'tooltip', id: 'info-pop' });
+    var body = el('div', { class: 'info-short' }, def.short);
+    var more = el('div', { class: 'info-detail', style: 'display:none' }, detail);
+    var expand = el('button', { class: 'info-expand', type: 'button', 'aria-expanded': 'false',
+      title: 'More detail', onclick: function (ev) {
+        ev.stopPropagation();
+        var open = more.style.display !== 'none';
+        more.style.display = open ? 'none' : '';
+        expand.setAttribute('aria-expanded', String(!open));
+        expand.textContent = open ? '+' : '\u2212';
+        place();
+      } }, '+');
+    infoPop.appendChild(el('div', { class: 'info-row' }, body, expand));
+    infoPop.appendChild(more);
+    document.body.appendChild(infoPop);
+    function place() {
+      var r = trigger.getBoundingClientRect();
+      var w = infoPop.offsetWidth, h = infoPop.offsetHeight;
+      var left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8);
+      var top = r.bottom + 6;
+      if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+      infoPop.style.left = left + 'px';
+      infoPop.style.top = top + 'px';
+    }
+    place();
+    setTimeout(function () {
+      document.addEventListener('click', onDocClickInfo, true);
+      document.addEventListener('keydown', onDocKeyInfo, true);
+    }, 0);
+  }
+  /** A visible, quiet info trigger for a registry term. Never pairs with a native title. */
+  function info(termKey) {
+    if (infoUsed.indexOf(termKey) < 0) infoUsed.push(termKey);
+    var t = el('button', { class: 'info-trigger', type: 'button', 'data-term': termKey,
+      'aria-label': 'What does this mean?' }, 'i');
+    var hoverTimer = null;
+    t.addEventListener('mouseenter', function () {
+      hoverTimer = setTimeout(function () { openInfo(t, termKey); }, 550);
+    });
+    t.addEventListener('mouseleave', function () {
+      if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+      // the bubble persists so the pointer can travel into it; outside-click/Escape closes
+    });
+    t.addEventListener('click', function (ev) { ev.stopPropagation(); openInfo(t, termKey); });
+    t.addEventListener('focus', function () { openInfo(t, termKey); });
+    t.addEventListener('blur', function () { setTimeout(function () {
+      if (infoPop && !infoPop.contains(document.activeElement)) closeInfo();
+    }, 150); });
+    return t;
+  }
+
+
   window.UI = {
+    info: info,
     fmtDate: fmtDate,
     el: el,
     icon: icon,

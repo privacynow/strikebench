@@ -1224,10 +1224,10 @@
       explain(c.beginnerExplanation));
     card.appendChild(el('div', { class: 'chip-row expert-only' },
       c.decisionScore !== null && c.decisionScore !== undefined
-        ? chip('Decision score', fmtNum(c.decisionScore, 0), 'Risk-adjusted composite (gates, capital, tail risk, evidence quality) — this is what ordered the list.') : null,
+        ? chip(el('span', {}, 'Decision score', UI.info('decisionscore')), fmtNum(c.decisionScore, 0)) : null,
       c.expectedValueCents !== null && c.expectedValueCents !== undefined ? chip('Model EV', fmtMoney(c.expectedValueCents, { plus: true })) : null,
       chip('Liquidity', fmtNum(c.liquidityScore, 2)),
-      chip('Screen score', fmtNum(c.score, 0), 'The quick idea-screen component of the ranking. When a Decision score is shown, that risk-adjusted score ordered this list.')));
+      chip(el('span', {}, 'Screen score', UI.info('screenscore')), fmtNum(c.score, 0))));
     if (c.warnings && c.warnings.length) card.appendChild(alertBox('warn', 'Heads up', c.warnings));
     card.appendChild(el('details', { class: 'qa' },
       el('summary', {}, 'Why this idea — and what would kill it'),
@@ -4718,14 +4718,12 @@
     }
     if (prob.pAnyProfit !== undefined) {
       wrap.appendChild(el('div', { class: 'grid grid-4', id: 'prob-map' },
-        stat(beginner ? 'Chance of making anything' : 'P(any profit)', fmtPct(prob.pAnyProfit),
-          beginner ? 'Out of 100 futures the options market itself prices, how many end with ANY profit.' : null),
-        stat(beginner ? 'Chance of the FULL win' : 'P(max profit)', fmtPct(prob.pMaxProfit)),
-        stat(beginner ? 'Chance of the WORST case' : 'P(max loss)',
+        stat(el('span', {}, beginner ? 'Chance of making anything' : 'P(any profit)', UI.info('pop')), fmtPct(prob.pAnyProfit)),
+        stat(el('span', {}, beginner ? 'Chance of the FULL win' : 'P(max profit)', UI.info('pmaxprofit')), fmtPct(prob.pMaxProfit)),
+        stat(el('span', {}, beginner ? 'Chance of the WORST case' : 'P(max loss)', UI.info('pmaxloss')),
           el('span', { class: prob.pMaxLoss > 0.4 ? 'loss' : '' }, fmtPct(prob.pMaxLoss))),
-        stat(beginner ? 'A very bad run costs' : 'CVaR 95%',
-          el('span', { class: 'loss' }, fmtMoney(prob.cvar95Cents)),
-          beginner ? 'The average result of the worst 1-in-20 outcomes.' : 'Expected P/L across the worst 5% of outcomes.')));
+        stat(el('span', {}, beginner ? 'A very bad run costs' : 'CVaR 95%', UI.info('cvar')),
+          el('span', { class: 'loss' }, fmtMoney(prob.cvar95Cents)))));
       wrap.appendChild(el('div', { class: 'muted small' },
         (prob.basis || '') + (prob.timeBasis ? ' \u00b7 time: ' + prob.timeBasis : '')));
     }
@@ -4734,10 +4732,10 @@
         chip('Midpoint', fmtMoney(exec.midNetCents, { plus: true }), 'The package priced at every leg\u2019s midpoint — rarely fully fillable, but the honest reference.'),
         chip('Executable now', fmtMoney(exec.executableNetCents, { plus: true }), 'Crossing every book: buys at the ask, sells at the bid.'),
         exec.proposedNetCents !== undefined ? chip('Your price', fmtMoney(exec.proposedNetCents, { plus: true })) : null,
-        exec.concessionVsMidCents !== undefined ? chip(beginner ? 'Cost of entering' : 'Concession vs mid',
+        exec.concessionVsMidCents !== undefined ? chip(
+          el('span', {}, beginner ? 'Cost of entering' : 'Concession vs mid', UI.info('concession')),
           el('span', { class: 'loss' }, fmtMoney(exec.concessionVsMidCents)
-            + (exec.concessionPctOfMid !== undefined ? ' (' + Math.round(Math.abs(exec.concessionPctOfMid) * 100) + '% of mid)' : '')),
-          'Dollars surrendered to the market makers crossing the bid/ask, before the trade even starts.') : null,
+            + (exec.concessionPctOfMid !== undefined ? ' (' + Math.round(Math.abs(exec.concessionPctOfMid) * 100) + '% of mid)' : ''))) : null,
         exec.exitSpreadEstimateCents !== undefined ? chip('Exit will cost ~', fmtMoney(exec.exitSpreadEstimateCents),
           'Half the package spread again, on the way out.') : null);
       wrap.appendChild(el('div', { class: 'card card-slim', style: 'margin:8px 0' },

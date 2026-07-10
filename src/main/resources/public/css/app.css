@@ -1245,3 +1245,24 @@ body.lvl-expert .showcase-frame { max-height: 375px; }
 .verdict-line.verdict-favorable { color: var(--risk-ok, inherit); }
 .chart .em-band { fill: var(--accent); opacity: 0.07; }
 .chart .em-label { font-size: 9px; fill: var(--text-dim); }
+
+/* Block E: the explanation system — quiet visible triggers + one bubble */
+.info-trigger { display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; min-height: 14px; margin-left: 4px; padding: 0;
+  border-radius: 50%; border: 1px solid var(--border); background: transparent;
+  color: var(--text-dim); font-size: 9.5px; font-style: italic; font-family: Georgia, serif;
+  line-height: 1; cursor: help; vertical-align: middle; }
+.info-trigger:hover, .info-trigger:focus-visible { color: var(--accent); border-color: var(--accent); }
+.info-pop { position: fixed; z-index: 300; max-width: 320px; padding: 9px 11px;
+  background: var(--bg-card, var(--bg)); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.18); font-size: 12.5px; line-height: 1.45; }
+.info-pop .info-row { display: flex; gap: 8px; align-items: flex-start; }
+.info-pop .info-short { flex: 1; }
+.info-pop .info-expand { flex: none; width: 18px; height: 18px; min-height: 18px; padding: 0;
+  border-radius: 4px; border: 1px solid var(--border); background: transparent;
+  color: var(--text-dim); font-size: 13px; line-height: 1; cursor: pointer; }
+.info-pop .info-detail { margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--border);
+  color: var(--text-dim); }
+@media (prefers-reduced-motion: no-preference) {
+  .info-pop { animation: xp-in .12s ease-out; }
+}
