@@ -61,7 +61,7 @@
 
   // POSTs that change NO server state — never touch the cache (the builder previews on every
   // keystroke; the lab hypothesis/replicate tools are pure math).
-  var PURE_COMPUTE = /^\/api\/(recommend($|\/)|trades\/preview$|lab\/(hypothesis|replicate)$)/;
+  var PURE_COMPUTE = /^\/api\/(recommend($|\/)|trades\/preview$|lab\/(hypothesis|replicate|question)$|sim\/(scenario|strategy)$)/;
   // POSTs that ONLY write evaluation/recommendation history — read back solely by /api/evaluations
   // and /api/calibration. Invalidate JUST those views so market/account/quote caches stay warm.
   var HISTORY_WRITER = /^\/api\/(evaluate$|opportunities$|optimize$)/;

@@ -16,4 +16,8 @@ public interface CandleStore {
 
     /** Stored daily candles for the symbol/range, or empty to fall through to the provider chain. */
     Optional<CandleSeries> candles(String symbol, LocalDate from, LocalDate to);
+
+    /** A cache-key discriminator (e.g. the active dataset id) so switching datasets never serves
+     *  another dataset's cached candles. Default: none. */
+    default String cacheKey() { return ""; }
 }

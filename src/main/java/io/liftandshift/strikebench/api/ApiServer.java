@@ -94,6 +94,8 @@ public final class ApiServer {
     private io.liftandshift.strikebench.db.DataCoverage dataCoverage;           // Data Center coverage matrix
     private io.liftandshift.strikebench.db.DataResetService dataReset;          // Data Center tiered wipe
     private CboeProvider cboe;                                                  // for Data Center throttle display
+    private io.liftandshift.strikebench.db.DatasetService datasets;             // observed + synthetic dataset registry
+    private io.liftandshift.strikebench.sim.SimulationEngine simEngine;         // scenario previews + dataset runs
     private java.util.concurrent.ScheduledExecutorService streamScheduler;     // pushes SSE market frames
     private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
     private final String startedAt = java.time.Instant.now().toString();
@@ -156,9 +158,11 @@ public final class ApiServer {
         newsProviders.add(fixture);
         ratesProviders.add(fixture);
 
-        // Persisted daily bars (Data Center backfills / snapshots / CSV ingest) feed the read path.
+        // Persisted daily bars (Data Center backfills / snapshots / CSV ingest / synthetic datasets)
+        // feed the read path; the active-dataset switch decides which dataset serves.
+        io.liftandshift.strikebench.db.DatasetService datasetSvc = new io.liftandshift.strikebench.db.DatasetService(db, clock);
         MarketDataService market = new MarketDataService(providers, newsProviders, ratesProviders,
-                new io.liftandshift.strikebench.db.StoredCandleStore(db));
+                new io.liftandshift.strikebench.db.StoredCandleStore(db, datasetSvc));
         AuditLog audit = new AuditLog(db, clock);
         AccountService accounts = new AccountService(db, cfg, audit, clock);
         MarketDataMarks marksSource = new MarketDataMarks(market, cfg.fixturesOnly());
@@ -172,8 +176,11 @@ public final class ApiServer {
         List<io.liftandshift.strikebench.market.ports.HistoricalOptionsProvider> historical = new ArrayList<>();
         if (cfg.fixturesOnly()) {
             historical.add(fixture);
-        } else if (!cfg.polygonApiKey().isBlank()) {
-            historical.add(new PolygonProvider(cfg));
+        } else {
+            // Owned option history FIRST (snapshots + licensed CSV ingest) — the "own the past" moat
+            // now upgrades the single backtester too, then Polygon if keyed.
+            historical.add(new io.liftandshift.strikebench.db.StoredHistoricalOptionsProvider(db));
+            if (!cfg.polygonApiKey().isBlank()) historical.add(new PolygonProvider(cfg));
         }
         Backtester backtester = new Backtester(market, historical, cfg, db, clock);
         io.liftandshift.strikebench.market.UniverseService universe = new io.liftandshift.strikebench.market.UniverseService(db, cfg, clock);
@@ -189,6 +196,8 @@ public final class ApiServer {
         server.dataReset = new io.liftandshift.strikebench.db.DataResetService(db, accounts);
         server.cboe = cboeRef[0];
         server.marketEngine.setSnapshotStore(new io.liftandshift.strikebench.db.MarketSnapshotStore(db));
+        server.datasets = datasetSvc;
+        server.simEngine = new io.liftandshift.strikebench.sim.SimulationEngine(market, datasetSvc, db, clock);
         return server;
     }
 
@@ -284,6 +293,14 @@ public final class ApiServer {
             c.routes.post("/api/data/jobs/{id}/cancel", this::dataJobCancel);
             c.routes.post("/api/data/jobs/{id}/retry", this::dataJobRetry);
             c.routes.post("/api/data/reset", this::dataResetRoute);
+
+            // ---- Datasets & scenario simulation ----
+            c.routes.get("/api/datasets", ctx -> ctx.json(datasets.describe()));
+            c.routes.put("/api/datasets/active", this::datasetSetActive);
+            c.routes.delete("/api/datasets/{id}", ctx -> { datasets.delete(ctx.pathParam("id")); ctx.json(Map.of("ok", true)); });
+            c.routes.post("/api/sim/scenario", this::simScenario);   // pure compute: the fan preview
+            c.routes.post("/api/sim/strategy", this::simStrategy);   // pure compute: strategy P&L distribution
+            c.routes.post("/api/sim/dataset", this::simDataset);     // persists a synthetic dataset
 
             c.routes.get("/api/account", this::account);
             c.routes.post("/api/account/reset", this::accountReset);
@@ -615,16 +632,21 @@ public final class ApiServer {
     }
 
     private void config(Context ctx) {
-        ctx.json(Map.of(
-                "port", cfg.port(),
-                "fixturesOnly", cfg.fixturesOnly(),
-                "marketOpen", io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()),
-                "authEnabled", auth.enabled(),  // always-readable auth signal (config is in the auth-open allowlist)
-                "feePerContractCents", cfg.feePerContractCents(),
-                "feePerOrderCents", cfg.feePerOrderCents(),
-                "defaultStartingCashCents", cfg.defaultStartingCashCents(),
-                "brand", Map.of("name", cfg.brandName(), "tagline", cfg.brandTagline()),
-                "disclaimer", RecommendationEngine.DISCLAIMER));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("port", cfg.port());
+        out.put("fixturesOnly", cfg.fixturesOnly());
+        out.put("marketOpen", io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()));
+        out.put("authEnabled", auth.enabled());  // always-readable auth signal (config is in the auth-open allowlist)
+        out.put("feePerContractCents", cfg.feePerContractCents());
+        out.put("feePerOrderCents", cfg.feePerOrderCents());
+        out.put("defaultStartingCashCents", cfg.defaultStartingCashCents());
+        out.put("brand", Map.of("name", cfg.brandName(), "tagline", cfg.brandTagline()));
+        out.put("disclaimer", RecommendationEngine.DISCLAIMER);
+        // Scenario mode: the app-wide honesty signal that a synthetic dataset is active.
+        String active = datasets == null ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : datasets.activeId();
+        out.put("activeDataset", active);
+        out.put("scenarioMode", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(active));
+        ctx.json(out);
     }
 
     /**
@@ -797,6 +819,50 @@ public final class ApiServer {
         // Re-running a privileged CSV import is itself privileged, even for the job's owner.
         if ("import_options_csv".equalsIgnoreCase(dataJobs.kindOf(id))) requireAdmin(ctx);
         ctx.json(dataJobs.retry(id, ownerId(ctx)));
+    }
+
+    // ---- Datasets & scenario simulation ----
+
+    public record ScenarioRequest(String symbol, io.liftandshift.strikebench.sim.ScenarioSpec spec) {}
+
+    public record StrategySimRequest(String symbol,
+                                     java.util.List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
+                                     Integer qty,
+                                     io.liftandshift.strikebench.sim.ScenarioSpec spec,
+                                     io.liftandshift.strikebench.sim.IvSpec iv) {}
+
+    public record ActiveDatasetRequest(String id) {}
+
+    private void datasetSetActive(Context ctx) {
+        ActiveDatasetRequest b = requireBody(bodyOrNull(ctx, ActiveDatasetRequest.class));
+        datasets.setActive(b.id());
+        ctx.json(Map.of("ok", true, "active", datasets.activeId(),
+                "scenarioMode", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(datasets.activeId())));
+    }
+
+    private void simScenario(Context ctx) {
+        ScenarioRequest b = requireBody(bodyOrNull(ctx, ScenarioRequest.class));
+        if (b.spec() == null) throw new IllegalArgumentException("spec is required");
+        ctx.json(simEngine.preview(b.symbol(), b.spec()));
+    }
+
+    private void simDataset(Context ctx) {
+        ScenarioRequest b = requireBody(bodyOrNull(ctx, ScenarioRequest.class));
+        if (b.spec() == null) throw new IllegalArgumentException("spec is required");
+        ctx.json(simEngine.toJson(simEngine.runAndPersist(b.symbol(), b.spec(), ownerId(ctx))));
+    }
+
+    private void simStrategy(Context ctx) {
+        StrategySimRequest b = requireBody(bodyOrNull(ctx, StrategySimRequest.class));
+        if (b.spec() == null) throw new IllegalArgumentException("spec is required");
+        if (b.legs() == null || b.legs().isEmpty()) throw new IllegalArgumentException("legs are required");
+        String sym = b.symbol() == null ? "" : b.symbol().trim().toUpperCase(Locale.ROOT);
+        double spot = market.quote(sym).map(q -> q.mark() == null ? 100.0 : q.mark().doubleValue()).orElse(100.0);
+        double r = market.riskFreeRate(Math.max(1, b.spec().sane().horizonDays()));
+        var result = new io.liftandshift.strikebench.sim.ScenarioSimulator().run(
+                spot, b.legs(), b.qty() == null ? 1 : b.qty(), b.spec(), b.iv(), r,
+                simEngine.historicalLogReturns(sym));
+        ctx.json(result);
     }
 
     public record DataResetRequest(String tier, Boolean confirm) {}

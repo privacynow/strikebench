@@ -128,7 +128,9 @@ public final class MarketDataService {
 
     /** Candles WITH provenance — consumers must label demo (fixture) history in live mode. */
     public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to) {
-        String k = norm(symbol) + "|" + from + "|" + to;
+        // The store's cacheKey (the active dataset id) is part of the key: switching datasets in the
+        // Data Center must never serve another dataset's cached candles.
+        String k = (candleStore == null ? "" : candleStore.cacheKey() + "|") + norm(symbol) + "|" + from + "|" + to;
         CandleSeries r = candlesCache.get(k, key -> {
             // Persisted bars (Data Center backfills / snapshots / CSV ingest) win over live provider
             // calls — the whole point of storing history is that the read path uses it.
