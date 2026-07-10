@@ -70,6 +70,8 @@ public final class MarketDataEngine {
     private volatile long lastRefreshEpochMs = 0L;
 
     private ExecutorService refreshPool;      // bounded — polite to providers
+    /** How many user-blocking fetches are in flight — background work YIELDS while this is nonzero. */
+    private final java.util.concurrent.atomic.AtomicInteger pendingInteractive = new java.util.concurrent.atomic.AtomicInteger();
     private ScheduledExecutorService scheduler;
     private volatile boolean running = false;
 
@@ -123,8 +125,8 @@ public final class MarketDataEngine {
             for (int i = 0; i < active.size(); i++) {
                 String s = active.get(i);
                 track(s);
-                if (warmSpacingMs == 0) refreshAsync(s);
-                else scheduler.schedule(() -> refreshAsync(s), i * warmSpacingMs, TimeUnit.MILLISECONDS);
+                if (warmSpacingMs == 0) backgroundRefresh(s);
+                else scheduler.schedule(() -> backgroundRefresh(s), i * warmSpacingMs, TimeUnit.MILLISECONDS);
             }
             // Full-universe warming is OFF by default: with a heavy keyless source like Cboe (every
             // "quote" is a full option-chain payload), warming ~95 symbols rate-limits us. Only the
@@ -156,7 +158,7 @@ public final class MarketDataEngine {
                 List<String> chunk = new ArrayList<>(all.subList(i, Math.min(i + batch, all.size())));
                 long delaySec = 1L + (i / batch) * 3L; // ~8 symbols every 3s
                 if (scheduler != null && !scheduler.isShutdown()) {
-                    scheduler.schedule(() -> chunk.forEach(s -> { track(s); refreshAsync(s); }), delaySec, TimeUnit.SECONDS);
+                    scheduler.schedule(() -> chunk.forEach(s -> { track(s); backgroundRefresh(s); }), delaySec, TimeUnit.SECONDS);
                 }
             }
             log.info("market engine trickling full universe ({} symbols) in batches of {}", all.size(), batch);
@@ -215,6 +217,10 @@ public final class MarketDataEngine {
 
     private void tick() {
         try {
+            // A user is waiting on a cold fetch right now: skip this background cycle entirely so
+            // scheduled refreshes never queue ahead of (or beside) the interactive request at the
+            // provider's concurrency gate. The next tick picks the stale symbols back up.
+            if (pendingInteractive.get() > 0) return;
             int interval = currentIntervalSeconds();
             long now = clock.millis();
             for (String s : new ArrayList<>(lastAccess.keySet())) {
@@ -273,17 +279,27 @@ public final class MarketDataEngine {
         try { refreshFuture(symbol); } catch (Exception e) { /* pool rejected; next tick retries */ }
     }
 
+    /** Background variant: yields to any pending interactive fetch (the tick retries the symbol). */
+    private void backgroundRefresh(String symbol) {
+        if (pendingInteractive.get() > 0) return;
+        refreshAsync(symbol);
+    }
+
     /** Blocking parallel fill for cold symbols: JOINS any in-flight (e.g. warm) refresh, never skips. */
     private void fetchBlocking(List<String> symbols) {
-        List<java.util.concurrent.CompletableFuture<Void>> futures = new ArrayList<>();
-        for (String s : symbols) {
-            try { futures.add(refreshFuture(s)); } catch (Exception e) { /* skip; snapshot may stay cold */ }
-        }
+        pendingInteractive.incrementAndGet();
         try {
+            List<java.util.concurrent.CompletableFuture<Void>> futures = new ArrayList<>();
+            for (String s : symbols) {
+                try { futures.add(refreshFuture(s)); } catch (Exception e) { /* skip; snapshot may stay cold */ }
+            }
             java.util.concurrent.CompletableFuture
                     .allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
                     .get(cfg.httpTimeoutMs() + 5000L, TimeUnit.MILLISECONDS);
-        } catch (Exception e) { /* leave whatever we have; snapshots carry any error */ }
+        } catch (Exception e) { /* leave whatever we have; snapshots carry any error */
+        } finally {
+            pendingInteractive.decrementAndGet();
+        }
     }
 
     private void doRefresh(String symbol) {

@@ -79,7 +79,8 @@ public final class ResearchQuestionEngine {
                                  double winRateEdgePct, double meanEdgePct, double zScore, boolean significant,
                                  double ciLowPct, double ciHighPct, List<Bucket> distribution,
                                  List<String> exampleDates, String evidence, boolean observed,
-                                 String verdict, List<String> notes) {}
+                                 String verdict, List<String> notes,
+                                 Double effectSize, String holdout) {}
 
     public QuestionResult run(RunRequest req) {
         String key = req.key() == null ? "" : req.key().trim();
@@ -120,15 +121,22 @@ public final class ResearchQuestionEngine {
         // complement, not all bars — so the win-rate edge compares disjoint groups (finding: a baseline
         // that is a superset of the conditioned set biases the test toward "no edge"). No look-ahead:
         // bar i's signal uses closes[<= i]; the forward return looks ahead only for the outcome.
+        // NON-OVERLAPPING EVENTS: a signal that keeps firing day after day is ONE market episode, not
+        // many independent observations — after taking a signal, further firings inside its hold window
+        // are merged into that event. The conditioned sample is therefore genuinely independent.
         List<Double> baseFwd = new ArrayList<>();  // non-signal complement = "normally"
         List<Double> condFwd = new ArrayList<>();
         List<String> examples = new ArrayList<>();
+        int mergedFirings = 0;
+        int eventOpenUntil = -1;
         for (int i = startIdx; i + forward < n; i++) {
             double fwd = closes[i + forward] / closes[i] - 1.0;
             if (signal(key, closes, i, lookback, p)) {
+                if (i < eventOpenUntil) { mergedFirings++; continue; } // same episode as a taken signal
                 condFwd.add(fwd);
+                eventOpenUntil = i + forward;
                 if (examples.size() < 6) examples.add(candles.get(i).date().toString());
-            } else {
+            } else if (i >= eventOpenUntil) {
                 baseFwd.add(fwd);
             }
         }
@@ -137,13 +145,21 @@ public final class ResearchQuestionEngine {
         Stat conditioned = stat(condFwd);
         double winEdge = round(conditioned.winRatePct() - baseline.winRatePct());
         double meanEdge = round(conditioned.meanReturnPct() - baseline.meanReturnPct());
-        // Forward windows overlap by (forward-1) days, so adjacent observations are NOT independent —
-        // deflate the effective sample by ~forward for the z-test and use a block bootstrap for the CI,
-        // else significance is wildly overstated and the CI far too narrow.
+        // The conditioned sample is non-overlapping events (independent); the baseline complement
+        // still overlaps by (forward-1) days, so only ITS effective sample is deflated for the z-test.
         double z = twoPropZ(conditioned, baseline, forward);
         boolean significant = conditioned.sample() >= MIN_SAMPLE && Math.abs(z) >= Z_95;
-        double[] ci = bootstrapMeanCi(condFwd, symbol.hashCode() ^ key.hashCode(), forward);
-        if (forward > 1) notes.add("Forward windows overlap; significance is corrected for that (effective sample ≈ signals ÷ hold).");
+        double[] ci = bootstrapMeanCi(condFwd, symbol.hashCode() ^ key.hashCode(), 1); // events are independent
+        if (mergedFirings > 0) notes.add("Back-to-back firings inside one hold window count as ONE event ("
+                + mergedFirings + " merged) — the " + conditioned.sample() + " events are non-overlapping.");
+        // EFFECT SIZE (Cohen's d vs the baseline spread): a "significant" edge that is a tiny fraction
+        // of normal day-to-day noise is not tradable — say so with a number.
+        Double effectSize = effectSize(condFwd, baseFwd);
+        // SPLIT-HALF HOLDOUT: did the edge exist in BOTH halves of the window, or is it one regime's story?
+        String holdout = splitHalfHoldout(condFwd, baseline.winRatePct(), winEdge);
+        if (significant) notes.add("One of " + catalog().size() + " catalog questions: at 95% confidence, expect "
+                + "a false \u201csupported\u201d roughly once per " + Math.max(2, Math.round(20.0 / catalog().size()))
+                + " full sweeps \u2014 treat a lone positive as a lead to verify, not proof.");
         List<Bucket> dist = histogram(condFwd);
 
         String verdict;
@@ -152,7 +168,9 @@ public final class ResearchQuestionEngine {
         } else if (significant && winEdge > 0) {
             verdict = "Supported — after this signal, " + symbol + " was positive " + pct(conditioned.winRatePct())
                     + " of the time over " + forward + " days, vs " + pct(baseline.winRatePct())
-                    + " normally (mean " + signed(conditioned.meanReturnPct()) + " vs " + signed(baseline.meanReturnPct()) + ").";
+                    + " normally (mean " + signed(conditioned.meanReturnPct()) + " vs " + signed(baseline.meanReturnPct()) + ")."
+                    + ("held".equals(holdout) ? " The edge held in both halves of the window."
+                       : "faded".equals(holdout) ? " CAUTION: the edge lived in only one half of the window \u2014 possibly one regime's story." : "");
         } else if (significant && winEdge < 0) {
             verdict = "Rejected — the signal preceded WORSE outcomes than normal (" + pct(conditioned.winRatePct())
                     + " positive vs " + pct(baseline.winRatePct()) + "). Fading it may make more sense than following it.";
@@ -163,7 +181,8 @@ public final class ResearchQuestionEngine {
 
         return new QuestionResult(key, symbol, questionText(q, symbol, forward, lookback, p), from.toString(), to.toString(),
                 forward, baseline, conditioned, winEdge, meanEdge, round(z), significant,
-                round(ci[0]), round(ci[1]), dist, examples, evidenceLabel(series.freshness()), observed, verdict, notes);
+                round(ci[0]), round(ci[1]), dist, examples, evidenceLabel(series.freshness()), observed, verdict, notes,
+                effectSize, holdout);
     }
 
     // ---- Signals (no look-ahead) ----
@@ -214,24 +233,58 @@ public final class ResearchQuestionEngine {
     }
 
     /**
-     * Two-proportion z-test on the conditioned vs baseline win rate (pooled), with the effective
-     * sample deflated by the hold period because overlapping forward windows are not independent.
+     * Two-proportion z-test on the conditioned vs baseline win rate (pooled). Conditioned events are
+     * sampled non-overlapping (independent) so they count in full; the baseline complement still
+     * overlaps by the hold period, so only its effective sample is deflated by ~forward.
      */
     private static double twoPropZ(Stat cond, Stat base, int forward) {
         if (cond.sample() == 0 || base.sample() == 0) return 0;
         double p1 = cond.winRatePct() / 100.0, p2 = base.winRatePct() / 100.0;
-        int f = Math.max(1, forward);
-        int n1 = Math.max(1, cond.sample() / f);   // effective (near-independent) sample
-        int n2 = Math.max(1, base.sample() / f);
+        int n1 = cond.sample();                                   // independent events
+        int n2 = Math.max(1, base.sample() / Math.max(1, forward)); // overlapping complement
         double pooled = (p1 * n1 + p2 * n2) / (n1 + n2);
         double se = Math.sqrt(pooled * (1 - pooled) * (1.0 / n1 + 1.0 / n2));
         return se == 0 ? 0 : (p1 - p2) / se;
     }
 
     /**
+     * Cohen's d of the conditioned mean vs the baseline distribution: edge \u00f7 normal noise.
+     * Null when either side is too thin to estimate a spread.
+     */
+    private static Double effectSize(List<Double> cond, List<Double> base) {
+        if (cond.size() < 5 || base.size() < 5) return null;
+        double mc = cond.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+        double mb = base.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+        double var = 0;
+        for (double r : base) var += (r - mb) * (r - mb);
+        double sd = Math.sqrt(var / (base.size() - 1));
+        return sd == 0 ? null : round((mc - mb) / sd);
+    }
+
+    /**
+     * Split-half walk-forward check: did the win-rate edge (vs the FULL baseline) point the same way
+     * in both the first and second half of the events? "held" / "faded" / null (too few to split).
+     */
+    private static String splitHalfHoldout(List<Double> condFwd, double baselineWinPct, double fullEdge) {
+        int n = condFwd.size();
+        if (n < 10 || fullEdge == 0) return null;
+        int half = n / 2;
+        double w1 = winPct(condFwd.subList(0, half)) - baselineWinPct;
+        double w2 = winPct(condFwd.subList(half, n)) - baselineWinPct;
+        boolean sameSign = Math.signum(w1) == Math.signum(fullEdge) && Math.signum(w2) == Math.signum(fullEdge);
+        return sameSign ? "held" : "faded";
+    }
+
+    private static double winPct(List<Double> rs) {
+        if (rs.isEmpty()) return 0;
+        long wins = rs.stream().filter(r -> r > 0).count();
+        return (double) wins / rs.size() * 100.0;
+    }
+
+    /**
      * Deterministic MOVING-BLOCK bootstrap 90% CI on the conditioned mean forward return (percent).
-     * Blocks of length ~forward preserve the autocorrelation of overlapping windows, so the CI is
-     * honestly wide (an iid bootstrap of overlapping returns would be far too narrow).
+     * With non-overlapping events the caller passes block=1 (iid resampling of independent events);
+     * the block machinery remains for any future overlapping series.
      */
     private static double[] bootstrapMeanCi(List<Double> rs, long seed, int forward) {
         int n = rs.size();
@@ -293,7 +346,8 @@ public final class ResearchQuestionEngine {
                                  boolean observed, Freshness f, String verdict, List<String> notes) {
         Stat z = new Stat(0, 0, 0, 0, 0, 0);
         return new QuestionResult(q.key(), symbol, q.title(), from.toString(), to.toString(), forward,
-                z, z, 0, 0, 0, false, 0, 0, List.of(), List.of(), evidenceLabel(f), observed, verdict, notes);
+                z, z, 0, 0, 0, false, 0, 0, List.of(), List.of(), evidenceLabel(f), observed, verdict, notes,
+                null, null);
     }
 
     private static boolean isObserved(Freshness f) {

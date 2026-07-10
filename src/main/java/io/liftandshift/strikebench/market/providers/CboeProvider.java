@@ -48,15 +48,18 @@ public final class CboeProvider implements MarketDataProvider {
      * and across the auto-scout's universe scan — pay for one download, not one per call.
      * Failures are never cached; a definitive 404 is (as empty) so unknown symbols don't hammer.
      */
-    private final com.github.benmanes.caffeine.cache.Cache<String, Optional<JsonNode>> payloadCache =
+    /** A cached payload remembers WHEN it was fetched — readers must never restamp it as fresh. */
+    record CachedPayload(JsonNode data, long fetchedAtMs) {}
+
+    private final com.github.benmanes.caffeine.cache.Cache<String, Optional<CachedPayload>> payloadCache =
             com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
                     .expireAfterWrite(java.time.Duration.ofSeconds(120))
                     // WEIGHT-bounded, not count-bounded: each entry is a full multi-MB option-chain
                     // tree, so 300 of them was a heap risk. ~64MB budget, weighed by contract count
                     // (a cheap proxy for tree size: ~200 bytes/contract + fixed overhead).
                     .maximumWeight(64L * 1024 * 1024)
-                    .weigher((String k, Optional<JsonNode> v) ->
-                            v.map(n -> 1024 + n.path("options").size() * 200).orElse(64))
+                    .weigher((String k, Optional<CachedPayload> v) ->
+                            v.map(cp -> 1024 + cp.data().path("options").size() * 200).orElse(64))
                     .build();
 
     private final long cooldownMs;
@@ -127,8 +130,9 @@ public final class CboeProvider implements MarketDataProvider {
     @Override
     public Optional<Quote> quote(String symbol) {
         String sym = normalize(symbol);
-        JsonNode data = fetchData(sym);
-        if (data == null) return Optional.empty();
+        CachedPayload payload = fetchData(sym);
+        if (payload == null) return Optional.empty();
+        JsonNode data = payload.data();
 
         BigDecimal last = decimal(data, "current_price");
         if (last == null) last = decimal(data, "close");
@@ -146,7 +150,7 @@ public final class CboeProvider implements MarketDataProvider {
                 null,
                 longVal(data, "volume"),
                 optionable,
-                System.currentTimeMillis(),
+                payload.fetchedAtMs(), // when Cboe answered — a cache read must not restamp it
                 "cboe",
                 Freshness.DELAYED));
     }
@@ -154,8 +158,9 @@ public final class CboeProvider implements MarketDataProvider {
     @Override
     public List<LocalDate> expirations(String symbol) {
         String sym = normalize(symbol);
-        JsonNode data = fetchData(sym);
-        if (data == null) return List.of();
+        CachedPayload payload = fetchData(sym);
+        if (payload == null) return List.of();
+        JsonNode data = payload.data();
 
         TreeSet<LocalDate> dates = new TreeSet<>();
         for (JsonNode opt : data.path("options")) {
@@ -168,10 +173,11 @@ public final class CboeProvider implements MarketDataProvider {
     @Override
     public Optional<OptionChain> chain(String symbol, LocalDate expiration) {
         String sym = normalize(symbol);
-        JsonNode data = fetchData(sym);
-        if (data == null) return Optional.empty();
+        CachedPayload payload = fetchData(sym);
+        if (payload == null) return Optional.empty();
+        JsonNode data = payload.data();
 
-        long asOf = System.currentTimeMillis();
+        long asOf = payload.fetchedAtMs();
         List<OptionQuote> calls = new ArrayList<>();
         List<OptionQuote> puts = new ArrayList<>();
         for (JsonNode opt : data.path("options")) {
@@ -224,15 +230,15 @@ public final class CboeProvider implements MarketDataProvider {
      * node, or null when Cboe definitively has nothing for the symbol
      * (HTTP 404, or a body without a data object). Other failures propagate.
      */
-    private JsonNode fetchData(String symbol) {
+    private CachedPayload fetchData(String symbol) {
         // Circuit breaker: while cooling down from a 429, make NO Cboe request (for any symbol) — this
         // is what stops the retry storm and the ongoing hammering. Callers fall through the chain.
         if (coolingDown()) return null;
-        Optional<JsonNode> cached = payloadCache.get(symbol, this::fetchDataUncached);
+        Optional<CachedPayload> cached = payloadCache.get(symbol, this::fetchDataUncached);
         return cached == null ? null : cached.orElse(null);
     }
 
-    private Optional<JsonNode> fetchDataUncached(String symbol) {
+    private Optional<CachedPayload> fetchDataUncached(String symbol) {
         String url = baseUrl + "/api/global/delayed_quotes/options/" + symbol + ".json";
         String body;
         boolean acquired = false;
@@ -265,7 +271,7 @@ public final class CboeProvider implements MarketDataProvider {
             if (acquired) concurrency.release();
         }
         JsonNode data = Json.parse(body).path("data");
-        return data.isObject() ? Optional.of(data) : Optional.empty();
+        return data.isObject() ? Optional.of(new CachedPayload(data, System.currentTimeMillis())) : Optional.empty();
     }
 
     private static String normalize(String symbol) {

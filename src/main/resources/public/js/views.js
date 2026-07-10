@@ -1146,7 +1146,7 @@
         : el('div', { class: 'fact' },
             el('div', { class: 'f-label' }, UI.term('pop', 'Chance of any profit')),
             el('div', { class: 'f-value' }, fmtPct(c.pop)));
-    var card = el('div', { class: 'candidate' },
+    var card = el('div', { class: 'candidate', 'data-strategy': c.strategy },
       el('div', { class: 'head' },
         el('h3', {}, c.displayName),
         intentBadge(c.intent),
@@ -1213,9 +1213,11 @@
         chip('Confidence', fmtPct(c.confidence))),
       explain(c.beginnerExplanation));
     card.appendChild(el('div', { class: 'chip-row expert-only' },
+      c.decisionScore !== null && c.decisionScore !== undefined
+        ? chip('Decision score', fmtNum(c.decisionScore, 0), 'Risk-adjusted composite (gates, capital, tail risk, evidence quality) — this is what ordered the list.') : null,
       c.expectedValueCents !== null && c.expectedValueCents !== undefined ? chip('Model EV', fmtMoney(c.expectedValueCents, { plus: true })) : null,
       chip('Liquidity', fmtNum(c.liquidityScore, 2)),
-      chip('Screen score', fmtNum(c.score, 0), 'The quick idea-screen ranking. The Decision view re-scores with capital, tail risk and evidence quality — its ranking wins.')));
+      chip('Screen score', fmtNum(c.score, 0), 'The quick idea-screen component of the ranking. When a Decision score is shown, that risk-adjusted score ordered this list.')));
     if (c.warnings && c.warnings.length) card.appendChild(alertBox('warn', 'Heads up', c.warnings));
     card.appendChild(el('details', { class: 'qa' },
       el('summary', {}, 'Why this idea — and what would kill it'),
@@ -1279,7 +1281,8 @@
       { key: 'assignmentProb', label: 'Assign%', get: function (c) { return c.assignmentProb === null || c.assignmentProb === undefined ? -1 : c.assignmentProb; }, render: function (c) { return el('span', {}, c.assignmentProb === null || c.assignmentProb === undefined ? '\u2014' : fmtPct(c.assignmentProb)); } },
       { key: 'annualizedYieldPct', label: 'Yield/yr', get: function (c) { return c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? -1 : c.annualizedYieldPct; }, render: function (c) { return el('span', {}, c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? '\u2014' : fmtNum(c.annualizedYieldPct, 1) + '%'); } },
       { key: 'liquidityScore', label: 'Liq', get: function (c) { return c.liquidityScore; }, render: function (c) { return el('span', {}, fmtNum(c.liquidityScore, 2)); } },
-      { key: 'score', label: 'Screen score', get: function (c) { return c.score; }, render: function (c) { return el('b', {}, fmtNum(c.score, 0)); } }
+      { key: 'decisionScore', label: 'Decision score', get: function (c) { return c.decisionScore; }, render: function (c) { return c.decisionScore === null || c.decisionScore === undefined ? '\u2014' : el('b', {}, fmtNum(c.decisionScore, 0)); } },
+      { key: 'score', label: 'Screen score', get: function (c) { return c.score; }, render: function (c) { return fmtNum(c.score, 0); } }
     ];
     var wrap = el('div', { class: 'card', id: 'compare-table' });
     function render() {
@@ -4487,10 +4490,19 @@
     out.appendChild(mean);
     var dc = distChart(r.distribution);
     if (dc) out.appendChild(dc);
+    if (r.holdout) {
+      out.appendChild(el('div', { class: 'muted small' },
+        r.holdout === 'held' ? 'Out-of-sample check: the edge held in both halves of the window.'
+          : 'Out-of-sample check: the edge lived in only ONE half of the window \u2014 treat with caution.'));
+    }
     if (level === 'expert') {
       out.appendChild(el('div', { class: 'chip-row' },
         chip('z-score', String(r.zScore)),
         chip('90% CI (avg)', r.ciLowPct + '% … ' + r.ciHighPct + '%'),
+        r.effectSize !== null && r.effectSize !== undefined
+          ? chip('Effect size', String(r.effectSize), 'Cohen\u2019s d: the edge measured in units of the stock\u2019s normal noise. Under ~0.2 is negligible even when statistically significant.') : null,
+        r.holdout ? chip('Out-of-sample', r.holdout === 'held' ? 'held' : 'faded',
+          'Split-half walk-forward: did the edge point the same way in both halves of the window?') : null,
         chip('Baseline avg', (r.baseline.meanReturnPct >= 0 ? '+' : '') + r.baseline.meanReturnPct + '%'),
         chip('Significant', r.significant ? 'yes' : 'no')));
     }

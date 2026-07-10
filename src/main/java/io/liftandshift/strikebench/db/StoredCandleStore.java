@@ -29,7 +29,12 @@ public final class StoredCandleStore implements CandleStore {
         this.datasets = datasets;
     }
 
-    private String activeId() { return datasets == null ? DatasetService.OBSERVED : datasets.activeId(); }
+    private String activeId() {
+        // The REQUESTING USER'S dataset (ThreadLocal set per request); background threads have
+        // no context and read observed — scenario mode is personal, never ambient.
+        String ctx = DatasetContext.current();
+        return ctx != null && datasets != null ? ctx : DatasetService.OBSERVED;
+    }
 
     @Override public String cacheKey() { return activeId(); }
 

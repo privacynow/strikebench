@@ -1230,3 +1230,8 @@ body.lvl-expert .showcase-frame { max-height: 375px; }
 @media (min-width: 640px) {
   .form-grid .field > label { min-height: 2.35em; display: flex; align-items: flex-end; }
 }
+
+/* Fan chart: clickable sample paths (per-future inspection) */
+.fan-chart g.fan-sample { cursor: pointer; }
+.fan-chart g.fan-sample.selected .fan-sample-line { stroke: var(--accent); stroke-width: 2; opacity: 1; }
+.fan-path-readout { margin-top: 4px; }

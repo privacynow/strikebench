@@ -509,6 +509,39 @@
     var xs = points.map(function (p) { return parseFloat(p.price); });
     var ys = points.map(function (p) { return p.profitCents; });
     var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
+
+    // KNOT-BASED X-DOMAIN: the server grid spans spot±30%, but a tight vertical's action lives in
+    // a few-dollar slice — untrimmed it renders as a sliver. Window = knots (slope changes) +
+    // breakevens + spot + current handle strikes, padded; pure-linear payoffs keep the full span.
+    (function trimDomain() {
+      var interesting = [];
+      for (var k = 1; k < xs.length - 1; k++) {
+        var dx0 = xs[k] - xs[k - 1] || 1, dx1 = xs[k + 1] - xs[k] || 1;
+        var s0 = (ys[k] - ys[k - 1]) / dx0, s1 = (ys[k + 1] - ys[k]) / dx1;
+        if (Math.abs(s1 - s0) > 1e-6 * Math.max(1, Math.abs(s0), Math.abs(s1))) interesting.push(xs[k]);
+      }
+      if (!interesting.length) return; // linear (stock) — nothing to focus on
+      (opts.breakevens || []).forEach(function (b) { var v = parseFloat(b); if (!isNaN(v)) interesting.push(v); });
+      if (opts.spot !== undefined && opts.spot !== null) interesting.push(opts.spot);
+      (opts.handles || []).forEach(function (h) { if (h && typeof h.strike === 'number') interesting.push(h.strike); });
+      var iLo = Math.min.apply(null, interesting), iHi = Math.max.apply(null, interesting);
+      var padX = Math.max((iHi - iLo) * 0.35, (opts.spot || iHi || 1) * 0.03);
+      var lo = Math.max(xMin, iLo - padX), hi = Math.min(xMax, iHi + padX);
+      if (hi - lo <= 1e-9 || hi - lo >= (xMax - xMin) * 0.98) return; // no meaningful trim
+      function yAt(px) {
+        var i = 1;
+        while (i < xs.length - 1 && xs[i] < px) i++;
+        var t = xs[i] === xs[i - 1] ? 0 : (px - xs[i - 1]) / (xs[i] - xs[i - 1]);
+        return ys[i - 1] + t * (ys[i] - ys[i - 1]);
+      }
+      var nxs = [lo], nys = [yAt(lo)];
+      for (var j = 0; j < xs.length; j++) {
+        if (xs[j] > lo && xs[j] < hi) { nxs.push(xs[j]); nys.push(ys[j]); }
+      }
+      nxs.push(hi); nys.push(yAt(hi));
+      xs = nxs; ys = nys; xMin = lo; xMax = hi;
+    })();
+
     var yMin = Math.min.apply(null, ys), yMax = Math.max.apply(null, ys);
     if (yMin === yMax) { yMin -= 100; yMax += 100; }
     var yPad = (yMax - yMin) * 0.12;
@@ -612,8 +645,11 @@
         if (!box.width) return;
         var vx = (ev.clientX - box.left) / box.width * W;
         var price = xMin + (vx - padL) / (W - padL - padR) * (xMax - xMin);
-        var best = h.strikes[0], bd = Infinity;
-        h.strikes.forEach(function (k) { var d = Math.abs(k - price); if (d < bd) { bd = d; best = k; } });
+        var best = snapped, bd = Infinity;
+        h.strikes.forEach(function (k) {
+          if (k < xMin || k > xMax) return; // outside the focused window — the selects still reach it
+          var d = Math.abs(k - price); if (d < bd) { bd = d; best = k; }
+        });
         if (best !== snapped) { snapped = best; moveTo(best); }
       });
       grip.addEventListener('pointerup', function (ev) {

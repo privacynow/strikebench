@@ -522,8 +522,12 @@ test('discover-to-place: screening happens ONCE, in Discover; Place is strikes/r
   await page.selectOption('#rec-thesis', 'bullish');
   await page.click('#rec-go');
   await page.waitForSelector('#rec-results .candidate', { timeout: 30000 });
-  // Button label differs by level (beginner: Practice this trade / expert: Use in trade ticket)
-  await page.locator('#rec-results .candidate button:has-text("Practice this trade"), #rec-results .candidate button:has-text("Use in trade ticket")').first().click();
+  // Button label differs by level (beginner: Practice this trade / expert: Use in trade ticket).
+  // Prefer a CREDIT structure: downstream ledger tests pin RESERVE_HOLD/RELEASE rows, which only
+  // credit trades produce (candidates are decision-ranked, so the first card's family can change).
+  const creditCard = page.locator('#rec-results .candidate[data-strategy^="CREDIT"]');
+  const pickCard = (await creditCard.count()) ? creditCard.first() : page.locator('#rec-results .candidate').first();
+  await pickCard.locator('button:has-text("Practice this trade"), button:has-text("Use in trade ticket")').first().click();
   // Place opens at Strikes with the idea in the bar
   await page.waitForSelector('#to-review');
   assert.match(await page.textContent('#idea-bar'), /AAPL/);

@@ -184,6 +184,7 @@ public final class TradeService {
     /** Closes at current marks. Returns realized P/L net of all fees. */
     public CloseResult unwind(String tradeId, boolean confirm) {
         requireConfirm(confirm, "unwind");
+        markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
         CloseResult result = db.tx(c -> {
             TradeRecord t = requireStatus(c, tradeId, TradeRecord.ACTIVE);
             Account acct = AccountService.get(c, t.accountId());
@@ -215,6 +216,7 @@ public final class TradeService {
     /** Settles an expired position at cash-equivalent intrinsic value. */
     public CloseResult settle(String tradeId, boolean confirm) {
         requireConfirm(confirm, "settle");
+        markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
         CloseResult result = db.tx(c -> {
             TradeRecord t = requireStatus(c, tradeId, TradeRecord.ACTIVE);
             java.time.Instant now = clock.instant();
@@ -357,6 +359,7 @@ public final class TradeService {
      */
     public TradeRecord delete(String tradeId, boolean confirm) {
         requireConfirm(confirm, "delete");
+        markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
         TradeRecord out = db.tx(c -> {
             TradeRecord t = requireStatus(c, tradeId, TradeRecord.ACTIVE);
             Account acct = AccountService.get(c, t.accountId());
@@ -385,6 +388,16 @@ public final class TradeService {
         return out;
     }
 
+    /**
+     * ONE mark snapshot per trade per ~10s: the portfolio page asks for the same trade's mark from
+     * the summary, the greeks strip, AND the enriched table row — three identical leg-by-leg
+     * computations against 15s-cached quotes. Read paths share this memo; refresh() always
+     * recomputes (it persists a row) and replaces the memo; closes invalidate.
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, MarkView> markMemo =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .expireAfterWrite(java.time.Duration.ofSeconds(10)).maximumSize(500).build();
+
     /** Recomputes marks and writes a trade_marks row. NEVER touches cash or the reserve. */
     public MarkView refresh(String tradeId) {
         TradeRecord t = get(tradeId);
@@ -392,6 +405,7 @@ public final class TradeService {
             throw new IllegalStateException("trade is " + t.status() + "; only ACTIVE trades can be refreshed");
         }
         MarkView view = computeMark(t);
+        markMemo.put(tradeId, view);
         db.exec("INSERT INTO trade_marks(trade_id,ts,underlying_px_cents,close_cost_cents,unrealized_cents,pop_now,freshness,detail_json) VALUES (?,?,?,?,?,?,?,?)",
                 tradeId, view.ts(), view.underlyingCents(), view.closeCostCents(), view.unrealizedCents(),
                 view.popNow(), view.freshness(), null);
@@ -400,7 +414,15 @@ public final class TradeService {
 
     /** Same computation as refresh, but persists nothing — used by the detail view. */
     public MarkView currentMark(String tradeId) {
-        return computeMark(get(tradeId));
+        return memoizedMark(get(tradeId));
+    }
+
+    private MarkView memoizedMark(TradeRecord t) {
+        MarkView cached = markMemo.getIfPresent(t.id());
+        if (cached != null) return cached;
+        MarkView view = computeMark(t);
+        markMemo.put(t.id(), view);
+        return view;
     }
 
     private MarkView computeMark(TradeRecord t) {
@@ -485,7 +507,7 @@ public final class TradeService {
         Freshness worst = Freshness.FIXTURE;
         for (TradeRecord t : active) {
             MarkView view;
-            try { view = computeMark(t); } catch (RuntimeException e) { complete = false; continue; }
+            try { view = memoizedMark(t); } catch (RuntimeException e) { complete = false; continue; }
             if (view.closeCostCents() == null) { complete = false; continue; }
             value += view.closeCostCents();
             unrealized += view.unrealizedCents() == null ? 0 : view.unrealizedCents();
@@ -510,7 +532,7 @@ public final class TradeService {
         List<Map<String, Object>> positions = new ArrayList<>();
         for (TradeRecord t : active) {
             MarkView view;
-            try { view = computeMark(t); } catch (RuntimeException e) { complete = false; continue; }
+            try { view = memoizedMark(t); } catch (RuntimeException e) { complete = false; continue; }
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", t.id());
             row.put("symbol", t.symbol());

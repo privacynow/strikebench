@@ -305,6 +305,40 @@ public final class ApiServer {
                         || p.equals("/api/config") || p.equals("/api/status")) return;
                 auth.requireUser(ctx);
             });
+            // Per-request dataset context: the caller's active dataset drives the candle read
+            // path for THIS request only. Background threads never see it — scenario mode is
+            // personal, never ambient. Cleared in `after` so pooled threads can't leak worlds.
+            c.routes.before("/api/*", ctx -> {
+                if (datasets == null) return;
+                try {
+                    io.liftandshift.strikebench.db.DatasetContext.set(datasets.activeId(ownerId(ctx)));
+                } catch (Exception e) { io.liftandshift.strikebench.db.DatasetContext.clear(); }
+            });
+            c.routes.after("/api/*", ctx -> io.liftandshift.strikebench.db.DatasetContext.clear());
+
+            // LIVE-MODE per-IP throttle: this app fronts real third-party feeds, so one runaway
+            // client (a stuck retry loop, a scraper) must not translate into provider hammering.
+            // Token bucket per remote IP: 300 burst, ~50 req/s refill — invisible to humans and
+            // to the DOM suites (fixture mode never throttles), decisive against a loop. SSE
+            // streams and health stay exempt so monitoring keeps working while throttled.
+            c.routes.before("/api/*", ctx -> {
+                apiRequests.incrementAndGet();
+                if (cfg.fixturesOnly()) return;
+                String path = ctx.path();
+                if (path.equals("/api/health") || path.equals("/api/metrics")
+                        || path.equals("/api/events") || path.equals("/api/market/stream")) return;
+                String ip = ctx.header("X-Forwarded-For") != null
+                        ? ctx.header("X-Forwarded-For").split(",")[0].trim() : ctx.ip();
+                if (!throttle.tryAcquire(ip)) {
+                    apiThrottled.incrementAndGet();
+                    ctx.status(429);
+                    ctx.json(java.util.Map.of("error", "rate limited",
+                            "detail", "too many requests from this address — slow down and retry"));
+                    ctx.skipRemainingHandlers();
+                }
+            });
+            c.routes.get("/api/metrics", this::metrics);
+
             // Prefetch governor: speculative requests (X-Priority: prefetch) are welcome only when
             // the heavy providers have spare budget. A denied prefetch is a quiet 204 — the client
             // simply doesn't warm its cache; the user never waits on (or behind) a guess.
@@ -460,6 +494,7 @@ public final class ApiServer {
             c.routes.exception(IllegalStateException.class, (e, ctx) ->
                     ctx.status(409).json(Map.of("error", "conflict", "detail", String.valueOf(e.getMessage()))));
             c.routes.exception(Exception.class, (e, ctx) -> {
+                apiErrors.incrementAndGet();
                 log.error("unhandled error on {} {}{}", ctx.method(), ctx.path(), jarChangedHint(), e);
                 ctx.status(500).json(Map.of("error", "internal", "detail", String.valueOf(e.getMessage()) + jarChangedHint()));
             });
@@ -698,8 +733,8 @@ public final class ApiServer {
         out.put("defaultStartingCashCents", cfg.defaultStartingCashCents());
         out.put("brand", Map.of("name", cfg.brandName(), "tagline", cfg.brandTagline()));
         out.put("disclaimer", RecommendationEngine.DISCLAIMER);
-        // Scenario mode: the app-wide honesty signal that a synthetic dataset is active.
-        String active = datasets == null ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : datasets.activeId();
+        // Scenario mode is PERSONAL: the signal reflects the CALLER's active dataset.
+        String active = datasets == null ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : datasets.activeId(ownerId(ctx));
         out.put("activeDataset", active);
         out.put("activeDatasetName", datasets == null ? active : datasets.nameOf(active)); // banners show NAMES, not ds_… ids
         out.put("scenarioMode", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(active));
@@ -711,6 +746,44 @@ public final class ApiServer {
      * rewritten under this running server — the classic "some screens fail to load" cause —
      * and the UI turns it into a restart banner instead of a mystery. Never 500s.
      */
+    // ---- Operational metrics + throttle ----
+    private final java.util.concurrent.atomic.AtomicLong apiRequests = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong apiErrors = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong apiThrottled = new java.util.concurrent.atomic.AtomicLong();
+    private final IpThrottle throttle = new IpThrottle(300, 50.0);
+
+    /** Simple per-IP token bucket. Buckets are pruned lazily past 10k addresses. */
+    static final class IpThrottle {
+        private final int burst; private final double perSecond;
+        private final java.util.concurrent.ConcurrentHashMap<String, Bucket> buckets = new java.util.concurrent.ConcurrentHashMap<>();
+        IpThrottle(int burst, double perSecond) { this.burst = burst; this.perSecond = perSecond; }
+        boolean tryAcquire(String ip) {
+            if (ip == null || ip.isBlank()) return true;
+            if (buckets.size() > 10_000) buckets.clear(); // bounded memory beats per-entry bookkeeping here
+            Bucket b = buckets.computeIfAbsent(ip, k -> new Bucket(burst));
+            synchronized (b) {
+                long now = System.nanoTime();
+                b.tokens = Math.min(burst, b.tokens + (now - b.lastNs) / 1e9 * perSecond);
+                b.lastNs = now;
+                if (b.tokens < 1) return false;
+                b.tokens -= 1;
+                return true;
+            }
+        }
+        static final class Bucket { double tokens; long lastNs = System.nanoTime(); Bucket(int t) { tokens = t; } }
+    }
+
+    /** Operational counters — request volume, error volume, throttle hits, engine health. */
+    private void metrics(io.javalin.http.Context ctx) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("requests", apiRequests.get());
+        out.put("errors", apiErrors.get());
+        out.put("throttled", apiThrottled.get());
+        out.put("throttleActive", !cfg.fixturesOnly());
+        try { out.put("engine", marketEngine.status()); } catch (Exception e) { out.put("engine", Map.of("error", e.toString())); }
+        ctx.json(out);
+    }
+
     private void health(Context ctx) {
         boolean changed;
         try {
@@ -989,14 +1062,14 @@ public final class ApiServer {
     public record ActiveDatasetRequest(String id) {}
 
     private void datasetSetActive(Context ctx) {
-        // The active dataset changes the APP-WIDE candle read path (tape, engine, backtests) —
-        // with auth on, only an admin flips it; the service additionally requires the caller to
-        // OWN the dataset being activated (or observed). Auth off = the single local user.
-        if (auth.enabled()) requireAdmin(ctx);
+        // PER-USER selection: activating a dataset changes only the CALLER's read path, so no
+        // admin gate is needed anymore — ownership (yours or observed) is the whole rule.
         ActiveDatasetRequest b = requireBody(bodyOrNull(ctx, ActiveDatasetRequest.class));
-        datasets.setActive(b.id(), ownerId(ctx));
-        ctx.json(Map.of("ok", true, "active", datasets.activeId(),
-                "scenarioMode", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(datasets.activeId())));
+        String owner = ownerId(ctx);
+        datasets.setActive(b.id(), owner);
+        String nowActive = datasets.activeId(owner);
+        ctx.json(Map.of("ok", true, "active", nowActive,
+                "scenarioMode", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(nowActive)));
     }
 
     public record CompareStructure(String key, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs) {}
@@ -1415,7 +1488,38 @@ public final class ApiServer {
     // ---- Recommendations ----
 
     private void recommend(Context ctx) {
-        ctx.json(resolveAndRecommend(ctx));
+        RecommendationEngine.Result result = resolveAndRecommend(ctx);
+        ctx.json(decisionRanked(result, currentAccount(ctx)));
+    }
+
+    /**
+     * ONE ranking everywhere: candidates leave this API ordered by the DECISION score (the full
+     * StrategyEvaluation composite — gates, capital, tail risk, evidence haircut), the same score
+     * the Decision page and the opportunity scan use. The engine's quick screen score stays on each
+     * candidate as a disclosed component. Evaluation trouble falls back to screen order, labeled.
+     */
+    private Object decisionRanked(RecommendationEngine.Result result, Account acct) {
+        if (result.candidates() == null || result.candidates().size() < 2) return result;
+        try {
+            var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
+                    result.riskMode(), result.candidates(), acct.buyingPowerCents(), null, false);
+            if (evals.size() != result.candidates().size()) return result; // partial evaluation: keep screen order
+            com.fasterxml.jackson.databind.node.ObjectNode out =
+                    (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(result);
+            com.fasterxml.jackson.databind.node.ArrayNode cands = out.putArray("candidates");
+            for (var e : evals) { // evaluateAndRank order: viable first, then risk-adjusted desc
+                com.fasterxml.jackson.databind.node.ObjectNode m =
+                        (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(e.candidate());
+                m.put("decisionScore", Math.round(e.rankScore()));
+                m.put("decisionViable", e.viable());
+                cands.add(m);
+            }
+            out.put("ranking", "decision"); // disclosed: what ordered this list
+            return out;
+        } catch (RuntimeException e) {
+            log.warn("decision ranking unavailable — serving screen order: {}", e.toString());
+            return result;
+        }
     }
 
     /** Parses the recommend request (injecting real holdings for hold-based intents) and runs the engine. */

@@ -110,6 +110,38 @@ class ResearchQuestionEngineTest {
     }
 
     @Test
+    void signalEventsAreNonOverlapping() {
+        // A 10-day hold means events must start >= 10 bars apart: the up_streak signal on a rising
+        // series fires on runs of consecutive days, and counting each firing as an independent
+        // observation would multiply one episode into many. Pin: example dates are spaced >= forward.
+        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+                "up_streak", "TEST", "2023-02-01", "2024-06-30",
+                Map.of("streak", 2, "forward", 10)));
+        assertThat(r.conditioned().sample()).isGreaterThan(1);
+        var dates = r.exampleDates().stream().map(java.time.LocalDate::parse).toList();
+        for (int i = 1; i < dates.size(); i++) {
+            long gapDays = java.time.temporal.ChronoUnit.DAYS.between(dates.get(i - 1), dates.get(i));
+            // >= forward TRADING days apart; calendar gap is at least the trading gap
+            assertThat(gapDays).isGreaterThanOrEqualTo(10);
+        }
+    }
+
+    @Test
+    void reportsEffectSizeAndSplitHalfHoldout() {
+        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+                "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",
+                Map.of("lookback", 20, "forward", 5)));
+        // With a healthy event count both rigor fields are populated and sane.
+        if (r.conditioned().sample() >= 10) {
+            assertThat(r.holdout()).isIn("held", "faded");
+        }
+        if (r.conditioned().sample() >= 5 && r.baseline().sample() >= 5) {
+            assertThat(r.effectSize()).isNotNull();
+            assertThat(Math.abs(r.effectSize())).isLessThan(10.0); // a standardized edge, not a raw %
+        }
+    }
+
+    @Test
     void reportsSampleEdgeDistributionAndExamples() {
         var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
                 "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",

@@ -285,12 +285,18 @@
     var median = p.bands.map(function (b, i) { return (i ? 'L' : 'M') + x(b.day).toFixed(1) + ',' + y(b.p50).toFixed(1); }).join(' ');
     // Sample paths arrive at FULL step resolution (intraday) — map each by its own length so
     // the squiggle spans the same time axis as the daily bands.
-    var samples = (p.samples || []).map(function (s) {
+    var samples = (p.samples || []).map(function (s, si) {
       var n = Math.max(1, s.length - 1);
-      return '<path d="' + s.map(function (v, i) {
+      var d = s.map(function (v, i) {
         var px = padL + (W - padL - padR) * i / n;
         return (i ? 'L' : 'M') + px.toFixed(1) + ',' + y(v).toFixed(1);
-      }).join(' ') + '" fill="none" stroke="var(--text-faint)" stroke-width="1" opacity="0.55"/>';
+      }).join(' ');
+      // Two strokes per sample: a wide invisible hit target (a 1px squiggle is unclickable) and
+      // the visible line — click a path to inspect that ONE future.
+      return '<g class="fan-sample" data-sample="' + si + '">'
+        + '<path d="' + d + '" fill="none" stroke="transparent" stroke-width="10" pointer-events="stroke"/>'
+        + '<path class="fan-sample-line" d="' + d + '" fill="none" stroke="var(--text-faint)" stroke-width="1" opacity="0.55"/>'
+        + '</g>';
     }).join('');
     var gridY = [0.25, 0.5, 0.75].map(function (f2) {
       var v = lo + (hi - lo) * f2;
@@ -331,6 +337,26 @@
         tip.style.top = Math.max(0, ev.clientY - r.top - 34) + 'px';
       });
       host.addEventListener('pointerleave', function () { tip.style.display = 'none'; });
+    })();
+    // Click a sample squiggle to inspect that single future: highlight + where it ended/travelled.
+    (function wireSampleInspect() {
+      var readout = null;
+      wrap.firstChild.addEventListener('click', function (ev) {
+        var g = ev.target && ev.target.closest ? ev.target.closest('g.fan-sample') : null;
+        wrap.firstChild.querySelectorAll('g.fan-sample.selected').forEach(function (x) { x.classList.remove('selected'); });
+        if (readout) { readout.remove(); readout = null; }
+        if (!g) return;
+        g.classList.add('selected');
+        var si = parseInt(g.getAttribute('data-sample'), 10);
+        var s = (p.samples || [])[si];
+        if (!s || !s.length) return;
+        var end = s[s.length - 1], mn = Math.min.apply(null, s), mx = Math.max.apply(null, s);
+        var pctNum = (end / p.spot - 1) * 100;
+        readout = el('div', { class: 'muted small fan-path-readout' },
+          'This future: ends at ' + end.toFixed(2) + ' (' + (pctNum >= 0 ? '+' : '') + pctNum.toFixed(1)
+          + '%), travelled ' + mn.toFixed(2) + ' \u2013 ' + mx.toFixed(2) + ' along the way. Click the chart background to clear.');
+        wrap.appendChild(readout);
+      });
     })();
     var pctDown = Math.round((p.endP10 / p.spot - 1) * 100), pctUp = Math.round((p.endP90 / p.spot - 1) * 100);
     wrap.appendChild(el('div', { class: 'chip-row chart-summary' },

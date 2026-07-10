@@ -128,15 +128,18 @@ class SimulationStackTest {
         LocalDate to = LocalDate.now(clock), from = to.minusDays(40);
         assertThat(market.candleSeries("AAPL", from, to).source()).isEqualTo("fixture"); // observed default
 
-        // Select the synthetic dataset → the read path serves it, labeled MODELED ('synthetic').
+        // Select the synthetic dataset AND enter the request context (per-user, per-request:
+        // background threads without a context always read observed) → the read path serves it.
         datasets.setActive(run.datasetId(), null);
+        io.liftandshift.strikebench.db.DatasetContext.set(datasets.activeId(null));
         CandleSeries s = market.candleSeries("AAPL", from, to);
         assertThat(s.source()).isEqualTo("synthetic");
         assertThat(s.freshness()).isEqualTo(Freshness.MODELED); // scenario data never masquerades as real
 
+        io.liftandshift.strikebench.db.DatasetContext.clear();
         // Deleting the active dataset falls back to observed (and cascades its bars).
         datasets.delete(run.datasetId(), null);
-        assertThat(datasets.activeId()).isEqualTo(DatasetService.OBSERVED);
+        assertThat(datasets.activeId(null)).isEqualTo(DatasetService.OBSERVED);
         long orphans = db.query("SELECT count(*) c FROM underlying_bar WHERE dataset_id=?",
                 r -> r.lng("c"), run.datasetId()).getFirst();
         assertThat(orphans).isZero();
@@ -158,14 +161,16 @@ class SimulationStackTest {
                 .isInstanceOf(java.util.NoSuchElementException.class);
         // Owner semantics still allow the owner everything.
         datasets.setActive(mine, "user-a");
-        assertThat(datasets.activeId()).isEqualTo(mine);
+        assertThat(datasets.activeId("user-a")).isEqualTo(mine);
+        // …and the selection is PERSONAL: user-b's read path is untouched by user-a's switch.
+        assertThat(datasets.activeId("user-b")).isEqualTo(DatasetService.OBSERVED);
         // Retention pruning is per owner AND spares the active run: user-a's churn must never
         // evict user-b's dataset, and never the one the app is actively analyzing.
         for (int i = 0; i < 30; i++) datasets.create("run" + i, "SYNTHETIC_PURE", "AAPL", 100 + i, Map.of(), "user-a");
         assertThat(datasets.ownedBy(theirs, "user-b")).isTrue();
         assertThat(datasets.ownedBy(mine, "user-a")).isTrue(); // survived its owner's churn (it is active)
         datasets.delete(mine, "user-a");
-        assertThat(datasets.activeId()).isEqualTo(DatasetService.OBSERVED); // fell back, no ghost
+        assertThat(datasets.activeId("user-a")).isEqualTo(DatasetService.OBSERVED); // fell back, no ghost
     }
 
     @Test
