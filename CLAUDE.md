@@ -1336,6 +1336,46 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   evidence-card ordering; per-row control alignment. Matrix: 342 JUnit + 47 fixture + 3 audit +
   4 seeded + 8 live — ALL GREEN.
   ===============================================================================================
+- FIN PROGRAM (2026-07-10, commit 2a9bda6): junior's completion sequence + the two open P3s —
+  everything closed except the two user-dependency items (auth-on needs the Google OIDC client
+  secret; prod cutover needs the EC2 box + real DB).
+  - FIN-1 PER-USER DATASET CONTEXT (no global synthetic switch): db/DatasetContext = request-scoped
+    ThreadLocal set by a before("/api/*") from datasets.activeId(ownerId(ctx)), cleared in after;
+    StoredCandleStore reads it; anything OUTSIDE a request (engine warm, snapshots, scans) sees no
+    context → observed. DatasetService.activeId(userId): per-owner key 'active_dataset:<owner>' w/
+    legacy-global fallback + dangling-id→observed guard; setActive per-user (activation admin gate
+    REMOVED — ownership is the rule) + owner-tagged dataset.selected; DataResetService predicate →
+    k LIKE 'active_dataset%'. Pinned: user A's switch never flips user B; unit tests must set
+    DatasetContext explicitly (no HTTP request thread).
+  - FIN-2 FEED DISCIPLINE: MarketDataEngine pendingInteractive counter — tick + boot-warm
+    backgroundRefresh() YIELDS while any user-blocking fetchBlocking is in flight (next tick
+    retries). CboeProvider CachedPayload{data, fetchedAtMs} — quote/chain asOf = FETCH time (a
+    cache read can never restamp stale as fresh). TradeService markMemo (Caffeine 10s): ONE mark
+    snapshot shared by portfolio summary/greeks/rows; refresh() recomputes+replaces; unwind/settle/
+    delete invalidate. Live-mode per-IP token bucket (300 burst, 50/s; fixture mode + SSE/health/
+    metrics exempt) + GET /api/metrics {requests, errors, throttled, engine}.
+  - FIN-3 ONE RANKING: /api/recommend candidates now ORDERED by the DECISION score (full
+    StrategyEvaluation composite, same as Decision page + scans) via ApiServer.decisionRanked —
+    each candidate carries decisionScore/decisionViable (Jackson tree rebuild; Candidate record
+    untouched), 'ranking':'decision' disclosed, evaluation failure falls back to screen order.
+    UI: Decision-score chip leads the expert chip row, comparison table gains the column, tooltips
+    updated. GOTCHA: DOM suites that pin RESERVE_RELEASE ledger rows must pick a CREDIT candidate
+    card (decision ranking put a debit spread first) — beginner cards now carry data-strategy too.
+  - FIN-3 STATISTICAL RIGOR (ResearchQuestionEngine): NON-OVERLAPPING signal events (firings
+    inside a taken hold window merge into that episode; noted w/ merged count; pinned by example-
+    date spacing ≥ hold); z-test = independent events vs deflated overlapping complement; Cohen's-d
+    effectSize vs baseline spread; split-half walk-forward holdout ('held'/'faded' in verdict +
+    both-level note + expert chip); multiple-testing note when significant. QuestionResult gained
+    effectSize/holdout (appended fields, wire-compat).
+  - FIN-3 CHART P3s CLOSED: payoffChart knot-based x-domain trim (knots from slope changes +
+    breakevens + spot + current handle strikes, padded max(35% span, 3% spot); edge interpolation
+    keeps the curve exact; handle snap bounded to the visible domain, seeded from current; pure-
+    linear payoffs keep the full span) — verified: 245/250 bull put fills the chart. Fan per-path
+    click inspection: wide invisible hit stroke per sample + accent highlight + 'ends at X (+p%),
+    travelled lo–hi' readout — verified live (playwright: click ON the stroke via getPointAtLength
+    midpoint mapped through getScreenCTM; a bbox-center force-click misses squiggles).
+  - Matrix: 344 JUnit + 47 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
+  ===============================================================================================
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
