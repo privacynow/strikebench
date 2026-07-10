@@ -189,6 +189,13 @@ test('scenario studio: beginner story cards → fan of futures → strategy verd
   assert.ok(await page.locator('#bt-mode .pill.active[data-mode="scenario"]').count(), 'Verify opened in scenario mode');
   // The FULL strategy catalog with payoff-shape sketches + a visible symbol picker.
   assert.ok((await page.locator('#sc-pos .sc-card').count()) >= 16, 'full strategy catalog, not a subset');
+  // ANTI-DRIFT: the frontend catalog must name only real backend StrategyFamily values —
+  // a hand-maintained duplicate list is exactly how the six-strategy subset happened.
+  const familyCheck = await page.evaluate(async () => {
+    const fams = (await (await fetch('/api/strategies')).json()).families;
+    return Scenario.CATALOG.map(c => c.key).filter(k => !fams.includes(k));
+  });
+  assert.deepEqual(familyCheck, [], 'catalog keys unknown to the backend: ' + familyCheck.join(','));
   assert.ok((await page.locator('#sc-pos .sc-sketch svg').count()) >= 16, 'payoff-shape sketches');
   assert.ok(await page.locator('#sc-symbol').count(), 'symbol input exists');
   await page.locator('#sc-pos .sc-card[data-pos="DEBIT_CALL_SPREAD"]').scrollIntoViewIfNeeded();

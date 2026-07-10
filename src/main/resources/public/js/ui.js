@@ -55,7 +55,9 @@
 
   function fmtPct(x, digits) {
     if (x === null || x === undefined || isNaN(x)) return '—';
-    return (x * 100).toFixed(digits === undefined ? 0 : digits) + '%';
+    var out = (x * 100).toFixed(digits === undefined ? 0 : digits);
+    if (parseFloat(out) === 0) out = out.replace('-', ''); // '−0.0%' is a formatting artifact, not a loss
+    return out + '%';
   }
 
   function fmtNum(x, digits) {
@@ -132,8 +134,18 @@
     return svg;
   }
 
-  function chip(label, valueNode) {
-    return el('span', { class: 'chip' }, el('span', { class: 'chip-label' }, label), el('b', {}, valueNode));
+  /** ISO instant/date -> the USER'S local calendar date (UTC slicing showed evening-US users tomorrow). */
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso).slice(0, 10);
+    var m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+    return d.getFullYear() + '-' + m + '-' + day;
+  }
+
+  function chip(label, valueNode, title) {
+    return el('span', { class: 'chip', title: title || null },
+      el('span', { class: 'chip-label' }, label), el('b', {}, valueNode));
   }
 
   function table(headers, rows) {
@@ -747,6 +759,7 @@
   }
 
   window.UI = {
+    fmtDate: fmtDate,
     el: el,
     icon: icon,
     skeleton: skeleton,

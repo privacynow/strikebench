@@ -362,6 +362,11 @@ public final class ApiServer {
             c.routes.get("/api/research/{symbol}/news", this::news);
             c.routes.get("/api/lookup", this::lookup);
 
+            // The single source of truth for strategy families — frontend catalogs (builder,
+            // scenario) are checked against this in the DOM suite so they can never drift silently.
+            c.routes.get("/api/strategies", ctx -> ctx.json(Map.of("families",
+                    java.util.Arrays.stream(io.liftandshift.strikebench.strategy.StrategyFamily.values())
+                            .map(Enum::name).toList())));
             c.routes.post("/api/recommend", this::recommend);
             c.routes.post("/api/recommend/auto", this::recommendAuto);
             c.routes.post("/api/recommend/ladder", this::recommendLadder);
@@ -1025,13 +1030,17 @@ public final class ApiServer {
         // construction; a market-priced entry measures YOUR SCENARIO vs THE MARKET'S PRICE.
         int qty = b.qty() == null ? 1 : b.qty();
         MarketEntry me = marketEntry(sym, b.legs(), qty);
+        // CALIBRATION: volAnnual<=0 is the "use market vol" sentinel — replace with the chain's
+        // ATM IV so a caller with no view on wildness gets THIS symbol's, not a canned 25%.
+        io.liftandshift.strikebench.sim.ScenarioSpec spec = b.spec();
+        if (spec.volAnnual() <= 0 && me != null && me.atmIv() != null) spec = spec.withVol(me.atmIv());
         io.liftandshift.strikebench.sim.IvSpec iv = b.iv();
         if (iv == null) {
-            double atm = me != null && me.atmIv() != null ? me.atmIv() : b.spec().sane().volAnnual();
+            double atm = me != null && me.atmIv() != null ? me.atmIv() : spec.sane().volAnnual();
             iv = io.liftandshift.strikebench.sim.IvSpec.flat(atm);
         }
         var result = new io.liftandshift.strikebench.sim.ScenarioSimulator().run(
-                spot, b.legs(), qty, b.spec(), iv, r,
+                spot, b.legs(), qty, spec, iv, r,
                 simEngine.historicalLogReturns(sym),
                 me == null ? null : me.entryCents(),
                 me == null ? null : "Entry priced from " + me.source() + " market quotes (buy at ask, sell at bid).");
@@ -1571,8 +1580,24 @@ public final class ApiServer {
         int size = Math.clamp(intParam(ctx, "size", 20), 1, 100);
         TradeService.Page result = trades.list(acct.id(), ctx.queryParam("status"),
                 ctx.queryParam("symbol"), ctx.queryParam("intent"), page, size);
-        ctx.json(Map.of(
-                "trades", result.trades().stream().map(TradeView::of).toList(),
+        // ACTIVE rows carry a live unrealized P/L (a table without "how is it doing NOW" hides
+        // the one number a position holder wants). Best-effort per row: a mark that can't price
+        // just leaves the cell empty — never fails the list.
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (var t : result.trades()) {
+            Map<String, Object> row = new LinkedHashMap<>(Json.MAPPER.convertValue(TradeView.of(t),
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
+            if ("ACTIVE".equals(t.status())) {
+                try {
+                    var mark = trades.currentMark(t.id());
+                    if (mark != null && mark.unrealizedCents() != null) {
+                        row.put("unrealizedPnlCents", mark.unrealizedCents());
+                    }
+                } catch (Exception e) { /* leave blank */ }
+            }
+            rows.add(row);
+        }
+        ctx.json(Map.of("trades", rows,
                 "total", result.total(), "page", result.page(), "size", result.size()));
     }
 

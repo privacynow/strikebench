@@ -217,7 +217,9 @@ public final class PortfolioBacktester {
                 : "modeled";
         return new PortfolioReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                 mode, confidence, window.size(), sample, concurrentPeak, winRate, avgRoR,
-                startingCash, ending, round(maxDd * 100), trades, equity, notes, demo, DISCLAIMER);
+                // FRACTION, like the single backtester — the UI's fmtPct multiplies by 100
+                // exactly once (x100 here too displayed 6% as 623%).
+                startingCash, ending, round(maxDd), trades, equity, notes, demo, DISCLAIMER);
     }
 
     // ---- position construction (delta-based) ----

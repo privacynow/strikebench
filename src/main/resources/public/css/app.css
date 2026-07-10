@@ -1203,3 +1203,18 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 .scenario-form label .glyph { text-transform: none; }
 .sc-pos-grid { grid-template-columns: repeat(3, 1fr); }
 @media (min-width: 900px) { .sc-pos-grid { grid-template-columns: repeat(6, 1fr); } }
+
+/* UX-reconciliation pass */
+.btn-sub { display: block; font-size: 10px; font-weight: 400; opacity: .75; letter-spacing: 0; text-transform: none; }
+#tape-demo-chip { align-self: center; margin-left: 10px; flex: none; }
+/* The expert welcome showcase content is taller than the beginner's — never guillotine an alert. */
+body.lvl-expert .showcase-frame { max-height: 375px; }
+.journey { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 2px; }
+.journey-step { display: flex; align-items: center; gap: 8px; background: none; border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 10px; cursor: pointer; text-align: left; font-size: 13.5px; color: var(--fg); }
+.journey-step:hover { border-color: var(--border-strong); }
+.journey-step .ck-mark { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center;
+  justify-content: center; font-size: 11.5px; background: var(--bg-sunken, var(--bg)); border: 1px solid var(--border); flex: none; }
+.journey-step.done { opacity: .75; }
+.journey-step.done .ck-mark { background: var(--risk-ok-solid, #3aa76d); color: #fff; border-color: transparent; }
+.journey-step.done .ck-mark::after { content: '✓'; }

@@ -208,9 +208,9 @@
 
     function getIv() {
       if (level === 'beginner') {
-        var m = MAGS.find(function (x) { return x.key === f.mag; });
         if (f.shape === 'EVENT_JUMP') { // earnings-style: IV rich into the event, crushed after
-          return { startIv: m.vol * 1.4, driftPerYear: 0, meanRevertSpeed: 1.5, longRunIv: m.vol,
+          var mv = magVolFor(f.mag);
+          return { startIv: mv * 1.4, driftPerYear: 0, meanRevertSpeed: 1.5, longRunIv: mv,
             eventDay: Math.max(1, Math.round(f.horizon / 3)), eventShockPct: -0.35, minIv: 0.03, maxIv: 4 };
         }
         // null on purpose: the server prices the IV path off the REAL chain's ATM IV, so the

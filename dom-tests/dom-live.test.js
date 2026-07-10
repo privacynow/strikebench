@@ -106,7 +106,7 @@ test('live: research handles unknown and non-optionable symbols gracefully', asy
   await page.waitForSelector('#history-card');
   await page.waitForFunction(() => {
     const t = (document.getElementById('history-card') || {}).textContent || '';
-    return /Polygon or Alpha Vantage|DEMO DATA|High/.test(t); // honest no-source note, or real/demo data if a key exists
+    return /Polygon or Alpha Vantage|No free daily-history source|DEMO DATA|High/.test(t); // honest no-source note (level-worded), or real/demo data if a key exists
   }, { timeout: 30000 });
   const hist = await page.textContent('#history-card');
   assert.doesNotMatch(hist, /Not enough data for this window/);

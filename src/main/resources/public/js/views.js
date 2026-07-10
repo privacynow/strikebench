@@ -48,7 +48,7 @@
           el('h1', { class: 'hero-title' }, 'Learn options by ', el('span', { class: 'grad' }, 'doing'), ',', el('br', {}),
             'with honest numbers.'),
           el('p', { class: 'hero-sub' },
-            'Screen strategies against your goal, practice with $100,000 in paper money, and backtest honestly \u2014 all on your machine.'),
+            'Screen strategies against your goal, practice with \$100,000 in paper money, and verify honestly.'),
           el('div', { class: 'hero-ctas' },
             el('button', {
               class: 'btn btn-lg', onclick: function () {
@@ -76,7 +76,7 @@
           } }, 'Skip \u2192 dashboard')),
         el('div', { class: 'showcase' }, liveHost,
           el('p', { class: 'showcase-caption' },
-            'A real screened idea \u2014 generated this second, refusals, odds, and assumptions included, like every idea here.')))));
+            'A real screened idea \u2014 generated this second.')))));
     (async function () {
       try {
         var r = await API.post('/api/recommend', { symbol: 'AAPL', thesis: 'bullish', horizon: 'month', riskMode: 'conservative' });
@@ -295,13 +295,33 @@
                 el('td', {}, prettyStrategy(t.strategy)),
                 el('td', {}, 'x' + t.qty),
                 el('td', { class: 'loss' }, fmtMoney(t.maxLossCents)),
-                el('td', { class: 'muted' }, (t.createdAt || '').slice(0, 10)));
+                el('td', { class: 'muted' }, UI.fmtDate(t.createdAt)));
             })));
         }
       } catch (e) {
         posCard.appendChild(alertBox('warn', 'Could not load open trades', [e.message]));
       }
     })();
+
+    // First-week journey: the welcome tour ORIENTS; a visible, check-off-able first path
+    // RETAINS. Beginner + not-yet-traded only — it retires itself the moment it's done its job.
+    if (Learn.currentLevel() === 'beginner' && acct && !acct.hasTraded) {
+      var steps = [
+        { label: 'Research a stock', done: (function () { try { return (JSON.parse(localStorage.getItem('strikebench.recent') || '[]')).length > 0; } catch (e) { return false; } })(), hash: '#/research' },
+        { label: 'Get a screened idea', done: !!App.state.recommendResults || !!App.state.scoutResults, hash: '#/trade/discover' },
+        { label: 'Practice-place it', done: false, hash: '#/trade/discover' },
+        { label: 'Know the exit plan', done: false, hash: '#/trade/discover' }
+      ];
+      colR.appendChild(el('div', { class: 'card card-slim', id: 'journey-card' },
+        UI.cardHeader('Your first trade — four steps'),
+        el('div', { class: 'journey' }, steps.map(function (st2, i) {
+          return el('button', { class: 'journey-step' + (st2.done ? ' done' : ''), type: 'button',
+            onclick: function () { App.navigate(st2.hash); } },
+            el('span', { class: 'ck-mark' }, st2.done ? '' : String(i + 1)), // done glyph lives in CSS
+            el('span', {}, st2.label));
+        })),
+        explain('Paper money, honest numbers, worst case always known. The list disappears after your first practice trade.')));
+    }
 
     // Continuity: one-tap re-entry into whatever the user was last doing — the working idea
     // takes you to Place, the working symbol back to its research page. Renders only when
@@ -340,6 +360,23 @@
 
     // Wait for the fills so data-ready means READY (tests and users agree on that).
     await Promise.all([marketsFill, tradesFill]);
+  }
+
+  /** Under ~a day old — the window where the spread-cost note earns its keep. */
+  /** Raw pricing-tier enums, in words a person reads. */
+  function prettyPricingMode(mode) {
+    return {
+      HISTORICAL_CHAIN: 'real option history (observed chains)',
+      OBSERVED_FROM_HISTORY: 'real option history (observed marks)',
+      MODELED_FROM_UNDERLYING: 'modeled from the stock\u2019s own moves (no real option history)',
+      PAYOFF_ONLY: 'payoff math only (no pricing data)'
+    }[mode] || mode;
+  }
+
+  function isYoungTrade(createdAt) {
+    if (!createdAt) return false;
+    var t = new Date(createdAt).getTime();
+    return isFinite(t) && (Date.now() - t) < 26 * 3600 * 1000;
   }
 
   function quickAction(title, hint, hash, ic) {
@@ -488,6 +525,8 @@
         chip('Prev close', fmtNum(q.prevClose)),
         chip('Day', fmtNum(q.dayLow) + ' – ' + fmtNum(q.dayHigh)),
         chip('IV (ATM)', fmtPct(r.ivAtm)),
+        chip('IV rank', 'building history',
+          'IV rank compares today\u2019s IV to this symbol\u2019s own past year — it needs observed IV history. StrikeBench records a daily snapshot (on by default in live mode); the rank unlocks as history accrues, or immediately after a licensed options-CSV import on the Data screen.'),
         chip('HV 30d', fmtPct(r.hv30) + (r.historyDemo ? ' (demo)' : '')),
         chip('Options', r.optionable ? 'yes' : 'no')),
       explain('IV is the move the options market is pricing in; HV is what the stock actually did lately. IV far above HV → options are relatively expensive to buy (and richer to sell).'),
@@ -639,14 +678,28 @@
               el('td', {}, el('b', {}, stripZeros(k))),
               el('td', { class: k > spot ? 'itm' : '' }, p.bid !== undefined ? fmtNum(p.bid) + ' / ' + fmtNum(p.ask) : '—'));
           }
+          function buildBtn(type) {
+            return el('button', { class: 'btn btn-sm btn-secondary chain-build', title: 'Start a build with this ' + type.toLowerCase() + ' leg in the strategy builder',
+              onclick: function () {
+                App.state.builderForm = { symbol: symbol, qty: 1, goal: 'BROWSE', templateKey: null, step: 4, legIdx: 0,
+                  legs: [{ action: 'BUY', type: type, strike: String(k), expiration: select.value, ratio: 1 }], excluded: {} };
+                App.navigate('#/trade/shape');
+              } }, 'B');
+          }
           return el('tr', { class: isAtm ? 'atm' : '' },
+            el('td', {}, buildBtn('CALL')),
             el('td', { class: k < spot ? 'itm' : '' }, c.bid !== undefined ? fmtNum(c.bid) + ' / ' + fmtNum(c.ask) : '—'),
             el('td', { class: k < spot ? 'itm' : '' }, c.delta !== undefined && c.delta !== null ? fmtNum(c.delta) : '—'),
             el('td', { class: k < spot ? 'itm' : '' }, c.iv ? fmtPct(c.iv) : '—'),
+            el('td', { class: k < spot ? 'itm' : '', title: 'open interest / volume' },
+              (c.openInterest != null ? fmtNum(c.openInterest, 0) : '—') + ' / ' + (c.volume != null ? fmtNum(c.volume, 0) : '—')),
             el('td', {}, el('b', {}, stripZeros(k))),
+            el('td', { class: k > spot ? 'itm' : '', title: 'open interest / volume' },
+              (p.openInterest != null ? fmtNum(p.openInterest, 0) : '—') + ' / ' + (p.volume != null ? fmtNum(p.volume, 0) : '—')),
             el('td', { class: k > spot ? 'itm' : '' }, p.iv ? fmtPct(p.iv) : '—'),
             el('td', { class: k > spot ? 'itm' : '' }, p.delta !== undefined && p.delta !== null ? fmtNum(p.delta) : '—'),
-            el('td', { class: k > spot ? 'itm' : '' }, p.bid !== undefined ? fmtNum(p.bid) + ' / ' + fmtNum(p.ask) : '—'));
+            el('td', { class: k > spot ? 'itm' : '' }, p.bid !== undefined ? fmtNum(p.bid) + ' / ' + fmtNum(p.ask) : '—'),
+            el('td', {}, buildBtn('PUT')));
         });
         chainBody.appendChild(el('div', { class: 'chip-row' },
           chip('Underlying', fmtNum(spot)), chip('Strikes', visible.length + ' of ' + strikes.length), badge(chain.freshness)));
@@ -661,7 +714,7 @@
         }
         chainBody.appendChild(table(
           learning ? ['Call price', 'Strike', 'Put price']
-                   : ['Call bid/ask', 'Call Δ', 'Call IV', 'Strike', 'Put IV', 'Put Δ', 'Put bid/ask'], rows));
+                   : ['', 'Call bid/ask', 'Call Δ', 'Call IV', 'C OI/Vol', 'Strike', 'P OI/Vol', 'Put IV', 'Put Δ', 'Put bid/ask', ''], rows));
       };
       loadChain(r.expirations[0]);
     }
@@ -669,6 +722,17 @@
       if (!App.alive(_rt)) return;
       heroCard.replaceWith(alertBox('danger', 'No data for ' + symbol + '. Check the ticker.'));
       actionsAnchor.remove(); chainAnchor.remove();
+      // The scenario studio must not offer to simulate futures for a symbol the app just said
+      // it knows nothing about — swap it for the same honest empty state its siblings show.
+      var wi = document.getElementById('whatif-card');
+      if (wi) {
+        wi.innerHTML = '';
+        wi.appendChild(UI.cardHeader('What COULD happen next?'));
+        wi.appendChild(UI.emptyState('Needs a live or demo quote first',
+          (App.config && App.config.fixturesOnly)
+            ? 'Demo mode covers AAPL, SPY, QQQ and TSLA — try one of those.'
+            : 'Simulations anchor on a real price. Check the ticker, or the Data screen for source health.'));
+      }
     });
   }
 
@@ -746,10 +810,11 @@
         badge: hist.demo ? el('span', { class: 'badge badge-warn' }, 'DEMO DATA') : null,
         note: hist.demo ? explain('This price history is built-in DEMO DATA \u2014 no live candle source is configured. Add a Polygon or Alpha Vantage key for real history.') : null,
         emptyText: candles.length ? null
-          : 'No daily price history available for ' + symbol + '. Quotes and option chains are live (Cboe), '
-            + 'but historical candles need a free Polygon or Alpha Vantage key \u2014 set POLYGON_API_KEY or '
-            + 'ALPHAVANTAGE_API_KEY (or polygon.api.key in strikebench.properties) and restart. '
-            + 'The Data screen shows per-source health.'
+          : (App.config && App.config.fixturesOnly)
+            ? 'Demo mode ships price history for AAPL, SPY, QQQ and TSLA only \u2014 try one of those.'
+            : Learn.currentLevel() === 'beginner'
+              ? 'No free daily-history source covers ' + symbol + ' right now. Quotes and option chains still work; the Data screen explains what each source provides.'
+              : 'No daily history for ' + symbol + '. Quotes/chains are live (Cboe); candles need a free Polygon or Alpha Vantage key \u2014 set POLYGON_API_KEY or ALPHAVANTAGE_API_KEY (or polygon.api.key in strikebench.properties) and restart. Per-source health: Data screen.'
       };
     };
   }
@@ -1104,7 +1169,7 @@
           : null));
     var gb = guideBlock(c.strategy);
     if (gb) card.appendChild(gb);
-    card.appendChild(UI.expandable('The exact contracts (' + c.qty + 'x)', function () {
+    card.appendChild(UI.expandable('The exact contracts \u2014 ' + c.qty + ' lot' + (c.qty > 1 ? 's' : '') + ' (each line \u00d7' + c.qty + ')', function () {
       return el('div', {},
         el('div', { class: 'mono', style: 'margin-bottom:6px' }, c.label),
         el('ul', {}, c.legs.map(function (l) { return el('li', {}, legLabel(l)); })),
@@ -1149,7 +1214,7 @@
     card.appendChild(el('div', { class: 'chip-row expert-only' },
       c.expectedValueCents !== null && c.expectedValueCents !== undefined ? chip('Model EV', fmtMoney(c.expectedValueCents, { plus: true })) : null,
       chip('Liquidity', fmtNum(c.liquidityScore, 2)),
-      chip('Score', fmtNum(c.score, 0))));
+      chip('Screen score', fmtNum(c.score, 0), 'The quick idea-screen ranking. The Decision view re-scores with capital, tail risk and evidence quality — its ranking wins.')));
     if (c.warnings && c.warnings.length) card.appendChild(alertBox('warn', 'Heads up', c.warnings));
     card.appendChild(el('details', { class: 'qa' },
       el('summary', {}, 'Why this idea — and what would kill it'),
@@ -1213,7 +1278,7 @@
       { key: 'assignmentProb', label: 'Assign%', get: function (c) { return c.assignmentProb === null || c.assignmentProb === undefined ? -1 : c.assignmentProb; }, render: function (c) { return el('span', {}, c.assignmentProb === null || c.assignmentProb === undefined ? '\u2014' : fmtPct(c.assignmentProb)); } },
       { key: 'annualizedYieldPct', label: 'Yield/yr', get: function (c) { return c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? -1 : c.annualizedYieldPct; }, render: function (c) { return el('span', {}, c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? '\u2014' : fmtNum(c.annualizedYieldPct, 1) + '%'); } },
       { key: 'liquidityScore', label: 'Liq', get: function (c) { return c.liquidityScore; }, render: function (c) { return el('span', {}, fmtNum(c.liquidityScore, 2)); } },
-      { key: 'score', label: 'Score', get: function (c) { return c.score; }, render: function (c) { return el('b', {}, fmtNum(c.score, 0)); } }
+      { key: 'score', label: 'Screen score', get: function (c) { return c.score; }, render: function (c) { return el('b', {}, fmtNum(c.score, 0)); } }
     ];
     var wrap = el('div', { class: 'card', id: 'compare-table' });
     function render() {
@@ -1397,6 +1462,7 @@
           onclick: function () {
             goal = i.key;
             remember({ goal: goal });
+            results.innerHTML = ''; App.state.recommendResults = null; App.state.scoutResults = null;
             intentRow.querySelectorAll('.choice').forEach(function (b) { b.classList.remove('selected'); });
             this.classList.add('selected');
             sync();
@@ -1422,6 +1488,7 @@
           onclick: function () {
             source = o.key;
             remember({ source: source });
+            results.innerHTML = ''; App.state.recommendResults = null; App.state.scoutResults = null;
             sourceRow.querySelectorAll('.choice').forEach(function (b) { b.classList.remove('selected'); });
             this.classList.add('selected');
             sync();
@@ -1592,7 +1659,9 @@
               goal: 'BROWSE', templateKey: null, step: 2, legIdx: 0, legs: [], excluded: {} };
           }
         }, 'All strategies \u2192')),
-      explain('Two questions: what are you trying to do, and where should ideas come from. "Scan the market for me" is the scout — momentum, news sentiment, and IV vs realized volatility across your universe, evidence shown. Only strategies whose worst case is known and capped pass the screens, and refusals are always explained.'),
+      explain(beginner
+        ? 'Two questions: what are you trying to do, and where should ideas come from. "Scan the market for me" looks at how fast each stock has been moving, what the news says, and whether its options look cheap or expensive — and shows its evidence. Only trades whose worst case is known and capped get through, and every refusal is explained.'
+        : 'Two questions: goal + source. "Scan the market for me" is the scout — momentum, news sentiment, and IV vs realized volatility across your universe, evidence shown. Only defined-risk structures pass; refusals are always explained.'),
       intentRow,
       el('div', { class: 'field-label', style: 'margin-top:12px' }, 'Where should ideas come from?'),
       sourceRow,
@@ -1741,7 +1810,7 @@
         results.appendChild(incomeBoard(r, extras.acct, extras.held));
       }
       results.appendChild(el('div', { class: 'chip-row' },
-        chip('Risk budget', fmtMoney(r.riskBudgetCents)),
+        chip('Risk budget (this trade)', fmtMoney(r.riskBudgetCents), 'The most this one trade may risk under your header risk mode.'),
         chip('Mode', r.riskMode.toLowerCase()),
         chip('Candidates', String(r.candidates.length))));
       // Recommendations-as-a-competition: score these side by side INLINE (D3 — no orphan surface).
@@ -1773,9 +1842,18 @@
           UI.cardHeader('Looked at and refused'),
           explain('Learning what gets blocked — and why — matters as much as what gets suggested.'));
         r.rejected.forEach(function (x) {
+          var reasons = (x.reasons || []).join(' ');
+          // The covered call is the strategy beginners come FOR — a jargon refusal at the
+          // default settings read as a dead end. Say what to do about it, with a way there.
+          var needsShares = /shares|covered|free share/i.test(reasons) || /COVERED_CALL|PROTECTIVE/i.test(x.strategy || '');
           rej.appendChild(el('div', { class: 'status-item' },
             el('span', { class: 'badge badge-danger' }, 'BLOCKED'),
-            el('span', {}, el('b', {}, x.displayName), ' \u2014 ', (x.reasons || []).join(' '))));
+            el('span', {}, el('b', {}, x.displayName), ' \u2014 ',
+              needsShares && Learn.currentLevel() === 'beginner'
+                ? 'needs 100 shares you own first — covered trades rent out shares you hold. '
+                : reasons + ' ',
+              needsShares ? el('a', { href: '#/portfolio', onclick: function () { App.navigate('#/portfolio'); } },
+                'Buy practice shares in Portfolio \u2192') : null)));
         });
         results.appendChild(rej);
       }
@@ -1975,7 +2053,7 @@
     results.innerHTML = '';
     results.appendChild(el('div', { class: 'chip-row' },
       chip('Picks', String(r.picks.length)),
-      chip('Risk budget', fmtMoney(r.riskBudgetCents))));
+      chip('Risk budget (per idea)', fmtMoney(r.riskBudgetCents), 'The most any single scanned idea may risk under your header risk mode.')));
     (r.notes || []).forEach(function (n) { results.appendChild(alertBox('warn', n)); });
     if (!r.picks.length) {
       results.appendChild(UI.emptyState('No opportunities passed the screens',
@@ -1983,16 +2061,36 @@
     }
     var intentsSeen = [];
     r.picks.forEach(function (p) { if (intentsSeen.indexOf(p.intent) < 0) intentsSeen.push(p.intent); });
+    var GROUPS = { DIRECTIONAL: 'Trading a view', INCOME: 'Income opportunities',
+      ACQUIRE: 'Buy-at-a-discount candidates', EXIT: 'Harvesting your holdings', HEDGE: 'Protecting your holdings' };
+    // A 20-pick "Everything" scan rendered as an ~18,500px wall of full cards. Structure it:
+    // a jump row up top, the top 3 per goal expanded, and the rest one honest tap away.
+    if (r.picks.length > 6 && intentsSeen.length > 1) {
+      results.appendChild(el('div', { class: 'chip-row', id: 'scout-jump' }, intentsSeen.map(function (ik) {
+        var n = r.picks.filter(function (p) { return p.intent === ik; }).length;
+        return el('button', { class: 'sym-chip', type: 'button', onclick: function () {
+          var t2 = document.getElementById('scout-g-' + ik);
+          if (t2) t2.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } }, (GROUPS[ik] || ik) + ' (' + n + ')');
+      })));
+    }
+    function renderGroup(ik, picks) {
+      if (intentsSeen.length > 1) results.appendChild(el('h2', { class: 'scout-group', id: 'scout-g-' + ik }, GROUPS[ik] || ik));
+      var top = picks.slice(0, 3), rest = picks.slice(3);
+      top.forEach(function (pick) { results.appendChild(pickCard(pick)); });
+      if (rest.length) {
+        var slot = el('div', {});
+        slot.appendChild(el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick: function () {
+          slot.innerHTML = '';
+          rest.forEach(function (pick) { slot.appendChild(pickCard(pick)); });
+        } }, 'Show ' + rest.length + ' more ' + (GROUPS[ik] || ik).toLowerCase()));
+        results.appendChild(slot);
+      }
+    }
     if (intentsSeen.length > 1) {
-      var GROUPS = { DIRECTIONAL: 'Trading a view', INCOME: 'Income opportunities',
-        ACQUIRE: 'Buy-at-a-discount candidates', EXIT: 'Harvesting your holdings', HEDGE: 'Protecting your holdings' };
-      intentsSeen.forEach(function (ik) {
-        results.appendChild(el('h2', { class: 'scout-group' }, GROUPS[ik] || ik));
-        r.picks.filter(function (p) { return p.intent === ik; })
-          .forEach(function (pick) { results.appendChild(pickCard(pick)); });
-      });
-    } else {
-      r.picks.forEach(function (pick) { results.appendChild(pickCard(pick)); });
+      intentsSeen.forEach(function (ik) { renderGroup(ik, r.picks.filter(function (p) { return p.intent === ik; })); });
+    } else if (r.picks.length) {
+      renderGroup(intentsSeen[0], r.picks);
     }
     if (r.skipped && r.skipped.length) {
       var sk = el('div', { class: 'card' }, UI.cardHeader('Skipped'));
@@ -2306,7 +2404,7 @@
       body.appendChild(UI.spinner('Previewing against live data…'));
       try {
         var previewReq = {
-          symbol: t.symbol, strategy: t.custom ? 'CUSTOM' : c6.strategy, qty: t.qty,
+          symbol: t.symbol, strategy: t.custom ? (t.customFamily || 'CUSTOM') : c6.strategy, qty: t.qty,
           legs: t.legs, thesis: t.thesis, horizon: t.horizon, riskMode: riskMode()
         };
         if (c6 && c6.intent && c6.intent !== 'DIRECTIONAL') previewReq.intent = c6.intent;
@@ -2359,7 +2457,7 @@
           stat('Max loss', el('span', { class: 'loss' }, fmtMoney(p.maxLossCents)), 'The most this position can lose, fees excluded.'),
           stat('Max profit', p.maxProfitCents === null || p.maxProfitCents === undefined ? 'uncapped' : el('span', { class: 'gain' }, fmtMoney(p.maxProfitCents))),
           stat('Fees', fmtMoney(p.feesOpenCents), '$0.65 per contract per leg by default.'),
-          stat('POP', fmtPct(p.popEntry), 'Modeled probability of any profit at expiration.'),
+          stat(UI.term('pop', Learn.currentLevel() === 'beginner' ? 'Chance of any profit' : 'POP'), fmtPct(p.popEntry), 'Modeled probability of any profit at expiration — before commissions, not a promise.'),
           stat('Breakevens', (p.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
           stat('Buying power after', fmtMoney(p.buyingPowerAfterCents), 'Drops by exactly max loss + fees.'),
           stat('Cash after', fmtMoney(p.cashAfterCents))));
@@ -2426,7 +2524,7 @@
   async function portfolio(root, params) {
     // One money home: Positions (holdings + trades) | Activity (the ledger) | Account
     // (starting cash, reset). The old #/account URL lands on the Account section.
-    var section = params[0] === 'activity' ? 'activity' : params[0] === 'account' ? 'account' : 'positions';
+    var section = params[0] === 'activity' ? 'activity' : params[0] === 'account' ? 'account' : params[0] === 'record' ? 'record' : 'positions';
     var tab = params[0] === 'closed' ? 'closed' : 'active';
     var page = parseInt(params[1] || '0', 10);
     root.appendChild(el('h1', {}, 'Portfolio'));
@@ -2466,8 +2564,54 @@
         onclick: function () { App.navigate('#/portfolio'); } }, 'Positions'),
       el('button', { class: section === 'activity' ? 'active' : '', id: 'pf-sec-activity',
         onclick: function () { App.navigate('#/portfolio/activity'); } }, 'Activity'),
+      el('button', { class: section === 'record' ? 'active' : '', id: 'pf-sec-record',
+        onclick: function () { App.navigate('#/portfolio/record'); } }, 'Your record'),
       el('button', { class: section === 'account' ? 'active' : '', id: 'pf-sec-account',
         onclick: function () { App.navigate('#/portfolio/account'); } }, 'Account')));
+
+    if (section === 'record') {
+      // The learning loop, closed: what the model PREDICTED vs what actually happened to YOUR
+      // trades. Nothing else in this product category is honest enough to show this.
+      var recCard = el('div', { class: 'card', id: 'your-record' },
+        UI.cardHeader('Your record — predicted vs real'),
+        explain(Learn.currentLevel() === 'beginner'
+          ? 'Every idea you took came with a predicted chance of profit. This compares those predictions with what actually happened — the honest way to know whether the process (and the model) is working.'
+          : 'Calibration: surfaced recommendations vs resolved outcomes, bucketed by predicted POP. Well-calibrated = realized win rate tracks the prediction.'),
+        UI.spinner('Loading your record…'));
+      root.appendChild(recCard);
+      try {
+        var cal = await API.get('/api/calibration');
+        recCard.removeChild(recCard.lastChild);
+        var resolved = cal.resolved || 0;
+        if (!resolved) {
+          recCard.appendChild(UI.emptyState('No closed recommendations yet',
+            'Take an idea, close it (unwind or settle), and the predicted-vs-real record starts building here.'));
+        } else {
+          recCard.appendChild(el('div', { class: 'grid grid-4' },
+            stat('Resolved trades', String(resolved)),
+            stat('Win rate', cal.overallWinRate !== null && cal.overallWinRate !== undefined ? fmtPct(cal.overallWinRate) : '—'),
+            stat('Total P/L', pnlSpan(cal.totalPnlCents))));
+          if (cal.reliability && cal.reliability.length) {
+            recCard.appendChild(el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Reliability — the model said vs what happened'));
+            recCard.appendChild(table(['Predicted chance', 'Actual win rate', 'Trades'],
+              cal.reliability.map(function (b) {
+                return el('tr', {},
+                  el('td', {}, b.bucket || (fmtPct(b.fromPop) + ' – ' + fmtPct(b.toPop))),
+                  el('td', {}, b.realizedWinRate !== undefined && b.realizedWinRate !== null ? fmtPct(b.realizedWinRate) : '—'),
+                  el('td', { class: 'muted' }, String(b.n || b.count || 0)));
+              })));
+            recCard.appendChild(el('div', { class: 'muted small' },
+              'Well-calibrated means the two columns roughly match. A big gap is a lesson about the model, the market — or the trades you pick.'));
+          }
+          if (cal.note) { recCard.appendChild(el('div', { class: 'muted small' }, cal.note));
+          }
+        }
+      } catch (e) {
+        recCard.removeChild(recCard.lastChild);
+        recCard.appendChild(alertBox('warn', 'Record unavailable right now', [e.message]));
+      }
+      return;
+    }
 
     if (section === 'activity') {
       root.appendChild(el('div', { class: 'card' },
@@ -2476,7 +2620,7 @@
         table(['Date', 'Type', 'Amount', 'Cash after', 'Reserved after', 'Memo'],
           (acctData.ledger || []).map(function (r) {
             return el('tr', {},
-              el('td', { class: 'muted' }, r.ts ? r.ts.slice(0, 10) : ''),
+              el('td', { class: 'muted' }, UI.fmtDate(r.ts)),
               el('td', {}, el('span', { class: 'badge badge-dim' }, r.type)),
               el('td', {}, pnlSpan(r.amountCents)),
               el('td', {}, fmtMoney(r.cashAfterCents)),
@@ -2661,10 +2805,17 @@
         el('td', {}, 'x' + t.qty),
         el('td', {}, pnlSpan(t.entryNetPremiumCents)),
         el('td', { class: 'loss' }, fmtMoney(t.maxLossCents)),
-        el('td', {}, tab === 'active' ? el('span', { class: 'muted' }, (t.createdAt || '').slice(0, 10)) : pnlSpan(t.realizedPnlCents)),
+        tab === 'active'
+          ? el('td', {}, t.unrealizedPnlCents !== undefined && t.unrealizedPnlCents !== null
+              ? pnlSpan(t.unrealizedPnlCents) : el('span', { class: 'muted' }, '—'))
+          : null,
+        el('td', {}, tab === 'active' ? el('span', { class: 'muted' }, UI.fmtDate(t.createdAt)) : pnlSpan(t.realizedPnlCents)),
         el('td', {}, el('span', { class: 'badge ' + (t.status === 'ACTIVE' ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, t.status)));
     });
-    tradesCard.appendChild(table(['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Max loss', tab === 'active' ? 'Opened' : 'Realized P/L', 'Status'], rows));
+    tradesCard.appendChild(table(
+      tab === 'active'
+        ? ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Max loss', 'Now', 'Opened', 'Status']
+        : ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Max loss', 'Realized P/L', 'Status'], rows));
     if (data.total > 15) {
       tradesCard.appendChild(el('div', { class: 'btn-row' },
         page > 0 ? el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { App.navigate('#/portfolio/' + tab + '/' + (page - 1)); } }, '← Newer') : null,
@@ -2694,8 +2845,13 @@
           ? el('span', { class: 'px ' + (pnl >= 0 ? 'gain' : 'loss') }, fmtMoney(pnl, { plus: true }))
           : null),
       el('div', { class: 'muted' },
-        (active ? 'Unrealized (before close fees)' : 'Realized P/L') + ' · opened ' + (t.createdAt || '').slice(0, 10)
+        (active ? 'Unrealized (before close fees)' : 'Realized P/L') + ' · opened ' + UI.fmtDate(t.createdAt)
         + (t.closeReason ? ' · ' + t.closeReason : '')),
+      // The first thing a novice sees after placing is a red number — the bid/ask cost of
+      // entering. Say so, once, while the trade is young, instead of letting it read as a mistake.
+      active && pnl !== null && pnl < 0 && isYoungTrade(t.createdAt)
+        ? explain('New positions start a little down — that\u2019s the bid/ask spread you paid to enter, not a mistake. It fades as the trade develops.')
+        : null,
       el('div', { class: 'chip-row' }, t.legs.map(function (l, i) { return chip('Leg ' + (i + 1), legLabel(l)); })),
       el('div', { class: 'chip-row' },
         chip('Entry', fmtMoney(t.entryNetPremiumCents, { plus: true })),
@@ -2779,7 +2935,8 @@
           el('button', {
             class: 'btn', id: 'unwind-btn', onclick: function () {
               var est = d.current && d.current.closeCostCents !== null && d.current.closeCostCents !== undefined
-                ? 'Closing now brings ' + fmtMoney(d.current.closeCostCents, { plus: true }) + ' before fees. ' : '';
+                ? 'Closing now brings ' + fmtMoney(d.current.closeCostCents, { plus: true }) + ' before fees. '
+                  + 'This is the executable close (selling at bid, buying back at ask) — the header\u2019s P/L is marked at the midpoint, so the two differ by the spread you pay to exit. ' : '';
               UI.confirmModal('Close (unwind) this trade?',
                 el('div', {},
                   el('p', {}, est + 'The reserve of this trade is released and the result becomes final.'),
@@ -2790,7 +2947,7 @@
                   App.navigate('#/trade/' + id);
                 });
             }
-          }, 'Unwind…'),
+          }, 'Unwind…', el('span', { class: 'btn-sub' }, 'close now at market')),
           el('button', {
             class: 'btn btn-secondary', id: 'settle-btn', onclick: function () {
               UI.confirmModal('Settle at expiration value?',
@@ -2801,7 +2958,30 @@
                   App.navigate('#/trade/' + id);
                 });
             }
-          }, 'Settle…'),
+          }, 'Settle…', el('span', { class: 'btn-sub' }, 'after expiration')),
+          el('button', {
+            class: 'btn btn-secondary', id: 'roll-btn', onclick: function () {
+              UI.confirmModal('Roll this position?',
+                el('div', {},
+                  el('p', {}, 'Rolling = two paper orders: close this position at market now, then reopen the same structure with every option leg moved ~1 month later. Both orders pay fees; the builder opens so you can adjust strikes before placing.'),
+                  explain('Management plans often say "roll at 21 DTE" — this is that action, honestly priced at current quotes.')),
+                'Close & rebuild',
+                async function () {
+                  await API.post('/api/trades/' + id + '/unwind', { confirm: true });
+                  var rolled = (t.legs || []).map(function (l) {
+                    var leg = { action: l.action, type: l.stock ? 'STOCK' : l.type, strike: String(l.strike || ''), ratio: l.ratio || 1 };
+                    if (!l.stock && l.expiration) {
+                      var d2 = new Date(l.expiration); d2.setDate(d2.getDate() + 28);
+                      leg.expiration = d2.toISOString().slice(0, 10);
+                    }
+                    return leg;
+                  });
+                  App.state.builderForm = { symbol: t.symbol, qty: t.qty, goal: 'BROWSE', templateKey: null,
+                    step: 4, legIdx: 0, legs: rolled, excluded: {} };
+                  App.navigate('#/trade/shape');
+                });
+            }
+          }, 'Roll…', el('span', { class: 'btn-sub' }, 'close + reopen ~1 month out')),
           el('span', { class: 'spacer' }),
           el('button', {
             class: 'btn btn-danger', id: 'delete-btn', onclick: function () {
@@ -2816,7 +2996,7 @@
                   App.navigate('#/portfolio');
                 }, true);
             }
-          }, 'Void…'))));
+          }, 'Void…', el('span', { class: 'btn-sub' }, 'erase — practice only')))));
     }
 
     if (d.marksHistory && d.marksHistory.length) {
@@ -2956,31 +3136,100 @@
     card.appendChild(posWrap);
 
     var out = el('div', { id: 'sc-verify-out' });
+    async function spotFor() {
+      var qd = await API.get('/api/quotes?symbols=' + symbol);
+      var row = (qd.quotes || [])[0] || {};
+      var spot = parseFloat(row.last || row.prevClose);
+      if (!isFinite(spot) || spot <= 0) throw new Error('No price for ' + symbol + ' — check the ticker.');
+      return spot;
+    }
     var run = el('button', { class: 'btn', id: 'sc-verify-run' }, level === 'beginner' ? 'Run it through the futures' : 'Run Monte Carlo');
     run.addEventListener('click', async function () {
       run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Simulating…'));
       try {
         var spec = f.getSpec();
-        var legs;
+        var legs, spot = null;
         if (picked.key === 'WORKING' && workingHere) {
           legs = working;
         } else {
-          var qd = await API.get('/api/quotes?symbols=' + symbol);
-          var row = (qd.quotes || [])[0] || {};
-          var spot = parseFloat(row.last || row.prevClose);
-          if (!isFinite(spot) || spot <= 0) throw new Error('No price for ' + symbol + ' — check the ticker.');
+          spot = await spotFor();
           var qk = Scenario.CATALOG.find(function (x) { return x.key === picked.key; }) || Scenario.CATALOG[0];
           legs = qk.legs(spot, spec.horizonDays + 10);
         }
-        var r = await API.post('/api/sim/strategy', { symbol: symbol, legs: legs, qty: 1, spec: spec, iv: f.getIv() });
+        // The position AND the do-nothing baseline, on the SAME seeded paths — comparative
+        // evidence is what makes a 51% world actionable ("better than just holding shares?").
+        var rP = API.post('/api/sim/strategy', { symbol: symbol, legs: legs, qty: 1, spec: spec, iv: f.getIv() });
+        var basP = API.post('/api/sim/strategy', { symbol: symbol, qty: 1, spec: spec,
+          legs: [{ action: 'BUY', type: 'STOCK', strike: 0, expiryDay: 0, ratio: 1 }] }).catch(function () { return null; });
+        var r = await rP, bas = await basP;
         out.innerHTML = '';
         out.appendChild(el('div', { class: 'muted small', style: 'margin:4px 0' },
           f.describe() + ' · entry cost ' + UI.fmtMoneyCompact(r.entryCostCents)));
         out.appendChild(Scenario.pnlView(r, level));
+        if (bas) {
+          out.appendChild(el('div', { class: 'chip-row' },
+            chip('Baseline: just hold 100 shares', UI.fmtMoneyCompact(bas.expectedPnlCents) + ' · ' + Math.round(bas.winRatePct) + '%',
+              'The same simulated futures applied to plain stock — the strategy has to beat doing nothing.'),
+            chip('This position vs baseline',
+              UI.fmtMoneyCompact(r.expectedPnlCents - bas.expectedPnlCents),
+              'Expected P&L difference on IDENTICAL paths. Positive = the structure adds value under your scenario.')));
+        }
       } catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Simulation failed', [String((e && e.message) || e)])); }
       finally { run.disabled = false; }
     });
-    card.appendChild(el('div', { class: 'btn-row' }, run));
+
+    // The junior's core ask: ONE market view, EVERY compatible structure, identical paths.
+    var compareBtn = el('button', { class: 'btn btn-secondary', id: 'sc-compare-all' },
+      level === 'beginner' ? 'Which strategy fits this story best?' : 'Compare all strategies');
+    compareBtn.addEventListener('click', async function () {
+      compareBtn.disabled = true; run.disabled = true;
+      out.innerHTML = '';
+      var prog = el('div', { class: 'muted small' }, 'Running the catalog on identical paths…');
+      out.appendChild(prog);
+      try {
+        var spec = f.getSpec(); // one spec, one seed — every structure sees the SAME futures
+        var spot = await spotFor();
+        var iv = f.getIv();
+        var results = [];
+        for (var i = 0; i < Scenario.CATALOG.length; i++) {
+          var q2 = Scenario.CATALOG[i];
+          prog.textContent = 'Simulating ' + (i + 1) + '/' + Scenario.CATALOG.length + ' — ' + q2.label + '…';
+          try {
+            var rr = await API.post('/api/sim/strategy', { symbol: symbol, qty: 1, spec: spec, iv: iv,
+              legs: q2.legs(spot, spec.horizonDays + 10) });
+            results.push({ q: q2, r: rr });
+          } catch (e) { /* a structure that can't price here just doesn't rank */ }
+        }
+        if (!results.length) throw new Error('Nothing could be priced for ' + symbol + '.');
+        results.sort(function (a, b) { return b.r.expectedPnlCents - a.r.expectedPnlCents; });
+        out.innerHTML = '';
+        out.appendChild(el('div', { class: 'muted small', style: 'margin:4px 0' },
+          f.describe() + ' — every structure ran on the SAME ' + results[0].r.paths + ' futures (seed-matched), entries at market quotes where available.'));
+        out.appendChild(UI.table(
+          level === 'beginner'
+            ? ['Strategy', 'Chance of profit', 'Typical outcome', 'Bad run (1 in 20)', 'Expected', '']
+            : ['Structure', 'Win %', 'p50', 'p5', 'E[P&L]', 'Entry', ''],
+          results.map(function (x) {
+            return el('tr', { class: 'clickable' },
+              el('td', {}, el('b', {}, x.q.label), ' ', el('span', { class: 'muted small' }, x.q.group)),
+              el('td', {}, Math.round(x.r.winRatePct) + '%'),
+              el('td', {}, pnlSpan(x.r.p50Cents)),
+              el('td', {}, pnlSpan(x.r.p5Cents)),
+              el('td', {}, pnlSpan(x.r.expectedPnlCents)),
+              level === 'beginner' ? null : el('td', {}, UI.fmtMoneyCompact(x.r.entryCostCents)),
+              el('td', {}, el('button', { class: 'btn btn-sm', onclick: (function (key) { return function () {
+                picked.key = key; vf.quick = key;
+                posWrap.querySelectorAll('.sc-card').forEach(function (b2) { b2.classList.toggle('active', b2.getAttribute('data-pos') === key); });
+                run.click();
+              }; })(x.q.key) }, 'Details')));
+          })));
+        out.appendChild(el('div', { class: 'muted small' },
+          'Ranked by expected P&L under YOUR scenario — not a prediction. A different story re-ranks the whole table; the honest conclusion can be that nothing beats the baseline.'));
+      } catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Comparison failed', [String((e && e.message) || e)])); }
+      finally { compareBtn.disabled = false; run.disabled = false; }
+    });
+
+    card.appendChild(el('div', { class: 'btn-row' }, run, compareBtn));
     card.appendChild(out);
     host.appendChild(card);
   }
@@ -3195,7 +3444,7 @@
           + 'For a real backtest, add a free Polygon or Alpha Vantage key (see the Data screen) and re-run.'));
       }
       var modeKind = r.pricingMode === 'HISTORICAL_CHAIN' ? 'ok' : r.pricingMode === 'MODELED_FROM_UNDERLYING' ? 'warn' : 'danger';
-      out.appendChild(alertBox(modeKind, 'Pricing mode: ' + r.pricingMode + ' — confidence ' + r.confidence + '. ' +
+      out.appendChild(alertBox(modeKind, 'Pricing: ' + prettyPricingMode(r.pricingMode) + ' — confidence ' + r.confidence + '. ' +
         (r.pricingMode !== 'HISTORICAL_CHAIN' ? 'These are modeled option prices, not observed ones.' : '')));
       out.appendChild(el('div', { class: 'grid grid-4' },
         stat('Sample size', String(r.sampleSize), 'Completed trades. Below ~20, treat every number as anecdote.'),
@@ -3728,7 +3977,7 @@
       return el('div', { class: 'alt-row', 'data-strategy': c.strategy },
         el('div', { class: 'alt-main' }, el('b', {}, c.displayName), el('span', { class: 'muted' }, '  ' + c.label)),
         el('div', { class: 'alt-facts' },
-          chip('Score', Math.round(e.score.riskAdjustedScore)),
+          chip('Decision score', Math.round(e.score.riskAdjustedScore), 'Risk-adjusted: gates, six weighted factors, then haircuts for evidence quality and tail risk. May rank differently than the quick screen score — this one decides.'),
           chip('Max loss', el('span', { class: 'loss' }, fmtMoney(e.risk.maxLossCents)))),
         el('button', { class: 'btn btn-sm', onclick: function () { useEval(c, symbol); } }, 'Use'));
     }));
@@ -3749,7 +3998,7 @@
         el('td', {}, el('button', { class: 'btn btn-sm', onclick: function () { useEval(c, symbol); } }, 'Use')));
     });
     return el('div', { id: 'decision-table' },
-      UI.table(['Structure', 'Score', 'Evidence', 'Cost', 'Max loss', 'Max profit', 'POP', 'Tail loss', ''], rows));
+      UI.table(['Structure', 'Decision score', 'Evidence', 'Cost', 'Max loss', 'Max profit', 'POP', 'Tail loss', ''], rows));
   }
 
   /**

@@ -529,8 +529,12 @@
     var onLegsReplaced = null; // each surface wires its own re-render
 
     function handoff() {
+      // A structure picked from a NAMED template keeps its identity all the way to the
+      // portfolio row — an 'Iron condor' must never place as 'Custom' (naming is education).
+      var tpl = st.templateKey ? TEMPLATES.find(function (t2) { return t2.key === st.templateKey; }) : null;
       App.state.ticket = {
         symbol: st.symbol, custom: true, customFor: st.symbol,
+        customFamily: tpl && tpl.family ? tpl.family : null,
         legs: wireLegs(activeLegs()), qty: st.qty, step: 6,
         thesis: 'neutral', horizon: 'month'
       };
@@ -1255,11 +1259,15 @@
         stat('Fees', fmtMoney(p.feesOpenCents), null)));
       if (p.breakevens && p.breakevens.length) {
         hostEl.appendChild(el('div', { class: 'chip-row' },
-          chip(UI.term('breakeven', 'Breakevens'), p.breakevens.map(function (b) { return '$' + b; }).join(' / '))));
+          chip(UI.term('breakeven', 'Breakevens'), p.breakevens.map(function (b) { return '$' + parseFloat(b).toFixed(2); }).join(' / '))));
       }
       hostEl.appendChild(el('div', { class: 'chip-row' },
         chip('Buying power after', fmtMoney(p.buyingPowerAfterCents)),
-        p.reserveCents ? chip(UI.term('reserve', 'Set aside'), fmtMoney(p.reserveCents)) : null));
+        p.reserveCents ? chip(UI.term('reserve', 'Set aside'), fmtMoney(p.reserveCents),
+          'Cash held while the trade is open. For credit trades this is the full width between strikes (it already contains the worst case); for debit trades the premium has left your account, so nothing extra is held. It is released when you close.') : null));
+      // One line kills the "three different risk numbers" confusion: everything here is a TOTAL.
+      hostEl.appendChild(el('div', { class: 'muted small' },
+        'All figures are totals for this exact position and quantity. "Set aside" and "most you can lose" differ on credit trades because the set-aside is the gross width — the worst case lives inside it.'));
       if (p.payoff && p.payoff.length > 1) {
         if (handles && handles.length) {
           hostEl.appendChild(el('p', { class: 'muted', style: 'margin:6px 0 2px; font-size:12.5px' },
@@ -1270,7 +1278,32 @@
           handles: handles || null
         }));
       } else if (p.legs && p.legs.length) {
-        hostEl.appendChild(explain('Mixed expirations: the at-expiry chart does not exist for this position — its value depends on volatility after the near leg dies.'));
+        hostEl.appendChild(explain('Mixed expirations: a single at-expiry payoff line does not exist — the position\u2019s value depends on volatility after the near leg dies. Below: a SIMULATED P&L range instead (Monte-Carlo, honestly labeled MODELED).'));
+        // The sim engine prices calendars/diagonals along paths — point it at the gap the
+        // static payoff curve honestly refuses to fill.
+        (function simFan() {
+          var slot = el('div', { class: 'fan-slot' }, UI.spinner('Simulating the mixed-expiration range\u2026'));
+          hostEl.appendChild(slot);
+          var today = Date.now();
+          var simLegs = [];
+          for (var i = 0; i < p.legs.length; i++) {
+            var lg = p.legs[i];
+            if (!lg.expiration || !lg.strike) { slot.remove(); return; }
+            var days = Math.max(1, Math.round((new Date(lg.expiration) - today) / 86400000 * 5 / 7));
+            simLegs.push({ action: lg.action, type: lg.type, strike: parseFloat(lg.strike), expiryDay: days, ratio: lg.ratio || 1 });
+          }
+          var nearDays = Math.min.apply(null, simLegs.map(function (l) { return l.expiryDay; }));
+          API.post('/api/sim/strategy', { symbol: st.symbol, legs: simLegs, qty: st.qty || 1,
+            spec: { model: 'GBM', shape: 'CHOP', horizonDays: Math.max(2, nearDays), stepsPerDay: 4,
+              driftAnnual: 0, volAnnual: 0, jumpsPerYear: 0, jumpMean: 0, jumpVol: 0, tailNu: 6,
+              heston: null, seed: 4242, paths: 200 } })
+            .then(function (r) {
+              slot.innerHTML = '';
+              slot.appendChild(window.Scenario ? Scenario.pnlView(r, beginnerWording ? 'beginner' : 'expert')
+                : el('div', { class: 'muted small' }, 'Simulated range unavailable.'));
+            })
+            .catch(function () { slot.remove(); });
+        })();
       }
       if (p.ok && p.warnings && p.warnings.length) {
         hostEl.appendChild(alertBox('warn', 'Heads up', p.warnings));

@@ -61,6 +61,7 @@
       // Lab dissolved: its tools moved to their natural homes (study→Research, optimizer→Decision,
       // replicator→Builder template). #/lab* keeps working by redirecting to Research (the study home).
       if (route === 'lab') { route = 'research'; params = []; }
+      if (route === 'data') { route = 'status'; params = []; } // the nav says Data; the URL should too
       if (route === 'recommend') { route = 'trade'; params = ['discover'].concat(params); }
       if (route === 'backtest') { route = 'trade'; params = ['verify']; }
       if (route === 'ticket') {
@@ -362,6 +363,14 @@
       // Same symbols as the strip already shows? Update the numbers IN PLACE and leave
       // the marquee running \u2014 a rebuild restarts the animation at 0%, which reads as the
       // whole ticker jumping every refresh. Rebuild only when the symbol set changes.
+      // Honest labeling on the ONE always-visible market surface: demo quotes get a DEMO chip
+      // at the tape's leading edge (the tiles were quadruple-badged while the tape said nothing).
+      var allDemo = quotes.length && quotes.every(function (q) { return q.freshness === 'FIXTURE'; });
+      var demoChip = document.getElementById('tape-demo-chip');
+      if (allDemo && !demoChip) {
+        tape.insertBefore(UI.el('span', { id: 'tape-demo-chip', class: 'badge badge-dim',
+          title: 'These prices are built-in demo data, not the market.' }, 'DEMO'), tape.firstChild);
+      } else if (!allDemo && demoChip) { demoChip.remove(); }
       var symbolsKey = quotes.map(function (q) { return q.symbol; }).join(',');
       if (strip.getAttribute('data-symbols') === symbolsKey && strip.children.length) {
         updateTapePrices(quotes);

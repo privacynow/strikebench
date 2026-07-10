@@ -173,11 +173,15 @@ public final class AppConfig {
 
     // ---- Forward chain snapshots (the historical-evidence moat) ----
     /** When true, a background job records a daily EOD snapshot of the active universe's chains. */
-    public boolean snapshotEnabled() { return getBool("SNAPSHOT_ENABLED", false); }
+    /** Forward snapshots default ON in live mode — the IV-history moat should accrue without a
+     *  flag hunt. Demo mode defaults off (nothing real to record). */
+    public boolean snapshotEnabled() { return getBool("SNAPSHOT_ENABLED", !fixturesOnly()); }
     /** Hours between scheduled snapshots (default daily). */
     public int snapshotIntervalHours() { return getInt("SNAPSHOT_INTERVAL_HOURS", 24); }
     /** Delay before the first scheduled snapshot after boot, seconds (lets providers warm). */
-    public int snapshotInitialDelaySeconds() { return getInt("SNAPSHOT_INITIAL_DELAY_SECONDS", 60); }
+    /** 10 min: with snapshots now default-on in live mode, boot must not fire a full-universe
+     *  chain sweep while the user's first screens are still warming (politeness first). */
+    public int snapshotInitialDelaySeconds() { return getInt("SNAPSHOT_INITIAL_DELAY_SECONDS", 600); }
 
     // ---- In-memory market-data engine (warm cache + background refresh + streaming) ----
     /** When true (default), the engine warms the active universe on boot and refreshes in the background. */

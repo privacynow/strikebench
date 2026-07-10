@@ -91,6 +91,12 @@ public record ScenarioSpec(
                 seed, Math.clamp(paths <= 0 ? 200 : paths, 1, Math.min(5000, maxPaths)));
     }
 
+    /** Same scenario, different vol — the calibration hook (volAnnual<=0 means "use market vol"). */
+    public ScenarioSpec withVol(double vol) {
+        return new ScenarioSpec(model, shape, horizonDays, stepsPerDay, driftAnnual, vol,
+                jumpsPerYear, jumpMean, jumpVol, tailNu, heston, seed, paths);
+    }
+
     /** Same scenario, different path count (persisting a dataset needs exactly ONE path). */
     public ScenarioSpec withPaths(int n) {
         return new ScenarioSpec(model, shape, horizonDays, stepsPerDay, driftAnnual, volAnnual,
