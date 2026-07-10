@@ -100,6 +100,18 @@ class MarketDataEngineTest {
     }
 
     @Test
+    void liveWarmSetSpansTheWholeUniverseNotJustTheActiveSector() {
+        db = TestDb.fresh();
+        AppConfig live = new AppConfig(Map.of()); // fixturesOnly defaults false → curated real sectors
+        UniverseService u = new UniverseService(db, live, clock);
+        var warm = u.warmSymbols();
+        // Far more than the single active sector, spanning multiple sectors (the whole universe).
+        assertThat(warm.size()).isGreaterThan(u.active().symbols().size());
+        assertThat(warm.size()).isGreaterThanOrEqualTo(50);
+        assertThat(warm).contains("AAPL", "XOM", "JPM"); // tech / energy / financials — different sectors
+    }
+
+    @Test
     void statusReportsWarmedTrackedAndInterval() {
         AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
         CountingProvider p = new CountingProvider(clock);

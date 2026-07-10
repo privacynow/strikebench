@@ -91,16 +91,45 @@ public final class MarketDataEngine {
             log.info("market engine: serving path on, background refresh DISABLED (ENGINE_ENABLED=false)");
             return;
         }
+        int tick = Math.max(5, Math.min(cfg.engineQuoteRefreshSeconds(), cfg.engineQuoteRefreshClosedSeconds()));
+        scheduler = Executors.newSingleThreadScheduledExecutor(daemon("mkt-engine-scheduler"));
         try {
-            List<String> warm = universe.active().symbols();
-            for (String s : warm) { track(s); refreshAsync(s); }
-            log.info("market engine warming {} symbols", warm.size());
+            // The ACTIVE sector warms immediately (that's what the first screen shows). The rest of the
+            // universe warms a few seconds later so switching sectors / looking up any ticker is instant,
+            // without contending the visible screen's fetches at boot.
+            List<String> active = universe.active().symbols();
+            for (String s : active) { track(s); refreshAsync(s); }
+            log.info("market engine warming active sector ({} symbols); full universe staged", active.size());
+            // Give the visible (active) sector an uncontended head start before trickling the rest.
+            scheduler.schedule(this::warmFullUniverse, 12, TimeUnit.SECONDS);
         } catch (Exception e) {
             log.warn("market engine warm failed: {}", e.toString());
         }
-        int tick = Math.max(5, Math.min(cfg.engineQuoteRefreshSeconds(), cfg.engineQuoteRefreshClosedSeconds()));
-        scheduler = Executors.newSingleThreadScheduledExecutor(daemon("mkt-engine-scheduler"));
         scheduler.scheduleWithFixedDelay(this::tick, tick, tick, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Warm the whole curated universe, but TRICKLED in small batches spaced a few seconds apart so
+     * the refresh pool is never flooded — on-demand quotes() (the visible screen) stay responsive
+     * while the rest of the universe fills in over ~half a minute. Capped by ENGINE_MAX_TRACKED.
+     */
+    private void warmFullUniverse() {
+        try {
+            List<String> all = universe.warmSymbols();
+            int cap = Math.max(20, cfg.engineMaxTracked());
+            if (all.size() > cap) all = all.subList(0, cap);
+            int batch = 8;
+            for (int i = 0; i < all.size(); i += batch) {
+                List<String> chunk = new ArrayList<>(all.subList(i, Math.min(i + batch, all.size())));
+                long delaySec = 1L + (i / batch) * 3L; // ~8 symbols every 3s
+                if (scheduler != null && !scheduler.isShutdown()) {
+                    scheduler.schedule(() -> chunk.forEach(s -> { track(s); refreshAsync(s); }), delaySec, TimeUnit.SECONDS);
+                }
+            }
+            log.info("market engine trickling full universe ({} symbols) in batches of {}", all.size(), batch);
+        } catch (Exception e) {
+            log.warn("market engine full-universe warm failed: {}", e.toString());
+        }
     }
 
     public synchronized void stop() {

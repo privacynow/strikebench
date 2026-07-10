@@ -57,6 +57,23 @@ public final class UniverseService {
         return env != null && !env.isBlank();
     }
 
+    /**
+     * Every symbol worth keeping warm — the active universe FIRST (priority), then the union of all
+     * curated sector lists (deduped). The market engine warms these on boot so switching sectors or
+     * looking up any covered ticker is instant, not a cold fetch. The DEMO pseudo-sector is skipped in
+     * live mode (its symbols are the fixture set, already covered by real sectors where applicable).
+     */
+    public List<String> warmSymbols() {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>(active().symbols());
+        boolean demo = cfg.fixturesOnly();
+        for (Universes.Sector s : Universes.SECTORS.values()) {
+            boolean isDemo = "DEMO".equals(s.key());
+            if (demo != isDemo) continue; // fixture mode → only the demo set (has data); live → all real sectors
+            out.addAll(s.symbols());
+        }
+        return List.copyOf(out);
+    }
+
     /** Selects a curated sector (clears any custom list). Throws on unknown keys -> 400. */
     public Active selectSector(String key) {
         String norm = key == null ? "" : key.trim().toUpperCase(Locale.ROOT);

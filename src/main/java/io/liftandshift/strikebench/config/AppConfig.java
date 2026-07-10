@@ -186,8 +186,9 @@ public final class AppConfig {
     public int engineQuoteRefreshSeconds() { return getInt("ENGINE_QUOTE_REFRESH_SECONDS", 20); }
     /** Quote refresh interval when the market is closed, seconds (slower — nothing is moving). */
     public int engineQuoteRefreshClosedSeconds() { return getInt("ENGINE_QUOTE_REFRESH_CLOSED_SECONDS", 300); }
-    /** Max symbols the engine keeps warm at once (active universe + recently-viewed, LRU-evicted). */
-    public int engineMaxTracked() { return getInt("ENGINE_MAX_TRACKED", 160); }
+    /** Max symbols the engine keeps warm at once (whole universe + recently-viewed, LRU-evicted).
+     *  Default holds all ~100 curated sector symbols plus headroom for ad-hoc lookups. */
+    public int engineMaxTracked() { return getInt("ENGINE_MAX_TRACKED", 220); }
     /** Seconds between SSE pushes on /api/market/stream (live-ish tape from engine memory). */
     public int engineStreamIntervalSeconds() { return getInt("ENGINE_STREAM_INTERVAL_SECONDS", 3); }
 
