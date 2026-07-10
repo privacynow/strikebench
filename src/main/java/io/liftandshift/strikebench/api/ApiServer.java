@@ -213,6 +213,23 @@ public final class ApiServer {
         datasetSvc.setEvents(server.events);
         if (cboeRef[0] != null) cboeRef[0].setEvents(server.events);
         if (yahooRef[0] != null) yahooRef[0].setEvents(server.events);
+        // The Cboe breaker survives restarts: persist trips, restore at boot (a restart used to
+        // forget an active ban and resume traffic straight back into the rate limiter).
+        if (cboeRef[0] != null) {
+            try {
+                var saved = db.query("SELECT v FROM settings WHERE k='cboe_cooldown_until'", r -> r.str("v"));
+                if (!saved.isEmpty() && saved.getFirst() != null) cboeRef[0].seedCooldown(Long.parseLong(saved.getFirst()));
+            } catch (Exception e) { /* best effort */ }
+            server.events.subscribe(e -> {
+                if ("provider.cooldown".equals(e.type()) && "cboe".equals(e.data().get("provider"))) {
+                    try {
+                        db.exec("INSERT INTO settings(k,v,updated_at) VALUES ('cboe_cooldown_until',?,now()) "
+                              + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
+                                String.valueOf(e.data().get("untilMs")));
+                    } catch (Exception ex) { /* best effort */ }
+                }
+            });
+        }
         return server;
     }
 
@@ -678,6 +695,7 @@ public final class ApiServer {
         // Scenario mode: the app-wide honesty signal that a synthetic dataset is active.
         String active = datasets == null ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : datasets.activeId();
         out.put("activeDataset", active);
+        out.put("activeDatasetName", datasets == null ? active : datasets.nameOf(active)); // banners show NAMES, not ds_… ids
         out.put("scenarioMode", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(active));
         ctx.json(out);
     }
@@ -1018,6 +1036,7 @@ public final class ApiServer {
         }
         var tier = io.liftandshift.strikebench.db.DataResetService.parseTier(b.tier());
         var result = dataReset.reset(tier);
+        datasets.invalidateActiveCache(); // the settings row is gone; in-memory state must follow
         try { audit.log(null, null, "DATA_RESET", "WARN", Map.of("tier", result.tier(), "tables", result.tablesCleared())); }
         catch (Exception e) { /* best-effort; the reset itself succeeded */ }
         ctx.json(result);

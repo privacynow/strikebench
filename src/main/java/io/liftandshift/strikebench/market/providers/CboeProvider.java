@@ -51,7 +51,12 @@ public final class CboeProvider implements MarketDataProvider {
     private final com.github.benmanes.caffeine.cache.Cache<String, Optional<JsonNode>> payloadCache =
             com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
                     .expireAfterWrite(java.time.Duration.ofSeconds(120))
-                    .maximumSize(300) // above the curated universe so warming doesn't churn the cache
+                    // WEIGHT-bounded, not count-bounded: each entry is a full multi-MB option-chain
+                    // tree, so 300 of them was a heap risk. ~64MB budget, weighed by contract count
+                    // (a cheap proxy for tree size: ~200 bytes/contract + fixed overhead).
+                    .maximumWeight(64L * 1024 * 1024)
+                    .weigher((String k, Optional<JsonNode> v) ->
+                            v.map(n -> 1024 + n.path("options").size() * 200).orElse(64))
                     .build();
 
     private final long cooldownMs;
@@ -86,6 +91,14 @@ public final class CboeProvider implements MarketDataProvider {
 
     private io.liftandshift.strikebench.util.EventBus events; // optional: announce breaker trips
     public void setEvents(io.liftandshift.strikebench.util.EventBus events) { this.events = events; }
+
+    /** Restore a persisted breaker state at boot — a restart must not forget an active Cboe ban. */
+    public void seedCooldown(long untilMs) {
+        if (untilMs > System.currentTimeMillis()) {
+            cooldownUntilMs = untilMs;
+            log.warn("Cboe cooldown restored from disk — cooling until {}", java.time.Instant.ofEpochMilli(untilMs));
+        }
+    }
 
     /**
      * Whether this heavy provider has budget for SPECULATIVE work right now. Prefetch is

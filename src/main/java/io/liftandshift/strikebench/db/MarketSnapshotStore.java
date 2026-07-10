@@ -32,10 +32,18 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
     /** Load every persisted last-known quote as a STALE snapshot to seed the engine on boot. */
     @Override public List<MarketSnapshot> loadAll() {
         List<MarketSnapshot> out = new ArrayList<>();
-        db.query("SELECT symbol, description, last, bid, ask, prev_close, optionable, source, as_of FROM market_snapshot",
-                r -> out.add(new MarketSnapshot(r.str("symbol"), r.str("description"), r.bd("last"), r.bd("bid"),
-                        r.bd("ask"), r.bd("prev_close"), r.lng("optionable") == 1,
-                        Freshness.STALE, r.str("source"), r.lng("as_of"), r.lng("as_of"), false, null)));
+        db.query("SELECT symbol, description, last, bid, ask, prev_close, optionable, source, freshness, as_of FROM market_snapshot",
+                r -> {
+                    // Provenance survives the round-trip: a persisted FIXTURE quote reloads as
+                    // FIXTURE — switching a local DB from demo to live must never show fake
+                    // prices dressed up as stale MARKET data. Everything real reloads as STALE.
+                    boolean demo = "FIXTURE".equals(r.str("freshness")) || "fixture".equals(r.str("source"));
+                    out.add(new MarketSnapshot(r.str("symbol"), r.str("description"), r.bd("last"), r.bd("bid"),
+                            r.bd("ask"), r.bd("prev_close"), r.lng("optionable") == 1,
+                            demo ? Freshness.FIXTURE : Freshness.STALE, r.str("source"),
+                            r.lng("as_of"), r.lng("as_of"), false, null));
+                    return null;
+                });
         return out;
     }
 }

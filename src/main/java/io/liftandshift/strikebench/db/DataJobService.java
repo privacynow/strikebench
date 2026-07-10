@@ -238,9 +238,11 @@ public final class DataJobService {
     private ItemResult work(String kind, String label, Map<String, Object> params) {
         switch (kind) {
             case "warm_universe", "refresh_now" -> {
+                // BLOCKING: the stale-while-refresh accessor reported success before any refresh ran.
+                boolean ok = engine.refreshBlocking(label, cfg.httpTimeoutMs() + 5000L);
                 var snap = engine.quote(label);
-                boolean warm = snap.isPresent() && snap.get().last() != null;
-                return new ItemResult(warm ? 1 : 0, warm, warm ? "warmed from " + snap.get().source() : "no quote");
+                String src = snap.map(x -> x.source()).orElse("none");
+                return new ItemResult(ok ? 1 : 0, ok, ok ? "refreshed from " + src : "refresh failed or no quote");
             }
             case "snapshot_now" -> {
                 SnapshotService.SnapshotResult r = snapshots.snapshotActiveUniverse();

@@ -30,17 +30,46 @@ public final class EventBus {
     private static final int REPLAY_MAX = 256;
 
     private final AtomicLong seq = new AtomicLong();
-    private final CopyOnWriteArrayList<Consumer<Event>> subscribers = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<Subscriber> subscribers = new CopyOnWriteArrayList<>();
     private final ArrayDeque<Event> replay = new ArrayDeque<>(); // guarded by `this`
-    // Fan-out happens on ONE dedicated daemon thread: a publisher (e.g. a provider fetch
-    // thread, a job worker) must never block behind a slow SSE client's write. Single thread
-    // keeps delivery ordered.
-    private final java.util.concurrent.ExecutorService pump =
-            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
-                Thread t = new Thread(r, "event-bus"); t.setDaemon(true); return t;
-            });
+    // PER-SUBSCRIBER bounded queues drained on virtual threads: one stalled SSE client blocks
+    // only ITS OWN drain, never the publisher and never other subscribers (a single shared pump
+    // let one slow client stall all delivery and grow an unbounded queue). Events are hints —
+    // when a queue overflows the OLDEST hint is dropped; the client's normal refetching covers it.
+    private static final int SUBSCRIBER_QUEUE_MAX = 256;
+    private final java.util.concurrent.ExecutorService drains =
+            java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
-    /** Publishes an event to all subscribers (async, ordered). Null-tolerant data; never throws. */
+    private final class Subscriber {
+        final Consumer<Event> consumer;
+        final ArrayDeque<Event> queue = new ArrayDeque<>(); // guarded by `this` (the Subscriber)
+        boolean draining;
+
+        Subscriber(Consumer<Event> consumer) { this.consumer = consumer; }
+
+        void offer(Event e) {
+            boolean startDrain = false;
+            synchronized (this) {
+                if (queue.size() >= SUBSCRIBER_QUEUE_MAX) queue.removeFirst(); // drop-oldest: hints, not payloads
+                queue.addLast(e);
+                if (!draining) { draining = true; startDrain = true; }
+            }
+            if (startDrain) drains.execute(this::drain);
+        }
+
+        private void drain() {
+            while (true) {
+                Event e;
+                synchronized (this) {
+                    e = queue.pollFirst();
+                    if (e == null) { draining = false; return; }
+                }
+                try { consumer.accept(e); } catch (Exception ignore) { /* one bad subscriber never breaks the bus */ }
+            }
+        }
+    }
+
+    /** Publishes an event to all subscribers (async, per-subscriber ordered). Never throws or blocks. */
     public Event publish(String type, Map<String, Object> data) {
         Map<String, Object> copy = new LinkedHashMap<>();
         if (data != null) copy.putAll(data);
@@ -49,11 +78,7 @@ public final class EventBus {
             replay.addLast(e);
             while (replay.size() > REPLAY_MAX) replay.removeFirst();
         }
-        pump.execute(() -> {
-            for (Consumer<Event> s : subscribers) {
-                try { s.accept(e); } catch (Exception ignore) { /* one bad subscriber never breaks the bus */ }
-            }
-        });
+        for (Subscriber s : subscribers) s.offer(e);
         return e;
     }
 
@@ -62,8 +87,9 @@ public final class EventBus {
 
     /** Subscribes; returns the unsubscribe handle (call it on SSE close). */
     public Runnable subscribe(Consumer<Event> consumer) {
-        subscribers.add(consumer);
-        return () -> subscribers.remove(consumer);
+        Subscriber s = new Subscriber(consumer);
+        subscribers.add(s);
+        return () -> subscribers.remove(s);
     }
 
     /** Events newer than {@code lastSeq}, oldest first — the Last-Event-ID replay. */

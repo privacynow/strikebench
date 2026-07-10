@@ -62,6 +62,16 @@ public final class DatasetService {
         if (events != null) events.publish("dataset.selected", java.util.Map.of("active", id));
     }
 
+    /** Drops the in-memory active-dataset cache (used after a Data reset wipes the settings row). */
+    public void invalidateActiveCache() { activeCache = null; }
+
+    /** Human name for a dataset id — the scenario banner must never show a raw ds_… id. */
+    public String nameOf(String id) {
+        if (OBSERVED.equals(id)) return "Observed market data";
+        var rows = db.query("SELECT name FROM dataset WHERE id=?", r -> r.str("name"), id);
+        return rows.isEmpty() || rows.getFirst() == null ? id : rows.getFirst();
+    }
+
     /** True when the dataset exists AND belongs to this caller ('observed' belongs to everyone). */
     public boolean ownedBy(String id, String userId) {
         if (OBSERVED.equals(id)) return true;

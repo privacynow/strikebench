@@ -115,7 +115,17 @@ public final class MarketDataEngine {
             // universe warms a few seconds later so switching sectors / looking up any ticker is instant,
             // without contending the visible screen's fetches at boot.
             List<String> active = universe.active().symbols();
-            for (String s : active) { track(s); refreshAsync(s); }
+            // TRICKLE even the active sector in live mode: firing all symbols at once queues them
+            // fairly AHEAD of interactive requests at the heavy provider's semaphore (a 15-symbol
+            // sector imposed ~18s of queueing on the first user click). Spaced ~1.5s apart, at most
+            // one warm task ever waits at the gate; fixture mode warms instantly.
+            long warmSpacingMs = cfg.fixturesOnly() ? 0 : 1500;
+            for (int i = 0; i < active.size(); i++) {
+                String s = active.get(i);
+                track(s);
+                if (warmSpacingMs == 0) refreshAsync(s);
+                else scheduler.schedule(() -> refreshAsync(s), i * warmSpacingMs, TimeUnit.MILLISECONDS);
+            }
             // Full-universe warming is OFF by default: with a heavy keyless source like Cboe (every
             // "quote" is a full option-chain payload), warming ~95 symbols rate-limits us. Only the
             // active/visible sector warms unless ENGINE_WARM_FULL_UNIVERSE is set (light/licensed feed).
@@ -241,6 +251,22 @@ public final class MarketDataEngine {
                 throw ex;
             }
         });
+    }
+
+    /**
+     * FORCED, BLOCKING refresh — the truthful backend of the Data Center's "refresh now" job:
+     * returns only after the provider round-trip lands (or times out), so a job item can never
+     * report success for a refresh that hasn't happened. Joins any in-flight refresh (singleflight).
+     */
+    public boolean refreshBlocking(String symbol, long timeoutMs) {
+        track(symbol);
+        try {
+            refreshFuture(symbol).get(Math.max(1000, timeoutMs), TimeUnit.MILLISECONDS);
+            MarketSnapshot snap = snapshots.get(norm(symbol));
+            return snap != null && snap.last() != null && snap.error() == null;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private void refreshAsync(String symbol) {

@@ -18,12 +18,18 @@ public final class DataResetService {
 
     private static final Logger log = LoggerFactory.getLogger(DataResetService.class);
 
+    // Every table the tier touches. Entries may carry a predicate ("dataset WHERE id <> 'observed'")
+    // — the display name shown to the user is the part before WHERE. The 'observed' dataset registry
+    // row is schema seed data (bar tables default/FK onto it), never user data, so it survives.
     public enum Tier {
-        MARKET_DATA(List.of("option_bar", "underlying_bar", "data_job_item", "data_job"), false),
+        MARKET_DATA(List.of("option_bar", "underlying_bar", "market_snapshot",
+                "dataset WHERE id <> 'observed'", "settings WHERE k IN ('active_dataset','cboe_cooldown_until')",
+                "data_job_item", "data_job"), false),
         RESEARCH(List.of("recommendation", "strategy_evaluation", "backtests", "research_note"), false),
         PAPER(List.of("trade_marks", "ledger", "positions", "live_orders", "audit", "trades", "accounts"), true),
-        EVERYTHING(List.of("option_bar", "underlying_bar", "data_job_item", "data_job",
-                "recommendation", "strategy_evaluation", "backtests", "research_note",
+        EVERYTHING(List.of("option_bar", "underlying_bar", "market_snapshot", "dataset WHERE id <> 'observed'",
+                "data_job_item", "data_job",
+                "recommendation", "strategy_evaluation", "backtests", "research_note", "workspace",
                 "trade_marks", "ledger", "positions", "live_orders", "audit", "trades",
                 "secrets", "settings", "accounts"), true);
 
@@ -49,12 +55,12 @@ public final class DataResetService {
     }
 
     /** The exact table list a tier will clear — surfaced to the UI so the user sees what's affected. */
-    public List<String> tablesFor(Tier tier) { return tier.tables; }
+    public List<String> tablesFor(Tier tier) { return displayNames(tier); }
 
     public ResetResult reset(Tier tier) {
         db.tx(c -> {
             for (String table : tier.tables) {
-                Db.execOn(c, "DELETE FROM " + table);
+                Db.execOn(c, "DELETE FROM " + table); // entries may carry their own WHERE predicate
             }
             return null;
         });
@@ -64,6 +70,11 @@ public final class DataResetService {
             reseeded = true;
         }
         log.warn("DATA RESET tier={} cleared={} reseeded={}", tier, tier.tables, reseeded);
-        return new ResetResult(tier.name(), tier.tables, reseeded);
+        return new ResetResult(tier.name(), displayNames(tier), reseeded);
+    }
+
+    /** The user-facing table list: predicate entries show just the table name. */
+    private static List<String> displayNames(Tier tier) {
+        return tier.tables.stream().map(t -> t.contains(" WHERE ") ? t.substring(0, t.indexOf(" WHERE ")) : t).toList();
     }
 }
