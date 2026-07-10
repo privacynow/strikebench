@@ -129,31 +129,107 @@ public final class TradeService {
      * ledger and reserves are NEVER touched. This is the learning loop's missing import path:
      * the MU condor left zero trace because only paper placements existed.
      */
+    /** Execution identity for the real-fill lane: when it happened, where, and the order id. */
+    public record ExternalMeta(String executedAt, String broker, String orderRef, boolean historical) {}
+
     public TradeRecord createExternal(OpenRequest req) {
-        if (req.proposedNetCents() == null) {
-            throw new IllegalArgumentException("recording a real trade requires proposedNetCents — the actual net fill");
+        return createExternal(req, new ExternalMeta(null, null, null, false));
+    }
+
+    public TradeRecord createExternal(OpenRequest req, ExternalMeta meta) {
+        Plan p;
+        if (meta != null && meta.historical()) {
+            // HISTORICAL fills: the contracts may be dead and the books gone — the user's own
+            // per-leg fills ARE the record. No live validation is possible; evidence says so.
+            p = planFromUserFills(req);
+        } else {
+            if (req.proposedNetCents() == null) {
+                throw new IllegalArgumentException("recording a real trade requires proposedNetCents — the actual net fill");
+            }
+            p = computePlan(req);
         }
-        Plan p = computePlan(req);
-        if (!p.blocks.isEmpty()) reject(req, p.blocks);
+        if (!p.blocks().isEmpty()) reject(req, p.blocks());
         String tradeId = Ids.trade();
         String now = now();
+        java.time.OffsetDateTime executedAt = parseExecutedAt(meta == null ? null : meta.executedAt());
         db.exec("""
                 INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
                   entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,
                   pop_entry,fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,
-                  is_live,created_at,closed_at,updated_at,intent,shares_locked,origin)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,0,'EXTERNAL')""",
+                  is_live,created_at,closed_at,updated_at,intent,shares_locked,origin,
+                  proposed_net_cents,executed_at,broker,order_ref)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,0,'EXTERNAL',?,?,?,?)""",
                 tradeId, req.accountId(), req.symbol().toUpperCase(java.util.Locale.ROOT),
-                req.strategy(), TradeRecord.ACTIVE, req.qty(), Json.write(p.filledLegs),
+                req.strategy(), TradeRecord.ACTIVE, req.qty(), Json.write(p.filledLegs()),
                 req.thesis(), req.horizon(), req.riskMode(),
-                p.underlyingCents, p.entryNet, p.maxLoss, p.maxProfit, Json.write(p.breakevens),
-                p.pop, p.fees, p.snapshotJson, now, now,
+                p.underlyingCents(), p.entryNet(), p.maxLoss(), p.maxProfit(), Json.write(p.breakevens()),
+                p.pop(), p.fees(), p.snapshotJson(), now, now,
                 req.intent() == null || req.intent().isBlank() ? null
-                        : io.liftandshift.strikebench.strategy.StrategyIntent.parse(req.intent()).name());
+                        : io.liftandshift.strikebench.strategy.StrategyIntent.parse(req.intent()).name(),
+                req.proposedNetCents(), executedAt,
+                meta == null ? null : meta.broker(), meta == null ? null : meta.orderRef());
         auditSafe(req.accountId(), tradeId, "EXTERNAL_TRADE_RECORDED", "INFO", Map.of(
                 "symbol", req.symbol(), "strategy", req.strategy(), "qty", req.qty(),
-                "fillNetCents", p.entryNet, "feesCents", p.fees));
+                "fillNetCents", p.entryNet(), "feesCents", p.fees()));
         return get(tradeId);
+    }
+
+    private static java.time.OffsetDateTime parseExecutedAt(String s) {
+        if (s == null || s.isBlank()) return null;
+        try { return java.time.OffsetDateTime.parse(s); } catch (RuntimeException ignored) { }
+        try { return LocalDate.parse(s.trim()).atTime(16, 0).atOffset(java.time.ZoneOffset.UTC); }
+        catch (RuntimeException e) { throw new IllegalArgumentException("executedAt must be an ISO date or datetime"); }
+    }
+
+    /**
+     * A plan built ENTIRELY from user-supplied per-leg fills — the honest path for recording a
+     * trade whose contracts have since expired. No live marks, no POP/EV (no vol), evidence
+     * MISSING; undefined-risk reality is RECORDED with a loud warning, never blocked (it already
+     * happened at the broker).
+     */
+    private Plan planFromUserFills(OpenRequest req) {
+        List<String> blocks = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+        if (req.qty() < 1 || req.qty() > 100) blocks.add("Quantity must be 1..100");
+        if (req.legs() == null || req.legs().isEmpty()) blocks.add("At least one leg is required");
+        List<Leg> filled = new ArrayList<>();
+        for (Leg leg : req.legs() == null ? List.<Leg>of() : req.legs()) {
+            if (!leg.isStock() && (leg.entryPrice() == null || leg.entryPrice().signum() <= 0)) {
+                blocks.add("Historical recording requires YOUR fill price on every option leg (" + legDesc(leg) + ")");
+                continue;
+            }
+            filled.add(leg);
+        }
+        if (!blocks.isEmpty()) return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0,
+                Freshness.MISSING, blocks, warnings, "{}");
+        long netAdjust = 0;
+        PayoffCurve curve = PayoffCurve.of(filled, req.qty());
+        long entryNet = curve.entryNetPremiumCents();
+        if (req.proposedNetCents() != null && req.proposedNetCents() != entryNet) {
+            netAdjust = req.proposedNetCents() - entryNet;
+            curve = PayoffCurve.of(filled, req.qty(), netAdjust);
+            entryNet = curve.entryNetPremiumCents();
+            warnings.add("Package net " + Money.fmt(entryNet) + " taken from your stated total; per-leg fills sum to "
+                    + Money.fmt(entryNet - netAdjust));
+        }
+        long maxLoss;
+        Long maxProfit = curve.maxProfitUnbounded() ? null : curve.maxProfitCents();
+        if (curve.maxLossUnbounded()) {
+            maxLoss = 0;
+            warnings.add("UNDEFINED RISK recorded as-is: this real position can lose more than any figure shown — "
+                    + "max loss is stored as $0 because no cap exists");
+        } else {
+            maxLoss = curve.maxLossCents();
+        }
+        long fees = req.feesOverrideCents() != null ? Math.max(0, req.feesOverrideCents()) : feesFor(filled, req.qty());
+        warnings.add("Recorded from YOUR fills — contracts were not validated against a live book (historical entry)");
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("freshness", Freshness.MISSING.name());
+        snapshot.put("asOf", now());
+        snapshot.put("basis", "user-supplied historical fills");
+        return new Plan(filled, entryNet, fees, 0, maxLoss, maxProfit,
+                curve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
+                null, null, 0, Freshness.MISSING, blocks, warnings, Json.write(snapshot));
     }
 
     /** Opens the trade or throws TradeRejectedException (audit row only, zero mutation). */
@@ -203,15 +279,15 @@ public final class TradeService {
                         INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
                           entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,
                           pop_entry,fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,
-                          is_live,created_at,closed_at,updated_at,intent,shares_locked)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,?)""",
+                          is_live,created_at,closed_at,updated_at,intent,shares_locked,proposed_net_cents)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,?,?)""",
                         tradeId, acct.id(), symbol, req.strategy(), TradeRecord.ACTIVE,
                         req.qty(), Json.write(p.filledLegs), req.thesis(), req.horizon(), req.riskMode(),
                         p.underlyingCents, p.entryNet, p.maxLoss, p.maxProfit, Json.write(p.breakevens),
                         p.pop, p.fees, p.snapshotJson, now, now,
                         req.intent() == null || req.intent().isBlank() ? null
                                 : io.liftandshift.strikebench.strategy.StrategyIntent.parse(req.intent()).name(),
-                        p.sharesToLock());
+                        p.sharesToLock(), req.proposedNetCents());
                 Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, has_traded=1, updated_at=? WHERE id=?",
                         cash, reserved, now, acct.id());
                 return getOn(c, tradeId);
@@ -876,11 +952,13 @@ public final class TradeService {
         Long packageMid = packageMidCents(snapshotLegs, req.qty());
         // YOUR price, not the model's: a proposed limit (pre-trade) or an actual fill (evaluation)
         // reprices the whole package — max loss, breakevens, POP, EV all follow the real number.
+        long netAdjust = 0;
         if (req.proposedNetCents() != null && filled.stream().anyMatch(l -> !l.isStock())) {
-            long delta = req.proposedNetCents() - entryNet;
-            if (delta != 0) {
-                filled = adjustNetTo(filled, delta, req.qty());
-                curve = PayoffCurve.of(filled, req.qty());
+            // R5: judge the SAME legs at YOUR price via a package-level curve adjustment — legs
+            // keep their REAL quotes (no fabricated per-leg fill ever persists).
+            netAdjust = req.proposedNetCents() - entryNet;
+            if (netAdjust != 0) {
+                curve = PayoffCurve.of(filled, req.qty(), netAdjust);
                 entryNet = curve.entryNetPremiumCents();
             }
             warnings.add("Priced at YOUR net price " + Money.fmt(req.proposedNetCents())
@@ -939,7 +1017,7 @@ public final class TradeService {
         if (shareContext) {
             List<Leg> combined = new ArrayList<>(filled);
             combined.add(Leg.stock(LegAction.BUY, contextLots, underlying));
-            riskCurve = PayoffCurve.of(combined, req.qty());
+            riskCurve = PayoffCurve.of(combined, req.qty(), netAdjust); // YOUR price shifts this curve too
             warnings.add(shareCovered
                     ? "Covered by " + sharesToLock + " held shares (locked while this trade is open) — "
                         + "risk figures include those shares at today's price; they keep their own downside"
@@ -1066,24 +1144,6 @@ public final class TradeService {
         return total;
     }
 
-    /** Repackages the fill so the package nets to entryNet+delta: the whole adjustment lands on the
-     *  first option leg's per-share price (package-exact; per-leg market rows keep the real quotes). */
-    private static List<Leg> adjustNetTo(List<Leg> filled, long deltaCents, int qty) {
-        List<Leg> out = new ArrayList<>(filled);
-        for (int i = 0; i < out.size(); i++) {
-            Leg l = out.get(i);
-            if (l.isStock()) continue;
-            long shares = (long) Leg.SHARES_PER_CONTRACT * l.ratio() * qty;
-            BigDecimal perShare = BigDecimal.valueOf(deltaCents).movePointLeft(2)
-                    .divide(BigDecimal.valueOf(shares), 6, java.math.RoundingMode.HALF_UP);
-            // entryNet counts SELL as +price: raising a SELL leg's price raises the net; BUY lowers it.
-            BigDecimal adj = l.action() == LegAction.SELL ? l.entryPrice().add(perShare)
-                    : l.entryPrice().subtract(perShare);
-            out.set(i, new Leg(l.action(), l.type(), l.strike(), l.expiration(), l.ratio(), adj));
-            return out;
-        }
-        return out;
-    }
 
     /**
      * The assembled judgment every Review consumer shares: full probability map (risk-neutral,
@@ -1323,7 +1383,8 @@ public final class TradeService {
                 r.dblOrNull("pop_entry"), r.lng("fees_open_cents"), r.lng("fees_close_cents"),
                 r.lngOrNull("realized_pnl_cents"), r.str("close_reason"), r.str("entry_snapshot_json"),
                 r.bool("is_live"), r.str("created_at"), r.str("closed_at"), r.str("updated_at"),
-                r.str("intent"), r.lng("shares_locked"), r.str("origin"));
+                r.str("intent"), r.lng("shares_locked"), r.str("origin"),
+                r.lngOrNull("proposed_net_cents"), r.str("executed_at"), r.str("broker"), r.str("order_ref"));
     }
 
     static String legDesc(Leg leg) {

@@ -35,8 +35,28 @@ public record TradeRecord(
         String updatedAt,
         String intent,        // StrategyIntent name the trade was placed under, nullable
         long sharesLocked,    // held shares pledged as short-call coverage while ACTIVE
-        String origin         // PAPER | EXTERNAL (a real broker fill recorded for the learning loop)
+        String origin,        // PAPER | EXTERNAL (a real broker fill recorded for the learning loop)
+        Long proposedNetCents,// the USER'S package price when one was set (provenance), nullable
+        String executedAt,    // real execution time for EXTERNAL trades (ISO), nullable
+        String broker,        // e.g. ETRADE, nullable
+        String orderRef       // broker order id, nullable
 ) {
+    /** Pre-provenance shape. */
+    public TradeRecord(String id, String accountId, String symbol, String strategy, String status,
+                       int qty, List<Leg> legs, String thesis, String horizon, String riskMode,
+                       long entryUnderlyingCents, long entryNetPremiumCents, long maxLossCents,
+                       Long maxProfitCents, List<String> breakevens, Double popEntry,
+                       long feesOpenCents, long feesCloseCents, Long realizedPnlCents,
+                       String closeReason, String entrySnapshotJson, boolean isLive,
+                       String createdAt, String closedAt, String updatedAt, String intent,
+                       long sharesLocked, String origin) {
+        this(id, accountId, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
+                entryUnderlyingCents, entryNetPremiumCents, maxLossCents, maxProfitCents, breakevens,
+                popEntry, feesOpenCents, feesCloseCents, realizedPnlCents, closeReason,
+                entrySnapshotJson, isLive, createdAt, closedAt, updatedAt, intent, sharesLocked, origin,
+                null, null, null, null);
+    }
+
     /** Pre-origin shape. */
     public TradeRecord(String id, String accountId, String symbol, String strategy, String status,
                        int qty, List<Leg> legs, String thesis, String horizon, String riskMode,

@@ -31,7 +31,17 @@ public final class PayoffCurve {
     private final boolean maxLossUnbounded;
     private final BigDecimal tailSlope;          // dollars of profit per $1 of underlying above last knot
 
+    /** Additive package-level entry adjustment in cents: judges the SAME legs at YOUR net price
+     *  (a proposed limit or an actual fill) without fabricating any per-leg quote — the whole
+     *  curve, breakevens included, shifts exactly. */
+    private final long entryAdjustCents;
+
     private PayoffCurve(List<Leg> legs, int qty) {
+        this(legs, qty, 0L);
+    }
+
+    private PayoffCurve(List<Leg> legs, int qty, long entryAdjustCents) {
+        this.entryAdjustCents = entryAdjustCents;
         if (legs == null || legs.isEmpty()) throw new IllegalArgumentException("at least one leg required");
         if (qty < 1) throw new IllegalArgumentException("qty must be >= 1");
         this.legs = List.copyOf(legs);
@@ -69,6 +79,11 @@ public final class PayoffCurve {
         return new PayoffCurve(legs, qty);
     }
 
+    /** With a package-level entry-net adjustment (null/0 = none): profit(S) shifts by exactly this. */
+    public static PayoffCurve of(List<Leg> legs, int qty, Long entryAdjustCents) {
+        return new PayoffCurve(legs, qty, entryAdjustCents == null ? 0L : entryAdjustCents);
+    }
+
     /** Exact profit in dollars for the whole position at expiration price s. */
     public BigDecimal profitAt(BigDecimal s) {
         BigDecimal total = BigDecimal.ZERO;
@@ -76,7 +91,7 @@ public final class PayoffCurve {
             BigDecimal perShare = leg.profitPerShare(s);
             total = total.add(perShare.multiply(HUNDRED).multiply(BigDecimal.valueOf((long) leg.ratio() * qty)));
         }
-        return total;
+        return entryAdjustCents == 0 ? total : total.add(BigDecimal.valueOf(entryAdjustCents, 2));
     }
 
     public long profitAtCents(BigDecimal s) {
@@ -90,7 +105,7 @@ public final class PayoffCurve {
             BigDecimal cash = leg.entryPrice().multiply(HUNDRED).multiply(BigDecimal.valueOf((long) leg.ratio() * qty));
             total = leg.action() == LegAction.SELL ? total.add(cash) : total.subtract(cash);
         }
-        return Money.toCents(total);
+        return Money.toCents(total) + entryAdjustCents;
     }
 
     public List<BigDecimal> knots() { return knots; }

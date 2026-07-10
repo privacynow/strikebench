@@ -161,6 +161,28 @@ class PaperCoreTest {
     }
 
     @org.junit.jupiter.api.Test
+    void historicalExternalTradesRecordFromUserFillsEvenWhenContractsAreDead() {
+        Account acct = accounts.getOrCreateDefault();
+        // Legs that expired LAST WEEK (dead vs the fixed 2026-07-08 clock) with the user's fills.
+        LocalDate dead = LocalDate.of(2026, 7, 2);
+        TradeService.OpenRequest past = new TradeService.OpenRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+                List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"), dead, 1, new BigDecimal("3.10")),
+                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), dead, 1, new BigDecimal("1.35"))),
+                "bullish", "week", "balanced", null, null, null, 200L, "IMPORT");
+        TradeRecord t = trades.createExternal(past,
+                new TradeService.ExternalMeta("2026-07-01", "ETRADE", "ORD-123", true));
+        assertThat(t.external()).isTrue();
+        assertThat(t.entryNetPremiumCents()).isEqualTo(175_00); // 3.10 - 1.35 per share
+        assertThat(t.broker()).isEqualTo("ETRADE");
+        assertThat(t.orderRef()).isEqualTo("ORD-123");
+        assertThat(t.executedAt()).isNotNull();
+        // Legs carry the REAL user fills — nothing fabricated, nothing validated against a dead book.
+        assertThat(t.legs().getFirst().entryPrice()).isEqualByComparingTo("3.10");
+        // Still zero paper-money mutation.
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?", r -> r.lng("n"), t.id()).getFirst()).isZero();
+    }
+
+    @org.junit.jupiter.api.Test
     void externalTradesNeverTouchPaperMoney() {
         Account acct = accounts.getOrCreateDefault();
         long cashBefore = acct.cashCents(), reservedBefore = acct.reservedCents();

@@ -2931,24 +2931,37 @@
           el('select', { class: 'x-type' }, el('option', {}, 'PUT'), el('option', {}, 'CALL')),
           el('input', { class: 'x-strike', type: 'number', step: '0.5', placeholder: 'strike', style: 'max-width:100px' }),
           el('input', { class: 'x-exp', type: 'date', style: 'max-width:150px' }),
+          el('input', { class: 'x-fill', type: 'number', step: '0.01', placeholder: 'fill $/sh', style: 'max-width:100px',
+            title: 'Your per-leg fill — required for past trades whose contracts have expired' }),
           el('button', { class: 'btn btn-sm', onclick: function (ev) { ev.target.closest('.ext-leg').remove(); } }, '\u00d7'));
       }
       legsBox.appendChild(legRow());
+      var execDate = el('input', { type: 'date', id: 'ext-date', title: 'When the trade actually executed' });
+      var brokerIn = el('input', { type: 'text', id: 'ext-broker', placeholder: 'broker (optional)', style: 'max-width:130px' });
+      var refIn = el('input', { type: 'text', id: 'ext-ref', placeholder: 'order # (optional)', style: 'max-width:130px' });
+      var pastChk = el('input', { type: 'checkbox', id: 'ext-past' });
       var msg = el('div', { class: 'muted small', id: 'ext-msg' });
       var saveBtn = el('button', { class: 'btn btn-sm', id: 'ext-save', onclick: async function () {
         saveBtn.disabled = true; msg.textContent = '';
         try {
           var legs = Array.prototype.map.call(legsBox.querySelectorAll('.ext-leg'), function (row) {
-            return { action: row.querySelector('.x-act').value, type: row.querySelector('.x-type').value,
-                     strike: row.querySelector('.x-strike').value, expiration: row.querySelector('.x-exp').value, ratio: 1 };
+            var fillV = row.querySelector('.x-fill').value;
+            var lg = { action: row.querySelector('.x-act').value, type: row.querySelector('.x-type').value,
+                       strike: row.querySelector('.x-strike').value, expiration: row.querySelector('.x-exp').value, ratio: 1 };
+            if (fillV !== '') lg.entryPrice = fillV;
+            return lg;
           }).filter(function (l) { return l.strike && l.expiration; });
+          if (pastChk.checked && legs.some(function (l) { return !l.entryPrice; })) {
+            throw new Error('A past trade needs YOUR fill price on every leg — the live book is gone.');
+          }
           if (!legs.length) throw new Error('Add at least one leg (strike + expiration).');
           if (net.value === '') throw new Error('The actual net fill is required.');
           var t = await API.post('/api/trades/external', {
             symbol: (sym.value || '').toUpperCase(), strategy: 'CUSTOM', qty: Math.max(1, parseInt(qty.value || '1', 10)),
             legs: legs, proposedNetCents: Math.round(parseFloat(net.value) * 100),
             feesOverrideCents: fees.value === '' ? null : Math.round(parseFloat(fees.value) * 100),
-            source: 'IMPORT' });
+            executedAt: execDate.value || null, broker: brokerIn.value || null, orderRef: refIn.value || null,
+            historical: pastChk.checked, source: 'IMPORT' });
           msg.textContent = 'Recorded ' + t.id + ' — it now appears below with an EXTERNAL badge.';
           App.render();
         } catch (e) { msg.textContent = 'Refused: ' + (e.message || e); }
@@ -2959,6 +2972,10 @@
         el('span', { class: 'muted small' }, 'Qty'), qty, net, fees,
         el('button', { class: 'btn btn-sm', onclick: function () { legsBox.appendChild(legRow()); } }, '+ Leg')));
       box.appendChild(legsBox);
+      box.appendChild(el('div', { class: 'btn-row' },
+        el('span', { class: 'muted small' }, 'Executed'), execDate, brokerIn, refIn,
+        el('label', { class: 'muted small', style: 'display:flex;gap:4px;align-items:center' }, pastChk,
+          el('span', {}, 'Past trade (contracts may have expired \u2014 uses your fills, no live check)'))));
       box.appendChild(el('div', { class: 'btn-row' }, saveBtn));
       box.appendChild(msg);
       return box;

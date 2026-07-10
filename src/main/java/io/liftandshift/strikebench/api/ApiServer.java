@@ -444,7 +444,9 @@ public final class ApiServer {
                 Account acct = currentAccount(ctx);
                 TradeOpenRequest body = bodyOrNull(ctx, TradeOpenRequest.class);
                 var req = toOpenRequest(body, acct);
-                ctx.status(201).json(trades.createExternal(req));
+                var meta = new io.liftandshift.strikebench.paper.TradeService.ExternalMeta(
+                        body.executedAt(), body.broker(), body.orderRef(), Boolean.TRUE.equals(body.historical()));
+                ctx.status(201).json(trades.createExternal(req, meta));
             });
             c.routes.post("/api/trades", this::tradeCreate);
             c.routes.get("/api/trades", this::tradeList);
@@ -1769,7 +1771,8 @@ public final class ApiServer {
     public record TradeOpenRequest(String symbol, String strategy, Integer qty, List<LegView> legs,
                                    String thesis, String horizon, String riskMode,
                                    String intent, Boolean useHeldShares, String recommendationId,
-                                   Long proposedNetCents, Long feesOverrideCents, String source) {}
+                                   Long proposedNetCents, Long feesOverrideCents, String source,
+                                   String executedAt, String broker, String orderRef, Boolean historical) {}
 
     public record ConfirmRequest(Boolean confirm) {}
 
