@@ -1316,6 +1316,26 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   careful knot-based trim around the drag-handle math; per-path click-inspection on the fan.
   Matrix: 342 JUnit + 43 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
   ===============================================================================================
+- UXR2 (2026-07-10, commit b1050e1): junior's 8 release blockers + the user's three UX problems.
+  BLOCKERS: (1) magVolFor crash — LESSON: a multi-replace python patch that asserts AFTER some
+  replacements but BEFORE write() loses EVERYTHING silently when one assert fails; the calibration
+  patch died this way TWICE. Assert-all-first or write incrementally. (2) True per-stock wildness:
+  HV multiplier client-side + volAnnual<=0 sentinel resolving to chain ATM IV in ALL sim endpoints.
+  (3) Contract identity: sim runs the EXACT listed contracts the entry priced (resolvedLegs +
+  named snaps). (4) Freshness-honest entry notes (DEMO/delayed/real-time; never 'is real').
+  (5) /api/sim/compare: ONE path set, one budget permit, refusals BY NAME, RoR-per-downside
+  ranking (fair across position sizes), beginner top-3 progressive disclosure, undefined-risk
+  exclusion disclosed. (6) legs/qty/ratio/structure caps. (7) PortfolioBacktester snaps to LISTED
+  expirations from owned history. (8) observed-only coverage; banner states single-symbol scope.
+  UX: MarketContextSelector on Imagine-a-future (sector rail + search + full-universe non-wrapping
+  peer rail — replaced 8 scattered wrapping pills); 'Historical evidence — did this happen before?'
+  MOUNTED on the symbol page between chart and futures (the promised pairing was a false claim;
+  also fixed its labForm crash when mounted outside the study view); stable field geometry
+  (.form-grid label min-height contract + shortened offender labels) with a DOM alignment test.
+  New pinned coverage: every story card × every model end-to-end; batched-comparison call count;
+  evidence-card ordering; per-row control alignment. Matrix: 342 JUnit + 47 fixture + 3 audit +
+  4 seeded + 8 live — ALL GREEN.
+  ===============================================================================================
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
