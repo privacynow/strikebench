@@ -99,9 +99,15 @@ public final class MarketDataEngine {
             // without contending the visible screen's fetches at boot.
             List<String> active = universe.active().symbols();
             for (String s : active) { track(s); refreshAsync(s); }
-            log.info("market engine warming active sector ({} symbols); full universe staged", active.size());
-            // Give the visible (active) sector an uncontended head start before trickling the rest.
-            scheduler.schedule(this::warmFullUniverse, 12, TimeUnit.SECONDS);
+            // Full-universe warming is OFF by default: with a heavy keyless source like Cboe (every
+            // "quote" is a full option-chain payload), warming ~95 symbols rate-limits us. Only the
+            // active/visible sector warms unless ENGINE_WARM_FULL_UNIVERSE is set (light/licensed feed).
+            if (cfg.engineWarmFullUniverse()) {
+                log.info("market engine warming active sector ({}); full universe staged", active.size());
+                scheduler.schedule(this::warmFullUniverse, 12, TimeUnit.SECONDS);
+            } else {
+                log.info("market engine warming active sector only ({} symbols); full-universe warm disabled", active.size());
+            }
         } catch (Exception e) {
             log.warn("market engine warm failed: {}", e.toString());
         }

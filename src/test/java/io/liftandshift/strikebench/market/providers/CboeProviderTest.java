@@ -60,6 +60,22 @@ class CboeProviderTest {
     }
 
     @Test
+    void a429TripsTheCircuitBreakerAndStopsAllFurtherCboeRequests() throws Exception {
+        // One 429 (Cloudflare 1015) must cool Cboe down GLOBALLY — no more requests, for any symbol.
+        server.enqueue(new MockResponse().setResponseCode(429).setBody("error code: 1015"));
+        // The first call surfaces the 429 (MarketDataService catches it in prod) AND trips the breaker.
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> provider.quote("QQQ"))
+                .isInstanceOf(Http.ProviderHttpException.class);
+        assertThat(provider.coolingDown()).isTrue();
+        // These would 404/hang the test if they hit the server (nothing more enqueued) — the breaker
+        // short-circuits them, so no request is made.
+        assertThat(provider.quote("AAPL")).isEmpty();
+        assertThat(provider.expirations("SPY")).isEmpty();
+        assertThat(provider.chain("TSLA", java.time.LocalDate.parse("2026-07-31"))).isEmpty();
+        assertThat(server.getRequestCount()).isEqualTo(1);    // exactly one request total
+    }
+
+    @Test
     void identity() {
         assertThat(provider.name()).isEqualTo("cboe");
         assertThat(provider.domains()).containsExactlyInAnyOrder(Domain.OPTIONS, Domain.QUOTES);

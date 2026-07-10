@@ -93,6 +93,7 @@ public final class ApiServer {
     private io.liftandshift.strikebench.db.DataJobService dataJobs;             // Data Center background jobs
     private io.liftandshift.strikebench.db.DataCoverage dataCoverage;           // Data Center coverage matrix
     private io.liftandshift.strikebench.db.DataResetService dataReset;          // Data Center tiered wipe
+    private CboeProvider cboe;                                                  // for Data Center throttle display
     private java.util.concurrent.ScheduledExecutorService streamScheduler;     // pushes SSE market frames
     private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
     private final String startedAt = java.time.Instant.now().toString();
@@ -133,11 +134,13 @@ public final class ApiServer {
 
         SecretsStore secretsStore = new SecretsStore(db, clock);
         ETradeProvider etrade = new ETradeProvider(cfg, secretsStore, clock);
+        final CboeProvider[] cboeRef = new CboeProvider[1]; // captured so the Data Center can show throttle state
 
         // Priority: E*TRADE -> Cboe -> AlphaVantage/Polygon -> Stooq -> Fixture (always last resort)
         if (!cfg.fixturesOnly()) {
             if (etrade.configured()) providers.add(etrade);
-            providers.add(new CboeProvider(cfg));
+            cboeRef[0] = new CboeProvider(cfg);
+            providers.add(cboeRef[0]);
             if (!cfg.alphaVantageApiKey().isBlank()) providers.add(new AlphaVantageProvider(cfg));
             if (!cfg.polygonApiKey().isBlank()) providers.add(new PolygonProvider(cfg));
             // Yahoo keyless equity candles — PERSONAL/LOCAL-CLONE opt-in only (see AppConfig.yahooEnabled).
@@ -184,6 +187,7 @@ public final class ApiServer {
         server.dataJobs = new io.liftandshift.strikebench.db.DataJobService(db, clock, server.marketEngine, snapshots, backfill, universe, cfg);
         server.dataCoverage = new io.liftandshift.strikebench.db.DataCoverage(db);
         server.dataReset = new io.liftandshift.strikebench.db.DataResetService(db, accounts);
+        server.cboe = cboeRef[0];
         return server;
     }
 
@@ -722,8 +726,13 @@ public final class ApiServer {
     private void dataSources(Context ctx) {
         List<Map<String, Object>> sources = new ArrayList<>();
         boolean fx = cfg.fixturesOnly();
-        sources.add(source("Cboe (delayed chains)", "Option chains + greeks", !fx, "keyless · delayed · display-only",
-                "Keyless. Current option chains with bid/ask/IV/greeks (15-min delayed). Always on in live mode."));
+        boolean cboeThrottled = cboe != null && cboe.coolingDown();
+        String cboeHint = "Keyless, HEAVY (each request is a full option-chain payload). Current chains with "
+                + "bid/ask/IV/greeks, 15-min delayed. Used for option workflows + a slow active-sector refresh.";
+        if (cboeThrottled) cboeHint = "THROTTLED — Cboe rate-limited us (429/1015); cooling down. Serving stale/other "
+                + "sources until it clears. " + cboeHint;
+        sources.add(source(cboeThrottled ? "Cboe (delayed chains) — THROTTLED" : "Cboe (delayed chains)",
+                "Option chains + greeks", !fx && !cboeThrottled, "keyless · delayed · display-only", cboeHint));
         sources.add(source("Yahoo Finance", "Equity/ETF/index candles", cfg.yahooEnabled(), "keyless · PERSONAL / local-clone only",
                 "Underlying OHLCV for backtesting (NOT options). Off by default; set YAHOO_ENABLED=true to opt in — you own Yahoo's terms."));
         sources.add(source("Alpha Vantage", "Equity candles + historical options", !cfg.alphaVantageApiKey().isBlank(),

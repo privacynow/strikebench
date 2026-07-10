@@ -189,6 +189,12 @@ public final class AppConfig {
     /** Max symbols the engine keeps warm at once (whole universe + recently-viewed, LRU-evicted).
      *  Default holds all ~100 curated sector symbols plus headroom for ad-hoc lookups. */
     public int engineMaxTracked() { return getInt("ENGINE_MAX_TRACKED", 220); }
+    /** Warm the WHOLE curated universe on boot. OFF by default — Cboe's keyless options endpoint is
+     *  heavy (each "quote" is a full option-chain payload), so full-universe warming rate-limits us.
+     *  Enable only when a light/licensed quote source is configured. */
+    public boolean engineWarmFullUniverse() { return getBool("ENGINE_WARM_FULL_UNIVERSE", false); }
+    /** After a Cboe 429/1015 (rate limit), stop calling Cboe globally for this many minutes. */
+    public int cboeCooldownMinutes() { return getInt("CBOE_COOLDOWN_MINUTES", 15); }
     /** Seconds between SSE pushes on /api/market/stream (live-ish tape from engine memory). */
     public int engineStreamIntervalSeconds() { return getInt("ENGINE_STREAM_INTERVAL_SECONDS", 3); }
 

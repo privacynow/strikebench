@@ -50,14 +50,24 @@ public final class CboeProvider implements MarketDataProvider {
      */
     private final com.github.benmanes.caffeine.cache.Cache<String, Optional<JsonNode>> payloadCache =
             com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
-                    .expireAfterWrite(java.time.Duration.ofSeconds(60))
-                    .maximumSize(50)
+                    .expireAfterWrite(java.time.Duration.ofSeconds(120))
+                    .maximumSize(300) // above the curated universe so warming doesn't churn the cache
                     .build();
+
+    private final long cooldownMs;
+    /** After a 429/1015, ALL Cboe requests short-circuit until this time (a shared circuit breaker). */
+    private volatile long cooldownUntilMs = 0;
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CboeProvider.class);
 
     public CboeProvider(AppConfig cfg) {
         this.http = new Http(cfg.httpTimeoutMs());
         this.baseUrl = Http.normalizeBase(cfg.cboeBaseUrl());
+        this.cooldownMs = Math.max(1, cfg.cboeCooldownMinutes()) * 60_000L;
     }
+
+    /** True while Cboe is in a rate-limit cooldown — surfaced to the Data Center. */
+    public boolean coolingDown() { return System.currentTimeMillis() < cooldownUntilMs; }
+    public long cooldownUntilMs() { return cooldownUntilMs; }
 
     @Override
     public String name() {
@@ -175,6 +185,9 @@ public final class CboeProvider implements MarketDataProvider {
      * (HTTP 404, or a body without a data object). Other failures propagate.
      */
     private JsonNode fetchData(String symbol) {
+        // Circuit breaker: while cooling down from a 429, make NO Cboe request (for any symbol) — this
+        // is what stops the retry storm and the ongoing hammering. Callers fall through the chain.
+        if (coolingDown()) return null;
         Optional<JsonNode> cached = payloadCache.get(symbol, this::fetchDataUncached);
         return cached == null ? null : cached.orElse(null);
     }
@@ -190,6 +203,12 @@ public final class CboeProvider implements MarketDataProvider {
             String msg = e.getMessage() == null ? "" : e.getMessage();
             if (msg.contains("HTTP 404") || (msg.contains("HTTP 403") && msg.contains("AccessDenied"))) {
                 return Optional.empty();
+            }
+            // 429 (Cloudflare 1015) = rate limited. Trip the breaker so we stop asking Cboe app-wide.
+            if (msg.contains("HTTP 429")) {
+                cooldownUntilMs = System.currentTimeMillis() + cooldownMs;
+                log.warn("Cboe rate-limited (429/1015) — cooling down for {} min; serving stale/other sources",
+                        cooldownMs / 60000);
             }
             throw e;
         }
