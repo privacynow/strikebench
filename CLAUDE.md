@@ -1247,6 +1247,49 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     ⇒ every DOM suite fails at 0ms in before() — check the container FIRST.
   - FINAL MATRIX: 332 JUnit + 43 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
   ===============================================================================================
+- REVIEW-RESPONSE PROGRAM (2026-07-10, commits 03e5972→44fcacf→b59b85c→7d2a9d9; branch, NOT deployed).
+  External review (12 findings P0/P1) + user UX critique of "Imagine a future" — ALL addressed:
+  - SIM CORRECTNESS (P0s): expired legs settle ONCE at their expiration-step price (were re-valuing
+    against post-expiry stock forever); total work capped as a PRODUCT (ScenarioSpec.MAX_TOTAL_POINTS
+    3M + SimBudget 2 concurrent runs); runAndPersist generates exactly ONE path; missing quote = loud
+    404 (never a silent $100 anchor — three sites).
+  - SIM MATH: GBM is Gaussian (was literally t(6)); Itô −σ²/2 drift correction in GBM/jump/Heston (+
+    Merton compensator) — E[S_T] sits ON the stated drift (pinned); bootstrap rescales to the vol knob
+    + step size; GAP/EVENT shapes carry a deterministic timed shock that REPLACES that step's noise
+    (overnight events, not diffusion) so EVERY path contains the promised move; 6 statistical
+    contract tests. Persisted scenarios write the RECENT PAST ending today (not future dates) so an
+    ACTIVE dataset genuinely drives Research/HV/backtests (test window updated to match).
+  - OWNERSHIP: datasets per-user (list own+observed; foreign activate/delete = 404; per-owner prune
+    spares the active run); active-dataset + universe switches admin-gated under auth (app-wide read
+    path); workspace localStorage namespaced per signed-in subject.
+  - EVIDENCE: StoredCandleStore answers only when it COVERS the range (head/tail ±7d + ≥60% trading
+    days; synthetic datasets exempt — scenario mode IS the world); weakest-link freshness everywhere
+    (any demo bar ⇒ FIXTURE; all-observed ⇒ EOD); UnderlyingBackfill uses candleSeriesFromProviders
+    (stored-first read let a partial store backfill only itself); Backtester tier decided by chain
+    EVIDENCE not provider name (owned CSV counts as HISTORICAL_CHAIN); PortfolioBacktester marks from
+    dataset_id='observed' AND bid_ask_observed=1 only, OBSERVED label needs ≥90% observed marks.
+  - FEED: live-mode active-sector warm trickles at 1.5s spacing (was ~18s interactive queueing);
+    refresh/warm jobs use engine.refreshBlocking (no success-before-refresh); Cboe payload cache
+    weight-bounded ~64MB; breaker cooldown PERSISTS across restarts (settings via event bus);
+    fixture snapshots reload as FIXTURE never STALE; EventBus per-subscriber bounded queues (256,
+    drop-oldest) on virtual threads — one stalled client can't block publishers or peers.
+  - DATA OPS: reset tiers cover market_snapshot/dataset(≠observed)/workspace + invalidate the
+    in-memory active-dataset cache; scenario banner shows the dataset NAME (config.activeDatasetName).
+  - "IMAGINE A FUTURE" REBUILT (user critique): visible symbol input + universe chips (was silently
+    following the working symbol = looked hardcoded to AAPL); FULL 18-structure catalog w/ payoff-
+    shape sketches (story cards sketch the PRICE PATH; position cards the PROFIT shape — labeled);
+    entries priced from LIVE quotes at executable sides w/ provenance note (model-vs-itself was a
+    coin flip by construction — verdicts are now decisive, e.g. straddle under news-shock 84%/+$837);
+    beginner IV defaults to the chain's real ATM IV (server); 4 steps/day + full-resolution samples
+    (real squiggle, not connect-the-dots); Heston κ/ξ/ρ knobs; model-irrelevant fields disable w/
+    tooltip; σ/μ glyphs escape the uppercase transform; fan hover readout; histogram $ axis +
+    break-even marker. Research: "What COULD happen" + "What HAS happened" framed as a pair.
+  - DELIBERATE DEPARTURES from the review: recent-past framing instead of a virtual analysis clock
+    (simpler, honest, makes every existing screen work unchanged); active-dataset/universe stay
+    app-level switches gated to admin under auth (per-user read-path threading is the recorded
+    follow-up); Cboe keeps its inline pinned governor (ProviderPoliteness generalizes for others).
+  - Matrix: 342 JUnit + 43 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
+  ===============================================================================================
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
