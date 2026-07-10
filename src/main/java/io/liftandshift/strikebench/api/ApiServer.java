@@ -153,7 +153,9 @@ public final class ApiServer {
         newsProviders.add(fixture);
         ratesProviders.add(fixture);
 
-        MarketDataService market = new MarketDataService(providers, newsProviders, ratesProviders);
+        // Persisted daily bars (Data Center backfills / snapshots / CSV ingest) feed the read path.
+        MarketDataService market = new MarketDataService(providers, newsProviders, ratesProviders,
+                new io.liftandshift.strikebench.db.StoredCandleStore(db));
         AuditLog audit = new AuditLog(db, clock);
         AccountService accounts = new AccountService(db, cfg, audit, clock);
         MarketDataMarks marksSource = new MarketDataMarks(market, cfg.fixturesOnly());

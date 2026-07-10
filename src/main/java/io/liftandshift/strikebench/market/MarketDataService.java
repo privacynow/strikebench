@@ -42,6 +42,7 @@ public final class MarketDataService {
     private final List<MarketDataProvider> providers;
     private final List<NewsFilingsProvider> newsProviders;
     private final List<RatesProvider> ratesProviders;
+    private final io.liftandshift.strikebench.market.ports.CandleStore candleStore; // stored bars first (nullable)
 
     private final Cache<String, Quote> quoteCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(15)).maximumSize(500).build();
     private final Cache<String, OptionChain> chainCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(60)).maximumSize(200).build();
@@ -55,6 +56,16 @@ public final class MarketDataService {
     public MarketDataService(List<MarketDataProvider> providers,
                              List<NewsFilingsProvider> newsProviders,
                              List<RatesProvider> ratesProviders) {
+        this(providers, newsProviders, ratesProviders, null);
+    }
+
+    /** With a {@link io.liftandshift.strikebench.market.ports.CandleStore}: persisted daily bars are
+     *  served before the provider chain, so a Data Center backfill actually feeds Research/backtests. */
+    public MarketDataService(List<MarketDataProvider> providers,
+                             List<NewsFilingsProvider> newsProviders,
+                             List<RatesProvider> ratesProviders,
+                             io.liftandshift.strikebench.market.ports.CandleStore candleStore) {
+        this.candleStore = candleStore;
         this.providers = List.copyOf(providers);
         this.newsProviders = List.copyOf(newsProviders);
         this.ratesProviders = List.copyOf(ratesProviders);
@@ -119,6 +130,14 @@ public final class MarketDataService {
     public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to) {
         String k = norm(symbol) + "|" + from + "|" + to;
         CandleSeries r = candlesCache.get(k, key -> {
+            // Persisted bars (Data Center backfills / snapshots / CSV ingest) win over live provider
+            // calls — the whole point of storing history is that the read path uses it.
+            if (candleStore != null) {
+                try {
+                    Optional<CandleSeries> stored = candleStore.candles(norm(symbol), from, to);
+                    if (stored.isPresent() && !stored.get().candles().isEmpty()) return stored.get();
+                } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol, e.toString()); }
+            }
             for (MarketDataProvider p : providersFor(Domain.CANDLES)) {
                 try {
                     List<Candle> candles = p.candles(norm(symbol), from, to);
