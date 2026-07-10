@@ -106,7 +106,7 @@ public final class SnapshotService {
                     Db.execOn(c,
                             "INSERT INTO underlying_bar (symbol, d, open, high, low, close, volume, source, observed) "
                           + "VALUES (?,?,?,?,?,?,?,?,?) "
-                          + "ON CONFLICT (symbol, d, source) DO UPDATE SET "
+                          + "ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET "
                           + "open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, "
                           + "volume=excluded.volume, observed=excluded.observed",
                             sym, asof, null, quote.dayHigh(), quote.dayLow(), close, quote.volume(), SOURCE, observed);
@@ -128,7 +128,7 @@ public final class SnapshotService {
                           + "iv, delta, gamma, theta, vega, open_interest, volume, underlying, source, "
                           + "bid_ask_observed, iv_source, greeks_source) "
                           + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                          + "ON CONFLICT (symbol, asof, expiration, strike, opt_type, source) DO UPDATE SET "
+                          + "ON CONFLICT (symbol, asof, expiration, strike, opt_type, source, dataset_id) DO UPDATE SET "
                           + "bid=excluded.bid, ask=excluded.ask, last=excluded.last, mark=excluded.mark, "
                           + "iv=excluded.iv, delta=excluded.delta, gamma=excluded.gamma, theta=excluded.theta, "
                           + "vega=excluded.vega, open_interest=excluded.open_interest, volume=excluded.volume, "

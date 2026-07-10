@@ -56,7 +56,7 @@ public final class UnderlyingBackfill {
                 Db.execOn(c,
                         "INSERT INTO underlying_bar (symbol, d, open, high, low, close, volume, source, observed) "
                       + "VALUES (?,?,?,?,?,?,?,?,?) "
-                      + "ON CONFLICT (symbol, d, source) DO UPDATE SET "
+                      + "ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET "
                       + "open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, "
                       + "volume=excluded.volume, observed=excluded.observed",
                         sym, cd.date(), cd.open(), cd.high(), cd.low(), cd.close(), cd.volume(), source, observed);

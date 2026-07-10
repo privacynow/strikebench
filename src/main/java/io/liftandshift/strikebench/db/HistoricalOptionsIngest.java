@@ -92,13 +92,13 @@ public final class HistoricalOptionsIngest {
                 + "iv, delta, gamma, theta, vega, open_interest, volume, underlying, source, "
                 + "bid_ask_observed, iv_source, greeks_source) "
                 + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                + "ON CONFLICT (symbol, asof, expiration, strike, opt_type, source) DO UPDATE SET "
+                + "ON CONFLICT (symbol, asof, expiration, strike, opt_type, source, dataset_id) DO UPDATE SET "
                 + "bid=excluded.bid, ask=excluded.ask, last=excluded.last, mark=excluded.mark, iv=excluded.iv, "
                 + "delta=excluded.delta, gamma=excluded.gamma, theta=excluded.theta, vega=excluded.vega, "
                 + "open_interest=excluded.open_interest, volume=excluded.volume, underlying=excluded.underlying, "
                 + "bid_ask_observed=excluded.bid_ask_observed, iv_source=excluded.iv_source, greeks_source=excluded.greeks_source";
         String undSql = "INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,1) "
-                + "ON CONFLICT (symbol, d, source) DO UPDATE SET close=excluded.close, observed=1";
+                + "ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET close=excluded.close, observed=1";
 
         int opt = 0, skipped = 0;
         Map<String, BigDecimal> underlyings = new HashMap<>(); // symbol|date -> underlying close

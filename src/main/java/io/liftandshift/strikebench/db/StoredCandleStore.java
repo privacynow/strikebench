@@ -27,9 +27,11 @@ public final class StoredCandleStore implements CandleStore {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
         if (sym.isEmpty() || from == null || to == null || from.isAfter(to)) return Optional.empty();
         // One row per day, preferring observed real data over demo, then a stable source order.
+        // Scoped to the OBSERVED dataset — synthetic runs live under their own dataset_id and are
+        // read only when explicitly selected (recommendations must default to observed data).
         List<Row> rows = db.query(
                 "SELECT DISTINCT ON (d) d::text d, open, high, low, close, volume, source, observed "
-              + "FROM underlying_bar WHERE symbol=? AND d BETWEEN ? AND ? "
+              + "FROM underlying_bar WHERE symbol=? AND dataset_id='observed' AND d BETWEEN ? AND ? "
               + "ORDER BY d, observed DESC, source",
                 r -> new Row(LocalDate.parse(r.str("d")),
                         r.bd("open"), r.bd("high"), r.bd("low"), r.bd("close"),
