@@ -75,6 +75,7 @@ public final class ApiServer {
     private final AppConfig cfg;
     private final Clock clock;
     private final MarketDataService market;
+    private final io.liftandshift.strikebench.market.EventService eventCalendar;
     private final AuditLog audit;
     private final AccountService accounts;
     private final TradeService trades;
@@ -118,6 +119,7 @@ public final class ApiServer {
         this.cfg = cfg;
         this.clock = clock;
         this.market = market;
+        this.eventCalendar = new io.liftandshift.strikebench.market.EventService(market, clock);
         this.audit = audit;
         this.accounts = accounts;
         this.trades = trades;
@@ -1440,6 +1442,16 @@ public final class ApiServer {
             out.put("quote", q);
             out.put("optionable", q.optionable());
             out.put("ivAtm", ie.ivAtm());
+            // The event model: an ESTIMATED earnings window from the issuer's SEC filing cadence
+            // (never keywords), and an HONESTLY-ABSENT ex-div (no keyless source exists).
+            eventCalendar.nextEarnings(symbol).ifPresentOrElse(
+                    e -> out.put("earningsEstimate", Map.of(
+                            "date", e.estimated().toString(), "windowDays", e.windowDays(),
+                            "basis", e.basis(), "confirmed", e.confirmed())),
+                    () -> out.put("earningsEstimate", Map.of("available", false,
+                            "note", "not enough SEC quarterly filings to project a cadence")));
+            out.put("exDividend", Map.of("available", false,
+                    "note", "no keyless ex-dividend source \u2014 connect a licensed calendar for confirmed dates"));
             out.put("hv30", Double.isNaN(hv30) ? null : hv30);
             out.put("historyDemo", demoHistory);
             out.put("expirations", ie.exps().stream().map(LocalDate::toString).toList());
@@ -1767,9 +1779,15 @@ public final class ApiServer {
         try { family = StrategyFamily.valueOf(req.strategy()); } catch (IllegalArgumentException ignored) {}
         List<OptionQuote> quotes = new ArrayList<>();
         Freshness worst = Freshness.FIXTURE;
-        // Earnings proximity from the news/filings stream (best-effort; ex-div data has no
-        // keyless source and stays false — documented limitation).
-        boolean earningsSoon = market.news(req.symbol()).stream().anyMatch(n -> {
+        // Earnings proximity from the CALENDAR ESTIMATE (SEC filing cadence), never keywords —
+        // the MU incident's warning fired on stale results headlines two weeks AFTER earnings.
+        // Keyword hits become a separate, honestly-labeled advisory below. Ex-div still has no
+        // keyless source and stays false — documented limitation.
+        java.time.LocalDate latestExp = req.legs().stream()
+                .filter(l -> !l.isStock()).map(Leg::expiration).filter(java.util.Objects::nonNull)
+                .max(java.time.LocalDate::compareTo).orElse(null);
+        boolean earningsSoon = latestExp != null && eventCalendar.earningsLikelyBefore(req.symbol(), latestExp);
+        boolean eventLikeNews = market.news(req.symbol()).stream().anyMatch(n -> {
             String h = n.headline() == null ? "" : n.headline().toLowerCase(Locale.ROOT);
             return h.contains("earnings") || h.contains("guidance") || h.contains("results");
         });
@@ -1813,6 +1831,20 @@ public final class ApiServer {
             List<String> blocks = new ArrayList<>(verdict.blockReasons());
             blocks.addFirst(shareShortfall);
             verdict = Verdict.of(blocks, verdict.warnings());
+        }
+        if (earningsSoon) {
+            var est = eventCalendar.nextEarnings(req.symbol()).orElse(null);
+            if (est != null) {
+                List<String> warnings = new ArrayList<>(verdict.warnings());
+                warnings.add("Earnings ESTIMATED around " + est.estimated() + " \u00b1" + est.windowDays()
+                        + "d (" + est.basis() + ") \u2014 not a confirmed date, but it lands inside this trade");
+                verdict = Verdict.of(verdict.blockReasons(), warnings);
+            }
+        } else if (eventLikeNews) {
+            List<String> warnings = new ArrayList<>(verdict.warnings());
+            warnings.add("Event-like news in recent headlines (earnings/guidance keywords) \u2014 a news signal only; "
+                    + "no earnings event is ESTIMATED before this trade's expiration");
+            verdict = Verdict.of(verdict.blockReasons(), warnings);
         }
         // The manual ticket is not bound by risk-mode budgets (deliberate freedom), but an
         // oversized trade deserves a loud flag against the mode the user chose in the header.

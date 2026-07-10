@@ -770,6 +770,16 @@
           had = true;
         });
       } catch (e) { /* chips below may still land */ }
+      // The ESTIMATED earnings window from filing cadence — a real (labeled) date, not a keyword.
+      try {
+        var rsch = await API.get('/api/research/' + symbol).catch(function () { return null; });
+        var ee = rsch && rsch.earningsEstimate;
+        if (ee && ee.date) {
+          body.appendChild(chip('Earnings ~', ee.date + ' \u00b1' + ee.windowDays + 'd',
+            (ee.confirmed ? 'Confirmed date.' : 'ESTIMATED from ' + ee.basis + ' \u2014 not a confirmed date.')));
+          had = true;
+        }
+      } catch (e) { /* estimate is additive */ }
       try {
         var items = (await newsP).items || [];
         var earn = items.find(function (n) { return EARNINGS_RE.test(n.headline || ''); });

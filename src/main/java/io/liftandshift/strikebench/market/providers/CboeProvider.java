@@ -48,8 +48,11 @@ public final class CboeProvider implements MarketDataProvider {
      * and across the auto-scout's universe scan — pay for one download, not one per call.
      * Failures are never cached; a definitive 404 is (as empty) so unknown symbols don't hammer.
      */
-    /** A cached payload remembers WHEN it was fetched — readers must never restamp it as fresh. */
-    record CachedPayload(JsonNode data, long fetchedAtMs) {}
+    /** A cached payload remembers WHEN it was fetched AND the data's OWN stamp — readers must
+     *  never restamp either as fresh. asOf() prefers the source's own time when Cboe provides it. */
+    record CachedPayload(JsonNode data, long fetchedAtMs, Long sourceAsOfMs) {
+        long asOf() { return sourceAsOfMs != null ? sourceAsOfMs : fetchedAtMs; }
+    }
 
     private final com.github.benmanes.caffeine.cache.Cache<String, Optional<CachedPayload>> payloadCache =
             com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
@@ -150,7 +153,7 @@ public final class CboeProvider implements MarketDataProvider {
                 null,
                 longVal(data, "volume"),
                 optionable,
-                payload.fetchedAtMs(), // when Cboe answered — a cache read must not restamp it
+                payload.asOf(), // the DATA's own stamp (or fetch time) — a cache read must not restamp it
                 "cboe",
                 Freshness.DELAYED));
     }
@@ -177,7 +180,7 @@ public final class CboeProvider implements MarketDataProvider {
         if (payload == null) return Optional.empty();
         JsonNode data = payload.data();
 
-        long asOf = payload.fetchedAtMs();
+        long asOf = payload.asOf();
         List<OptionQuote> calls = new ArrayList<>();
         List<OptionQuote> puts = new ArrayList<>();
         for (JsonNode opt : data.path("options")) {
@@ -270,8 +273,18 @@ public final class CboeProvider implements MarketDataProvider {
         } finally {
             if (acquired) concurrency.release();
         }
-        JsonNode data = Json.parse(body).path("data");
-        return data.isObject() ? Optional.of(new CachedPayload(data, System.currentTimeMillis())) : Optional.empty();
+        JsonNode root = Json.parse(body);
+        JsonNode data = root.path("data");
+        if (!data.isObject()) return Optional.empty();
+        Long sourceAsOf = null;
+        try {
+            String ts = root.path("timestamp").asText(null); // "yyyy-MM-dd HH:mm:ss" (UTC)
+            if (ts != null && !ts.isBlank()) {
+                sourceAsOf = java.time.LocalDateTime.parse(ts.replace(' ', 'T'))
+                        .toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
+            }
+        } catch (RuntimeException ignored) { /* fall back to fetch time */ }
+        return Optional.of(new CachedPayload(data, System.currentTimeMillis(), sourceAsOf));
     }
 
     private static String normalize(String symbol) {
