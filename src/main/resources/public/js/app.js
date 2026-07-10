@@ -121,6 +121,8 @@
       }
       root.setAttribute('data-ready', 'true');
       root.setAttribute('data-route', route);
+      prefetchForRoute(route, params); // idle-time warm-up of the likely next step (server-governed)
+      if (window.Workspace) Workspace.save(); // navigation is a save point (dirty-checked, debounced push)
       // The ticker is CONTEXT, not chrome: it accompanies market-facing screens only
       var tape = document.getElementById('tape');
       if (tape) {
@@ -176,20 +178,28 @@
    * SCENARIO MODE banner: when a synthetic dataset is the active analysis dataset, every screen
    * must say so loudly — simulated futures can never quietly masquerade as market data.
    */
+  var scenarioBannerSeq = 0; // click handler AND the dataset.selected event both call this — only the latest applies
   async function refreshScenarioBanner() {
-    var existing = document.getElementById('scenario-banner');
+    var seq = ++scenarioBannerSeq;
     var cfg;
     try { cfg = await API.getFresh('/api/config'); App.config = cfg || App.config; } catch (e) { return; }
+    if (seq !== scenarioBannerSeq) return; // a newer refresh superseded this one
+    // Re-query AFTER the await (a concurrent refresh may have inserted one) and never
+    // tolerate duplicates — two racing inserts once left an unremovable second banner.
+    var existing = Array.prototype.slice.call(document.querySelectorAll('#scenario-banner'));
     if (cfg && cfg.scenarioMode) {
       var label = 'SCENARIO MODE — analysis uses the synthetic dataset “' + (cfg.activeDataset || '') + '”, not market data. ';
-      if (existing) { existing.childNodes[1].textContent = label; return; }
+      if (existing.length) {
+        existing.forEach(function (b, i) { if (i === 0) b.childNodes[1].textContent = label; else b.remove(); });
+        return;
+      }
       var banner = UI.el('div', { id: 'scenario-banner' },
         UI.icon('warn', 15),
         document.createTextNode(label),
         UI.el('a', { href: '#/status', onclick: function () { App.navigate('#/status'); } }, 'Switch back in Data'));
       document.body.insertBefore(banner, document.getElementById('tape') || document.body.firstChild);
-    } else if (existing) {
-      existing.remove();
+    } else {
+      existing.forEach(function (b) { b.remove(); });
     }
   }
   App.refreshScenarioBanner = refreshScenarioBanner;
@@ -260,14 +270,15 @@
     var app = document.getElementById('app');
     if (app && !app.firstChild) app.appendChild(UI.skeleton());
 
-    // ONE parallel round-trip for auth + config — not two serial ones. Route data is never
-    // fetched before auth state is known: App.render() runs only AFTER this resolves, and an
-    // enabled-but-unauthenticated session swaps straight to the sign-in screen (no 401 flashes).
+    // ONE parallel round-trip for auth + config + the saved workspace — not three serial ones.
+    // Route data is never fetched before auth state is known: App.render() runs only AFTER this
+    // resolves, and an enabled-but-unauthenticated session swaps straight to the sign-in screen.
     var pair = await Promise.all([
       API.get('/api/auth/me').catch(function () { return null; }),
-      API.get('/api/config').catch(function () { return null; })
+      API.get('/api/config').catch(function () { return null; }),
+      API.get('/api/workspace').catch(function () { return null; })
     ]);
-    var me = pair[0], cfg = pair[1];
+    var me = pair[0], cfg = pair[1], wsRemote = pair[2];
     App._me = me;
     if (cfg && cfg.disclaimer) document.getElementById('disclaimer').textContent = cfg.disclaimer;
     if (cfg && cfg.brand && cfg.brand.name) applyBrand(cfg.brand);
@@ -281,11 +292,22 @@
     App.authUser = (me && me.user) || null;
     addSignOut();
 
+    // Continuity: restore the saved workspace (forms, working idea, working symbol) and — on a
+    // bare open only — the route the user was on. An explicit hash (bookmark/link) always wins.
+    if (window.Workspace) {
+      var ws = Workspace.hydrate(wsRemote);
+      if (ws && ws.route && (!window.location.hash || window.location.hash === '#')) {
+        window.location.hash = ws.route;
+      }
+      Workspace.start();
+    }
+
     checkServerHealth();
     setInterval(checkServerHealth, 5 * 60 * 1000);
     if (cfg && cfg.scenarioMode) refreshScenarioBanner(); // restore the loud banner across reloads
     refreshUniverse();
     subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
+    subscribeEvents();                // typed workspace events (jobs, datasets, provider cooldowns)
     setInterval(refreshTape, 45 * 1000);
     window.addEventListener('hashchange', App.render);
     App.render();
@@ -428,6 +450,94 @@
     };
   }
   App.subscribeMarketStream = subscribeMarketStream;
+
+  /**
+   * The typed event stream (/api/events): small server hints — job progress, dataset switches,
+   * provider cooldowns, workspace revisions. Events never carry payloads; interested screens
+   * refetch. Views register with App.onEvent(types, fn, token): handlers die with their route
+   * (token) so a screen you left never reacts to events. Reconnect is EventSource-native and
+   * replays recent events via Last-Event-ID; anything older is covered by normal refetching.
+   */
+  App._eventHandlers = [];
+  App.onEvent = function (types, fn, token) {
+    var list = Array.isArray(types) ? types : [types];
+    App._eventHandlers.push({ types: list, fn: fn, token: token });
+  };
+  function dispatchAppEvent(type, data) {
+    App._eventHandlers = App._eventHandlers.filter(function (h) {
+      return h.token === undefined || App.alive(h.token);
+    });
+    App._eventHandlers.forEach(function (h) {
+      if (h.types.indexOf(type) >= 0) {
+        try { h.fn(type, data); } catch (e) { /* a handler must never kill the stream */ }
+      }
+    });
+  }
+
+  function subscribeEvents() {
+    if (!window.EventSource) return;
+    var es;
+    try { es = new EventSource('/api/events'); } catch (e) { return; }
+    App._eventsES = es;
+    ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated']
+      .forEach(function (type) {
+        es.addEventListener(type, function (ev) {
+          var data = null;
+          try { data = JSON.parse(ev.data); } catch (e) { /* hint only */ }
+          if (type === 'dataset.selected') refreshScenarioBanner();
+          if (type === 'provider.cooldown' && data) showCooldownChip(data);
+          if (type === 'workspace.updated' && data && window.Workspace) Workspace.onRemoteRev(data.rev);
+          dispatchAppEvent(type, data);
+        });
+      });
+    // EventSource reconnects itself; events are hints, so a gap costs nothing but freshness.
+  }
+
+  /**
+   * Calm provider-cooldown status: a small amber chip in the header — never a scary banner.
+   * The app keeps working from stale snapshots and other sources; this just says why numbers
+   * may pause. Removes itself when the cooldown ends.
+   */
+  function showCooldownChip(data) {
+    var until = data.untilMs || 0;
+    var existing = document.getElementById('cooldown-chip');
+    if (existing) existing.remove();
+    if (until <= Date.now()) return;
+    var when = new Date(until);
+    var hh = String(when.getHours()).padStart(2, '0') + ':' + String(when.getMinutes()).padStart(2, '0');
+    var chip = UI.el('span', {
+      id: 'cooldown-chip',
+      title: (data.provider || 'A data source') + ' rate-limited us; requests pause until ~' + hh
+           + '. Showing the last snapshot and other sources meanwhile.'
+    }, UI.icon('warn', 13), ' ' + (data.provider === 'cboe' ? 'Cboe' : data.provider) + ' cooling down · ' + hh);
+    var controls = document.querySelector('.topbar-controls');
+    if (controls) controls.insertBefore(chip, controls.firstChild);
+    setTimeout(function () {
+      var c = document.getElementById('cooldown-chip');
+      if (c) c.remove();
+    }, Math.min(until - Date.now(), 2147000000));
+  }
+  App.showCooldownChip = showCooldownChip; // exposed for tests
+
+  /**
+   * Careful prefetch: after a screen settles, warm the LIKELY next step through the normal
+   * GET cache during idle time. The request is marked X-Priority: prefetch so the backend can
+   * refuse it when heavy providers lack budget — client guesses, server governs.
+   */
+  function prefetchForRoute(route, params) {
+    if (!window.API || !API.prefetch) return;
+    var sym = null;
+    if (route === 'research' && params[0] && /^[A-Z.\-]{1,10}$/.test(params[0])) sym = params[0];
+    else if (route === 'trade') sym = (App.state.lastRecommendSymbol || '').toUpperCase() || null;
+    if (!sym) return;
+    var run = function () {
+      // Research → Trade: the ticket/builder need expirations + a quote first thing.
+      API.prefetch('/api/research/' + sym + '/expirations');
+      if (route === 'trade') API.prefetch('/api/research/' + sym + '/history?range=6m');
+    };
+    if (window.requestIdleCallback) requestIdleCallback(run, { timeout: 2500 });
+    else setTimeout(run, 700);
+  }
 
   // A tape built at one width leaves a BLANK region each cycle if the window later grows
   // past its half-length (nothing re-measured it — that read as "the ticker ends in a gap,

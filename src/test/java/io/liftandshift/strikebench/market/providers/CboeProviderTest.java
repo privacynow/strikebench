@@ -74,6 +74,23 @@ class CboeProviderTest {
         assertThat(provider.expirations("SPY")).isEmpty();
         assertThat(provider.chain("TSLA", java.time.LocalDate.parse("2026-07-31"))).isEmpty();
         assertThat(server.getRequestCount()).isEqualTo(1);    // exactly one request total
+        // Speculative work is refused while cooling down — prefetch never spends scarce budget.
+        assertThat(provider.prefetchBudget()).isFalse();
+    }
+
+    @Test
+    void cooldownAnnouncesOnTheEventBusAndPrefetchBudgetRecovers() {
+        var bus = new io.liftandshift.strikebench.util.EventBus();
+        provider.setEvents(bus);
+        assertThat(provider.prefetchBudget()).isTrue(); // healthy: budget available
+        server.enqueue(new MockResponse().setResponseCode(429).setBody("error code: 1015"));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> provider.quote("QQQ"))
+                .isInstanceOf(Http.ProviderHttpException.class);
+        assertThat(bus.since(0)).anySatisfy(e -> {
+            assertThat(e.type()).isEqualTo("provider.cooldown");
+            assertThat(e.data()).containsEntry("provider", "cboe");
+            assertThat((long) e.data().get("untilMs")).isGreaterThan(System.currentTimeMillis());
+        });
     }
 
     @Test

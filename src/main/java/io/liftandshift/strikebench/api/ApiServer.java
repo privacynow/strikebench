@@ -87,6 +87,9 @@ public final class ApiServer {
     private final io.liftandshift.strikebench.market.SnapshotService snapshots;
     private final io.liftandshift.strikebench.auth.AuthService auth;
     private final io.liftandshift.strikebench.eval.EvaluationService evaluations;
+    /** In-process pub/sub feeding /api/events (jobs, datasets, provider cooldowns, workspace revs). */
+    final io.liftandshift.strikebench.util.EventBus events = new io.liftandshift.strikebench.util.EventBus();
+    io.liftandshift.strikebench.db.WorkspaceService workspaceSvc;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
@@ -198,6 +201,12 @@ public final class ApiServer {
         server.marketEngine.setSnapshotStore(new io.liftandshift.strikebench.db.MarketSnapshotStore(db));
         server.datasets = datasetSvc;
         server.simEngine = new io.liftandshift.strikebench.sim.SimulationEngine(market, datasetSvc, db, clock);
+        // Workspace continuity + the event bus: services announce, /api/events streams to the browser.
+        server.workspaceSvc = new io.liftandshift.strikebench.db.WorkspaceService(db, clock);
+        server.workspaceSvc.setEvents(server.events);
+        server.dataJobs.setEvents(server.events);
+        datasetSvc.setEvents(server.events);
+        if (cboeRef[0] != null) cboeRef[0].setEvents(server.events);
         return server;
     }
 
@@ -273,6 +282,16 @@ public final class ApiServer {
                         || p.equals("/api/config") || p.equals("/api/status")) return;
                 auth.requireUser(ctx);
             });
+            // Prefetch governor: speculative requests (X-Priority: prefetch) are welcome only when
+            // the heavy providers have spare budget. A denied prefetch is a quiet 204 — the client
+            // simply doesn't warm its cache; the user never waits on (or behind) a guess.
+            c.routes.before("/api/research/*", ctx -> {
+                if ("prefetch".equalsIgnoreCase(ctx.header("X-Priority")) && !prefetchBudget()) {
+                    ctx.status(204);
+                    ctx.header("X-Prefetch", "denied");
+                    ctx.skipRemainingHandlers();
+                }
+            });
 
             c.routes.get("/api/status", this::status);
             c.routes.get("/api/config", this::config);
@@ -282,6 +301,11 @@ public final class ApiServer {
             c.routes.get("/api/quotes", this::quotesBatch);
             c.routes.get("/api/market/engine", ctx -> ctx.json(marketEngine.status())); // Data Center: engine health
             c.routes.sse("/api/market/stream", this::marketStream);                     // live-ish quote deltas from memory
+            c.routes.sse("/api/events", this::eventStream);                             // typed workspace events (jobs/datasets/providers)
+
+            // ---- Workspace continuity: the client-owned UX state blob, versioned per user ----
+            c.routes.get("/api/workspace", this::workspaceGet);
+            c.routes.put("/api/workspace", this::workspacePut);
 
             // ---- Data Center ----
             c.routes.get("/api/data/overview", this::dataOverview);
@@ -724,6 +748,64 @@ public final class ApiServer {
         int interval = Math.max(1, cfg.engineStreamIntervalSeconds());
         var task = streamScheduler.scheduleWithFixedDelay(push, interval, interval, java.util.concurrent.TimeUnit.SECONDS);
         client.onClose(() -> task.cancel(true));
+    }
+
+    // ---- Workspace continuity + the typed event stream ----
+
+    /**
+     * Whether heavy providers have budget for SPECULATIVE requests right now. Fixture mode is
+     * always yes (local deterministic data); live mode defers to the Cboe breaker/permits —
+     * a prefetch guess must never compete with something the user actually asked for.
+     */
+    private boolean prefetchBudget() {
+        if (cfg.fixturesOnly() || cboe == null) return true;
+        return cboe.prefetchBudget();
+    }
+
+    /**
+     * /api/events: one SSE stream of small typed hints (job.progress, job.complete,
+     * dataset.selected, provider.cooldown, workspace.updated). Events carry ids/versions,
+     * not payloads — the client refetches what it cares about; GETs stay the source of truth.
+     * Reconnects replay from Last-Event-ID via the bus's ring buffer.
+     */
+    private void eventStream(io.javalin.http.sse.SseClient client) {
+        client.keepAlive();
+        long last = 0;
+        String lastId = client.ctx().header("Last-Event-ID");
+        if (lastId != null) {
+            try { last = Long.parseLong(lastId.trim()); } catch (NumberFormatException ignore) { /* fresh start */ }
+        }
+        for (var e : events.since(last)) sendEvent(client, e);
+        Runnable unsubscribe = events.subscribe(e -> sendEvent(client, e));
+        client.onClose(unsubscribe);
+    }
+
+    /** Serialized per client: concurrent publishers must not interleave SSE frames. */
+    private void sendEvent(io.javalin.http.sse.SseClient client,
+                           io.liftandshift.strikebench.util.EventBus.Event e) {
+        try {
+            synchronized (client) { client.sendEvent(e.type(), e.data(), String.valueOf(e.seq())); }
+        } catch (Exception ignore) { /* client gone — onClose unsubscribes */ }
+    }
+
+    private void workspaceGet(Context ctx) {
+        if (workspaceSvc == null) { ctx.json(Map.of("rev", 0)); return; }
+        var ws = workspaceSvc.get(ownerId(ctx));
+        if (ws.isEmpty()) { ctx.json(Map.of("rev", 0)); return; }
+        ctx.json(Map.of("rev", ws.get().rev(), "updatedAt", ws.get().updatedAt(),
+                "state", Json.parse(ws.get().stateJson())));
+    }
+
+    /** Body IS the state object (client-owned shape). Validated as JSON, size-capped, last-write-wins. */
+    private void workspacePut(Context ctx) {
+        if (workspaceSvc == null) { ctx.status(503).json(Map.of("error", "workspace store unavailable")); return; }
+        String body = ctx.body();
+        if (body == null || body.isBlank()) throw new IllegalArgumentException("state body required");
+        com.fasterxml.jackson.databind.JsonNode node;
+        try { node = Json.parse(body); } catch (Exception e) { throw new IllegalArgumentException("state must be JSON"); }
+        if (!node.isObject()) throw new IllegalArgumentException("state must be a JSON object");
+        long rev = workspaceSvc.put(ownerId(ctx), body);
+        ctx.json(Map.of("ok", true, "rev", rev));
     }
 
     // ---- Data Center ----

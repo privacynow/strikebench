@@ -1183,3 +1183,13 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 #scenario-banner { background: var(--risk-caution, #b98a00); color: #fff; padding: 7px 14px; font-size: 13px;
   display: flex; gap: 8px; align-items: center; position: sticky; top: 0; z-index: 60; }
 #scenario-banner a { color: #fff; text-decoration: underline; }
+
+/* ---- Workspace continuity ---- */
+/* Calm provider-cooldown status: an amber header chip, never a scary banner. */
+#cooldown-chip { display: inline-flex; align-items: center; gap: 4px; height: var(--ctl-h-sm, 30px);
+  padding: 0 10px; border-radius: 999px; font-size: 12px; white-space: nowrap;
+  background: color-mix(in srgb, var(--risk-caution, #b98a00) 16%, var(--bg)); color: var(--fg);
+  border: 1px solid color-mix(in srgb, var(--risk-caution, #b98a00) 45%, var(--border)); }
+#cooldown-chip svg { flex: none; }
+@media (max-width: 760px) { #cooldown-chip { display: none; } } /* Data screen still shows THROTTLED */
+#continue-row .chip-row { margin: 2px 0 0; }

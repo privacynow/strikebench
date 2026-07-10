@@ -84,6 +84,18 @@ public final class CboeProvider implements MarketDataProvider {
     public boolean coolingDown() { return System.currentTimeMillis() < cooldownUntilMs; }
     public long cooldownUntilMs() { return cooldownUntilMs; }
 
+    private io.liftandshift.strikebench.util.EventBus events; // optional: announce breaker trips
+    public void setEvents(io.liftandshift.strikebench.util.EventBus events) { this.events = events; }
+
+    /**
+     * Whether this heavy provider has budget for SPECULATIVE work right now. Prefetch is
+     * denied while cooling down or while every concurrency permit is busy with real requests —
+     * a guess must never queue behind (or ahead of) something the user actually asked for.
+     */
+    public boolean prefetchBudget() {
+        return !coolingDown() && concurrency.availablePermits() > 0;
+    }
+
     @Override
     public String name() {
         return "cboe";
@@ -232,6 +244,8 @@ public final class CboeProvider implements MarketDataProvider {
                 cooldownUntilMs = System.currentTimeMillis() + cooldownMs;
                 log.warn("Cboe rate-limited (429/1015) — cooling down for {} min; serving stale/other sources",
                         cooldownMs / 60000);
+                if (events != null) events.publish("provider.cooldown",
+                        java.util.Map.of("provider", "cboe", "untilMs", cooldownUntilMs));
             }
             throw e;
         } finally {

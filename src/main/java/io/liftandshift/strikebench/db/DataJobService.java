@@ -46,6 +46,20 @@ public final class DataJobService {
         Thread t = new Thread(r, "data-job"); t.setDaemon(true); return t;
     });
     private final Map<String, Boolean> cancelRequested = new ConcurrentHashMap<>();
+    private io.liftandshift.strikebench.util.EventBus events; // optional: live progress to the UI
+    private volatile long lastProgressPublishMs = 0;
+
+    public void setEvents(io.liftandshift.strikebench.util.EventBus events) { this.events = events; }
+
+    /** job.progress is a hint (throttled — fast items must not flood the stream); terminal events always send. */
+    private void publishJob(String type, String id, String kind, String status, int done, int total) {
+        if (events == null) return;
+        long now = System.currentTimeMillis();
+        boolean terminal = !"RUNNING".equals(status);
+        if (!terminal && now - lastProgressPublishMs < 250 && done < total) return;
+        lastProgressPublishMs = now;
+        events.publish(type, Map.of("id", id, "kind", kind, "status", status, "done", done, "total", total));
+    }
 
     public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
                           UnderlyingBackfill backfill, UniverseService universe, AppConfig cfg) {
@@ -193,18 +207,22 @@ public final class DataJobService {
                 }
                 done++;
                 db.exec("UPDATE data_job SET done=?, rows_written=?, updated_at=now() WHERE id=?", done, totalRows, id);
+                publishJob("job.progress", id, kind, "RUNNING", done, labels.size());
             }
             if (Boolean.TRUE.equals(cancelRequested.get(id))) {
                 // Atomic: keep the cancel status AND the 'cancelled by user' message (no summary overwrite).
                 db.exec("UPDATE data_job SET status='CANCELLED', message='cancelled by user', updated_at=now() WHERE id=?", id);
+                publishJob("job.complete", id, kind, "CANCELLED", done, labels.size());
             } else {
                 // FAILED only when EVERY processed item failed; a partial failure stays DONE (message notes it).
                 String status = (done > 0 && failed == done) ? "FAILED" : "DONE";
                 db.exec("UPDATE data_job SET status=?, message=?, updated_at=now() WHERE id=? AND status <> 'CANCELLED'",
                         status, summary(kind, done, totalRows, failed), id);
+                publishJob("job.complete", id, kind, status, done, labels.size());
             }
         } catch (Exception e) {
             db.exec("UPDATE data_job SET status='FAILED', error=?, updated_at=now() WHERE id=? AND status <> 'CANCELLED'", e.toString(), id);
+            publishJob("job.complete", id, kind, "FAILED", done, labels.size());
         } finally {
             cancelRequested.remove(id);
         }

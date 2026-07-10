@@ -762,4 +762,64 @@ class ApiIntegrationTest {
         assertThat(jobId).isNotBlank();
         assertThat(get("/api/data/jobs").body()).contains(jobId);
     }
+
+    @Test
+    @Order(26)
+    void workspacePersistsVersionsAndStreamsEvents() throws Exception {
+        // Fresh workspace: rev 0, no state.
+        JsonNode empty = Json.parse(get("/api/workspace").body());
+        assertThat(empty.get("rev").asLong()).isZero();
+
+        // PUT stores the client-owned blob verbatim; revisions increment per write.
+        HttpResponse<String> put1 = put("/api/workspace",
+                "{\"route\":\"#/research/AAPL\",\"symbol\":\"AAPL\",\"forms\":{\"discover\":{\"goal\":\"INCOME\"}}}");
+        assertThat(put1.statusCode()).isEqualTo(200);
+        long rev1 = Json.parse(put1.body()).get("rev").asLong();
+        long rev2 = Json.parse(put("/api/workspace",
+                "{\"route\":\"#/trade/discover\",\"symbol\":\"QQQ\"}").body()).get("rev").asLong();
+        assertThat(rev2).isEqualTo(rev1 + 1);
+        JsonNode got = Json.parse(get("/api/workspace").body());
+        assertThat(got.get("rev").asLong()).isEqualTo(rev2);
+        assertThat(got.get("state").get("symbol").asText()).isEqualTo("QQQ");
+
+        // Garbage and non-object bodies are rejected, arrays included.
+        assertThat(put("/api/workspace", "not json").statusCode()).isEqualTo(400);
+        assertThat(put("/api/workspace", "[1,2]").statusCode()).isEqualTo(400);
+        // Oversized blobs are rejected — the workspace is forms and ids, not payload storage.
+        assertThat(put("/api/workspace", "{\"big\":\"" + "x".repeat(140 * 1024) + "\"}").statusCode()).isEqualTo(400);
+
+        // The event bus announced both writes; /api/events replays from Last-Event-ID.
+        assertThat(server.events.since(0)).anyMatch(e -> e.type().equals("workspace.updated"));
+
+        // Dataset switches publish dataset.selected (the scenario banner listens for this).
+        long before = server.events.since(0).size();
+        put("/api/datasets/active", "{\"id\":\"observed\"}");
+        assertThat(server.events.since(0).stream().skip(before))
+                .anyMatch(e -> e.type().equals("dataset.selected") && "observed".equals(e.data().get("active")));
+
+        // SSE endpoint speaks event-stream and replays the ring buffer on connect.
+        HttpRequest sse = HttpRequest.newBuilder(URI.create(base + "/api/events"))
+                .header("Accept", "text/event-stream").header("Last-Event-ID", "0")
+                .timeout(java.time.Duration.ofSeconds(5)).GET().build();
+        HttpResponse<java.io.InputStream> stream = http.send(sse, HttpResponse.BodyHandlers.ofInputStream());
+        assertThat(stream.statusCode()).isEqualTo(200);
+        assertThat(stream.headers().firstValue("Content-Type").orElse("")).contains("text/event-stream");
+        byte[] first = new byte[4096];
+        int n = stream.body().read(first);
+        String frames = new String(first, 0, Math.max(0, n), java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(frames).contains("event: workspace.updated");
+        stream.body().close();
+    }
+
+    @Test
+    @Order(27)
+    void prefetchHeaderIsHonoredAndHarmless() throws Exception {
+        // Fixture mode always has budget: a prefetch GET serves normally (200 + real payload).
+        HttpResponse<String> pf = http.send(HttpRequest.newBuilder(URI.create(base + "/api/research/AAPL/expirations"))
+                        .header("X-Priority", "prefetch").GET().build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(pf.statusCode()).isEqualTo(200);
+        assertThat(Json.parse(pf.body()).get("expirations").size()).isGreaterThan(0);
+        // A normal request without the header is untouched by the governor.
+        assertThat(get("/api/research/AAPL/expirations").statusCode()).isEqualTo(200);
+    }
 }

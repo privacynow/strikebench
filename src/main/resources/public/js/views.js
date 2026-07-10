@@ -303,6 +303,32 @@
       }
     })();
 
+    // Continuity: one-tap re-entry into whatever the user was last doing — the working idea
+    // takes you to Place, the working symbol back to its research page. Renders only when
+    // there is genuinely something to continue (a fresh account sees nothing extra).
+    (function continueRow() {
+      var chips = [];
+      var t = App.state.ticket;
+      if (t && t.symbol) {
+        var what = t.custom ? 'custom strategy' : (t.candidate && t.candidate.strategy
+            ? prettyStrategy(t.candidate.strategy) : 'trade');
+        chips.push(el('button', { class: 'sym-chip', 'data-continue': 'idea',
+          onclick: function () { App.navigate('#/trade/place'); } },
+          'Working idea: ' + t.symbol + ' ' + what + ' →'));
+      }
+      var sym = (App.state.lastRecommendSymbol || '').toUpperCase();
+      if (sym) {
+        chips.push(el('button', { class: 'sym-chip', 'data-continue': 'research',
+          onclick: function () { App.navigate('#/research/' + sym); } }, 'Research ' + sym + ' →'));
+        chips.push(el('button', { class: 'sym-chip', 'data-continue': 'ideas',
+          onclick: function () { App.navigate('#/trade/discover'); } }, 'Ideas for ' + sym + ' →'));
+      }
+      if (!chips.length) return;
+      colR.appendChild(el('div', { class: 'card card-slim', id: 'continue-row' },
+        UI.cardHeader('Pick up where you left off'),
+        el('div', { class: 'chip-row' }, chips)));
+    })();
+
     colR.appendChild(el('div', { class: 'home-actions' },
       quickAction('Research a symbol', 'Quotes, chains, IV vs HV, history, news.', '#/research', 'scope'),
       quickAction('Scout opportunities', 'Momentum, sentiment, and volatility views.', '#/trade/discover', 'compass'),
@@ -3328,7 +3354,20 @@
           j.message ? el('div', { class: 'muted small' }, j.message) : (j.error ? el('div', { class: 'loss small' }, j.error) : null));
         jobsCard.appendChild(row);
       });
-      if (anyRunning && App.alive(token)) jobsTimer = setTimeout(loadJobs, 2000); // live progress while a job runs
+      // Poll is the FALLBACK: with the event stream connected, job.progress events drive the
+      // refresh and a slow 10s poll just catches anything missed; without it, 2s keeps it live.
+      var pollMs = App._eventsES ? 10000 : 2000;
+      if (anyRunning && App.alive(token)) jobsTimer = setTimeout(loadJobs, pollMs);
+    }
+
+    // Live progress: job events re-render the card the moment the backend reports movement.
+    // Debounced (events can arrive per item); dies with the route via the render token.
+    if (App.onEvent) {
+      var jobsEventTimer = null;
+      App.onEvent(['job.progress', 'job.complete'], function () {
+        clearTimeout(jobsEventTimer);
+        jobsEventTimer = setTimeout(function () { if (App.alive(token)) loadJobs(); }, 300);
+      }, token);
     }
 
     function startJob(kind, params) {

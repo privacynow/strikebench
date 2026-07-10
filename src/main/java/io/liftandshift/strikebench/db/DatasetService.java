@@ -24,8 +24,11 @@ public final class DatasetService {
     private final Db db;
     private final Clock clock;
     private volatile String activeCache = null;
+    private io.liftandshift.strikebench.util.EventBus events; // optional: dataset switches to the UI
 
     public DatasetService(Db db, Clock clock) { this.db = db; this.clock = clock; }
+
+    public void setEvents(io.liftandshift.strikebench.util.EventBus events) { this.events = events; }
 
     public record DatasetRow(String id, String name, String kind, String symbol, Long seed,
                              String spec, long bars, String createdAt) {}
@@ -44,6 +47,7 @@ public final class DatasetService {
         db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
                 ACTIVE_KEY, id, clock.instant().toString());
         activeCache = id;
+        if (events != null) events.publish("dataset.selected", java.util.Map.of("active", id));
     }
 
     public boolean exists(String id) {

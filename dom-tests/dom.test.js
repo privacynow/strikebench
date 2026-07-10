@@ -239,6 +239,85 @@ test('data center: generate a scenario dataset, activate it (loud banner), switc
   await page.evaluate(() => { if (App.state.verifyForm) App.state.verifyForm.mode = 'history'; App.state.verifyMode = null; });
 });
 
+test('workspace continuity: forms, symbol, and route survive a full reload', async () => {
+  // Work: pick a goal + symbol in Ideas (one-stock mode), then wander off to Research.
+  await go('#/recommend/manual');
+  await page.waitForSelector('#rec-symbol');
+  await page.fill('#rec-symbol', 'QQQ');
+  await page.evaluate(() => { App.state.discoverForm.symbol = 'QQQ'; App.state.lastRecommendSymbol = 'QQQ'; });
+  await go('#/research/AAPL');
+  await page.waitForSelector('.quote-hero');
+  // Persist NOW (the 4s tick and pagehide would do this; tests don't wait).
+  await page.evaluate(() => Workspace.save());
+  await page.waitForTimeout(1700); // let the debounced backend push land
+  const rev = await page.evaluate(() => API.getFresh('/api/workspace').then(r => r.rev));
+  assert.ok(rev >= 1, 'workspace persisted to the backend (rev ' + rev + ')');
+
+  // Cold open with NO hash: the app resumes exactly where the user left off.
+  await page.goto(BASE + '/');
+  await page.waitForSelector('#app[data-ready="true"]');
+  assert.equal(await page.evaluate(() => window.location.hash), '#/research/AAPL', 'route restored');
+  const restored = await page.evaluate(() => ({
+    sym: App.state.lastRecommendSymbol,
+    form: App.state.discoverForm && App.state.discoverForm.symbol
+  }));
+  assert.equal(restored.sym, 'QQQ', 'working symbol restored');
+  assert.equal(restored.form, 'QQQ', 'draft form restored');
+
+  // An explicit hash always beats the saved route (bookmarks/links stay honest).
+  await page.goto(BASE + '/#/portfolio');
+  await page.waitForSelector('#app[data-ready="true"]');
+  assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'portfolio');
+
+  // Home offers one-tap re-entry into the working context.
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1')); // dashboard, not the tour
+  await go('#/home');
+  await page.waitForSelector('#continue-row .sym-chip');
+  assert.match(await page.textContent('#continue-row'), /Research QQQ/);
+  await page.click('#continue-row .sym-chip[data-continue="research"]');
+  await page.waitForSelector('.quote-hero');
+  assert.equal(await page.evaluate(() => window.location.hash), '#/research/QQQ');
+});
+
+test('event stream: job.complete reaches the browser; cooldown shows a calm header chip', async () => {
+  await go('#/home');
+  // End-to-end SSE: start a real job and wait for its completion EVENT (not a poll).
+  const evt = await page.evaluate(() => new Promise((resolve, reject) => {
+    App.onEvent(['job.complete'], (type, data) => resolve({ type: type, data: data }));
+    API.post('/api/data/jobs', { kind: 'refresh_now', params: {} }).catch(reject);
+    setTimeout(() => reject(new Error('no job.complete event within 20s')), 20000);
+  }));
+  assert.equal(evt.type, 'job.complete');
+  assert.ok(evt.data && evt.data.id, 'event carries the job id');
+
+  // Provider cooldown renders as a calm amber chip, and clears when the window passes.
+  await page.evaluate(() => App.showCooldownChip({ provider: 'cboe', untilMs: Date.now() + 60000 }));
+  assert.match(await page.textContent('#cooldown-chip'), /Cboe cooling down/);
+  const title = await page.getAttribute('#cooldown-chip', 'title');
+  assert.match(title, /last snapshot/i);
+  await page.evaluate(() => App.showCooldownChip({ provider: 'cboe', untilMs: Date.now() - 1 }));
+  assert.ok(!(await page.locator('#cooldown-chip').count()), 'expired cooldown removes the chip');
+});
+
+test('prefetch warms the likely next step through the governed cache', async () => {
+  await page.evaluate(() => API.flushCache());
+  await go('#/research/AAPL');
+  await page.waitForSelector('.quote-hero');
+  await page.waitForTimeout(2000); // idle prefetch fires (requestIdleCallback, 2.5s budget)
+  // The expirations read must now be a cache hit: zero network fetches.
+  const fetches = await page.evaluate(() => {
+    let calls = 0;
+    const orig = window.fetch;
+    window.fetch = function () { calls++; return orig.apply(window, arguments); };
+    return API.get('/api/research/AAPL/expirations').then(function (r) {
+      window.fetch = orig;
+      if (!r.expirations || !r.expirations.length) throw new Error('bad expirations payload');
+      return calls;
+    });
+  });
+  assert.equal(fetches, 0, 'expirations served from the prefetched cache');
+});
+
 test('market stream (SSE): the browser receives live quote frames from the engine', async () => {
   await go('#/home');
   const symbols = await page.evaluate(() => new Promise((resolve) => {
@@ -484,9 +563,9 @@ test('data center: engine status, sources with license modes, coverage, jobs, ti
   await page.waitForSelector('#dc-coverage');
   await page.waitForSelector('#dc-health:has-text("QUOTES")', { timeout: 15000 });
   assert.match(await page.textContent('#app'), /Fixtures-only|simulated demo/i);
-  // Jobs: backfill the universe → a job row appears
+  // Jobs: backfill the universe → its job row appears (other suites' jobs may already be listed)
   await page.click('#dc-backfill');
-  await page.waitForSelector('#dc-jobs .dc-job', { timeout: 15000 });
+  await page.waitForSelector('#dc-jobs .dc-job:has-text("backfill_underlying")', { timeout: 15000 });
   assert.match(await page.textContent('#dc-jobs'), /backfill_underlying/);
   // Expert reset exposes all four tiers; the confirm needs the typed word
   const tiers = await page.$$eval('#dc-reset-tier option', os => os.map(o => o.value));
