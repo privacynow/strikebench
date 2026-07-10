@@ -159,7 +159,8 @@ public final class PortfolioBacktester {
                     openPositions.remove(p);
                     continue;
                 }
-                long markValue = valueCents(p, spot, iv, tte, date);
+                // The mark that BOOKS an exit is a trade — value it at executable sides.
+                long markValue = valueCents(p, spot, iv, tte, date, true);
                 long unrealized = markValue - p.entryValueCents;
                 String exit = null;
                 if (p.maxProfitCents > 0 && unrealized >= profitTarget * p.maxProfitCents) exit = "PROFIT_TARGET";
@@ -185,7 +186,7 @@ public final class PortfolioBacktester {
             long openUnreal = 0;
             for (Position p : openPositions) {
                 double tte = Math.max(0, ChronoUnit.DAYS.between(date, p.expiration)) / 365.0;
-                openUnreal += valueCents(p, spot, iv, tte, date) - p.entryValueCents;
+                openUnreal += valueCents(p, spot, iv, tte, date, false) - p.entryValueCents; // mid marks
             }
             long eq = startingCash + realized + openUnreal;
             equity.add(Map.of("date", date.toString(), "equityCents", eq));
@@ -200,7 +201,7 @@ public final class PortfolioBacktester {
         for (Position p : new ArrayList<>(openPositions)) {
             double tte = Math.max(0, ChronoUnit.DAYS.between(last.date(), p.expiration)) / 365.0;
             long unreal = valueCents(p, last.close().doubleValue(),
-                    Math.max(DEFAULT_IV, hvOn(all, last.date())), tte, last.date()) - p.entryValueCents;
+                    Math.max(DEFAULT_IV, hvOn(all, last.date())), tte, last.date(), true) - p.entryValueCents;
             realized += unreal;
             trades.add(close(p, last.date(), unreal, "WINDOW_END"));
         }
@@ -244,7 +245,9 @@ public final class PortfolioBacktester {
         // model even with a loaded dataset.
         LocalDate exp = listedExpirationNear(date, targetDte);
         if (exp == null) exp = date.plusDays(targetDte); // no history for this date — modeled world
-        double tte = targetDte / 365.0;
+        // Time to expiry is measured to the CONTRACT WE ACTUALLY SELECTED — a snapped listing can
+        // sit days from the requested target, and pricing at targetDte/365 silently mispriced it.
+        double tte = Math.max(1, java.time.temporal.ChronoUnit.DAYS.between(date, exp)) / 365.0;
         double step = strikeStep(spot);
         double width = Math.max(step, Math.round(spot * widthPct / step) * step);
 
@@ -271,7 +274,7 @@ public final class PortfolioBacktester {
 
         Position p = new Position();
         p.entryDate = date; p.expiration = exp; p.legs = legs; p.qty = qty;
-        p.entryValueCents = valueCents(p, spot, iv, tte, date);
+        p.entryValueCents = valueCents(p, spot, iv, tte, date, true); // entries fill at executable sides
         p.creditCents = -p.entryValueCents;
         // Max profit/loss from the intrinsic payoff at extreme spots + the strikes.
         long best = Long.MIN_VALUE, worst = Long.MAX_VALUE;
@@ -346,10 +349,14 @@ public final class PortfolioBacktester {
      * configured and a matching bar exists for that date/expiration/strike; otherwise Black-Scholes
      * from realized vol. Setting {@link #usedObserved} lets the report label its pricing honestly.
      */
-    private long valueCents(Position p, double spot, double iv, double tte, java.time.LocalDate date) {
+    private long valueCents(Position p, double spot, double iv, double tte, java.time.LocalDate date,
+                            boolean executable) {
         long v = 0;
         for (Leg l : p.legs) {
-            Double observed = db == null ? null : observedMarkDollars(runSymbol, date, p.expiration, l.strike(), l.call());
+            // Side-aware when the caller is TRADING (entry/exit): shorts sell at the historical
+            // bid and buys pay the ask; MARKS stay at mid so unrealized never flatters.
+            Double observed = db == null ? null
+                    : observedSideDollars(runSymbol, date, p.expiration, l.strike(), l.call(), executable, l.shortLeg());
             double price;
             totalMarks++;
             if (observed != null) { price = observed; observedMarks++; }
@@ -361,20 +368,32 @@ public final class PortfolioBacktester {
 
     /** The observed per-share mark (mark, else bid/ask midpoint) from option_bar, or null if none. */
     Double observedMarkDollars(String symbol, java.time.LocalDate date, java.time.LocalDate exp, double strike, boolean call) {
-        var rows = db.query(
-                // OBSERVED dataset + genuinely observed quotes only: a synthetic/modeled row must
-            // never count as observed pricing (it upgraded whole runs to OBSERVED_FROM_HISTORY).
-            "SELECT mark, bid, ask FROM option_bar WHERE symbol=? AND asof=? AND expiration=? AND strike=? "
-              + "AND opt_type=? AND dataset_id='observed' AND bid_ask_observed=1 LIMIT 1",
-                r -> {
-                    Double m = r.dblOrNull("mark");
-                    if (m != null) return m;
-                    Double b = r.dblOrNull("bid"), a = r.dblOrNull("ask");
-                    return (b != null && a != null) ? (b + a) / 2.0 : null;
-                },
-                symbol, date, exp, java.math.BigDecimal.valueOf(strike), call ? "CALL" : "PUT");
-        return rows.isEmpty() ? null : rows.getFirst();
+        return observedSideDollars(symbol, date, exp, strike, call, false, false);
     }
+
+    /**
+     * Side-aware observed price: when TRADING (executable=true) a short leg SELLS at the historical
+     * bid and a long leg PAYS the ask — modeled mids never flatter a fill that history disagrees
+     * with. Falls back to mark/mid when the side is absent.
+     */
+    Double observedSideDollars(String symbol, java.time.LocalDate date, java.time.LocalDate exp,
+                               double strike, boolean call, boolean executable, boolean shortLeg) {
+        var rows = db.query(
+                "SELECT mark, bid, ask FROM option_bar WHERE symbol=? AND asof=? AND expiration=? AND strike=? "
+              + "AND opt_type=? AND dataset_id='observed' AND bid_ask_observed=1 LIMIT 1",
+                r -> new Double[]{r.dblOrNull("mark"), r.dblOrNull("bid"), r.dblOrNull("ask")},
+                symbol, date, exp, java.math.BigDecimal.valueOf(strike), call ? "CALL" : "PUT");
+        if (rows.isEmpty()) return null;
+        Double mark = rows.getFirst()[0], bid = rows.getFirst()[1], ask = rows.getFirst()[2];
+        if (executable) {
+            // The leg's cash flow in valueCents is sign-adjusted; here we pick WHICH quote it gets.
+            Double side = shortLeg ? bid : ask; // short legs receive the bid, long legs pay the ask
+            if (side != null) return side;
+        }
+        if (mark != null) return mark;
+        return (bid != null && ask != null) ? (bid + ask) / 2.0 : null;
+    }
+
 
     private static long intrinsicValueCents(Position p, double spot) {
         long v = 0;

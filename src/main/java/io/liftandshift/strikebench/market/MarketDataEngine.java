@@ -77,12 +77,16 @@ public final class MarketDataEngine {
     /** A queued refresh with an explicit class: the queue drains user-facing work FIRST, always. */
     private static final class PriorityTask implements Runnable, Comparable<PriorityTask> {
         final int priority; final long seq; final Runnable body;
+        final java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
         PriorityTask(int priority, long seq, Runnable body) { this.priority = priority; this.seq = seq; this.body = body; }
-        @Override public void run() { body.run(); }
+        @Override public void run() { started.set(true); body.run(); }
         @Override public int compareTo(PriorityTask o) {
             return priority != o.priority ? Integer.compare(priority, o.priority) : Long.compare(seq, o.seq);
         }
     }
+
+    /** The queued (not yet started) task per symbol — so a higher-priority join can ESCALATE it. */
+    private final java.util.concurrent.ConcurrentHashMap<String, PriorityTask> queuedTask = new java.util.concurrent.ConcurrentHashMap<>();
     /** How many user-blocking fetches are in flight — background work YIELDS while this is nonzero. */
     private final java.util.concurrent.atomic.AtomicInteger pendingInteractive = new java.util.concurrent.atomic.AtomicInteger();
     private ScheduledExecutorService scheduler;
@@ -262,25 +266,48 @@ public final class MarketDataEngine {
             try { doRefresh(symbol); } catch (Exception e) { /* recorded on the snapshot */ }
             return java.util.concurrent.CompletableFuture.completedFuture(null);
         }
+        var joined = inFlight.get(symbol);
+        if (joined != null) {
+            // PRIORITY INVERSION FIX (R12): an interactive caller joining a QUEUED warm task must
+            // not wait at warm priority — if the task hasn't started, requeue it at the new class.
+            escalate(symbol, priority);
+            return joined;
+        }
         return inFlight.computeIfAbsent(symbol, s -> {
             markRefreshing(s, true);
             java.util.concurrent.CompletableFuture<Void> f = new java.util.concurrent.CompletableFuture<>();
+            Runnable body = () -> {
+                try { doRefresh(s); } finally {
+                    markRefreshing(s, false);
+                    inFlight.remove(s);
+                    queuedTask.remove(s);
+                    f.complete(null);
+                }
+            };
             try {
-                refreshPool.execute(new PriorityTask(priority, taskSeq.incrementAndGet(), () -> {
-                    try { doRefresh(s); } finally {
-                        markRefreshing(s, false);
-                        inFlight.remove(s);
-                        f.complete(null);
-                    }
-                }));
+                PriorityTask task = new PriorityTask(priority, taskSeq.incrementAndGet(), body);
+                queuedTask.put(s, task);
+                refreshPool.execute(task);
                 return f;
             } catch (java.util.concurrent.RejectedExecutionException ex) {
                 // Pool shutting down between the isShutdown() check and submit — clear the flag and
                 // do NOT cache anything (computeIfAbsent stores nothing when the mapping throws).
                 markRefreshing(s, false);
+                queuedTask.remove(s);
                 throw ex;
             }
         });
+    }
+
+    private void escalate(String symbol, int priority) {
+        PriorityTask task = queuedTask.get(symbol);
+        if (task == null || priority >= task.priority || task.started.get()) return;
+        if (refreshPool.remove(task)) { // only a task still WAITING can be requeued
+            PriorityTask bumped = new PriorityTask(priority, taskSeq.incrementAndGet(), task.body);
+            queuedTask.put(symbol, bumped);
+            try { refreshPool.execute(bumped); }
+            catch (java.util.concurrent.RejectedExecutionException e) { queuedTask.remove(symbol); }
+        }
     }
 
     /**

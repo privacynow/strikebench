@@ -1277,13 +1277,13 @@ public final class TradeService {
         if (nearest == null) return new TimeToExpiry(0, 0, 0.5 / 365.0, "no option legs");
         long calDays = Math.max(0, ChronoUnit.DAYS.between(today, nearest));
         int sessions = io.liftandshift.strikebench.market.MarketHours.tradingDaysBetween(today, nearest);
-        // SHORT-DATED positions live in trading sessions, not calendar days: a Friday-sold Monday
-        // expiry has ONE session of price discovery, not three days of diffusion. Longer horizons
-        // keep the calendar convention (weekend variance is real over weeks).
-        double t = calDays <= 14
-                ? Math.max(sessions, 0.5) / 252.0
-                : Math.max(calDays, 0.5) / 365.0;
-        String basis = calDays <= 14 ? sessions + " trading sessions / 252" : calDays + " calendar days / 365";
+        // ONE convention, reconciled (R1): risk-neutral probabilities de-annualize the CHAIN'S OWN
+        // IV, and vendors annualize IV on the calendar — the MU straddle premium reproduced only
+        // at calendar T. So model time is calendar/365 everywhere; TRADING SESSIONS drive the
+        // near-expiry REGIME (gamma warnings, plans) where realized dynamics are what matters.
+        double t = Math.max(calDays, 0.5) / 365.0;
+        String basis = calDays + " calendar days / 365 (chain-IV convention) \u00b7 "
+                + sessions + " trading session" + (sessions == 1 ? "" : "s") + " remain";
         return new TimeToExpiry(sessions, calDays, t, basis);
     }
 
