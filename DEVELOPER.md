@@ -78,6 +78,19 @@ were doing and quietly prepares the next step.
   `workspace.updated` — with a Last-Event-ID replay ring. Events carry ids, never payloads; the
   client refetches what it cares about (GETs stay the source of truth). The quote tape keeps its
   dedicated `/api/market/stream`.
+- *Simulated market* (`market/sim/`): `SimulatedWorld` is a deterministic per-seed world — a
+  virtual exchange clock (30 sim-sec × speed per 1s tick, skips closed hours via `MarketHours`,
+  rolls daily bars), factor-correlated GBM with Itô drift and scenario shapes, 250 seeded
+  history bars, and a full BSM option exchange (smile, intrinsic floors, moneyness/DTE spreads,
+  synthetic OI). `SimulationSessions` persists configs (`sim_session`, V11 — same seed restores
+  the same world), runs all active sessions on one shared loop (max 3), and publishes throttled
+  `world.tick` hints. The active world is a per-user runtime switch (`GET/PUT /api/world`,
+  settings `active_world:<owner>`); `MarketDataService` routes world-aware reads through a
+  resolver while the observed engine keeps running, so switching back is instant. Inside a
+  world, `currentAccount` resolves to a dedicated simulation account (`accounts.world_id`) —
+  the real practice account and the sim lane can never pollute each other. Everything is
+  labeled `Freshness.SIMULATED`. Lifecycle: `/api/sim/market` CRUD + `start/pause/step/speed/
+  event` + `/report`.
 - *Prefetch*: client-hinted, server-governed. `API.prefetch(path)` marks speculative GETs with
   `X-Priority: prefetch`; the server answers 204 when heavy providers lack budget
   (`CboeProvider.prefetchBudget()`: never while cooling down or fully contended; fixture mode

@@ -1453,6 +1453,79 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     candles) · licensed options CSV (observed option evidence) · E*TRADE keys (sandbox e2e +
     automated fill sync).
   ===============================================================================================
+- SIMULATED-MARKET + EXPLANATION PROGRAM (2026-07-10, branch; NOT deployed). Three blocks after the MU
+  iron-condor analysis: R (13 junior corrections), E (explanations), S (simulated market for weekend
+  reviewer sessions). Commits 6be985c..: R-MATH / R-HONESTY / R-CONTRACTS / R-GOVERNANCE / Block E /
+  Block S.
+  - BLOCK R (all 13): R1 ONE time convention — model T = calendar/365 everywhere (chain IV is
+    calendar-annualized; MU straddle reproduces only at calendar T); trading SESSIONS drive the
+    near-expiry regime (<=5 sessions gamma warnings, DTE-aware plans). R2 server-enforced
+    acknowledgments: preview returns requiredAcks + HMAC ackToken (15-min TTL, per-boot secret);
+    create RECOMPUTES and 422s on missing acks — UI checkboxes are no longer the enforcement.
+    R3 three clocks disclosed (sourceAsOf / evaluatedAt / now). R4 AccountRiskContext governs:
+    riskCapital caps engine budget + oversize needs an ack; accountFit % chips. R5 proposed price
+    is FIRST-CLASS: PayoffCurve.entryAdjustCents package-level shift (adjustNetTo leg-fabrication
+    DELETED). R6 external-trade lane: trades.origin EXTERNAL (V9/V10: proposed_net_cents,
+    executed_at, broker, order_ref), planFromUserFills for dead-contract historical recording,
+    zero paper-cash mutation. R7 earnings are ESTIMATES from EDGAR 10-Q/K cadence (never keyword
+    hits; chip says 'Earnings (est.)'). R8 evPhysicalCents -> evHistVolCents rename (it is a
+    historical-vol scenario EV, not physical measure). R9 EV net of round-trip fees
+    (EvalContext.feePerContractCents; DecisionPolicy gates + 35% tail haircut + gamma/DTE mult).
+    R10 evaluated baselines: CASH zeros + BUY_AND_HOLD via ProbabilityMap CVaR on the same grid.
+    R11 backtest TTE to the SNAPPED expiration + executable sides. R12 priority-executor
+    escalation (a queued low-priority task joins at the caller's priority via requeue). R13
+    dependence-corrected stats wording. pricing/ProbabilityMap: P(any/max profit), P(max loss),
+    CVaR95, +/-20%/2sigma stress, touch odds — risk-neutral basis ALWAYS disclosed; TradePreview
+    .analytics consumed by ticket review, builder, compare — ONE evaluation pipeline.
+  - BLOCK E EXPLANATIONS: learn.js INFO registry ({short, beginner, expert} per term, ~20 terms:
+    pop/ev/evhistvol/cvar/pmaxloss/touch/concession/decisionscore/screenscore/evidence/ivrank/vrp/
+    nlv/riskcapital/expectedmove/sessions/seed/world/assignment...); UI.info(termKey) = VISIBLE
+    quiet (i) trigger (user: never hide the affordance), bubble on 550ms hover or click-focus,
+    [+] expands beginner/expert body by level, Escape/outside closes, aria-expanded; title= dups
+    removed where info() replaced them. AUDIT: window.__usedInfoTerms accumulates every rendered
+    term; dom.test 'explanation system' walks screens at both levels and fails on any term missing
+    from the registry (anti-drift, same pattern as the strategy-catalog pin).
+  - BLOCK S SIMULATED MARKET (weekend reviewer sessions; traders/statisticians): market/sim/
+    SimulatedWorld — deterministic per-seed world: virtual exchange clock (30 sim-sec x speed per
+    tick, skips closed hours/weekends via MarketHours, rolls daily bars at close), market-factor
+    model (z = rho*sign(beta)*zM + sqrt(1-rho^2)*zi, rho=|beta|/1.5, Ito drift, scenario shapes
+    CHOP/TREND_UP/TREND_DOWN/SELLOFF_REBOUND/RALLY_FADE/VOL_EVENT), 250-bar seeded history so
+    HV/charts work from day one, full option exchange (next-6-Fridays + 2 monthlies, BSM + smile
+    + intrinsic floors + moneyness/DTE spreads + synthetic OI), injectMove/injectVolShift for
+    live-demo events. Freshness.SIMULATED (TRADABLE rank, after FIXTURE; badge-sim style).
+    SimulationSessions: V11 sim_session persistence (config jsonb — same seed restores the SAME
+    world), ONE shared 1s tick loop, MAX_ACTIVE=3, world.tick SSE hints throttled 4s, per-user
+    ownership. RUNTIME PER-USER SWITCH (user: never a boot flag): settings 'active_world:<owner>',
+    GET/PUT /api/world; MarketDataService.setWorldResolver + world-aware overloads — observed
+    engine NEVER stops, switching back is instant; anything outside a request sees observed
+    (fail-safe). currentAccount() is world-aware: inside a world the SIMULATION account (V11
+    accounts.world_id, $100k, getOrCreateForWorld) IS the account — real practice account and sim
+    lane can never pollute each other. TradeService.worldOf(accountId) threads every marks/closeOn
+    call; RecommendationEngine.recommend(req,bp,worldId) uses a CALL-scoped ThreadLocal (set/
+    finally-cleared same thread — NOT request-ambient); research/history/expirations/chain/
+    recommend/guardrails all world-routed. Routes: /api/sim/market CRUD + start/pause/step/speed/
+    event + report (honest note: outcomes measure DECISIONS, not the market). FRONTEND stays
+    agnostic: ONE loud #world-band (SIMULATED MARKET · scenario · sim clock · speed · seed +
+    Play/Pause/Step + Return to real market) mirroring the scenario-banner supersede pattern;
+    body.in-sim-world hides the tape (it quotes the observed market); world.tick SSE filtered by
+    App.state.world + worldGen token discards stale events from a just-left world; App.switchWorld
+    = PUT + flushCache + render (route/level/symbol preserved). Data Center 'Simulated market'
+    workbench card: create (name, symbol:beta pairs, scenario, vol, seed, speed) / enter / pause /
+    inject event / finish. SimulatedMarketTest (5): seed determinism, coherent books (no crossed,
+    intrinsic floors, monotonic strikes), clock-in-session + rolled bars, event injection, beta
+    co-movement; dom.test 'simulated market' pins create -> band -> world-routed research
+    (SIMULATED badge, sim account active) -> instant return (band gone, real account back).
+    COHERENCE SWEEP (screenshot-driven): scout world-routed end-to-end (SignalEngine.analyze +
+    AutoRecommender.run + horizonIdeas gained worldId; in a world the default scan list is the
+    WORLD's symbols); engine.ladder(req,bp,worldId) twin (research symbol-action one-liners price
+    in-world); research benchmarks come from the SAME world (observed SPY/QQQ never leak into a
+    sim session — filter on SIMULATED freshness since world reads fall back observed). GOTCHAS:
+    ApiServer field-initializer built SimulationSessions before create() assigned the db pool ->
+    attachDb late wiring (same pattern as setEvents); V1's accounts_type_check needed the
+    SIMULATION lane (V11 drops+recreates it); dom-seeded's raw POST /api/trades seeding now goes
+    preview->ack->create (R2 gate applies to test seeding too); /api/account returns {account:{}}
+    not the account. Suites after: 365 JUnit + 50 fixture + 3 audit + 4 seeded + 8 live DOM — ALL
+    GREEN on the final jar. Screenshots shots/sim-{workbench,band-data,research-acme,trade}.png.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
