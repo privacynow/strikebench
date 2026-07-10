@@ -461,6 +461,11 @@
   App._eventHandlers = [];
   App.onEvent = function (types, fn, token) {
     var list = Array.isArray(types) ? types : [types];
+    // Prune dead-route handlers at registration too — dispatch-only pruning would let a
+    // quiet stream accumulate one detached-DOM closure per screen visit.
+    App._eventHandlers = App._eventHandlers.filter(function (h) {
+      return h.token === undefined || App.alive(h.token);
+    });
     App._eventHandlers.push({ types: list, fn: fn, token: token });
   };
   function dispatchAppEvent(type, data) {
@@ -505,11 +510,13 @@
     if (until <= Date.now()) return;
     var when = new Date(until);
     var hh = String(when.getHours()).padStart(2, '0') + ':' + String(when.getMinutes()).padStart(2, '0');
+    var name = data.provider === 'cboe' ? 'Cboe'
+      : data.provider ? data.provider.charAt(0).toUpperCase() + data.provider.slice(1) : 'A data source';
     var chip = UI.el('span', {
       id: 'cooldown-chip',
-      title: (data.provider || 'A data source') + ' rate-limited us; requests pause until ~' + hh
+      title: name + ' rate-limited us; requests pause until ~' + hh
            + '. Showing the last snapshot and other sources meanwhile.'
-    }, UI.icon('warn', 13), ' ' + (data.provider === 'cboe' ? 'Cboe' : data.provider) + ' cooling down · ' + hh);
+    }, UI.icon('warn', 13), ' ' + name + ' cooling down · ' + hh);
     var controls = document.querySelector('.topbar-controls');
     if (controls) controls.insertBefore(chip, controls.firstChild);
     setTimeout(function () {

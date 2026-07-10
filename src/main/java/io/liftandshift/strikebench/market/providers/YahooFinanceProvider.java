@@ -36,11 +36,20 @@ public final class YahooFinanceProvider implements MarketDataProvider {
 
     private final Http http;
     private final String baseUrl;
+    // The backfill job walks whole universes through this endpoint — same politeness discipline
+    // as Cboe: capped concurrency, spaced starts, and a provider-wide breaker on rate limits
+    // (Yahoo answers 429 or its legacy 999). While cooling, candles() returns empty and the
+    // provider chain falls through to other sources.
+    private final io.liftandshift.strikebench.market.ProviderPoliteness politeness =
+            new io.liftandshift.strikebench.market.ProviderPoliteness("yahoo", 2, 250, 10 * 60_000L);
 
     public YahooFinanceProvider(AppConfig cfg) {
         this.http = new Http(cfg.httpTimeoutMs());
         this.baseUrl = Http.normalizeBase(cfg.yahooBaseUrl());
     }
+
+    public void setEvents(io.liftandshift.strikebench.util.EventBus events) { politeness.setEvents(events); }
+    public boolean coolingDown() { return politeness.coolingDown(); }
 
     @Override public String name() { return "yahoo"; }
 
@@ -55,8 +64,9 @@ public final class YahooFinanceProvider implements MarketDataProvider {
         String url = baseUrl + "/v8/finance/chart/" + enc
                 + "?period1=" + p1 + "&period2=" + p2 + "&interval=1d&events=div%2Csplit";
         // A browser-like User-Agent avoids the occasional bot interstitial; still a plain GET.
-        String body = http.get(url, Map.of("User-Agent",
-                "Mozilla/5.0 (compatible; StrikeBench/1.0; +https://strikebench.com)"));
+        // The politeness gate spaces/limits requests and short-circuits during a rate-limit cooldown.
+        String body = politeness.call(() -> http.get(url, Map.of("User-Agent",
+                "Mozilla/5.0 (compatible; StrikeBench/1.0; +https://strikebench.com)")), null);
         if (body == null || body.isBlank()) return List.of();
 
         JsonNode root = Json.parse(body);

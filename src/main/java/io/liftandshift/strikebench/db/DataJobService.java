@@ -52,13 +52,18 @@ public final class DataJobService {
     public void setEvents(io.liftandshift.strikebench.util.EventBus events) { this.events = events; }
 
     /** job.progress is a hint (throttled — fast items must not flood the stream); terminal events always send. */
-    private void publishJob(String type, String id, String kind, String status, int done, int total) {
+    private void publishJob(String type, String id, String kind, String status, int done, int total, String userId) {
         if (events == null) return;
         long now = System.currentTimeMillis();
         boolean terminal = !"RUNNING".equals(status);
         if (!terminal && now - lastProgressPublishMs < 250 && done < total) return;
         lastProgressPublishMs = now;
-        events.publish(type, Map.of("id", id, "kind", kind, "status", status, "done", done, "total", total));
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("id", id); data.put("kind", kind); data.put("status", status);
+        data.put("done", done); data.put("total", total);
+        // Owner scope: when auth is on, /api/events delivers user-scoped events ONLY to their owner.
+        if (userId != null) data.put("user", userId);
+        events.publish(type, data);
     }
 
     public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
@@ -107,7 +112,7 @@ public final class DataJobService {
             }
             return null;
         });
-        jobPool.submit(() -> run(id, k, p, labels));
+        jobPool.submit(() -> run(id, k, p, labels, userId));
         return get(id).job();
     }
 
@@ -185,7 +190,7 @@ public final class DataJobService {
 
     // ---- Runner ----
 
-    private void run(String id, String kind, Map<String, Object> params, List<String> labels) {
+    private void run(String id, String kind, Map<String, Object> params, List<String> labels, String userId) {
         db.exec("UPDATE data_job SET status='RUNNING', updated_at=now() WHERE id=? AND status='QUEUED'", id);
         long totalRows = 0;
         int done = 0;   // items actually processed (excludes cancel-skipped)
@@ -207,22 +212,22 @@ public final class DataJobService {
                 }
                 done++;
                 db.exec("UPDATE data_job SET done=?, rows_written=?, updated_at=now() WHERE id=?", done, totalRows, id);
-                publishJob("job.progress", id, kind, "RUNNING", done, labels.size());
+                publishJob("job.progress", id, kind, "RUNNING", done, labels.size(), userId);
             }
             if (Boolean.TRUE.equals(cancelRequested.get(id))) {
                 // Atomic: keep the cancel status AND the 'cancelled by user' message (no summary overwrite).
                 db.exec("UPDATE data_job SET status='CANCELLED', message='cancelled by user', updated_at=now() WHERE id=?", id);
-                publishJob("job.complete", id, kind, "CANCELLED", done, labels.size());
+                publishJob("job.complete", id, kind, "CANCELLED", done, labels.size(), userId);
             } else {
                 // FAILED only when EVERY processed item failed; a partial failure stays DONE (message notes it).
                 String status = (done > 0 && failed == done) ? "FAILED" : "DONE";
                 db.exec("UPDATE data_job SET status=?, message=?, updated_at=now() WHERE id=? AND status <> 'CANCELLED'",
                         status, summary(kind, done, totalRows, failed), id);
-                publishJob("job.complete", id, kind, status, done, labels.size());
+                publishJob("job.complete", id, kind, status, done, labels.size(), userId);
             }
         } catch (Exception e) {
             db.exec("UPDATE data_job SET status='FAILED', error=?, updated_at=now() WHERE id=? AND status <> 'CANCELLED'", e.toString(), id);
-            publishJob("job.complete", id, kind, "FAILED", done, labels.size());
+            publishJob("job.complete", id, kind, "FAILED", done, labels.size(), userId);
         } finally {
             cancelRequested.remove(id);
         }

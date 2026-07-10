@@ -58,6 +58,16 @@ class WorkspaceServiceTest {
                 .hasMessageContaining("too large");
     }
 
+    /** Fan-out is async (a dedicated pump thread) — assertions on delivery must poll briefly. */
+    private static void awaitTrue(java.util.function.BooleanSupplier cond) {
+        long deadline = System.currentTimeMillis() + 3000;
+        while (!cond.getAsBoolean()) {
+            if (System.currentTimeMillis() > deadline) break;
+            try { Thread.sleep(10); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+        }
+        assertThat(cond.getAsBoolean()).isTrue();
+    }
+
     @Test
     void writesAnnounceOnTheBus() {
         db = TestDb.fresh();
@@ -67,10 +77,8 @@ class WorkspaceServiceTest {
         List<EventBus.Event> seen = new CopyOnWriteArrayList<>();
         bus.subscribe(seen::add);
         long rev = ws.put("user-a", "{\"symbol\":\"AAPL\"}");
-        assertThat(seen).anySatisfy(e -> {
-            assertThat(e.type()).isEqualTo("workspace.updated");
-            assertThat(e.data()).containsEntry("rev", rev);
-        });
+        awaitTrue(() -> seen.stream().anyMatch(e ->
+                e.type().equals("workspace.updated") && Long.valueOf(rev).equals(e.data().get("rev"))));
     }
 
     @Test
@@ -81,17 +89,20 @@ class WorkspaceServiceTest {
         bus.subscribe(seen::add);
         var e1 = bus.publish("job.progress", Map.of("id", "j1", "done", 1));
         var e2 = bus.publish("job.complete", Map.of("id", "j1", "status", "DONE"));
-        assertThat(seen).hasSize(2); // the throwing subscriber didn't break delivery
+        awaitTrue(() -> seen.size() == 2); // the throwing subscriber didn't break delivery
+        // The replay ring is synchronous truth regardless of the async pump.
         assertThat(bus.since(e1.seq())).containsExactly(e2);
         assertThat(bus.since(0)).hasSize(2);
+        assertThat(bus.currentSeq()).isEqualTo(e2.seq());
         // The replay ring is capped — old events fall off instead of growing forever.
         for (int i = 0; i < 400; i++) bus.publish("tick", Map.of("i", i));
         assertThat(bus.since(0)).hasSizeLessThanOrEqualTo(256);
         // Unsubscribe actually stops delivery.
+        awaitTrue(() -> seen.size() == 402);
         int before = seen.size();
         Runnable unsub = bus.subscribe(seen::add);
         unsub.run();
         bus.publish("after", Map.of());
-        assertThat(seen.size()).isEqualTo(before + 1); // only the original subscriber saw 'after'
+        awaitTrue(() -> seen.size() == before + 1); // only the original subscriber saw 'after'
     }
 }

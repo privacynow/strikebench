@@ -279,6 +279,34 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
   assert.equal(await page.evaluate(() => window.location.hash), '#/research/QQQ');
 });
 
+test('working view follows: idea bar carries the thesis; scenario studio opens on it', async () => {
+  await page.click('#level-switch button[data-level="beginner"]');
+  // State the view in Ideas: QQQ, bearish, ~1 month.
+  await go('#/recommend/manual');
+  await page.waitForSelector('#rec-symbol');
+  await page.fill('#rec-symbol', 'QQQ');
+  await page.evaluate(() => {
+    App.state.discoverForm.symbol = 'QQQ';
+    App.state.discoverForm.thesis = 'bearish';
+    App.state.discoverForm.horizon = 'month';
+    App.state.lastRecommendSymbol = 'QQQ';
+    App.state.ticket = null; App.state.builderForm = null; App.state.scenarioForm = null;
+  });
+  // The Trade idea bar shows the working VIEW even with no working idea yet.
+  await go('#/trade/verify');
+  await page.waitForSelector('#working-view-chip');
+  const wv = await page.textContent('#working-view-chip');
+  assert.match(wv, /QQQ/);
+  assert.match(wv, /bearish/);
+  assert.match(wv, /~1 month/);
+  // A fresh Scenario Studio opens on the bearish story (Rises, then fades) — not a random default.
+  await go('#/research/QQQ');
+  await page.waitForSelector('#whatif-card .sc-card.active');
+  assert.equal(await page.getAttribute('#whatif-card .sc-card.active', 'data-shape'), 'RALLY_FADE');
+  // Cleanup for downstream tests: a persisted bearish default must not surprise them.
+  await page.evaluate(() => { App.state.scenarioForm = null; App.state.discoverForm.thesis = 'bullish'; });
+});
+
 test('event stream: job.complete reaches the browser; cooldown shows a calm header chip', async () => {
   await go('#/home');
   // End-to-end SSE: start a real job and wait for its completion EVENT (not a poll).

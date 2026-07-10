@@ -309,7 +309,10 @@
     (function continueRow() {
       var chips = [];
       var t = App.state.ticket;
-      if (t && t.symbol) {
+      // Same placeability rule as the Place stage gate — a chip that lands on
+      // "Nothing to place yet" is a dead end, not continuity.
+      var placeable = !!(t && (t.candidate || (t.custom && t.legs && t.legs.length)));
+      if (placeable) {
         var what = t.custom ? 'custom strategy' : (t.candidate && t.candidate.strategy
             ? prettyStrategy(t.candidate.strategy) : 'trade');
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'idea',
@@ -1814,9 +1817,36 @@
         onclick: function () { App.state.ticket = null; App.state.builderForm = null; App.render(); }
       }, 'Clear'));
     } else {
-      bar.appendChild(el('span', { class: 'muted' }, 'No working idea yet \u2014 pick one from Ideas or make one in the Builder.'));
+      // No working IDEA yet \u2014 but the working VIEW (symbol \u00b7 goal \u00b7 thesis \u00b7 horizon) still
+      // follows the user, so the bar offers context instead of a dead sentence.
+      var wv = workingViewLabel();
+      if (wv) {
+        bar.appendChild(el('span', { class: 'idea-chip', id: 'working-view-chip' }, icon('compass', 14), wv));
+        bar.appendChild(el('button', { class: 'btn btn-sm btn-secondary',
+          onclick: function () { App.navigate('#/trade/discover'); } }, 'Find ideas'));
+      } else {
+        bar.appendChild(el('span', { class: 'muted' }, 'No working idea yet \u2014 pick one from Ideas or make one in the Builder.'));
+      }
     }
     return bar;
+  }
+
+  /**
+   * The working VIEW in one plain sentence \u2014 the thesis context that follows the user across
+   * Research and Trade (persisted in the workspace): "QQQ \u00b7 Trade a view: bearish \u00b7 ~1 month".
+   * Null when there's nothing meaningful yet.
+   */
+  function workingViewLabel() {
+    var f = App.state.discoverForm || {};
+    var sym = ((App.state.lastRecommendSymbol || f.symbol) || '').toUpperCase();
+    if (!sym) return null;
+    var parts = [sym];
+    var goal = f.goal && f.goal !== 'ALL' ? f.goal : null;
+    var meta = goal && (Learn.INTENTS || []).find(function (i) { return i.key === goal; });
+    if (meta) parts.push(meta.label + ((goal === 'DIRECTIONAL' && f.thesis) ? ': ' + f.thesis : ''));
+    var HZ = { '0DTE': 'today', week: '~1 week', month: '~1 month', quarter: '~3 months' };
+    if (f.horizon && HZ[f.horizon]) parts.push(HZ[f.horizon]);
+    return parts.join(' \u00b7 ');
   }
 
   async function workbench(root, params) {

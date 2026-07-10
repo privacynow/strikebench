@@ -1180,8 +1180,11 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 .sc-sketch svg { width: 100%; height: 30px; }
 .fan-chart { margin: 8px 0 4px; }
 .sc-math p { margin: 4px 0; font-size: 12.5px; }
+/* In normal flow (NOT sticky): stacking it over the topbar/stale-banner hid more urgent
+   chrome once the page scrolled. It sits loudly at the top; DEMO/MODELED badges carry the
+   honesty for anything below the fold. */
 #scenario-banner { background: var(--risk-caution, #b98a00); color: #fff; padding: 7px 14px; font-size: 13px;
-  display: flex; gap: 8px; align-items: center; position: sticky; top: 0; z-index: 60; }
+  display: flex; gap: 8px; align-items: center; }
 #scenario-banner a { color: #fff; text-decoration: underline; }
 
 /* ---- Workspace continuity ---- */

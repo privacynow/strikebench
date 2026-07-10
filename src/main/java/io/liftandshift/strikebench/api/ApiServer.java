@@ -140,6 +140,8 @@ public final class ApiServer {
         SecretsStore secretsStore = new SecretsStore(db, clock);
         ETradeProvider etrade = new ETradeProvider(cfg, secretsStore, clock);
         final CboeProvider[] cboeRef = new CboeProvider[1]; // captured so the Data Center can show throttle state
+        final io.liftandshift.strikebench.market.providers.YahooFinanceProvider[] yahooRef =
+                new io.liftandshift.strikebench.market.providers.YahooFinanceProvider[1]; // captured for event wiring
 
         // Priority: E*TRADE -> Cboe -> AlphaVantage/Polygon -> Stooq -> Fixture (always last resort)
         if (!cfg.fixturesOnly()) {
@@ -150,7 +152,10 @@ public final class ApiServer {
             if (!cfg.polygonApiKey().isBlank()) providers.add(new PolygonProvider(cfg));
             // Yahoo keyless equity candles — PERSONAL/LOCAL-CLONE opt-in only (see AppConfig.yahooEnabled).
             // Ahead of Stooq (which is bot-blocked for us) so a self-hoster gets real underlying history.
-            if (cfg.yahooEnabled()) providers.add(new io.liftandshift.strikebench.market.providers.YahooFinanceProvider(cfg));
+            if (cfg.yahooEnabled()) {
+                yahooRef[0] = new io.liftandshift.strikebench.market.providers.YahooFinanceProvider(cfg);
+                providers.add(yahooRef[0]);
+            }
             providers.add(new StooqProvider(cfg));
             if (!cfg.newsRssBaseUrl().isBlank()) newsProviders.add(new NewsRssProvider(cfg)); // keyless headlines
             newsProviders.add(new EdgarProvider(cfg));                                          // SEC filings
@@ -207,6 +212,7 @@ public final class ApiServer {
         server.dataJobs.setEvents(server.events);
         datasetSvc.setEvents(server.events);
         if (cboeRef[0] != null) cboeRef[0].setEvents(server.events);
+        if (yahooRef[0] != null) yahooRef[0].setEvents(server.events);
         return server;
     }
 
@@ -735,7 +741,16 @@ public final class ApiServer {
                 : java.util.Arrays.stream(raw.split(",")).map(s -> s.trim().toUpperCase(Locale.ROOT))
                     .filter(s -> !s.isBlank()).distinct().limit(60).toList();
         client.keepAlive();
+        // The task ref lets the push cancel ITSELF when it notices the client died — onClose is
+        // the normal path, but a client that vanishes without firing it must not keep a scheduled
+        // write alive forever.
+        var taskRef = new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<?>>();
         Runnable push = () -> {
+            if (client.terminated()) {
+                var t = taskRef.get();
+                if (t != null) t.cancel(false);
+                return;
+            }
             try {
                 List<Map<String, Object>> rows = new ArrayList<>();
                 for (var snap : marketEngine.quotes(symbols)) {
@@ -747,6 +762,7 @@ public final class ApiServer {
         push.run(); // immediate first frame so the UI paints without waiting a full interval
         int interval = Math.max(1, cfg.engineStreamIntervalSeconds());
         var task = streamScheduler.scheduleWithFixedDelay(push, interval, interval, java.util.concurrent.TimeUnit.SECONDS);
+        taskRef.set(task);
         client.onClose(() -> task.cancel(true));
     }
 
@@ -770,22 +786,47 @@ public final class ApiServer {
      */
     private void eventStream(io.javalin.http.sse.SseClient client) {
         client.keepAlive();
-        long last = 0;
+        // No Last-Event-ID = a FRESH client: start from now (a history dump of up to 256 stale
+        // hints would trigger pointless refetch storms). A reconnect replays only what it missed.
+        long last = events.currentSeq();
         String lastId = client.ctx().header("Last-Event-ID");
         if (lastId != null) {
-            try { last = Long.parseLong(lastId.trim()); } catch (NumberFormatException ignore) { /* fresh start */ }
+            try { last = Long.parseLong(lastId.trim()); } catch (NumberFormatException ignore) { /* stay at now */ }
         }
-        for (var e : events.since(last)) sendEvent(client, e);
-        Runnable unsubscribe = events.subscribe(e -> sendEvent(client, e));
+        // Per-user scope: events carrying a "user" key (jobs, workspace revs) go only to their
+        // owner when auth is on. Global events (dataset.selected, provider.cooldown) go to all.
+        // Auth off = single local user = everything. Resolve the caller ONCE — ctx is not
+        // guaranteed usable from publisher threads later.
+        final String caller = auth.enabled() ? ownerId(client.ctx()) : null;
+        final boolean scoped = auth.enabled();
+        java.util.function.Predicate<io.liftandshift.strikebench.util.EventBus.Event> visible = e -> {
+            if (!scoped) return true;
+            Object owner = e.data().get("user");
+            return owner == null || owner.equals(caller);
+        };
+        // Subscribe FIRST, replay second: an event published in between is delivered live instead
+        // of lost (a duplicate frame is harmless — events are idempotent hints). The subscriber
+        // self-unsubscribes when the client is gone, so a death during replay can't leak it.
+        final java.util.concurrent.atomic.AtomicReference<Runnable> unsub = new java.util.concurrent.atomic.AtomicReference<>();
+        Runnable unsubscribe = events.subscribe(e -> {
+            if (client.terminated()) {
+                Runnable u = unsub.get();
+                if (u != null) u.run();
+                return;
+            }
+            if (visible.test(e)) sendEvent(client, e);
+        });
+        unsub.set(unsubscribe);
         client.onClose(unsubscribe);
+        for (var e : events.since(last)) if (visible.test(e)) sendEvent(client, e);
     }
 
-    /** Serialized per client: concurrent publishers must not interleave SSE frames. */
+    /** Serialized per client: the bus pump and the replay loop must not interleave SSE frames. */
     private void sendEvent(io.javalin.http.sse.SseClient client,
                            io.liftandshift.strikebench.util.EventBus.Event e) {
         try {
             synchronized (client) { client.sendEvent(e.type(), e.data(), String.valueOf(e.seq())); }
-        } catch (Exception ignore) { /* client gone — onClose unsubscribes */ }
+        } catch (Exception ignore) { /* client gone — onClose/self-unsubscribe cleans up */ }
     }
 
     private void workspaceGet(Context ctx) {

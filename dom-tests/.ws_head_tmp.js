@@ -36,15 +36,7 @@
     Object.keys(s.forms || {}).forEach(function (k) {
       if (FORM_KEYS.indexOf(k) >= 0 && s.forms[k]) App.state[k] = s.forms[k];
     });
-    if (s.ticket) {
-      // HONESTY GUARD: a restored ticket re-enters at the strikes step, never at a
-      // review/confirm armed with the OLD session's prices — marks have moved since. The
-      // normal flow re-previews at current marks before anything can be placed.
-      var t = s.ticket;
-      if (t.step && t.step > 5) t.step = 5;
-      delete t.preview;
-      App.state.ticket = t;
-    }
+    if (s.ticket) App.state.ticket = s.ticket;
     return true;
   }
 
@@ -101,14 +93,6 @@
     lastSavedJson = ''; // first save after boot always writes
     window.addEventListener('hashchange', saveIfDirty);
     setInterval(saveIfDirty, 4000);
-    // A tab that adopted another tab's state while hidden still SHOWS its old DOM —
-    // re-render once when the user comes back to it.
-    document.addEventListener('visibilitychange', function () {
-      if (!document.hidden && adoptedWhileHidden) {
-        adoptedWhileHidden = false;
-        if (window.App && App.render) App.render();
-      }
-    });
     // Leaving the page: localStorage synchronously; the backend via keepalive fetch (a normal
     // request would be cancelled by the unload).
     window.addEventListener('pagehide', function () {
@@ -125,7 +109,6 @@
   }
 
   /** Another tab (or device) wrote rev N. Adopt only while hidden — never yank live work. */
-  var adoptedWhileHidden = false;
   function onRemoteRev(newRev) {
     if (!newRev || newRev <= rev) return;
     rev = newRev;
@@ -133,13 +116,7 @@
     API.getFresh('/api/workspace').then(function (r) {
       if (r && r.state && r.state.v === 1) {
         apply(r.state);
-        // Rebase the dirty-check on the ADOPTED state: re-pushing what we just pulled would
-        // bump the rev and ping-pong forever between two hidden tabs. Only a genuine local
-        // change after this may write again.
-        var s = snapshot();
-        lastSavedJson = JSON.stringify({ route: s.route, symbol: s.symbol, forms: s.forms, ticket: s.ticket });
-        persistLocal(s);
-        adoptedWhileHidden = true; // the DOM still shows pre-adoption state — refresh on return
+        lastSavedJson = ''; // adopted — next tick re-saves the merged view
       }
     }).catch(function () { /* ignore */ });
   }

@@ -53,7 +53,14 @@
   function form(level, symbol) {
     var f = App.state.scenarioForm = App.state.scenarioForm || {};
     if (f.seed == null) f.seed = Math.floor(Math.random() * 1000000);
-    f.shape = f.shape || 'SELLOFF_REBOUND';
+    // A fresh studio opens on the user's WORKING VIEW — the thesis they picked in Ideas seeds
+    // the story (bullish → climbs, bearish → fades, volatile → news shock). Pure default: the
+    // user can pick any other shape, and a persisted choice always wins.
+    if (!f.shape) {
+      var thesis = (App.state.discoverForm && App.state.discoverForm.thesis) || '';
+      f.shape = { bullish: 'GRIND_UP', bearish: 'RALLY_FADE', neutral: 'CHOP', volatile: 'EVENT_JUMP' }[thesis]
+             || 'SELLOFF_REBOUND';
+    }
     f.horizon = f.horizon || 10;
     f.mag = f.mag || 'typical';
     var box = el('div', { class: 'scenario-form' });

@@ -64,8 +64,28 @@ CSV import), and a tiered, confirmation-gated reset. Best-source ladder for evid
 
 Provider priority per data domain: **E*TRADE → Cboe → AlphaVantage/Polygon → Stooq →
 fixtures**, per-domain health at `GET /api/status` (never 500s). Frontend:
-`src/main/resources/public` — `js/{learn,api,ui,builder,views,app}.js`, hash router, screens
-adapt structurally to the Beginner/Expert level.
+`src/main/resources/public` — `js/{learn,api,workspace,ui,scenario,builder,views,app}.js`,
+hash router, screens adapt structurally to the Beginner/Expert level.
+
+**Workspace continuity + events.** The app behaves like a trader's desk: it remembers what you
+were doing and quietly prepares the next step.
+- *State*: `js/workspace.js` persists a client-owned blob (draft forms, working idea, working
+  symbol, route — never result payloads) to localStorage instantly and to `PUT /api/workspace`
+  debounced (`workspace` table, rev per write, 128KB cap, per-user; `'local'` when auth is off).
+  Boot hydrates the newest copy; a bare open restores the exact route, an explicit hash wins.
+- *Events*: `GET /api/events` (SSE) streams small typed hints from the in-process
+  `util.EventBus` — `job.progress`/`job.complete`, `dataset.selected`, `provider.cooldown`,
+  `workspace.updated` — with a Last-Event-ID replay ring. Events carry ids, never payloads; the
+  client refetches what it cares about (GETs stay the source of truth). The quote tape keeps its
+  dedicated `/api/market/stream`.
+- *Prefetch*: client-hinted, server-governed. `API.prefetch(path)` marks speculative GETs with
+  `X-Priority: prefetch`; the server answers 204 when heavy providers lack budget
+  (`CboeProvider.prefetchBudget()`: never while cooling down or fully contended; fixture mode
+  always allows). The app warms the likely next step (expirations/history for the working
+  symbol) during idle time after each render; denials are silent and cost the user nothing.
+- *Status UX*: provider rate-limit cooldowns show as a calm amber header chip (self-expiring),
+  a synthetic active dataset shows the loud SCENARIO MODE banner, and Home offers
+  "Pick up where you left off" chips into the working context.
 
 The engineering log — every decision, incident, and gotcha — is `CLAUDE.md` at the repo root.
 

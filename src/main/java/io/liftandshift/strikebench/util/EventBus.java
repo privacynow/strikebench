@@ -32,8 +32,15 @@ public final class EventBus {
     private final AtomicLong seq = new AtomicLong();
     private final CopyOnWriteArrayList<Consumer<Event>> subscribers = new CopyOnWriteArrayList<>();
     private final ArrayDeque<Event> replay = new ArrayDeque<>(); // guarded by `this`
+    // Fan-out happens on ONE dedicated daemon thread: a publisher (e.g. a provider fetch
+    // thread, a job worker) must never block behind a slow SSE client's write. Single thread
+    // keeps delivery ordered.
+    private final java.util.concurrent.ExecutorService pump =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "event-bus"); t.setDaemon(true); return t;
+            });
 
-    /** Publishes an event to all subscribers. Null-tolerant data values; never throws. */
+    /** Publishes an event to all subscribers (async, ordered). Null-tolerant data; never throws. */
     public Event publish(String type, Map<String, Object> data) {
         Map<String, Object> copy = new LinkedHashMap<>();
         if (data != null) copy.putAll(data);
@@ -42,11 +49,16 @@ public final class EventBus {
             replay.addLast(e);
             while (replay.size() > REPLAY_MAX) replay.removeFirst();
         }
-        for (Consumer<Event> s : subscribers) {
-            try { s.accept(e); } catch (Exception ignore) { /* one bad subscriber never breaks the bus */ }
-        }
+        pump.execute(() -> {
+            for (Consumer<Event> s : subscribers) {
+                try { s.accept(e); } catch (Exception ignore) { /* one bad subscriber never breaks the bus */ }
+            }
+        });
         return e;
     }
+
+    /** The newest sequence number — a fresh SSE client with no Last-Event-ID starts here (no history dump). */
+    public long currentSeq() { return seq.get(); }
 
     /** Subscribes; returns the unsubscribe handle (call it on SSE close). */
     public Runnable subscribe(Consumer<Event> consumer) {
