@@ -115,7 +115,7 @@ public final class TradeService {
                 acct.cashCents(), blocks.isEmpty() ? cashAfter : acct.cashCents(),
                 acct.reservedCents(), blocks.isEmpty() ? reservedAfter : acct.reservedCents(),
                 acct.buyingPowerCents(), blocks.isEmpty() ? cashAfter - reservedAfter : acct.buyingPowerCents(),
-                p.freshness.name(), p.underlyingCents, p.assignmentProb(), p.legDetails(), p.payoff());
+                p.freshness.name(), p.underlyingCents, p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics());
     }
 
     /** Opens the trade or throws TradeRejectedException (audit row only, zero mutation). */
@@ -631,7 +631,17 @@ public final class TradeService {
                         Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
                         Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
                         long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
-                        List<Map<String, Object>> payoff) {
+                        List<Map<String, Object>> payoff, Map<String, Object> analytics) {
+        Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
+             Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
+             Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
+             long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
+             List<Map<String, Object>> payoff) {
+            this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens, pop, ev,
+                    underlyingCents, freshness, blocks, warnings, snapshotJson, sharesToLock,
+                    legDetails, assignmentProb, payoff, Map.of());
+        }
+
         Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
              Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson) {
@@ -754,6 +764,24 @@ public final class TradeService {
 
         PayoffCurve curve = PayoffCurve.of(filled, req.qty());
         long entryNet = curve.entryNetPremiumCents();
+        long executableNet = entryNet;                       // what crossing the books pays, right now
+        Long packageMid = packageMidCents(snapshotLegs, req.qty());
+        // YOUR price, not the model's: a proposed limit (pre-trade) or an actual fill (evaluation)
+        // reprices the whole package — max loss, breakevens, POP, EV all follow the real number.
+        if (req.proposedNetCents() != null && filled.stream().anyMatch(l -> !l.isStock())) {
+            long delta = req.proposedNetCents() - entryNet;
+            if (delta != 0) {
+                filled = adjustNetTo(filled, delta, req.qty());
+                curve = PayoffCurve.of(filled, req.qty());
+                entryNet = curve.entryNetPremiumCents();
+            }
+            warnings.add("Priced at YOUR net price " + Money.fmt(req.proposedNetCents())
+                    + " — the executable sides right now say " + Money.fmt(executableNet)
+                    + (packageMid != null ? ", midpoint " + Money.fmt(packageMid) : ""));
+            if (packageMid != null && req.proposedNetCents() > packageMid) {
+                warnings.add("Your price is MORE favorable than the midpoint — resting there may never fill");
+            }
+        }
 
         // Same math the recommendation engine shows on candidates — the builder's live
         // panel must not disagree with the Ideas screen about the same structure.
@@ -813,10 +841,47 @@ public final class TradeService {
         // Chart-ready payoff samples: computed even for blocked plans so the builder can
         // SHOW the cliff (an uncapped short call's curve teaches more than the block text).
         List<Map<String, Object>> payoff = chartPointMaps(riskCurve, underlying);
+
+        double spot = underlying.doubleValue();
+        TimeToExpiry tte = timeToNearestExpiry(filled);
+        double t = tte.tYears();
+        if (ivs.isEmpty()) {
+            warnings.add("No implied volatility available — POP/EV assume a 30% placeholder volatility");
+        }
+        double ivAvg = ivs.isEmpty() ? FALLBACK_IV : ivs.stream().mapToDouble(Double::doubleValue).average().orElse(FALLBACK_IV);
+
+        // SHORT-DURATION REGIME (1–5 sessions): gamma concentration, weekend gaps and pin risk are
+        // the trade — literal 0DTE was the only timing warning before, and a Friday-sold Monday
+        // condor sailed through unwarned (the MU incident).
+        List<java.math.BigDecimal> shortStrikes = filled.stream()
+                .filter(l -> !l.isStock() && l.action() == LegAction.SELL)
+                .map(Leg::strike).filter(java.util.Objects::nonNull).distinct().toList();
+        if (tte.sessions() <= 5 && tte.sessions() >= 0) {
+            String weekend = tte.calendarDays() - tte.sessions() >= 2
+                    ? " including a weekend/holiday gap the position is exposed to" : "";
+            warnings.add("Near-expiry gamma: only " + tte.sessions() + " trading session"
+                    + (tte.sessions() == 1 ? "" : "s") + " remain"
+                    + (tte.sessions() == 1 ? "s" : "") + " to the nearest expiration ("
+                    + tte.calendarDays() + " calendar days" + weekend
+                    + ") — small moves swing the P/L hard and there is little time to be wrong");
+            double emOneSession = spot * ivAvg * Math.sqrt(1.0 / 252.0);
+            for (java.math.BigDecimal k : shortStrikes) {
+                if (Math.abs(k.doubleValue() - spot) <= emOneSession) {
+                    warnings.add("Pin/assignment risk: short strike " + k.stripTrailingZeros().toPlainString()
+                            + " sits INSIDE the one-session expected move (~" + Money.fmt(Math.round(emOneSession * 100))
+                            + ") — plan the exit before the final hour, and expect assignment mechanics if it finishes near the strike");
+                    break;
+                }
+            }
+        }
+
         if (riskCurve.maxLossUnbounded()) {
             blocks.add("Undefined (unlimited) risk: this position can lose more than any amount reserved. Add a protective leg to cap the loss.");
+            Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
+                    snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
+                    0, null, null, null, worst);
             return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
-                    worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff);
+                    worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked);
         }
         long combinedMaxLoss = riskCurve.maxLossCents();
         if (combinedMaxLoss <= 0 && !shareContext) {
@@ -827,15 +892,9 @@ public final class TradeService {
         }
         long maxLoss = shareContext ? Math.max(0, -entryNet) : combinedMaxLoss;
         Long maxProfit = riskCurve.maxProfitUnbounded() ? null : riskCurve.maxProfitCents();
-        long fees = feesFor(filled, req.qty());
+        long fees = req.feesOverrideCents() != null ? Math.max(0, req.feesOverrideCents()) : feesFor(filled, req.qty());
         long reserve = shareContext ? 0 : Math.max(0, maxLoss + entryNet);
 
-        double spot = underlying.doubleValue();
-        double t = yearsToNearestExpiry(filled);
-        if (ivs.isEmpty()) {
-            warnings.add("No implied volatility available — POP/EV assume a 30% placeholder volatility");
-        }
-        double ivAvg = ivs.isEmpty() ? FALLBACK_IV : ivs.stream().mapToDouble(Double::doubleValue).average().orElse(FALLBACK_IV);
         Double pop = riskCurve.probProfit(spot, ivAvg, t, 0);
         Long ev = riskCurve.expectedValueCents(spot, ivAvg, t, 0);
 
@@ -847,10 +906,13 @@ public final class TradeService {
         if (shareCovered) snapshot.put("coveredByHeldShares", sharesToLock);
         if (shareContext) snapshot.put("heldShareContextLots", (long) contextLots * req.qty());
 
+        Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
+                snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
+                fees, maxLoss, maxProfit, ev, worst);
         return new Plan(filled, entryNet, fees, reserve, maxLoss, maxProfit,
                 riskCurve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
                 pop, ev, Money.toCents(underlying), worst, blocks, warnings, Json.write(snapshot), sharesToLock,
-                snapshotLegs, assignProb, payoff);
+                snapshotLegs, assignProb, payoff, analytics);
     }
 
     private static List<Map<String, Object>> chartPointMaps(PayoffCurve curve, BigDecimal spot) {
@@ -862,6 +924,180 @@ public final class TradeService {
             out.add(m);
         }
         return out;
+    }
+
+    // ---- Evaluation analytics (the one pipeline every entry path shares) ----
+
+    /** Signed package midpoint from the leg snapshots: SELL +, BUY −, per-share x100 x ratio x qty. */
+    private static Long packageMidCents(List<Map<String, Object>> snaps, int qty) {
+        long total = 0;
+        for (Map<String, Object> snap : snaps) {
+            Object midS = snap.get("mid");
+            if (midS == null) return null;
+            int sign = "SELL".equals(snap.get("action")) ? 1 : -1;
+            int ratio = ((Number) snap.get("ratio")).intValue();
+            long shares = "STOCK".equals(snap.get("type")) ? (long) Leg.SHARES_PER_CONTRACT * ratio
+                    : (long) Leg.SHARES_PER_CONTRACT * ratio;
+            total += sign * Money.centsFromPrice(new BigDecimal(midS.toString()), shares * qty);
+        }
+        return total;
+    }
+
+    /** Total quoted spread across the package (ask−bid summed, x100 x ratio x qty); null if any book is one-sided. */
+    private static Long packageSpreadCents(List<Map<String, Object>> snaps, int qty) {
+        long total = 0;
+        for (Map<String, Object> snap : snaps) {
+            if ("STOCK".equals(snap.get("type"))) continue;
+            Object bidS = snap.get("bid"), askS = snap.get("ask");
+            if (bidS == null || askS == null) return null;
+            BigDecimal spread = new BigDecimal(askS.toString()).subtract(new BigDecimal(bidS.toString()));
+            if (spread.signum() < 0) return null; // crossed book — not a meaningful spread
+            int ratio = ((Number) snap.get("ratio")).intValue();
+            total += Money.centsFromPrice(spread, (long) Leg.SHARES_PER_CONTRACT * ratio * qty);
+        }
+        return total;
+    }
+
+    /** Repackages the fill so the package nets to entryNet+delta: the whole adjustment lands on the
+     *  first option leg's per-share price (package-exact; per-leg market rows keep the real quotes). */
+    private static List<Leg> adjustNetTo(List<Leg> filled, long deltaCents, int qty) {
+        List<Leg> out = new ArrayList<>(filled);
+        for (int i = 0; i < out.size(); i++) {
+            Leg l = out.get(i);
+            if (l.isStock()) continue;
+            long shares = (long) Leg.SHARES_PER_CONTRACT * l.ratio() * qty;
+            BigDecimal perShare = BigDecimal.valueOf(deltaCents).movePointLeft(2)
+                    .divide(BigDecimal.valueOf(shares), 6, java.math.RoundingMode.HALF_UP);
+            // entryNet counts SELL as +price: raising a SELL leg's price raises the net; BUY lowers it.
+            BigDecimal adj = l.action() == LegAction.SELL ? l.entryPrice().add(perShare)
+                    : l.entryPrice().subtract(perShare);
+            out.set(i, new Leg(l.action(), l.type(), l.strike(), l.expiration(), l.ratio(), adj));
+            return out;
+        }
+        return out;
+    }
+
+    /**
+     * The assembled judgment every Review consumer shares: full probability map (risk-neutral,
+     * labeled), EV sensitivity to the vol input, execution quality vs the books, a DTE-aware
+     * management plan, and a server-computed verdict — so Beginner and Expert read the SAME truth.
+     */
+    private Map<String, Object> buildAnalytics(PayoffCurve curve, double spot, double ivAvg, double t,
+                                               TimeToExpiry tte, List<BigDecimal> shortStrikes,
+                                               List<Map<String, Object>> snaps, int qty,
+                                               long entryNet, long executableNet, Long packageMid,
+                                               Long proposedNet, long fees, Long maxLoss, Long maxProfit,
+                                               Long ev, Freshness freshness) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        var map = io.liftandshift.strikebench.pricing.ProbabilityMap.of(curve, spot, ivAvg, t, shortStrikes);
+        Map<String, Object> prob = new LinkedHashMap<>();
+        prob.put("pAnyProfit", map.pAnyProfit());
+        prob.put("pMaxProfit", map.pMaxProfit());
+        prob.put("pMaxLoss", map.pMaxLoss());
+        prob.put("pPartial", map.pPartial());
+        prob.put("cvar95Cents", map.cvar95Cents());
+        prob.put("stressLossCents", map.stressLossCents());
+        prob.put("touches", map.touches().stream().map(x -> Map.of(
+                "strike", x.strike().stripTrailingZeros().toPlainString(),
+                "probability", x.probability())).toList());
+        prob.put("basis", map.basis());
+        prob.put("timeBasis", tte.basis());
+        out.put("probabilityMap", prob);
+
+        // EV sensitivity: the same integral at ±20% of the vol input — one falsely precise number
+        // never travels alone.
+        List<Map<String, Object>> sens = new ArrayList<>();
+        for (double scale : new double[]{0.8, 1.0, 1.2}) {
+            sens.add(Map.of("ivScale", scale,
+                    "evCents", curve.expectedValueCents(spot, ivAvg * scale, t, 0)));
+        }
+        out.put("evSensitivity", sens);
+
+        Map<String, Object> exec = new LinkedHashMap<>();
+        exec.put("executableNetCents", executableNet);
+        exec.put("midNetCents", packageMid);
+        if (proposedNet != null) exec.put("proposedNetCents", proposedNet);
+        Long spread = packageSpreadCents(snaps, qty);
+        exec.put("packageSpreadCents", spread);
+        if (spread != null) exec.put("exitSpreadEstimateCents", spread / 2);
+        if (packageMid != null) {
+            long basisNet = proposedNet != null ? proposedNet : executableNet;
+            long concession = packageMid - basisNet;   // dollars surrendered vs midpoint (signed net)
+            exec.put("concessionVsMidCents", concession);
+            if (packageMid != 0) exec.put("concessionPctOfMid", round4((double) concession / Math.abs(packageMid)));
+            if (maxProfit != null && maxProfit > 0) exec.put("concessionPctOfMaxProfit", round4((double) concession / maxProfit));
+            if (maxLoss != null && maxLoss > 0) exec.put("concessionPctOfMaxRisk", round4((double) concession / maxLoss));
+        }
+        out.put("executionQuality", exec);
+
+        out.put("managementPlan", dtePlan(tte, entryNet >= 0));
+        out.put("asOfEpochMs", clock.millis());
+        out.put("freshness", freshness.name());
+
+        // The assembled verdict: worst-triggered tier wins; the reason names the single biggest problem.
+        String verdict = "favorable"; String reason = "Model odds, payoff and execution costs look reasonable together.";
+        double pAny = map.pAnyProfit();
+        Object concessionPct = exec.get("concessionPctOfMid");
+        boolean expensive = concessionPct instanceof Double d && Math.abs(d) > 0.10;
+        long evAfterFees = (ev == null ? 0 : ev) - fees;
+        if (curve.maxLossUnbounded()) {
+            verdict = "unfavorable"; reason = "Risk is UNDEFINED — the stress loss below is a scenario, not a cap.";
+        } else if (ev != null && evAfterFees < 0 && pAny < 0.45) {
+            verdict = "unfavorable";
+            reason = "Negative expected value (" + Money.fmt(evAfterFees) + " after fees) with the odds against it ("
+                    + Math.round(pAny * 100) + "% chance of any profit, " + Math.round(map.pMaxLoss() * 100)
+                    + "% chance of max loss) — the market is charging more than this position is worth by its own odds.";
+        } else if (map.pMaxLoss() > 0.5) {
+            verdict = "unfavorable";
+            reason = "The single most likely outcome is FULL max loss (" + Math.round(map.pMaxLoss() * 100) + "%).";
+        } else if (expensive) {
+            verdict = "mixed";
+            reason = "Execution is expensive: crossing these books surrenders "
+                    + Math.round(Math.abs((Double) concessionPct) * 100) + "% of the package midpoint before the trade even starts.";
+        } else if (tte.sessions() <= 5 && tte.sessions() >= 0 && !shortStrikes.isEmpty()) {
+            verdict = "mixed";
+            reason = "Only " + tte.sessions() + " trading session" + (tte.sessions() == 1 ? "" : "s")
+                    + " remain — gamma and pin risk dominate; the plan matters more than the entry.";
+        } else if (ev != null && evAfterFees < 0) {
+            verdict = "mixed";
+            reason = "Expected value is slightly negative after fees (" + Money.fmt(evAfterFees) + ") at the market's own volatility.";
+        }
+        out.put("verdict", verdict);
+        out.put("verdictReason", reason);
+        return out;
+    }
+
+    /** DTE-aware management plan: a 3-day trade must never be told to 'roll at 21 DTE'. */
+    private static Map<String, Object> dtePlan(TimeToExpiry tte, boolean credit) {
+        List<String> rules = new ArrayList<>();
+        String regime;
+        if (tte.sessions() <= 5) {
+            regime = "near-expiry (" + tte.sessions() + " session" + (tte.sessions() == 1 ? "" : "s") + ")";
+            rules.add("Take profits early — at 50% of the maximum, do not wait for the last dollar");
+            rules.add("If price TOUCHES a short strike, close that side immediately; do not hold and hope");
+            rules.add("Do not carry a short strike that is near the money into the final hour — pin and assignment mechanics take over");
+            if (tte.calendarDays() - tte.sessions() >= 2) {
+                rules.add("A weekend/holiday gap sits inside this trade — the market can reopen through your strikes with no chance to react");
+            }
+            rules.add("Rolling is NOT a plan at this distance — closing is");
+        } else if (tte.sessions() <= 15) {
+            regime = "short-dated (~" + tte.sessions() + " sessions)";
+            rules.add("Take profit at 50% of the maximum" + (credit ? " credit" : ""));
+            rules.add(credit ? "Stop if the loss reaches the credit received (1x) — being wrong fast is information"
+                    : "Stop if the position loses half its cost");
+            rules.add("In the final week, close or roll — do not let a winner decay into a coin flip at expiry");
+        } else {
+            regime = "standard (" + tte.calendarDays() + " days)";
+            rules.add("Take profit at 50% of the maximum" + (credit ? " credit" : ""));
+            rules.add(credit ? "Stop at 2x the credit received" : "Stop at half the debit paid");
+            rules.add("Manage or roll around 21 days to expiration — gamma grows fast after that");
+        }
+        Map<String, Object> plan = new LinkedHashMap<>();
+        plan.put("regime", regime);
+        plan.put("sessions", tte.sessions());
+        plan.put("calendarDays", tte.calendarDays());
+        plan.put("rules", rules);
+        return plan;
     }
 
     // ---- Shared helpers ----
@@ -906,13 +1142,29 @@ public final class TradeService {
                 r -> r.lng("n"), tradeId).getFirst();
     }
 
-    private double yearsToNearestExpiry(List<Leg> legs) {
+    /** Sessions + calendar days + the model time to the nearest expiry, with its basis disclosed. */
+    record TimeToExpiry(int sessions, long calendarDays, double tYears, String basis) {}
+
+    private TimeToExpiry timeToNearestExpiry(List<Leg> legs) {
         LocalDate today = LocalDate.now(clock);
-        return legs.stream().filter(l -> !l.isStock())
-                .mapToLong(l -> ChronoUnit.DAYS.between(today, l.expiration()))
-                .min().stream()
-                .mapToDouble(d -> Math.max(d, 0.5) / 365.0)
-                .findFirst().orElse(0.5 / 365.0);
+        LocalDate nearest = legs.stream().filter(l -> !l.isStock())
+                .map(Leg::expiration).filter(java.util.Objects::nonNull)
+                .min(LocalDate::compareTo).orElse(null);
+        if (nearest == null) return new TimeToExpiry(0, 0, 0.5 / 365.0, "no option legs");
+        long calDays = Math.max(0, ChronoUnit.DAYS.between(today, nearest));
+        int sessions = io.liftandshift.strikebench.market.MarketHours.tradingDaysBetween(today, nearest);
+        // SHORT-DATED positions live in trading sessions, not calendar days: a Friday-sold Monday
+        // expiry has ONE session of price discovery, not three days of diffusion. Longer horizons
+        // keep the calendar convention (weekend variance is real over weeks).
+        double t = calDays <= 14
+                ? Math.max(sessions, 0.5) / 252.0
+                : Math.max(calDays, 0.5) / 365.0;
+        String basis = calDays <= 14 ? sessions + " trading sessions / 252" : calDays + " calendar days / 365";
+        return new TimeToExpiry(sessions, calDays, t, basis);
+    }
+
+    private double yearsToNearestExpiry(List<Leg> legs) {
+        return timeToNearestExpiry(legs).tYears();
     }
 
     private TradeRecord requireStatus(Connection c, String tradeId, String expected) throws SQLException {

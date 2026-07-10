@@ -26,5 +26,6 @@ public record TradePreview(
         long underlyingCents,          // spot used for fills/curve (0 when unavailable)
         Double assignmentProb,         // chance ANY short strike finishes ITM; null if no shorts
         List<Map<String, Object>> legs,    // per-leg fills: action/type/strike/expiration/ratio/fill/bid/ask/mid/iv/greeks/freshness
-        List<Map<String, Object>> payoff   // expiration P/L samples {price, profitCents}; empty for multi-expiration
+        List<Map<String, Object>> payoff,  // expiration P/L samples {price, profitCents}; empty for multi-expiration
+        Map<String, Object> analytics      // probabilityMap / evSensitivity / executionQuality / managementPlan / verdict
 ) {}

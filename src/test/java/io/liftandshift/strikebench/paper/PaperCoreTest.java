@@ -101,6 +101,65 @@ class PaperCoreTest {
         return Leg.option(a, OptionType.CALL, new BigDecimal(strike), EXP, 1, new BigDecimal(prem));
     }
 
+    @org.junit.jupiter.api.Test
+    void proposedNetPriceRepricesTheWholePackage() {
+        Account acct = accounts.getOrCreateDefault();
+        // Executable credit for the 100/95 put spread in the stub book: 3.00 - 1.20 = 1.80/sh = $180.
+        TradePreview atMarket = trades.preview(creditPutSpread(acct.id(), 1));
+        assertThat(atMarket.entryNetPremiumCents()).isEqualTo(180_00);
+        assertThat(atMarket.maxLossCents()).isEqualTo(500_00 - 180_00);
+
+        // The SAME package at YOUR price ($1.60 credit — a worse fill): max loss, breakevens and
+        // the ledgered economics all follow the real number, and the override is disclosed.
+        TradeService.OpenRequest mine = new TradeService.OpenRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+                List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
+                "bullish", "month", "balanced", null, null, 160_00L, 200L, "IMPORT");
+        TradePreview atMine = trades.preview(mine);
+        assertThat(atMine.entryNetPremiumCents()).isEqualTo(160_00);
+        assertThat(atMine.maxLossCents()).isEqualTo(500_00 - 160_00);
+        assertThat(atMine.feesOpenCents()).isEqualTo(200L); // fee override respected
+        assertThat(atMine.warnings()).anySatisfy(w -> assertThat(w).contains("YOUR net price"));
+
+        // The analytics contract every Review consumer shares.
+        assertThat(atMine.analytics()).containsKeys("probabilityMap", "evSensitivity", "executionQuality",
+                "managementPlan", "verdict", "verdictReason");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> prob = (Map<String, Object>) atMine.analytics().get("probabilityMap");
+        assertThat((Double) prob.get("pAnyProfit")).isBetween(0.0, 1.0);
+        assertThat((String) prob.get("basis")).containsIgnoringCase("risk-neutral");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> exec = (Map<String, Object>) atMine.analytics().get("executionQuality");
+        assertThat((Long) exec.get("executableNetCents")).isEqualTo(180_00L);
+        assertThat((Long) exec.get("proposedNetCents")).isEqualTo(160_00L);
+        // Zero-spread stub book: mid == executable, so the concession vs mid is exactly the give-up.
+        assertThat((Long) exec.get("concessionVsMidCents")).isEqualTo(20_00L);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> plan = (Map<String, Object>) atMine.analytics().get("managementPlan");
+        assertThat((java.util.List<String>) plan.get("rules")).isNotEmpty();
+    }
+
+    @org.junit.jupiter.api.Test
+    void nearExpiryPackagesGetTheGammaRegimeNotSilence() {
+        Account acct = accounts.getOrCreateDefault();
+        // Same spread expiring in 3 calendar days (1-2 sessions from the fixed clock 2026-07-08):
+        // the near-expiry tier must fire and the plan must NOT say "roll at 21 DTE".
+        LocalDate soon = LocalDate.of(2026, 7, 10); // Friday, 2 sessions from Wed Jul 8
+        TradeService.OpenRequest shortDte = new TradeService.OpenRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+                List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"), soon, 1, BigDecimal.ZERO),
+                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), soon, 1, BigDecimal.ZERO)),
+                "bullish", "week", "balanced");
+        TradePreview p = trades.preview(shortDte);
+        assertThat(p.warnings()).anySatisfy(w -> assertThat(w).contains("Near-expiry gamma"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> plan = (Map<String, Object>) p.analytics().get("managementPlan");
+        assertThat((String) plan.get("regime")).contains("near-expiry");
+        assertThat(String.join(" ", (java.util.List<String>) plan.get("rules"))).doesNotContain("21 days");
+        // Time basis: sessions/252, disclosed.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
+        assertThat((String) prob.get("timeBasis")).contains("trading sessions");
+    }
+
     private TradeService.OpenRequest creditPutSpread(String accountId, int qty) {
         return new TradeService.OpenRequest(accountId, "AAPL", "CREDIT_PUT_SPREAD", qty,
                 List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
