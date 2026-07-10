@@ -41,7 +41,9 @@ public final class UnderlyingBackfill {
         if (sym.isEmpty()) throw new IllegalArgumentException("symbol is required");
         if (from == null || to == null || from.isAfter(to)) throw new IllegalArgumentException("bad date range");
 
-        CandleSeries series = market.candleSeries(sym, from, to);
+        // Providers ONLY: the stored-first read path would let a partial store answer its own
+        // backfill request (an incomplete history could never grow past itself).
+        CandleSeries series = market.candleSeriesFromProviders(sym, from, to);
         List<Candle> candles = series.candles();
         if (candles.isEmpty()) {
             return new BackfillResult(sym, series.source(), false, 0, from, to,

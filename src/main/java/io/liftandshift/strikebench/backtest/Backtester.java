@@ -291,7 +291,12 @@ public final class Backtester {
                 if (exp == null) continue;
                 chain = p.historicalChain(symbol, date, exp).orElse(null);
                 if (chain != null && !chain.isEmpty()) {
-                    mode = "polygon".equals(chain.source()) ? "HISTORICAL_CHAIN" : "MODELED_FROM_UNDERLYING";
+                    // EVIDENCE decides the tier, not the provider's name: owned CSV/snapshot rows
+                    // (source 'stored', all-observed => EOD) are just as historical as Polygon.
+                    boolean observedChain = chain.freshness() == io.liftandshift.strikebench.model.Freshness.EOD
+                            || chain.freshness() == io.liftandshift.strikebench.model.Freshness.DELAYED
+                            || chain.freshness() == io.liftandshift.strikebench.model.Freshness.REALTIME;
+                    mode = observedChain ? "HISTORICAL_CHAIN" : "MODELED_FROM_UNDERLYING";
                     break;
                 }
                 chain = null;

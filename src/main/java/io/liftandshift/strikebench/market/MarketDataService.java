@@ -140,22 +140,32 @@ public final class MarketDataService {
                     if (stored.isPresent() && !stored.get().candles().isEmpty()) return stored.get();
                 } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol, e.toString()); }
             }
-            for (MarketDataProvider p : providersFor(Domain.CANDLES)) {
-                try {
-                    List<Candle> candles = p.candles(norm(symbol), from, to);
-                    if (candles != null && !candles.isEmpty()) {
-                        recordOk(p.name(), Domain.CANDLES);
-                        Freshness f = "fixture".equals(p.name()) ? Freshness.FIXTURE : Freshness.EOD;
-                        return new CandleSeries(candles, p.name(), f);
-                    }
-                    recordEmpty(p.name(), Domain.CANDLES);
-                } catch (Exception e) {
-                    recordError(p.name(), Domain.CANDLES, e);
-                }
-            }
-            return null;
+            CandleSeries fromProviders = candleSeriesFromProviders(symbol, from, to);
+            return fromProviders.candles().isEmpty() ? null : fromProviders;
         });
         return r == null ? CandleSeries.EMPTY : r;
+    }
+
+    /**
+     * Providers ONLY — never the stored-bars read path. The backfill writer MUST use this: going
+     * through {@link #candleSeries} let an incomplete store answer its own backfill request, so a
+     * partial history could only ever "backfill" the rows it already had.
+     */
+    public CandleSeries candleSeriesFromProviders(String symbol, LocalDate from, LocalDate to) {
+        for (MarketDataProvider p : providersFor(Domain.CANDLES)) {
+            try {
+                List<Candle> candles = p.candles(norm(symbol), from, to);
+                if (candles != null && !candles.isEmpty()) {
+                    recordOk(p.name(), Domain.CANDLES);
+                    Freshness f = "fixture".equals(p.name()) ? Freshness.FIXTURE : Freshness.EOD;
+                    return new CandleSeries(candles, p.name(), f);
+                }
+                recordEmpty(p.name(), Domain.CANDLES);
+            } catch (Exception e) {
+                recordError(p.name(), Domain.CANDLES, e);
+            }
+        }
+        return CandleSeries.EMPTY;
     }
 
     private static final String FIXTURE = "fixture";

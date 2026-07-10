@@ -45,7 +45,8 @@ public final class PortfolioBacktester {
 
     // Per-run state (a fresh instance per request, single-threaded per run).
     private String runSymbol;
-    private boolean usedObserved;
+    private long observedMarks;
+    private long totalMarks;
 
     public PortfolioBacktester(MarketDataService market, AppConfig cfg, Clock clock) {
         this(market, cfg, clock, null);
@@ -91,7 +92,8 @@ public final class PortfolioBacktester {
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         this.runSymbol = symbol;
-        this.usedObserved = false;
+        this.observedMarks = 0;
+        this.totalMarks = 0;
         Family family = Family.parse(req.strategy());
         LocalDate from = LocalDate.parse(req.from());
         LocalDate to = LocalDate.parse(req.to());
@@ -205,8 +207,14 @@ public final class PortfolioBacktester {
                         .mapToDouble(PortfolioTrade::returnOnRisk).average().orElse(0));
         long ending = startingCash + realized;
 
-        String mode = demo ? "PAYOFF_ONLY" : usedObserved ? "OBSERVED_FROM_HISTORY" : "MODELED_FROM_UNDERLYING";
-        String confidence = demo ? "none (demo data)" : usedObserved ? "observed" : "modeled";
+        // OBSERVED means observed: the run earns the historical label only when at least 90% of
+        // leg marks came from real option history — one observed mark must not upgrade the run.
+        boolean mostlyObserved = totalMarks > 0 && observedMarks * 10 >= totalMarks * 9;
+        String mode = demo ? "PAYOFF_ONLY" : mostlyObserved ? "OBSERVED_FROM_HISTORY" : "MODELED_FROM_UNDERLYING";
+        String confidence = demo ? "none (demo data)"
+                : mostlyObserved ? "observed"
+                : observedMarks > 0 ? "modeled (" + (observedMarks * 100 / Math.max(1, totalMarks)) + "% observed marks)"
+                : "modeled";
         return new PortfolioReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                 mode, confidence, window.size(), sample, concurrentPeak, winRate, avgRoR,
                 startingCash, ending, round(maxDd * 100), trades, equity, notes, demo, DISCLAIMER);
@@ -282,7 +290,8 @@ public final class PortfolioBacktester {
         for (Leg l : p.legs) {
             Double observed = db == null ? null : observedMarkDollars(runSymbol, date, p.expiration, l.strike(), l.call());
             double price;
-            if (observed != null) { price = observed; usedObserved = true; }
+            totalMarks++;
+            if (observed != null) { price = observed; observedMarks++; }
             else price = tte <= 0 ? intrinsic(l, spot) : BlackScholes.price(l.call(), spot, l.strike(), tte, R, 0, iv);
             v += (l.shortLeg() ? -1 : 1) * Math.round(price * 10_000) * p.qty; // price$/sh * 100sh * 100¢
         }
@@ -292,8 +301,10 @@ public final class PortfolioBacktester {
     /** The observed per-share mark (mark, else bid/ask midpoint) from option_bar, or null if none. */
     Double observedMarkDollars(String symbol, java.time.LocalDate date, java.time.LocalDate exp, double strike, boolean call) {
         var rows = db.query(
-                "SELECT mark, bid, ask FROM option_bar WHERE symbol=? AND asof=? AND expiration=? AND strike=? "
-              + "AND opt_type=? ORDER BY bid_ask_observed DESC LIMIT 1",
+                // OBSERVED dataset + genuinely observed quotes only: a synthetic/modeled row must
+            // never count as observed pricing (it upgraded whole runs to OBSERVED_FROM_HISTORY).
+            "SELECT mark, bid, ask FROM option_bar WHERE symbol=? AND asof=? AND expiration=? AND strike=? "
+              + "AND opt_type=? AND dataset_id='observed' AND bid_ask_observed=1 LIMIT 1",
                 r -> {
                     Double m = r.dblOrNull("mark");
                     if (m != null) return m;

@@ -27,15 +27,17 @@ public final class DataCoverage {
 
     public List<SymbolCoverage> bySymbol() {
         Map<String, Object[]> u = new LinkedHashMap<>();
-        db.query("SELECT symbol, min(d)::text f, max(d)::text t, count(*) bars, max(observed) obs, "
+        db.query("SELECT symbol, min(d)::text f, max(d)::text t, count(*) bars, min(observed) obs, "
                + "string_agg(DISTINCT source, ',' ORDER BY source) srcs "
-               + "FROM underlying_bar GROUP BY symbol",
+               // Coverage describes the OBSERVED world: synthetic scenario runs must not inflate
+               // it, and 'observed' is true only when EVERY bar is observed (weakest link).
+               + "FROM underlying_bar WHERE dataset_id='observed' GROUP BY symbol",
                 r -> u.put(r.str("symbol"),
                         new Object[]{r.str("f"), r.str("t"), r.lng("bars"), r.lng("obs") == 1, r.str("srcs")}));
         Map<String, Object[]> o = new LinkedHashMap<>();
         db.query("SELECT symbol, min(asof)::text f, max(asof)::text t, count(*) rows, "
-               + "count(DISTINCT asof) days, max(CASE WHEN bid_ask_observed=1 THEN 1 ELSE 0 END) obs "
-               + "FROM option_bar GROUP BY symbol",
+               + "count(DISTINCT asof) days, min(CASE WHEN bid_ask_observed=1 THEN 1 ELSE 0 END) obs "
+               + "FROM option_bar WHERE dataset_id='observed' GROUP BY symbol",
                 r -> o.put(r.str("symbol"),
                         new Object[]{r.str("f"), r.str("t"), r.lng("rows"), r.lng("days"), r.lng("obs") == 1}));
 

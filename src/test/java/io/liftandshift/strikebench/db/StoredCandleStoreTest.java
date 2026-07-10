@@ -62,9 +62,36 @@ class StoredCandleStoreTest {
                 "AAPL", LocalDate.parse("2026-04-02"), new java.math.BigDecimal("252.00"), "yahoo");
         MarketDataService reader = new MarketDataService(List.<MarketDataProvider>of(),
                 List.<NewsFilingsProvider>of(), List.<RatesProvider>of(), new StoredCandleStore(db));
-        CandleSeries s = reader.candleSeries("AAPL", from, to);
+        // The store answers only for the range it actually COVERS.
+        CandleSeries s = reader.candleSeries("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-04-02"));
         assertThat(s.candles()).hasSize(2);
         assertThat(s.freshness()).isEqualTo(Freshness.EOD); // observed real history
+    }
+
+    @Test
+    void partialCoverageFallsThroughToProviders() {
+        db = TestDb.fresh();
+        // Two stray rows must NOT satisfy a month-long request (that silenced the provider chain
+        // and let an incomplete store 'backfill' only itself forever).
+        db.exec("INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,1)",
+                "AAPL", LocalDate.parse("2026-04-01"), new java.math.BigDecimal("250.00"), "yahoo");
+        db.exec("INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,1)",
+                "AAPL", LocalDate.parse("2026-04-02"), new java.math.BigDecimal("252.00"), "yahoo");
+        var store = new StoredCandleStore(db);
+        assertThat(store.candles("AAPL", LocalDate.parse("2026-03-01"), LocalDate.parse("2026-04-30"))).isEmpty();
+    }
+
+    @Test
+    void mixedObservedAndDemoRowsAreWeakestLinkFixture() {
+        db = TestDb.fresh();
+        // One real bar must never launder a fabricated neighbor into an EOD series.
+        db.exec("INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,1)",
+                "AAPL", LocalDate.parse("2026-04-01"), new java.math.BigDecimal("250.00"), "yahoo");
+        db.exec("INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,0)",
+                "AAPL", LocalDate.parse("2026-04-02"), new java.math.BigDecimal("252.00"), "fixture");
+        var store = new StoredCandleStore(db);
+        var s = store.candles("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-04-02")).orElseThrow();
+        assertThat(s.freshness()).isEqualTo(Freshness.FIXTURE); // worst-of, never best-of
     }
 
     @Test

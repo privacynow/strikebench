@@ -49,11 +49,11 @@ public final class StoredCandleStore implements CandleStore {
                 sym, dataset, from, to);
         if (rows.size() < 2) return Optional.empty(); // not enough to be useful; fall through to providers
 
-        boolean anyObserved = false;
         List<Candle> candles = new java.util.ArrayList<>(rows.size());
+        boolean allObserved = true;
         for (Row r : rows) {
             if (r.close == null) continue;
-            anyObserved |= r.observed;
+            allObserved &= r.observed;
             candles.add(new Candle(r.d,
                     r.open == null ? r.close : r.open,
                     r.high == null ? r.close : r.high,
@@ -61,10 +61,31 @@ public final class StoredCandleStore implements CandleStore {
                     r.close, r.volume, false));
         }
         if (candles.size() < 2) return Optional.empty();
+
         boolean synthetic = !DatasetService.OBSERVED.equals(dataset);
-        return Optional.of(new CandleSeries(candles,
-                synthetic ? "synthetic" : "stored",
-                synthetic ? Freshness.MODELED : (anyObserved ? Freshness.EOD : Freshness.FIXTURE)));
+        if (synthetic) {
+            // Scenario mode: the dataset IS the analysis world — serve whatever it holds, MODELED.
+            return Optional.of(new CandleSeries(candles, "synthetic", Freshness.MODELED));
+        }
+        // Observed dataset: the store satisfies the request ONLY when it actually COVERS the
+        // requested range — two stray rows must never silence the provider chain on a five-year
+        // ask (and, via the backfill path, freeze an incomplete store forever).
+        if (!coversRange(candles, from, to)) return Optional.empty();
+        // Weakest-link evidence: a series containing ANY demo bar is labeled FIXTURE, never EOD —
+        // one real row must not launder fabricated neighbors.
+        return Optional.of(new CandleSeries(candles, "stored", allObserved ? Freshness.EOD : Freshness.FIXTURE));
+    }
+
+    /** Head within a week of `from`, tail within a week of `to`, and ≥60% of expected trading days. */
+    private static boolean coversRange(List<Candle> candles, LocalDate from, LocalDate to) {
+        LocalDate first = candles.getFirst().date(), last = candles.getLast().date();
+        if (first.isAfter(from.plusDays(7)) || last.isBefore(to.minusDays(7))) return false;
+        long weekdays = 0;
+        for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
+            java.time.DayOfWeek w = d.getDayOfWeek();
+            if (w != java.time.DayOfWeek.SATURDAY && w != java.time.DayOfWeek.SUNDAY) weekdays++;
+        }
+        return candles.size() >= Math.max(2, Math.round(weekdays * 0.6));
     }
 
     private record Row(LocalDate d, java.math.BigDecimal open, java.math.BigDecimal high,
