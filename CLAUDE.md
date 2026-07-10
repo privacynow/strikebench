@@ -1376,6 +1376,83 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     midpoint mapped through getScreenCTM; a bbox-center force-click misses squiggles).
   - Matrix: 344 JUnit + 47 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
   ===============================================================================================
+- CP PROGRAM COMPLETE (2026-07-10, commits dcd4c7b..CP-12; branch, NOT deployed): the full
+  completion plan (MU-trade lessons + junior's plan + my additions, reconciled over 3 iterations)
+  EXECUTED END TO END. One invariant everywhere: no new surfaces, no duplicate builders, no
+  free-form text — ONE evaluation pipeline upgraded for every strategy, both levels.
+  - CP-1 CONTRACTS+ISOLATION: db/AnalysisContext (explicit, immutable; ThreadLocal DELETED —
+    vthread fan-outs capture the param; settle/marks/backfill/recommendations ALWAYS observed —
+    fixed a real leak where a synthetic-active user's settle read synthetic closes); legacy
+    dataset fallback local-only; OpenRequest IS the OrderPackage (+proposedNetCents/
+    feesOverrideCents/source, compat ctors); PMCC template; 5-surface anti-drift; keyword
+    warning relabeled event-like-news. GOTCHA: Jackson + record + multiple ctors can bind a
+    SHORTER ctor silently dropping new fields — @JsonCreator the canonical AND check wire DTO
+    adapters (TradeOpenRequest→toOpenRequest dropped the fields; curl-verified).
+  - CP-2 ENGINE CORRECTNESS: sim work = paths×(steps+1)×LEGS (40M cap, compare sums legs);
+    uniform sim-leg validation; dup calibrateVol removed; MarketHours NYSE calendar 2020-35
+    (computus + observed shifts; isTradingDay/tradingDaysBetween — Fri→Mon = 1 session, pinned);
+    PortfolioBacktester strikes snap to LISTED contracts w/ modeled-substitution counting.
+  - CP-3 EVALUATION MATH (the core): pricing/ProbabilityMap — numeric lognormal integration vs
+    the exact PayoffCurve: P(any/max profit), P(max loss), P(partial), CVaR95, ±20%/2σ stress
+    (the honest number when max loss is undefined), touch odds; basis ALWAYS disclosed
+    ('the options market's own odds, not a forecast'); trading-day T ≤14d (sessions/252);
+    near-expiry regime warnings (≤5 sessions + weekend gap + pin-inside-1-session-EM);
+    proposedNet reprices the WHOLE package (max loss/breakevens/POP/EV follow YOUR price,
+    optimistic-vs-mid warned); execution quality aggregated (mid/executable/proposed, package
+    spread, exit estimate, concession $ + % of mid/maxP/maxR); DTE-aware ManagementPlanner
+    (near-expiry: close-never-roll/touch-triggers/final-hour; ≤15 sessions; standard 21-DTE);
+    server-assembled verdict favorable/mixed/unfavorable + biggest-risk sentence. All via
+    TradeService.computePlan → TradePreview.analytics (one map field; blocked cliffs included).
+    MU map pinned: ~34%/~14%/~53% reproduce the hand-verified incident numbers.
+  - CP-4 DECISIONPOLICY: ScoreComposer = THE policy; +EV component (0.20, heaviest — POP & RR
+    separately let the MU shape double-dip), executable-credit gate (negative-credit 'credit'
+    structures gate out: 'book too wide to earn a credit'), tail haircut 35%, gamma/DTE mult
+    (×0.8 ≤3d, ×0.9 ≤7d); weights .15/.15/.20/.10/.10/.15/.15; negativeEv flag on decision-
+    ranked candidates; /api/evaluate returns CASH + BUY_AND_HOLD baselines.
+  - CP-5 FORCEFUL REVIEW: views.verdictPanel — conclusion-first banner + probability map stats
+    (beginner sentences / expert dense) + execution ladder + DTE plan + quote-age line;
+    ACKNOWLEDGMENT GATE (negative EV / >10% concession / near-expiry) before Continue; expert
+    'Evaluate at your price' (net+fees re-preview); EM band on payoff charts (domain-aware);
+    builder panel verdict line + prob chips. DOM suites check ack boxes like users.
+  - CP-6 ACCOUNT TRUTH: paper/AccountRiskContext (NLV/cashBP/marginBP/maintenance/riskCapital,
+    self-declared, per-user settings JSON; GET/PUT /api/account/risk-context; Portfolio Account
+    card both levels); preview.accountFit % of each denominator + over-risk-capital warning
+    (the 6.5%-of-real-cash MU lesson); /api/portfolio/heat (total worst case, short-vol count,
+    concentration, assignment cash, post-assignment BP) + Book-heat strip; ATOMIC account mark
+    snapshot (one pass, 10s memo) shared by summary+greeks; closes invalidate.
+  - CP-7 EVENT MODEL: market/EventService — next-earnings ESTIMATED from EDGAR 10-Q/10-K
+    cadence (median gap 60-120d, forward-dated, confirmed=false, honest empty when <2 reports);
+    guardrail earnings warning is CALENDAR-based w/ date+basis; keyword hits a separate labeled
+    advisory; research payload earningsEstimate + exDividend{available:false}; comingUp chip
+    'Earnings ~date ±7d'; Cboe payloads parse the feed's OWN timestamp (asOf = source stamp).
+  - CP-8 RIGOR: RiskProfile +evPhysicalCents/evBasisNote (same integral at REALIZED vol — the
+    VRP made visible, two lanes never blended); compare returns CASH baseline + fairness
+    contract; split-half renamed 'consistency check … not out-of-sample' everywhere.
+  - CP-9 LEARNING LOOP: V9 trades.origin; createExternal (real fill via proposedNetCents,
+    validated against live listed contracts, ZERO ledger/cash/reserve — pinned); external
+    unwind/settle write outcome to the trade row only; EXCLUDED from openPositionsValue
+    (money identity) but marked/judged identically; POST /api/trades/external; Portfolio
+    'Record a real trade' structured form + EXTERNAL badges. E*TRADE populates the same
+    OrderPackage when keys arrive.
+  - CP-10 PERFORMANCE: MarketDataEngine refresh pool = PriorityBlockingQueue executor
+    (interactive 0 > screen 1 > job 2 > warm 3, FIFO within class; singleflight kept; advisory
+    yield kept as queue brake); throttle honors XFF only from loopback/TRUSTED_PROXY=true;
+    Trade sector rail shows the persisted selection on cold render (fetches /api/universe).
+  - CP-11 SWEEP: keyboard strike handles (role=slider, arrows step listed strikes, Enter
+    commits); backtest prefill = family+DTE from the working idea; Cboe _SPX/_NDX/_VIX/… index
+    roots; mid()-is-last-trade → display mark labeled STALE (fills unaffected); /history
+    labeling verified already-done.
+  - CP-12 GATE: golden regression portfolio in PaperCoreTest — MU-geometry condor (judged at
+    the user's fill: map+regime+no-invented-earnings+exec+verdict), long straddle (uncapped map
+    coherence), per-family analytics contract (spread/long-call/CSP), external lifecycle,
+    repricing, near-expiry regime + all prior pins.
+  - FINAL MATRIX: 359 JUnit + 48 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
+  - USER-DEPENDENCY LANE (blocked on the user, NOT deferred): auth-on (Google OIDC client
+    secret) · prod cutover (EC2 session: merge→ETL→migration rehearsal→backup-RESTORE drill→
+    deploy; strikebench.com still runs pre-research-platform main) · Polygon/AV key (observed
+    candles) · licensed options CSV (observed option evidence) · E*TRADE keys (sandbox e2e +
+    automated fill sync).
+  ===============================================================================================
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

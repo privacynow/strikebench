@@ -192,6 +192,89 @@ class PaperCoreTest {
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore);
     }
 
+    // ==================== GOLDEN REGRESSION PORTFOLIO (the release gate) ====================
+    // Every package below must produce a CONSISTENT verdict through the one evaluation pipeline:
+    // full probability map, execution quality, a DTE-appropriate plan, and either a coherent
+    // judgment or a specifically asserted refusal. The MU-geometry condor is row one — the trade
+    // that motivated the program — never the organizing principle.
+
+    @org.junit.jupiter.api.Test
+    void golden_muGeometryCondor_shortDteTightShortsFatCredit() {
+        Account acct = accounts.getOrCreateDefault();
+        // Near-expiry world: shorts AT the money, wings a step out, expiring in 2 sessions
+        // (Fri 2026-07-10 from the fixed Wed 2026-07-08 clock).
+        LocalDate soon = LocalDate.of(2026, 7, 10);
+        java.util.function.BiFunction<LegAction, String, Leg> putL = (a, k) ->
+                Leg.option(a, OptionType.PUT, new BigDecimal(k), soon, 1, BigDecimal.ZERO);
+        java.util.function.BiFunction<LegAction, String, Leg> callL = (a, k) ->
+                Leg.option(a, OptionType.CALL, new BigDecimal(k), soon, 1, BigDecimal.ZERO);
+        // The user's ACTUAL fill: slightly below the stub executable, with real fees.
+        TradeService.OpenRequest condor = new TradeService.OpenRequest(acct.id(), "AAPL", "IRON_BUTTERFLY", 1,
+                List.of(putL.apply(LegAction.SELL, "100"), putL.apply(LegAction.BUY, "95"),
+                        callL.apply(LegAction.SELL, "100"), callL.apply(LegAction.BUY, "105")),
+                "neutral", "week", "balanced", null, null, 330_00L, 200L, "IMPORT");
+        TradePreview p = trades.preview(condor);
+        assertThat(p.ok()).isTrue();
+        assertThat(p.entryNetPremiumCents()).isEqualTo(330_00); // judged at MY price
+        // The full map, present and coherent: ATM shorts at 2 sessions = max loss is a REAL risk.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
+        assertThat((Double) prob.get("pMaxLoss")).isGreaterThan(0.0);
+        assertThat((Double) prob.get("pAnyProfit")).isBetween(0.01, 0.99);
+        assertThat((String) prob.get("timeBasis")).contains("trading sessions");
+        // Near-expiry regime: gamma warning + a plan that NEVER says roll-at-21-DTE.
+        assertThat(p.warnings()).anySatisfy(w -> assertThat(w).contains("Near-expiry gamma"));
+        assertThat(p.warnings()).anySatisfy(w -> assertThat(w).contains("Pin/assignment risk"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> plan = (Map<String, Object>) p.analytics().get("managementPlan");
+        assertThat(String.join(" ", (List<String>) plan.get("rules"))).doesNotContain("21 days");
+        // NO invented earnings: the stub world has no filings, so no calendar estimate may fire.
+        assertThat(p.warnings()).noneSatisfy(w -> assertThat(w).contains("Earnings ESTIMATED"));
+        // Execution quality is aggregated and the verdict is assembled.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> exec = (Map<String, Object>) p.analytics().get("executionQuality");
+        assertThat(exec).containsKeys("executableNetCents", "midNetCents", "proposedNetCents");
+        assertThat((String) p.analytics().get("verdict")).isIn("favorable", "mixed", "unfavorable");
+        assertThat((String) p.analytics().get("verdictReason")).isNotBlank();
+    }
+
+    @org.junit.jupiter.api.Test
+    void golden_longStraddle_uncappedMapStaysCoherent() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeService.OpenRequest straddle = new TradeService.OpenRequest(acct.id(), "AAPL", "LONG_STRADDLE", 1,
+                List.of(put(LegAction.BUY, "100", "0"),
+                        Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), EXP, 1, BigDecimal.ZERO)),
+                "volatile", "month", "balanced");
+        TradePreview p = trades.preview(straddle);
+        assertThat(p.ok()).isTrue();
+        assertThat(p.maxProfitCents()).isNull(); // uncapped upside
+        @SuppressWarnings("unchecked")
+        Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
+        // Uncapped structures never register a max-profit plateau; max loss (the debit) is real.
+        assertThat((Double) prob.get("pMaxProfit")).isZero();
+        assertThat((Double) prob.get("pMaxLoss")).isGreaterThan(0.0);
+        assertThat((Long) prob.get("cvar95Cents")).isLessThan(0);
+    }
+
+    @org.junit.jupiter.api.Test
+    void golden_perFamilyAnalyticsContract() {
+        // Every family the harness can build must carry the SAME analytics contract.
+        Account acct = accounts.getOrCreateDefault();
+        List<TradeService.OpenRequest> packages = List.of(
+                creditPutSpread(acct.id(), 1),
+                new TradeService.OpenRequest(acct.id(), "AAPL", "LONG_CALL", 1,
+                        List.of(Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), EXP, 1, BigDecimal.ZERO)),
+                        "bullish", "month", "balanced"),
+                new TradeService.OpenRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
+                        List.of(put(LegAction.SELL, "95", "0")), "neutral", "month", "balanced"));
+        for (TradeService.OpenRequest req : packages) {
+            TradePreview p = trades.preview(req);
+            assertThat(p.ok()).as(req.strategy()).isTrue();
+            assertThat(p.analytics()).as(req.strategy())
+                    .containsKeys("probabilityMap", "evSensitivity", "executionQuality", "managementPlan", "verdict");
+        }
+    }
+
     private TradeService.OpenRequest creditPutSpread(String accountId, int qty) {
         return new TradeService.OpenRequest(accountId, "AAPL", "CREDIT_PUT_SPREAD", qty,
                 List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
