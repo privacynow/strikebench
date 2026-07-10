@@ -3463,6 +3463,17 @@
     // A candidate card's "Backtest this" lands here with the form pre-answered.
     var prefill = App.state.backtestPrefill || {};
     App.state.backtestPrefill = null;
+    // The WORKING IDEA prefills the whole form, not just the symbol: family from the candidate,
+    // target DTE from its legs' actual expiration — verify the trade you are about to place.
+    if (!prefill.strategy && App.state.ticket && App.state.ticket.candidate) {
+      var wt = App.state.ticket;
+      prefill.symbol = prefill.symbol || wt.symbol;
+      prefill.strategy = wt.candidate.strategy;
+      try {
+        var wexp = (wt.legs || []).map(function (l) { return l.expiration; }).filter(Boolean).sort()[0];
+        if (wexp) prefill.dte = Math.max(1, Math.round((new Date(wexp + 'T16:00:00') - Date.now()) / 86400000));
+      } catch (e) { /* dte stays default */ }
+    }
     // Persist the form per the state-ownership convention: symbol/strategy/window/dte survive nav
     // and level switches instead of resetting to defaults. Prefill (an explicit ask) wins over it.
     var bf = App.state.backtestForm = App.state.backtestForm || {};
@@ -3540,7 +3551,7 @@
     var fromDefault = new Date(today.getTime() - 182 * 86400000).toISOString().slice(0, 10);
     var from = el('input', { type: 'date', id: 'bt-from', value: bf.from || fromDefault });
     var to = el('input', { type: 'date', id: 'bt-to', value: bf.to || toDefault });
-    var dte = el('input', { type: 'number', id: 'bt-dte', value: bf.dte || '30', min: '1', max: '365' });
+    var dte = el('input', { type: 'number', id: 'bt-dte', value: prefill.dte || bf.dte || '30', min: '1', max: '365' });
     from.addEventListener('change', function () { bf.from = from.value; });
     to.addEventListener('change', function () { bf.to = to.value; });
     dte.addEventListener('change', function () { bf.dte = dte.value; });

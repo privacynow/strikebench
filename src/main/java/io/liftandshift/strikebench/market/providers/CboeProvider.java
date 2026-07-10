@@ -241,8 +241,13 @@ public final class CboeProvider implements MarketDataProvider {
         return cached == null ? null : cached.orElse(null);
     }
 
+    /** Cboe serves index option chains under underscore roots (SPX -> _SPX etc.). */
+    private static final java.util.Set<String> INDEX_ROOTS = java.util.Set.of(
+            "SPX", "XSP", "NDX", "VIX", "RUT", "DJX", "OEX", "XEO");
+
     private Optional<CachedPayload> fetchDataUncached(String symbol) {
-        String url = baseUrl + "/api/global/delayed_quotes/options/" + symbol + ".json";
+        String cboeSymbol = INDEX_ROOTS.contains(symbol) ? "_" + symbol : symbol;
+        String url = baseUrl + "/api/global/delayed_quotes/options/" + cboeSymbol + ".json";
         String body;
         boolean acquired = false;
         try {

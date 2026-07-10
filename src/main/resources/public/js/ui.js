@@ -628,7 +628,9 @@
       // mash the labels), and its label rides BESIDE the grip, flipping near the right edge.
       var gy = padT + 10 + (hi % 4) * 22;
       var lineEl = svgEl('line', { class: 'strike-line', x1: hx, y1: padT, x2: hx, y2: H - padB });
-      var grip = svgEl('circle', { class: 'strike-grip', cx: hx, cy: gy, r: 8, 'data-handle': h.id });
+      var grip = svgEl('circle', { class: 'strike-grip', cx: hx, cy: gy, r: 8, 'data-handle': h.id,
+        tabindex: '0', role: 'slider', 'aria-label': h.label,
+        'aria-valuenow': String(cur), 'aria-valuetext': h.label });
       var lbl = svgEl('text', { class: 'strike-grip-label', y: gy + 4 });
       function placeLabel(nx, text) {
         var flip = nx > W - 130;
@@ -673,6 +675,24 @@
       grip.addEventListener('pointercancel', function () {
         grip.classList.remove('dragging');
         snapped = cur; moveTo(cur);
+      });
+      // Keyboard operation: arrow keys step to the neighboring listed strike (within the
+      // visible domain), Enter/Space commits — the drag interaction, without a pointer.
+      grip.addEventListener('keydown', function (ev) {
+        if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight' && ev.key !== 'Enter' && ev.key !== ' ') return;
+        ev.preventDefault();
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          if (snapped !== cur && h.onChange) h.onChange(snapped);
+          return;
+        }
+        var inDomain = h.strikes.filter(function (k) { return k >= xMin && k <= xMax; }).sort(function (a, b) { return a - b; });
+        var idx = inDomain.indexOf(snapped);
+        if (idx < 0) idx = inDomain.indexOf(cur);
+        var next = ev.key === 'ArrowLeft' ? inDomain[Math.max(0, idx - 1)] : inDomain[Math.min(inDomain.length - 1, idx + 1)];
+        if (next !== undefined && next !== snapped) {
+          snapped = next; moveTo(next);
+          grip.setAttribute('aria-valuenow', String(next));
+        }
       });
     });
 

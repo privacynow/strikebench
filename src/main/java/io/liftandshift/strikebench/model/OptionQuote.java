@@ -39,6 +39,12 @@ public record OptionQuote(
         return null;
     }
 
+    /** True when mid() is standing in the LAST TRADE (no two-sided book) — possibly hours old. */
+    public boolean midIsLastTradeFallback() {
+        boolean twoSided = bid != null && ask != null && ask.signum() > 0 && bid.signum() >= 0 && ask.compareTo(bid) >= 0;
+        return !twoSided && last != null && last.signum() > 0;
+    }
+
     /** Bid-ask spread as a fraction of mid (liquidity quality). NaN when unpriceable. */
     public double spreadPct() {
         BigDecimal m = mid();

@@ -40,7 +40,14 @@ public final class MarketDataMarks implements MarksSource {
         return market.chain(symbol, leg.expiration())
                 .flatMap(chain -> chain.find(leg.type(), leg.strike())
                         .filter(OptionQuote::hasMark)
-                        .map(q -> new LegMark(q.bid(), q.ask(), q.mid(), q.iv(), q.freshness(),
+                        // A mid standing in the LAST TRADE (no two-sided book) may be hours old:
+                        // the display mark is labeled STALE so it can never read as a live price.
+                        // Fills are unaffected — they use the executable sides, which don't exist here.
+                        .map(q -> new LegMark(q.bid(), q.ask(), q.mid(), q.iv(),
+                                q.midIsLastTradeFallback()
+                                        ? io.liftandshift.strikebench.model.Freshness.worse(q.freshness(),
+                                                io.liftandshift.strikebench.model.Freshness.STALE)
+                                        : q.freshness(),
                                 q.delta(), q.gamma(), q.theta(), q.vega())));
     }
 
