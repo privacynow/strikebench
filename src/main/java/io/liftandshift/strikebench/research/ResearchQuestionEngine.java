@@ -157,6 +157,8 @@ public final class ResearchQuestionEngine {
         double[] ci = bootstrapMeanCi(condFwd, symbol.hashCode() ^ key.hashCode(), 1); // events are independent
         if (mergedFirings > 0) notes.add("Back-to-back firings inside one hold window count as ONE event ("
                 + mergedFirings + " merged) — the " + conditioned.sample() + " events are non-overlapping.");
+        if (forward > 1) notes.add("The baseline's windows still overlap by the hold length, so its effective "
+                + "sample is deflated (÷" + forward + ") in the significance test — a conservative dependence correction.");
         // EFFECT SIZE (Cohen's d vs the baseline spread): a "significant" edge that is a tiny fraction
         // of normal day-to-day noise is not tradable — say so with a number.
         Double effectSize = effectSize(condFwd, baseFwd);
@@ -171,13 +173,13 @@ public final class ResearchQuestionEngine {
         if (conditioned.sample() < MIN_SAMPLE) {
             verdict = "Too few signals (" + conditioned.sample() + ") to conclude — widen the window or relax the condition.";
         } else if (significant && winEdge > 0) {
-            verdict = "Supported — after this signal, " + symbol + " was positive " + pct(conditioned.winRatePct())
+            verdict = "Supported (95%, two-sided, dependence-corrected) — after this signal, " + symbol + " was positive " + pct(conditioned.winRatePct())
                     + " of the time over " + forward + " days, vs " + pct(baseline.winRatePct())
                     + " normally (mean " + signed(conditioned.meanReturnPct()) + " vs " + signed(baseline.meanReturnPct()) + ")."
                     + ("held".equals(holdout) ? " The edge was consistent across both halves of the window (an in-sample check, not out-of-sample validation)."
                        : "faded".equals(holdout) ? " CAUTION: the edge lived in only one half of the window \u2014 possibly one regime's story." : "");
         } else if (significant && winEdge < 0) {
-            verdict = "Rejected — the signal preceded WORSE outcomes than normal (" + pct(conditioned.winRatePct())
+            verdict = "Rejected (95%, two-sided, dependence-corrected) — the signal preceded WORSE outcomes than normal (" + pct(conditioned.winRatePct())
                     + " positive vs " + pct(baseline.winRatePct()) + "). Fading it may make more sense than following it.";
         } else {
             verdict = "No clear edge — outcomes after the signal look like " + symbol + "'s normal behavior ("

@@ -775,8 +775,8 @@
         var rsch = await API.get('/api/research/' + symbol).catch(function () { return null; });
         var ee = rsch && rsch.earningsEstimate;
         if (ee && ee.date) {
-          body.appendChild(chip('Earnings ~', ee.date + ' \u00b1' + ee.windowDays + 'd',
-            (ee.confirmed ? 'Confirmed date.' : 'ESTIMATED from ' + ee.basis + ' \u2014 not a confirmed date.')));
+          body.appendChild(chip(ee.confirmed ? 'Earnings' : 'Earnings (est.)', '~' + ee.date + ' \u00b1' + ee.windowDays + 'd',
+            (ee.confirmed ? 'Confirmed date.' : 'ESTIMATED from ' + ee.basis + ' \u2014 not a confirmed calendar date.')));
           had = true;
         }
       } catch (e) { /* estimate is additive */ }

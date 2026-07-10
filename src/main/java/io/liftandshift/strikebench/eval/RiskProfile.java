@@ -16,7 +16,7 @@ public record RiskProfile(
         long tailLossCents,           // loss under the stress move (>= 0)
         double tailMovePct,           // the stress move used for tailLoss, e.g. 0.20 for -20%/+20%
         List<Scenario> scenarios,     // ordered by underlyingMovePct ascending
-        Long evPhysicalCents,         // EV at REALIZED vol (physical-vol lane, zero drift); null w/o history
+        Long evHistVolCents,         // EV at REALIZED vol, zero drift — a HISTORICAL-VOL SCENARIO, not the physical measure; null w/o history
         String evBasisNote            // the two lanes, spelled out — never one falsely precise number
 ) {
     public RiskProfile {
