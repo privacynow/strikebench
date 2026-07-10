@@ -50,7 +50,9 @@ public final class YahooFinanceProvider implements MarketDataProvider {
     public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
         long p1 = from.atStartOfDay(ZoneOffset.UTC).toEpochSecond();
         long p2 = to.plusDays(1).atStartOfDay(ZoneOffset.UTC).toEpochSecond();
-        String url = baseUrl + "/v8/finance/chart/" + symbol.trim().toUpperCase(Locale.ROOT)
+        // URL-encode the symbol so index/class tickers (^GSPC, BRK-B) reach the right path segment.
+        String enc = java.net.URLEncoder.encode(symbol.trim().toUpperCase(Locale.ROOT), java.nio.charset.StandardCharsets.UTF_8);
+        String url = baseUrl + "/v8/finance/chart/" + enc
                 + "?period1=" + p1 + "&period2=" + p2 + "&interval=1d&events=div%2Csplit";
         // A browser-like User-Agent avoids the occasional bot interstitial; still a plain GET.
         String body = http.get(url, Map.of("User-Agent",

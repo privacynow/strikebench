@@ -517,17 +517,29 @@ public final class ApiServer {
             String email = db.query("SELECT email FROM users WHERE id=?", r -> r.str("email"), uid)
                     .stream().findFirst().orElse(null);
             if (email == null) return false;
-            java.util.List<String> admins = cfg.authAdminEmails();
-            if (admins.isEmpty()) admins = cfg.authAllowedEmails();
-            return admins.isEmpty() || admins.contains(email.toLowerCase(Locale.ROOT));
+            // FAIL CLOSED: admin requires an EXPLICIT AUTH_ADMIN_EMAILS entry. We do NOT fall back to
+            // the entry allowlist (with the default "any verified Google account" that would make every
+            // signed-in user an admin for destructive ops).
+            return cfg.authAdminEmails().contains(email.toLowerCase(Locale.ROOT));
         }
         String token = cfg.adminToken();
         if (!token.isBlank()) return token.equals(ctx.header("X-Admin-Token"));
         return isLocalRequest(ctx);
     }
 
+    /**
+     * A genuinely local request: no proxy headers (blocks anything behind the nginx TLS proxy, which
+     * sets X-Forwarded-*) AND a loopback client IP. LAN/self-host access via a non-loopback IP must set
+     * ADMIN_TOKEN — a deliberate fail-closed default for destructive ops.
+     */
     private static boolean isLocalRequest(Context ctx) {
-        return blank(ctx.header("X-Forwarded-For")) && blank(ctx.header("X-Forwarded-Proto")) && blank(ctx.header("X-Real-IP"));
+        if (!(blank(ctx.header("X-Forwarded-For")) && blank(ctx.header("X-Forwarded-Proto")) && blank(ctx.header("X-Real-IP")))) {
+            return false;
+        }
+        try {
+            String ip = ctx.ip();
+            return ip != null && java.net.InetAddress.getByName(ip).isLoopbackAddress(); // 127.*, ::1, ::ffff:127.0.0.1
+        } catch (Exception e) { return false; }
     }
 
     private static boolean blank(String s) { return s == null || s.isBlank(); }
@@ -692,7 +704,7 @@ public final class ApiServer {
         Map<String, Object> out = new LinkedHashMap<>();
         try { out.put("engine", marketEngine.status()); } catch (Exception e) { out.put("engine", null); }
         try { out.put("coverage", dataCoverage.summary()); } catch (Exception e) { out.put("coverage", null); }
-        try { out.put("jobs", dataJobs.recent(8)); } catch (Exception e) { out.put("jobs", List.of()); }
+        try { out.put("jobs", dataJobs.recent(ownerId(ctx), isAdmin(ctx), 8)); } catch (Exception e) { out.put("jobs", List.of()); }
         out.put("fixturesOnly", cfg.fixturesOnly());
         out.put("marketOpen", io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()));
         out.put("jobKinds", io.liftandshift.strikebench.db.DataJobService.KINDS);
@@ -734,10 +746,19 @@ public final class ApiServer {
         return m;
     }
 
-    private void dataJobsList(Context ctx) { ctx.json(Map.of("jobs", dataJobs.recent(30))); }
+    private void dataJobsList(Context ctx) { ctx.json(Map.of("jobs", dataJobs.recent(ownerId(ctx), isAdmin(ctx), 30))); }
+
+    /** Admin, or the job's owner (null==null for the local/anonymous case). Otherwise 404 (no leak). */
+    private void requireJobAccess(Context ctx, String jobId) {
+        if (isAdmin(ctx)) return;
+        if (java.util.Objects.equals(dataJobs.ownerOf(jobId), ownerId(ctx))) return;
+        throw new java.util.NoSuchElementException("no such job");
+    }
 
     private void dataJobGet(Context ctx) {
-        var v = dataJobs.get(ctx.pathParam("id"));
+        String id = ctx.pathParam("id");
+        requireJobAccess(ctx, id);
+        var v = dataJobs.get(id);
         if (v.job() == null) throw new java.util.NoSuchElementException("no such job");
         ctx.json(Map.of("job", v.job(), "items", v.items()));
     }
@@ -752,12 +773,18 @@ public final class ApiServer {
     }
 
     private void dataJobCancel(Context ctx) {
-        dataJobs.cancel(ctx.pathParam("id"));
+        String id = ctx.pathParam("id");
+        requireJobAccess(ctx, id);
+        dataJobs.cancel(id);
         ctx.json(Map.of("ok", true));
     }
 
     private void dataJobRetry(Context ctx) {
-        ctx.json(dataJobs.retry(ctx.pathParam("id"), ownerId(ctx)));
+        String id = ctx.pathParam("id");
+        requireJobAccess(ctx, id);
+        // Re-running a privileged CSV import is itself privileged, even for the job's owner.
+        if ("import_options_csv".equalsIgnoreCase(dataJobs.kindOf(id))) requireAdmin(ctx);
+        ctx.json(dataJobs.retry(id, ownerId(ctx)));
     }
 
     public record DataResetRequest(String tier, Boolean confirm) {}

@@ -133,6 +133,32 @@ public final class DataJobService {
         return new JobView((DataJob) head.getFirst()[0], items, (String) head.getFirst()[1]);
     }
 
+    /** The owner user_id of a job (null = local/anonymous), or null if the job doesn't exist. */
+    public String ownerOf(String jobId) {
+        return db.query("SELECT user_id FROM data_job WHERE id=?", r -> r.str("user_id"), jobId)
+                .stream().findFirst().orElse(null);
+    }
+
+    /** The job kind, or null if it doesn't exist (used to re-gate a privileged retry). */
+    public String kindOf(String jobId) {
+        return db.query("SELECT kind FROM data_job WHERE id=?", r -> r.str("kind"), jobId)
+                .stream().findFirst().orElse(null);
+    }
+
+    /** Recent jobs scoped to the caller unless {@code all} (admin). Null-safe on user_id. */
+    public List<DataJob> recent(String userId, boolean all, int limit) {
+        int lim = Math.max(1, Math.min(limit, 100));
+        if (all) return recent(lim);
+        return db.query(
+                "SELECT id, kind, status, total, done, rows_written, message, error, "
+              + "created_at::text ca, updated_at::text ua FROM data_job "
+              + "WHERE user_id IS NOT DISTINCT FROM ? ORDER BY created_at DESC LIMIT ?",
+                r -> new DataJob(r.str("id"), r.str("kind"), r.str("status"), (int) r.lng("total"),
+                        (int) r.lng("done"), r.lng("rows_written"), r.str("message"), r.str("error"),
+                        r.str("ca"), r.str("ua")),
+                userId, lim);
+    }
+
     public List<DataJob> recent(int limit) {
         return db.query(
                 "SELECT id, kind, status, total, done, rows_written, message, error, "
