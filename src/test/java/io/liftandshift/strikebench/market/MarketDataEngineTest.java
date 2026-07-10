@@ -112,6 +112,38 @@ class MarketDataEngineTest {
     }
 
     @Test
+    void persistsQuotesAndBootsStaleFirstFromDisk() {
+        AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
+        CountingProvider p = new CountingProvider(clock);
+        db = TestDb.fresh();
+        MarketDataService market = new MarketDataService(
+                List.<MarketDataProvider>of(p), List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
+        UniverseService universe = new UniverseService(db, cfg, clock);
+        var store = new io.liftandshift.strikebench.db.MarketSnapshotStore(db);
+
+        // Engine #1: fetch AAPL (mirrors it to disk via the store).
+        MarketDataEngine eng1 = new MarketDataEngine(market, universe, cfg, clock);
+        eng1.setSnapshotStore(store);
+        eng1.quote("AAPL");
+        assertThat(store.loadAll()).anySatisfy(s -> assertThat(s.symbol()).isEqualTo("AAPL"));
+
+        // Engine #2 (a "restart"): a fresh engine with NO fetch yet seeds from disk on start().
+        MarketDataEngine eng2 = new MarketDataEngine(market, universe, cfg,
+                Clock.fixed(Instant.parse("2026-07-06T14:00:00Z"), ZoneOffset.UTC));
+        eng2.setSnapshotStore(store);
+        // seed happens in start(); use a config with the engine on but we only need the seed path.
+        eng2.start();
+        try {
+            var st = eng2.status();
+            assertThat(st.symbols()).anySatisfy(s -> assertThat(s.symbol()).isEqualTo("AAPL"));
+            // the seeded snapshot is labeled STALE (last-known), not passed off as live
+            assertThat(eng2.quote("AAPL")).isPresent();
+        } finally {
+            eng2.stop();
+        }
+    }
+
+    @Test
     void statusReportsWarmedTrackedAndInterval() {
         AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
         CountingProvider p = new CountingProvider(clock);

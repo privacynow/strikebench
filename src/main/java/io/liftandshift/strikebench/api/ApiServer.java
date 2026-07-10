@@ -188,6 +188,7 @@ public final class ApiServer {
         server.dataCoverage = new io.liftandshift.strikebench.db.DataCoverage(db);
         server.dataReset = new io.liftandshift.strikebench.db.DataResetService(db, accounts);
         server.cboe = cboeRef[0];
+        server.marketEngine.setSnapshotStore(new io.liftandshift.strikebench.db.MarketSnapshotStore(db));
         return server;
     }
 

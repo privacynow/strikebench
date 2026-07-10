@@ -60,6 +60,7 @@ public final class MarketDataEngine {
     private final UniverseService universe;
     private final AppConfig cfg;
     private final Clock clock;
+    private io.liftandshift.strikebench.market.ports.SnapshotStore snapshotStore; // persist/boot last-known quotes (nullable)
 
     private final Map<String, MarketSnapshot> snapshots = new ConcurrentHashMap<>();
     private final Map<String, Long> lastAccess = new ConcurrentHashMap<>();   // for LRU eviction of tracked symbols
@@ -79,6 +80,11 @@ public final class MarketDataEngine {
         this.clock = clock;
     }
 
+    /** Inject the persistence store so the engine boots stale-first and mirrors refreshes to DB. */
+    public void setSnapshotStore(io.liftandshift.strikebench.market.ports.SnapshotStore store) {
+        this.snapshotStore = store;
+    }
+
     // ---- Lifecycle ----
 
     /** Warms the active universe and starts the background refresh loop. Idempotent; safe if disabled. */
@@ -87,6 +93,17 @@ public final class MarketDataEngine {
         // The serving path (quotes()) always works; the scheduler + warm only run when enabled.
         refreshPool = Executors.newFixedThreadPool(8, daemon("mkt-engine-refresh"));
         running = true;
+        // Boot STALE-FIRST: seed memory from persisted last-known quotes so the tape/tiles paint
+        // instantly (labeled stale), instead of waiting on a heavy/throttled provider to warm.
+        if (snapshotStore != null) {
+            try {
+                int seeded = 0;
+                for (MarketSnapshot s : snapshotStore.loadAll()) {
+                    if (s.last() != null) { snapshots.put(s.symbol(), s); track(s.symbol()); seeded++; }
+                }
+                if (seeded > 0) log.info("market engine seeded {} last-known quotes from disk (stale-first)", seeded);
+            } catch (Exception e) { log.warn("snapshot seed failed: {}", e.toString()); }
+        }
         if (!cfg.engineEnabled()) {
             log.info("market engine: serving path on, background refresh DISABLED (ENGINE_ENABLED=false)");
             return;
@@ -268,6 +285,10 @@ public final class MarketDataEngine {
     private void commit(String symbol, MarketSnapshot snap) {
         if (lastAccess.containsKey(symbol)) snapshots.put(symbol, snap);
         else snapshots.remove(symbol);
+        // Mirror real quotes to disk (best-effort) so the next boot is stale-first. Errors ignored.
+        if (snapshotStore != null && snap.last() != null && snap.error() == null) {
+            try { snapshotStore.save(snap); } catch (Exception e) { /* persistence is best-effort */ }
+        }
     }
 
     private void putError(String symbol, String error) {
