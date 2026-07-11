@@ -96,6 +96,20 @@ public final class SimulationEngine {
      * the preview chart. Pure compute: nothing is persisted; the same seed reproduces it exactly.
      */
     public Preview preview(String symbolRaw, ScenarioSpec specRaw) {
+        return preview(symbolRaw, specRaw, null);
+    }
+
+    /** World-aware: inside a simulated session the fan anchors on THAT world's price. */
+    public Preview preview(String symbolRaw, ScenarioSpec specRaw, String worldId) {
+        this.anchorWorld = worldId;
+        try { return previewInner(symbolRaw, specRaw); }
+        finally { this.anchorWorld = null; }
+    }
+
+    /** CALL-scoped anchor lane (set/cleared within one synchronous call on one thread). */
+    private volatile String anchorWorld;
+
+    private Preview previewInner(String symbolRaw, ScenarioSpec specRaw) {
         String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
@@ -145,7 +159,7 @@ public final class SimulationEngine {
 
     /** The real (or explicit demo) price a simulation anchors on. Missing quote = loud refusal. */
     private double anchorSpot(String symbol) {
-        return market.quote(symbol)
+        return market.quote(symbol, anchorWorld)
                 .map(q -> q.mark())
                 .filter(java.util.Objects::nonNull)
                 .map(BigDecimal::doubleValue)

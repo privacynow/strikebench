@@ -56,8 +56,11 @@ public final class ScoreComposer {
         Long ev = risk.expectedValueCents();
         if (ev != null && risk.maxLossCents() > 0) {
             // R9: judged NET of round-trip commissions — a thin edge that fees eat is no edge.
+            // Contract count matches what the ledger actually charges: OPTION legs only —
+            // commissions on a buy-write's stock leg were a phantom tax on hedged structures.
             long contracts = c.legs() == null ? 0
-                    : c.legs().stream().mapToLong(l -> Math.max(1, l.ratio())).sum() * Math.max(1, c.qty());
+                    : c.legs().stream().filter(l -> !"STOCK".equalsIgnoreCase(l.type()))
+                        .mapToLong(l -> Math.max(1, l.ratio())).sum() * Math.max(1, c.qty());
             long costs = contracts * ctx.feePerContractCents() * 2; // open + close
             long evNet = ev - costs;
             evComp = clamp01(0.5 + (double) evNet / (2.0 * risk.maxLossCents())); // -maxLoss -> 0, 0 -> .5, +maxLoss -> 1

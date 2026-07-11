@@ -243,7 +243,9 @@ public final class PayoffCurve {
 
     /** Double-precision profit for the integration kernel only. */
     private double profitDollars(double s) {
-        double total = 0;
+        // The package-level price adjustment shifts EVERY statistic, including expected value —
+        // a proposed price that moves breakevens but not EV would lie about the trade's economics.
+        double total = entryAdjustCents / 100.0;
         for (Leg leg : legs) {
             double intrinsic;
             if (leg.isStock()) {

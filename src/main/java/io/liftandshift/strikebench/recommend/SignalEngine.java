@@ -80,7 +80,9 @@ public final class SignalEngine {
         if (quote == null) return Optional.empty();
         boolean optionable = quote.optionable() && !market.expirations(sym, worldId).isEmpty();
 
-        LocalDate today = LocalDate.now(clock);
+        LocalDate today = market.simInstant(worldId)
+                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                .orElseGet(() -> LocalDate.now(clock));
         io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(sym, today.minusDays(120), today, worldId, null);
         List<Candle> candles = series.candles();
         boolean demoHistory = series.isFixture() && !fixturesOnly;

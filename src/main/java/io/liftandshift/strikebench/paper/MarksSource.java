@@ -29,6 +29,14 @@ public interface MarksSource {
 
 default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.util.Optional.empty(); }
 
+    /** The data's own stamp from the lane that actually prices the trade. */
+    default java.util.Optional<Long> underlyingAsOfMs(String symbol, String worldId) {
+        return underlyingAsOfMs(symbol);
+    }
+
+    /** The lane's effective clock: a simulated world's sim instant; empty = use the real clock. */
+    default java.util.Optional<java.time.Instant> simNow(String worldId) { return java.util.Optional.empty(); }
+
 
     /**
      * bid/ask are the EXECUTABLE sides (null/zero = no market on that side); mid is the

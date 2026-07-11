@@ -111,8 +111,21 @@ public final class EvaluationService {
                                              String riskMode, List<Candidate> candidates,
                                              long buyingPowerCents, String userId, boolean persist,
                                              io.liftandshift.strikebench.db.AnalysisContext actx) {
+        return evaluate(symbol, intent, thesis, horizon, riskMode, candidates, buyingPowerCents,
+                userId, persist, actx, null);
+    }
+
+    /**
+     * WORLD-AWARE variant (review P0): the decision score must be computed from the SAME market
+     * that priced the candidates — inside a simulated session the spot, ATM IV, realized vol and
+     * clock all come from that world. worldId null = observed.
+     */
+    public List<StrategyEvaluation> evaluate(String symbol, String intent, String thesis, String horizon,
+                                             String riskMode, List<Candidate> candidates,
+                                             long buyingPowerCents, String userId, boolean persist,
+                                             io.liftandshift.strikebench.db.AnalysisContext actx, String worldId) {
         List<StrategyEvaluation> ranked = rank(symbol, intent, thesis, horizon, riskMode, candidates,
-                buyingPowerCents, actx);
+                buyingPowerCents, actx, worldId);
         if (persist && !ranked.isEmpty()) store.saveAll(ranked, userId);
         return ranked;
     }
@@ -124,6 +137,13 @@ public final class EvaluationService {
      */
     public ScanResult scan(List<String> symbols, String intent, String thesis, String horizon, String riskMode,
                            long buyingPowerCents, String userId, int topN) {
+        return scan(symbols, intent, thesis, horizon, riskMode, buyingPowerCents, userId, topN, null, null);
+    }
+
+    /** World-aware + risk-governed scan: candidates AND their evaluation context share one lane,
+     *  and the caller's declared risk capital caps the engine budget (R4). */
+    public ScanResult scan(List<String> symbols, String intent, String thesis, String horizon, String riskMode,
+                           long buyingPowerCents, String userId, int topN, String worldId, Long maxLossCents) {
         List<String> syms = new ArrayList<>();
         for (String raw : symbols == null ? List.<String>of() : symbols) {
             String sym = raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
@@ -146,13 +166,13 @@ public final class EvaluationService {
                 futures.add(exec.submit(() -> {
                     gate.acquire();
                     try {
-                        var req = new RecommendationEngine.Request(sym, thesis, horizon, riskMode, null, null, null,
-                                null, false, false, intent, null, null);
-                        var result = engine.recommend(req, buyingPowerCents);
+                        var req = new RecommendationEngine.Request(sym, thesis, horizon, riskMode, maxLossCents,
+                                null, null, null, false, false, intent, null, null);
+                        var result = engine.recommend(req, buyingPowerCents, worldId);
                         if (result.candidates().isEmpty()) return new PerSym(null, sym + ": no candidates");
                         StrategyEvaluation top = rank(sym, result.intent(), result.thesis(), result.horizon(),
                                 result.riskMode(), result.candidates(), buyingPowerCents,
-                                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED).stream()
+                                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId).stream()
                                 .filter(StrategyEvaluation::viable).findFirst().orElse(null);
                         return new PerSym(top, null); // no-viable is silently dropped, as before
                     } catch (RuntimeException e) {
@@ -181,8 +201,8 @@ public final class EvaluationService {
 
     private List<StrategyEvaluation> rank(String symbol, String intent, String thesis, String horizon,
                                           String riskMode, List<Candidate> candidates, long buyingPowerCents,
-                                          io.liftandshift.strikebench.db.AnalysisContext actx) {
-        EvalContext ctx = buildContext(symbol, candidates, buyingPowerCents, actx);
+                                          io.liftandshift.strikebench.db.AnalysisContext actx, String worldId) {
+        EvalContext ctx = buildContext(symbol, candidates, buyingPowerCents, actx, worldId);
         String family = candidates.isEmpty() ? null : candidates.getFirst().strategy();
         StrategySpec spec = new StrategySpec(symbol, family, intent, horizon, thesis, riskMode, "risk_adjusted");
         return evaluator.evaluateAndRank(candidates, spec, ctx);
@@ -193,18 +213,23 @@ public final class EvaluationService {
     }
 
     private EvalContext buildContext(String symbol, List<Candidate> candidates, long buyingPowerCents,
-                                     io.liftandshift.strikebench.db.AnalysisContext actx) {
-        LocalDate today = LocalDate.now(clock);
-        long underlyingCents = market.quote(symbol)
+                                     io.liftandshift.strikebench.db.AnalysisContext actx, String worldId) {
+        // ONE LANE: spot, DTE clock, ATM IV and realized vol all come from the market that priced
+        // the candidates — a sim world's numbers never blend with observed ones (review P0).
+        Instant laneNow = market.simInstant(worldId).orElseGet(() -> Instant.now(clock));
+        LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
+        long underlyingCents = market.quote(symbol, worldId)
                 .map(q -> q.mark() == null ? 0L : Money.toCents(q.mark())).orElse(0L);
 
         LocalDate frontExp = frontExpiration(candidates);
         int dte = frontExp != null ? Math.max(0, (int) ChronoUnit.DAYS.between(today, frontExp)) : 30;
 
-        Double atmIv = atmIv(symbol, underlyingCents, frontExp);
-        Double realizedVol = realizedVol30(symbol, today, actx);
-        List<Double> ivHistory = ivHistory(symbol);
-        boolean open = MarketHours.isRegularSession(Instant.now(clock));
+        Double atmIv = atmIv(symbol, underlyingCents, frontExp, worldId);
+        Double realizedVol = worldId != null
+                ? realizedVolWorld(symbol, today, worldId)
+                : realizedVol30(symbol, today, actx);
+        List<Double> ivHistory = worldId != null ? List.of() : ivHistory(symbol); // no observed IV history in a world
+        boolean open = worldId != null || MarketHours.isRegularSession(laneNow);
 
         return new EvalContext(symbol, underlyingCents, dte, atmIv, realizedVol, ivHistory, buyingPowerCents, open,
                 feePerContractCents);
@@ -224,14 +249,14 @@ public final class EvaluationService {
         return min;
     }
 
-    private Double atmIv(String symbol, long underlyingCents, LocalDate frontExp) {
+    private Double atmIv(String symbol, long underlyingCents, LocalDate frontExp, String worldId) {
         LocalDate exp = frontExp;
         if (exp == null) {
-            List<LocalDate> exps = market.expirations(symbol);
+            List<LocalDate> exps = market.expirations(symbol, worldId);
             if (exps.isEmpty()) return null;
             exp = exps.getFirst();
         }
-        OptionChain chain = market.chain(symbol, exp).orElse(null);
+        OptionChain chain = market.chain(symbol, exp, worldId).orElse(null);
         if (chain == null || chain.isEmpty()) return null;
         BigDecimal underlying = Money.priceFromCents(underlyingCents);
         return chain.calls().stream()
@@ -239,6 +264,13 @@ public final class EvaluationService {
                 .min(Comparator.comparing(q -> q.strike().subtract(underlying).abs()))
                 .map(OptionQuote::iv)
                 .orElse(null);
+    }
+
+    private Double realizedVolWorld(String symbol, LocalDate today, String worldId) {
+        var series = market.candleSeries(symbol, today.minusDays(60), today, worldId, null);
+        if (series.isEmpty() || series.candles().size() < 20) return null;
+        double v = HistoricalVol.annualized(series.candles(), 30);
+        return Double.isFinite(v) && v > 0 ? v : null;
     }
 
     private Double realizedVol30(String symbol, LocalDate today,

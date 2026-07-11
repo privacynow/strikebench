@@ -5,13 +5,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The FULL probability picture of a position at expiration — not just "POP". All probabilities are
- * RISK-NEUTRAL (lognormal terminal distribution at the given sigma, zero drift): they are the
- * options market's own odds, not a physical forecast, and every consumer must label them that way.
+ * The FULL probability picture of a position at expiration — not just "POP". Probabilities are
+ * RISK-NEUTRAL: a lognormal terminal distribution at the chain's own IV with drift {@code r − σ²/2}
+ * (the same risk-free rate the options are priced with), so the numbers are the options market's
+ * own odds, not a physical forecast — every consumer must label them that way.
  *
- * Computed by numeric integration of the terminal density against the exact piecewise-linear
- * payoff (PayoffCurve), so it is correct for every strategy shape — spreads, condors, flies,
- * covered structures, uncapped single legs — without per-family case analysis.
+ * <p>Regions are EXACT, not sampled (adversarial-review correction): the payoff is piecewise
+ * linear, so profit / max-profit / max-loss regions are derived from the curve's own knots and
+ * breakevens and integrated as closed-form lognormal CDF differences. A single-point maximum
+ * (e.g. a butterfly's pin) honestly has probability 0 of exact attainment. Only CVaR keeps a
+ * numeric grid (the worst-5% set is not an interval in S); the touch statistic is an explicitly
+ * labeled reflection ESTIMATE (≈2× the expire-beyond odds), not a barrier model.
  */
 public final class ProbabilityMap {
 
@@ -20,60 +24,84 @@ public final class ProbabilityMap {
                          long cvar95Cents, long stressLossCents,
                          List<Touch> touches, String basis) {}
 
-    /** Probability the underlying TOUCHES the strike before expiry (≈ 2x the expire-beyond odds). */
+    /** Probability the underlying TOUCHES the strike before expiry (reflection estimate). */
     public record Touch(BigDecimal strike, double probability) {}
 
-    private static final int GRID = 800;          // integration resolution in log-space
-    private static final double SPAN_SIGMAS = 5;  // integrate over ±5σ of terminal distribution
-    private static final double PLATEAU_EPS = 0.005; // within 0.5% of the extreme counts as "at" it
+    private static final int CVAR_GRID = 800;        // numeric grid for CVaR only
+    private static final double SPAN_SIGMAS = 6;
 
     private ProbabilityMap() {}
 
+    /** Back-compat overload: zero rate (labeled zero-drift lognormal scenario). */
+    public static Result of(PayoffCurve curve, double spot, double sigma, double tYears,
+                            List<BigDecimal> shortStrikes) {
+        return of(curve, spot, sigma, tYears, 0.0, shortStrikes);
+    }
+
     /**
-     * @param curve       exact payoff
-     * @param spot        current underlying
-     * @param sigma       annualized volatility (the chain's own IV — risk-neutral basis)
-     * @param tYears      time to expiry in YEARS; callers should pass trading-day time for
-     *                    short-dated positions (sessions/252), calendar time otherwise
+     * @param curve        exact payoff (includes any package-level price adjustment)
+     * @param spot         current underlying
+     * @param sigma        annualized volatility (the chain's own IV — risk-neutral basis)
+     * @param tYears       time to expiry in YEARS (trading-day time for short-dated positions)
+     * @param riskFreeRate annualized r used in the risk-neutral drift (r − σ²/2)
      * @param shortStrikes strikes of SHORT legs (touch/assignment interest); may be empty
      */
     public static Result of(PayoffCurve curve, double spot, double sigma, double tYears,
-                            List<BigDecimal> shortStrikes) {
+                            double riskFreeRate, List<BigDecimal> shortStrikes) {
         if (spot <= 0 || sigma <= 0 || tYears <= 0) {
             return new Result(0, 0, 0, 0, 0, 0, List.of(), "undefined (missing spot/vol/time)");
         }
         double sd = sigma * Math.sqrt(tYears);
+        double mu = Math.log(spot) + (riskFreeRate - sigma * sigma / 2) * tYears;
+
         long maxProfit = curve.maxProfitUnbounded() ? Long.MAX_VALUE : curve.maxProfitCents();
         long maxLoss = curve.maxLossUnbounded() ? Long.MAX_VALUE : curve.maxLossCents();
 
-        // Numeric integration over the lognormal terminal density in log-space (zero drift,
-        // martingale form: ln S_T ~ N(ln spot - sd^2/2, sd^2)).
-        double mu = Math.log(spot) - sd * sd / 2;
+        // ---- EXACT region probabilities from the curve's own geometry ----
+        // Boundary set: 0, every knot, every breakeven, +inf. On each open interval the payoff is
+        // linear, so its sign and its equality-to-extreme are decided by the endpoint values.
+        List<Double> bounds = new ArrayList<>();
+        bounds.add(0.0);
+        for (BigDecimal k : curve.knots()) bounds.add(k.doubleValue());
+        for (BigDecimal b : curve.breakevens()) bounds.add(b.doubleValue());
+        bounds.add(spot * Math.exp(SPAN_SIGMAS * sd) * 4); // effective +inf for the closed forms
+        bounds = new ArrayList<>(bounds.stream().filter(x -> x >= 0).sorted().distinct().toList());
+
         double pAny = 0, pMaxP = 0, pMaxL = 0;
-        double[] pl = new double[GRID];
-        double[] w = new double[GRID];
-        double lo = mu - SPAN_SIGMAS * sd, hi = mu + SPAN_SIGMAS * sd, step = (hi - lo) / GRID;
-        double wsum = 0;
-        for (int i = 0; i < GRID; i++) {
-            double x = lo + (i + 0.5) * step;                       // midpoint rule
-            double z = (x - mu) / sd;
-            double dens = Math.exp(-z * z / 2);                     // unnormalized; normalized by wsum
-            double s = Math.exp(x);
-            long p = curve.profitAtCents(BigDecimal.valueOf(s));
-            pl[i] = p; w[i] = dens; wsum += dens;
-            if (p > 0) pAny += dens;
-            if (maxProfit != Long.MAX_VALUE && p >= maxProfit * (1 - PLATEAU_EPS) - 1) pMaxP += dens;
-            if (maxLoss != Long.MAX_VALUE && maxLoss > 0 && -p >= maxLoss * (1 - PLATEAU_EPS) - 1) pMaxL += dens;
+        for (int i = 0; i + 1 < bounds.size(); i++) {
+            double a = bounds.get(i), b = bounds.get(i + 1);
+            if (b - a < 1e-9) continue;
+            double mid = (a + b) / 2;
+            long pm = curve.profitAtCents(BigDecimal.valueOf(mid));
+            double mass = cdf(b, mu, sd) - cdf(a, mu, sd);
+            if (pm > 0) pAny += mass;
+            // Equality with the extreme holds on the whole interval only if BOTH endpoints (and
+            // hence the linear segment) sit at the extreme — a single-point peak contributes 0.
+            long pa = curve.profitAtCents(BigDecimal.valueOf(Math.max(a, 1e-9)));
+            long pb = curve.profitAtCents(BigDecimal.valueOf(b));
+            if (maxProfit != Long.MAX_VALUE && Math.abs(pa - maxProfit) <= 1 && Math.abs(pb - maxProfit) <= 1) pMaxP += mass;
+            if (maxLoss != Long.MAX_VALUE && maxLoss > 0 && Math.abs(-pa - maxLoss) <= 1 && Math.abs(-pb - maxLoss) <= 1) pMaxL += mass;
         }
-        pAny /= wsum; pMaxP /= wsum; pMaxL /= wsum;
+        pAny = clamp01(pAny); pMaxP = clamp01(pMaxP); pMaxL = clamp01(pMaxL);
         double pPartial = Math.max(0, 1 - pAny - pMaxL);
 
-        // CVaR95: expected P/L over the worst 5% of probability mass (sorted by P/L).
-        Integer[] idx = new Integer[GRID];
-        for (int i = 0; i < GRID; i++) idx[i] = i;
+        // ---- CVaR95: numeric (the worst-5% set is not an S-interval) ----
+        double lo = mu - SPAN_SIGMAS * sd, hi = mu + SPAN_SIGMAS * sd, step = (hi - lo) / CVAR_GRID;
+        double[] pl = new double[CVAR_GRID];
+        double[] w = new double[CVAR_GRID];
+        double wsum = 0;
+        for (int i = 0; i < CVAR_GRID; i++) {
+            double x = lo + (i + 0.5) * step;
+            double z = (x - mu) / sd;
+            double dens = Math.exp(-z * z / 2);
+            pl[i] = curve.profitAtCents(BigDecimal.valueOf(Math.exp(x)));
+            w[i] = dens; wsum += dens;
+        }
+        Integer[] idx = new Integer[CVAR_GRID];
+        for (int i = 0; i < CVAR_GRID; i++) idx[i] = i;
         java.util.Arrays.sort(idx, (a, b) -> Double.compare(pl[a], pl[b]));
         double tailMass = 0.05 * wsum, acc = 0, cvarNum = 0;
-        for (int k = 0; k < GRID && acc < tailMass; k++) {
+        for (int k = 0; k < CVAR_GRID && acc < tailMass; k++) {
             double take = Math.min(w[idx[k]], tailMass - acc);
             cvarNum += pl[idx[k]] * take;
             acc += take;
@@ -92,15 +120,23 @@ public final class ProbabilityMap {
         for (BigDecimal k : shortStrikes == null ? List.<BigDecimal>of() : shortStrikes) {
             double kk = k.doubleValue();
             if (kk <= 0) continue;
-            // P(expire beyond K) one-sided, doubled for touch (reflection heuristic), capped at 1.
-            double d = (Math.log(kk / spot) - (-sd * sd / 2)) / sd;
-            double beyond = kk >= spot ? 1 - normCdf(d) : normCdf(d);
+            double beyond = kk >= spot ? 1 - cdf(kk, mu, sd) : cdf(kk, mu, sd);
             touches.add(new Touch(k, Math.min(1.0, 2 * beyond)));
         }
+        String basis = riskFreeRate != 0
+                ? String.format("risk-neutral lognormal (market IV, r=%.1f%%) — the options market's own odds, not a forecast; touch is a reflection estimate", riskFreeRate * 100)
+                : "zero-drift lognormal scenario (market IV) — model odds, not a forecast; touch is a reflection estimate";
         return new Result(round4(pAny), round4(pMaxP), round4(pMaxL), round4(pPartial),
-                cvar95, Math.min(0, stress), touches,
-                "risk-neutral lognormal (market IV, zero drift) — the options market's own odds, not a forecast");
+                cvar95, Math.min(0, stress), touches, basis);
     }
+
+    /** Lognormal CDF: P(S_T <= s) with ln S_T ~ N(mu, sd^2). */
+    private static double cdf(double s, double mu, double sd) {
+        if (s <= 0) return 0;
+        return normCdf((Math.log(s) - mu) / sd);
+    }
+
+    private static double clamp01(double v) { return Math.max(0, Math.min(1, v)); }
 
     private static double normCdf(double z) {
         return 0.5 * (1 + erf(z / Math.sqrt(2)));

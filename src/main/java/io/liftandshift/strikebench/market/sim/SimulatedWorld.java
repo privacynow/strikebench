@@ -15,91 +15,171 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * A LIVE SIMULATED MARKET: one deterministic world per session — a virtual exchange clock (sim ET
- * date/time, real session hours + the NYSE holiday calendar), a market/idiosyncratic factor model
- * stepping every symbol's spot, an evolving base IV, and a full simulated option exchange (listed
- * expirations on the sim calendar, BSM+smile pricing with intrinsic floors, spreads widening by
- * moneyness/DTE, synthesized OI/volume, greeks). Everything it emits is labeled
- * {@link Freshness#SIMULATED} with source "simulated"; identical (seed, config) reproduces the
- * identical world tick-for-tick.
+ * A LIVE SIMULATED MARKET: one deterministic world per session. It is a MODELED harness, not a real
+ * exchange — every quote/chain it emits is labeled {@link Freshness#SIMULATED} and priced with a
+ * European Black-Scholes kernel plus an intrinsic floor (no dividends, no early-exercise premium,
+ * no real order book). Within those honest limits it is coherent and reproducible.
  *
- * A tick-speed multiplier here advances SIM TIME, not just prices — theta, DTE and expirations
- * move with the clock, so the world stays mathematically coherent (junior's correction).
+ * <p>Determinism is STRUCTURAL, not incidental:
+ * <ul>
+ *   <li>The path lives on fixed <b>quanta</b> — each quantum is exactly {@code QUANTUM_SECONDS} of
+ *       open-market time and applies exactly one diffusion step of that size. Playback {@code speed}
+ *       only changes how many quanta advance per real tick, so the path at sim-time T is identical
+ *       at 1× and 600× (junior: "speed must not change the path").</li>
+ *   <li>Randomness comes from independent counter-based streams keyed by (seed, stream, symbol,
+ *       quantum) — adding or removing a symbol never shifts another symbol's draws, and iteration
+ *       order is irrelevant.</li>
+ *   <li>Injected events and speed changes are recorded on an immutable log keyed by quantum, so
+ *       {@code replayTo(q)} reconstructs the exact world after a restart.</li>
+ * </ul>
+ *
+ * <p>The clock is the single source of time: option time-to-expiry is measured in <b>open-market
+ * seconds to the expiration bell</b>, so theta/gamma converge continuously to intrinsic as the sim
+ * clock runs through expiration day (junior: "0.5/365 floor is wrong at 3:59pm"). Beta is a real
+ * factor loading (a β=1.5 name carries more market variance than a β=0.6 name), and implied vol is
+ * a distinct process from realized diffusion vol.
  */
 public final class SimulatedWorld {
+
+    /** The model version stamped into reports; bump when dynamics change so old runs stay labeled. */
+    public static final String MODEL_VERSION = "sim-2";
+
+    /** One quantum of the path = 30 seconds of OPEN-MARKET time. Fixed forever (path identity). */
+    private static final double QUANTUM_SECONDS = 30.0;
+    private static final double SESSION_SECONDS = 6.5 * 3600.0;   // 09:30–16:00 ET
+    private static final double YEAR_SECONDS = 252.0 * SESSION_SECONDS; // trading-time year
+    private static final ZoneId ET = ZoneId.of("America/New_York");
+    private static final LocalTime OPEN = LocalTime.of(9, 30), CLOSE = LocalTime.of(16, 0);
+    private static final int HISTORY_DAYS = 250;
 
     /** Reproducible session configuration. betas: symbol -> market beta (index proxy uses 1.0). */
     public record Config(String worldId, String name, Map<String, Double> symbolBetas,
                          Map<String, Double> startSpots, String scenario, double volAnnual,
-                         long seed, String startSimTime /* ISO LocalDateTime, ET */, double speed) {}
+                         long seed, String startSimTime /* ISO LocalDateTime, ET */, double speed) {
+        public Config {
+            if (symbolBetas == null || symbolBetas.isEmpty())
+                throw new IllegalArgumentException("a simulated world needs at least one symbol");
+            symbolBetas.forEach((k, v) -> {
+                if (v == null || !Double.isFinite(v) || Math.abs(v) > 3.0)
+                    throw new IllegalArgumentException("beta for " + k + " must be finite and within ±3");
+            });
+            if (startSpots != null) startSpots.forEach((k, v) -> {
+                if (v == null || !Double.isFinite(v) || v <= 0)
+                    throw new IllegalArgumentException("start price for " + k + " must be positive");
+            });
+            if (!Double.isFinite(volAnnual) || volAnnual <= 0 || volAnnual > 5.0)
+                throw new IllegalArgumentException("annual volatility must be in (0, 500%]");
+            if (!Double.isFinite(speed) || speed <= 0 || speed > 600)
+                throw new IllegalArgumentException("speed must be in (0, 600]");
+            try { LocalDateTime.parse(startSimTime); }
+            catch (RuntimeException e) { throw new IllegalArgumentException("startSimTime must be ISO LocalDateTime"); }
+        }
+    }
+
+    /** An immutable path event — replayed at its quantum so a restored world is bit-identical. */
+    public record WorldEvent(long quantum, String kind /* MOVE|VOL|SPEED */, String symbol, double value) {}
+
+    // Counter-RNG stream ids (mixed into the seed so streams never collide).
+    private static final long S_MARKET = 0x9E3779B97F4A7C15L;
+    private static final long S_IDIO = 0xC2B2AE3D27D4EB4FL;
 
     private final Config cfg;
-    private final Random rng;
+    private final double sigmaMarket;   // market-factor annual vol
+    private final double sigmaIdio;     // idiosyncratic annual vol (modeled default)
     private final Map<String, Sym> syms = new ConcurrentHashMap<>();
-    private volatile LocalDateTime simTime;   // ET wall time inside the world
+    private final List<WorldEvent> events = new ArrayList<>(); // guarded by this
+
+    private volatile LocalDateTime simTime;
     private volatile double speed;
     private volatile boolean running = false;
-    private volatile long tickCount = 0;
-    private volatile double ivShift = 0;      // injected vol shift (points, e.g. 0.10)
-
-    private static final double DT_PER_TICK_SEC = 30; // one tick advances 30 sim-seconds × speed
+    private volatile long quantum = 0;   // total quanta elapsed — the path index
+    private volatile double ivLevel;     // IMPLIED vol level (distinct from realized diffusion vol)
 
     private static final class Sym {
         final double beta;
+        final double anchorSpot;              // fixes the strike grid so a big move can't delist a strike
+        final double sigmaTotal;              // realized total vol = sqrt(beta^2 sigmaM^2 + sigmaIdio^2)
+        final long key;                       // stable per-symbol RNG stream key (from the NAME, sorted-safe)
         volatile double spot;
-        volatile double open, high, low;      // intraday accumulation for the daily bar
-        final List<Candle> daily = new ArrayList<>(); // history + rolled sim days
-        Sym(double beta, double spot) { this.beta = beta; this.spot = spot; resetDay(); }
+        volatile double open, high, low;
+        final List<Candle> daily = new ArrayList<>();
+        Sym(String name, double beta, double spot, double sigmaTotal) {
+            this.beta = beta; this.anchorSpot = spot; this.sigmaTotal = sigmaTotal; this.spot = spot;
+            this.key = mix(name.hashCode() * 0x9E3779B97F4A7C15L + name.length());
+            resetDay();
+        }
         void resetDay() { open = spot; high = spot; low = spot; }
     }
 
     public SimulatedWorld(Config cfg) {
         this.cfg = cfg;
-        this.rng = new Random(cfg.seed());
-        this.speed = cfg.speed() <= 0 ? 1 : cfg.speed();
-        this.simTime = LocalDateTime.parse(cfg.startSimTime());
+        this.sigmaMarket = cfg.volAnnual();
+        this.sigmaIdio = cfg.volAnnual() * 0.6; // modeled residual vol; labeled as such in the report
+        this.speed = cfg.speed();
+        this.simTime = snapToSession(LocalDateTime.parse(cfg.startSimTime()));
+        this.ivLevel = cfg.volAnnual();
         for (var e : cfg.symbolBetas().entrySet()) {
             String sym = e.getKey().toUpperCase(Locale.ROOT);
-            double s0 = cfg.startSpots().getOrDefault(e.getKey(), 100.0);
-            Sym st = new Sym(e.getValue(), s0);
+            double s0 = cfg.startSpots() == null ? 100.0 : cfg.startSpots().getOrDefault(e.getKey(), 100.0);
+            double sigmaTotal = Math.sqrt(e.getValue() * e.getValue() * sigmaMarket * sigmaMarket + sigmaIdio * sigmaIdio);
+            Sym st = new Sym(sym, e.getValue(), s0, sigmaTotal);
             seedHistory(st, sym);
             syms.put(sym, st);
         }
     }
 
-    /** ~250 daily bars of coherent history ENDING at the sim start, so charts/HV work day one. */
+    // ---- deterministic counter-based gaussian: pure function of (seed, stream, key, index) ----
+    private double gaussian(long stream, long key, long index) {
+        long h = cfg.seed();
+        h = mix(h ^ stream); h = mix(h ^ key); h = mix(h ^ index);
+        // Box–Muller from two mixed uniforms — stateless, independent per (stream,key,index).
+        long h2 = mix(h ^ 0xD1B54A32D192ED03L);
+        double u1 = (h >>> 11) * 0x1.0p-53 + 1e-12;
+        double u2 = (h2 >>> 11) * 0x1.0p-53;
+        return Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    }
+
+    private static long mix(long z) { // splitmix64 finalizer
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
+    }
+
+    /** ~250 daily bars of coherent history ending at the sim start (vol-scaled ranges). */
     private void seedHistory(Sym st, String sym) {
-        Random h = new Random(cfg.seed() ^ sym.hashCode());
-        double vol = cfg.volAnnual();
-        double s = st.spot * Math.exp(-0.0); // walk BACKWARD deterministically then reverse
-        double[] closes = new double[250];
-        closes[249] = st.spot;
-        for (int i = 248; i >= 0; i--) {
-            double z = h.nextGaussian();
-            closes[i] = closes[i + 1] / Math.exp((-vol * vol / 2) * (1.0 / 252) + vol * Math.sqrt(1.0 / 252) * z);
+        long symKey = mix(sym.hashCode());
+        double[] closes = new double[HISTORY_DAYS];
+        closes[HISTORY_DAYS - 1] = st.spot;
+        double dt = 1.0 / 252;
+        for (int i = HISTORY_DAYS - 2; i >= 0; i--) {
+            double z = gaussian(0xA5A5A5A5L, symKey, i);
+            closes[i] = closes[i + 1] / Math.exp((-st.sigmaTotal * st.sigmaTotal / 2) * dt
+                    + st.sigmaTotal * Math.sqrt(dt) * z);
         }
         LocalDate d = simTime.toLocalDate();
         List<LocalDate> days = new ArrayList<>();
-        while (days.size() < 250) {
+        while (days.size() < HISTORY_DAYS) {
             d = d.minusDays(1);
             if (MarketHours.isTradingDay(d)) days.add(d);
         }
         java.util.Collections.reverse(days);
-        for (int i = 0; i < 250; i++) {
+        double dailySd = st.sigmaTotal * Math.sqrt(dt); // typical daily log-range scale
+        for (int i = 0; i < HISTORY_DAYS; i++) {
             double c = closes[i];
             double o = i == 0 ? c : closes[i - 1];
-            st.daily.add(new Candle(days.get(i), bd(o), bd(Math.max(o, c) * 1.004), bd(Math.min(o, c) * 0.996),
-                    bd(c), 1_000_000 + (long) (h.nextDouble() * 4_000_000), false));
+            double rng = Math.abs(gaussian(0xB6B6B6B6L, symKey, i)) * dailySd; // vol-scaled range
+            double hi = Math.max(o, c) * (1 + rng);
+            double lo = Math.min(o, c) * (1 - rng);
+            long vol = 800_000 + (long) (Math.abs(gaussian(0xC7C7C7C7L, symKey, i)) * 3_000_000);
+            st.daily.add(new Candle(days.get(i), bd(o), bd(hi), bd(lo), bd(c), vol, false));
         }
     }
 
@@ -109,78 +189,143 @@ public final class SimulatedWorld {
     public boolean running() { return running; }
     public void start() { running = true; }
     public void pause() { running = false; }
-    public void setSpeed(double s) { this.speed = Math.clamp(s, 0.1, 600); }
     public double speed() { return speed; }
     public LocalDateTime simTime() { return simTime; }
-    public long simMillis() { return simTime.toInstant(ZoneOffset.of("-05:00")).toEpochMilli(); }
-    public long ticks() { return tickCount; }
+    public long simMillis() { return simTime.atZone(ET).toInstant().toEpochMilli(); }
+    public long ticks() { return quantum; }
+    public String modelVersion() { return MODEL_VERSION; }
+    public synchronized List<WorldEvent> eventLog() { return List.copyOf(events); }
 
-    /** Advance the world by one tick (called by the session loop, or step() manually). */
+    public synchronized void setSpeed(double s) {
+        this.speed = Math.clamp(s, 0.1, 600);
+        events.add(new WorldEvent(quantum, "SPEED", null, this.speed));
+    }
+
+    /** Restore-only: adopt the checkpointed speed without logging a new event. */
+    public synchronized void setSpeedSilently(double s) { this.speed = Math.clamp(s, 0.1, 600); }
+
+    /** Advance the world by one real tick = {@code round(speed)} quanta (path is speed-invariant). */
     public synchronized void tick() {
-        double simSeconds = DT_PER_TICK_SEC * speed;
-        LocalDateTime next = simTime.plusSeconds((long) simSeconds);
-        // Skip closed hours: the exchange clock jumps from close to the NEXT session's open —
-        // prices only move while the sim market is open, exactly like the real one.
-        LocalDate day = next.toLocalDate();
-        LocalTime t = next.toLocalTime();
-        if (!MarketHours.isTradingDay(day) || t.isAfter(LocalTime.of(16, 0))) {
-            rollDay();
-            do { day = day.plusDays(1); } while (!MarketHours.isTradingDay(day));
-            next = LocalDateTime.of(day, LocalTime.of(9, 30));
-        } else if (t.isBefore(LocalTime.of(9, 30))) {
-            next = LocalDateTime.of(day, LocalTime.of(9, 30));
-        }
-        double dtYears = simSeconds / (252.0 * 6.5 * 3600.0); // trading-time diffusion
-        double vol = currentVol();
+        int quanta = Math.max(1, (int) Math.round(speed));
+        for (int i = 0; i < quanta; i++) stepOneQuantum();
+    }
+
+    /** The atomic path step: one fixed quantum of sim time and one diffusion step of that size. */
+    private void stepOneQuantum() {
+        long q = quantum; // draws for THIS quantum
+        double dtYears = QUANTUM_SECONDS / YEAR_SECONDS;
         double drift = scenarioDrift();
-        double zM = rng.nextGaussian(); // ONE market factor draw per tick — correlation source
-        for (Sym st : syms.values()) {
-            double b = Math.clamp(st.beta, -1.5, 1.5);
-            double rho = Math.min(0.99, Math.abs(b) / 1.5);
-            double z = rho * Math.signum(b) * zM + Math.sqrt(1 - rho * rho) * rng.nextGaussian();
-            st.spot = st.spot * Math.exp((drift - vol * vol / 2) * dtYears + vol * Math.sqrt(dtYears) * z);
+        double zM = gaussian(S_MARKET, 0, q); // one market-factor draw per quantum
+        for (String name : sortedSymbols()) {
+            Sym st = syms.get(name);
+            double zI = gaussian(S_IDIO, st.key, q);
+            // r_i = (drift - 0.5 sigmaTotal^2) dt + beta*sigmaM*sqrt(dt)*zM + sigmaIdio*sqrt(dt)*zI
+            double factor = st.beta * sigmaMarket * Math.sqrt(dtYears) * zM
+                    + sigmaIdio * Math.sqrt(dtYears) * zI;
+            st.spot = st.spot * Math.exp((drift - 0.5 * st.sigmaTotal * st.sigmaTotal) * dtYears + factor);
             st.high = Math.max(st.high, st.spot);
             st.low = Math.min(st.low, st.spot);
         }
-        simTime = next;
-        tickCount++;
+        quantum = q + 1;
+        // Advance the clock by one quantum of OPEN-MARKET time, rolling the daily bar at the bell.
+        advanceClock();
+    }
+
+    private void advanceClock() {
+        LocalDateTime next = simTime.plusSeconds((long) QUANTUM_SECONDS);
+        if (!MarketHours.isTradingDay(next.toLocalDate())
+                || next.toLocalTime().isAfter(CLOSE) || next.toLocalTime().equals(CLOSE)) {
+            rollDay();
+            LocalDate d = simTime.toLocalDate();
+            do { d = d.plusDays(1); } while (!MarketHours.isTradingDay(d));
+            simTime = LocalDateTime.of(d, OPEN);
+        } else if (next.toLocalTime().isBefore(OPEN)) {
+            simTime = LocalDateTime.of(next.toLocalDate(), OPEN);
+        } else {
+            simTime = next;
+        }
+    }
+
+    private LocalDateTime snapToSession(LocalDateTime t) {
+        LocalDate d = t.toLocalDate();
+        while (!MarketHours.isTradingDay(d)) d = d.plusDays(1);
+        LocalTime time = t.toLocalTime();
+        if (d.equals(t.toLocalDate()) && time.isAfter(OPEN) && time.isBefore(CLOSE)) return t;
+        return LocalDateTime.of(d, OPEN);
     }
 
     private void rollDay() {
         LocalDate d = simTime.toLocalDate();
-        for (Sym st : syms.values()) {
-            st.daily.add(new Candle(d, bd(st.open), bd(st.high), bd(st.low), bd(st.spot),
-                    1_000_000 + (tickCount % 3_000_000), false));
+        for (String name : sortedSymbols()) {
+            Sym st = syms.get(name);
+            long vol = 800_000 + Math.abs(mix(cfg.seed() ^ d.toEpochDay() ^ st.key)) % 3_000_000;
+            st.daily.add(new Candle(d, bd(st.open), bd(st.high), bd(st.low), bd(st.spot), vol, false));
             st.resetDay();
         }
     }
 
-    private double currentVol() { return Math.max(0.05, cfg.volAnnual() + ivShift); }
-
-    /** Scenario shapes as LIVE drift bias (annualized) — dynamics, not a fixed outcome. */
+    /** Realized diffusion drift for the active scenario, phased by SIM-TIME elapsed (speed-invariant). */
     private double scenarioDrift() {
         String sc = cfg.scenario() == null ? "CHOP" : cfg.scenario().toUpperCase(Locale.ROOT);
-        long phase = tickCount / 200; // regime alternation for round-trip shapes
+        // Elapsed sim TRADING days since start — a function of quanta, never of wall-clock ticks.
+        double sessionsElapsed = quantum * QUANTUM_SECONDS / SESSION_SECONDS;
+        long phase = (long) (sessionsElapsed / 3.0); // regime flips every ~3 sim sessions
         return switch (sc) {
             case "TREND_UP", "GRIND_UP" -> 0.35;
             case "TREND_DOWN", "SELLOFF" -> -0.5;
             case "SELLOFF_REBOUND" -> phase % 2 == 0 ? -0.8 : 0.8;
             case "RALLY_FADE" -> phase % 2 == 0 ? 0.8 : -0.8;
-            case "VOL_EVENT", "NEWS_SHOCK" -> 0.0; // vol carries the story (use injectVolShift)
+            case "VOL_EVENT", "NEWS_SHOCK" -> 0.0; // vol carries the story (injectVolShift)
             default -> 0.0; // CHOP / CALM
         };
     }
 
-    // ---- event injection (the reviewer-demo lever) ----
+    // ---- event injection (recorded on the path log so restore is exact) ----
     public synchronized void injectMove(String symbol, double pct) {
+        if (!Double.isFinite(pct) || pct <= -0.95 || pct > 5.0)
+            throw new IllegalArgumentException("move must be a finite fraction in (-95%, +500%]");
         Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
-        if (st == null) return;
-        st.spot = st.spot * (1 + pct);
+        if (st == null) throw new IllegalArgumentException("no such symbol: " + symbol);
+        st.spot = Math.max(0.01, st.spot * (1 + pct));
         st.high = Math.max(st.high, st.spot);
         st.low = Math.min(st.low, st.spot);
+        events.add(new WorldEvent(quantum, "MOVE", symbol.toUpperCase(Locale.ROOT), pct));
     }
 
-    public synchronized void injectVolShift(double points) { ivShift += points; }
+    public synchronized void injectVolShift(double points) {
+        if (!Double.isFinite(points)) throw new IllegalArgumentException("vol shift must be finite");
+        ivLevel = Math.clamp(ivLevel + points, 0.05, 5.0);
+        events.add(new WorldEvent(quantum, "VOL", null, points));
+    }
+
+    /** Deterministic restore: replay every quantum and re-apply logged events at their quantum. */
+    public synchronized void replayTo(long targetQuantum, List<WorldEvent> log) {
+        java.util.Map<Long, List<WorldEvent>> byQuantum = new java.util.HashMap<>();
+        for (WorldEvent e : log) byQuantum.computeIfAbsent(e.quantum(), k -> new ArrayList<>()).add(e);
+        while (quantum < targetQuantum) {
+            long q = quantum;
+            stepOneQuantum();
+            for (WorldEvent e : byQuantum.getOrDefault(q, List.of())) applyReplayEvent(e);
+        }
+        this.events.clear();
+        this.events.addAll(log);
+    }
+
+    private void applyReplayEvent(WorldEvent e) {
+        switch (e.kind()) {
+            case "MOVE" -> { Sym st = syms.get(e.symbol()); if (st != null) {
+                st.spot = Math.max(0.01, st.spot * (1 + e.value())); st.high = Math.max(st.high, st.spot); st.low = Math.min(st.low, st.spot); } }
+            case "VOL" -> ivLevel = Math.clamp(ivLevel + e.value(), 0.05, 5.0);
+            case "SPEED" -> speed = Math.clamp(e.value(), 0.1, 600);
+            default -> { }
+        }
+    }
+
+    private List<String> sortedSymbols() {
+        List<String> names = new ArrayList<>(syms.keySet());
+        java.util.Collections.sort(names);
+        return names;
+    }
 
     // ---- the market data surface (everything labeled SIMULATED) ----
     public java.util.Set<String> symbols() { return syms.keySet(); }
@@ -189,57 +334,65 @@ public final class SimulatedWorld {
         Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
         if (st == null) return java.util.Optional.empty();
         double spr = Math.max(0.01, st.spot * 0.0004);
-        BigDecimal last = bd(st.spot);
         double prev = st.daily.isEmpty() ? st.spot : st.daily.getLast().close().doubleValue();
         return java.util.Optional.of(new Quote(symbol.toUpperCase(Locale.ROOT),
-                cfg.name() + " (simulated)", last, bd(st.spot - spr / 2), bd(st.spot + spr / 2),
+                cfg.name() + " (simulated)", bd(st.spot), bd(st.spot - spr / 2), bd(st.spot + spr / 2),
                 bd(prev), null, null, 1_000_000L, true, simMillis(), "simulated", Freshness.SIMULATED));
     }
 
-    /** Listed expirations on the SIM calendar: next 6 Fridays + the next 2 third-Fridays. */
+    /** Listed expirations on the SIM calendar: the sim day's own expiry (if a Friday before the
+     *  bell) plus the next Fridays and two monthlies — holiday Fridays roll to the prior session. */
     public List<LocalDate> expirations() {
         List<LocalDate> out = new ArrayList<>();
-        LocalDate d = simTime.toLocalDate();
-        LocalDate f = d;
-        while (out.size() < 6) {
+        LocalDate today = simTime.toLocalDate();
+        boolean beforeBell = simTime.toLocalTime().isBefore(CLOSE);
+        // 0DTE: the sim day itself if it's a listed expiration and the bell hasn't rung.
+        if (beforeBell && today.getDayOfWeek() == DayOfWeek.FRIDAY && MarketHours.isTradingDay(today)) out.add(today);
+        LocalDate f = today;
+        while (out.size() < 7) {
             f = f.plusDays(1);
-            if (f.getDayOfWeek() == DayOfWeek.FRIDAY && MarketHours.isTradingDay(f)) out.add(f);
+            if (f.getDayOfWeek() == DayOfWeek.FRIDAY) out.add(holidayAdjust(f));
         }
-        LocalDate m = d.withDayOfMonth(1).plusMonths(2);
+        LocalDate m = today.withDayOfMonth(1).plusMonths(2);
         for (int k = 0; k < 2; k++) {
-            LocalDate third = m.with(java.time.temporal.TemporalAdjusters.dayOfWeekInMonth(3, DayOfWeek.FRIDAY));
-            if (!out.contains(third) && third.isAfter(d)) out.add(third);
+            LocalDate third = holidayAdjust(m.with(java.time.temporal.TemporalAdjusters.dayOfWeekInMonth(3, DayOfWeek.FRIDAY)));
+            if (!out.contains(third) && third.isAfter(today)) out.add(third);
             m = m.plusMonths(1);
         }
         out.sort(LocalDate::compareTo);
-        return out;
+        return out.stream().distinct().toList();
+    }
+
+    /** A holiday expiration rolls to the prior trading session (real listed-option convention). */
+    private static LocalDate holidayAdjust(LocalDate d) {
+        while (!MarketHours.isTradingDay(d)) d = d.minusDays(1);
+        return d;
     }
 
     public java.util.Optional<OptionChain> chain(String symbol, LocalDate exp) {
         Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
-        if (st == null || exp == null || !exp.isAfter(simTime.toLocalDate().minusDays(1))) return java.util.Optional.empty();
+        if (st == null || exp == null || exp.isBefore(simTime.toLocalDate())) return java.util.Optional.empty();
         double spot = st.spot;
-        double step = spot < 25 ? 0.5 : spot < 100 ? 1.0 : spot < 300 ? 2.5 : 5.0;
-        int sessions = MarketHours.tradingDaysBetween(simTime.toLocalDate(), exp);
-        long calDays = java.time.temporal.ChronoUnit.DAYS.between(simTime.toLocalDate(), exp);
-        double tte = Math.max(calDays, 0.5) / 365.0;
-        double baseIv = currentVol();
+        double step = strikeStep(st.anchorSpot);
+        double tte = timeToExpiryYears(exp);
+        double baseIv = ivLevel;
         List<OptionQuote> calls = new ArrayList<>(), puts = new ArrayList<>();
-        double lo = Math.max(step, Math.floor(spot * 0.75 / step) * step);
-        double hi = Math.ceil(spot * 1.25 / step) * step;
-        Random liq = new Random(cfg.seed() ^ exp.hashCode() ^ symbol.hashCode());
+        // Strikes anchored to the START spot with a WIDE band that always covers the current spot,
+        // so a large move (or an injected shock) can never delist an open position's strike.
+        double center = st.anchorSpot;
+        double lo = Math.max(step, Math.floor(Math.min(center, spot) * 0.5 / step) * step);
+        double hi = Math.ceil(Math.max(center, spot) * 1.6 / step) * step;
         for (double k = lo; k <= hi + 1e-9; k += step) {
             double money = Math.log(k / spot);
             double iv = Math.max(0.05, baseIv * (1 + 0.35 * money * money * 8) - 0.06 * money); // smile + skew
+            long expKey = mix(cfg.seed() ^ exp.toEpochDay() ^ mix((long) (k * 1000)) ^ st.key);
             for (OptionType type : OptionType.values()) {
                 boolean call = type == OptionType.CALL;
                 double px = BlackScholes.price(call, spot, k, tte, 0.03, 0, iv);
                 double intrinsic = Math.max(0, call ? spot - k : k - spot);
-                px = Math.max(px, intrinsic + 0.01); // American-style floor: never below parity
-                // spread widens with moneyness distance, shrinking DTE and injected stress
-                double half = Math.max(0.01, px * (0.01 + 0.03 * Math.abs(money) + (sessions <= 3 ? 0.01 : 0)
-                        + Math.abs(ivShift) * 0.05));
-                long oi = Math.max(5, (long) (3000 * Math.exp(-8 * money * money) * (0.5 + liq.nextDouble())));
+                px = Math.max(px, intrinsic + 0.01);
+                double half = Math.max(0.01, px * (0.01 + 0.03 * Math.abs(money) + (tte < 4.0 / 252 ? 0.01 : 0)));
+                long oi = Math.max(5, (long) (3000 * Math.exp(-8 * money * money) * (0.5 + (Math.abs(expKey % 1000) / 1000.0))));
                 var q = new OptionQuote(symbol.toUpperCase(Locale.ROOT),
                         occ(symbol, exp, call, k), type, bd(k), exp,
                         bd(Math.max(0.0, px - half)), bd(px + half), bd(px),
@@ -256,17 +409,80 @@ public final class SimulatedWorld {
                 calls, puts, simMillis(), "simulated", Freshness.SIMULATED));
     }
 
-    /** Daily bars (seeded history + rolled sim days), inclusive range. */
+    /**
+     * Time to expiry in YEARS measured in OPEN-MARKET seconds to the expiration bell — so option
+     * time value converges continuously to intrinsic as the sim clock runs through expiration day.
+     * At 3:59pm on expiry this is ~one minute of a year, not the old half-day floor.
+     */
+    public double timeToExpiryYears(LocalDate exp) {
+        return openSecondsUntil(LocalDateTime.of(exp, CLOSE)) / YEAR_SECONDS;
+    }
+
+    /** Open-market seconds from now (sim) to a target datetime; 0 once at/after target. */
+    private double openSecondsUntil(LocalDateTime target) {
+        if (!target.isAfter(simTime)) return 0;
+        LocalDate d = simTime.toLocalDate();
+        double secs = 0;
+        // remainder of today's session
+        if (MarketHours.isTradingDay(d)) {
+            LocalTime from = simTime.toLocalTime().isBefore(OPEN) ? OPEN : simTime.toLocalTime();
+            LocalTime to = d.equals(target.toLocalDate())
+                    ? (target.toLocalTime().isAfter(CLOSE) ? CLOSE : target.toLocalTime())
+                    : CLOSE;
+            if (to.isAfter(from)) secs += java.time.Duration.between(from, to).getSeconds();
+        }
+        if (d.equals(target.toLocalDate())) return secs;
+        d = d.plusDays(1);
+        while (d.isBefore(target.toLocalDate())) {
+            if (MarketHours.isTradingDay(d)) secs += SESSION_SECONDS;
+            d = d.plusDays(1);
+        }
+        // partial final day up to the target time
+        if (d.equals(target.toLocalDate()) && MarketHours.isTradingDay(d)) {
+            LocalTime to = target.toLocalTime().isAfter(CLOSE) ? CLOSE : target.toLocalTime();
+            if (to.isAfter(OPEN)) secs += java.time.Duration.between(OPEN, to).getSeconds();
+        }
+        return secs;
+    }
+
+    private static double strikeStep(double ref) {
+        return ref < 25 ? 0.5 : ref < 100 ? 1.0 : ref < 300 ? 2.5 : 5.0;
+    }
+
+    /** The sim close for a date: the rolled daily bar's close, else the current spot (today). */
+    public java.util.Optional<BigDecimal> closeOn(String symbol, LocalDate date) {
+        Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
+        if (st == null) return java.util.Optional.empty();
+        synchronized (this) {
+            for (int i = st.daily.size() - 1; i >= 0; i--) {
+                if (st.daily.get(i).date().equals(date)) return java.util.Optional.of(st.daily.get(i).close());
+            }
+            if (date.equals(simTime.toLocalDate())) return java.util.Optional.of(bd(st.spot));
+        }
+        return java.util.Optional.empty();
+    }
+
     public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
         Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
         if (st == null) return List.of();
         List<Candle> out = new ArrayList<>();
         synchronized (this) {
-            for (Candle c : st.daily) {
-                if (!c.date().isBefore(from) && !c.date().isAfter(to)) out.add(c);
-            }
+            for (Candle c : st.daily) if (!c.date().isBefore(from) && !c.date().isAfter(to)) out.add(c);
         }
         return out;
+    }
+
+    /** Statistical self-check for validation reports: realized annualized vol of the history. */
+    public double realizedVol(String symbol) {
+        Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
+        if (st == null || st.daily.size() < 3) return Double.NaN;
+        List<Candle> c;
+        synchronized (this) { c = new ArrayList<>(st.daily); }
+        double mean = 0; double[] r = new double[c.size() - 1];
+        for (int i = 1; i < c.size(); i++) { r[i - 1] = Math.log(c.get(i).close().doubleValue() / c.get(i - 1).close().doubleValue()); mean += r[i - 1]; }
+        mean /= r.length;
+        double var = 0; for (double x : r) var += (x - mean) * (x - mean);
+        return Math.sqrt(var / (r.length - 1) * 252);
     }
 
     private static String occ(String sym, LocalDate exp, boolean call, double strike) {

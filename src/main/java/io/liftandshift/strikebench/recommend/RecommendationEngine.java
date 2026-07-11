@@ -161,7 +161,10 @@ public final class RecommendationEngine {
         double minConfidence = req.minConfidence() == null ? 0 : req.minConfidence();
 
         List<String> notes = new ArrayList<>();
-        if (!MarketHours.isRegularSession(clock.instant())) {
+        // ONE CLOCK PER LANE: a simulated session's clock is always in-session while it runs —
+        // the observed market being closed says nothing about THIS market (review P2).
+        java.time.Instant laneNow = market.simInstant(activeWorldId()).orElseGet(clock::instant);
+        if (activeWorldId() == null && !MarketHours.isRegularSession(laneNow)) {
             notes.add("The market is closed — prices and strikes here are anchored to the PRIOR CLOSE, "
                     + "not a live quote, and can shift at the next open.");
         }
@@ -188,8 +191,8 @@ public final class RecommendationEngine {
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
         }
 
-        LocalDate today = LocalDate.now(clock);
-        LocalDate near = pickExpiration(expirations, req.horizon(), today, allow0dte, clock.instant(), notes);
+        LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
+        LocalDate near = pickExpiration(expirations, req.horizon(), today, allow0dte, laneNow, notes);
         if (near == null) {
             notes.add("No expiration matches the requested horizon");
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
@@ -357,8 +360,9 @@ public final class RecommendationEngine {
                     : symbol + " has no listed options");
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
-        LocalDate today = LocalDate.now(clock);
-        LocalDate near = pickExpiration(expirations, req.horizon(), today, false, clock.instant(), notes);
+        java.time.Instant ladderNow = market.simInstant(activeWorldId()).orElseGet(clock::instant);
+        LocalDate today = LocalDate.ofInstant(ladderNow, MarketHours.EASTERN);
+        LocalDate near = pickExpiration(expirations, req.horizon(), today, false, ladderNow, notes);
         OptionChain chain = near == null ? null : market.chain(symbol, near, activeWorldId()).orElse(null);
         if (chain == null || chain.isEmpty()) {
             notes.add("Option chain unavailable for " + symbol);

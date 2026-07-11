@@ -115,6 +115,17 @@ public final class MarketDataService {
         try { return worldResolver.apply(worldId); } catch (RuntimeException e) { return java.util.Optional.empty(); }
     }
 
+    /** The lane's effective clock: the world's sim instant inside a simulated session, else empty. */
+    public Optional<java.time.Instant> simInstant(String worldId) {
+        return world(worldId).map(w -> w.simTime()
+                .atZone(java.time.ZoneId.of("America/New_York")).toInstant());
+    }
+
+    /** The world's own symbol set (empty optional = observed lane). */
+    public Optional<java.util.Set<String>> worldSymbols(String worldId) {
+        return world(worldId).map(io.liftandshift.strikebench.market.sim.SimulatedWorld::symbols);
+    }
+
     /** World-aware quote: a simulated world serves ITS data (labeled SIMULATED); else observed. */
     public Optional<Quote> quote(String symbol, String worldId) {
         var w = world(worldId);

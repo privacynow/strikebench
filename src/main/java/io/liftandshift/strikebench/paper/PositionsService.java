@@ -79,9 +79,16 @@ public final class PositionsService {
         });
     }
 
+    /** The account's market lane: a SIMULATION account's shares price against ITS world. */
+    private String worldOf(String accountId) {
+        var rows = db.query("SELECT world_id FROM accounts WHERE id=?", r -> r.str("world_id"), accountId);
+        return rows.isEmpty() ? null : rows.getFirst();
+    }
+
     private PositionView view(Position p) {
         long locked = db.with(c -> lockedShares(c, p.accountId(), p.symbol()));
-        Long last = marks.underlyingMark(p.symbol()).map(Money::toCents).orElse(null); // per-share cents
+        Long last = marks.underlyingMark(p.symbol(), worldOf(p.accountId()))
+                .map(Money::toCents).orElse(null); // per-share cents
         Long mv = last == null ? null : last * p.shares();
         Long unreal = last == null ? null : (last - p.avgCostCents()) * p.shares();
         Double gainPct = last == null || p.avgCostCents() <= 0 ? null
@@ -95,8 +102,9 @@ public final class PositionsService {
     /** Buys shares at the executable ask. Blocks on missing/one-sided quotes or insufficient cash. */
     public StockTradeResult buy(String accountId, String symbol, long shares) {
         String sym = norm(symbol);
-        List<String> warnings = validateOrder(shares);
-        MarksSource.LegMark mark = stockMark(sym);
+        String world = worldOf(accountId);
+        List<String> warnings = validateOrder(shares, world);
+        MarksSource.LegMark mark = stockMark(sym, world);
         BigDecimal ask = mark.executable(LegAction.BUY);
         if (ask == null) {
             throw new TradeRejectedException(List.of("No executable ask for " + sym
@@ -143,8 +151,9 @@ public final class PositionsService {
     /** Sells FREE shares at the executable bid; realized P/L is reported against the average basis. */
     public StockTradeResult sell(String accountId, String symbol, long shares) {
         String sym = norm(symbol);
-        List<String> warnings = validateOrder(shares);
-        MarksSource.LegMark mark = stockMark(sym);
+        String world = worldOf(accountId);
+        List<String> warnings = validateOrder(shares, world);
+        MarksSource.LegMark mark = stockMark(sym, world);
         BigDecimal bid = mark.executable(LegAction.SELL);
         if (bid == null) {
             throw new TradeRejectedException(List.of("No executable bid for " + sym
@@ -184,20 +193,23 @@ public final class PositionsService {
         return new StockTradeResult(view(updated), shares, priceCents, proceeds, realized[0], warnings);
     }
 
-    private List<String> validateOrder(long shares) {
+    private List<String> validateOrder(long shares, String world) {
         if (shares <= 0) throw new IllegalArgumentException("shares must be positive");
         if (shares > MAX_SHARES_PER_ORDER) {
             throw new IllegalArgumentException("shares exceeds the " + MAX_SHARES_PER_ORDER + " practice cap");
         }
         List<String> warnings = new ArrayList<>();
-        if (!io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant())) {
+        // ONE CLOCK PER LANE: a running sim session is its own open market — the observed
+        // market being closed is irrelevant (and saying otherwise was a false claim).
+        java.time.Instant now = marks.simNow(world).orElseGet(clock::instant);
+        if (world == null && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(now)) {
             warnings.add("Market is closed — quotes are leftovers from the last session and paper fills are simulated");
         }
         return warnings;
     }
 
-    private MarksSource.LegMark stockMark(String sym) {
-        return marks.legMark(sym, Leg.stock(LegAction.BUY, 1, BigDecimal.ONE))
+    private MarksSource.LegMark stockMark(String sym, String world) {
+        return marks.legMark(sym, Leg.stock(LegAction.BUY, 1, BigDecimal.ONE), world)
                 .orElseThrow(() -> new TradeRejectedException(List.of("No quote available for " + sym)));
     }
 

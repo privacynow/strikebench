@@ -147,6 +147,27 @@ public final class TradeService {
                 throw new IllegalArgumentException("recording a real trade requires proposedNetCents — the actual net fill");
             }
             p = computePlan(req);
+            // A real fill is a FACT to record, not an order to risk-screen (CP-9/R6): entry-quality
+            // blocks (undefined risk, too-good-to-be-true quotes) become loud warnings here — the
+            // riskiest real trades are the ones the learning loop most needs to see. Structural
+            // problems (unknown symbol, no market at all) still reject.
+            List<String> hardBlocks = new ArrayList<>();
+            List<String> softened = new ArrayList<>();
+            for (String b : p.blocks()) {
+                if (b.startsWith("Undefined (unlimited) risk") || b.startsWith("Computed max loss is $0.00")) {
+                    softened.add("RECORDED WITH UNSCREENED RISK: " + b);
+                } else {
+                    hardBlocks.add(b);
+                }
+            }
+            if (!softened.isEmpty() && hardBlocks.isEmpty()) {
+                List<String> warns = new ArrayList<>(p.warnings());
+                warns.addAll(softened);
+                p = new Plan(p.filledLegs(), p.entryNet(), p.fees(), 0, p.maxLoss(), p.maxProfit(),
+                        p.breakevens(), p.pop(), p.ev(), p.underlyingCents(), p.freshness(),
+                        List.of(), warns, p.snapshotJson(), p.sharesToLock(), p.legDetails(),
+                        p.assignmentProb(), p.payoff(), p.analytics());
+            }
         }
         if (!p.blocks().isEmpty()) reject(req, p.blocks());
         String tradeId = Ids.trade();
@@ -350,8 +371,11 @@ public final class TradeService {
         accountSnapshot.invalidateAll(); // the book changed — no consumer may see the old snapshot
         CloseResult result = db.tx(c -> {
             TradeRecord t = requireStatus(c, tradeId, TradeRecord.ACTIVE);
-            java.time.Instant now = clock.instant();
-            LocalDate today = LocalDate.now(clock);
+            // ONE CLOCK PER LANE: a sim-world trade dies at the SIM bell and settles at the sim
+            // closes the moment the SIM calendar passes expiry — never the JVM's calendar.
+            String settleWorld = worldOf(t.accountId());
+            java.time.Instant now = nowFor(settleWorld);
+            LocalDate today = LocalDate.ofInstant(now, io.liftandshift.strikebench.market.MarketHours.EASTERN);
             // A contract is settleable only after its 16:00 ET final bell — a bare date check
             // would let expiry-day positions cash out at intrinsic hours before they die.
             boolean anyAlive = t.legs().stream()
@@ -596,7 +620,12 @@ public final class TradeService {
      * demand if every short put were exercised (the post-assignment picture).
      */
     public Map<String, Object> portfolioHeat(String accountId) {
-        List<TradeRecord> active = list(accountId, TradeRecord.ACTIVE, 0, 200).trades();
+        List<TradeRecord> all = list(accountId, TradeRecord.ACTIVE, 0, 200).trades();
+        // EXTERNAL trades are excluded from paper-CASH arithmetic (their money lives at the
+        // broker — same identity as openPositionsValue); they are counted separately so the
+        // strip can label them instead of silently bending paper buying power (review P2).
+        List<TradeRecord> active = all.stream().filter(t -> !t.external()).toList();
+        long externalCount = all.size() - active.size();
         Account acct = db.with(c -> AccountService.get(c, accountId));
         long totalMaxLoss = 0, assignmentCash = 0;
         int shortVol = 0;
@@ -622,6 +651,7 @@ public final class TradeService {
         out.put("concentrationPct", totalMaxLoss > 0 ? Math.round(100.0 * worstSymbol / totalMaxLoss) : 0);
         out.put("assignmentCashCents", assignmentCash);
         out.put("postAssignmentBuyingPowerCents", acct.buyingPowerCents() - assignmentCash);
+        out.put("externalTrades", externalCount); // marked/judged elsewhere; never in paper cash math
         return out;
     }
 
@@ -688,7 +718,9 @@ public final class TradeService {
             }
             PayoffCurve curve = PayoffCurve.of(curveLegs, t.qty());
             double ivAvg = ivs.isEmpty() ? FALLBACK_IV : ivs.stream().mapToDouble(Double::doubleValue).average().orElse(FALLBACK_IV);
-            popNow = curve.probProfit(underlyingCents / 100.0, ivAvg, yearsToNearestExpiry(t.legs()), 0);
+            TimeToExpiry mtte = timeToNearestExpiry(t.legs(), todayFor(world));
+            popNow = curve.probProfit(underlyingCents / 100.0, ivAvg, mtte.tYears(),
+                    marks.riskFreeRate((int) Math.max(1, mtte.calendarDays())));
         }
         return new MarkView(t.id(), now, underlyingCents, closeCost, unrealized, popNow, worst.name(),
                 greeks, complete ? legGreeks : List.of());
@@ -861,7 +893,9 @@ public final class TradeService {
         BigDecimal underlying = marks.underlyingMark(req.symbol(), world).orElse(null);
         if (underlying == null) blocks.add("No current price for " + req.symbol());
 
-        java.time.Instant nowInstant = clock.instant();
+        // ONE CLOCK PER LANE: a world trade's expiry gates, session warnings and DTE all run on
+        // the SIM clock (the clock that priced the chain) — never the JVM's (adversarial review P0).
+        java.time.Instant nowInstant = nowFor(world);
         for (Leg leg : req.legs()) {
             if (!leg.isStock() && io.liftandshift.strikebench.market.MarketHours.contractDead(leg.expiration(), nowInstant)) {
                 blocks.add("Leg " + legDesc(leg) + " is already expired — contracts die at 4:00pm ET on their expiration day; "
@@ -869,7 +903,7 @@ public final class TradeService {
             }
         }
         if (!blocks.isEmpty()) return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0, Freshness.MISSING, blocks, warnings, "{}");
-        if (!io.liftandshift.strikebench.market.MarketHours.isRegularSession(nowInstant)) {
+        if (world == null && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(nowInstant)) {
             warnings.add("Market is closed — quotes are leftovers from the last session and paper fills are simulated");
         }
 
@@ -1037,8 +1071,10 @@ public final class TradeService {
         List<Map<String, Object>> payoff = chartPointMaps(riskCurve, underlying);
 
         double spot = underlying.doubleValue();
-        TimeToExpiry tte = timeToNearestExpiry(filled);
+        TimeToExpiry tte = timeToNearestExpiry(filled,
+                LocalDate.ofInstant(nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN));
         double t = tte.tYears();
+        double rfr = marks.riskFreeRate((int) Math.max(1, tte.calendarDays()));
         if (ivs.isEmpty()) {
             warnings.add("No implied volatility available — POP/EV assume a 30% placeholder volatility");
         }
@@ -1073,7 +1109,7 @@ public final class TradeService {
             blocks.add("Undefined (unlimited) risk: this position can lose more than any amount reserved. Add a protective leg to cap the loss.");
             Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
                     snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
-                    0, null, null, null, worst, marks.underlyingAsOfMs(req.symbol()).orElse(null));
+                    0, null, null, null, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null), rfr);
             return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked);
         }
@@ -1089,8 +1125,8 @@ public final class TradeService {
         long fees = req.feesOverrideCents() != null ? Math.max(0, req.feesOverrideCents()) : feesFor(filled, req.qty());
         long reserve = shareContext ? 0 : Math.max(0, maxLoss + entryNet);
 
-        Double pop = riskCurve.probProfit(spot, ivAvg, t, 0);
-        Long ev = riskCurve.expectedValueCents(spot, ivAvg, t, 0);
+        Double pop = riskCurve.probProfit(spot, ivAvg, t, rfr);
+        Long ev = riskCurve.expectedValueCents(spot, ivAvg, t, rfr);
 
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("underlying", underlying.toPlainString());
@@ -1102,7 +1138,7 @@ public final class TradeService {
 
         Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
                 snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
-                fees, maxLoss, maxProfit, ev, worst, marks.underlyingAsOfMs(req.symbol()).orElse(null));
+                fees, maxLoss, maxProfit, ev, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null), rfr);
         return new Plan(filled, entryNet, fees, reserve, maxLoss, maxProfit,
                 riskCurve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
                 pop, ev, Money.toCents(underlying), worst, blocks, warnings, Json.write(snapshot), sharesToLock,
@@ -1163,9 +1199,9 @@ public final class TradeService {
                                                List<Map<String, Object>> snaps, int qty,
                                                long entryNet, long executableNet, Long packageMid,
                                                Long proposedNet, long fees, Long maxLoss, Long maxProfit,
-                                               Long ev, Freshness freshness, Long sourceAsOf) {
+                                               Long ev, Freshness freshness, Long sourceAsOf, double rfr) {
         Map<String, Object> out = new LinkedHashMap<>();
-        var map = io.liftandshift.strikebench.pricing.ProbabilityMap.of(curve, spot, ivAvg, t, shortStrikes);
+        var map = io.liftandshift.strikebench.pricing.ProbabilityMap.of(curve, spot, ivAvg, t, rfr, shortStrikes);
         Map<String, Object> prob = new LinkedHashMap<>();
         prob.put("pAnyProfit", map.pAnyProfit());
         prob.put("pMaxProfit", map.pMaxProfit());
@@ -1185,7 +1221,7 @@ public final class TradeService {
         List<Map<String, Object>> sens = new ArrayList<>();
         for (double scale : new double[]{0.8, 1.0, 1.2}) {
             sens.add(Map.of("ivScale", scale,
-                    "evCents", curve.expectedValueCents(spot, ivAvg * scale, t, 0)));
+                    "evCents", curve.expectedValueCents(spot, ivAvg * scale, t, rfr)));
         }
         out.put("evSensitivity", sens);
 
@@ -1338,11 +1374,24 @@ public final class TradeService {
                 r -> r.lng("n"), tradeId).getFirst();
     }
 
+    /** The lane's effective clock: inside a simulated world, the WORLD's sim instant — every
+     *  gate, warning, DTE and analytic for a world trade must run on the clock that priced it. */
+    private java.time.Instant nowFor(String worldId) {
+        return marks.simNow(worldId).orElseGet(clock::instant);
+    }
+
+    private LocalDate todayFor(String worldId) {
+        return LocalDate.ofInstant(nowFor(worldId), io.liftandshift.strikebench.market.MarketHours.EASTERN);
+    }
+
     /** Sessions + calendar days + the model time to the nearest expiry, with its basis disclosed. */
     record TimeToExpiry(int sessions, long calendarDays, double tYears, String basis) {}
 
     private TimeToExpiry timeToNearestExpiry(List<Leg> legs) {
-        LocalDate today = LocalDate.now(clock);
+        return timeToNearestExpiry(legs, LocalDate.now(clock));
+    }
+
+    private TimeToExpiry timeToNearestExpiry(List<Leg> legs, LocalDate today) {
         LocalDate nearest = legs.stream().filter(l -> !l.isStock())
                 .map(Leg::expiration).filter(java.util.Objects::nonNull)
                 .min(LocalDate::compareTo).orElse(null);

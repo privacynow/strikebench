@@ -122,7 +122,7 @@ public final class ApiServer {
         this.market = market;
         this.eventCalendar = new io.liftandshift.strikebench.market.EventService(market, clock);
         this.simSessions = new io.liftandshift.strikebench.market.sim.SimulationSessions(db, events);
-        market.setWorldResolver(id -> simSessions.get(id));
+        market.setWorldResolver(id -> simSessions.resolveForData(id));
         this.audit = audit;
         this.accounts = accounts;
         this.trades = trades;
@@ -358,7 +358,16 @@ public final class ApiServer {
             c.routes.get("/api/status", this::status);
             c.routes.get("/api/config", this::config);
             c.routes.get("/api/health", this::health);
-            c.routes.get("/api/universe", ctx -> ctx.json(universe.describe()));
+            c.routes.get("/api/universe", ctx -> {
+                String w = worldParam(activeWorld(ctx));
+                if (w != null) {
+                    var syms = market.worldSymbols(w).map(x -> List.copyOf(x)).orElse(List.of());
+                    ctx.json(Map.of("key", "world", "name", "Simulated session",
+                            "symbols", syms, "world", w));
+                    return;
+                }
+                ctx.json(universe.describe());
+            });
             c.routes.put("/api/universe", this::universeSelect);
             c.routes.get("/api/quotes", this::quotesBatch);
             c.routes.get("/api/market/engine", ctx -> ctx.json(marketEngine.status())); // Data Center: engine health
@@ -456,6 +465,9 @@ public final class ApiServer {
                 db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
                                 + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
                         "active_world:" + ownerId(ctx), w, clock.instant().toString());
+                // Owner-scoped hint: other tabs of the SAME user adopt the switch (multi-tab truth).
+                events.publish("world.selected", Map.of("world", w,
+                        "user", ownerId(ctx) == null ? "local" : ownerId(ctx)));
                 ctx.json(Map.of("world", w));
             });
             c.routes.get("/api/sim/market", ctx -> ctx.json(Map.of("sessions", simSessions.list(ownerId(ctx)))));
@@ -525,12 +537,16 @@ public final class ApiServer {
             c.routes.get("/api/portfolio/greeks", ctx ->
                     ctx.json(trades.portfolioGreeks(currentAccount(ctx).id())));
 
-            c.routes.post("/api/backtest", ctx ->
-                    ctx.json(backtester.run(requireBody(bodyOrNull(ctx, Backtester.BacktestRequest.class)), analysisCtx(ctx))));
-            c.routes.post("/api/backtest/portfolio", ctx ->
-                    ctx.json(new io.liftandshift.strikebench.backtest.PortfolioBacktester(market, cfg, clock, db)
-                            .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.backtest.PortfolioBacktester.PortfolioRequest.class)),
-                                    analysisCtx(ctx))));
+            c.routes.post("/api/backtest", ctx -> {
+                requireObservedLane(ctx, "Backtesting replays the REAL market's history");
+                ctx.json(backtester.run(requireBody(bodyOrNull(ctx, Backtester.BacktestRequest.class)), analysisCtx(ctx)));
+            });
+            c.routes.post("/api/backtest/portfolio", ctx -> {
+                requireObservedLane(ctx, "Portfolio backtesting replays the REAL market's history");
+                ctx.json(new io.liftandshift.strikebench.backtest.PortfolioBacktester(market, cfg, clock, db)
+                        .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.backtest.PortfolioBacktester.PortfolioRequest.class)),
+                                analysisCtx(ctx)));
+            });
             c.routes.get("/api/backtests", ctx -> ctx.json(Map.of("backtests", backtester.list())));
             c.routes.get("/api/backtests/{id}", ctx -> ctx.json(backtester.get(ctx.pathParam("id"))));
 
@@ -694,6 +710,20 @@ public final class ApiServer {
      * and PASSED to engines — never stored in a ThreadLocal (virtual-thread fan-outs would lose it,
      * and background work must always read observed).
      */
+    /** Lane purity: features that replay OBSERVED history refuse to run inside a simulated
+     *  session with an honest, actionable message rather than silently blending markets. */
+    private void requireObservedLane(Context ctx, String what) {
+        if (!"observed".equals(activeWorld(ctx))) {
+            throw new IllegalStateException(what + " \u2014 it has no meaning inside a simulated session. "
+                    + "Return to the real market to run it; your simulated session keeps running.");
+        }
+    }
+
+    /** Normalizes the route-level world to the service-layer convention (null = observed). */
+    private static String worldParam(String world) {
+        return world == null || "observed".equals(world) ? null : world;
+    }
+
     /** The caller's active market world: 'observed' unless they switched to a sim session. */
     private String activeWorld(Context ctx) {
         var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), "active_world:" + ownerId(ctx));
@@ -710,17 +740,39 @@ public final class ApiServer {
         SimMarketCreate b = requireBody(bodyOrNull(ctx, SimMarketCreate.class));
         String start = b.startSimTime() != null && !b.startSimTime().isBlank() ? b.startSimTime()
                 : nextSimOpen().toString();
+        // REAL-PRICE ANCHORS (review P2): a symbol with no explicit start price anchors at its
+        // OBSERVED quote when one exists — 'AAPL:1' should feel like AAPL, not a $100 stand-in.
+        // Made-up tickers start at $100, and the response DISCLOSES every resolution.
+        java.util.Map<String, Double> spots = new java.util.LinkedHashMap<>(
+                b.spots() == null ? java.util.Map.of() : b.spots());
+        java.util.Map<String, String> spotBasis = new java.util.LinkedHashMap<>();
+        if (b.symbols() != null) {
+            for (String sym : b.symbols().keySet()) {
+                if (spots.containsKey(sym)) { spotBasis.put(sym, "user"); continue; }
+                var q = market.quote(sym).map(io.liftandshift.strikebench.model.Quote::mark).orElse(null);
+                if (q != null && q.signum() > 0) {
+                    spots.put(sym, q.doubleValue());
+                    spotBasis.put(sym, "anchored to the real market's last price");
+                } else {
+                    spots.put(sym, 100.0);
+                    spotBasis.put(sym, "made-up ticker — starts at $100");
+                }
+            }
+        }
+        // Seed default varies per session (still shown + persisted — same seed replays the world).
+        long seed = b.seed() != null ? b.seed() : Math.floorMod(clock.millis(), 1_000_000L);
         var cfg = new io.liftandshift.strikebench.market.sim.SimulatedWorld.Config(null,
                 b.name() == null ? "Simulated session" : b.name(),
-                b.symbols(), b.spots() == null ? java.util.Map.of() : b.spots(),
+                b.symbols(), spots,
                 b.scenario() == null ? "CHOP" : b.scenario(),
                 b.volAnnual() == null || b.volAnnual() <= 0 ? 0.3 : b.volAnnual(),
-                b.seed() == null ? 4242L : b.seed(), start, b.speed() == null ? 1 : b.speed());
+                seed, start, b.speed() == null ? 1 : b.speed());
         var w = simSessions.create(cfg, ownerId(ctx));
         // The SIMULATION ACCOUNT: the only lane allowed to trade against this world.
         var acct = accounts.getOrCreateForWorld(w.worldId(), (b.name() == null ? "Simulation" : b.name()) + " account");
         ctx.status(201).json(Map.of("worldId", w.worldId(), "accountId", acct.id(),
-                "config", w.config(), "simTime", w.simTime().toString()));
+                "config", w.config(), "simTime", w.simTime().toString(),
+                "spotBasis", spotBasis, "modelVersion", w.modelVersion()));
     }
 
     /** The next sim session open: today 09:30 ET if a trading day and before close, else next open. */
@@ -761,8 +813,17 @@ public final class ApiServer {
         out.put("resolved", resolved);
         out.put("winRate", resolved > 0 ? Math.round(100.0 * wins / resolved) : null);
         out.put("realizedPnlCents", realized);
-        out.put("note", "Every price in this world was generated (seed " + w.config().seed()
-                + ", scenario " + w.config().scenario() + ") — outcomes measure DECISIONS, not the market.");
+        // Replay record: model version + every injected event/speed change — WITHOUT this the
+        // seed line below would overclaim (injections are not derivable from the seed).
+        var replay = simSessions.replayRecord(worldId, ownerId(ctx));
+        out.put("modelVersion", replay.getOrDefault("modelVersion", "sim-1"));
+        out.put("events", replay.getOrDefault("events", List.of()));
+        int eventCount = replay.get("events") instanceof List<?> l ? l.size() : 0;
+        out.put("note", "Every price in this world was generated (model " + replay.getOrDefault("modelVersion", "sim-1")
+                + ", seed " + w.config().seed() + ", scenario " + w.config().scenario() + ")"
+                + (eventCount > 0 ? " plus " + eventCount + " manually injected event" + (eventCount == 1 ? "" : "s")
+                        + " listed below — replay needs the seed AND the event log" : "")
+                + " — outcomes measure DECISIONS, not the market.");
         ctx.json(out);
     }
 
@@ -969,7 +1030,8 @@ public final class ApiServer {
             mac.init(new javax.crypto.spec.SecretKeySpec(ackSecret, "HmacSHA256"));
             String payload = req.symbol() + "|" + req.strategy() + "|" + req.qty() + "|"
                     + io.liftandshift.strikebench.util.Json.canonical(req.legs()) + "|"
-                    + req.proposedNetCents() + "|" + ts;
+                    + req.proposedNetCents() + "|" + req.feesOverrideCents() + "|"
+                    + req.accountId() + "|" + ts;
             return java.util.HexFormat.of().formatHex(mac.doFinal(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         } catch (Exception e) { throw new IllegalStateException(e); }
     }
@@ -1047,6 +1109,31 @@ public final class ApiServer {
     /** Light batch quotes for the ticker tape and dashboards — no chains, no news. */
     private void quotesBatch(Context ctx) {
         String raw = ctx.queryParam("symbols");
+        String world = worldParam(activeWorld(ctx));
+        if (world != null) {
+            // ONE LANE PER SCREEN: inside a simulated session the dashboard tiles quote the
+            // WORLD's symbols from the world — observed AAPL under a SIMULATED band was the
+            // 'quiet lie' the honesty rules forbid (review P1).
+            List<String> syms = raw == null || raw.isBlank()
+                    ? market.worldSymbols(world).map(x -> List.copyOf(x)).orElse(List.of())
+                    : java.util.Arrays.stream(raw.split(",")).map(x -> x.trim().toUpperCase(Locale.ROOT))
+                        .filter(x -> !x.isBlank()).distinct().toList();
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (String sym : syms.stream().limit(40).toList()) {
+                market.quote(sym, world).ifPresent(q -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("symbol", q.symbol());
+                    m.put("description", q.description());
+                    m.put("last", q.last());
+                    m.put("prevClose", q.prevClose());
+                    m.put("freshness", q.freshness().name());
+                    m.put("source", q.source());
+                    rows.add(m);
+                });
+            }
+            ctx.json(Map.of("quotes", rows, "requested", syms.size(), "world", world));
+            return;
+        }
         List<String> symbols = raw == null || raw.isBlank()
                 ? universe.active().symbols()
                 : java.util.Arrays.stream(raw.split(",")).map(s -> s.trim().toUpperCase(Locale.ROOT))
@@ -1318,17 +1405,17 @@ public final class ApiServer {
         if (b.structures().size() > 30) throw new IllegalArgumentException("at most 30 structures");
         String sym = b.symbol() == null ? "" : b.symbol().trim().toUpperCase(Locale.ROOT);
         if (sym.isEmpty()) throw new IllegalArgumentException("symbol is required");
-        double spot = market.quote(sym)
+        double spot = market.quote(sym, worldParam(activeWorld(ctx)))
                 .map(q -> q.mark()).filter(java.util.Objects::nonNull)
                 .map(java.math.BigDecimal::doubleValue).filter(v -> v > 0)
                 .orElseThrow(() -> new java.util.NoSuchElementException(
                         "No price for " + sym + " — a simulation needs a real (or demo) quote to anchor on."));
         int qty = b.qty() == null ? 1 : Math.clamp(b.qty(), 1, 100);
         double r = market.riskFreeRate(Math.max(1, b.spec().sane().horizonDays()));
-        io.liftandshift.strikebench.sim.ScenarioSpec spec = calibrateVol(sym, b.spec());
+        io.liftandshift.strikebench.sim.ScenarioSpec spec = calibrateVol(sym, b.spec(), worldParam(activeWorld(ctx)));
         io.liftandshift.strikebench.sim.IvSpec iv = b.iv();
         if (iv == null) {
-            Double atm = atmIvOf(sym);
+            Double atm = atmIvOf(sym, worldParam(activeWorld(ctx)));
             iv = io.liftandshift.strikebench.sim.IvSpec.flat(atm != null ? atm : spec.sane().volAnnual());
         }
         List<io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem> items = new ArrayList<>();
@@ -1339,7 +1426,7 @@ public final class ApiServer {
                 refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(), "reason", legProblem));
                 continue;
             }
-            MarketEntry me = marketEntry(sym, st.legs(), qty);
+            MarketEntry me = marketEntry(sym, st.legs(), qty, worldParam(activeWorld(ctx)));
             var legsToRun = me != null && me.resolvedLegs() != null ? me.resolvedLegs() : st.legs();
             items.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem(
                     st.key(), legsToRun,
@@ -1353,12 +1440,16 @@ public final class ApiServer {
         // R9: fees ride each outcome so the ranking can be judged NET of round-trip commissions.
         List<Map<String, Object>> feeAware = new ArrayList<>();
         for (var oc : report.results()) {
-            long legsN = items.stream().filter(it -> it.key().equals(oc.key()))
-                    .findFirst().map(it -> (long) it.legs().size()).orElse(0L);
+            // ONE fee convention product-wide (ledger rule): OPTION contracts only, ratio-aware —
+            // a 1x2 backspread pays for 3 contracts, a buy-write's stock leg pays none.
+            long contractsN = items.stream().filter(it -> it.key().equals(oc.key()))
+                    .findFirst().map(it -> it.legs().stream()
+                            .filter(l -> !"STOCK".equalsIgnoreCase(l.type()))
+                            .mapToLong(l -> Math.max(1, l.ratio())).sum()).orElse(0L);
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("key", oc.key());
             m.put("result", oc.result());
-            m.put("feesCents", legsN * cfg.feePerContractCents() * 2L * qty);
+            m.put("feesCents", contractsN * cfg.feePerContractCents() * 2L * qty);
             feeAware.add(m);
         }
         ctx.json(Map.of("results", feeAware, "refused", refused,
@@ -1390,26 +1481,32 @@ public final class ApiServer {
     private void simScenario(Context ctx) {
         ScenarioRequest b = requireBody(bodyOrNull(ctx, ScenarioRequest.class));
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
-        ctx.json(simEngine.preview(b.symbol(), calibrateVol(b.symbol(), b.spec())));
+        ctx.json(simEngine.preview(b.symbol(), calibrateVol(b.symbol(), b.spec(), worldParam(activeWorld(ctx))), worldParam(activeWorld(ctx))));
     }
 
     /** volAnnual<=0 = "use market vol": the chain's ATM IV, so every symbol gets ITS OWN wildness. */
-    private io.liftandshift.strikebench.sim.ScenarioSpec calibrateVol(String symbol, io.liftandshift.strikebench.sim.ScenarioSpec spec) {
+    private io.liftandshift.strikebench.sim.ScenarioSpec calibrateVol(String symbol,
+            io.liftandshift.strikebench.sim.ScenarioSpec spec, String worldId) {
         if (spec.volAnnual() > 0) return spec;
-        Double atm = atmIvOf(symbol);
+        Double atm = atmIvOf(symbol, worldId);
         return atm != null ? spec.withVol(atm) : spec; // sane() falls back to its own default if truly nothing
     }
 
-    private Double atmIvOf(String symbol) {
+    private Double atmIvOf(String symbol) { return atmIvOf(symbol, null); }
+
+    private Double atmIvOf(String symbol, String worldId) {
         try {
-            var exps = market.expirations(symbol);
+            var exps = market.expirations(symbol, worldId);
             if (exps.isEmpty()) return null;
-            // ~30d expiry is the conventional IV anchor.
-            java.time.LocalDate target = java.time.LocalDate.now(clock).plusDays(30);
+            // ~30d expiry is the conventional IV anchor — on the LANE's clock.
+            java.time.LocalDate laneToday = market.simInstant(worldId)
+                    .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                    .orElseGet(() -> java.time.LocalDate.now(clock));
+            java.time.LocalDate target = laneToday.plusDays(30);
             java.time.LocalDate exp = exps.stream()
                     .min(java.util.Comparator.comparingLong(e -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e, target))))
                     .orElse(null);
-            var chain = exp == null ? null : market.chain(symbol, exp).orElse(null);
+            var chain = exp == null ? null : market.chain(symbol, exp, worldId).orElse(null);
             if (chain == null || chain.isEmpty() || chain.underlyingPrice() == null) return null;
             final java.math.BigDecimal spot = chain.underlyingPrice();
             return chain.calls().stream()
@@ -1422,7 +1519,7 @@ public final class ApiServer {
     private void simDataset(Context ctx) {
         ScenarioRequest b = requireBody(bodyOrNull(ctx, ScenarioRequest.class));
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
-        io.liftandshift.strikebench.sim.ScenarioSpec spec = calibrateVol(b.symbol(), b.spec()); // resolve ONCE
+        io.liftandshift.strikebench.sim.ScenarioSpec spec = calibrateVol(b.symbol(), b.spec(), worldParam(activeWorld(ctx))); // resolve ONCE
         ctx.json(simEngine.toJson(simEngine.runAndPersist(b.symbol(), spec, ownerId(ctx))));
     }
 
@@ -1434,7 +1531,7 @@ public final class ApiServer {
         if (sym.isEmpty()) throw new IllegalArgumentException("symbol is required");
         // Loud refusal on a missing quote — a strategy simulated against an invented $100 stock
         // would be fixture-masquerade all over again (404 via the NoSuchElementException mapper).
-        double spot = market.quote(sym)
+        double spot = market.quote(sym, worldParam(activeWorld(ctx)))
                 .map(q -> q.mark()).filter(java.util.Objects::nonNull)
                 .map(java.math.BigDecimal::doubleValue).filter(v -> v > 0)
                 .orElseThrow(() -> new java.util.NoSuchElementException(
@@ -1452,7 +1549,7 @@ public final class ApiServer {
         for (var lg : b.legs()) {
             if (lg.ratio() > 10) throw new IllegalArgumentException("ratio must be 1..10");
         }
-        MarketEntry me = marketEntry(sym, b.legs(), qty);
+        MarketEntry me = marketEntry(sym, b.legs(), qty, worldParam(activeWorld(ctx)));
         // CALIBRATION: volAnnual<=0 is the "use market vol" sentinel — replace with the chain's
         // ATM IV so a caller with no view on wildness gets THIS symbol's, not a canned 25%.
         io.liftandshift.strikebench.sim.ScenarioSpec spec = b.spec();
@@ -1499,8 +1596,13 @@ public final class ApiServer {
     }
 
     private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs, int qty) {
+        return marketEntry(symbol, legs, qty, null);
+    }
+
+    private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
+                                    int qty, String worldId) {
         try {
-            List<java.time.LocalDate> exps = market.expirations(symbol);
+            List<java.time.LocalDate> exps = market.expirations(symbol, worldId);
             if (exps.isEmpty()) return null;
             java.time.LocalDate today = java.time.LocalDate.now(clock);
             double entryPerUnit = 0;
@@ -1512,7 +1614,7 @@ public final class ApiServer {
             List<String> snaps = new ArrayList<>();
             for (var leg : legs) {
                 if ("STOCK".equalsIgnoreCase(leg.type())) {
-                    var q = market.quote(symbol).orElse(null);
+                    var q = market.quote(symbol, worldId).orElse(null);
                     if (q == null || q.mark() == null) return null;
                     double sign = "SELL".equalsIgnoreCase(leg.action()) ? -1 : 1;
                     entryPerUnit += sign * Math.max(1, leg.ratio()) * 100 * q.mark().doubleValue();
@@ -1525,7 +1627,7 @@ public final class ApiServer {
                         .min(java.util.Comparator.comparingLong(e2 -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e2, target))))
                         .orElse(null);
                 if (exp == null) return null;
-                var chain = market.chain(symbol, exp).orElse(null);
+                var chain = market.chain(symbol, exp, worldId).orElse(null);
                 if (chain == null || chain.isEmpty()) return null;
                 if (spotBd == null) spotBd = chain.underlyingPrice();
                 boolean call = "CALL".equalsIgnoreCase(leg.type());
@@ -1630,7 +1732,11 @@ public final class ApiServer {
             return;
         }
         Quote q = quote.get();
-        LocalDate today = LocalDate.now(clock);
+        // The chart window ends at the LANE's today: a fast-forwarded world's own rolled bars
+        // must render and feed HV — windowing on the real date silently hid the whole session.
+        LocalDate today = market.simInstant(worldParam(world))
+                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                .orElseGet(() -> LocalDate.now(clock));
 
         // The three remaining pieces are independent provider calls — the old serial waterfall
         // (expirations→chain→candles→SPY→QQQ) made the endpoint as slow as the SUM of them, which in
@@ -1670,12 +1776,19 @@ public final class ApiServer {
             out.put("ivAtm", ie.ivAtm());
             // The event model: an ESTIMATED earnings window from the issuer's SEC filing cadence
             // (never keywords), and an HONESTLY-ABSENT ex-div (no keyless source exists).
-            eventCalendar.nextEarnings(symbol).ifPresentOrElse(
-                    e -> out.put("earningsEstimate", Map.of(
-                            "date", e.estimated().toString(), "windowDays", e.windowDays(),
-                            "basis", e.basis(), "confirmed", e.confirmed())),
-                    () -> out.put("earningsEstimate", Map.of("available", false,
-                            "note", "not enough SEC quarterly filings to project a cadence")));
+            // A simulated world has NO earnings — a real company's calendar attached to a
+            // generated market would be a phantom event (review P2).
+            if (!"observed".equals(world)) {
+                out.put("earningsEstimate", Map.of("available", false,
+                        "note", "simulated market — no earnings exist in this world"));
+            } else {
+                eventCalendar.nextEarnings(symbol).ifPresentOrElse(
+                        e -> out.put("earningsEstimate", Map.of(
+                                "date", e.estimated().toString(), "windowDays", e.windowDays(),
+                                "basis", e.basis(), "confirmed", e.confirmed())),
+                        () -> out.put("earningsEstimate", Map.of("available", false,
+                                "note", "not enough SEC quarterly filings to project a cadence")));
+            }
             out.put("exDividend", Map.of("available", false,
                     "note", "no keyless ex-dividend source \u2014 connect a licensed calendar for confirmed dates"));
             out.put("hv30", Double.isNaN(hv30) ? null : hv30);
@@ -1683,6 +1796,7 @@ public final class ApiServer {
             out.put("expirations", ie.exps().stream().map(LocalDate::toString).toList());
             out.put("benchmarks", benchF.get());
             out.put("freshness", q.freshness().name());
+            out.put("asOfDate", today.toString()); // the LANE's today — client DTE math uses this, never Date.now()
             ctx.json(out);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -1731,7 +1845,10 @@ public final class ApiServer {
             case "1m", "3m", "6m", "ytd", "1y", "2y", "5y", "max" -> requested;
             default -> "1y";
         };
-        LocalDate today = LocalDate.now(clock);
+        // The lane's today: inside a world the chart must include the session's own rolled bars.
+        LocalDate today = market.simInstant(worldParam(activeWorld(ctx)))
+                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                .orElseGet(() -> LocalDate.now(clock));
         int days = switch (range) {
             case "1m" -> 30;
             case "3m" -> 91;
@@ -1755,6 +1872,11 @@ public final class ApiServer {
 
     private void news(Context ctx) {
         String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
+        if (!"observed".equals(activeWorld(ctx))) {
+            ctx.json(Map.of("symbol", symbol, "items", List.of(),
+                    "note", "simulated market \u2014 there is no news in this world; headlines belong to the real market"));
+            return;
+        }
         ctx.json(Map.of("symbol", symbol, "items", market.news(symbol)));
     }
 
@@ -1767,7 +1889,7 @@ public final class ApiServer {
 
     private void recommend(Context ctx) {
         RecommendationEngine.Result result = resolveAndRecommend(ctx);
-        ctx.json(decisionRanked(result, currentAccount(ctx)));
+        ctx.json(decisionRanked(result, currentAccount(ctx), activeWorld(ctx)));
     }
 
     /**
@@ -1776,12 +1898,14 @@ public final class ApiServer {
      * the Decision page and the opportunity scan use. The engine's quick screen score stays on each
      * candidate as a disclosed component. Evaluation trouble falls back to screen order, labeled.
      */
-    private Object decisionRanked(RecommendationEngine.Result result, Account acct) {
+    private Object decisionRanked(RecommendationEngine.Result result, Account acct, String world) {
         if (result.candidates() == null || result.candidates().size() < 2) return result;
         try {
+            // The decision score is computed from the SAME market that priced the candidates —
+            // inside a simulated session that is the world's spot/IV/vol, never observed (review P0).
             var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
                     result.riskMode(), result.candidates(), acct.buyingPowerCents(), null, false,
-                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED); // recommendations always price observed
+                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world));
             if (evals.size() != result.candidates().size()) return result; // partial evaluation: keep screen order
             com.fasterxml.jackson.databind.node.ObjectNode out =
                     (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(result);
@@ -1847,13 +1971,17 @@ public final class ApiServer {
     private void evaluate(Context ctx) {
         RecommendationEngine.Result result = resolveAndRecommend(ctx);
         Account acct = currentAccount(ctx);
+        String world = activeWorld(ctx);
+        boolean inWorld = !"observed".equals(world);
         String uid = auth.currentUserId(ctx);
         String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
         var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
-                result.riskMode(), result.candidates(), acct.buyingPowerCents(), ownerId, true);
-        // Record the surfaced pick as a calibration sample; its id lets a placed trade link back.
+                result.riskMode(), result.candidates(), acct.buyingPowerCents(), ownerId, !inWorld,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world));
+        // Record the surfaced pick as a calibration sample — REAL LANE ONLY: a simulated market's
+        // outcomes are self-graded homework and must never touch 'Your record' (review P0).
         String recommendationId = null;
-        if (!evals.isEmpty()) {
+        if (!evals.isEmpty() && !inWorld) {
             try { recommendationId = evaluations.recordSurfaced(evals.getFirst().id(), ownerId); }
             catch (RuntimeException e) { log.warn("could not record recommendation: {}", e.toString()); }
         }
@@ -1872,12 +2000,23 @@ public final class ApiServer {
         cash.put("note", "Do nothing: $0 expected, $0 at risk, zero costs — every idea above must beat this after fees and spreads.");
         baselines.add(cash);
         try {
-            var q = market.quote(result.symbol()).orElse(null);
-            var evs0 = evals.isEmpty() ? null : evals.getFirst();
+            var q = market.quote(result.symbol(), worldParam(world)).orElse(null);
             if (q != null && q.mark() != null) {
                 double spot = q.mark().doubleValue();
                 long lot = Math.round(spot * 100) * 100; // 100 shares, cents
+                // The baseline is judged over the COMPETITION'S OWN horizon (front-expiration DTE),
+                // not a fixed month — a 7-DTE contest vs a 30-day tail was apples-to-oranges (P3).
                 int horizonDays = 30;
+                java.time.LocalDate frontExp = result.candidates().stream()
+                        .flatMap(c -> c.legs().stream())
+                        .map(l -> { try { return java.time.LocalDate.parse(l.expiration()); }
+                                    catch (RuntimeException e) { return null; } })
+                        .filter(java.util.Objects::nonNull)
+                        .min(java.time.LocalDate::compareTo).orElse(null);
+                if (frontExp != null) {
+                    horizonDays = (int) Math.max(1, java.time.temporal.ChronoUnit.DAYS.between(
+                            java.time.LocalDate.now(clock), frontExp));
+                }
                 Double iv = null;
                 try { iv = atmIvOf(result.symbol()); } catch (RuntimeException ignored) { }
                 var stockLeg = io.liftandshift.strikebench.model.Leg.stock(
@@ -1894,12 +2033,15 @@ public final class ApiServer {
                 bh.put("pAnyProfit", map.pAnyProfit());
                 bh.put("viable", true);
                 bh.put("note", "Own 100 shares (" + io.liftandshift.strikebench.util.Money.fmt(lot)
-                        + "): EV \u2248 $0 at zero drift, no expiry, nothing to cross; the tail numbers above are its REAL 30-day downside at the chain's own vol.");
+                        + "): EV \u2248 $0 at zero drift, no expiry, nothing to cross; the tail numbers above are its REAL "
+                        + horizonDays + "-day downside at the chain's own vol.");
                 baselines.add(bh);
             }
         } catch (RuntimeException ignored) { /* baseline is advisory */ }
         out.put("baselines", baselines);
         if (recommendationId != null) out.put("recommendationId", recommendationId);
+        if (inWorld) out.put("calibrationNote",
+                "Simulated market — this competition is NOT recorded in your calibration record.");
         ctx.json(out);
     }
 
@@ -1913,17 +2055,24 @@ public final class ApiServer {
     private void opportunities(Context ctx) {
         OpportunitiesRequest req = bodyOrNull(ctx, OpportunitiesRequest.class);
         if (req == null) req = new OpportunitiesRequest(null, null, null, null, null, null);
+        String world = worldParam(activeWorld(ctx));
+        // Inside a simulated session the scan covers the WORLD's symbols through the world-routed
+        // engine — an observed-universe scan sized with sim capital was a cross-lane blend (P1).
         List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
-                ? req.universe() : universe.active().symbols();
+                ? req.universe()
+                : world != null
+                        ? market.worldSymbols(world).map(List::copyOf).orElseGet(() -> universe.active().symbols())
+                        : universe.active().symbols();
         Account acct = currentAccount(ctx);
         String uid = auth.currentUserId(ctx);
         String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
         int topN = req.topN() != null ? req.topN() : 8;
+        var rcScan = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
         var result = evaluations.scan(symbols, req.intent(),
                 req.thesis() != null ? req.thesis() : "neutral",
                 req.horizon() != null ? req.horizon() : "month",
                 req.riskMode() != null ? req.riskMode() : "balanced",
-                acct.buyingPowerCents(), ownerId, topN);
+                acct.buyingPowerCents(), world != null ? null : ownerId, topN, world, rcScan.riskCapitalCents());
         ctx.json(Map.of("ranked", result.ranked(), "notes", result.notes(), "scanned", result.scanned()));
     }
 
@@ -1935,16 +2084,22 @@ public final class ApiServer {
     private void optimize(Context ctx) {
         OptimizeRequest req = bodyOrNull(ctx, OptimizeRequest.class);
         if (req == null) req = new OptimizeRequest(null, null, null, null, null, null, null, null, null, null, null);
+        String optWorld = worldParam(activeWorld(ctx));
         List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
-                ? req.universe() : universe.active().symbols();
+                ? req.universe()
+                : optWorld != null
+                        ? market.worldSymbols(optWorld).map(List::copyOf).orElseGet(() -> universe.active().symbols())
+                        : universe.active().symbols();
         Account acct = currentAccount(ctx);
         String uid = auth.currentUserId(ctx);
         String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+        var rcOpt = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
         var scan = evaluations.scan(symbols, req.intent(),
                 req.thesis() != null ? req.thesis() : "neutral",
                 req.horizon() != null ? req.horizon() : "month",
                 req.riskMode() != null ? req.riskMode() : "balanced",
-                acct.buyingPowerCents(), ownerId, Math.max(1, symbols.size()));
+                acct.buyingPowerCents(), optWorld != null ? null : ownerId, Math.max(1, symbols.size()),
+                optWorld, rcOpt.riskCapitalCents());
         long budget = req.totalCapitalCents() != null ? req.totalCapitalCents() : acct.buyingPowerCents();
         var result = new io.liftandshift.strikebench.research.PortfolioOptimizer().optimize(scan.ranked(),
                 new io.liftandshift.strikebench.research.PortfolioOptimizer.Constraints(
@@ -1983,12 +2138,20 @@ public final class ApiServer {
                         req.filters());
             } catch (java.util.NoSuchElementException ignored) { /* buy-write ladder */ }
         }
+        // R4: the declared risk-capital line governs EVERY sizing surface, ladders included.
+        var rcLad = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
+        if (rcLad.riskCapitalCents() != null && rcLad.riskCapitalCents() > 0
+                && (req.maxLossCents() == null || req.maxLossCents() > rcLad.riskCapitalCents())) {
+            req = new RecommendationEngine.Request(req.symbol(), req.thesis(), req.horizon(), req.riskMode(),
+                    rcLad.riskCapitalCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
+                    req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
+        }
         var ladder = engine.ladder(req, acct.buyingPowerCents(), activeWorld(ctx));
         // R9: the SAME decision policy annotates every rung — no ranked surface escapes it.
         try {
             var rungEvals = evaluations.evaluate(req.symbol(), req.intent(), req.thesis(), req.horizon(),
                     req.riskMode(), ladder.rungs(), acct.buyingPowerCents(), null, false,
-                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(activeWorld(ctx)));
             if (rungEvals.size() == ladder.rungs().size()) {
                 com.fasterxml.jackson.databind.node.ObjectNode out =
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(ladder);
@@ -2078,8 +2241,12 @@ public final class ApiServer {
         java.time.LocalDate latestExp = req.legs().stream()
                 .filter(l -> !l.isStock()).map(Leg::expiration).filter(java.util.Objects::nonNull)
                 .max(java.time.LocalDate::compareTo).orElse(null);
-        boolean earningsSoon = latestExp != null && eventCalendar.earningsLikelyBefore(req.symbol(), latestExp);
-        boolean eventLikeNews = market.news(req.symbol()).stream().anyMatch(n -> {
+        // A simulated world has NO earnings and NO news — real-company events attached to a
+        // generated market were phantom risks (review P2). Observed lane keeps both.
+        boolean inWorld = acct.worldId() != null;
+        boolean earningsSoon = !inWorld && latestExp != null
+                && eventCalendar.earningsLikelyBefore(req.symbol(), latestExp);
+        boolean eventLikeNews = !inWorld && market.news(req.symbol()).stream().anyMatch(n -> {
             String h = n.headline() == null ? "" : n.headline().toLowerCase(Locale.ROOT);
             return h.contains("earnings") || h.contains("guidance") || h.contains("results");
         });
@@ -2117,8 +2284,11 @@ public final class ApiServer {
                         + " but only " + Math.max(0, free) + " are free (held minus already locked)";
             }
         }
+        LocalDate laneToday = market.simInstant(acct.worldId())
+                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                .orElseGet(() -> LocalDate.now(clock));
         Verdict verdict = Guardrails.check(new Guardrails.Proposal(family, priced, req.qty(), quotes, spot,
-                worst, LocalDate.now(clock), acct.buyingPowerCents(), false, earningsSoon, false, lockedLots));
+                worst, laneToday, acct.buyingPowerCents(), false, earningsSoon, false, lockedLots));
         if (shareShortfall != null) {
             List<String> blocks = new ArrayList<>(verdict.blockReasons());
             blocks.addFirst(shareShortfall);
@@ -2141,7 +2311,20 @@ public final class ApiServer {
         // The manual ticket is not bound by risk-mode budgets (deliberate freedom), but an
         // oversized trade deserves a loud flag against the mode the user chose in the header.
         try {
-            io.liftandshift.strikebench.pricing.PayoffCurve curve = io.liftandshift.strikebench.pricing.PayoffCurve.of(priced, req.qty());
+            // The guardrail judges the SAME repriced package the analytics show (R5/CP-3): a
+            // proposed net shifts max loss here exactly as it does in the preview (review P3).
+            Long gAdjust = null;
+            if (req.proposedNetCents() != null) {
+                long pricedNet = 0;
+                for (Leg l : priced) {
+                    long shares = (long) Leg.SHARES_PER_CONTRACT * l.ratio() * req.qty();
+                    long cents = io.liftandshift.strikebench.util.Money.centsFromPrice(l.entryPrice(), shares);
+                    pricedNet += l.action() == io.liftandshift.strikebench.model.LegAction.SELL ? cents : -cents;
+                }
+                gAdjust = req.proposedNetCents() - pricedNet;
+            }
+            io.liftandshift.strikebench.pricing.PayoffCurve curve =
+                    io.liftandshift.strikebench.pricing.PayoffCurve.of(priced, req.qty(), gAdjust);
             if (!curve.maxLossUnbounded() && curve.maxLossCents() > 0) {
                 RecommendationEngine.RiskMode mode = RecommendationEngine.RiskMode.parse(req.riskMode());
                 long budget = Math.round(acct.buyingPowerCents() * mode.defaultRiskPct());
@@ -2226,8 +2409,10 @@ public final class ApiServer {
             throw new TradeRejectedException(verdict.blockReasons());
         }
         TradeRecord t = trades.create(req);
-        // Close the calibration loop: link the placed trade to the recommendation it came from.
-        if (body != null && body.recommendationId() != null && !body.recommendationId().isBlank()) {
+        // Close the calibration loop: link the placed trade to the recommendation it came from —
+        // REAL LANE ONLY: a simulated market's outcomes never feed 'Your record' (review P0).
+        if (body != null && body.recommendationId() != null && !body.recommendationId().isBlank()
+                && acct.worldId() == null) {
             try { evaluations.linkTrade(body.recommendationId(), t.id()); }
             catch (RuntimeException e) { log.warn("could not link recommendation: {}", e.toString()); }
         }
@@ -2386,9 +2571,15 @@ public final class ApiServer {
         ctx.json(Map.of("trade", TradeView.of(result.trade()), "realizedPnlCents", result.realizedPnlCents()));
     }
 
-    /** Best-effort: auto-resolve any recommendation tied to a trade that just closed. */
+    /** Best-effort: auto-resolve any recommendation tied to a trade that just closed. Sim-world
+     *  trades never resolve into the calibration record (they never link, but belt-and-braces). */
     private void resolveRecommendationForTrade(String tradeId, String status, Long pnlCents) {
-        try { evaluations.resolveByTrade(tradeId, status, pnlCents); }
+        try {
+            var t = trades.get(tradeId);
+            var acctRows = db.query("SELECT world_id FROM accounts WHERE id=?", r -> r.str("world_id"), t.accountId());
+            if (!acctRows.isEmpty() && acctRows.getFirst() != null) return; // sim lane: not recorded
+            evaluations.resolveByTrade(tradeId, status, pnlCents);
+        }
         catch (RuntimeException e) { log.warn("could not resolve recommendation for {}: {}", tradeId, e.toString()); }
     }
 

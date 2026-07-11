@@ -11,8 +11,9 @@ public enum EvidenceLevel {
     OBSERVED_DELAYED(1, "Observed (delayed)"),
     OBSERVED_EOD(2, "Observed (end-of-day)"),
     MODELED(3, "Modeled"),
-    DEMO_FIXTURE(4, "Demo data"),
-    UNKNOWN(5, "Unknown");
+    SIMULATED(4, "Simulated market"),
+    DEMO_FIXTURE(5, "Demo data"),
+    UNKNOWN(6, "Unknown");
 
     private final int uncertainty;
     private final String label;
@@ -39,6 +40,7 @@ public enum EvidenceLevel {
             case "DELAYED" -> OBSERVED_DELAYED;
             case "EOD" -> OBSERVED_EOD;
             case "MODELED" -> MODELED;
+            case "SIMULATED" -> SIMULATED; // a generated market: honest, coherent, never observed
             case "FIXTURE" -> DEMO_FIXTURE;
             case "STALE", "MISSING" -> UNKNOWN;
             default -> UNKNOWN;

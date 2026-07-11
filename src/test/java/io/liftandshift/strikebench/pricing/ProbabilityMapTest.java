@@ -48,8 +48,16 @@ class ProbabilityMapTest {
         // Touch odds are at least the expire-beyond odds and within [0,1].
         assertThat(r.touches()).hasSize(2);
         r.touches().forEach(t -> assertThat(t.probability()).isBetween(0.0, 1.0));
-        // The basis is DISCLOSED as risk-neutral — never a physical forecast.
-        assertThat(r.basis()).containsIgnoringCase("risk-neutral");
+        // The zero-rate overload discloses itself HONESTLY as a zero-drift scenario (junior's
+        // correction: without r it is not the market's risk-neutral distribution)...
+        assertThat(r.basis()).containsIgnoringCase("zero-drift lognormal scenario");
+        // ...and the r-variant IS risk-neutral, with the rate disclosed.
+        var rr = ProbabilityMap.of(condor(), 991.83, 0.756, 3.0 / 365.0, 0.04,
+                List.of(new BigDecimal("980"), new BigDecimal("1005")));
+        assertThat(rr.basis()).containsIgnoringCase("risk-neutral");
+        assertThat(rr.basis()).contains("r=4.0%");
+        // With r>0 over 3 days the numbers barely move — same hand-verified regime.
+        assertThat(rr.pAnyProfit()).isBetween(0.30, 0.38);
     }
 
     @Test
@@ -82,5 +90,23 @@ class ProbabilityMapTest {
         var r = ProbabilityMap.of(condor(), 0, 0.5, 0.01, List.of());
         assertThat(r.basis()).contains("undefined");
         assertThat(r.pAnyProfit()).isZero();
+    }
+
+    @org.junit.jupiter.api.Test
+    void expectedValueFollowsTheProposedPackagePriceExactly() {
+        // R-CONTRACTS: a package-level price adjustment must shift EVERY statistic — the EV
+        // integral included. EV(adjusted) = EV(base) + adjust, to the cent (review P0).
+        var legs = java.util.List.of(
+                leg(io.liftandshift.strikebench.model.LegAction.SELL, io.liftandshift.strikebench.model.OptionType.PUT, "100", "2.00"),
+                leg(io.liftandshift.strikebench.model.LegAction.BUY, io.liftandshift.strikebench.model.OptionType.PUT, "95", "0.80"));
+        PayoffCurve base = PayoffCurve.of(legs, 1);
+        PayoffCurve proposed = PayoffCurve.of(legs, 1, -3500L); // you accept $35 less credit
+        long evBase = base.expectedValueCents(100, 0.3, 30 / 365.0, 0.04);
+        long evProp = proposed.expectedValueCents(100, 0.3, 30 / 365.0, 0.04);
+        org.assertj.core.api.Assertions.assertThat(evProp - evBase).isEqualTo(-3500L);
+        // ...and probabilities move consistently with the shifted breakevens.
+        var mBase = ProbabilityMap.of(base, 100, 0.3, 30 / 365.0, 0.04, java.util.List.of());
+        var mProp = ProbabilityMap.of(proposed, 100, 0.3, 30 / 365.0, 0.04, java.util.List.of());
+        org.assertj.core.api.Assertions.assertThat(mProp.pAnyProfit()).isLessThan(mBase.pAnyProfit());
     }
 }

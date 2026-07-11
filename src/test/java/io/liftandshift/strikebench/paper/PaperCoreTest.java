@@ -272,9 +272,12 @@ class PaperCoreTest {
         assertThat(p.maxProfitCents()).isNull(); // uncapped upside
         @SuppressWarnings("unchecked")
         Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
-        // Uncapped structures never register a max-profit plateau; max loss (the debit) is real.
+        // Uncapped structures never register a max-profit plateau. And with EXACT knot-derived
+        // regions, a straddle's max loss — attained only at the single pin point — honestly has
+        // probability ZERO of exact attainment (the old plateau sampling fabricated a small mass).
         assertThat((Double) prob.get("pMaxProfit")).isZero();
-        assertThat((Double) prob.get("pMaxLoss")).isGreaterThan(0.0);
+        assertThat((Double) prob.get("pMaxLoss")).isZero();
+        assertThat((Double) prob.get("pPartial")).isGreaterThan(0.0); // losses live in the partial band
         assertThat((Long) prob.get("cvar95Cents")).isLessThan(0);
     }
 

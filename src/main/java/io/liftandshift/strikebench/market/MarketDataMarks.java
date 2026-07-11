@@ -68,6 +68,17 @@ public final class MarketDataMarks implements MarksSource {
     }
 
     @Override
+    public Optional<Long> underlyingAsOfMs(String symbol, String worldId) {
+        if (worldId == null) return underlyingAsOfMs(symbol);
+        return market.quote(symbol, worldId).map(io.liftandshift.strikebench.model.Quote::asOfEpochMs);
+    }
+
+    @Override
+    public Optional<java.time.Instant> simNow(String worldId) {
+        return worldId == null ? Optional.empty() : market.simInstant(worldId);
+    }
+
+    @Override
     public Optional<LegMark> legMark(String symbol, Leg leg) {
         if (leg.isStock()) {
             // A share behaves like a delta-1, greek-free contract

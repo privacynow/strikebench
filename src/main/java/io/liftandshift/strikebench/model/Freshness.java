@@ -18,7 +18,9 @@ public enum Freshness {
         return this == REALTIME || this == DELAYED || this == FIXTURE || this == SIMULATED;
     }
 
-    private static final Freshness[] RANK = {REALTIME, FIXTURE, SIMULATED, DELAYED, EOD, MODELED, STALE, MISSING};
+    // SIMULATED sits BELOW every observed tier: a generated quote is coherent and tradable in
+    // its own lane, but it must never roll up as more trustworthy than real (even delayed) data.
+    private static final Freshness[] RANK = {REALTIME, FIXTURE, DELAYED, EOD, SIMULATED, MODELED, STALE, MISSING};
 
     /** The less trustworthy of the two — for aggregating a position's overall freshness. */
     public static Freshness worse(Freshness a, Freshness b) {
