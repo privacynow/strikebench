@@ -2808,6 +2808,7 @@ public final class ApiServer {
                     "note", "no keyless ex-dividend source \u2014 connect a licensed calendar for confirmed dates"));
             out.put("hv30", Double.isNaN(hv30) ? null : hv30);
             out.put("historyDemo", demoHistory);
+            out.put("historyBarBasis", candleSeries.barBasis());
             Map<String, io.liftandshift.strikebench.model.DataEvidence> evidenceInputs = new LinkedHashMap<>();
             evidenceInputs.put("quote", q.evidence());
             evidenceInputs.put("history", candleSeries.isEmpty()

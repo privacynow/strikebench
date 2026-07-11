@@ -18,7 +18,7 @@ public final class DataCoverage {
     public DataCoverage(Db db) { this.db = db; }
 
     public record SymbolCoverage(String symbol, String underlyingFrom, String underlyingTo, long underlyingBars,
-                                 boolean underlyingObserved, String underlyingSources,
+                                 boolean underlyingObserved, String underlyingSources, String underlyingBasis,
                                  String optionFrom, String optionTo, long optionRows, long optionDays,
                                  boolean optionObserved) {}
 
@@ -27,13 +27,14 @@ public final class DataCoverage {
 
     public List<SymbolCoverage> bySymbol() {
         Map<String, Object[]> u = new LinkedHashMap<>();
-        db.query("SELECT symbol, min(d)::text f, max(d)::text t, count(*) bars, min(observed) obs, "
-               + "string_agg(DISTINCT source, ',' ORDER BY source) srcs "
+        db.query("SELECT symbol, min(d)::text f, max(d)::text t, count(DISTINCT d) bars, min(observed) obs, "
+               + "string_agg(DISTINCT source, ',' ORDER BY source) srcs, "
+               + "string_agg(DISTINCT bar_kind, ',' ORDER BY bar_kind) basis "
                // Coverage describes the OBSERVED world: synthetic scenario runs must not inflate
                // it, and 'observed' is true only when EVERY bar is observed (weakest link).
                + "FROM underlying_bar WHERE dataset_id='observed' GROUP BY symbol",
                 r -> u.put(r.str("symbol"),
-                        new Object[]{r.str("f"), r.str("t"), r.lng("bars"), r.lng("obs") == 1, r.str("srcs")}));
+                        new Object[]{r.str("f"), r.str("t"), r.lng("bars"), r.lng("obs") == 1, r.str("srcs"), r.str("basis")}));
         Map<String, Object[]> o = new LinkedHashMap<>();
         db.query("SELECT symbol, min(asof)::text f, max(asof)::text t, count(*) rows, "
                + "count(DISTINCT asof) days, min(CASE WHEN bid_ask_observed=1 THEN 1 ELSE 0 END) obs "
@@ -51,7 +52,7 @@ public final class DataCoverage {
             out.add(new SymbolCoverage(s,
                     ub == null ? null : (String) ub[0], ub == null ? null : (String) ub[1],
                     ub == null ? 0 : (long) ub[2], ub != null && (boolean) ub[3],
-                    ub == null ? null : (String) ub[4],
+                    ub == null ? null : (String) ub[4], ub == null ? null : (String) ub[5],
                     ob == null ? null : (String) ob[0], ob == null ? null : (String) ob[1],
                     ob == null ? 0 : (long) ob[2], ob == null ? 0 : (long) ob[3],
                     ob != null && (boolean) ob[4]));
@@ -61,9 +62,10 @@ public final class DataCoverage {
 
     public CoverageSummary summary() {
         // OBSERVED world only: synthetic scenario rows must never inflate the coverage story.
-        long[] u = db.query("SELECT count(DISTINCT symbol) syms, count(*) bars, "
-                + "count(DISTINCT CASE WHEN observed=1 THEN symbol END) obs FROM underlying_bar "
-                + "WHERE dataset_id='observed'",
+        long[] u = db.query("SELECT count(*) syms, coalesce(sum(bars),0) bars, "
+                + "coalesce(sum(CASE WHEN obs=1 THEN 1 ELSE 0 END),0) obs FROM ("
+                + "SELECT symbol,count(DISTINCT d) bars,min(observed) obs FROM underlying_bar "
+                + "WHERE dataset_id='observed' GROUP BY symbol) x",
                 r -> new long[]{r.lng("syms"), r.lng("bars"), r.lng("obs")}).getFirst();
         long[] o = db.query("SELECT count(DISTINCT symbol) syms, count(*) rows, "
                 + "count(DISTINCT CASE WHEN bid_ask_observed=1 THEN symbol END) obs FROM option_bar "

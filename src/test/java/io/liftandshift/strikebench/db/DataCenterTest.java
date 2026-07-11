@@ -117,6 +117,18 @@ class DataCenterTest {
     }
 
     @Test
+    void coverageCountsDistinctTradingDatesNotDuplicateProviderRows() {
+        Ctx c = wire();
+        db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,bar_kind) VALUES ('AAPL','2026-06-01',100,'source-a',1,'OHLCV')");
+        db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,bar_kind) VALUES ('AAPL','2026-06-01',101,'source-b',1,'CLOSE_ONLY')");
+        var row = c.coverage().bySymbol().stream().filter(x -> x.symbol().equals("AAPL")).findFirst().orElseThrow();
+        assertThat(row.underlyingBars()).isEqualTo(1);
+        assertThat(row.underlyingSources()).contains("source-a", "source-b");
+        assertThat(row.underlyingBasis()).contains("OHLCV", "CLOSE_ONLY");
+        assertThat(c.coverage().summary().underlyingBars()).isEqualTo(1);
+    }
+
+    @Test
     void resetMarketDataClearsBarsButKeepsAccount() {
         Ctx c = wire();
         c.accounts().getOrCreateDefault();

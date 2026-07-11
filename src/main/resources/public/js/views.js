@@ -693,7 +693,7 @@
     researchPanels.overview.appendChild(el('div', { class: 'card', id: 'history-card' },
       UI.cardHeader('Price history'),
       UI.rangeChart({ initial: '1y', fetch: historyFetch(symbol) }),
-      explain('Daily OHLC candles: green closed up, red closed down; slide across for open/high/low/close, change, and volume. The evidence badge names whether this history is observed, simulated, modeled, or Demo. Pills change the window; long windows aggregate to weekly candles.')));
+      explain('When observed OHLC is available, candles show open/high/low/close and volume. Close-only imports render as a line instead of inventing ranges. The evidence badge names whether history is observed, simulated, modeled, or Demo.')));
 
     // The Research progression on a symbol: NOW (chart/news above) → TEST YOUR VIEW (past
     // evidence + possible futures under ONE thesis) → express it in Trade.
@@ -1166,16 +1166,22 @@
     return async function (range) {
       var hist = await API.get('/api/research/' + symbol + '/history?range=' + range);
       var candles = hist.candles || [];
+      var closeOnly = hist.barBasis === 'CLOSE_ONLY' || hist.barBasis === 'MIXED';
       return {
-        range: hist.range, candles: candles,
+        range: hist.range,
+        candles: closeOnly ? null : candles,
+        series: closeOnly ? candles.map(function (c) { return { date: String(c.date), value: parseFloat(c.close) }; }) : null,
         badge: UI.evidenceBadge(hist.evidence),
       note: hist.evidence && hist.evidence.provenance === 'DEMO'
           ? explain('This chart is fabricated teaching data from the explicit Demo market. It is not a substitute for observed history.')
           : hist.evidence && hist.evidence.provenance === 'MODELED'
             ? explain('This chart is a generated Scenario dataset. Its modeled path is separate from observed market history.')
             : hist.evidence && hist.evidence.provenance === 'OBSERVED' && candles.length
-              ? explain('These are stored historical observations through ' + candles[candles.length - 1].date
-                  + '. They remain available when the market is closed; closed means no new live session updates, not that past candles disappear.')
+              ? explain((closeOnly
+                  ? 'These are observed closing prices through ' + candles[candles.length - 1].date
+                    + '. Daily highs and lows were not in the source and are not drawn as candles. '
+                  : 'These are stored historical OHLC observations through ' + candles[candles.length - 1].date + '. ')
+                  + 'They remain available when the market is closed; closed means no new session updates, not that past observations disappear.')
               : null,
         emptyText: candles.length ? null
           : (App.config && App.config.fixturesOnly)
@@ -5618,6 +5624,8 @@
     var coverageCard = el('div', { class: 'card', id: 'dc-coverage' }, UI.cardHeader('What data we hold'), UI.spinner('Loading coverage…'));
     var jobsCard = el('div', { class: 'card', id: 'dc-jobs' }, UI.cardHeader('Jobs'), UI.spinner('Loading jobs…'));
     var sourcesCard = el('div', { class: 'card', id: 'dc-sources' }, UI.cardHeader('Data sources'), UI.spinner('Loading sources…'));
+    var syncCard = el('div', { class: 'card', id: 'dc-history-sync' },
+      UI.cardHeader('Get & maintain daily price history'), UI.spinner('Planning available sources…'));
     var healthCard = el('div', { class: 'card dc-overview-card', id: 'dc-health' });
     var resetCard = el('div', { class: 'card', id: 'dc-reset' });
     // The Overview "where you are" card: current analysis mode + the recommended next action.
@@ -5790,7 +5798,7 @@
     fillMode();
     fillActivity();
     if (tab === 'datasets') [datasetsCard, coverageCard].forEach(function (c) { root.appendChild(c); });
-    if (tab === 'sources') [sourcesCard, jobsCard].forEach(function (c) { root.appendChild(c); });
+    if (tab === 'sources') [syncCard, sourcesCard, jobsCard].forEach(function (c) { root.appendChild(c); });
     if (tab === 'admin') {
       root.appendChild(explain('Destructive operations live HERE and only here — separated from routine data work on purpose. Every reset asks for its scope, states its consequences, and requires typed confirmation.'));
       root.appendChild(resetCard);
@@ -5913,12 +5921,17 @@
       if (level === 'beginner') jobsCard.appendChild(explain('Background tasks that fetch or refresh data. Progress and results show here.'));
       if (!jobs.length) { jobsCard.appendChild(UI.emptyState('No jobs yet', 'Warm the engine or backfill history to create one.')); return; }
       var anyRunning = false;
+      function jobName(kind) {
+        return ({ sync_underlying: 'Update daily history', backfill_underlying: 'Legacy history update',
+          refresh_now: 'Refresh current quotes', warm_universe: 'Warm market cache',
+          snapshot_now: 'Record option snapshot', import_options_csv: 'Import option history' })[kind] || kind;
+      }
       jobs.forEach(function (j) {
         if (j.status === 'RUNNING' || j.status === 'QUEUED') anyRunning = true;
         var row = el('div', { class: 'dc-job' },
           el('div', { class: 'chip-row', style: 'align-items:center;margin:0' },
             el('span', { class: 'badge ' + (JOB_BADGE[j.status] || 'badge-dim') }, j.status),
-            el('b', {}, j.kind),
+            el('b', {}, jobName(j.kind)),
             el('span', { class: 'muted' }, j.done + '/' + j.total + ' · ' + j.rowsWritten + ' rows'),
             el('span', { class: 'spacer' }),
             (j.status === 'RUNNING' || j.status === 'QUEUED')
@@ -5927,7 +5940,22 @@
                 ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { API.post('/api/data/jobs/' + j.id + '/retry', {}).then(loadJobs); } }, 'Retry')
                 : null),
           dcProgress(j.done, j.total),
-          j.message ? el('div', { class: 'muted small' }, j.message) : (j.error ? el('div', { class: 'loss small' }, j.error) : null));
+          j.message ? el('div', { class: 'muted small' }, j.message) : (j.error ? el('div', { class: 'loss small' }, j.error) : null),
+          UI.expandable('Per-symbol details', function () {
+            var detail = el('div', {}, UI.spinner('Loading item checkpoints…'));
+            API.getFresh('/api/data/jobs/' + j.id).then(function (d) {
+              detail.innerHTML = '';
+              var items = d.items || [];
+              if (!items.length) { detail.appendChild(el('p', { class: 'muted' }, 'No item detail.')); return; }
+              detail.appendChild(table(['Item', 'State', 'Rows', 'Result'], items.map(function (x) {
+                return el('tr', {}, el('td', {}, el('b', {}, x.label)),
+                  el('td', {}, el('span', { class: 'badge ' + (x.status === 'DONE' ? 'badge-ok'
+                    : x.status === 'FAILED' ? 'badge-danger' : x.status === 'PENDING' ? 'badge-caution' : 'badge-dim') }, x.status)),
+                  el('td', {}, String(x.rowsWritten || 0)), el('td', { class: 'muted small' }, x.note || ''));
+              })));
+            }).catch(function (e) { detail.innerHTML = ''; detail.appendChild(alertBox('warn', e.message)); });
+            return detail;
+          }));
         jobsCard.appendChild(row);
       });
       // Poll is the FALLBACK: with the event stream connected, job.progress events drive the
@@ -6023,8 +6051,9 @@
           disabled: App.config && App.config.fixturesOnly,
           title: App.config && App.config.fixturesOnly
             ? 'Observed backfill is unavailable in this explicit Demo build'
-            : 'Pull observed daily history for your universe',
-          onclick: function () { startJob('backfill_underlying', { symbols: uni, years: 5 }); } }, 'Backfill history')));
+            : 'Choose a source, preview missing dates, then update only what is needed',
+          onclick: function () { App.state.dataSyncForm = App.state.dataSyncForm || {};
+            App.state.dataSyncForm.symbols = uni.join(', '); App.navigate('#/data/sources'); } }, 'Get or update history')));
       if (App.config && App.config.fixturesOnly) coverageCard.appendChild(alertBox('caution',
         'Observed backfill is unavailable in this explicit Demo build. Demo history stays isolated.'));
       if (level === 'beginner') coverageCard.appendChild(explain('The price history we have stored and its source. Backfill pulls observed daily history when an allowed source is configured; Demo rows never enter Observed coverage.'));
@@ -6036,7 +6065,7 @@
         chip('Observed', (sum.observedUnderlyingSymbols || 0) + ' symbols')));
       if (!syms.length) {
         coverageCard.appendChild(UI.emptyState('No stored history yet',
-          'Connect an eligible underlying-history source under Sources & jobs, then run Backfill history.'));
+          'Open Sources & jobs, choose an eligible source, and preview exactly what will be downloaded.'));
         return;
       }
       var rows = syms.slice(0, level === 'beginner' ? 12 : syms.length).map(function (s) {
@@ -6047,9 +6076,217 @@
             ? el('span', { class: 'badge ' + (s.underlyingObserved ? 'badge-ok' : 'badge-dim') }, s.underlyingObserved ? 'observed' : 'demo')
             : el('span', { class: 'muted' }, '—')),
           el('td', { class: 'muted' }, String(s.underlyingBars || 0)),
+          level === 'expert' ? el('td', { class: 'muted small' }, (s.underlyingBasis || '—') + (s.underlyingSources ? ' · ' + s.underlyingSources : '')) : null,
           el('td', { class: 'muted' }, s.optionRows ? (s.optionDays + ' days / ' + s.optionRows + ' rows') : '—'));
       });
-      coverageCard.appendChild(table(['Symbol', 'Underlying range', 'Evidence', 'Bars', 'Options'], rows));
+      coverageCard.appendChild(table(level === 'expert'
+        ? ['Symbol', 'Underlying range', 'Evidence', 'Bars', 'Basis & sources', 'Options']
+        : ['Symbol', 'Underlying range', 'Evidence', 'Bars', 'Options'], rows));
+    })();
+
+    // --- Daily-history acquisition: one guided workflow over every lawful connector. ---
+    (async function fillHistorySync() {
+      if (!syncCard.isConnected) return;
+      var doc;
+      try { doc = await API.getFresh('/api/data/sync'); }
+      catch (e) {
+        if (!App.alive(token)) return;
+        syncCard.innerHTML = ''; syncCard.appendChild(UI.cardHeader('Get & maintain daily price history'));
+        syncCard.appendChild(alertBox('warn', 'History setup is unavailable: ' + e.message)); return;
+      }
+      if (!App.alive(token) || !syncCard.isConnected) return;
+      var connectors = doc.connectors || [];
+      function parseSymbolText(raw) {
+        return String(raw || '').split(/[\s,]+/).map(function (s) { return s.trim().toUpperCase(); })
+          .filter(function (s, i, all) { return /^[A-Z0-9.^_-]{1,20}$/.test(s) && all.indexOf(s) === i; }).slice(0, 120);
+      }
+      var automated = connectors.filter(function (c) { return c.automated; });
+      var eligible = automated.filter(function (c) { return c.eligible; });
+      var active = (App.state.universe && App.state.universe.active) || {};
+      var defaultSymbols = (active.symbols || []).join(', ');
+      var st = App.state.dataSyncForm || (App.state.dataSyncForm = {
+        scope: 'sector', symbols: defaultSymbols, source: doc.recommendedSource || '', years: 5,
+        from: '', to: doc.latestCompletedSession || '', basis: 'AUTO'
+      });
+      if (!st.symbols) st.symbols = defaultSymbols;
+      if (!st.source || !automated.some(function (c) { return c.key === st.source && c.eligible; })) {
+        st.source = doc.recommendedSource && doc.recommendedSource !== 'none'
+          ? doc.recommendedSource : (eligible[0] && eligible[0].key) || '';
+      }
+      var planDoc = null;
+      syncCard.innerHTML = '';
+      syncCard.appendChild(UI.cardHeader('Get & maintain daily price history',
+        el('span', { class: 'badge badge-ok' }, 'ADDITIVE · RESUMABLE')));
+      syncCard.appendChild(explain(level === 'beginner'
+        ? 'Choose stocks and a permitted source. StrikeBench checks what dates are already stored, shows the request cost, and fetches only missing daily history. Nothing generated can enter Observed data.'
+        : 'Missing-range planning is per symbol over observed trading sessions, with a short revision overlap. Source identity, adjusted/raw basis, request allowance, cursor, and rejected-row quarantine survive restarts.'));
+
+      var sourceGrid = el('div', { class: 'data-source-picker', role: 'group', 'aria-label': 'Automated daily price source' });
+      automated.forEach(function (c) {
+        var chosen = c.key === st.source;
+        sourceGrid.appendChild(el('button', { type: 'button', class: 'data-source-choice' + (chosen ? ' active' : ''),
+          disabled: !c.eligible, 'aria-pressed': chosen ? 'true' : 'false', 'data-source-key': c.key,
+          onclick: function () { st.source = c.key; App.state.dataSyncForm = st; fillHistorySync(); } },
+          el('span', { class: 'chip-row' },
+            el('b', {}, c.name),
+            el('span', { class: 'badge ' + (c.eligible ? 'badge-ok' : 'badge-dim') }, c.eligible ? 'READY' : 'SETUP NEEDED')),
+          el('span', { class: 'muted small' }, c.history),
+          c.dailyLimit > 0 ? el('span', { class: 'small' }, c.remainingToday + ' of ' + c.dailyLimit + ' requests left today')
+            : el('span', { class: 'small' }, 'Usage follows your provider plan')));
+      });
+      if (!automated.length) sourceGrid.appendChild(el('p', { class: 'muted' }, 'No automated candle connectors are present in this build.'));
+      syncCard.appendChild(el('section', { class: 'data-acquire-section' },
+        el('h3', {}, '1. Choose an automated source'), sourceGrid));
+      if (!eligible.length) syncCard.appendChild(alertBox('caution',
+        'No automated daily-price source is eligible yet. Use your own CSV below now, or connect an official keyed source. Yahoo automation remains blocked unless you have permission.'));
+
+      var sectorBtn = el('button', { type: 'button', class: st.scope === 'sector' ? 'active' : '',
+        onclick: function () { st.scope = 'sector'; st.symbols = defaultSymbols; symbolsInput.value = st.symbols; syncScope(); } },
+        'Current sector · ' + ((active.symbols || []).length || 0));
+      var customBtn = el('button', { type: 'button', class: st.scope === 'custom' ? 'active' : '',
+        onclick: function () { st.scope = 'custom'; syncScope(); symbolsInput.focus(); } }, 'Choose symbols');
+      var symbolsInput = el('input', { type: 'text', id: 'data-sync-symbols', value: st.symbols,
+        placeholder: 'AAPL, MSFT, SPY', list: 'universe-symbols', oninput: function () { st.symbols = this.value; st.scope = 'custom'; syncScope(); } });
+      function syncScope() {
+        sectorBtn.classList.toggle('active', st.scope === 'sector');
+        customBtn.classList.toggle('active', st.scope === 'custom');
+        symbolsInput.disabled = st.scope === 'sector';
+        App.state.dataSyncForm = st;
+      }
+      syncScope();
+      var years = el('select', { id: 'data-sync-years', onchange: function () { st.years = parseInt(this.value, 10); App.state.dataSyncForm = st; } },
+        [1, 2, 5, 10, 20].map(function (y) { return el('option', { value: y }, y + (y === 1 ? ' year' : ' years')); }));
+      years.value = String(Number(st.years) || 5);
+      var fromInput = el('input', { type: 'date', id: 'data-sync-from', value: st.from || '',
+        onchange: function () { st.from = this.value; App.state.dataSyncForm = st; } });
+      var toInput = el('input', { type: 'date', id: 'data-sync-to', value: st.to || doc.latestCompletedSession || '',
+        onchange: function () { st.to = this.value; App.state.dataSyncForm = st; } });
+      var scopeGrid = el('div', { class: 'form-grid data-acquire-grid' },
+        el('div', { class: 'field data-symbol-scope' }, el('label', {}, 'Stocks'),
+          el('div', { class: 'level-switch data-scope-switch' }, sectorBtn, customBtn), symbolsInput),
+        el('div', { class: 'field' }, el('label', {}, 'History window'), years),
+        level === 'expert' ? el('div', { class: 'field' }, el('label', {}, 'Exact start (optional)'), fromInput) : null,
+        level === 'expert' ? el('div', { class: 'field' }, el('label', {}, 'Through completed session'), toInput) : null);
+      syncCard.appendChild(el('section', { class: 'data-acquire-section' }, el('h3', {}, '2. Choose coverage'), scopeGrid));
+      if (level === 'beginner') syncCard.appendChild(UI.expandable('Choose exact dates (optional)', function () {
+        return el('div', { class: 'form-grid grid-2' },
+          el('div', { class: 'field' }, el('label', {}, 'Start date'), fromInput),
+          el('div', { class: 'field' }, el('label', {}, 'Through completed session'), toInput));
+      }));
+
+      var planSlot = el('div', { id: 'data-sync-plan', 'aria-live': 'polite' });
+      var startBtn = el('button', { class: 'btn', id: 'data-sync-start', disabled: true, onclick: async function () {
+        if (!planDoc) return;
+        startBtn.disabled = true;
+        try {
+          await startJob('sync_underlying', { source: planDoc.source.key,
+            symbols: parseSymbolText(st.symbols), from: String(planDoc.effectiveFrom), to: String(planDoc.to), years: Number(st.years) || 5 });
+          planSlot.innerHTML = '';
+          planSlot.appendChild(alertBox('ok', 'History update started. Progress is shown in Jobs below; each completed symbol becomes available to Research immediately.'));
+        } catch (e) { planSlot.appendChild(alertBox('warn', e.message)); startBtn.disabled = false; }
+      } }, 'Start update');
+      var previewBtn = el('button', { class: 'btn', id: 'data-sync-preview', disabled: !st.source,
+        onclick: async function () {
+          previewBtn.disabled = true; planSlot.innerHTML = ''; planSlot.appendChild(UI.spinner('Checking stored dates and request cost…'));
+          try {
+            planDoc = await API.post('/api/data/sync/plan', { source: st.source,
+              symbols: parseSymbolText(st.symbols), years: Number(st.years) || 5,
+              from: level === 'expert' && st.from ? st.from : null, to: st.to || null });
+            planSlot.innerHTML = '';
+            planSlot.appendChild(el('div', { class: 'data-plan-summary' },
+              el('div', { class: 'chip-row' },
+                chip('Symbols', String(planDoc.symbols)), chip('Missing sessions', String(planDoc.missingSessions)),
+                chip('Estimated requests', String(planDoc.estimatedRequests), 'Requests are planned before work starts and still pass through the durable provider allowance.'),
+                chip('Range', String(planDoc.effectiveFrom) + ' → ' + String(planDoc.to))),
+              planDoc.limitation ? alertBox('caution', planDoc.limitation) : null,
+              planDoc.missingSessions === 0
+                ? alertBox('ok', 'This range is already covered. No provider request is needed.')
+                : el('p', { class: 'muted small' }, 'Existing rows are kept. A three-session overlap lets adjusted providers revise recent split/dividend history safely.')));
+            var remaining = planDoc.source.dailyLimit > 0 ? planDoc.source.remainingToday : Number.MAX_SAFE_INTEGER;
+            startBtn.disabled = planDoc.missingSessions === 0 || planDoc.estimatedRequests > remaining;
+            if (planDoc.estimatedRequests > remaining) planSlot.appendChild(alertBox('warn',
+              'This plan needs ' + planDoc.estimatedRequests + ' requests but only ' + remaining + ' remain today. Narrow the scope or resume after the allowance resets.'));
+          } catch (e) { planDoc = null; planSlot.innerHTML = ''; planSlot.appendChild(alertBox('warn', e.message)); }
+          previewBtn.disabled = !st.source;
+        } }, 'Preview update');
+      syncCard.appendChild(el('section', { class: 'data-acquire-section' },
+        el('h3', {}, '3. Preview, then run'), el('div', { class: 'btn-row' }, previewBtn, startBtn), planSlot));
+
+      // User-owned CSV is a peer capability, not an inferior fallback. It is often the safest
+      // route for broker/Yahoo exports because no automated collection occurs.
+      var fileIn = el('input', { type: 'file', id: 'data-csv-file', accept: '.csv,text/csv' });
+      var csvSymbol = el('input', { type: 'text', id: 'data-csv-symbol', value: App.state.lastRecommendSymbol || '',
+        placeholder: 'Only needed if file has no Symbol column', list: 'universe-symbols' });
+      var csvBasis = el('select', { id: 'data-csv-basis' },
+        el('option', { value: 'AUTO' }, 'Auto-detect adjusted close'),
+        el('option', { value: 'RAW' }, 'Raw prices'),
+        el('option', { value: 'ADJUSTED' }, 'File is adjusted'));
+      var csvLabel = el('input', { type: 'text', id: 'data-csv-label', placeholder: 'Broker or source name' });
+      var csvResult = el('div', { id: 'data-csv-result', 'aria-live': 'polite' });
+      var uploadBtn = el('button', { class: 'btn', id: 'data-csv-upload', onclick: async function () {
+        if (!fileIn.files || !fileIn.files[0]) { csvResult.innerHTML = ''; csvResult.appendChild(alertBox('warn', 'Choose a CSV file first.')); return; }
+        uploadBtn.disabled = true; csvResult.innerHTML = ''; csvResult.appendChild(UI.spinner('Validating and importing…'));
+        try {
+          var fd = new FormData(); fd.append('file', fileIn.files[0]); fd.append('symbol', csvSymbol.value || '');
+          fd.append('basis', csvBasis.value); fd.append('sourceLabel', csvLabel.value || fileIn.files[0].name);
+          var r = await API.upload('/api/data/import/underlying', fd);
+          csvResult.innerHTML = '';
+          csvResult.appendChild(alertBox(r.rowsWritten ? 'ok' : 'caution', r.note));
+          csvResult.appendChild(el('div', { class: 'chip-row' },
+            chip('Imported', r.rowsWritten + ' rows'), chip('Series basis', r.barBasis,
+              r.barBasis === 'CLOSE_ONLY' ? 'Observed closes are present; intraday high/low are not observed.' : 'Observed OHLC fields are present.'),
+            r.quarantined ? chip('Quarantined', r.quarantined + ' rows') : null));
+          if (r.rowsWritten && !(App.config && App.config.fixturesOnly)) csvResult.appendChild(
+            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/' + (csvSymbol.value || App.state.lastRecommendSymbol || 'SPY').toUpperCase()); } }, 'Open in Research'));
+          loadJobs();
+        } catch (e) { csvResult.innerHTML = ''; csvResult.appendChild(alertBox('warn', e.message)); }
+        uploadBtn.disabled = false;
+      } }, 'Validate & import');
+      var importBody = el('div', { class: 'data-import-grid' },
+        el('div', { class: 'field' }, el('label', {}, 'CSV file'), fileIn),
+        el('div', { class: 'field' }, el('label', {}, 'Symbol fallback'), csvSymbol),
+        el('div', { class: 'field' }, el('label', {}, 'Price basis', UI.info('adjustedprices')), csvBasis),
+        el('div', { class: 'field' }, el('label', {}, 'Source label'), csvLabel), uploadBtn, csvResult);
+      syncCard.appendChild(UI.expandable('Import a CSV you already own', function () { return importBody; },
+        { open: !eligible.length }));
+
+      var schedule = doc.schedule || {};
+      var scheduleToggle = el('input', { type: 'checkbox', id: 'data-sync-schedule',
+        disabled: !st.source || App.config && App.config.fixturesOnly });
+      scheduleToggle.checked = !!schedule.enabled;
+      var scheduleStatus = el('div', { class: 'muted small', id: 'data-sync-schedule-status' },
+        schedule.lastRunDate ? ('Last scheduled session: ' + schedule.lastRunDate + ' · ' + (schedule.lastStatus || ''))
+          : 'No automatic update has run yet.');
+      var scheduleBody = el('div', { class: 'data-schedule' },
+        el('label', { class: 'toggle-row' }, scheduleToggle,
+          el('span', {}, el('b', {}, 'Keep this history current after each market close'),
+            el('span', { class: 'muted small' }, ' Once per completed session, after a 20-minute grace period — never hourly.'))),
+        el('div', { class: 'btn-row' }, el('button', { class: 'btn btn-sm', id: 'data-sync-schedule-save',
+          disabled: !st.source || App.config && App.config.fixturesOnly, onclick: async function () {
+          try {
+            var saved = await API.put('/api/data/sync/schedule', { enabled: scheduleToggle.checked,
+              source: st.source, symbols: parseSymbolText(st.symbols), years: Number(st.years) || 5, adjustment: st.basis || 'AUTO' });
+            scheduleStatus.textContent = saved.enabled ? 'Automatic daily maintenance is on.' : 'Automatic maintenance is off.';
+          } catch (e) { scheduleStatus.textContent = e.message; scheduleToggle.checked = false; }
+        } }, 'Save maintenance setting')), scheduleStatus);
+      syncCard.appendChild(level === 'expert' ? el('section', { class: 'data-acquire-section' },
+        el('h3', {}, 'Maintenance schedule'), scheduleBody)
+        : UI.expandable('Keep it current automatically', function () { return scheduleBody; }));
+
+      var cursorRows = (doc.cursors || []).map(function (c) { return el('tr', {},
+        el('td', {}, el('b', {}, c.symbol)), el('td', {}, c.source),
+        el('td', {}, el('span', { class: 'badge ' + (c.status === 'COMPLETE' ? 'badge-ok'
+          : c.status === 'FAILED' ? 'badge-danger' : c.status === 'RUNNING' ? 'badge-caution' : 'badge-dim') }, c.status)),
+        el('td', { class: 'muted' }, c.lastSuccessDate || '—'), el('td', { class: 'muted' }, String(c.rowsWritten || 0)),
+        el('td', { class: 'muted small' }, c.note || '')); });
+      var diagnostics = el('div', {},
+        cursorRows.length ? table(['Symbol', 'Source', 'State', 'Through', 'Rows', 'Note'], cursorRows)
+          : el('p', { class: 'muted' }, 'No sync cursors yet.'),
+        doc.quarantine && doc.quarantine.total ? alertBox('caution', doc.quarantine.total
+          + ' rejected row(s) are quarantined and are not used by analysis.') : null);
+      syncCard.appendChild(level === 'expert' ? el('section', { class: 'data-acquire-section' },
+        el('h3', {}, 'Cursors & rejected rows', UI.info('synccursor')), diagnostics)
+        : UI.expandable('Update history & rejected rows', function () { return diagnostics; }));
     })();
 
     // --- Sources ---
@@ -6064,19 +6301,38 @@
       if (!App.alive(token)) return;
       sourcesCard.innerHTML = '';
       sourcesCard.appendChild(UI.cardHeader('Data sources'));
-      if (level === 'beginner') sourcesCard.appendChild(explain('Where data can come from. Free/keyless sources work out of the box; keyed and licensed ones unlock more history. Each shows how it may be used.'));
+      if (level === 'beginner') sourcesCard.appendChild(explain('Every source says what it supplies, whether it is ready, and what permission or plan governs it. No source is called merely because it is free or keyless.'));
+      sourcesCard.appendChild(el('h3', {}, 'Daily price-history connectors'));
       var grid = el('div', { class: 'grid grid-2' });
-      (data.sources || []).forEach(function (s) {
-        grid.appendChild(el('div', { class: 'dc-source' + (s.enabled ? ' on' : '') },
+      (data.connectors || []).forEach(function (s) {
+        grid.appendChild(el('div', { class: 'dc-source' + (s.eligible ? ' on' : '') },
           el('div', { class: 'chip-row', style: 'align-items:center;margin:0' },
-            el('span', { class: 'badge ' + (s.enabled ? 'badge-ok' : 'badge-dim') }, s.enabled ? 'ON' : 'off'),
+            el('span', { class: 'badge ' + (s.eligible ? 'badge-ok' : 'badge-dim') }, s.eligible ? 'READY' : (s.configured ? 'BLOCKED' : 'SETUP')),
             el('b', {}, s.name),
             el('span', { class: 'spacer' }),
             el('span', { class: 'muted small' }, s.covers)),
+          el('div', { class: 'muted small', style: 'margin-top:4px' }, s.access + ' · ' + s.cadence),
+          el('div', { class: 'small', style: 'margin-top:4px' }, s.rights),
+          el('div', { class: 'muted small', style: 'margin-top:4px' }, s.adjustment + ' · ' + s.history),
+          s.dailyLimit > 0 ? el('div', { class: 'small', style: 'margin-top:4px' },
+            s.remainingToday + '/' + s.dailyLimit + ' requests remain today ', UI.info('requestbudget')) : null,
+          (!s.eligible || level === 'expert') ? el('div', { class: 'small', style: 'margin-top:5px' }, s.setup) : null,
+          level === 'expert' ? el('div', { class: 'muted small', style: 'margin-top:4px' }, s.note) : null));
+      });
+      sourcesCard.appendChild(grid);
+      sourcesCard.appendChild(el('h3', { style: 'margin-top:14px' }, 'Live market, filings, rates & option history'));
+      var support = el('div', { class: 'grid grid-2' });
+      (data.sources || []).filter(function (s) {
+        return !/^(Yahoo|Alpha Vantage|Polygon|Stooq|Historical options CSV)/.test(s.name);
+      }).forEach(function (s) {
+        support.appendChild(el('div', { class: 'dc-source' + (s.enabled ? ' on' : '') },
+          el('div', { class: 'chip-row', style: 'align-items:center;margin:0' },
+            el('span', { class: 'badge ' + (s.enabled ? 'badge-ok' : 'badge-dim') }, s.enabled ? 'ON' : 'off'),
+            el('b', {}, s.name), el('span', { class: 'spacer' }), el('span', { class: 'muted small' }, s.covers)),
           el('div', { class: 'muted small', style: 'margin-top:4px' }, s.license),
           el('div', { class: 'small', style: 'margin-top:4px' }, s.hint)));
       });
-      sourcesCard.appendChild(grid);
+      sourcesCard.appendChild(support);
     })();
 
     // --- Provider health (the old status view, kept as detail) ---

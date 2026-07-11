@@ -89,6 +89,17 @@
 
   function del(path) { return request('DELETE', path).then(function (out) { flushCache(); return out; }); }
 
+  /** Multipart upload for user-owned local files. The browser sends the file to StrikeBench;
+   *  it never calls a market-data provider directly or exposes a server filesystem path. */
+  async function upload(path, formData) {
+    var res = await fetch(path, { method: 'POST', headers: { 'Accept': 'application/json' }, body: formData });
+    var text = await res.text(), json = null;
+    try { json = text ? JSON.parse(text) : null; } catch (e) { /* non-JSON */ }
+    if (!res.ok) throw new Error((json && (json.detail || json.error)) || ('HTTP ' + res.status));
+    flushCache();
+    return json;
+  }
+
   /**
    * Speculative warm-up of the GET cache for the LIKELY next step. The request carries
    * X-Priority: prefetch so the server may refuse it (204) when heavy providers are cooling
@@ -128,6 +139,7 @@
     'delete': del,          // alias so an API.delete(...) typo can't silently no-op
     invalidate: invalidate,
     flushCache: flushCache,
+    upload: upload,
     prefetch: prefetch
   };
 })();

@@ -1272,11 +1272,16 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
 
   // Sources & jobs tab
   await page.click('#data-tabs [data-tab="sources"]');
+  await page.waitForSelector('#dc-history-sync #data-csv-upload');
   await page.waitForSelector('#dc-sources .dc-source');
   const sources = await page.textContent('#dc-sources');
-  assert.match(sources, /Yahoo Finance/);
-  assert.match(sources, /PERSONAL/);
-  assert.match(sources, /licensed · internal-use/); // the owned-CSV path
+  assert.match(sources, /Yahoo Finance automation/);
+  assert.match(sources, /Automated collection requires permission|automated collection requires permission/i);
+  assert.match(sources, /Your price-history CSV/);
+  assert.ok(await page.locator('#dc-history-sync .data-source-choice').count() >= 4, 'all automated connector choices remain visible');
+  assert.equal(await page.locator('#data-sync-preview').isDisabled(), true, 'Demo build cannot start an observed provider sync');
+  assert.ok(await page.locator('#data-csv-file').count(), 'user-owned CSV import remains available');
+  assert.ok(await page.locator('#data-sync-schedule').count(), 'maintenance capability is present at expert');
 
   await page.waitForSelector('#dc-jobs .dc-job:has-text("refresh_now")', { timeout: 15000 });
 
@@ -1315,6 +1320,12 @@ test('data center reset tiers are reduced for Beginner', async () => {
   const tiers = await page.$$eval('#dc-reset-tier option', os => os.map(o => o.value));
   assert.ok(!tiers.includes('MARKET_DATA'), 'beginner hides the granular market-data tier');
   assert.ok(tiers.includes('PAPER') && tiers.includes('EVERYTHING'), 'beginner keeps the plain resets');
+  await go('#/data/sources');
+  await page.waitForSelector('#dc-history-sync #data-csv-upload');
+  assert.ok(await page.locator('#dc-history-sync .data-source-choice').count() >= 4, 'beginner keeps every connector');
+  assert.ok(await page.locator('#data-sync-years').count(), 'beginner keeps history window control');
+  assert.ok(await page.locator('#dc-history-sync .xp-head:has-text("Keep it current automatically")').count(),
+    'beginner gets the same maintenance capability through progressive disclosure');
   await page.click('#level-switch button[data-level="expert"]'); // restore for later tests
 });
 

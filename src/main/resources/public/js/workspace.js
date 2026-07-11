@@ -16,7 +16,7 @@
     LS_KEY = 'strikebench.workspace.' + (userKey && String(userKey).trim() ? String(userKey).trim() : 'local');
   }
   // Draft forms carry the user's thinking; results are refetched (fresh data beats stale payloads).
-  var FORM_KEYS = ['discoverForm', 'builderForm', 'backtestForm', 'verifyForm', 'scenarioForm', 'ideasForm'];
+  var FORM_KEYS = ['discoverForm', 'builderForm', 'backtestForm', 'verifyForm', 'scenarioForm', 'ideasForm', 'dataSyncForm'];
 
   var rev = 0;             // last backend revision seen (multi-tab adopt guard)
   var started = false;
