@@ -26,6 +26,7 @@
     var s = {
       v: 1,
       route: window.location.hash || '#/home',
+      world: (window.App && App.state.world) || null,
       symbol: (window.App && App.state.lastRecommendSymbol) || null,
       forms: {},
       ticket: (window.App && App.state.ticket) || null,
@@ -49,6 +50,7 @@
 
   function apply(s) {
     if (!s || s.v !== 1 || !window.App) return false;
+    if (s.world) App.state.world = s.world;
     if (s.symbol) App.state.lastRecommendSymbol = s.symbol;
     if (s.marketThesis) App.state.marketThesis = s.marketThesis;
     // Selection only (F6): results/questions rebuild fresh — never restore stale evidence.
@@ -94,7 +96,7 @@
   function saveIfDirty() {
     if (!started || !window.App || !window.API) return;
     var s = snapshot();
-    var json = JSON.stringify({ route: s.route, symbol: s.symbol, forms: s.forms, ticket: s.ticket });
+    var json = JSON.stringify({ route: s.route, world: s.world, symbol: s.symbol, forms: s.forms, ticket: s.ticket });
     if (json === lastSavedJson) return;
     lastSavedJson = json;
     persistLocal(s);
@@ -162,7 +164,7 @@
         // bump the rev and ping-pong forever between two hidden tabs. Only a genuine local
         // change after this may write again.
         var s = snapshot();
-        lastSavedJson = JSON.stringify({ route: s.route, symbol: s.symbol, forms: s.forms, ticket: s.ticket });
+        lastSavedJson = JSON.stringify({ route: s.route, world: s.world, symbol: s.symbol, forms: s.forms, ticket: s.ticket });
         persistLocal(s);
         adoptedWhileHidden = true; // the DOM still shows pre-adoption state — refresh on return
       }

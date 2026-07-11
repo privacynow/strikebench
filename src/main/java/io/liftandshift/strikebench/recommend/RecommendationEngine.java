@@ -187,7 +187,7 @@ public final class RecommendationEngine {
         var lane = market.lane(worldId);
         Quote quote = market.quote(symbol, worldId).orElse(null);
         if (quote == null) {
-            notes.add("No market data available for " + symbol);
+            notes.add(missingMarketDataNote(lane, symbol));
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
         }
         if (!quote.evidence().usableIn(lane)) {
@@ -373,7 +373,7 @@ public final class RecommendationEngine {
         Quote quote = market.quote(symbol, worldId).orElse(null);
         List<LocalDate> expirations = quote == null ? List.of() : market.expirations(symbol, worldId);
         if (quote == null || !quote.optionable() || expirations.isEmpty()) {
-            notes.add(quote == null ? "No market data available for " + symbol
+            notes.add(quote == null ? missingMarketDataNote(lane, symbol)
                     : symbol + " has no listed options");
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
@@ -431,6 +431,15 @@ public final class RecommendationEngine {
         if (rungs.isEmpty()) notes.add("No tradable strikes for this ladder right now");
         if (sharesHeld) notes.add("Sized against your " + freeShares + " free shares");
         return new LadderResult(symbol, intent.name(), rungs, notes, DISCLAIMER);
+    }
+
+    private static String missingMarketDataNote(io.liftandshift.strikebench.market.MarketLane lane,
+                                                String symbol) {
+        if (lane == io.liftandshift.strikebench.market.MarketLane.OBSERVED) {
+            return "No market data is available for " + symbol + " in the OBSERVED-lane"
+                    + "; DEMO and SIMULATED substitutes are disabled. Choose an explicit market lane or add data.";
+        }
+        return "No market data is available for " + symbol + " in the " + lane + " lane";
     }
 
     // ---- Scoring & explanation ----
@@ -594,10 +603,8 @@ public final class RecommendationEngine {
             case REALTIME -> 1.0;
             case DELAYED -> 0.85;
             case EOD -> 0.70;
-            // FIXTURE is simulated data — NOT real-time. Scoring it 1.0 inflated the composite score
-            // and confidence % on any live-mode demo-fallback candidate. In whole-app demo mode every
-            // candidate is FIXTURE so relative ranking is unchanged; in live mode a fixture fallback is
-            // now correctly penalized below real DELAYED data.
+            // FIXTURE is fabricated Demo data, never real-time. It is eligible only in the explicit
+            // Demo lane; the haircut keeps educational confidence appropriately below observed data.
             case FIXTURE -> 0.45;
             default -> 0.40;
         };
@@ -666,7 +673,7 @@ public final class RecommendationEngine {
         if (ivMissing && !multiExp) {
             candidateWarnings.add("No implied volatility available — POP/EV assume a 30% placeholder volatility");
         }
-        return new Candidate(family.name(), family.display(), built.label(),
+        return new Candidate(family.name(), family.display(), family.structureGroup(), built.label(),
                 built.legs().stream().map(LegView::of).toList(), qty,
                 entryNet, maxProfit, maxLoss, breakevens, pop, ev,
                 round2(liquidity), freshness.name(), candidateWarnings,

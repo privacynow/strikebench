@@ -986,7 +986,7 @@
     var h = opts.height || 40;
     if (!spark || !spark.available || !spark.closes || spark.closes.length < 2) {
       return el('div', { class: 'spark spark-empty', style: 'height:' + h + 'px' },
-        el('span', { class: 'muted' }, 'no chart data'));
+        el('span', { class: 'muted' }, 'history unavailable'), info('historycoverage'));
     }
     var closes = spark.closes.map(Number);
     var dates = spark.dates || [];
@@ -1040,9 +1040,160 @@
     return wrap;
   }
 
+  /**
+   * One symbol-context primitive for every market-facing workflow.
+   *
+   * editable: one stock can change before work is priced;
+   * locked: a priced/placed package names its stock but cannot mutate in place;
+   * multi: a portfolio or simulated market exposes an explicit focus selector.
+   *
+   * Quote status is fetched once per settled edit and always carries the server's source
+   * evidence. Callers own the workflow consequence of a change through onCommit/onPick.
+   */
+  function symbolContext(opts) {
+    opts = opts || {};
+    var mode = opts.mode || 'editable';
+    var symbol = String(opts.symbol || '').toUpperCase();
+    var wrap = el('section', {
+      class: 'symbol-context-bar symbol-context-' + mode + (opts.compact ? ' symbol-context-compact' : '')
+        + (opts.class ? ' ' + opts.class : ''),
+      id: opts.id || null,
+      'aria-label': opts.ariaLabel || (mode === 'multi' ? 'Market symbols' : 'Stock context')
+    });
+    var labelText = opts.label || (mode === 'editable' ? 'Symbol' : mode === 'locked' ? 'Position symbol' : 'Market focus');
+    var status = el('div', { class: 'symbol-context-status muted', 'aria-live': 'polite' });
+    var seq = 0, timer = null;
+
+    function evidenceFor(q) {
+      if (!q) return null;
+      if (q.evidence) return evidenceBadge(q.evidence);
+      if (q.provenance) return evidenceBadge(q.provenance);
+      if (q.freshness) return freshnessBadge(q.freshness);
+      return null;
+    }
+    async function loadStatus(next) {
+      next = String(next || '').trim().toUpperCase();
+      var mySeq = ++seq;
+      status.innerHTML = '';
+      if (!next || !window.API) return;
+      status.appendChild(el('span', { class: 'muted' }, 'Checking market…'));
+      try {
+        var data = await window.API.get('/api/quotes?symbols=' + encodeURIComponent(next));
+        if (mySeq !== seq || !status.isConnected) return;
+        status.innerHTML = '';
+        var q = (data.quotes || [])[0];
+        if (!q) {
+          status.appendChild(el('span', { class: 'symbol-context-unavailable' }, 'Market quote unavailable'));
+          return;
+        }
+        status.appendChild(el('b', { class: 'symbol-context-price' }, fmtNum(q.last)));
+        status.appendChild(delta(q.last, q.prevClose));
+        var ev = evidenceFor(q);
+        if (ev) status.appendChild(ev);
+        if (q.asOf || q.sourceTimestamp) {
+          status.appendChild(el('span', { class: 'muted symbol-context-asof' },
+            'as of ' + fmtDate(q.asOf || q.sourceTimestamp)));
+        }
+      } catch (e) {
+        if (mySeq !== seq || !status.isConnected) return;
+        status.innerHTML = '';
+        status.appendChild(el('span', { class: 'symbol-context-unavailable' }, 'Market quote unavailable'));
+      }
+    }
+
+    if (mode === 'multi') {
+      wrap.appendChild(el('div', { class: 'symbol-context-heading' },
+        el('span', { class: 'symbol-context-label' }, labelText),
+        opts.hint ? el('span', { class: 'muted symbol-context-hint' }, opts.hint) : null));
+      var rail = el('div', { class: 'symbol-context-symbols', role: 'listbox', 'aria-label': labelText });
+      (opts.symbols || []).forEach(function (s) {
+        s = String(s).toUpperCase();
+        var choice = el('button', {
+          type: 'button', class: 'sym-chip' + (s === symbol ? ' active' : ''),
+          'data-symbol': s,
+          role: 'option', 'aria-selected': s === symbol ? 'true' : 'false',
+          onclick: function () {
+            symbol = s;
+            rail.querySelectorAll('[role="option"]').forEach(function (b) {
+              var active = b.getAttribute('data-symbol') === s;
+              b.classList.toggle('active', active);
+              b.setAttribute('aria-selected', active ? 'true' : 'false');
+            });
+            loadStatus(s);
+            if (opts.onPick) opts.onPick(s);
+          }
+        }, s);
+        rail.appendChild(choice);
+      });
+      wrap.appendChild(rail);
+      if (symbol) { wrap.appendChild(status); loadStatus(symbol); }
+      return wrap;
+    }
+
+    var primary = el('div', { class: 'symbol-context-primary' });
+    if (mode === 'locked') {
+      primary.appendChild(el('div', { class: 'symbol-context-heading' },
+        el('span', { class: 'symbol-context-label' }, labelText),
+        el('span', { class: 'symbol-context-symbol' }, symbol),
+        el('span', { class: 'badge badge-dim' }, 'LOCKED')));
+      if (symbol) loadStatus(symbol);
+    } else {
+      var input = opts.input || el('input', {
+        type: 'text', value: symbol, list: opts.list || 'universe-symbols',
+        placeholder: opts.placeholder || 'AAPL'
+      });
+      if (!input.id) input.id = (opts.id || 'symbol-context') + '-input';
+      input.value = input.value || symbol;
+      var field = el('div', { class: 'symbol-context-field' },
+        el('label', { for: input.id, class: 'symbol-context-label' }, labelText), input);
+      primary.appendChild(field);
+      function settle() {
+        var next = String(input.value || '').trim().toUpperCase();
+        input.value = next;
+        if (opts.showStatus !== false) loadStatus(next);
+        if (opts.onInput) opts.onInput(next, input);
+      }
+      input.addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(settle, opts.debounceMs || 350);
+      });
+      input.addEventListener('change', settle);
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault(); settle();
+          if (opts.onCommit) opts.onCommit(input.value.trim().toUpperCase(), input);
+        }
+      });
+      wrap.input = input;
+      if (opts.showStatus !== false) loadStatus(input.value);
+    }
+    wrap.appendChild(primary);
+    if (opts.showStatus !== false) wrap.appendChild(status);
+    var actions = el('div', { class: 'symbol-context-actions' });
+    if (mode === 'editable' && opts.onCommit) {
+      actions.appendChild(el('button', { type: 'button', class: 'btn btn-sm', id: opts.commitId || null, onclick: function () {
+        var next = String(wrap.input.value || '').trim().toUpperCase();
+        wrap.input.value = next;
+        opts.onCommit(next, wrap.input);
+      } }, opts.commitLabel || 'Apply'));
+    }
+    if (opts.onResearch && symbol) {
+      actions.appendChild(el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
+        onclick: function () { opts.onResearch(symbol); } }, 'Research'));
+    }
+    if (mode === 'locked' && opts.onChange) {
+      actions.appendChild(el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
+        onclick: opts.onChange }, 'Change symbol'));
+    }
+    if (actions.children.length) wrap.appendChild(actions);
+    wrap.refresh = function (next) { symbol = String(next || '').toUpperCase(); loadStatus(symbol); };
+    return wrap;
+  }
+
   window.UI = {
     info: info,
     sparkline: sparkline,
+    symbolContext: symbolContext,
     fmtDate: fmtDate,
     el: el,
     icon: icon,

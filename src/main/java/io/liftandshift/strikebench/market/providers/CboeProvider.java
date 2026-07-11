@@ -102,7 +102,7 @@ public final class CboeProvider implements MarketDataProvider {
     public void seedCooldown(long untilMs) {
         if (untilMs > System.currentTimeMillis()) {
             cooldownUntilMs = untilMs;
-            log.warn("Cboe cooldown restored from disk — cooling until {}", java.time.Instant.ofEpochMilli(untilMs));
+            log.warn("Cboe cooldown restored from local state — cooling until {}", java.time.Instant.ofEpochMilli(untilMs));
         }
     }
 

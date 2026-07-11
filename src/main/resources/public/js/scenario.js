@@ -210,12 +210,12 @@
     function fld(label, input) {
       // Greek glyphs must survive the app-wide uppercase label transform (σ became Σ — the
       // summation sign — which a quant reads as a bug). Wrap them in a no-transform span.
-      var lab = el('label', {});
+      var labelEl = el('label', {});
       label.split(/([σμκξρν])/).forEach(function (part) {
-        if (/^[σμκξρν]$/.test(part)) lab.appendChild(el('span', { class: 'glyph' }, part));
-        else if (part) lab.appendChild(document.createTextNode(part));
+        if (/^[σμκξρν]$/.test(part)) labelEl.appendChild(el('span', { class: 'glyph' }, part));
+        else if (part) labelEl.appendChild(document.createTextNode(part));
       });
-      return el('div', { class: 'field' }, lab, input);
+      return el('div', { class: 'field' }, labelEl, input);
     }
 
     function getSpec() {
@@ -432,7 +432,7 @@
         ? '<line x1="' + zeroX.toFixed(1) + '" y1="8" x2="' + zeroX.toFixed(1) + '" y2="' + base + '" stroke="var(--text)" stroke-width="0.9" stroke-dasharray="4 3" opacity="0.55"/>'
           + '<text x="' + zeroX.toFixed(1) + '" y="' + (base + 12) + '" text-anchor="middle" font-size="10" fill="var(--text-dim)">$0</text>'
         : '';
-      out.appendChild(el('div', { class: 'lab-chart', html:
+      out.appendChild(el('div', { class: 'tool-chart', html:
         '<svg viewBox="0 0 ' + HW + ' ' + HH + '" width="100%" role="img" aria-label="P&L distribution">'
         + '<line x1="' + hPadL + '" y1="' + base + '" x2="' + (HW - hPadR) + '" y2="' + base + '" stroke="var(--border)" stroke-width="1"/>'
         + bars + zeroMark

@@ -12,6 +12,25 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   workflows, must be retained and improved. The research, backtesting, education, and simulation agenda should make
   recommendations more accurate, explainable, and confidence-building, not replace them.
 
+## Current Release State (2026-07-11 — feature/research-platform, NOT deployed)
+- The integrity/workflow program is complete. Market lanes are explicit (`OBSERVED`, `DEMO`,
+  `SIMULATED`, `SCENARIO`); generated providers never substitute into Observed reads or execution.
+  Missing observed inputs stay unavailable. V14 quarantines generated rows and V15 marks ambiguous
+  legacy trade provenance UNKNOWN unless the entry snapshot proves observed/broker origin.
+- Research cards are native direct links to full analysis; Lab routes/state are removed; Research,
+  Trade, Builder, Verify, Data, and Portfolio share one lane-owned symbol/workspace context. World
+  transitions are atomic and simulated Play/Pause/speed state synchronizes band, tabs, control room,
+  and other tabs through owner-scoped events.
+- Welcome/Home have distinct product/desk jobs on one hero frame; Home is a balanced trading desk.
+  Data is route-tabbed with a symmetric 2x2 desktop Overview and a full simulated-market control room.
+  Responsive gates cover 1280/1000/390/375/320px without horizontal overflow.
+- Final clean release gate: **405 JUnit + 53 fixture DOM + 5 responsive audit + 4 grown-state +
+  8 live-provider DOM, all green**. Use `mvn clean test` after deleting/renaming test classes; an
+  incremental run can otherwise execute stale compiled tests. Representative screenshots:
+  `dom-tests/shots/release-*.png`.
+- The only external operational dependencies are the Google OIDC client secret for auth-on and a
+  deliberate production-host/data session for deployment. Do not describe buildable work as blocked.
+
 ## Status (2026-07-06, second session — BUILD COMPLETE)
 - **All 12 build-order milestones done on the user's Mac** (not the sandbox; network was open).
   Full backend + frontend + tests: **146 JUnit tests green** (`mvn -q test`), **12 Playwright DOM tests green**

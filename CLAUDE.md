@@ -1950,10 +1950,50 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     prepending a column shifts it.
   - Screenshots dom-tests/shots/ns-{research-cards,research-preview,research-dark,home,data-
     overview}.png.
-- Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
-  candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
-  live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
-  defaults could too), a real earnings/ex-div calendar if a keyless source appears.
+- INTEGRITY + WORKFLOW COMPLETION (2026-07-11; branch, NOT deployed). The IC program and the
+  observed-lane correctness incident are fully closed in committed code plus the final release commit:
+  - STRICT MARKET LANES: `OBSERVED`, `DEMO`, `SIMULATED`, and `SCENARIO` are explicit request lanes.
+    Fixture providers never participate in Observed quote/chain/candle/news reads; missing observed
+    evidence renders an honest unavailable state. Demo books execute only in the Demo account,
+    simulated books only in their session account, and Observed execution requires observed/broker
+    inputs. Backfill/snapshot jobs reject generated inputs. Mixed provenance is exposed per input and
+    page-level evidence takes the weakest input.
+  - DATA HYGIENE: V14 quarantines generated rows from the observed dataset; V15 changes ambiguous
+    legacy trade provenance to UNKNOWN unless the stored entry snapshot proves OBSERVED/BROKER origin.
+    The V15 upgrade is pinned from a schema-at-V14 fixture. Caches are invalidated at lane/dataset
+    boundaries. Startup/import logs use product-level "local data store" language, never storage-engine
+    implementation names.
+  - RESEARCH FLOW: stock cards are native links that open full analysis in one action; their sparkline
+    remains a non-navigation exploration subregion. Back restores sector/range/scroll. Cards carry
+    explicit evidence from the server and one batch sparkline request. `Find strategies` carries symbol
+    and context forward, auto-runs only when intent is complete, and otherwise lands at the one missing
+    choice. All Lab routes/state/helpers are removed (`/api/lab/*` = 404; `#/lab` resolves Home); the ETF
+    replicator lives under Trade and research tools use canonical Research APIs/state.
+  - ONE CONTEXT CONTRACT: shared editable/locked/multi-symbol context bars cover Research, Ideas,
+    Builder, Verify, ticket review, trade detail, scenarios, and simulated sessions. Workspace state,
+    drafts, results, thesis, and caches are lane-owned. World transitions hydrate first and commit
+    atomically; an authoritative PUT bootstrap recovers a failed SSE-hint hydration. Exiting/finishing a
+    world reconciles account, universe, MarketStore, route, datasets, banners, and all tabs together.
+  - COMPOSITION: Welcome remains the product tour and Home the operational desk, both built on one hero
+    frame. Visible Welcome rows share one width. Home uses a balanced trading-desk grid with one primary
+    action, useful market cards, named Continue/Tools/Sector-pulse regions, and useful open-trade rows.
+    Data uses route-backed tabs and a compact, symmetric 2x2 desktop Overview; populated Expert state
+    stays inside the 720px composition gate. Mobile navigation and every route are clip-free down to
+    320px.
+  - SIMULATED MARKET: the creator defaults to the current ticker/universe and honest last-known anchors;
+    the backend remains the market seam while the UI stays source-agnostic except for loud provenance.
+    The control room includes tape, symbols, focus chart, breadth, account/P&L, provenance, event log,
+    actions, report, and clean return. `world.control` is owner-scoped over SSE; Play/Pause/speed update
+    band, tab badge, and control room in place without replacing the chart or losing focus.
+  - RELEASE DISCIPLINE: deleted test classes require `mvn clean test` before counting (a stale compiled
+    ResearchLabTest had inflated an incremental count). Final clean matrix: **405 JUnit + 53 fixture +
+    5 responsive audit widths + 4 grown-state + 8 live-provider DOM, all green**. Live gates explicitly
+    forbid Demo substitution in Observed Research/backtests. Final screenshots are the
+    `dom-tests/shots/release-*.png` set.
+- EXTERNAL OPERATIONAL DEPENDENCIES (not buildable without owner credentials/access): enabling Google
+  sign-in needs the OIDC client secret; production cutover needs the deployment host and production data
+  session. Optional licensed/provider and brokerage credentials enrich observed history and broker
+  integration but are not required for the strict-lane local product.
 
 ## Non-negotiable decisions (from user)
 1. Java package root: **`io.liftandshift.strikebench`** (moved 2026-07-08 from `io.liftandshift` on the

@@ -126,6 +126,11 @@ public final class MarketDataMarks implements MarksSource {
     }
 
     @Override
+    public double riskFreeRate(int days, String worldId) {
+        return market.riskFreeRateQuote(days, worldId).annualRate();
+    }
+
+    @Override
     public io.liftandshift.strikebench.model.DataEvidence riskFreeRateEvidence(int days, String worldId) {
         return market.riskFreeRateQuote(days, worldId).evidence();
     }

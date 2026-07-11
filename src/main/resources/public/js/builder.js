@@ -561,14 +561,12 @@
         remember();
         App.render();
       };
-      failInput.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') retryWith(); });
       var uniSyms = (App.state.universe && App.state.universe.active.symbols) || [];
       root.appendChild(el('div', { class: 'card', id: 'builder-load-error' },
         alertBox('danger', 'Could not load ' + st.symbol, [e.message,
-          'The builder needs a live quote and an option chain. Pick another symbol or retry.']),
-        el('div', { class: 'btn-row' },
-          failInput,
-          el('button', { class: 'btn', id: 'builder-retry', onclick: function () { retryWith(); } }, 'Retry')),
+          'The builder needs an eligible quote and option chain in the active market. Pick another symbol or retry.']),
+        UI.symbolContext({ mode: 'editable', id: 'builder-error-symbol-context', input: failInput,
+          label: 'Try another symbol', commitLabel: 'Retry', commitId: 'builder-retry', onCommit: retryWith }),
         uniSyms.length ? el('div', { class: 'sym-chips', style: 'margin-top:8px' }, uniSyms.map(function (s2) {
           return el('button', { class: 'sym-chip', type: 'button', onclick: function () { retryWith(s2); } }, s2);
         })) : null));
@@ -577,7 +575,7 @@
 
     remember(); // the (possibly followed) symbol is now this builder's state
 
-    // Hand-off from elsewhere (e.g. the Lab replicator) can seed a templateKey with no legs —
+    // A Trade exposure-replication handoff can seed a templateKey with no legs —
     // build it from the live chain now so the user lands ON the structure, not an empty catalog.
     if (st.templateKey && !st.legs.length) {
       var seedSeq = ++buildSeq;
@@ -670,14 +668,18 @@
       }
 
       function paint() {
+        var contextInput = symbolInput();
+        host.appendChild(UI.symbolContext({
+          mode: 'editable', id: 'builder-symbol-context', input: contextInput,
+          label: 'Which stock are you building around?', commitLabel: 'Load',
+          onCommit: function () { contextInput.dispatchEvent(new Event('change')); }
+        }));
         host.appendChild(stepHeader());
 
         if (st.step === 1) {
           host.appendChild(el('div', { class: 'card' },
             el('h3', { class: 'mt0' }, 'What are you trying to do?'),
             explain('The builder walks you from a goal to a full multi-leg position, one leg at a time, showing exactly what each leg adds — cost, worst case, and odds. Every structure a broker menu carries is here, each with its payoff shape and a guide.'),
-            el('div', { class: 'form-grid', style: 'margin-bottom:10px' },
-              el('div', { class: 'field' }, el('label', {}, 'Symbol'), symbolInput())),
             el('div', { class: 'choice-row', id: 'bw-goals' }, (Learn.INTENTS || []).map(function (i) {
               return el('button', {
                 class: 'choice' + (st.goal === i.key ? ' selected' : ''), 'data-goal': i.key,
@@ -950,9 +952,13 @@
       var panel = el('div', { class: 'card builder-panel', id: 'builder-panel' });
 
       var fitStatus = el('div', { id: 'builder-fit-status' });
+      root.appendChild(UI.symbolContext({
+        mode: 'editable', id: 'builder-symbol-context', input: symInput,
+        label: 'Builder symbol', commitLabel: 'Load',
+        onCommit: function () { symInput.dispatchEvent(new Event('change')); }
+      }));
       root.appendChild(el('div', { class: 'card' },
         el('div', { class: 'builder-bar' },
-          el('div', { class: 'field' }, el('label', {}, 'Symbol'), symInput),
           el('div', { class: 'field' }, el('label', {}, 'Qty'), qtyIn),
           el('div', { class: 'field builder-bar-grow' }, el('label', {}, 'Structure'), tplSel),
           el('div', { class: 'field builder-bar-end' }, el('div', { class: 'btn-row', style: 'margin:0' }, addBtn, clearBtn))),

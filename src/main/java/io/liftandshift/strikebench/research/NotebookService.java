@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 
 /**
- * Phase-5 research lab notebook: per-user saved analyses (title + freeform/markdown body + tags),
+ * Research notebook: per-user saved analyses (title + freeform/markdown body + tags),
  * so a user can keep their hypotheses, scan results, and conclusions. Scoped by user_id; a null
  * user is the local/anonymous account.
  */

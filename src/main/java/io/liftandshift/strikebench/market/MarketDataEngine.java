@@ -99,7 +99,7 @@ public final class MarketDataEngine {
         this.clock = clock;
     }
 
-    /** Inject the persistence store so the engine boots stale-first and mirrors refreshes to DB. */
+    /** Inject the persistence store so the engine boots stale-first and mirrors eligible refreshes. */
     public void setSnapshotStore(io.liftandshift.strikebench.market.ports.SnapshotStore store) {
         this.snapshotStore = store;
     }
@@ -384,7 +384,8 @@ public final class MarketDataEngine {
     private void commit(String symbol, MarketSnapshot snap) {
         if (lastAccess.containsKey(symbol)) snapshots.put(symbol, snap);
         else snapshots.remove(symbol);
-        // Mirror real quotes to disk (best-effort) so the next boot is stale-first. Errors ignored.
+        // Mirror eligible observed quotes to the durable snapshot cache (best-effort) so the next
+        // boot is stale-first. The store itself rejects Demo/Simulated/Modeled evidence.
         if (snapshotStore != null && snap.last() != null && snap.error() == null) {
             try { snapshotStore.save(snap); } catch (Exception e) { /* persistence is best-effort */ }
         }

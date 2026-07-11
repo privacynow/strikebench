@@ -17,6 +17,7 @@ public enum MarketLane {
     public static MarketLane of(String worldId, boolean fixturesOnly,
                                 io.liftandshift.strikebench.db.AnalysisContext context) {
         MarketLane market = of(worldId, fixturesOnly);
-        return market == OBSERVED && context != null && context.synthetic() ? SCENARIO : market;
+        return (market == OBSERVED || market == DEMO) && context != null && context.synthetic()
+                ? SCENARIO : market;
     }
 }

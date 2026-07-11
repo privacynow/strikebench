@@ -222,6 +222,7 @@ public final class ApiServer {
         server.workspaceSvc = new io.liftandshift.strikebench.db.WorkspaceService(db, clock);
         server.workspaceSvc.setEvents(server.events);
         server.dataJobs.setEvents(server.events);
+        server.dataJobs.setDataChangedHook(server::invalidateHistoricalViews);
         datasetSvc.setEvents(server.events);
         if (cboeRef[0] != null) cboeRef[0].setEvents(server.events);
         if (yahooRef[0] != null) yahooRef[0].setEvents(server.events);
@@ -407,8 +408,8 @@ public final class ApiServer {
             c.routes.get("/api/account", this::account);
             c.routes.post("/api/account/reset", this::accountReset);
 
-            // Historical event studies: PRIMARY routes under /api/research (the capability's real
-            // home); the /api/lab/* names remain as compatibility ALIASES to the same handlers.
+            // Historical event studies live under Research. There is no legacy Lab destination:
+            // every capability has one canonical owner and route.
             io.javalin.http.Handler questionsHandler = ctx ->
                     ctx.json(Map.of("questions", new io.liftandshift.strikebench.research.ResearchQuestionEngine(market).catalog()));
             io.javalin.http.Handler studyHandler = ctx ->
@@ -417,8 +418,15 @@ public final class ApiServer {
                                     analysisCtx(ctx), worldParam(activeWorld(ctx))));
             c.routes.get("/api/research/questions", questionsHandler);
             c.routes.post("/api/research/event-studies", studyHandler);
-            c.routes.get("/api/lab/questions", questionsHandler);   // compatibility alias
-            c.routes.post("/api/lab/question", studyHandler);       // compatibility alias
+            c.routes.post("/api/research/hypotheses", ctx ->
+                    ctx.json(new io.liftandshift.strikebench.research.HypothesisTester(market)
+                            .test(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.HypothesisTester.HypothesisRequest.class)),
+                                    analysisCtx(ctx))));
+            c.routes.post("/api/research/notes", this::noteCreate);
+            c.routes.get("/api/research/notes", this::noteList);
+            c.routes.get("/api/research/notes/{id}", this::noteGet);
+            c.routes.put("/api/research/notes/{id}", this::noteUpdate);
+            c.routes.delete("/api/research/notes/{id}", this::noteDelete);
             c.routes.get("/api/research/{symbol}", this::research);
             c.routes.get("/api/research/{symbol}/expirations", this::expirations);
             c.routes.get("/api/research/{symbol}/chain", this::chain);
@@ -453,19 +461,9 @@ public final class ApiServer {
             c.routes.post("/api/evaluate", this::evaluate);
             c.routes.post("/api/opportunities", this::opportunities);
             c.routes.post("/api/optimize", this::optimize);
-            c.routes.post("/api/lab/hypothesis", ctx ->
-                    ctx.json(new io.liftandshift.strikebench.research.HypothesisTester(market)
-                            .test(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.HypothesisTester.HypothesisRequest.class)),
-                                    analysisCtx(ctx))));
-            // (event-study routes registered above the /api/research/{symbol} param route)
-            c.routes.post("/api/lab/replicate", ctx ->
+            c.routes.post("/api/trade/replicate", ctx ->
                     ctx.json(new io.liftandshift.strikebench.research.ETFReplicator(market)
                             .replicate(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ETFReplicator.ReplicationRequest.class)))));
-            c.routes.post("/api/lab/notes", this::noteCreate);
-            c.routes.get("/api/lab/notes", this::noteList);
-            c.routes.get("/api/lab/notes/{id}", this::noteGet);
-            c.routes.put("/api/lab/notes/{id}", this::noteUpdate);
-            c.routes.delete("/api/lab/notes/{id}", this::noteDelete);
             c.routes.get("/api/evaluations", ctx -> {
                 String uid = auth.currentUserId(ctx);
                 String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
@@ -533,13 +531,32 @@ public final class ApiServer {
             c.routes.get("/api/sim/market/{id}/anchors", ctx ->
                     ctx.json(simSessions.anchors(ctx.pathParam("id"), ownerId(ctx)))); // F8: provenance detail
             c.routes.post("/api/sim/market", this::simMarketCreate);
-            c.routes.post("/api/sim/market/{id}/start", ctx -> { simSessions.start(ctx.pathParam("id"), ownerId(ctx)); ctx.json(Map.of("ok", true)); });
-            c.routes.post("/api/sim/market/{id}/pause", ctx -> { simSessions.pause(ctx.pathParam("id"), ownerId(ctx)); ctx.json(Map.of("ok", true)); });
+            c.routes.post("/api/sim/market/{id}/start", ctx -> {
+                String id = ctx.pathParam("id");
+                String owner = ownerId(ctx);
+                simSessions.start(id, owner);
+                events.publish("world.control", Map.of("world", id,
+                        "user", owner == null ? "local" : owner, "running", true));
+                ctx.json(Map.of("ok", true, "running", true));
+            });
+            c.routes.post("/api/sim/market/{id}/pause", ctx -> {
+                String id = ctx.pathParam("id");
+                String owner = ownerId(ctx);
+                simSessions.pause(id, owner);
+                events.publish("world.control", Map.of("world", id,
+                        "user", owner == null ? "local" : owner, "running", false));
+                ctx.json(Map.of("ok", true, "running", false));
+            });
             c.routes.post("/api/sim/market/{id}/step", ctx -> { simSessions.step(ctx.pathParam("id"), ownerId(ctx)); ctx.json(Map.of("ok", true)); });
             c.routes.post("/api/sim/market/{id}/speed", ctx -> {
                 var b = requireBody(bodyOrNull(ctx, java.util.Map.class));
-                simSessions.setSpeed(ctx.pathParam("id"), ownerId(ctx), Double.parseDouble(String.valueOf(b.get("speed"))));
-                ctx.json(Map.of("ok", true));
+                String id = ctx.pathParam("id");
+                String owner = ownerId(ctx);
+                double speed = Double.parseDouble(String.valueOf(b.get("speed")));
+                simSessions.setSpeed(id, owner, speed);
+                events.publish("world.control", Map.of("world", id,
+                        "user", owner == null ? "local" : owner, "speed", speed));
+                ctx.json(Map.of("ok", true, "speed", speed));
             });
             c.routes.post("/api/sim/market/{id}/event", ctx -> {
                 var b = requireBody(bodyOrNull(ctx, java.util.Map.class));
@@ -560,11 +577,12 @@ public final class ApiServer {
                 // synthetic dataset, and PUBLISH it — every tab (including the caller's own SSE)
                 // reconciles through the same event as an explicit return-to-real (review P0 #2).
                 if (wasActive) {
-                    db.exec("UPDATE settings SET v='observed' WHERE k=?", "active_world:" + ownerId(ctx));
+                    String baseline = cfg.fixturesOnly() ? "demo" : "observed";
+                    db.exec("UPDATE settings SET v=? WHERE k=?", baseline, "active_world:" + ownerId(ctx));
                     if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(datasets.activeId(ownerId(ctx)))) {
                         datasets.setActive(io.liftandshift.strikebench.db.DatasetService.OBSERVED, ownerId(ctx));
                     }
-                    events.publish("world.selected", Map.of("world", "observed",
+                    events.publish("world.selected", Map.of("world", baseline,
                             "user", ownerId(ctx) == null ? "local" : ownerId(ctx)));
                 }
                 ctx.json(Map.of("ok", true, "worldReset", wasActive));
@@ -789,7 +807,7 @@ public final class ApiServer {
         String world = activeWorld(ctx);
         if (!"observed".equals(world) && !"demo".equals(world)) {
             throw new IllegalStateException(what + " \u2014 it has no meaning inside a simulated session. "
-                    + "Return to the real market to run it; your simulated session keeps running.");
+                    + "Return to the baseline market to run it; your simulated session keeps running.");
         }
     }
 
@@ -1501,7 +1519,7 @@ public final class ApiServer {
         if (path.startsWith("/api/datasets") || path.startsWith("/api/data")) return "data-ops";
         if (path.startsWith("/api/broker")) return "broker";
         if (path.startsWith("/api/sparklines")) return "quotes";
-        if (path.startsWith("/api/research") || path.startsWith("/api/lab")) return "research";
+        if (path.startsWith("/api/research")) return "research";
         if (path.startsWith("/api/quotes") || path.startsWith("/api/market")) return "quotes";
         if (path.startsWith("/api/recommend") || path.startsWith("/api/evaluate")
                 || path.startsWith("/api/opportunities") || path.startsWith("/api/sim")
@@ -1612,7 +1630,11 @@ public final class ApiServer {
                     m.put("symbol", q.symbol());
                     m.put("description", q.description());
                     m.put("last", q.last());
+                    m.put("bid", q.bid());
+                    m.put("ask", q.ask());
                     m.put("prevClose", q.prevClose());
+                    m.put("optionable", q.optionable());
+                    m.put("asOf", q.asOfEpochMs());
                     m.put("freshness", q.freshness().name());
                     m.put("source", q.source());
                     m.put("evidence", q.evidence());
@@ -1675,6 +1697,27 @@ public final class ApiServer {
                 if ("observed".equals(world)) {
                     for (var snap : marketEngine.quotes(symbols)) {
                         rows.add(io.liftandshift.strikebench.market.MarketDataEngine.toRow(snap));
+                    }
+                } else if ("demo".equals(world)) {
+                    List<String> demoSymbols = raw == null || raw.isBlank()
+                            ? market.worldSymbols("demo").map(List::copyOf).orElse(List.of())
+                            : symbols;
+                    for (String sym : demoSymbols) {
+                        market.quote(sym, "demo").ifPresent(q -> {
+                            Map<String, Object> row = new LinkedHashMap<>();
+                            row.put("symbol", q.symbol());
+                            row.put("description", q.description());
+                            row.put("last", q.last() == null ? null : q.last().toPlainString());
+                            row.put("bid", q.bid() == null ? null : q.bid().toPlainString());
+                            row.put("ask", q.ask() == null ? null : q.ask().toPlainString());
+                            row.put("prevClose", q.prevClose() == null ? null : q.prevClose().toPlainString());
+                            row.put("optionable", q.optionable());
+                            row.put("freshness", q.freshness().name());
+                            row.put("evidence", q.evidence());
+                            row.put("asOf", q.asOfEpochMs());
+                            row.put("refreshing", false);
+                            rows.add(row);
+                        });
                     }
                 } else {
                     var wOpt = simSessions.getOrRestore(world, streamOwner);
@@ -1935,10 +1978,11 @@ public final class ApiServer {
         String owner = ownerId(ctx);
         // ONE market mode at a time (holistic review P0): a saved scenario dataset and a live
         // simulated world are different worlds — layering one on the other silently blends them.
+        String activeMarket = activeWorld(ctx);
         if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(b.id())
-                && !"observed".equals(activeWorld(ctx))) {
+                && !"observed".equals(activeMarket) && !"demo".equals(activeMarket)) {
             throw new IllegalStateException("You are inside a simulated market session — return to the "
-                    + "real market before activating a scenario dataset (they are separate worlds).");
+                    + "baseline market before activating a scenario dataset (they are separate worlds).");
         }
         datasets.setActive(b.id(), owner);
         String nowActive = datasets.activeId(owner);
@@ -2619,14 +2663,22 @@ public final class ApiServer {
 
     /**
      * Batch sparkline closes for the Research/Home cards — ONE http call for the whole grid,
-     * served from the shared candles cache (store-first, then providers), the simulated world's
-     * memory, or fixture walks. Never a per-card provider fan-out from the client. A symbol with
+     * served from the shared candles cache (store-first, then lane-eligible providers) or the
+     * simulated world's memory. Never a per-card provider fan-out from the client. A symbol with
      * no candle source in live keyless mode answers available:false with an honest note (and a
      * 15-minute negative memo so a dead symbol cannot re-trigger the provider chain per render).
      */
     private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> sparklineEmptyMemo =
             com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
                     .expireAfterWrite(java.time.Duration.ofMinutes(15)).maximumSize(500).build();
+    private final java.util.concurrent.atomic.AtomicLong historicalDataVersion =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    private void invalidateHistoricalViews() {
+        historicalDataVersion.incrementAndGet();
+        sparklineEmptyMemo.invalidateAll();
+        market.invalidateHistoricalData();
+    }
 
     private void sparklines(Context ctx) {
         String raw = ctx.queryParam("symbols");
@@ -2655,18 +2707,23 @@ public final class ApiServer {
                     : universe.active().symbols())
                 : java.util.Arrays.stream(raw.split(",")).map(x -> x.trim().toUpperCase(Locale.ROOT))
                     .filter(x -> !x.isBlank()).distinct().toList();
-        if (symbols.size() > 16) symbols = symbols.subList(0, 16);
+        int totalRequested = symbols.size();
+        boolean truncated = totalRequested > 16;
+        if (truncated) symbols = symbols.subList(0, 16);
         var actx = analysisCtx(ctx);
         String lane = world != null ? world : "observed";
+        long dataVersion = historicalDataVersion.get();
         var rows = new java.util.concurrent.ConcurrentHashMap<String, Map<String, Object>>();
-        var gate = new java.util.concurrent.Semaphore(4); // cold fills bounded; warm = memory
+        var gate = new java.util.concurrent.Semaphore(2); // optional screen decoration never fans out aggressively
         List<Thread> workers = new ArrayList<>();
         for (String sym : symbols) {
             workers.add(Thread.startVirtualThread(() -> {
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("symbol", sym);
-                String memoKey = lane + "|" + actx + "|" + sym + "|" + range;
-                if (sparklineEmptyMemo.getIfPresent(memoKey) != null) {
+                String memoKey = dataVersion + "|" + lane + "|" + actx + "|" + sym + "|" + range;
+                // Simulated worlds advance under their own clock and are memory-cheap: never pin
+                // a temporary empty result while the world is creating its next candle.
+                if (world == null && sparklineEmptyMemo.getIfPresent(memoKey) != null) {
                     row.put("available", false);
                     row.put("closes", List.of());
                     row.put("note", "No daily-candle source for this symbol right now \u2014 quotes still work.");
@@ -2679,7 +2736,7 @@ public final class ApiServer {
                         var series = market.candleSeries(sym, from, today, world, actx);
                         var candles = series == null ? List.<io.liftandshift.strikebench.model.Candle>of() : series.candles();
                         if (candles.size() < 2) {
-                            sparklineEmptyMemo.put(memoKey, Boolean.TRUE);
+                            if (world == null) sparklineEmptyMemo.put(memoKey, Boolean.TRUE);
                             row.put("available", false);
                             row.put("closes", List.of());
                             row.put("note", "No daily-candle source for this symbol right now \u2014 quotes still work.");
@@ -2724,6 +2781,9 @@ public final class ApiServer {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("range", range);
         body.put("sparklines", out);
+        body.put("totalRequested", totalRequested);
+        body.put("truncated", truncated);
+        if (truncated) body.put("note", "Showing the first 16 symbols; request another page for the rest.");
         if (world != null) body.put("world", world);
         ctx.json(body);
     }
@@ -2951,7 +3011,7 @@ public final class ApiServer {
         List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
                 ? req.universe()
                 : world != null
-                        ? market.worldSymbols(world).map(List::copyOf).orElseGet(() -> universe.active().symbols())
+                        ? market.worldSymbols(world).map(List::copyOf).orElse(List.of())
                         : universe.active().symbols();
         Account acct = currentAccount(ctx);
         String uid = auth.currentUserId(ctx);
@@ -2970,7 +3030,7 @@ public final class ApiServer {
                                   String intent, Long totalCapitalCents, Long maxPerPositionCents,
                                   Integer maxPositions, Double maxSymbolPct, String objective, Boolean diagnostic) {}
 
-    /** Research lab: scan a universe, then allocate a budget across the winners under constraints. */
+    /** Portfolio construction: scan a universe, then allocate a budget across the winners. */
     private void optimize(Context ctx) {
         OptimizeRequest req = bodyOrNull(ctx, OptimizeRequest.class);
         if (req == null) req = new OptimizeRequest(null, null, null, null, null, null, null, null, null, null, null);
@@ -2978,7 +3038,7 @@ public final class ApiServer {
         List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
                 ? req.universe()
                 : optWorld != null
-                        ? market.worldSymbols(optWorld).map(List::copyOf).orElseGet(() -> universe.active().symbols())
+                        ? market.worldSymbols(optWorld).map(List::copyOf).orElse(List.of())
                         : universe.active().symbols();
         Account acct = currentAccount(ctx);
         String uid = auth.currentUserId(ctx);

@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Phase-5 research lab: replicate a target dollar exposure to an underlying (an ETF or any symbol)
+ * Trade shaping tool: replicate a target dollar exposure to an underlying (an ETF or any symbol)
  * with a capital-efficient options structure instead of buying the shares outright. A synthetic
  * stock position (long ATM call + short ATM put, or the reverse) carries ~100 delta per contract,
  * so N contracts replicate the delta of 100·N shares while tying up far less than the share cost.

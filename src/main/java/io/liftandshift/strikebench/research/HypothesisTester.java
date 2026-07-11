@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Phase-5 research lab: tests a simple, mechanical market hypothesis against history with an honest
+ * Research event-study engine: tests a simple, mechanical market hypothesis against history with an honest
  * significance test. The built-in hypothesis: "after N-day momentum ≥ threshold, is the next
  * M-day return positive more often than chance (50%)?" — evaluated over the underlying's candles
  * with a two-sided z-test on the win rate. Reports the sample, edge, z-score, and a plain verdict

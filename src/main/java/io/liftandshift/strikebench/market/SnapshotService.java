@@ -23,7 +23,7 @@ import java.util.Optional;
  * Provenance is preserved LOUDLY, never hidden. Rows carry {@code source='snapshot'} to mark them
  * as our own recordings, and the per-dimension evidence columns ({@code observed},
  * {@code bid_ask_observed}, {@code iv_source}, {@code greeks_source}) say exactly how real each
- * value is — a fixture/demo snapshot is flagged as modeled so it can never masquerade as observed
+ * value is. Demo, simulated, modeled, stale, and missing inputs are refused before any canonical row is written
  * market data downstream.
  */
 public final class SnapshotService {

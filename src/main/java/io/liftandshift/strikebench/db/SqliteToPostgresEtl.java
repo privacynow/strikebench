@@ -34,7 +34,7 @@ import java.util.Set;
  */
 public final class SqliteToPostgresEtl {
 
-    private static final Logger log = LoggerFactory.getLogger(SqliteToPostgresEtl.class);
+    private static final Logger log = LoggerFactory.getLogger("io.liftandshift.strikebench.data.LegacyImport");
 
     /** FK-safe insertion order (accounts before its children; trades before trade_marks). */
     private static final List<String> TABLES = List.of(
@@ -97,9 +97,9 @@ public final class SqliteToPostgresEtl {
         }
 
         if (problems.isEmpty()) {
-            log.info("ETL OK: {} rows across {} tables migrated + verified", totalRows(results), results.size());
+            log.info("Legacy data import verified: {} rows across {} data groups", totalRows(results), results.size());
         } else {
-            log.error("ETL found {} problem(s): {}", problems.size(), problems);
+            log.error("Legacy data import found {} problem(s): {}", problems.size(), problems);
         }
         return new EtlResult(results, checks, problems);
     }

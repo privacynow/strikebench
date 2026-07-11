@@ -47,9 +47,11 @@ public final class DataJobService {
     });
     private final Map<String, Boolean> cancelRequested = new ConcurrentHashMap<>();
     private io.liftandshift.strikebench.util.EventBus events; // optional: live progress to the UI
+    private Runnable dataChangedHook = () -> {}; // clears negative/history caches after durable writes
     private volatile long lastProgressPublishMs = 0;
 
     public void setEvents(io.liftandshift.strikebench.util.EventBus events) { this.events = events; }
+    public void setDataChangedHook(Runnable hook) { this.dataChangedHook = hook == null ? () -> {} : hook; }
 
     /** job.progress is a hint (throttled — fast items must not flood the stream); terminal events always send. */
     private void publishJob(String type, String id, String kind, String status, int done, int total, String userId) {
@@ -195,6 +197,7 @@ public final class DataJobService {
         long totalRows = 0;
         int done = 0;   // items actually processed (excludes cancel-skipped)
         int failed = 0; // of those, how many threw
+        boolean dataChangedNotified = false;
         try {
             for (int seq = 0; seq < labels.size(); seq++) {
                 if (Boolean.TRUE.equals(cancelRequested.get(id))) {
@@ -214,6 +217,10 @@ public final class DataJobService {
                 db.exec("UPDATE data_job SET done=?, rows_written=?, updated_at=now() WHERE id=?", done, totalRows, id);
                 publishJob("job.progress", id, kind, "RUNNING", done, labels.size(), userId);
             }
+            if (totalRows > 0) {
+                notifyDataChanged();
+                dataChangedNotified = true;
+            }
             if (Boolean.TRUE.equals(cancelRequested.get(id))) {
                 // Atomic: keep the cancel status AND the 'cancelled by user' message (no summary overwrite).
                 db.exec("UPDATE data_job SET status='CANCELLED', message='cancelled by user', updated_at=now() WHERE id=?", id);
@@ -226,11 +233,21 @@ public final class DataJobService {
                 publishJob("job.complete", id, kind, status, done, labels.size(), userId);
             }
         } catch (Exception e) {
+            if (totalRows > 0 && !dataChangedNotified) {
+                notifyDataChanged();
+                dataChangedNotified = true;
+            }
             db.exec("UPDATE data_job SET status='FAILED', error=?, updated_at=now() WHERE id=? AND status <> 'CANCELLED'", e.toString(), id);
             publishJob("job.complete", id, kind, "FAILED", done, labels.size(), userId);
         } finally {
+            if (totalRows > 0 && !dataChangedNotified) notifyDataChanged();
             cancelRequested.remove(id);
         }
+    }
+
+    private void notifyDataChanged() {
+        try { dataChangedHook.run(); }
+        catch (RuntimeException e) { log.warn("data-change cache invalidation failed: {}", e.toString()); }
     }
 
     private record ItemResult(long rows, boolean ok, String note) {}

@@ -14,8 +14,8 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Research lab: hypothesis tester + ETF (delta-1) replicator. */
-class ResearchLabTest {
+/** Research tools: hypothesis tester + ETF (delta-1) replicator. */
+class ResearchToolsTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("America/New_York"));
 

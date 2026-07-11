@@ -113,12 +113,18 @@ public enum StrategyFamily {
     public String structureGroup() {
         return switch (this) {
             case CALENDAR_CALL, CALENDAR_PUT, DIAGONAL_CALL, DIAGONAL_PUT -> "time";
-            case IRON_BUTTERFLY, LONG_CALL_BUTTERFLY, LONG_PUT_BUTTERFLY -> "pin";
-            case CREDIT_CALL_SPREAD, CREDIT_PUT_SPREAD, IRON_CONDOR -> "credit";
-            case DEBIT_CALL_SPREAD, DEBIT_PUT_SPREAD -> "debit";
-            case LONG_CALL, LONG_PUT, LONG_STRADDLE, LONG_STRANGLE -> "long";
-            case COVERED_CALL, CASH_SECURED_PUT, PROTECTIVE_COLLAR, PROTECTIVE_PUT -> "stock";
-            case NAKED_CALL, NAKED_PUT, SHORT_STRADDLE, SHORT_STRANGLE -> "short";
+            case IRON_BUTTERFLY -> "pin_credit";
+            case LONG_CALL_BUTTERFLY, LONG_PUT_BUTTERFLY -> "butterfly";
+            case IRON_CONDOR -> "range_credit";
+            case CREDIT_CALL_SPREAD, CREDIT_PUT_SPREAD -> "credit_vertical";
+            case DEBIT_CALL_SPREAD, DEBIT_PUT_SPREAD -> "debit_vertical";
+            case LONG_CALL, LONG_PUT -> "single_long";
+            case LONG_STRADDLE, LONG_STRANGLE -> "long_volatility";
+            case COVERED_CALL -> "covered_income";
+            case CASH_SECURED_PUT -> "acquisition_income";
+            case PROTECTIVE_COLLAR, PROTECTIVE_PUT -> "stock_protection";
+            case NAKED_CALL, NAKED_PUT -> "uncovered_directional";
+            case SHORT_STRADDLE, SHORT_STRANGLE -> "short_volatility";
         };
     }
 }

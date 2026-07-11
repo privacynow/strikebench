@@ -61,9 +61,6 @@
       // and Ideas/Ticket/Backtest are stages of the Trade workbench
       if (route === 'welcome') { route = 'home'; params = ['tour']; }
       if (route === 'account') { route = 'portfolio'; params = ['account']; }
-      // Lab dissolved: its tools moved to their natural homes (study→Research, optimizer→Decision,
-      // replicator→Builder template). #/lab* keeps working by redirecting to Research (the study home).
-      if (route === 'lab') { route = 'research'; params = []; }
       if (route === 'data') { route = 'status'; } // the nav says Data; params carry the Data tab
       if (route === 'recommend') { route = 'trade'; params = ['discover'].concat(params); }
       if (route === 'backtest') { route = 'trade'; params = ['verify']; }
@@ -194,7 +191,7 @@
     var existing = Array.prototype.slice.call(document.querySelectorAll('#scenario-banner'));
     if (cfg && cfg.scenarioMode) {
       var label = 'SCENARIO MODE — “' + (cfg.activeDatasetName || cfg.activeDataset || '')
-        + '” replaces market data for ITS symbol; other symbols still show observed data. ';
+        + '” replaces the current market history for ITS symbol; other symbols stay on their existing lane. ';
       if (existing.length) {
         existing.forEach(function (b, i) { if (i === 0) b.childNodes[1].textContent = label; else b.remove(); });
         return;
@@ -216,7 +213,7 @@
             refreshScenarioBanner();
             App.render();
           } catch (e) { alert(e.message); }
-        } }, 'Back to observed data'));
+        } }, 'Back to market baseline'));
       document.body.insertBefore(banner, document.getElementById('tape') || document.body.firstChild);
       // The scenario's own SYMBOL powers the Research/Test buttons (dataset rows carry it).
       (async function () {
@@ -269,6 +266,19 @@
       + (sess && sess.simTime ? ' \u00b7 ' + sess.simTime.replace('T', ' ') + ' ET' : '');
   }
 
+  var worldBandResizeQueued = false;
+  function syncWorldBandTop() {
+    if (worldBandResizeQueued) return;
+    worldBandResizeQueued = true;
+    requestAnimationFrame(function () {
+      worldBandResizeQueued = false;
+      var band = document.getElementById('world-band');
+      var topbar = document.querySelector('.topbar');
+      if (band && topbar) band.style.top = topbar.getBoundingClientRect().height + 'px';
+    });
+  }
+  window.addEventListener('resize', syncWorldBandTop, { passive: true });
+
   /**
    * The SIMULATED MARKET band. Updates IN PLACE (label text, play/pause caption, speed value) so
    * keyboard focus survives the ~4s ticks; rebuilt only when it doesn't exist yet. Sticky under
@@ -297,24 +307,25 @@
 
     if (isDemo) {
       var existingDemo = document.getElementById('world-band');
-      if (existingDemo && existingDemo.dataset.world === 'demo') return;
+      if (existingDemo && existingDemo.dataset.world === 'demo') { syncWorldBandTop(); return; }
       Array.prototype.slice.call(document.querySelectorAll('#world-band')).forEach(function (b) { b.remove(); });
       var demoActions = [
-        UI.el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, 'Explore demo data'),
-        UI.el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } }, 'Demo controls')
+        UI.el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, 'Explore demo'),
+        UI.el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } }, 'Controls')
       ];
       if (!(App.config && App.config.fixturesOnly)) {
         demoActions.push(UI.el('button', { class: 'btn btn-sm', id: 'world-exit',
           onclick: function () { App.switchWorld('observed'); } }, 'Return to observed market'));
       }
+      var demoTruth = 'Fabricated teaching data — not real market prices or history.';
       var demoBand = UI.el('div', { id: 'world-band', 'data-world': 'demo', role: 'status' },
         UI.icon('warn', 15), UI.el('b', { class: 'wb-tag' }, 'DEMO MARKET'),
-        UI.el('span', { class: 'wb-label' },
-          'Every quote, chart, option chain, headline and fill is fabricated teaching data.'),
+        UI.el('span', { class: 'wb-label', 'aria-label': demoTruth },
+          UI.el('span', { class: 'wb-label-wide', 'aria-hidden': 'true' }, demoTruth),
+          UI.el('span', { class: 'wb-label-short', 'aria-hidden': 'true' }, 'FABRICATED DATA · NOT REAL')),
         UI.el('span', { class: 'spacer' }), demoActions);
       document.body.insertBefore(demoBand, document.getElementById('tape') || document.body.firstChild);
-      var demoTopbar = document.querySelector('.topbar');
-      if (demoTopbar) demoBand.style.top = demoTopbar.getBoundingClientRect().height + 'px';
+      syncWorldBandTop();
       return;
     }
 
@@ -332,13 +343,18 @@
         spd.value = String(Math.round(sess.speed));
       }
       band.dataset.playing = String(playing);
+      syncWorldBandTop();
       return;
     }
     Array.prototype.slice.call(document.querySelectorAll('#world-band')).forEach(function (b) { b.remove(); });
 
     var speedSel = UI.el('select', { id: 'world-speed', 'aria-label': 'Playback speed',
       title: 'How fast simulated time passes', onchange: async function () {
-        try { await API.post('/api/sim/market/' + world + '/speed', { speed: parseFloat(speedSel.value) }); }
+        try {
+          var speed = parseFloat(speedSel.value);
+          await API.post('/api/sim/market/' + world + '/speed', { speed: speed });
+          App.emitEvent('world.control', { world: world, speed: speed });
+        }
         catch (e) { UI.toast ? UI.toast(e.message) : alert(e.message); }
       } },
       SPEED_CHOICES.map(function (x) { return UI.el('option', { value: String(x) }, SPEED_LABELS[x] || (x + '\u00d7')); }));
@@ -361,6 +377,7 @@
           band.dataset.playing = String(!isPlaying);
           var t = band.querySelector('#world-toggle');
           if (t) t.textContent = !isPlaying ? 'Pause' : 'Play';
+          App.emitEvent('world.control', { world: world, running: !isPlaying });
         } catch (e) { alert(e.message); }
       } }, playing ? 'Pause' : 'Play'),
       UI.el('button', { class: 'btn btn-sm', id: 'world-step', onclick: async function () {
@@ -370,15 +387,20 @@
       speedSel,
       UI.el('button', { class: 'btn btn-sm', id: 'world-report', onclick: function () { App.navigate('#/data/simulation'); } },
         'Report'),
-      UI.el('button', { class: 'btn btn-sm', id: 'world-exit', onclick: function () { App.switchWorld('observed'); } },
-        'Return to real market'));
+      UI.el('button', { class: 'btn btn-sm', id: 'world-exit',
+        'aria-label': App.config && App.config.fixturesOnly ? 'Return to demo market' : 'Return to observed market',
+        onclick: function () { App.switchWorld(App.baseWorldId()); } },
+        UI.el('span', { class: 'wb-exit-wide', 'aria-hidden': 'true' },
+          App.config && App.config.fixturesOnly ? 'Return to demo market' : 'Return to observed market'),
+        UI.el('span', { class: 'wb-exit-short', 'aria-hidden': 'true' },
+          App.config && App.config.fixturesOnly ? 'Demo market' : 'Observed')));
     band.dataset.playing = String(playing);
     document.body.insertBefore(band, document.getElementById('tape') || document.body.firstChild);
     // Pin the band just below the sticky topbar so the mode is ALWAYS visible.
-    var topbar = document.querySelector('.topbar');
-    if (topbar) band.style.top = topbar.getBoundingClientRect().height + 'px';
+    syncWorldBandTop();
   }
   App.refreshWorldBand = refreshWorldBand;
+  App.baseWorldId = function () { return App.config && App.config.fixturesOnly ? 'demo' : 'observed'; };
 
   /**
    * A tick landed: the market MOVED. Flush the world's cached GETs and let the current screen
@@ -409,7 +431,8 @@
   // must never leak into observed screens (or vice versa).
   var LANE_KEYS = ['lastRecommendSymbol', 'marketThesis', 'researchStudy', 'evidencePrefill',
     'ideasPrefill', 'backtestPrefill', 'discoverForm', 'builderForm', 'backtestForm',
-    'verifyForm', 'scenarioForm', 'ideasForm', 'scoutResults',
+    'verifyForm', 'scenarioForm', 'ideasForm', 'scoutResults', 'tradeReplicator',
+    'portfolioOptimizer',
     // Result objects are market-DERIVED state (review P0 #1): an observed evaluation must
     // never render inside a simulated market. HTTP-cache flushes don't touch these.
     'recommendResults', 'decisionCache', 'decisionInflight', 'filterState', 'scoutForm'];
@@ -433,13 +456,22 @@
     // Collapse CONCURRENT transitions to the same target into one reconciliation: the SSE
     // hint and the awaited PUT often land within milliseconds. Skipping was the bug;
     // doubling the work is merely wasteful — collapsing does it exactly once, fully.
-    if (App._transitionTarget === target && App._transitionP) return App._transitionP;
+    if (App._transitionTarget === target && App._transitionP) {
+      var currentTransition = App._transitionP;
+      // A server response carrying the complete target bootstrap is authoritative. If an
+      // earlier SSE hint started a GET-based hydration that fails, consume this payload on a
+      // fresh transition instead of throwing the good response away with the failed hint.
+      return bootstrap
+        ? currentTransition.catch(function () { return App.transitionWorld(target, bootstrap, revision); })
+        : currentTransition;
+    }
     App._transitionTarget = target;
     // ATOMIC TRANSITION (review P1 #6): requested vs committed are separate — NOTHING about
     // the app's state changes until the target lane's universe has actually loaded. A failed
     // hydration leaves the app honestly in the PREVIOUS market, with a visible retry.
     App.state.transitionStatus = 'pending';
     App._transitionP = (async function () {
+      var committed = false;
       try {
         // HYDRATE FIRST (no state mutation): the server already knows the caller's active
         // world, so this GET answers for the TARGET lane.
@@ -480,6 +512,7 @@
         var oldBar = document.getElementById('transition-error');
         if (oldBar) oldBar.remove();  // a successful reconciliation clears the failure state
         App.state.transitionStatus = 'committed';
+        committed = true;
         // Decorative surfaces refresh after commit (their failure never fails the transition)
         try { await refreshTape(); } catch (eT) { /* tape is decorative */ }
         subscribeMarketStream();      // the stream's default symbol set follows the new universe
@@ -492,8 +525,16 @@
           App.navigate('#/research/' + syms[0]);
           return;
         }
-        return App.render();          // same screen, new market under it — observed never stopped
+        try {
+          return await App.render();  // same screen, new market under it — observed never stopped
+        } catch (renderError) {
+          // The market switch DID commit. Let the route error boundary explain a screen failure;
+          // never tell the user they remain in the prior market after state/account/store moved.
+          if (UI.toast) UI.toast('Market switched, but this screen could not refresh. Use Retry on the page.');
+          return;
+        }
       } catch (e2) {
+        if (committed) throw e2;
         // FAILED: no state was committed — the app still (honestly) shows the previous market.
         App.state.transitionStatus = 'failed';
         if (UI.toast) UI.toast('Market switch incomplete — the universe did not load. Retrying may help.');
@@ -521,7 +562,9 @@
     try {
       var res = await API.put('/api/world', { world: worldId });
       if (res && res.datasetReset && UI.toast) {
-        UI.toast('Back on the real market — your scenario dataset was switched off too');
+        UI.toast(App.baseWorldId() === 'demo'
+          ? 'Back on the Demo baseline — your scenario dataset was switched off too'
+          : 'Back on the observed market — your scenario dataset was switched off too');
       }
       // Transition failures reject AND paint the #transition-error banner — no alert on top.
       // The PUT's response carries the target bootstrap: server and client commit together.
@@ -682,14 +725,19 @@
     // transition committed/failed). Anything that derives market-context state on first paint
     // (the welcome proof cache, prefetch) awaits this instead of racing /api/world (review P2).
     App.worldReady = API.get('/api/world').then(function (w) {
-      var boot = (w && w.world) || 'observed';
-      // BOOT IS A TRANSITION TOO (review P1 #3): reloading inside a simulated world must
-      // reconcile the store, universe, lane state, and screens — not just paint the band
-      // over observed-market state.
-      if (w && w.revision) App.state.worldRevision = Number(w.revision);
-      if (boot !== 'observed') return App.transitionWorld(boot, null, w && w.revision)
-        .catch(function () { /* banner shown */ });
-    }).catch(function () { /* observed */ });
+      var boot = (w && w.world) || App.baseWorldId();
+      // BOOT IS ALWAYS A FULL TRANSITION, even when the restored workspace already names
+      // the server's lane. A same-lane reload still has a fresh DOM and empty MarketStore;
+      // skipping reconciliation used to drop the DEMO/SIMULATED band, universe bootstrap,
+      // and stream subscription while leaving fabricated quotes on screen.
+      return App.transitionWorld(boot, null, w && w.revision)
+        .catch(function () { /* transition paints the visible failure state */ });
+    }).catch(function () {
+      // /api/config carries the server's baseline lane and is already loaded. Preserve the
+      // same fail-honest behavior if the small /api/world read is transiently unavailable.
+      return App.transitionWorld((App.config && App.config.world) || App.baseWorldId())
+        .catch(function () { /* transition paints the visible failure state */ });
+    });
     App.onEvent('world.tick', function (type, data) {
       if (!data || data.world !== App.state.world) return; // a world we already left — discard
       var gen = App.state.worldGen;
@@ -710,6 +758,7 @@
           .catch(function () { /* banner shown */ });
       }).catch(function () { /* offline — next visit retries */ });
     });
+    await App.worldReady;             // never paint restored work under an unconfirmed market lane
     refreshUniverse();
     subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
     subscribeEvents();                // typed workspace events (jobs, datasets, provider cooldowns)
@@ -942,13 +991,17 @@
       }
     });
   }
+  // Local command responses use the same typed path as SSE. The server also publishes the event
+  // for other tabs; duplicate delivery is intentionally harmless and collapses in each view.
+  App.emitEvent = dispatchAppEvent;
 
   function subscribeEvents() {
     if (!window.EventSource) return;
     var es;
     try { es = new EventSource('/api/events'); } catch (e) { return; }
     App._eventsES = es;
-    ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated', 'world.tick', 'world.selected']
+    ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated',
+      'world.tick', 'world.selected', 'world.control']
       .forEach(function (type) {
         es.addEventListener(type, function (ev) {
           var data = null;

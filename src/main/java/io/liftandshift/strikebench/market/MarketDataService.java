@@ -110,6 +110,11 @@ public final class MarketDataService {
         rateCache.invalidateAll();
     }
 
+    /** Durable bar imports/backfills changed history without changing the active dataset id. */
+    public void invalidateHistoricalData() {
+        candlesCache.invalidateAll();
+    }
+
     // ---- Public API ----
 
     public List<SymbolMatch> lookup(String query) {
@@ -127,7 +132,7 @@ public final class MarketDataService {
         return merged;
     }
 
-    /** Resolves a simulated world by id; null resolver or unknown world = observed (fail-safe). */
+    /** Resolves a simulated world by id. Unknown explicit ids stay unavailable; they never fall through to Observed. */
     private volatile java.util.function.Function<String, java.util.Optional<io.liftandshift.strikebench.market.sim.SimulatedWorld>> worldResolver;
 
     public void setWorldResolver(java.util.function.Function<String, java.util.Optional<io.liftandshift.strikebench.market.sim.SimulatedWorld>> r) {
@@ -140,6 +145,10 @@ public final class MarketDataService {
             return java.util.Optional.empty();
         }
         try { return worldResolver.apply(worldId); } catch (RuntimeException e) { return java.util.Optional.empty(); }
+    }
+
+    private static boolean observedWorld(String worldId) {
+        return worldId == null || worldId.isBlank() || "observed".equalsIgnoreCase(worldId);
     }
 
     /** The lane's effective clock: the world's sim instant inside a simulated session, else empty. */
@@ -161,25 +170,32 @@ public final class MarketDataService {
         if ("demo".equals(worldId)) return demoProvider == null ? Optional.empty() : demoProvider.quote(norm(symbol));
         var w = world(worldId);
         if (w.isPresent()) return w.get().quote(symbol);
-        return quote(symbol);
+        return observedWorld(worldId) ? quote(symbol) : Optional.empty();
     }
 
     public List<LocalDate> expirations(String symbol, String worldId) {
         if ("demo".equals(worldId)) return demoProvider == null ? List.of() : demoProvider.expirations(norm(symbol));
         var w = world(worldId);
         if (w.isPresent()) return w.get().quote(symbol).isPresent() ? w.get().expirations() : List.of();
-        return expirations(symbol);
+        return observedWorld(worldId) ? expirations(symbol) : List.of();
     }
 
     public Optional<OptionChain> chain(String symbol, LocalDate expiration, String worldId) {
         if ("demo".equals(worldId)) return demoProvider == null ? Optional.empty() : demoProvider.chain(norm(symbol), expiration);
         var w = world(worldId);
         if (w.isPresent()) return w.get().chain(symbol, expiration);
-        return chain(symbol, expiration);
+        return observedWorld(worldId) ? chain(symbol, expiration) : Optional.empty();
     }
 
     public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to, String worldId,
                                      io.liftandshift.strikebench.db.AnalysisContext actx) {
+        // A saved Scenario is the explicit analysis lane on top of either normal Observed or
+        // an explicit Demo build. It must read its own persisted bars before the baseline
+        // market provider; live simulated exchanges remain mutually exclusive with datasets.
+        if (actx != null && actx.synthetic()
+                && (worldId == null || worldId.isBlank() || "observed".equals(worldId) || "demo".equals(worldId))) {
+            return candleSeries(symbol, from, to, actx);
+        }
         if ("demo".equals(worldId)) {
             if (demoProvider == null) return CandleSeries.EMPTY;
             List<Candle> cs = demoProvider.candles(norm(symbol), from, to);
@@ -191,14 +207,15 @@ public final class MarketDataService {
             return cs.size() < 2 ? CandleSeries.EMPTY
                     : new CandleSeries(cs, "simulated", Freshness.SIMULATED);
         }
-        return candleSeries(symbol, from, to, actx);
+        return observedWorld(worldId) ? candleSeries(symbol, from, to, actx) : CandleSeries.EMPTY;
     }
 
     public Optional<Quote> quote(String symbol) {
         String sym = norm(symbol);
         Quote q = quoteCache.get(sym, s ->
                 firstNonEmpty(Domain.QUOTES, p -> p.quote(s).orElse(null)));
-        return Optional.ofNullable(q).map(this::gateQuote);
+        return Optional.ofNullable(q).map(this::gateQuote)
+                .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
     }
 
     public List<LocalDate> expirations(String symbol) {
@@ -212,7 +229,8 @@ public final class MarketDataService {
         String k = norm(symbol) + "|" + expiration;
         OptionChain c = chainCache.get(k, key ->
                 firstNonEmpty(Domain.OPTIONS, p -> p.chain(norm(symbol), expiration).orElse(null)));
-        return Optional.ofNullable(c).map(this::gateChain);
+        return Optional.ofNullable(c).map(this::gateChain)
+                .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
     }
 
     public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
@@ -231,7 +249,7 @@ public final class MarketDataService {
     }
 
     /**
-     * Candles WITH provenance — consumers must label demo (fixture) history in live mode. The
+     * Candles WITH provenance. Demo history is served only by the explicit Demo overload; the
      * dataset comes from the EXPLICIT context (no ambient request state), so virtual-thread
      * fan-outs keep the caller's world and background work always reads observed.
      */
@@ -313,7 +331,7 @@ public final class MarketDataService {
     public List<NewsItem> news(String symbol, String worldId) {
         if ("demo".equals(worldId)) return demoNewsProvider == null ? List.of() : demoNewsProvider.news(norm(symbol));
         if (world(worldId).isPresent()) return List.of();
-        return news(symbol);
+        return observedWorld(worldId) ? news(symbol) : List.of();
     }
 
     private void gatherNews(String provider, java.util.function.Supplier<List<NewsItem>> call, List<NewsItem> acc) {
@@ -348,6 +366,14 @@ public final class MarketDataService {
             OptionalDouble v = demoRatesProvider.riskFreeRate(days);
             if (v.isPresent()) return new RateQuote(v.getAsDouble(),
                     io.liftandshift.strikebench.model.DataEvidence.of("fixture", Freshness.FIXTURE));
+        }
+        if (!observedWorld(worldId)) {
+            if (world(worldId).isPresent()) {
+                return new RateQuote(0.04,
+                        io.liftandshift.strikebench.model.DataEvidence.of("simulated rate assumption", Freshness.SIMULATED));
+            }
+            return new RateQuote(0.04,
+                    io.liftandshift.strikebench.model.DataEvidence.missing("unknown simulated market"));
         }
         RateQuote r = rateCache.get(days, d -> {
             for (RatesProvider p : ratesProviders) {
@@ -386,7 +412,15 @@ public final class MarketDataService {
     // ---- Chain traversal ----
 
     private List<MarketDataProvider> providersFor(Domain d) {
-        return providers.stream().filter(p -> p.domains().contains(d)).toList();
+        return providers.stream()
+                .filter(p -> p.domains().contains(d))
+                .filter(p -> fixtureOnlyChain || !FIXTURE.equalsIgnoreCase(p.name()))
+                .toList();
+    }
+
+    private static boolean observedEvidence(io.liftandshift.strikebench.model.DataEvidence e) {
+        return e != null && (e.provenance() == io.liftandshift.strikebench.model.DataProvenance.OBSERVED
+                || e.provenance() == io.liftandshift.strikebench.model.DataProvenance.BROKER);
     }
 
     private <T> T firstNonEmpty(Domain domain, Function<MarketDataProvider, T> op) {

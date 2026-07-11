@@ -63,21 +63,24 @@
             }
           }, 'See how it works')],
         extras: el('div', { class: 'trust-row' },
-          ['No signup', 'No cloud', 'Fills at real bid/ask', 'Undefined risk blocked by default']
-            .map(function (t, i) {
-              return el('span', {}, i ? el('span', { class: 'dot-sep' }, '\u00B7') : null, t);
-            }))
+          ['No signup', 'No cloud', 'Uses bid/ask, not midpoint', 'Undefined risk blocked']
+            .map(function (t) { return el('span', {}, t); }))
       }),
       el('section', { class: 'welcome-section welcome-live-col' },
         el('div', { class: 'live-head' },
-          el('div', { class: 'eyebrow' }, 'LIVE FROM THE ENGINE'),
+          el('div', { class: 'eyebrow' }, 'FROM THE ENGINE'),
           el('button', { class: 'btn-link', id: 'welcome-skip', onclick: function () {
             try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
             App.navigate('#/home');
           } }, 'Skip \u2192 dashboard')),
         el('div', { class: 'showcase' }, liveHost,
-          el('p', { class: 'showcase-caption' },
-            'A real screened idea \u2014 generated this second.')))));
+          el('p', { class: 'showcase-caption', id: 'welcome-proof-caption' }, welcomeProofCaption())))));
+    function welcomeProofCaption() {
+      if (App.config && App.config.scenarioMode) return 'A screened scenario result \u2014 modeled, not observed.';
+      if (App.state.world === 'demo') return 'A screened teaching idea \u2014 generated from fabricated Demo data.';
+      if (App.state.world && App.state.world !== 'observed') return 'A screened simulated-market idea \u2014 generated, not observed.';
+      return 'A screened idea from observed market inputs \u2014 generated this second.';
+    }
     (async function () {
       // LAST-KNOWN FIRST (review #15): the opening composition must never be half spinner on a
       // slow provider. Render the cached proof instantly, then refresh it live and re-store.
@@ -90,6 +93,8 @@
       var proofToken = App.navToken;
       if (App.worldReady) { try { await App.worldReady; } catch (e) { /* lane decided anyway */ } }
       if (!App.alive(proofToken)) return; // navigated away while the lane was deciding
+      var proofCaption = document.getElementById('welcome-proof-caption');
+      if (proofCaption) proofCaption.textContent = welcomeProofCaption();
       var proofCtx = {
         world: App.state.world || 'observed',
         scenario: (App.config && App.config.scenarioMode && App.config.activeDataset) || 'observed',
@@ -229,11 +234,13 @@
     // on the Welcome/tour page only; repeating it here made Home a compressed landing page.
     var statsAnchor = el('div', { class: 'grid grid-4', id: 'home-stats' });
     var heroMode = el('span', { class: 'badge badge-ok', id: 'home-mode-chip' }, 'OBSERVED MARKET');
-    if (App.state.world && App.state.world !== 'observed') {
-      heroMode = el('span', { class: 'badge badge-sim', id: 'home-mode-chip' }, 'SIMULATED MARKET SESSION');
-    } else if (App.config && App.config.scenarioMode) {
+    if (App.config && App.config.scenarioMode) {
       heroMode = el('span', { class: 'badge badge-warn', id: 'home-mode-chip' },
         'SCENARIO: ' + (App.config.activeDatasetName || 'generated data'));
+    } else if (App.state.world === 'demo') {
+      heroMode = el('span', { class: 'badge badge-warn', id: 'home-mode-chip' }, 'DEMO MARKET');
+    } else if (App.state.world && App.state.world !== 'observed') {
+      heroMode = el('span', { class: 'badge badge-sim', id: 'home-mode-chip' }, 'SIMULATED MARKET SESSION');
     }
     var t0 = App.state.ticket;
     var heroPlaceable = !!(t0 && (t0.candidate || (t0.custom && t0.legs && t0.legs.length)));
@@ -274,9 +281,10 @@
       statsAnchor.appendChild(alertBox('warn', 'Account unavailable right now', ['Retry from the Account screen.']));
     }
 
-    var colL = el('div', { class: 'home-col' });
+    var colL = el('section', { class: 'home-col home-market-slot', 'aria-label': 'Market watch' });
     var colR = el('div', { class: 'home-col home-col-side' });
-    root.appendChild(el('div', { class: 'home-cols' }, colL, colR));
+    var posAnchor = el('div', { id: 'open-trades-anchor', class: 'home-wide' });
+    root.appendChild(el('div', { class: 'home-cols home-layout' }, colL, colR, posAnchor));
     var pulseAnchor = el('div', { id: 'sector-pulse-anchor' });
     // Sector pulse: the shared sector rail — same affordance as Research and Trade.
     // Renders instantly (usable before quotes answer); day moves fill in async.
@@ -291,6 +299,10 @@
             App.navigate('#/research');
           }
         }),
+        App.state.world === 'demo'
+          ? el('p', { class: 'muted small', style: 'margin:10px 4px 0' },
+              'One fixed teaching universe is active. Open Research for its five stocks, or start a moving session from Simulate.')
+          : null,
         explain('Day change of each sector\u2019s ETF proxy. Tap a sector to open its symbols in the explorer.'));
       if (pulseAnchor.isConnected) pulseAnchor.replaceWith(pulse);
       else pulseAnchor.appendChild(pulse); // not yet mounted: fill in place, mount later
@@ -300,13 +312,17 @@
     // Markets: shell now, tiles when the ONE batch-quotes call answers (this used to be
     // eight sequential full-research calls that blocked the whole dashboard).
     var uni = App.state.universe && App.state.universe.active;
-    // Four tiles keeps the dashboard on one desktop screen; the sector explorer has the rest
-    var marketSymbols = uni && uni.symbols && uni.symbols.length ? uni.symbols.slice(0, 4) : CORE_SYMBOLS;
-    var tiles = el('div', { class: 'tile-row' });
-    colL.appendChild(el('div', { class: 'card' },
-      UI.cardHeader('Markets' + (uni ? ' — ' + uni.label : '')),
+    // Eight symbols use desktop real estate without turning Home into the full explorer.
+    // Smaller viewports progressively show the first six/four; the full universe stays one tap away.
+    var marketSymbols = uni && uni.symbols && uni.symbols.length ? uni.symbols.slice(0, 8) : CORE_SYMBOLS;
+    var tiles = el('div', { class: 'home-market-grid' });
+    colL.appendChild(el('div', { class: 'card home-market-card', id: 'home-market-watch' },
+      UI.cardHeader('Market watch' + (uni ? ' — ' + uni.label : ''),
+        el('a', { href: '#/research', class: 'muted home-view-all' },
+          'View all ' + ((uni && uni.symbols && uni.symbols.length) || marketSymbols.length) + ' symbols →')),
       tiles,
-      explain('Tap a symbol to research it: chart, option chain, expected vs realized volatility, news.')));
+      el('p', { class: 'muted small market-watch-caption' },
+        'Select a stock for its chart, options, volatility, events and historical evidence.')));
     var marketsFill = (async function fillMarkets() {
       var rows = [];
       try {
@@ -318,22 +334,25 @@
           'Check data status', function () { App.navigate('#/status'); }));
         return;
       }
+      tiles.setAttribute('data-count', String(Math.min(rows.length, 8)));
       rows.forEach(function (q) {
         var sparkSlot = el('div', { class: 'spark-slot' });
-        tiles.appendChild(pressable(el('div', {
+        tiles.appendChild(el('a', {
           class: 'tile sym-card', 'data-sym': q.symbol,
-          onclick: function () { App.navigate('#/research/' + q.symbol); }
+          href: '#/research/' + q.symbol,
+          'aria-label': 'Open ' + q.symbol + ' full analysis'
         },
           el('div', { class: 't-sym' }, q.symbol, ' ', badge(q.freshness)),
           el('div', { class: 't-px' }, fmtNum(q.last)),
           UI.delta(q.last, q.prevClose),
           el('div', { class: 't-nm' }, q.description || ''),
-          sparkSlot), 'Research ' + q.symbol));
+          sparkSlot));
       });
       // The SAME sparkline card as Research, ONE batch call; Home cards go straight to the
       // full analysis (no preview layer here — review P5.8).
       try {
-        var sp = await API.get('/api/sparklines?symbols=' + rows.map(function (q) { return q.symbol; }).join(',') + '&range=3m');
+        var sp = await API.prefetch('/api/sparklines?symbols=' + rows.map(function (q) { return q.symbol; }).join(',') + '&range=3m');
+        if (!sp) return; // optional decoration yielded to interactive provider work
         (sp.sparklines || []).forEach(function (row) {
           var slot = tiles.querySelector('.sym-card[data-sym="' + row.symbol + '"] .spark-slot');
           if (slot) { slot.innerHTML = ''; slot.appendChild(UI.sparkline(row, { height: 30 })); }
@@ -344,15 +363,13 @@
     // Open positions (review #8): a 256px empty card was wasted real estate — with no trades
     // the whole card stays OFF the page (Next up carries the one-line state + action instead);
     // with trades, three USEFUL rows: live P/L, max loss, opened.
-    var posAnchor = el('div', { id: 'open-trades-anchor' });
-    colL.appendChild(posAnchor);
     var hasOpenTrades = false;
     var tradesFill = (async function fillTrades() {
       try {
         var open = await API.get('/api/trades?status=ACTIVE&size=3');
         if (!open.trades.length) { posAnchor.remove(); return; }
         hasOpenTrades = true;
-        var posCard = el('div', { class: 'card', id: 'open-trades-card' }, UI.cardHeader('Open practice trades',
+        var posCard = el('div', { class: 'card home-wide', id: 'open-trades-card' }, UI.cardHeader('Open practice trades',
           el('a', { href: '#/portfolio' }, 'All trades \u2192')));
         posCard.appendChild(table(['Symbol', 'Strategy', 'Now', 'Max loss', 'Opened'],
           open.trades.map(function (t) {
@@ -373,7 +390,7 @@
     // NEXT UP (review #9): ONE contextual card replaces the journey card + continuity row +
     // empty-trades CTA — the single most useful next action first, everything else quiet.
     (function nextUp() {
-      var card = el('div', { class: 'card card-slim', id: 'next-up' }, UI.cardHeader('Next up'));
+      var card = el('div', { class: 'card card-slim', id: 'next-up' }, UI.cardHeader('Continue'));
       var any = false;
       // The beginner first-week path, folded in (retires itself after the first trade).
       if (Learn.currentLevel() === 'beginner' && acct && !acct.hasTraded) {
@@ -406,15 +423,21 @@
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'research',
           onclick: function () { App.navigate('#/research/' + sym); } }, 'Resume: ' + sym + ' analysis →'));
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'ideas',
-          onclick: function () { App.state.ideasPrefill = { symbol: sym, autorun: true }; App.navigate('#/trade/discover'); } }, 'Resume: strategies for ' + sym + ' →'));
+          onclick: function () {
+            var f = App.state.discoverForm || {};
+            App.state.ideasPrefill = { symbol: sym, intent: f.goalExplicit ? f.goal : null, autorun: true };
+            App.navigate('#/trade/discover');
+          } }, 'Resume: strategies for ' + sym + ' →'));
       }
       if (chips.length) {
         card.appendChild(el('div', { class: 'chip-row', id: 'continue-row' }, chips));
         any = true;
       }
       if (!any) {
-        card.appendChild(el('div', { class: 'muted small' },
-          'No open work \u2014 the button above finds a risk-screened idea; the worst case is always shown first.'));
+        card.appendChild(el('button', { class: 'home-start-research', type: 'button',
+          onclick: function () { App.navigate('#/research'); } },
+          el('b', {}, 'Start with a stock you know'),
+          el('span', { class: 'muted small' }, 'Open Research, choose a ticker, then carry that view into a strategy.')));
       }
       colR.appendChild(card);
     })();
@@ -422,6 +445,7 @@
     // Command bar (review P5): ONLY shortcuts the primary nav does not already carry —
     // Research and Ideas live in the top nav and the hero; repeating them here was noise.
     colR.appendChild(el('div', { class: 'card card-slim', id: 'command-bar' },
+      UI.cardHeader('Tools'),
       el('div', { class: 'btn-row', style: 'flex-wrap:wrap' },
         [['Builder', '#/trade/shape', 'target'], ['Backtest', '#/trade/verify', 'chart'],
          ['Simulate', '#/data/simulation', 'flask']].map(function (a) {
@@ -514,17 +538,20 @@
     var symbol = (params[0] || '').toUpperCase();
     var input = el('input', { type: 'text', id: 'symbol-input', placeholder: 'Ticker, e.g. AAPL', value: symbol });
     var go = function () { if (input.value.trim()) App.navigate('#/research/' + input.value.trim().toUpperCase()); };
-    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
 
     root.appendChild(el('h1', {}, 'Research'));
     var recentBox = el('span', { class: 'sym-chips', id: 'recent-symbols' });
-    root.appendChild(el('div', { class: 'card' },
-      el('div', { class: 'btn-row', style: 'margin-top:0' },
-        input, el('button', { class: 'btn', id: 'symbol-go', onclick: go }, 'Look up'),
-        symbol ? el('a', { href: '#/research', class: 'muted', id: 'back-to-sectors',
-          style: 'font-size:12.5px; white-space:nowrap' }, '\u2190 All sectors') : null,
-        el('span', { class: 'spacer' }),
-        recentBox)));
+    var researchContext = UI.symbolContext({
+      mode: 'editable', id: 'research-symbol-context', input: input,
+      label: symbol ? 'Change stock' : Learn.currentLevel() === 'beginner'
+        ? 'Which stock do you want to understand?' : 'Research symbol',
+      compact: !!symbol, showStatus: !symbol,
+      commitLabel: symbol ? 'Go' : 'Open analysis', commitId: 'symbol-go', onCommit: go
+    });
+    var contextExtras = el('div', { class: 'symbol-context-extras' },
+      symbol ? el('a', { href: '#/research', class: 'muted', id: 'back-to-sectors' }, '\u2190 All sectors') : null,
+      recentBox);
+    root.appendChild(el('div', { class: 'research-symbol-shell' }, researchContext, contextExtras));
     function renderRecents() {
       recentBox.innerHTML = '';
       var list = recentSymbols();
@@ -546,7 +573,7 @@
       (async function fillIndex() {
         await sectorExplorer(idxBody, 'research');
         if (!App.alive(_it)) return;
-        idxBody.appendChild(await studyToolsSection()); // Stage E: the Lab's STUDY tools live in Research
+        idxBody.appendChild(await studyToolsSection());
       })();
       return;
     }
@@ -675,7 +702,7 @@
         r.optionable ? el('button', {
           class: 'btn btn-sm', onclick: function () {
             App.state.lastRecommendSymbol = symbol;
-            App.state.ideasPrefill = { symbol: symbol, autorun: true }; // context-complete handoffs RUN (contract #4)
+            App.state.ideasPrefill = { symbol: symbol, autorun: true }; // asks for a goal, then runs
             App.navigate('#/recommend/manual');
           }
         }, 'Find strategies') : null),
@@ -724,7 +751,7 @@
               el('p', { class: 'muted action-line' }, lineNode),
               el('button', {
                 class: 'btn btn-sm', onclick: function () {
-                  App.state.ideasPrefill = { intent: intentKey, symbol: symbol };
+                  App.state.ideasPrefill = { intent: intentKey, symbol: symbol, autorun: true };
                   App.navigate('#/recommend/manual');
                 }
               }, cta));
@@ -912,10 +939,10 @@
       if (wi) {
         wi.innerHTML = '';
         wi.appendChild(UI.cardHeader('What COULD happen next?'));
-        wi.appendChild(UI.emptyState('Needs a live or demo quote first',
+        wi.appendChild(UI.emptyState('Needs a price anchor first',
           (App.config && App.config.fixturesOnly)
-            ? 'Demo mode covers AAPL, SPY, QQQ and TSLA — try one of those.'
-            : 'Simulations anchor on a real price. Check the ticker, or the Data screen for source health.'));
+            ? 'The Demo market covers AAPL, SPY, QQQ, TSLA and VTSAX — try one of those.'
+            : 'Simulations start from the active market lane\'s disclosed price. Check the ticker, or Data for source health.'));
       }
     });
   }
@@ -1036,6 +1063,21 @@
       : 'generated-scenario occurrences (not real history)';
   }
 
+  /** Page-level history wording follows the active lane; labels never promote Demo/Scenario data. */
+  function activeHistoryBasis() {
+    if (App.config && App.config.scenarioMode) return {
+      plain: 'the active generated Scenario history', expert: 'generated Scenario event study', observed: false
+    };
+    if (App.state.world === 'demo') return {
+      plain: 'fabricated Demo history (not the real past)',
+      expert: 'fabricated Demo history (not the real past)', observed: false
+    };
+    if (App.state.world && App.state.world !== 'observed') return {
+      plain: 'this simulated market\'s generated history', expert: 'simulated-world event study', observed: false
+    };
+    return { plain: 'the stock\'s observed past', expert: 'observed-history event study', observed: true };
+  }
+
   function sectorRail(opts) {
     opts = opts || {};
     var u = App.state.universe;
@@ -1118,45 +1160,21 @@
    * quote/freshness/lane chip to any EDITABLE symbol input: same look, same data, every
    * surface. Debounced, supersede-guarded; failures show honestly as 'no live quote'.
    */
-  function symbolStatus(input) {
-    var chipEl = el('span', { class: 'sym-status muted', 'aria-live': 'polite' });
-    var seq = 0, timer = null;
-    async function fill() {
-      var v = (input.value || '').trim().toUpperCase();
-      var mySeq = ++seq;
-      if (!v) { chipEl.textContent = ''; return; }
-      try {
-        var q = ((await API.get('/api/quotes?symbols=' + v)).quotes || [])[0];
-        if (mySeq !== seq || !chipEl.isConnected) return;
-        chipEl.innerHTML = '';
-        if (!q) { chipEl.textContent = 'no live quote'; return; }
-        chipEl.appendChild(el('b', {}, fmtNum(q.last)));
-        chipEl.appendChild(UI.delta(q.last, q.prevClose));
-        if (q.freshness) chipEl.appendChild(badge(q.freshness));
-      } catch (e) { if (mySeq === seq && chipEl.isConnected) chipEl.textContent = 'no live quote'; }
-    }
-    input.addEventListener('input', function () {
-      clearTimeout(timer);
-      timer = setTimeout(fill, 350);
-    });
-    fill();
-    return chipEl;
-  }
-
   /**
    * LOCKED symbol context (interaction contract #5): a placed/reviewed package shows its
    * symbol but cannot silently mutate it — changing means going back through the workflow.
    */
   function lockedSymbolBar(symbol, opts) {
     opts = opts || {};
-    return el('div', { class: 'chip-row locked-symbol', id: opts.id || 'locked-symbol' },
-      el('span', { class: 'chip' }, el('span', { class: 'chip-label' }, 'Symbol'),
-        el('b', {}, symbol), el('span', { class: 'badge badge-dim', title: 'This package is priced on '
-          + symbol + ' — contracts cannot silently change under a review' }, 'LOCKED')),
-      el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/research/' + symbol); } }, 'Research'),
-      opts.noChange ? null : el('button', { class: 'btn btn-sm btn-secondary',
-        title: 'Start a fresh idea on another stock \u2014 through the normal workflow',
-        onclick: function () { App.state.ideasPrefill = {}; App.navigate('#/trade/discover'); } }, 'Change symbol'));
+    return UI.symbolContext({
+      mode: 'locked', symbol: symbol, id: opts.id || 'locked-symbol',
+      label: opts.label || 'Position symbol',
+      onResearch: function () { App.navigate('#/research/' + symbol); },
+      onChange: opts.noChange ? null : function () {
+        App.state.ideasPrefill = {};
+        App.navigate('#/trade/discover');
+      }
+    });
   }
 
   function symbolPanel(symbol, opts) {
@@ -1241,9 +1259,14 @@
       }));
     var instruction = el('p', { class: 'muted explorer-hint', id: 'explorer-hint' },
       'Choose a stock to open its full analysis \u2014 chart, events, headlines, chains and strategies.');
+    var quoteBasis = App.state.world === 'demo'
+      ? 'Fabricated Demo quotes for this teaching universe.'
+      : App.state.world && App.state.world !== 'observed'
+        ? 'Generated quotes from the active simulated market.'
+        : 'Observed-source quotes for the selected sector.';
     var card = el('div', { class: 'card', id: 'sector-explorer' },
       UI.cardHeader('Explore by sector'), rail, head, instruction, rangeRow, grid,
-      explain('Live quotes per sector. Tap a card to open the stock, or point the scout at a whole sector. '
+      explain(quoteBasis + ' Tap a card to open the stock, or point the scout at a whole sector. '
         + (u.note ? u.note : '')));
     root.appendChild(card);
 
@@ -1254,8 +1277,9 @@
       if (!sector) return;
       var mySpark = ++sparkSeq;
       try {
-        var sp = await API.get('/api/sparklines?symbols=' + sector.symbols.join(',')
+        var sp = await API.prefetch('/api/sparklines?symbols=' + sector.symbols.join(',')
           + '&range=' + App.state.explorerRange);
+        if (!sp) return; // optional chart fill yielded to interactive provider work
         if (mySpark !== sparkSeq || seqAtCall !== loadSeq || !grid.isConnected) return;
         (sp.sparklines || []).forEach(function (row) {
           var t2 = grid.querySelector('.sym-card[data-sym="' + row.symbol + '"] .spark-slot');
@@ -1308,6 +1332,7 @@
         var data = await API.get('/api/quotes?symbols=' + sector.symbols.join(','));
         if (seq !== loadSeq) return; // a newer sector was picked while this loaded
         grid.innerHTML = '';
+        grid.setAttribute('data-count', String(sector.symbols.length));
         // EVERY symbol gets an actionable tile \u2014 a sector click must always land somewhere
         // clickable. Symbols without a live quote say so honestly but still link onward.
         var bySym = {};
@@ -1322,12 +1347,14 @@
           var prev = q ? parseFloat(q.prevClose) : null;
           var pct = q && prev ? (last - prev) / prev * 100 : null;
           var sparkSlot = el('div', { class: 'spark-slot' });
-          var tile = el('div', { class: 'tile sector-tile sym-card clickable' + (q ? '' : ' tile-nodata'),
+          var tile = el('a', { class: 'tile sector-tile sym-card clickable' + (q ? '' : ' tile-nodata'),
             'data-sym': s,
+            href: '#/research/' + s,
+            'aria-label': 'Open ' + s + ' full analysis',
             title: 'Open ' + s + ' \u2014 full analysis' },
             el('div', { class: 't-sym' }, s,
               q && !q.optionable ? el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO OPTIONS') : null,
-              q ? null : el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO LIVE DATA')),
+              q ? null : el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO QUOTE')),
             el('div', { class: 't-px' }, q ? last.toFixed(2) : '\u2014'),
             pct === null
               ? el('div', { class: 'muted t-move' }, 'no quote right now')
@@ -1337,15 +1364,13 @@
           tile.addEventListener('click', function (e) {
             // The sparkline is a deliberate interaction SUBREGION (hover/keys explore the
             // chart) — clicking it must not yank the user off the page.
-            if (e.target.closest('.spark')) return;
+            if (e.target.closest('.spark')) { e.preventDefault(); return; }
             App.state.explorerScroll = window.scrollY; // Back restores the exact spot
-            App.navigate('#/research/' + s);
           });
           tile.addEventListener('keydown', function (e) {
             var spark = sparkSlot.firstChild;
             if (spark && spark.exploreKey && spark.exploreKey(e.key)) { e.preventDefault(); }
           });
-          pressable(tile, 'Open ' + s + ' full analysis');
           grid.appendChild(tile);
         });
         // Return continuity: coming Back from a symbol page lands on the same scroll spot.
@@ -1581,20 +1606,6 @@
   var THESIS_BADGE = { BULLISH: 'badge-ok', BEARISH: 'badge-danger', NEUTRAL: 'badge-dim', VOLATILE: 'badge-warn' };
 
   /** Pro: side-by-side strategy comparison — sortable columns, expandable detail rows. */
-  // Structure-shape lookup for presentation diversity: served by /api/strategies (explicit
-  // enum metadata), cached; unknown families group as 'other'.
-  var _structureGroups = null;
-  function structureGroupOf(name, groups) { return (groups && groups[name]) || 'other'; }
-  function fetchStructureGroups() {
-    if (_structureGroups) return Promise.resolve(_structureGroups);
-    return API.get('/api/strategies').then(function (r) {
-      var m = {};
-      (r.catalog || []).forEach(function (f) { m[f.name] = f.structureGroup; });
-      _structureGroups = m;
-      return m;
-    }).catch(function () { return {}; });
-  }
-
   /**
    * Beginner candidate list: ranked cards with rank numbers. Long lists open with DIVERSE
    * representatives (max 2 per structure shape, top 5 of the engine's order) plus
@@ -1606,19 +1617,15 @@
     function rankBadge(i) {
       return el('span', { class: 'badge badge-dim rank-badge', title: 'Rank in this list\u2019s ordering (best first)' }, '#' + (i + 1));
     }
-    function paint(showAll, groups) {
+    function paint(showAll) {
       host.innerHTML = '';
       var shown = [];
-      var haveGroups = groups && Object.keys(groups).length;
       if (showAll || candidates.length <= 5) {
         candidates.forEach(function (c, i) { shown.push({ c: c, rank: i }); });
-      } else if (!haveGroups) {
-        // Catalog unavailable: plain top-5 of the ranked order (never 2-of-'other' nonsense)
-        candidates.slice(0, 5).forEach(function (c, i) { shown.push({ c: c, rank: i }); });
       } else {
         var perGroup = {};
         for (var i = 0; i < candidates.length && shown.length < 5; i++) {
-          var g = structureGroupOf(candidates[i].strategy, groups);
+          var g = candidates[i].structureGroup || 'other';
           var n = perGroup[g] || 0;
           if (n >= 2) continue;
           perGroup[g] = n + 1;
@@ -1635,16 +1642,11 @@
       if (!showAll && shown.length < candidates.length) {
         host.appendChild(el('div', { class: 'btn-row' }, el('button', {
           class: 'btn btn-secondary', id: 'show-all-ranked',
-          onclick: function () { paint(true, groups); }
+          onclick: function () { paint(true); }
         }, 'Show all ' + candidates.length + ' ranked strategies')));
       }
     }
-    if (candidates.length <= 5) { paint(true, {}); }
-    else if (_structureGroups) { paint(false, _structureGroups); }
-    else {
-      paint(false, {}); // top-5 immediately; the diverse cut lands when the catalog answers
-      fetchStructureGroups().then(function (groups) { if (host.isConnected) paint(false, groups); });
-    }
+    paint(candidates.length <= 5);
   }
 
   function comparisonTable(candidates) {
@@ -1733,6 +1735,7 @@
       var s0 = App.state.scoutForm || {};
       saved = App.state.discoverForm = {
         goal: m0.intent || s0.goal || 'DIRECTIONAL',
+        goalExplicit: !!(m0.intent || s0.goal),
         source: m0.symbol ? 'single' : 'scan',
         symbol: m0.symbol || '', target: m0.target || '',
         universe: s0.universe || '', scanTarget: s0.target || '',
@@ -1742,11 +1745,12 @@
     var prefill = App.state.ideasPrefill || {};
     App.state.ideasPrefill = null;
     if (prefill.symbol) { saved.symbol = prefill.symbol; saved.source = 'single'; }
-    if (prefill.intent) saved.goal = prefill.intent;
+    if (prefill.intent) { saved.goal = prefill.intent; saved.goalExplicit = true; }
     // COMPLETED INTENT IS NOT REQUESTED TWICE (interaction contract #4): a 'Find strategies'
     // click arrives with the symbol; when a goal is already known (handed over, or chosen
     // before and persisted) the search RUNS. Only a genuinely ambiguous goal asks.
-    var autorun = !!prefill.autorun && !!prefill.symbol;
+    var autorun = !!prefill.autorun && !!prefill.symbol && !!saved.goalExplicit;
+    var pendingAutorun = !!prefill.autorun && !!prefill.symbol && !saved.goalExplicit;
     // Route seeds keep every old link honest: /manual = one-stock mode, /scout = scan mode
     if (params && params[0] === 'manual') saved.source = 'single';
     if (params && params[0] === 'scout') saved.source = 'scan';
@@ -1875,11 +1879,15 @@
           title: i.blurb,
           onclick: function () {
             goal = i.key;
-            remember({ goal: goal });
+            remember({ goal: goal, goalExplicit: true });
             results.innerHTML = ''; App.state.recommendResults = null; App.state.scoutResults = null;
             intentRow.querySelectorAll('.choice').forEach(function (b) { b.classList.remove('selected'); });
             this.classList.add('selected');
             sync();
+            if (pendingAutorun && source === 'single') {
+              pendingAutorun = false;
+              setTimeout(function () { if (goBtn && goBtn.isConnected) goBtn.click(); }, 0);
+            }
           }
         }, expertChooser
              ? el('b', {}, i.label)
@@ -1931,8 +1939,12 @@
         }, s2));
       });
     }
-    var symField = el('div', { class: 'field' },
-      el('label', {}, beginner ? 'Which stock?' : 'Symbol'), sym, symbolStatus(sym), symChips);
+    var symField = UI.symbolContext({
+      mode: 'editable', id: 'ideas-symbol-context', input: sym,
+      label: beginner ? 'Which stock?' : 'Symbol'
+    });
+    symChips.classList.add('symbol-context-peers');
+    symField.appendChild(symChips);
     // Chart + headlines for the underlying, one tap away — informative, never in the way
     var ctxAnchor = el('div', { id: 'symbol-context' });
     var ctxSym = null;
@@ -2068,7 +2080,7 @@
       // Deferred one tick: the form below must be in the DOM before results paint into it.
       setTimeout(function () {
         if (!goBtn.isConnected) return; // navigated away before the tick
-        if ((saved.goal || goal) && !scanMode()) {
+        if (saved.goalExplicit && !scanMode()) {
           goBtn.click();
         } else {
           var chooser = document.getElementById('intent-choices');
@@ -2379,12 +2391,12 @@
     if (stage === 'discover') await discoverStage(root, params.slice(1));
     else if (stage === 'shape') {
       await Builder.render(root);
-      // The ETF-replication sizer lost its home when the Lab dissolved (it was only reachable
-      // from a dead route — a silent feature loss). It belongs with CONSTRUCTION: size a
+      // Exposure replication belongs with construction: size a
       // synthetic to a dollar exposure, then hand the legs to the builder above. Collapsed —
       // genuinely optional detail (interaction contract #3).
-      App.state.labForm = App.state.labForm || {};
-      var rctx = App.state.labForm.ctx = App.state.labForm.ctx || {};
+      App.state.tradeReplicator = App.state.tradeReplicator || {};
+      var rctx = { symbol: (App.state.builderForm && App.state.builderForm.symbol)
+        || App.state.lastRecommendSymbol || App.state.tradeReplicator.symbol || 'SPY' };
       root.appendChild(UI.expandable('Replicate an ETF exposure \u2014 synthetic sizing', function () {
         return replicateCard(Learn.currentLevel(), rctx);
       }));
@@ -2548,13 +2560,12 @@
     var s = pick.signals;
     var card = el('div', { class: 'card pick-card' },
       el('div', { class: 'quote-hero' },
-        el('span', { class: 'sym' }, pick.symbol),
+        el('a', { class: 'sym pick-symbol-link', href: '#/research/' + pick.symbol,
+          title: 'Open full analysis for ' + pick.symbol }, pick.symbol),
         intentBadge(pick.intent),
         el('span', { class: 'badge ' + (THESIS_BADGE[s.thesis] || 'badge-dim') }, s.thesis),
         chip('Confidence', fmtPct(s.confidence)),
-        chip('Opportunity', fmtNum(pick.opportunityScore, 2)),
-        el('span', { class: 'spacer' }),
-        el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/research/' + pick.symbol); } }, 'Research')));
+        chip('Opportunity', fmtNum(pick.opportunityScore, 2))));
     card.appendChild(el('div', { class: 'chip-row' },
       s.ret20d !== null && s.ret20d !== undefined ? chip('20d move', (s.ret20d >= 0 ? '+' : '') + (s.ret20d * 100).toFixed(1) + '%') : null,
       chip('Sentiment', (s.sentimentScore >= 0 ? '+' : '') + s.sentimentScore.toFixed(2)),
@@ -3475,6 +3486,7 @@
       data.trades = data.trades.concat(extra[0].trades, extra[1].trades);
     }
     if (!data.trades.length) {
+      tradesCard.classList.add('is-empty');
       tradesCard.appendChild(tab === 'active'
         ? UI.emptyState('No open practice trades', 'Find a risk-screened idea and practice it — the worst case is known before you commit.', 'Find an idea', function () { App.navigate('#/trade/discover'); })
         : UI.emptyState('Nothing closed yet', 'Closed, settled, and voided trades land here.'));
@@ -3751,11 +3763,12 @@
   /** Research: "I think X happens next" → hundreds of simulated futures → hand off to Verify. */
   function whatIfCard(symbol) {
     var level = Learn.currentLevel();
+    var historyBasis = activeHistoryBasis();
     var card = el('div', { class: 'card', id: 'whatif-card' });
     card.appendChild(UI.cardHeader('What COULD happen next?'));
     card.appendChild(explain(level === 'beginner'
-      ? 'Pick the story you believe and we draw hundreds of realistic “possible futures” for ' + symbol + ' — so you can SEE the range of outcomes, then test a strategy against it. (“Historical evidence” above checks the same belief against the real past.)'
-      : 'Parameterize a scenario (model, drift, vol, jumps, IV path) and preview the Monte-Carlo fan; hand it to Verify to run a structure against it. “Historical evidence” above is the observed-history half of the pair.'));
+      ? 'Pick the story you believe and we draw hundreds of model-generated “possible futures” for ' + symbol + ' — so you can see the range of outcomes, then test a strategy against it. Historical evidence checks the same belief against ' + historyBasis.plain + '.'
+      : 'Parameterize a scenario (model, drift, vol, jumps, IV path) and preview the Monte-Carlo fan; hand it to Verify to run a structure against it. The paired evidence lens is a ' + historyBasis.expert + '.'));
     var f = Scenario.form(level, symbol);
     card.appendChild(f.el);
     var out = el('div', { id: 'whatif-out' });
@@ -3805,8 +3818,12 @@
     }
     symInput.addEventListener('change', function () { switchSymbol(symInput.value); });
     symInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') switchSymbol(symInput.value); });
-    card.appendChild(UI.cardHeader('Imagine a future for ' + symbol,
-      el('span', { class: 'btn-row', style: 'margin:0' }, symInput)));
+    card.appendChild(UI.cardHeader('Imagine a future for ' + symbol));
+    card.appendChild(UI.symbolContext({
+      mode: 'editable', id: 'scenario-symbol-context', input: symInput,
+      label: level === 'beginner' ? 'Which stock?' : 'Scenario symbol',
+      commitLabel: 'Apply', onCommit: switchSymbol
+    }));
     // EVIDENCE MODE banner: Research handed over its analog windows — the runs below price on
     // THOSE real occurrences (clearable; falls back to generated futures).
     var evb = App.state.evidencePrefill;
@@ -4131,8 +4148,12 @@
       }
     }
     var MODES = [
-      { m: 'history', label: 'Observed backtest',
-        note: 'Replays real (or demo-labeled) daily history with no look-ahead.' },
+      { m: 'history', label: 'Historical replay',
+        note: App.state.world === 'demo'
+          ? 'Replays fabricated Demo history with no look-ahead; every result stays labeled DEMO.'
+          : App.state.world && App.state.world !== 'observed'
+            ? 'Replays this simulated market\'s generated history with no look-ahead.'
+            : 'Replays observed daily history with no look-ahead.' },
       { m: 'dataset', label: 'Saved scenario',
         note: scenarioActive
           ? 'Your generated scenario dataset is ACTIVE — the backtest below reads it and says so.'
@@ -4167,17 +4188,32 @@
       }
 
     }
+    function modeAvailable(m) {
+      if (m === 'dataset') return scenarioActive;
+      if (m === 'world') return inWorld;
+      if (m === 'analogs') return !!App.state.evidencePrefill;
+      return true;
+    }
     var modeRow = el('div', { class: 'range-pills', id: 'bt-mode' },
       MODES.map(function (o) {
+        var available = modeAvailable(o.m);
         return el('button', { type: 'button', class: 'pill' + (vf.mode === o.m ? ' active' : ''), 'data-mode': o.m,
-          onclick: function () {
-            if (o.m === 'dataset' && !scenarioActive) { App.navigate('#/data/datasets'); return; }
-            if (o.m === 'world' && !inWorld) { App.navigate('#/data/simulation'); return; }
-            applyMode(o.m);
-          } }, o.label);
+          disabled: available ? null : '', title: available ? o.note : 'Set up this mode using the action below',
+          onclick: function () { applyMode(o.m); } }, o.label);
       }));
+    var setupRow = el('div', { class: 'btn-row verify-setup', id: 'bt-mode-setup' },
+      !scenarioActive ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
+        App.navigate('#/data/datasets');
+      } }, 'Create or activate a dataset') : null,
+      !App.state.evidencePrefill ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
+        App.navigate('#/research/' + ((App.state.lastRecommendSymbol || 'AAPL').toUpperCase()));
+      } }, 'Find historical analogs') : null,
+      !inWorld ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
+        App.navigate('#/data/simulation');
+      } }, 'Start a simulated session') : null);
     root.appendChild(modeRow);
     root.appendChild(modeNote);
+    if (setupRow.children.length) root.appendChild(setupRow);
     root.appendChild(scenWrap);
     root.appendChild(histWrap);
     root.appendChild(worldWrap);
@@ -4267,15 +4303,19 @@
       btLevel === 'beginner'
         ? explain('Every strategy is here — the simpler ones lead each group. Target DTE is how far out each trade’s expiration is: Monthly (30 days) is the classic starting point.')
         : null,
+      UI.symbolContext({
+        mode: 'editable', id: 'backtest-symbol-context', input: sym,
+        label: btLevel === 'beginner' ? 'Which stock?' : 'Backtest symbol'
+      }),
       el('div', { class: 'form-grid' },
-        el('div', { class: 'field' }, el('label', {}, 'Symbol'), sym, symbolStatus(sym)),
         el('div', { class: 'field' }, el('label', {}, 'Strategy'), strat),
         engine ? el('div', { class: 'field' }, el('label', {}, 'Engine'), engine) : null,
-        el('div', { class: 'field' }, el('label', {}, 'Target DTE'), dte, dtePresets),
+        el('div', { class: 'field' }, el('label', {},
+          btLevel === 'beginner' ? 'Days to expiration' : 'Target DTE', UI.info('dte')), dte, dtePresets),
         el('div', { class: 'field' }, el('label', {}, 'Window'), periodRow),
         el('div', { class: 'field' }, el('label', {}, 'From'), from),
         el('div', { class: 'field' }, el('label', {}, 'To'), to)),
-      engine ? explain('Portfolio engine currently backtests CREDIT_PUT_SPREAD and DEBIT_CALL_SPREAD (delta-selected strikes, profit-target/stop/time exits, capital-gated concurrency).') : null,
+      engine ? explain('The portfolio engine currently supports bull put credit spreads and bull call debit spreads. It can overlap positions and apply profit-target, stop and time exits inside one capital pool.') : null,
       el('div', { class: 'btn-row' },
         el('button', {
           class: 'btn', id: 'bt-run', onclick: async function () {
@@ -4480,7 +4520,7 @@
     var tab = params && params[0] ? String(params[0]).toLowerCase() : 'overview';
     if (!TABS.some(function (t) { return t.key === tab; })) tab = 'overview';
     root.appendChild(el('h1', {}, 'Data center'));
-    root.appendChild(el('div', { class: 'tabs data-tabs', id: 'data-tabs', role: 'tablist' },
+    var dataTabs = el('div', { class: 'tabs data-tabs', id: 'data-tabs', role: 'tablist' },
       TABS.map(function (t) {
         return el('button', {
           class: t.key === tab ? 'active' : '', 'data-tab': t.key, role: 'tab',
@@ -4491,7 +4531,14 @@
           onclick: function () { App.navigate('#/data/' + t.key); }
         }, t.label, el('span', { class: 'badge badge-ok', id: 'data-tab-badge-' + t.key,
           style: 'display:none; margin-left:6px' }));
-      })));
+      }));
+    var dataTabsWrap = el('div', { class: 'data-tabs-wrap' }, dataTabs);
+    function syncDataTabsEdge() {
+      dataTabsWrap.classList.toggle('at-end', dataTabs.scrollLeft + dataTabs.clientWidth >= dataTabs.scrollWidth - 2);
+    }
+    dataTabs.addEventListener('scroll', syncDataTabsEdge, { passive: true });
+    root.appendChild(dataTabsWrap);
+    requestAnimationFrame(syncDataTabsEdge);
     function setTabBadge(key, text, cls) {
       var b = document.getElementById('data-tab-badge-' + key);
       if (!b) return;
@@ -4505,8 +4552,10 @@
     async function fillTabBadges() {
       try {
         var ss = (await API.get('/api/sim/market')).sessions || [];
-        var running = ss.filter(function (x) { return x.status === 'RUNNING'; }).length;
-        setTabBadge('simulation', running ? 'RUNNING' : null);
+        var open = ss.filter(function (x) { return x.status !== 'FINISHED'; });
+        var ticking = open.some(function (x) { return !!x.running; });
+        setTabBadge('simulation', ticking ? 'LIVE' : open.length ? 'OPEN' : null,
+          ticking ? 'badge-ok' : 'badge-warn');
       } catch (e) { /* badge only */ }
       try {
         var cfgd = await API.get('/api/config');
@@ -4530,14 +4579,14 @@
       } catch (e) { /* stays hidden — fail closed both visually and on the server */ }
     })();
     if (App.onEvent) {
-      App.onEvent(['job.progress', 'job.complete', 'dataset.selected', 'world.selected'], function () {
+      App.onEvent(['job.progress', 'job.complete', 'dataset.selected', 'world.selected', 'world.control'], function () {
         clearTimeout(badgeTimer);
         badgeTimer = setTimeout(function () { if (App.alive(token)) fillTabBadges(); }, 400);
       }, token);
     }
     if (tab === 'overview') {
-      root.appendChild(explain('Where your market data comes from, how fresh it is, and what you can pull in. '
-        + brandName() + ' keeps Observed, Demo, Simulated and Scenario data separate. Missing observed data stays unavailable; it is never replaced by fabricated values.'));
+      root.appendChild(el('p', { class: 'dc-intro' },
+        'Observed, Demo, Simulated and Scenario data stay separate. Missing observed data stays unavailable; fabricated values never replace it.'));
     }
 
     var engineCard = el('div', { class: 'card', id: 'dc-engine' }, UI.spinner('Checking the market engine…'));
@@ -4557,7 +4606,7 @@
       UI.cardHeader('Simulated market'),
       explain(beginnerDC()
         ? 'A practice market that MOVES: generated prices and option chains stream like the real thing, on any day, at any speed. Everything is loudly labeled \u2014 nothing here is real, and a separate simulation account keeps your practice account untouched.'
-        : 'Deterministic per-session worlds: a real beta factor model on fixed 30-sim-second quanta (speed never changes the path), a full generated option book, replayable from seed + event log. A separate simulation account is the only lane that trades a world.'));
+        : 'Deterministic per-session worlds: a beta factor model on fixed 30-sim-second quanta (speed never changes the path), a full generated option book, replayable from seed + event log. A separate simulation account is the only lane that trades a world.'));
     simCard.appendChild(el('div', { class: 'demo-market-choice' },
       el('div', {}, el('b', {}, 'Built-in demo market'),
         el('p', { class: 'muted small' }, 'A fixed, fabricated market for learning the interface. It is isolated from observed data and uses its own account.')),
@@ -4570,10 +4619,13 @@
     if (tab === 'simulation') root.appendChild(simCard);
     (async function () {
       if (!simCard.isConnected) return; // inactive tab: none of this loads (addendum B)
-      var wt = (App.state.lastRecommendSymbol || '').toUpperCase();
-      var curSector = (App.state.universe && App.state.universe.active && App.state.universe.active.sectorKey) || '';
+      var activeUniverse = (App.state.universe && App.state.universe.active) || {};
+      var activeSymbols = (activeUniverse.symbols || []).slice();
+      var wt = (App.state.lastRecommendSymbol || activeSymbols[0] || 'SPY').toUpperCase();
+      var curSector = activeUniverse.sectorKey || '';
       var st = { scenario: 'CHOP', speed: 26, sectorKey: curSector !== 'world' ? curSector : '',
-        symbolsText: wt, allowFictional: false, rows: [{ symbol: wt || 'ACME', beta: 1, spot: '' }] };
+        includeActiveUniverse: curSector === 'world', symbolsText: wt, allowFictional: false,
+        rows: [{ symbol: wt, beta: 1, spot: '' }] };
 
       async function refreshSim() {
         var box = document.getElementById('dc-sim-sessions');
@@ -4626,26 +4678,40 @@
       function controlRoom(sx) {
         var cfg = sx.config || {};
         var syms = Object.keys(cfg.symbolBetas || {});
+        var focusSym = syms[0];
+        var chartHost = null;
+        var marketSelector = UI.symbolContext({
+          mode: 'multi', id: 'cr-symbols', symbols: syms.slice(0, 12), symbol: focusSym,
+          label: 'Session symbols', hint: 'Select one to focus the chart',
+          onPick: function (sym) { focusSym = sym; if (chartHost) drawFocus(); }
+        });
+        marketSelector.querySelectorAll('[data-symbol]').forEach(function (btn) {
+          var s0 = btn.getAttribute('data-symbol');
+          btn.appendChild(el('b', { 'data-cr-sym': s0 }, '\u2026'));
+        });
+        if (syms.length > 12) marketSelector.querySelector('.symbol-context-symbols').appendChild(
+          el('span', { class: 'muted small' }, '+' + (syms.length - 12) + ' more'));
         var room = el('div', { class: 'card-slim', id: 'sim-control-room', 'data-sim-id': sx.id,
           style: 'margin:6px 0; padding:12px' },
           UI.cardHeader('Control room \u2014 ' + (sx.name || sx.id),
-            el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : 'badge-warn') },
-              sx.running ? 'RUNNING' : (sx.status || ''))),
+            el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : 'badge-warn'), id: 'cr-status' },
+              sx.running ? 'RUNNING' : 'PAUSED')),
           el('div', { class: 'chip-row' },
             chip('Sim clock', el('span', { id: 'cr-clock' }, String(sx.simTime || '').replace('T', ' '))),
             chip('Scenario', App.scenarioLabel(cfg.scenario)),
-            chip('Speed', (sx.speed || cfg.speed || 1) + '\u00d7'),
+            chip('Speed', el('span', { id: 'cr-speed' }, (sx.speed || cfg.speed || 1) + '\u00d7')),
             chip('Seed', String(cfg.seed)),
             sx.modelVersion ? chip('Model', sx.modelVersion) : null),
-          el('div', { class: 'chip-row', id: 'cr-symbols' }, syms.slice(0, 12).map(function (sym) {
-            return el('button', { class: 'chip clickable', title: 'Research ' + sym,
-              onclick: function () { App.navigate('#/research/' + sym); } },
-              el('span', { class: 'chip-label' }, sym), el('b', { 'data-cr-sym': sym }, '\u2026'));
-          }), syms.length > 12 ? el('span', { class: 'muted small' }, '+' + (syms.length - 12) + ' more') : null),
+          marketSelector,
           el('div', { class: 'chip-row', id: 'cr-pl' }, el('span', { class: 'muted small' }, 'Loading positions\u2026')),
           el('div', { class: 'btn-row', style: 'margin-top:6px' },
-            el('button', { class: 'btn btn-sm', id: 'cr-toggle', onclick: async function () {
-              try { await API.post('/api/sim/market/' + sx.id + '/' + (sx.running ? 'pause' : 'start'), {}); refreshSim(); App.refreshWorldBand(); }
+            el('button', { class: 'btn btn-sm', id: 'cr-toggle', 'data-running': String(!!sx.running), onclick: async function () {
+              try {
+                var running = document.getElementById('cr-toggle').dataset.running !== 'true';
+                await API.post('/api/sim/market/' + sx.id + '/' + (running ? 'start' : 'pause'), {});
+                App.emitEvent('world.control', { world: sx.id, running: running });
+                App.refreshWorldBand();
+              }
               catch (e) { alert(e.message); } } }, sx.running ? 'Pause' : 'Play'),
             el('button', { class: 'btn btn-sm', onclick: async function () {
               try { await API.post('/api/sim/market/' + sx.id + '/step', {}); } catch (e) { alert(e.message); } } }, 'Step'),
@@ -4655,7 +4721,7 @@
             el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/portfolio'); } }, 'Simulated portfolio'),
             el('button', { class: 'btn btn-sm btn-danger', onclick: function () { finishModal(sx); } }, 'Finish'),
             el('button', { class: 'btn btn-sm btn-secondary', id: 'cr-exit', onclick: function () {
-              App.switchWorld('observed'); } }, 'Return to real market')));
+              App.switchWorld(App.baseWorldId()); } }, App.config && App.config.fixturesOnly ? 'Return to demo market' : 'Return to observed market')));
         // ---- The CONSOLE parts (F9): breadth, anchor coverage, focus chart, live P/L, heat,
         // event timeline. Everything below reuses existing primitives — no duplicate engines.
         var breadthChip = el('span', { class: 'chip', id: 'cr-breadth' },
@@ -4669,8 +4735,7 @@
             'Symbols with a priced start anchor; excluded symbols are named in the provenance table below.'));
         }
         // Focus chart: the same range-pill chart Research uses, on the tapped symbol.
-        var focusSym = syms[0];
-        var chartHost = el('div', { id: 'cr-chart', style: 'margin-top:6px' });
+        chartHost = el('div', { id: 'cr-chart', style: 'margin-top:6px' });
         room.appendChild(chartHost);
         function drawFocus() {
           chartHost.innerHTML = '';
@@ -4681,13 +4746,6 @@
           chartHost.appendChild(UI.rangeChart({ initial: '3m', fetch: historyFetch(focusSym) }));
         }
         drawFocus();
-        room.querySelectorAll('#cr-symbols .chip').forEach(function (chipEl) {
-          var symBtn = chipEl.querySelector('[data-cr-sym]');
-          if (!symBtn) return;
-          var sym = symBtn.getAttribute('data-cr-sym');
-          chipEl.onclick = function () { focusSym = sym; drawFocus(); }; // chart focus; Research via the chart link
-          chipEl.title = 'Chart ' + sym + ' here';
-        });
         function paint() {
           var up = 0, down = 0;
           syms.forEach(function (sym) {
@@ -4788,16 +4846,23 @@
         var row = el('div', { class: 'btn-row sim-session-row', 'data-sim-id': sx.id, style: 'margin:6px 0' },
           el('b', {}, sx.name || sx.id),
           el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : finished ? 'badge-dim' : 'badge-warn') },
-            sx.running ? 'RUNNING' : (sx.status || '')),
+            finished ? 'FINISHED' : sx.running ? 'RUNNING' : 'PAUSED'),
           el('span', { class: 'muted small' }, App.scenarioLabel(cfg.scenario)
             + ' \u00b7 seed ' + cfg.seed
             + (sx.eventCount ? ' \u00b7 ' + sx.eventCount + ' injected event' + (sx.eventCount === 1 ? '' : 's') : '')
             + (sx.simTime ? ' \u00b7 ' + String(sx.simTime).replace('T', ' ') : '')));
         if (!finished) {
           row.appendChild(el('button', { class: 'btn btn-sm', onclick: function () {
-            App.switchWorld(active ? 'observed' : sx.id); } }, active ? 'Back to real' : 'Enter this market'));
+            App.switchWorld(active ? App.baseWorldId() : sx.id); } }, active
+              ? (App.config && App.config.fixturesOnly ? 'Back to demo' : 'Back to real')
+              : 'Enter this market'));
           row.appendChild(el('button', { class: 'btn btn-sm', onclick: async function () {
-            try { await API.post('/api/sim/market/' + sx.id + '/' + (sx.running ? 'pause' : 'start'), {}); refreshSim(); App.refreshWorldBand(); }
+            try {
+              var running = !sx.running;
+              await API.post('/api/sim/market/' + sx.id + '/' + (sx.running ? 'pause' : 'start'), {});
+              App.emitEvent('world.control', { world: sx.id, running: running });
+              App.refreshWorldBand();
+            }
             catch (e) { alert(e.message); } } }, sx.running ? 'Pause' : 'Start'));
           row.appendChild(el('button', { class: 'btn btn-sm', id: 'sim-inject-' + sx.id, onclick: function () {
             injectModal(sx); } }, 'Inject event'));
@@ -4843,7 +4908,7 @@
           // Finishing the ACTIVE world is a full market transition — never a bare state
           // assignment (review P0 #2: the old path skipped cache/store/universe/render and
           // left "Dom sim (simulated)" all over the observed screens).
-          if (wasActive) await App.transitionWorld('observed');
+          if (wasActive) await App.transitionWorld(App.baseWorldId());
           refreshSim(); App.refreshWorldBand();
         }, true);
         API.getFresh('/api/sim/market/' + sx.id + '/report').then(function (rep) {
@@ -5041,15 +5106,20 @@
             }
           })();
           var sectorChk = el('input', { type: 'checkbox', id: 'sim-use-sector' });
-          sectorChk.checked = !!st.sectorKey;
+          sectorChk.checked = !!st.sectorKey || !!st.includeActiveUniverse;
           sectorChk.onchange = function () {
-            st.sectorKey = sectorChk.checked ? (curSector !== 'world' && curSector ? curSector : 'CORE') : '';
+            if (!sectorChk.checked) { st.sectorKey = ''; st.includeActiveUniverse = false; return; }
+            if (curSector === 'world') { st.sectorKey = ''; st.includeActiveUniverse = true; }
+            else { st.sectorKey = curSector || 'CORE'; st.includeActiveUniverse = false; }
           };
-          if (!st.sectorKey && sectorChk.checked === false && curSector !== 'world') {
+          if (!st.sectorKey && !st.includeActiveUniverse && sectorChk.checked === false && curSector !== 'world') {
             st.sectorKey = curSector || 'CORE'; sectorChk.checked = true; // default ON
           }
-          grid.appendChild(labeled('Bring my current sector along', el('div', { class: 'btn-row', style: 'align-items:center' },
-            sectorChk, el('span', { class: 'muted small' }, (st.sectorKey || 'CORE') + ' \u2014 so the tape and explorer stay alive'))));
+          grid.appendChild(labeled(curSector === 'world' ? 'Bring my current market along' : 'Bring my current sector along',
+            el('div', { class: 'btn-row', style: 'align-items:center' }, sectorChk,
+              el('span', { class: 'muted small' },
+                (curSector === 'world' ? (activeUniverse.label || 'Current market') + ' \u00b7 ' + activeSymbols.length + ' symbols'
+                  : (st.sectorKey || 'CORE')) + ' \u2014 so the tape and explorer stay alive'))));
           // Honest units: speed multiplies TIME, so the label states what one 6.5h session
           // becomes. (The old '10x = a day in ~40 min' claim was mathematically false.)
           var speedSel = el('select', { id: 'sim-speed' },
@@ -5062,7 +5132,7 @@
           grid.appendChild(labeled('How fast should time pass?', speedSel, 'speed'));
           creator.appendChild(grid);
           creator.appendChild(el('div', { class: 'muted small', style: 'margin:6px 0' },
-            'Your held stocks plus SPY and QQQ ride along automatically. Real tickers anchor to their last price; a real ticker with NO price available is excluded (never invented); made-up tickers start at $100. A fresh seed is drawn \u2014 the session report shows it so the exact market can be replayed.'));
+            'Your held stocks plus SPY and QQQ ride along automatically. Recognized tickers anchor to the current market\'s last available price; one with no price is excluded (never invented). Made-up tickers are excluded unless you explicitly enable them below; when enabled, they start at $100. A fresh seed is drawn \u2014 the session report shows it so the exact market can be replayed.'));
         } else {
           // Expert: per-symbol rows (symbol / beta / start price) — no micro-syntax.
           var rowsWrap = el('div', { id: 'sim-symbol-rows' });
@@ -5071,7 +5141,7 @@
             symIn.oninput = function () { r.symbol = symIn.value.toUpperCase(); };
             var betaIn = el('input', { type: 'number', value: String(r.beta), step: '0.1', min: '-3', max: '3', style: 'max-width:90px' });
             betaIn.oninput = function () { r.beta = parseFloat(betaIn.value); };
-            var spotIn = el('input', { type: 'number', value: r.spot, placeholder: 'real price', min: '0.01', step: '0.01', style: 'max-width:120px' });
+            var spotIn = el('input', { type: 'number', value: r.spot, placeholder: 'market anchor', min: '0.01', step: '0.01', style: 'max-width:120px' });
             spotIn.oninput = function () { r.spot = spotIn.value; };
             rowsWrap.appendChild(el('div', { class: 'btn-row', style: 'margin:4px 0' },
               symIn, betaIn, spotIn,
@@ -5081,20 +5151,27 @@
               } }, '\u00d7')));
           });
           var secSel = el('select', { id: 'sim-sector' }, el('option', { value: '' }, 'No sector \u2014 only my rows'));
+          if (curSector === 'world' && activeSymbols.length) {
+            secSel.appendChild(el('option', { value: '__ACTIVE__' },
+              (activeUniverse.label || 'Current market') + ' (' + activeSymbols.length + ')'));
+          }
           (App.state.universe && App.state.universe.sectors || []).forEach(function (sec) {
             if (sec.key === 'world') return;
             var o = el('option', { value: sec.key }, sec.label + ' (' + sec.symbols.length + ')');
             secSel.appendChild(o);
           });
-          secSel.value = st.sectorKey || '';
-          secSel.onchange = function () { st.sectorKey = secSel.value; };
+          secSel.value = st.includeActiveUniverse ? '__ACTIVE__' : (st.sectorKey || '');
+          secSel.onchange = function () {
+            st.includeActiveUniverse = secSel.value === '__ACTIVE__';
+            st.sectorKey = st.includeActiveUniverse ? '' : secSel.value;
+          };
           creator.appendChild(el('div', { class: 'btn-row', style: 'margin:4px 0' },
             el('span', { class: 'muted small' }, 'Background sector'), secSel,
             el('span', { class: 'muted small' }, 'anchored from warm data only \u2014 never a provider burst')));
           var rowHead = el('div', { class: 'btn-row muted small' },
             el('span', { style: 'width:110px' }, 'Symbol'),
             (function () { var x = el('span', { style: 'width:90px' }, 'Beta'); x.appendChild(UI.info('beta')); return x; })(),
-            el('span', { style: 'width:120px' }, 'Start price (blank = real)'));
+            (function () { var x = el('span', { style: 'width:120px' }, 'Start price'); x.appendChild(UI.info('marketanchor')); return x; })());
           creator.appendChild(rowHead);
           creator.appendChild(rowsWrap);
           creator.appendChild(el('button', { class: 'btn btn-sm btn-secondary', id: 'sim-add-symbol', onclick: function () {
@@ -5118,7 +5195,7 @@
         fictChk.checked = !!st.allowFictional;
         fictChk.onchange = function () { st.allowFictional = fictChk.checked; };
         creator.appendChild(el('label', { class: 'btn-row muted small', style: 'align-items:center; gap:6px; margin-top:6px' },
-          fictChk, el('span', {}, 'Made-up tickers start at $100 (explicit demo instruments \u2014 never inferred)')));
+          fictChk, el('span', {}, 'Allow made-up tickers (explicit demo instruments; they start at $100)')));
         var createBtn = el('button', { class: 'btn', id: 'sim-create', style: 'margin-top:8px', onclick: async function () {
           createBtn.disabled = true;
           try {
@@ -5128,7 +5205,7 @@
                 st.addPickerTokens(st.pickerInput()); // whatever is still typed counts too
               }
               (st.symbolsList && st.symbolsList.length ? st.symbolsList
-                : (st.symbolsText || 'ACME').split(',').map(function (x) { return x.trim().toUpperCase(); }))
+                : (st.symbolsText || wt).split(',').map(function (x) { return x.trim().toUpperCase(); }))
                 .forEach(function (sym) { if (sym) symbols[sym] = 1.0; });
             } else {
               st.rows.forEach(function (r) {
@@ -5137,6 +5214,11 @@
                 symbols[sym] = isFinite(r.beta) ? r.beta : 1.0;
                 var sp = parseFloat(r.spot);
                 if (isFinite(sp) && sp > 0) spots[sym] = sp;
+              });
+            }
+            if (st.includeActiveUniverse) {
+              activeSymbols.forEach(function (sym) {
+                if (sym && symbols[sym] === undefined) symbols[sym] = 1.0;
               });
             }
             if (!Object.keys(symbols).length) throw new Error('Add at least one symbol');
@@ -5163,6 +5245,32 @@
         creator.appendChild(createBtn);
       }
 
+      if (App.onEvent) App.onEvent('world.control', function (type, data) {
+        if (!App.alive(token) || !data || !data.world) return;
+        var activeRoom = document.getElementById('sim-control-room');
+        if (!activeRoom || activeRoom.dataset.simId !== data.world) {
+          // A non-active row changed in another tab. Rehydrate the small session list; the active
+          // control room, chart and focus are never replaced for its own controls.
+          refreshSim();
+          return;
+        }
+        if (typeof data.running === 'boolean') {
+          var status = activeRoom.querySelector('#cr-status');
+          if (status) {
+            status.textContent = data.running ? 'RUNNING' : 'PAUSED';
+            status.className = 'badge ' + (data.running ? 'badge-ok' : 'badge-warn');
+          }
+          var toggle = activeRoom.querySelector('#cr-toggle');
+          if (toggle) {
+            toggle.dataset.running = String(data.running);
+            toggle.textContent = data.running ? 'Pause' : 'Play';
+          }
+        }
+        if (data.speed !== undefined) {
+          var speed = activeRoom.querySelector('#cr-speed');
+          if (speed) speed.textContent = data.speed + '\u00d7';
+        }
+      }, token);
       refreshSim();
     })();
 
@@ -5284,15 +5392,18 @@
       var active = data.active, rows = data.datasets || [];
       datasetsCard.innerHTML = '';
       datasetsCard.appendChild(UI.cardHeader('Datasets & scenarios'));
-      if (level === 'beginner') datasetsCard.appendChild(explain('“Observed” is real market data. Saved scenario runs are made-up futures you generated — pick one to explore the whole app as if that future happened. Real data is never overwritten.'));
+      if (level === 'beginner') datasetsCard.appendChild(explain(App.config && App.config.fixturesOnly
+        ? 'This build’s baseline is fabricated Demo data. Saved scenario runs are separate made-up futures you generated; neither is observed market history.'
+        : '“Observed” is real market data. Saved scenario runs are made-up futures you generated — pick one to explore the whole app as if that future happened. Real data is never overwritten.'));
       if (active !== 'observed') datasetsCard.appendChild(alertBox('caution',
-        'SCENARIO MODE — analysis screens are using a synthetic dataset, not market data. Switch back to Observed below when done.'));
+        'SCENARIO MODE — analysis screens are using a synthetic dataset, not market data. Switch back to '
+          + (App.config && App.config.fixturesOnly ? 'the Demo baseline' : 'Observed') + ' below when done.'));
       rows.forEach(function (d) {
         var isActive = d.id === active;
         datasetsCard.appendChild(el('div', { class: 'status-item', 'data-dataset': d.id },
-          el('span', { class: 'badge ' + (d.id === 'observed' ? 'badge-ok' : 'badge-caution') },
-            d.id === 'observed' ? 'OBSERVED' : 'SYNTHETIC'),
-          el('b', {}, d.name),
+          el('span', { class: 'badge ' + (d.id === 'observed' ? (App.config && App.config.fixturesOnly ? 'badge-warn' : 'badge-ok') : 'badge-caution') },
+            d.id === 'observed' ? (App.config && App.config.fixturesOnly ? 'DEMO BASELINE' : 'OBSERVED') : 'SYNTHETIC'),
+          el('b', {}, d.id === 'observed' && App.config && App.config.fixturesOnly ? 'Demo market baseline' : d.name),
           el('span', { class: 'muted small' }, d.id === 'observed' ? '' : (d.bars + ' bars')),
           el('span', { class: 'spacer' }),
           isActive ? el('span', { class: 'badge badge-ok' }, 'ACTIVE')
@@ -5300,25 +5411,17 @@
                 await API.put('/api/datasets/active', { id: d.id });
                 App.refreshScenarioBanner && App.refreshScenarioBanner();
                 loadDatasets();
-              } }, 'Use'),
-          d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm', title: 'Activate and explore in Research',
-            onclick: async function () {
-              try {
-                await API.put('/api/datasets/active', { id: d.id });
-                App.refreshScenarioBanner && App.refreshScenarioBanner();
-                App.state.lastRecommendSymbol = d.symbol;
-                App.navigate('#/research/' + d.symbol);
-              } catch (e) { alert(e.message); }
-            } }, 'Research') : null,
-          d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm', title: 'Activate and compare strategies under it',
-            onclick: async function () {
-              try {
-                await API.put('/api/datasets/active', { id: d.id });
-                App.refreshScenarioBanner && App.refreshScenarioBanner();
-                App.state.lastRecommendSymbol = d.symbol;
-                App.navigate('#/trade/verify');
-              } catch (e) { alert(e.message); }
-            } }, 'Test strategies') : null,
+              } }, 'Activate'),
+          isActive && d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm',
+            title: 'Open this active scenario on the stock analysis page', onclick: function () {
+              App.state.lastRecommendSymbol = d.symbol;
+              App.navigate('#/research/' + d.symbol);
+            } }, 'Open Research') : null,
+          isActive && d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm',
+            title: 'Compare strategies while this scenario remains active', onclick: function () {
+              App.state.lastRecommendSymbol = d.symbol;
+              App.navigate('#/trade/verify');
+            } }, 'Compare strategies') : null,
           d.id !== 'observed' ? el('button', { class: 'btn btn-sm btn-secondary', title: 'Delete this run',
             onclick: async function () { await API.del('/api/datasets/' + d.id); App.refreshScenarioBanner && App.refreshScenarioBanner(); loadDatasets(); } }, 'Delete') : null));
       });
@@ -5368,7 +5471,8 @@
           } catch (e) { note.textContent = 'Failed: ' + ((e && e.message) || e); }
           finally { go.disabled = false; }
         });
-        genWrap.appendChild(el('div', { class: 'btn-row' }, el('label', { class: 'muted' }, 'Symbol '), sym));
+        genWrap.appendChild(UI.symbolContext({ mode: 'editable', id: 'dataset-symbol-context',
+          input: sym, label: level === 'beginner' ? 'Which stock should this scenario follow?' : 'Scenario symbol' }));
         genWrap.appendChild(f.el);
         genWrap.appendChild(el('div', { class: 'btn-row' }, go));
         genWrap.appendChild(note);
@@ -5435,7 +5539,8 @@
       var ov;
       try { ov = await API.get('/api/data/overview'); } catch (e) {
         if (!App.alive(token)) return;
-        engineCard.innerHTML = ''; engineCard.appendChild(UI.cardHeader('Market engine'));
+        engineCard.innerHTML = ''; engineCard.appendChild(UI.cardHeader(
+          el('span', {}, 'Market engine', UI.info('marketengine'))));
         engineCard.appendChild(alertBox('warn', 'Engine status unavailable.'));
         renderReset(false); // fail closed on the destructive panel
         return;
@@ -5444,17 +5549,16 @@
       renderReset(!!ov.admin); // the reset panel is admin-gated
       var e = ov.engine || {};
       engineCard.innerHTML = '';
-      engineCard.appendChild(UI.cardHeader('Market engine',
+      engineCard.appendChild(UI.cardHeader(el('span', {}, 'Market engine', UI.info('marketengine')),
         el('button', { class: 'btn btn-sm', id: 'dc-refresh-now', onclick: function () { startJob('refresh_now', {}); } }, 'Refresh now')));
       if (ov.marketLane === 'DEMO') engineCard.appendChild(alertBox('warn',
         'Demo market is active: every price and chain is fabricated teaching data in an isolated account.'));
-      if (level === 'beginner') engineCard.appendChild(explain('An in-memory feed keeps your tickers fresh in the background so screens load instantly, instead of downloading on every click.'));
       engineCard.appendChild(el('div', { class: 'chip-row' },
-        chip('Market', ov.marketOpen ? 'Open' : 'Closed'),
+        ov.marketLane === 'DEMO' ? chip('Feed', 'Static Demo') : chip('Market', ov.marketOpen ? 'Open' : 'Closed'),
         chip('Warmed', (e.warmed || 0) + ' / ' + (e.tracked || 0)),
         chip('Refreshing', String(e.inFlight || 0)),
         chip('Stale', String(e.stale || 0)),
-        chip('Refresh every', (e.refreshInterval || 0) + 's'),
+        ov.marketLane === 'DEMO' ? null : chip('Refresh every', (e.refreshInterval || 0) + 's'),
         chip('Avg latency', (e.avgLatencyMs || 0) + ' ms'),
         e.errors ? chip('Errors since startup', String(e.errors),
           'Total provider/refresh errors since this server started — not a current-failure count.') : null));
@@ -5487,9 +5591,15 @@
       coverageCard.innerHTML = '';
       var uni = (App.state.universe && App.state.universe.active && App.state.universe.active.symbols) || [];
       coverageCard.appendChild(UI.cardHeader('What data we hold',
-        el('button', { class: 'btn btn-sm', id: 'dc-backfill', title: 'Pull daily history for your universe',
+        el('button', { class: 'btn btn-sm', id: 'dc-backfill',
+          disabled: App.config && App.config.fixturesOnly,
+          title: App.config && App.config.fixturesOnly
+            ? 'Observed backfill is unavailable in this explicit Demo build'
+            : 'Pull observed daily history for your universe',
           onclick: function () { startJob('backfill_underlying', { symbols: uni, years: 5 }); } }, 'Backfill history')));
-      if (level === 'beginner') coverageCard.appendChild(explain('The price history we’ve stored, and whether it’s real (observed) or demo. Backfill pulls daily history for your universe so backtests use real data.'));
+      if (App.config && App.config.fixturesOnly) coverageCard.appendChild(alertBox('caution',
+        'Observed backfill is unavailable in this explicit Demo build. Demo history stays isolated.'));
+      if (level === 'beginner') coverageCard.appendChild(explain('The price history we have stored and its source. Backfill pulls observed daily history when an allowed source is configured; Demo rows never enter Observed coverage.'));
       coverageCard.appendChild(el('div', { class: 'chip-row' },
         chip('Underlying symbols', String(sum.underlyingSymbols || 0)),
         chip('Daily bars', String(sum.underlyingBars || 0)),
@@ -5498,7 +5608,7 @@
         chip('Observed', (sum.observedUnderlyingSymbols || 0) + ' symbols')));
       if (!syms.length) {
         coverageCard.appendChild(UI.emptyState('No stored history yet',
-          'Backfill history (above) to store daily bars. In live mode set YAHOO_ENABLED, or a Polygon/Alpha Vantage key, for real data.'));
+          'Connect an eligible underlying-history source under Sources & jobs, then run Backfill history.'));
         return;
       }
       var rows = syms.slice(0, level === 'beginner' ? 12 : syms.length).map(function (s) {
@@ -5575,8 +5685,8 @@
           var rank = { ERROR: 4, COOLDOWN: 4, EMPTY: 3, STALE: 3, UNKNOWN: 2, UNCONFIGURED: 1, OK: 0 };
           return (rank[p2.state] || 0) > (rank[acc] || 0) ? p2.state : acc;
         }, items.length ? items[0].state : 'NONE');
-        var worst = worstState === 'ERROR' || worstState === 'COOLDOWN' ? 'badge-danger'
-          : worstState === 'EMPTY' || worstState === 'STALE' ? 'badge-warn' : 'badge-ok';
+        var worst = worstState === 'COOLDOWN' ? 'badge-danger'
+          : (STATE_BADGE[worstState] || 'badge-dim');
         var okCount = items.filter(function (p2) { return p2.state === 'OK'; }).length;
         sumRow.appendChild(el('span', { class: 'chip', title: okCount + ' of ' + items.length
             + ' sources OK \u2014 the badge shows the WORST source state in this domain' },
@@ -5871,11 +5981,10 @@
       host.appendChild(level === 'beginner' ? decisionAltList(evals.slice(1), symbol) : decisionTable(evals, symbol));
     }
     // The portfolio optimizer — "size the strongest ideas across a budget" — lives with the
-    // competition it operates on (construction belongs in the Trade family, not a separate Lab).
-    App.state.labForm = App.state.labForm || {};
-    var octx = App.state.labForm.ctx = App.state.labForm.ctx || {};
+    // competition it operates on.
+    App.state.portfolioOptimizer = App.state.portfolioOptimizer || {};
     host.appendChild(el('h2', { class: 'section-h' }, 'Size the strongest ideas across a budget'));
-    host.appendChild(optimizerCard(level, octx));
+    host.appendChild(optimizerCard(level, App.state.portfolioOptimizer));
   }
 
   async function decision(root, params) {
@@ -5892,9 +6001,12 @@
         'Find ideas', function () { App.navigate('#/trade/discover'); }));
       return;
     }
-    root.appendChild(el('div', { class: 'idea-source-row' },
-      el('span', { class: 'muted' }, 'For '), el('b', {}, symbol),
-      el('button', { class: 'btn btn-sm btn-secondary', id: 'decision-refresh', onclick: function () { App.state.decisionCache = null; App.render(); } }, 'Refresh')));
+    var decisionContext = lockedSymbolBar(symbol, { id: 'decision-symbol-context', label: 'Compared symbol' });
+    decisionContext.querySelector('.symbol-context-actions').appendChild(
+      el('button', { class: 'btn btn-sm btn-secondary', id: 'decision-refresh', onclick: function () {
+        App.state.decisionCache = null; App.render();
+      } }, 'Refresh'));
+    root.appendChild(decisionContext);
 
     var host = el('div', { id: 'decision-host' });
     root.appendChild(host);
@@ -5903,38 +6015,26 @@
     renderCompetition(host, symbol).catch(function () { /* handled inside */ });
   }
 
-  // ---- Research lab (Phase 5): optimizer, hypothesis tester, ETF replicator, notebook ----
-  // Built to the same design language as Trade/Research: a hero band, ONE shared research
-  // context every tool reads from, conclusion-first results (the answer leads), stat/fact
-  // tiles, icon-tile accents, and interactive SVG charts.
+  // ---- Shared Research/Trade workbench components ----
 
-  var LAB_PALETTE = ['#2f6bde', '#7c4fe0', '#3aa76d', '#e0912f', '#d64545', '#2ba3b8', '#b8556f', '#6b8e23'];
-  function labColor(i) { return LAB_PALETTE[i % LAB_PALETTE.length]; }
+  var CHART_PALETTE = ['#2f6bde', '#7c4fe0', '#3aa76d', '#e0912f', '#d64545', '#2ba3b8', '#b8556f', '#6b8e23'];
+  function chartColor(i) { return CHART_PALETTE[i % CHART_PALETTE.length]; }
 
-  function labField(label, input) {
+  function toolField(label, input) {
     return el('div', { class: 'field' }, el('label', {}, label), input);
   }
 
   /** A stat/fact tile (label over value), matching the tiles the recommendation pages use. */
-  function labFact(label, value, cls) {
+  function metricFact(label, value, cls) {
     return el('div', { class: 'fact' + (cls ? ' ' + cls : '') },
       el('div', { class: 'f-label' }, label),
       el('div', { class: 'f-value' }, value));
   }
 
-  /** Hero band for the lab — same DNA as the home hero (eyebrow + gradient title + sub). */
-
-  /**
-   * ONE shared research context the four tools default from: the working stock (feeds the
-   * signal test + replicator), the account size (feeds the optimizer budget), and — at Expert —
-   * the history window (feeds the signal test). Editing it live-syncs the tool inputs without a
-   * re-render, so in-progress results are never wiped.
-   */
-
   /** A card header with an icon-tile accent, like the recommendation surfaces. */
-  function labHeader(iconName, title, right) {
+  function toolHeader(iconName, title, right) {
     return UI.cardHeader(
-      el('span', { class: 'lab-title' }, el('span', { class: 'icon-tile icon-tile-sm' }, icon(iconName)), el('b', {}, title)),
+      el('span', { class: 'tool-title' }, el('span', { class: 'icon-tile icon-tile-sm' }, icon(iconName)), el('b', {}, title)),
       right || null);
   }
 
@@ -5945,16 +6045,16 @@
     segments.forEach(function (s, i) {
       var w = Math.max(0, s.value) / total * 100;
       rects += '<rect x="' + x.toFixed(3) + '" y="0" width="' + Math.max(0, w - 0.4).toFixed(3) + '" height="22" rx="1.5" fill="'
-        + labColor(i) + '"><title>' + s.label + ' — ' + fmtMoney(s.value) + ' (' + w.toFixed(0) + '%)</title></rect>';
+        + chartColor(i) + '"><title>' + s.label + ' — ' + fmtMoney(s.value) + ' (' + w.toFixed(0) + '%)</title></rect>';
       x += w;
     });
     var svg = '<svg viewBox="0 0 100 22" preserveAspectRatio="none" width="100%" height="22" role="img" aria-label="Allocation by symbol">' + rects + '</svg>';
-    var legend = el('div', { class: 'lab-legend' }, segments.map(function (s, i) {
-      return el('span', { class: 'lab-legend-item' },
-        el('span', { class: 'lab-swatch', style: 'background:' + labColor(i) }),
+    var legend = el('div', { class: 'chart-legend' }, segments.map(function (s, i) {
+      return el('span', { class: 'chart-legend-item' },
+        el('span', { class: 'chart-swatch', style: 'background:' + chartColor(i) }),
         el('b', {}, s.label), ' ', el('span', { class: 'muted' }, fmtMoney(s.value)));
     }));
-    return el('div', {}, el('div', { class: 'lab-chart', html: svg }), legend);
+    return el('div', {}, el('div', { class: 'tool-chart', html: svg }), legend);
   }
 
   /** A 0..1 bar with a baseline marker; fill greens above baseline, reds below (SVG, hover). */
@@ -5966,36 +6066,36 @@
       + '<rect x="0" y="5" width="' + v.toFixed(2) + '" height="6" rx="3" fill="' + col + '"><title>' + Math.round(v) + '%</title></rect>'
       + '<line x1="' + b.toFixed(2) + '" y1="1.5" x2="' + b.toFixed(2) + '" y2="14.5" stroke="var(--text)" stroke-width="0.8"/>'
       + '<circle cx="' + v.toFixed(2) + '" cy="8" r="2.4" fill="' + col + '" stroke="var(--surface)" stroke-width="0.8"/></svg>';
-    return el('div', {}, el('div', { class: 'lab-chart', html: svg }),
+    return el('div', {}, el('div', { class: 'tool-chart', html: svg }),
       caption ? el('div', { class: 'muted small' }, caption) : null);
   }
 
   // ---- Optimizer ----
   function optimizerCard(level, ctx) {
-    var f = App.state.labForm.opt = App.state.labForm.opt || {};
+    var f = ctx || (App.state.portfolioOptimizer = App.state.portfolioOptimizer || {});
     var defaultBudget = f.budget || (ctx && ctx.accountCents ? Math.round(ctx.accountCents / 100) : 25000);
-    var card = el('div', { class: 'card lab-card lab-optimizer' });
-    card.appendChild(labHeader('grid', 'Build a portfolio'));
+    var card = el('div', { class: 'card tool-card portfolio-optimizer' });
+    card.appendChild(toolHeader('grid', 'Build a portfolio'));
     card.appendChild(explain('Allocate your account across the strongest ideas in your universe — diversified by symbol and capped per position. Only ideas that pass the risk screens are funded.'));
 
-    var budget = el('input', { type: 'number', id: 'lab-budget', value: defaultBudget, min: '0', step: '1000' });
-    var goal = el('select', { id: 'lab-goal' },
+    var budget = el('input', { type: 'number', id: 'portfolio-budget', value: defaultBudget, min: '0', step: '1000' });
+    var goal = el('select', { id: 'portfolio-goal' },
       el('option', { value: '' }, 'Any goal'), el('option', { value: 'INCOME' }, 'Income'),
       el('option', { value: 'DIRECTIONAL' }, 'Directional'));
     if (f.goal) goal.value = f.goal;
     // Scan scope: honor the shared context's Working stock — "my whole universe" or just that stock.
-    var scope = el('select', { id: 'lab-opt-scope' },
+    var scope = el('select', { id: 'portfolio-scope' },
       el('option', { value: 'universe' }, 'My whole universe'),
       el('option', { value: 'symbol' }, 'Just the working stock'));
     scope.value = f.scope || 'universe';
-    var fields = [labField('Budget ($)', budget), labField('Ideas from', scope), labField('Goal', goal)];
+    var fields = [toolField('Budget ($)', budget), toolField('Ideas from', scope), toolField('Goal', goal)];
     var objective = null, maxPos = null, maxSym = null;
     if (level === 'expert') {
-      objective = el('select', { id: 'lab-obj' }, el('option', { value: 'score' }, 'Best score'), el('option', { value: 'ev' }, 'Best expected value'));
+      objective = el('select', { id: 'portfolio-objective' }, el('option', { value: 'score' }, 'Best score'), el('option', { value: 'ev' }, 'Best expected value'));
       if (f.objective) objective.value = f.objective;
-      maxPos = el('input', { type: 'number', id: 'lab-maxpos', value: f.maxPos || 8, min: '1', max: '20' });
-      maxSym = el('input', { type: 'number', id: 'lab-maxsym', value: f.maxSym || 40, min: '5', max: '100', step: '5' });
-      fields.push(labField('Rank by', objective), labField('Max positions', maxPos), labField('Max % per symbol', maxSym));
+      maxPos = el('input', { type: 'number', id: 'portfolio-max-positions', value: f.maxPos || 8, min: '1', max: '20' });
+      maxSym = el('input', { type: 'number', id: 'portfolio-max-symbol-pct', value: f.maxSym || 40, min: '5', max: '100', step: '5' });
+      fields.push(toolField('Rank by', objective), toolField('Max positions', maxPos), toolField('Max % per symbol', maxSym));
     }
     card.appendChild(el('div', { class: 'form-grid' }, fields));
 
@@ -6004,14 +6104,14 @@
     // least-bad set anyway, clearly labeled — for inspecting a weak universe, not for acting on.
     var diag = null;
     if (level === 'expert') {
-      diag = el('input', { type: 'checkbox', id: 'lab-opt-diag' });
+      diag = el('input', { type: 'checkbox', id: 'portfolio-diagnostics' });
       if (f.diagnostic) diag.checked = true;
-      card.appendChild(el('label', { class: 'lab-check' }, diag,
+      card.appendChild(el('label', { class: 'tool-check' }, diag,
         el('span', {}, ' Diagnostic mode — show the least-bad set even if no idea has positive expected value')));
     }
 
-    var out = el('div', { id: 'lab-opt-out', class: 'lab-out' });
-    var run = el('button', { class: 'btn', id: 'lab-opt-run' }, 'Build portfolio');
+    var out = el('div', { id: 'portfolio-output', class: 'tool-output' });
+    var run = el('button', { class: 'btn', id: 'portfolio-build' }, 'Build portfolio');
     run.addEventListener('click', async function () {
       f.budget = +budget.value; f.goal = goal.value; f.scope = scope.value;
       if (objective) { f.objective = objective.value; f.maxPos = +maxPos.value; f.maxSym = +maxSym.value; }
@@ -6055,18 +6155,18 @@
     // Conclusion first: what this portfolio IS, in one sentence. In diagnostic mode it is the
     // "least-bad set", never "Funded" (which reads as an endorsement).
     var lead = o.diagnostic ? 'Least-bad set: ' : 'Funded ';
-    out.appendChild(el('div', { class: 'lab-verdict' },
+    out.appendChild(el('div', { class: 'tool-verdict' },
       el('b', {}, lead + allocs.length + ' position' + (allocs.length === 1 ? '' : 's')
         + ' across ' + nSym + ' symbol' + (nSym === 1 ? '' : 's') + ' for ' + fmtMoney(o.capitalUsedCents) + '.'),
       ' Expected value ', pnlSpan(o.expectedValueCents),
       ', worst-case tail ', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0))), '.'));
 
-    out.appendChild(el('div', { class: 'fact-grid', id: 'lab-opt-summary' },
-      labFact('Capital used', fmtMoney(o.capitalUsedCents)),
-      labFact('Positions', String(allocs.length)),
-      labFact('Expected value', pnlSpan(o.expectedValueCents), o.expectedValueCents >= 0 ? 'f-ok' : 'f-danger'),
-      labFact('Tail risk', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0))), 'f-danger'),
-      labFact('Avg score', String(Math.round(o.avgScore || 0)))));
+    out.appendChild(el('div', { class: 'fact-grid', id: 'portfolio-summary' },
+      metricFact('Capital used', fmtMoney(o.capitalUsedCents)),
+      metricFact('Positions', String(allocs.length)),
+      metricFact('Expected value', pnlSpan(o.expectedValueCents), o.expectedValueCents >= 0 ? 'f-ok' : 'f-danger'),
+      metricFact('Tail risk', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0))), 'f-danger'),
+      metricFact('Avg score', String(Math.round(o.avgScore || 0)))));
 
     var segments = Object.keys(perSym).map(function (k) { return { label: k, value: perSym[k] }; });
     if (segments.length) {
@@ -6110,7 +6210,7 @@
     }).join('');
     var svg = '<svg viewBox="0 0 100 40" preserveAspectRatio="none" width="100%" height="70" role="img">'
       + '<line x1="0" y1="34" x2="100" y2="34" stroke="var(--border)" stroke-width="0.5"/>' + bars + '</svg>';
-    return el('div', {}, el('div', { class: 'lab-chart', html: svg }),
+    return el('div', {}, el('div', { class: 'tool-chart', html: svg }),
       el('div', { class: 'muted small' }, 'Forward-return distribution after the signal (each bar = a return range)'));
   }
 
@@ -6120,22 +6220,23 @@
   /**
    * TEST YOUR VIEW — the thesis stage of Research on a symbol (adversarial-review refactor):
    * one shared MarketThesis (direction + horizon) drives BOTH connected stages —
-   *   Past evidence  : what followed similar conditions in THIS stock's real history
+   *   Past evidence  : what followed similar conditions in the active lane's disclosed history
    *   Possible futures: what a stochastic model says could happen from here
    * Both inherit the page symbol (no nested ticker), results are keyed by symbol+question+
    * params+range and never restored across a mismatch, and the evidence hands its EXACT analog
-   * windows to Trade as a path source. Not a Lab tool: the next answer after you state a view.
+   * windows to Trade as a path source: the next answer after you state a view.
    */
   function testYourViewSection(symbol) {
     var level = Learn.currentLevel();
+    var historyBasis = activeHistoryBasis();
     App.state.marketThesis = App.state.marketThesis || {};
     var th = App.state.marketThesis[symbol] = App.state.marketThesis[symbol]
       || { direction: 'rebound', horizonDays: 10 };
     var wrap = el('div', { class: 'card', id: 'test-your-view' });
     wrap.appendChild(UI.cardHeader('Test your view \u2014 ' + symbol));
     wrap.appendChild(explain(level === 'beginner'
-      ? 'Say what you think ' + symbol + ' does next. StrikeBench checks the REAL past for similar moments (and what followed), and draws possible futures — then you can test strategies against either.'
-      : 'One thesis drives both lenses: the observed event study (conditional history, bootstrap CI) and the parametric Monte Carlo fan. The analog windows behind the study are reusable as a strategy path source in Trade.'));
+      ? 'Say what you think ' + symbol + ' does next. StrikeBench checks ' + historyBasis.plain + ' for similar moments (and what followed), and draws model-generated possible futures — then you can test strategies against either.'
+      : 'One thesis drives both lenses: the ' + historyBasis.expert + ' (conditional history, bootstrap CI) and the parametric Monte Carlo fan. The analog windows behind the study are reusable as a strategy path source in Trade.'));
 
     // ---- The shared thesis row ----
     var dirSel = el('select', { id: 'tv-direction' },
@@ -6199,10 +6300,10 @@
     f.results = f.results || {};
     var stage = el('div', { id: 'what-has-happened' });
     var qKey = THESIS_QUESTION[thesis.direction] || 'pullback_rebound';
-    var picker = el('div', { id: 'lab-q-picker' });
+    var picker = el('div', { id: 'study-question-picker' });
     stage.appendChild(picker);
-    var out = el('div', { id: 'lab-hyp-out', class: 'lab-out' });
-    var run = el('button', { class: 'btn', id: 'lab-hyp-run', disabled: 'disabled' }, 'Check the past');
+    var out = el('div', { id: 'study-results', class: 'tool-output' });
+    var run = el('button', { class: 'btn', id: 'study-run', disabled: 'disabled' }, 'Check the past');
     stage.appendChild(el('div', { class: 'btn-row' }, run));
     stage.appendChild(out);
 
@@ -6231,10 +6332,10 @@
         (q.params || []).forEach(function (pr) {
           if (pr.key === 'forward') return; // the thesis horizon owns this
           var saved = (f.params && f.params[q.key] && f.params[q.key][pr.key]);
-          var inp = el('input', { type: 'number', id: 'lab-q-' + pr.key,
+          var inp = el('input', { type: 'number', id: 'study-param-' + pr.key,
             value: saved == null ? pr.def : saved, min: String(pr.min), max: String(pr.max), step: '1' });
           paramInputs[pr.key] = inp;
-          fields.push(labField(pr.label + ' (' + pr.unit + ')', inp));
+          fields.push(toolField(pr.label + ' (' + pr.unit + ')', inp));
         });
         if (fields.length) picker.appendChild(el('div', { class: 'form-grid' }, fields));
         picker.appendChild(el('p', { class: 'muted small', id: 'tv-question-line' }, q.description));
@@ -6392,14 +6493,14 @@
     out.appendChild(gaugeChart(r.conditioned.winRatePct / 100, r.baseline.winRatePct / 100,
       'Positive ' + Math.round(r.conditioned.winRatePct) + '% of the time after the signal vs ' + Math.round(r.baseline.winRatePct) + '% normally — over ' + r.conditioned.sample + ' signals'));
     var facts = el('div', { class: 'fact-grid' },
-      labFact('After the signal', Math.round(r.conditioned.winRatePct) + '% up', r.winRateEdgePct >= 0 ? 'f-ok' : 'f-danger'),
-      labFact('Normally', Math.round(r.baseline.winRatePct) + '% up'),
-      labFact('Edge', (r.winRateEdgePct >= 0 ? '+' : '') + r.winRateEdgePct + ' pts', r.winRateEdgePct >= 0 ? 'f-ok' : 'f-danger'));
+      metricFact('After the signal', Math.round(r.conditioned.winRatePct) + '% up', r.winRateEdgePct >= 0 ? 'f-ok' : 'f-danger'),
+      metricFact('Normally', Math.round(r.baseline.winRatePct) + '% up'),
+      metricFact('Edge', (r.winRateEdgePct >= 0 ? '+' : '') + r.winRateEdgePct + ' pts', r.winRateEdgePct >= 0 ? 'f-ok' : 'f-danger'));
     out.appendChild(facts);
     var mean = el('div', { class: 'fact-grid' },
-      labFact('Avg return', (r.conditioned.meanReturnPct >= 0 ? '+' : '') + r.conditioned.meanReturnPct + '%', r.meanEdgePct >= 0 ? 'f-ok' : 'f-danger'),
-      labFact('Worst case', r.conditioned.worstPct + '%', 'f-danger'),
-      labFact('Best case', '+' + r.conditioned.bestPct + '%', 'f-ok'));
+      metricFact('Avg return', (r.conditioned.meanReturnPct >= 0 ? '+' : '') + r.conditioned.meanReturnPct + '%', r.meanEdgePct >= 0 ? 'f-ok' : 'f-danger'),
+      metricFact('Worst case', r.conditioned.worstPct + '%', 'f-danger'),
+      metricFact('Best case', '+' + r.conditioned.bestPct + '%', 'f-ok'));
     out.appendChild(mean);
     var dc = distChart(r.distribution);
     if (dc) out.appendChild(dc);
@@ -6447,25 +6548,25 @@
 
   // ---- ETF / exposure replicator ----
   function replicateCard(level, ctx) {
-    var f = App.state.labForm.rep = App.state.labForm.rep || {};
-    var card = el('div', { class: 'card lab-card' });
-    card.appendChild(labHeader('coins', 'Replicate an exposure'));
+    var f = App.state.tradeReplicator = App.state.tradeReplicator || {};
+    var card = el('div', { class: 'card tool-card' });
+    card.appendChild(toolHeader('coins', 'Replicate an exposure'));
     card.appendChild(explain('Get the price exposure of owning shares — for far less capital — with a synthetic options position.'));
 
-    var symbol = el('input', { type: 'text', id: 'lab-rep-sym', value: (ctx && ctx.symbol) || f.symbol || 'SPY', list: 'universe-symbols' });
-    var target = el('input', { type: 'number', id: 'lab-rep-tgt', value: f.target || 50000, min: '0', step: '1000' });
-    var dir = el('select', { id: 'lab-rep-dir' }, el('option', { value: 'long' }, 'Bullish (long)'), el('option', { value: 'short' }, 'Bearish (short)'));
+    var symbol = el('input', { type: 'text', id: 'replicate-symbol', value: (ctx && ctx.symbol) || f.symbol || 'SPY', list: 'universe-symbols' });
+    var target = el('input', { type: 'number', id: 'replicate-target', value: f.target || 50000, min: '0', step: '1000' });
+    var dir = el('select', { id: 'replicate-direction' }, el('option', { value: 'long' }, 'Bullish (long)'), el('option', { value: 'short' }, 'Bearish (short)'));
     dir.value = f.dir || 'long';
     card.appendChild(el('div', { class: 'form-grid' },
-      labField('Underlying', symbol), labField('Target exposure ($)', target), labField('Direction', dir)));
+      toolField('Underlying', symbol), toolField('Target exposure ($)', target), toolField('Direction', dir)));
 
-    var out = el('div', { id: 'lab-rep-out', class: 'lab-out' });
-    var run = el('button', { class: 'btn', id: 'lab-rep-run' }, 'Size it');
+    var out = el('div', { id: 'replicate-output', class: 'tool-output' });
+    var run = el('button', { class: 'btn', id: 'replicate-run' }, 'Size it');
     run.addEventListener('click', async function () {
       f.symbol = symbol.value.toUpperCase(); f.target = +target.value; f.dir = dir.value;
       run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Sizing…'));
       var body = { symbol: symbol.value, targetExposureCents: Math.round((+target.value || 0) * 100), bullish: dir.value === 'long' };
-      try { var _d = await API.post('/api/lab/replicate', body); f.result = _d; renderReplication(out, _d); }
+      try { var _d = await API.post('/api/trade/replicate', body); f.result = _d; renderReplication(out, _d); }
       catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Replicate failed', [String((e && e.message) || e)])); }
       finally { run.disabled = false; }
     });
@@ -6499,7 +6600,7 @@
     }
     out.appendChild(el('div', { class: 'btn-row' },
       el('button', {
-        class: 'btn btn-sm', id: 'lab-rep-build', onclick: function () {
+        class: 'btn btn-sm', id: 'replicate-build', onclick: function () {
           App.state.lastRecommendSymbol = (r.symbol || '').toUpperCase();
           App.state.builderForm = {
             symbol: (r.symbol || '').toUpperCase(),
@@ -6514,16 +6615,16 @@
 
   // ---- Notebook ----
   async function notebookCard() {
-    var card = el('div', { class: 'card lab-card lab-notebook' });
-    var newBtn = el('button', { class: 'btn btn-sm', id: 'lab-note-new' }, 'New note');
-    card.appendChild(labHeader('pen', 'Your research notes', newBtn));
-    var list = el('div', { id: 'lab-notes', class: 'lab-out' });
+    var card = el('div', { class: 'card tool-card research-notebook' });
+    var newBtn = el('button', { class: 'btn btn-sm', id: 'research-note-new' }, 'New note');
+    card.appendChild(toolHeader('pen', 'Your research notes', newBtn));
+    var list = el('div', { id: 'research-notes', class: 'tool-output' });
     card.appendChild(list);
 
     async function reload() {
       list.innerHTML = ''; list.appendChild(UI.spinner('Loading notes…'));
       try {
-        var notes = (await API.get('/api/lab/notes')).notes || [];
+        var notes = (await API.get('/api/research/notes')).notes || [];
         list.innerHTML = '';
         if (!notes.length) list.appendChild(el('div', { class: 'muted small' }, 'No notes yet — save your hypotheses and conclusions here.'));
         notes.forEach(function (n) { list.appendChild(noteRow(n, reload)); });
@@ -6547,13 +6648,13 @@
     var body = el('textarea', { rows: '4', placeholder: 'Your analysis…' }, (n && n.body) || '');
     var tags = el('input', { type: 'text', placeholder: 'tags (comma-separated)', value: (n && n.tags) || '' });
     var wrap = el('div', { class: 'note-editor' },
-      labField('Title', title), labField('Notes', body), labField('Tags', tags));
+      toolField('Title', title), toolField('Notes', body), toolField('Tags', tags));
     var save = el('button', { class: 'btn btn-sm' }, 'Save');
     save.addEventListener('click', async function () {
       save.disabled = true;
       try {
-        if (n && n.id) await API.put('/api/lab/notes/' + n.id, { title: title.value, body: body.value, tags: tags.value });
-        else await API.post('/api/lab/notes', { title: title.value, body: body.value, tags: tags.value });
+        if (n && n.id) await API.put('/api/research/notes/' + n.id, { title: title.value, body: body.value, tags: tags.value });
+        else await API.post('/api/research/notes', { title: title.value, body: body.value, tags: tags.value });
         await reload();
       } catch (e) { save.disabled = false; wrap.appendChild(alertBox('danger', String((e && e.message) || e))); }
     });
@@ -6562,7 +6663,7 @@
       var del = el('button', { class: 'btn btn-sm btn-danger' }, 'Delete');
       del.addEventListener('click', async function () {
         del.disabled = true;
-        try { await API.del('/api/lab/notes/' + n.id); await reload(); }
+        try { await API.del('/api/research/notes/' + n.id); await reload(); }
         catch (e) { del.disabled = false; wrap.appendChild(alertBox('danger', 'Could not delete', [String((e && e.message) || e)])); }
       });
       row.appendChild(del);
@@ -6573,14 +6674,13 @@
 
 
 
-  /** The Lab's STUDY tools (signal test + notebook), rendered inside Research where studying lives. */
+  /** Saved notes, rendered inside Research where studying lives. */
   async function studyToolsSection() {
     // The landing page is a MARKET-ENTRY surface: sectors, symbols, recents, saved work.
     // The event-study workbench lives on the SYMBOL page, inside the thesis workflow —
-    // a full study tool here was an orphaned Lab card (adversarial review).
+    // the full event study belongs on a symbol page, not on the market index.
     var wrap = el('div', { id: 'research-study-tools' });
-    wrap.appendChild(el('h2', { class: 'section-h' }, 'Your research notes'));
-    var grid = el('div', { class: 'lab-grid' });
+    var grid = el('div', { class: 'tool-grid' });
     grid.appendChild(await notebookCard());
     wrap.appendChild(grid);
     return wrap;

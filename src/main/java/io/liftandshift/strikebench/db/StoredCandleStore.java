@@ -12,8 +12,8 @@ import java.util.Optional;
 
 /**
  * Reads persisted daily candles from {@code underlying_bar} for the ACTIVE analysis dataset. With
- * the default 'observed' dataset this serves real backfills/snapshots (one row per date, observed
- * preferred over demo, labeled EOD/FIXTURE honestly). When the user selects a synthetic dataset in
+ * the default 'observed' dataset this serves only attributable observed backfills/snapshots (one row
+ * per date; Demo rows are physically quarantined and also excluded here). When the user selects a synthetic dataset in
  * the Data Center, its bars serve instead — labeled MODELED with source 'synthetic' so scenario mode
  * can never masquerade as market data. Empty result ⇒ the provider chain runs.
  */

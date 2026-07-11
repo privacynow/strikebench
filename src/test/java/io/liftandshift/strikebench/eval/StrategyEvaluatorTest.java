@@ -19,7 +19,7 @@ class StrategyEvaluatorTest {
                 new LegView("BUY", "CALL", "250", "2026-08-21", 1, "4.00"),
                 new LegView("SELL", "CALL", "255", "2026-08-21", 1, "2.00"));
         // $2.00 debit and $5.00 width per share -> $200 debit / $300 profit / $200 loss PER CONTRACT (cents).
-        return new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "BUY 250C / SELL 255C Aug21",
+        return new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 250C / SELL 255C Aug21",
                 legs, 1, -20_000L, 30_000L, 20_000L, List.of("252.00"),
                 0.45, 2_000L, 0.70, freshness, List.of(),
                 55.0, confidence, "Cheap defined-risk way to play a move up",

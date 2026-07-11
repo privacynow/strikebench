@@ -747,7 +747,7 @@ public final class TradeService {
             double ivAvg = ivs.isEmpty() ? FALLBACK_IV : ivs.stream().mapToDouble(Double::doubleValue).average().orElse(FALLBACK_IV);
             TimeToExpiry mtte = timeToNearestExpiry(t.legs(), todayFor(world));
             popNow = curve.probProfit(underlyingCents / 100.0, ivAvg, mtte.tYears(),
-                    marks.riskFreeRate((int) Math.max(1, mtte.calendarDays())));
+                    marks.riskFreeRate((int) Math.max(1, mtte.calendarDays()), world));
         }
         return new MarkView(t.id(), now, underlyingCents, closeCost, unrealized, popNow, worst.name(),
                 greeks, complete ? legGreeks : List.of());
@@ -1111,7 +1111,7 @@ public final class TradeService {
                 LocalDate.ofInstant(nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN));
         double t = tte.tYears();
         int rateDays = (int) Math.max(1, tte.calendarDays());
-        double rfr = marks.riskFreeRate(rateDays);
+        double rfr = marks.riskFreeRate(rateDays, world);
         io.liftandshift.strikebench.model.DataEvidence rateEvidence =
                 marks.riskFreeRateEvidence(rateDays, world);
         if (ivs.isEmpty()) {

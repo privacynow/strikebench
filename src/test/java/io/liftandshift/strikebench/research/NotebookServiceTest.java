@@ -12,7 +12,7 @@ import java.time.ZoneId;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** The research-lab notebook: per-user saved analyses, full CRUD + isolation. */
+/** Research notes: per-user saved analyses, full CRUD + isolation. */
 class NotebookServiceTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("UTC"));

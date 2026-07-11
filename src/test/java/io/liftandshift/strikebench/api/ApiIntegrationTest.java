@@ -157,6 +157,7 @@ class ApiIntegrationTest {
         assertThat(json.get("disclaimer").asText()).containsIgnoringCase("educational");
         JsonNode first = json.get("candidates").get(0);
         assertThat(first.get("maxLossCents").asLong()).isPositive();
+        assertThat(first.get("structureGroup").asText()).isNotBlank();
         assertThat(first.get("beginnerExplanation").asText()).isNotBlank();
     }
 
@@ -580,6 +581,14 @@ class ApiIntegrationTest {
         JsonNode quotes = Json.parse(get("/api/quotes?symbols=AAPL,TSLA,ZZZZ").body()).get("quotes");
         assertThat(quotes.size()).isEqualTo(2);
         assertThat(quotes.get(0).get("last").asText()).isNotBlank();
+        JsonNode aaplQuote = java.util.stream.StreamSupport.stream(quotes.spliterator(), false)
+                .filter(q -> "AAPL".equals(q.get("symbol").asText())).findFirst().orElseThrow();
+        assertThat(aaplQuote.get("optionable").asBoolean()).isTrue();
+        assertThat(aaplQuote.get("bid").asText()).isNotBlank();
+        assertThat(aaplQuote.get("ask").asText()).isNotBlank();
+        assertThat(aaplQuote.get("asOf").asLong()).isPositive();
+        assertThat(Json.parse(get("/api/quotes?symbols=VTSAX").body())
+                .at("/quotes/0/optionable").asBoolean()).isFalse();
         // No symbols param -> the active universe
         assertThat(Json.parse(get("/api/quotes").body()).get("quotes").size())
                 .isEqualTo(u.at("/active/symbols").size());
@@ -869,11 +878,20 @@ class ApiIntegrationTest {
     @Test
     @Order(28)
     void researchEventStudyRoutesAndAnalogStrategySim() throws Exception {
-        // PRIMARY routes live under /api/research; /api/lab/* stays as a compatibility alias.
+        // Research has one canonical route family; the dissolved Lab aliases stay gone.
         var q1 = get("/api/research/questions");
-        var q2 = get("/api/lab/questions");
         assertThat(q1.statusCode()).isEqualTo(200);
-        assertThat(q2.body()).isEqualTo(q1.body()); // same handler, byte-identical
+        assertThat(get("/api/lab/questions").statusCode()).isEqualTo(404);
+        assertThat(post("/api/lab/question", "{}").statusCode()).isEqualTo(404);
+        // Static Research tools must win over /api/research/{symbol}; this route-ordering
+        // contract previously sent "notes" through the ticker handler.
+        var note = post("/api/research/notes", """
+                {"title":"AAPL study","body":"Watch the 10-day follow-through","tags":"momentum"}""");
+        assertThat(note.statusCode()).isEqualTo(200);
+        String noteId = Json.parse(note.body()).get("id").asText();
+        assertThat(get("/api/research/notes").statusCode()).isEqualTo(200);
+        assertThat(get("/api/lab/notes").statusCode()).isEqualTo(404);
+        assertThat(delete("/api/research/notes/" + noteId).statusCode()).isEqualTo(200);
         String study = """
             {"key":"pullback_rebound","symbol":"AAPL","from":"","to":"",
               "params":{"dropPct":2,"lookback":20,"forward":10}}""";
@@ -923,7 +941,10 @@ class ApiIntegrationTest {
         var jStrict = Json.parse(rStrict.body());
         assertThat(jStrict.get("config").get("symbolBetas").has("ZZZFAKE")).isFalse();
         assertThat(jStrict.get("spotBasis").get("ZZZFAKE").asText()).containsIgnoringCase("excluded");
-        delete("/api/sim/market/" + jStrict.get("worldId").asText());
+        String strictWorld = jStrict.get("worldId").asText();
+        assertThat(put("/api/world", "{\"world\":\"" + strictWorld + "\"}").statusCode()).isEqualTo(200);
+        delete("/api/sim/market/" + strictWorld);
+        assertThat(Json.parse(get("/api/world").body()).get("world").asText()).isEqualTo("demo");
 
         String body = """
             {"name":"Anchor gate","symbols":{"AAPL":1.0,"ZZZFAKE":1.0},"scenario":"CHOP","speed":26,
@@ -1021,6 +1042,8 @@ class ApiIntegrationTest {
         // available:false with a note — never a fabricated line, never a 404.
         JsonNode r = Json.parse(get("/api/sparklines?symbols=AAPL,SPY,ZZZZ&range=1m").body());
         assertThat(r.get("range").asText()).isEqualTo("1m");
+        assertThat(r.get("totalRequested").asInt()).isEqualTo(3);
+        assertThat(r.get("truncated").asBoolean()).isFalse();
         assertThat(r.get("sparklines")).hasSize(3);
         java.util.Map<String, JsonNode> bySym = new java.util.HashMap<>();
         for (JsonNode row : r.get("sparklines")) bySym.put(row.get("symbol").asText(), row);
@@ -1038,6 +1061,12 @@ class ApiIntegrationTest {
         // Blank symbols default to the active universe and never exceed the cap.
         JsonNode def = Json.parse(get("/api/sparklines").body());
         assertThat(def.get("sparklines").size()).isBetween(1, 16);
+        JsonNode capped = Json.parse(get("/api/sparklines?symbols="
+                + java.util.stream.IntStream.range(0, 17).mapToObj(i -> "Z" + String.format("%03d", i))
+                        .collect(java.util.stream.Collectors.joining(","))).body());
+        assertThat(capped.get("sparklines")).hasSize(16);
+        assertThat(capped.get("totalRequested").asInt()).isEqualTo(17);
+        assertThat(capped.get("truncated").asBoolean()).isTrue();
     }
 
     @Test

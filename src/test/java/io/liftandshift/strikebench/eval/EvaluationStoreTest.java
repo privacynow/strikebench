@@ -24,7 +24,7 @@ class EvaluationStoreTest {
         List<LegView> legs = List.of(
                 new LegView("BUY", "CALL", "250", "2026-08-21", 1, "4.00"),
                 new LegView("SELL", "CALL", "255", "2026-08-21", 1, "2.00"));
-        Candidate c = new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "BUY 250C / SELL 255C",
+        Candidate c = new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 250C / SELL 255C",
                 legs, 1, -20_000L, 30_000L, 20_000L, List.of("252.00"),
                 0.45, 2_000L, 0.70, "DELAYED", List.of(), 55.0, 0.6,
                 "why", "up", "down", "inval", "plain", "DIRECTIONAL", List.of("DIRECTIONAL"),

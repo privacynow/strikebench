@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.model.NewsItem;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
+import io.liftandshift.strikebench.support.ObservedFixtureProvider;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -27,7 +28,7 @@ class MarketDataServiceTest {
 
     /** Wraps the fixture and counts calls, to observe caching and chain traversal. */
     static final class CountingProvider implements MarketDataProvider {
-        final FixtureProvider inner = new FixtureProvider(CLOCK);
+        final ObservedFixtureProvider inner = new ObservedFixtureProvider(CLOCK);
         final AtomicInteger quoteCalls = new AtomicInteger();
         @Override public String name() { return "counting"; }
         @Override public Set<Domain> domains() { return Set.of(Domain.QUOTES, Domain.OPTIONS, Domain.CANDLES); }
@@ -78,6 +79,21 @@ class MarketDataServiceTest {
     }
 
     @Test
+    void fixtureProviderCanNeverBecomeAnObservedFallback() {
+        FixtureProvider fixture = new FixtureProvider(CLOCK);
+        MarketDataService svc = new MarketDataService(
+                List.of(new BrokenProvider(), fixture), List.of(fixture), List.of(fixture));
+        svc.setDemoSources(fixture, fixture, fixture);
+
+        assertThat(svc.quote("AAPL")).isEmpty();
+        assertThat(svc.expirations("AAPL")).isEmpty();
+        assertThat(svc.candleSeries("AAPL", LocalDate.now(CLOCK).minusMonths(1), LocalDate.now(CLOCK)).isEmpty()).isTrue();
+        assertThat(svc.news("AAPL")).isEmpty();
+        assertThat(svc.quote("AAPL", "demo")).isPresent();
+        assertThat(svc.expirations("AAPL", "demo")).isNotEmpty();
+    }
+
+    @Test
     void statusNeverThrowsEvenWithZeroProviders() {
         MarketDataService svc = new MarketDataService(List.of(), List.of(), List.of());
         Map<String, List<ProviderStatusInfo>> status = svc.status();
@@ -112,6 +128,27 @@ class MarketDataServiceTest {
     /** A canned news source (headlines OR filings), to exercise aggregation vs winner-take-all. */
     record FakeNews(String name, List<NewsItem> items) implements io.liftandshift.strikebench.market.ports.NewsFilingsProvider {
         @Override public List<NewsItem> news(String symbol) { return items; }
+    }
+
+    @Test
+    void unknownExplicitWorldFailsClosedInsteadOfLeakingObservedData() {
+        ObservedFixtureProvider observed = new ObservedFixtureProvider(CLOCK);
+        var headline = new NewsItem("AAPL", "Observed headline", "wire", "http://wire/1", 1_000);
+        MarketDataService svc = new MarketDataService(List.of(observed),
+                List.of(new FakeNews("wire", List.of(headline))), List.of());
+        svc.setWorldResolver(id -> Optional.empty());
+        LocalDate to = LocalDate.now(CLOCK), from = to.minusMonths(1);
+        LocalDate exp = observed.expirations("AAPL").getFirst();
+
+        assertThat(svc.quote("AAPL")).isPresent();
+        assertThat(svc.quote("AAPL", "deleted-world")).isEmpty();
+        assertThat(svc.expirations("AAPL", "deleted-world")).isEmpty();
+        assertThat(svc.chain("AAPL", exp, "deleted-world")).isEmpty();
+        assertThat(svc.candleSeries("AAPL", from, to, "deleted-world",
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED).isEmpty()).isTrue();
+        assertThat(svc.news("AAPL", "deleted-world")).isEmpty();
+        assertThat(svc.riskFreeRateQuote(30, "deleted-world").evidence().provenance())
+                .isEqualTo(io.liftandshift.strikebench.model.DataProvenance.MISSING);
     }
 
     @Test

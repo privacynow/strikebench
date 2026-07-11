@@ -11,10 +11,9 @@ import java.util.Locale;
 
 /**
  * Backfills daily {@code underlying_bar} history for a symbol from whatever candle source the
- * provider chain currently offers (Yahoo/Stooq/Polygon/Alpha Vantage in live mode, fixtures in demo).
- * Provider-agnostic and evidence-honest: rows are tagged with the winning provider's name and an
- * {@code observed} flag derived from its source provenance, so a fixture backfill is never mistaken
- * for real history. Idempotent upsert on {@code (symbol, d, source)}.
+ * observed provider chain currently offers (Yahoo/Stooq/Polygon/Alpha Vantage). Provider-agnostic
+ * and evidence-honest: non-observed results are rejected before any canonical row is written.
+ * Idempotent upsert on {@code (symbol, d, source)}.
  *
  * <p>This is the writer the Data Center's "backfill underlying" job calls per symbol; once loaded,
  * the portfolio backtester and the research-question workbench read OBSERVED history instead of
@@ -46,7 +45,7 @@ public final class UnderlyingBackfill {
         List<Candle> candles = series.candles();
         if (candles.isEmpty()) {
             return new BackfillResult(sym, series.source(), false, 0, from, to,
-                    "No candle source returned data — set YAHOO_ENABLED, or a Polygon/Alpha Vantage key, for real history.");
+                    "No candle source returned data — set YAHOO_ENABLED, or a Polygon/Alpha Vantage key, for observed history.");
         }
         boolean observed = series.evidence().provenance()
                 == io.liftandshift.strikebench.model.DataProvenance.OBSERVED;

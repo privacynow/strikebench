@@ -1,6 +1,7 @@
 /*
- * LIVE-mode browser suite: the same jar, NO FIXTURES_ONLY — real keyless providers
- * (Cboe delayed chains, EDGAR, fixture fallback where labeled). Assertions are
+ * LIVE-mode browser suite: the same jar, NO FIXTURES_ONLY — real keyless providers.
+ * The Observed lane fails closed: unavailable data is explicit and fixtures never substitute.
+ * Assertions are
  * structural, not value-exact, because live markets move; any page JS error, any
  * /api 5xx, or any screen that fails to render is a hard failure.
  *
@@ -68,30 +69,35 @@ after(async () => {
   if (pg) pg.drop();
 });
 
-test('live: dashboard renders market tiles', async () => {
+test('live: dashboard renders observed cards or an explicit unavailable state', async () => {
   // A fresh live account opens on the welcome page — skip it like a new user would
   const welcome = await page.locator('#welcome-skip').count();
   if (welcome) {
     await page.click('#welcome-skip');
     await page.waitForSelector('#app[data-ready="true"]', { timeout: 30000 });
   }
-  await page.waitForSelector('.tile-row .tile', { timeout: 30000 });
-  assert.ok((await page.locator('.tile-row .tile').count()) >= 1, 'at least one market tile');
+  await page.waitForSelector('#home-market-watch .sym-card, #home-market-watch .empty', { timeout: 60000 });
+  const cards = page.locator('#home-market-watch .sym-card');
+  if (await cards.count()) {
+    assert.doesNotMatch(await page.textContent('#home-market-watch'), /DEMO DATA/i,
+      'Observed Home never substitutes Demo quotes');
+  } else {
+    assert.match(await page.textContent('#home-market-watch'), /market data unavailable/i,
+      'provider outage is an explicit state');
+  }
   assertClean('dashboard');
 });
 
 test('live: research a real symbol end to end', async () => {
   await go('#/research/AAPL');
   await page.waitForSelector('#research-symbol', { timeout: 30000 });
-  assert.ok(await page.isVisible('text=DELAYED') || await page.isVisible('text=DEMO DATA'),
-    'freshness labeled');
+  const quoteBadge = await page.textContent('.quote-hero .badge');
+  assert.match(quoteBadge, /REALTIME|DELAYED|EOD|STALE/i, 'observed quote age is labeled');
+  assert.doesNotMatch(quoteBadge, /DEMO|SIMULATED/i, 'Observed quote never comes from another lane');
   await page.waitForSelector('#expiration-select', { timeout: 30000 });
   await page.waitForSelector('.tbl tbody tr');
-  // demo history must be labeled when the chart falls back to fixtures in live mode
-  const text = await page.textContent('#app');
-  if (text.includes('One year of closes') && text.includes('DEMO DATA —')) {
-    assert.match(text, /demo data/i);
-  }
+  const hist = await page.textContent('#history-card');
+  assert.doesNotMatch(hist, /DEMO DATA/i, 'Observed Research never substitutes Demo candles');
   assertClean('research');
 });
 
@@ -99,14 +105,14 @@ test('live: research handles unknown and non-optionable symbols gracefully', asy
   await go('#/research/ZZZZQQ');
   await page.waitForSelector('text=/No data for ZZZZQQ/i', { timeout: 30000 }); // hero fills detached
   await go('#/research/VTSAX');
-  await page.waitForSelector('text=/no listed options/i', { timeout: 30000 });
+  await page.waitForSelector('text=/No data for VTSAX|no listed options/i', { timeout: 30000 });
   // A real, established stock with NO candle source (keyless: Stooq blocks bots, no
   // Polygon/AV key) must say WHY the chart is empty — never blame the window
   await go('#/research/PG');
   await page.waitForSelector('#history-card');
   await page.waitForFunction(() => {
     const t = (document.getElementById('history-card') || {}).textContent || '';
-    return /Polygon or Alpha Vantage|No free daily-history source|DEMO DATA|High/.test(t); // honest no-source note (level-worded), or real/demo data if a key exists
+    return /Connect or backfill|Observed daily history is unavailable|No observed daily history|High/.test(t);
   }, { timeout: 30000 });
   const hist = await page.textContent('#history-card');
   assert.doesNotMatch(hist, /Not enough data for this window/);
@@ -172,14 +178,13 @@ test('live: full ticket flow places and unwinds a paper trade at real marks', as
   assertClean('ticket-lifecycle');
 });
 
-test('live: backtest discloses demo underlying when no candle source', async () => {
+test('live: observed backtest never substitutes demo history', async () => {
   await go('#/backtest');
   await page.click('#bt-run');
   await page.waitForSelector('#bt-results .stat, #bt-results .alert-danger', { timeout: 120000 });
   const text = await page.textContent('#bt-results');
-  if (/Sample size/.test(text) && /DEMO DATA/i.test(text)) {
-    assert.match(text, /do not reflect the real market/i);
-  }
+  assert.doesNotMatch(text, /Demo price data|DEMO DATA/i,
+    'Observed backtest must require observed/modeled-from-observed history instead of substituting fixtures');
   assertClean('backtest');
 });
 

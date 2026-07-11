@@ -77,14 +77,20 @@ function auditInPage() {
   const out = { overflow: [], emoji: [], controls: [] };
   const doc = document.documentElement;
   if (doc.scrollWidth > doc.clientWidth + 2) {
-    // name the widest offender to make failures actionable
-    let worst = null, worstW = 0;
+    // Animated/local-scroll children can be thousands of pixels wide without widening the
+    // document. Name the elements nearest the page edge instead; those are the constraints
+    // that actually produce small whole-page overflows.
+    const edge = [];
     document.querySelectorAll('body *').forEach(el => {
       const r = el.getBoundingClientRect();
-      if (r.right > worstW) { worstW = r.right; worst = el; }
+      if (r.right > doc.clientWidth + .5 && r.right <= doc.clientWidth + 12 && r.left >= -12) {
+        const cs = getComputedStyle(el);
+        edge.push((el.id || el.className || el.tagName).toString().slice(0, 42)
+          + '@' + r.left.toFixed(1) + '..' + r.right.toFixed(1)
+          + '/w=' + cs.width + '/min=' + cs.minWidth + '/ox=' + cs.overflowX);
+      }
     });
-    out.overflow.push('page ' + doc.scrollWidth + '>' + doc.clientWidth + ' widest=' +
-      (worst ? (worst.id || worst.className || worst.tagName).toString().slice(0, 60) : '?'));
+    out.overflow.push('page ' + doc.scrollWidth + '>' + doc.clientWidth + ' edge=' + edge.slice(0, 8).join(','));
   }
   const emojiRe = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/u;
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);

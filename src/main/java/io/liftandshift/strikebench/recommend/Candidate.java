@@ -17,6 +17,7 @@ import java.util.List;
 public record Candidate(
         String strategy,
         String displayName,
+        String structureGroup,        // presentation diversity only; never changes the ranked order
         String label,                 // short human summary, e.g. "SELL 555P / BUY 550P Aug 21"
         List<LegView> legs,
         int qty,

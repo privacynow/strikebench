@@ -21,7 +21,10 @@ public final class Migrations {
                 .locations("classpath:db/migrations")
                 .load()
                 .migrate();
-        log.info("Local data schema ready at version {} ({} update(s) applied)",
-                result.targetSchemaVersion, result.migrationsExecuted);
+        if (result.targetSchemaVersion == null) {
+            log.info("Local data schema ready (no updates needed)");
+        } else {
+            log.info("Local data schema ready ({} update(s) applied)", result.migrationsExecuted);
+        }
     }
 }

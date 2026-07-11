@@ -70,6 +70,8 @@ class DataCenterTest {
     @Test
     void backfillJobRunsWritesBarsAndReportsDone() throws Exception {
         Ctx c = wire();
+        var invalidations = new java.util.concurrent.atomic.AtomicInteger();
+        c.jobs().setDataChangedHook(invalidations::incrementAndGet);
         var job = c.jobs().start("backfill_underlying",
                 Map.of("symbols", List.of("AAPL"), "from", "2026-04-01", "to", "2026-06-30"), null);
         var done = await(c.jobs(), job.id());
@@ -79,6 +81,7 @@ class DataCenterTest {
         var view = c.jobs().get(job.id());
         assertThat(view.items()).hasSize(1);
         assertThat(view.items().getFirst().status()).isEqualTo("DONE");
+        assertThat(invalidations.get()).isEqualTo(1);
     }
 
     @Test

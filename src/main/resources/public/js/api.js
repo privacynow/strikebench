@@ -60,8 +60,8 @@
   }
 
   // POSTs that change NO server state — never touch the cache (the builder previews on every
-  // keystroke; the lab hypothesis/replicate tools are pure math).
-  var PURE_COMPUTE = /^\/api\/(recommend($|\/)|trades\/preview$|lab\/(hypothesis|replicate|question)$|sim\/(scenario|strategy)$)/;
+  // keystroke; Research event studies and Trade shaping tools are pure compute).
+  var PURE_COMPUTE = /^\/api\/(recommend($|\/)|trades\/preview$|research\/(hypotheses|event-studies)$|trade\/replicate$|sim\/(scenario|strategy)$)/;
   // Writes that only persist UI state — flushing market/account caches for them would defeat
   // the cache entirely (the workspace autosaves every few seconds).
   var STATE_WRITER = /^\/api\/workspace$/;
@@ -100,7 +100,10 @@
       if (NEVER_CACHE.test(path)) return Promise.resolve(null);
       if (navigator.connection && navigator.connection.saveData) return Promise.resolve(null);
       var hit = cache.get(path);
-      if (hit && Date.now() - hit.at < CACHE_TTL_MS) return Promise.resolve(null); // already warm
+      // A warm prefetch is a network no-op, but callers that use the optional result to paint
+      // decoration still need the VALUE. Returning null here made a second Home/Research render
+      // erase otherwise-available sparklines after reload or a level switch.
+      if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.promise;
       var p = fetch(path, { headers: { 'Accept': 'application/json', 'X-Priority': 'prefetch' } })
         .then(function (res) {
           if (res.status !== 200) throw new Error('prefetch declined');

@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Phase-5 research lab: allocates a capital budget across the competition's ranked winners under
+ * Portfolio construction engine: allocates a capital budget across ranked winners under
  * real constraints — a greedy allocation by objective DENSITY (value per unit of capital) subject to
  * a per-position cap, a per-symbol concentration cap (diversification), a max number of positions,
  * and the total budget. Only VIABLE (gate-passing) evaluations are funded; every skip is explained.

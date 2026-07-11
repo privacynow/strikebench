@@ -45,7 +45,7 @@ class MarketDataEngineTest {
             inner = new FixtureProvider(c);
             this.observedQuotes = observedQuotes;
         }
-        public String name() { return "counting"; }
+        public String name() { return observedQuotes ? "counting-observed" : "fixture"; }
         public java.util.Set<Domain> domains() { return inner.domains(); }
         public List<SymbolMatch> lookup(String q) { return inner.lookup(q); }
         public Optional<Quote> quote(String s) {
