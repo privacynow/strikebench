@@ -387,6 +387,7 @@ public final class ApiServer {
             });
             c.routes.put("/api/universe", this::universeSelect);
             c.routes.get("/api/quotes", this::quotesBatch);
+            c.routes.get("/api/sparklines", this::sparklines);
             c.routes.get("/api/market/engine", ctx -> ctx.json(marketEngine.status())); // Data Center: engine health
             c.routes.sse("/api/market/stream", this::marketStream);                     // live-ish quote deltas from memory
             c.routes.sse("/api/events", this::eventStream);                             // typed workspace events (jobs/datasets/providers)
@@ -442,9 +443,25 @@ public final class ApiServer {
 
             // The single source of truth for strategy families — frontend catalogs (builder,
             // scenario) are checked against this in the DOM suite so they can never drift silently.
-            c.routes.get("/api/strategies", ctx -> ctx.json(Map.of("families",
+            c.routes.get("/api/strategies", ctx -> ctx.json(Map.of(
+                    "families",
                     java.util.Arrays.stream(io.liftandshift.strikebench.strategy.StrategyFamily.values())
-                            .map(Enum::name).toList())));
+                            .map(Enum::name).toList(),
+                    // Explicit per-family metadata: presentation grouping + foundational ordering.
+                    // The riskRank here is an EDUCATION-ORDERING hint (foundational first), never a gate.
+                    "catalog",
+                    java.util.Arrays.stream(io.liftandshift.strikebench.strategy.StrategyFamily.values())
+                            .map(f -> Map.of(
+                                    "name", f.name(),
+                                    "display", f.display(),
+                                    "structureGroup", f.structureGroup(),
+                                    "foundationalRank", f.riskRank(),
+                                    "definedRisk", f.definedRisk(),
+                                    "blockedByDefault", f.blockedByDefault(),
+                                    "multiExpiration", f.multiExpiration(),
+                                    "needsStock", f.needsStock(),
+                                    "primaryIntent", f.primaryIntent().name()))
+                            .toList())));
             c.routes.post("/api/recommend", this::recommend);
             c.routes.post("/api/recommend/auto", this::recommendAuto);
             c.routes.post("/api/recommend/ladder", this::recommendLadder);
@@ -578,6 +595,7 @@ public final class ApiServer {
                 io.liftandshift.strikebench.paper.AccountRiskContext.save(db, ownerId(ctx), rc);
                 ctx.json(rc);
             });
+            c.routes.get("/api/risk-budget", this::riskBudget);
             c.routes.get("/api/portfolio/greeks", ctx ->
                     ctx.json(trades.portfolioGreeks(currentAccount(ctx).id())));
 
@@ -1456,11 +1474,20 @@ public final class ApiServer {
     private static String latencyClass(String path) {
         if (path == null) return "other";
         if (path.contains("/chain")) return "chain";
-        if (path.startsWith("/api/research")) return "research";
+        // Heavy analysis routes get their OWN buckets (review P2: backtests hiding inside
+        // 'other' made /api/metrics look healthy while Research stayed slow).
+        if (path.startsWith("/api/backtest")) return "backtest";
+        if (path.startsWith("/api/sim/market")) return "world";
+        if (path.startsWith("/api/datasets") || path.startsWith("/api/data")) return "data-ops";
+        if (path.startsWith("/api/broker")) return "broker";
+        if (path.startsWith("/api/sparklines")) return "quotes";
+        if (path.startsWith("/api/research") || path.startsWith("/api/lab")) return "research";
         if (path.startsWith("/api/quotes") || path.startsWith("/api/market")) return "quotes";
         if (path.startsWith("/api/recommend") || path.startsWith("/api/evaluate")
-                || path.startsWith("/api/opportunities") || path.startsWith("/api/sim")) return "compute";
-        if (path.startsWith("/api/trades") || path.startsWith("/api/portfolio")) return "trading";
+                || path.startsWith("/api/opportunities") || path.startsWith("/api/sim")
+                || path.startsWith("/api/optimize")) return "compute";
+        if (path.startsWith("/api/trades") || path.startsWith("/api/portfolio")
+                || path.startsWith("/api/positions")) return "trading";
         return "other";
     }
     private void recordLatency(String path, long micros) {
@@ -2507,6 +2534,117 @@ public final class ApiServer {
         ctx.json(chain.get());
     }
 
+    /**
+     * Batch sparkline closes for the Research/Home cards — ONE http call for the whole grid,
+     * served from the shared candles cache (store-first, then providers), the simulated world's
+     * memory, or fixture walks. Never a per-card provider fan-out from the client. A symbol with
+     * no candle source in live keyless mode answers available:false with an honest note (and a
+     * 15-minute negative memo so a dead symbol cannot re-trigger the provider chain per render).
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> sparklineEmptyMemo =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .expireAfterWrite(java.time.Duration.ofMinutes(15)).maximumSize(500).build();
+
+    private void sparklines(Context ctx) {
+        String raw = ctx.queryParam("symbols");
+        String requested = ctx.queryParam("range") == null ? "3m" : ctx.queryParam("range").toLowerCase(Locale.ROOT);
+        String range = switch (requested) {
+            case "1m", "3m", "6m", "ytd", "1y" -> requested;
+            default -> "3m";
+        };
+        String world = worldParam(activeWorld(ctx));
+        // EXACTLY history's window computation so the candlesCache key (dataset|sym|from|to) is
+        // shared between /history and /sparklines — one warms the other for free.
+        LocalDate today = market.simInstant(world)
+                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                .orElseGet(() -> LocalDate.now(clock));
+        int days = switch (range) {
+            case "1m" -> 30;
+            case "6m" -> 182;
+            case "ytd" -> today.getDayOfYear();
+            case "1y" -> 365;
+            default -> 91;
+        };
+        LocalDate from = today.minusDays(days);
+        List<String> symbols = raw == null || raw.isBlank()
+                ? (world != null
+                    ? market.worldSymbols(world).map(List::copyOf).orElse(List.of())
+                    : universe.active().symbols())
+                : java.util.Arrays.stream(raw.split(",")).map(x -> x.trim().toUpperCase(Locale.ROOT))
+                    .filter(x -> !x.isBlank()).distinct().toList();
+        if (symbols.size() > 16) symbols = symbols.subList(0, 16);
+        var actx = analysisCtx(ctx);
+        String lane = world != null ? world : "observed";
+        var rows = new java.util.concurrent.ConcurrentHashMap<String, Map<String, Object>>();
+        var gate = new java.util.concurrent.Semaphore(4); // cold fills bounded; warm = memory
+        List<Thread> workers = new ArrayList<>();
+        for (String sym : symbols) {
+            workers.add(Thread.startVirtualThread(() -> {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("symbol", sym);
+                String memoKey = lane + "|" + actx + "|" + sym + "|" + range;
+                if (sparklineEmptyMemo.getIfPresent(memoKey) != null) {
+                    row.put("available", false);
+                    row.put("closes", List.of());
+                    row.put("note", "No daily-candle source for this symbol right now \u2014 quotes still work.");
+                    rows.put(sym, row);
+                    return;
+                }
+                try {
+                    gate.acquire();
+                    try {
+                        var series = market.candleSeries(sym, from, today, world, actx);
+                        var candles = series == null ? List.<io.liftandshift.strikebench.model.Candle>of() : series.candles();
+                        if (candles.size() < 2) {
+                            sparklineEmptyMemo.put(memoKey, Boolean.TRUE);
+                            row.put("available", false);
+                            row.put("closes", List.of());
+                            row.put("note", "No daily-candle source for this symbol right now \u2014 quotes still work.");
+                        } else {
+                            // Trim to <=64 points: a sparkline needs shape, not every bar.
+                            int stride = Math.max(1, (int) Math.ceil(candles.size() / 64.0));
+                            List<String> dates = new ArrayList<>();
+                            List<java.math.BigDecimal> closes = new ArrayList<>();
+                            for (int i = 0; i < candles.size(); i += stride) {
+                                var cnd = candles.get(i);
+                                dates.add(cnd.date().toString());
+                                closes.add(cnd.close());
+                            }
+                            var last = candles.getLast();
+                            if (!dates.getLast().equals(last.date().toString())) { // always end on the latest bar
+                                dates.add(last.date().toString());
+                                closes.add(last.close());
+                            }
+                            row.put("available", true);
+                            row.put("dates", dates);
+                            row.put("closes", closes);
+                            row.put("source", series.source());
+                            row.put("freshness", series.freshness().name());
+                            row.put("demo", series.isFixture() && !cfg.fixturesOnly());
+                        }
+                    } finally {
+                        gate.release();
+                    }
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                } catch (RuntimeException e) {
+                    row.put("available", false);
+                    row.put("closes", List.of());
+                    row.put("note", "History lookup failed \u2014 " + e.getMessage());
+                }
+                rows.put(sym, row);
+            }));
+        }
+        for (Thread t : workers) { try { t.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (String sym : symbols) { var r = rows.get(sym); if (r != null) out.add(r); }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("range", range);
+        body.put("sparklines", out);
+        if (world != null) body.put("world", world);
+        ctx.json(body);
+    }
+
     private void history(Context ctx) {
         String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
         String requested = ctx.queryParam("range") == null ? "1y" : ctx.queryParam("range").toLowerCase(Locale.ROOT);
@@ -2898,7 +3036,57 @@ public final class ApiServer {
                 body.source() == null || body.source().isBlank() ? "TICKET" : body.source());
     }
 
-    private Verdict guardrailCheck(TradeService.OpenRequest req, Account acct) {
+    /** The caller's declared per-trade risk capital (AccountRiskContext), or null when unset. */
+    private Long riskCapCents(Context ctx) {
+        try {
+            var rc = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
+            return rc.riskCapitalCents() != null && rc.riskCapitalCents() > 0 ? rc.riskCapitalCents() : null;
+        } catch (RuntimeException e) { return null; }
+    }
+
+    /**
+     * ONE SOURCE OF TRUTH for the per-idea capital budget (review P0): the server computes it,
+     * the header, the ticket reconciliation, the guardrail advisory and the screening engine all
+     * speak these numbers. Basis is the CALLER'S CURRENT account's buying power (cash minus
+     * reserves — paper and simulation accounts are cash-only, so no margin figure can silently
+     * inflate the denominator), capped by the user's declared risk capital when set.
+     */
+    private void riskBudget(Context ctx) {
+        Account acct = currentAccount(ctx);
+        Long cap = riskCapCents(ctx);
+        java.util.List<Map<String, Object>> modes = new ArrayList<>();
+        for (RecommendationEngine.RiskMode m : RecommendationEngine.RiskMode.values()) {
+            long policy = Math.round(acct.buyingPowerCents() * m.defaultRiskPct());
+            long effective = cap != null ? Math.min(policy, cap) : policy;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("mode", m.name().toLowerCase(Locale.ROOT));
+            row.put("label", switch (m) {
+                case CONSERVATIVE -> "Cautious";
+                case BALANCED -> "Standard";
+                case AGGRESSIVE -> "High";
+            });
+            row.put("percent", m.defaultRiskPct());
+            row.put("policyBudgetCents", policy);
+            row.put("effectiveBudgetCents", effective);
+            row.put("capped", cap != null && policy > cap);
+            modes.add(row);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("basisType", "BUYING_POWER");
+        out.put("basisCents", acct.buyingPowerCents());
+        out.put("accountType", acct.type());
+        out.put("explicitCapCents", cap);
+        out.put("capSource", cap != null ? "RISK_CAPITAL" : null);
+        out.put("modes", modes);
+        out.put("note", "Per-idea budget = percent \u00d7 buying power (cash minus reserves; this practice "
+                + "account is cash-only, no margin). Your declared risk capital, when set, caps every mode. "
+                + "The screening engine enforces these same numbers server-side.");
+        out.put("acquireException", "Buy-shares-at-a-discount ideas are capped by buying power instead \u2014 "
+                + "a cash-secured put sets aside the full purchase price by design.");
+        ctx.json(out);
+    }
+
+    private Verdict guardrailCheck(TradeService.OpenRequest req, Account acct, Long riskCapCents) {
         StrategyFamily family = null;
         try { family = StrategyFamily.valueOf(req.strategy()); } catch (IllegalArgumentException ignored) {}
         List<OptionQuote> quotes = new ArrayList<>();
@@ -2996,7 +3184,10 @@ public final class ApiServer {
                     io.liftandshift.strikebench.pricing.PayoffCurve.of(priced, req.qty(), gAdjust);
             if (!curve.maxLossUnbounded() && curve.maxLossCents() > 0) {
                 RecommendationEngine.RiskMode mode = RecommendationEngine.RiskMode.parse(req.riskMode());
+                // The SAME effective budget /api/risk-budget publishes: percent x buying power,
+                // capped by the user's declared risk capital — one source of truth (review P0).
                 long budget = Math.round(acct.buyingPowerCents() * mode.defaultRiskPct());
+                if (riskCapCents != null && riskCapCents > 0) budget = Math.min(budget, riskCapCents);
                 if (curve.maxLossCents() > budget) {
                     List<String> warnings = new ArrayList<>(verdict.warnings());
                     warnings.add("Max loss " + io.liftandshift.strikebench.util.Money.fmt(curve.maxLossCents())
@@ -3012,7 +3203,7 @@ public final class ApiServer {
     private void tradePreview(Context ctx) {
         Account acct = currentAccount(ctx);
         TradeService.OpenRequest req = toOpenRequest(bodyOrNull(ctx, TradeOpenRequest.class), acct);
-        Verdict verdict = guardrailCheck(req, acct);
+        Verdict verdict = guardrailCheck(req, acct, riskCapCents(ctx));
         var preview = trades.preview(req);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("preview", preview);
@@ -3071,7 +3262,7 @@ public final class ApiServer {
                 throw new TradeRejectedException(List.of("Acknowledgment token missing or stale — preview this exact package again"));
             }
         }
-        Verdict verdict = guardrailCheck(req, acct);
+        Verdict verdict = guardrailCheck(req, acct, riskCapCents(ctx));
         if (verdict.blocked()) {
             audit.log(acct.id(), null, "TRADE_REJECTED", "BLOCK",
                     Map.of("symbol", req.symbol(), "strategy", req.strategy(), "reasons", verdict.blockReasons()));

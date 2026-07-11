@@ -953,8 +953,74 @@
     return t;
   }
 
+  /**
+   * Compact price sparkline for selection cards: one polyline, gain/loss colored by the
+   * window's net move, with a pointer/keyboard readout (date · price) sized for reading
+   * glasses (>=14px). Data comes from ONE /api/sparklines batch — this component never
+   * fetches. Unavailable data renders an honest quiet line, never a fabricated squiggle.
+   */
+  function sparkline(spark, opts) {
+    opts = opts || {};
+    var h = opts.height || 40;
+    if (!spark || !spark.available || !spark.closes || spark.closes.length < 2) {
+      return el('div', { class: 'spark spark-empty', style: 'height:' + h + 'px' },
+        el('span', { class: 'muted' }, 'no chart data'));
+    }
+    var closes = spark.closes.map(Number);
+    var dates = spark.dates || [];
+    var W = 300, H = 60;
+    var min = Math.min.apply(null, closes), max = Math.max.apply(null, closes);
+    var span = (max - min) || 1;
+    var pts = closes.map(function (c, i) {
+      var x = closes.length === 1 ? 0 : (i / (closes.length - 1)) * W;
+      var y = H - 6 - ((c - min) / span) * (H - 12);
+      return [x, y];
+    });
+    var up = closes[closes.length - 1] >= closes[0];
+    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, preserveAspectRatio: 'none',
+      class: 'spark-svg ' + (up ? 'spark-up' : 'spark-down'), 'aria-hidden': 'true' });
+    svg.style.height = h + 'px';
+    var line = svgEl('polyline', { points: pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' '),
+      fill: 'none', 'stroke-width': '2.5', 'vector-effect': 'non-scaling-stroke' });
+    var dot = svgEl('circle', { r: '3.5', style: 'display:none', class: 'spark-dot' });
+    svg.appendChild(line); svg.appendChild(dot);
+    var readout = el('div', { class: 'spark-readout', 'aria-live': 'polite' });
+    function fmtDay(d) {
+      try { var dt = new Date(d + 'T12:00:00'); return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
+      catch (e) { return d; }
+    }
+    var base = fmtDay(dates[0] || '') + ' \u2192 ' + fmtDay(dates[dates.length - 1] || '') + ' \u00b7 '
+      + (up ? '+' : '') + (((closes[closes.length - 1] - closes[0]) / closes[0]) * 100).toFixed(1) + '%';
+    readout.textContent = base;
+    function showAt(idx) {
+      idx = Math.max(0, Math.min(closes.length - 1, idx));
+      dot.setAttribute('cx', pts[idx][0].toFixed(1));
+      dot.setAttribute('cy', pts[idx][1].toFixed(1));
+      dot.style.display = '';
+      readout.textContent = fmtDay(dates[idx] || '') + ' \u00b7 $' + closes[idx].toFixed(2);
+    }
+    function clearReadout() { dot.style.display = 'none'; readout.textContent = base; }
+    svg.addEventListener('pointermove', function (ev) {
+      var r = svg.getBoundingClientRect();
+      if (!r.width) return;
+      showAt(Math.round(((ev.clientX - r.left) / r.width) * (closes.length - 1)));
+    });
+    svg.addEventListener('pointerleave', clearReadout);
+    var wrap = el('div', { class: 'spark', style: 'height:' + (h + 20) + 'px' }, svg, readout);
+    // Keyboard exploration when the OWNING card has focus: left/right walk the points.
+    wrap.exploreKey = function (key) {
+      if (key !== 'ArrowLeft' && key !== 'ArrowRight') return false;
+      var cur = wrap._ki === undefined ? closes.length - 1 : wrap._ki;
+      wrap._ki = key === 'ArrowLeft' ? Math.max(0, cur - 1) : Math.min(closes.length - 1, cur + 1);
+      showAt(wrap._ki);
+      return true;
+    };
+    return wrap;
+  }
+
   window.UI = {
     info: info,
+    sparkline: sparkline,
     fmtDate: fmtDate,
     el: el,
     icon: icon,

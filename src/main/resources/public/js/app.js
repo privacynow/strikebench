@@ -49,6 +49,9 @@
       // async, and anything watching data-ready (tests, tooling) must never catch the
       // outgoing screen still claiming to be ready for the new route.
       root.setAttribute('data-ready', 'false');
+      // Keep the header's dollar budget honest: every mutation flushes the GET cache and every
+      // route change lands here, so trades/resets/world switches re-price the label (review P1).
+      if (App.refreshRiskBudget) App.refreshRiskBudget();
 
       var hash = window.location.hash || '#/home';
       var parts = hash.replace(/^#\//, '').split('/').filter(function (p) { return p.length; });
@@ -401,59 +404,79 @@
     // doubling the work is merely wasteful — collapsing does it exactly once, fully.
     if (App._transitionTarget === target && App._transitionP) return App._transitionP;
     App._transitionTarget = target;
-    var from = App.state.world || 'observed';
-    var changed = from !== target;
-    App.state.world = target;
-    App.state.worldGen++;           // discard SSE/stale fills from the world we just left
-    if (changed) { stashLane(from); restoreLane(target); }
-    // A working idea priced in the OTHER market cannot survive the switch: its quotes,
-    // expirations and account lane belong to a different world (review P2).
-    if (App.state.ticket && (App.state.ticket.world || 'observed') !== target) {
-      App.state.ticket = null;
-      if (UI.toast) UI.toast('Working idea cleared — it was priced in the other market');
-    }
-    API.flushCache();               // every cached GET belonged to the old world
-    if (App.Market) { App.Market.quotes = {}; App.Market.seq = 0; App.Market.world = target; App.Market.simTime = null; }
-    refreshWorldBand();
-    refreshScenarioBanner();        // dataset exclusivity is server-enforced; the banner must agree
-    // The universe follows the lane: tape, sector rail, and symbol datalist must show THIS
-    // market's symbols (P0: they silently emptied because the world schema differed).
-    App._transitionP = refreshUniverse({ strict: true }).catch(function (e) {
-      // One quiet retry, then a LOUD failure with a retry affordance — never a silent
-      // render against the previous market's universe.
-      return new Promise(function (res) { setTimeout(res, 1500); })
-        .then(function () { return refreshUniverse({ strict: true }); })
-        .catch(function (e2) {
-          if (UI.toast) UI.toast('Market switch incomplete — the universe did not load. Retrying may help.');
-          var bar = document.getElementById('transition-error');
-          if (!bar) {
-            bar = UI.el('div', { id: 'transition-error', class: 'alert alert-danger', role: 'alert',
-              style: 'margin:8px' },
-              'The market switch could not finish loading (' + ((e2 && e2.message) || 'network error') + '). ',
-              UI.el('button', { class: 'btn btn-sm', onclick: function () {
-                bar.remove(); App.transitionWorld(target);
-              } }, 'Retry'));
-            var appRoot = document.getElementById('app');
-            if (appRoot) appRoot.insertBefore(bar, appRoot.firstChild);
-          }
-          throw e2;
-        });
-    }).then(function () {
-      // Route guard: a symbol page the new market cannot serve is a dead end — land on a
-      // symbol that EXISTS here instead of preserving a route that 404s its data.
-      var m = (window.location.hash || '').match(/^#\/research\/([A-Z0-9._-]+)/i);
-      var syms = (App.state.universe && App.state.universe.active && App.state.universe.active.symbols) || [];
-      if (m && syms.length && syms.indexOf(m[1].toUpperCase()) < 0) {
-        if (UI.toast) UI.toast(m[1].toUpperCase() + ' is not in this market \u2014 showing ' + syms[0]);
-        App.navigate('#/research/' + syms[0]);
-        return;
+    // ATOMIC TRANSITION (review P1 #6): requested vs committed are separate — NOTHING about
+    // the app's state changes until the target lane's universe has actually loaded. A failed
+    // hydration leaves the app honestly in the PREVIOUS market, with a visible retry.
+    App.state.transitionStatus = 'pending';
+    App._transitionP = (async function () {
+      try {
+        // HYDRATE FIRST (no state mutation): the server already knows the caller's active
+        // world, so this GET answers for the TARGET lane.
+        var u;
+        try {
+          u = await API.getFresh('/api/universe');
+        } catch (e1) {
+          await new Promise(function (res) { setTimeout(res, 1500); });
+          u = await API.getFresh('/api/universe'); // one quiet retry, then loud
+        }
+        // COMMIT PHASE — synchronous, no awaits between these mutations:
+        var from = App.state.world || 'observed';
+        var changed = from !== target;
+        App.state.world = target;
+        App.state.worldGen++;         // discard SSE/stale fills from the world we just left
+        if (changed) { stashLane(from); restoreLane(target); }
+        // A working idea priced in the OTHER market cannot survive the switch: its quotes,
+        // expirations and account lane belong to a different world (review P2).
+        if (App.state.ticket && (App.state.ticket.world || 'observed') !== target) {
+          App.state.ticket = null;
+          if (UI.toast) UI.toast('Working idea cleared — it was priced in the other market');
+        }
+        API.flushCache();             // every cached GET belonged to the old world
+        if (App.Market) { App.Market.quotes = {}; App.Market.seq = 0; App.Market.world = target; App.Market.simTime = null; }
+        App.state.universe = u;
+        var dl = document.getElementById('universe-symbols');
+        if (dl) {
+          dl.innerHTML = '';
+          (u.active.symbols || []).forEach(function (sym) { dl.appendChild(UI.el('option', { value: sym })); });
+        }
+        refreshWorldBand();
+        refreshScenarioBanner();      // dataset exclusivity is server-enforced; the banner must agree
+        var oldBar = document.getElementById('transition-error');
+        if (oldBar) oldBar.remove();  // a successful reconciliation clears the failure state
+        App.state.transitionStatus = 'committed';
+        // Decorative surfaces refresh after commit (their failure never fails the transition)
+        try { await refreshTape(); } catch (eT) { /* tape is decorative */ }
+        subscribeMarketStream();      // the stream's default symbol set follows the new universe
+        // Route guard: a symbol page the new market cannot serve is a dead end — land on a
+        // symbol that EXISTS here instead of preserving a route that 404s its data.
+        var m = (window.location.hash || '').match(/^#\/research\/([A-Z0-9._-]+)/i);
+        var syms = (u.active && u.active.symbols) || [];
+        if (m && syms.length && syms.indexOf(m[1].toUpperCase()) < 0) {
+          if (UI.toast) UI.toast(m[1].toUpperCase() + ' is not in this market \u2014 showing ' + syms[0]);
+          App.navigate('#/research/' + syms[0]);
+          return;
+        }
+        return App.render();          // same screen, new market under it — observed never stopped
+      } catch (e2) {
+        // FAILED: no state was committed — the app still (honestly) shows the previous market.
+        App.state.transitionStatus = 'failed';
+        if (UI.toast) UI.toast('Market switch incomplete — the universe did not load. Retrying may help.');
+        var bar = document.getElementById('transition-error');
+        if (!bar) {
+          bar = UI.el('div', { id: 'transition-error', class: 'alert alert-danger', role: 'alert',
+            style: 'margin:8px' },
+            'The market switch could not finish loading (' + ((e2 && e2.message) || 'network error') + '). ',
+            UI.el('button', { class: 'btn btn-sm', onclick: function () {
+              bar.remove(); App.transitionWorld(target).catch(function () { /* banner re-renders */ });
+            } }, 'Retry'));
+          var appRoot = document.getElementById('app');
+          if (appRoot) appRoot.insertBefore(bar, appRoot.firstChild);
+        }
+        throw e2;                     // callers OBSERVE the failure (review P1: never resolve-as-success)
+      } finally {
+        App._transitionTarget = null; App._transitionP = null;
       }
-      return App.render();          // same screen, new market under it — observed never stopped
-    }).then(function () {
-      App._transitionTarget = null; App._transitionP = null;
-    }, function () {
-      App._transitionTarget = null; App._transitionP = null;
-    });
+    })();
     return App._transitionP;
   };
 
@@ -464,7 +487,8 @@
       if (res && res.datasetReset && UI.toast) {
         UI.toast('Back on the real market — your scenario dataset was switched off too');
       }
-      await App.transitionWorld(worldId);
+      // Transition failures reject AND paint the #transition-error banner — no alert on top.
+      await App.transitionWorld(worldId).catch(function () { /* visible in the banner */ });
     } catch (e) { alert(e.message); }
   };
 
@@ -492,23 +516,35 @@
     if (storedRisk === 'learning') { storedRisk = 'conservative';
       try { window.localStorage.setItem('strikebench.riskMode', 'conservative'); } catch (e) { /* ignore */ } }
     if (storedRisk) risk.value = storedRisk;
-    // The control SHOWS ITS CONSEQUENCE (review: "Conservative" alone says nothing): live
-    // dollar budgets from the real buying power, refreshed when the account loads.
-    var RISK_PCT = { conservative: 0.01, balanced: 0.02, aggressive: 0.05 };
-    function labelRiskOptions(bpCents) {
+    // ONE SOURCE OF TRUTH (review P0): the SERVER computes every mode's dollar budget
+    // (percent x buying power, capped by declared risk capital). The header only displays it —
+    // no client percentage arithmetic anywhere. Refreshed via the GET cache: every mutation
+    // flushes the cache, and every render calls this, so the label follows trades, resets,
+    // stock buys and world switches.
+    function labelRiskOptions(rb) {
+      var byMode = {};
+      (rb.modes || []).forEach(function (m) { byMode[m.mode] = m; });
       risk.querySelectorAll('option').forEach(function (o) {
-        var pct = RISK_PCT[o.value];
-        if (!pct) return;
-        var base = o.value === 'conservative' ? 'Cautious' : o.value === 'balanced' ? 'Standard' : 'High';
-        var dollars = bpCents ? ' (~' + UI.fmtMoneyCompact(Math.round(bpCents * pct)) + ')' : '';
-        o.textContent = base + ' \u2014 ' + (pct * 100) + '%/idea' + dollars;
+        var m = byMode[o.value];
+        if (!m) return;
+        // Compact: consequence in the label, mechanics in the tooltip (review: no sentences in a select)
+        o.textContent = m.label + ' \u00b7 ' + UI.fmtMoneyCompact(m.effectiveBudgetCents) + '/idea';
+        o.title = (m.percent * 100) + '% of ' + UI.fmtMoneyCompact(rb.basisCents) + ' buying power'
+          + (m.capped ? ' \u2014 capped by your declared risk capital' : '');
       });
-      if (bpCents) risk.title = 'Max capital one new idea may put at risk, based on '
-        + UI.fmtMoneyCompact(bpCents) + ' buying power. Never changes the math \u2014 the same contract has the same odds in every mode.';
+      risk.title = 'Max capital one new idea may put at risk \u2014 '
+        + 'computed by the server from your current buying power'
+        + (rb.explicitCapCents ? ', capped by your declared risk capital of ' + UI.fmtMoneyCompact(rb.explicitCapCents) : '')
+        + '. Never changes the math: the same contract has the same odds in every mode.';
     }
-    API.get('/api/account').then(function (a) {
-      if (a && a.account) labelRiskOptions(a.account.buyingPowerCents);
-    }).catch(function () { /* base labels stand */ });
+    App.refreshRiskBudget = function () {
+      return API.get('/api/risk-budget').then(function (rb) {
+        if (!rb || !rb.modes) return;
+        App.state.riskBudget = rb; // the ticket reconciliation reads THIS, never recomputes
+        labelRiskOptions(rb);
+      }).catch(function () { /* base labels stand; ticket falls back to server preview data */ });
+    };
+    App.refreshRiskBudget();
     risk.addEventListener('change', function () {
       try { window.localStorage.setItem('strikebench.riskMode', risk.value); } catch (e) { /* ignore */ }
       // A budget change INVALIDATES budget-derived results (review #6): the header must never
@@ -521,21 +557,10 @@
     });
   }
 
-  function applyLevelSideEffects() {
-    // Beginners don't get the aggressive risk mode
-    var risk = document.getElementById('risk-mode');
-    var aggressive = risk.querySelector('option[value="aggressive"]');
-    var beginner = document.body.classList.contains('lvl-beginner');
-    aggressive.hidden = beginner;
-    aggressive.disabled = beginner;
-    if (beginner && risk.value === 'aggressive') {
-      risk.value = 'conservative';
-      // Persist the correction (review #6): silently reverting the dropdown while localStorage
-      // kept 'aggressive' resurrected the old value on the next load.
-      try { window.localStorage.setItem('strikebench.riskMode', 'conservative'); } catch (e) { /* ignore */ }
-      risk.dispatchEvent(new Event('change')); // budget-derived results refresh too
-    }
-  }
+  // EXPERIENCE IS PRESENTATION ONLY (review P0): the risk budget is selectable at BOTH levels —
+  // the label shows the dollar consequence, the info bubble explains, and the per-trade
+  // acknowledgment gates catch oversized positions. No level ever mutates a persisted choice.
+  function applyLevelSideEffects() { /* intentionally empty — kept for the two call sites */ }
 
   /** Full-page sign-in screen shown only when the server requires auth and we're signed out. */
   function renderSignIn(me) {
@@ -608,12 +633,15 @@
     checkServerHealth();
     setInterval(checkServerHealth, 5 * 60 * 1000);
     if (cfg && cfg.scenarioMode) refreshScenarioBanner(); // restore the loud banner across reloads
-    API.get('/api/world').then(function (w) {
+    // worldReady RESOLVES once the boot lane is decided (observed confirmed, or the world
+    // transition committed/failed). Anything that derives market-context state on first paint
+    // (the welcome proof cache, prefetch) awaits this instead of racing /api/world (review P2).
+    App.worldReady = API.get('/api/world').then(function (w) {
       var boot = (w && w.world) || 'observed';
       // BOOT IS A TRANSITION TOO (review P1 #3): reloading inside a simulated world must
       // reconcile the store, universe, lane state, and screens — not just paint the band
       // over observed-market state.
-      if (boot !== 'observed') App.transitionWorld(boot);
+      if (boot !== 'observed') return App.transitionWorld(boot).catch(function () { /* banner shown */ });
     }).catch(function () { /* observed */ });
     App.onEvent('world.tick', function (type, data) {
       if (!data || data.world !== App.state.world) return; // a world we already left — discard
@@ -623,14 +651,14 @@
     // Multi-tab truth: another tab (same user) switched worlds — adopt it here too, band and all.
     App.onEvent('world.selected', function (type, data) {
       if (!data || data.world === undefined) return;
-      App.transitionWorld(data.world); // idempotent: same-target concurrent calls collapse
+      App.transitionWorld(data.world).catch(function () { /* banner shown */ }); // idempotent: same-target calls collapse
     });
     // Belt-and-braces for tabs whose SSE dropped: re-check the server's world on return.
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState !== 'visible') return;
       API.getFresh('/api/world').then(function (w) {
         var srv = (w && w.world) || 'observed';
-        if (srv !== App.state.world) App.transitionWorld(srv);
+        if (srv !== App.state.world) App.transitionWorld(srv).catch(function () { /* banner shown */ });
       }).catch(function () { /* offline — next visit retries */ });
     });
     refreshUniverse();

@@ -151,12 +151,17 @@ class RecommendationEngineTest {
     }
 
     @Test
-    void bullishLearningModeReturnsOnlyBeginnerDefinedRiskStrategies() {
+    void bullishConservativeReturnsDefinedRiskCandidatesWithFullNarratives() {
+        // 'learning' is API-compat only: it maps to CONSERVATIVE at the boundary and produces
+        // the IDENTICAL result — risk mode is a capital budget, never a catalog gate (review P0).
         RecommendationEngine.Result result = engine.recommend(req("AAPL", "bullish", "month", "learning"), BP);
+        RecommendationEngine.Result conservative = engine.recommend(req("AAPL", "bullish", "month", "conservative"), BP);
+        assertThat(result.riskMode()).isEqualTo("CONSERVATIVE");
+        assertThat(result.riskBudgetCents()).isEqualTo(conservative.riskBudgetCents());
+        assertThat(result.candidates()).extracting(Candidate::strategy)
+                .containsExactlyElementsOf(conservative.candidates().stream().map(Candidate::strategy).toList());
         assertThat(result.candidates()).isNotEmpty();
-        Set<String> allowed = Set.of("LONG_CALL", "DEBIT_CALL_SPREAD", "COVERED_CALL");
         for (Candidate c : result.candidates()) {
-            assertThat(allowed).contains(c.strategy());
             StrategyFamily family = StrategyFamily.valueOf(c.strategy());
             assertThat(family.definedRisk()).isTrue();
             assertThat(c.maxLossCents()).isPositive().isLessThanOrEqualTo(result.riskBudgetCents());
@@ -167,7 +172,7 @@ class RecommendationEngineTest {
             assertThat(c.wouldInvalidate()).isNotBlank();
             assertThat(c.beginnerExplanation()).isNotBlank();
             assertThat(c.confidence()).isBetween(0.0, 1.0);
-            // learning default risk budget = 1% of $100k = $1,000
+            // conservative risk budget = 1% of $100k = $1,000
             assertThat(result.riskBudgetCents()).isEqualTo(100_000L);
         }
         assertThat(result.disclaimer()).containsIgnoringCase("not financial advice");
@@ -186,10 +191,19 @@ class RecommendationEngineTest {
     }
 
     @Test
-    void learningModeNeverSuggestsCreditSpreadsEvenWhenNeutral() {
-        RecommendationEngine.Result result = engine.recommend(req("AAPL", "neutral", "month", "learning"), BP);
-        assertThat(result.candidates()).extracting(Candidate::strategy)
-                .noneMatch(s -> s.contains("CREDIT") || s.equals("IRON_CONDOR") || s.equals("IRON_BUTTERFLY"));
+    void everyRiskModeSeesTheSameDefinedRiskCatalog() {
+        // Risk modes differ ONLY by budget: the family sets offered for the same view must be
+        // identical across all three (sizing/qty may differ; naked structures stay blocked).
+        RecommendationEngine.Result cons = engine.recommend(req("AAPL", "neutral", "month", "conservative"), BP);
+        RecommendationEngine.Result aggr = engine.recommend(req("AAPL", "neutral", "month", "aggressive"), BP);
+        Set<String> consFams = new java.util.HashSet<>();
+        cons.candidates().forEach(c -> consFams.add(c.strategy()));
+        cons.rejected().forEach(r -> consFams.add(r.strategy()));
+        Set<String> aggrFams = new java.util.HashSet<>();
+        aggr.candidates().forEach(c -> aggrFams.add(c.strategy()));
+        aggr.rejected().forEach(r -> aggrFams.add(r.strategy()));
+        assertThat(consFams).isEqualTo(aggrFams);
+        assertThat(cons.candidates()).extracting(Candidate::strategy).noneMatch(f -> StrategyFamily.valueOf(f).blockedByDefault());
     }
 
     @Test
@@ -263,14 +277,18 @@ class RecommendationEngineTest {
     }
 
     @Test
-    void candidatesAreRankedByScoreDescending() {
+    void candidatesAreRankedByScoreDescendingAndComplete() {
+        // RANKING TRUTH: the engine returns the COMPLETE score-sorted list — presentation may
+        // summarize with diverse representatives, but the engine never hides a ranked candidate.
         RecommendationEngine.Result result = engine.recommend(req("AAPL", "neutral", "month", "aggressive"), BP);
         List<Candidate> c = result.candidates();
         assertThat(c.size()).isGreaterThanOrEqualTo(2);
         for (int i = 1; i < c.size(); i++) {
             assertThat(c.get(i - 1).score()).isGreaterThanOrEqualTo(c.get(i).score());
         }
-        assertThat(c).hasSizeLessThanOrEqualTo(5);
+        // Every defined-risk family that fits the thesis and passed screens is present — no
+        // top-N cap, no structural-group trim (a neutral month view offers many structures).
+        assertThat(c.size()).isGreaterThanOrEqualTo(5);
     }
 
     @Test

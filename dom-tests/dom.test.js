@@ -96,15 +96,19 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await go('#/welcome');
   await page.waitForSelector('#welcome-hero');
   assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'home');
-  // The brand mark ALWAYS brings the welcome back — skipping it once is not goodbye
-  await go('#/home');
-  await page.waitForSelector('.tile-row .tile');
+  // BRAND RETURNS TO THE OPERATIONAL DESK (review P5): from any screen the mark lands on
+  // Home, never a surprise tour; the tour keeps its own quiet entry at the page bottom.
+  await go('#/research/AAPL');
+  await page.waitForSelector('.quote-hero');
   await page.click('.brand');
-  await page.waitForSelector('#welcome-hero');
-  assert.ok(await page.locator('.brand .brand-mark').count(), 'the SVG mark renders in the header');
-  await go('#/home');
   await page.waitForSelector('.tile-row .tile');
-  await page.click('#home-tour-link'); // the hero band CTA is the second way back
+  assert.equal(await page.evaluate(() => window.location.hash), '#/home', 'brand goes to the desk');
+  assert.ok(await page.locator('.brand .brand-mark').count(), 'the SVG mark renders in the header');
+  // The tour stays reachable — demoted to a quiet About link, not a standing command
+  assert.ok(await page.locator('#home-tour-link').isVisible(), 'quiet tour entry exists');
+  assert.equal(await page.locator('.home-hero-ctas #home-tour-link').count(), 0,
+    'the hero owns ONE primary action; the tour left the hero');
+  await page.click('#home-tour-link');
   await page.waitForSelector('#welcome-hero');
   // Home: sector pulse chips dig into the explorer
   await go('#/home');
@@ -317,7 +321,7 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
   await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1')); // dashboard, not the tour
   await go('#/home');
   await page.waitForSelector('#continue-row .sym-chip');
-  assert.match(await page.textContent('#continue-row'), /Research QQQ/);
+  assert.match(await page.textContent('#continue-row'), /Resume: QQQ analysis/);
   await page.click('#continue-row .sym-chip[data-continue="research"]');
   await page.waitForSelector('.quote-hero');
   assert.equal(await page.evaluate(() => window.location.hash), '#/research/QQQ');
@@ -1272,18 +1276,50 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   // EVERY sector symbol is an actionable tile, with or without a quote
   const tiles = await page.locator('#sector-grid .sector-tile').count();
   assert.ok(tiles >= 10, 'all TECH symbols render as tiles, got ' + tiles);
-  assert.ok(await page.locator('#sector-grid .tile-nodata button:has-text("Research")').count() >= 1,
-    'quote-less tiles still offer Research');
-  // Tap a tile -> the symbol panel opens in ONE predictable slot above the grid
-  await page.locator('#sector-grid .sector-tile:has-text("AAPL")').first().click();
+  // ONE selectable card per symbol (review): no per-card Research/Ideas buttons anywhere —
+  // the card itself is the single keyboard-operable control, the preview owns the commands.
+  assert.equal(await page.locator('#sector-grid .sector-tile button').count(), 0,
+    'cards carry no repeated action buttons');
+  assert.ok(await page.locator('#explorer-hint:has-text("Choose a stock")').count(),
+    'one instruction replaces dozens of buttons');
+  // Shared range selector + sparklines: one batch, real information on the cards
+  assert.ok(await page.locator('#spark-range .pill[data-range="3m"]').count(), 'shared 1M/3M/YTD selector');
+  await page.waitForSelector('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg', { timeout: 15000 });
+  assert.ok(await page.locator('#sector-grid .sym-card .spark-svg').count() >= 1, 'sparklines on cards with history');
+  // Cards are accessible: role + tabindex + aria-expanded
+  const cardA11y = await page.evaluate(() => {
+    const c = document.querySelector('#sector-grid .sym-card[data-sym="AAPL"]');
+    return { role: c.getAttribute('role'), tab: c.getAttribute('tabindex'), exp: c.getAttribute('aria-expanded') };
+  });
+  assert.ok(cardA11y.role && cardA11y.tab === '0' && cardA11y.exp === 'false', 'card is keyboard-operable');
+  // Tap a card -> the symbol panel opens in ONE predictable slot above the grid
+  await page.locator('#sector-grid .sym-card[data-sym="AAPL"]').first().click();
   await page.waitForSelector('#explorer-focus .symbol-panel .range-pills .pill');
   await page.waitForSelector('#explorer-focus .symbol-panel .chart-wrap svg.chart', { timeout: 15000 });
   assert.ok(await page.locator('#explorer-focus .symbol-panel .sp-news .status-item').count() >= 1,
     'headlines inside the focus panel');
   assert.ok(await page.locator('#sector-grid .sector-tile.open').count() === 1, 'source tile highlighted');
-  // Close: the panel's own X, or tapping the tile again
+  assert.equal(await page.getAttribute('#sector-grid .sym-card[data-sym="AAPL"]', 'aria-expanded'), 'true');
+  // The preview owns the two contextual commands, in the standard vocabulary
+  assert.ok(await page.locator('#explorer-focus button:has-text("Open full analysis")').count(), 'full analysis command');
+  const stratBtn = page.locator('#explorer-focus #sp-strategies');
+  assert.ok(await stratBtn.count(), 'Find strategies command');
+  await page.waitForFunction(() => {
+    const b = document.querySelector('#explorer-focus #sp-strategies');
+    return b && !b.disabled;
+  }, { timeout: 15000 }); // AAPL has a live quote + options -> handoff enabled
+  // Close: the panel's own X, or tapping the card again
   await page.click('#explorer-focus .focus-close');
   assert.equal(await page.locator('#explorer-focus .symbol-panel').count(), 0, 'X closes the panel');
+  assert.equal(await page.getAttribute('#sector-grid .sym-card[data-sym="AAPL"]', 'aria-expanded'), 'false');
+  // A quote-less card previews too, but its strategy handoff is HONESTLY disabled
+  await page.locator('#sector-grid .tile-nodata').first().click();
+  await page.waitForSelector('#explorer-focus #sp-strategies');
+  await page.waitForFunction(() => {
+    const b = document.querySelector('#explorer-focus #sp-strategies');
+    return b && b.disabled && /quote|options/i.test(b.title);
+  }, { timeout: 15000 });
+  await page.click('#explorer-focus .focus-close');
   assert.ok(await page.locator('#set-universe-btn').count(), 'one-click make-this-my-universe');
   await page.click('#sector-explorer .btn-row button:has-text("Scout this sector")');
   await page.waitForSelector('#auto-universe');
@@ -1395,16 +1431,21 @@ test('experience ladder reshapes the UI per level', async () => {
   await page.click('.candidate .term');
   assert.ok(await page.locator('#glossary-popover').isVisible(), 'glossary popover opens');
 
-  // Learning: filters expandable exposes ONLY the two plain limits (money + odds)
+  // PRESENTATION-ONLY LEVELS (review P0): beginner filters stay behind the expandable
+  // (progressive disclosure) but ALL FIVE limits exist there — nothing is unreachable.
   assert.ok(await page.locator('#rec-filters .xp-head').count(), 'beginner filters live behind an expandable');
   await page.click('#rec-filters .xp-head');
   assert.ok(await page.locator('#rec-f-maxloss').isVisible(), 'max-loss limit at beginner');
   assert.ok(await page.locator('#rec-f-pop').isVisible(), 'POP limit at beginner');
-  assert.equal(await page.locator('#rec-f-yield').count(), 0, 'yield/assignment filters hidden at beginner');
-  // Learning: backtest strategy menu is the beginner subset
+  assert.ok(await page.locator('#rec-f-yield').isVisible(), 'income limit reachable at beginner too');
+  assert.ok(await page.locator('#rec-f-assign').isVisible(), 'assignment limit reachable at beginner too');
+  // 0DTE is a visible, explained choice at beginner — not a hidden capability
+  assert.ok(await page.locator('#rec-horizon option[value="0DTE"]').count(), '0DTE horizon exists at beginner');
+  // Beginner backtest menu is the FULL catalog (foundational structures lead each group)
   await go('#/backtest');
-  assert.equal(await page.locator('#bt-strategy option[value="IRON_CONDOR"]').count(), 0, 'condor locked at beginner');
+  assert.ok(await page.locator('#bt-strategy option[value="IRON_CONDOR"]').count(), 'condor reachable at beginner');
   assert.ok(await page.locator('#bt-strategy option[value="COVERED_CALL"]').count(), 'covered call available at beginner');
+  assert.ok(await page.locator('#bt-engine').count(), 'both engines selectable at beginner');
 
   // Pro: dense body class, explainers gone, cards show metric chips
   await page.click('#level-switch button[data-level="expert"]');
@@ -1422,7 +1463,16 @@ test('experience ladder reshapes the UI per level', async () => {
   assert.match(filterText, /Worst case/);
   assert.doesNotMatch(filterText, /Min POP|Max assign %|% of account/i); // the old jargon is gone
   await go('#/backtest');
-  assert.ok(await page.locator('#bt-strategy option[value="IRON_BUTTERFLY"]').count(), 'full strategy menu at Pro');
+  assert.ok(await page.locator('#bt-strategy option[value="IRON_BUTTERFLY"]').count(), 'full strategy menu at Expert');
+  // The identical menu at both levels (one catalog): compare option sets
+  const expertOpts = await page.evaluate(() => Array.from(document.querySelectorAll('#bt-strategy option')).map(o => o.value).join(','));
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.waitForSelector('#app[data-ready="true"]');
+  await go('#/backtest');
+  const begOpts = await page.evaluate(() => Array.from(document.querySelectorAll('#bt-strategy option')).map(o => o.value).join(','));
+  assert.equal(begOpts, expertOpts, 'one strategy catalog at both levels');
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForSelector('#app[data-ready="true"]');
 
   // Exactly two levels exist — the middle tier is gone for good
   assert.equal(await page.locator('#level-switch button').count(), 2, 'Beginner and Expert only');
@@ -1865,37 +1915,46 @@ test('cache: read-only compute POST (/api/evaluate) keeps the GET cache warm', a
   assert.equal(r.added, 0, '/api/config was refetched after /api/evaluate — the cache was wrongly flushed');
 });
 
-test('level-leak: hidden Expert filters + 0DTE do not reach the engine at Beginner', async () => {
-  // Set Expert-only filters + 0DTE in persisted state, then run ideas AS BEGINNER. The engine
-  // request must NOT carry the hidden constraints (invisible rejections were the bug).
-  await page.evaluate(() => {
+test('cross-level invariance: identical persisted inputs produce the identical engine request', async () => {
+  // PRESENTATION-ONLY LEVELS (review P0): every control is visible at both levels, so the
+  // exact same persisted state must produce byte-identical requests as Beginner and Expert.
+  // (The old test pinned Beginner request SANITIZATION — that contract is retired: nothing
+  // is hidden anymore, so nothing needs to be dropped.)
+  const seedState = () => page.evaluate(() => {
     App.state.filterState = { rec: { minPop: '', maxAssign: '80', minYield: '5', maxCost: '300' } };
     App.state.discoverForm = { goal: 'DIRECTIONAL', source: 'single', symbol: 'AAPL', horizon: '0DTE', allow0: true };
+    App.state.recommendResults = null;
   });
+  async function captureRequest(level) {
+    await seedState();
+    await page.click(`#level-switch button[data-level="${level}"]`);
+    await page.waitForSelector('#app[data-ready="true"]');
+    let body = null;
+    await page.route('**/api/recommend', route => {
+      try { body = JSON.parse(route.request().postData() || '{}'); } catch (e) {}
+      route.continue();
+    });
+    await go('#/recommend/manual');
+    await page.fill('#rec-symbol', 'AAPL');
+    await page.click('#rec-go');
+    await page.waitForTimeout(1200);
+    await page.unroute('**/api/recommend');
+    return body;
+  }
+  const asBeginner = await captureRequest('beginner');
+  const asExpert = await captureRequest('expert');
+  assert.ok(asBeginner && asExpert, 'both requests captured');
+  assert.deepEqual(asBeginner, asExpert, 'identical inputs => identical request at both levels');
+  // And the visible controls were honored, not dropped:
+  assert.equal(asBeginner.horizon, '0DTE', 'persisted 0DTE horizon honored');
+  assert.equal(asBeginner.allow0dte, true, 'persisted allow0dte honored');
+  const f = asBeginner.filters || {};
+  assert.equal(f.maxAssignmentProb, 0.8, 'assignment limit honored at beginner');
+  assert.equal(f.minAnnualizedYieldPct, 5, 'yield limit honored at beginner');
+  assert.equal(f.maxCostCents, 30000, 'cost limit honored at beginner');
+  await page.evaluate(() => { App.state.filterState = {}; App.state.discoverForm = null; App.state.recommendResults = null; });
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
-
-  let body = null;
-  await page.route('**/api/recommend', route => {
-    try { body = JSON.parse(route.request().postData() || '{}'); } catch (e) {}
-    route.continue();
-  });
-  await go('#/recommend/manual');
-  await page.fill('#rec-symbol', 'AAPL');
-  await page.click('#rec-go');
-  await page.waitForFunction(() => window.__lastRec !== undefined || true); // let the request fire
-  await page.waitForTimeout(1200);
-  await page.unroute('**/api/recommend');
-
-  assert.ok(body, 'recommend request captured');
-  // Hidden Expert filters must be absent; 0DTE must be sanitized off for Beginner.
-  const f = body.filters || {};
-  assert.ok(!('maxAssignmentProb' in f), 'hidden assignment filter must not leak to Beginner');
-  assert.ok(!('minAnnualizedYieldPct' in f), 'hidden yield filter must not leak to Beginner');
-  assert.ok(!('maxCostCents' in f), 'hidden cost filter must not leak to Beginner');
-  assert.equal(body.allow0dte, false, '0DTE must be off at Beginner even if persisted from Expert');
-  assert.notEqual(body.horizon, '0DTE', 'a persisted 0DTE horizon must be sanitized at Beginner');
-  await page.evaluate(() => { App.state.filterState = {}; App.state.discoverForm = null; });
 });
 
 test('undefined-risk framing: synthetic short is BLOCKED, synthetic long is not', async () => {
@@ -2177,6 +2236,35 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
     return g ? Math.round(g.getBoundingClientRect().bottom) : 9999;
   });
   assert.ok(ovBottom <= 730, 'Data Overview fits a 720px viewport (bottom=' + ovBottom + ')');
+  // VERTICAL SYMMETRY (review): each desktop row's paired cards share top AND bottom edges
+  // within 2px — presence alone let the grid pass while looking ragged.
+  const dcGeo = await page.evaluate(() => {
+    const cards = Array.from(document.querySelectorAll('.dc-grid > .card'))
+      .map(c => { const r = c.getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; });
+    return cards;
+  });
+  assert.equal(dcGeo.length, 4, 'four overview cards');
+  for (const [a, b] of [[0, 1], [2, 3]]) {
+    assert.ok(Math.abs(dcGeo[a].top - dcGeo[b].top) <= 2,
+      `row cards share tops: ${dcGeo[a].top} vs ${dcGeo[b].top}`);
+    assert.ok(Math.abs(dcGeo[a].bottom - dcGeo[b].bottom) <= 2,
+      `row cards share bottoms: ${dcGeo[a].bottom} vs ${dcGeo[b].bottom}`);
+  }
+  // The provider-health summary chip's TEXT matches its color class (worst-of, review):
+  const chipTruth = await page.evaluate(() => {
+    const out = [];
+    document.querySelectorAll('#dc-health .chip-row .badge').forEach(b => {
+      out.push({ text: b.textContent.trim(), danger: b.classList.contains('badge-danger'),
+        warn: b.classList.contains('badge-warn') });
+    });
+    return out;
+  });
+  for (const c of chipTruth) {
+    if (c.danger) assert.match(c.text, /ERROR|COOLDOWN/, 'red chip must NAME the failure, got ' + c.text);
+    if (c.warn) assert.match(c.text, /EMPTY|STALE/, 'amber chip must name the degradation, got ' + c.text);
+  }
+  // Expanded detail lives BELOW the grid (drawer), never inside a row card
+  assert.ok(await page.locator('#dc-detail .xp-head').count() >= 1, 'detail drawer below the 2x2');
   // Home: exactly ONE 'Find an idea' doorway (review #9) and no marketing hero.
   await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1')); // dashboard, not the tour
   await go('#/home');
@@ -2185,6 +2273,8 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
   const findCount = (homeText.match(/Find an idea/g) || []).length;
   assert.ok(findCount <= 1, 'one contextual Find-an-idea, not ' + findCount);
   assert.ok(await page.locator('#next-up').count(), 'one Next up area (journey + continuity merged)');
-  assert.ok(await page.locator('#command-bar .btn').count() >= 5, 'compact command bar');
+  const cbText = await page.textContent('#command-bar');
+  assert.ok(await page.locator('#command-bar .btn').count() === 3, 'command bar keeps only non-nav tools');
+  assert.doesNotMatch(cbText, /Research|Ideas/, 'nav destinations are not repeated as commands');
   await page.setViewportSize({ width: 1280, height: 900 });
 });

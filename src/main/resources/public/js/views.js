@@ -84,9 +84,15 @@
       // The proof cache carries its CONTEXT (review P2 #7): a candidate produced in a
       // simulated world, under a scenario dataset, or a week ago must not flash as
       // "LIVE FROM THE ENGINE" on an observed page.
+      // BOOT-LANE RACE FIX (review P1 #7): wait for the boot world determination before
+      // building the context — a reload inside a simulated world must not save a simulated
+      // candidate under the observed cache key. Keyed by the immutable dataset ID, not name.
+      var proofToken = App.navToken;
+      if (App.worldReady) { try { await App.worldReady; } catch (e) { /* lane decided anyway */ } }
+      if (!App.alive(proofToken)) return; // navigated away while the lane was deciding
       var proofCtx = {
         world: App.state.world || 'observed',
-        scenario: (App.config && App.config.scenarioMode && App.config.activeDatasetName) || 'observed',
+        scenario: (App.config && App.config.scenarioMode && App.config.activeDataset) || 'observed',
         riskMode: 'conservative'
       };
       var cached = null;
@@ -235,17 +241,14 @@
       ? el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/place'); } },
           'Place ' + t0.symbol + ' \u2192')
       : el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find an idea');
+    // The hero owns THE single primary next action (review P5): the tour demoted to a
+    // quiet entry at the bottom of the page — onboarding is not a permanent command.
     root.appendChild(heroBlock('dashboard', {
       eyebrow: ['YOUR PRACTICE DESK ', heroMode],
       title: el('h1', { class: 'home-hero-title' }, 'Your ', el('span', { class: 'grad' }, 'desk'), '.'),
       sub: heroSub,
       aside: statsAnchor,
-      ctas: [heroCta,
-        el('button', {
-          class: 'btn btn-ghost', id: 'home-tour-link',
-          title: 'The opening page: what StrikeBench is, how it works, the live engine demo',
-          onclick: function () { App.navigate('#/home/tour'); }
-        }, 'Take the tour')]
+      ctas: [heroCta]
     }));
 
     // First contact: a fresh account that hasn't dismissed the welcome gets the opening
@@ -312,14 +315,26 @@
         return;
       }
       rows.forEach(function (q) {
+        var sparkSlot = el('div', { class: 'spark-slot' });
         tiles.appendChild(pressable(el('div', {
-          class: 'tile', onclick: function () { App.navigate('#/research/' + q.symbol); }
+          class: 'tile sym-card', 'data-sym': q.symbol,
+          onclick: function () { App.navigate('#/research/' + q.symbol); }
         },
           el('div', { class: 't-sym' }, q.symbol, ' ', badge(q.freshness)),
           el('div', { class: 't-px' }, fmtNum(q.last)),
           UI.delta(q.last, q.prevClose),
-          el('div', { class: 't-nm' }, q.description || '')), 'Research ' + q.symbol));
+          el('div', { class: 't-nm' }, q.description || ''),
+          sparkSlot), 'Research ' + q.symbol));
       });
+      // The SAME sparkline card as Research, ONE batch call; Home cards go straight to the
+      // full analysis (no preview layer here — review P5.8).
+      try {
+        var sp = await API.get('/api/sparklines?symbols=' + rows.map(function (q) { return q.symbol; }).join(',') + '&range=3m');
+        (sp.sparklines || []).forEach(function (row) {
+          var slot = tiles.querySelector('.sym-card[data-sym="' + row.symbol + '"] .spark-slot');
+          if (slot) { slot.innerHTML = ''; slot.appendChild(UI.sparkline(row, { height: 30 })); }
+        });
+      } catch (e) { /* quotes are the load-bearing data */ }
     })();
 
     // Open positions (review #8): a 256px empty card was wasted real estate — with no trades
@@ -383,10 +398,11 @@
       }
       var sym = (App.state.lastRecommendSymbol || '').toUpperCase();
       if (sym) {
+        // Context, not command duplication (review P5): these chips RESUME where you were.
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'research',
-          onclick: function () { App.navigate('#/research/' + sym); } }, 'Research ' + sym + ' →'));
+          onclick: function () { App.navigate('#/research/' + sym); } }, 'Resume: ' + sym + ' analysis →'));
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'ideas',
-          onclick: function () { App.navigate('#/trade/discover'); } }, 'Ideas for ' + sym + ' →'));
+          onclick: function () { App.navigate('#/trade/discover'); } }, 'Resume: strategies for ' + sym + ' →'));
       }
       if (chips.length) {
         card.appendChild(el('div', { class: 'chip-row', id: 'continue-row' }, chips));
@@ -399,16 +415,22 @@
       colR.appendChild(card);
     })();
 
-    // Command bar (review #9): five stacked action cards → one compact row of commands.
+    // Command bar (review P5): ONLY shortcuts the primary nav does not already carry —
+    // Research and Ideas live in the top nav and the hero; repeating them here was noise.
     colR.appendChild(el('div', { class: 'card card-slim', id: 'command-bar' },
       el('div', { class: 'btn-row', style: 'flex-wrap:wrap' },
-        [['Research', '#/research', 'scope'], ['Ideas', '#/trade/discover', 'compass'],
-         ['Builder', '#/trade/shape', 'target'], ['Backtest', '#/trade/verify', 'chart'],
+        [['Builder', '#/trade/shape', 'target'], ['Backtest', '#/trade/verify', 'chart'],
          ['Simulate', '#/data/simulation', 'flask']].map(function (a) {
           return el('button', { class: 'btn btn-sm btn-secondary', title: a[0],
             onclick: function () { App.navigate(a[1]); } }, icon(a[2], 14), ' ', a[0]);
         }))));
     colR.appendChild(pulseAnchor); // sector pulse LAST: on phones the next action leads
+    // The tour's quiet home: a muted line at the very bottom (review P5 — onboarding is
+    // reachable, never a standing primary action). Same id so muscle memory + tests hold.
+    root.appendChild(el('p', { class: 'muted small home-about-row' },
+      el('a', { href: '#/home/tour', id: 'home-tour-link',
+        title: 'The opening page: what StrikeBench is, how it works, the live engine demo' },
+        'About StrikeBench \u00b7 take the tour')));
 
     // Wait for the fills so data-ready means READY (tests and users agree on that).
     await Promise.all([marketsFill, tradesFill]);
@@ -638,7 +660,7 @@
             App.state.ideasPrefill = { symbol: symbol }; // lands in the Discover form even over a saved symbol
             App.navigate('#/recommend/manual');
           }
-        }, 'Get ideas for ' + symbol) : null),
+        }, 'Find strategies') : null),
       el('div', { class: 'nm', style: 'margin-top:2px' }, q.description || ''),
       el('div', { class: 'chip-row' },
         chip('Bid/Ask', fmtNum(q.bid) + ' / ' + fmtNum(q.ask)),
@@ -1078,12 +1100,13 @@
     (async function fillQuote() {
       try {
         var q = ((await API.get('/api/quotes?symbols=' + symbol)).quotes || [])[0];
+        if (panel._gateStrategies) panel._gateStrategies(q || null);
         if (!q) return;
         qrow.appendChild(el('span', { class: 'sp-px' }, fmtNum(q.last)));
         qrow.appendChild(UI.delta(q.last, q.prevClose));
         if (q.freshness) qrow.appendChild(badge(q.freshness));
         if (q.description) qrow.appendChild(el('span', { class: 'muted sp-nm' }, q.description));
-      } catch (e) { /* chart + news still render */ }
+      } catch (e) { if (panel._gateStrategies) panel._gateStrategies(null); /* chart + news still render */ }
     })();
     panel.appendChild(UI.rangeChart({ initial: opts.range || '6m', fetch: historyFetch(symbol) }));
     panel.appendChild(comingUp(symbol, true));
@@ -1107,14 +1130,30 @@
       }
     })();
     if (!opts.noActions) {
+      // ONE consistent vocabulary product-wide (review): 'Open full analysis' goes deep,
+      // 'Find strategies' hands off to screening. Strategy handoff is GATED on a live,
+      // optionable quote — no dead-end construction without a price (review gap #8).
+      var stratBtn = el('button', {
+        class: 'btn btn-sm btn-secondary', id: 'sp-strategies', disabled: '',
+        title: 'Checking for a live quote\u2026',
+        onclick: function () {
+          App.state.ideasPrefill = { symbol: symbol };
+          App.navigate('#/recommend/manual');
+        }
+      }, 'Find strategies');
+      panel._gateStrategies = function (q) {
+        if (q && q.optionable !== false) {
+          stratBtn.removeAttribute('disabled');
+          stratBtn.title = 'Screen option strategies on ' + symbol;
+        } else {
+          stratBtn.setAttribute('disabled', '');
+          stratBtn.title = q ? symbol + ' has no listed options \u2014 strategies need an option chain'
+                             : 'No live quote for ' + symbol + ' right now \u2014 strategy screening needs a price';
+        }
+      };
       panel.appendChild(el('div', { class: 'btn-row' },
-        el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/' + symbol); } }, 'Full research'),
-        el('button', {
-          class: 'btn btn-sm btn-secondary', onclick: function () {
-            App.state.ideasPrefill = { symbol: symbol };
-            App.navigate('#/recommend/manual');
-          }
-        }, 'Trade ideas')));
+        el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/' + symbol); } }, 'Open full analysis'),
+        stratBtn));
     }
     return panel;
   }
@@ -1137,11 +1176,53 @@
     var grid = el('div', { class: 'tile-row', id: 'sector-grid' });
     var head = el('div', { class: 'btn-row', style: 'margin-top:0' });
     var focus = el('div', { id: 'explorer-focus' });
+    // ONE shared range selector for every card's sparkline (never per-card controls) + one
+    // plain instruction instead of dozens of repeated buttons (review).
+    App.state.explorerRange = App.state.explorerRange || '3m';
+    var RANGES = [{ k: '1m', l: '1M' }, { k: '3m', l: '3M' }, { k: 'ytd', l: 'YTD' }];
+    var rangeRow = el('div', { class: 'range-pills', id: 'spark-range', role: 'group', 'aria-label': 'Sparkline window' },
+      RANGES.map(function (r) {
+        return el('button', {
+          class: 'pill' + (App.state.explorerRange === r.k ? ' active' : ''), type: 'button', 'data-range': r.k,
+          onclick: function () {
+            App.state.explorerRange = r.k;
+            rangeRow.querySelectorAll('.pill').forEach(function (b) {
+              b.classList.toggle('active', b.getAttribute('data-range') === r.k);
+            });
+            fillSparklines(null, loadSeq); // same sector, new window — cards update in place
+          }
+        }, r.l);
+      }));
+    var instruction = el('p', { class: 'muted explorer-hint', id: 'explorer-hint' },
+      'Choose a stock to preview its chart, events, and headlines.');
     var card = el('div', { class: 'card', id: 'sector-explorer' },
-      UI.cardHeader('Explore by sector'), rail, head, focus, grid,
-      explain('Live quotes per sector. Tap a symbol for its chart and headlines right here, or point the scout at a whole sector. '
+      UI.cardHeader('Explore by sector'), rail, head, instruction, rangeRow, focus, grid,
+      explain('Live quotes per sector. Tap a card for its chart and headlines right here, or point the scout at a whole sector. '
         + (u.note ? u.note : '')));
     root.appendChild(card);
+
+    var currentSector = null;
+    var sparkSeq = 0; // supersede: a slow sparkline batch must not paint over a newer one
+    async function fillSparklines(sector, seqAtCall) {
+      sector = sector || currentSector;
+      if (!sector) return;
+      var mySpark = ++sparkSeq;
+      try {
+        var sp = await API.get('/api/sparklines?symbols=' + sector.symbols.join(',')
+          + '&range=' + App.state.explorerRange);
+        if (mySpark !== sparkSeq || seqAtCall !== loadSeq || !grid.isConnected) return;
+        (sp.sparklines || []).forEach(function (row) {
+          var t2 = grid.querySelector('.sym-card[data-sym="' + row.symbol + '"] .spark-slot');
+          if (!t2) return;
+          t2.innerHTML = '';
+          t2.appendChild(UI.sparkline(row, { height: 36 }));
+          // Evidence badge: where this line actually comes from (never silently 'real')
+          var ev = row.demo ? 'DEMO' : row.freshness === 'SIMULATED' ? 'SIMULATED'
+            : row.freshness === 'FIXTURE' ? 'DEMO' : row.available ? 'OBSERVED' : null;
+          if (ev) t2.appendChild(el('span', { class: 'badge badge-dim spark-ev' }, ev));
+        });
+      } catch (e) { /* cards stand without sparklines — quotes are the load-bearing data */ }
+    }
 
     var loadSeq = 0; // supersede token: a slow quote batch for a PREVIOUS sector must not paint over the current one
     async function load() {
@@ -1152,6 +1233,7 @@
       grid.innerHTML = '';
       grid.appendChild(UI.spinner('Loading sector quotes…'));
       var sector = u.sectors.find(function (s) { return s.key === selectedKey; }) || u.sectors[0];
+      currentSector = sector;
       head.appendChild(el('b', {}, sector.label));
       head.appendChild(el('span', { class: 'muted' }, sector.symbols.length + ' symbols'));
       head.appendChild(el('span', { class: 'spacer' }));
@@ -1194,8 +1276,12 @@
           var was = focus.getAttribute('data-symbol') === symq;
           focus.innerHTML = '';
           focus.removeAttribute('data-symbol');
-          grid.querySelectorAll('.sector-tile.open').forEach(function (t) { t.classList.remove('open'); });
+          grid.querySelectorAll('.sector-tile.open').forEach(function (t) {
+            t.classList.remove('open');
+            t.setAttribute('aria-expanded', 'false');
+          });
           if (was) return;
+          tile.setAttribute('aria-expanded', 'true');
           focus.setAttribute('data-symbol', symq);
           tile.classList.add('open');
           focus.appendChild(el('div', { class: 'focus-wrap' },
@@ -1206,32 +1292,65 @@
             symbolPanel(symq)));
           focus.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
+        // ONE selectable card per symbol (review: 24 repeated buttons were navigational
+        // noise). The whole card is a single keyboard-operable control that opens the rich
+        // preview; the preview owns the two contextual commands. A sparkline replaces the
+        // button clutter — real information where labels used to repeat.
         sector.symbols.forEach(function (s) {
           var q = bySym[s];
           var last = q ? parseFloat(q.last) : null;
           var prev = q ? parseFloat(q.prevClose) : null;
           var pct = q && prev ? (last - prev) / prev * 100 : null;
-          var tile = el('div', { class: 'tile sector-tile clickable' + (q ? '' : ' tile-nodata'),
-            title: 'Tap for chart, events and headlines' },
+          var sparkSlot = el('div', { class: 'spark-slot' });
+          var tile = el('div', { class: 'tile sector-tile sym-card clickable' + (q ? '' : ' tile-nodata'),
+            'data-sym': s, 'aria-expanded': 'false',
+            title: 'Preview ' + s + ': chart, events and headlines' },
             el('div', { class: 't-sym' }, s,
               q && !q.optionable ? el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO OPTIONS') : null,
               q ? null : el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO LIVE DATA')),
             el('div', { class: 't-px' }, q ? last.toFixed(2) : '\u2014'),
             pct === null
-              ? el('div', { class: 'muted' }, 'no quote right now')
-              : el('div', { class: pct >= 0 ? 'gain' : 'loss' }, (pct >= 0 ? '\u25B2 ' : '\u25BC ') + Math.abs(pct).toFixed(2) + '%'),
-            el('div', { class: 'btn-row', style: 'margin-top:8px' },
-              el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/' + s); } }, 'Research'),
-              (!q || q.optionable) ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
-                App.state.ideasPrefill = { symbol: s };
-                App.navigate('#/recommend/manual');
-              } }, 'Ideas') : null));
+              ? el('div', { class: 'muted t-move' }, 'no quote right now')
+              : el('div', { class: 't-move ' + (pct >= 0 ? 'gain' : 'loss') }, (pct >= 0 ? '\u25B2 ' : '\u25BC ') + Math.abs(pct).toFixed(2) + '%'),
+            q && q.description ? el('div', { class: 't-nm muted' }, q.description) : null,
+            sparkSlot);
           tile.addEventListener('click', function (e) {
-            if (e.target.closest('button, a')) return; // the tile's own actions win
+            if (e.target.closest('button, a')) return; // preview action buttons win
             toggleExpand(s, tile);
           });
+          tile.addEventListener('keydown', function (e) {
+            var spark = sparkSlot.firstChild;
+            if (spark && spark.exploreKey && spark.exploreKey(e.key)) { e.preventDefault(); }
+          });
+          pressable(tile, 'Preview ' + s);
           grid.appendChild(tile);
         });
+        fillSparklines(sector, seq);
+        // LIVE CARDS (review gap): prices follow the market stream in place — a simulated
+        // session's ticks repaint the grid without rebuilding it.
+        App.Market.subscribe(function (frame) {
+          (frame.quotes ? Object.keys(frame.quotes) : []).forEach(function (symKey) {
+            var t2 = grid.querySelector('.sym-card[data-sym="' + symKey + '"]');
+            if (!t2) return;
+            var fq = frame.quotes[symKey];
+            var lastF = parseFloat(fq.last), prevF = parseFloat(fq.prevClose);
+            var px = t2.querySelector('.t-px');
+            if (px && isFinite(lastF)) {
+              if (px.textContent !== lastF.toFixed(2)) {
+                px.textContent = lastF.toFixed(2);
+                t2.classList.remove('live-tick-up', 'live-tick-down');
+                void t2.offsetWidth; // restart the tint animation
+                t2.classList.add(lastF >= prevF ? 'live-tick-up' : 'live-tick-down');
+              }
+            }
+            var mv = t2.querySelector('.t-move');
+            if (mv && isFinite(lastF) && isFinite(prevF) && prevF) {
+              var p2 = (lastF - prevF) / prevF * 100;
+              mv.className = 't-move ' + (p2 >= 0 ? 'gain' : 'loss');
+              mv.textContent = (p2 >= 0 ? '\u25B2 ' : '\u25BC ') + Math.abs(p2).toFixed(2) + '%';
+            }
+          });
+        }, App.navToken);
         if (!(data.quotes || []).length && u.note) {
           grid.appendChild(explain('Demo mode carries data only for the built-in symbols \u2014 each ticker still links to research and ideas so you can explore the flow.'));
         }
@@ -1433,14 +1552,85 @@
   var THESIS_BADGE = { BULLISH: 'badge-ok', BEARISH: 'badge-danger', NEUTRAL: 'badge-dim', VOLATILE: 'badge-warn' };
 
   /** Pro: side-by-side strategy comparison — sortable columns, expandable detail rows. */
+  // Structure-shape lookup for presentation diversity: served by /api/strategies (explicit
+  // enum metadata), cached; unknown families group as 'other'.
+  var _structureGroups = null;
+  function structureGroupOf(name, groups) { return (groups && groups[name]) || 'other'; }
+  function fetchStructureGroups() {
+    if (_structureGroups) return Promise.resolve(_structureGroups);
+    return API.get('/api/strategies').then(function (r) {
+      var m = {};
+      (r.catalog || []).forEach(function (f) { m[f.name] = f.structureGroup; });
+      _structureGroups = m;
+      return m;
+    }).catch(function () { return {}; });
+  }
+
+  /**
+   * Beginner candidate list: ranked cards with rank numbers. Long lists open with DIVERSE
+   * representatives (max 2 per structure shape, top 5 of the engine's order) plus
+   * 'Show all N ranked strategies' — diversity is presentation, the ranking is the truth.
+   */
+  function renderRankedCards(results, candidates) {
+    var host = el('div', { id: 'ranked-cards' });
+    results.appendChild(host);
+    function rankBadge(i) {
+      return el('span', { class: 'badge badge-dim rank-badge', title: 'Rank in this list\u2019s ordering (best first)' }, '#' + (i + 1));
+    }
+    function paint(showAll, groups) {
+      host.innerHTML = '';
+      var shown = [];
+      var haveGroups = groups && Object.keys(groups).length;
+      if (showAll || candidates.length <= 5) {
+        candidates.forEach(function (c, i) { shown.push({ c: c, rank: i }); });
+      } else if (!haveGroups) {
+        // Catalog unavailable: plain top-5 of the ranked order (never 2-of-'other' nonsense)
+        candidates.slice(0, 5).forEach(function (c, i) { shown.push({ c: c, rank: i }); });
+      } else {
+        var perGroup = {};
+        for (var i = 0; i < candidates.length && shown.length < 5; i++) {
+          var g = structureGroupOf(candidates[i].strategy, groups);
+          var n = perGroup[g] || 0;
+          if (n >= 2) continue;
+          perGroup[g] = n + 1;
+          shown.push({ c: candidates[i], rank: i });
+        }
+      }
+      shown.forEach(function (x) {
+        var card = candidateCard(x.c, true);
+        var head = card.querySelector('h3, .cand-head, .card-head') || card.firstChild;
+        if (head && head.insertBefore) head.insertBefore(rankBadge(x.rank), head.firstChild);
+        else card.insertBefore(rankBadge(x.rank), card.firstChild);
+        host.appendChild(card);
+      });
+      if (!showAll && shown.length < candidates.length) {
+        host.appendChild(el('div', { class: 'btn-row' }, el('button', {
+          class: 'btn btn-secondary', id: 'show-all-ranked',
+          onclick: function () { paint(true, groups); }
+        }, 'Show all ' + candidates.length + ' ranked strategies')));
+      }
+    }
+    if (candidates.length <= 5) { paint(true, {}); }
+    else if (_structureGroups) { paint(false, _structureGroups); }
+    else {
+      paint(false, {}); // top-5 immediately; the diverse cut lands when the catalog answers
+      fetchStructureGroups().then(function (groups) { if (host.isConnected) paint(false, groups); });
+    }
+  }
+
   function comparisonTable(candidates) {
-    var sortKey = 'score', sortDir = -1;
+    var sortKey = 'rank', sortDir = 1;
+    // The served order IS the ranking (decision-ranked; screen order on fallback) — stamp it
+    // once so re-sorting by any column keeps the true rank visible on every row (review P1).
+    var rankOf = new Map();
+    candidates.forEach(function (c, i) { rankOf.set(c, i + 1); });
     var COLS = [
+      { key: 'rank', label: '#', get: function (c) { return rankOf.get(c); }, render: function (c) { return el('span', { class: 'muted', title: 'Rank in the served ordering (best first)' }, '#' + rankOf.get(c)); } },
       { key: 'displayName', label: 'Strategy', get: function (c) { return c.displayName; }, render: function (c) { return el('b', {}, c.displayName); } },
       { key: 'entryNetPremiumCents', label: 'Cost/Credit', get: function (c) { return c.entryNetPremiumCents; }, render: function (c) { return pnlSpan(c.entryNetPremiumCents); } },
       { key: 'maxLossCents', label: 'Max loss', get: function (c) { return c.usesHeldShares && c.combinedMaxLossCents ? c.combinedMaxLossCents : c.maxLossCents; }, render: function (c) { return c.usesHeldShares && c.maxLossCents === 0 ? el('span', {}, '$0*') : el('span', { class: 'loss' }, fmtMoney(c.maxLossCents)); } },
       { key: 'maxProfitCents', label: 'Max profit', get: function (c) { return c.maxProfitCents === null || c.maxProfitCents === undefined ? Infinity : c.maxProfitCents; }, render: function (c) { return c.maxProfitCents === null || c.maxProfitCents === undefined ? el('span', { class: 'gain' }, '\u221E') : el('span', { class: 'gain' }, fmtMoney(c.maxProfitCents)); } },
-      { key: 'rr', label: 'R:R', get: function (c) { var denom = c.maxLossCents > 0 ? c.maxLossCents : (c.combinedMaxLossCents || 0); if (denom <= 0) return -1; return c.maxProfitCents === null || c.maxProfitCents === undefined ? Infinity : c.maxProfitCents / denom; }, render: function (c) { var v = COLS[4].get(c); return el('span', {}, v === -1 ? '\u2014' : v === Infinity ? '\u221E' : fmtNum(v, 2)); } },
+      { key: 'rr', label: 'R:R', get: function (c) { var denom = c.maxLossCents > 0 ? c.maxLossCents : (c.combinedMaxLossCents || 0); if (denom <= 0) return -1; return c.maxProfitCents === null || c.maxProfitCents === undefined ? Infinity : c.maxProfitCents / denom; }, render: function (c) { var v = COLS[5].get(c); return el('span', {}, v === -1 ? '\u2014' : v === Infinity ? '\u221E' : fmtNum(v, 2)); } },
       { key: 'pop', label: 'POP', get: function (c) { return c.pop === null || c.pop === undefined ? -1 : c.pop; }, render: function (c) { return el('span', {}, fmtPct(c.pop)); } },
       { key: 'expectedValueCents', label: 'EV', get: function (c) { return c.expectedValueCents === null || c.expectedValueCents === undefined ? -Infinity : c.expectedValueCents; }, render: function (c) { return c.expectedValueCents === null || c.expectedValueCents === undefined ? el('span', {}, '\u2014') : pnlSpan(c.expectedValueCents); } },
       { key: 'breakevens', label: 'Breakevens', get: function (c) { return (c.breakevens || []).length ? parseFloat(c.breakevens[0]) : 0; }, render: function (c) { return el('span', { class: 'mono' }, (c.breakevens || []).map(fmtBreakeven).join(' / ') || '\u2014'); } },
@@ -1543,7 +1733,10 @@
       ['bullish', 'bearish', 'neutral', 'volatile'].map(function (t) {
         return el('option', { value: t, selected: t === saved.thesis ? '' : null }, t);
       }));
-    var horizons = beginner ? ['week', 'month', 'quarter'] : ['week', 'month', 'quarter', '0DTE'];
+    // PRESENTATION-ONLY LEVELS (review P0): 0DTE exists at BOTH levels — beginner defaults
+    // steer away from it, the engine's same-day warnings still fire, but nothing is unreachable
+    // and no persisted choice is silently rewritten.
+    var horizons = ['week', 'month', 'quarter', '0DTE'];
     var horizon = el('select', { id: 'rec-horizon' },
       horizons.map(function (h) { return el('option', { value: h, selected: h === (saved.horizon || 'month') ? '' : null }, h); }));
     horizon.addEventListener('change', function () { remember({ horizon: horizon.value }); });
@@ -1724,8 +1917,9 @@
       el('label', { id: 'rec-target-label' }, 'Target price ($/sh)'), target, targetPresets);
     var sharesField = el('div', { class: 'field', style: 'display:none' }, el('label', {}, 'Shares you want'), wantShares);
     var horizonField = el('div', { class: 'field' }, el('label', {}, 'Horizon'), horizon);
-    var zeroField = el('div', { class: 'field inline-check', style: 'align-self:end' + (beginner ? ';display:none' : '') },
-      allow0, el('label', { for: 'rec-0dte', style: 'text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500' }, 'Allow same-day (0DTE) expiry'));
+    var zeroField = el('div', { class: 'field inline-check', style: 'align-self:end' },
+      allow0, el('label', { for: 'rec-0dte', style: 'text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500' },
+        beginner ? 'Allow same-day (0DTE) expiry \u2014 fast and unforgiving' : 'Allow same-day (0DTE) expiry'));
     var sectorField = el('div', { class: 'field', style: 'grid-column: 1 / -1' },
       el('label', {}, 'Universe (applies everywhere)'), sectorSel);
     var oneOffField = el('div', { class: 'field', style: 'grid-column: 1 / -1' },
@@ -1733,7 +1927,7 @@
     var scanTargetField = el('div', { class: 'field' }, el('label', {}, 'Target profit ($)'), scanTarget);
     var expiryRow = el('div', { class: 'btn-row' },
       el('span', { class: 'muted' }, 'Expirations:'),
-      beginner ? null : el('label', { class: 'inline-check' }, h0, ' 0DTE'),
+      el('label', { class: 'inline-check' }, h0, ' 0DTE'),
       el('label', { class: 'inline-check' }, hW, ' Weekly'),
       el('label', { class: 'inline-check' }, hM, ' Monthly'));
     var goBtn; // created below; sync() relabels it
@@ -1748,7 +1942,7 @@
       targetField.style.display = !scan && (goal === 'EXIT' || goal === 'ACQUIRE' || goal === 'HEDGE') ? '' : 'none';
       sharesField.style.display = !scan && goal === 'ACQUIRE' ? '' : 'none';
       horizonField.style.display = scan ? 'none' : '';
-      zeroField.style.display = scan || beginner ? 'none' : '';
+      zeroField.style.display = scan ? 'none' : '';
       sectorField.style.display = scan && source === 'scan' ? '' : 'none';
       oneOffField.style.display = scan && source === 'scan' ? '' : 'none';
       scanTargetField.style.display = scan ? '' : 'none';
@@ -1889,10 +2083,10 @@
       results.appendChild(UI.spinner('Scanning and deriving views\u2026'));
       try {
         var horizonsSel = [];
-        if (h0.checked && !beginner) horizonsSel.push('0DTE');
+        if (h0.checked) horizonsSel.push('0DTE');
         if (hW.checked) horizonsSel.push('week');
         if (hM.checked) horizonsSel.push('month');
-        var body = { horizons: horizonsSel, riskMode: riskMode(), allow0dte: h0.checked && !beginner };
+        var body = { horizons: horizonsSel, riskMode: riskMode(), allow0dte: h0.checked };
         body.intents = goal === 'ALL'
           ? (Learn.INTENTS || []).map(function (i) { return i.key; })
           : [goal];
@@ -1920,12 +2114,11 @@
       results.appendChild(UI.spinner('Screening strategies\u2026'));
       try {
         App.state.lastRecommendSymbol = sym.value.trim().toUpperCase();
-        // Beginner never exposes 0DTE (the control is hidden) \u2014 a persisted Expert allow0dte
-        // (or a stale '0DTE' horizon) must not leak same-day expiries into Beginner ideas.
-        var hz = (beginner && horizon.value === '0DTE') ? 'month' : horizon.value;
+        // The 0DTE controls are VISIBLE at both levels (presentation-only levels, review P0):
+        // what the user set is what the engine receives — no silent rewrites.
         var body = {
-          symbol: sym.value.trim(), horizon: hz,
-          riskMode: riskMode(), allow0dte: !beginner && allow0.checked, avoidEarnings: true,
+          symbol: sym.value.trim(), horizon: horizon.value,
+          riskMode: riskMode(), allow0dte: allow0.checked, avoidEarnings: true,
           intent: goal
         };
         if (goal === 'DIRECTIONAL') body.thesis = thesis.value;
@@ -2021,9 +2214,13 @@
         results.appendChild(el('h3', {}, 'Other structures for this goal'));
       }
       if (Learn.currentLevel() === 'expert' && r.candidates.length > 1) {
+        // Expert receives the COMPLETE ranking immediately (ranking truth, review P1).
         results.appendChild(comparisonTable(r.candidates));
       } else {
-        r.candidates.forEach(function (c) { results.appendChild(candidateCard(c, true)); });
+        // Beginner: DIVERSE REPRESENTATIVES of the ranked list (max 2 per structure shape,
+        // top 5) with the numerical rank kept visible + a real Show-all affordance — the
+        // presentation summarizes, the engine's order is never rewritten (review P1).
+        renderRankedCards(results, r.candidates);
       }
       if (r.rejected && r.rejected.length) {
         var rej = el('div', { class: 'card' },
@@ -2180,36 +2377,41 @@
     var maxCost = mkFilter('maxCost', { id: idPrefix + '-f-cost', min: '0', step: '50' });
     var maxLoss = mkFilter('maxLoss', { id: idPrefix + '-f-maxloss', min: '0', step: '50' });
     var node;
+    // ALL FIVE limits exist at BOTH levels (presentation-only levels, review P0): Beginner gets
+    // them collapsed behind the expandable in plain words; Expert gets the same five inline.
+    // A value set anywhere applies everywhere — persisted selections are never dropped.
+    var fieldRow = function (label, input, tip) {
+      return el('div', { class: 'field', title: tip }, el('label', {}, label), input);
+    };
+    var TIPS = {
+      pop: 'POP — the modeled probability the trade ends with ANY profit. 70 keeps only ideas with at least a 70% chance. Model output, pre-commission.',
+      assign: 'Probability of ending up assigned shares on the short leg(s). For sell-at-target and buy-at-discount goals assignment IS the point — leave blank there.',
+      yld: 'Share-backed income only (covered calls, cash-secured puts, collars). Annualized so a 2-week and a 2-month trade compare fairly — 0.5% over two weeks is about 13%/yr. Blank = no floor.',
+      cost: 'The most you pay up front (debit trades). Credit trades collect cash instead — cap those with the worst case.',
+      loss: 'Hard cap on the modeled maximum loss — your per-idea risk budget in dollars. Blank = sized by the header risk mode.'
+    };
     if (level === 'beginner') {
-      // Two limits a first-time trader actually has: money and odds. The rest unlocks at Expert.
       node = UI.expandable('Only show ideas that fit my limits', function () {
         return el('div', {},
           el('div', { class: 'form-grid' },
-            el('div', { class: 'field' },
-              el('label', {}, UI.term('max loss', 'The most I am willing to lose ($)')), maxLoss),
-            el('div', { class: 'field' },
-              el('label', {}, UI.term('pop', 'Minimum chance of any profit (%)')), minPop)),
+            fieldRow(UI.term('max loss', 'The most I am willing to lose ($)'), maxLoss, TIPS.loss),
+            fieldRow(UI.term('pop', 'Minimum chance of any profit (%)'), minPop, TIPS.pop),
+            fieldRow(UI.term('assignment', 'Chance I end up with shares (max %)'), maxAssign, TIPS.assign),
+            fieldRow('Income pace (min %/yr)', minYield, TIPS.yld),
+            fieldRow('Cash I pay up front (max $)', maxCost, TIPS.cost)),
           explain('Ideas outside your limits are not hidden silently — the results call them out with the exact reason, so you can see what you are screening out.'));
       });
     } else {
       // Plain trader language, units in the label, the fine print one hover away.
-      // "Worst case ≤ $" IS the per-idea risk budget (the old % -of-account knob merged
+      // "Worst case \u2264 $" IS the per-idea risk budget (the old % -of-account knob merged
       // into it; the header risk mode still sizes ideas when this is blank).
-      var f = function (label, input, tip) {
-        return el('div', { class: 'field', title: tip }, el('label', {}, label), input);
-      };
       node = el('div', { class: 'card compact-filters' },
         el('div', { class: 'form-grid grid-5' },
-          f('Chance of profit \u2265 %', minPop,
-            'POP — the modeled probability the trade ends with ANY profit. 70 keeps only ideas with at least a 70% chance. Model output, pre-commission.'),
-          f('Assignment risk \u2264 %', maxAssign,
-            'Probability of ending up assigned shares on the short leg(s). For sell-at-target and buy-at-discount goals assignment IS the point — leave blank there.'),
-          f('Income rate \u2265 %/yr', minYield,
-            'Share-backed income only (covered calls, cash-secured puts, collars). Annualized so a 2-week and a 2-month trade compare fairly — 0.5% over two weeks is about 13%/yr. Blank = no floor.'),
-          f('Cash outlay \u2264 $', maxCost,
-            'The most you pay up front (debit trades). Credit trades collect cash instead — cap those with the worst case.'),
-          f('Worst case \u2264 $', maxLoss,
-            'Hard cap on the modeled maximum loss — your per-idea risk budget in dollars. Blank = sized by the header risk mode.')),
+          fieldRow('Chance of profit \u2265 %', minPop, TIPS.pop),
+          fieldRow('Assignment risk \u2264 %', maxAssign, TIPS.assign),
+          fieldRow('Income rate \u2265 %/yr', minYield, TIPS.yld),
+          fieldRow('Cash outlay \u2264 $', maxCost, TIPS.cost),
+          fieldRow('Worst case \u2264 $', maxLoss, TIPS.loss)),
         el('p', { class: 'muted', style: 'margin:6px 0 0; font-size:12px' },
           'Blank = no limit. Hover a label for exactly what it means; refused ideas always say which limit they broke.'));
     }
@@ -2217,16 +2419,13 @@
     return {
       node: node,
       value: function () {
-        // Only submit filters VISIBLE at the current level. Beginner shows just minPop (+ maxLoss);
-        // a persisted Expert value for maxAssign/minYield/maxCost must NOT silently constrain a
-        // Beginner's ideas (they're hidden, so they'd be invisible rejections).
+        // Every limit is VISIBLE at both levels, so every set value is honored — identical
+        // inputs produce identical requests at both levels (cross-level invariance, review P0).
         var f = {};
         if (minPop.value) f.minPop = parseFloat(minPop.value) / 100;
-        if (level !== 'beginner') {
-          if (maxAssign.value) f.maxAssignmentProb = parseFloat(maxAssign.value) / 100;
-          if (minYield.value) f.minAnnualizedYieldPct = parseFloat(minYield.value);
-          if (maxCost.value) f.maxCostCents = Math.round(parseFloat(maxCost.value) * 100);
-        }
+        if (maxAssign.value) f.maxAssignmentProb = parseFloat(maxAssign.value) / 100;
+        if (minYield.value) f.minAnnualizedYieldPct = parseFloat(minYield.value);
+        if (maxCost.value) f.maxCostCents = Math.round(parseFloat(maxCost.value) * 100);
         return Object.keys(f).length ? f : null;
       },
       maxLossCents: function () {
@@ -2671,17 +2870,32 @@
         // limit is a rule this ticket either fits or exceeds — say which, in dollars and %.
         (function budgetLine() {
           try {
+          // ONE SOURCE OF TRUTH (review P0): the SERVER's /api/risk-budget numbers — the same
+          // effective budget the engine sized with and the guardrail advisory warned against.
+          // No client percentage arithmetic; if the contract hasn't loaded, the line waits.
           var riskSel = document.getElementById('risk-mode');
-          var pct = { conservative: 0.01, balanced: 0.02, aggressive: 0.05 }[riskSel ? riskSel.value : 'conservative'] || 0.01;
-          var budget = Math.round((p.buyingPowerBeforeCents || 0) * pct);
-          if (!budget || !p.maxLossCents) return;
-          var ratio = Math.round(p.maxLossCents / budget * 100);
-          body.appendChild(el('div', { class: 'muted small', id: 'budget-reconcile',
-            style: ratio > 100 ? 'color: var(--risk-danger-solid, #c53030)' : '' },
-            'This position risks ' + fmtMoney(p.maxLossCents) + ' \u2014 ' + ratio + '% of your selected '
-            + fmtMoney(budget) + ' per-idea limit ('
-            + (riskSel ? riskSel.options[riskSel.selectedIndex].textContent.split(' \u2014 ')[0] : 'Cautious') + ').'
-            + (ratio > 100 ? ' Exceeding it is allowed here \u2014 deliberately, and acknowledged below.' : '')));
+          var modeKey = riskSel ? riskSel.value : 'conservative';
+          function renderLine(rb) {
+            if (!rb || !rb.modes || !p.maxLossCents) return;
+            var m = null;
+            rb.modes.forEach(function (x) { if (x.mode === modeKey) m = x; });
+            if (!m || !m.effectiveBudgetCents) return;
+            var budget = m.effectiveBudgetCents;
+            var ratio = Math.round(p.maxLossCents / budget * 100);
+            var line = el('div', { class: 'muted small', id: 'budget-reconcile',
+              style: ratio > 100 ? 'color: var(--risk-danger-solid, #c53030)' : '' },
+              'This position risks ' + fmtMoney(p.maxLossCents) + ' \u2014 ' + ratio + '% of your selected '
+              + fmtMoney(budget) + ' per-idea limit (' + m.label
+              + (m.capped ? ', capped by your declared risk capital' : '') + ').'
+              + (ratio > 100 ? ' Exceeding it is allowed here \u2014 deliberately, and acknowledged below.' : ''));
+            var stale = body.querySelector('#budget-reconcile');
+            if (stale) stale.replaceWith(line); else body.appendChild(line);
+          }
+          if (App.state.riskBudget) renderLine(App.state.riskBudget);
+          else API.get('/api/risk-budget').then(function (rb) {
+            App.state.riskBudget = rb;
+            if (body.isConnected) renderLine(rb);
+          }).catch(function () { /* context line only */ });
           } catch (e) { /* the reconciliation line is context, never a blocker */ }
         })();
         // Expert: judge the package at YOUR limit, not the model's executable assumption.
@@ -3783,34 +3997,61 @@
       host.innerHTML = '';
       host.appendChild(UI.spinner('Loading your session\u2019s record\u2026'));
       try {
-        var sessions = (await API.getFresh('/api/sim/market')).sessions || [];
-        var cur = sessions.filter(function (x) { return x.id === App.state.world; })[0];
-        var open = await API.getFresh('/api/trades?status=ACTIVE&size=10');
+        // GENUINE VERIFICATION (review P2): the session REPORT is the record — open AND
+        // closed decisions, each with the predicted odds it was entered at and what actually
+        // happened (result, worst/best while open, how it ended). Live Now P/L for open rows
+        // merges in from the enriched trades list.
+        var rep = await API.getFresh('/api/sim/market/' + encodeURIComponent(App.state.world) + '/report');
+        var nowBy = {};
+        try {
+          ((await API.getFresh('/api/trades?status=ACTIVE&size=50')).trades || []).forEach(function (t) {
+            if (t.unrealizedPnlCents !== undefined && t.unrealizedPnlCents !== null) nowBy[t.id] = t.unrealizedPnlCents;
+          });
+        } catch (e2) { /* Now column degrades to em-dash */ }
+        var rows = rep.trades || [];
+        var pvo = rep.popVsOutcome;
         host.innerHTML = '';
         host.appendChild(el('div', { class: 'card', id: 'world-verify' },
           UI.cardHeader('This simulated session judges your DECISIONS',
             el('span', { class: 'badge badge-sim' }, 'SIMULATED')),
-          explain('Place practice trades inside this generated market; every entry is judged at the session\u2019s own clock and prices. The report scores decisions vs outcomes when you finish.'),
-          cur ? el('div', { class: 'chip-row' },
-            chip('Session', cur.name || cur.id),
-            chip('Sim clock', String(cur.simTime || '').replace('T', ' ')),
-            chip('Scenario', App.scenarioLabel((cur.config || {}).scenario)),
-            cur.anchorSummary ? chip('Anchored', String(cur.anchorSummary.anchored || 0)) : null) : null,
-          open.trades && open.trades.length
-            ? table(['Symbol', 'Strategy', 'Now', 'Max loss'], open.trades.map(function (t) {
-                return pressable(el('tr', { class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); } },
-                  el('td', {}, el('b', {}, t.symbol)),
-                  el('td', {}, prettyStrategy(t.strategy) + ' x' + t.qty),
-                  el('td', {}, t.unrealizedPnlCents !== undefined && t.unrealizedPnlCents !== null
-                    ? pnlSpan(t.unrealizedPnlCents) : el('span', { class: 'muted' }, '\u2014')),
-                  el('td', { class: 'loss' }, fmtMoney(t.maxLossCents))), 'Open ' + t.symbol);
-              }))
+          explain('Every entry was judged at the session\u2019s own clock and prices. Open decisions show live standing; closed ones show the predicted odds against what actually happened.'),
+          el('div', { class: 'chip-row' },
+            chip('Sim clock', String(rep.simTime || '').replace('T', ' ')),
+            chip('Decisions', String(rows.length)),
+            chip('Resolved', String(rep.resolved || 0)),
+            rep.winRate !== null && rep.winRate !== undefined ? chip('Win rate', rep.winRate + '%') : null,
+            rep.realizedPnlCents !== null && rep.realizedPnlCents !== undefined ? chip('Realized', fmtMoney(rep.realizedPnlCents)) : null),
+          rows.length
+            ? table(['Decision', 'Entered (sim clock)', 'Predicted odds', 'Now / Result', 'Worst / best while open', 'How it ended'],
+                rows.map(function (t) {
+                  var open = t.realizedPnlCents === null || t.realizedPnlCents === undefined;
+                  return pressable(el('tr', { class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); } },
+                    el('td', {}, el('b', {}, t.symbol), ' ', prettyStrategy(t.strategy) + ' x' + t.qty),
+                    el('td', { class: 'mono' }, t.laneEntryTime ? String(t.laneEntryTime).replace('T', ' ') : '\u2014'),
+                    el('td', {}, t.popEntry !== null && t.popEntry !== undefined ? Math.round(t.popEntry * 100) + '%' : '\u2014'),
+                    el('td', {}, open
+                      ? (nowBy[t.id] !== undefined ? pnlSpan(nowBy[t.id]) : el('span', { class: 'badge badge-dim' }, t.status))
+                      : pnlSpan(t.realizedPnlCents)),
+                    el('td', {}, t.maeCents !== undefined && t.maeCents !== null
+                      ? el('span', {}, pnlSpan(t.maeCents), ' / ', pnlSpan(t.mfeCents)) : el('span', { class: 'muted' }, '\u2014')),
+                    el('td', { class: 'muted' }, open ? 'still open' : (t.closeReason || '\u2014'))), 'Open ' + t.symbol);
+                }))
             : UI.emptyState('No practice trades in this session yet',
                 'Find a screened idea and place it \u2014 the session report will judge the decision.',
                 'Find ideas in this market', function () { App.navigate('#/trade/discover'); }),
+          pvo && (pvo.highPopTrades || pvo.lowPopTrades)
+            ? el('p', { class: 'muted', style: 'margin:8px 0 0' },
+                'Calibration so far: ' + (pvo.highPopTrades || 0) + ' high-confidence entries (\u226550% predicted) won '
+                + (pvo.highPopWinRate === null || pvo.highPopWinRate === undefined ? '\u2014' : pvo.highPopWinRate + '%') + ' of the time; '
+                + (pvo.lowPopTrades || 0) + ' low-confidence entries won '
+                + (pvo.lowPopWinRate === null || pvo.lowPopWinRate === undefined ? '\u2014' : pvo.lowPopWinRate + '%') + '. '
+                + (pvo.note || ''))
+            : null,
           el('div', { class: 'btn-row' },
-            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find ideas'),
-            el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } }, 'Open the control room'))));
+            rows.length ? el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find ideas') : null,
+            el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } }, 'Open the control room'),
+            el('button', { class: 'btn btn-sm btn-secondary', title: 'Your observed-market record \u2014 simulated sessions are scored here, in their own report, never mixed into it',
+              onclick: function () { App.navigate('#/portfolio/record'); } }, 'Your observed record \u2192'))));
       } catch (e) {
         host.innerHTML = '';
         host.appendChild(alertBox('warn', 'Session record unavailable', [String((e && e.message) || e)]));
@@ -3879,35 +4120,25 @@
       bf.symbol = sym.value;
       var s = sym.value.trim().toUpperCase(); if (s) App.state.lastRecommendSymbol = s;
     });
-    // The strategy menu climbs the ladder with the user: Learning sees the beginner
-    // families (mirroring the engine's learning risk rank), Expert unlocks defined-risk
-    // premium selling, Pro sees everything backtestable.
+    // ONE menu for both levels, grouped by goal with the foundational structure leading each
+    // group (education ordering, never a gate — presentation-only levels, review P0).
     var BT_GROUPS = [
       { label: 'Trade a view', families: ['LONG_CALL', 'LONG_PUT', 'DEBIT_CALL_SPREAD', 'DEBIT_PUT_SPREAD',
                                           'LONG_STRADDLE', 'LONG_STRANGLE',
                                           'LONG_CALL_BUTTERFLY', 'LONG_PUT_BUTTERFLY'] },
-      { label: 'Earn income', families: ['CREDIT_CALL_SPREAD', 'CREDIT_PUT_SPREAD', 'IRON_CONDOR',
-                                         'IRON_BUTTERFLY', 'COVERED_CALL'] },
+      { label: 'Earn income', families: ['COVERED_CALL', 'CREDIT_CALL_SPREAD', 'CREDIT_PUT_SPREAD',
+                                         'IRON_CONDOR', 'IRON_BUTTERFLY'] },
       { label: 'Buy at a discount', families: ['CASH_SECURED_PUT'] },
       { label: 'Protect shares', families: ['PROTECTIVE_PUT', 'PROTECTIVE_COLLAR'] }
     ];
     var btLevel = Learn.currentLevel();
-    var BT_LEVEL_ALLOWED = {
-      beginner: ['LONG_CALL', 'LONG_PUT', 'DEBIT_CALL_SPREAD', 'DEBIT_PUT_SPREAD',
-                 'COVERED_CALL', 'CASH_SECURED_PUT', 'PROTECTIVE_PUT']
-    };
-    var btAllowed = BT_LEVEL_ALLOWED[btLevel] || null; // expert: everything
-    // A "Backtest this" click is an explicit ask — never silently swap the strategy
-    // because the current level's menu wouldn't normally show it.
-    if (btAllowed && prefill.strategy && btAllowed.indexOf(prefill.strategy) < 0) {
-      btAllowed = btAllowed.concat([prefill.strategy]);
-    }
+    // PRESENTATION-ONLY LEVELS (review P0): the FULL catalog is discoverable at both levels.
+    // Beginner sees the same menu with the foundational structures first in each goal group —
+    // progressive ordering, never a locked door.
     var btDefaultStrat = prefill.strategy || bf.strategy || 'DEBIT_CALL_SPREAD';
     var strat = el('select', { id: 'bt-strategy' },
       BT_GROUPS.map(function (g) {
-        var fams = btAllowed ? g.families.filter(function (s) { return btAllowed.indexOf(s) >= 0; }) : g.families;
-        if (!fams.length) return null;
-        return el('optgroup', { label: g.label }, fams.map(function (s) {
+        return el('optgroup', { label: g.label }, g.families.map(function (s) {
           return el('option', { value: s, selected: s === btDefaultStrat ? '' : null }, prettyStrategy(s));
         }));
       }));
@@ -3952,19 +4183,16 @@
         return el('button', { class: 'sym-chip', type: 'button', onclick: function () { dte.value = String(p.v); bf.dte = dte.value; } }, p.label);
       }));
 
-    // D4: Expert unlocks the PORTFOLIO engine (concurrent positions + mechanical exits) — the deeper
-    // tool, not fewer words. Beginner stays on the single-position engine.
-    var engine = null;
-    if (btLevel !== 'beginner') {
-      engine = el('select', { id: 'bt-engine' },
-        el('option', { value: 'single' }, 'Single position (one trade at a time)'),
-        el('option', { value: 'portfolio' }, 'Portfolio (concurrent positions, mechanical exits)'));
-      engine.value = bf.engine || 'single';
-      engine.addEventListener('change', function () { bf.engine = engine.value; });
-    }
+    // BOTH levels get both engines (presentation-only levels): beginner default stays the
+    // simpler single-position engine, with plain words explaining the difference.
+    var engine = el('select', { id: 'bt-engine' },
+      el('option', { value: 'single' }, btLevel === 'beginner' ? 'One trade at a time (simplest)' : 'Single position (one trade at a time)'),
+      el('option', { value: 'portfolio' }, btLevel === 'beginner' ? 'A book of trades at once' : 'Portfolio (concurrent positions, mechanical exits)'));
+    engine.value = bf.engine || 'single';
+    engine.addEventListener('change', function () { bf.engine = engine.value; });
     root.appendChild(el('div', { class: 'card' },
       btLevel === 'beginner'
-        ? explain('The strategy list matches your Beginner level — credit spreads, condors, collars and the rest unlock at Expert (the level switch is in the header). Target DTE is how far out each trade’s expiration is: Monthly (30 days) is the classic starting point.')
+        ? explain('Every strategy is here — the simpler ones lead each group. Target DTE is how far out each trade’s expiration is: Monthly (30 days) is the classic starting point.')
         : null,
       el('div', { class: 'form-grid' },
         el('div', { class: 'field' }, el('label', {}, 'Symbol'), sym),
@@ -4835,8 +5063,11 @@
               scenario: st.scenario, speed: st.speed, allowFictional: !!st.allowFictional };
             if (st.sectorKey) payload.sectorKey = st.sectorKey;
             if (Object.keys(spots).length) payload.spots = spots;
-            if (!beginner && st.vol) payload.volAnnual = st.vol / 100;
-            if (!beginner && st.seed) payload.seed = parseInt(st.seed, 10);
+            // Persisted selections are never silently discarded (review P0): the vol/seed inputs
+            // render at Expert, but a value SET there still applies if the world is created at
+            // Beginner — per-symbol calibration remains the default when both are blank.
+            if (st.vol) payload.volAnnual = st.vol / 100;
+            if (st.seed) payload.seed = parseInt(st.seed, 10);
             var res = await API.post('/api/sim/market', payload);
             if (res.excluded && res.excluded.length && UI.toast) {
               UI.toast(res.excluded.length + ' symbol(s) excluded \u2014 no price available: '
@@ -4937,6 +5168,9 @@
       var ovGrid = el('div', { class: 'dc-grid' });
       [modeCard, activityCard, engineCard, healthCard].forEach(function (c) { ovGrid.appendChild(c); });
       root.appendChild(ovGrid);
+      // Expanded detail lives BELOW the 2x2 summary (review visual): opening a drawer must
+      // never stretch a neighbor card into an empty wall.
+      root.appendChild(el('div', { id: 'dc-detail' }));
     }
     fillMode();
     fillActivity();
@@ -5131,9 +5365,11 @@
         chip('Stale', String(e.stale || 0)),
         chip('Refresh every', (e.refreshInterval || 0) + 's'),
         chip('Avg latency', (e.avgLatencyMs || 0) + ' ms'),
-        e.errors ? chip('Errors', String(e.errors)) : null));
-      if (level === 'expert' && e.symbols && e.symbols.length) {
-        engineCard.appendChild(UI.expandable('Per-symbol engine state', function () {
+        e.errors ? chip('Errors since startup', String(e.errors),
+          'Total provider/refresh errors since this server started — not a current-failure count.') : null));
+      var detailHost = document.getElementById('dc-detail');
+      if (level === 'expert' && e.symbols && e.symbols.length && detailHost) {
+        detailHost.appendChild(UI.expandable('Per-symbol engine state', function () {
           return table(['Symbol', 'Fresh', 'Source', 'Age', 'State'], e.symbols.map(function (s) {
             return el('tr', {},
               el('td', {}, el('b', {}, s.symbol)),
@@ -5242,14 +5478,55 @@
       var sumRow = el('div', { class: 'chip-row' });
       Object.keys(s.domains || {}).forEach(function (domain) {
         var items = s.domains[domain] || [];
-        var worst = items.some(function (p) { return p.state === 'ERROR' || p.state === 'COOLDOWN'; }) ? 'badge-danger'
-          : items.some(function (p) { return p.state === 'EMPTY' || p.state === 'STALE'; }) ? 'badge-warn' : 'badge-ok';
-        sumRow.appendChild(el('span', { class: 'chip' },
+        // The chip TEXT is the SAME aggregated worst state as its color (review: a red chip
+        // literally said 'OK' whenever the failing provider wasn't listed first).
+        var worstState = items.reduce(function (acc, p2) {
+          var rank = { ERROR: 4, COOLDOWN: 4, EMPTY: 3, STALE: 3, UNKNOWN: 2, UNCONFIGURED: 1, OK: 0 };
+          return (rank[p2.state] || 0) > (rank[acc] || 0) ? p2.state : acc;
+        }, items.length ? items[0].state : 'NONE');
+        var worst = worstState === 'ERROR' || worstState === 'COOLDOWN' ? 'badge-danger'
+          : worstState === 'EMPTY' || worstState === 'STALE' ? 'badge-warn' : 'badge-ok';
+        var okCount = items.filter(function (p2) { return p2.state === 'OK'; }).length;
+        sumRow.appendChild(el('span', { class: 'chip', title: okCount + ' of ' + items.length
+            + ' sources OK \u2014 the badge shows the WORST source state in this domain' },
           el('span', { class: 'chip-label' }, domain),
-          el('b', {}, el('span', { class: 'badge ' + worst }, items.length ? items[0].state : 'NONE'))));
+          el('b', {}, el('span', { class: 'badge ' + worst }, items.length ? worstState : 'NONE'))));
       });
       healthCard.appendChild(sumRow);
-      healthCard.appendChild(UI.expandable('Per-source detail', function () { return body; }));
+      var detailHost2 = document.getElementById('dc-detail');
+      if (detailHost2) {
+        detailHost2.appendChild(UI.expandable('Per-source detail', function () { return body; }));
+        // Observability for the operator (review P2 #9): p50/p95 by route class, live.
+        if (Learn.currentLevel() === 'expert') {
+          detailHost2.appendChild(UI.expandable('API latency (p50/p95 by route class)', function () {
+            var holder = el('div', {}, UI.spinner('Reading metrics\u2026'));
+            API.getFresh('/api/metrics').then(function (m) {
+              holder.innerHTML = '';
+              var lat = (m && m.latency) || {};
+              var keys = Object.keys(lat);
+              if (!keys.length) { holder.appendChild(el('p', { class: 'muted' }, 'No samples yet.')); return; }
+              holder.appendChild(table(['Route class', 'Samples', 'p50', 'p95', 'Max'], keys.sort().map(function (k) {
+                var v = lat[k];
+                var ms = function (x) { return (x / 1000).toFixed(1) + ' ms'; };
+                return el('tr', {},
+                  el('td', {}, el('b', {}, k)),
+                  el('td', { class: 'muted' }, String(v.samples)),
+                  el('td', {}, ms(v.p50Micros || 0)),
+                  el('td', {}, ms(v.p95Micros || 0)),
+                  el('td', { class: 'muted' }, ms(v.maxMicros || 0)));
+              })));
+              holder.appendChild(el('p', { class: 'muted small' },
+                'Since server start. Cold first-hits and warm cache-hits are mixed \u2014 read p95 as the honest worst-typical.'));
+            }).catch(function (e2) {
+              holder.innerHTML = '';
+              holder.appendChild(el('p', { class: 'muted' }, 'Metrics unavailable: ' + e2.message));
+            });
+            return holder;
+          }));
+        }
+      } else {
+        healthCard.appendChild(UI.expandable('Per-source detail', function () { return body; }));
+      }
     })();
 
     // --- Reset (danger; admin-gated) ---
@@ -5464,7 +5741,7 @@
     // Cache by the exact inputs; an in-flight guard also collapses the nav+render double-call
     // (and view-transition re-renders) onto ONE request. Refresh busts the cache.
     var cacheKey = JSON.stringify(body) + '|world=' + (App.state.world || 'observed')
-      + '|scenario=' + ((App.config && App.config.scenarioMode && App.config.activeDatasetName) || 'observed');
+      + '|scenario=' + ((App.config && App.config.scenarioMode && App.config.activeDataset) || 'observed');
     var cached = App.state.decisionCache;
     var data;
     if (cached && cached.key === cacheKey) {

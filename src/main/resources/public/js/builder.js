@@ -436,9 +436,13 @@
     function schedulePreviewIfAny() { if (schedulePreviewHook) schedulePreviewHook(); }
 
     function limitsFields(beginnerShape) {
+      // ALL FOUR limits exist at both levels (presentation-only levels, review P0) — beginner
+      // wording is plain, expert wording is compact; a value set anywhere judges everywhere.
       return beginnerShape
         ? [limitField('maxLoss', UI.term ? 'The most I am willing to lose ($)' : 'Max loss ($)', '50'),
-           limitField('minPop', 'Minimum chance of any profit (%)', '5')]
+           limitField('minPop', 'Minimum chance of any profit (%)', '5'),
+           limitField('target', 'Profit I am aiming for ($)', '50'),
+           limitField('maxAssign', 'Chance I end up with shares (max %)', '5')]
         : [limitField('maxLoss', 'Worst case \u2264 $', '50'),
            limitField('target', 'Profit target \u2265 $', '50'),
            limitField('minPop', 'Chance of profit \u2265 %', '5'),
@@ -453,9 +457,9 @@
           el('span', { class: 'chip-label' }, label), el('b', {}, actual)));
       }
       var v = st.limits;
-      // Profit-target and assignment limits are Expert-only controls — a persisted Expert value must
-      // not judge (or later constrain) a Beginner who can't see or clear them.
-      var expertLimits = Learn.currentLevel() !== 'beginner';
+      // Every limit is VISIBLE (and clearable) at both levels now, so every set value judges —
+      // no invisible constraints, no silently-dropped persisted choices (review P0).
+      var expertLimits = true;
       if (v.maxLoss) {
         var cap = Math.round(parseFloat(v.maxLoss) * 100);
         var unbounded = !p.ok && (p.blockReasons || []).some(function (r) { return /undefined|unlimited/i.test(r); });
@@ -502,8 +506,7 @@
         if (st.limits.maxLoss) body.maxLossCents = Math.round(parseFloat(st.limits.maxLoss) * 100);
         var f = {};
         if (st.limits.minPop) f.minPop = parseFloat(st.limits.minPop) / 100;
-        // Assignment limit is Expert-only — don't send a persisted value on a Beginner fit.
-        if (Learn.currentLevel() !== 'beginner' && st.limits.maxAssign) f.maxAssignmentProb = parseFloat(st.limits.maxAssign) / 100;
+        if (st.limits.maxAssign) f.maxAssignmentProb = parseFloat(st.limits.maxAssign) / 100;
         if (Object.keys(f).length) body.filters = f;
         var fitSeq = ++buildSeq;                 // the fitted legs replace the structure — same supersede rule
         var r = await API.post('/api/recommend', body);

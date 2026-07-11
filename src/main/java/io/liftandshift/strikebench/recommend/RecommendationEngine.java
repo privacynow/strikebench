@@ -43,31 +43,31 @@ public final class RecommendationEngine {
             + "entire amount at risk and, in undefined-risk strategies, more. Nothing here promises any profit. "
             + "POP/EV/breakevens are model outputs computed before commissions with zero price drift.";
 
-    private static final int MAX_CANDIDATES = 5;
-
-    /** Structural family group for the diversity cut (naming heuristic over the catalog). */
+    /** Structural shape group — delegates to the catalog's explicit metadata (presentation only). */
     static String structuralGroup(String family) {
         if (family == null) return "other";
-        if (family.contains("CALENDAR") || family.contains("DIAGONAL")) return "time";
-        if (family.contains("BUTTERFLY")) return "pin";
-        if (family.contains("CREDIT") || family.contains("CONDOR")) return "credit";
-        if (family.contains("DEBIT")) return "debit";
-        if (family.startsWith("LONG_")) return "long";
-        return "other";
+        try { return StrategyFamily.valueOf(family).structureGroup(); }
+        catch (IllegalArgumentException e) { return "other"; }
     }
     private static final int MAX_QTY = 5;
 
+    /**
+     * Risk mode is a CAPITAL BUDGET, nothing else: a per-idea percent of buying power. It never
+     * gates which strategies exist (the position's own math and the DecisionPolicy do that).
+     * The historical 'learning' wire value maps to CONSERVATIVE at this boundary only.
+     */
     public enum RiskMode {
-        LEARNING(1, 0.01), CONSERVATIVE(2, 0.01), BALANCED(3, 0.02), AGGRESSIVE(4, 0.05);
-        final int rank;
+        CONSERVATIVE(0.01), BALANCED(0.02), AGGRESSIVE(0.05);
         final double defaultRiskPct;
-        RiskMode(int rank, double defaultRiskPct) { this.rank = rank; this.defaultRiskPct = defaultRiskPct; }
+        RiskMode(double defaultRiskPct) { this.defaultRiskPct = defaultRiskPct; }
 
         public double defaultRiskPct() { return defaultRiskPct; }
 
         public static RiskMode parse(String s) {
             if (s == null) return CONSERVATIVE;
-            try { return valueOf(s.trim().toUpperCase(Locale.ROOT)); }
+            String v = s.trim().toUpperCase(Locale.ROOT);
+            if (v.equals("LEARNING")) return CONSERVATIVE; // legacy wire value, API compat only
+            try { return valueOf(v); }
             catch (IllegalArgumentException e) { return CONSERVATIVE; }
         }
     }
@@ -250,14 +250,10 @@ public final class RecommendationEngine {
                 if (family.blockedByDefault() && !family.servesIntent(intent)) continue;
                 if (thesisExplicit && !family.fits(thesis)) continue;
             }
-            // RISK MODE IS A BUDGET, NOT A COMPLEXITY LADDER (risk/experience decoupling): the
-            // three selectable modes see the SAME defined-risk catalog — the actual position's
-            // max loss, EV, tail, liquidity and the DecisionPolicy decide what ranks. A diagonal
-            // is not automatically riskier than a long call. LEARNING keeps the foundational
-            // subset (the guided/legacy lane; no longer offered by the header selector).
-            if (mode == RiskMode.LEARNING && family.riskRank() > mode.rank) {
-                if (!family.blockedByDefault()) continue; // outside the guided subset
-            }
+            // RISK MODE IS A BUDGET, NOT A COMPLEXITY LADDER (risk/experience decoupling): every
+            // mode sees the SAME defined-risk catalog — the actual position's max loss, EV, tail,
+            // liquidity and the DecisionPolicy decide what ranks. A diagonal is not automatically
+            // riskier than a long call.
             if (req.allowedStrategies() != null && !req.allowedStrategies().isEmpty()
                     && req.allowedStrategies().stream().noneMatch(s -> s.equalsIgnoreCase(family.name()))) {
                 continue;
@@ -322,22 +318,11 @@ public final class RecommendationEngine {
         }
 
         candidates.sort(Comparator.comparingDouble(Candidate::score).reversed());
-        // STRUCTURAL DIVERSITY in the final cut: with the full defined-risk catalog competing
-        // (risk modes no longer gate complexity), five near-identical structures can crowd out
-        // whole categories — cap each structural group at two so the competition stays a
-        // competition of IDEAS, not five flavors of one idea.
-        List<Candidate> top = new ArrayList<>();
-        java.util.Map<String, Integer> perGroup = new java.util.HashMap<>();
-        for (Candidate c : candidates) {
-            if (top.size() >= MAX_CANDIDATES) break;
-            String g = structuralGroup(c.strategy());
-            int n = perGroup.getOrDefault(g, 0);
-            if (n >= 2) continue;
-            perGroup.put(g, n + 1);
-            top.add(c);
-        }
-        if (top.isEmpty()) notes.add("No strategy passed the risk screens for this combination — try a wider risk budget or different horizon");
-        return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, top, rejected, notes, DISCLAIMER);
+        // RANKING TRUTH: the engine returns the COMPLETE score-sorted list. Structural diversity
+        // is a PRESENTATION concern (the UI may summarize with representatives per shape group,
+        // with a Show-all affordance) — it must never rewrite the engine's ranked truth.
+        if (candidates.isEmpty()) notes.add("No strategy passed the risk screens for this combination — try a wider risk budget or different horizon");
+        return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, candidates, rejected, notes, DISCLAIMER);
     }
 
     /**

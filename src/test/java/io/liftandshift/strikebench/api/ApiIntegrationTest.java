@@ -982,4 +982,67 @@ class ApiIntegrationTest {
         for (var a : j.get("anchors")) assertThat(a.has("basis")).isTrue();
         delete("/api/sim/market/" + j.get("worldId").asText());
     }
+
+    @Test
+    @Order(31)
+    void riskBudgetIsServerOwnedAndCapsByDeclaredRiskCapital() throws Exception {
+        // ONE SOURCE OF TRUTH (review P0): the header/ticket consume this contract; no client
+        // percentage arithmetic. Basis is explicit; declared risk capital caps every mode.
+        JsonNode rb = Json.parse(get("/api/risk-budget").body());
+        assertThat(rb.get("basisType").asText()).isEqualTo("BUYING_POWER");
+        long basis = rb.get("basisCents").asLong();
+        assertThat(basis).isPositive();
+        assertThat(rb.get("modes")).hasSize(3);
+        java.util.Map<String, Double> pct = java.util.Map.of("conservative", 0.01, "balanced", 0.02, "aggressive", 0.05);
+        for (JsonNode m : rb.get("modes")) {
+            String mode = m.get("mode").asText();
+            assertThat(pct).containsKey(mode);
+            assertThat(m.get("policyBudgetCents").asLong()).isEqualTo(Math.round(basis * pct.get(mode)));
+            assertThat(m.get("effectiveBudgetCents").asLong()).isEqualTo(m.get("policyBudgetCents").asLong());
+            assertThat(m.get("label").asText()).isIn("Cautious", "Standard", "High");
+        }
+        // Declare a risk capital SMALLER than the standard budget: every mode must cap to it.
+        long cap = Math.round(basis * 0.02) - 5000;
+        assertThat(put("/api/account/risk-context",
+                "{\"riskCapitalCents\":" + cap + "}").statusCode()).isEqualTo(200);
+        JsonNode capped = Json.parse(get("/api/risk-budget").body());
+        assertThat(capped.get("explicitCapCents").asLong()).isEqualTo(cap);
+        assertThat(capped.get("capSource").asText()).isEqualTo("RISK_CAPITAL");
+        for (JsonNode m : capped.get("modes")) {
+            assertThat(m.get("effectiveBudgetCents").asLong())
+                    .isLessThanOrEqualTo(cap);
+        }
+        // The legacy 'learning' wire value still parses (maps to conservative at the boundary).
+        assertThat(post("/api/recommend",
+                "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"learning\"}")
+                .statusCode()).isEqualTo(200);
+        // Clean up so later-ordered tests keep the uncapped budget expectations.
+        assertThat(put("/api/account/risk-context", "{}").statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    @Order(32)
+    void sparklinesBatchServesClosesAndHonestEmptiesInOneCall() throws Exception {
+        // ONE call for the whole card grid; a symbol with no candle source answers
+        // available:false with a note — never a fabricated line, never a 404.
+        JsonNode r = Json.parse(get("/api/sparklines?symbols=AAPL,SPY,ZZZZ&range=1m").body());
+        assertThat(r.get("range").asText()).isEqualTo("1m");
+        assertThat(r.get("sparklines")).hasSize(3);
+        java.util.Map<String, JsonNode> bySym = new java.util.HashMap<>();
+        for (JsonNode row : r.get("sparklines")) bySym.put(row.get("symbol").asText(), row);
+        for (String sym : new String[]{"AAPL", "SPY"}) {
+            JsonNode row = bySym.get(sym);
+            assertThat(row.get("available").asBoolean()).as(sym + " available").isTrue();
+            assertThat(row.get("closes").size()).isGreaterThanOrEqualTo(10);
+            assertThat(row.get("dates").size()).isEqualTo(row.get("closes").size());
+            assertThat(row.get("freshness").asText()).isEqualTo("FIXTURE");
+            assertThat(row.get("demo").asBoolean()).isFalse(); // fixture MODE is not 'demo masquerading'
+        }
+        JsonNode dead = bySym.get("ZZZZ");
+        assertThat(dead.get("available").asBoolean()).isFalse();
+        assertThat(dead.get("note").asText()).isNotBlank();
+        // Blank symbols default to the active universe and never exceed the cap.
+        JsonNode def = Json.parse(get("/api/sparklines").body());
+        assertThat(def.get("sparklines").size()).isBetween(1, 16);
+    }
 }

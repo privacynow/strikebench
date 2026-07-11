@@ -1009,12 +1009,18 @@ body.lvl-expert .not-expert { display: none !important; }
 .candles .grid { stroke: var(--border); stroke-width: 1; }
 .candles .tick { fill: var(--text-faint); font-size: 11px; }
 .tabs .tabs-aside { margin-left: auto; align-self: center; font-size: 12.5px; padding: 6px 4px; }
-/* Data Overview: a control DASHBOARD on desktop — 2x2 compact grid, not mobile stacking. */
+/* Data Overview: a control DASHBOARD on desktop — 2x2 compact grid, not mobile stacking.
+   VERTICAL SYMMETRY (review): each desktop row's cards STRETCH to one height and share the
+   same anatomy (header, body, action footer pinned to the bottom); expanded detail lives in
+   the #dc-detail drawer BELOW the grid so opening one card never hollows out its neighbor. */
 .dc-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); align-items: start; }
 @media (min-width: 1000px) {
-  .dc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dc-grid .card { margin-bottom: 0; }
+  .dc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; }
+  .dc-grid .card { margin-bottom: 0; display: flex; flex-direction: column; }
+  .dc-grid .card > .btn-row:last-child,
+  .dc-grid .card > .status-item:last-of-type { margin-top: auto; }
 }
+#dc-detail { margin-top: 12px; }
 /* Data's local nav is the same underline-tab language; it just adds live badges + mobile scroll. */
 .data-tabs { overflow-x: auto; scrollbar-width: thin; white-space: nowrap; }
 .data-tabs button { flex: 0 0 auto; }
@@ -1346,3 +1352,46 @@ body.lvl-expert .showcase-frame { max-height: 375px; }
 
 /* The info bubble must ride ABOVE sticky chrome (topbar/world band) — never under it. */
 .info-pop { position: absolute; z-index: 60; } /* page-anchored: scrolls WITH its trigger */
+
+/* ---------- Sparkline selection cards (Research explorer + Home Markets) ---------- */
+/* Typography for 40s-50s eyes (review): body >=14px, prices lead at 21px. */
+.sym-card { cursor: pointer; }
+.sym-card .t-px { font-size: 21px; }
+.sym-card .t-nm { font-size: 14px; color: var(--text-dim); }
+.sym-card .t-move { font-size: 14px; }
+.spark { position: relative; margin-top: 6px; }
+.spark-slot { min-height: 56px; } /* reserved: sparkline arrival never shifts the card (click-killer rule) */
+.spark-svg { width: 100%; display: block; touch-action: pan-y; }
+.spark-svg polyline { stroke: var(--text-dim); }
+.spark-up polyline { stroke: var(--risk-ok, #2f9e6e); }
+.spark-down polyline { stroke: var(--risk-danger, #d64545); }
+.spark-dot { fill: var(--accent); }
+.spark-readout { font-size: 14px; color: var(--text-dim); margin-top: 2px; min-height: 18px;
+  font-variant-numeric: tabular-nums; }
+.spark-empty { display: flex; align-items: center; font-size: 14px; }
+.spark-ev { position: absolute; top: 0; right: 0; font-size: 10px; }
+.explorer-hint { margin: 2px 0 6px; font-size: 14px; }
+/* Restrained response (review: no perpetual bouncing on a trading screen): lift on
+   hover/focus, compress on press, brief tint on a live tick — all reduced-motion guarded. */
+@media (prefers-reduced-motion: no-preference) {
+  .sym-card { transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+  .sym-card:hover, .sym-card:focus-visible { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(0,0,0,.10); }
+  .sym-card:active { transform: translateY(0) scale(.99); }
+  @keyframes live-tick-up { 0% { background-color: color-mix(in srgb, var(--risk-ok, #2f9e6e) 14%, transparent); } 100% { background-color: transparent; } }
+  @keyframes live-tick-down { 0% { background-color: color-mix(in srgb, var(--risk-danger, #d64545) 14%, transparent); } 100% { background-color: transparent; } }
+  .sym-card.live-tick-up { animation: live-tick-up 0.9s ease-out; }
+  .sym-card.live-tick-down { animation: live-tick-down 0.9s ease-out; }
+}
+.sym-card:hover, .sym-card:focus-visible { border-color: var(--accent); }
+.sym-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sym-card.open { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.rank-badge { margin-right: 8px; }
+
+/* Tablet hero (641-1099px): text+CTA row first, stats a full-width 2x2 below — no dead
+   middle column (review P5.7). Desktop >=1100 keeps the compact one-row band. */
+@media (min-width: 641px) and (max-width: 1099px) {
+  .home-hero-top { flex-wrap: wrap; }
+  .home-hero-top #home-stats { flex-basis: 100%; max-width: none; order: 3; }
+}
+.home-about-row { text-align: center; margin: 10px 0 0; }
+.home-about-row a { color: var(--text-dim); }

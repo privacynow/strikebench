@@ -103,4 +103,22 @@ public enum StrategyFamily {
     public StrategyIntent primaryIntent() { return primaryIntent; }
     public Set<StrategyIntent> intents() { return intents; }
     public boolean servesIntent(StrategyIntent intent) { return intents.contains(intent); }
+
+    /**
+     * Structural shape group — explicit metadata for PRESENTATION diversity (grouping similar
+     * shapes when a result list is summarized). Never used to gate or re-rank the engine's
+     * score-ordered truth. The exhaustive switch (no default) makes the compiler force every
+     * new family to declare its group.
+     */
+    public String structureGroup() {
+        return switch (this) {
+            case CALENDAR_CALL, CALENDAR_PUT, DIAGONAL_CALL, DIAGONAL_PUT -> "time";
+            case IRON_BUTTERFLY, LONG_CALL_BUTTERFLY, LONG_PUT_BUTTERFLY -> "pin";
+            case CREDIT_CALL_SPREAD, CREDIT_PUT_SPREAD, IRON_CONDOR -> "credit";
+            case DEBIT_CALL_SPREAD, DEBIT_PUT_SPREAD -> "debit";
+            case LONG_CALL, LONG_PUT, LONG_STRADDLE, LONG_STRANGLE -> "long";
+            case COVERED_CALL, CASH_SECURED_PUT, PROTECTIVE_COLLAR, PROTECTIVE_PUT -> "stock";
+            case NAKED_CALL, NAKED_PUT, SHORT_STRADDLE, SHORT_STRANGLE -> "short";
+        };
+    }
 }

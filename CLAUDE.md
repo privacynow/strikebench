@@ -1880,6 +1880,76 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     sector rail's min-content re-widened the page at ≤1099px (order:-1 works on grid items too).
   - MATRIX: 391 JUnit + 52 fixture + 5 audit + 4 seeded + 8 live — ALL GREEN. Screenshots
     dom-tests/shots/r2-home-{mobile,1000,desktop}.png.
+- NS PROGRAM: ONE SOURCE OF TRUTH + RESEARCH SELECTION EXPERIENCE (2026-07-11; branch, NOT
+  deployed). The user's Research/Home UX critique + junior's 13-finding review + 7-phase program —
+  ALL EXECUTED (matrix: 393 JUnit + 52 fixture + 5 audit + 4 seeded + 8 live):
+  - NS-0 SERVER-OWNED RISK BUDGET (P0): GET /api/risk-budget {basisType:BUYING_POWER, basisCents,
+    explicitCapCents (declared risk capital), modes[{mode,label,percent,policyBudgetCents,
+    effectiveBudgetCents,capped}]}; header labels ('Cautious · $1.0k/idea', mechanics in tooltips) +
+    ticket #budget-reconcile + guardrail advisory ALL consume it — zero client percentage math;
+    refreshed every render via the GET cache (mutations flush → labels follow trades/resets/worlds).
+    RiskMode enum: LEARNING constant DELETED, parse('learning')→CONSERVATIVE (boundary compat only);
+    the engine catalog gate is GONE — every mode sees one defined-risk catalog. Order(31) pins the
+    contract incl. the risk-capital cap.
+  - NS-1 PRESENTATION-ONLY LEVELS (P0): the beginner aggressive-hide/force-correction DELETED
+    (High selectable at both levels; per-trade acks gate oversize); 0DTE horizon + checkbox visible
+    at both levels, requests honor them (silent '0DTE'→'month' rewrite removed); filterPanel = ALL
+    FIVE limits at both levels (beginner collapsed expandable, plain words; value() submits all);
+    builder = all four limits both levels, judged + sent; backtest = ONE full family menu (BT_LEVEL_
+    ALLOWED deleted, foundational-first ordering) + both engines at both levels; sim-creator vol/seed
+    persisted values apply regardless of level. Cross-level invariance DOM test: identical persisted
+    state → byte-identical /api/recommend request at both levels (replaces the sanitization pin).
+  - NS-2 RANKING TRUTH (P1): engine returns the COMPLETE score-sorted list (top-5 cap + in-engine
+    diversity trim deleted); StrategyFamily.structureGroup() = explicit exhaustive-switch metadata
+    (compiler forces new families to declare); /api/strategies gains a full `catalog` (display/
+    group/foundationalRank/definedRisk/...); diversity is PRESENTATION: beginner renderRankedCards
+    shows diverse representatives (max 2/group, top 5) with #-rank badges + 'Show all N ranked
+    strategies'; expert comparison table gets a leading '#' rank column pinned to the SERVED order
+    (sortable columns never masquerade as ranking). worldVerifyPanel is genuine verification now:
+    the session REPORT feeds it (open+closed decisions, sim-clock entry, predicted POP vs Now/
+    Result, MAE/MFE, popVsOutcome calibration line), duplicate empty-state CTA removed, observed-
+    record ('#/portfolio/record') linked with the lane rule stated.
+  - NS-3 ATOMIC TRANSITIONS (P1): transitionWorld HYDRATES FIRST (strict /api/universe + one 1.5s
+    retry) and only then COMMITS synchronously (world/worldGen/lane stash/ticket drop/flush/store/
+    band/banner/datalist) — a failed transition leaves the app honestly in the PREVIOUS market and
+    the promise REJECTS (tail .then(clear,clear) swallow removed; callers .catch quietly, the
+    #transition-error banner is the surface; transitionStatus pending/committed/failed). boot
+    exposes App.worldReady; the welcome proof awaits it (boot-lane race) and proof + decision
+    caches key by the immutable activeDataset ID, not the display name.
+  - NS-4 RESEARCH SELECTION EXPERIENCE: GET /api/sparklines?symbols=&range= — ONE batch over the
+    shared candles cache (store-first/providers/world-memory/fixture walks; window computation
+    IDENTICAL to /history so the cache key is shared; ≤64 closes/symbol; 15-min negative memo so
+    live-keyless dead symbols never re-trigger the provider chain; honest available:false rows;
+    virtual-thread fill gated at 4). UI.sparkline (gain/loss polyline, pointer + ArrowKey readout
+    'Jul 3 · $255.30' at ≥14px, honest empty). Sector tiles → ONE selectable sym-card each (NO
+    per-card Research/Ideas buttons; pressable + aria-expanded; 21px price, 14px body; sparkline +
+    OBSERVED/DEMO/SIMULATED evidence badge; MarketStore-subscribed live prices w/ tick tint;
+    restrained hover-lift/press/reduced-motion). One instruction line + shared 1M/3M/YTD selector
+    above the grid. The preview owns the TWO commands: 'Open full analysis' + 'Find strategies'
+    (gated disabled w/ honest title when no quote/options). Vocabulary standardized: 'Find
+    strategies' everywhere ('Trade ideas'/'Get ideas for X'/tile 'Ideas' gone).
+  - NS-5 HOME RATIONALIZED: brand → #/home (the desk, never a surprise tour); hero owns THE single
+    contextual CTA (tour demoted to a quiet 'About StrikeBench · take the tour' footer link, same
+    #home-tour-link id); command bar = Builder/Backtest/Simulate only (nav destinations not
+    repeated); continuity chips speak RESUME ('Resume: QQQ analysis →'); Markets tiles reuse the
+    sparkline card, direct-to-analysis; tablet band (641-1099) wraps stats to a full-width row
+    under text+CTA (no dead middle). Welcome/Home stay two STATES of one entry (per junior: welcome
+    answers 'what is this', home answers 'what now') — content never merged.
+  - NS-6 DATA SYMMETRY + HONEST HEALTH: provider-health summary chip TEXT = the same aggregated
+    WORST state as its color (rank ERROR/COOLDOWN>EMPTY/STALE>UNKNOWN>OK; tooltip 'N of M sources
+    OK') — a red chip can never say OK; .dc-grid desktop rows STRETCH (flex-column cards, action
+    rows pinned bottom); expanded detail (per-symbol engine state, per-source detail, NEW expert
+    'API latency p50/p95 by route class' panel from /api/metrics) lives in the #dc-detail drawer
+    BELOW the 2×2 — expanding never hollows a neighbor; 'Errors' → 'Errors since startup' w/
+    tooltip; latencyClass gains backtest/world/data-ops/broker buckets (+sparklines→quotes,
+    optimize→compute, positions→trading, lab→research). DOM gates: paired card tops/bottoms ≤2px,
+    chip text matches color class, drawer below grid.
+  - GOTCHAS: a python patcher that interpolates a variable INSIDE a JS string literal emits
+    literal '+ D +' — page error 'D is not defined' broke two tests before the grep; chip() takes
+    (label, value, title). The comparison table's R:R renderer self-references COLS by index —
+    prepending a column shifts it.
+  - Screenshots dom-tests/shots/ns-{research-cards,research-preview,research-dark,home,data-
+    overview}.png.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
