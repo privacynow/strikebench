@@ -9,9 +9,9 @@ import static io.liftandshift.strikebench.strategy.StrategyIntent.HEDGE;
 import static io.liftandshift.strikebench.strategy.StrategyIntent.INCOME;
 
 /**
- * The strategy catalog. riskRank gates recommendation by risk mode:
- * 1 = learning, 2 = conservative, 3 = balanced, 4 = aggressive, 99 = never recommended
- * (undefined-risk families are blocked by default everywhere and shown only as rejected examples).
+ * The strategy catalog. riskRank is a foundational-ordering hint for education surfaces:
+ * 1 = foundational through 4 = advanced, 99 = blocked-by-default undefined risk. It never gates
+ * the catalog by experience level or capital-risk mode; safety gates and the decision policy own that.
  * intents() answers WHY someone trades the family (see StrategyIntent); the first is primary.
  */
 public enum StrategyFamily {

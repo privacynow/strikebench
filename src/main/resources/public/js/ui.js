@@ -107,7 +107,7 @@
       ? (age === 'STALE' ? 'badge-danger' : age === 'DELAYED' ? 'badge-warn' : 'badge-ok')
       : p === 'DEMO' ? 'badge-warn'
       : p === 'SIMULATED' ? 'badge-sim'
-      : p === 'MODELED' || p === 'MIXED' ? 'badge-caution' : 'badge-danger';
+      : p === 'MODELED' || p === 'MIXED' ? 'badge-caution' : 'badge-dim';
     return el('span', { class: 'badge evidence-badge ' + cls + (opts && opts.className ? ' ' + opts.className : ''),
       title: evidence.source ? ('Source: ' + evidence.source) : null }, label);
   }

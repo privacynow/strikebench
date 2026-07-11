@@ -83,8 +83,13 @@ public final class Http {
     }
 
     public static final class ProviderHttpException extends RuntimeException {
+        private final int statusCode;
+
         public ProviderHttpException(String url, int status, String detail) {
             super("HTTP " + (status > 0 ? status : "error") + " from " + url + (detail == null || detail.isBlank() ? "" : ": " + detail));
+            this.statusCode = status;
         }
+
+        public int statusCode() { return statusCode; }
     }
 }

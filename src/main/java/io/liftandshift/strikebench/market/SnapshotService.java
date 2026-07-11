@@ -82,8 +82,9 @@ public final class SnapshotService {
                 underlyingRows += written[0];
                 optionRows += written[1];
             } catch (RuntimeException e) {
-                log.warn("snapshot for {} failed: {}", sym, e.toString());
-                errors.add(sym + ": " + e.getClass().getSimpleName() + " " + e.getMessage());
+                log.warn("Market snapshot for {} could not be saved", sym);
+                log.debug("Market snapshot failure detail for " + sym, e);
+                errors.add(sym + ": snapshot unavailable; check source health and retry");
             }
         }
 

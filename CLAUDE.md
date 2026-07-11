@@ -1990,6 +1990,38 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     5 responsive audit widths + 4 grown-state + 8 live-provider DOM, all green**. Live gates explicitly
     forbid Demo substitution in Observed Research/backtests. Final screenshots are the
     `dom-tests/shots/release-*.png` set.
+- POST-IC ADVERSARIAL HARDENING (2026-07-11; branch, NOT deployed): a code + real-browser review of
+  the committed IC result, including the user's full observed universe and local accumulated state:
+  - HOME COMPOSITION: the 13-sector rail's intrinsic width escaped through `#sector-pulse` and widened
+    the right column/document to ~2,900px; the fixture audit had only one Demo sector and missed it.
+    Every nested grid/rail boundary is now min-width/overflow contained, and the composition gate
+    injects the full observed catalog. Home uses one resume action and a 2x2 desktop journey; pulse and
+    side edges measure identically, document width equals viewport width.
+  - PROGRESSIVE NAVIGATION: `data-route` now commits with the shell, before any account/quote/trade fill,
+    so cold observed Home never flashes expanded stat explanations. Native View Transitions were
+    removed after rapid navigation left `updateCallbackDone` pending for Chromium's 30-second timeout;
+    the synchronous skeleton + card-arrival motion preserves continuity without owning control flow.
+  - COMPLETE LANE OWNERSHIP: ETF replication, the retained hypothesis API, symbol lookup, and their
+    output evidence now take the active world explicitly. Unknown/deleted worlds fail closed instead of
+    falling into Observed. Simulation calibration describes OBSERVED/DEMO plus data age, never calls a
+    delayed chain "live". Missing-source age alone can no longer infer OBSERVED provenance.
+  - INPUT HONESTY: explicit Demo rates remain Demo-only; an exhausted Observed rate chain uses the
+    disclosed MODELED default. Ticket review shows the annual rate and evidence. Multi-provider
+    aggregates name `multiple inputs`; unavailable/error sparkline rows carry MISSING evidence and
+    generic product wording, never exception internals.
+  - LARGE-MARKET PERFORMANCE: Research sparklines load only near the viewport, sequentially in <=16-
+    symbol batches; all cards in a 24-symbol regression resolve to a chart or honest unavailable state.
+    Home renders history evidence separately from quote freshness with reserved, non-overlapping layout.
+    If a speculative chart request yields to interactive work, every card terminates in an explicit
+    MISSING state rather than remaining blank or "queued"; no retry loop pressures a cooling source.
+  - FIRST IMPRESSION: Welcome resolves a valid no-candidate engine response as disciplined "no trade
+    passes" evidence and bounds a cold proof refresh at six seconds. Startup logs say local data
+    store/schema/snapshot cache; framework and storage implementation chatter is suppressed. Public
+    reset/job/provider/error contracts use product areas and stable messages, not schema names,
+    exception classes, SQL, endpoint bodies, or stack traces.
+  - FINAL GATES: **408 clean JUnit + 57 fixture DOM + 5 responsive audit widths + 4 grown-state +
+    8 live-provider DOM, all green**. Fresh real-browser review covered cold + settled Home, Research,
+    Data Overview, and Welcome; responsive audit remains clip-free down to 320px.
 - EXTERNAL OPERATIONAL DEPENDENCIES (not buildable without owner credentials/access): enabling Google
   sign-in needs the OIDC client secret; production cutover needs the deployment host and production data
   session. Optional licensed/provider and brokerage credentials enrich observed history and broker

@@ -1516,7 +1516,8 @@ public final class TradeService {
             audit.log(accountId, tradeId, action, level, detail);
         } catch (RuntimeException e) {
             org.slf4j.LoggerFactory.getLogger(TradeService.class)
-                    .warn("post-commit audit write failed for {} {}: {}", action, tradeId, e.toString());
+                    .warn("A completed paper-trade action could not be added to the activity record: {} {}", action, tradeId);
+            org.slf4j.LoggerFactory.getLogger(TradeService.class).debug("Paper-trade audit detail for " + action + " " + tradeId, e);
         }
     }
 

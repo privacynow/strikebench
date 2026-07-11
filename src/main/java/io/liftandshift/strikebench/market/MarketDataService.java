@@ -101,6 +101,11 @@ public final class MarketDataService {
 
     public MarketLane lane(String worldId) { return MarketLane.of(worldId, fixtureOnlyChain); }
 
+    /** The complete analysis lane: execution market plus the caller's selected dataset. */
+    public MarketLane lane(String worldId, io.liftandshift.strikebench.db.AnalysisContext context) {
+        return MarketLane.of(worldId, fixtureOnlyChain, context);
+    }
+
     public void invalidateAll() {
         quoteCache.invalidateAll();
         chainCache.invalidateAll();
@@ -130,6 +135,27 @@ public final class MarketDataService {
             }
         }
         return merged;
+    }
+
+    /** Lookup within the selected market; explicit worlds never suggest symbols from Observed. */
+    public List<SymbolMatch> lookup(String query, String worldId) {
+        if (observedWorld(worldId)) return lookup(query);
+        String needle = norm(query);
+        return worldSymbols(worldId).orElseGet(java.util.Set::of).stream()
+                .filter(sym -> needle.isBlank() || sym.contains(needle))
+                .sorted()
+                .limit(40)
+                .map(sym -> quote(sym, worldId)
+                        .map(q -> new SymbolMatch(sym,
+                                q.description() == null || q.description().isBlank()
+                                        ? marketLabel(worldId) + " symbol" : q.description(),
+                                q.optionable()))
+                        .orElseGet(() -> new SymbolMatch(sym, marketLabel(worldId) + " symbol", true)))
+                .toList();
+    }
+
+    private static String marketLabel(String worldId) {
+        return "demo".equalsIgnoreCase(worldId) ? "Demo market" : "Simulated market";
     }
 
     /** Resolves a simulated world by id. Unknown explicit ids stay unavailable; they never fall through to Observed. */
@@ -377,12 +403,17 @@ public final class MarketDataService {
         }
         RateQuote r = rateCache.get(days, d -> {
             for (RatesProvider p : ratesProviders) {
+                // Fixture rates belong only to the explicit Demo build/lane. In an Observed
+                // chain, exhausted Treasury/FRED sources fall through to the MODELED default;
+                // disclosure never grants a Demo input permission to enter Observed pricing.
+                if (!fixtureOnlyChain && FIXTURE.equalsIgnoreCase(p.name())) continue;
                 try {
                     OptionalDouble v = p.riskFreeRate(d);
                     if (v.isPresent()) {
                         recordOk(p.name(), Domain.RATES);
                         return new RateQuote(v.getAsDouble(),
-                                io.liftandshift.strikebench.model.DataEvidence.of(p.name(), Freshness.EOD));
+                                io.liftandshift.strikebench.model.DataEvidence.of(p.name(),
+                                        FIXTURE.equalsIgnoreCase(p.name()) ? Freshness.FIXTURE : Freshness.EOD));
                     }
                     recordEmpty(p.name(), Domain.RATES);
                 } catch (Exception e) {
@@ -494,10 +525,22 @@ public final class MarketDataService {
     }
 
     private void recordError(String provider, Domain d, Exception e) {
-        log.warn("provider {} failed for {}: {}", provider, d, e.toString());
+        String detail = publicProviderFailure(e);
+        log.warn("Market source {} could not serve {}: {}", provider, d, detail);
+        log.debug("Market source failure detail for " + provider + " " + d, e);
         statusByKey.merge(key(provider, d),
-                new ProviderStatusInfo(provider, d.name(), "ERROR", e.getClass().getSimpleName() + ": " + e.getMessage(), null, System.currentTimeMillis()),
+                new ProviderStatusInfo(provider, d.name(), "ERROR", detail, null, System.currentTimeMillis()),
                 (old, fresh) -> new ProviderStatusInfo(provider, d.name(), "ERROR", fresh.detail(), old.lastSuccessEpochMs(), fresh.lastErrorEpochMs()));
+    }
+
+    static String publicProviderFailure(Exception e) {
+        if (e instanceof io.liftandshift.strikebench.market.providers.Http.ProviderHttpException http) {
+            return http.statusCode() > 0 ? "source returned HTTP " + http.statusCode() : "source connection failed";
+        }
+        String message = e.getMessage() == null ? "" : e.getMessage().toLowerCase(Locale.ROOT);
+        if (message.contains("timeout") || message.contains("timed out")) return "source timed out";
+        if (Thread.currentThread().isInterrupted() || message.contains("interrupted")) return "source request was interrupted";
+        return "source request failed";
     }
 
     private static String norm(String symbol) {

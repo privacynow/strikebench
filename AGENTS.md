@@ -24,7 +24,10 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
 - Welcome/Home have distinct product/desk jobs on one hero frame; Home is a balanced trading desk.
   Data is route-tabbed with a symmetric 2x2 desktop Overview and a full simulated-market control room.
   Responsive gates cover 1280/1000/390/375/320px without horizontal overflow.
-- Final clean release gate: **405 JUnit + 53 fixture DOM + 5 responsive audit + 4 grown-state +
+- Post-release adversarial hardening closes full-sector Home overflow, progressive-navigation stalls,
+  large-world sparkline batching, per-input rate/history evidence, and the remaining world-unaware
+  research-tool seams. Missing history stays visibly unavailable; it never gains a fabricated chart.
+- Final clean release gate: **408 JUnit + 57 fixture DOM + 5 responsive audit + 4 grown-state +
   8 live-provider DOM, all green**. Use `mvn clean test` after deleting/renaming test classes; an
   incremental run can otherwise execute stale compiled tests. Representative screenshots:
   `dom-tests/shots/release-*.png`.

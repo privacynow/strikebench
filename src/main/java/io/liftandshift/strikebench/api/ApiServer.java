@@ -288,7 +288,9 @@ public final class ApiServer {
             // of wedging Javalin's task loop.
             c.router.javaLangErrorHandler((res, error) -> {
                 res.setStatus(500);
-                log.error("java.lang.Error while serving a request{}", jarChangedHint(), error);
+                boolean changed = !jarChangedHint().isEmpty();
+                log.error("A request could not be served{}", changed ? " because the running build changed; restart StrikeBench" : "");
+                log.debug("Request failure detail", error);
             });
             c.jsonMapper(new JavalinJackson(Json.MAPPER, true));
             c.startup.showJavalinBanner = false;
@@ -421,7 +423,7 @@ public final class ApiServer {
             c.routes.post("/api/research/hypotheses", ctx ->
                     ctx.json(new io.liftandshift.strikebench.research.HypothesisTester(market)
                             .test(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.HypothesisTester.HypothesisRequest.class)),
-                                    analysisCtx(ctx))));
+                                    analysisCtx(ctx), worldParam(activeWorld(ctx)))));
             c.routes.post("/api/research/notes", this::noteCreate);
             c.routes.get("/api/research/notes", this::noteList);
             c.routes.get("/api/research/notes/{id}", this::noteGet);
@@ -463,7 +465,8 @@ public final class ApiServer {
             c.routes.post("/api/optimize", this::optimize);
             c.routes.post("/api/trade/replicate", ctx ->
                     ctx.json(new io.liftandshift.strikebench.research.ETFReplicator(market)
-                            .replicate(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ETFReplicator.ReplicationRequest.class)))));
+                            .replicate(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ETFReplicator.ReplicationRequest.class)),
+                                    worldParam(activeWorld(ctx)))));
             c.routes.get("/api/evaluations", ctx -> {
                 String uid = auth.currentUserId(ctx);
                 String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
@@ -670,8 +673,14 @@ public final class ApiServer {
                     ctx.status(409).json(Map.of("error", "conflict", "detail", String.valueOf(e.getMessage()))));
             c.routes.exception(Exception.class, (e, ctx) -> {
                 apiErrors.incrementAndGet();
-                log.error("unhandled error on {} {}{}", ctx.method(), ctx.path(), jarChangedHint(), e);
-                ctx.status(500).json(Map.of("error", "internal", "detail", String.valueOf(e.getMessage()) + jarChangedHint()));
+                boolean changed = !jarChangedHint().isEmpty();
+                log.error("Request failed on {} {}{}", ctx.method(), ctx.path(),
+                        changed ? " because the running build changed; restart StrikeBench" : "");
+                log.debug("Request failure detail on " + ctx.method() + " " + ctx.path(), e);
+                String detail = changed
+                        ? "StrikeBench changed while it was running. Restart it and try again."
+                        : "The request failed unexpectedly. Retry it, then check Data health if the problem persists.";
+                ctx.status(500).json(Map.of("error", "internal", "detail", detail));
             });
             c.routes.error(404, ctx -> {
                 if (ctx.path().startsWith("/api") && ctx.attribute("apiErrorWritten") == null) {
@@ -707,7 +716,10 @@ public final class ApiServer {
         long periodSec = Math.max(1, (long) cfg.snapshotIntervalHours()) * 3600L;
         snapshotScheduler.scheduleWithFixedDelay(() -> {
             try { snapshots.snapshotActiveUniverse(); }
-            catch (RuntimeException e) { log.warn("scheduled snapshot failed: {}", e.toString()); }
+            catch (RuntimeException e) {
+                log.warn("Scheduled market snapshot did not complete; the next run will retry");
+                log.debug("Scheduled market-snapshot detail", e);
+            }
         }, initial, periodSec, java.util.concurrent.TimeUnit.SECONDS);
         log.info("snapshot scheduler on — first run in {}s, then every {}h", initial, cfg.snapshotIntervalHours());
     }
@@ -727,7 +739,8 @@ public final class ApiServer {
                 client.send(req, java.net.http.HttpResponse.BodyHandlers.discarding());
             }
         } catch (Exception e) {
-            log.warn("error-pipeline warmup failed (non-fatal): {}", e.toString());
+            log.warn("Startup request checks did not complete; restart if requests fail");
+            log.debug("Startup request-check detail", e);
         }
     }
 
@@ -1059,9 +1072,9 @@ public final class ApiServer {
                     double hv = io.liftandshift.strikebench.pricing.HistoricalVol.annualized(series.candles(), 30);
                     if (Double.isFinite(hv) && hv > 0 && hv <= 5.0) {
                         symVols.put(sym, hv);
-                        boolean demoCandles = series.freshness() == io.liftandshift.strikebench.model.Freshness.FIXTURE;
-                        cal.append("vol ").append(Math.round(hv * 100)).append("% from HV30")
-                                .append(demoCandles ? " (DEMO candles)" : " (observed candles)");
+                        var ev = series.evidence();
+                        cal.append("vol ").append(Math.round(hv * 100)).append("% from HV30 (")
+                                .append(ev.provenance().name()).append(" · ").append(ev.age().name()).append(")");
                     }
                 }
             } catch (RuntimeException ignored) { /* no candle source — session knob applies */ }
@@ -1078,9 +1091,9 @@ public final class ApiServer {
                         if (atm != null && Double.isFinite(atm) && atm > 0 && atm <= 5.0) {
                             symIvs.put(sym, atm);
                             if (!cal.isEmpty()) cal.append(" · ");
-                            boolean demoChain = chain.freshness() == io.liftandshift.strikebench.model.Freshness.FIXTURE;
                             cal.append("IV ").append(Math.round(atm * 100)).append("% from the ")
-                                    .append(demoChain ? "demo" : "live").append(" chain's ATM strike");
+                                    .append(chain.evidence().provenance().name()).append(" · ")
+                                    .append(chain.evidence().age().name()).append(" chain's ATM strike");
                         }
                     }
                 }
@@ -1171,7 +1184,8 @@ public final class ApiServer {
                         "user", owner == null ? "local" : owner, "state", "late"));
             }
         } catch (RuntimeException e) {
-            log.warn("background world resolution failed for {}: {}", worldId, e.toString());
+            log.warn("Simulated market {} could not finish preparing", worldId);
+            log.debug("Simulated-market preparation detail for " + worldId, e);
         }
     }
 
@@ -1381,9 +1395,10 @@ public final class ApiServer {
             out.put("fixturesOnly", cfg.fixturesOnly());
             out.put("domains", market.status());
         } catch (Exception e) {
-            log.warn("status assembly failed", e);
+            log.warn("Market-data status is temporarily unavailable");
+            log.debug("Market-data status failure detail", e);
             out.put("ok", false);
-            out.put("error", String.valueOf(e.getMessage()));
+            out.put("error", "Market-data status is temporarily unavailable");
         }
         ctx.json(out); // 200 always, by contract
     }
@@ -1569,7 +1584,12 @@ public final class ApiServer {
         out.put("errors", apiErrors.get());
         out.put("throttled", apiThrottled.get());
         out.put("throttleActive", !cfg.fixturesOnly());
-        try { out.put("engine", marketEngine.status()); } catch (Exception e) { out.put("engine", Map.of("error", e.toString())); }
+        try {
+            out.put("engine", marketEngine.status());
+        } catch (Exception e) {
+            log.debug("Market-engine metrics failure detail", e);
+            out.put("engine", Map.of("error", "Market engine status is temporarily unavailable"));
+        }
         ctx.json(out);
     }
 
@@ -2450,7 +2470,7 @@ public final class ApiServer {
         var tier = io.liftandshift.strikebench.db.DataResetService.parseTier(b.tier());
         var result = dataReset.reset(tier);
         datasets.invalidateActiveCache(); // the settings row is gone; in-memory state must follow
-        try { audit.log(null, null, "DATA_RESET", "WARN", Map.of("tier", result.tier(), "tables", result.tablesCleared())); }
+        try { audit.log(null, null, "DATA_RESET", "WARN", Map.of("tier", result.tier(), "areas", result.areasCleared())); }
         catch (Exception e) { /* best-effort; the reset itself succeeded */ }
         ctx.json(result);
     }
@@ -2727,6 +2747,7 @@ public final class ApiServer {
                     row.put("available", false);
                     row.put("closes", List.of());
                     row.put("note", "No daily-candle source for this symbol right now \u2014 quotes still work.");
+                    row.put("evidence", io.liftandshift.strikebench.model.DataEvidence.missing("daily history unavailable"));
                     rows.put(sym, row);
                     return;
                 }
@@ -2740,6 +2761,9 @@ public final class ApiServer {
                             row.put("available", false);
                             row.put("closes", List.of());
                             row.put("note", "No daily-candle source for this symbol right now \u2014 quotes still work.");
+                            row.put("evidence", series == null
+                                    ? io.liftandshift.strikebench.model.DataEvidence.missing("daily history unavailable")
+                                    : series.evidence());
                         } else {
                             // Trim to <=64 points: a sparkline needs shape, not every bar.
                             int stride = Math.max(1, (int) Math.ceil(candles.size() / 64.0));
@@ -2767,10 +2791,15 @@ public final class ApiServer {
                     }
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
+                    row.put("available", false);
+                    row.put("closes", List.of());
+                    row.put("note", "History lookup was interrupted \u2014 try again.");
+                    row.put("evidence", io.liftandshift.strikebench.model.DataEvidence.missing("history interrupted"));
                 } catch (RuntimeException e) {
                     row.put("available", false);
                     row.put("closes", List.of());
-                    row.put("note", "History lookup failed \u2014 " + e.getMessage());
+                    row.put("note", "History lookup failed \u2014 try again or check Data source health.");
+                    row.put("evidence", io.liftandshift.strikebench.model.DataEvidence.missing("history lookup failed"));
                 }
                 rows.put(sym, row);
             }));
@@ -2783,7 +2812,8 @@ public final class ApiServer {
         body.put("sparklines", out);
         body.put("totalRequested", totalRequested);
         body.put("truncated", truncated);
-        if (truncated) body.put("note", "Showing the first 16 symbols; request another page for the rest.");
+        body.put("batchLimit", 16);
+        if (truncated) body.put("note", "Showing the first 16 symbols in this response; send additional symbol batches for the rest.");
         if (world != null) body.put("world", world);
         ctx.json(body);
     }
@@ -2833,7 +2863,7 @@ public final class ApiServer {
 
     private void lookup(Context ctx) {
         String q = ctx.queryParam("q");
-        ctx.json(Map.of("matches", q == null ? List.of() : market.lookup(q)));
+        ctx.json(Map.of("matches", q == null ? List.of() : market.lookup(q, activeWorld(ctx))));
     }
 
     // ---- Recommendations ----
@@ -2874,7 +2904,8 @@ public final class ApiServer {
             out.put("ranking", "decision"); // disclosed: what ordered this list
             return out;
         } catch (RuntimeException e) {
-            log.warn("decision ranking unavailable — serving screen order: {}", e.toString());
+            log.warn("Decision ranking is temporarily unavailable; showing the screened order");
+            log.debug("Decision-ranking failure detail", e);
             return result;
         }
     }
@@ -2933,7 +2964,10 @@ public final class ApiServer {
         String recommendationId = null;
         if (!evals.isEmpty() && !inWorld) {
             try { recommendationId = evaluations.recordSurfaced(evals.getFirst().id(), ownerId); }
-            catch (RuntimeException e) { log.warn("could not record recommendation: {}", e.toString()); }
+            catch (RuntimeException e) {
+                log.warn("A recommendation could not be added to the learning record");
+                log.debug("Recommendation-record detail", e);
+            }
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("symbol", result.symbol());
@@ -3121,7 +3155,10 @@ public final class ApiServer {
                 ctx.json(out);
                 return;
             }
-        } catch (RuntimeException e) { log.warn("ladder decision annotation unavailable: {}", e.toString()); }
+        } catch (RuntimeException e) {
+            log.warn("Ladder decision details are temporarily unavailable");
+            log.debug("Ladder decision-detail failure", e);
+        }
         ctx.json(ladder);
     }
 
@@ -3434,7 +3471,10 @@ public final class ApiServer {
         if (body != null && body.recommendationId() != null && !body.recommendationId().isBlank()
                 && acct.worldId() == null) {
             try { evaluations.linkTrade(body.recommendationId(), t.id()); }
-            catch (RuntimeException e) { log.warn("could not link recommendation: {}", e.toString()); }
+            catch (RuntimeException e) {
+                log.warn("The paper trade could not be linked to its recommendation record");
+                log.debug("Recommendation-link detail", e);
+            }
         }
         ctx.status(201).json(Map.of("trade", TradeView.of(t), "warnings", verdict.warnings()));
     }
@@ -3502,7 +3542,12 @@ public final class ApiServer {
         TradeRecord t = trades.get(id);
         TradeService.MarkView current = null;
         if (TradeRecord.ACTIVE.equals(t.status())) {
-            try { current = trades.currentMark(id); } catch (Exception e) { log.warn("mark failed for {}", id, e); }
+            try {
+                current = trades.currentMark(id);
+            } catch (Exception e) {
+                log.warn("Current paper-trade mark is unavailable for {}", id);
+                log.debug("Paper-trade mark detail for " + id, e);
+            }
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("trade", TradeView.of(t));
@@ -3600,7 +3645,10 @@ public final class ApiServer {
             if (!acctRows.isEmpty() && acctRows.getFirst() != null) return; // sim lane: not recorded
             evaluations.resolveByTrade(tradeId, status, pnlCents);
         }
-        catch (RuntimeException e) { log.warn("could not resolve recommendation for {}: {}", tradeId, e.toString()); }
+        catch (RuntimeException e) {
+            log.warn("Recommendation context is unavailable for trade {}", tradeId);
+            log.debug("Recommendation-context detail for " + tradeId, e);
+        }
     }
 
     private void tradeDelete(Context ctx) {

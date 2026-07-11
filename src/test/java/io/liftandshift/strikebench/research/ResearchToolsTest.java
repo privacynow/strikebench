@@ -5,6 +5,8 @@ import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
+import io.liftandshift.strikebench.model.DataProvenance;
+import io.liftandshift.strikebench.support.ObservedFixtureProvider;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -24,6 +26,13 @@ class ResearchToolsTest {
         return new MarketDataService(List.<MarketDataProvider>of(f), List.<NewsFilingsProvider>of(f), List.<RatesProvider>of(f));
     }
 
+    private MarketDataService observedMarketWithNoWorlds() {
+        var observed = new ObservedFixtureProvider(CLOCK);
+        var market = new MarketDataService(List.<MarketDataProvider>of(observed), List.of(), List.of());
+        market.setWorldResolver(id -> java.util.Optional.empty());
+        return market;
+    }
+
     @Test void hypothesisTestReportsAnHonestVerdictAndIsDeterministic() {
         var req = new HypothesisTester.HypothesisRequest("AAPL", "2026-01-02", "2026-06-01", 20, 0.0, 10);
         var r = new HypothesisTester(market()).test(req);
@@ -33,6 +42,7 @@ class ResearchToolsTest {
         assertThat(r.expectedByChance()).isEqualTo(0.5);
         assertThat(Double.isFinite(r.zScore())).isTrue();
         assertThat(r.verdict()).isNotBlank();
+        assertThat(r.evidence().provenance()).isEqualTo(DataProvenance.DEMO);
         assertThat(r.notes()).anyMatch(n -> n.toLowerCase().contains("not a forecast"));
 
         var r2 = new HypothesisTester(market()).test(req);
@@ -58,6 +68,7 @@ class ResearchToolsTest {
         assertThat(rep.deltaExposureCents()).isPositive();
         assertThat(rep.shareCostCents()).isPositive();
         assertThat(rep.notes()).anyMatch(n -> n.contains("Delta-1"));
+        assertThat(rep.evidence().provenance()).isEqualTo(DataProvenance.DEMO);
     }
 
     @Test void bearishReplicationIsAShortSynthetic() {
@@ -65,5 +76,20 @@ class ResearchToolsTest {
                 new ETFReplicator.ReplicationRequest("AAPL", 10_000_000L, false));
         assertThat(rep.structure()).contains("Synthetic SHORT");
         assertThat(rep.deltaExposureCents()).isNegative();
+    }
+
+    @Test void explicitUnknownWorldNeverFallsThroughToObservedResearchInputs() {
+        var market = observedMarketWithNoWorlds();
+        var study = new HypothesisTester(market).test(
+                new HypothesisTester.HypothesisRequest("AAPL", "2026-01-02", "2026-06-01", 20, 0.0, 10),
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, "missing-world");
+        var replication = new ETFReplicator(market).replicate(
+                new ETFReplicator.ReplicationRequest("AAPL", 10_000_000L, true), "missing-world");
+
+        assertThat(study.sample()).isZero();
+        assertThat(study.evidence().provenance()).isEqualTo(DataProvenance.MISSING);
+        assertThat(study.verdict()).containsIgnoringCase("unavailable");
+        assertThat(replication.contracts()).isZero();
+        assertThat(replication.evidence().provenance()).isEqualTo(DataProvenance.MISSING);
     }
 }

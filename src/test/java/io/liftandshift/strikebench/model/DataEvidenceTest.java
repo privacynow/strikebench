@@ -40,4 +40,21 @@ class DataEvidenceTest {
         assertThat(MarketLane.of("demo", false)).isEqualTo(MarketLane.DEMO);
         assertThat(MarketLane.of("observed", true)).isEqualTo(MarketLane.DEMO);
     }
+
+    @Test
+    void observedAgeWithoutAnAttributableSourceFailsClosed() {
+        DataEvidence unattributed = DataEvidence.of(null, Freshness.DELAYED);
+        assertThat(unattributed.provenance()).isEqualTo(DataProvenance.MISSING);
+        assertThat(unattributed.executableIn(MarketLane.OBSERVED)).isFalse();
+    }
+
+    @Test
+    void sameProvenanceFromSeveralSourcesKeepsObservedButNamesMultipleInputs() {
+        DataEvidence aggregate = DataEvidence.aggregate(List.of(
+                DataEvidence.of("cboe", Freshness.DELAYED),
+                DataEvidence.of("stored-observed", Freshness.EOD)));
+        assertThat(aggregate.provenance()).isEqualTo(DataProvenance.OBSERVED);
+        assertThat(aggregate.age()).isEqualTo(DataAge.EOD);
+        assertThat(aggregate.source()).isEqualTo("multiple inputs");
+    }
 }

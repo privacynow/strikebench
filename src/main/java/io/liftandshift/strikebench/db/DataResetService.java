@@ -9,7 +9,7 @@ import java.util.Locale;
 
 /**
  * Tiered "reset data" for the Data Center — from clearing just market history up to a full
- * fresh-deploy wipe. Each tier deletes an explicit, FK-safe list of tables inside ONE transaction
+ * fresh-deploy wipe. Each tier deletes an explicit, dependency-safe set of records inside ONE transaction
  * (all-or-nothing), and paper/everything re-seed a funded default account so the app is usable
  * immediately after. Table names are hardcoded constants (never user input). The caller enforces
  * typed confirmation + admin auth before invoking this.
@@ -18,24 +18,32 @@ public final class DataResetService {
 
     private static final Logger log = LoggerFactory.getLogger(DataResetService.class);
 
-    // Every table the tier touches. Entries may carry a predicate ("dataset WHERE id <> 'observed'")
-    // — the display name shown to the user is the part before WHERE. The 'observed' dataset registry
-    // row is schema seed data (bar tables default/FK onto it), never user data, so it survives.
+    // Storage targets stay internal. Product-facing responses use areas, never schema names.
     public enum Tier {
         MARKET_DATA(List.of("option_bar", "underlying_bar", "market_snapshot",
                 "dataset WHERE id NOT IN ('observed','demo-fixture')", "settings WHERE k LIKE 'active_dataset%' OR k = 'cboe_cooldown_until'",
-                "data_job_item", "data_job"), false),
-        RESEARCH(List.of("recommendation", "strategy_evaluation", "backtests", "research_note"), false),
-        PAPER(List.of("trade_marks", "ledger", "positions", "live_orders", "audit", "trades", "accounts"), true),
+                "data_job_item", "data_job"), List.of(
+                        "Market history and snapshots", "Generated datasets", "Background data jobs", "Active data selection"), false),
+        RESEARCH(List.of("recommendation", "strategy_evaluation", "backtests", "research_note"), List.of(
+                "Saved recommendations", "Evaluations", "Backtests", "Research notes"), false),
+        PAPER(List.of("trade_marks", "ledger", "positions", "live_orders", "audit", "trades", "accounts"), List.of(
+                "Paper trades and marks", "Share positions", "Paper orders", "Practice ledger and account"), true),
         EVERYTHING(List.of("option_bar", "underlying_bar", "market_snapshot", "dataset WHERE id NOT IN ('observed','demo-fixture')",
                 "data_job_item", "data_job",
                 "recommendation", "strategy_evaluation", "backtests", "research_note", "workspace",
                 "trade_marks", "ledger", "positions", "live_orders", "audit", "trades",
-                "secrets", "settings", "accounts"), true);
+                "secrets", "settings", "accounts"), List.of(
+                        "Market data and datasets", "Research and backtests", "Paper portfolio and account",
+                        "Workspace and local settings"), true);
 
         final List<String> tables;
+        final List<String> areas;
         final boolean reseedAccount;
-        Tier(List<String> tables, boolean reseedAccount) { this.tables = tables; this.reseedAccount = reseedAccount; }
+        Tier(List<String> tables, List<String> areas, boolean reseedAccount) {
+            this.tables = tables;
+            this.areas = areas;
+            this.reseedAccount = reseedAccount;
+        }
     }
 
     private final Db db;
@@ -46,7 +54,7 @@ public final class DataResetService {
         this.accounts = accounts;
     }
 
-    public record ResetResult(String tier, List<String> tablesCleared, boolean reseededAccount) {}
+    public record ResetResult(String tier, List<String> areasCleared, boolean reseededAccount) {}
 
     public static Tier parseTier(String raw) {
         String t = raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
@@ -54,8 +62,8 @@ public final class DataResetService {
         catch (IllegalArgumentException e) { throw new IllegalArgumentException("unknown reset tier: " + raw); }
     }
 
-    /** The exact table list a tier will clear — surfaced to the UI so the user sees what's affected. */
-    public List<String> tablesFor(Tier tier) { return displayNames(tier); }
+    /** Product areas affected by a tier, suitable for UI and audit output. */
+    public List<String> areasFor(Tier tier) { return tier.areas; }
 
     public ResetResult reset(Tier tier) {
         db.tx(c -> {
@@ -69,12 +77,7 @@ public final class DataResetService {
             accounts.getOrCreateDefault(); // a funded default account so the app is usable post-reset
             reseeded = true;
         }
-        log.warn("DATA RESET tier={} cleared={} reseeded={}", tier, tier.tables, reseeded);
-        return new ResetResult(tier.name(), displayNames(tier), reseeded);
-    }
-
-    /** The user-facing table list: predicate entries show just the table name. */
-    private static List<String> displayNames(Tier tier) {
-        return tier.tables.stream().map(t -> t.contains(" WHERE ") ? t.substring(0, t.indexOf(" WHERE ")) : t).toList();
+        log.warn("Local data reset completed: tier={} areas={} freshPracticeAccount={}", tier, tier.areas, reseeded);
+        return new ResetResult(tier.name(), tier.areas, reseeded);
     }
 }

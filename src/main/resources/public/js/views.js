@@ -114,7 +114,10 @@
         liveHost.appendChild(el('p', { class: 'muted small', style: 'margin:4px 0 0' }, 'Refreshing with a live run\u2026'));
       }
       try {
-        var r = await API.post('/api/recommend', { symbol: 'AAPL', thesis: 'bullish', horizon: 'month', riskMode: 'conservative' });
+        var refresh = API.post('/api/recommend', { symbol: 'AAPL', thesis: 'bullish', horizon: 'month', riskMode: 'conservative' });
+        var r = await Promise.race([refresh, new Promise(function (_, reject) {
+          setTimeout(function () { reject(new Error('The current market check is still running.')); }, 6000);
+        })]);
         if (r.candidates && r.candidates.length) {
           liveHost.innerHTML = '';
           liveHost.appendChild(candidateCard(r.candidates[0], false));
@@ -122,11 +125,21 @@
             localStorage.setItem('strikebench.welcomeProof', JSON.stringify(
               Object.assign({ candidate: r.candidates[0], asOf: Date.now() }, proofCtx)));
           } catch (e) { /* private mode */ }
+        } else if (!cached) {
+          liveHost.innerHTML = '';
+          liveHost.appendChild(el('div', { class: 'empty-state', id: 'welcome-proof-unavailable' },
+            el('b', {}, 'No AAPL idea passes right now'),
+            el('p', { class: 'muted small' },
+              'That is a valid engine result, not a missing demo. Open Research to inspect the evidence or choose another stock.'),
+            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/AAPL'); } }, 'Research AAPL')));
         }
       } catch (e) {
         if (!cached) {
           liveHost.innerHTML = '';
-          liveHost.appendChild(el('p', { class: 'muted', style: 'padding:16px' }, 'The engine needs the server running to demo itself.'));
+          liveHost.appendChild(el('div', { class: 'empty-state', id: 'welcome-proof-unavailable' },
+            el('b', {}, 'The current market check is still running'),
+            el('p', { class: 'muted small' }, 'The rest of StrikeBench is ready. Research opens immediately while the feed catches up.'),
+            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, 'Open Research')));
         }
       }
     })();
@@ -350,14 +363,32 @@
       });
       // The SAME sparkline card as Research, ONE batch call; Home cards go straight to the
       // full analysis (no preview layer here — review P5.8).
+      function paintHomeSpark(row) {
+        var slot = tiles.querySelector('.sym-card[data-sym="' + row.symbol + '"] .spark-slot');
+        if (!slot) return;
+        slot.innerHTML = '';
+        slot.appendChild(UI.sparkline(row, { height: 30 }));
+        if (row.evidence) slot.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev' }));
+      }
       try {
         var sp = await API.prefetch('/api/sparklines?symbols=' + rows.map(function (q) { return q.symbol; }).join(',') + '&range=3m');
-        if (!sp) return; // optional decoration yielded to interactive provider work
+        if (!sp) {
+          rows.forEach(function (q) { paintHomeSpark(missingSparkRow(q.symbol,
+            'History lookup yielded to interactive market work. Open analysis to try on demand.')); });
+          return;
+        }
+        var returned = {};
         (sp.sparklines || []).forEach(function (row) {
-          var slot = tiles.querySelector('.sym-card[data-sym="' + row.symbol + '"] .spark-slot');
-          if (slot) { slot.innerHTML = ''; slot.appendChild(UI.sparkline(row, { height: 30 })); }
+          returned[row.symbol] = true;
+          paintHomeSpark(row);
         });
-      } catch (e) { /* quotes are the load-bearing data */ }
+        rows.forEach(function (q) {
+          if (!returned[q.symbol]) paintHomeSpark(missingSparkRow(q.symbol, 'Daily history was not returned for this symbol.'));
+        });
+      } catch (e) {
+        rows.forEach(function (q) { paintHomeSpark(missingSparkRow(q.symbol,
+          'Chart unavailable right now; the quote remains usable.')); });
+      }
     })();
 
     // Open positions (review #8): a 256px empty card was wasted real estate — with no trades
@@ -422,12 +453,6 @@
         // Context, not command duplication (review P5): these chips RESUME where you were.
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'research',
           onclick: function () { App.navigate('#/research/' + sym); } }, 'Resume: ' + sym + ' analysis →'));
-        chips.push(el('button', { class: 'sym-chip', 'data-continue': 'ideas',
-          onclick: function () {
-            var f = App.state.discoverForm || {};
-            App.state.ideasPrefill = { symbol: sym, intent: f.goalExplicit ? f.goal : null, autorun: true };
-            App.navigate('#/trade/discover');
-          } }, 'Resume: strategies for ' + sym + ' →'));
       }
       if (chips.length) {
         card.appendChild(el('div', { class: 'chip-row', id: 'continue-row' }, chips));
@@ -593,7 +618,7 @@
     root.appendChild(el('div', { class: 'card', id: 'history-card' },
       UI.cardHeader('Price history'),
       UI.rangeChart({ initial: '1y', fetch: historyFetch(symbol) }),
-      explain('Real OHLC candles: green closed up, red closed down; slide across for open/high/low/close, change, and volume. Pills change the window; long windows aggregate to weekly candles.')));
+      explain('Daily OHLC candles: green closed up, red closed down; slide across for open/high/low/close, change, and volume. The evidence badge names whether this history is observed, simulated, modeled, or Demo. Pills change the window; long windows aggregate to weekly candles.')));
 
     // The Research progression on a symbol: NOW (chart/news above) → TEST YOUR VIEW (past
     // evidence + possible futures under ONE thesis) → express it in Trade.
@@ -1043,6 +1068,116 @@
     };
   }
 
+  function missingSparkRow(symbol, note) {
+    return { symbol: symbol, available: false, closes: [], note: note,
+      evidence: { provenance: 'MISSING', age: 'MISSING', source: 'daily history unavailable' } };
+  }
+
+  /**
+   * Viewport-governed sparkline loader. One API batch is capped at 16 so optional chart
+   * decoration cannot fan a large universe into a provider burst. Cards enqueue only when
+   * visible or near-visible; scrolling therefore completes large simulated worlds instead
+   * of leaving every card after number 16 blank.
+   */
+  function lazySparklines(container, symbols, opts) {
+    opts = opts || {};
+    symbols = (symbols || []).slice();
+    var pending = new Set(), generation = 0, pumping = false, pumpScheduled = false, observer = null;
+
+    function slotFor(sym) {
+      return container.querySelector('.sym-card[data-sym="' + sym + '"] .spark-slot');
+    }
+    function markQueued(sym) {
+      var slot = slotFor(sym);
+      if (!slot) return;
+      slot.innerHTML = '';
+      slot.appendChild(el('div', { class: 'spark spark-loading' },
+        el('span', { class: 'muted' }, 'chart queued')));
+    }
+    function enqueue(sym) {
+      if (!sym || !container.isConnected || (opts.valid && !opts.valid())) return;
+      pending.add(sym);
+      if (!pumpScheduled) {
+        pumpScheduled = true;
+        Promise.resolve().then(function () { pumpScheduled = false; pump(); });
+      }
+    }
+    async function pump() {
+      if (pumping) return;
+      pumping = true;
+      var activeBatch = [];
+      try {
+        while (pending.size && container.isConnected && (!opts.valid || opts.valid())) {
+          var mine = generation;
+          var batch = Array.from(pending).slice(0, 16);
+          activeBatch = batch;
+          batch.forEach(function (sym) { pending.delete(sym); });
+          var data = await API.prefetch('/api/sparklines?symbols='
+            + encodeURIComponent(batch.join(',')) + '&range=' + encodeURIComponent(opts.range()));
+          if (mine !== generation || !container.isConnected || (opts.valid && !opts.valid())) continue;
+          if (!data) {
+            batch.forEach(function (sym) {
+              if (opts.paint) opts.paint(missingSparkRow(sym,
+                'Chart deferred to protect interactive market requests. Open analysis to try on demand.'));
+              var card = container.querySelector('.sym-card[data-sym="' + sym + '"]');
+              if (observer && card) observer.unobserve(card);
+            });
+            activeBatch = [];
+            break;
+          }
+          var returned = {};
+          (data.sparklines || []).forEach(function (row) {
+            returned[row.symbol] = true;
+            if (opts.paint) opts.paint(row);
+            var card = container.querySelector('.sym-card[data-sym="' + row.symbol + '"]');
+            if (observer && card) observer.unobserve(card);
+          });
+          batch.forEach(function (sym) {
+            if (returned[sym]) return;
+            if (opts.paint) opts.paint(missingSparkRow(sym, 'Daily history was not returned for this symbol.'));
+          });
+          activeBatch = [];
+        }
+      } catch (e) {
+        activeBatch.forEach(function (sym) {
+          if (opts.paint) opts.paint(missingSparkRow(sym, 'Chart unavailable right now; the quote remains usable.'));
+          var card = container.querySelector('.sym-card[data-sym="' + sym + '"]');
+          if (observer && card) observer.unobserve(card);
+        });
+      } finally {
+        pumping = false;
+        if (pending.size && container.isConnected && (!opts.valid || opts.valid())) pump();
+      }
+    }
+    function startObserving() {
+      if (observer) observer.disconnect();
+      if (window.IntersectionObserver) {
+        observer = new IntersectionObserver(function (entries) {
+          entries.forEach(function (entry) {
+            if (entry.isIntersecting) enqueue(entry.target.getAttribute('data-sym'));
+          });
+        }, { rootMargin: '240px 0px' });
+        symbols.forEach(function (sym) {
+          var card = container.querySelector('.sym-card[data-sym="' + sym + '"]');
+          if (card) observer.observe(card);
+        });
+      } else {
+        symbols.forEach(enqueue);
+      }
+    }
+    function reload() {
+      generation++;
+      pending.clear();
+      symbols.forEach(markQueued);
+      startObserving();
+    }
+    reload();
+    return {
+      reload: reload,
+      disconnect: function () { generation++; pending.clear(); if (observer) observer.disconnect(); }
+    };
+  }
+
   // One ETF proxy per sector — used anywhere a sector shows its day move
   var SECTOR_ETF_MAP = { TECH: 'XLK', SEMICONDUCTORS: 'SMH', HEALTHCARE: 'XLV', DEFENSE: 'ITA',
     STAPLES: 'XLP', DISCRETIONARY: 'XLY', ENERGY: 'XLE', FINANCIALS: 'XLF', INDUSTRIALS: 'XLI',
@@ -1253,7 +1388,7 @@
             rangeRow.querySelectorAll('.pill').forEach(function (b) {
               b.classList.toggle('active', b.getAttribute('data-range') === r.k);
             });
-            fillSparklines(null, loadSeq); // same sector, new window — cards update in place
+            if (sparkLoader) sparkLoader.reload(); // same sector, new window; visible cards update in place
           }
         }, r.l);
       }));
@@ -1271,31 +1406,12 @@
     root.appendChild(card);
 
     var currentSector = null;
-    var sparkSeq = 0; // supersede: a slow sparkline batch must not paint over a newer one
-    async function fillSparklines(sector, seqAtCall) {
-      sector = sector || currentSector;
-      if (!sector) return;
-      var mySpark = ++sparkSeq;
-      try {
-        var sp = await API.prefetch('/api/sparklines?symbols=' + sector.symbols.join(',')
-          + '&range=' + App.state.explorerRange);
-        if (!sp) return; // optional chart fill yielded to interactive provider work
-        if (mySpark !== sparkSeq || seqAtCall !== loadSeq || !grid.isConnected) return;
-        (sp.sparklines || []).forEach(function (row) {
-          var t2 = grid.querySelector('.sym-card[data-sym="' + row.symbol + '"] .spark-slot');
-          if (!t2) return;
-          t2.innerHTML = '';
-          t2.appendChild(UI.sparkline(row, { height: 36 }));
-          // Evidence badge: SERVER-computed kind rendered verbatim (review IC-1) — the client
-          // never infers OBSERVED from mere availability.
-          if (row.evidence) t2.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev' }));
-        });
-      } catch (e) { /* cards stand without sparklines — quotes are the load-bearing data */ }
-    }
+    var sparkLoader = null;
 
     var loadSeq = 0; // supersede token: a slow quote batch for a PREVIOUS sector must not paint over the current one
     async function load() {
       var seq = ++loadSeq;
+      if (sparkLoader) { sparkLoader.disconnect(); sparkLoader = null; }
       head.innerHTML = '';
       grid.innerHTML = '';
       grid.appendChild(UI.spinner('Loading sector quotes…'));
@@ -1379,7 +1495,18 @@
           App.state.explorerScroll = null;
           requestAnimationFrame(function () { window.scrollTo(0, y); });
         }
-        fillSparklines(sector, seq);
+        sparkLoader = lazySparklines(grid, sector.symbols, {
+          range: function () { return App.state.explorerRange; },
+          valid: function () { return seq === loadSeq && grid.isConnected; },
+          paint: function (row) {
+            var t2 = grid.querySelector('.sym-card[data-sym="' + row.symbol + '"] .spark-slot');
+            if (!t2) return;
+            t2.innerHTML = '';
+            t2.appendChild(UI.sparkline(row, { height: 36 }));
+            // Evidence is server-computed and rendered verbatim; availability never implies Observed.
+            if (row.evidence) t2.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev' }));
+          }
+        });
         // LIVE CARDS (review gap): prices follow the market stream in place — a simulated
         // session's ticks repaint the grid without rebuilding it.
         App.Market.subscribe(function (frame) {
@@ -6421,6 +6548,15 @@
       wrap.appendChild(el('div', { class: 'muted small' },
         (prob.basis || '') + (prob.timeBasis ? ' \u00b7 time: ' + prob.timeBasis : '')));
     }
+    if (a.rate && a.rate.annual !== undefined && a.rate.annual !== null) {
+      var rateEvidence = a.rate.evidence || {};
+      var modeledRate = rateEvidence.provenance === 'MODELED' || rateEvidence.provenance === 'MISSING';
+      wrap.appendChild(el('div', { class: 'model-input-line muted small', id: 'rate-input' },
+        el('span', {}, beginner ? 'Pricing assumes a ' : 'Risk-free rate input '),
+        el('b', {}, (Number(a.rate.annual) * 100).toFixed(beginner ? 1 : 3) + '% annual'),
+        ' ', UI.evidenceBadge(rateEvidence), UI.info('riskfreerate'),
+        modeledRate ? el('span', {}, ' Default assumption; no eligible rate source answered.') : null));
+    }
     if (exec.midNetCents !== undefined && exec.midNetCents !== null) {
       var ladder = el('div', { class: 'chip-row', id: 'exec-ladder' },
         chip('Midpoint', fmtMoney(exec.midNetCents, { plus: true }), 'The package priced at every leg\u2019s midpoint — rarely fully fillable, but the honest reference.'),
@@ -6578,8 +6714,13 @@
 
   function renderReplication(out, r) {
     out.innerHTML = '';
-    if (!r.contracts) { out.appendChild(alertBox('warn', (r.notes && r.notes[0]) || 'Could not size a replication.')); return; }
+    if (!r.contracts) {
+      out.appendChild(alertBox('warn', (r.notes && r.notes[0]) || 'Could not size a replication.'));
+      if (r.evidence) out.appendChild(UI.evidenceBadge(r.evidence));
+      return;
+    }
     out.appendChild(el('p', { class: 'decision-why' }, r.structure));
+    if (r.evidence) out.appendChild(el('div', { class: 'chip-row' }, UI.evidenceBadge(r.evidence)));
     out.appendChild(el('div', { class: 'chip-row' },
       chip('Contracts', String(r.contracts)),
       chip('Delta exposure', pnlSpan(r.deltaExposureCents)),

@@ -1,6 +1,8 @@
 package io.liftandshift.strikebench.research;
 
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
@@ -25,19 +27,27 @@ public final class ETFReplicator {
 
     public record ReplicationResult(String symbol, long targetExposureCents, long underlyingCents,
                                     int contracts, String structure, long deltaExposureCents,
-                                    long shareCostCents, long estMarginCents, List<String> notes) {}
+                                    long shareCostCents, long estMarginCents, DataEvidence evidence,
+                                    List<String> notes) {}
 
     public ReplicationResult replicate(ReplicationRequest req) {
+        return replicate(req, null);
+    }
+
+    /** Sizes against the selected execution market; explicit worlds never fall through to Observed. */
+    public ReplicationResult replicate(ReplicationRequest req, String worldId) {
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         long target = req.targetExposureCents() == null ? 0 : Math.max(0, req.targetExposureCents());
         boolean bullish = req.bullish() == null || req.bullish();
 
-        BigDecimal spot = market.quote(symbol).map(q -> q.mark()).orElse(null);
+        Quote quote = market.quote(symbol, worldId).orElse(null);
+        DataEvidence evidence = quote == null ? DataEvidence.missing("no quote") : quote.evidence();
+        BigDecimal spot = quote == null || !evidence.usableIn(market.lane(worldId)) ? null : quote.mark();
         List<String> notes = new ArrayList<>();
         if (spot == null || spot.signum() <= 0) {
-            notes.add("No price available for " + symbol + " — cannot size a replication.");
-            return new ReplicationResult(symbol, target, 0, 0, "n/a", 0, 0, 0, notes);
+            notes.add("No price is available for " + symbol + " in the selected market — cannot size a replication.");
+            return new ReplicationResult(symbol, target, 0, 0, "n/a", 0, 0, 0, evidence, notes);
         }
         long underlyingCents = Money.toCents(spot);
         long per100 = underlyingCents * 100;                 // exposure of one contract (100 shares)
@@ -58,6 +68,6 @@ public final class ETFReplicator {
                     + "if the stock rallies. This is not a defined-risk position and is blocked from placement here.");
         }
         return new ReplicationResult(symbol, target, underlyingCents, contracts, structure,
-                deltaExposure, shareCost, estMargin, notes);
+                deltaExposure, shareCost, estMargin, evidence, notes);
     }
 }

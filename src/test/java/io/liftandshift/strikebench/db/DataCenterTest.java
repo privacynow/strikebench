@@ -124,7 +124,8 @@ class DataCenterTest {
         assertThat(underlyingRows("AAPL")).isGreaterThan(0);
 
         var res = c.reset().reset(DataResetService.Tier.MARKET_DATA);
-        assertThat(res.tablesCleared()).contains("underlying_bar", "option_bar");
+        assertThat(res.areasCleared()).contains("Market history and snapshots", "Generated datasets");
+        assertThat(res.areasCleared()).noneMatch(a -> a.contains("_") || a.contains(" WHERE "));
         assertThat(underlyingRows("AAPL")).isZero();
         // the account is untouched by a market-data reset
         assertThat(db.query("SELECT count(*) c FROM accounts", r -> r.lng("c")).getFirst()).isGreaterThanOrEqualTo(1);

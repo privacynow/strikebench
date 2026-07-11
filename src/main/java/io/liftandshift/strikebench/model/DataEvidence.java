@@ -16,6 +16,7 @@ public record DataEvidence(DataProvenance provenance, DataAge age, String source
         else if (f == Freshness.SIMULATED || s.equals("simulated")) provenance = DataProvenance.SIMULATED;
         else if (f == Freshness.MODELED || s.equals("model") || s.equals("synthetic")) provenance = DataProvenance.MODELED;
         else if (f == Freshness.MISSING) provenance = DataProvenance.MISSING;
+        else if (s.isBlank()) provenance = DataProvenance.MISSING;
         else if (s.contains("etrade") || s.contains("broker")) provenance = DataProvenance.BROKER;
         else provenance = DataProvenance.OBSERVED;
 
@@ -42,12 +43,17 @@ public record DataEvidence(DataProvenance provenance, DataAge age, String source
         boolean anyMissing = usable.stream().anyMatch(e -> e.provenance == DataProvenance.MISSING);
         java.util.Set<DataProvenance> origins = new java.util.LinkedHashSet<>();
         for (DataEvidence e : usable) if (e.provenance != DataProvenance.MISSING) origins.add(e.provenance);
+        java.util.Set<String> sources = new java.util.LinkedHashSet<>();
+        for (DataEvidence e : usable) {
+            if (e.source != null && !e.source.isBlank()) sources.add(e.source);
+        }
         DataProvenance p = anyMissing ? DataProvenance.MISSING
                 : origins.size() == 1 ? origins.iterator().next() : DataProvenance.MIXED;
         DataAge age = usable.stream().map(DataEvidence::age)
                 .max(java.util.Comparator.comparingInt(DataEvidence::ageRank)).orElse(DataAge.MISSING);
-        return new DataEvidence(p, age, origins.size() <= 1 && !anyMissing
-                ? usable.getFirst().source : "multiple inputs");
+        String source = !anyMissing && sources.size() == 1 ? sources.iterator().next()
+                : sources.isEmpty() ? "none" : "multiple inputs";
+        return new DataEvidence(p, age, source);
     }
 
     private static int ageRank(DataAge age) {

@@ -89,8 +89,12 @@ class MarketDataServiceTest {
         assertThat(svc.expirations("AAPL")).isEmpty();
         assertThat(svc.candleSeries("AAPL", LocalDate.now(CLOCK).minusMonths(1), LocalDate.now(CLOCK)).isEmpty()).isTrue();
         assertThat(svc.news("AAPL")).isEmpty();
+        assertThat(svc.riskFreeRateQuote(30).evidence().provenance())
+                .isEqualTo(io.liftandshift.strikebench.model.DataProvenance.MODELED);
         assertThat(svc.quote("AAPL", "demo")).isPresent();
         assertThat(svc.expirations("AAPL", "demo")).isNotEmpty();
+        assertThat(svc.riskFreeRateQuote(30, "demo").evidence().provenance())
+                .isEqualTo(io.liftandshift.strikebench.model.DataProvenance.DEMO);
     }
 
     @Test
@@ -147,6 +151,7 @@ class MarketDataServiceTest {
         assertThat(svc.candleSeries("AAPL", from, to, "deleted-world",
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED).isEmpty()).isTrue();
         assertThat(svc.news("AAPL", "deleted-world")).isEmpty();
+        assertThat(svc.lookup("AAPL", "deleted-world")).isEmpty();
         assertThat(svc.riskFreeRateQuote(30, "deleted-world").evidence().provenance())
                 .isEqualTo(io.liftandshift.strikebench.model.DataProvenance.MISSING);
     }

@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.research;
 
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Candle;
+import io.liftandshift.strikebench.model.DataEvidence;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -29,14 +30,21 @@ public final class HypothesisTester {
 
     public record HypothesisResult(String symbol, String hypothesis, int sample, int wins,
                                    double winRate, double expectedByChance, double edgePct,
-                                   double zScore, boolean significant, String verdict, List<String> notes) {}
+                                   double zScore, boolean significant, String verdict,
+                                   DataEvidence evidence, List<String> notes) {}
 
     public HypothesisResult test(HypothesisRequest req) {
-        return test(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        return test(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null);
     }
 
     /** Context-aware variant: the hypothesis runs over the caller's analysis dataset. */
     public HypothesisResult test(HypothesisRequest req, io.liftandshift.strikebench.db.AnalysisContext actx) {
+        return test(req, actx, null);
+    }
+
+    /** Context- and world-aware variant: history must come from the selected analysis lane. */
+    public HypothesisResult test(HypothesisRequest req, io.liftandshift.strikebench.db.AnalysisContext actx,
+                                 String worldId) {
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         LocalDate from = LocalDate.parse(req.from());
@@ -45,9 +53,18 @@ public final class HypothesisTester {
         double threshold = req.thresholdPct() == null ? 0.0 : req.thresholdPct();
         int forward = Math.clamp(req.forwardDays() == null ? 10 : req.forwardDays(), 1, 120);
 
-        List<Candle> candles = market.candles(symbol, from.minusDays(lookback + 15L), to, actx).stream()
-                .filter(c -> !c.date().isAfter(to)).toList();
+        var series = market.candleSeries(symbol, from.minusDays(lookback + 15L), to, worldId, actx);
+        DataEvidence evidence = series.evidence();
         List<String> notes = new ArrayList<>();
+        if (!evidence.usableIn(market.lane(worldId, actx))) {
+            String hypothesis = hypothesis(symbol, lookback, threshold, forward);
+            notes.add("No compatible history is available in the selected analysis market. Choose another dataset or import observed bars in Data.");
+            return new HypothesisResult(symbol, hypothesis, 0, 0, 0, 0.5, -50, 0, false,
+                    "History unavailable — this study was not run.", evidence, notes);
+        }
+
+        List<Candle> candles = series.candles().stream()
+                .filter(c -> !c.date().isAfter(to)).toList();
 
         int sample = 0, wins = 0;
         for (int i = lookback; i + forward < candles.size(); i++) {
@@ -65,8 +82,7 @@ public final class HypothesisTester {
         double winRate = sample == 0 ? 0 : (double) wins / sample;
         double z = sample == 0 ? 0 : (winRate - 0.5) / Math.sqrt(0.25 / sample);
         boolean significant = sample >= MIN_SAMPLE && Math.abs(z) >= Z_95;
-        String hypothesis = "After " + lookback + "-day momentum ≥ " + threshold + "%, the next "
-                + forward + "-day return on " + symbol + " is positive more often than chance.";
+        String hypothesis = hypothesis(symbol, lookback, threshold, forward);
         String verdict;
         if (sample < MIN_SAMPLE) {
             verdict = "Too few signals (" + sample + ") to conclude — widen the window or relax the threshold.";
@@ -79,7 +95,12 @@ public final class HypothesisTester {
         notes.add("Model result over one historical window, not a forecast. Survivorship/regime effects apply.");
 
         return new HypothesisResult(symbol, hypothesis, sample, wins, round(winRate), 0.5,
-                round((winRate - 0.5) * 100), round(z), significant, verdict, notes);
+                round((winRate - 0.5) * 100), round(z), significant, verdict, evidence, notes);
+    }
+
+    private static String hypothesis(String symbol, int lookback, double threshold, int forward) {
+        return "After " + lookback + "-day momentum ≥ " + threshold + "%, the next "
+                + forward + "-day return on " + symbol + " is positive more often than chance.";
     }
 
     private static double round(double v) { return Math.round(v * 1000.0) / 1000.0; }

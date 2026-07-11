@@ -122,7 +122,10 @@ public final class MarketDataEngine {
                     if (s.last() != null) { snapshots.put(s.symbol(), s); track(s.symbol()); seeded++; }
                 }
                 if (seeded > 0) log.info("market engine restored {} last-known quotes from the local snapshot cache", seeded);
-            } catch (Exception e) { log.warn("snapshot seed failed: {}", e.toString()); }
+            } catch (Exception e) {
+                log.warn("Last-known market quotes could not be restored; sources will refresh them");
+                log.debug("Last-known quote restore detail", e);
+            }
         }
         if (!cfg.engineEnabled()) {
             log.info("market engine: serving path on, background refresh DISABLED (ENGINE_ENABLED=false)");
@@ -156,7 +159,8 @@ public final class MarketDataEngine {
                 log.info("market engine warming active sector only ({} symbols); full-universe warm disabled", active.size());
             }
         } catch (Exception e) {
-            log.warn("market engine warm failed: {}", e.toString());
+            log.warn("Initial market warmup did not complete; symbols will load on demand");
+            log.debug("Initial market warmup detail", e);
         }
         scheduler.scheduleWithFixedDelay(this::tick, tick, tick, TimeUnit.SECONDS);
     }
@@ -181,7 +185,8 @@ public final class MarketDataEngine {
             }
             log.info("market engine trickling full universe ({} symbols) in batches of {}", all.size(), batch);
         } catch (Exception e) {
-            log.warn("market engine full-universe warm failed: {}", e.toString());
+            log.warn("Background universe warmup did not complete; symbols will load on demand");
+            log.debug("Background universe warmup detail", e);
         }
     }
 
@@ -375,7 +380,8 @@ public final class MarketDataEngine {
             commit(symbol, new MarketSnapshot(v.symbol(), v.description(), v.last(), v.bid(), v.ask(),
                     v.prevClose(), v.optionable(), v.freshness(), v.source(), v.asOfEpochMs(), t1, false, null));
         } catch (Exception e) {
-            putError(symbol, e.getClass().getSimpleName() + ": " + e.getMessage());
+            putError(symbol, MarketDataService.publicProviderFailure(e));
+            log.debug("Market refresh failure detail for " + symbol, e);
         }
     }
 

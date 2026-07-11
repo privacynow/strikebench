@@ -558,7 +558,7 @@ body.lvl-expert .not-expert { display: none !important; }
 #events-card .chip-row a.chip:hover b, .events-strip a.chip:hover b { color: var(--accent); }
 
 /* ---- Sector rail: THE sector affordance everywhere (home / research / trade) ---- */
-.sector-rail-wrap { display: flex; align-items: center; gap: 4px; min-width: 0;; min-width: 0; max-width: 100%; }
+.sector-rail-wrap { display: flex; align-items: center; gap: 4px; min-width: 0; width: 100%; max-width: 100%; overflow: hidden; }
 .sector-rail { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px;
   scrollbar-width: none; flex: 1; min-width: 0; }
 .sector-rail::-webkit-scrollbar { display: none; }
@@ -966,11 +966,13 @@ body.lvl-expert .not-expert { display: none !important; }
 .home-market-grid .t-nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .home-view-all { font-size: 12.5px; white-space: nowrap; }
 .market-watch-caption { margin: 9px 0 0; }
-.home-col-side { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 12px; }
+.home-col-side { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 12px; min-width: 0; overflow: hidden; }
+.home-col-side > * { min-width: 0; width: 100%; max-width: 100%; }
 .home-col-side > .card, .home-col-side > #sector-pulse { margin-bottom: 0; }
 .home-col-side #sector-pulse { height: 100%; }
-#sector-pulse-anchor { min-height: 0; }
+#sector-pulse-anchor { min-height: 0; min-width: 0; width: 100%; max-width: 100%; overflow: hidden; }
 #sector-pulse-anchor > #sector-pulse { height: 100%; margin-bottom: 0; }
+#sector-pulse { min-width: 0; width: 100%; max-width: 100%; overflow: hidden; }
 .home-wide { grid-column: 1 / -1; min-width: 0; }
 .home-start-research { width: 100%; border: 0; background: transparent; color: var(--text);
   padding: 4px 0; text-align: left; cursor: pointer; display: grid; gap: 3px; }
@@ -1000,6 +1002,8 @@ body.lvl-expert .not-expert { display: none !important; }
 }
 @media (min-width: 1100px) {
   .home-cols { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+  #next-up .journey { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+  #next-up .journey-step { min-width: 0; padding: 7px 8px; line-height: 1.25; }
   /* Tighter dashboard rhythm on large screens so the fold never hides an action */
   #app[data-route="home"] .stat .explain { margin: 4px 0 0; }
   #app[data-route="home"] h1 { margin-bottom: 10px; }
@@ -1459,8 +1463,10 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .spark-dot { fill: var(--accent); }
 .spark-readout { font-size: 14px; color: var(--text-dim); margin-top: 2px; min-height: 18px;
   font-variant-numeric: tabular-nums; }
-.spark-empty { display: flex; align-items: center; font-size: 14px; }
-.spark-ev { position: absolute; top: 0; right: 0; font-size: 11.5px; }
+.spark-empty, .spark-loading { display: flex; align-items: center; font-size: 14px; min-height: 40px; }
+.spark-loading { opacity: .72; }
+.spark-ev { display: inline-flex; margin-top: 4px; font-size: 11.5px; }
+.model-input-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 5px 0 8px; }
 .pick-symbol-link { color: var(--text); text-decoration: none; text-underline-offset: 3px; }
 .pick-symbol-link:hover, .pick-symbol-link:focus-visible { color: var(--accent); text-decoration: underline; }
 .verify-setup { margin: 7px 0 12px; }

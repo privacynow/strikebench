@@ -78,6 +78,9 @@
       document.querySelectorAll('#nav a, #bottom-nav a').forEach(function (a) {
         a.classList.toggle('active', a.getAttribute('data-route') === route);
       });
+      // Route identity is part of the synchronous navigation commit. Progressive views paint
+      // before their async fills finish, and their layout CSS must apply to that first frame.
+      root.setAttribute('data-route', route);
 
       // Swap = clear + paint a skeleton so the screen is never blank while data loads.
       // Wrapped in a View Transition when the browser has one (Chromium): the old screen
@@ -89,12 +92,10 @@
         root.innerHTML = '';
         root.appendChild(skeleton);
       };
-      var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (document.startViewTransition && !reduced) {
-        try { await document.startViewTransition(swap).updateCallbackDone; } catch (e) { /* swap already ran */ }
-      } else {
-        swap();
-      }
+      // Native View Transitions can leave updateCallbackDone pending for 30 seconds when a
+      // second navigation supersedes the first. Navigation correctness wins over a 160ms
+      // crossfade; the skeleton and card-arrival motion retain continuity without owning flow.
+      swap();
       // The skeleton leaves the moment the view appends its first real element — views
       // render progressively, so first content usually lands within a frame or two.
       var mo = new MutationObserver(function (muts) {

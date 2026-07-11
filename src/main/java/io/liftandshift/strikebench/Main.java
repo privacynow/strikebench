@@ -78,7 +78,8 @@ public final class Main {
             log.info("Migrated legacy local data to the current StrikeBench location (data unchanged)");
         } catch (Exception e) {
             // Never brick the boot over a rename: fall back to the legacy file untouched.
-            log.warn("Could not migrate legacy local data: {} — continuing without the move", e.toString());
+            log.warn("Could not migrate legacy local data — continuing without the move");
+            log.debug("Legacy local-data migration detail", e);
         }
     }
 
@@ -102,7 +103,8 @@ public final class Main {
             log.info("ingested {} option bars + {} underlying bars ({} skipped) from {} as source '{}'",
                     result.optionRows(), result.underlyingRows(), result.skipped(), args[1], source);
         } catch (Exception e) {
-            log.error("ingest failed: {}", e.toString());
+            log.error("Data import failed. Check the input file and import settings.");
+            log.debug("Data-import failure detail", e);
             System.exit(1);
         }
     }
@@ -138,7 +140,8 @@ public final class Main {
             log.debug("Preloaded {} classes in {} ms ({} optional-dependency classes unavailable)",
                     loaded, System.currentTimeMillis() - start, unavailable);
         } catch (Exception e) {
-            log.warn("class preload skipped (non-fatal): {}", e.toString());
+            log.warn("Startup preparation was incomplete; restart if requests fail");
+            log.debug("Startup preparation detail", e);
         }
     }
 }

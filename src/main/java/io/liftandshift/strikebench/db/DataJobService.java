@@ -91,7 +91,10 @@ public final class DataJobService {
         try {
             db.exec("UPDATE data_job SET status='FAILED', error='interrupted by server restart', updated_at=now() "
                   + "WHERE status IN ('RUNNING','QUEUED')");
-        } catch (Exception e) { log.warn("job reconcile failed: {}", e.toString()); }
+        } catch (Exception e) {
+            log.warn("Background data jobs could not be reconciled after restart");
+            log.debug("Background-job reconciliation detail", e);
+        }
     }
 
     public void shutdown() { jobPool.shutdownNow(); }
@@ -211,7 +214,9 @@ public final class DataJobService {
                     totalRows += res.rows;
                 } catch (Exception e) {
                     failed++;
-                    setItem(id, seq, "FAILED", 0, e.getClass().getSimpleName() + ": " + e.getMessage());
+                    String failure = publicFailure(e);
+                    setItem(id, seq, "FAILED", 0, failure);
+                    log.debug("Data-job item failure for " + kind + " " + label, e);
                 }
                 done++;
                 db.exec("UPDATE data_job SET done=?, rows_written=?, updated_at=now() WHERE id=?", done, totalRows, id);
@@ -237,7 +242,9 @@ public final class DataJobService {
                 notifyDataChanged();
                 dataChangedNotified = true;
             }
-            db.exec("UPDATE data_job SET status='FAILED', error=?, updated_at=now() WHERE id=? AND status <> 'CANCELLED'", e.toString(), id);
+            db.exec("UPDATE data_job SET status='FAILED', error=?, updated_at=now() WHERE id=? AND status <> 'CANCELLED'",
+                    publicFailure(e), id);
+            log.debug("Data-job failure for " + kind + " " + id, e);
             publishJob("job.complete", id, kind, "FAILED", done, labels.size(), userId);
         } finally {
             if (totalRows > 0 && !dataChangedNotified) notifyDataChanged();
@@ -247,7 +254,27 @@ public final class DataJobService {
 
     private void notifyDataChanged() {
         try { dataChangedHook.run(); }
-        catch (RuntimeException e) { log.warn("data-change cache invalidation failed: {}", e.toString()); }
+        catch (RuntimeException e) {
+            log.warn("New data was saved, but cached views could not be refreshed immediately");
+            log.debug("Data-change cache refresh detail", e);
+        }
+    }
+
+    private static String publicFailure(Exception e) {
+        String message = e.getMessage() == null ? "" : e.getMessage().toLowerCase(Locale.ROOT);
+        if (e instanceof java.nio.file.NoSuchFileException || e instanceof java.io.FileNotFoundException
+                || message.contains("no such file")) {
+            return "The selected file could not be found.";
+        }
+        if (e instanceof io.liftandshift.strikebench.market.providers.Http.ProviderHttpException http) {
+            return http.statusCode() > 0
+                    ? "The source returned HTTP " + http.statusCode() + ". Try again later or check source access."
+                    : "The source could not be reached. Check the connection and try again.";
+        }
+        if (message.contains("timeout") || message.contains("timed out")) {
+            return "The source timed out. Try again later.";
+        }
+        return "The data operation failed. Check the source setup and try again.";
     }
 
     private record ItemResult(long rows, boolean ok, String note) {}

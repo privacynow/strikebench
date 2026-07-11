@@ -1042,6 +1042,7 @@ class ApiIntegrationTest {
         // available:false with a note — never a fabricated line, never a 404.
         JsonNode r = Json.parse(get("/api/sparklines?symbols=AAPL,SPY,ZZZZ&range=1m").body());
         assertThat(r.get("range").asText()).isEqualTo("1m");
+        assertThat(r.get("batchLimit").asInt()).isEqualTo(16);
         assertThat(r.get("totalRequested").asInt()).isEqualTo(3);
         assertThat(r.get("truncated").asBoolean()).isFalse();
         assertThat(r.get("sparklines")).hasSize(3);
@@ -1058,6 +1059,7 @@ class ApiIntegrationTest {
         JsonNode dead = bySym.get("ZZZZ");
         assertThat(dead.get("available").asBoolean()).isFalse();
         assertThat(dead.get("note").asText()).isNotBlank();
+        assertThat(dead.get("evidence").get("provenance").asText()).isEqualTo("MISSING");
         // Blank symbols default to the active universe and never exceed the cap.
         JsonNode def = Json.parse(get("/api/sparklines").body());
         assertThat(def.get("sparklines").size()).isBetween(1, 16);
@@ -1067,6 +1069,8 @@ class ApiIntegrationTest {
         assertThat(capped.get("sparklines")).hasSize(16);
         assertThat(capped.get("totalRequested").asInt()).isEqualTo(17);
         assertThat(capped.get("truncated").asBoolean()).isTrue();
+        assertThat(capped.get("batchLimit").asInt()).isEqualTo(16);
+        assertThat(capped.get("note").asText()).contains("additional symbol batches");
     }
 
     @Test

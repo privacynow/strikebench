@@ -89,6 +89,15 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await page.waitForSelector('.home-market-grid .tile');
   await page.waitForFunction(() => document.querySelectorAll('.home-market-grid .spark-svg').length >= 4,
     { timeout: 15000 });
+  assert.ok(await page.locator('.home-market-grid .spark-slot .evidence-badge').count() >= 4,
+    'Home names history provenance separately from quote freshness');
+  assert.equal(await page.evaluate(() => Array.from(document.querySelectorAll('.home-market-grid .sym-card')).some(card => {
+    const ev = card.querySelector('.spark-ev');
+    const head = card.querySelector('.t-sym');
+    if (!ev || !head) return false;
+    const a = ev.getBoundingClientRect(), b = head.getBoundingClientRect();
+    return a.top < b.bottom && a.bottom > b.top;
+  })), false, 'history evidence never covers the ticker/freshness row');
   const app = await page.textContent('#app');
   // Home is the OPERATIONAL desk (review #10): market mode + account numbers + one contextual
   // action — the product positioning lives on Welcome only, never repeated here.
@@ -133,6 +142,43 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await page.click('#sector-pulse .sector-chip');
   await page.waitForSelector('#sector-explorer');
   await go('#/home'); // leave the suite on the dashboard for the next test
+});
+
+test('welcome proof treats no qualifying idea as a complete result', async () => {
+  await page.route('**/api/recommend', r => r.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ symbol: 'AAPL', candidates: [], rejected: [], notes: ['No candidate passed.'] })
+  }));
+  await page.evaluate(() => localStorage.removeItem('strikebench.welcomeProof'));
+  await go('#/home/tour');
+  await page.waitForSelector('#welcome-proof-unavailable');
+  assert.match(await page.textContent('#welcome-proof-unavailable'), /No AAPL idea passes right now/);
+  assert.match(await page.textContent('#welcome-proof-unavailable'), /valid engine result/);
+  assert.ok(await page.locator('#welcome-proof-unavailable button').count(), 'the no-trade proof has a next step');
+  await page.unroute('**/api/recommend');
+});
+
+test('provider-governed sparkline deferral resolves to an honest unavailable state', async () => {
+  await page.route('**/api/sparklines?*', r => r.fulfill({ status: 204, body: '' }));
+  try {
+    await page.evaluate(() => {
+      localStorage.setItem('strikebench.welcomed', '1');
+      API.flushCache();
+      App.navigate('#/home');
+    });
+    await page.waitForSelector('#app[data-route="home"][data-ready="true"]');
+    await page.waitForFunction(() => {
+      const cards = document.querySelectorAll('.home-market-grid .sym-card');
+      return cards.length > 0 && document.querySelectorAll('.home-market-grid .spark-ev').length === cards.length;
+    });
+    assert.equal(await page.locator('.home-market-grid .spark-loading').count(), 0,
+      'a declined optional request never leaves a permanent loading state');
+    assert.equal(await page.locator('.home-market-grid .spark-ev').evaluateAll(nodes =>
+      nodes.every(n => /DATA UNAVAILABLE/.test(n.textContent))), true,
+      'every deferred chart states that its history evidence is missing');
+  } finally {
+    await page.unroute('**/api/sparklines?*');
+  }
 });
 
 test('research AAPL: hero quote, events, news, focused chain, show-all toggle', async () => {
@@ -195,6 +241,40 @@ test('navigation is NEVER trapped behind a slow route (Research does not block m
     await page.waitForTimeout(50); // let the gated handler settle before unrouting
     await page.unroute('**/api/research/AAPL');
     await page.evaluate(() => API.flushCache());
+  }
+});
+
+test('progressive Home applies its route layout before slow market fills finish', async () => {
+  await page.evaluate(() => { window.location.hash = '#/research'; });
+  await page.waitForSelector('#app[data-route="research"][data-ready="true"]');
+  await page.evaluate(async () => {
+    window.__homeAccount = await API.getFresh('/api/account');
+    window.__homeGet = API.get;
+    window.__homeGate = {};
+    API.get = function (path) {
+      if (String(path) === '/api/account') {
+        return new Promise(resolve => { window.__homeGate.release = resolve; });
+      }
+      return window.__homeGet.apply(API, arguments);
+    };
+  });
+  try {
+    await page.evaluate(() => { API.flushCache(); window.location.hash = '#/home'; });
+    await page.waitForSelector('#app[data-route="home"]');
+    await page.waitForSelector('.home-hero');
+    assert.equal(await page.getAttribute('#app', 'data-route'), 'home',
+      'route identity commits with the shell, not after data finishes');
+    assert.equal(await page.getAttribute('#app', 'data-ready'), 'false',
+      'the assertion observes the progressive shell while its gated fill is still pending');
+  } finally {
+    await page.evaluate(() => {
+      if (window.__homeGate && window.__homeGate.release) window.__homeGate.release(window.__homeAccount);
+      if (window.__homeGet) API.get = window.__homeGet;
+      delete window.__homeAccount;
+      delete window.__homeGet;
+      delete window.__homeGate;
+    });
+    await page.waitForSelector('#app[data-route="home"][data-ready="true"]', { timeout: 10000 });
   }
 });
 
@@ -436,8 +516,13 @@ test('every scenario story runs at both levels (the Big-news-shock crash class)'
 
 test('fair comparison: one batch call, refusals named, ranked per dollar of downside', async () => {
   await page.click('#level-switch button[data-level="expert"]');
-  await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = { mode: 'scenario' }; App.state.lastRecommendSymbol = 'AAPL'; });
-  await go('#/trade/verify');
+  await page.evaluate(() => {
+    App.state.scenarioForm = null;
+    App.state.verifyForm = { mode: 'scenario' };
+    App.state.lastRecommendSymbol = 'AAPL';
+    App.navigate('#/trade/verify'); // same hash still means an explicit rerender
+  });
+  await page.waitForSelector('#app[data-route="trade"][data-ready="true"]');
   await page.waitForSelector('#sc-compare-all');
   // Count network calls: the comparison must be ONE POST, not 18.
   const calls = await page.evaluate(() => new Promise((resolve, reject) => {
@@ -791,6 +876,10 @@ test('review verdict panel: probability map, execution ladder, expert repricing'
   assert.match(panel, /P\(max loss\)|Chance of the WORST case/);
   assert.match(panel, /CVaR|very bad run/);
   assert.match(panel, /risk-neutral/i);           // the basis is disclosed, always
+  await page.waitForSelector('#rate-input');
+  assert.match(await page.textContent('#rate-input'), /Risk-free rate input|Pricing assumes a/);
+  assert.match(await page.textContent('#rate-input'), /% annual/);
+  assert.ok(await page.locator('#rate-input .evidence-badge').count(), 'the rate input carries its own provenance');
   await page.waitForSelector('#exec-ladder');
   assert.match(await page.textContent('#exec-ladder'), /Midpoint/);
   assert.match(await page.textContent('#quote-age'), /quotes/);
@@ -1282,6 +1371,8 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.click('#history-card .pill[data-range="3m"]');
   await page.waitForSelector('#history-card .pill.active[data-range="3m"]');
   await page.waitForSelector('#history-card .chart-wrap svg.chart');
+  assert.doesNotMatch(await page.textContent('#history-card'), /Real OHLC candles/,
+    'lane-neutral chart instructions never promote Demo/Simulated history as real');
   const summary = await page.textContent('#history-card .chart-summary');
   assert.match(summary, /Change/);
   assert.match(summary, /High .* Low/);
@@ -1432,6 +1523,46 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.click('#tape .tape-item >> nth=4');
   await page.waitForSelector('#app[data-route="research"][data-ready="true"]');
   // Explicit Demo owns this universe already; no hidden sector mutation is needed.
+});
+
+test('large Research markets progressively load every sparkline in governed batches', async () => {
+  const symbols = ['AAPL', 'SPY', 'QQQ', 'TSLA', 'VTSAX'];
+  for (let i = 0; i < 19; i++) symbols.push('Z' + String(i).padStart(3, '0'));
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(async (syms) => {
+    window.__largeUniverseRestore = App.state.universe;
+    if (window.performance && performance.clearResourceTimings) performance.clearResourceTimings();
+    App.state.universe = {
+      active: { sectorKey: 'LARGE', label: 'Large review market', symbols: syms },
+      sectors: [{ key: 'LARGE', label: 'Large review market', symbols: syms }],
+      lane: 'DEMO', note: 'DOM large-market fixture'
+    };
+    App.state.explorerSector = 'LARGE';
+    history.replaceState(null, '', '#/research');
+    await App.render();
+  }, symbols);
+  await page.waitForSelector('#sector-grid[data-count="24"]');
+  const finalSym = symbols[symbols.length - 1];
+  await page.locator('#sector-grid .sym-card[data-sym="' + finalSym + '"]').scrollIntoViewIfNeeded();
+  await page.waitForSelector('#sector-grid .sym-card[data-sym="' + finalSym + '"] .spark', { timeout: 20000 });
+  await page.waitForFunction(() =>
+    document.querySelectorAll('#sector-grid .spark-loading').length === 0, null, { timeout: 30000 });
+  const requests = await page.evaluate(() => performance.getEntriesByType('resource')
+    .map(e => e.name).filter(n => n.includes('/api/sparklines?symbols=')));
+  assert.ok(requests.length >= 2, 'more than 16 symbols require multiple controlled batches: ' + requests.length);
+  for (const url of requests) {
+    const count = decodeURIComponent(new URL(url).searchParams.get('symbols') || '').split(',').filter(Boolean).length;
+    assert.ok(count <= 16, 'no optional chart request exceeds the provider-safe batch: ' + count);
+  }
+  assert.equal(await page.locator('#sector-grid .spark').count(), symbols.length,
+    'every large-market card resolves to a chart or an honest unavailable state');
+  await page.evaluate(() => {
+    App.state.universe = window.__largeUniverseRestore;
+    delete window.__largeUniverseRestore;
+    App.state.explorerSector = null;
+  });
+  await go('#/home');
+  await page.setViewportSize({ width: 1280, height: 900 });
 });
 
 test('intent-native UX: discount ladder, exit rungs, income board, symbol actions', async () => {
@@ -2411,6 +2542,17 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
   assert.ok(await page.locator('#dc-detail .xp-head').count() >= 1, 'detail drawer below the 2x2');
   // Home: exactly ONE 'Find an idea' doorway (review #9) and no marketing hero.
   await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1')); // dashboard, not the tour
+  // Exercise the observed-size sector catalog even though this suite runs in explicit Demo.
+  // The prior audit saw one Demo sector and therefore missed the full rail widening Home by 1,600px.
+  await page.evaluate(() => {
+    window.__homeUniverseRestore = App.state.universe;
+    const active = App.state.universe.active;
+    const keys = ['CORE', 'TECH', 'SEMICONDUCTORS', 'HEALTHCARE', 'DEFENSE', 'STAPLES',
+      'DISCRETIONARY', 'ENERGY', 'FINANCIALS', 'INDUSTRIALS', 'COMMUNICATIONS', 'UTILITIES', 'ETFS'];
+    App.state.universe = Object.assign({}, App.state.universe, {
+      sectors: keys.map(k => ({ key: k, label: k.replaceAll('_', ' '), symbols: active.symbols }))
+    });
+  });
   await go('#/home');
   await page.waitForSelector('#home-stats .stat');
   const homeText = await page.textContent('#app');
@@ -2427,6 +2569,21 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
   });
   assert.ok(Math.abs(homeGeo.mt - homeGeo.st) <= 2 && Math.abs(homeGeo.mb - homeGeo.sb) <= 2,
     'Home primary columns share visible top and bottom edges: ' + JSON.stringify(homeGeo));
+  const homeContainment = await page.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    document: document.documentElement.scrollWidth,
+    side: Math.round(document.querySelector('.home-col-side').getBoundingClientRect().right),
+    pulse: Math.round(document.querySelector('#sector-pulse').getBoundingClientRect().right),
+    app: Math.round(document.getElementById('app').getBoundingClientRect().right)
+  }));
+  assert.ok(homeContainment.document <= homeContainment.viewport + 2,
+    'Home cannot widen the document: ' + JSON.stringify(homeContainment));
+  assert.ok(homeContainment.pulse <= homeContainment.side + 2 && homeContainment.pulse <= homeContainment.app + 2,
+    'the full sector rail stays inside the right column: ' + JSON.stringify(homeContainment));
+  await page.evaluate(() => {
+    App.state.universe = window.__homeUniverseRestore;
+    delete window.__homeUniverseRestore;
+  });
   const sparseMarketRows = await page.evaluate(() => {
     const cards = Array.from(document.querySelectorAll('.home-market-grid .sym-card'));
     const ys = cards.map(c => Math.round(c.getBoundingClientRect().top));

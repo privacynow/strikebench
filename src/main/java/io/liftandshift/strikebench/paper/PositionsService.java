@@ -295,7 +295,8 @@ public final class PositionsService {
             audit.log(accountId, null, action, "INFO", detail);
         } catch (RuntimeException e) {
             org.slf4j.LoggerFactory.getLogger(PositionsService.class)
-                    .warn("post-commit audit write failed for {}: {}", action, e.toString());
+                    .warn("A completed share action could not be added to the activity record: {}", action);
+            org.slf4j.LoggerFactory.getLogger(PositionsService.class).debug("Share-action audit detail for " + action, e);
         }
     }
 

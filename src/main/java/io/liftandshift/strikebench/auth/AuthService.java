@@ -100,7 +100,8 @@ public final class AuthService {
         try {
             identity = provider.exchange(code, expectedNonce);
         } catch (Exception e) {
-            log.warn("OIDC token exchange/validation failed: {}", e.toString());
+            log.warn("Sign-in validation failed; try signing in again");
+            log.debug("Sign-in validation detail", e);
             throw new UnauthorizedException("Could not verify the Google sign-in");
         }
         String uid = authorizeAndProvision(identity);

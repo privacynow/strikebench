@@ -79,7 +79,11 @@ public final class Db implements AutoCloseable {
                 c.commit();
                 return out;
             } catch (Exception e) {
-                try { c.rollback(); } catch (SQLException re) { log.warn("rollback failed", re); }
+                try { c.rollback(); }
+                catch (SQLException re) {
+                    log.warn("A local-data operation could not be rolled back cleanly");
+                    log.debug("Local-data rollback detail", re);
+                }
                 if (e instanceof SQLException se) throw new DbException(se);
                 if (e instanceof RuntimeException re) throw re;
                 throw new RuntimeException(e);

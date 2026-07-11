@@ -3,8 +3,8 @@
 **Learn options by doing — with honest numbers.**
 
 StrikeBench is a free, local-first app for learning, paper-trading, and backtesting stock
-options. It runs entirely on your machine, gives you a **$100,000 practice account**, live
-market data with no sign-ups or API keys, and an engine that always tells you the worst case
+options. It runs on infrastructure you control, gives you a **$100,000 practice account**,
+keyless delayed quotes and option chains where available, and an engine that tells you the worst case
 *before* you commit — and explains every idea it refuses.
 
 > **Educational tool only — not financial advice.** Every suggestion is a risk-screened
@@ -14,10 +14,12 @@ market data with no sign-ups or API keys, and an engine that always tells you th
 
 ## Get started in two minutes
 
-You need Java 25 (free: [Adoptium](https://adoptium.net) or Amazon Corretto). Then:
+You need Java 25 (free: [Adoptium](https://adoptium.net) or Amazon Corretto). From a source checkout:
 
 ```bash
-java -jar strikebench.jar     # build one from source in two commands — see DEVELOPER.md
+docker compose up -d db              # start the bundled local data service
+mvn -q -DskipTests package
+java -jar target/strikebench.jar
 # open http://localhost:7070
 ```
 
@@ -29,7 +31,7 @@ First launch opens the welcome page. Pick your path:
   per-leg analytics, inline filters.
 
 You can switch levels any time with the Beginner / Expert control in the header, and the
-brand mark in the top-left always brings the welcome page back.
+brand mark in the top-left always brings your working desk back. The tour remains linked from Home.
 
 ## What you can do
 
@@ -39,7 +41,7 @@ and one-tap paths into everything else.
 **Research** — explore 13 sector universes as live quote tiles; tap any stock for an
 interactive candle chart (1M to MAX, crosshair readout), what's coming up (option expirations,
 earnings mentions, SEC filings), headlines, the full option chain with greeks, and
-"what you can do with this stock" — live per-goal suggestions computed from real prices.
+"what you can do with this stock" — live per-goal suggestions computed from the active market lane.
 
 **Trade → Ideas** — start from what you're *trying to do*: trade a view, earn income, buy a
 stock at a discount, sell your shares at a target, or protect them. Name a ticker or let the
@@ -82,20 +84,22 @@ instantly.
 - Model outputs (chance of profit, expected value, breakevens) are labeled as model outputs.
   Demo data is loudly badged `DEMO DATA`. Stale or missing quotes block trades instead of
   silently pricing them.
-- The ledger is append-only: nothing is ever erased, every row snapshots your cash and
-  reserves.
+- The ledger is append-only: corrections and practice-only voids add audit events rather than
+  rewriting prior cash movements; every row snapshots cash and reserves.
 
 ## Market data
 
-Works with **zero keys**: delayed option chains and quotes from Cboe, SEC EDGAR filings,
-US Treasury yields — plus built-in demo data as the last resort (always labeled).
+Works with **zero keys** for delayed option chains and quotes from Cboe, SEC EDGAR filings,
+and US Treasury yields when those sources answer. Missing observed data stays unavailable.
+Built-in fabricated data exists only after you explicitly enter the isolated **Demo** market;
+it never fills a gap in Observed.
 
 Two optional free keys unlock more:
 
-| Add to `strikebench.properties` | What it unlocks |
+| Configure | What it unlocks |
 |---|---|
-| `polygon.api.key=...` | Real daily price history for every stock, and historical option chains that upgrade backtests from "modeled" to real prices |
-| `alphavantage.api.key=...` | Real daily price history (alternative to Polygon) |
+| `POLYGON_API_KEY` | Eligible daily price history and historical option chains that can upgrade backtests from modeled to observed pricing |
+| `ALPHAVANTAGE_API_KEY` | Eligible daily price history (alternative to Polygon) |
 
 The **Data** screen shows the live health of every source, per domain.
 
@@ -107,8 +111,9 @@ The **Data** screen shows the live health of every source, per domain.
   paper fills are simulated. The app refuses to trade contracts that are already dead.
 - **Updated the app while it was running?** Restart it — the UI shows a red banner when it
   detects this.
-- Your data lives in one SQLite file (`data/strikebench.db`). Back it up, move it, or delete
-  it to start over. Resetting the account from the Portfolio screen keeps the ledger history.
+- Your data lives in the configured local data service. Use Data → Administration for the
+  guarded reset levels; resetting a practice account keeps its audit history unless you explicitly
+  choose a broader data reset. Deployment backup details live in `DEVELOPER.md`.
 
 ## For developers
 
