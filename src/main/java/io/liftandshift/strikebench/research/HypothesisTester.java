@@ -1,29 +1,25 @@
 package io.liftandshift.strikebench.research;
 
 import io.liftandshift.strikebench.market.MarketDataService;
-import io.liftandshift.strikebench.model.Candle;
+import io.liftandshift.strikebench.model.DataAge;
 import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.DataProvenance;
 
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
+import java.util.Map;
 
 /**
- * Research event-study engine: tests a simple, mechanical market hypothesis against history with an honest
- * significance test. The built-in hypothesis: "after N-day momentum ≥ threshold, is the next
- * M-day return positive more often than chance (50%)?" — evaluated over the underlying's candles
- * with a two-sided z-test on the win rate. Reports the sample, edge, z-score, and a plain verdict
- * (including "too few samples"). No look-ahead: each signal only looks forward from its own bar.
+ * Compatibility adapter for the original hypothesis endpoint. The old implementation duplicated
+ * event detection and compared momentum with a bare 50% coin flip. It now delegates to the same
+ * baseline-relative {@link ResearchQuestionEngine} used by the Research workspace, preserving the
+ * request/response shape without maintaining a second statistical engine.
  */
 public final class HypothesisTester {
 
-    private static final double Z_95 = 1.96;
-    private static final int MIN_SAMPLE = 20;
+    private final ResearchQuestionEngine engine;
 
-    private final MarketDataService market;
-
-    public HypothesisTester(MarketDataService market) { this.market = market; }
+    public HypothesisTester(MarketDataService market) { this.engine = new ResearchQuestionEngine(market); }
 
     public record HypothesisRequest(String symbol, String from, String to,
                                     Integer lookbackDays, Double thresholdPct, Integer forwardDays) {}
@@ -45,62 +41,31 @@ public final class HypothesisTester {
     /** Context- and world-aware variant: history must come from the selected analysis lane. */
     public HypothesisResult test(HypothesisRequest req, io.liftandshift.strikebench.db.AnalysisContext actx,
                                  String worldId) {
-        String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
-        if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
-        LocalDate from = LocalDate.parse(req.from());
-        LocalDate to = LocalDate.parse(req.to());
-        int lookback = Math.clamp(req.lookbackDays() == null ? 20 : req.lookbackDays(), 1, 250);
-        double threshold = req.thresholdPct() == null ? 0.0 : req.thresholdPct();
-        int forward = Math.clamp(req.forwardDays() == null ? 10 : req.forwardDays(), 1, 120);
-
-        var series = market.candleSeries(symbol, from.minusDays(lookback + 15L), to, worldId, actx);
-        DataEvidence evidence = series.evidence();
-        List<String> notes = new ArrayList<>();
-        if (!evidence.usableIn(market.lane(worldId, actx))) {
-            String hypothesis = hypothesis(symbol, lookback, threshold, forward);
-            notes.add("No compatible history is available in the selected analysis market. Choose another dataset or import observed bars in Data.");
-            return new HypothesisResult(symbol, hypothesis, 0, 0, 0, 0.5, -50, 0, false,
-                    "History unavailable — this study was not run.", evidence, notes);
-        }
-
-        List<Candle> candles = series.candles().stream()
-                .filter(c -> !c.date().isAfter(to)).toList();
-
-        int sample = 0, wins = 0;
-        for (int i = lookback; i + forward < candles.size(); i++) {
-            double c0 = candles.get(i).close().doubleValue();
-            double base = candles.get(i - lookback).close().doubleValue();
-            if (base <= 0) continue;
-            double momentum = c0 / base - 1.0;
-            if (momentum >= threshold / 100.0) {
-                sample++;
-                double fwd = candles.get(i + forward).close().doubleValue() / c0 - 1.0;
-                if (fwd > 0) wins++;
-            }
-        }
-
-        double winRate = sample == 0 ? 0 : (double) wins / sample;
-        double z = sample == 0 ? 0 : (winRate - 0.5) / Math.sqrt(0.25 / sample);
-        boolean significant = sample >= MIN_SAMPLE && Math.abs(z) >= Z_95;
-        String hypothesis = hypothesis(symbol, lookback, threshold, forward);
-        String verdict;
-        if (sample < MIN_SAMPLE) {
-            verdict = "Too few signals (" + sample + ") to conclude — widen the window or relax the threshold.";
-        } else if (significant) {
-            verdict = winRate > 0.5 ? "Supported — a statistically significant positive edge in this window."
-                    : "Rejected — a statistically significant NEGATIVE edge (the opposite of the claim).";
-        } else {
-            verdict = "Not statistically significant — consistent with chance.";
-        }
-        notes.add("Model result over one historical window, not a forecast. Survivorship/regime effects apply.");
-
-        return new HypothesisResult(symbol, hypothesis, sample, wins, round(winRate), 0.5,
-                round((winRate - 0.5) * 100), round(z), significant, verdict, evidence, notes);
+        Map<String, Object> params = Map.of(
+                "lookback", req.lookbackDays() == null ? 20 : req.lookbackDays(),
+                "thresholdPct", req.thresholdPct() == null ? 0.0 : req.thresholdPct(),
+                "forward", req.forwardDays() == null ? 10 : req.forwardDays());
+        var r = engine.run(new ResearchQuestionEngine.RunRequest(
+                "momentum", req.symbol(), req.from(), req.to(), params), actx, worldId);
+        int sample = r.conditioned().sample();
+        double winRate = r.conditioned().winRatePct() / 100.0;
+        int wins = (int) Math.round(sample * winRate);
+        List<String> notes = new ArrayList<>(r.notes());
+        notes.add("Compatibility response: computed by the shared Research event-study engine against the stock's non-signal baseline, not a 50% coin flip.");
+        return new HypothesisResult(r.symbol(), r.question(), sample, wins, round(winRate),
+                round(r.baseline().winRatePct() / 100.0), r.winRateEdgePct(), r.zScore(),
+                r.significant(), r.verdict(), evidence(r.evidence()), notes);
     }
 
-    private static String hypothesis(String symbol, int lookback, double threshold, int forward) {
-        return "After " + lookback + "-day momentum ≥ " + threshold + "%, the next "
-                + forward + "-day return on " + symbol + " is positive more often than chance.";
+    private static DataEvidence evidence(String label) {
+        return switch (label == null ? "MISSING" : label) {
+            case "OBSERVED_LIVE" -> new DataEvidence(DataProvenance.OBSERVED, DataAge.REALTIME, "event study");
+            case "OBSERVED_DELAYED" -> new DataEvidence(DataProvenance.OBSERVED, DataAge.DELAYED, "event study");
+            case "OBSERVED_EOD" -> new DataEvidence(DataProvenance.OBSERVED, DataAge.EOD, "event study");
+            case "DEMO_FIXTURE" -> new DataEvidence(DataProvenance.DEMO, DataAge.NOT_APPLICABLE, "demo event study");
+            case "MODELED" -> new DataEvidence(DataProvenance.MODELED, DataAge.NOT_APPLICABLE, "modeled event study");
+            default -> DataEvidence.missing("event study");
+        };
     }
 
     private static double round(double v) { return Math.round(v * 1000.0) / 1000.0; }

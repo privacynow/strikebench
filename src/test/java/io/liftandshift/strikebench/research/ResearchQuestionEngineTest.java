@@ -142,6 +142,40 @@ class ResearchQuestionEngineTest {
     }
 
     @Test
+    void statisticalProtocolIsExplicitConfigurableAndKeyed() {
+        var eng = engine(walk(), Freshness.EOD);
+        var defaults = eng.run(new ResearchQuestionEngine.RunRequest(
+                "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",
+                Map.of("lookback", 20, "forward", 10)));
+        assertThat(defaults.protocol().baseline()).isEqualTo("NON_SIGNAL_COMPLEMENT");
+        assertThat(defaults.protocol().eventSpacingDays()).isEqualTo(10);
+        assertThat(defaults.protocol().confidencePct()).isEqualTo(95);
+        assertThat(defaults.protocol().bootstrapSamples()).isEqualTo(800);
+        assertThat(defaults.protocol().multiplicity()).isEqualTo("CATALOG_BONFERRONI");
+
+        var exploratory = eng.run(new ResearchQuestionEngine.RunRequest(
+                "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",
+                Map.of("lookback", 20, "forward", 10, "eventSpacing", 2,
+                        "confidencePct", 99, "bootstrapSamples", 1200, "minSample", 20,
+                        "multiplicity", "UNADJUSTED_EXPLORATORY", "splitHalf", false)));
+        assertThat(exploratory.protocol().eventSpacingDays()).isEqualTo(2);
+        assertThat(exploratory.protocol().effectiveEventBlock()).isEqualTo(5);
+        assertThat(exploratory.protocol().confidencePct()).isEqualTo(99);
+        assertThat(exploratory.protocol().bootstrapSamples()).isEqualTo(1200);
+        assertThat(exploratory.protocol().minSample()).isEqualTo(20);
+        assertThat(exploratory.protocol().criticalZ()).isEqualTo(2.576);
+        assertThat(exploratory.holdout()).isNull();
+        assertThat(exploratory.studyKey()).isNotEqualTo(defaults.studyKey());
+        assertThat(exploratory.notes()).anyMatch(n -> n.contains("Exploratory unadjusted"));
+
+        var returns = java.util.List.of(-.02, -.01, .00, .01, .02, .03, -.015, .012, .018, -.008);
+        double[] ci90 = BootstrapSampler.meanCi(returns, 17, 1, 1000, 90);
+        double[] ci99 = BootstrapSampler.meanCi(returns, 17, 1, 1000, 99);
+        assertThat(ci99[0]).isLessThanOrEqualTo(ci90[0]);
+        assertThat(ci99[1]).isGreaterThanOrEqualTo(ci90[1]);
+    }
+
+    @Test
     void reportsSampleEdgeDistributionAndExamples() {
         var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
                 "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",

@@ -20,17 +20,23 @@ public final class BootstrapSampler {
     private static final long S_PATHS = 0x5851F42D4C957F2DL; // stream id for path resampling
 
     /**
-     * Deterministic MOVING-BLOCK bootstrap 90% CI on the mean (as percent of the input scale).
-     * VERBATIM the algorithm previously private to ResearchQuestionEngine — with non-overlapping
-     * events callers pass block=1 (iid resampling of independent events).
+     * Compatibility overload for the original deterministic moving-block 90% interval.
      */
     public static double[] meanCi(List<Double> rs, long seed, int block, int iterations) {
+        return meanCi(rs, seed, block, iterations, 90);
+    }
+
+    /** Deterministic moving-block bootstrap interval at the requested two-sided confidence. */
+    public static double[] meanCi(List<Double> rs, long seed, int block, int iterations, int confidencePct) {
         int n = rs.size();
         if (n < 5) return new double[]{0, 0};
         int b = Math.max(1, Math.min(block, n));
+        int iters = Math.clamp(iterations, 200, 10_000);
+        int confidence = confidencePct == 90 || confidencePct == 99 ? confidencePct : 95;
+        double tail = (1.0 - confidence / 100.0) / 2.0;
         Random rnd = new Random(seed);
-        double[] means = new double[iterations];
-        for (int it = 0; it < iterations; it++) {
+        double[] means = new double[iters];
+        for (int it = 0; it < iters; it++) {
             double s = 0; int c = 0;
             while (c < n) {
                 int start = rnd.nextInt(n);
@@ -39,7 +45,9 @@ public final class BootstrapSampler {
             means[it] = s / n;
         }
         java.util.Arrays.sort(means);
-        return new double[]{means[(int) (0.05 * iterations)] * 100, means[(int) (0.95 * iterations)] * 100};
+        int lo = Math.clamp((int) Math.floor(tail * iters), 0, iters - 1);
+        int hi = Math.clamp((int) Math.ceil((1.0 - tail) * iters) - 1, 0, iters - 1);
+        return new double[]{means[lo] * 100, means[hi] * 100};
     }
 
     /**

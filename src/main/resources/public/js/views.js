@@ -630,39 +630,62 @@
     App.state.researchTabBySymbol = App.state.researchTabBySymbol || {};
     var selectedResearchTab = App.state.researchTabBySymbol[symbol] || 'overview';
     var researchPanels = {};
-    var researchTabs = el('div', { class: 'tabs research-workspace-tabs', id: 'research-workspace-tabs', role: 'tablist' },
-      [
-        { key: 'overview', label: 'Overview' },
-        { key: 'view', label: 'Test view' },
-        { key: 'options', label: 'Options' },
-        { key: 'news', label: 'News' }
-      ].map(function (t) {
-        return el('button', { type: 'button', role: 'tab', 'data-research-tab': t.key,
+    var researchTabDefs = [
+      { key: 'overview', label: 'Market picture', sub: 'Price, events and latest news', icon: 'chart' },
+      { key: 'view', label: 'Evidence & scenarios', sub: 'Historical analogs and possible futures', icon: 'scope' },
+      { key: 'options', label: 'Options', sub: 'Chains, expirations and trade paths', icon: 'grid' },
+      { key: 'news', label: 'News & filings', sub: 'Headlines and source documents', icon: 'flag' }
+    ];
+    var researchTabs = el('div', { class: 'research-local-tabs', id: 'research-workspace-tabs', role: 'tablist' },
+      researchTabDefs.map(function (t) {
+        return el('button', { type: 'button', role: 'tab', id: 'research-tab-' + t.key,
+          'data-research-tab': t.key, 'aria-controls': 'research-panel-' + t.key,
+          tabindex: selectedResearchTab === t.key ? '0' : '-1',
           class: selectedResearchTab === t.key ? 'active' : '',
           'aria-selected': selectedResearchTab === t.key ? 'true' : 'false',
-          onclick: function () { activateResearchTab(t.key); } }, t.label);
+          onclick: function () { activateResearchTab(t.key); },
+          onkeydown: function (e) {
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+            e.preventDefault();
+            var i = researchTabDefs.findIndex(function (x) { return x.key === t.key; });
+            var step = e.key === 'ArrowRight' ? 1 : -1;
+            var next = researchTabDefs[(i + step + researchTabDefs.length) % researchTabDefs.length];
+            activateResearchTab(next.key, true);
+          }
+        }, icon(t.icon, 16), el('span', {}, el('b', {}, t.label), el('small', {}, t.sub)));
       }));
+    var researchNav = el('nav', { class: 'research-local-nav', 'aria-label': symbol + ' research workspace' },
+      el('div', { class: 'research-local-nav-head' },
+        el('b', {}, 'Explore ' + symbol),
+        el('span', { class: 'muted' }, 'One workspace, four connected views.')),
+      researchTabs);
     var researchWorkspace = el('div', { class: 'research-workspace', id: 'research-workspace' });
     ['overview', 'view', 'options', 'news'].forEach(function (key) {
-      var panel = el('section', { class: 'research-workspace-panel', 'data-research-panel': key,
+      var panel = el('section', { class: 'research-workspace-panel', id: 'research-panel-' + key,
+        role: 'tabpanel', 'aria-labelledby': 'research-tab-' + key, 'data-research-panel': key,
         hidden: selectedResearchTab === key ? null : '' });
       researchPanels[key] = panel;
       researchWorkspace.appendChild(panel);
     });
-    function activateResearchTab(key) {
+    function activateResearchTab(key, focus) {
       selectedResearchTab = key;
       App.state.researchTabBySymbol[symbol] = key;
       researchTabs.querySelectorAll('[role="tab"]').forEach(function (b) {
         var active = b.getAttribute('data-research-tab') === key;
         b.classList.toggle('active', active);
         b.setAttribute('aria-selected', active ? 'true' : 'false');
+        b.setAttribute('tabindex', active ? '0' : '-1');
+        if (active && focus) b.focus();
       });
       Object.keys(researchPanels).forEach(function (k) { researchPanels[k].hidden = k !== key; });
     }
-    root.appendChild(researchTabs);
+    root.appendChild(researchNav);
     root.appendChild(researchWorkspace);
 
     researchPanels.overview.appendChild(comingUp(symbol, false)); // dated events; self-fetches
+    var newsOverviewCard = el('div', { class: 'card', id: 'news-overview-card' },
+      UI.cardHeader('Latest news & filings'), UI.spinner('Loading headlines…'));
+    researchPanels.overview.appendChild(newsOverviewCard);
     var actionsAnchor = el('div', { id: 'symbol-actions-anchor' }); // filled after r: the action cards, or the no-options warning
     researchPanels.options.appendChild(actionsAnchor);
 
@@ -687,33 +710,59 @@
       var newsItems = [];
       try { newsItems = ((await API.get('/api/research/' + symbol + '/news')).items || []); }
       catch (e) { /* empty state below */ }
+      var isFiling = function (n) { return /edgar|sec/i.test(n.source || '') || /filing$/i.test(n.headline || ''); };
+      function newsContext(n) {
+        var h = String(n.headline || '').toLowerCase();
+        if (isFiling(n)) return 'Official company disclosure. Open the source to inspect the filing type, dates and material changes.';
+        if (/earnings|results|revenue|guidance|outlook/.test(h)) return 'Results or guidance can reset price and implied volatility. Check the actual release and whether it falls inside your horizon.';
+        if (/regulat|probe|lawsuit|antitrust|recall/.test(h)) return 'Regulatory or legal news can create gap risk. Verify the scope and source before changing a thesis.';
+        if (/analyst|upgrade|downgrade|price target/.test(h)) return 'Analyst opinion, not a company disclosure. Inspect the changed assumptions rather than relying on the headline.';
+        if (/launch|product|approval|contract|deal/.test(h)) return 'A business catalyst may affect growth expectations. Open the source to judge timing, scale and whether it is already priced in.';
+        return 'Headline-based context only. Open the source before treating it as evidence or a catalyst.';
+      }
+      function newsTile(n) {
+        var when = n.publishedEpochMs ? new Date(n.publishedEpochMs).toISOString().slice(0, 10) : '';
+        return el('article', { class: 'news-tile' },
+          el('div', { class: 'news-meta' },
+            el('span', { class: 'badge badge-dim' }, isFiling(n) ? 'FILING' : 'NEWS'),
+            el('span', { class: 'muted' }, [when, n.source].filter(Boolean).join(' · '))),
+          n.url ? el('a', { class: 'news-headline', href: n.url, target: '_blank', rel: 'noopener' }, n.headline)
+            : el('b', { class: 'news-headline' }, n.headline),
+          el('p', { class: 'muted news-context' }, newsContext(n)));
+      }
+      newsOverviewCard.innerHTML = '';
+      newsOverviewCard.appendChild(UI.cardHeader('Latest news & filings',
+        el('button', { type: 'button', class: 'btn btn-sm btn-secondary', id: 'open-news-tab',
+          onclick: function () { activateResearchTab('news', true); } }, 'View all')));
       newsCard.innerHTML = '';
       newsCard.appendChild(UI.cardHeader('News & filings'));
       if (!newsItems.length) {
+        newsOverviewCard.appendChild(el('p', { class: 'muted' },
+          'No headline or filing source answered for ' + symbol + '. Price research remains available.'));
         newsCard.appendChild(UI.emptyState('No headlines right now',
           'No news source answered for ' + symbol + '. See the Data screen for per-source health.',
           'Check data status', function () { App.navigate('#/status'); }));
         return;
       }
-      var isFiling = function (n) { return /edgar|sec/i.test(n.source || '') || /filing$/i.test(n.headline || ''); };
       var headlines = newsItems.filter(function (n) { return !isFiling(n); }).slice(0, 8);
       var filings = newsItems.filter(isFiling).slice(0, 5);
-      var row = function (n) {
-        var when = n.publishedEpochMs ? new Date(n.publishedEpochMs).toISOString().slice(0, 10) : '';
-        return el('div', { class: 'status-item' },
-          el('a', { href: n.url, target: '_blank', rel: 'noopener' }, n.headline),
-          el('span', { class: 'spacer' }),
-          when ? el('span', { class: 'muted' }, when + ' · ') : null,
-          el('span', { class: 'muted' }, n.source));
-      };
-      headlines.forEach(function (n) { newsCard.appendChild(row(n)); });
+      newsOverviewCard.appendChild(el('div', { class: 'news-grid news-grid-overview' },
+        newsItems.slice(0, 3).map(newsTile)));
+      newsOverviewCard.appendChild(el('p', { class: 'muted small news-honesty' },
+        'Context is classified from the headline and source; it is not an article summary. Open the source for the facts.'));
+      if (headlines.length) {
+        newsCard.appendChild(el('h3', { class: 'news-section-title' }, 'Headlines'));
+        newsCard.appendChild(el('div', { class: 'news-grid' }, headlines.map(newsTile)));
+      }
       if (filings.length) {
-        newsCard.appendChild(el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Corporate filings (SEC)'));
+        newsCard.appendChild(el('h3', { class: 'news-section-title' }, 'Corporate filings (SEC)'));
         if (Learn.currentLevel() === 'beginner') {
           newsCard.appendChild(explain('Official documents companies must file: 10-K (annual report), 10-Q (quarterly), 8-K (something important just happened). Big moves often start here.'));
         }
-        filings.forEach(function (n) { newsCard.appendChild(row(n)); });
+        newsCard.appendChild(el('div', { class: 'news-grid' }, filings.map(newsTile)));
       }
+      newsCard.appendChild(el('p', { class: 'muted small news-honesty' },
+        'StrikeBench does not summarize article bodies here. Headline context is a navigation aid, not evidence by itself.'));
     })();
 
     // Hero + option-dependent sections fill WITHOUT blocking the route: research() returns after
@@ -6681,6 +6730,12 @@
   function evidenceStage(symbol, thesis, level) {
     var f = App.state.researchStudy;
     f.results = f.results || {};
+    f.protocolBySymbol = f.protocolBySymbol || {};
+    var protocol = f.protocolBySymbol[symbol] = Object.assign({
+      window: '3y', from: '', to: '', strictness: 'balanced', regime: 'ALL',
+      eventSpacing: thesis.horizonDays, minSample: 15, confidencePct: 95,
+      bootstrapSamples: 800, multiplicity: 'CATALOG_BONFERRONI', splitHalf: true
+    }, f.protocolBySymbol[symbol] || {});
     var stage = el('div', { id: 'what-has-happened' });
     var qKey = THESIS_QUESTION[thesis.direction] || 'pullback_rebound';
     var picker = el('div', { id: 'study-question-picker' });
@@ -6690,7 +6745,16 @@
     stage.appendChild(el('div', { class: 'btn-row' }, run));
     stage.appendChild(out);
 
-    var paramInputs = {};
+    var paramInputs = {}, protocolInputs = {};
+    function isoYearsAgo(years) {
+      var d = new Date(); d.setUTCFullYear(d.getUTCFullYear() - years);
+      return d.toISOString().slice(0, 10);
+    }
+    function today() { return new Date().toISOString().slice(0, 10); }
+    function windowFrom(value) { return value === '1y' ? isoYearsAgo(1) : value === 'max' ? '2000-01-01' : isoYearsAgo(3); }
+    if (!protocol.from) protocol.from = windowFrom(protocol.window);
+    if (!protocol.to) protocol.to = today();
+
     function currentParams(q) {
       var params = {};
       (q.params || []).forEach(function (pr) {
@@ -6699,39 +6763,158 @@
             ? f.params[q.key][pr.key] : pr.def;
       });
       params.forward = thesis.horizonDays; // the THESIS horizon is the study horizon — one truth
+      params.eventSpacing = +(protocolInputs.eventSpacing ? protocolInputs.eventSpacing.value : protocol.eventSpacing || thesis.horizonDays);
+      params.minSample = +(protocolInputs.minSample ? protocolInputs.minSample.value : protocol.minSample);
+      params.confidencePct = +(protocolInputs.confidencePct ? protocolInputs.confidencePct.value : protocol.confidencePct);
+      params.bootstrapSamples = +(protocolInputs.bootstrapSamples ? protocolInputs.bootstrapSamples.value : protocol.bootstrapSamples);
+      params.regime = protocolInputs.regime ? protocolInputs.regime.value : protocol.regime;
+      params.multiplicity = protocolInputs.multiplicity ? protocolInputs.multiplicity.value : protocol.multiplicity;
+      params.splitHalf = protocolInputs.splitHalf ? protocolInputs.splitHalf.checked : protocol.splitHalf;
       return params;
+    }
+
+    function rememberProtocol() {
+      if (protocolInputs.window) protocol.window = protocolInputs.window.value;
+      if (protocolInputs.from) protocol.from = protocolInputs.from.value;
+      if (protocolInputs.to) protocol.to = protocolInputs.to.value;
+      if (protocolInputs.strictness) protocol.strictness = protocolInputs.strictness.value;
+      if (protocolInputs.regime) protocol.regime = protocolInputs.regime.value;
+      if (protocolInputs.eventSpacing) protocol.eventSpacing = +protocolInputs.eventSpacing.value;
+      if (protocolInputs.minSample) protocol.minSample = +protocolInputs.minSample.value;
+      if (protocolInputs.confidencePct) protocol.confidencePct = +protocolInputs.confidencePct.value;
+      if (protocolInputs.bootstrapSamples) protocol.bootstrapSamples = +protocolInputs.bootstrapSamples.value;
+      if (protocolInputs.multiplicity) protocol.multiplicity = protocolInputs.multiplicity.value;
+      if (protocolInputs.splitHalf) protocol.splitHalf = protocolInputs.splitHalf.checked;
+    }
+
+    function invalidateVisible() {
+      rememberProtocol();
+      if (out.children.length) {
+        out.innerHTML = '';
+        out.appendChild(el('p', { class: 'muted study-rerun-note' }, 'Study settings changed — run the study again to refresh the evidence.'));
+      }
+    }
+
+    function strictValue(qKey0, param, mode) {
+      if (mode === 'balanced') return param.def;
+      var loose = mode === 'more';
+      if (param.key === 'dropPct') return qKey0 === 'pullback_rebound'
+        ? (loose ? 3 : 8) : (loose ? 2 : 5);
+      if (param.key === 'thresholdPct') return loose ? 3 : 10;
+      if (param.key === 'streak') return loose ? 2 : 5;
+      if (param.key === 'lookback' && qKey0 === 'breakout_followthrough') return loose ? 10 : 60;
+      return param.def;
     }
 
     function buildPicker(cat) {
       picker.innerHTML = '';
-      paramInputs = {};
+      paramInputs = {}; protocolInputs = {};
       var q = cat.find(function (x) { return x.key === qKey; }) || cat[0];
-      if (level === 'beginner') {
-        // The thesis chose the question — restate it as the human sentence, no second chooser.
-        picker.appendChild(el('div', { class: 'muted', id: 'tv-question-line' },
-          el('b', {}, q.title + ' '), q.plain + ' (over your ' + thesis.horizonDays + '-day horizon)'));
-      } else {
-        var fields = [];
+      picker.appendChild(el('div', { class: 'study-question-line', id: 'tv-question-line' },
+        el('b', {}, q.title), el('span', { class: 'muted' }, q.plain + ' · ' + thesis.horizonDays + '-trading-day outcome')));
+
+      var signalFields = [];
+      (q.params || []).forEach(function (pr) {
+        if (pr.key === 'forward') return;
+        var saved = (f.params && f.params[q.key] && f.params[q.key][pr.key]);
+        var inp = el('input', { type: 'number', id: 'study-param-' + pr.key,
+          value: saved == null ? strictValue(q.key, pr, protocol.strictness) : saved,
+          min: String(pr.min), max: String(pr.max), step: '1' });
+        paramInputs[pr.key] = inp;
+        signalFields.push(toolField((level === 'beginner' ? pr.label : pr.label + ' (' + pr.unit + ')'), inp));
+      });
+
+      protocolInputs.window = el('select', { id: 'study-window' },
+        el('option', { value: '1y' }, 'Past year'), el('option', { value: '3y' }, 'Past 3 years'),
+        el('option', { value: 'max' }, 'All available history'),
+        el('option', { value: 'custom' }, 'Custom dates'));
+      protocolInputs.window.value = protocol.window;
+      protocolInputs.strictness = el('select', { id: 'study-strictness' },
+        el('option', { value: 'more' }, level === 'beginner' ? 'More examples (looser signal)' : 'Loose signal / more events'),
+        el('option', { value: 'balanced' }, 'Balanced signal'),
+        el('option', { value: 'stronger' }, level === 'beginner' ? 'Fewer, stronger examples' : 'Strict signal / fewer events'),
+        el('option', { value: 'custom' }, 'Custom thresholds'));
+      protocolInputs.strictness.value = protocol.strictness;
+      protocolInputs.regime = el('select', { id: 'study-regime' },
+        el('option', { value: 'ALL' }, 'All market conditions'),
+        el('option', { value: 'ABOVE_200DMA' }, 'Above 200-day average'),
+        el('option', { value: 'BELOW_200DMA' }, 'Below 200-day average'),
+        el('option', { value: 'HIGH_VOL' }, 'Higher-volatility regimes'),
+        el('option', { value: 'LOW_VOL' }, 'Lower-volatility regimes'));
+      protocolInputs.regime.value = protocol.regime;
+
+      var beginnerControls = el('div', { class: 'form-grid study-beginner-controls' },
+        toolField('History to check', protocolInputs.window),
+        toolField('How selective?', protocolInputs.strictness),
+        toolField('Market conditions', protocolInputs.regime));
+      picker.appendChild(beginnerControls);
+
+      protocolInputs.from = el('input', { type: 'date', id: 'study-from', value: protocol.from });
+      protocolInputs.to = el('input', { type: 'date', id: 'study-to', value: protocol.to, max: today() });
+      protocolInputs.eventSpacing = el('input', { type: 'number', id: 'study-spacing', min: '1',
+        max: String(thesis.horizonDays), value: String(Math.min(thesis.horizonDays, protocol.eventSpacing || thesis.horizonDays)) });
+      protocolInputs.minSample = el('input', { type: 'number', id: 'study-min-sample', min: '5', max: '100', value: String(protocol.minSample) });
+      protocolInputs.confidencePct = el('select', { id: 'study-confidence' },
+        el('option', { value: '90' }, '90%'), el('option', { value: '95' }, '95%'), el('option', { value: '99' }, '99%'));
+      protocolInputs.confidencePct.value = String(protocol.confidencePct);
+      protocolInputs.bootstrapSamples = el('input', { type: 'number', id: 'study-bootstrap', min: '200', max: '10000', step: '100', value: String(protocol.bootstrapSamples) });
+      protocolInputs.multiplicity = el('select', { id: 'study-multiplicity' },
+        el('option', { value: 'CATALOG_BONFERRONI' }, level === 'beginner' ? 'Protect against lucky findings' : 'Bonferroni across question catalog'),
+        el('option', { value: 'UNADJUSTED_EXPLORATORY' }, level === 'beginner' ? 'Exploratory (more false alarms)' : 'Unadjusted exploratory'));
+      protocolInputs.multiplicity.value = protocol.multiplicity;
+      protocolInputs.splitHalf = el('input', { type: 'checkbox', id: 'study-split-half', checked: protocol.splitHalf ? '' : null });
+
+      var exactFields = el('div', { class: 'form-grid study-protocol-grid' }, signalFields,
+        toolField(level === 'beginner' ? 'Start date' : 'Sample start', protocolInputs.from),
+        toolField(level === 'beginner' ? 'End date' : 'Sample end', protocolInputs.to),
+        toolField(level === 'beginner' ? 'Days between examples' : 'Minimum event separation (days)', protocolInputs.eventSpacing),
+        toolField(level === 'beginner' ? 'Minimum examples' : 'Minimum event sample', protocolInputs.minSample),
+        toolField('Confidence', protocolInputs.confidencePct),
+        toolField(level === 'beginner' ? 'Resamples' : 'Bootstrap draws', protocolInputs.bootstrapSamples),
+        toolField(level === 'beginner' ? 'Lucky-finding protection' : 'Multiple-testing policy', protocolInputs.multiplicity),
+        el('div', { class: 'field inline-check study-split-check' }, protocolInputs.splitHalf,
+          el('label', { for: 'study-split-half' }, level === 'beginner' ? 'Check both halves of history' : 'Split-half consistency check')));
+      var protocolDetails = el('details', { class: 'study-protocol', open: level === 'expert' ? '' : null },
+        el('summary', {}, level === 'beginner' ? 'Fine-tune the evidence check' : 'Study protocol · full controls'),
+        el('div', { class: 'study-protocol-body' }, exactFields,
+          el('p', { class: 'muted small' }, level === 'beginner'
+            ? 'The default keeps examples independent, compares them with non-signal days, resamples the events, and protects against finding a pattern by luck.'
+            : 'Signal detection uses no future data. The baseline is the disjoint non-signal complement. Event overlap reduces effective sample size; moving-block bootstrap, a two-sided z-test, Cohen’s d, split-half consistency and catalog-wide multiplicity are reported separately.')));
+      picker.appendChild(protocolDetails);
+      picker.appendChild(el('p', { class: 'muted small study-description' }, q.description));
+
+      protocolInputs.window.addEventListener('change', function () {
+        if (protocolInputs.window.value !== 'custom') protocolInputs.from.value = windowFrom(protocolInputs.window.value);
+        invalidateVisible();
+      });
+      protocolInputs.strictness.addEventListener('change', function () {
+        if (protocolInputs.strictness.value === 'custom') { invalidateVisible(); return; }
         (q.params || []).forEach(function (pr) {
-          if (pr.key === 'forward') return; // the thesis horizon owns this
-          var saved = (f.params && f.params[q.key] && f.params[q.key][pr.key]);
-          var inp = el('input', { type: 'number', id: 'study-param-' + pr.key,
-            value: saved == null ? pr.def : saved, min: String(pr.min), max: String(pr.max), step: '1' });
-          paramInputs[pr.key] = inp;
-          fields.push(toolField(pr.label + ' (' + pr.unit + ')', inp));
+          if (pr.key !== 'forward' && paramInputs[pr.key]) paramInputs[pr.key].value = strictValue(q.key, pr, protocolInputs.strictness.value);
         });
-        if (fields.length) picker.appendChild(el('div', { class: 'form-grid' }, fields));
-        picker.appendChild(el('p', { class: 'muted small', id: 'tv-question-line' }, q.description));
-      }
+        invalidateVisible();
+      });
+      [protocolInputs.regime, protocolInputs.to, protocolInputs.eventSpacing,
+        protocolInputs.minSample, protocolInputs.confidencePct, protocolInputs.bootstrapSamples,
+        protocolInputs.multiplicity, protocolInputs.splitHalf].forEach(function (node) {
+          node.addEventListener('change', invalidateVisible);
+        });
+      protocolInputs.from.addEventListener('change', function () {
+        protocolInputs.window.value = 'custom'; invalidateVisible();
+      });
+      Object.keys(paramInputs).forEach(function (key) {
+        paramInputs[key].addEventListener('change', function () {
+          protocolInputs.strictness.value = 'custom'; invalidateVisible();
+        });
+      });
       run.disabled = false;
       // KEYED RESTORE: show a stored result ONLY when its key matches the visible controls —
       // an AAPL result may never flash on a QQQ page (adversarial review P1).
-      var key = studyClientKey(symbol, q.key, currentParams(q), '', today());
+      rememberProtocol();
+      var key = studyClientKey(symbol, q.key, currentParams(q), protocol.from, protocol.to);
       out.innerHTML = '';
       if (f.results[key]) renderQuestion(out, f.results[key], level, symbol, thesis);
     }
-
-    function today() { return new Date().toISOString().slice(0, 10); }
 
     run.addEventListener('click', async function () {
       var cat = f.questions || [];
@@ -6739,13 +6922,14 @@
       if (!q) return;
       var params = currentParams(q);
       f.params = f.params || {}; f.params[q.key] = params;
+      rememberProtocol();
       run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Replaying ' + symbol + '\u2019s history\u2026'));
-      var body = { key: q.key, symbol: symbol, from: '', to: today(), params: params };
+      var body = { key: q.key, symbol: symbol, from: protocol.from, to: protocol.to, params: params };
       try {
         var _d = await API.post('/api/research/event-studies', body);
-        var key = _d.studyKey || studyClientKey(symbol, q.key, params, '', today());
+        var key = _d.studyKey || studyClientKey(symbol, q.key, params, protocol.from, protocol.to);
         f.results[key] = _d;
-        f.results[studyClientKey(symbol, q.key, params, '', today())] = _d; // client-key alias
+        f.results[studyClientKey(symbol, q.key, params, protocol.from, protocol.to)] = _d; // client-key alias
         var keys = Object.keys(f.results);
         if (keys.length > 16) delete f.results[keys[0]]; // bounded memory
         renderQuestion(out, _d, level, symbol, thesis);
@@ -6865,7 +7049,11 @@
 
   function renderQuestion(out, r, level, symbol, thesis) {
     out.innerHTML = '';
-    var few = r.conditioned.sample < 15;
+    var protocol = r.protocol || { minSample: 15, confidencePct: 95, bootstrapSamples: 800,
+      eventSpacingDays: r.forwardDays, effectiveEventBlock: 1, regime: 'ALL',
+      multiplicity: 'CATALOG_BONFERRONI', splitHalfCheck: true,
+      baseline: 'NON_SIGNAL_COMPLEMENT', criticalZ: 2.576 };
+    var few = r.conditioned.sample < protocol.minSample;
     var kind = few ? 'warn' : (r.significant ? (r.winRateEdgePct > 0 ? 'ok' : 'danger') : 'caution');
     out.appendChild(alertBox(kind, r.verdict));
     out.appendChild(el('p', { class: 'muted small' }, r.question));
@@ -6878,9 +7066,30 @@
       evidenceBadge(r.evidence),
       chip('Evidence', strength,
         'Rolls up sample size, statistical significance, effect size and split-half consistency. Even strong evidence describes the PAST — use it to raise or lower your confidence, never as a prediction.'),
-      chip('Independent events', String(r.conditioned.sample))));
+      chip('Signal episodes', String(r.conditioned.sample),
+        'Signals are separated by the protocol spacing. If outcome windows still overlap, the effective sample and bootstrap are dependence-adjusted.')));
     out.appendChild(el('div', { class: 'muted small' },
       'Use this to raise or lower your confidence in the view \u2014 it does not predict the next occurrence.'));
+    var regimeText = protocol.regime === 'ABOVE_200DMA' ? 'above the 200-day average'
+      : protocol.regime === 'BELOW_200DMA' ? 'below the 200-day average'
+      : protocol.regime === 'HIGH_VOL' ? 'higher-volatility regimes'
+      : protocol.regime === 'LOW_VOL' ? 'lower-volatility regimes' : 'all market conditions';
+    out.appendChild(el('details', { class: 'study-result-protocol' },
+      el('summary', {}, level === 'beginner' ? 'How this evidence was checked' : 'Protocol and assumptions'),
+      el('div', { class: 'study-result-protocol-body' },
+        el('div', { class: 'chip-row' },
+          chip('Window', r.from + ' \u2192 ' + r.to),
+          chip('Regime', regimeText),
+          chip('Event spacing', protocol.eventSpacingDays + ' days'),
+          chip('Minimum sample', String(protocol.minSample)),
+          chip('Confidence', protocol.confidencePct + '%'),
+          chip('Bootstrap', protocol.bootstrapSamples + ' draws'),
+          chip('Multiple tests', protocol.multiplicity === 'CATALOG_BONFERRONI' ? 'catalog-adjusted' : 'unadjusted exploratory'),
+          chip('Split-half', protocol.splitHalfCheck ? 'on' : 'off')),
+        el('p', { class: 'muted small' }, level === 'beginner'
+          ? 'Each signal uses only information known on that date. Similar dates are separated before counting; ordinary non-signal dates form the comparison group. Resampling estimates uncertainty.'
+          : 'No-look-ahead signal; disjoint non-signal baseline; effective event block ' + protocol.effectiveEventBlock
+            + '; two-sided z threshold |z| ' + protocol.criticalZ + '; moving-block bootstrap; Cohen\u2019s d; optional split-half consistency.'))));
     // Conditioned win rate vs the baseline (the baseline bar marker) — the honest comparison.
     out.appendChild(gaugeChart(r.conditioned.winRatePct / 100, r.baseline.winRatePct / 100,
       'Positive ' + Math.round(r.conditioned.winRatePct) + '% of the time after the signal vs ' + Math.round(r.baseline.winRatePct) + '% normally — over ' + r.conditioned.sample + ' signals'));
@@ -6904,13 +7113,16 @@
     if (level === 'expert') {
       out.appendChild(el('div', { class: 'chip-row' },
         chip('z-score', String(r.zScore)),
-        chip('90% CI (avg)', r.ciLowPct + '% … ' + r.ciHighPct + '%'),
+        chip(protocol.confidencePct + '% CI (avg)', r.ciLowPct + '% … ' + r.ciHighPct + '%'),
         r.effectSize !== null && r.effectSize !== undefined
           ? chip('Effect size', String(r.effectSize), 'Cohen\u2019s d: the edge measured in units of the stock\u2019s normal noise. Under ~0.2 is negligible even when statistically significant.') : null,
         r.holdout ? chip('Consistency', r.holdout === 'held' ? 'held' : 'faded',
           'Split-half check on the SAME window \u2014 in-sample consistency, not genuine out-of-sample validation.') : null,
         chip('Baseline avg', (r.baseline.meanReturnPct >= 0 ? '+' : '') + r.baseline.meanReturnPct + '%'),
-        chip('Significant', r.significant ? 'yes' : 'no')));
+        chip('Significant', r.significant ? 'yes' : 'no',
+          protocol.multiplicity === 'CATALOG_BONFERRONI'
+            ? 'Uses the catalog-adjusted critical z shown in the protocol.'
+            : 'Exploratory and unadjusted; repeated searching raises false-positive risk.')));
     }
     if (r.exampleDates && r.exampleDates.length) {
       out.appendChild(el('div', { class: 'muted small', style: 'margin-top:4px' }, 'Example signal dates: ' + r.exampleDates.join(', ')));

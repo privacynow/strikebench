@@ -39,7 +39,7 @@ class ResearchToolsTest {
 
         assertThat(r.hypothesis()).contains("AAPL");
         assertThat(r.winRate()).isBetween(0.0, 1.0);
-        assertThat(r.expectedByChance()).isEqualTo(0.5);
+        assertThat(r.expectedByChance()).isBetween(0.0, 1.0);
         assertThat(Double.isFinite(r.zScore())).isTrue();
         assertThat(r.verdict()).isNotBlank();
         assertThat(r.evidence().provenance()).isEqualTo(DataProvenance.DEMO);
@@ -48,6 +48,15 @@ class ResearchToolsTest {
         var r2 = new HypothesisTester(market()).test(req);
         assertThat(r2.sample()).isEqualTo(r.sample());
         assertThat(r2.wins()).isEqualTo(r.wins());
+
+        var shared = new ResearchQuestionEngine(market()).run(new ResearchQuestionEngine.RunRequest(
+                "momentum", "AAPL", "2026-01-02", "2026-06-01",
+                java.util.Map.of("lookback", 20, "thresholdPct", 0.0, "forward", 10)));
+        assertThat(r.sample()).isEqualTo(shared.conditioned().sample());
+        assertThat(r.zScore()).isEqualTo(shared.zScore());
+        assertThat(r.expectedByChance()).isCloseTo(shared.baseline().winRatePct() / 100.0,
+                org.assertj.core.api.Assertions.within(0.001));
+        assertThat(r.notes()).anyMatch(n -> n.contains("shared Research event-study engine"));
     }
 
     @Test void tooFewSignalsIsCalledOutHonestly() {

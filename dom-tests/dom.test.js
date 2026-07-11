@@ -200,15 +200,23 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   // From a symbol page, the sector explorer is one visible click away
   assert.ok(await page.locator('#back-to-sectors').isVisible(), 'All sectors link on symbol pages');
   // The lookup shortcuts are YOUR recent symbols, not four frozen tickers
-  assert.match(await page.textContent('#recent-symbols'), /Recent:/);
+  assert.match(await page.textContent('#recent-symbols'), /Recent/);
   assert.ok(await page.locator('#recent-symbols .sym-chip:has-text("AAPL")').count(), 'AAPL just researched');
   assert.equal(await page.locator('.research-workspace-panel:not([hidden])').count(), 1,
     'one coherent Research task is visible at a time');
+  assert.ok(await page.locator('.research-local-nav:has-text("Explore AAPL")').count(),
+    'mid-page navigation is framed as the symbol workspace, not loose words');
+  assert.ok(await page.locator('#research-workspace-tabs small').count() >= 4,
+    'desktop tabs explain the task behind each destination');
+  await page.waitForSelector('#news-overview-card .news-tile');
+  assert.ok(await page.locator('#news-overview-card .news-tile').count() >= 1,
+    'latest news remains part of the market overview');
+  assert.match(await page.textContent('#news-overview-card'), /not an article summary/i);
   // News NEVER silently vanishes — card renders with items or an honest empty state
   await openResearchTab('news');
   await page.waitForSelector('#news-card');
   assert.match(await page.textContent('#news-card'), /News & filings/);
-  assert.ok((await page.locator('#news-card .status-item').count()) >= 1, 'fixture headlines render');
+  assert.ok((await page.locator('#news-card .news-tile').count()) >= 1, 'fixture headlines render');
   await page.waitForSelector('#research-evidence .evidence-badge:has-text("DEMO")');
   assert.equal(await page.locator('.quote-hero .badge:has-text("DEMO DATA")').count(), 0,
     'the hero does not repeat the page-level Demo evidence label');
@@ -699,6 +707,7 @@ test('fair comparison: one batch call, refusals named, ranked per dollar of down
 });
 
 test('research symbol page: ONE Test-your-view section — thesis-driven, symbol-inherited, keyed results', async () => {
+  await page.click('#level-switch button[data-level="beginner"]');
   await go('#/research/AAPL');
   await openResearchTab('view');
   await page.waitForSelector('#test-your-view');
@@ -718,6 +727,15 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   await page.waitForSelector('#what-has-happened');
   // The thesis question line names the CONDITION — "did this happen before" never leaves "this" undefined.
   await page.waitForSelector('#tv-question-line');
+  assert.ok(await page.locator('#study-window:visible').count(), 'beginner controls the history window');
+  assert.ok(await page.locator('#study-strictness:visible').count(), 'beginner controls signal selectivity');
+  assert.ok(await page.locator('#study-regime:visible').count(), 'beginner controls market regime');
+  assert.ok(await page.locator('#study-bootstrap').count(),
+    'full statistical capability remains mounted behind progressive disclosure');
+  const beforeStrict = await page.inputValue('#study-param-dropPct');
+  await page.selectOption('#study-strictness', 'stronger');
+  assert.notEqual(await page.inputValue('#study-param-dropPct'), beforeStrict,
+    'plain-language selectivity changes the real signal threshold');
   // Run the study; the conclusion is decision-useful (evidence strength + confidence guidance + handoff).
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
   await page.click('#study-run');
@@ -728,6 +746,21 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   // The handoff exists when enough analogs matched.
   const handoff = await page.locator('#tv-test-analogs').count();
   if (handoff) assert.match(await page.textContent('#tv-test-analogs'), /DEMO-data occurrences/); // fixture suite: never 'real'
+  assert.match(await page.textContent('#study-results'), /How this evidence was checked/);
+
+  // Expert sees the SAME engine and every protocol knob, not a reduced or separate tool.
+  await page.click('#level-switch button[data-level="expert"]');
+  await openResearchTab('view');
+  await page.click('#tv-stages .pill[data-mode="past"]');
+  await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
+  assert.ok(await page.locator('.study-protocol[open] #study-bootstrap:visible').count(),
+    'expert protocol opens with bootstrap, dates, dependence, confidence and multiplicity controls');
+  await page.selectOption('#study-confidence', '99');
+  await page.selectOption('#study-multiplicity', 'UNADJUSTED_EXPLORATORY');
+  await page.click('#study-run');
+  await page.waitForSelector('#study-results .alert', { timeout: 20000 });
+  assert.match(await page.textContent('#study-results'), /99% CI \(avg\)/);
+  assert.match(await page.textContent('#study-results'), /Exploratory unadjusted significance/);
   // KEYED RESULTS: switching to QQQ must not display AAPL's study.
   await go('#/research/QQQ');
   await openResearchTab('view');

@@ -23,9 +23,8 @@ import java.util.Random;
  */
 public final class ResearchQuestionEngine {
 
-    private static final double Z_95 = 1.96;
-    private static final int MIN_SAMPLE = 15;
-    private static final int BOOTSTRAP = 800;
+    private static final int DEFAULT_MIN_SAMPLE = 15;
+    private static final int DEFAULT_BOOTSTRAP = 800;
 
     private final MarketDataService market;
 
@@ -66,7 +65,7 @@ public final class ResearchQuestionEngine {
     }
 
     /** Bumped whenever detection/stats change — persisted study keys must not collide across engines. */
-    static final int ENGINE_VERSION = 2;
+    static final int ENGINE_VERSION = 3;
 
     /** Order-sensitive fold over every bar's date + close: any content change changes the hash. */
     static String contentHash(java.util.List<Candle> candles, String source) {
@@ -88,6 +87,11 @@ public final class ResearchQuestionEngine {
 
     public record Bucket(double fromPct, double toPct, int count) {}
 
+    /** The disclosed statistical protocol. Every field also participates in the study key. */
+    public record Protocol(String baseline, String regime, int eventSpacingDays, int effectiveEventBlock,
+                           int minSample, int confidencePct, int bootstrapSamples,
+                           String multiplicity, boolean splitHalfCheck, double criticalZ) {}
+
     public record QuestionResult(String key, String symbol, String question, String from, String to,
                                  int forwardDays, Stat baseline, Stat conditioned,
                                  double winRateEdgePct, double meanEdgePct, double zScore, boolean significant,
@@ -95,10 +99,11 @@ public final class ResearchQuestionEngine {
                                  List<String> exampleDates, String evidence, boolean observed,
                                  String verdict, List<String> notes,
                                  Double effectSize, String holdout,
-                                 // The EMPIRICAL PATH ENSEMBLE: each non-overlapping event's forward
+                                 // The EMPIRICAL PATH ENSEMBLE: each separated event's forward
                                  // window as day-by-day RELATIVE prices (1.0 = the event close) — the
                                  // exact analogs behind the inference, reusable as a scenario source.
-                                 List<List<Double>> analogPaths, List<String> eventDates, String studyKey) {}
+                                 List<List<Double>> analogPaths, List<String> eventDates, String studyKey,
+                                 Protocol protocol) {}
 
     public QuestionResult run(RunRequest req) {
         return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null);
@@ -126,39 +131,61 @@ public final class ResearchQuestionEngine {
         LocalDate from = parseDate(req.from(), to.minusYears(3));
         int forward = clampParam(p, "forward", 10, 1, 120);
         int lookback = clampParam(p, "lookback", 20, 1, 250);
+        int spacing = clampParam(p, "eventSpacing", forward, 1, forward);
+        int minSample = clampParam(p, "minSample", DEFAULT_MIN_SAMPLE, 5, 100);
+        int confidence = choiceParam(p, "confidencePct", 95, 90, 95, 99);
+        int bootstrapSamples = clampParam(p, "bootstrapSamples", DEFAULT_BOOTSTRAP, 200, 10_000);
+        String regime = enumParam(p, "regime", "ALL",
+                "ALL", "ABOVE_200DMA", "BELOW_200DMA", "HIGH_VOL", "LOW_VOL");
+        String multiplicity = enumParam(p, "multiplicity", "CATALOG_BONFERRONI",
+                "CATALOG_BONFERRONI", "UNADJUSTED_EXPLORATORY");
+        boolean splitHalf = boolParam(p, "splitHalf", true);
+        int eventBlock = Math.max(1, (int) Math.ceil((double) forward / spacing));
+        double criticalZ = criticalZ(confidence, "CATALOG_BONFERRONI".equals(multiplicity));
+        Protocol protocol = new Protocol("NON_SIGNAL_COMPLEMENT", regime, spacing, eventBlock,
+                minSample, confidence, bootstrapSamples, multiplicity, splitHalf, criticalZ);
 
         // Pull enough history to warm up the look-back before `from`.
-        CandleSeries series = market.candleSeries(symbol, from.minusDays(lookback + 20L), to, worldId, actx);
+        int regimeWarmup = "ABOVE_200DMA".equals(regime) || "BELOW_200DMA".equals(regime) ? 200
+                : "HIGH_VOL".equals(regime) || "LOW_VOL".equals(regime) ? 60 : 0;
+        int warmup = Math.max(lookback, regimeWarmup);
+        CandleSeries series = market.candleSeries(symbol, from.minusDays(warmup + 100L), to, worldId, actx);
         List<Candle> candles = series.candles().stream().filter(c -> !c.date().isAfter(to)).toList();
         boolean observed = series.evidence().provenance()
                 == io.liftandshift.strikebench.model.DataProvenance.OBSERVED;
         List<String> notes = new ArrayList<>();
         notes.add("A model result over one historical window, not a forecast. Regime and survivorship effects apply.");
+        if (series.evidence().provenance() == io.liftandshift.strikebench.model.DataProvenance.MISSING) {
+            notes.add("No compatible history is available in the selected market and dataset. Import observed bars or choose another explicit data lane.");
+            return empty(q, symbol, from, to, forward, false, Freshness.MISSING,
+                    "History unavailable — this study was not run.", notes, protocol);
+        }
         if (!observed) notes.add(series.evidence().provenance() == io.liftandshift.strikebench.model.DataProvenance.DEMO
                 ? "Built-in DEMO history — fabricated teaching data, not observed market evidence."
                 : "Generated history — useful for scenario exploration, not observed market evidence.");
 
         double[] closes = candles.stream().mapToDouble(c -> c.close().doubleValue()).toArray();
         int n = closes.length;
-        if (n < lookback + forward + 5) {
+        if (n < warmup + forward + 5) {
             return empty(q, symbol, from, to, forward, observed, series.freshness(),
-                    "Not enough price history for this window — widen the dates or shorten the hold.", notes);
+                    "Not enough price history for this window and protocol — widen the dates, relax the regime, or shorten the hold.",
+                    notes, protocol);
         }
 
         // Align the analyzed window with the REQUESTED `from` (not just the array warm-up), so a
         // large look-back doesn't silently shrink or shift the window the user asked about.
-        int startIdx = lookback;
-        for (int i = lookback; i < candles.size(); i++) {
-            if (!candles.get(i).date().isBefore(from)) { startIdx = Math.max(lookback, i); break; }
+        int startIdx = warmup;
+        for (int i = warmup; i < candles.size(); i++) {
+            if (!candles.get(i).date().isBefore(from)) { startIdx = Math.max(warmup, i); break; }
         }
 
         // Forward returns split into SIGNAL vs its COMPLEMENT (non-signal bars). The baseline is the
         // complement, not all bars — so the win-rate edge compares disjoint groups (finding: a baseline
         // that is a superset of the conditioned set biases the test toward "no edge"). No look-ahead:
         // bar i's signal uses closes[<= i]; the forward return looks ahead only for the outcome.
-        // NON-OVERLAPPING EVENTS: a signal that keeps firing day after day is ONE market episode, not
-        // many independent observations — after taking a signal, further firings inside its hold window
-        // are merged into that event. The conditioned sample is therefore genuinely independent.
+        // SEPARATED EVENTS: a signal that keeps firing day after day is one market episode, not many
+        // independent observations. The default spacing equals the outcome horizon (non-overlapping);
+        // an expert may shorten it, in which case the effective sample and bootstrap are block-adjusted.
         List<Double> baseFwd = new ArrayList<>();  // non-signal complement = "normally"
         List<Double> condFwd = new ArrayList<>();
         List<String> examples = new ArrayList<>();
@@ -167,11 +194,12 @@ public final class ResearchQuestionEngine {
         int mergedFirings = 0;
         int eventOpenUntil = -1;
         for (int i = startIdx; i + forward < n; i++) {
+            if (!inRegime(regime, closes, i)) continue;
             double fwd = closes[i + forward] / closes[i] - 1.0;
             if (signal(key, closes, i, lookback, p)) {
                 if (i < eventOpenUntil) { mergedFirings++; continue; } // same episode as a taken signal
                 condFwd.add(fwd);
-                eventOpenUntil = i + forward;
+                eventOpenUntil = i + spacing;
                 if (examples.size() < 6) examples.add(candles.get(i).date().toString());
                 eventDates.add(candles.get(i).date().toString());
                 List<Double> path = new ArrayList<>(forward + 1);
@@ -186,36 +214,43 @@ public final class ResearchQuestionEngine {
         Stat conditioned = stat(condFwd);
         double winEdge = round(conditioned.winRatePct() - baseline.winRatePct());
         double meanEdge = round(conditioned.meanReturnPct() - baseline.meanReturnPct());
-        // The conditioned sample is non-overlapping events (independent); the baseline complement
-        // still overlaps by (forward-1) days, so only ITS effective sample is deflated for the z-test.
-        double z = twoPropZ(conditioned, baseline, forward);
-        boolean significant = conditioned.sample() >= MIN_SAMPLE && Math.abs(z) >= Z_95;
-        double[] ci = BootstrapSampler.meanCi(condFwd, symbol.hashCode() ^ key.hashCode(), 1, BOOTSTRAP); // events are independent
-        if (mergedFirings > 0) notes.add("Back-to-back firings inside one hold window count as ONE event ("
-                + mergedFirings + " merged) — the " + conditioned.sample() + " events are non-overlapping.");
+        double z = twoPropZ(conditioned, baseline, forward, eventBlock);
+        boolean significant = conditioned.sample() >= minSample && Math.abs(z) >= criticalZ;
+        double[] ci = BootstrapSampler.meanCi(condFwd, symbol.hashCode() ^ key.hashCode(),
+                eventBlock, bootstrapSamples, confidence);
+        if (mergedFirings > 0) notes.add("Repeated firings inside the configured " + spacing
+                + "-day separation count as ONE episode (" + mergedFirings + " merged). The "
+                + conditioned.sample() + " events are separated by at least " + spacing + " trading days.");
+        if (eventBlock > 1) notes.add("The chosen event spacing permits overlapping outcome windows, so the event sample "
+                + "and bootstrap use a dependence block of " + eventBlock + ".");
         if (forward > 1) notes.add("The baseline's windows still overlap by the hold length, so its effective "
                 + "sample is deflated (÷" + forward + ") in the significance test — a conservative dependence correction.");
         // EFFECT SIZE (Cohen's d vs the baseline spread): a "significant" edge that is a tiny fraction
         // of normal day-to-day noise is not tradable — say so with a number.
         Double effectSize = effectSize(condFwd, baseFwd);
         // SPLIT-HALF HOLDOUT: did the edge exist in BOTH halves of the window, or is it one regime's story?
-        String holdout = splitHalfHoldout(condFwd, baseline.winRatePct(), winEdge);
-        if (significant) notes.add("One of " + catalog().size() + " catalog questions: at 95% confidence, expect "
-                + "a false \u201csupported\u201d roughly once per " + Math.max(2, Math.round(20.0 / catalog().size()))
-                + " full sweeps \u2014 treat a lone positive as a lead to verify, not proof.");
+        String holdout = splitHalf ? splitHalfHoldout(condFwd, baseline.winRatePct(), winEdge) : null;
+        if ("CATALOG_BONFERRONI".equals(multiplicity)) {
+            notes.add("The significance threshold is Bonferroni-adjusted across the " + catalog().size()
+                    + " built-in questions (critical |z| " + round(criticalZ) + ").");
+        } else {
+            notes.add("Exploratory unadjusted significance was selected. Trying several questions or thresholds raises the false-positive risk.");
+        }
+        if (!splitHalf) notes.add("Split-half consistency is off; this protocol cannot show whether the result depended on one half of the window.");
+        if (!"ALL".equals(regime)) notes.add("Baseline and signal events are both restricted to regime " + regimeLabel(regime) + ".");
         List<Bucket> dist = histogram(condFwd);
 
         String verdict;
-        if (conditioned.sample() < MIN_SAMPLE) {
+        if (conditioned.sample() < minSample) {
             verdict = "Too few signals (" + conditioned.sample() + ") to conclude — widen the window or relax the condition.";
         } else if (significant && winEdge > 0) {
-            verdict = "Supported (95%, two-sided, dependence-corrected) — after this signal, " + symbol + " was positive " + pct(conditioned.winRatePct())
+            verdict = "Supported (" + confidence + "%, two-sided, dependence- and multiplicity-aware) — after this signal, " + symbol + " was positive " + pct(conditioned.winRatePct())
                     + " of the time over " + forward + " days, vs " + pct(baseline.winRatePct())
                     + " normally (mean " + signed(conditioned.meanReturnPct()) + " vs " + signed(baseline.meanReturnPct()) + ")."
                     + ("held".equals(holdout) ? " The edge was consistent across both halves of the window (an in-sample check, not out-of-sample validation)."
                        : "faded".equals(holdout) ? " CAUTION: the edge lived in only one half of the window \u2014 possibly one regime's story." : "");
         } else if (significant && winEdge < 0) {
-            verdict = "Rejected (95%, two-sided, dependence-corrected) — the signal preceded WORSE outcomes than normal (" + pct(conditioned.winRatePct())
+            verdict = "Rejected (" + confidence + "%, two-sided, dependence- and multiplicity-aware) — the signal preceded WORSE outcomes than normal (" + pct(conditioned.winRatePct())
                     + " positive vs " + pct(baseline.winRatePct()) + "). Fading it may make more sense than following it.";
         } else {
             verdict = "No clear edge — outcomes after the signal look like " + symbol + "'s normal behavior ("
@@ -239,7 +274,7 @@ public final class ResearchQuestionEngine {
         return new QuestionResult(key, symbol, questionText(q, symbol, forward, lookback, p), from.toString(), to.toString(),
                 forward, baseline, conditioned, winEdge, meanEdge, round(z), significant,
                 round(ci[0]), round(ci[1]), dist, examples, evidenceLabel(series.freshness()), observed, verdict, notes,
-                effectSize, holdout, analogPaths, eventDates, studyKey);
+                effectSize, holdout, analogPaths, eventDates, studyKey, protocol);
     }
 
     // ---- Signals (no look-ahead) ----
@@ -290,14 +325,13 @@ public final class ResearchQuestionEngine {
     }
 
     /**
-     * Two-proportion z-test on the conditioned vs baseline win rate (pooled). Conditioned events are
-     * sampled non-overlapping (independent) so they count in full; the baseline complement still
-     * overlaps by the hold period, so only its effective sample is deflated by ~forward.
+     * Two-proportion z-test on the conditioned vs baseline win rate (pooled). Event and baseline
+     * effective samples are both deflated when their outcome windows overlap.
      */
-    private static double twoPropZ(Stat cond, Stat base, int forward) {
+    private static double twoPropZ(Stat cond, Stat base, int forward, int conditionedBlock) {
         if (cond.sample() == 0 || base.sample() == 0) return 0;
         double p1 = cond.winRatePct() / 100.0, p2 = base.winRatePct() / 100.0;
-        int n1 = cond.sample();                                   // independent events
+        int n1 = Math.max(1, cond.sample() / Math.max(1, conditionedBlock));
         int n2 = Math.max(1, base.sample() / Math.max(1, forward)); // overlapping complement
         double pooled = (p1 * n1 + p2 * n2) / (n1 + n2);
         double se = Math.sqrt(pooled * (1 - pooled) * (1.0 / n1 + 1.0 / n2));
@@ -379,20 +413,60 @@ public final class ResearchQuestionEngine {
     }
 
     private QuestionResult empty(Question q, String symbol, LocalDate from, LocalDate to, int forward,
-                                 boolean observed, Freshness f, String verdict, List<String> notes) {
+                                 boolean observed, Freshness f, String verdict, List<String> notes,
+                                 Protocol protocol) {
         Stat z = new Stat(0, 0, 0, 0, 0, 0);
         return new QuestionResult(q.key(), symbol, q.title(), from.toString(), to.toString(), forward,
                 z, z, 0, 0, 0, false, 0, 0, List.of(), List.of(), evidenceLabel(f), observed, verdict, notes,
                 null, null, List.of(), List.of(),
-                symbol + "|" + q.key() + "|" + from + ".." + to + "|{}");
+                symbol + "|" + q.key() + "|" + from + ".." + to + "|protocol=" + protocol, protocol);
     }
 
-    private static boolean isObserved(Freshness f) {
-        return f == Freshness.REALTIME || f == Freshness.DELAYED || f == Freshness.EOD || f == Freshness.STALE;
+    private static boolean inRegime(String regime, double[] closes, int i) {
+        if ("ALL".equals(regime)) return true;
+        if (("ABOVE_200DMA".equals(regime) || "BELOW_200DMA".equals(regime)) && i >= 200) {
+            double sum = 0;
+            for (int j = i - 199; j <= i; j++) sum += closes[j];
+            double avg = sum / 200.0;
+            return "ABOVE_200DMA".equals(regime) ? closes[i] >= avg : closes[i] < avg;
+        }
+        if (("HIGH_VOL".equals(regime) || "LOW_VOL".equals(regime)) && i >= 60) {
+            double shortVol = realizedStd(closes, i, 20);
+            double longVol = realizedStd(closes, i, 60);
+            return "HIGH_VOL".equals(regime) ? shortVol >= longVol : shortVol < longVol;
+        }
+        return false;
+    }
+
+    private static double realizedStd(double[] closes, int i, int days) {
+        double sum = 0, sumSq = 0;
+        for (int j = i - days + 1; j <= i; j++) {
+            double r = Math.log(closes[j] / closes[j - 1]);
+            sum += r;
+            sumSq += r * r;
+        }
+        double mean = sum / days;
+        return Math.sqrt(Math.max(0, sumSq / days - mean * mean));
+    }
+
+    private static double criticalZ(int confidence, boolean bonferroni) {
+        if (bonferroni) return confidence == 90 ? 2.326 : confidence == 99 ? 3.090 : 2.576;
+        return confidence == 90 ? 1.645 : confidence == 99 ? 2.576 : 1.960;
+    }
+
+    private static String regimeLabel(String regime) {
+        return switch (regime) {
+            case "ABOVE_200DMA" -> "above the 200-day average";
+            case "BELOW_200DMA" -> "below the 200-day average";
+            case "HIGH_VOL" -> "20-day volatility at or above its 60-day baseline";
+            case "LOW_VOL" -> "20-day volatility below its 60-day baseline";
+            default -> "all market conditions";
+        };
     }
 
     private static String evidenceLabel(Freshness f) {
-        if (f == Freshness.FIXTURE || f == Freshness.MISSING) return "DEMO_FIXTURE";
+        if (f == Freshness.MISSING) return "MISSING";
+        if (f == Freshness.FIXTURE) return "DEMO_FIXTURE";
         if (f == Freshness.EOD || f == Freshness.STALE) return "OBSERVED_EOD";
         if (f == Freshness.DELAYED) return "OBSERVED_DELAYED";
         if (f == Freshness.REALTIME) return "OBSERVED_LIVE";
@@ -403,6 +477,23 @@ public final class ResearchQuestionEngine {
         Object v = p.get(key);
         try { return Math.clamp(v == null ? def : (int) Math.round(Double.parseDouble(v.toString())), min, max); }
         catch (Exception e) { return def; }
+    }
+
+    private static int choiceParam(Map<String, Object> p, String key, int def, int... allowed) {
+        int value = clampParam(p, key, def, Integer.MIN_VALUE, Integer.MAX_VALUE);
+        for (int x : allowed) if (value == x) return value;
+        return def;
+    }
+
+    private static String enumParam(Map<String, Object> p, String key, String def, String... allowed) {
+        String value = String.valueOf(p.getOrDefault(key, def)).trim().toUpperCase(Locale.ROOT);
+        for (String x : allowed) if (x.equals(value)) return value;
+        return def;
+    }
+
+    private static boolean boolParam(Map<String, Object> p, String key, boolean def) {
+        Object value = p.get(key);
+        return value == null ? def : Boolean.parseBoolean(String.valueOf(value));
     }
 
     private static LocalDate parseDate(String s, LocalDate def) {
