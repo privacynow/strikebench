@@ -99,6 +99,9 @@ public final class ApiServer {
     private io.liftandshift.strikebench.db.DataJobService dataJobs;             // Data Center background jobs
     private io.liftandshift.strikebench.db.DataCoverage dataCoverage;           // Data Center coverage matrix
     private io.liftandshift.strikebench.db.DataResetService dataReset;          // Data Center tiered wipe
+    private io.liftandshift.strikebench.db.DataConnectorCatalog dataConnectors;
+    private io.liftandshift.strikebench.db.DataSyncState dataSyncState;
+    private io.liftandshift.strikebench.db.DataSyncScheduler dataSyncScheduler;
     private CboeProvider cboe;                                                  // for Data Center throttle display
     private io.liftandshift.strikebench.db.DatasetService datasets;             // observed + synthetic dataset registry
     private io.liftandshift.strikebench.sim.SimulationEngine simEngine;         // scenario previews + dataset runs
@@ -157,8 +160,8 @@ public final class ApiServer {
             if (etrade.configured()) providers.add(etrade);
             cboeRef[0] = new CboeProvider(cfg);
             providers.add(cboeRef[0]);
-            if (!cfg.alphaVantageApiKey().isBlank()) providers.add(new AlphaVantageProvider(cfg, providerBudget));
             if (!cfg.polygonApiKey().isBlank()) providers.add(new PolygonProvider(cfg, providerBudget));
+            if (!cfg.alphaVantageApiKey().isBlank()) providers.add(new AlphaVantageProvider(cfg, providerBudget));
             // Yahoo keyless equity candles — PERSONAL/LOCAL-CLONE opt-in only (see AppConfig.yahooEnabled).
             // Ahead of Stooq (which is bot-blocked for us) so a self-hoster gets real underlying history.
             if (cfg.yahooEnabled() && cfg.yahooAutomationPermissionConfirmed()) {
@@ -213,7 +216,12 @@ public final class ApiServer {
         server.simSessions.attachDb(db);
         // Data Center services (need db, which is set above; reuse the constructor-built engine).
         var backfill = new io.liftandshift.strikebench.db.UnderlyingBackfill(market, db, clock);
-        server.dataJobs = new io.liftandshift.strikebench.db.DataJobService(db, clock, server.marketEngine, snapshots, backfill, universe, cfg);
+        server.dataConnectors = new io.liftandshift.strikebench.db.DataConnectorCatalog(cfg, providerBudget);
+        server.dataSyncState = new io.liftandshift.strikebench.db.DataSyncState(db, clock);
+        server.dataJobs = new io.liftandshift.strikebench.db.DataJobService(db, clock, server.marketEngine,
+                snapshots, backfill, universe, cfg, server.dataConnectors);
+        server.dataSyncScheduler = new io.liftandshift.strikebench.db.DataSyncScheduler(
+                cfg, clock, server.dataSyncState, server.dataJobs);
         server.dataCoverage = new io.liftandshift.strikebench.db.DataCoverage(db);
         server.dataReset = new io.liftandshift.strikebench.db.DataResetService(db, accounts);
         server.cboe = cboeRef[0];
@@ -390,6 +398,10 @@ public final class ApiServer {
             c.routes.get("/api/data/overview", this::dataOverview);
             c.routes.get("/api/data/coverage", this::dataCoverageRoute);
             c.routes.get("/api/data/sources", this::dataSources);
+            c.routes.get("/api/data/sync", this::dataSyncStatus);
+            c.routes.post("/api/data/sync/plan", this::dataSyncPlan);
+            c.routes.put("/api/data/sync/schedule", this::dataSyncSchedulePut);
+            c.routes.post("/api/data/import/underlying", this::dataUnderlyingImport);
             c.routes.get("/api/data/jobs", this::dataJobsList);
             c.routes.get("/api/data/jobs/{id}", this::dataJobGet);
             c.routes.post("/api/data/jobs", this::dataJobStart);
@@ -728,6 +740,7 @@ public final class ApiServer {
         });
         if (dataJobs != null) dataJobs.reconcileOnBoot(); // fail orphaned jobs from a prior run so they can retry
         if (marketEngine != null) marketEngine.start(); // warm the universe + background refresh
+        if (dataSyncScheduler != null) dataSyncScheduler.start();
         log.info("StrikeBench listening on http://localhost:{} (market mode: {})",
                 app.port(), cfg.fixturesOnly() ? "demo" : "observed");
         return app;
@@ -808,6 +821,7 @@ public final class ApiServer {
     }
 
     public void stop() {
+        if (dataSyncScheduler != null) dataSyncScheduler.close();
         if (dataJobs != null) dataJobs.shutdown();
         if (marketEngine != null) marketEngine.stop();
         if (streamScheduler != null) streamScheduler.shutdownNow();
@@ -1934,10 +1948,14 @@ public final class ApiServer {
                 + "sources until it clears. " + cboeHint;
         sources.add(source(cboeThrottled ? "Cboe (delayed chains) — THROTTLED" : "Cboe (delayed chains)",
                 "Option chains + greeks", !fx && !cboeThrottled, "keyless · delayed · display-only", cboeHint));
-        sources.add(source("Yahoo Finance", "Equity/ETF/index candles", cfg.yahooEnabled(), "keyless · PERSONAL / local-clone only",
-                "Underlying OHLCV for backtesting (NOT options). Off by default; set YAHOO_ENABLED=true to opt in — you own Yahoo's terms."));
-        sources.add(source("Alpha Vantage", "Equity candles + historical options", !cfg.alphaVantageApiKey().isBlank(),
-                "keyed · internal-use", "Set ALPHAVANTAGE_API_KEY. 15+ years of historical options with IV/greeks (premium tier)."));
+        boolean yahooEligible = cfg.yahooEnabled() && cfg.yahooAutomationPermissionConfirmed();
+        sources.add(source("Yahoo Finance automation", "Equity/ETF/index candles", yahooEligible,
+                "permission-required · PERSONAL / local-clone only",
+                yahooEligible
+                        ? "Authorized local automation is enabled and governed by a durable request budget."
+                        : "Off by default. Enabling the endpoint alone is insufficient; automated collection requires permission confirmation. Prefer a user-exported CSV or official keyed API."));
+        sources.add(source("Alpha Vantage", "Daily equity/ETF candles", !cfg.alphaVantageApiKey().isBlank(),
+                "official keyed API · plan terms apply", "Set ALPHAVANTAGE_API_KEY. Compact access supplies recent daily rows; full history requires an entitled plan."));
         sources.add(source("Polygon", "Historical option chains", !cfg.polygonApiKey().isBlank(),
                 "keyed · internal-use", "Set POLYGON_API_KEY for real historical chains used by the backtester's observed tier."));
         sources.add(source("Stooq", "Equity EOD candles", !fx, "keyless (bot-blocked for us)",
@@ -1949,7 +1967,98 @@ public final class ApiServer {
                 "Import a licensed vendor CSV (ORATS / Cboe DataShop / Databento) via a backfill job — the 'own the past' path."));
         sources.add(source("Built-in demo market", "Deterministic fabricated teaching data", fx, "demo",
                 "Available only when you explicitly enter Demo market; never used as an Observed fallback."));
-        ctx.json(Map.of("sources", sources, "fixturesOnly", fx));
+        ctx.json(Map.of("sources", sources, "connectors", dataConnectors.all(),
+                "recommendedCandleSource", dataConnectors.recommendedSource(), "fixturesOnly", fx));
+    }
+
+    public record DataSyncPlanRequest(List<String> symbols, String source, String from, String to, Integer years) {}
+    public record DataSyncScheduleRequest(Boolean enabled, String source, List<String> symbols,
+                                          Integer years, String adjustment) {}
+
+    private void dataSyncStatus(Context ctx) {
+        var schedule = dataSyncState.schedule(ownerId(ctx));
+        ctx.json(Map.of(
+                "connectors", dataConnectors.all(),
+                "recommendedSource", dataConnectors.recommendedSource(),
+                "cursors", dataSyncState.cursors(ownerId(ctx)),
+                "schedule", schedule,
+                "quarantine", dataSyncState.quarantineSummary(),
+                "latestCompletedSession", io.liftandshift.strikebench.db.DataSyncScheduler
+                        .latestCompletedSession(clock).toString(),
+                "note", "Daily price maintenance runs once after a completed market session. Hourly daily-bar downloads are intentionally avoided."));
+    }
+
+    private void dataSyncPlan(Context ctx) {
+        DataSyncPlanRequest b = requireBody(bodyOrNull(ctx, DataSyncPlanRequest.class));
+        LocalDate to = b.to() == null || b.to().isBlank()
+                ? io.liftandshift.strikebench.db.DataSyncScheduler.latestCompletedSession(clock)
+                : LocalDate.parse(b.to());
+        int years = b.years() == null ? 5 : Math.max(1, Math.min(20, b.years()));
+        LocalDate from = b.from() == null || b.from().isBlank() ? to.minusYears(years) : LocalDate.parse(b.from());
+        String source = b.source() == null || b.source().isBlank() ? "auto" : b.source();
+        var connector = dataConnectors.requireAutomated(source);
+        LocalDate effectiveFrom = from;
+        String limitation = null;
+        if ("alphavantage".equals(connector.key()) && !cfg.alphaVantageFullHistoryEnabled()
+                && effectiveFrom.isBefore(to.minusDays(160))) {
+            effectiveFrom = to.minusDays(160);
+            limitation = "Compact Alpha Vantage access covers only the recent window. Use an entitled full-history plan or a user-owned CSV for older dates.";
+        }
+        List<String> symbols = normalizeSymbols(b.symbols());
+        if (symbols.isEmpty()) symbols = universe.active().symbols();
+        var planner = new io.liftandshift.strikebench.db.MissingRangePlanner(db);
+        List<Map<String, Object>> plans = new ArrayList<>();
+        int requests = 0, missing = 0;
+        for (String symbol : symbols.stream().distinct().limit(120).toList()) {
+            var plan = planner.plan(symbol, effectiveFrom, to);
+            requests += plan.ranges().size(); missing += plan.missingSessions();
+            plans.add(Map.of("symbol", symbol, "existingSessions", plan.existingSessions(),
+                    "missingSessions", plan.missingSessions(), "requests", plan.ranges().size(),
+                    "complete", plan.complete(), "ranges", plan.ranges()));
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("source", connector); out.put("requestedFrom", from); out.put("effectiveFrom", effectiveFrom);
+        out.put("to", to); out.put("symbols", symbols.size()); out.put("missingSessions", missing);
+        out.put("estimatedRequests", requests); out.put("plans", plans);
+        if (limitation != null) out.put("limitation", limitation);
+        ctx.json(out);
+    }
+
+    private void dataSyncSchedulePut(Context ctx) {
+        DataSyncScheduleRequest b = requireBody(bodyOrNull(ctx, DataSyncScheduleRequest.class));
+        boolean enabled = Boolean.TRUE.equals(b.enabled());
+        String source = b.source() == null ? "auto" : b.source();
+        if (enabled) dataConnectors.requireAutomated(source);
+        List<String> symbols = normalizeSymbols(b.symbols());
+        if (symbols.isEmpty()) symbols = universe.active().symbols();
+        ctx.json(dataSyncState.saveSchedule(ownerId(ctx), enabled, source, symbols,
+                b.years() == null ? 5 : b.years(), b.adjustment()));
+    }
+
+    private void dataUnderlyingImport(Context ctx) throws java.io.IOException {
+        requireAdmin(ctx); // observed history is app-wide; public users may not mutate it
+        ctx.multipartConfig().maxFileSize(25, io.javalin.config.SizeUnit.MB);
+        ctx.multipartConfig().maxTotalRequestSize(26, io.javalin.config.SizeUnit.MB);
+        io.javalin.http.UploadedFile file = ctx.uploadedFile("file");
+        if (file == null) throw new IllegalArgumentException("CSV file is required");
+        if (file.size() > 25L * 1024 * 1024) throw new IllegalArgumentException("CSV file exceeds 25 MB");
+        String basisRaw = ctx.formParam("basis");
+        io.liftandshift.strikebench.db.UnderlyingCsvIngest.Basis basis;
+        try { basis = io.liftandshift.strikebench.db.UnderlyingCsvIngest.Basis.valueOf(
+                basisRaw == null ? "AUTO" : basisRaw.trim().toUpperCase(Locale.ROOT)); }
+        catch (IllegalArgumentException e) { throw new IllegalArgumentException("basis must be AUTO, RAW, or ADJUSTED"); }
+        var result = io.liftandshift.strikebench.db.UnderlyingCsvIngest.run(file.content(), file.filename(),
+                ctx.formParam("symbol"), ctx.formParam("sourceLabel"), basis, db, dataSyncState, clock, ownerId(ctx));
+        invalidateHistoricalViews();
+        ctx.json(result);
+    }
+
+    private static List<String> normalizeSymbols(List<String> raw) {
+        if (raw == null) return List.of();
+        return raw.stream().filter(java.util.Objects::nonNull).map(String::trim)
+                .filter(s -> !s.isBlank()).map(s -> s.toUpperCase(Locale.ROOT))
+                .filter(s -> s.matches("[A-Z0-9.^_-]{1,20}"))
+                .distinct().limit(120).toList();
     }
 
     private static Map<String, Object> source(String name, String covers, boolean enabled, String license, String hint) {
@@ -2939,6 +3048,7 @@ public final class ApiServer {
         out.put("candles", series.candles());
         out.put("source", series.source());
         out.put("freshness", series.freshness().name());
+        out.put("barBasis", series.barBasis());
         out.put("evidence", series.evidence());
         ctx.json(out);
     }

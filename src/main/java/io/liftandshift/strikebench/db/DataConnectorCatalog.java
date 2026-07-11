@@ -76,6 +76,14 @@ public final class DataConnectorCatalog {
                         + "' is not eligible. Open Data → Sources & jobs to review setup and usage terms."));
     }
 
+    public Connector requireAutomated(String source) {
+        Connector connector = requireEligible(source);
+        if (!connector.automated()) {
+            throw new IllegalStateException(connector.name() + " is a manual import, not an automated sync source.");
+        }
+        return connector;
+    }
+
     public String recommendedSource() {
         return all().stream().filter(Connector::automated).filter(Connector::recommended).filter(Connector::eligible)
                 .map(Connector::key).findFirst()

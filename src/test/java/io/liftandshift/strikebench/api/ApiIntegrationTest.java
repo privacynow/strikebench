@@ -759,6 +759,25 @@ class ApiIntegrationTest {
         // Source cards disclose license/use mode (Yahoo = personal-only).
         JsonNode sources = Json.parse(get("/api/data/sources").body()).get("sources");
         assertThat(sources.toString()).contains("Yahoo Finance").contains("PERSONAL");
+        JsonNode sourceDoc = Json.parse(get("/api/data/sources").body());
+        assertThat(sourceDoc.get("connectors").toString()).contains("Your price-history CSV");
+        JsonNode sync = Json.parse(get("/api/data/sync").body());
+        assertThat(sync.get("note").asText()).contains("once after a completed market session");
+        assertThat(sync.has("cursors")).isTrue();
+        // A local user-owned daily CSV enters the observed store through multipart upload; the
+        // browser never fetches a provider endpoint or sends a server filesystem path.
+        String boundary = "StrikeBenchBoundary";
+        String multipart = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"symbol\"\r\n\r\nMSFT\r\n"
+                + "--" + boundary + "\r\nContent-Disposition: form-data; name=\"basis\"\r\n\r\nRAW\r\n"
+                + "--" + boundary + "\r\nContent-Disposition: form-data; name=\"sourceLabel\"\r\n\r\nBroker export\r\n"
+                + "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"msft.csv\"\r\n"
+                + "Content-Type: text/csv\r\n\r\nDate,Close\n2026-07-06,500\n2026-07-07,505\n\r\n"
+                + "--" + boundary + "--\r\n";
+        HttpResponse<String> imported = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/import/underlying"))
+                        .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                        .POST(HttpRequest.BodyPublishers.ofString(multipart)).build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(imported.statusCode()).isEqualTo(200);
+        assertThat(Json.parse(imported.body()).get("barBasis").asText()).isEqualTo("CLOSE_ONLY");
         // Coverage responds with a matrix + summary.
         assertThat(get("/api/data/coverage").statusCode()).isEqualTo(200);
         // Reset without confirm is refused.

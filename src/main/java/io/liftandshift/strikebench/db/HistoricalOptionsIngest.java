@@ -66,7 +66,7 @@ public final class HistoricalOptionsIngest {
     public static IngestResult run(BufferedReader reader, String source, Db db) throws IOException {
         String headerLine = reader.readLine();
         if (headerLine == null) return new IngestResult(0, 0, 0, List.of("empty file"));
-        Map<String, Integer> col = mapColumns(splitCsv(headerLine));
+        Map<String, Integer> col = mapColumns(Csv.split(headerLine));
         for (String req : List.of("date", "symbol", "expiration", "strike", "type")) {
             if (!col.containsKey(req)) {
                 return new IngestResult(0, 0, 0, List.of("missing required column: " + req + " (header: " + headerLine + ")"));
@@ -76,7 +76,7 @@ public final class HistoricalOptionsIngest {
         List<String[]> rows = new ArrayList<>();
         String line;
         while ((line = reader.readLine()) != null) {
-            if (!line.isBlank()) rows.add(splitCsv(line));
+            if (!line.isBlank()) rows.add(Csv.split(line));
         }
 
         List<String> problems = new ArrayList<>();
@@ -207,23 +207,4 @@ public final class HistoricalOptionsIngest {
         return null;
     }
 
-    /** Minimal CSV split honoring double-quoted fields (vendor exports are otherwise clean). */
-    private static String[] splitCsv(String line) {
-        List<String> out = new ArrayList<>();
-        StringBuilder cur = new StringBuilder();
-        boolean inQ = false;
-        for (int i = 0; i < line.length(); i++) {
-            char ch = line.charAt(i);
-            if (ch == '"') {
-                if (inQ && i + 1 < line.length() && line.charAt(i + 1) == '"') { cur.append('"'); i++; }
-                else inQ = !inQ;
-            } else if (ch == ',' && !inQ) {
-                out.add(cur.toString()); cur.setLength(0);
-            } else {
-                cur.append(ch);
-            }
-        }
-        out.add(cur.toString());
-        return out.toArray(new String[0]);
-    }
 }

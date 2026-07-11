@@ -21,8 +21,8 @@ public final class DataResetService {
     // Storage targets stay internal. Product-facing responses use areas, never schema names.
     public enum Tier {
         MARKET_DATA(List.of("option_bar", "underlying_bar", "market_snapshot",
-                "dataset WHERE id NOT IN ('observed','demo-fixture')", "settings WHERE k LIKE 'active_dataset%' OR k = 'cboe_cooldown_until'",
-                "data_job_item", "data_job"), List.of(
+                "dataset WHERE id NOT IN ('observed','demo-fixture')", "settings WHERE k LIKE 'active_dataset%'",
+                "data_quarantine", "data_sync_cursor", "data_job_item", "data_job"), List.of(
                         "Market history and snapshots", "Generated datasets", "Background data jobs", "Active data selection"), false),
         RESEARCH(List.of("recommendation", "strategy_evaluation", "backtests", "research_note"), List.of(
                 "Saved recommendations", "Evaluations", "Backtests", "Research notes"), false),
@@ -31,10 +31,10 @@ public final class DataResetService {
                 "Paper trades and marks", "Share positions", "Paper orders", "Practice ledger and account",
                 "Simulation practice sessions"), true),
         EVERYTHING(List.of("option_bar", "underlying_bar", "market_snapshot", "dataset WHERE id NOT IN ('observed','demo-fixture')",
-                "data_job_item", "data_job",
+                "data_quarantine", "data_sync_cursor", "data_sync_schedule", "data_job_item", "data_job",
                 "recommendation", "strategy_evaluation", "backtests", "research_note", "workspace",
                 "trade_marks", "ledger", "positions", "live_orders", "audit", "trades",
-                "secrets", "settings", "accounts", "sim_session"), List.of(
+                "secrets", "settings WHERE k <> 'cboe_cooldown_until'", "accounts", "sim_session"), List.of(
                         "Market data and datasets", "Research and backtests", "Paper portfolio and account",
                         "Simulation practice sessions", "Workspace and local settings"), true);
 

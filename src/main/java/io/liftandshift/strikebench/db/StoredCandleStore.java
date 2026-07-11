@@ -36,13 +36,13 @@ public final class StoredCandleStore implements CandleStore {
         // even as a weakest-link fallback. Scenario datasets intentionally contain modeled rows.
         String provenanceClause = synthetic ? " " : " AND observed=1 ";
         List<Row> rows = db.query(
-                "SELECT DISTINCT ON (d) d::text d, open, high, low, close, volume, source, observed,adjusted "
+                "SELECT DISTINCT ON (d) d::text d, open, high, low, close, volume, source, observed,adjusted,bar_kind "
               + "FROM underlying_bar WHERE symbol=? AND dataset_id=? AND d BETWEEN ? AND ? "
               + provenanceClause
               + "ORDER BY d, observed DESC, quality_rank DESC, created_at DESC, source",
                 r -> new Row(LocalDate.parse(r.str("d")),
                         r.bd("open"), r.bd("high"), r.bd("low"), r.bd("close"),
-                        r.lng("volume"), r.lng("observed") == 1, r.lng("adjusted") == 1),
+                        r.lng("volume"), r.lng("observed") == 1, r.lng("adjusted") == 1, r.str("bar_kind")),
                 sym, dataset, from, to);
         if (rows.size() < 2) return Optional.empty(); // not enough to be useful; fall through to providers
 
@@ -61,13 +61,13 @@ public final class StoredCandleStore implements CandleStore {
 
         if (synthetic) {
             // Scenario mode: the dataset IS the analysis world — serve whatever it holds, MODELED.
-            return Optional.of(new CandleSeries(candles, "synthetic", Freshness.MODELED));
+            return Optional.of(new CandleSeries(candles, "synthetic", Freshness.MODELED, basis(rows)));
         }
         // Observed dataset: the store satisfies the request ONLY when it actually COVERS the
         // requested range — two stray rows must never silence the provider chain on a five-year
         // ask (and, via the backfill path, freeze an incomplete store forever).
         if (!coversRange(candles, from, to)) return Optional.empty();
-        return Optional.of(new CandleSeries(candles, "stored-observed", Freshness.EOD));
+        return Optional.of(new CandleSeries(candles, "stored-observed", Freshness.EOD, basis(rows)));
     }
 
     /** Head within a week of `from`, tail within a week of `to`, and ≥60% of expected trading days. */
@@ -84,5 +84,10 @@ public final class StoredCandleStore implements CandleStore {
 
     private record Row(LocalDate d, java.math.BigDecimal open, java.math.BigDecimal high,
                        java.math.BigDecimal low, java.math.BigDecimal close, long volume,
-                       boolean observed, boolean adjusted) {}
+                       boolean observed, boolean adjusted, String barKind) {}
+
+    private static String basis(List<Row> rows) {
+        java.util.Set<String> kinds = rows.stream().map(r -> r.barKind == null ? "OHLCV" : r.barKind).collect(java.util.stream.Collectors.toSet());
+        return kinds.size() == 1 ? kinds.iterator().next() : "MIXED";
+    }
 }

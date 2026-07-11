@@ -9,9 +9,13 @@ import java.util.List;
  * Candles plus where they came from. Explicit Demo, Simulated, and Scenario lanes may return
  * generated history; the Observed provider chain never substitutes it.
  */
-public record CandleSeries(List<Candle> candles, String source, Freshness freshness) {
+public record CandleSeries(List<Candle> candles, String source, Freshness freshness, String barBasis) {
 
-    public static final CandleSeries EMPTY = new CandleSeries(List.of(), null, Freshness.MISSING);
+    public CandleSeries(List<Candle> candles, String source, Freshness freshness) {
+        this(candles, source, freshness, "OHLCV");
+    }
+
+    public static final CandleSeries EMPTY = new CandleSeries(List.of(), null, Freshness.MISSING, "NONE");
 
     public boolean isEmpty() { return candles.isEmpty(); }
 

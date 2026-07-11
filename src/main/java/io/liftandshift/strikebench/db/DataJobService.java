@@ -32,7 +32,8 @@ public final class DataJobService {
     private static final Logger log = LoggerFactory.getLogger(DataJobService.class);
 
     public static final List<String> KINDS = List.of(
-            "warm_universe", "refresh_now", "snapshot_now", "backfill_underlying", "import_options_csv");
+            "warm_universe", "refresh_now", "snapshot_now", "sync_underlying",
+            "backfill_underlying", "import_options_csv");
 
     private final Db db;
     private final Clock clock;
@@ -41,6 +42,7 @@ public final class DataJobService {
     private final UnderlyingBackfill backfill;
     private final UniverseService universe;
     private final AppConfig cfg;
+    private final DataConnectorCatalog connectors;
 
     private final ExecutorService jobPool = Executors.newFixedThreadPool(2, r -> {
         Thread t = new Thread(r, "data-job"); t.setDaemon(true); return t;
@@ -70,6 +72,13 @@ public final class DataJobService {
 
     public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
                           UnderlyingBackfill backfill, UniverseService universe, AppConfig cfg) {
+        this(db, clock, engine, snapshots, backfill, universe, cfg,
+                new DataConnectorCatalog(cfg, new ProviderRequestBudget(db, clock)));
+    }
+
+    public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
+                          UnderlyingBackfill backfill, UniverseService universe, AppConfig cfg,
+                          DataConnectorCatalog connectors) {
         this.db = db;
         this.clock = clock;
         this.engine = engine;
@@ -77,6 +86,7 @@ public final class DataJobService {
         this.backfill = backfill;
         this.universe = universe;
         this.cfg = cfg;
+        this.connectors = connectors;
     }
 
     public record DataJob(String id, String kind, String status, int total, int done, long rowsWritten,
@@ -97,7 +107,16 @@ public final class DataJobService {
         }
     }
 
-    public void shutdown() { jobPool.shutdownNow(); }
+    public void shutdown() {
+        jobPool.shutdownNow();
+        try {
+            if (!jobPool.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                log.warn("Background data jobs did not stop within five seconds");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
 
     // ---- Public API ----
 
@@ -193,6 +212,11 @@ public final class DataJobService {
                 Math.max(1, Math.min(limit, 100)));
     }
 
+    public boolean hasActive(String kind) {
+        return db.query("SELECT count(*) c FROM data_job WHERE kind=? AND status IN ('QUEUED','RUNNING')",
+                r -> r.lng("c"), kind).getFirst() > 0;
+    }
+
     // ---- Runner ----
 
     private void run(String id, String kind, Map<String, Object> params, List<String> labels, String userId) {
@@ -209,7 +233,7 @@ public final class DataJobService {
                 }
                 String label = labels.get(seq);
                 try {
-                    ItemResult res = work(kind, label, params);
+                    ItemResult res = work(id, kind, label, params, userId);
                     setItem(id, seq, res.rows > 0 || res.ok ? "DONE" : "SKIPPED", res.rows, res.note);
                     totalRows += res.rows;
                 } catch (Exception e) {
@@ -271,6 +295,7 @@ public final class DataJobService {
                     ? "The source returned HTTP " + http.statusCode() + ". Try again later or check source access."
                     : "The source could not be reached. Check the connection and try again.";
         }
+        if (e instanceof ProviderRequestBudget.Exhausted) return e.getMessage();
         if (message.contains("timeout") || message.contains("timed out")) {
             return "The source timed out. Try again later.";
         }
@@ -279,7 +304,7 @@ public final class DataJobService {
 
     private record ItemResult(long rows, boolean ok, String note) {}
 
-    private ItemResult work(String kind, String label, Map<String, Object> params) {
+    private ItemResult work(String jobId, String kind, String label, Map<String, Object> params, String userId) {
         switch (kind) {
             case "warm_universe", "refresh_now" -> {
                 // BLOCKING: the stale-while-refresh accessor reported success before any refresh ran.
@@ -295,11 +320,20 @@ public final class DataJobService {
                         + " underlying + " + r.optionRows() + " option bars"
                         + (r.errors().isEmpty() ? "" : " (" + r.errors().size() + " errors)"));
             }
-            case "backfill_underlying" -> {
+            case "backfill_underlying", "sync_underlying" -> {
                 LocalDate to = dateParam(params, "to", LocalDate.now(clock));
                 LocalDate from = dateParam(params, "from", to.minusYears(yearsParam(params)));
-                var r = backfill.backfill(label, from, to);
-                return new ItemResult(r.rows(), r.rows() > 0, r.note());
+                String source = strParam(params, "source", "auto").trim().toLowerCase(Locale.ROOT);
+                if ("sync_underlying".equals(kind)) {
+                    source = connectors.requireAutomated(source).key();
+                    // Compact Alpha access intentionally fetches only the recent window. Do not
+                    // pretend a five-year request can be fulfilled without the entitled full endpoint.
+                    if ("alphavantage".equals(source) && !cfg.alphaVantageFullHistoryEnabled()) {
+                        from = from.isBefore(to.minusDays(160)) ? to.minusDays(160) : from;
+                    }
+                }
+                var r = backfill.backfill(label, from, to, source, userId, jobId);
+                return new ItemResult(r.rows(), r.complete(), r.note());
             }
             case "import_options_csv" -> {
                 try {
@@ -320,7 +354,7 @@ public final class DataJobService {
 
     private List<String> itemsFor(String kind, Map<String, Object> params) {
         return switch (kind) {
-            case "warm_universe", "refresh_now", "backfill_underlying" -> symbolsParam(params);
+            case "warm_universe", "refresh_now", "backfill_underlying", "sync_underlying" -> symbolsParam(params);
             case "snapshot_now" -> List.of("active universe");
             case "import_options_csv" -> List.of(strParam(params, "path", ""));
             default -> List.of();
