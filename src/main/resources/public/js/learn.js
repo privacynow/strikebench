@@ -100,8 +100,8 @@
       beginner: 'A beta of 1.5 moves harder with the whole market than a beta of 0.5. It is a real sensitivity: higher beta = genuinely wilder swings, not just more correlation.',
       expert: 'r_i = (\u03bc\u2212\u03c3\u00b2/2)dt + \u03b2\u03c3_m dW_m + \u03c3_idio dW_i; total vol \u221a(\u03b2\u00b2\u03c3_m\u00b2+\u03c3_idio\u00b2). Betas validated to \u00b13.' },
     speed: { short: 'How fast simulated time passes \u2014 without changing the path.',
-      beginner: 'At 10\u00d7, ten simulated minutes pass every real minute. Faster or slower playback never changes WHAT happens \u2014 only how quickly you watch it.',
-      expert: 'The path lives on fixed 30-sim-second quanta; speed = quanta per real tick. Same seed + same sim-time \u21d2 identical prices at any speed (pinned).' },
+      beginner: 'At 26\u00d7, twenty-six simulated seconds pass every real second \u2014 a full 6.5-hour trading session in about 15 minutes. Faster or slower playback never changes WHAT happens \u2014 only how quickly you watch it.',
+      expert: 'Speed = sim-seconds per real second (a session holds 23,400). The path lives on fixed 30-sim-second quanta; ticks accumulate fractional quanta and step whole ones. Same seed + same sim-time \u21d2 identical prices at any speed (pinned).' },
     assignment: { short: 'The chance a short option finishes in-the-money and you are assigned.',
       beginner: 'For covered calls and cash-secured puts this is often the GOAL (your shares sell / you buy at your price). For other trades it is the chance of ending up with a stock position.',
       expert: 'N(d2)/N(\u2212d2) per distinct short strike, summed and capped at 1, at per-leg smile IVs.' }

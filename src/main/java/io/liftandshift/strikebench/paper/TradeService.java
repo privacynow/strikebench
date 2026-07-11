@@ -1041,6 +1041,8 @@ public final class TradeService {
             snapCal.put("underlying", underlying.toPlainString());
             snapCal.put("freshness", worst.name());
             snapCal.put("asOf", now());
+            if (world != null) snapCal.put("laneTime", java.time.LocalDateTime.ofInstant(
+                    nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString());
             snapCal.put("legs", snapshotLegs);
             return new Plan(filled, entryNet, feesCal, 0, maxLossCal, null, List.of(), null, null,
                     Money.toCents(underlying), worst, blocks, warnings, Json.write(snapCal), sharesToLock,
@@ -1132,6 +1134,10 @@ public final class TradeService {
         snapshot.put("underlying", underlying.toPlainString());
         snapshot.put("freshness", worst.name());
         snapshot.put("asOf", now());
+        // DUAL TIMESTAMPS for world trades: wall time above, the SIMULATED clock here — a session
+        // report must place each decision on the lane's own clock (weekend-handoff M9).
+        if (world != null) snapshot.put("laneTime", java.time.LocalDateTime.ofInstant(
+                nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString());
         snapshot.put("legs", snapshotLegs);
         if (shareCovered) snapshot.put("coveredByHeldShares", sharesToLock);
         if (shareContext) snapshot.put("heldShareContextLots", (long) contextLots * req.qty());

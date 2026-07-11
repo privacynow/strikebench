@@ -471,10 +471,19 @@ public final class ApiServer {
                 db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
                                 + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
                         "active_world:" + ownerId(ctx), w, clock.instant().toString());
+                // RETURN TO REAL MEANS REAL (weekend-handoff M10): leaving a sim world also drops
+                // any active SYNTHETIC dataset — 'back to the real market' must never land on a
+                // scenario dataset the user forgot about. setActive publishes dataset.selected so
+                // the scenario banner clears everywhere.
+                boolean datasetReset = false;
+                if ("observed".equals(w) && !"observed".equals(datasets.activeId(ownerId(ctx)))) {
+                    datasets.setActive("observed", ownerId(ctx));
+                    datasetReset = true;
+                }
                 // Owner-scoped hint: other tabs of the SAME user adopt the switch (multi-tab truth).
                 events.publish("world.selected", Map.of("world", w,
                         "user", ownerId(ctx) == null ? "local" : ownerId(ctx)));
-                ctx.json(Map.of("world", w));
+                ctx.json(Map.of("world", w, "datasetReset", datasetReset));
             });
             c.routes.get("/api/sim/market", ctx -> ctx.json(Map.of("sessions", simSessions.list(ownerId(ctx)))));
             c.routes.post("/api/sim/market", this::simMarketCreate);
@@ -732,9 +741,13 @@ public final class ApiServer {
 
     /** The caller's active market world: 'observed' unless they switched to a sim session. */
     private String activeWorld(Context ctx) {
-        var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), "active_world:" + ownerId(ctx));
+        return activeWorldFor(ownerId(ctx));
+    }
+
+    private String activeWorldFor(String owner) {
+        var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), "active_world:" + owner);
         String w = rows.isEmpty() || rows.getFirst() == null || rows.getFirst().isBlank() ? "observed" : rows.getFirst();
-        if (!"observed".equals(w) && simSessions.getOrRestore(w, ownerId(ctx)).isEmpty()) return "observed"; // fail-safe
+        if (!"observed".equals(w) && simSessions.getOrRestore(w, owner).isEmpty()) return "observed"; // fail-safe
         return w;
     }
 
@@ -746,23 +759,74 @@ public final class ApiServer {
         SimMarketCreate b = requireBody(bodyOrNull(ctx, SimMarketCreate.class));
         String start = b.startSimTime() != null && !b.startSimTime().isBlank() ? b.startSimTime()
                 : nextSimOpen().toString();
-        // REAL-PRICE ANCHORS (review P2): a symbol with no explicit start price anchors at its
-        // OBSERVED quote when one exists — 'AAPL:1' should feel like AAPL, not a $100 stand-in.
-        // Made-up tickers start at $100, and the response DISCLOSES every resolution.
+        // REAL-PRICE ANCHORS (review P2) + HONEST PROVENANCE (release blocker #3): a symbol with
+        // no explicit start price anchors at its quote when one exists — but the label is derived
+        // from the quote's FRESHNESS. A fixture/demo quote must NEVER be described as "the real
+        // market's last price". Made-up tickers start at $100; every resolution is disclosed.
         java.util.Map<String, Double> spots = new java.util.LinkedHashMap<>(
                 b.spots() == null ? java.util.Map.of() : b.spots());
         java.util.Map<String, String> spotBasis = new java.util.LinkedHashMap<>();
+        // Per-symbol calibration (M8): observed HV30 drives each symbol's total vol and the chain's
+        // ATM IV drives its base IV, so 'AAPL:1' MOVES like AAPL, not like the generic vol knob.
+        java.util.Map<String, Double> symVols = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Double> symIvs = new java.util.LinkedHashMap<>();
+        java.util.Map<String, String> calibrationBasis = new java.util.LinkedHashMap<>();
+        java.time.LocalDate today = java.time.LocalDate.now(clock);
         if (b.symbols() != null) {
             for (String sym : b.symbols().keySet()) {
-                if (spots.containsKey(sym)) { spotBasis.put(sym, "user"); continue; }
-                var q = market.quote(sym).map(io.liftandshift.strikebench.model.Quote::mark).orElse(null);
-                if (q != null && q.signum() > 0) {
-                    spots.put(sym, q.doubleValue());
-                    spotBasis.put(sym, "anchored to the real market's last price");
+                var q = market.quote(sym).orElse(null);
+                var mark = q == null ? null : q.mark();
+                boolean realQuote = q != null && switch (q.freshness()) {
+                    case REALTIME, DELAYED, EOD, STALE -> true;
+                    default -> false;
+                };
+                if (spots.containsKey(sym)) {
+                    spotBasis.put(sym, "user-set start price");
+                } else if (mark != null && mark.signum() > 0) {
+                    spots.put(sym, mark.doubleValue());
+                    spotBasis.put(sym, realQuote
+                            ? "anchored to the real market's last " + q.freshness().name().toLowerCase() + " price"
+                            : "anchored to a built-in DEMO quote — not a live price");
                 } else {
                     spots.put(sym, 100.0);
                     spotBasis.put(sym, "made-up ticker — starts at $100");
                 }
+                // Calibrate only KNOWN symbols; explicit per-request values would win if we ever
+                // accept them. Failures fall back to the session vol knob, disclosed below.
+                if (mark == null || mark.signum() <= 0) continue;
+                StringBuilder cal = new StringBuilder();
+                try {
+                    var series = market.candleSeries(sym, today.minusDays(90), today);
+                    if (series != null && series.candles() != null && series.candles().size() >= 20) {
+                        double hv = io.liftandshift.strikebench.pricing.HistoricalVol.annualized(series.candles(), 30);
+                        if (Double.isFinite(hv) && hv > 0 && hv <= 5.0) {
+                            symVols.put(sym, hv);
+                            boolean demoCandles = series.freshness() == io.liftandshift.strikebench.model.Freshness.FIXTURE;
+                            cal.append("vol ").append(Math.round(hv * 100)).append("% from HV30")
+                                    .append(demoCandles ? " (DEMO candles)" : " (observed candles)");
+                        }
+                    }
+                } catch (RuntimeException ignored) { /* no candle source — session knob applies */ }
+                try {
+                    var exps = market.expirations(sym);
+                    if (!exps.isEmpty()) {
+                        var chain = market.chain(sym, exps.getFirst()).orElse(null);
+                        if (chain != null && !chain.isEmpty()) {
+                            var spot = java.math.BigDecimal.valueOf(spots.get(sym));
+                            Double atm = chain.calls().stream()
+                                    .filter(oq -> oq.iv() != null && oq.strike() != null)
+                                    .min(java.util.Comparator.comparing(oq -> oq.strike().subtract(spot).abs()))
+                                    .map(io.liftandshift.strikebench.model.OptionQuote::iv).orElse(null);
+                            if (atm != null && Double.isFinite(atm) && atm > 0 && atm <= 5.0) {
+                                symIvs.put(sym, atm);
+                                if (!cal.isEmpty()) cal.append(" · ");
+                                cal.append("IV ").append(Math.round(atm * 100)).append("% from the ")
+                                        .append(realQuote ? "live" : "demo").append(" chain's ATM strike");
+                            }
+                        }
+                    }
+                } catch (RuntimeException ignored) { /* chainless symbol — session knob applies */ }
+                calibrationBasis.put(sym, cal.isEmpty() ? "session vol knob (no per-symbol data)" : cal.toString());
             }
         }
         // Seed default varies per session (still shown + persisted — same seed replays the world).
@@ -772,13 +836,15 @@ public final class ApiServer {
                 b.symbols(), spots,
                 b.scenario() == null ? "CHOP" : b.scenario(),
                 b.volAnnual() == null || b.volAnnual() <= 0 ? 0.3 : b.volAnnual(),
-                seed, start, b.speed() == null ? 1 : b.speed());
+                seed, start, b.speed() == null ? 1 : b.speed(),
+                symVols.isEmpty() ? null : symVols, symIvs.isEmpty() ? null : symIvs);
         var w = simSessions.create(cfg, ownerId(ctx));
         // The SIMULATION ACCOUNT: the only lane allowed to trade against this world.
         var acct = accounts.getOrCreateForWorld(w.worldId(), (b.name() == null ? "Simulation" : b.name()) + " account");
         ctx.status(201).json(Map.of("worldId", w.worldId(), "accountId", acct.id(),
                 "config", w.config(), "simTime", w.simTime().toString(),
-                "spotBasis", spotBasis, "modelVersion", w.modelVersion()));
+                "spotBasis", spotBasis, "calibration", calibrationBasis,
+                "modelVersion", w.modelVersion()));
     }
 
     /** The next sim session open: today 09:30 ET if a trading day and before close, else next open. */
@@ -796,17 +862,45 @@ public final class ApiServer {
         var acctRows = db.query("SELECT id FROM accounts WHERE world_id=?", r -> r.str("id"), worldId);
         List<Map<String, Object>> tradeRows = new ArrayList<>();
         long realized = 0; int wins = 0, resolved = 0;
+        // POP vs outcome: did higher-POP entries actually win more often? (decision quality,
+        // separated from single-trade outcomes — one loss on a 70% trade is not a bad decision.)
+        int hiPop = 0, hiPopWins = 0, loPop = 0, loPopWins = 0;
         if (!acctRows.isEmpty()) {
             var page = trades.list(acctRows.getFirst(), null, 0, 200);
             for (var t : page.trades()) {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id", t.id()); m.put("symbol", t.symbol()); m.put("strategy", t.strategy());
-                m.put("status", t.status()); m.put("realizedPnlCents", t.realizedPnlCents());
+                m.put("status", t.status()); m.put("qty", t.qty());
+                m.put("entryNetPremiumCents", t.entryNetPremiumCents());
+                m.put("realizedPnlCents", t.realizedPnlCents());
                 m.put("maxLossCents", t.maxLossCents()); m.put("popEntry", t.popEntry());
+                m.put("closeReason", t.closeReason());
+                m.put("openedAt", t.createdAt()); m.put("closedAt", t.closedAt());
+                // DUAL CLOCKS: wall time above; the SIMULATED time the decision was made below.
+                try {
+                    var snap = io.liftandshift.strikebench.util.Json.read(t.entrySnapshotJson(),
+                            new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                    Object lane = snap == null ? null : snap.get("laneTime");
+                    if (lane != null) m.put("laneEntryTime", lane.toString());
+                } catch (RuntimeException ignored) { /* legacy snapshot without lane time */ }
+                // MAE/MFE from the trade's own mark history: how far it went against/for the
+                // trader while open — the difference between a bad outcome and a bad decision.
+                var excursion = db.query(
+                        "SELECT MIN(unrealized_cents) mae, MAX(unrealized_cents) mfe FROM trade_marks WHERE trade_id=?",
+                        r -> new Long[]{r.lng("mae"), r.lng("mfe")}, t.id());
+                if (!excursion.isEmpty() && excursion.getFirst()[0] != null) {
+                    m.put("maeCents", excursion.getFirst()[0]);
+                    m.put("mfeCents", excursion.getFirst()[1]);
+                }
                 tradeRows.add(m);
                 if (t.realizedPnlCents() != null) {
                     resolved++; realized += t.realizedPnlCents();
-                    if (t.realizedPnlCents() > 0) wins++;
+                    boolean win = t.realizedPnlCents() > 0;
+                    if (win) wins++;
+                    if (t.popEntry() != null) {
+                        if (t.popEntry() >= 0.5) { hiPop++; if (win) hiPopWins++; }
+                        else { loPop++; if (win) loPopWins++; }
+                    }
                 }
             }
         }
@@ -819,6 +913,14 @@ public final class ApiServer {
         out.put("resolved", resolved);
         out.put("winRate", resolved > 0 ? Math.round(100.0 * wins / resolved) : null);
         out.put("realizedPnlCents", realized);
+        // Decision-vs-outcome: predicted odds against realized frequency, per POP band.
+        Map<String, Object> popVsOutcome = new LinkedHashMap<>();
+        popVsOutcome.put("highPopTrades", hiPop);
+        popVsOutcome.put("highPopWinRate", hiPop > 0 ? Math.round(100.0 * hiPopWins / hiPop) : null);
+        popVsOutcome.put("lowPopTrades", loPop);
+        popVsOutcome.put("lowPopWinRate", loPop > 0 ? Math.round(100.0 * loPopWins / loPop) : null);
+        popVsOutcome.put("note", "Entries with POP ≥ 50% vs below — with few trades this is noise, not a verdict.");
+        out.put("popVsOutcome", popVsOutcome);
         // Replay record: model version + every injected event/speed change — WITHOUT this the
         // seed line below would overclaim (injections are not derivable from the seed).
         var replay = simSessions.replayRecord(worldId, ownerId(ctx));
@@ -1166,6 +1268,7 @@ public final class ApiServer {
                 ? universe.active().symbols()
                 : java.util.Arrays.stream(raw.split(",")).map(s -> s.trim().toUpperCase(Locale.ROOT))
                     .filter(s -> !s.isBlank()).distinct().limit(60).toList();
+        final String streamOwner = ownerId(client.ctx()); // captured at open; identity never changes mid-stream
         client.keepAlive();
         // The task ref lets the push cancel ITSELF when it notices the client died — onClose is
         // the normal path, but a client that vanishes without firing it must not keep a scheduled
@@ -1178,11 +1281,40 @@ public final class ApiServer {
                 return;
             }
             try {
+                // LANE-AWARE (weekend-handoff M5): inside a simulated session this stream quotes the
+                // WORLD's symbols from the world — the same channel that drives the tape/live tiles
+                // in the real market drives them in the sim, with SIMULATED freshness disclosed.
+                // Re-resolved per frame so entering/leaving a world retargets without reconnecting.
+                String world = activeWorldFor(streamOwner);
                 List<Map<String, Object>> rows = new ArrayList<>();
-                for (var snap : marketEngine.quotes(symbols)) {
-                    rows.add(io.liftandshift.strikebench.market.MarketDataEngine.toRow(snap));
+                long asOf = clock.millis();
+                if ("observed".equals(world)) {
+                    for (var snap : marketEngine.quotes(symbols)) {
+                        rows.add(io.liftandshift.strikebench.market.MarketDataEngine.toRow(snap));
+                    }
+                } else {
+                    var wOpt = simSessions.getOrRestore(world, streamOwner);
+                    if (wOpt.isPresent()) {
+                        var w = wOpt.get();
+                        for (String sym : w.config().symbolBetas().keySet()) {
+                            market.quote(sym, world).ifPresent(q -> {
+                                Map<String, Object> row = new LinkedHashMap<>();
+                                row.put("symbol", q.symbol());
+                                row.put("description", q.description());
+                                row.put("last", q.last() == null ? null : q.last().toPlainString());
+                                row.put("bid", q.bid() == null ? null : q.bid().toPlainString());
+                                row.put("ask", q.ask() == null ? null : q.ask().toPlainString());
+                                row.put("prevClose", q.prevClose() == null ? null : q.prevClose().toPlainString());
+                                row.put("optionable", q.optionable());
+                                row.put("freshness", q.freshness().name());
+                                row.put("asOf", q.asOfEpochMs());
+                                row.put("refreshing", false);
+                                rows.add(row);
+                            });
+                        }
+                    }
                 }
-                client.sendEvent("quotes", Map.of("quotes", rows, "asOf", clock.millis()));
+                client.sendEvent("quotes", Map.of("quotes", rows, "asOf", asOf, "world", world));
             } catch (Exception e) { /* client gone or engine hiccup — the scheduled task keeps trying */ }
         };
         push.run(); // immediate first frame so the UI paints without waiting a full interval

@@ -1618,6 +1618,58 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     conditional bootstrap deterministic + whole-path only; API alias parity + pathSource contract;
     DOM: composed section, no nested symbol input, keyed no-cross-symbol restore, landing clean,
     futures as second stage, studio tests open the futures stage via openFutures().
+- WEEKEND-HANDOFF REMEDIATION (2026-07-10, branch; NOT deployed). Junior's verdict at d88c7e9: NOT
+  ready for unsupervised weekend reviewers (blockers B1-B4 + majors M5-M10); user waived B4 (single
+  reviewer, shared DB fine) and ordered "do your own analysis too, fix everything". ALL FIXED:
+  - B1 REPLAY EXACT AROUND INJECTIONS: replayTo applies each quantum's logged events BEFORE stepping
+    it (a live injection at counter q lands before step q consumes RNG index q; target-quantum events
+    applied at the end). The old step-then-apply ordering skewed OHLC and bell-crossing settlement.
+  - B2 DURABLE USER COMMANDS: SimulationSessions.persistOrThrow for step/speed/inject/pause — an
+    acknowledged command is durable or it FAILS; finish() writes state+events+FINISHED in ONE atomic
+    statement BEFORE evicting; LRU eviction only after a durable checkpoint (else world stays
+    resident); only the tick-loop checkpoint stays best-effort and is TIME-based now (30s real —
+    quantum-counted checkpoints starved slow worlds). Pinned in SimLaneGateTest (finish + immediacy).
+  - B3 HONEST ANCHORS + M8 PER-SYMBOL CALIBRATION: simMarketCreate labels every anchor from quote
+    FRESHNESS (REALTIME/DELAYED/EOD/STALE = real market; FIXTURE = "built-in DEMO quote — not a live
+    price"; missing = made-up $100) and calibrates each known symbol at create (HV30 from candles →
+    Config.symbolVols; chain ATM IV → Config.symbolIvs; basis disclosed in response.calibration incl.
+    DEMO provenance). SimulatedWorld: per-symbol sigmaTotal/sigmaIdio (σ_idio²=max(4e-4,σ_tot²−β²σ_m²)),
+    baseIv; diffusion uses calibrated idio vol; chains price at effectiveIv. CP-1 GOTCHA RECURRED:
+    SimulationSessions.create rebuilt Config via the 9-arg compat ctor, silently DROPPING the
+    calibration maps — caught by the new Order(29) integration gate; full ctor now.
+  - M5 SIM MARKET STREAMED PRODUCT-WIDE: /api/market/stream re-resolves the caller's active world
+    PER FRAME (world symbols + SIMULATED freshness inside a session; retargets without reconnect);
+    research world.tick handler fetches the LIGHT /api/quotes batch (was the full research payload
+    per tick); portfolio Active rows have data-now-for cells updated in place on world.tick (8s
+    client throttle vs the 10s server mark memo); step/injectMove/injectVol publish an IMMEDIATE
+    owner-scoped world.tick hint. The masked DOM assertion (catch-fallback wrote the price into the
+    DOM itself — a dead SSE path could pass) is REMOVED; tests wait on the app's own handler.
+  - M6 SPEED = SIM-TIME MULTIPLIER: sim-seconds per real second (1× real time; session = 23,400s);
+    tick() accumulates SIM-SECONDS not quantum fractions (30×(1/30)=0.999… in doubles — real time
+    NEVER stepped; integral speeds sum exactly); stepQuanta(1) = the band Step (one 30s quantum at
+    any speed); MAX_SPEED 2000. All speed UI speaks session time: 1× real / 26×≈15min / 78×≈5min /
+    390×≈1min / 1560×≈15s; expert numeric ≤2000 w/ tooltip; INFO 'speed' rewritten. (The old
+    "10× = a day in ~40 min" was mathematically false.)
+  - M7 VOL_EVENT IS A VOL EVENT: deterministic scenarioIvFactor arc (1.0→1.5× build over session 1,
+    crush to 0.75× at the second open, revert over 3 sessions) × per-symbol baseIv + accumulating
+    replayed ivInjected; effectiveIv clamped [0.05, 5]. Pinned incl. replay-identity of the arc.
+  - M9 TRADER-GRADE REPORT: rows carry structure/qty/entry/POP-entry/realized/closeReason/openedAt+
+    closedAt (wall) AND laneEntryTime (computePlan stamps snapshot.laneTime from nowFor(world) — the
+    SIM clock), MAE/MFE from the trade's own trade_marks excursions, POP-vs-outcome bands (≥50% vs
+    <50% predicted vs realized, small-N honesty note). reportNode renders the decisions table.
+  - M10 RETURN TO REAL MEANS REAL: PUT /api/world observed also resets the caller's active synthetic
+    dataset (dataset.selected clears scenario banners everywhere); switchWorld toasts the reset.
+  - TESTS: three sim classes moved to the new speed unit (old speed s ≡ new 30·s); new gates: pacing
+    math + Step contract, VOL_EVENT IV arc, per-symbol calibration realized-vol ratio, B2 durability
+    ×2, B3 anchor/calibration disclosure. GOLDEN DOM JOURNEY: create world → world-listed credit
+    spread via preview→ack→create → portfolio Now P/L MOVES on real SSE ticks → unwind → finish →
+    report shows sim-clock entry + MAE/MFE + POP-vs-outcome + UNWIND → return observed, real account
+    byte-identical. API-shape gotchas: /api/trades/preview → {preview, guardrails, requiredAcks,
+    ackToken}; /api/trades → {trade}; /api/research/{sym}/chain returns the OptionChain UNWRAPPED;
+    never assert doesNotContain("real market") against a label that says "not a real market price".
+  - MATRIX: 390 JUnit + 51 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
+  - HANDOFF: YES for single-reviewer weekend sessions on this build; B4 (auth on) remains the gate
+    for multiple simultaneous reviewers — blocked on the Google OIDC client secret.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

@@ -21,7 +21,7 @@ class SimulatedMarketTest {
         return new SimulatedWorld(new SimulatedWorld.Config(
                 "w-test", "Test world", Map.of("ACME", 1.0, "BETA", 0.6),
                 Map.of("ACME", 100.0, "BETA", 50.0), "CHOP", 0.30, seed,
-                "2026-07-13T09:30:00", 10));
+                "2026-07-13T09:30:00", 300)); // 300x: one tick(=1 real second) = ten 30-sec quanta
     }
 
     @Test
@@ -76,7 +76,7 @@ class SimulatedMarketTest {
     @Test
     void theVirtualClockSkipsClosedHoursAndRollsDailyBars() {
         SimulatedWorld w = world(9);
-        // 10x speed, 30 sim-seconds/tick => 300 sim-sec/tick; a 6.5h session = 78 ticks.
+        // 300x speed = 300 sim-sec/tick; a 6.5h session (23,400 sim-sec) = 78 ticks.
         for (int i = 0; i < 100; i++) w.tick();
         // The clock is INSIDE a session (09:30..16:00 ET) on a TRADING day — never a weekend/night.
         var t = w.simTime();

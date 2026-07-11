@@ -73,7 +73,7 @@ class SimLaneGateTest {
     private static SimulatedWorld createWorld(String userId) {
         return sessions.create(new SimulatedWorld.Config(null, "Weekend review",
                 Map.of("ACME", 1.0), Map.of("ACME", 100.0), "CHOP", 0.30, 99L,
-                "2026-07-13T09:30:00", 10), userId);
+                "2026-07-13T09:30:00", 300), userId); // 300x = ten 30-sec quanta per tick
     }
 
     @Test
@@ -181,6 +181,41 @@ class SimLaneGateTest {
         assertThat(restored.simTime()).isEqualTo(beforeTime);
         assertThat(restored.ticks()).isEqualTo(w.ticks());
         assertThat(restored.quote("ACME").orElseThrow().last()).isEqualByComparingTo(before);
+    }
+
+    @Test
+    void finishPersistsTheLatestStateAndEventsBeforeEviction() {
+        // Release blocker B2: finish must write state + events + FINISHED in one durable
+        // statement BEFORE evicting — a finish that dropped the last injection while
+        // acknowledging success silently forked the replayable record.
+        SimulatedWorld w = createWorld("durable-user");
+        String id = w.worldId();
+        for (int i = 0; i < 25; i++) sessions.step(id, "durable-user");
+        sessions.injectMove(id, "durable-user", "ACME", -0.05);
+        long ticksAtFinish = w.ticks();
+        sessions.finish(id, "durable-user");
+        var rows = db.query("SELECT state::text s, events::text e, status FROM sim_session WHERE id=?",
+                r -> new String[]{r.str("s"), r.str("e"), r.str("status")}, id);
+        assertThat(rows).hasSize(1);
+        assertThat(rows.getFirst()[2]).isEqualTo("FINISHED");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> state = io.liftandshift.strikebench.util.Json.read(rows.getFirst()[0], Map.class);
+        assertThat(((Number) state.get("quantum")).longValue()).isEqualTo(ticksAtFinish);
+        assertThat(rows.getFirst()[1]).as("the injected event is in the durable log").contains("MOVE");
+    }
+
+    @Test
+    void userMutationsPersistImmediatelyNotOnTheNextLoopCheckpoint() {
+        // Steps and injections are user commands: each persists synchronously (persist-or-throw),
+        // so a crash right after an acknowledged command can never lose it.
+        SimulatedWorld w = createWorld("sync-user");
+        String id = w.worldId();
+        sessions.step(id, "sync-user");
+        sessions.step(id, "sync-user");
+        var rows = db.query("SELECT state::text s FROM sim_session WHERE id=?", r -> r.str("s"), id);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> state = io.liftandshift.strikebench.util.Json.read(rows.getFirst(), Map.class);
+        assertThat(((Number) state.get("quantum")).longValue()).isEqualTo(2);
     }
 
     @Test

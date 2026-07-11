@@ -28,9 +28,10 @@ class SimWorldGateTest {
 
     @Test
     void theSpeedKnobNeverChangesThePath() {
-        // Same seed, same sim-time — one world runs 600 quanta at 1x, the other at 10x.
-        SimulatedWorld slow = world(7, 1);
-        SimulatedWorld fast = world(7, 10);
+        // Speed = SIM-SECONDS PER REAL SECOND: at 30x one tick(=1s) is one 30-sec quantum, at
+        // 300x it is ten. Same seed + same reached sim-time => identical prices, any speed.
+        SimulatedWorld slow = world(7, 30);
+        SimulatedWorld fast = world(7, 300);
         for (int i = 0; i < 600; i++) slow.tick(); // 600 ticks x 1 quantum
         for (int i = 0; i < 60; i++) fast.tick();  // 60 ticks x 10 quanta
         assertThat(slow.ticks()).isEqualTo(fast.ticks());
@@ -43,15 +44,15 @@ class SimWorldGateTest {
 
     @Test
     void replayReconstructsTheExactWorldIncludingInjectedEvents() {
-        SimulatedWorld live = world(11, 5);
+        SimulatedWorld live = world(11, 150);
         for (int i = 0; i < 40; i++) live.tick();
         live.injectMove("ACME", -0.06);
         live.injectVolShift(0.10);
         for (int i = 0; i < 40; i++) live.tick();
-        live.setSpeed(20);
+        live.setSpeed(600);
         for (int i = 0; i < 10; i++) live.tick();
 
-        SimulatedWorld restored = world(11, 5);
+        SimulatedWorld restored = world(11, 150);
         restored.replayTo(live.ticks(), live.eventLog());
 
         assertThat(restored.ticks()).isEqualTo(live.ticks());
@@ -68,7 +69,7 @@ class SimWorldGateTest {
     @Test
     void betaIsARealFactorLoadingNotJustCorrelation() {
         // A beta-1.5 name must carry visibly more variance than a beta-0.3 name over many quanta.
-        SimulatedWorld w = world(23, 10);
+        SimulatedWorld w = world(23, 300);
         double vLo = 0, vHi = 0, prevLo = 50, prevHi = 200;
         int n = 0;
         for (int i = 0; i < 500; i++) {
@@ -91,7 +92,7 @@ class SimWorldGateTest {
     void optionValueConvergesContinuouslyToIntrinsicAtTheSimBell() {
         // Run the clock deep into expiration day and watch ATM time value die smoothly —
         // the old whole-day floor held half a day of premium at 3:59pm (junior P0).
-        SimulatedWorld w = world(3, 1);
+        SimulatedWorld w = world(3, 30);
         LocalDate exp = w.expirations().getFirst();
         // Advance to expiration morning.
         while (w.simTime().toLocalDate().isBefore(exp)) w.tick();
@@ -111,7 +112,7 @@ class SimWorldGateTest {
 
     @Test
     void surfaceInvariants_parityConvexityCalendarVerticalsUncrossed() {
-        SimulatedWorld w = world(31, 5);
+        SimulatedWorld w = world(31, 150);
         for (int i = 0; i < 30; i++) w.tick();
         List<LocalDate> exps = w.expirations();
         LocalDate near = exps.get(1), far = exps.get(exps.size() - 1);
@@ -156,7 +157,7 @@ class SimWorldGateTest {
     void strikesNeverDelistWhenTheSpotMoves() {
         // The grid anchors at inception: a -30% crash (the demo lever!) must NOT delist the
         // protective put someone is holding — that was the "hedge vanishes when it pays" defect.
-        SimulatedWorld w = world(41, 5);
+        SimulatedWorld w = world(41, 150);
         LocalDate exp = w.expirations().get(2);
         var before = w.chain("ACME", exp).orElseThrow();
         double strike100 = 100.0;
@@ -189,7 +190,7 @@ class SimWorldGateTest {
         // The variance-scaling defect made fast worlds ~25-40% wilder than their own quoted IV.
         // With fixed quanta the realized vol of the PATH is speed-independent by construction;
         // check the seeded history is also in family with the configured total vol.
-        SimulatedWorld w = world(57, 600);
+        SimulatedWorld w = world(57, 300);
         double rv = w.realizedVol("ACME");
         // sigmaTotal for beta=1 with sigmaM=0.30, sigmaIdio=0.18 => sqrt(.09+.0324) ~ 0.35
         assertThat(rv).isBetween(0.24, 0.46);
@@ -208,6 +209,77 @@ class SimWorldGateTest {
                 "2026-06-29T10:00:00", 1));
         assertThat(hol.expirations()).contains(LocalDate.parse("2026-07-02"));
         assertThat(hol.expirations()).doesNotContain(LocalDate.parse("2026-07-03"));
+    }
+
+    @Test
+    void speedIsASimTimeMultiplierAndStepMovesExactlyOneQuantum() {
+        // 1x = REAL TIME: one tick (one real second) advances less than a quantum; 30 ticks = one.
+        SimulatedWorld rt = world(71, 1);
+        for (int i = 0; i < 29; i++) rt.tick();
+        assertThat(rt.ticks()).isZero();
+        rt.tick();
+        assertThat(rt.ticks()).isEqualTo(1);
+        // Fractions accumulate exactly: 26x (a session in ~15 min) over 30 ticks = 26 quanta.
+        SimulatedWorld fast = world(71, 26);
+        for (int i = 0; i < 30; i++) fast.tick();
+        assertThat(fast.ticks()).isEqualTo(26);
+        // The band's Step button contract: exactly one quantum, at any speed.
+        SimulatedWorld stepped = world(71, 1);
+        stepped.stepQuanta(1);
+        assertThat(stepped.ticks()).isEqualTo(1);
+        assertThat(stepped.simTime()).isEqualTo(java.time.LocalDateTime.parse("2026-07-13T09:30:30"));
+    }
+
+    @Test
+    void volEventScenarioActuallyMovesImpliedVol() {
+        // M7: a "vol event" must BE one — IV builds ~1.5x into the event, crushes to ~0.75x at
+        // the second open, and mean-reverts. The old scenario only shaped the PRICE path.
+        SimulatedWorld w = new SimulatedWorld(new SimulatedWorld.Config(
+                "w-vol", "Vol event", Map.of("ACME", 1.0), Map.of("ACME", 100.0), "VOL_EVENT", 0.30,
+                13, "2026-07-13T09:30:00", 30));
+        LocalDate exp = w.expirations().get(2); // far enough that intrinsic never dominates
+        double ivStart = atmIv(w, "ACME", exp);
+        for (int i = 0; i < 770; i++) w.tick();   // deep into session 1: anticipation build
+        double ivPeak = atmIv(w, "ACME", exp);
+        for (int i = 0; i < 100; i++) w.tick();   // across the 2nd open: the crush
+        double ivCrushed = atmIv(w, "ACME", exp);
+        assertThat(ivPeak).isGreaterThan(ivStart * 1.3);
+        assertThat(ivCrushed).isLessThan(ivPeak * 0.65);
+        assertThat(ivCrushed).isLessThan(ivStart);
+        // And the arc REPLAYS: a restored world reaches the same IV at the same quantum.
+        SimulatedWorld r = new SimulatedWorld(new SimulatedWorld.Config(
+                "w-vol", "Vol event", Map.of("ACME", 1.0), Map.of("ACME", 100.0), "VOL_EVENT", 0.30,
+                13, "2026-07-13T09:30:00", 30));
+        r.replayTo(w.ticks(), w.eventLog());
+        assertThat(atmIv(r, "ACME", exp)).isEqualTo(ivCrushed);
+    }
+
+    @Test
+    void perSymbolCalibrationDrivesVolAndIv() {
+        // M8: a calibrated symbol moves at ITS vol and quotes ITS IV, not the session knob's.
+        SimulatedWorld w = new SimulatedWorld(new SimulatedWorld.Config(
+                "w-cal", "Calibrated", Map.of("TAME", 1.0, "WILD", 1.0),
+                Map.of("TAME", 100.0, "WILD", 100.0), "CHOP", 0.30, 91, "2026-07-13T09:30:00", 300,
+                Map.of("TAME", 0.15, "WILD", 0.60), Map.of("TAME", 0.16, "WILD", 0.62)));
+        LocalDate exp = w.expirations().get(2);
+        double ivTame = atmIv(w, "TAME", exp), ivWild = atmIv(w, "WILD", exp);
+        assertThat(ivWild).isGreaterThan(ivTame * 2.5);
+        double vT = 0, vW = 0, pT = 100, pW = 100;
+        for (int i = 0; i < 400; i++) {
+            w.tick();
+            double t = w.quote("TAME").orElseThrow().last().doubleValue();
+            double x = w.quote("WILD").orElseThrow().last().doubleValue();
+            double rT = Math.log(t / pT), rW = Math.log(x / pW);
+            vT += rT * rT; vW += rW * rW; pT = t; pW = x;
+        }
+        assertThat(Math.sqrt(vW / 400) / Math.sqrt(vT / 400))
+                .as("realized vol ratio must reflect the calibrated 0.60 vs 0.15")
+                .isGreaterThan(2.0);
+    }
+
+    private static double atmIv(SimulatedWorld w, String sym, LocalDate exp) {
+        var chain = w.chain(sym, exp).orElseThrow();
+        return nearest(chain.calls(), chain.underlyingPrice().doubleValue()).iv();
     }
 
     private static OptionQuote nearest(List<OptionQuote> quotes, double strike) {

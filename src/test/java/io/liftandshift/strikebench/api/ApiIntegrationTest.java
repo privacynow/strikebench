@@ -908,4 +908,29 @@ class ApiIntegrationTest {
             assertThat(rj.get("studyKey").asText()).isEqualTo(sj.get("studyKey").asText());
         }
     }
+
+    @Test
+    @Order(29)
+    void simWorldAnchorsDiscloseProvenanceAndCalibration() throws Exception {
+        // Release blocker B3: this server runs FIXTURES_ONLY, so an AAPL anchor comes from a
+        // DEMO quote — the creator must say so, never "the real market's last price". A made-up
+        // ticker starts at $100 and says that. Per-symbol calibration is disclosed with basis.
+        String body = """
+            {"name":"Anchor gate","symbols":{"AAPL":1.0,"ZZZFAKE":1.0},"scenario":"CHOP","speed":26}""";
+        var r = post("/api/sim/market", body);
+        assertThat(r.statusCode()).isEqualTo(201);
+        var j = Json.parse(r.body());
+        String aapl = j.get("spotBasis").get("AAPL").asText();
+        assertThat(aapl).containsIgnoringCase("demo");
+        assertThat(aapl).doesNotContain("real market");
+        assertThat(j.get("spotBasis").get("ZZZFAKE").asText()).contains("made-up");
+        // Calibration ran for the known symbol and names its basis (HV30 / chain ATM IV).
+        assertThat(j.has("calibration")).isTrue();
+        assertThat(j.get("calibration").get("AAPL").asText()).containsIgnoringCase("IV");
+        // The persisted config carries the per-symbol values so the WORLD actually uses them.
+        assertThat(j.get("config").has("symbolIvs")).isTrue();
+        // Cleanup: finish the world so later tests see no extra running sessions.
+        String wid = j.get("worldId").asText();
+        delete("/api/sim/market/" + wid);
+    }
 }

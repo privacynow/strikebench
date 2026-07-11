@@ -60,10 +60,20 @@ public final class SimulatedWorld {
     private static final LocalTime OPEN = LocalTime.of(9, 30), CLOSE = LocalTime.of(16, 0);
     private static final int HISTORY_DAYS = 250;
 
-    /** Reproducible session configuration. betas: symbol -> market beta (index proxy uses 1.0). */
+    /** Reproducible session configuration. betas: symbol -> market beta (index proxy uses 1.0).
+     *  symbolVols / symbolIvs: OPTIONAL per-symbol calibration (realized vol, base IV) — resolved
+     *  from observed data at creation when available, else modeled defaults; the creator labels
+     *  each basis. Appended fields keep old persisted configs deserializable (null = defaults). */
     public record Config(String worldId, String name, Map<String, Double> symbolBetas,
                          Map<String, Double> startSpots, String scenario, double volAnnual,
-                         long seed, String startSimTime /* ISO LocalDateTime, ET */, double speed) {
+                         long seed, String startSimTime /* ISO LocalDateTime, ET */, double speed,
+                         Map<String, Double> symbolVols, Map<String, Double> symbolIvs) {
+        public Config(String worldId, String name, Map<String, Double> symbolBetas,
+                      Map<String, Double> startSpots, String scenario, double volAnnual,
+                      long seed, String startSimTime, double speed) {
+            this(worldId, name, symbolBetas, startSpots, scenario, volAnnual, seed, startSimTime,
+                    speed, null, null);
+        }
         public Config {
             if (symbolBetas == null || symbolBetas.isEmpty())
                 throw new IllegalArgumentException("a simulated world needs at least one symbol");
@@ -77,8 +87,16 @@ public final class SimulatedWorld {
             });
             if (!Double.isFinite(volAnnual) || volAnnual <= 0 || volAnnual > 5.0)
                 throw new IllegalArgumentException("annual volatility must be in (0, 500%]");
-            if (!Double.isFinite(speed) || speed <= 0 || speed > 600)
-                throw new IllegalArgumentException("speed must be in (0, 600]");
+            if (!Double.isFinite(speed) || speed <= 0 || speed > 2000)
+                throw new IllegalArgumentException("speed (sim-time multiplier) must be in (0, 2000]");
+            if (symbolVols != null) symbolVols.forEach((k, v) -> {
+                if (v == null || !Double.isFinite(v) || v <= 0 || v > 5.0)
+                    throw new IllegalArgumentException("calibrated vol for " + k + " must be in (0, 500%]");
+            });
+            if (symbolIvs != null) symbolIvs.forEach((k, v) -> {
+                if (v == null || !Double.isFinite(v) || v <= 0 || v > 5.0)
+                    throw new IllegalArgumentException("calibrated IV for " + k + " must be in (0, 500%]");
+            });
             try { LocalDateTime.parse(startSimTime); }
             catch (RuntimeException e) { throw new IllegalArgumentException("startSimTime must be ISO LocalDateTime"); }
         }
@@ -101,18 +119,21 @@ public final class SimulatedWorld {
     private volatile double speed;
     private volatile boolean running = false;
     private volatile long quantum = 0;   // total quanta elapsed — the path index
-    private volatile double ivLevel;     // IMPLIED vol level (distinct from realized diffusion vol)
+    private volatile double ivInjected = 0; // cumulative injected IV shifts (logged + replayed)
 
     private static final class Sym {
         final double beta;
         final double anchorSpot;              // fixes the strike grid so a big move can't delist a strike
-        final double sigmaTotal;              // realized total vol = sqrt(beta^2 sigmaM^2 + sigmaIdio^2)
+        final double sigmaTotal;              // realized total vol (per-symbol calibrated when available)
+        final double sigmaIdio;               // idiosyncratic component consistent with beta + total
+        final double baseIv;                  // this symbol's OWN base implied vol (calibrated or modeled)
         final long key;                       // stable per-symbol RNG stream key (from the NAME, sorted-safe)
         volatile double spot;
         volatile double open, high, low;
         final List<Candle> daily = new ArrayList<>();
-        Sym(String name, double beta, double spot, double sigmaTotal) {
-            this.beta = beta; this.anchorSpot = spot; this.sigmaTotal = sigmaTotal; this.spot = spot;
+        Sym(String name, double beta, double spot, double sigmaTotal, double sigmaIdio, double baseIv) {
+            this.beta = beta; this.anchorSpot = spot; this.sigmaTotal = sigmaTotal;
+            this.sigmaIdio = sigmaIdio; this.baseIv = baseIv; this.spot = spot;
             this.key = mix(name.hashCode() * 0x9E3779B97F4A7C15L + name.length());
             resetDay();
         }
@@ -125,12 +146,26 @@ public final class SimulatedWorld {
         this.sigmaIdio = cfg.volAnnual() * 0.6; // modeled residual vol; labeled as such in the report
         this.speed = cfg.speed();
         this.simTime = snapToSession(LocalDateTime.parse(cfg.startSimTime()));
-        this.ivLevel = cfg.volAnnual();
+
         for (var e : cfg.symbolBetas().entrySet()) {
             String sym = e.getKey().toUpperCase(Locale.ROOT);
             double s0 = cfg.startSpots() == null ? 100.0 : cfg.startSpots().getOrDefault(e.getKey(), 100.0);
-            double sigmaTotal = Math.sqrt(e.getValue() * e.getValue() * sigmaMarket * sigmaMarket + sigmaIdio * sigmaIdio);
-            Sym st = new Sym(sym, e.getValue(), s0, sigmaTotal);
+            double beta = e.getValue();
+            // PER-SYMBOL calibration (adversarial review M8): a calibrated total vol constrains the
+            // idiosyncratic term (sigmaIdio^2 = sigmaTotal^2 - beta^2 sigmaM^2, floored so the factor
+            // never exceeds the total); base IV is the symbol's own when calibrated.
+            Double calVol = cfg.symbolVols() == null ? null : cfg.symbolVols().get(e.getKey());
+            double sTot, sIdio;
+            if (calVol != null) {
+                sTot = calVol;
+                sIdio = Math.sqrt(Math.max(0.0004, sTot * sTot - beta * beta * sigmaMarket * sigmaMarket));
+            } else {
+                sIdio = sigmaIdio;
+                sTot = Math.sqrt(beta * beta * sigmaMarket * sigmaMarket + sIdio * sIdio);
+            }
+            Double calIv = cfg.symbolIvs() == null ? null : cfg.symbolIvs().get(e.getKey());
+            double bIv = calIv != null ? calIv : cfg.volAnnual();
+            Sym st = new Sym(sym, beta, s0, sTot, sIdio, bIv);
             seedHistory(st, sym);
             syms.put(sym, st);
         }
@@ -188,18 +223,34 @@ public final class SimulatedWorld {
     public String modelVersion() { return MODEL_VERSION; }
     public synchronized List<WorldEvent> eventLog() { return List.copyOf(events); }
 
+    /** speed = the SIM-TIME MULTIPLIER: 1x means one simulated second per real second (a full
+     *  6.5h session takes 6.5 real hours); 26x ~ a session in 15 minutes; 1560x ~ in 15 seconds.
+     *  The adversarial review caught the old unit (quanta-per-tick) making every label false. */
+    public static final double MAX_SPEED = 2000;
+
     public synchronized void setSpeed(double s) {
-        this.speed = Math.clamp(s, 0.1, 600);
+        this.speed = Math.clamp(s, 0.1, MAX_SPEED);
         events.add(new WorldEvent(quantum, "SPEED", null, this.speed));
     }
 
     /** Restore-only: adopt the checkpointed speed without logging a new event. */
-    public synchronized void setSpeedSilently(double s) { this.speed = Math.clamp(s, 0.1, 600); }
+    public synchronized void setSpeedSilently(double s) { this.speed = Math.clamp(s, 0.1, MAX_SPEED); }
 
-    /** Advance the world by one real tick = {@code round(speed)} quanta (path is speed-invariant). */
+    // Accumulate SIM-SECONDS, not quantum fractions: integral speeds sum exactly in doubles
+    // (30 x 1.0 == 30.0), while 30 x (1/30) is 0.999… and real-time playback never stepped.
+    private double pendingSimSeconds = 0; // pacing only, never the path
+
+    /** One real second of playback: accumulate speed x 1s of sim time and run whole quanta.
+     *  Pacing NEVER touches the path — the path is a pure function of the quantum index. */
     public synchronized void tick() {
-        int quanta = Math.max(1, (int) Math.round(speed));
-        for (int i = 0; i < quanta; i++) stepOneQuantum();
+        pendingSimSeconds += speed;
+        while (pendingSimSeconds >= QUANTUM_SECONDS) { stepOneQuantum(); pendingSimSeconds -= QUANTUM_SECONDS; }
+    }
+
+    /** Exactly one quantum (30 sim-seconds), regardless of speed — the band's Step button
+     *  must always move the world visibly (at 1x a bare tick() advances less than a quantum). */
+    public synchronized void stepQuanta(int n) {
+        for (int i = 0; i < Math.max(1, n); i++) stepOneQuantum();
     }
 
     /** The atomic path step: one fixed quantum of sim time and one diffusion step of that size. */
@@ -211,9 +262,9 @@ public final class SimulatedWorld {
         for (String name : sortedSymbols()) {
             Sym st = syms.get(name);
             double zI = gaussian(S_IDIO, st.key, q);
-            // r_i = (drift - 0.5 sigmaTotal^2) dt + beta*sigmaM*sqrt(dt)*zM + sigmaIdio*sqrt(dt)*zI
+            // r_i = (drift - 0.5 sigmaTotal^2) dt + beta*sigmaM*sqrt(dt)*zM + sigmaIdio_i*sqrt(dt)*zI
             double factor = st.beta * sigmaMarket * Math.sqrt(dtYears) * zM
-                    + sigmaIdio * Math.sqrt(dtYears) * zI;
+                    + st.sigmaIdio * Math.sqrt(dtYears) * zI;
             st.spot = st.spot * Math.exp((drift - 0.5 * st.sigmaTotal * st.sigmaTotal) * dtYears + factor);
             st.high = Math.max(st.high, st.spot);
             st.low = Math.min(st.low, st.spot);
@@ -285,20 +336,48 @@ public final class SimulatedWorld {
     }
 
     public synchronized void injectVolShift(double points) {
-        if (!Double.isFinite(points)) throw new IllegalArgumentException("vol shift must be finite");
-        ivLevel = Math.clamp(ivLevel + points, 0.05, 5.0);
+        if (!Double.isFinite(points) || Math.abs(points) > 2.0)
+            throw new IllegalArgumentException("vol shift must be finite and within \u00b1200 IV points");
+        ivInjected = Math.clamp(ivInjected + points, -2.0, 2.0);
         events.add(new WorldEvent(quantum, "VOL", null, points));
     }
 
-    /** Deterministic restore: replay every quantum and re-apply logged events at their quantum. */
+    /**
+     * The IMPLIED-VOL level as a real, deterministic PROCESS (a pure function of the quantum, so
+     * replay is exact): VOL_EVENT builds IV through the first session, breaks it (the crush) at
+     * the second open, and mean-reverts over ~3 sessions — a volatility event that actually
+     * happens, not a card that only zeroes drift (adversarial review). Injected shifts stack on top.
+     */
+    private double scenarioIvFactor() {
+        String sc = cfg.scenario() == null ? "CHOP" : cfg.scenario().toUpperCase(Locale.ROOT);
+        if (!"VOL_EVENT".equals(sc) && !"NEWS_SHOCK".equals(sc)) return 1.0;
+        double sessions = quantum * QUANTUM_SECONDS / SESSION_SECONDS;
+        if (sessions < 1.0) return 1.0 + 0.5 * sessions;          // anticipation build: 1.0 -> 1.5x
+        double after = sessions - 1.0;                             // the event at the 2nd open
+        if (after < 3.0) return 0.75 + (1.0 - 0.75) * (after / 3); // crush to 0.75x, revert over 3 sessions
+        return 1.0;
+    }
+
+    /** Effective base IV for a symbol right now: its own calibrated level x the scenario arc + shifts. */
+    private double effectiveIv(Sym st) {
+        return Math.clamp(st.baseIv * scenarioIvFactor() + ivInjected, 0.05, 5.0);
+    }
+
+    /**
+     * Deterministic restore: replay every quantum, applying each logged event BEFORE stepping its
+     * quantum — a live injection at counter q lands before step q consumes index q, so replay must
+     * do the same (the old step-then-apply ordering skewed OHLC and bell-crossing settlement for
+     * injections near the close — adversarial-review release blocker #1). Events logged AT the
+     * target quantum (after the final step) are applied at the end.
+     */
     public synchronized void replayTo(long targetQuantum, List<WorldEvent> log) {
         java.util.Map<Long, List<WorldEvent>> byQuantum = new java.util.HashMap<>();
         for (WorldEvent e : log) byQuantum.computeIfAbsent(e.quantum(), k -> new ArrayList<>()).add(e);
         while (quantum < targetQuantum) {
-            long q = quantum;
+            for (WorldEvent e : byQuantum.getOrDefault(quantum, List.of())) applyReplayEvent(e);
             stepOneQuantum();
-            for (WorldEvent e : byQuantum.getOrDefault(q, List.of())) applyReplayEvent(e);
         }
+        for (WorldEvent e : byQuantum.getOrDefault(quantum, List.of())) applyReplayEvent(e);
         this.events.clear();
         this.events.addAll(log);
     }
@@ -307,8 +386,8 @@ public final class SimulatedWorld {
         switch (e.kind()) {
             case "MOVE" -> { Sym st = syms.get(e.symbol()); if (st != null) {
                 st.spot = Math.max(0.01, st.spot * (1 + e.value())); st.high = Math.max(st.high, st.spot); st.low = Math.min(st.low, st.spot); } }
-            case "VOL" -> ivLevel = Math.clamp(ivLevel + e.value(), 0.05, 5.0);
-            case "SPEED" -> speed = Math.clamp(e.value(), 0.1, 600);
+            case "VOL" -> ivInjected = Math.clamp(ivInjected + e.value(), -2.0, 2.0);
+            case "SPEED" -> speed = Math.clamp(e.value(), 0.1, MAX_SPEED);
             default -> { }
         }
     }
@@ -367,7 +446,7 @@ public final class SimulatedWorld {
         double spot = st.spot;
         double step = strikeStep(st.anchorSpot);
         double tte = timeToExpiryYears(exp);
-        double baseIv = ivLevel;
+        double baseIv = effectiveIv(st);
         List<OptionQuote> calls = new ArrayList<>(), puts = new ArrayList<>();
         // Strikes anchored to the START spot with a WIDE band that always covers the current spot,
         // so a large move (or an injected shock) can never delist an open position's strike.

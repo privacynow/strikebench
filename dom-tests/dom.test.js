@@ -1918,25 +1918,16 @@ test('simulated market: product creator, loud live band, world-routed research, 
   const badges = await page.$$eval('.quote-hero .badge', els => els.map(e => e.textContent).join(' '));
   assert.match(badges, /SIMULATED/, 'sim quotes carry the SIMULATED label');
   const px0 = await page.textContent('#research-px');
-  // Step the world several times via the band, then fire the tick handler the SSE would drive.
-  for (let i = 0; i < 6; i++) await page.click('#world-step');
-  await page.evaluate(() => new Promise(res => {
-    API.flushCache();
-    const t = setInterval(() => {}, 1000); clearInterval(t); res();
-  }));
+  // Step the world several times via the band. Each step publishes a REAL world.tick SSE hint;
+  // the app's own handler must move the hero price. NO fallback: the old catch wrote the price
+  // into the DOM itself, which masked a dead SSE path (weekend-handoff review M5).
+  for (let i = 0; i < 12; i++) await page.click('#world-step');
   await page.waitForFunction((prev) => {
     const el2 = document.getElementById('research-px');
     return el2 && el2.textContent !== prev;
-  }, px0, { timeout: 15000 }).catch(async () => {
-    // The tick handler is SSE-driven; drive one refresh cycle explicitly (headless SSE timing).
-    await page.evaluate(async () => {
-      const fresh = await API.getFresh('/api/research/ACME');
-      const el2 = document.getElementById('research-px');
-      if (el2 && fresh && fresh.quote) el2.textContent = String(fresh.quote.last);
-    });
-  });
+  }, px0, { timeout: 20000 });
   const px1 = await page.textContent('#research-px');
-  assert.notEqual(px1, px0, 'the simulated market visibly moves on screen');
+  assert.notEqual(px1, px0, 'the app’s own SSE handler moved the price on screen');
 
   // The simulation account is the account inside the world.
   const simAcct = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);
@@ -1964,4 +1955,87 @@ test('simulated market: product creator, loud live band, world-routed research, 
   await page.click('#modal-confirm');
   // Finished sessions stay listed (reports kept) under the collapsed group.
   await page.waitForSelector('.xp-head:has-text("Finished sessions")', { timeout: 15000 });
+});
+
+test('golden weekend-trader journey: world trade, moving book, trader-grade report, clean return', async () => {
+  // The exact handoff story: a reviewer creates a world, trades INSIDE it, watches the book
+  // move on real SSE ticks, closes, reads a per-decision report, and returns to an untouched
+  // real account. Every hop uses the app's own affordances or its own API client.
+  const realAcct = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);
+
+  // Create + enter the world through the app's client (cache flush + world adoption included).
+  const world = await page.evaluate(async () => {
+    const w = await API.post('/api/sim/market', {
+      name: 'Journey', symbols: { ACME: 1.0 }, scenario: 'CHOP', speed: 26, seed: 424242
+    });
+    await App.switchWorld(w.worldId);
+    return w;
+  });
+  await page.waitForSelector('#world-band', { timeout: 20000 });
+  assert.ok(world.spotBasis.ACME.includes('made-up'), 'honest anchor label for a made-up ticker');
+
+  // Place a credit put spread against the WORLD's own listed book (preview -> acks -> create).
+  const tradeId = await page.evaluate(async () => {
+    const exps = (await API.getFresh('/api/research/ACME/expirations')).expirations;
+    const exp = exps[2];
+    const chain = await API.getFresh('/api/research/ACME/chain?expiration=' + exp);
+    const spot = Number(chain.underlyingPrice);
+    const below = chain.puts.map(p => Number(p.strike)).filter(k => k <= spot - 4).sort((a, b) => b - a);
+    const body = {
+      symbol: 'ACME', strategy: 'CREDIT_PUT_SPREAD', qty: 1,
+      legs: [
+        { action: 'SELL', type: 'PUT', strike: String(below[0]), expiration: exp, ratio: 1 },
+        { action: 'BUY', type: 'PUT', strike: String(below[1]), expiration: exp, ratio: 1 }
+      ],
+      thesis: 'bullish', horizon: 'week', riskMode: 'balanced'
+    };
+    const prev = await API.post('/api/trades/preview', body);
+    if (!prev.preview || !prev.preview.ok) {
+      throw new Error('preview blocked: ' + JSON.stringify(prev.preview && prev.preview.blockReasons));
+    }
+    if (prev.requiredAcks && prev.requiredAcks.length) {
+      body.acknowledgedRisks = prev.requiredAcks.map(a => a.id);
+      body.ackToken = prev.ackToken;
+    }
+    return (await API.post('/api/trades', body)).trade.id;
+  });
+
+  // Portfolio shows the position with a live Now cell; the world's ticks move it via the
+  // app's OWN SSE handler (server marks memoize ~10s, client refreshes at most every 8s —
+  // so step, wait, and step again until the number genuinely changes).
+  await go('#/portfolio');
+  await page.waitForSelector(`[data-now-for="${tradeId}"]`, { timeout: 20000 });
+  const now0 = await page.textContent(`[data-now-for="${tradeId}"]`);
+  let moved = false;
+  for (let round = 0; round < 10 && !moved; round++) {
+    await page.evaluate(async (w) => {
+      for (let i = 0; i < 20; i++) await API.post('/api/sim/market/' + w + '/step', {});
+    }, world.worldId);
+    await page.waitForTimeout(3000);
+    moved = (await page.textContent(`[data-now-for="${tradeId}"]`)) !== now0;
+  }
+  assert.ok(moved, 'the portfolio Now P/L moved on world ticks via the app’s SSE handler');
+
+  // Close the position, finish the session, and read the TRADER-GRADE report.
+  await page.evaluate(async (id) => { await API.post('/api/trades/' + id + '/unwind', { confirm: true }); }, tradeId);
+  await go('#/data');
+  const row = page.locator('.sim-session-row', { hasText: 'Journey' });
+  await row.locator('button:has-text("Finish")').click();
+  await page.waitForSelector('#sim-report table', { timeout: 15000 });
+  const rep = await page.textContent('#sim-report');
+  assert.match(rep, /Entered \(sim clock\)/, 'per-decision sim-clock entry column');
+  assert.match(rep, /\d{4}-\d{2}-\d{2} \d{2}:\d{2}/, 'the entry is stamped on the LANE clock');
+  assert.match(rep, /Worst \/ best while open/, 'MAE/MFE excursion column');
+  assert.match(rep, /Decisions vs outcomes/, 'POP-vs-outcome summary separates decisions from results');
+  assert.match(rep, /UNWIND/, 'how the trade ended is on the row');
+  await page.click('#modal-confirm');
+  await page.waitForSelector('#world-band', { state: 'detached', timeout: 15000 });
+
+  // Back on the real market: the practice account never saw any of it.
+  const after = await page.evaluate(async () => ({
+    world: (await API.getFresh('/api/world')).world,
+    acct: (await API.getFresh('/api/account')).account.id
+  }));
+  assert.equal(after.world, 'observed');
+  assert.equal(after.acct, realAcct, 'the real practice account is exactly the one we left');
 });

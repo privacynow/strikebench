@@ -35,7 +35,7 @@ public final class SimulationSessions {
     private static final int MAX_RESIDENT_WORLDS = 16;
     private static final int MAX_SYMBOLS = 40;
     private static final long TICK_MS = 1000;
-    private static final int CHECKPOINT_EVERY_TICKS = 60;
+    private static final long CHECKPOINT_EVERY_MS = 30_000; // real time — slow worlds checkpoint too
 
     private volatile Db db; // late-wired: ApiServer owns the pool and attaches it after construction
     private final EventBus events;
@@ -71,9 +71,11 @@ public final class SimulationSessions {
         enforceActiveCap(userId);
         // World ids are SERVER-GENERATED only — a client-chosen id would be a forgeable capability.
         String id = Ids.newId("simw");
+        // Rebuild with the FULL ctor: the 9-arg compat ctor would silently drop the per-symbol
+        // calibration maps (the record-adapter defect class pinned in CP-1).
         SimulatedWorld.Config cfg = new SimulatedWorld.Config(id, raw.name(), raw.symbolBetas(),
                 raw.startSpots() == null ? Map.of() : raw.startSpots(), raw.scenario(), raw.volAnnual(),
-                raw.seed(), raw.startSimTime(), raw.speed());
+                raw.seed(), raw.startSimTime(), raw.speed(), raw.symbolVols(), raw.symbolIvs());
         SimulatedWorld w = new SimulatedWorld(cfg);
         admit(id, w, owner(userId));
         db.exec("INSERT INTO sim_session(id,name,user_id,config,status,model_version,events) "
@@ -93,8 +95,12 @@ public final class SimulationSessions {
                     .filter(e -> !e.getValue().running() && !e.getKey().equals(id))
                     .min(java.util.Comparator.comparingLong(e -> lastTouch.getOrDefault(e.getKey(), 0L)))
                     .ifPresent(e -> {
-                        persistCheckpoint(e.getKey(), e.getValue());
-                        evict(e.getKey());
+                        // Evict ONLY after a durable checkpoint — dropping a world whose latest
+                        // state failed to persist would silently rewind it on restore.
+                        try {
+                            persistOrThrow(e.getKey(), e.getValue());
+                            evict(e.getKey());
+                        } catch (RuntimeException ex) { /* keep resident; retry next admit */ }
                     });
         }
     }
@@ -194,9 +200,9 @@ public final class SimulationSessions {
                             "simTime", ww.simTime().toString(), "ticks", ww.ticks()));
                 }
                 Long cp = lastCheckpoint.get(id);
-                if (cp == null || ww.ticks() - cp >= CHECKPOINT_EVERY_TICKS) {
-                    lastCheckpoint.put(id, ww.ticks());
-                    persistCheckpoint(id, ww);
+                if (cp == null || now - cp >= CHECKPOINT_EVERY_MS) {
+                    lastCheckpoint.put(id, now);
+                    persistQuietly(id, ww);
                 }
             } catch (RuntimeException e) { /* one bad tick never kills the loop */ }
         }, TICK_MS, TICK_MS, TimeUnit.MILLISECONDS));
@@ -205,49 +211,72 @@ public final class SimulationSessions {
     public void pause(String worldId, String userId) {
         SimulatedWorld w = require(worldId, userId);
         w.pause();
-        persistCheckpoint(worldId, w);
+        persistOrThrow(worldId, w);
         db.exec("UPDATE sim_session SET status='PAUSED' WHERE id=?", worldId);
     }
 
+    /** Step = exactly ONE quantum (30 sim-seconds): the button must always move the world
+     *  visibly — at real-time speed a plain tick advances less than a quantum. */
     public void step(String worldId, String userId) {
         SimulatedWorld w = require(worldId, userId);
-        w.tick();
-        persistCheckpoint(worldId, w);
+        w.stepQuanta(1);
+        persistOrThrow(worldId, w);
+        hint(worldId, userId, w); // a user stepping expects every screen to move NOW, not on the next loop hint
     }
 
     public void setSpeed(String worldId, String userId, double speed) {
         SimulatedWorld w = require(worldId, userId);
         w.setSpeed(speed);
-        persistCheckpoint(worldId, w);
+        persistOrThrow(worldId, w);
     }
 
     public void injectMove(String worldId, String userId, String symbol, double pct) {
         SimulatedWorld w = require(worldId, userId);
         w.injectMove(symbol, pct);
-        persistCheckpoint(worldId, w);
+        persistOrThrow(worldId, w);
+        hint(worldId, userId, w);
     }
 
     public void injectVol(String worldId, String userId, double points) {
         SimulatedWorld w = require(worldId, userId);
         w.injectVolShift(points);
-        persistCheckpoint(worldId, w);
+        persistOrThrow(worldId, w);
+        hint(worldId, userId, w);
     }
 
+    /** Immediate (unthrottled) world.tick hint for user-triggered moves — same shape as the loop's. */
+    private void hint(String worldId, String userId, SimulatedWorld w) {
+        if (events == null) return;
+        events.publish("world.tick", Map.of("world", worldId, "user", owner(userId),
+                "simTime", w.simTime().toString(), "ticks", w.ticks()));
+    }
+
+    /** Finish persists state+events AND the terminal status BEFORE evicting — a finish that
+     *  lost the latest events while acknowledging success was release blocker #2. */
     public void finish(String worldId, String userId) {
         SimulatedWorld w = require(worldId, userId);
         w.pause();
-        persistCheckpoint(worldId, w);
+        Checkpoint cp = new Checkpoint(w.ticks(), w.simTime().toString(), w.speed(), false);
+        db.exec("UPDATE sim_session SET state=?::jsonb, events=?::jsonb, status='FINISHED', "
+                        + "finished_at=now() WHERE id=?",
+                Json.write(cp), Json.write(w.eventLog()), worldId); // one atomic statement; throws on failure
         evict(worldId);
-        db.exec("UPDATE sim_session SET status='FINISHED', finished_at=now() WHERE id=?", worldId);
     }
 
-    /** Every mutation and speed/event change lands here so restore-by-replay is always exact. */
-    private void persistCheckpoint(String worldId, SimulatedWorld w) {
-        try {
-            Checkpoint cp = new Checkpoint(w.ticks(), w.simTime().toString(), w.speed(), w.running());
-            db.exec("UPDATE sim_session SET state=?::jsonb, events=?::jsonb WHERE id=?",
-                    Json.write(cp), Json.write(w.eventLog()), worldId);
-        } catch (RuntimeException e) { /* durability is best-effort per tick; the next checkpoint retries */ }
+    /**
+     * USER-TRIGGERED mutations persist or FAIL — an inject/pause/speed that returns success
+     * without durable state silently forks the replayable record (release blocker #2). Only the
+     * background tick loop's periodic checkpoint is best-effort (persistQuietly).
+     */
+    private void persistOrThrow(String worldId, SimulatedWorld w) {
+        Checkpoint cp = new Checkpoint(w.ticks(), w.simTime().toString(), w.speed(), w.running());
+        db.exec("UPDATE sim_session SET state=?::jsonb, events=?::jsonb WHERE id=?",
+                Json.write(cp), Json.write(w.eventLog()), worldId);
+    }
+
+    private void persistQuietly(String worldId, SimulatedWorld w) {
+        try { persistOrThrow(worldId, w); }
+        catch (RuntimeException e) { /* the next periodic checkpoint retries */ }
     }
 
     /** All of this owner's sessions — FINISHED rows included (the report must stay reachable). */

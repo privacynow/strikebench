@@ -503,19 +503,20 @@
       var q = r.quote;
 
       // In a simulated world the tape is hidden — THIS hero is the price surface. Each throttled
-      // world.tick refetches the quote and updates the visible number in place (no re-render).
+      // world.tick refetches ONLY the light quote batch: the full research payload (quote +
+      // profile + vol + benchmarks + news) per tick would hammer the world at speed for nothing.
       if (App.onEvent && App.state.world && App.state.world !== 'observed') {
         App.onEvent('world.tick', async function () {
           if (!App.alive(_rt)) return;
           try {
-            var fresh = await API.getFresh('/api/research/' + encodeURIComponent(symbol));
-            if (!App.alive(_rt) || !fresh || !fresh.quote) return;
+            var fresh = await API.getFresh('/api/quotes?symbols=' + encodeURIComponent(symbol));
+            var row = fresh && fresh.quotes && fresh.quotes[0];
+            if (!App.alive(_rt) || !row) return;
             var px = document.getElementById('research-px');
-            if (px) px.textContent = fmtNum(fresh.quote.last);
+            if (px) px.textContent = fmtNum(row.last);
             var d = px && px.nextElementSibling;
             if (d && d.classList.contains('delta')) {
-              var nd = UI.delta(fresh.quote.last, fresh.quote.prevClose);
-              d.replaceWith(nd);
+              d.replaceWith(UI.delta(row.last, row.prevClose));
             }
           } catch (e) { /* next tick retries */ }
         }, _rt);
@@ -3051,7 +3052,7 @@
         el('td', {}, pnlSpan(t.entryNetPremiumCents)),
         el('td', { class: 'loss' }, fmtMoney(t.maxLossCents)),
         tab === 'active'
-          ? el('td', {}, t.unrealizedPnlCents !== undefined && t.unrealizedPnlCents !== null
+          ? el('td', { 'data-now-for': t.id }, t.unrealizedPnlCents !== undefined && t.unrealizedPnlCents !== null
               ? pnlSpan(t.unrealizedPnlCents) : el('span', { class: 'muted' }, '—'))
           : null,
         el('td', {}, tab === 'active' ? el('span', { class: 'muted' }, UI.fmtDate(t.createdAt)) : pnlSpan(t.realizedPnlCents)),
@@ -3061,6 +3062,28 @@
       tab === 'active'
         ? ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Max loss', 'Now', 'Opened', 'Status']
         : ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Max loss', 'Realized P/L', 'Status'], rows));
+    // Inside a simulated session the book visibly MOVES: each world tick (already server-throttled)
+    // refreshes the active rows' Now P/L in place — light trades-list fetch, no re-render.
+    if (tab === 'active' && App.onEvent && App.state.world && App.state.world !== 'observed') {
+      var _prt = App.navToken, _nowLast = 0;
+      App.onEvent('world.tick', async function () {
+        if (!App.alive(_prt)) return;
+        var nowMs = Date.now();
+        if (nowMs - _nowLast < 8000) return; // marks memoize ~10s server-side — refetching faster buys nothing
+        _nowLast = nowMs;
+        try {
+          var fresh = await API.getFresh('/api/trades?status=ACTIVE&page=' + page + '&size=15');
+          if (!App.alive(_prt) || !fresh || !fresh.trades) return;
+          fresh.trades.forEach(function (ft) {
+            var cell = document.querySelector('[data-now-for="' + ft.id + '"]');
+            if (!cell) return;
+            while (cell.firstChild) cell.removeChild(cell.firstChild);
+            cell.appendChild(ft.unrealizedPnlCents !== undefined && ft.unrealizedPnlCents !== null
+              ? pnlSpan(ft.unrealizedPnlCents) : el('span', { class: 'muted' }, '—'));
+          });
+        } catch (e) { /* next tick retries */ }
+      }, _prt);
+    }
     if (data.total > 15) {
       tradesCard.appendChild(el('div', { class: 'btn-row' },
         page > 0 ? el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { App.navigate('#/portfolio/' + tab + '/' + (page - 1)); } }, '← Newer') : null,
@@ -3907,7 +3930,7 @@
     function beginnerDC() { return window.Learn && Learn.currentLevel() === 'beginner'; }
     root.appendChild(simCard);
     (async function () {
-      var st = { scenario: 'CHOP', speed: 10, rows: [{ symbol: 'ACME', beta: 1, spot: '' }] };
+      var st = { scenario: 'CHOP', speed: 26, rows: [{ symbol: 'ACME', beta: 1, spot: '' }] };
 
       async function refreshSim() {
         var box = document.getElementById('dc-sim-sessions');
@@ -4010,6 +4033,43 @@
             el('span', { class: 'chip' }, 'Realized: ' + UI.fmtMoney(rep.realizedPnlCents)),
             el('span', { class: 'chip' }, 'Model ' + (rep.modelVersion || 'sim-1'))),
           el('div', { class: 'muted small', style: 'margin-top:6px' }, rep.note));
+        // The trader's ledger of DECISIONS: what was entered (on the sim clock), what the odds
+        // said, how far it swung either way while open, and how it ended.
+        var rows = rep.trades || [];
+        if (rows.length) {
+          n.appendChild(el('div', { style: 'overflow-x:auto; margin-top:8px' },
+            el('table', { class: 'tbl' },
+              el('thead', {}, el('tr', {},
+                el('th', {}, 'Trade'),
+                el('th', {}, 'Entered (sim clock)'),
+                el('th', {}, 'Entry'),
+                el('th', {}, 'POP'),
+                el('th', {}, 'Worst / best while open'),
+                el('th', {}, 'Result'),
+                el('th', {}, 'How it ended'))),
+              el('tbody', {}, rows.map(function (t) {
+                return el('tr', {},
+                  el('td', {}, el('b', {}, t.symbol), ' ', prettyStrategy(t.strategy) + ' x' + t.qty),
+                  el('td', {}, t.laneEntryTime ? t.laneEntryTime.replace('T', ' ') : '\u2014'),
+                  el('td', {}, pnlSpan(t.entryNetPremiumCents)),
+                  el('td', {}, t.popEntry == null ? '\u2014' : Math.round(t.popEntry * 100) + '%'),
+                  el('td', {}, t.maeCents == null ? '\u2014'
+                    : el('span', {}, pnlSpan(t.maeCents), ' / ', pnlSpan(t.mfeCents))),
+                  el('td', {}, t.realizedPnlCents == null
+                    ? el('span', { class: 'badge badge-dim' }, t.status)
+                    : pnlSpan(t.realizedPnlCents)),
+                  el('td', { class: 'muted small' }, t.closeReason || '\u2014'));
+              })))));
+        }
+        var pvo = rep.popVsOutcome;
+        if (pvo && (pvo.highPopTrades || pvo.lowPopTrades)) {
+          n.appendChild(el('div', { class: 'muted small', style: 'margin-top:6px' },
+            'Decisions vs outcomes: POP\u226550% entries won '
+            + (pvo.highPopWinRate == null ? '\u2014' : pvo.highPopWinRate + '%') + ' of ' + pvo.highPopTrades
+            + '; below-50% entries won '
+            + (pvo.lowPopWinRate == null ? '\u2014' : pvo.lowPopWinRate + '%') + ' of ' + pvo.lowPopTrades
+            + '. ' + (pvo.note || '')));
+        }
         var evs = rep.events || [];
         if (evs.length) {
           n.appendChild(el('div', { class: 'muted small', style: 'margin-top:4px' },
@@ -4082,10 +4142,13 @@
             placeholder: 'AAPL, SPY' });
           symsIn.oninput = function () { st.symbolsText = symsIn.value; };
           grid.appendChild(labeled('Stocks to include (comma-separated)', symsIn));
+          // Honest units: speed multiplies TIME, so the label states what one 6.5h session
+          // becomes. (The old '10x = a day in ~40 min' claim was mathematically false.)
           var speedSel = el('select', { id: 'sim-speed' },
-            el('option', { value: '1' }, 'Real time (1\u00d7)'),
-            el('option', { value: '10' }, 'Brisk \u2014 a day in ~40 min (10\u00d7)'),
-            el('option', { value: '60' }, 'Fast \u2014 a day in ~6 min (60\u00d7)'));
+            el('option', { value: '1' }, 'Real time \u2014 a session takes 6.5 hours (1\u00d7)'),
+            el('option', { value: '26' }, 'One session in ~15 minutes (26\u00d7)'),
+            el('option', { value: '78' }, 'One session in ~5 minutes (78\u00d7)'),
+            el('option', { value: '390' }, 'One session in ~1 minute (390\u00d7)'));
           speedSel.value = String(st.speed);
           speedSel.onchange = function () { st.speed = parseFloat(speedSel.value); };
           grid.appendChild(labeled('How fast should time pass?', speedSel, 'speed'));
@@ -4123,11 +4186,12 @@
           volIn.oninput = function () { st.vol = parseFloat(volIn.value); };
           var seedIn = el('input', { type: 'number', id: 'sim-seed', value: st.seed || '', placeholder: 'auto' });
           seedIn.oninput = function () { st.seed = seedIn.value; };
-          var speedIn = el('input', { type: 'number', id: 'sim-speed', value: String(st.speed), min: '1', max: '600' });
+          var speedIn = el('input', { type: 'number', id: 'sim-speed', value: String(st.speed), min: '1', max: '2000',
+            title: 'Sim-seconds per real second. 1 = real time; 26 \u2248 one 6.5h session in 15 min; 390 \u2248 one session per minute.' });
           speedIn.oninput = function () { st.speed = parseFloat(speedIn.value); };
           grid.appendChild(labeled('Market volatility %/yr', volIn));
           grid.appendChild(labeled('Seed (blank = fresh)', seedIn, 'seed'));
-          grid.appendChild(labeled('Speed \u00d7', speedIn, 'speed'));
+          grid.appendChild(labeled('Speed \u00d7 (sim-seconds per real second)', speedIn, 'speed'));
           creator.appendChild(grid);
         }
 

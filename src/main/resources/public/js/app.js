@@ -222,7 +222,16 @@
     return SCENARIO_LABELS[String(key || '').toUpperCase()] ||
       String(key || '').toLowerCase().replace(/_/g, ' ');
   };
-  var SPEED_CHOICES = [1, 5, 10, 30, 60, 300];
+  // Speed = SIM-SECONDS PER REAL SECOND (1x = real time; a 6.5h session has 23,400 market
+  // seconds). Presets are named by what a trader actually feels: how long one session takes.
+  var SPEED_CHOICES = [1, 26, 78, 390, 1560];
+  var SPEED_LABELS = {
+    1: '1\u00d7 \u00b7 real time',
+    26: '26\u00d7 \u00b7 session \u2248 15 min',
+    78: '78\u00d7 \u00b7 session \u2248 5 min',
+    390: '390\u00d7 \u00b7 session \u2248 1 min',
+    1560: '1560\u00d7 \u00b7 session \u2248 15 s'
+  };
 
   function bandLabelText(sess, cfg) {
     return App.scenarioLabel(cfg.scenario)
@@ -274,7 +283,7 @@
         try { await API.post('/api/sim/market/' + world + '/speed', { speed: parseFloat(speedSel.value) }); }
         catch (e) { UI.toast ? UI.toast(e.message) : alert(e.message); }
       } },
-      SPEED_CHOICES.map(function (x) { return UI.el('option', { value: String(x) }, x + '\u00d7'); }));
+      SPEED_CHOICES.map(function (x) { return UI.el('option', { value: String(x) }, SPEED_LABELS[x] || (x + '\u00d7')); }));
     if (sess && sess.speed && SPEED_CHOICES.indexOf(Math.round(sess.speed)) < 0) {
       speedSel.appendChild(UI.el('option', { value: String(sess.speed) }, sess.speed + '\u00d7'));
     }
@@ -325,7 +334,13 @@
   /** The one-command world switch: preserves route/symbol/level — it changes the MARKET, not you. */
   App.switchWorld = async function (worldId) {
     try {
-      await API.put('/api/world', { world: worldId });
+      var res = await API.put('/api/world', { world: worldId });
+      // Return to real means REAL: the server also dropped any active synthetic dataset —
+      // clear the scenario banner and say so, or the switch looks only half-done.
+      if (res && res.datasetReset) {
+        refreshScenarioBanner();
+        if (UI.toast) UI.toast('Back on the real market — your scenario dataset was switched off too');
+      }
       App.adoptWorld(worldId, true);
     } catch (e) { alert(e.message); }
   };
