@@ -356,7 +356,8 @@
       quickAction('Research a symbol', 'Quotes, chains, IV vs HV, history, news.', '#/research', 'scope'),
       quickAction('Scout opportunities', 'Momentum, sentiment, and volatility views.', '#/trade/discover', 'compass'),
       quickAction('Build a strategy', 'Multi-leg construction with live risk.', '#/trade/shape', 'target'),
-      quickAction('Backtest a strategy', 'How a rule would have behaved.', '#/trade/verify', 'chart')));
+      quickAction('Backtest a strategy', 'How a rule would have behaved.', '#/trade/verify', 'chart'),
+      quickAction('Practice in a simulated market', 'A market that moves \u2014 any day, any speed.', '#/data', 'flask')));
 
     // Wait for the fills so data-ready means READY (tests and users agree on that).
     await Promise.all([marketsFill, tradesFill]);
@@ -502,10 +503,29 @@
       renderRecents();
       var q = r.quote;
 
+      // In a simulated world the tape is hidden — THIS hero is the price surface. Each throttled
+      // world.tick refetches the quote and updates the visible number in place (no re-render).
+      if (App.onEvent && App.state.world && App.state.world !== 'observed') {
+        App.onEvent('world.tick', async function () {
+          if (!App.alive(_rt)) return;
+          try {
+            var fresh = await API.getFresh('/api/research/' + encodeURIComponent(symbol));
+            if (!App.alive(_rt) || !fresh || !fresh.quote) return;
+            var px = document.getElementById('research-px');
+            if (px) px.textContent = fmtNum(fresh.quote.last);
+            var d = px && px.nextElementSibling;
+            if (d && d.classList.contains('delta')) {
+              var nd = UI.delta(fresh.quote.last, fresh.quote.prevClose);
+              d.replaceWith(nd);
+            }
+          } catch (e) { /* next tick retries */ }
+        }, _rt);
+      }
+
     var hero = el('div', { class: 'card' },
       el('div', { class: 'quote-hero' },
         el('span', { class: 'sym', id: 'research-symbol' }, symbol),
-        el('span', { class: 'px' }, fmtNum(q.last)),
+        el('span', { class: 'px', id: 'research-px' }, fmtNum(q.last)),
         UI.delta(q.last, q.prevClose),
         badge(r.freshness),
         el('span', { class: 'spacer' }),
@@ -526,8 +546,7 @@
         chip('Prev close', fmtNum(q.prevClose)),
         chip('Day', fmtNum(q.dayLow) + ' – ' + fmtNum(q.dayHigh)),
         chip('IV (ATM)', fmtPct(r.ivAtm)),
-        chip('IV rank', 'building history',
-          'IV rank compares today\u2019s IV to this symbol\u2019s own past year — it needs observed IV history. StrikeBench records a daily snapshot (on by default in live mode); the rank unlocks as history accrues, or immediately after a licensed options-CSV import on the Data screen.'),
+        chip(el('span', {}, 'IV rank', UI.info('ivrank')), 'building history'),
         chip('HV 30d', fmtPct(r.hv30) + (r.historyDemo ? ' (demo)' : '')),
         chip('Options', r.optionable ? 'yes' : 'no')),
       explain('IV is the move the options market is pricing in; HV is what the stock actually did lately. IV far above HV → options are relatively expensive to buy (and richer to sell).'),
@@ -1190,7 +1209,7 @@
     card.appendChild(el('div', { class: 'btn-row' },
       withUse ? el('button', {
         class: 'btn', onclick: function () {
-          App.state.ticket = { candidate: c, symbol: symbolForTicket || App.state.lastRecommendSymbol, step: 5 };
+          App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbolForTicket || App.state.lastRecommendSymbol, step: 5 };
           App.navigate('#/trade/place');
         }
       }, 'Practice this trade') : null));
@@ -1215,8 +1234,9 @@
           ? chip('Worst case w/ shares', el('span', { class: 'loss' }, fmtMoney(c.combinedMaxLossCents))) : null,
         chip('Max profit', c.maxProfitCents === null || c.maxProfitCents === undefined
           ? 'uncapped' : el('span', { class: 'gain' }, fmtMoney(c.maxProfitCents))),
-        chip('POP', fmtPct(c.pop)),
-        c.assignmentProb !== null && c.assignmentProb !== undefined ? chip('Assignment', fmtPct(c.assignmentProb)) : null,
+        chip(el('span', {}, 'POP', UI.info('pop')), fmtPct(c.pop)),
+        c.assignmentProb !== null && c.assignmentProb !== undefined
+          ? chip(el('span', {}, 'Assignment', UI.info('assignment')), fmtPct(c.assignmentProb)) : null,
         c.annualizedYieldPct !== null && c.annualizedYieldPct !== undefined ? chip('Yield/yr', fmtNum(c.annualizedYieldPct, 1) + '%') : null,
         c.effectivePrice ? chip(c.intent === 'ACQUIRE' ? 'Effective buy' : 'Effective sell', '$' + c.effectivePrice) : null,
         chip('Breakeven', (c.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
@@ -1225,7 +1245,8 @@
     card.appendChild(el('div', { class: 'chip-row expert-only' },
       c.decisionScore !== null && c.decisionScore !== undefined
         ? chip(el('span', {}, 'Decision score', UI.info('decisionscore')), fmtNum(c.decisionScore, 0)) : null,
-      c.expectedValueCents !== null && c.expectedValueCents !== undefined ? chip('Model EV', fmtMoney(c.expectedValueCents, { plus: true })) : null,
+      c.expectedValueCents !== null && c.expectedValueCents !== undefined
+        ? chip(el('span', {}, 'Model EV', UI.info('ev')), fmtMoney(c.expectedValueCents, { plus: true })) : null,
       chip('Liquidity', fmtNum(c.liquidityScore, 2)),
       chip(el('span', {}, 'Screen score', UI.info('screenscore')), fmtNum(c.score, 0))));
     if (c.warnings && c.warnings.length) card.appendChild(alertBox('warn', 'Heads up', c.warnings));
@@ -1240,7 +1261,7 @@
       card.appendChild(el('div', { class: 'btn-row' },
         el('button', {
           class: 'btn', onclick: function () {
-            App.state.ticket = { candidate: c, symbol: symbolForTicket || App.state.lastRecommendSymbol, step: 5 };
+            App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbolForTicket || App.state.lastRecommendSymbol, step: 5 };
             App.navigate('#/trade/place');
           }
         }, 'Use in trade ticket'),
@@ -1327,7 +1348,7 @@
           el('td', {}, el('button', {
             class: 'btn btn-sm', onclick: function (e) {
               e.stopPropagation();
-              App.state.ticket = { candidate: c, symbol: App.state.lastRecommendSymbol, step: 5 };
+              App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: App.state.lastRecommendSymbol, step: 5 };
               App.navigate('#/trade/place');
             }
           }, 'Use'))]));
@@ -2246,7 +2267,7 @@
           sentence(c),
           el('button', {
             class: 'btn btn-sm', style: 'margin-left:auto', onclick: function () {
-              App.state.ticket = { candidate: c, symbol: ctx.symbol, step: 5 };
+              App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: ctx.symbol, step: 5 };
               App.navigate('#/trade/place');
             }
           }, 'Practice this'));
@@ -2288,7 +2309,7 @@
         tds.push(el('td', {}, el('button', {
           class: 'btn btn-sm', onclick: function (e) {
             e.stopPropagation();
-            App.state.ticket = { candidate: c, symbol: ctx.symbol, step: 5 };
+            App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: ctx.symbol, step: 5 };
             App.navigate('#/trade/place');
           }
         }, 'Use')));
@@ -2747,12 +2768,18 @@
           return el('div', { class: 'field' }, el('label', {}, label),
             el('input', { type: 'number', id: id, step: '100', value: val != null ? Math.round(val / 100) : '' }));
         }
+        function fldInfo(id, label, val, termKey) {
+          var lbl = el('label', {}, label);
+          lbl.appendChild(UI.info(termKey));
+          return el('div', { class: 'field' }, lbl,
+            el('input', { type: 'number', id: id, step: '100', value: val != null ? Math.round(val / 100) : '' }));
+        }
         var grid = el('div', { class: 'form-grid' },
-          fld('rc-nlv', 'Account value (NLV) $', rc.nlvCents),
+          fldInfo('rc-nlv', 'Account value (NLV) $', rc.nlvCents, 'nlv'),
           fld('rc-cash', 'Cash buying power $', rc.cashBpCents),
           rcBeginner ? null : fld('rc-margin', 'Margin buying power $', rc.marginBpCents),
           rcBeginner ? null : fld('rc-maint', 'Maintenance req. $', rc.maintenanceCents),
-          fld('rc-risk', 'Risk capital per trade $', rc.riskCapitalCents));
+          fldInfo('rc-risk', 'Risk capital per trade $', rc.riskCapitalCents, 'riskcapital'));
         var saveBtn = el('button', { class: 'btn btn-sm', id: 'rc-save', onclick: async function () {
           saveBtn.disabled = true;
           function cents(id) { var n = document.getElementById(id); if (!n || n.value === '') return null; return Math.round(parseFloat(n.value) * 100); }
@@ -3836,14 +3863,28 @@
       + brandName() + ' chains several sources per job and falls back gracefully — DEMO DATA means the built-in fixture is serving.'));
 
     var engineCard = el('div', { class: 'card', id: 'dc-engine' }, UI.spinner('Checking the market engine…'));
-    // ---- Block S: the simulated-market workbench — configuration and operations, not a Lab ----
-    var simCard = el('div', { class: 'card', id: 'dc-sim-market' }, UI.cardHeader('Simulated market'),
-      explain(Learn.currentLevel() === 'beginner'
-        ? 'A practice market that MOVES: generated prices and option chains stream like the real thing, on any day, at any speed. Everything is loudly labeled — nothing here is real, and your practice account is untouched (a separate simulation account trades it).'
-        : 'Deterministic per-session worlds: factor-correlated dynamics over the model menu, a virtual exchange clock (sessions/holidays, speed), a full simulated option exchange, and an isolated simulation account. Identical seed = identical world.'));
+    // ---- Block S: the simulated-market workbench — a product surface, not a technical utility.
+    // Beginner: scenario story cards + plain symbol list + speed words, everything else defaulted.
+    // Expert: per-symbol beta/price rows, model seed, full knobs. Both levels: labeled fields,
+    // info() on every technical term, app modals (never window.prompt/confirm).
+    var SIM_SCENARIOS = [
+      { key: 'CHOP', blurb: 'Sideways drift \u2014 quiet premium-selling weather.' },
+      { key: 'TREND_UP', blurb: 'A steady climb with normal wobble.' },
+      { key: 'TREND_DOWN', blurb: 'A steady decline with normal wobble.' },
+      { key: 'SELLOFF_REBOUND', blurb: 'Falls hard, then recovers \u2014 tests your nerve.' },
+      { key: 'RALLY_FADE', blurb: 'Rises first, then gives it back.' },
+      { key: 'VOL_EVENT', blurb: 'Calm prices, jumpy options \u2014 volatility is the story.' }
+    ];
+    var simCard = el('div', { class: 'card', id: 'dc-sim-market' },
+      UI.cardHeader('Simulated market'),
+      explain(beginnerDC()
+        ? 'A practice market that MOVES: generated prices and option chains stream like the real thing, on any day, at any speed. Everything is loudly labeled \u2014 nothing here is real, and a separate simulation account keeps your practice account untouched.'
+        : 'Deterministic per-session worlds: a real beta factor model on fixed 30-sim-second quanta (speed never changes the path), a full generated option book, replayable from seed + event log. A separate simulation account is the only lane that trades a world.'));
+    function beginnerDC() { return window.Learn && Learn.currentLevel() === 'beginner'; }
     root.appendChild(simCard);
     (async function () {
-      function row(txt) { return el('div', { class: 'muted small' }, txt); }
+      var st = { scenario: 'CHOP', speed: 10, rows: [{ symbol: 'ACME', beta: 1, spot: '' }] };
+
       async function refreshSim() {
         var box = document.getElementById('dc-sim-sessions');
         if (!box) return;
@@ -3851,77 +3892,255 @@
         var sessions = [];
         try { sessions = (await API.getFresh('/api/sim/market')).sessions || []; }
         catch (e) { box.appendChild(alertBox('warn', 'Could not load sessions: ' + e.message)); return; }
-        if (!sessions.length) { box.appendChild(row('No simulated sessions yet — create one below.')); return; }
-        sessions.forEach(function (sx) {
-          var cfg = sx.config || {};
-          var active = App.state.world === sx.id;
-          box.appendChild(el('div', { class: 'btn-row', style: 'margin:6px 0' },
-            el('b', {}, sx.name || sx.id),
-            el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : 'badge-warn') }, sx.running ? 'RUNNING' : (sx.status || '')),
-            el('span', { class: 'muted small' }, (cfg.scenario || '') + ' \u00b7 seed ' + cfg.seed
-              + (sx.simTime ? ' \u00b7 ' + sx.simTime.replace('T', ' ') : '')),
-            el('button', { class: 'btn btn-sm', onclick: function () { App.switchWorld(active ? 'observed' : sx.id); } },
-              active ? 'Back to real' : 'Enter this market'),
-            el('button', { class: 'btn btn-sm', onclick: async function () {
-              try { await API.post('/api/sim/market/' + sx.id + '/' + (sx.running ? 'pause' : 'start'), {}); refreshSim(); App.refreshWorldBand(); }
-              catch (e) { alert(e.message); } } }, sx.running ? 'Pause' : 'Start'),
-            el('button', { class: 'btn btn-sm', onclick: async function () {
-              var pct = parseFloat(prompt('Inject a move on ' + Object.keys(cfg.symbolBetas || {})[0] + ' (% e.g. -5):', '-5'));
-              if (isNaN(pct)) return;
-              try { await API.post('/api/sim/market/' + sx.id + '/event',
-                { symbol: Object.keys(cfg.symbolBetas || {})[0], movePct: pct / 100 }); }
-              catch (e) { alert(e.message); } } }, 'Inject event'),
-            el('button', { class: 'btn btn-sm', onclick: async function () {
-              var holder = document.getElementById('sim-report');
-              if (holder) holder.remove();
-              try {
-                var rep = await API.getFresh('/api/sim/market/' + sx.id + '/report');
-                holder = el('div', { id: 'sim-report', class: 'card-slim', style: 'margin:8px 0' },
-                  el('b', {}, 'Session report \u2014 ' + (sx.name || sx.id)),
-                  el('div', { class: 'chips' },
-                    el('span', { class: 'chip' }, 'Trades: ' + (rep.trades || []).length),
-                    el('span', { class: 'chip' }, 'Resolved: ' + rep.resolved),
-                    el('span', { class: 'chip' }, 'Win rate: ' + (rep.winRate == null ? '\u2014' : rep.winRate + '%')),
-                    el('span', { class: 'chip' }, 'Realized: ' + UI.fmtMoney(rep.realizedPnlCents))),
-                  el('div', { class: 'muted small' }, rep.note));
-                box.parentNode.insertBefore(holder, box.nextSibling);
-              } catch (e) { alert(e.message); } } }, 'Report'),
-            el('button', { class: 'btn btn-sm btn-danger', onclick: async function () {
-              if (!confirm('Finish and remove this session?')) return;
-              try { await API.del('/api/sim/market/' + sx.id); if (App.state.world === sx.id) App.state.world = 'observed'; refreshSim(); App.refreshWorldBand(); }
-              catch (e) { alert(e.message); } } }, 'Finish')));
-        });
+        if (!sessions.length) {
+          box.appendChild(el('div', { class: 'muted small' }, 'No simulated sessions yet \u2014 create one below.'));
+          return;
+        }
+        var live = sessions.filter(function (x) { return x.status !== 'FINISHED'; });
+        var done = sessions.filter(function (x) { return x.status === 'FINISHED'; });
+        live.forEach(function (sx) { box.appendChild(sessionRow(sx, false)); });
+        if (done.length) {
+          box.appendChild(UI.expandable('Finished sessions (' + done.length + ') \u2014 reports kept',
+            function () {
+              var slot = el('div', {});
+              done.forEach(function (sx) { slot.appendChild(sessionRow(sx, true)); });
+              return slot;
+            }));
+        }
       }
+
+      function sessionRow(sx, finished) {
+        var cfg = sx.config || {};
+        var active = App.state.world === sx.id;
+        var row = el('div', { class: 'btn-row sim-session-row', 'data-sim-id': sx.id, style: 'margin:6px 0' },
+          el('b', {}, sx.name || sx.id),
+          el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : finished ? 'badge-dim' : 'badge-warn') },
+            sx.running ? 'RUNNING' : (sx.status || '')),
+          el('span', { class: 'muted small' }, App.scenarioLabel(cfg.scenario)
+            + ' \u00b7 seed ' + cfg.seed
+            + (sx.eventCount ? ' \u00b7 ' + sx.eventCount + ' injected event' + (sx.eventCount === 1 ? '' : 's') : '')
+            + (sx.simTime ? ' \u00b7 ' + String(sx.simTime).replace('T', ' ') : '')));
+        if (!finished) {
+          row.appendChild(el('button', { class: 'btn btn-sm', onclick: function () {
+            App.switchWorld(active ? 'observed' : sx.id); } }, active ? 'Back to real' : 'Enter this market'));
+          row.appendChild(el('button', { class: 'btn btn-sm', onclick: async function () {
+            try { await API.post('/api/sim/market/' + sx.id + '/' + (sx.running ? 'pause' : 'start'), {}); refreshSim(); App.refreshWorldBand(); }
+            catch (e) { alert(e.message); } } }, sx.running ? 'Pause' : 'Start'));
+          row.appendChild(el('button', { class: 'btn btn-sm', id: 'sim-inject-' + sx.id, onclick: function () {
+            injectModal(sx); } }, 'Inject event'));
+        }
+        row.appendChild(el('button', { class: 'btn btn-sm', onclick: function () { showReport(sx); } }, 'Report'));
+        if (!finished) {
+          row.appendChild(el('button', { class: 'btn btn-sm btn-danger', onclick: function () {
+            finishModal(sx); } }, 'Finish'));
+        }
+        return row;
+      }
+
+      /** Inject-event: an app modal with a SYMBOL PICKER — never window.prompt (review P2). */
+      function injectModal(sx) {
+        var syms = Object.keys((sx.config || {}).symbolBetas || {});
+        var symSel = el('select', { id: 'inject-symbol' }, syms.map(function (x) { return el('option', { value: x }, x); }));
+        var moveIn = el('input', { type: 'number', id: 'inject-move', value: '-5', min: '-50', max: '50', step: '0.5' });
+        var volIn = el('input', { type: 'number', id: 'inject-vol', value: '0', min: '-50', max: '100', step: '1' });
+        var body = el('div', { class: 'form-grid' },
+          el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Symbol'), symSel),
+          el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Price shock %'), moveIn),
+          el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Volatility shift (IV points)'), volIn),
+          el('div', { class: 'muted small', style: 'grid-column:1/-1' },
+            'The shock lands immediately and is recorded in the session\u2019s event log \u2014 replays include it.'));
+        UI.confirmModal('Inject a market event', body, 'Inject', async function () {
+          var pct = parseFloat(moveIn.value), vol = parseFloat(volIn.value);
+          if (!isFinite(pct) && !isFinite(vol)) throw new Error('Enter a price shock or a volatility shift');
+          var payload = {};
+          if (isFinite(pct) && pct !== 0) { payload.symbol = symSel.value; payload.movePct = pct / 100; }
+          if (isFinite(vol) && vol !== 0) payload.volShift = vol / 100;
+          if (!Object.keys(payload).length) throw new Error('Nothing to inject \u2014 both fields are zero');
+          await API.post('/api/sim/market/' + sx.id + '/event', payload);
+          refreshSim(); App.refreshWorldBand();
+        }, false);
+      }
+
+      /** Finish: shows THE REPORT first (the session's whole point), then confirms the finish. */
+      function finishModal(sx) {
+        var body = el('div', {}, UI.spinner('Loading the session report\u2026'));
+        UI.confirmModal('Finish this session?', body, 'Finish session', async function () {
+          await API.del('/api/sim/market/' + sx.id);
+          if (App.state.world === sx.id) App.state.world = 'observed';
+          refreshSim(); App.refreshWorldBand();
+        }, true);
+        API.getFresh('/api/sim/market/' + sx.id + '/report').then(function (rep) {
+          body.innerHTML = '';
+          body.appendChild(reportNode(rep));
+          body.appendChild(el('div', { class: 'muted small', style: 'margin-top:8px' },
+            'Finishing pauses the world for good. The report stays available under \u201cFinished sessions\u201d.'));
+        }).catch(function (e) { body.innerHTML = ''; body.appendChild(alertBox('warn', 'Report unavailable: ' + e.message)); });
+      }
+
+      function reportNode(rep) {
+        var n = el('div', { id: 'sim-report' },
+          el('div', { class: 'chips' },
+            el('span', { class: 'chip' }, 'Trades: ' + (rep.trades || []).length),
+            el('span', { class: 'chip' }, 'Resolved: ' + rep.resolved),
+            el('span', { class: 'chip' }, 'Win rate: ' + (rep.winRate == null ? '\u2014' : rep.winRate + '%')),
+            el('span', { class: 'chip' }, 'Realized: ' + UI.fmtMoney(rep.realizedPnlCents)),
+            el('span', { class: 'chip' }, 'Model ' + (rep.modelVersion || 'sim-1'))),
+          el('div', { class: 'muted small', style: 'margin-top:6px' }, rep.note));
+        var evs = rep.events || [];
+        if (evs.length) {
+          n.appendChild(el('div', { class: 'muted small', style: 'margin-top:4px' },
+            'Injected events: ' + evs.map(function (e) {
+              return e.kind + (e.symbol ? ' ' + e.symbol : '') + ' @ tick ' + e.quantum;
+            }).join(' \u00b7 ')));
+        }
+        return n;
+      }
+
+      function showReport(sx) {
+        var holder = document.getElementById('sim-report-holder');
+        if (holder) holder.innerHTML = '';
+        else {
+          holder = el('div', { id: 'sim-report-holder', class: 'card-slim', style: 'margin:8px 0' });
+          var box = document.getElementById('dc-sim-sessions');
+          box.parentNode.insertBefore(holder, box.nextSibling);
+        }
+        holder.appendChild(el('b', {}, 'Session report \u2014 ' + (sx.name || sx.id)));
+        API.getFresh('/api/sim/market/' + sx.id + '/report')
+          .then(function (rep) { holder.appendChild(reportNode(rep)); })
+          .catch(function (e) { holder.appendChild(alertBox('warn', 'Report unavailable: ' + e.message)); });
+      }
+
       simCard.appendChild(el('div', { id: 'dc-sim-sessions' }));
-      var nameIn = el('input', { type: 'text', id: 'sim-name', placeholder: 'Weekend review', style: 'max-width:160px' });
-      var symsIn = el('input', { type: 'text', id: 'sim-symbols', placeholder: 'ACME:1, BETA:0.6', style: 'max-width:220px',
-        title: 'symbol:beta pairs — beta correlates the symbol with the market factor' });
-      var scenSel = el('select', { id: 'sim-scenario' },
-        ['CHOP', 'TREND_UP', 'TREND_DOWN', 'SELLOFF_REBOUND', 'RALLY_FADE', 'VOL_EVENT'].map(function (x) {
-          return el('option', { value: x }, x.toLowerCase().replace('_', ' ')); }));
-      var volIn = el('input', { type: 'number', id: 'sim-vol', value: '30', min: '5', max: '200', style: 'max-width:80px', title: 'annualized vol %' });
-      var seedIn = el('input', { type: 'number', id: 'sim-seed', value: '4242', style: 'max-width:100px' });
-      var speedIn = el('input', { type: 'number', id: 'sim-speed', value: '10', min: '1', max: '600', style: 'max-width:80px', title: 'sim-time multiplier' });
-      var createBtn = el('button', { class: 'btn btn-sm', id: 'sim-create', onclick: async function () {
-        createBtn.disabled = true;
-        try {
-          var symbols = {}, spots = {};
-          (symsIn.value || 'ACME:1').split(',').forEach(function (part) {
-            var kv = part.trim().split(':');
-            if (kv[0]) { symbols[kv[0].toUpperCase()] = kv[1] ? parseFloat(kv[1]) : 1.0; spots[kv[0].toUpperCase()] = 100; }
+
+      // ---- The creator ----
+      var creator = el('div', { id: 'sim-creator', style: 'margin-top:10px' });
+      simCard.appendChild(creator);
+      renderCreator();
+
+      function scenarioCards() {
+        var wrap = el('div', { class: 'grid grid-3', id: 'sim-scenarios' });
+        SIM_SCENARIOS.forEach(function (sc) {
+          var card = el('button', { class: 'choice sim-scenario' + (st.scenario === sc.key ? ' active' : ''),
+            type: 'button', 'data-scenario': sc.key, onclick: function () {
+              st.scenario = sc.key; renderCreator();
+            } },
+            el('b', {}, App.scenarioLabel(sc.key)),
+            el('div', { class: 'muted small' }, sc.blurb));
+          wrap.appendChild(card);
+        });
+        return wrap;
+      }
+
+      function labeled(text, node, infoKey) {
+        var lbl = el('label', { class: 'field-label' }, text);
+        if (infoKey) lbl.appendChild(UI.info(infoKey));
+        return el('div', { class: 'field' }, lbl, node);
+      }
+
+      function renderCreator() {
+        creator.innerHTML = '';
+        var beginner = beginnerDC();
+        creator.appendChild(el('div', { class: 'muted small', style: 'margin-bottom:6px' },
+          'Create a session'));
+        // Scenario: story cards at both levels (the story IS the configuration).
+        var scLbl = el('label', { class: 'field-label' }, 'What kind of market?');
+        scLbl.appendChild(UI.info('scenario'));
+        creator.appendChild(scLbl);
+        creator.appendChild(scenarioCards());
+
+        var nameIn = el('input', { type: 'text', id: 'sim-name', value: st.name || '', placeholder: 'Weekend review' });
+        nameIn.oninput = function () { st.name = nameIn.value; };
+        var grid = el('div', { class: 'form-grid', style: 'margin-top:8px' }, labeled('Session name', nameIn));
+
+        if (beginner) {
+          // Beginner: one plain symbols box; betas default to 1; real prices anchor automatically.
+          var symsIn = el('input', { type: 'text', id: 'sim-symbols', value: st.symbolsText || '',
+            placeholder: 'AAPL, SPY' });
+          symsIn.oninput = function () { st.symbolsText = symsIn.value; };
+          grid.appendChild(labeled('Stocks to include (comma-separated)', symsIn));
+          var speedSel = el('select', { id: 'sim-speed' },
+            el('option', { value: '1' }, 'Real time (1\u00d7)'),
+            el('option', { value: '10' }, 'Brisk \u2014 a day in ~40 min (10\u00d7)'),
+            el('option', { value: '60' }, 'Fast \u2014 a day in ~6 min (60\u00d7)'));
+          speedSel.value = String(st.speed);
+          speedSel.onchange = function () { st.speed = parseFloat(speedSel.value); };
+          grid.appendChild(labeled('How fast should time pass?', speedSel, 'speed'));
+          creator.appendChild(grid);
+          creator.appendChild(el('div', { class: 'muted small', style: 'margin:6px 0' },
+            'Real tickers start at their real last price; made-up tickers start at $100. A fresh seed is drawn for you \u2014 the session report shows it so the exact market can be replayed.'));
+        } else {
+          // Expert: per-symbol rows (symbol / beta / start price) — no micro-syntax.
+          var rowsWrap = el('div', { id: 'sim-symbol-rows' });
+          st.rows.forEach(function (r, i) {
+            var symIn = el('input', { type: 'text', value: r.symbol, placeholder: 'SYM', style: 'max-width:110px' });
+            symIn.oninput = function () { r.symbol = symIn.value.toUpperCase(); };
+            var betaIn = el('input', { type: 'number', value: String(r.beta), step: '0.1', min: '-3', max: '3', style: 'max-width:90px' });
+            betaIn.oninput = function () { r.beta = parseFloat(betaIn.value); };
+            var spotIn = el('input', { type: 'number', value: r.spot, placeholder: 'real price', min: '0.01', step: '0.01', style: 'max-width:120px' });
+            spotIn.oninput = function () { r.spot = spotIn.value; };
+            rowsWrap.appendChild(el('div', { class: 'btn-row', style: 'margin:4px 0' },
+              symIn, betaIn, spotIn,
+              el('button', { class: 'btn btn-sm btn-secondary', 'aria-label': 'Remove symbol', onclick: function () {
+                st.rows.splice(i, 1); if (!st.rows.length) st.rows.push({ symbol: '', beta: 1, spot: '' });
+                renderCreator();
+              } }, '\u00d7')));
           });
-          var res = await API.post('/api/sim/market', {
-            name: nameIn.value || 'Simulated session', symbols: symbols, spots: spots,
-            scenario: scenSel.value, volAnnual: parseFloat(volIn.value) / 100,
-            seed: parseInt(seedIn.value || '4242', 10), speed: parseFloat(speedIn.value || '10') });
-          await API.post('/api/sim/market/' + res.worldId + '/start', {});
-          await App.switchWorld(res.worldId);
-          refreshSim();
-        } catch (e) { alert(e.message); }
-        createBtn.disabled = false;
-      } }, 'Create & enter');
-      simCard.appendChild(el('div', { class: 'btn-row', style: 'margin-top:8px' },
-        nameIn, symsIn, scenSel, volIn, seedIn, speedIn, createBtn));
+          var rowHead = el('div', { class: 'btn-row muted small' },
+            el('span', { style: 'width:110px' }, 'Symbol'),
+            (function () { var x = el('span', { style: 'width:90px' }, 'Beta'); x.appendChild(UI.info('beta')); return x; })(),
+            el('span', { style: 'width:120px' }, 'Start price (blank = real)'));
+          creator.appendChild(rowHead);
+          creator.appendChild(rowsWrap);
+          creator.appendChild(el('button', { class: 'btn btn-sm btn-secondary', id: 'sim-add-symbol', onclick: function () {
+            st.rows.push({ symbol: '', beta: 1, spot: '' }); renderCreator();
+          } }, '+ Add symbol'));
+
+          var volIn = el('input', { type: 'number', id: 'sim-vol', value: String(st.vol || 30), min: '5', max: '200' });
+          volIn.oninput = function () { st.vol = parseFloat(volIn.value); };
+          var seedIn = el('input', { type: 'number', id: 'sim-seed', value: st.seed || '', placeholder: 'auto' });
+          seedIn.oninput = function () { st.seed = seedIn.value; };
+          var speedIn = el('input', { type: 'number', id: 'sim-speed', value: String(st.speed), min: '1', max: '600' });
+          speedIn.oninput = function () { st.speed = parseFloat(speedIn.value); };
+          grid.appendChild(labeled('Market volatility %/yr', volIn));
+          grid.appendChild(labeled('Seed (blank = fresh)', seedIn, 'seed'));
+          grid.appendChild(labeled('Speed \u00d7', speedIn, 'speed'));
+          creator.appendChild(grid);
+        }
+
+        var createBtn = el('button', { class: 'btn', id: 'sim-create', style: 'margin-top:8px', onclick: async function () {
+          createBtn.disabled = true;
+          try {
+            var symbols = {}, spots = {};
+            if (beginner) {
+              (st.symbolsText || 'ACME').split(',').forEach(function (part) {
+                var sym = part.trim().toUpperCase();
+                if (sym) symbols[sym] = 1.0;
+              });
+            } else {
+              st.rows.forEach(function (r) {
+                var sym = (r.symbol || '').trim().toUpperCase();
+                if (!sym) return;
+                symbols[sym] = isFinite(r.beta) ? r.beta : 1.0;
+                var sp = parseFloat(r.spot);
+                if (isFinite(sp) && sp > 0) spots[sym] = sp;
+              });
+            }
+            if (!Object.keys(symbols).length) throw new Error('Add at least one symbol');
+            var payload = { name: st.name || 'Simulated session', symbols: symbols,
+              scenario: st.scenario, speed: st.speed };
+            if (Object.keys(spots).length) payload.spots = spots;
+            if (!beginner && st.vol) payload.volAnnual = st.vol / 100;
+            if (!beginner && st.seed) payload.seed = parseInt(st.seed, 10);
+            var res = await API.post('/api/sim/market', payload);
+            await API.post('/api/sim/market/' + res.worldId + '/start', {});
+            await App.switchWorld(res.worldId);
+            refreshSim();
+          } catch (e) { alert(e.message); }
+          createBtn.disabled = false;
+        } }, 'Create & enter');
+        creator.appendChild(createBtn);
+      }
+
       refreshSim();
     })();
 
@@ -4277,7 +4496,7 @@
   }
 
   function useEval(c, symbol, recId) {
-    App.state.ticket = { candidate: c, symbol: symbol, step: 5, recommendationId: recId || null };
+    App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbol, step: 5, recommendationId: recId || null };
     App.navigate('#/trade/place');
   }
 

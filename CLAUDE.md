@@ -1526,6 +1526,59 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     preview->ack->create (R2 gate applies to test seeding too); /api/account returns {account:{}}
     not the account. Suites after: 365 JUnit + 50 fixture + 3 audit + 4 seeded + 8 live DOM — ALL
     GREEN on the final jar. Screenshots shots/sim-{workbench,band-data,research-acme,trade}.png.
+- W REMEDIATION PROGRAM (2026-07-10, commits b896113..; branch, NOT deployed): junior's 10 review
+  findings + 10 math findings + the (one-time, oversized) adversarial fleet's confirmed set —
+  ALL EXECUTED. The review-discipline lesson is memory [[feedback-review-discipline]]: no more
+  mega-fleets; domain invariants (one clock per lane / lane purity / identity / price coherence)
+  are structural release gates, budgeted into every program as a stage.
+  - ONE CLOCK PER LANE: MarksSource.simNow → TradeService.nowFor threads the WORLD's clock through
+    entry gates, settle (settles at the SIM bell at world closes — accelerated expiry unwedged),
+    closed-market warnings (a running world is never 'closed' — the Saturday session works),
+    analytics T/DTE/regime/acks, engine+ladder expiration pick, signals, positions, research/
+    history windows (sim rolled bars render + feed HV), guardrail today, comingUp (payload asOfDate).
+  - ISOLATION: owner-checked memory-resident lookups; server-only world ids; owner-tagged
+    world.tick; per-owner MAX_ACTIVE at create AND start (+persisted RUNNING rows); LRU-bounded
+    resident worlds; FINISHED terminal; V12 FK accounts.world_id; ack HMAC += accountId+feesOverride.
+  - LANE ROUTING: shares world-priced (PositionsService.worldOf); /api/quotes + /api/universe world-
+    aware; EvalContext from the candidates' OWN market (decision/evaluate/ladder/opportunities/
+    optimize + R4 risk-capital caps on all of them); calibration NEVER records sim outcomes;
+    sim-studio anchors + calibrateVol world-routed; backtests refuse in-world honestly;
+    earnings/news suppressed in worlds.
+  - MATH: EV includes entryAdjustCents (pinned to the cent); ProbabilityMap r−σ²/2 drift disclosed
+    (r=0 labeled 'zero-drift lognormal scenario'), EXACT knot-region probabilities (straddle max
+    loss honestly P=0), touch labeled reflection estimate; SimulatedWorld v2 (MODEL_VERSION sim-2):
+    fixed 30-sim-sec QUANTA (speed-invariant paths, pinned), counter-based per-(seed,stream,symbol,
+    quantum) RNG, real beta factor model (σ_i=√(β²σ_m²+σ_idio²), pinned), continuous open-market-
+    seconds TTE (bell convergence pinned), inception-anchored strike grids (crash can't delist,
+    pinned), sim-time scenario phases, separate IV level process, holiday-Friday rollback + 0DTE
+    till the bell, vol-scaled history, validation, America/New_York stamps. Parity pinned as the
+    AMERICAN band |C−P−(S−Ke^{−rT})| ≤ K(1−e^{−rT})+floors (the intrinsic floor IS early-exercise
+    value); convexity/calendar/verticals/uncrossed pinned.
+  - REPLAYABLE: V12 state/events/model_version; injections+speed logged at quanta; restore =
+    config+replay (restart resumes the exact world, RUNNING resumes ticking — pinned); report
+    shows model version + event log ('seed alone' overclaim scoped).
+  - UX: product workbench (scenario story cards both levels, beginner plain symbols + speed words +
+    auto seed + real-price anchors disclosed, expert per-symbol beta/price rows — no micro-syntax),
+    app modals for inject (symbol picker) + finish (REPORT SHOWN FIRST; finished sessions stay
+    listed w/ reports), band v2 (human scenario names, live speed control, Report, in-place tick
+    updates preserving focus, sticky below topbar, info(world)/info(seed)), Home quick action
+    'Practice in a simulated market', world.tick → cache flush + in-place research price updates
+    (the market VISIBLY moves), world.selected SSE + visibilitychange = multi-tab adoption,
+    cross-lane working ideas dropped on switch (ticket.world tag), in-world hides tape+sector rails.
+  - EXPLANATIONS: UI.term merged into INFO (registry-backed terms open the SAME level-aware bubble
+    at BOTH levels), scenario/beta/speed INFO entries + seed/world/pop/ev/assignment/ivrank/nlv/
+    riskcapital wired on their surfaces, aria-expanded/describedby + role=dialog, DOM-adjacent
+    insertion (Tab reaches [+]), Escape returns focus, scroll RE-ANCHORS (close only when trigger
+    leaves view), 28px hit area, bubble z-above sticky chrome + max-height, audit test walks
+    builder/backtest/data/portfolio FIRST + pins sim terms + keyboard path.
+  - GATES: SimWorldGateTest(9) + SimLaneGateTest(6) + EV/map pins. FINAL MATRIX: 381 JUnit +
+    50 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN. Screenshots shots/w-{workbench-
+    beginner,workbench-expert,band,inject-modal}.png. GOTCHAS: the info bubble must be BODY-
+    appended with absolute page coords (positioned ancestors corrupt them) + explicit Tab focus
+    management (the dialog pattern) — DOM-adjacent insertion made it a moving target under
+    Playwright's auto-scroll; Escape's return-focus needs a reopen-suppression window or the
+    focus handler reopens the bubble; page.evaluate(Learn.setLevel) does NOT re-render — call
+    App.render() after it.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

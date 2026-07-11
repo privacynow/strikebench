@@ -78,19 +78,25 @@ were doing and quietly prepares the next step.
   `workspace.updated` — with a Last-Event-ID replay ring. Events carry ids, never payloads; the
   client refetches what it cares about (GETs stay the source of truth). The quote tape keeps its
   dedicated `/api/market/stream`.
-- *Simulated market* (`market/sim/`): `SimulatedWorld` is a deterministic per-seed world — a
-  virtual exchange clock (30 sim-sec × speed per 1s tick, skips closed hours via `MarketHours`,
-  rolls daily bars), factor-correlated GBM with Itô drift and scenario shapes, 250 seeded
-  history bars, and a full BSM option exchange (smile, intrinsic floors, moneyness/DTE spreads,
-  synthetic OI). `SimulationSessions` persists configs (`sim_session`, V11 — same seed restores
-  the same world), runs all active sessions on one shared loop (max 3), and publishes throttled
-  `world.tick` hints. The active world is a per-user runtime switch (`GET/PUT /api/world`,
-  settings `active_world:<owner>`); `MarketDataService` routes world-aware reads through a
-  resolver while the observed engine keeps running, so switching back is instant. Inside a
-  world, `currentAccount` resolves to a dedicated simulation account (`accounts.world_id`) —
-  the real practice account and the sim lane can never pollute each other. Everything is
-  labeled `Freshness.SIMULATED`. Lifecycle: `/api/sim/market` CRUD + `start/pause/step/speed/
-  event` + `/report`.
+- *Simulated market* (`market/sim/`): `SimulatedWorld` is a deterministic MODELED harness — a
+  generated market, honestly labeled, never a claim of exchange realism. The path lives on fixed
+  30-sim-second QUANTA (playback speed = quanta per tick; the path at a given sim time is
+  identical at 1× and 600× — pinned), randomness is counter-based per (seed, stream, symbol,
+  quantum) so the symbol set can never shift another symbol's draws, and beta is a real factor
+  loading (β·σ_market + idiosyncratic). The virtual exchange clock skips closed hours via
+  `MarketHours` and measures option time-to-expiry in open-market seconds to the bell, so theta
+  converges continuously to intrinsic on expiration day. The generated option book is European
+  BSM + smile + an intrinsic (early-exercise) floor with moneyness/DTE spreads and synthetic OI —
+  no dividends, no real order book; surface no-arbitrage invariants are pinned (parity band,
+  convexity, calendar, verticals). Strike grids anchor at inception so a crash never delists a
+  held strike. `SimulationSessions` (V11/V12) checkpoint state + an immutable event log; restore
+  REPLAYS config+events to the exact world (a restart resumes it, RUNNING sessions resume
+  ticking); per-owner run caps, owner-checked lookups (including memory-resident worlds), and
+  owner-scoped `world.tick` events. The active world is a per-user runtime switch (`GET/PUT
+  /api/world`); every read/gate/analytic in a world runs on the WORLD's clock and data — shares,
+  option marks, settle, decision scores, scans — and calibration ('Your record') never records
+  sim outcomes. Lifecycle: `/api/sim/market` CRUD + `start/pause/step/speed/event` + `/report`
+  (model version + event log disclosed).
 - *Prefetch*: client-hinted, server-governed. `API.prefetch(path)` marks speculative GETs with
   `X-Priority: prefetch`; the server answers 204 when heavy providers lack budget
   (`CboeProvider.prefetchBudget()`: never while cooling down or fully contended; fixture mode

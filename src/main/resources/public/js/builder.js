@@ -537,6 +537,7 @@
       // portfolio row — an 'Iron condor' must never place as 'Custom' (naming is education).
       var tpl = st.templateKey ? TEMPLATES.find(function (t2) { return t2.key === st.templateKey; }) : null;
       App.state.ticket = {
+        world: App.state.world || 'observed',
         symbol: st.symbol, custom: true, customFor: st.symbol,
         customFamily: tpl && tpl.family ? tpl.family : null,
         legs: wireLegs(activeLegs()), qty: st.qty, step: 6,

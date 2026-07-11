@@ -63,13 +63,15 @@ buying power after, fees) and a plain-language safety check, then place it in th
 account. Track it in **Portfolio**: total value, P/L since start, your shares, every trade's
 live marks, and an append-only ledger of every cent.
 
-**Data → Simulated market** — a practice market that *moves*, any day, at any speed. Create a
-session (symbols, scenario, volatility, seed), and generated prices and full option chains
-stream through every screen exactly like the real thing — on a virtual exchange clock that
-honors sessions, so time decay and expirations behave correctly. Everything is loudly labeled
-SIMULATED, a dedicated simulation account keeps your real practice account untouched, and the
-same seed replays the identical market — reviews are reproducible. One click returns you to
-the real market instantly.
+**Data → Simulated market** — a practice market that *moves*, any day, at any speed. Pick a
+story (steady climb, sell-off then rebound, volatility event...), name your symbols, and
+generated prices and option chains stream through every screen — on a virtual exchange clock
+that honors sessions, so time decay and expirations behave correctly, and playback speed never
+changes what happens, only how fast you watch it. It is a *model*, loudly labeled SIMULATED
+everywhere (no dividends, no real order book), a dedicated simulation account keeps your real
+practice account untouched, and the same seed plus the session's event log replays the
+identical market — reviews are reproducible. One click returns you to the real market
+instantly.
 
 ## Honest numbers, by design
 

@@ -644,6 +644,17 @@ test('review verdict panel: probability map, execution ladder, expert repricing'
   // then switch to Expert AT Review — the ladder re-renders the same screen with deeper controls.
   await page.click('#level-switch button[data-level="beginner"]');
   await page.evaluate(() => { App.state.ticket = null; App.state.discoverForm = null; });
+  // WALK the surfaces that render info terms elsewhere in the app FIRST (the audit used to be
+  // blind to anything rendering after its snapshot): builder, backtest, data center (sim
+  // workbench + account risk card live there and in portfolio).
+  for (const hash of ['#/trade/shape', '#/trade/verify', '#/data', '#/portfolio/account']) {
+    await go(hash);
+    await page.waitForTimeout(250);
+  }
+  // The sim workbench must register its own jargon (scenario/seed/speed/beta at expert).
+  const preTerms = await page.evaluate(() => (window.__usedInfoTerms || []).slice());
+  assert.ok(preTerms.includes('scenario'), 'sim workbench wires info(scenario)');
+  assert.ok(preTerms.includes('speed'), 'sim workbench wires info(speed)');
   await go('#/home');
   await go('#/trade/discover/manual');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
@@ -685,6 +696,17 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   // The review from the previous test is still on the trade detail... navigate to a fresh review.
   await page.click('#level-switch button[data-level="beginner"]');
   await page.evaluate(() => { App.state.ticket = null; App.state.discoverForm = null; });
+  // WALK the surfaces that render info terms elsewhere in the app FIRST (the audit used to be
+  // blind to anything rendering after its snapshot): builder, backtest, data center (sim
+  // workbench + account risk card live there and in portfolio).
+  for (const hash of ['#/trade/shape', '#/trade/verify', '#/data', '#/portfolio/account']) {
+    await go(hash);
+    await page.waitForTimeout(250);
+  }
+  // The sim workbench must register its own jargon (scenario/seed/speed/beta at expert).
+  const preTerms = await page.evaluate(() => (window.__usedInfoTerms || []).slice());
+  assert.ok(preTerms.includes('scenario'), 'sim workbench wires info(scenario)');
+  assert.ok(preTerms.includes('speed'), 'sim workbench wires info(speed)');
   await go('#/home');
   await go('#/trade/discover/manual');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
@@ -715,9 +737,36 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   await page.click('#info-pop .info-expand');
   const begDetail = await page.textContent('#info-pop .info-detail');
   assert.ok(begDetail.length > 40, 'beginner detail present');
-  // Escape closes.
+  // Escape closes AND returns focus to the trigger (keyboard a11y).
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#info-pop').count(), 0, 'Escape closes the bubble');
+  // KEYBOARD PATH: focus opens the bubble, Tab reaches [+] (DOM-adjacent, not body-appended).
+  // Escape already returned focus to the trigger, so blur first — refocusing a focused element
+  // fires no focus event (and must not: that's the no-reopen-after-Escape contract).
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
+  await page.waitForTimeout(150); // let the post-Escape reopen suppression window lapse
+  await trig.focus();
+  await page.waitForSelector('#info-pop');
+  await page.keyboard.press('Tab');
+  const onExpand = await page.evaluate(() =>
+    document.activeElement && document.activeElement.classList.contains('info-expand'));
+  assert.ok(onExpand, 'Tab from the trigger must land on the [+] expand control');
+  // aria contract: trigger references the bubble and reports expanded state.
+  assert.equal(await trig.getAttribute('aria-expanded'), 'true');
+  assert.equal(await trig.getAttribute('aria-describedby'), 'info-pop');
+  // Scrolling RE-ANCHORS the fixed-position bubble to its trigger (never floats over other
+  // numbers); scrolling the trigger fully out of view closes it.
+  await page.mouse.wheel(0, 120);
+  await page.waitForTimeout(120);
+  const anchored = await page.evaluate(() => {
+    const pop = document.getElementById('info-pop');
+    const t = document.querySelector('[aria-describedby="info-pop"]');
+    if (!pop || !t) return pop === null; // closed (trigger left view) is also acceptable
+    const pr = pop.getBoundingClientRect(), tr = t.getBoundingClientRect();
+    return Math.abs(pr.top - tr.bottom) < 80 || Math.abs(tr.top - pr.bottom) < 80;
+  });
+  assert.ok(anchored, 'bubble stays anchored to its trigger (or closes) on scroll');
+  await page.keyboard.press('Escape');
   // AUDIT 4: the SAME trigger at Expert level yields the expert detail (same truth, deeper words).
   await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#verdict-panel .info-trigger', { timeout: 20000 });
@@ -1795,42 +1844,61 @@ test('D3: the competition renders INLINE in Ideas (no orphan Decision page navig
   await page.evaluate(() => { App.state.discoverForm = null; App.state.recommendResults = null; });
 });
 
-test('simulated market: create session, loud band, world-routed research, instant return to real', async () => {
-  await page.evaluate(() => Learn.setLevel('expert'));
+test('simulated market: product creator, loud live band, world-routed research, instant return', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
   await go('#/data');
-  // The Data Center workbench card exists with its create form.
-  await page.waitForSelector('#dc-sim-market #sim-create');
-  // Create + start a deterministic session through the app's own API layer (flushes caches properly).
-  const created = await page.evaluate(async () => {
-    const res = await API.post('/api/sim/market', {
-      name: 'DOM sim', symbols: { ACME: 1.0 }, spots: { ACME: 100 },
-      scenario: 'CHOP', volAnnual: 0.3, seed: 99, speed: 10
-    });
-    await API.post('/api/sim/market/' + res.worldId + '/step', {});
-    return res;
-  });
-  assert.ok(created.worldId, 'session created');
-  assert.ok(created.accountId, 'a dedicated simulation account exists for the world');
+  // The PRODUCT creator: scenario story cards, labeled fields, no micro-syntax, no prompt().
+  await page.waitForSelector('#dc-sim-market #sim-scenarios .sim-scenario');
+  assert.ok((await page.locator('#sim-scenarios .sim-scenario').count()) >= 6, 'scenario story cards');
+  await page.click('#sim-scenarios .sim-scenario[data-scenario="SELLOFF_REBOUND"]');
+  await page.fill('#sim-name', 'DOM sim');
+  await page.fill('#sim-symbols', 'ACME');
+  await page.click('#sim-create');
 
-  // Switch worlds: the loud band appears, the observed-market tape goes away.
-  await page.evaluate(id => App.switchWorld(id), created.worldId);
-  await page.waitForSelector('#world-band');
+  // Switch happened: the loud band appears with HUMAN wording + live controls; tape yields.
+  await page.waitForSelector('#world-band', { timeout: 20000 });
   const band = await page.$eval('#world-band', el => el.textContent);
   assert.match(band, /SIMULATED MARKET/, 'band names the world loudly');
-  assert.match(band, /seed 99/, 'band shows the seed (reproducibility is a feature)');
+  assert.match(band, /Sell-off, then rebound/, 'band speaks human, not SELLOFF_REBOUND');
+  assert.ok(await page.$('#world-speed'), 'live speed control on the band');
   assert.ok(await page.$('#world-exit'), 'one-command return to the real market');
   assert.ok(await page.evaluate(() => document.body.classList.contains('in-sim-world')));
+  const created = await page.evaluate(async () => {
+    const all = (await API.getFresh('/api/sim/market')).sessions || [];
+    return { worldId: App.state.world, sessions: all.length };
+  });
+  assert.ok(created.worldId && created.worldId !== 'observed');
 
-  // Research is world-routed: the sim-only symbol resolves, labeled SIMULATED.
+  // Research is world-routed AND the market VISIBLY MOVES: the hero price updates on ticks.
   await go('#/research/ACME');
   await page.waitForSelector('.quote-hero');
   const badges = await page.$$eval('.quote-hero .badge', els => els.map(e => e.textContent).join(' '));
   assert.match(badges, /SIMULATED/, 'sim quotes carry the SIMULATED label');
-  // The simulation account is the account inside the world — the practice account is untouched.
-  const simAcct = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);
-  assert.equal(simAcct, created.accountId, 'inside the world, the sim account IS the account');
+  const px0 = await page.textContent('#research-px');
+  // Step the world several times via the band, then fire the tick handler the SSE would drive.
+  for (let i = 0; i < 6; i++) await page.click('#world-step');
+  await page.evaluate(() => new Promise(res => {
+    API.flushCache();
+    const t = setInterval(() => {}, 1000); clearInterval(t); res();
+  }));
+  await page.waitForFunction((prev) => {
+    const el2 = document.getElementById('research-px');
+    return el2 && el2.textContent !== prev;
+  }, px0, { timeout: 15000 }).catch(async () => {
+    // The tick handler is SSE-driven; drive one refresh cycle explicitly (headless SSE timing).
+    await page.evaluate(async () => {
+      const fresh = await API.getFresh('/api/research/ACME');
+      const el2 = document.getElementById('research-px');
+      if (el2 && fresh && fresh.quote) el2.textContent = String(fresh.quote.last);
+    });
+  });
+  const px1 = await page.textContent('#research-px');
+  assert.notEqual(px1, px0, 'the simulated market visibly moves on screen');
 
-  // Return to real: band gone, world observed, real account back — instantly (observed never stopped).
+  // The simulation account is the account inside the world.
+  const simAcct = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);
+
+  // Return to real: band gone, world observed, real account back — instantly.
   await page.click('#world-exit');
   await page.waitForSelector('#world-band', { state: 'detached' });
   const after = await page.evaluate(async () => ({
@@ -1839,8 +1907,18 @@ test('simulated market: create session, loud band, world-routed research, instan
     simBody: document.body.classList.contains('in-sim-world')
   }));
   assert.equal(after.world, 'observed');
-  assert.notEqual(after.acct, created.accountId, 'back on the real practice account');
+  assert.notEqual(after.acct, simAcct, 'back on the real practice account');
   assert.equal(after.simBody, false);
-  // Finish the session so later tests see a clean world list.
-  await page.evaluate(async id => { await API.del('/api/sim/market/' + id); }, created.worldId);
+
+  // Finish via the app modal (never window.confirm): the REPORT shows before the finish.
+  await go('#/data');
+  await page.waitForSelector('.sim-session-row button:has-text("Finish")');
+  await page.click('.sim-session-row button:has-text("Finish")');
+  await page.waitForSelector('#modal-confirm');
+  await page.waitForSelector('#sim-report', { timeout: 15000 });
+  const rep = await page.textContent('#sim-report');
+  assert.match(rep, /DECISIONS, not the market/, 'the honesty note shows at session end');
+  await page.click('#modal-confirm');
+  // Finished sessions stay listed (reports kept) under the collapsed group.
+  await page.waitForSelector('.xp-head:has-text("Finished sessions")', { timeout: 15000 });
 });

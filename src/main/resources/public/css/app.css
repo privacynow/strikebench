@@ -1267,12 +1267,31 @@ body.lvl-expert .showcase-frame { max-height: 375px; }
   .info-pop { animation: xp-in .12s ease-out; }
 }
 
-/* Block S8: the simulated-market band — loud but professionally restrained */
+/* Block S8: the simulated-market band — loud but professionally restrained.
+   STICKY under the topbar: on a long chain screen the mode must stay visible. */
 #world-band { display: flex; align-items: center; gap: 8px; padding: 6px 14px;
   background: color-mix(in srgb, var(--accent) 14%, var(--bg)); border-bottom: 2px solid var(--accent);
-  font-size: 12.5px; letter-spacing: .02em; }
-#world-band b { font-weight: 600; }
+  font-size: 12.5px; letter-spacing: .02em; position: sticky; z-index: 39; flex-wrap: wrap; }
+#world-band .wb-tag { font-weight: 700; }
+#world-band .wb-label { color: var(--fg); }
+#world-band .wb-seed { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+#world-band #world-speed { height: 30px; max-width: 84px; }
+#world-band #world-exit { margin-left: auto; }
 
 .badge-sim { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); color: var(--accent);
   border: 1px solid var(--accent); }
 body.in-sim-world #tape { display: none; } /* the tape quotes the OBSERVED market — not this world */
+
+/* Explanation-system a11y (adversarial review): touch target >= 24px, scroll-safe bubble */
+.info-trigger { position: relative; }
+.info-trigger::after { content: ''; position: absolute; inset: -7px; } /* 28px hit area, 14px visual */
+.info-pop { max-height: 60vh; overflow-y: auto; }
+/* The non-interactive explainer icon must not mimic the clickable trigger */
+.explain-ico { opacity: .55; }
+
+/* In a simulated world, observed-market chrome yields: the tape (above) plus the sector pulse
+   and sector rails (they quote observed ETFs, which do not exist in the world). */
+body.in-sim-world #sector-pulse, body.in-sim-world .sector-rail-wrap { display: none; }
+
+/* The info bubble must ride ABOVE sticky chrome (topbar/world band) — never under it. */
+.info-pop { position: absolute; z-index: 60; } /* page-anchored: scrolls WITH its trigger */

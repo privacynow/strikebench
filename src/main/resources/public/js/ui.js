@@ -202,7 +202,19 @@
 
   /** A term of art with tap-to-define glossary popover (Beginner level). */
   function term(word, display) {
-    var def = window.Learn && Learn.GLOSSARY[word.toLowerCase()];
+    // ONE explanation system (review P1): a term backed by the INFO registry opens the SAME
+    // level-aware info bubble at BOTH levels — the expert plain-span fallback left the riskiest
+    // labels with literally nothing. Glossary-only terms keep the beginner popover.
+    var key = word.toLowerCase();
+    if (window.Learn && Learn.INFO && Learn.INFO[key]) {
+      if (infoUsed.indexOf(key) < 0) infoUsed.push(key);
+      var t2 = el('button', { class: 'term', type: 'button', 'data-term': key,
+        'aria-expanded': 'false' }, display || word);
+      t2.addEventListener('click', function (e) { e.stopPropagation(); openInfo(t2, key); });
+      t2.addEventListener('focus', function () { if (!infoSuppressFocusOpen) openInfo(t2, key); });
+      return t2;
+    }
+    var def = window.Learn && Learn.GLOSSARY[key];
     if (!def || (window.Learn && Learn.currentLevel() === 'expert')) {
       return el('span', {}, display || word);
     }
@@ -836,24 +848,50 @@
    */
   var infoPop = null;
   var infoUsed = window.__usedInfoTerms = window.__usedInfoTerms || [];
-  function closeInfo() {
-    if (infoPop) { infoPop.remove(); infoPop = null; }
+  var infoTrigger = null; // the trigger that owns the open bubble (focus returns to it on close)
+  var infoSuppressFocusOpen = false; // Escape's return-focus must not immediately reopen
+  function closeInfo(returnFocus) {
+    if (infoPop) {
+      if (infoPop._detachTriggerKey) infoPop._detachTriggerKey();
+      infoPop.remove(); infoPop = null;
+    }
+    if (infoTrigger) {
+      infoTrigger.setAttribute('aria-expanded', 'false');
+      infoTrigger.removeAttribute('aria-describedby');
+      if (returnFocus && document.contains(infoTrigger)) {
+        infoSuppressFocusOpen = true;
+        infoTrigger.focus();
+        setTimeout(function () { infoSuppressFocusOpen = false; }, 120);
+      }
+      infoTrigger = null;
+    }
     document.removeEventListener('click', onDocClickInfo, true);
     document.removeEventListener('keydown', onDocKeyInfo, true);
+    window.removeEventListener('resize', onInfoScroll, true);
   }
-  function onDocClickInfo(ev) { if (infoPop && !infoPop.contains(ev.target)) closeInfo(); }
-  function onDocKeyInfo(ev) { if (ev.key === 'Escape') closeInfo(); }
+  function onDocClickInfo(ev) { if (infoPop && !infoPop.contains(ev.target) && ev.target !== infoTrigger) closeInfo(); }
+  function onDocKeyInfo(ev) { if (ev.key === 'Escape') closeInfo(true); }
+  // The bubble is positioned ABSOLUTELY in page coordinates, so it scrolls WITH its trigger —
+  // structural anchoring, no scroll listeners, no floating over unrelated numbers. Resize
+  // still closes (the layout genuinely changed).
+  function onInfoScroll() { closeInfo(); }
   function openInfo(trigger, key) {
+    if (!trigger.isConnected) return; // a re-render replaced the trigger mid-hover
     closeInfo();
     var def = window.Learn && Learn.INFO && Learn.INFO[key];
     if (!def) return;
+    infoTrigger = trigger;
     var beginner = window.Learn && Learn.currentLevel && Learn.currentLevel() === 'beginner';
     var detail = beginner ? def.beginner : def.expert;
-    infoPop = el('div', { class: 'info-pop', role: 'tooltip', id: 'info-pop' });
+    // role=dialog, not tooltip: it CONTAINS an interactive control (the expand button), and the
+    // trigger references it via aria-describedby so screen readers announce the content.
+    infoPop = el('div', { class: 'info-pop', role: 'dialog', 'aria-label': def.short, id: 'info-pop' });
+    trigger.setAttribute('aria-expanded', 'true');
+    trigger.setAttribute('aria-describedby', 'info-pop');
     var body = el('div', { class: 'info-short' }, def.short);
     var more = el('div', { class: 'info-detail', style: 'display:none' }, detail);
     var expand = el('button', { class: 'info-expand', type: 'button', 'aria-expanded': 'false',
-      title: 'More detail', onclick: function (ev) {
+      'aria-label': 'More detail', onclick: function (ev) {
         ev.stopPropagation();
         var open = more.style.display !== 'none';
         more.style.display = open ? 'none' : '';
@@ -863,13 +901,27 @@
       } }, '+');
     infoPop.appendChild(el('div', { class: 'info-row' }, body, expand));
     infoPop.appendChild(more);
+    // Body-append (absolute page coordinates stay correct regardless of positioned ancestors);
+    // keyboard reachability comes from EXPLICIT focus management: Tab on the trigger moves into
+    // the bubble, Tab/Escape from the [+] returns to the trigger — the standard dialog pattern.
     document.body.appendChild(infoPop);
+    function onTriggerKey(ev) {
+      if (ev.key === 'Tab' && !ev.shiftKey && infoPop) {
+        ev.preventDefault();
+        expand.focus();
+      }
+    }
+    trigger.addEventListener('keydown', onTriggerKey);
+    expand.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Tab') { ev.preventDefault(); closeInfo(true); }
+    });
+    infoPop._detachTriggerKey = function () { trigger.removeEventListener('keydown', onTriggerKey); };
     function place() {
       var r = trigger.getBoundingClientRect();
       var w = infoPop.offsetWidth, h = infoPop.offsetHeight;
-      var left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8);
-      var top = r.bottom + 6;
-      if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+      var left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8) + window.scrollX;
+      var top = r.bottom + 6 + window.scrollY;
+      if (r.bottom + 6 + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6) + window.scrollY;
       infoPop.style.left = left + 'px';
       infoPop.style.top = top + 'px';
     }
@@ -877,13 +929,14 @@
     setTimeout(function () {
       document.addEventListener('click', onDocClickInfo, true);
       document.addEventListener('keydown', onDocKeyInfo, true);
+      window.addEventListener('resize', onInfoScroll, true);
     }, 0);
   }
   /** A visible, quiet info trigger for a registry term. Never pairs with a native title. */
   function info(termKey) {
     if (infoUsed.indexOf(termKey) < 0) infoUsed.push(termKey);
     var t = el('button', { class: 'info-trigger', type: 'button', 'data-term': termKey,
-      'aria-label': 'What does this mean?' }, 'i');
+      'aria-expanded': 'false', 'aria-label': 'What does this mean?' }, 'i');
     var hoverTimer = null;
     t.addEventListener('mouseenter', function () {
       hoverTimer = setTimeout(function () { openInfo(t, termKey); }, 550);
@@ -893,13 +946,12 @@
       // the bubble persists so the pointer can travel into it; outside-click/Escape closes
     });
     t.addEventListener('click', function (ev) { ev.stopPropagation(); openInfo(t, termKey); });
-    t.addEventListener('focus', function () { openInfo(t, termKey); });
+    t.addEventListener('focus', function () { if (!infoSuppressFocusOpen) openInfo(t, termKey); });
     t.addEventListener('blur', function () { setTimeout(function () {
-      if (infoPop && !infoPop.contains(document.activeElement)) closeInfo();
+      if (infoPop && !infoPop.contains(document.activeElement) && document.activeElement !== t) closeInfo();
     }, 150); });
     return t;
   }
-
 
   window.UI = {
     info: info,

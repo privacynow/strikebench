@@ -211,54 +211,140 @@
   App.state.world = App.state.world || 'observed';
   App.state.worldGen = App.state.worldGen || 0; // stale-event token: bump on every switch
 
+  // Human names for scenario enums — the band is permanent chrome, never raw SELLOFF_REBOUND.
+  var SCENARIO_LABELS = {
+    CHOP: 'Choppy drift', TREND_UP: 'Steady climb', GRIND_UP: 'Steady climb',
+    TREND_DOWN: 'Steady decline', SELLOFF: 'Steady decline',
+    SELLOFF_REBOUND: 'Sell-off, then rebound', RALLY_FADE: 'Rally, then fade',
+    VOL_EVENT: 'Volatility event', NEWS_SHOCK: 'Volatility event'
+  };
+  App.scenarioLabel = function (key) {
+    return SCENARIO_LABELS[String(key || '').toUpperCase()] ||
+      String(key || '').toLowerCase().replace(/_/g, ' ');
+  };
+  var SPEED_CHOICES = [1, 5, 10, 30, 60, 300];
+
+  function bandLabelText(sess, cfg) {
+    return App.scenarioLabel(cfg.scenario)
+      + (sess && sess.simTime ? ' \u00b7 ' + sess.simTime.replace('T', ' ') + ' ET' : '');
+  }
+
+  /**
+   * The SIMULATED MARKET band. Updates IN PLACE (label text, play/pause caption, speed value) so
+   * keyboard focus survives the ~4s ticks; rebuilt only when it doesn't exist yet. Sticky under
+   * the topbar so the mode stays visible on long screens.
+   */
   async function refreshWorldBand() {
     var seq = ++worldBandSeq;
     var world = App.state.world;
     document.body.classList.toggle('in-sim-world', !!world && world !== 'observed');
-    var existing = Array.prototype.slice.call(document.querySelectorAll('#world-band'));
-    if (!world || world === 'observed') { existing.forEach(function (b) { b.remove(); }); return; }
+    if (!world || world === 'observed') {
+      Array.prototype.slice.call(document.querySelectorAll('#world-band')).forEach(function (b) { b.remove(); });
+      return;
+    }
     var sess = null;
     try {
       var all = (await API.getFresh('/api/sim/market')).sessions || [];
       sess = all.find(function (x) { return x.id === world; });
     } catch (e) { /* band still renders minimal */ }
-    if (seq !== worldBandSeq) return;
-    existing.forEach(function (b) { b.remove(); });
+    if (seq !== worldBandSeq || App.state.world !== world) return;
     var cfg = sess && sess.config ? sess.config : {};
-    var label = 'SIMULATED MARKET \u00b7 ' + (cfg.scenario || '') + ' \u00b7 '
-      + (sess && sess.simTime ? sess.simTime.replace('T', ' ') + ' ET' : '')
-      + (sess && sess.speed ? ' \u00b7 ' + sess.speed + '\u00d7' : '')
-      + (cfg.seed !== undefined ? ' \u00b7 seed ' + cfg.seed : '');
     var playing = !!(sess && sess.running);
-    var band = UI.el('div', { id: 'world-band' },
+
+    var band = document.getElementById('world-band');
+    if (band && band.dataset.world === world) {
+      // IN-PLACE update: never tear down a band someone is tabbing through.
+      var lbl = band.querySelector('.wb-label');
+      if (lbl) lbl.textContent = bandLabelText(sess, cfg);
+      var toggle = band.querySelector('#world-toggle');
+      if (toggle && toggle.textContent !== (playing ? 'Pause' : 'Play')) {
+        toggle.textContent = playing ? 'Pause' : 'Play';
+      }
+      var spd = band.querySelector('#world-speed');
+      if (spd && sess && sess.speed && document.activeElement !== spd) {
+        spd.value = String(Math.round(sess.speed));
+      }
+      band.dataset.playing = String(playing);
+      return;
+    }
+    Array.prototype.slice.call(document.querySelectorAll('#world-band')).forEach(function (b) { b.remove(); });
+
+    var speedSel = UI.el('select', { id: 'world-speed', 'aria-label': 'Playback speed',
+      title: 'How fast simulated time passes', onchange: async function () {
+        try { await API.post('/api/sim/market/' + world + '/speed', { speed: parseFloat(speedSel.value) }); }
+        catch (e) { UI.toast ? UI.toast(e.message) : alert(e.message); }
+      } },
+      SPEED_CHOICES.map(function (x) { return UI.el('option', { value: String(x) }, x + '\u00d7'); }));
+    if (sess && sess.speed && SPEED_CHOICES.indexOf(Math.round(sess.speed)) < 0) {
+      speedSel.appendChild(UI.el('option', { value: String(sess.speed) }, sess.speed + '\u00d7'));
+    }
+    if (sess && sess.speed) speedSel.value = String(Math.round(sess.speed));
+
+    band = UI.el('div', { id: 'world-band', 'data-world': world, role: 'status' },
       UI.icon('warn', 15),
-      UI.el('b', { style: 'margin:0 6px' }, label),
+      UI.el('b', { class: 'wb-tag' }, 'SIMULATED MARKET'),
+      window.Learn && UI.info ? UI.info('world') : null,
+      UI.el('span', { class: 'wb-label' }, bandLabelText(sess, cfg)),
+      cfg.seed !== undefined ? UI.el('span', { class: 'wb-seed' }, 'seed ' + cfg.seed) : null,
+      cfg.seed !== undefined && window.Learn && UI.info ? UI.info('seed') : null,
       UI.el('button', { class: 'btn btn-sm', id: 'world-toggle', onclick: async function () {
+        var isPlaying = band.dataset.playing === 'true';
         try {
-          await API.post('/api/sim/market/' + world + '/' + (playing ? 'pause' : 'start'), {});
-          refreshWorldBand();
+          await API.post('/api/sim/market/' + world + '/' + (isPlaying ? 'pause' : 'start'), {});
+          band.dataset.playing = String(!isPlaying);
+          var t = band.querySelector('#world-toggle');
+          if (t) t.textContent = !isPlaying ? 'Pause' : 'Play';
         } catch (e) { alert(e.message); }
       } }, playing ? 'Pause' : 'Play'),
-      UI.el('button', { class: 'btn btn-sm', onclick: async function () {
-        try { await API.post('/api/sim/market/' + world + '/step', {}); refreshWorldBand(); }
+      UI.el('button', { class: 'btn btn-sm', id: 'world-step', onclick: async function () {
+        try { await API.post('/api/sim/market/' + world + '/step', {}); worldTicked(); }
         catch (e) { alert(e.message); }
       } }, 'Step'),
+      speedSel,
+      UI.el('button', { class: 'btn btn-sm', id: 'world-report', onclick: function () { App.navigate('#/data'); } },
+        'Report'),
       UI.el('button', { class: 'btn btn-sm', id: 'world-exit', onclick: function () { App.switchWorld('observed'); } },
         'Return to real market'));
+    band.dataset.playing = String(playing);
     document.body.insertBefore(band, document.getElementById('tape') || document.body.firstChild);
+    // Pin the band just below the sticky topbar so the mode is ALWAYS visible.
+    var topbar = document.querySelector('.topbar');
+    if (topbar) band.style.top = topbar.getBoundingClientRect().height + 'px';
   }
   App.refreshWorldBand = refreshWorldBand;
+
+  /**
+   * A tick landed: the market MOVED. Flush the world's cached GETs and let the current screen
+   * refresh its visible numbers in place (views register via App.onEvent with their route token).
+   */
+  function worldTicked() {
+    API.flushCache(); // the old prices are gone — every world GET is stale now
+    refreshWorldBand();
+  }
 
   /** The one-command world switch: preserves route/symbol/level — it changes the MARKET, not you. */
   App.switchWorld = async function (worldId) {
     try {
       await API.put('/api/world', { world: worldId });
-      App.state.world = worldId;
-      App.state.worldGen++;         // discard SSE/stale fills from the world we just left
-      API.flushCache();             // every cached GET belonged to the old world
-      refreshWorldBand();
-      App.render();                 // same screen, new market under it — observed engine never stopped
+      App.adoptWorld(worldId, true);
     } catch (e) { alert(e.message); }
+  };
+
+  /** Adopts a world locally (after our own PUT, or another tab's via the world.selected hint). */
+  App.adoptWorld = function (worldId, announced) {
+    if (App.state.world === worldId) { refreshWorldBand(); return; }
+    App.state.world = worldId;
+    App.state.worldGen++;           // discard SSE/stale fills from the world we just left
+    // A working idea priced in the OTHER market cannot survive the switch: its quotes,
+    // expirations and account lane belong to a different world (review P2).
+    if (App.state.ticket && (App.state.ticket.world || 'observed') !== worldId) {
+      App.state.ticket = null;
+      if (announced) UI.toast ? UI.toast('Working idea cleared — it was priced in the other market')
+        : console.info('working idea cleared on world switch');
+    }
+    API.flushCache();               // every cached GET belonged to the old world
+    refreshWorldBand();
+    App.render();                   // same screen, new market under it — observed never stopped
   };
 
   window.App = App;
@@ -371,7 +457,20 @@
     App.onEvent('world.tick', function (type, data) {
       if (!data || data.world !== App.state.world) return; // a world we already left — discard
       var gen = App.state.worldGen;
-      setTimeout(function () { if (gen === App.state.worldGen) refreshWorldBand(); }, 50);
+      setTimeout(function () { if (gen === App.state.worldGen) worldTicked(); }, 50);
+    });
+    // Multi-tab truth: another tab (same user) switched worlds — adopt it here too, band and all.
+    App.onEvent('world.selected', function (type, data) {
+      if (!data || data.world === undefined) return;
+      if (data.world !== App.state.world) App.adoptWorld(data.world, false);
+    });
+    // Belt-and-braces for tabs whose SSE dropped: re-check the server's world on return.
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState !== 'visible') return;
+      API.getFresh('/api/world').then(function (w) {
+        var srv = (w && w.world) || 'observed';
+        if (srv !== App.state.world) App.adoptWorld(srv, false);
+      }).catch(function () { /* offline — next visit retries */ });
     });
     refreshUniverse();
     subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
@@ -560,7 +659,7 @@
     var es;
     try { es = new EventSource('/api/events'); } catch (e) { return; }
     App._eventsES = es;
-    ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated', 'world.tick']
+    ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated', 'world.tick', 'world.selected']
       .forEach(function (type) {
         es.addEventListener(type, function (ev) {
           var data = null;
