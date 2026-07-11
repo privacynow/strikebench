@@ -580,7 +580,7 @@
     var go = function () { if (input.value.trim()) App.navigate('#/research/' + input.value.trim().toUpperCase()); };
 
     root.appendChild(el('h1', {}, 'Research'));
-    var recentBox = el('span', { class: 'sym-chips', id: 'recent-symbols' });
+    var recentBox = el('div', { class: 'research-recents', id: 'recent-symbols' });
     var researchContext = UI.symbolContext({
       mode: 'editable', id: 'research-symbol-context', input: input,
       label: symbol ? 'Change stock' : Learn.currentLevel() === 'beginner'
@@ -589,14 +589,14 @@
       commitLabel: symbol ? 'Go' : 'Open analysis', commitId: 'symbol-go', onCommit: go
     });
     var contextExtras = el('div', { class: 'symbol-context-extras' },
-      symbol ? el('a', { href: '#/research', class: 'muted', id: 'back-to-sectors' }, '\u2190 All sectors') : null,
+      symbol ? el('a', { href: '#/research', class: 'context-extras-action', id: 'back-to-sectors' }, 'All sectors') : null,
       recentBox);
     root.appendChild(el('div', { class: 'research-symbol-shell' }, researchContext, contextExtras));
     function renderRecents() {
       recentBox.innerHTML = '';
       var list = recentSymbols();
       if (!list.length) return;
-      recentBox.appendChild(el('span', { class: 'muted', style: 'font-size:12px' }, 'Recent:'));
+      recentBox.appendChild(el('span', { class: 'context-extras-label' }, 'Recent'));
       list.forEach(function (s) {
         recentBox.appendChild(el('button', { class: 'sym-chip' + (s === symbol ? ' active' : ''),
           onclick: function () { App.navigate('#/research/' + s); } }, s));

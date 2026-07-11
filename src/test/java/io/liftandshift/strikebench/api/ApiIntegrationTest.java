@@ -1188,4 +1188,28 @@ class ApiIntegrationTest {
             }
         }
     }
+
+    @Test
+    @Order(37)
+    void finishingTheActiveWorldPublishesAnOrderedBaselineBootstrap() throws Exception {
+        JsonNode before = Json.parse(get("/api/world").body());
+        JsonNode created = Json.parse(post("/api/sim/market", """
+                {"name":"Finish ordering","symbols":{"AAPL":1.0},"scenario":"CHOP","speed":26}
+                """).body());
+        String world = created.get("worldId").asText();
+        assertThat(post("/api/sim/market/" + world + "/start", "{}").statusCode()).isEqualTo(200);
+        JsonNode entered = Json.parse(put("/api/world", "{\"world\":\"" + world + "\"}").body());
+
+        JsonNode finished = Json.parse(delete("/api/sim/market/" + world).body());
+        assertThat(finished.get("worldReset").asBoolean()).isTrue();
+        assertThat(finished.get("world").asText()).isEqualTo("demo");
+        assertThat(finished.get("revision").asLong()).isGreaterThan(entered.get("revision").asLong());
+        assertThat(finished.get("revision").asLong()).isGreaterThan(before.get("revision").asLong());
+        assertThat(finished.get("epoch").asText()).isEqualTo(entered.get("epoch").asText());
+        assertThat(finished.at("/universe/active/symbols")).isNotEmpty();
+
+        JsonNode current = Json.parse(get("/api/world").body());
+        assertThat(current.get("world").asText()).isEqualTo("demo");
+        assertThat(current.get("revision").asLong()).isEqualTo(finished.get("revision").asLong());
+    }
 }

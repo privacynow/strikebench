@@ -1563,8 +1563,10 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   assert.equal(uni.active.sectorKey, pickedSector);
   // Datalist feeds symbol inputs everywhere
   assert.ok(await page.evaluate(() => document.querySelectorAll('#universe-symbols option').length) >= 4);
-  // The ticker is CONTEXT now: hidden on non-market screens like the scout
-  assert.ok(await page.locator('#tape.tape-offroute').count(), 'tape hidden on the scout');
+  // Trade keeps the market context and global sector selector. Hiding it here made the
+  // active universe appear to vanish at the exact moment the user chose a strategy.
+  assert.equal(await page.locator('#tape.tape-offroute').count(), 0, 'tape visible on the scout');
+  assert.ok(await page.locator('#tape-sector').isVisible(), 'sector selector remains reachable in Trade');
 
   // Sector explorer: chips per sector, live tiles, scout handoff
   await go('#/research');
@@ -1687,6 +1689,66 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.click('#tape .tape-item >> nth=4');
   await page.waitForSelector('#app[data-route="research"][data-ready="true"]');
   // Explicit Demo owns this universe already; no hidden sector mutation is needed.
+});
+
+test('wide Trade market controls stay inside the workbench with a full sector catalog', async () => {
+  await page.setViewportSize({ width: 2048, height: 1000 });
+  await page.evaluate(async () => {
+    window.__wideTestUniverse = App.state.universe;
+    window.__wideTestIdeas = App.state.discoverForm;
+    const defs = [
+      ['CORE', 'Core indexes + megacaps'], ['TECH', 'Technology'], ['SEMI', 'Semiconductors'],
+      ['HEALTH', 'Healthcare'], ['DEFENSE', 'Defense & aerospace'], ['STAPLES', 'Consumer staples'],
+      ['DISCRETIONARY', 'Consumer discretionary'], ['ENERGY', 'Energy'], ['FINANCIALS', 'Financials'],
+      ['INDUSTRIALS', 'Industrials'], ['COMMUNICATIONS', 'Communications'], ['UTILITIES', 'Utilities'],
+      ['REAL_ESTATE', 'Real estate']
+    ];
+    const activeSymbols = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'AVGO', 'ORCL', 'CRM', 'ADBE', 'NOW', 'IBM'];
+    App.state.universe = {
+      lane: 'OBSERVED',
+      active: { sectorKey: 'TECH', label: 'Technology', symbols: activeSymbols },
+      sectors: defs.map((d, i) => ({ key: d[0], label: d[1], symbols: activeSymbols.slice(0, 5 + (i % 5)) }))
+    };
+    App.state.discoverForm = Object.assign({}, App.state.discoverForm || {}, {
+      source: 'single', goal: 'DIRECTIONAL', symbol: 'AAPL', horizon: 'month', thesis: 'bullish'
+    });
+    window.location.hash = '#/trade/discover';
+    await App.render();
+  });
+  await page.waitForSelector('#idea-market-card #universe-sector .sector-chip');
+  await page.waitForTimeout(150);
+  const geometry = await page.evaluate(() => {
+    const card = document.getElementById('idea-market-card').getBoundingClientRect();
+    const context = document.getElementById('ideas-symbol-context').getBoundingClientRect();
+    const input = document.getElementById('rec-symbol').getBoundingClientRect();
+    const sector = document.getElementById('universe-sector');
+    const sectorBox = sector.getBoundingClientRect();
+    const rail = sector.querySelector('.sector-rail');
+    return {
+      page: [document.documentElement.scrollWidth, document.documentElement.clientWidth],
+      card: [card.left, card.right], context: [context.left, context.right], inputWidth: input.width,
+      sector: [sectorBox.left, sectorBox.right], sectorOverflow: rail.scrollWidth > rail.clientWidth + 2,
+      rightArrow: getComputedStyle(sector.querySelector('.rail-arrow-right')).display,
+      tapeVisible: !document.getElementById('tape').classList.contains('tape-offroute')
+    };
+  });
+  assert.equal(geometry.page[0], geometry.page[1], 'no document-level spill at 2048px');
+  assert.ok(geometry.context[0] >= geometry.card[0] - 1 && geometry.context[1] <= geometry.card[1] + 1,
+    'symbol context stays inside the card: ' + JSON.stringify(geometry));
+  assert.ok(geometry.sector[0] >= geometry.card[0] - 1 && geometry.sector[1] <= geometry.card[1] + 1,
+    'full sector catalog stays inside the card');
+  assert.ok(geometry.inputWidth <= 430, 'ticker input uses a purpose-sized edit control, not the entire card');
+  assert.ok(geometry.sectorOverflow && geometry.rightArrow !== 'none', 'overflow is navigable inside the rail');
+  assert.equal(geometry.tapeVisible, true, 'Trade retains the global market and sector context');
+
+  await page.evaluate(async () => {
+    App.state.universe = window.__wideTestUniverse;
+    App.state.discoverForm = window.__wideTestIdeas;
+    delete window.__wideTestUniverse;
+    delete window.__wideTestIdeas;
+    await App.render();
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
 });
 
 test('large Research markets progressively load every sparkline in governed batches', async () => {

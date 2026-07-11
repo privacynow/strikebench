@@ -125,10 +125,12 @@
       root.setAttribute('data-route', route);
       prefetchForRoute(route, params); // idle-time warm-up of the likely next step (server-governed)
       if (window.Workspace) Workspace.save(); // navigation is a save point (dirty-checked, debounced push)
-      // The ticker is CONTEXT, not chrome: it accompanies market-facing screens only
+      // The ticker is MARKET CONTEXT, not decoration. Research, trading, and portfolio work
+      // all depend on the current universe; hiding the only global sector selector on Trade
+      // inverted the workflow and made sector state appear to vanish between tabs.
       var tape = document.getElementById('tape');
       if (tape) {
-        var showTape = route === 'home' || route === 'research'
+        var showTape = route === 'home' || route === 'research' || route === 'trade' || route === 'portfolio'
           || (route === 'status' && App.state.world && App.state.world !== 'observed');
         tape.classList.toggle('tape-offroute', !showTape);
         var strip = document.getElementById('tape-strip');

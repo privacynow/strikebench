@@ -576,21 +576,51 @@ public final class ApiServer {
                 ctx.json(Map.of("ok", true));
             });
             c.routes.delete("/api/sim/market/{id}", ctx -> {
-                boolean wasActive = ctx.pathParam("id").equals(activeWorld(ctx));
-                simSessions.finish(ctx.pathParam("id"), ownerId(ctx));
+                String id = ctx.pathParam("id");
+                String owner = ownerId(ctx);
+                boolean wasActive = id.equals(activeWorld(ctx));
+                simSessions.finish(id, owner);
                 // Finishing the ACTIVE world IS a world transition: flip the setting, drop any
                 // synthetic dataset, and PUBLISH it — every tab (including the caller's own SSE)
                 // reconciles through the same event as an explicit return-to-real (review P0 #2).
                 if (wasActive) {
                     String baseline = cfg.fixturesOnly() ? "demo" : "observed";
-                    db.exec("UPDATE settings SET v=? WHERE k=?", baseline, "active_world:" + ownerId(ctx));
-                    if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(datasets.activeId(ownerId(ctx)))) {
-                        datasets.setActive(io.liftandshift.strikebench.db.DatasetService.OBSERVED, ownerId(ctx));
-                    }
-                    events.publish("world.selected", Map.of("world", baseline,
-                            "user", ownerId(ctx) == null ? "local" : ownerId(ctx)));
+                    Object bootstrap = universeViewFor(worldParam(baseline), owner);
+                    boolean datasetReset = !io.liftandshift.strikebench.db.DatasetService.OBSERVED
+                            .equals(datasets.activeId(owner));
+                    String now = clock.instant().toString();
+                    db.tx(conn -> {
+                        Db.execOn(conn, "INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
+                                        + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
+                                "active_world:" + owner, baseline, now);
+                        if (datasetReset) {
+                            String datasetOwner = owner == null || owner.isBlank() ? "local" : owner;
+                            Db.execOn(conn, "INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
+                                            + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
+                                    "active_dataset:" + datasetOwner,
+                                    io.liftandshift.strikebench.db.DatasetService.OBSERVED, now);
+                        }
+                        return null;
+                    });
+                    if (datasetReset) datasets.invalidateActiveCache();
+                    market.invalidateAll();
+                    long revision = worldRevision.incrementAndGet();
+                    String eventOwner = owner == null ? "local" : owner;
+                    if (datasetReset) events.publish("dataset.selected", Map.of(
+                            "active", "observed", "user", eventOwner));
+                    Map<String, Object> event = new LinkedHashMap<>();
+                    event.put("world", baseline);
+                    event.put("user", eventOwner);
+                    event.put("revision", revision);
+                    event.put("epoch", startedAt);
+                    event.put("universe", bootstrap);
+                    events.publish("world.selected", event);
+                    ctx.json(Map.of("ok", true, "worldReset", true, "world", baseline,
+                            "datasetReset", datasetReset, "revision", revision,
+                            "epoch", startedAt, "universe", bootstrap));
+                    return;
                 }
-                ctx.json(Map.of("ok", true, "worldReset", wasActive));
+                ctx.json(Map.of("ok", true, "worldReset", false));
             });
             c.routes.get("/api/sim/market/{id}/report", this::simMarketReport);
 
