@@ -69,9 +69,10 @@ class AlphaVantageProviderTest {
         assertThat(first.date()).isEqualTo(LocalDate.of(2026, 7, 1)); // ascending despite newest-first payload
         assertThat(second.date()).isEqualTo(LocalDate.of(2026, 7, 2));
 
-        assertThat(second.open()).isEqualByComparingTo(new BigDecimal("253.2"));
-        assertThat(second.high()).isEqualByComparingTo(new BigDecimal("256.4"));
-        assertThat(second.low()).isEqualByComparingTo(new BigDecimal("252.8"));
+        BigDecimal factor = new BigDecimal("255.3").divide(new BigDecimal("255.0"), java.math.MathContext.DECIMAL64);
+        assertThat(second.open()).isEqualByComparingTo(new BigDecimal("253.2").multiply(factor, java.math.MathContext.DECIMAL64));
+        assertThat(second.high()).isEqualByComparingTo(new BigDecimal("256.4").multiply(factor, java.math.MathContext.DECIMAL64));
+        assertThat(second.low()).isEqualByComparingTo(new BigDecimal("252.8").multiply(factor, java.math.MathContext.DECIMAL64));
         assertThat(second.close()).isEqualByComparingTo(new BigDecimal("255.3")); // adjusted close, not "4. close"
         assertThat(second.volume()).isEqualTo(40123456L);
         assertThat(second.adjusted()).isTrue();
@@ -92,7 +93,7 @@ class AlphaVantageProviderTest {
                 .startsWith("/query?")
                 .contains("function=TIME_SERIES_DAILY_ADJUSTED")
                 .contains("symbol=AAPL") // uppercased
-                .contains("outputsize=full")
+                .contains("outputsize=compact")
                 .contains("apikey=test-key-123");
     }
 

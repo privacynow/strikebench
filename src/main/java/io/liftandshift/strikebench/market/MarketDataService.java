@@ -332,6 +332,40 @@ public final class MarketDataService {
         return CandleSeries.EMPTY;
     }
 
+    /** Configured observed candle-source keys, for the Data Center's explicit acquisition planner. */
+    public List<String> candleSourceNames() {
+        return providersFor(Domain.CANDLES).stream().map(MarketDataProvider::name).distinct().toList();
+    }
+
+    /**
+     * One named observed provider only. Acquisition jobs use this instead of silently falling
+     * through to a different source whose rights, adjustment basis, and request budget differ.
+     */
+    public CandleSeries candleSeriesFromProvider(String source, String symbol, LocalDate from, LocalDate to) {
+        String wanted = source == null ? "" : source.trim().toLowerCase(Locale.ROOT);
+        MarketDataProvider provider = providersFor(Domain.CANDLES).stream()
+                .filter(p -> p.name().equalsIgnoreCase(wanted)).findFirst()
+                .orElseThrow(() -> new IllegalStateException("Candle source '" + wanted + "' is not configured"));
+        try {
+            List<Candle> candles = provider.candles(norm(symbol), from, to);
+            if (candles == null || candles.isEmpty()) {
+                recordEmpty(provider.name(), Domain.CANDLES);
+                return CandleSeries.EMPTY;
+            }
+            Freshness freshness = FIXTURE.equals(provider.name()) ? Freshness.FIXTURE : Freshness.EOD;
+            CandleSeries series = new CandleSeries(candles, provider.name(), freshness);
+            if (!fixtureOnlyChain && !observedEvidence(series.evidence())) {
+                recordEmpty(provider.name(), Domain.CANDLES);
+                return CandleSeries.EMPTY;
+            }
+            recordOk(provider.name(), Domain.CANDLES);
+            return series;
+        } catch (RuntimeException e) {
+            recordError(provider.name(), Domain.CANDLES, e);
+            throw e;
+        }
+    }
+
     private static final String FIXTURE = "fixture";
 
     /**

@@ -36,13 +36,13 @@ public final class StoredCandleStore implements CandleStore {
         // even as a weakest-link fallback. Scenario datasets intentionally contain modeled rows.
         String provenanceClause = synthetic ? " " : " AND observed=1 ";
         List<Row> rows = db.query(
-                "SELECT DISTINCT ON (d) d::text d, open, high, low, close, volume, source, observed "
+                "SELECT DISTINCT ON (d) d::text d, open, high, low, close, volume, source, observed,adjusted "
               + "FROM underlying_bar WHERE symbol=? AND dataset_id=? AND d BETWEEN ? AND ? "
               + provenanceClause
-              + "ORDER BY d, observed DESC, source",
+              + "ORDER BY d, observed DESC, quality_rank DESC, created_at DESC, source",
                 r -> new Row(LocalDate.parse(r.str("d")),
                         r.bd("open"), r.bd("high"), r.bd("low"), r.bd("close"),
-                        r.lng("volume"), r.lng("observed") == 1),
+                        r.lng("volume"), r.lng("observed") == 1, r.lng("adjusted") == 1),
                 sym, dataset, from, to);
         if (rows.size() < 2) return Optional.empty(); // not enough to be useful; fall through to providers
 
@@ -55,7 +55,7 @@ public final class StoredCandleStore implements CandleStore {
                     r.open == null ? r.close : r.open,
                     r.high == null ? r.close : r.high,
                     r.low == null ? r.close : r.low,
-                    r.close, r.volume, false));
+                    r.close, r.volume, r.adjusted));
         }
         if (candles.size() < 2) return Optional.empty();
 
@@ -83,5 +83,6 @@ public final class StoredCandleStore implements CandleStore {
     }
 
     private record Row(LocalDate d, java.math.BigDecimal open, java.math.BigDecimal high,
-                       java.math.BigDecimal low, java.math.BigDecimal close, long volume, boolean observed) {}
+                       java.math.BigDecimal low, java.math.BigDecimal close, long volume,
+                       boolean observed, boolean adjusted) {}
 }

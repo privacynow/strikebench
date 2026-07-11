@@ -137,12 +137,26 @@ public final class AppConfig {
     public String polygonBaseUrl() { return get("POLYGON_BASE_URL", "https://api.polygon.io"); }
     public String alphaVantageBaseUrl() { return get("ALPHAVANTAGE_BASE_URL", "https://www.alphavantage.co"); }
 
+    /** Alpha Vantage's free daily endpoint is compact (latest ~100 rows); full history requires an entitled plan. */
+    public boolean alphaVantageFullHistoryEnabled() { return getBool("ALPHAVANTAGE_FULL_HISTORY_ENABLED", false); }
+    /** Local daily safety budget; Alpha Vantage currently documents 25 requests/day for free keys. */
+    public int alphaVantageDailyRequestLimit() { return getInt("ALPHAVANTAGE_DAILY_REQUEST_LIMIT", 25); }
+    /** Polygon/Massive plans vary. Zero means do not invent a cap; the user's plan remains authoritative. */
+    public int polygonDailyRequestLimit() { return getInt("POLYGON_DAILY_REQUEST_LIMIT", 0); }
+
     // ---- Yahoo Finance keyless equity candles (PERSONAL / LOCAL-CLONE ONLY) ----
     // Yahoo's chart API is a public JSON endpoint, but its terms restrict automated/commercial reuse.
     // OFF by default so strikebench.com never enables it implicitly; a self-hosting user opts in and
     // owns the source terms. Covers EQUITY/ETF/index OHLCV only — NOT options.
     public boolean yahooEnabled() { return getBool("YAHOO_ENABLED", false); }
+    /** Automated Yahoo access is permission-gated separately from the legacy enable switch. */
+    public boolean yahooAutomationPermissionConfirmed() {
+        return getBool("YAHOO_AUTOMATION_PERMISSION_CONFIRMED", false);
+    }
+    public int yahooDailyRequestLimit() { return getInt("YAHOO_DAILY_REQUEST_LIMIT", 100); }
     public String yahooBaseUrl() { return get("YAHOO_BASE_URL", "https://query1.finance.yahoo.com"); }
+    /** Stooq currently serves an anti-bot interstitial to this client; keep it opt-in, never a noisy default. */
+    public boolean stooqEnabled() { return getBool("STOOQ_ENABLED", false); }
     /** Keyless per-symbol news headlines via the Google News RSS search feed. Blank disables it. */
     public String newsRssBaseUrl() { return get("NEWS_RSS_BASE_URL", "https://news.google.com/rss/search"); }
 

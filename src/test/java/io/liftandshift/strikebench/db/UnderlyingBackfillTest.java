@@ -61,8 +61,10 @@ class UnderlyingBackfillTest {
         long after1 = rows("AAPL");
         var b = bf.backfill("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-06-30"));
         long after2 = rows("AAPL");
-        assertThat(after2).isEqualTo(after1); // upsert on (symbol, d, source): no duplicate rows
-        assertThat(b.rows()).isEqualTo(a.rows());
+        assertThat(after2).isEqualTo(after1); // no duplicate rows
+        assertThat(b.rows()).isZero(); // durable coverage planner makes no second provider request
+        assertThat(b.complete()).isTrue();
+        assertThat(b.note()).contains("no provider request");
         assertThat(db.query("SELECT count(*) c FROM underlying_bar WHERE observed=1", r -> r.lng("c")).getFirst())
                 .isEqualTo(after2);
     }

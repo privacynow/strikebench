@@ -145,6 +145,7 @@ public final class ApiServer {
         List<RatesProvider> ratesProviders = new ArrayList<>();
 
         SecretsStore secretsStore = new SecretsStore(db, clock);
+        var providerBudget = new io.liftandshift.strikebench.db.ProviderRequestBudget(db, clock);
         ETradeProvider etrade = new ETradeProvider(cfg, secretsStore, clock);
         final CboeProvider[] cboeRef = new CboeProvider[1]; // captured so the Data Center can show throttle state
         final io.liftandshift.strikebench.market.providers.YahooFinanceProvider[] yahooRef =
@@ -156,15 +157,15 @@ public final class ApiServer {
             if (etrade.configured()) providers.add(etrade);
             cboeRef[0] = new CboeProvider(cfg);
             providers.add(cboeRef[0]);
-            if (!cfg.alphaVantageApiKey().isBlank()) providers.add(new AlphaVantageProvider(cfg));
-            if (!cfg.polygonApiKey().isBlank()) providers.add(new PolygonProvider(cfg));
+            if (!cfg.alphaVantageApiKey().isBlank()) providers.add(new AlphaVantageProvider(cfg, providerBudget));
+            if (!cfg.polygonApiKey().isBlank()) providers.add(new PolygonProvider(cfg, providerBudget));
             // Yahoo keyless equity candles — PERSONAL/LOCAL-CLONE opt-in only (see AppConfig.yahooEnabled).
             // Ahead of Stooq (which is bot-blocked for us) so a self-hoster gets real underlying history.
-            if (cfg.yahooEnabled()) {
-                yahooRef[0] = new io.liftandshift.strikebench.market.providers.YahooFinanceProvider(cfg);
+            if (cfg.yahooEnabled() && cfg.yahooAutomationPermissionConfirmed()) {
+                yahooRef[0] = new io.liftandshift.strikebench.market.providers.YahooFinanceProvider(cfg, providerBudget);
                 providers.add(yahooRef[0]);
             }
-            providers.add(new StooqProvider(cfg));
+            if (cfg.stooqEnabled()) providers.add(new StooqProvider(cfg));
             if (!cfg.newsRssBaseUrl().isBlank()) newsProviders.add(new NewsRssProvider(cfg)); // keyless headlines
             newsProviders.add(new EdgarProvider(cfg));                                          // SEC filings
             if (!cfg.fredApiKey().isBlank()) ratesProviders.add(new FredProvider(cfg));
@@ -198,7 +199,7 @@ public final class ApiServer {
             // Owned option history FIRST (snapshots + licensed CSV ingest) — the "own the past" moat
             // now upgrades the single backtester too, then Polygon if keyed.
             historical.add(new io.liftandshift.strikebench.db.StoredHistoricalOptionsProvider(db));
-            if (!cfg.polygonApiKey().isBlank()) historical.add(new PolygonProvider(cfg));
+            if (!cfg.polygonApiKey().isBlank()) historical.add(new PolygonProvider(cfg, providerBudget));
         }
         Backtester backtester = new Backtester(market, historical, cfg, db, clock);
         io.liftandshift.strikebench.market.UniverseService universe = new io.liftandshift.strikebench.market.UniverseService(db, cfg, clock);

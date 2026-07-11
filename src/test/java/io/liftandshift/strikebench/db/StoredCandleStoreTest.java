@@ -67,6 +67,23 @@ class StoredCandleStoreTest {
     }
 
     @Test
+    void higherQualitySourceWinsPerDateAndAdjustmentBasisSurvives() {
+        db = TestDb.fresh();
+        for (String d : List.of("2026-04-01", "2026-04-02")) {
+            db.exec("INSERT INTO underlying_bar(symbol,d,open,high,low,close,source,observed,adjusted,quality_rank) "
+                            + "VALUES ('AAPL',?,90,110,80,100,'low-source',1,0,40)", LocalDate.parse(d));
+            db.exec("INSERT INTO underlying_bar(symbol,d,open,high,low,close,source,observed,adjusted,quality_rank) "
+                            + "VALUES ('AAPL',?,180,220,160,200,'official-source',1,1,90)", LocalDate.parse(d));
+        }
+        var series = new StoredCandleStore(db).candles("AAPL", LocalDate.parse("2026-04-01"),
+                LocalDate.parse("2026-04-02"), DatasetService.OBSERVED).orElseThrow();
+        assertThat(series.candles()).allSatisfy(c -> {
+            assertThat(c.close()).isEqualByComparingTo("200");
+            assertThat(c.adjusted()).isTrue();
+        });
+    }
+
+    @Test
     void partialCoverageFallsThroughToProviders() {
         db = TestDb.fresh();
         // Two stray rows must NOT satisfy a month-long request (that silenced the provider chain

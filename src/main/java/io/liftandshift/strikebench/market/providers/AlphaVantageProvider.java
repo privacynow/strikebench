@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.util.Json;
 
 import java.math.BigDecimal;
+import java.math.MathContext;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
@@ -36,11 +37,21 @@ public final class AlphaVantageProvider implements MarketDataProvider {
     private final Http http;
     private final String baseUrl;
     private final String apiKey;
+    private final boolean fullHistory;
+    private final io.liftandshift.strikebench.db.ProviderRequestBudget budget;
+    private final int dailyLimit;
 
     public AlphaVantageProvider(AppConfig cfg) {
+        this(cfg, null);
+    }
+
+    public AlphaVantageProvider(AppConfig cfg, io.liftandshift.strikebench.db.ProviderRequestBudget budget) {
         this.http = new Http(cfg.httpTimeoutMs());
         this.baseUrl = Http.normalizeBase(cfg.alphaVantageBaseUrl());
         this.apiKey = cfg.alphaVantageApiKey();
+        this.fullHistory = cfg.alphaVantageFullHistoryEnabled();
+        this.budget = budget;
+        this.dailyLimit = cfg.alphaVantageDailyRequestLimit();
     }
 
     @Override
@@ -58,9 +69,10 @@ public final class AlphaVantageProvider implements MarketDataProvider {
         String sym = symbol.trim().toUpperCase(Locale.ROOT);
         String url = baseUrl + "/query?function=TIME_SERIES_DAILY_ADJUSTED"
                 + "&symbol=" + URLEncoder.encode(sym, StandardCharsets.UTF_8)
-                + "&outputsize=full"
+                + "&outputsize=" + (fullHistory ? "full" : "compact")
                 + "&apikey=" + URLEncoder.encode(apiKey, StandardCharsets.UTF_8);
 
+        if (budget != null) budget.acquire(name(), dailyLimit);
         JsonNode root = Json.parse(http.get(url));
         JsonNode series = root.get(SERIES_KEY);
         if (series == null || !series.isObject()) {
@@ -78,14 +90,18 @@ public final class AlphaVantageProvider implements MarketDataProvider {
             LocalDate date = LocalDate.parse(day.getKey());
             if (date.isBefore(from) || date.isAfter(to)) continue;
             JsonNode bar = day.getValue();
-            out.add(new Candle(
-                    date,
-                    money(bar, "1. open"),
-                    money(bar, "2. high"),
-                    money(bar, "3. low"),
-                    money(bar, "5. adjusted close"), // adjusted close as close
-                    bar.path("6. volume").asLong(0L),
-                    true));
+            BigDecimal rawClose = money(bar, "4. close");
+            BigDecimal adjustedClose = money(bar, "5. adjusted close");
+            if (rawClose.signum() <= 0 || adjustedClose.signum() <= 0) continue;
+            // DAILY_ADJUSTED reports raw O/H/L and adjusted close. Scale the whole OHLC tuple by
+            // the same corporate-action factor; mixing raw highs with an adjusted close creates
+            // impossible candles and corrupts volatility/range studies.
+            BigDecimal factor = adjustedClose.divide(rawClose, MathContext.DECIMAL64);
+            out.add(new Candle(date,
+                    money(bar, "1. open").multiply(factor, MathContext.DECIMAL64),
+                    money(bar, "2. high").multiply(factor, MathContext.DECIMAL64),
+                    money(bar, "3. low").multiply(factor, MathContext.DECIMAL64),
+                    adjustedClose, bar.path("6. volume").asLong(0L), true));
         }
         out.sort(Comparator.comparing(Candle::date));
         return List.copyOf(out);

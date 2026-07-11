@@ -36,6 +36,8 @@ public final class YahooFinanceProvider implements MarketDataProvider {
 
     private final Http http;
     private final String baseUrl;
+    private final io.liftandshift.strikebench.db.ProviderRequestBudget budget;
+    private final int dailyLimit;
     // The backfill job walks whole universes through this endpoint — same politeness discipline
     // as Cboe: capped concurrency, spaced starts, and a provider-wide breaker on rate limits
     // (Yahoo answers 429 or its legacy 999). While cooling, candles() returns empty and the
@@ -44,8 +46,14 @@ public final class YahooFinanceProvider implements MarketDataProvider {
             new io.liftandshift.strikebench.market.ProviderPoliteness("yahoo", 2, 250, 10 * 60_000L);
 
     public YahooFinanceProvider(AppConfig cfg) {
+        this(cfg, null);
+    }
+
+    public YahooFinanceProvider(AppConfig cfg, io.liftandshift.strikebench.db.ProviderRequestBudget budget) {
         this.http = new Http(cfg.httpTimeoutMs());
         this.baseUrl = Http.normalizeBase(cfg.yahooBaseUrl());
+        this.budget = budget;
+        this.dailyLimit = cfg.yahooDailyRequestLimit();
     }
 
     public void setEvents(io.liftandshift.strikebench.util.EventBus events) { politeness.setEvents(events); }
@@ -65,8 +73,11 @@ public final class YahooFinanceProvider implements MarketDataProvider {
                 + "?period1=" + p1 + "&period2=" + p2 + "&interval=1d&events=div%2Csplit";
         // A browser-like User-Agent avoids the occasional bot interstitial; still a plain GET.
         // The politeness gate spaces/limits requests and short-circuits during a rate-limit cooldown.
-        String body = politeness.call(() -> http.get(url, Map.of("User-Agent",
-                "Mozilla/5.0 (compatible; StrikeBench/1.0; +https://strikebench.com)")), null);
+        String body = politeness.call(() -> {
+            if (budget != null) budget.acquire(name(), dailyLimit);
+            return http.get(url, Map.of("User-Agent",
+                    "Mozilla/5.0 (compatible; StrikeBench/1.0; +https://strikebench.com)"));
+        }, null);
         if (body == null || body.isBlank()) return List.of();
 
         JsonNode root = Json.parse(body);
