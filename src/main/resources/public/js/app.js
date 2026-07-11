@@ -397,7 +397,7 @@
     LANE_KEYS.forEach(function (k) { if (box[k] !== undefined) App.state[k] = box[k]; });
   }
 
-  App.transitionWorld = function (worldId) {
+  App.transitionWorld = function (worldId, bootstrap) {
     var target = worldId || 'observed';
     // Collapse CONCURRENT transitions to the same target into one reconciliation: the SSE
     // hint and the awaited PUT often land within milliseconds. Skipping was the bug;
@@ -412,12 +412,16 @@
       try {
         // HYDRATE FIRST (no state mutation): the server already knows the caller's active
         // world, so this GET answers for the TARGET lane.
-        var u;
-        try {
-          u = await API.getFresh('/api/universe');
-        } catch (e1) {
-          await new Promise(function (res) { setTimeout(res, 1500); });
-          u = await API.getFresh('/api/universe'); // one quiet retry, then loud
+        // TRANSACTIONAL HANDOFF (review IC-1): when the server's PUT already returned the
+        // target bootstrap, commit from THAT payload — no second fetch to fail separately.
+        var u = bootstrap && bootstrap.active ? bootstrap : null;
+        if (!u) {
+          try {
+            u = await API.getFresh('/api/universe');
+          } catch (e1) {
+            await new Promise(function (res) { setTimeout(res, 1500); });
+            u = await API.getFresh('/api/universe'); // one quiet retry, then loud
+          }
         }
         // COMMIT PHASE — synchronous, no awaits between these mutations:
         var from = App.state.world || 'observed';
@@ -488,7 +492,8 @@
         UI.toast('Back on the real market — your scenario dataset was switched off too');
       }
       // Transition failures reject AND paint the #transition-error banner — no alert on top.
-      await App.transitionWorld(worldId).catch(function () { /* visible in the banner */ });
+      // The PUT's response carries the target bootstrap: server and client commit together.
+      await App.transitionWorld(worldId, res && res.universe).catch(function () { /* visible in the banner */ });
     } catch (e) { alert(e.message); }
   };
 
@@ -548,11 +553,18 @@
     risk.addEventListener('change', function () {
       try { window.localStorage.setItem('strikebench.riskMode', risk.value); } catch (e) { /* ignore */ }
       // A budget change INVALIDATES budget-derived results (review #6): the header must never
-      // say Standard while the page still shows Cautious sizing.
+      // say Standard while the page still shows Cautious sizing. That includes results parked
+      // in OTHER lanes' stashes (review IC-1) — a lane switch must not resurrect old sizing.
       App.state.recommendResults = null;
       App.state.decisionCache = null;
       App.state.decisionInflight = null;
       App.state.scoutResults = null;
+      var stash = App.state._laneStash || {};
+      Object.keys(stash).forEach(function (lane) {
+        ['recommendResults', 'decisionCache', 'decisionInflight', 'scoutResults'].forEach(function (k) {
+          delete stash[lane][k];
+        });
+      });
       App.render();
     });
   }

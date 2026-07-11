@@ -127,10 +127,13 @@
     })();
 
     // ---- Two doors, by experience ----
+    // The beginner door enters the GUIDED first workflow (review IC-3): step 1 of the
+    // first-week journey is researching a stock — not an unexplained empty form.
     var LEVEL_CARDS = [
       { level: 'beginner', title: 'Teach me', ic: 'sprout',
         blurb: 'Question-driven flows, plain language \u2014 every idea explains itself.',
-        cta: 'Start as a beginner', go: '#/recommend/manual' },
+        cta: 'Start as a beginner', go: '#/research',
+        toast: 'Step 1: pick a stock that interests you \u2014 the Next-up list on Home walks the rest.' },
       { level: 'expert', title: 'Give me the terminal', ic: 'bolt',
         blurb: 'Dense tables, greeks, per-leg impact, inline filters.',
         cta: 'Open the terminal', go: '#/research/AAPL' }
@@ -145,6 +148,7 @@
             class: 'btn', 'data-welcome-level': c.level, onclick: function () {
               Learn.setLevel(c.level);
               try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
+              if (c.toast && UI.toast) UI.toast(c.toast);
               App.navigate(c.go);
             }
           }, c.cta));
@@ -402,7 +406,7 @@
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'research',
           onclick: function () { App.navigate('#/research/' + sym); } }, 'Resume: ' + sym + ' analysis →'));
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'ideas',
-          onclick: function () { App.navigate('#/trade/discover'); } }, 'Resume: strategies for ' + sym + ' →'));
+          onclick: function () { App.state.ideasPrefill = { symbol: sym, autorun: true }; App.navigate('#/trade/discover'); } }, 'Resume: strategies for ' + sym + ' →'));
       }
       if (chips.length) {
         card.appendChild(el('div', { class: 'chip-row', id: 'continue-row' }, chips));
@@ -657,7 +661,7 @@
         r.optionable ? el('button', {
           class: 'btn btn-sm', onclick: function () {
             App.state.lastRecommendSymbol = symbol;
-            App.state.ideasPrefill = { symbol: symbol }; // lands in the Discover form even over a saved symbol
+            App.state.ideasPrefill = { symbol: symbol, autorun: true }; // context-complete handoffs RUN (contract #4)
             App.navigate('#/recommend/manual');
           }
         }, 'Find strategies') : null),
@@ -1091,6 +1095,52 @@
    * Expands from sector-explorer tiles and sits behind a quiet expandable in Trade —
    * one chart-and-news language everywhere.
    */
+  /**
+   * ONE SYMBOL CONTEXT (interaction contract / review IC-4). symbolStatus attaches a live
+   * quote/freshness/lane chip to any EDITABLE symbol input: same look, same data, every
+   * surface. Debounced, supersede-guarded; failures show honestly as 'no live quote'.
+   */
+  function symbolStatus(input) {
+    var chipEl = el('span', { class: 'sym-status muted', 'aria-live': 'polite' });
+    var seq = 0, timer = null;
+    async function fill() {
+      var v = (input.value || '').trim().toUpperCase();
+      var mySeq = ++seq;
+      if (!v) { chipEl.textContent = ''; return; }
+      try {
+        var q = ((await API.get('/api/quotes?symbols=' + v)).quotes || [])[0];
+        if (mySeq !== seq || !chipEl.isConnected) return;
+        chipEl.innerHTML = '';
+        if (!q) { chipEl.textContent = 'no live quote'; return; }
+        chipEl.appendChild(el('b', {}, fmtNum(q.last)));
+        chipEl.appendChild(UI.delta(q.last, q.prevClose));
+        if (q.freshness) chipEl.appendChild(badge(q.freshness));
+      } catch (e) { if (mySeq === seq && chipEl.isConnected) chipEl.textContent = 'no live quote'; }
+    }
+    input.addEventListener('input', function () {
+      clearTimeout(timer);
+      timer = setTimeout(fill, 350);
+    });
+    fill();
+    return chipEl;
+  }
+
+  /**
+   * LOCKED symbol context (interaction contract #5): a placed/reviewed package shows its
+   * symbol but cannot silently mutate it — changing means going back through the workflow.
+   */
+  function lockedSymbolBar(symbol, opts) {
+    opts = opts || {};
+    return el('div', { class: 'chip-row locked-symbol', id: opts.id || 'locked-symbol' },
+      el('span', { class: 'chip' }, el('span', { class: 'chip-label' }, 'Symbol'),
+        el('b', {}, symbol), el('span', { class: 'badge badge-dim', title: 'This package is priced on '
+          + symbol + ' — contracts cannot silently change under a review' }, 'LOCKED')),
+      el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/research/' + symbol); } }, 'Research'),
+      opts.noChange ? null : el('button', { class: 'btn btn-sm btn-secondary',
+        title: 'Start a fresh idea on another stock \u2014 through the normal workflow',
+        onclick: function () { App.state.ideasPrefill = {}; App.navigate('#/trade/discover'); } }, 'Change symbol'));
+  }
+
   function symbolPanel(symbol, opts) {
     opts = opts || {};
     symbol = symbol.toUpperCase();
@@ -1100,13 +1150,12 @@
     (async function fillQuote() {
       try {
         var q = ((await API.get('/api/quotes?symbols=' + symbol)).quotes || [])[0];
-        if (panel._gateStrategies) panel._gateStrategies(q || null);
         if (!q) return;
         qrow.appendChild(el('span', { class: 'sp-px' }, fmtNum(q.last)));
         qrow.appendChild(UI.delta(q.last, q.prevClose));
         if (q.freshness) qrow.appendChild(badge(q.freshness));
         if (q.description) qrow.appendChild(el('span', { class: 'muted sp-nm' }, q.description));
-      } catch (e) { if (panel._gateStrategies) panel._gateStrategies(null); /* chart + news still render */ }
+      } catch (e) { /* chart + news still render */ }
     })();
     panel.appendChild(UI.rangeChart({ initial: opts.range || '6m', fetch: historyFetch(symbol) }));
     panel.appendChild(comingUp(symbol, true));
@@ -1130,30 +1179,10 @@
       }
     })();
     if (!opts.noActions) {
-      // ONE consistent vocabulary product-wide (review): 'Open full analysis' goes deep,
-      // 'Find strategies' hands off to screening. Strategy handoff is GATED on a live,
-      // optionable quote — no dead-end construction without a price (review gap #8).
-      var stratBtn = el('button', {
-        class: 'btn btn-sm btn-secondary', id: 'sp-strategies', disabled: '',
-        title: 'Checking for a live quote\u2026',
-        onclick: function () {
-          App.state.ideasPrefill = { symbol: symbol };
-          App.navigate('#/recommend/manual');
-        }
-      }, 'Find strategies');
-      panel._gateStrategies = function (q) {
-        if (q && q.optionable !== false) {
-          stratBtn.removeAttribute('disabled');
-          stratBtn.title = 'Screen option strategies on ' + symbol;
-        } else {
-          stratBtn.setAttribute('disabled', '');
-          stratBtn.title = q ? symbol + ' has no listed options \u2014 strategies need an option chain'
-                             : 'No live quote for ' + symbol + ' right now \u2014 strategy screening needs a price';
-        }
-      };
+      // The panel lives where leaving the screen loses work (a Trade form); its one action
+      // is the deliberate exit to the destination page — never a duplicate of the host form.
       panel.appendChild(el('div', { class: 'btn-row' },
-        el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/' + symbol); } }, 'Open full analysis'),
-        stratBtn));
+        el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/' + symbol); } }, 'Open full analysis')));
     }
     return panel;
   }
@@ -1175,7 +1204,6 @@
     });
     var grid = el('div', { class: 'tile-row', id: 'sector-grid' });
     var head = el('div', { class: 'btn-row', style: 'margin-top:0' });
-    var focus = el('div', { id: 'explorer-focus' });
     // ONE shared range selector for every card's sparkline (never per-card controls) + one
     // plain instruction instead of dozens of repeated buttons (review).
     App.state.explorerRange = App.state.explorerRange || '3m';
@@ -1194,10 +1222,10 @@
         }, r.l);
       }));
     var instruction = el('p', { class: 'muted explorer-hint', id: 'explorer-hint' },
-      'Choose a stock to preview its chart, events, and headlines.');
+      'Choose a stock to open its full analysis \u2014 chart, events, headlines, chains and strategies.');
     var card = el('div', { class: 'card', id: 'sector-explorer' },
-      UI.cardHeader('Explore by sector'), rail, head, instruction, rangeRow, focus, grid,
-      explain('Live quotes per sector. Tap a card for its chart and headlines right here, or point the scout at a whole sector. '
+      UI.cardHeader('Explore by sector'), rail, head, instruction, rangeRow, grid,
+      explain('Live quotes per sector. Tap a card to open the stock, or point the scout at a whole sector. '
         + (u.note ? u.note : '')));
     root.appendChild(card);
 
@@ -1216,10 +1244,9 @@
           if (!t2) return;
           t2.innerHTML = '';
           t2.appendChild(UI.sparkline(row, { height: 36 }));
-          // Evidence badge: where this line actually comes from (never silently 'real')
-          var ev = row.demo ? 'DEMO' : row.freshness === 'SIMULATED' ? 'SIMULATED'
-            : row.freshness === 'FIXTURE' ? 'DEMO' : row.available ? 'OBSERVED' : null;
-          if (ev) t2.appendChild(el('span', { class: 'badge badge-dim spark-ev' }, ev));
+          // Evidence badge: SERVER-computed kind rendered verbatim (review IC-1) — the client
+          // never infers OBSERVED from mere availability.
+          if (row.evidence) t2.appendChild(el('span', { class: 'badge badge-dim spark-ev' }, row.evidence));
         });
       } catch (e) { /* cards stand without sparklines — quotes are the load-bearing data */ }
     }
@@ -1228,8 +1255,6 @@
     async function load() {
       var seq = ++loadSeq;
       head.innerHTML = '';
-      focus.innerHTML = '';
-      focus.removeAttribute('data-symbol');
       grid.innerHTML = '';
       grid.appendChild(UI.spinner('Loading sector quotes…'));
       var sector = u.sectors.find(function (s) { return s.key === selectedKey; }) || u.sectors[0];
@@ -1269,33 +1294,10 @@
         // clickable. Symbols without a live quote say so honestly but still link onward.
         var bySym = {};
         (data.quotes || []).forEach(function (q) { bySym[q.symbol] = q; });
-        // Tap a tile -> the full symbol panel (range-pill chart, events, headlines)
-        // opens in ONE predictable place: the focus slot above the grid. Mid-grid
-        // expansion shoved tiles around and felt random.
-        function toggleExpand(symq, tile) {
-          var was = focus.getAttribute('data-symbol') === symq;
-          focus.innerHTML = '';
-          focus.removeAttribute('data-symbol');
-          grid.querySelectorAll('.sector-tile.open').forEach(function (t) {
-            t.classList.remove('open');
-            t.setAttribute('aria-expanded', 'false');
-          });
-          if (was) return;
-          tile.setAttribute('aria-expanded', 'true');
-          focus.setAttribute('data-symbol', symq);
-          tile.classList.add('open');
-          focus.appendChild(el('div', { class: 'focus-wrap' },
-            el('button', {
-              class: 'focus-close', type: 'button', 'aria-label': 'Close ' + symq + ' details',
-              onclick: function () { toggleExpand(symq, tile); }
-            }, '\u00D7'),
-            symbolPanel(symq)));
-          focus.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
-        // ONE selectable card per symbol (review: 24 repeated buttons were navigational
-        // noise). The whole card is a single keyboard-operable control that opens the rich
-        // preview; the preview owns the two contextual commands. A sparkline replaces the
-        // button clutter — real information where labels used to repeat.
+        // DESTINATION CARDS NAVIGATE (interaction contract #1): a card that says AAPL opens
+        // AAPL's full analysis in ONE action — the old in-place preview repeated a subset of
+        // that page and cost an extra decision. Sector, range, and scroll are preserved so
+        // Back lands exactly where you left.
         sector.symbols.forEach(function (s) {
           var q = bySym[s];
           var last = q ? parseFloat(q.last) : null;
@@ -1303,8 +1305,8 @@
           var pct = q && prev ? (last - prev) / prev * 100 : null;
           var sparkSlot = el('div', { class: 'spark-slot' });
           var tile = el('div', { class: 'tile sector-tile sym-card clickable' + (q ? '' : ' tile-nodata'),
-            'data-sym': s, 'aria-expanded': 'false',
-            title: 'Preview ' + s + ': chart, events and headlines' },
+            'data-sym': s,
+            title: 'Open ' + s + ' \u2014 full analysis' },
             el('div', { class: 't-sym' }, s,
               q && !q.optionable ? el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO OPTIONS') : null,
               q ? null : el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO LIVE DATA')),
@@ -1315,16 +1317,25 @@
             q && q.description ? el('div', { class: 't-nm muted' }, q.description) : null,
             sparkSlot);
           tile.addEventListener('click', function (e) {
-            if (e.target.closest('button, a')) return; // preview action buttons win
-            toggleExpand(s, tile);
+            // The sparkline is a deliberate interaction SUBREGION (hover/keys explore the
+            // chart) — clicking it must not yank the user off the page.
+            if (e.target.closest('.spark')) return;
+            App.state.explorerScroll = window.scrollY; // Back restores the exact spot
+            App.navigate('#/research/' + s);
           });
           tile.addEventListener('keydown', function (e) {
             var spark = sparkSlot.firstChild;
             if (spark && spark.exploreKey && spark.exploreKey(e.key)) { e.preventDefault(); }
           });
-          pressable(tile, 'Preview ' + s);
+          pressable(tile, 'Open ' + s + ' full analysis');
           grid.appendChild(tile);
         });
+        // Return continuity: coming Back from a symbol page lands on the same scroll spot.
+        if (App.state.explorerScroll != null) {
+          var y = App.state.explorerScroll;
+          App.state.explorerScroll = null;
+          requestAnimationFrame(function () { window.scrollTo(0, y); });
+        }
         fillSparklines(sector, seq);
         // LIVE CARDS (review gap): prices follow the market stream in place — a simulated
         // session's ticks repaint the grid without rebuilding it.
@@ -1714,6 +1725,10 @@
     App.state.ideasPrefill = null;
     if (prefill.symbol) { saved.symbol = prefill.symbol; saved.source = 'single'; }
     if (prefill.intent) saved.goal = prefill.intent;
+    // COMPLETED INTENT IS NOT REQUESTED TWICE (interaction contract #4): a 'Find strategies'
+    // click arrives with the symbol; when a goal is already known (handed over, or chosen
+    // before and persisted) the search RUNS. Only a genuinely ambiguous goal asks.
+    var autorun = !!prefill.autorun && !!prefill.symbol;
     // Route seeds keep every old link honest: /manual = one-stock mode, /scout = scan mode
     if (params && params[0] === 'manual') saved.source = 'single';
     if (params && params[0] === 'scout') saved.source = 'scan';
@@ -1899,7 +1914,7 @@
       });
     }
     var symField = el('div', { class: 'field' },
-      el('label', {}, beginner ? 'Which stock?' : 'Symbol'), sym, symChips);
+      el('label', {}, beginner ? 'Which stock?' : 'Symbol'), sym, symbolStatus(sym), symChips);
     // Chart + headlines for the underlying, one tap away — informative, never in the way
     var ctxAnchor = el('div', { id: 'symbol-context' });
     var ctxSym = null;
@@ -1910,7 +1925,7 @@
       ctxAnchor.innerHTML = '';
       if (!v) return;
       ctxAnchor.appendChild(UI.expandable('What\u2019s happening with ' + v + ' \u2014 chart, events & news',
-        function () { return symbolPanel(v, { noActions: true }); }));
+        function () { return symbolPanel(v, {}); }));
     }
     var thesisField = el('div', { class: 'field' }, el('label', {}, 'Your view'), thesis);
     var targetField = el('div', { class: 'field', style: 'display:none' },
@@ -2031,6 +2046,19 @@
         return runSingle();
       }
     }, 'Find ideas');
+    if (autorun) {
+      // Deferred one tick: the form below must be in the DOM before results paint into it.
+      setTimeout(function () {
+        if (!goBtn.isConnected) return; // navigated away before the tick
+        if ((saved.goal || goal) && !scanMode()) {
+          goBtn.click();
+        } else {
+          var chooser = document.getElementById('intent-choices');
+          if (chooser) { chooser.scrollIntoView({ block: 'center' }); }
+          if (UI.toast) UI.toast('Pick a goal \u2014 ideas for ' + (saved.symbol || '') + ' run the moment you do.');
+        }
+      }, 0);
+    }
 
     root.appendChild(el('div', { class: 'card' },
       UI.cardHeader('What are you trying to do?',
@@ -2331,7 +2359,18 @@
     })));
     root.appendChild(ideaBar(stage));
     if (stage === 'discover') await discoverStage(root, params.slice(1));
-    else if (stage === 'shape') await Builder.render(root);
+    else if (stage === 'shape') {
+      await Builder.render(root);
+      // The ETF-replication sizer lost its home when the Lab dissolved (it was only reachable
+      // from a dead route — a silent feature loss). It belongs with CONSTRUCTION: size a
+      // synthetic to a dollar exposure, then hand the legs to the builder above. Collapsed —
+      // genuinely optional detail (interaction contract #3).
+      App.state.labForm = App.state.labForm || {};
+      var rctx = App.state.labForm.ctx = App.state.labForm.ctx || {};
+      root.appendChild(UI.expandable('Replicate an ETF exposure \u2014 synthetic sizing', function () {
+        return replicateCard(Learn.currentLevel(), rctx);
+      }));
+    }
     else if (stage === 'verify') await backtest(root);
     else await ticket(root);
   }
@@ -2803,6 +2842,9 @@
         var p = res.preview, g = res.guardrails;
         body.innerHTML = '';
         body.appendChild(el('h2', { class: 'mt0' }, 'Review before you commit'));
+        // LOCKED CONTEXT (interaction contract #5): the reviewed package's symbol cannot
+        // silently mutate — changing goes back through the workflow.
+        body.appendChild(lockedSymbolBar(t.symbol));
         var vp = verdictPanel(p, Learn.currentLevel() === 'beginner');
         body.appendChild(vp.node);
         if (res.accountFit) {
@@ -3482,7 +3524,10 @@
         el('span', { class: 'spacer' }),
         pnl !== null && pnl !== undefined
           ? el('span', { class: 'px ' + (pnl >= 0 ? 'gain' : 'loss') }, fmtMoney(pnl, { plus: true }))
-          : null),
+          : null,
+        el('button', { class: 'btn btn-sm btn-secondary', style: 'margin-left:8px',
+          title: 'Full analysis for ' + t.symbol + ' \u2014 the trade itself stays exactly as placed',
+          onclick: function () { App.navigate('#/research/' + t.symbol); } }, 'Research')),
       el('div', { class: 'muted' },
         (active ? 'Unrealized (before close fees)' : 'Realized P/L') + ' · opened ' + UI.fmtDate(t.createdAt)
         + (t.closeReason ? ' · ' + t.closeReason : '')),
@@ -4195,7 +4240,7 @@
         ? explain('Every strategy is here — the simpler ones lead each group. Target DTE is how far out each trade’s expiration is: Monthly (30 days) is the classic starting point.')
         : null,
       el('div', { class: 'form-grid' },
-        el('div', { class: 'field' }, el('label', {}, 'Symbol'), sym),
+        el('div', { class: 'field' }, el('label', {}, 'Symbol'), sym, symbolStatus(sym)),
         el('div', { class: 'field' }, el('label', {}, 'Strategy'), strat),
         engine ? el('div', { class: 'field' }, el('label', {}, 'Engine'), engine) : null,
         el('div', { class: 'field' }, el('label', {}, 'Target DTE'), dte, dtePresets),
@@ -5832,20 +5877,6 @@
   }
 
   /** Hero band for the lab — same DNA as the home hero (eyebrow + gradient title + sub). */
-  function labHero(level) {
-    return el('section', { class: 'lab-hero' },
-      el('div', { class: 'lab-hero-text' },
-        el('div', { class: 'eyebrow' }, 'RESEARCH LAB'),
-        el('h1', { class: 'lab-hero-title' }, 'Research before you ', el('span', { class: 'grad' }, 'risk'), '.'),
-        el('p', { class: 'lab-hero-sub' }, level === 'beginner'
-          ? 'Four honest tools: build a diversified portfolio, test whether a signal is real, replicate an exposure for less capital, and keep your notes.'
-          : 'Portfolio construction, signal-significance testing, capital-efficient replication, and a notebook — all on the same evidence the recommendations use.')),
-      el('div', { class: 'lab-hero-tools' },
-        [['grid', 'Portfolio'], ['magnifier', 'Signal test'], ['coins', 'Replicate'], ['pen', 'Notebook']].map(function (t) {
-          return el('span', { class: 'lab-hero-chip' },
-            el('span', { class: 'icon-tile icon-tile-sm' }, icon(t[0])), el('b', {}, t[1]));
-        })));
-  }
 
   /**
    * ONE shared research context the four tools default from: the working stock (feeds the
@@ -5853,37 +5884,6 @@
    * the history window (feeds the signal test). Editing it live-syncs the tool inputs without a
    * re-render, so in-progress results are never wiped.
    */
-  function labContextBar(ctx, level) {
-    var sym = el('input', { type: 'text', id: 'lab-ctx-sym', list: 'universe-symbols',
-      value: ctx.symbol || App.state.lastRecommendSymbol || 'AAPL' });
-    var acct = el('input', { type: 'number', id: 'lab-ctx-acct', min: '0', step: '1000',
-      value: ctx.accountCents ? Math.round(ctx.accountCents / 100) : 25000 });
-    ctx.symbol = (sym.value || '').toUpperCase();
-    ctx.accountCents = Math.round((+acct.value || 0) * 100);
-    sym.addEventListener('input', function () {
-      ctx.symbol = sym.value.trim().toUpperCase();
-      if (ctx.symbol) App.state.lastRecommendSymbol = ctx.symbol;
-      ['lab-hyp-sym', 'lab-rep-sym'].forEach(function (id) { var e = document.getElementById(id); if (e) e.value = ctx.symbol; });
-    });
-    acct.addEventListener('input', function () {
-      ctx.accountCents = Math.round((+acct.value || 0) * 100);
-      var b = document.getElementById('lab-budget'); if (b) b.value = +acct.value || 0;
-    });
-    var fields = [labField('Working stock', sym), labField('Account size ($)', acct)];
-    if (level === 'expert') {
-      var from = el('input', { type: 'date', id: 'lab-ctx-from', value: ctx.from || '2023-01-01' });
-      var to = el('input', { type: 'date', id: 'lab-ctx-to', value: ctx.to || new Date().toISOString().slice(0, 10) });
-      ctx.from = from.value; ctx.to = to.value;
-      from.addEventListener('change', function () { ctx.from = from.value; });
-      to.addEventListener('change', function () { ctx.to = to.value; });
-      fields.push(labField('History from', from), labField('to', to));
-    }
-    return el('div', { class: 'card lab-context' },
-      el('div', { class: 'lab-context-head' },
-        el('span', { class: 'eyebrow' }, 'SHARED RESEARCH CONTEXT'),
-        el('span', { class: 'muted small' }, 'Every tool below starts here.')),
-      el('div', { class: 'form-grid lab-context-grid' }, fields));
-  }
 
   /** A card header with an icon-tile accent, like the recommendation surfaces. */
   function labHeader(iconName, title, right) {
@@ -6525,27 +6525,7 @@
     return wrap;
   }
 
-  async function lab(root) {
-    App.state.labForm = App.state.labForm || {};
-    var level = Learn.currentLevel();
-    var ctx = App.state.labForm.ctx = App.state.labForm.ctx || {};
-    root.appendChild(labHero(level));
-    root.appendChild(labContextBar(ctx, level));
-    var grid = el('div', { class: 'lab-grid' });
-    root.appendChild(grid);
-    grid.appendChild(optimizerCard(level, ctx));   // spans full width on desktop
-    // The event study moved into each stock's Research page (Test your view) — one thesis
-    // workflow, no orphan tool. This alias card points there instead of duplicating it.
-    var evPointer = el('div', { class: 'card lab-card' });
-    evPointer.appendChild(labHeader('magnifier', 'Historical evidence'));
-    evPointer.appendChild(explain('Now part of each stock\u2019s Research page: state your view under \u201cTest your view\u201d and the past evidence runs against it \u2014 same engine, in the flow it belongs to.'));
-    evPointer.appendChild(el('button', { class: 'btn btn-sm', onclick: function () {
-      App.navigate('#/research/' + ((ctx && ctx.symbol) || App.state.lastRecommendSymbol || 'AAPL'));
-    } }, 'Open Research \u2192'));
-    grid.appendChild(evPointer);
-    grid.appendChild(replicateCard(level, ctx));
-    grid.appendChild(await notebookCard());        // spans full width on desktop
-  }
+
 
   /** The Lab's STUDY tools (signal test + notebook), rendered inside Research where studying lives. */
   async function studyToolsSection() {
@@ -6566,7 +6546,6 @@
     trade: trade,
     portfolio: portfolio,
     status: status,
-    decision: decision,
-    lab: lab
+    decision: decision
   };
 })();

@@ -1045,4 +1045,42 @@ class ApiIntegrationTest {
         JsonNode def = Json.parse(get("/api/sparklines").body());
         assertThat(def.get("sparklines").size()).isBetween(1, 16);
     }
+
+    @Test
+    @Order(33)
+    void autoAndManualRecommendationsApplyTheIdenticalDeclaredCapitalCap() throws Exception {
+        // ONE RiskBudgetPolicy (review IC-1): the scout must size under the same declared
+        // risk-capital cap as manual recommendations — it previously skipped the cap path.
+        long cap = 50_000L; // $500 — well under 1% of the default $100k account
+        assertThat(put("/api/account/risk-context",
+                "{\"riskCapitalCents\":" + cap + "}").statusCode()).isEqualTo(200);
+        JsonNode manual = Json.parse(post("/api/recommend",
+                "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"balanced\"}").body());
+        assertThat(manual.get("riskBudgetCents").asLong()).isEqualTo(cap);
+        JsonNode auto = Json.parse(post("/api/recommend/auto",
+                "{\"universe\":[\"AAPL\"],\"riskMode\":\"balanced\"}").body());
+        assertThat(auto.get("riskBudgetCents").asLong()).isEqualTo(cap);
+        for (JsonNode pick : auto.get("picks")) {
+            for (JsonNode hz : pick.get("horizons")) {
+                for (JsonNode c : hz.get("candidates")) {
+                    assertThat(c.get("candidate").get("maxLossCents").asLong())
+                            .as("every scouted candidate sized under the declared capital")
+                            .isLessThanOrEqualTo(cap);
+                }
+            }
+        }
+        assertThat(put("/api/account/risk-context", "{}").statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    @Order(34)
+    void sparklineEvidenceIsExplicitAndWorldSwitchReturnsBootstrap() throws Exception {
+        // Fixture-mode candles are DEMO evidence — never inferred OBSERVED (review IC-1).
+        JsonNode r = Json.parse(get("/api/sparklines?symbols=AAPL&range=1m").body());
+        JsonNode row = r.get("sparklines").get(0);
+        assertThat(row.get("evidence").asText()).isEqualTo("DEMO");
+        // PUT /api/world responds with the target lane's complete universe bootstrap.
+        JsonNode w = Json.parse(put("/api/world", "{\"world\":\"observed\"}").body());
+        assertThat(w.get("universe").get("active").get("symbols").size()).isGreaterThan(0);
+    }
 }

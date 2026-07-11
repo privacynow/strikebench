@@ -43,6 +43,7 @@ import io.liftandshift.strikebench.pricing.PayoffCurve;
 import io.liftandshift.strikebench.recommend.AutoRecommender;
 import io.liftandshift.strikebench.recommend.LegView;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
+import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
 import io.liftandshift.strikebench.recommend.SignalEngine;
 import io.liftandshift.strikebench.strategy.Guardrails;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
@@ -363,28 +364,8 @@ public final class ApiServer {
             c.routes.get("/api/status", this::status);
             c.routes.get("/api/config", this::config);
             c.routes.get("/api/health", this::health);
-            c.routes.get("/api/universe", ctx -> {
-                String w = worldParam(activeWorld(ctx));
-                if (w != null) {
-                    // ONE STABLE SCHEMA in every market mode (holistic review P0-1): the old world
-                    // branch returned a different shape ({key,name,symbols}) and the frontend's
-                    // u.active.symbols dereference crashed — tape, rails, datalists and every
-                    // downstream control silently vanished ("ghost town").
-                    var syms = market.worldSymbols(w).map(x -> List.copyOf(x)).orElse(List.<String>of());
-                    String name = simSessions.getOrRestore(w, ownerId(ctx))
-                            .map(x -> x.config().name() == null ? "Simulated session" : x.config().name())
-                            .orElse("Simulated session");
-                    Map<String, Object> out = new LinkedHashMap<>();
-                    out.put("active", Map.of("source", "world", "sectorKey", "world",
-                            "label", name + " (simulated)", "symbols", syms));
-                    out.put("sectors", List.of(Map.of("key", "world", "label", name + " (simulated)",
-                            "symbols", syms)));
-                    out.put("world", w);
-                    ctx.json(out);
-                    return;
-                }
-                ctx.json(universe.describe());
-            });
+            c.routes.get("/api/universe", ctx ->
+                ctx.json(universeViewFor(worldParam(activeWorld(ctx)), ownerId(ctx))));
             c.routes.put("/api/universe", this::universeSelect);
             c.routes.get("/api/quotes", this::quotesBatch);
             c.routes.get("/api/sparklines", this::sparklines);
@@ -518,7 +499,11 @@ public final class ApiServer {
                 // Owner-scoped hint: other tabs of the SAME user adopt the switch (multi-tab truth).
                 events.publish("world.selected", Map.of("world", w,
                         "user", ownerId(ctx) == null ? "local" : ownerId(ctx)));
-                ctx.json(Map.of("world", w, "datasetReset", datasetReset));
+                // TRANSACTIONAL HANDOFF (review IC-1): the response carries the complete target
+                // bootstrap, so the client commits from THIS payload — no separate hydration
+                // fetch that could fail after the server already switched.
+                ctx.json(Map.of("world", w, "datasetReset", datasetReset,
+                        "universe", universeViewFor("observed".equals(w) ? null : w, ownerId(ctx))));
             });
             c.routes.get("/api/sim/market", ctx -> ctx.json(Map.of("sessions", simSessions.list(ownerId(ctx)))));
             c.routes.get("/api/sim/market/{id}/anchors", ctx ->
@@ -2534,6 +2519,24 @@ public final class ApiServer {
         ctx.json(chain.get());
     }
 
+    /** ONE stable universe schema for every market mode (P0-1); world = null means observed. */
+    private Object universeViewFor(String worldOrNull, String owner) {
+        if (worldOrNull != null) {
+            var syms = market.worldSymbols(worldOrNull).map(x -> List.copyOf(x)).orElse(List.<String>of());
+            String name = simSessions.getOrRestore(worldOrNull, owner)
+                    .map(x -> x.config().name() == null ? "Simulated session" : x.config().name())
+                    .orElse("Simulated session");
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("active", Map.of("source", "world", "sectorKey", "world",
+                    "label", name + " (simulated)", "symbols", syms));
+            out.put("sectors", List.of(Map.of("key", "world", "label", name + " (simulated)",
+                    "symbols", syms)));
+            out.put("world", worldOrNull);
+            return out;
+        }
+        return universe.describe();
+    }
+
     /**
      * Batch sparkline closes for the Research/Home cards — ONE http call for the whole grid,
      * served from the shared candles cache (store-first, then providers), the simulated world's
@@ -2621,6 +2624,16 @@ public final class ApiServer {
                             row.put("source", series.source());
                             row.put("freshness", series.freshness().name());
                             row.put("demo", series.isFixture() && !cfg.fixturesOnly());
+                            // EXPLICIT evidence kind (review IC-1): the client renders this
+                            // verbatim — a MODELED synthetic dataset must never be inferred
+                            // into OBSERVED just because data exists.
+                            row.put("evidence", switch (series.freshness()) {
+                                case SIMULATED -> "SIMULATED";
+                                case FIXTURE -> "DEMO";
+                                case MODELED -> "MODELED";
+                                case MISSING, STALE -> "STALE";
+                                default -> "OBSERVED";
+                            });
                         }
                     } finally {
                         gate.release();
@@ -2758,13 +2771,12 @@ public final class ApiServer {
                         req.filters());
             } catch (java.util.NoSuchElementException ignored) { /* no position — engine handles it */ }
         }
-        // R4: the user's REAL risk-capital line governs sizing, not just chips — the engine's
-        // per-trade budget is capped by it when declared.
-        var rcGov = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
-        if (rcGov.riskCapitalCents() != null && rcGov.riskCapitalCents() > 0
-                && (req.maxLossCents() == null || req.maxLossCents() > rcGov.riskCapitalCents())) {
+        // R4 via THE policy (review IC-1): the declared risk-capital line caps the engine's
+        // per-trade budget — one translation shared by every recommending surface.
+        Long capGov = RiskBudgetPolicy.effectiveMaxLossCents(req.maxLossCents(), riskCapCents(ctx));
+        if (!java.util.Objects.equals(capGov, req.maxLossCents())) {
             req = new RecommendationEngine.Request(req.symbol(), req.thesis(), req.horizon(), req.riskMode(),
-                    rcGov.riskCapitalCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
+                    capGov, req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
                     req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
         }
         return engine.recommend(req, acct.buyingPowerCents(), activeWorld(ctx));
@@ -2945,12 +2957,11 @@ public final class ApiServer {
                         req.filters());
             } catch (java.util.NoSuchElementException ignored) { /* buy-write ladder */ }
         }
-        // R4: the declared risk-capital line governs EVERY sizing surface, ladders included.
-        var rcLad = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
-        if (rcLad.riskCapitalCents() != null && rcLad.riskCapitalCents() > 0
-                && (req.maxLossCents() == null || req.maxLossCents() > rcLad.riskCapitalCents())) {
+        // R4 via THE policy: ladders obey the same declared-capital translation as every surface.
+        Long capLad = RiskBudgetPolicy.effectiveMaxLossCents(req.maxLossCents(), riskCapCents(ctx));
+        if (!java.util.Objects.equals(capLad, req.maxLossCents())) {
             req = new RecommendationEngine.Request(req.symbol(), req.thesis(), req.horizon(), req.riskMode(),
-                    rcLad.riskCapitalCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
+                    capLad, req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
                     req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
         }
         var ladder = engine.ladder(req, acct.buyingPowerCents(), activeWorld(ctx));
@@ -3001,6 +3012,14 @@ public final class ApiServer {
                     req.riskMode(), req.allow0dte(), req.intents(), req.filters());
         }
         Account acct = currentAccount(ctx);
+        // THE policy applies to the scout too (review IC-1): auto and manual recommendations
+        // must size under the identical declared-capital cap.
+        Long capAuto = RiskBudgetPolicy.effectiveMaxLossCents(req.maxLossCents(), riskCapCents(ctx));
+        if (!java.util.Objects.equals(capAuto, req.maxLossCents())) {
+            req = new AutoRecommender.AutoRequest(req.universe(), req.horizons(), req.maxPicks(),
+                    req.targetProfitCents(), capAuto, req.maxRiskPctOfAccount(), req.minConfidence(),
+                    req.riskMode(), req.allow0dte(), req.intents(), req.filters());
+        }
         // Real holdings feed the EXIT/HEDGE scans and let INCOME write against held shares
         List<AutoRecommender.HoldingInfo> held = positions.list(acct.id()).stream()
                 .map(p -> new AutoRecommender.HoldingInfo(p.symbol(),
@@ -3056,19 +3075,14 @@ public final class ApiServer {
         Long cap = riskCapCents(ctx);
         java.util.List<Map<String, Object>> modes = new ArrayList<>();
         for (RecommendationEngine.RiskMode m : RecommendationEngine.RiskMode.values()) {
-            long policy = Math.round(acct.buyingPowerCents() * m.defaultRiskPct());
-            long effective = cap != null ? Math.min(policy, cap) : policy;
+            var b = RiskBudgetPolicy.compute(m, acct.buyingPowerCents(), cap);
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("mode", m.name().toLowerCase(Locale.ROOT));
-            row.put("label", switch (m) {
-                case CONSERVATIVE -> "Cautious";
-                case BALANCED -> "Standard";
-                case AGGRESSIVE -> "High";
-            });
-            row.put("percent", m.defaultRiskPct());
-            row.put("policyBudgetCents", policy);
-            row.put("effectiveBudgetCents", effective);
-            row.put("capped", cap != null && policy > cap);
+            row.put("mode", b.mode());
+            row.put("label", b.label());
+            row.put("percent", b.percent());
+            row.put("policyBudgetCents", b.policyBudgetCents());
+            row.put("effectiveBudgetCents", b.effectiveBudgetCents());
+            row.put("capped", b.capped());
             modes.add(row);
         }
         Map<String, Object> out = new LinkedHashMap<>();
@@ -3184,10 +3198,9 @@ public final class ApiServer {
                     io.liftandshift.strikebench.pricing.PayoffCurve.of(priced, req.qty(), gAdjust);
             if (!curve.maxLossUnbounded() && curve.maxLossCents() > 0) {
                 RecommendationEngine.RiskMode mode = RecommendationEngine.RiskMode.parse(req.riskMode());
-                // The SAME effective budget /api/risk-budget publishes: percent x buying power,
-                // capped by the user's declared risk capital — one source of truth (review P0).
-                long budget = Math.round(acct.buyingPowerCents() * mode.defaultRiskPct());
-                if (riskCapCents != null && riskCapCents > 0) budget = Math.min(budget, riskCapCents);
+                // The SAME effective budget /api/risk-budget publishes — THE policy (review IC-1).
+                long budget = RiskBudgetPolicy.compute(mode, acct.buyingPowerCents(), riskCapCents)
+                        .effectiveBudgetCents();
                 if (curve.maxLossCents() > budget) {
                     List<String> warnings = new ArrayList<>(verdict.warnings());
                     warnings.add("Max loss " + io.liftandshift.strikebench.util.Money.fmt(curve.maxLossCents())

@@ -1395,3 +1395,7 @@ body.lvl-expert .showcase-frame { max-height: 375px; }
 }
 .home-about-row { text-align: center; margin: 10px 0 0; }
 .home-about-row a { color: var(--text-dim); }
+
+/* One symbol context (review IC-4): live status beside editable inputs; locked bars on reviews */
+.sym-status { display: inline-flex; gap: 6px; align-items: baseline; font-size: 13px; margin-top: 4px; min-height: 18px; }
+.locked-symbol { margin: 4px 0 10px; align-items: center; }

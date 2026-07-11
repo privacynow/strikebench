@@ -603,6 +603,12 @@ test('discover-to-place: screening happens ONCE, in Discover; Place is strikes/r
   await page.click('#to-review');
   // Step 6: review shows exact money effects and the safety checklist
   await page.waitForSelector('#to-confirm');
+  // LOCKED CONTEXT (interaction contract #5): the reviewed package's symbol is shown but
+  // cannot silently mutate — a LOCKED chip plus a Research affordance, no free-text input.
+  await page.waitForSelector('#ticket-body .locked-symbol');
+  assert.match(await page.textContent('#ticket-body .locked-symbol'), /AAPL/);
+  assert.ok(await page.locator('#ticket-body .locked-symbol .badge:has-text("LOCKED")').count(),
+    'the placed package cannot silently change symbol');
   const review = await page.textContent('#ticket-body');
   assert.match(review, /Max loss/);
   assert.match(review, /Buying power after/);
@@ -1145,6 +1151,12 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   await page.waitForSelector('#symbol-context .symbol-panel .chart-wrap svg.chart', { timeout: 15000 });
   assert.ok(await page.locator('#symbol-context .symbol-panel .range-pills .pill').count() >= 5,
     'same range pills as Research');
+  // The panel's ONE action is the deliberate exit to the destination page — no duplicate
+  // of the host form's own strategy workflow (interaction contract #3).
+  assert.ok(await page.locator('#symbol-context button:has-text("Open full analysis")').count(),
+    'panel offers the full-analysis exit');
+  assert.equal(await page.locator('#symbol-context button:has-text("Find strategies")').count(), 0,
+    'no duplicate strategy command inside the strategy form');
   // The working symbol FOLLOWS across stages (the QQQ->AAPL amnesia bug)
   await go('#/trade/verify');
   assert.equal(await page.inputValue('#bt-symbol'), 'QQQ', 'Backtest picks up the ticker you just typed');
@@ -1276,50 +1288,44 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   // EVERY sector symbol is an actionable tile, with or without a quote
   const tiles = await page.locator('#sector-grid .sector-tile').count();
   assert.ok(tiles >= 10, 'all TECH symbols render as tiles, got ' + tiles);
-  // ONE selectable card per symbol (review): no per-card Research/Ideas buttons anywhere —
-  // the card itself is the single keyboard-operable control, the preview owns the commands.
+  // DESTINATION CARDS NAVIGATE (interaction contract): no per-card buttons, no preview
+  // detour — one action opens the full analysis. The old expansion repeated a subset of
+  // that page (review IC-2).
   assert.equal(await page.locator('#sector-grid .sector-tile button').count(), 0,
     'cards carry no repeated action buttons');
+  assert.equal(await page.locator('#explorer-focus').count(), 0, 'the preview detour is gone');
   assert.ok(await page.locator('#explorer-hint:has-text("Choose a stock")').count(),
-    'one instruction replaces dozens of buttons');
+    'one instruction above the grid');
   // Shared range selector + sparklines: one batch, real information on the cards
   assert.ok(await page.locator('#spark-range .pill[data-range="3m"]').count(), 'shared 1M/3M/YTD selector');
   await page.waitForSelector('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg', { timeout: 15000 });
-  assert.ok(await page.locator('#sector-grid .sym-card .spark-svg').count() >= 1, 'sparklines on cards with history');
-  // Cards are accessible: role + tabindex + aria-expanded
+  // Cards are accessible links: role + tabindex, and NO contradictory aria-expanded
   const cardA11y = await page.evaluate(() => {
     const c = document.querySelector('#sector-grid .sym-card[data-sym="AAPL"]');
     return { role: c.getAttribute('role'), tab: c.getAttribute('tabindex'), exp: c.getAttribute('aria-expanded') };
   });
-  assert.ok(cardA11y.role && cardA11y.tab === '0' && cardA11y.exp === 'false', 'card is keyboard-operable');
-  // Tap a card -> the symbol panel opens in ONE predictable slot above the grid
-  await page.locator('#sector-grid .sym-card[data-sym="AAPL"]').first().click();
-  await page.waitForSelector('#explorer-focus .symbol-panel .range-pills .pill');
-  await page.waitForSelector('#explorer-focus .symbol-panel .chart-wrap svg.chart', { timeout: 15000 });
-  assert.ok(await page.locator('#explorer-focus .symbol-panel .sp-news .status-item').count() >= 1,
-    'headlines inside the focus panel');
-  assert.ok(await page.locator('#sector-grid .sector-tile.open').count() === 1, 'source tile highlighted');
-  assert.equal(await page.getAttribute('#sector-grid .sym-card[data-sym="AAPL"]', 'aria-expanded'), 'true');
-  // The preview owns the two contextual commands, in the standard vocabulary
-  assert.ok(await page.locator('#explorer-focus button:has-text("Open full analysis")').count(), 'full analysis command');
-  const stratBtn = page.locator('#explorer-focus #sp-strategies');
-  assert.ok(await stratBtn.count(), 'Find strategies command');
-  await page.waitForFunction(() => {
-    const b = document.querySelector('#explorer-focus #sp-strategies');
-    return b && !b.disabled;
-  }, { timeout: 15000 }); // AAPL has a live quote + options -> handoff enabled
-  // Close: the panel's own X, or tapping the card again
-  await page.click('#explorer-focus .focus-close');
-  assert.equal(await page.locator('#explorer-focus .symbol-panel').count(), 0, 'X closes the panel');
-  assert.equal(await page.getAttribute('#sector-grid .sym-card[data-sym="AAPL"]', 'aria-expanded'), 'false');
-  // A quote-less card previews too, but its strategy handoff is HONESTLY disabled
+  assert.ok(cardA11y.role === 'link' && cardA11y.tab === '0' && cardA11y.exp === null,
+    'card is a keyboard-operable link without disclosure semantics');
+  // Sparkline interaction is a SUBREGION: clicking the chart explores, never navigates
+  await page.locator('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg').click();
+  assert.ok((await page.evaluate(() => window.location.hash)).startsWith('#/research') === true
+    && !(await page.evaluate(() => window.location.hash)).includes('AAPL'),
+    'chart click stays on the explorer');
+  // Card click -> the full analysis, ONE action; Back restores sector + scroll
+  await page.evaluate(() => window.scrollTo(0, 200));
+  await page.locator('#sector-grid .sym-card[data-sym="AAPL"]').click();
+  await page.waitForSelector('.quote-hero', { timeout: 15000 });
+  assert.equal(await page.evaluate(() => window.location.hash), '#/research/AAPL');
+  await page.goBack();
+  await page.waitForSelector('#sector-grid .sector-tile', { timeout: 15000 });
+  assert.ok(await page.locator('#sector-chips .sector-chip[data-sector="TECH"].active').count(),
+    'Back restores the SAME sector');
+  // A quote-less card navigates too — the full page owns the honest no-data story
   await page.locator('#sector-grid .tile-nodata').first().click();
-  await page.waitForSelector('#explorer-focus #sp-strategies');
-  await page.waitForFunction(() => {
-    const b = document.querySelector('#explorer-focus #sp-strategies');
-    return b && b.disabled && /quote|options/i.test(b.title);
-  }, { timeout: 15000 });
-  await page.click('#explorer-focus .focus-close');
+  await page.waitForSelector('#app[data-route="research"][data-ready="true"]', { timeout: 15000 });
+  assert.notEqual(await page.evaluate(() => window.location.hash), '#/research', 'landed on a symbol page');
+  await page.goBack();
+  await page.waitForSelector('#sector-grid .sector-tile', { timeout: 15000 });
   assert.ok(await page.locator('#set-universe-btn').count(), 'one-click make-this-my-universe');
   await page.click('#sector-explorer .btn-row button:has-text("Scout this sector")');
   await page.waitForSelector('#auto-universe');
