@@ -193,7 +193,7 @@ public final class EvaluationService {
             if (p.best() != null) best.add(p.best());
             if (p.note() != null) notes.add(p.note());
         }
-        best.sort(Comparator.comparingDouble(StrategyEvaluation::rankScore).reversed());
+        best.sort(StrategyEvaluator.RANKING);
         List<StrategyEvaluation> top = best.stream().limit(Math.max(1, topN)).toList();
         if (!top.isEmpty()) store.saveAll(top, userId);
         return new ScanResult(top, notes, scanned);

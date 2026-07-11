@@ -92,7 +92,7 @@ public final class UnderlyingBackfill {
                     String invalid = invalidReason(cd);
                     if (invalid != null) {
                         quarantined++;
-                        syncState.quarantine(jobId, actualSource, sym, cd.date().toString(), invalid, candleExcerpt(cd));
+                        syncState.quarantine(ownerId, jobId, actualSource, sym, cd.date().toString(), invalid, candleExcerpt(cd));
                         continue;
                     }
                     accepted.add(cd);

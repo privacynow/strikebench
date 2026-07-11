@@ -59,9 +59,12 @@ public final class UnderlyingCsvIngest {
             if (!columns.containsKey("symbol") && fallback.isBlank()) {
                 throw new IllegalArgumentException("Enter a symbol because this CSV has no Symbol column");
             }
+            boolean hasAdjustedColumn = columns.containsKey("adjclose");
+            boolean declaredAdjusted = chosen == Basis.ADJUSTED && !hasAdjustedColumn;
             boolean fileAdjusted = chosen == Basis.ADJUSTED
-                    || (chosen == Basis.AUTO && columns.containsKey("adjclose"));
-            source = sourceBase + (fileAdjusted ? ":adjusted" : ":raw");
+                    || (chosen == Basis.AUTO && hasAdjustedColumn);
+            source = sourceBase + (declaredAdjusted ? ":adjusted-declared"
+                    : fileAdjusted ? ":adjusted" : ":raw");
             String line;
             int row = 1;
             while ((line = reader.readLine()) != null) {
@@ -104,7 +107,7 @@ public final class UnderlyingCsvIngest {
                     }
                 } catch (RuntimeException e) {
                     quarantined++;
-                    state.quarantine(null, source, fallback.isBlank() ? null : fallback, "row " + row,
+                    state.quarantine(ownerId, null, source, fallback.isBlank() ? null : fallback, "row " + row,
                             publicReason(e), line);
                 }
             }
@@ -131,9 +134,11 @@ public final class UnderlyingCsvIngest {
                     accepted.values().stream().filter(b -> b.symbol().equals(symbol)).count(), true,
                     "Imported from " + source + " (" + barBasis + ").");
         }
+        String basisNote = source.endsWith(":adjusted-declared")
+                ? " Prices were accepted as user-declared adjusted because the file has no separate adjusted-close column." : "";
         return new Result(accepted.size(), quarantined, symbols, from, to, source, barBasis,
                 "Imported " + accepted.size() + " observed daily row(s) for " + symbols + " symbol(s)"
-                        + (quarantined > 0 ? "; quarantined " + quarantined + " invalid row(s)." : "."));
+                        + (quarantined > 0 ? "; quarantined " + quarantined + " invalid row(s)." : ".") + basisNote);
     }
 
     private static void write(Connection c, String source, Bar b) throws java.sql.SQLException {

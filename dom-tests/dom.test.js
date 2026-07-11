@@ -405,9 +405,12 @@ test('scenario studio: beginner story cards → fan of futures → strategy verd
   assert.match(await page.textContent('#whatif-out'), /never a forecast/i);   // honesty note
 
   // Handoff: "Test a strategy under this" opens Verify in scenario mode.
+  await page.evaluate(() => { App.state.evidencePrefill = { studyKey: 'stale-analog-proof' }; });
   await page.click('#whatif-verify');
   await page.waitForSelector('#bt-scenario-card', { timeout: 15000 });
   assert.ok(await page.locator('#bt-mode .pill.active[data-mode="scenario"]').count(), 'Verify opened in scenario mode');
+  assert.equal(await page.evaluate(() => App.state.evidencePrefill), null,
+    'generated-futures handoff cleared the prior historical-analog ensemble');
   // The FULL strategy catalog with payoff-shape sketches + a visible symbol picker.
   assert.ok((await page.locator('#sc-pos .sc-card').count()) >= 16, 'full strategy catalog, not a subset');
   // ANTI-DRIFT: the frontend catalog must name only real backend StrategyFamily values —
@@ -483,6 +486,35 @@ test('data center: generate a scenario dataset, activate it (loud banner), switc
   // Cleanup: leave the shared page as downstream tests expect (Beginner level, history verify mode).
   await page.click('#level-switch button[data-level="beginner"]');
   await page.evaluate(() => { if (App.state.verifyForm) App.state.verifyForm.mode = 'history'; App.state.verifyMode = null; });
+});
+
+test('dataset actions fail visibly instead of looking like dead buttons', async () => {
+  await page.route('**/api/datasets', async route => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        active: 'observed', datasets: [
+          { id: 'observed', name: 'Observed market data', bars: 0 },
+          { id: 'ds_error_fixture', name: 'Failure-path scenario', symbol: 'AAPL', bars: 20 }
+        ]
+      }) });
+    } else await route.continue();
+  });
+  await page.route('**/api/datasets/*', async route => {
+    if (route.request().method() === 'DELETE') {
+      await route.fulfill({ status: 422, contentType: 'application/json',
+        body: JSON.stringify({ error: 'This dataset is still in use by a separate market.' }) });
+    } else await route.continue();
+  });
+  try {
+    await go('#/data/datasets');
+    const remove = page.locator('#dc-datasets .status-item:has(.badge:has-text("SYNTHETIC")) button:has-text("Delete")').first();
+    await remove.click();
+    await page.waitForSelector('#dataset-action-error .alert');
+    assert.match(await page.textContent('#dataset-action-error'), /still in use|could not be completed/i);
+  } finally {
+    await page.unroute('**/api/datasets');
+    await page.unroute('**/api/datasets/*');
+  }
 });
 
 test('workspace continuity: forms, symbol, and route survive a full reload', async () => {
@@ -2297,10 +2329,15 @@ test('decision page: recommendations-as-a-competition — the pick, evidence, sc
 
   // The pick, with its honesty badges and score.
   await page.waitForSelector('.decision-pick');
-  assert.ok(await page.locator('.decision-pick .pick-badge').first().isVisible(), 'THE PICK badge');
+  assert.ok(await page.locator('.decision-pick .pick-badge').first().isVisible(), 'economic placement badge');
+  assert.doesNotMatch(await page.locator('.decision-pick .pick-badge').first().innerText(), /^THE PICK$/,
+    'mechanical availability is not presented as an endorsement');
   const evBadge = (await page.locator('.decision-pick .row-gap .badge').first().innerText()).trim();
   assert.match(evBadge, /Demo data|Observed|Modeled|Unknown/, 'evidence badge is labeled honestly');
   assert.ok(await page.locator('.decision-pick .score-wrap').first().isVisible(), 'risk-adjusted score meter');
+  assert.ok(await page.locator('.decision-pick [data-economic-verdict]').count(), 'Decision consumes the shared economic verdict');
+  assert.match(await page.textContent('.decision-pick [data-economic-verdict]'), /Market-implied EV/);
+  assert.match(await page.textContent('.decision-pick [data-economic-verdict]'), /Realized-vol scenario EV/);
 
   // Real risk scenarios + the honest capital pair + the co-equal management plan.
   assert.ok((await page.locator('.decision-pick .scenario-strip .scenario-cell').count()) >= 3, 'payoff scenario strip');
@@ -2311,6 +2348,7 @@ test('decision page: recommendations-as-a-competition — the pick, evidence, sc
   // When there is a field of alternatives, Expert ranks them in a comparison table.
   if ((await page.locator('.section-h').count()) > 0) {
     assert.ok((await page.locator('#decision-table').count()) > 0, 'expert comparison table for the field');
+    assert.match(await page.textContent('.decision-order-note'), /economic tier/i, 'the non-score sort key is disclosed');
   }
 
   // Handing the winner off to the Place stage carries the working idea.

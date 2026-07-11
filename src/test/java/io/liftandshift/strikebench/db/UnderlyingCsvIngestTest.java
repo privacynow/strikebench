@@ -59,7 +59,7 @@ class UnderlyingCsvIngestTest {
         assertThat(result.rowsWritten()).isEqualTo(2);
         assertThat(result.quarantined()).isEqualTo(1);
         assertThat(result.barBasis()).isEqualTo("CLOSE_ONLY");
-        assertThat(state.quarantineSummary().total()).isEqualTo(1);
+        assertThat(state.quarantineSummary(null).total()).isEqualTo(1);
         var series = new StoredCandleStore(db).candles("QQQ", java.time.LocalDate.parse("2026-07-08"),
                 java.time.LocalDate.parse("2026-07-10"), DatasetService.OBSERVED).orElseThrow();
         assertThat(series.barBasis()).isEqualTo("CLOSE_ONLY");
@@ -75,6 +75,19 @@ class UnderlyingCsvIngestTest {
         assertThat(result.rowsWritten()).isZero();
         assertThat(result.quarantined()).isEqualTo(2);
         assertThat(db.query("SELECT count(*) c FROM underlying_bar WHERE symbol='SPY'", r -> r.lng("c")).getFirst()).isZero();
+    }
+
+    @Test
+    void explicitAdjustedBasisWithoutAdjustedColumnIsAuditable() throws Exception {
+        db = TestDb.fresh();
+        String csv = "Date,Close\n2026-07-10,100\n";
+        var result = UnderlyingCsvIngest.run(stream(csv), "adjusted.csv", "AAPL", "Adjusted export",
+                UnderlyingCsvIngest.Basis.ADJUSTED, db, new DataSyncState(db, clock), clock, null);
+
+        assertThat(result.source()).endsWith(":adjusted-declared");
+        assertThat(result.note()).contains("user-declared adjusted");
+        assertThat(db.query("SELECT adjusted FROM underlying_bar WHERE symbol='AAPL'",
+                r -> r.bool("adjusted")).getFirst()).isTrue();
     }
 
     private static ByteArrayInputStream stream(String csv) {

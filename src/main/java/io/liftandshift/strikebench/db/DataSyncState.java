@@ -39,8 +39,14 @@ public final class DataSyncState {
     public void attempted(String ownerId, String source, String symbol, LocalDate from, LocalDate to) {
         db.exec("INSERT INTO data_sync_cursor(owner_key,source_key,symbol,status,requested_from,requested_to,last_attempt_at) "
                         + "VALUES (?,?,?,'RUNNING',?,?,now()) ON CONFLICT(owner_key,source_key,symbol,domain,interval_key) "
-                        + "DO UPDATE SET status='RUNNING',requested_from=excluded.requested_from,"
-                        + "requested_to=excluded.requested_to,last_attempt_at=now(),updated_at=now()",
+                        + "DO UPDATE SET status='RUNNING',requested_from=CASE "
+                        + "WHEN data_sync_cursor.requested_from IS NULL THEN excluded.requested_from "
+                        + "WHEN excluded.requested_from IS NULL THEN data_sync_cursor.requested_from "
+                        + "ELSE least(data_sync_cursor.requested_from,excluded.requested_from) END,"
+                        + "requested_to=CASE WHEN data_sync_cursor.requested_to IS NULL THEN excluded.requested_to "
+                        + "WHEN excluded.requested_to IS NULL THEN data_sync_cursor.requested_to "
+                        + "ELSE greatest(data_sync_cursor.requested_to,excluded.requested_to) END,"
+                        + "last_attempt_at=now(),updated_at=now()",
                 ownerKey(ownerId), source, symbol, from, to);
     }
 
@@ -49,12 +55,17 @@ public final class DataSyncState {
         db.exec("INSERT INTO data_sync_cursor(owner_key,source_key,symbol,status,requested_from,requested_to,"
                         + "last_success_date,last_attempt_at,failure_count,rows_written,note) "
                         + "VALUES (?,?,?,?,?,?,?,now(),0,?,?) ON CONFLICT(owner_key,source_key,symbol,domain,interval_key) "
-                        + "DO UPDATE SET status=excluded.status,requested_from=excluded.requested_from,"
-                        + "requested_to=excluded.requested_to,last_success_date=CASE "
+                        + "DO UPDATE SET status=excluded.status,requested_from=CASE "
+                        + "WHEN data_sync_cursor.requested_from IS NULL THEN excluded.requested_from "
+                        + "WHEN excluded.requested_from IS NULL THEN data_sync_cursor.requested_from "
+                        + "ELSE least(data_sync_cursor.requested_from,excluded.requested_from) END,"
+                        + "requested_to=CASE WHEN data_sync_cursor.requested_to IS NULL THEN excluded.requested_to "
+                        + "WHEN excluded.requested_to IS NULL THEN data_sync_cursor.requested_to "
+                        + "ELSE greatest(data_sync_cursor.requested_to,excluded.requested_to) END,last_success_date=CASE "
                         + "WHEN data_sync_cursor.last_success_date IS NULL THEN excluded.last_success_date "
                         + "WHEN excluded.last_success_date IS NULL THEN data_sync_cursor.last_success_date "
                         + "ELSE greatest(data_sync_cursor.last_success_date,excluded.last_success_date) END,"
-                        + "last_attempt_at=now(),failure_count=0,rows_written=data_sync_cursor.rows_written+excluded.rows_written,"
+                        + "last_attempt_at=now(),failure_count=0,rows_written=excluded.rows_written,"
                         + "note=excluded.note,updated_at=now()",
                 ownerKey(ownerId), source, symbol, complete ? "COMPLETE" : "PARTIAL",
                 from, to, lastSuccess, rows, cap(note, 500));
@@ -64,7 +75,12 @@ public final class DataSyncState {
         db.exec("INSERT INTO data_sync_cursor(owner_key,source_key,symbol,status,requested_from,requested_to,"
                         + "last_attempt_at,failure_count,note) VALUES (?,?,?,'FAILED',?,?,now(),1,?) "
                         + "ON CONFLICT(owner_key,source_key,symbol,domain,interval_key) DO UPDATE SET "
-                        + "status='FAILED',requested_from=excluded.requested_from,requested_to=excluded.requested_to,"
+                        + "status='FAILED',requested_from=CASE WHEN data_sync_cursor.requested_from IS NULL THEN excluded.requested_from "
+                        + "WHEN excluded.requested_from IS NULL THEN data_sync_cursor.requested_from "
+                        + "ELSE least(data_sync_cursor.requested_from,excluded.requested_from) END,"
+                        + "requested_to=CASE WHEN data_sync_cursor.requested_to IS NULL THEN excluded.requested_to "
+                        + "WHEN excluded.requested_to IS NULL THEN data_sync_cursor.requested_to "
+                        + "ELSE greatest(data_sync_cursor.requested_to,excluded.requested_to) END,"
                         + "last_attempt_at=now(),failure_count=data_sync_cursor.failure_count+1,note=excluded.note,updated_at=now()",
                 ownerKey(ownerId), source, symbol, from, to, cap(note, 500));
     }
@@ -79,17 +95,18 @@ public final class DataSyncState {
                         r.intv("failure_count"), r.lng("rows_written"), r.str("note"), r.str("ua")), ownerKey(ownerId));
     }
 
-    public void quarantine(String jobId, String source, String symbol, String rowRef,
+    public void quarantine(String ownerId, String jobId, String source, String symbol, String rowRef,
                            String reason, String payloadExcerpt) {
-        db.exec("INSERT INTO data_quarantine(job_id,source_key,symbol,row_ref,reason,payload_excerpt) VALUES (?,?,?,?,?,?)",
-                jobId, source, symbol, cap(rowRef, 80), cap(reason, 300), cap(payloadExcerpt, 500));
+        db.exec("INSERT INTO data_quarantine(owner_key,job_id,source_key,symbol,row_ref,reason,payload_excerpt) VALUES (?,?,?,?,?,?,?)",
+                ownerKey(ownerId), jobId, source, symbol, cap(rowRef, 80), cap(reason, 300), cap(payloadExcerpt, 500));
     }
 
-    public QuarantineSummary quarantineSummary() {
-        long total = db.query("SELECT count(*) c FROM data_quarantine", r -> r.lng("c")).getFirst();
+    public QuarantineSummary quarantineSummary(String ownerId) {
+        String owner = ownerKey(ownerId);
+        long total = db.query("SELECT count(*) c FROM data_quarantine WHERE owner_key=?", r -> r.lng("c"), owner).getFirst();
         List<QuarantineReason> reasons = db.query(
-                "SELECT reason,count(*) c FROM data_quarantine GROUP BY reason ORDER BY c DESC LIMIT 12",
-                r -> new QuarantineReason(r.str("reason"), r.lng("c")));
+                "SELECT reason,count(*) c FROM data_quarantine WHERE owner_key=? GROUP BY reason ORDER BY c DESC LIMIT 12",
+                r -> new QuarantineReason(r.str("reason"), r.lng("c")), owner);
         return new QuarantineSummary(total, reasons);
     }
 

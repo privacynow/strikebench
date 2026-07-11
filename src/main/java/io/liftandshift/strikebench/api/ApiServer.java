@@ -1982,7 +1982,7 @@ public final class ApiServer {
                 "recommendedSource", dataConnectors.recommendedSource(),
                 "cursors", dataSyncState.cursors(ownerId(ctx)),
                 "schedule", schedule,
-                "quarantine", dataSyncState.quarantineSummary(),
+                "quarantine", dataSyncState.quarantineSummary(ownerId(ctx)),
                 "latestCompletedSession", io.liftandshift.strikebench.db.DataSyncScheduler
                         .latestCompletedSession(clock).toString(),
                 "note", "Daily price maintenance runs once after a completed market session. Hourly daily-bar downloads are intentionally avoided."));
@@ -2031,6 +2031,7 @@ public final class ApiServer {
     }
 
     private void dataSyncSchedulePut(Context ctx) {
+        requireAdmin(ctx); // schedules mutate the app-wide observed store and consume provider allowance
         DataSyncScheduleRequest b = requireBody(bodyOrNull(ctx, DataSyncScheduleRequest.class));
         boolean enabled = Boolean.TRUE.equals(b.enabled());
         String source = b.source() == null ? "auto" : b.source();
@@ -2095,8 +2096,9 @@ public final class ApiServer {
 
     private void dataJobStart(Context ctx) {
         JobRequest b = requireBody(bodyOrNull(ctx, JobRequest.class));
-        // Importing a server-side CSV path reads a local file — gate it like a destructive op.
-        if ("import_options_csv".equalsIgnoreCase(b.kind())) requireAdmin(ctx);
+        // Both jobs mutate app-wide observed history. The server-path import also reads a local file.
+        if ("import_options_csv".equalsIgnoreCase(b.kind())
+                || "sync_underlying".equalsIgnoreCase(b.kind())) requireAdmin(ctx);
         ctx.json(dataJobs.start(b.kind(), b.params(), ownerId(ctx)));
     }
 
@@ -2111,7 +2113,8 @@ public final class ApiServer {
         String id = ctx.pathParam("id");
         requireJobAccess(ctx, id);
         // Re-running a privileged CSV import is itself privileged, even for the job's owner.
-        if ("import_options_csv".equalsIgnoreCase(dataJobs.kindOf(id))) requireAdmin(ctx);
+        if ("import_options_csv".equalsIgnoreCase(dataJobs.kindOf(id))
+                || "sync_underlying".equalsIgnoreCase(dataJobs.kindOf(id))) requireAdmin(ctx);
         ctx.json(dataJobs.retry(id, ownerId(ctx)));
     }
 

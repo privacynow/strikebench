@@ -25,7 +25,7 @@ public record EconomicAssessment(
         List<String> reasons
 ) {
     public enum Verdict {
-        FAVORABLE(3), MIXED(2), UNFAVORABLE(1), UNAVAILABLE(0);
+        FAVORABLE(3), MIXED(2), UNAVAILABLE(1), UNFAVORABLE(0);
 
         private final int rank;
         Verdict(int rank) { this.rank = rank; }

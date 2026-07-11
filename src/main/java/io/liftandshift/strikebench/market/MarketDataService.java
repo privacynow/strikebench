@@ -298,6 +298,9 @@ public final class MarketDataService {
                     }
                 } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol, e.toString()); }
             }
+            // Generated datasets are closed worlds. Missing scenario bars stay unavailable;
+            // falling through here would splice observed or Demo prices into a scenario lane.
+            if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)) return null;
             CandleSeries fromProviders = candleSeriesFromProviders(symbol, from, to);
             return fromProviders.candles().isEmpty() ? null : fromProviders;
         });

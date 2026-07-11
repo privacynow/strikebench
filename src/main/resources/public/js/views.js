@@ -1734,11 +1734,20 @@
       : v === 'UNAVAILABLE' ? 'economic-unavailable' : 'economic-mixed';
     var block = el('div', { class: 'economic-assessment ' + cls, 'data-economic-verdict': v },
       el('div', { class: 'economic-assessment-head' },
-        el('span', { class: 'badge' }, e.label || v),
-        e.marketEvAfterCostsCents !== null && e.marketEvAfterCostsCents !== undefined
-          ? el('b', { class: e.marketEvAfterCostsCents >= 0 ? 'gain' : 'loss' },
-              'After-cost model EV ' + fmtMoney(e.marketEvAfterCostsCents, { plus: true })) : null),
-      el('p', {}, e.summary || ''));
+        el('span', { class: 'badge' }, e.label || v)),
+      el('p', {}, e.summary || ''),
+      el('div', { class: 'chip-row economic-ev-lanes' },
+        chip(el('span', {}, 'Market-implied EV', UI.info('ev')),
+          e.marketEvAfterCostsCents !== null && e.marketEvAfterCostsCents !== undefined
+            ? el('span', { class: e.marketEvAfterCostsCents >= 0 ? 'gain' : 'loss' },
+                fmtMoney(e.marketEvAfterCostsCents, { plus: true })) : 'Unavailable',
+          'Expected result under the option market’s implied distribution, after estimated round-trip fees.'),
+        chip(el('span', {}, 'Realized-vol scenario EV', UI.info('vrp')),
+          e.realizedVolEvAfterCostsCents !== null && e.realizedVolEvAfterCostsCents !== undefined
+            ? el('span', { class: e.realizedVolEvAfterCostsCents >= 0 ? 'gain' : 'loss' },
+                fmtMoney(e.realizedVolEvAfterCostsCents, { plus: true })) : 'Unavailable',
+          'Expected result if this stock’s observed realized volatility is the better guide, after estimated round-trip fees.'),
+        chip('Estimated round-trip fees', fmtMoney(e.estimatedRoundTripFeesCents || 0))));
     if (e.reasons && e.reasons.length) {
       block.appendChild(UI.expandable('Why this classification', function () {
         return el('ul', { class: 'rationale' }, e.reasons.map(function (r) { return el('li', {}, r); }));
@@ -4138,6 +4147,7 @@
     reroll.addEventListener('click', function () { f.reroll(); run.click(); });
     toVerify.addEventListener('click', function () {
       App.state.lastRecommendSymbol = symbol;
+      App.state.evidencePrefill = null; // generated futures must never inherit an earlier analog ensemble
       App.state.verifyMode = 'scenario'; // the handoff: Verify opens in "Imagine a future"
       App.navigate('#/trade/verify');
     });
@@ -5821,6 +5831,18 @@
       var active = data.active, rows = data.datasets || [];
       datasetsCard.innerHTML = '';
       datasetsCard.appendChild(UI.cardHeader('Datasets & scenarios'));
+      var datasetActionError = el('div', { id: 'dataset-action-error', 'aria-live': 'polite' });
+      datasetsCard.appendChild(datasetActionError);
+      async function runDatasetAction(button, action) {
+        datasetActionError.innerHTML = '';
+        button.disabled = true;
+        try { await action(); }
+        catch (e) {
+          datasetActionError.appendChild(alertBox('warn', 'Dataset action could not be completed',
+            [String((e && e.message) || e)]));
+          button.disabled = false;
+        }
+      }
       if (level === 'beginner') datasetsCard.appendChild(explain(App.config && App.config.fixturesOnly
         ? 'This build’s baseline is fabricated Demo data. Saved scenario runs are separate made-up futures you generated; neither is observed market history.'
         : '“Observed” is real market data. Saved scenario runs are made-up futures you generated — pick one to explore the whole app as if that future happened. Real data is never overwritten.'));
@@ -5837,9 +5859,12 @@
           el('span', { class: 'spacer' }),
           isActive ? el('span', { class: 'badge badge-ok' }, 'ACTIVE')
             : el('button', { class: 'btn btn-sm btn-secondary', onclick: async function () {
-                await API.put('/api/datasets/active', { id: d.id });
-                App.refreshScenarioBanner && App.refreshScenarioBanner();
-                loadDatasets();
+                var button = this;
+                await runDatasetAction(button, async function () {
+                  await API.put('/api/datasets/active', { id: d.id });
+                  App.refreshScenarioBanner && App.refreshScenarioBanner();
+                  await loadDatasets();
+                });
               } }, 'Activate'),
           isActive && d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm',
             title: 'Open this active scenario on the stock analysis page', onclick: function () {
@@ -5852,7 +5877,14 @@
               App.navigate('#/trade/verify');
             } }, 'Compare strategies') : null,
           d.id !== 'observed' ? el('button', { class: 'btn btn-sm btn-secondary', title: 'Delete this run',
-            onclick: async function () { await API.del('/api/datasets/' + d.id); App.refreshScenarioBanner && App.refreshScenarioBanner(); loadDatasets(); } }, 'Delete') : null));
+            onclick: async function () {
+              var button = this;
+              await runDatasetAction(button, async function () {
+                await API.del('/api/datasets/' + d.id);
+                App.refreshScenarioBanner && App.refreshScenarioBanner();
+                await loadDatasets();
+              });
+            } }, 'Delete') : null));
       });
       // Generate a new synthetic run right here (the same Scenario Studio as Research/Verify).
       var genWrap = el('div', { id: 'dc-generate', style: 'margin-top:8px' });
@@ -6118,6 +6150,14 @@
           ? doc.recommendedSource : (eligible[0] && eligible[0].key) || '';
       }
       var planDoc = null;
+      function invalidatePlan() {
+        planDoc = null;
+        if (startBtn) startBtn.disabled = true;
+        if (planSlot) {
+          planSlot.innerHTML = '';
+          planSlot.appendChild(el('p', { class: 'muted small' }, 'Inputs changed. Preview the updated request before starting.'));
+        }
+      }
       syncCard.innerHTML = '';
       syncCard.appendChild(UI.cardHeader('Get & maintain daily price history',
         el('span', { class: 'badge badge-ok' }, 'ADDITIVE · RESUMABLE')));
@@ -6145,12 +6185,12 @@
         'No automated daily-price source is eligible yet. Use your own CSV below now, or connect an official keyed source. Yahoo automation remains blocked unless you have permission.'));
 
       var sectorBtn = el('button', { type: 'button', class: st.scope === 'sector' ? 'active' : '',
-        onclick: function () { st.scope = 'sector'; st.symbols = defaultSymbols; symbolsInput.value = st.symbols; syncScope(); } },
+        onclick: function () { st.scope = 'sector'; st.symbols = defaultSymbols; symbolsInput.value = st.symbols; syncScope(); invalidatePlan(); } },
         'Current sector · ' + ((active.symbols || []).length || 0));
       var customBtn = el('button', { type: 'button', class: st.scope === 'custom' ? 'active' : '',
-        onclick: function () { st.scope = 'custom'; syncScope(); symbolsInput.focus(); } }, 'Choose symbols');
+        onclick: function () { st.scope = 'custom'; syncScope(); invalidatePlan(); symbolsInput.focus(); } }, 'Choose symbols');
       var symbolsInput = el('input', { type: 'text', id: 'data-sync-symbols', value: st.symbols,
-        placeholder: 'AAPL, MSFT, SPY', list: 'universe-symbols', oninput: function () { st.symbols = this.value; st.scope = 'custom'; syncScope(); } });
+        placeholder: 'AAPL, MSFT, SPY', list: 'universe-symbols', oninput: function () { st.symbols = this.value; st.scope = 'custom'; syncScope(); invalidatePlan(); } });
       function syncScope() {
         sectorBtn.classList.toggle('active', st.scope === 'sector');
         customBtn.classList.toggle('active', st.scope === 'custom');
@@ -6158,13 +6198,13 @@
         App.state.dataSyncForm = st;
       }
       syncScope();
-      var years = el('select', { id: 'data-sync-years', onchange: function () { st.years = parseInt(this.value, 10); App.state.dataSyncForm = st; } },
+      var years = el('select', { id: 'data-sync-years', onchange: function () { st.years = parseInt(this.value, 10); App.state.dataSyncForm = st; invalidatePlan(); } },
         [1, 2, 5, 10, 20].map(function (y) { return el('option', { value: y }, y + (y === 1 ? ' year' : ' years')); }));
       years.value = String(Number(st.years) || 5);
       var fromInput = el('input', { type: 'date', id: 'data-sync-from', value: st.from || '',
-        onchange: function () { st.from = this.value; App.state.dataSyncForm = st; } });
+        onchange: function () { st.from = this.value; App.state.dataSyncForm = st; invalidatePlan(); } });
       var toInput = el('input', { type: 'date', id: 'data-sync-to', value: st.to || doc.latestCompletedSession || '',
-        onchange: function () { st.to = this.value; App.state.dataSyncForm = st; } });
+        onchange: function () { st.to = this.value; App.state.dataSyncForm = st; invalidatePlan(); } });
       var scopeGrid = el('div', { class: 'form-grid data-acquire-grid' },
         el('div', { class: 'field data-symbol-scope' }, el('label', {}, 'Stocks'),
           el('div', { class: 'level-switch data-scope-switch' }, sectorBtn, customBtn), symbolsInput),
@@ -6184,7 +6224,8 @@
         startBtn.disabled = true;
         try {
           await startJob('sync_underlying', { source: planDoc.source.key,
-            symbols: parseSymbolText(st.symbols), from: String(planDoc.effectiveFrom), to: String(planDoc.to), years: Number(st.years) || 5 });
+            symbols: (planDoc.plans || []).map(function (p) { return p.symbol; }),
+            from: String(planDoc.effectiveFrom), to: String(planDoc.to) });
           planSlot.innerHTML = '';
           planSlot.appendChild(alertBox('ok', 'History update started. Progress is shown in Jobs below; each completed symbol becomes available to Research immediately.'));
         } catch (e) { planSlot.appendChild(alertBox('warn', e.message)); startBtn.disabled = false; }
@@ -6542,13 +6583,19 @@
 
   function decisionTop(e, symbol, level, recId) {
     var c = e.candidate, risk = e.risk, capital = e.capital, sc = e.score;
+    var verdict = economicVerdict(e) || 'UNAVAILABLE';
+    var placement = verdict === 'FAVORABLE' ? 'WORTH INVESTIGATING'
+      : verdict === 'MIXED' ? 'COMPARE CAREFULLY'
+      : verdict === 'UNFAVORABLE' ? 'LEARNING EXAMPLE' : 'MECHANICS ONLY';
     var card = el('div', { class: 'card decision-pick', 'data-strategy': c.strategy });
     card.appendChild(UI.cardHeader(
-      el('span', {}, el('span', { class: 'pick-badge' }, 'THE PICK'), ' ', c.displayName),
+      el('span', {}, el('span', { class: 'pick-badge' }, placement), ' ', c.displayName),
       el('span', { class: 'row-gap' }, evidenceBadge(e.evidence.rollup), UI.scoreBar(sc.riskAdjustedScore))));
     if (e.explanation && (e.explanation.whySelected || e.explanation.headline)) {
       card.appendChild(el('p', { class: 'decision-why' }, e.explanation.whySelected || e.explanation.headline));
     }
+    var economics = economicAssessmentBlock(e);
+    if (economics) card.appendChild(economics);
     card.appendChild(el('div', { class: 'chip-row' },
       chip('Cost/credit', fmtMoney(c.entryNetPremiumCents, { plus: true })),
       chip('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(risk.maxLossCents))),
@@ -6587,9 +6634,16 @@
     return el('div', { class: 'alt-list' }, evals.map(function (e) {
       var c = e.candidate;
       return el('div', { class: 'alt-row', 'data-strategy': c.strategy },
-        el('div', { class: 'alt-main' }, el('b', {}, c.displayName), el('span', { class: 'muted' }, '  ' + c.label)),
+        el('div', { class: 'alt-main' }, el('b', {}, c.displayName),
+          el('span', { class: 'badge economic-table-' + String(economicVerdict(e) || 'unknown').toLowerCase() },
+            (e.economics && e.economics.label) || 'Economics unavailable'),
+          el('span', { class: 'muted' }, '  ' + c.label)),
         el('div', { class: 'alt-facts' },
           chip('Decision score', Math.round(e.score.riskAdjustedScore), 'Risk-adjusted: gates, six weighted factors, then haircuts for evidence quality and tail risk. May rank differently than the quick screen score — this one decides.'),
+          chip('Market EV', e.economics && e.economics.marketEvAfterCostsCents != null
+            ? fmtMoney(e.economics.marketEvAfterCostsCents, { plus: true }) : 'Unavailable'),
+          chip('History EV', e.economics && e.economics.realizedVolEvAfterCostsCents != null
+            ? fmtMoney(e.economics.realizedVolEvAfterCostsCents, { plus: true }) : 'Unavailable'),
           chip('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(e.risk.maxLossCents)))),
         el('button', { class: 'btn btn-sm', onclick: function () { useEval(c, symbol); } }, 'Use'));
     }));
@@ -6600,17 +6654,24 @@
       var c = e.candidate, r = e.risk;
       return el('tr', { 'data-strategy': c.strategy },
         el('td', {}, c.displayName),
+        el('td', {}, el('span', { class: 'badge economic-table-' + String(economicVerdict(e) || 'unknown').toLowerCase() },
+          (e.economics && e.economics.label) || 'Unavailable')),
         el('td', {}, UI.scoreBar(e.score.riskAdjustedScore)),
         el('td', {}, evidenceBadge(e.evidence.rollup)),
         el('td', {}, fmtMoney(c.entryNetPremiumCents, { plus: true })),
         el('td', {}, el('span', { class: 'loss' }, fmtMoney(r.maxLossCents))),
         el('td', {}, UI.maxProfitLabel(c.strategy, c.structureGroup, r.maxProfitCents, false, c.legs)),
         el('td', {}, fmtPct(r.pop)),
+        el('td', {}, e.economics && e.economics.marketEvAfterCostsCents != null
+          ? fmtMoney(e.economics.marketEvAfterCostsCents, { plus: true }) : '—'),
+        el('td', {}, e.economics && e.economics.realizedVolEvAfterCostsCents != null
+          ? fmtMoney(e.economics.realizedVolEvAfterCostsCents, { plus: true }) : '—'),
         el('td', {}, el('span', { class: 'loss' }, fmtMoney(r.tailLossCents))),
         el('td', {}, el('button', { class: 'btn btn-sm', onclick: function () { useEval(c, symbol); } }, 'Use')));
     });
     return el('div', { id: 'decision-table' },
-      UI.table(['Structure', 'Decision score', 'Evidence', 'Cost', 'Theor. max loss', 'Theor. max profit', 'POP', 'Tail loss', ''], rows));
+      UI.table(['Structure', 'Economic read', 'Decision score', 'Evidence', 'Cost', 'Theor. max loss',
+        'Theor. max profit', 'POP', 'Market EV', 'History EV', 'Tail loss', ''], rows));
   }
 
   /**
@@ -6670,6 +6731,9 @@
     host.appendChild(decisionTop(evals[0], symbol, level, data && data.recommendationId));
     if (evals.length > 1) {
       host.appendChild(el('h2', { class: 'section-h' }, level === 'beginner' ? 'Other ways to play it' : 'The full field'));
+      host.appendChild(el('p', { class: 'muted small decision-order-note' }, level === 'beginner'
+        ? 'Order: trades that pass the checks, then the economic read, then Decision score. A learning example never outranks a mechanically sound idea whose economics are simply unavailable.'
+        : 'Sort policy: mechanical eligibility → economic tier (favorable, mixed, unavailable, unfavorable) → Decision score within each tier.'));
       host.appendChild(level === 'beginner' ? decisionAltList(evals.slice(1), symbol) : decisionTable(evals, symbol));
     }
     // The portfolio optimizer — "size the strongest ideas across a budget" — lives with the
@@ -6686,7 +6750,7 @@
 
     root.appendChild(el('h1', {}, 'Compare ideas'));
     if (level === 'beginner') {
-      root.appendChild(explain('The same goal, a few different ways — scored side by side. The top one is our pick; we show WHY it wins, what could go wrong, and how to manage it after you enter.'));
+      root.appendChild(explain('The same goal, a few different ways — judged side by side. The first is the strongest available comparison, not an automatic recommendation; its economic label tells you whether to investigate it, compare carefully, study only the mechanics, or learn from it as a counterexample.'));
     }
     if (!symbol) {
       root.appendChild(UI.emptyState('No stock chosen yet', 'Pick a stock and a goal first, then compare the ideas.',

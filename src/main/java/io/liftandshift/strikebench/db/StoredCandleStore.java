@@ -57,8 +57,12 @@ public final class StoredCandleStore implements CandleStore {
             boolean coherentAdjustment = sourceRows.stream().map(r -> r.adjusted).distinct().count() <= 1;
             boolean allObserved = sourceRows.stream().allMatch(r -> r.observed);
             int quality = sourceRows.stream().mapToInt(r -> r.qualityRank).max().orElse(0);
+            // A scenario dataset intentionally owns only its generated window. Requiring it to
+            // cover an observed-style request range would reject valid scenario bars and tempt
+            // the caller to substitute another market lane. Observed sources still need broad
+            // range coverage before they can suppress a provider fetch.
             if (candles.size() >= 2 && coherentAdjustment && (synthetic || allObserved)
-                    && coversRange(candles, from, to)) {
+                    && (synthetic || coversRange(candles, from, to))) {
                 candidates.add(new Candidate(source, sourceRows, candles, quality));
             }
         });

@@ -101,4 +101,21 @@ class StrategyEvaluatorTest {
         List<StrategyEvaluation> ranked = evaluator.evaluateAndRank(List.of(weak, strong), null, ctx());
         assertThat(ranked.get(0).candidate().confidence()).isEqualTo(0.9); // strongest first
     }
+
+    @Test void unknownEconomicsRanksAheadOfKnownUnfavorableEconomics() {
+        var scoreHigh = new ScoreBreakdown(true, List.of(), 90, 90, List.of());
+        var scoreLow = new ScoreBreakdown(true, List.of(), 40, 40, List.of());
+        var unavailable = new EconomicAssessment(EconomicAssessment.Verdict.UNAVAILABLE, "MECHANICS_ONLY",
+                "Economics unavailable", "No economic basis", null, null, 0, null, true, List.of());
+        var unfavorable = new EconomicAssessment(EconomicAssessment.Verdict.UNFAVORABLE, "LEARN_FROM",
+                "Unfavorable", "Known adverse economics", -100L, -100L, 0, -1.0, true, List.of());
+        var unknownEval = new StrategyEvaluation("unknown", null, null, null, null, null, null, null,
+                scoreLow, unavailable, null);
+        var adverseEval = new StrategyEvaluation("adverse", null, null, null, null, null, null, null,
+                scoreHigh, unfavorable, null);
+
+        assertThat(java.util.stream.Stream.of(adverseEval, unknownEval)
+                .sorted(StrategyEvaluator.RANKING).map(StrategyEvaluation::id).toList())
+                .containsExactly("unknown", "adverse");
+    }
 }

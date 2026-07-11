@@ -788,6 +788,16 @@ class ApiIntegrationTest {
                         .POST(HttpRequest.BodyPublishers.ofString("{\"tier\":\"EVERYTHING\",\"confirm\":true}")).build(),
                 HttpResponse.BodyHandlers.ofString());
         assertThat(proxied.statusCode()).isEqualTo(401);
+        HttpResponse<String> proxiedSchedule = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/sync/schedule"))
+                        .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
+                        .PUT(HttpRequest.BodyPublishers.ofString("{\"enabled\":true,\"source\":\"auto\",\"symbols\":[\"AAPL\"],\"years\":1}"))
+                        .build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(proxiedSchedule.statusCode()).isEqualTo(401);
+        HttpResponse<String> proxiedSync = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/jobs"))
+                        .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
+                        .POST(HttpRequest.BodyPublishers.ofString("{\"kind\":\"sync_underlying\",\"params\":{\"symbols\":[\"AAPL\"]}}"))
+                        .build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(proxiedSync.statusCode()).isEqualTo(401);
         // A backfill job can be started and is listed.
         HttpResponse<String> start = post("/api/data/jobs",
                 "{\"kind\":\"backfill_underlying\",\"params\":{\"symbols\":[\"AAPL\"],\"from\":\"2026-04-01\",\"to\":\"2026-06-30\"}}");

@@ -80,12 +80,25 @@ class EvaluateIntegrationTest {
         // Fixture data is honestly labeled, never observed.
         assertThat(top.get("evidence").get("rollup").asText()).isEqualTo("DEMO_FIXTURE");
 
-        // Ranking: risk-adjusted score is non-increasing down the list.
-        double prev = Double.MAX_VALUE;
+        // Ranking: mechanical eligibility, then economic tier, then score within a tier.
+        // A mechanically valid but economically unknown calendar may precede a known-adverse
+        // lottery even when its numeric Decision score is lower.
+        int previousTier = Integer.MAX_VALUE;
+        double previousScoreInTier = Double.MAX_VALUE;
         for (JsonNode e : evals) {
+            String verdict = e.path("economics").path("verdict").asText("UNAVAILABLE");
+            int tier = switch (verdict) {
+                case "FAVORABLE" -> 3;
+                case "MIXED" -> 2;
+                case "UNAVAILABLE" -> 1;
+                default -> 0;
+            };
             double s = e.get("score").get("riskAdjustedScore").asDouble();
-            assertThat(s).isLessThanOrEqualTo(prev);
-            prev = s;
+            assertThat(tier).isLessThanOrEqualTo(previousTier);
+            if (tier == previousTier) assertThat(s).isLessThanOrEqualTo(previousScoreInTier);
+            else previousScoreInTier = Double.MAX_VALUE;
+            previousTier = tier;
+            previousScoreInTier = s;
         }
     }
 
@@ -99,14 +112,26 @@ class EvaluateIntegrationTest {
         assertThat(ranked.isArray()).isTrue();
         assertThat(ranked).isNotEmpty();
 
-        // Each winner is a full evaluation carrying its symbol; the list ranks cross-symbol.
-        double prev = Double.MAX_VALUE;
+        // Each winner is a full evaluation carrying its symbol; the list uses the same explicit
+        // viable -> economic tier -> Decision score order as a single-symbol competition.
+        int previousTier = Integer.MAX_VALUE;
+        double previousScoreInTier = Double.MAX_VALUE;
         java.util.Set<String> symbols = new java.util.HashSet<>();
         for (JsonNode e : ranked) {
             symbols.add(e.get("spec").get("symbol").asText());
+            String verdict = e.path("economics").path("verdict").asText("UNAVAILABLE");
+            int tier = switch (verdict) {
+                case "FAVORABLE" -> 3;
+                case "MIXED" -> 2;
+                case "UNAVAILABLE" -> 1;
+                default -> 0;
+            };
             double s = e.get("score").get("riskAdjustedScore").asDouble();
-            assertThat(s).isLessThanOrEqualTo(prev);
-            prev = s;
+            assertThat(tier).isLessThanOrEqualTo(previousTier);
+            if (tier == previousTier) assertThat(s).isLessThanOrEqualTo(previousScoreInTier);
+            else previousScoreInTier = Double.MAX_VALUE;
+            previousTier = tier;
+            previousScoreInTier = s;
         }
         assertThat(symbols).isNotEmpty(); // at least one symbol's best idea surfaced
     }

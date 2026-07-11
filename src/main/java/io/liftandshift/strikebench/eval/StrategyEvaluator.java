@@ -14,6 +14,12 @@ import java.util.List;
  */
 public final class StrategyEvaluator {
 
+    static final Comparator<StrategyEvaluation> RANKING =
+            Comparator.comparing(StrategyEvaluation::viable).reversed()
+                    .thenComparing(Comparator.comparingInt(
+                            (StrategyEvaluation e) -> e.economicVerdict().rank()).reversed())
+                    .thenComparing(Comparator.comparingDouble(StrategyEvaluation::rankScore).reversed());
+
     private final CapitalProfiler capital = new CapitalProfiler();
     private final VolatilityProfiler volatility = new VolatilityProfiler();
     private final RiskProfiler risk = new RiskProfiler();
@@ -42,10 +48,7 @@ public final class StrategyEvaluator {
     public List<StrategyEvaluation> evaluateAndRank(List<Candidate> candidates, StrategySpec spec, EvalContext ctx) {
         return candidates.stream()
                 .map(c -> evaluate(c, spec, ctx))
-                .sorted(Comparator.comparing(StrategyEvaluation::viable).reversed()
-                        .thenComparing(Comparator.comparingInt(
-                                (StrategyEvaluation e) -> e.economicVerdict().rank()).reversed())
-                        .thenComparing(Comparator.comparingDouble(StrategyEvaluation::rankScore).reversed()))
+                .sorted(RANKING)
                 .toList();
     }
 }

@@ -152,6 +152,8 @@ class ResearchQuestionEngineTest {
         assertThat(defaults.protocol().confidencePct()).isEqualTo(95);
         assertThat(defaults.protocol().bootstrapSamples()).isEqualTo(800);
         assertThat(defaults.protocol().multiplicity()).isEqualTo("CATALOG_BONFERRONI");
+        assertThat(defaults.protocol().criticalZ()).isGreaterThan(1.96);
+        assertThat(defaults.notes()).anyMatch(n -> n.contains("built-in questions"));
 
         var exploratory = eng.run(new ResearchQuestionEngine.RunRequest(
                 "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",
@@ -163,7 +165,8 @@ class ResearchQuestionEngineTest {
         assertThat(exploratory.protocol().confidencePct()).isEqualTo(99);
         assertThat(exploratory.protocol().bootstrapSamples()).isEqualTo(1200);
         assertThat(exploratory.protocol().minSample()).isEqualTo(20);
-        assertThat(exploratory.protocol().criticalZ()).isEqualTo(2.576);
+        assertThat(exploratory.protocol().criticalZ()).isCloseTo(2.576,
+                org.assertj.core.data.Offset.offset(0.002));
         assertThat(exploratory.holdout()).isNull();
         assertThat(exploratory.studyKey()).isNotEqualTo(defaults.studyKey());
         assertThat(exploratory.notes()).anyMatch(n -> n.contains("Exploratory unadjusted"));
