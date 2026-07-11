@@ -840,6 +840,8 @@ test('discover scan: a blank symbol box auto-recommends with evidence and target
   assert.match(text, /About a week|About a month/);
   assert.match(text, /covers|cannot reach|Uncapped/); // profit-target annotation
   assert.match(text, /not predictions/i);
+  assert.ok(await page.locator('.pick-card [data-economic-verdict]').count() >= 1,
+    'Scout uses the same economic classification as manual Ideas');
   // headline evidence is expandable
   assert.ok(await page.locator('.pick-card details').first().isVisible());
 });
@@ -852,7 +854,11 @@ test('recommendations render candidates and blocked examples', async () => {
   await page.waitForSelector('.candidate');
   const cards = await page.locator('.candidate').count();
   assert.ok(cards >= 1, 'at least one candidate card');
+  assert.equal(await page.locator('.candidate[data-economic-verdict]').count(), cards,
+    'every available strategy carries an economic verdict; none disappear behind the policy');
   const appText = await page.textContent('#app');
+  assert.match(appText, /Cash \/ no trade/);
+  assert.match(appText, /Worth investigating|Favorable in this teaching market|No demonstrated edge|Unfavorable at these prices/);
   assert.match(appText, /BLOCKED/);
   assert.match(appText, /undefined risk/i);
   assert.match(appText, /Theoretical worst case|Theoretical max loss/);

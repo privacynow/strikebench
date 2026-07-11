@@ -52,7 +52,11 @@ public final class RiskProfiler {
         // numbers must never be blended into one.
         Long evHistVol = null;
         String basisNote = null;
-        if (ctx.realizedVol30() != null && ctx.realizedVol30() > 0 && ctx.underlyingCents() > 0
+        long distinctExpirations = c.legs() == null ? 0 : c.legs().stream()
+                .filter(l -> l.expiration() != null && !l.expiration().isBlank())
+                .map(LegView::expiration).distinct().count();
+        if (distinctExpirations <= 1
+                && ctx.realizedVol30() != null && ctx.realizedVol30() > 0 && ctx.underlyingCents() > 0
                 && ctx.daysToExpiry() > 0 && c.legs() != null && !c.legs().isEmpty()) {
             try {
                 List<Leg> plegs = new ArrayList<>(c.legs().stream().map(LegView::toLeg).toList());
@@ -62,6 +66,8 @@ public final class RiskProfiler {
                 basisNote = "expectedValueCents = market-implied (IV, risk-neutral); evHistVolCents = realized-vol "
                         + Math.round(ctx.realizedVol30() * 100) + "% (physical lane, zero drift). Both pre-commission.";
             } catch (RuntimeException ignored) { /* lane stays honestly null */ }
+        } else if (distinctExpirations > 1) {
+            basisNote = "EV lanes are unavailable for multi-expiration structures in the single-terminal model; use the strategy simulator's two-expiry path valuation.";
         }
         return new RiskProfile(maxLoss, maxProfit, c.pop(), c.expectedValueCents(), tailLoss, TAIL_MOVE,
                 scenarios, evHistVol, basisNote);

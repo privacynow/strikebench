@@ -206,6 +206,7 @@ public final class ApiServer {
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
         io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, engine, db, clock)
                 .withFeePerContractCents(cfg.feePerContractCents()); // decision EV judged net of the REAL commission
+        auto.withEvaluationService(evaluations);
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
         server.db = db;
         server.simSessions.attachDb(db);
@@ -2941,7 +2942,7 @@ public final class ApiServer {
      * candidate as a disclosed component. Evaluation trouble falls back to screen order, labeled.
      */
     private Object decisionRanked(RecommendationEngine.Result result, Account acct, String world) {
-        if (result.candidates() == null || result.candidates().size() < 2) return result;
+        if (result.candidates() == null || result.candidates().isEmpty()) return result;
         try {
             // The decision score is computed from the SAME market that priced the candidates —
             // inside a simulated session that is the world's spot/IV/vol, never observed (review P0).
@@ -2952,17 +2953,43 @@ public final class ApiServer {
             com.fasterxml.jackson.databind.node.ObjectNode out =
                     (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(result);
             com.fasterxml.jackson.databind.node.ArrayNode cands = out.putArray("candidates");
+            int favorable = 0, mixed = 0, unfavorable = 0, unavailable = 0;
             for (var e : evals) { // evaluateAndRank order: viable first, then risk-adjusted desc
                 com.fasterxml.jackson.databind.node.ObjectNode m =
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(e.candidate());
                 m.put("decisionScore", Math.round(e.rankScore()));
                 m.put("decisionViable", e.viable());
+                m.put("structurallyEligible", e.viable());
+                if (e.economics() != null) {
+                    m.set("economics", Json.MAPPER.valueToTree(e.economics()));
+                    m.put("economicVerdict", e.economics().verdict().name());
+                    m.put("economicPlacement", e.economics().placement());
+                    switch (e.economics().verdict()) {
+                        case FAVORABLE -> favorable++;
+                        case MIXED -> mixed++;
+                        case UNFAVORABLE -> unfavorable++;
+                        case UNAVAILABLE -> unavailable++;
+                    }
+                }
                 if (e.evCents() != null && e.evCents() < 0) {
                     m.put("negativeEv", true); // never an unlabeled recommendation
                 }
                 cands.add(m);
             }
             out.put("ranking", "decision"); // disclosed: what ordered this list
+            out.put("economicPolicy", "eligibility_then_economics_then_score");
+            out.put("favorableCount", favorable);
+            out.put("mixedCount", mixed);
+            out.put("unfavorableCount", unfavorable);
+            out.put("unavailableCount", unavailable);
+            boolean generatedMarket = !"observed".equals(world);
+            out.put("economicMessage", favorable > 0
+                    ? generatedMarket
+                        ? favorable + " setup" + (favorable == 1 ? "" : "s")
+                            + " favorable inside this generated teaching market. That is useful practice, not evidence of a live-market edge."
+                        : favorable + " setup" + (favorable == 1 ? "" : "s")
+                            + " worth investigating; compare costs and evidence before acting."
+                    : "No setup currently shows a robust after-cost edge. Mixed and unfavorable structures remain available for comparison and learning.");
             return out;
         } catch (RuntimeException e) {
             log.warn("Decision ranking is temporarily unavailable; showing the screened order");
@@ -3210,6 +3237,12 @@ public final class ApiServer {
                     if (e != null) {
                         m.put("decisionScore", Math.round(e.rankScore()));
                         m.put("decisionViable", e.viable());
+                        m.put("structurallyEligible", e.viable());
+                        if (e.economics() != null) {
+                            m.set("economics", Json.MAPPER.valueToTree(e.economics()));
+                            m.put("economicVerdict", e.economics().verdict().name());
+                            m.put("economicPlacement", e.economics().placement());
+                        }
                     }
                     arr.add(m);
                 }

@@ -18,11 +18,22 @@ public record StrategyEvaluation(
         EvidenceProfile evidence,
         ManagementPlan management,
         ScoreBreakdown score,
+        EconomicAssessment economics,
         Explanation explanation
 ) {
+    /** Compatibility constructor for persisted/test evaluations created before economic classification. */
+    public StrategyEvaluation(String id, StrategySpec spec, Candidate candidate, CapitalProfile capital,
+                              VolatilityProfile volatility, RiskProfile risk, EvidenceProfile evidence,
+                              ManagementPlan management, ScoreBreakdown score, Explanation explanation) {
+        this(id, spec, candidate, capital, volatility, risk, evidence, management, score, null, explanation);
+    }
+
     /** The final rank value (risk-adjusted, 0 when the gate fails). Never stands alone in the UI. */
     public double rankScore() { return score == null ? 0.0 : score.riskAdjustedScore(); }
     public boolean viable() { return score != null && score.gatePassed(); }
+    public EconomicAssessment.Verdict economicVerdict() {
+        return economics == null ? EconomicAssessment.Verdict.UNAVAILABLE : economics.verdict();
+    }
 
     public EvidenceLevel evidenceLevel() { return evidence == null ? EvidenceLevel.UNKNOWN : evidence.rollup(); }
     public Long evCents() { return risk == null ? null : risk.expectedValueCents(); }

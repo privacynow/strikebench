@@ -1665,6 +1665,32 @@
       'USES ' + (c.sharesNeeded ? c.sharesNeeded + ' ' : '') + 'HELD SHARES');
   }
 
+  function economicVerdict(c) {
+    return (c && (c.economicVerdict || (c.economics && c.economics.verdict))) || null;
+  }
+
+  function economicAssessmentBlock(c) {
+    var e = c && c.economics;
+    if (!e) return null;
+    var v = economicVerdict(c);
+    var cls = v === 'FAVORABLE' ? 'economic-favorable'
+      : v === 'UNFAVORABLE' ? 'economic-unfavorable'
+      : v === 'UNAVAILABLE' ? 'economic-unavailable' : 'economic-mixed';
+    var block = el('div', { class: 'economic-assessment ' + cls, 'data-economic-verdict': v },
+      el('div', { class: 'economic-assessment-head' },
+        el('span', { class: 'badge' }, e.label || v),
+        e.marketEvAfterCostsCents !== null && e.marketEvAfterCostsCents !== undefined
+          ? el('b', { class: e.marketEvAfterCostsCents >= 0 ? 'gain' : 'loss' },
+              'After-cost model EV ' + fmtMoney(e.marketEvAfterCostsCents, { plus: true })) : null),
+      el('p', {}, e.summary || ''));
+    if (e.reasons && e.reasons.length) {
+      block.appendChild(UI.expandable('Why this classification', function () {
+        return el('ul', { class: 'rationale' }, e.reasons.map(function (r) { return el('li', {}, r); }));
+      }));
+    }
+    return block;
+  }
+
   /** Learning-level card: plain language first, numbers second, mechanics on tap. */
   function beginnerCandidateCard(c, withUse, symbolForTicket) {
     var g = Learn.STRATEGY_GUIDE[c.strategy] || {};
@@ -1683,7 +1709,8 @@
         : el('div', { class: 'fact' },
             el('div', { class: 'f-label' }, UI.term('pop', 'Chance of any profit')),
             el('div', { class: 'f-value' }, fmtPct(c.pop)));
-    var card = el('div', { class: 'candidate', 'data-strategy': c.strategy },
+    var card = el('div', { class: 'candidate', 'data-strategy': c.strategy,
+      'data-economic-verdict': economicVerdict(c) || 'UNKNOWN' },
       el('div', { class: 'head' },
         el('h3', {}, c.displayName),
         intentBadge(c.intent),
@@ -1705,6 +1732,8 @@
         (c.breakevens || []).length
           ? el('span', {}, ' The ', UI.term('breakeven'), ' is at ', el('b', {}, c.breakevens.map(fmtBreakeven).join(' / ')), '.')
           : null));
+    var econ = economicAssessmentBlock(c);
+    if (econ) card.insertBefore(econ, card.children[2] || null);
     var gb = guideBlock(c.strategy);
     if (gb) card.appendChild(gb);
     if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.state.lastRecommendSymbol, c));
@@ -1727,7 +1756,8 @@
 
   function candidateCard(c, withUse, symbolForTicket) {
     if (Learn.currentLevel() === 'beginner') return beginnerCandidateCard(c, withUse, symbolForTicket);
-    var card = el('div', { class: 'candidate', 'data-strategy': c.strategy },
+    var card = el('div', { class: 'candidate', 'data-strategy': c.strategy,
+      'data-economic-verdict': economicVerdict(c) || 'UNKNOWN' },
       el('div', { class: 'head' },
         el('h3', {}, c.displayName),
         intentBadge(c.intent),
@@ -1751,6 +1781,8 @@
         chip('Breakeven', (c.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
         chip('Confidence', fmtPct(c.confidence))),
       explain(c.beginnerExplanation));
+    var econ = economicAssessmentBlock(c);
+    if (econ) card.insertBefore(econ, card.children[2] || null);
     card.appendChild(el('div', { class: 'chip-row expert-only' },
       c.decisionScore !== null && c.decisionScore !== undefined
         ? chip(el('span', {}, 'Decision score', UI.info('decisionscore')), fmtNum(c.decisionScore, 0)) : null,
@@ -1813,8 +1845,9 @@
    * representatives (max 2 per structure shape, top 5 of the engine's order) plus
    * 'Show all N ranked strategies' — diversity is presentation, the ranking is the truth.
    */
-  function renderRankedCards(results, candidates) {
-    var host = el('div', { id: 'ranked-cards' });
+  function renderRankedCards(results, candidates, opts) {
+    opts = opts || {};
+    var host = el('div', { id: opts.id || 'ranked-cards' });
     results.appendChild(host);
     function rankBadge(i) {
       return el('span', { class: 'badge badge-dim rank-badge', title: 'Rank in this list\u2019s ordering (best first)' }, '#' + (i + 1));
@@ -1823,7 +1856,7 @@
       host.innerHTML = '';
       var shown = [];
       if (showAll || candidates.length <= 5) {
-        candidates.forEach(function (c, i) { shown.push({ c: c, rank: i }); });
+        candidates.forEach(function (c, i) { shown.push({ c: c, rank: (c._servedRank || (i + 1)) - 1 }); });
       } else {
         var perGroup = {};
         for (var i = 0; i < candidates.length && shown.length < 5; i++) {
@@ -1831,7 +1864,7 @@
           var n = perGroup[g] || 0;
           if (n >= 2) continue;
           perGroup[g] = n + 1;
-          shown.push({ c: candidates[i], rank: i });
+          shown.push({ c: candidates[i], rank: (candidates[i]._servedRank || (i + 1)) - 1 });
         }
       }
       shown.forEach(function (x) {
@@ -1851,19 +1884,57 @@
     paint(candidates.length <= 5);
   }
 
+  /** Beginner keeps the complete catalog, but endorsement and teaching cases no longer blur. */
+  function renderEconomicGroups(results, candidates) {
+    candidates.forEach(function (c, i) { c._servedRank = i + 1; });
+    var primary = candidates.filter(function (c) {
+      var v = economicVerdict(c);
+      return v !== 'UNFAVORABLE' && v !== 'UNAVAILABLE';
+    });
+    var learning = candidates.filter(function (c) {
+      var v = economicVerdict(c);
+      return v === 'UNFAVORABLE' || v === 'UNAVAILABLE';
+    });
+    if (primary.length) {
+      results.appendChild(el('h3', { class: 'economic-group-title' }, 'Candidates to investigate'));
+      renderRankedCards(results, primary, { id: 'ranked-cards-primary' });
+    }
+    if (learning.length) {
+      var section = el('details', { class: 'card economic-learning-group', open: primary.length ? null : '' },
+        el('summary', {}, 'Learn from ' + learning.length + ' trade-off' + (learning.length === 1 ? '' : 's')));
+      var body = el('div', { class: 'economic-learning-body' });
+      section.appendChild(body);
+      learning.forEach(function (c) {
+        var card = candidateCard(c, true);
+        var head = card.querySelector('h3') || card.firstChild;
+        if (head && head.insertBefore) head.insertBefore(
+          el('span', { class: 'badge badge-dim rank-badge' }, '#' + c._servedRank), head.firstChild);
+        body.appendChild(card);
+      });
+      results.appendChild(section);
+    }
+  }
+
   function comparisonTable(candidates) {
     var sortKey = 'rank', sortDir = 1;
     // The served order IS the ranking (decision-ranked; screen order on fallback) — stamp it
     // once so re-sorting by any column keeps the true rank visible on every row (review P1).
     var rankOf = new Map();
     candidates.forEach(function (c, i) { rankOf.set(c, i + 1); });
+    function rrValue(c) {
+      var denom = c.maxLossCents > 0 ? c.maxLossCents : (c.combinedMaxLossCents || 0);
+      if (denom <= 0) return -1;
+      var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs);
+      return k === 'uncapped' ? Infinity : k === 'model-dependent' ? -1 : c.maxProfitCents / denom;
+    }
     var COLS = [
       { key: 'rank', label: '#', get: function (c) { return rankOf.get(c); }, render: function (c) { return el('span', { class: 'muted', title: 'Rank in the served ordering (best first)' }, '#' + rankOf.get(c)); } },
+      { key: 'economicVerdict', label: 'Economic view', get: function (c) { var v = economicVerdict(c); return v === 'FAVORABLE' ? 3 : v === 'MIXED' ? 2 : v === 'UNFAVORABLE' ? 1 : 0; }, render: function (c) { var v = economicVerdict(c); return el('span', { class: 'badge economic-table-' + String(v || 'unknown').toLowerCase() }, (c.economics && c.economics.label) || v || '—'); } },
       { key: 'displayName', label: 'Strategy', get: function (c) { return c.displayName; }, render: function (c) { return el('b', {}, c.displayName); } },
       { key: 'entryNetPremiumCents', label: 'Cost/Credit', get: function (c) { return c.entryNetPremiumCents; }, render: function (c) { return pnlSpan(c.entryNetPremiumCents); } },
       { key: 'maxLossCents', label: 'Theor. max loss', get: function (c) { return c.usesHeldShares && c.combinedMaxLossCents ? c.combinedMaxLossCents : c.maxLossCents; }, render: function (c) { return c.usesHeldShares && c.maxLossCents === 0 ? el('span', {}, '$0*') : el('span', { class: 'loss' }, fmtMoney(c.maxLossCents)); } },
       { key: 'maxProfitCents', label: 'Theor. max profit', get: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'uncapped' ? Infinity : k === 'model-dependent' ? -Infinity : c.maxProfitCents; }, render: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'model-dependent' ? el('span', { class: 'muted' }, 'model-dependent') : k === 'uncapped' ? el('span', { class: 'gain' }, '\u221E') : el('span', { class: 'gain' }, fmtMoney(c.maxProfitCents)); } },
-      { key: 'rr', label: 'R:R', get: function (c) { var denom = c.maxLossCents > 0 ? c.maxLossCents : (c.combinedMaxLossCents || 0); if (denom <= 0) return -1; var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'uncapped' ? Infinity : k === 'model-dependent' ? -1 : c.maxProfitCents / denom; }, render: function (c) { var v = COLS[5].get(c); return el('span', {}, v === -1 ? '\u2014' : v === Infinity ? '\u221E' : fmtNum(v, 2)); } },
+      { key: 'rr', label: 'R:R', get: rrValue, render: function (c) { var v = rrValue(c); return el('span', {}, v === -1 ? '\u2014' : v === Infinity ? '\u221E' : fmtNum(v, 2)); } },
       { key: 'pop', label: 'POP', get: function (c) { return c.pop === null || c.pop === undefined ? -1 : c.pop; }, render: function (c) { return el('span', {}, fmtPct(c.pop)); } },
       { key: 'expectedValueCents', label: 'EV', get: function (c) { return c.expectedValueCents === null || c.expectedValueCents === undefined ? -Infinity : c.expectedValueCents; }, render: function (c) { return c.expectedValueCents === null || c.expectedValueCents === undefined ? el('span', {}, '\u2014') : pnlSpan(c.expectedValueCents); } },
       { key: 'breakevens', label: 'Breakevens', get: function (c) { return (c.breakevens || []).length ? parseFloat(c.breakevens[0]) : 0; }, render: function (c) { return el('span', { class: 'mono' }, (c.breakevens || []).map(fmtBreakeven).join(' / ') || '\u2014'); } },
@@ -2445,6 +2516,11 @@
         chip('Risk budget (this trade)', fmtMoney(r.riskBudgetCents), 'The most this one trade may risk under your header risk mode.'),
         chip('Mode', r.riskMode.toLowerCase()),
         chip('Candidates', String(r.candidates.length))));
+      if (r.candidates.length) {
+        results.appendChild(el('div', { class: 'economic-baseline', id: 'cash-baseline' },
+          el('div', {}, el('b', {}, 'Cash / no trade'), el('span', { class: 'badge badge-dim' }, 'BASELINE')),
+          el('p', {}, 'Doing nothing has $0 market P/L and no option execution cost. A structure should earn its place by improving the outcome under your evidence and risk limits.')));
+      }
       // Recommendations-as-a-competition: score these side by side INLINE (D3 — no orphan surface).
       if (body && body.symbol && r.candidates.length > 1) {
         var compareHost = el('div', { id: 'decision-host', style: 'margin-top:8px' });
@@ -2464,14 +2540,15 @@
       if (hasLadder && r.candidates.length) {
         results.appendChild(el('h3', {}, 'Other structures for this goal'));
       }
+      if (r.economicMessage) {
+        results.appendChild(alertBox(r.favorableCount > 0 ? 'ok' : 'warn', r.economicMessage));
+      }
       if (Learn.currentLevel() === 'expert' && r.candidates.length > 1) {
         // Expert receives the COMPLETE ranking immediately (ranking truth, review P1).
         results.appendChild(comparisonTable(r.candidates));
       } else {
-        // Beginner: DIVERSE REPRESENTATIVES of the ranked list (max 2 per structure shape,
-        // top 5) with the numerical rank kept visible + a real Show-all affordance — the
-        // presentation summarizes, the engine's order is never rewritten (review P1).
-        renderRankedCards(results, r.candidates);
+        // Beginner receives every capability, organized by economic meaning rather than hidden.
+        renderEconomicGroups(results, r.candidates);
       }
       if (r.rejected && r.rejected.length) {
         var rej = el('div', { class: 'card' },
@@ -2782,6 +2859,12 @@
         card.appendChild(el('p', { class: 'muted' }, 'Nothing passed the risk screens for this horizon.'));
       }
       h.candidates.forEach(function (sc) {
+        if (sc.economics) {
+          sc.candidate.economics = sc.economics;
+          sc.candidate.economicVerdict = sc.economics.verdict;
+          sc.candidate.economicPlacement = sc.economics.placement;
+        }
+        if (sc.decisionScore !== null && sc.decisionScore !== undefined) sc.candidate.decisionScore = sc.decisionScore;
         var cc = candidateCard(sc.candidate, true, pick.symbol);
         if (sc.targetFit) {
           cc.insertBefore(alertBox(sc.targetFit.indexOf('covers') >= 0 ? 'ok' : 'warn', sc.targetFit), cc.querySelector('.btn-row'));

@@ -29,8 +29,9 @@ public final class StrategyEvaluator {
         EvidenceProfile ev = evidence.assemble(c, ctx);
         ManagementPlan plan = management.plan(c, spec);
         ScoreBreakdown sb = score.compose(c, cap, rsk, ev, ctx);
+        EconomicAssessment economics = EconomicAssessment.assess(c, rsk, ev, sb, ctx);
         Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev);
-        return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan, sb, exp);
+        return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan, sb, economics, exp);
     }
 
     /**
@@ -42,6 +43,8 @@ public final class StrategyEvaluator {
         return candidates.stream()
                 .map(c -> evaluate(c, spec, ctx))
                 .sorted(Comparator.comparing(StrategyEvaluation::viable).reversed()
+                        .thenComparing(Comparator.comparingInt(
+                                (StrategyEvaluation e) -> e.economicVerdict().rank()).reversed())
                         .thenComparing(Comparator.comparingDouble(StrategyEvaluation::rankScore).reversed()))
                 .toList();
     }

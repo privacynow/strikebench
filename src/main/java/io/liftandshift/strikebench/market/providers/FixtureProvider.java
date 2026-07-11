@@ -43,15 +43,18 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
     private static final int STRIKES_EACH_SIDE = 10;
     private static final int EXPIRATION_COUNT = 8;
 
-    private record Spec(String name, BigDecimal price, double baseIv, BigDecimal strikeStep, boolean optionable, boolean zeroDte, double dailyVol) {}
+    private record Spec(String name, BigDecimal price, double baseIv, BigDecimal strikeStep,
+                        boolean optionable, boolean zeroDte, double dailyVol, double optionSpreadPct) {}
 
     private static final Map<String, Spec> SPECS = new LinkedHashMap<>();
     static {
-        SPECS.put("AAPL", new Spec("Apple Inc.", new BigDecimal("255.30"), 0.28, new BigDecimal("2.5"), true, false, 0.016));
-        SPECS.put("SPY", new Spec("SPDR S&P 500 ETF Trust", new BigDecimal("562.10"), 0.15, new BigDecimal("5"), true, true, 0.009));
-        SPECS.put("QQQ", new Spec("Invesco QQQ Trust", new BigDecimal("484.75"), 0.20, new BigDecimal("5"), true, true, 0.012));
-        SPECS.put("TSLA", new Spec("Tesla Inc.", new BigDecimal("321.50"), 0.55, new BigDecimal("5"), true, false, 0.032));
-        SPECS.put("VTSAX", new Spec("Vanguard Total Stock Market Index Fund", new BigDecimal("131.22"), 0.0, null, false, false, 0.009));
+        // Bid/ask width is part of the teaching world, not decorative noise. Highly liquid ETFs
+        // use tight books; single names and volatile TSLA stay progressively wider.
+        SPECS.put("AAPL", new Spec("Apple Inc.", new BigDecimal("255.30"), 0.28, new BigDecimal("2.5"), true, false, 0.016, 0.010));
+        SPECS.put("SPY", new Spec("SPDR S&P 500 ETF Trust", new BigDecimal("562.10"), 0.15, new BigDecimal("5"), true, true, 0.009, 0.004));
+        SPECS.put("QQQ", new Spec("Invesco QQQ Trust", new BigDecimal("484.75"), 0.20, new BigDecimal("5"), true, true, 0.012, 0.006));
+        SPECS.put("TSLA", new Spec("Tesla Inc.", new BigDecimal("321.50"), 0.55, new BigDecimal("5"), true, false, 0.032, 0.020));
+        SPECS.put("VTSAX", new Spec("Vanguard Total Stock Market Index Fund", new BigDecimal("131.22"), 0.0, null, false, false, 0.009, 0.0));
     }
 
     private final Clock clock;
@@ -149,8 +152,10 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
             if (strike.signum() <= 0) continue;
             double k = strike.doubleValue();
             double iv = smileIv(spec.baseIv(), s, k, t);
-            calls.add(buildQuote(symbol, OptionType.CALL, strike, expiration, s, k, t, iv, freshness));
-            puts.add(buildQuote(symbol, OptionType.PUT, strike, expiration, s, k, t, iv, freshness));
+            calls.add(buildQuote(symbol, OptionType.CALL, strike, expiration, s, k, t, iv,
+                    spec.optionSpreadPct(), freshness));
+            puts.add(buildQuote(symbol, OptionType.PUT, strike, expiration, s, k, t, iv,
+                    spec.optionSpreadPct(), freshness));
         }
         return new OptionChain(symbol, expiration, spot, calls, puts, nowMs(), NAME, freshness);
     }
@@ -161,10 +166,10 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
     }
 
     private OptionQuote buildQuote(String symbol, OptionType type, BigDecimal strike, LocalDate expiration,
-                                   double s, double k, double t, double iv, Freshness freshness) {
+                                   double s, double k, double t, double iv, double spreadPct, Freshness freshness) {
         boolean call = type == OptionType.CALL;
         double mid = BlackScholes.price(call, s, k, t, RISK_FREE, 0, iv);
-        double spread = Math.max(0.02, mid * 0.03);
+        double spread = Math.max(0.02, mid * spreadPct);
         BigDecimal bid = bd(Math.max(0, mid - spread / 2));
         BigDecimal ask = bd(mid + spread / 2);
         Random rng = seededRng(symbol + type + strike.toPlainString(), expiration, 1);

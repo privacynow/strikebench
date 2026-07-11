@@ -96,6 +96,20 @@ class FixtureProviderTest {
     }
 
     @Test
+    void teachingBooksUseSymbolRealisticRelativeSpreads() {
+        OptionChain spy = provider.chain("SPY", provider.expirations("SPY").get(1)).orElseThrow();
+        OptionQuote spyAtm = spy.find(OptionType.CALL, nearestStrike(spy, spy.underlyingPrice().doubleValue())).orElseThrow();
+        double spyWidthPct = spyAtm.ask().subtract(spyAtm.bid()).doubleValue() / spyAtm.mid().doubleValue();
+
+        OptionChain tsla = provider.chain("TSLA", provider.expirations("TSLA").getFirst()).orElseThrow();
+        OptionQuote tslaAtm = tsla.find(OptionType.CALL, nearestStrike(tsla, tsla.underlyingPrice().doubleValue())).orElseThrow();
+        double tslaWidthPct = tslaAtm.ask().subtract(tslaAtm.bid()).doubleValue() / tslaAtm.mid().doubleValue();
+
+        assertThat(spyWidthPct).as("liquid ETF teaching book").isLessThan(0.01);
+        assertThat(tslaWidthPct).as("volatile single-name teaching book").isGreaterThan(spyWidthPct);
+    }
+
+    @Test
     void candlesEndAtSpotAndAreDeterministic() {
         List<Candle> candles = provider.candles("AAPL", TODAY.minusYears(1), TODAY);
         assertThat(candles).isNotEmpty();

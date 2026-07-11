@@ -1146,4 +1146,46 @@ class ApiIntegrationTest {
         assertThat(post("/api/sim/market/" + world + "/step", "{}").statusCode()).isEqualTo(404);
         assertThat(Json.parse(get("/api/account").body()).get("account").get("id").asText()).isNotBlank();
     }
+
+    @Test
+    @Order(36)
+    void everyIdeaCarriesEconomicMeaningWithoutDeletingTeachingCases() throws Exception {
+        JsonNode r = Json.parse(post("/api/recommend", """
+                {"symbol":"AAPL","thesis":"neutral","horizon":"month","riskMode":"conservative"}
+                """).body());
+        assertThat(r.get("candidates")).isNotEmpty();
+        assertThat(r.get("economicPolicy").asText()).isEqualTo("eligibility_then_economics_then_score");
+        assertThat(r.get("economicMessage").asText()).isNotBlank();
+        boolean teachingCase = false;
+        boolean favorableTeachingCase = false;
+        for (JsonNode c : r.get("candidates")) {
+            assertThat(c.has("structurallyEligible")).isTrue();
+            assertThat(c.has("economicVerdict")).isTrue();
+            assertThat(c.has("economics")).isTrue();
+            if ("FAVORABLE".equals(c.get("economicVerdict").asText())) {
+                assertThat(c.get("economics").get("observedEvidence").asBoolean()).isFalse();
+                assertThat(c.get("economics").get("label").asText()).containsIgnoringCase("teaching market");
+                favorableTeachingCase = true;
+            }
+            teachingCase |= "UNFAVORABLE".equals(c.get("economicVerdict").asText());
+        }
+        assertThat(favorableTeachingCase)
+                .as("the deterministic teaching world demonstrates a favorable case without rigging every result positive")
+                .isTrue();
+        assertThat(teachingCase).as("unfavorable structures stay visible as counterexamples").isTrue();
+        assertThat(r.get("economicMessage").asText()).containsIgnoringCase("generated teaching market")
+                .containsIgnoringCase("not evidence of a live-market edge");
+
+        JsonNode auto = Json.parse(post("/api/recommend/auto", """
+                {"universe":["SPY"],"horizons":["month"],"riskMode":"conservative"}
+                """).body());
+        for (JsonNode pick : auto.get("picks")) {
+            for (JsonNode horizon : pick.get("horizons")) {
+                for (JsonNode c : horizon.get("candidates")) {
+                    assertThat(c.has("economics")).isTrue();
+                    assertThat(c.has("decisionScore")).isTrue();
+                }
+            }
+        }
+    }
 }

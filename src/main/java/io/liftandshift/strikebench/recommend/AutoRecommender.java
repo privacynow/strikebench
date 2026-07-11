@@ -1,6 +1,9 @@
 package io.liftandshift.strikebench.recommend;
 
 import io.liftandshift.strikebench.config.AppConfig;
+import io.liftandshift.strikebench.eval.EconomicAssessment;
+import io.liftandshift.strikebench.eval.EvaluationService;
+import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.util.Money;
 
@@ -54,7 +57,12 @@ public final class AutoRecommender {
     /** A held equity position, injected by the API layer for EXIT/HEDGE/INCOME scans. */
     public record HoldingInfo(String symbol, int freeShares, long avgCostCents) {}
 
-    public record ScoredCandidate(Candidate candidate, double autoScore, String targetFit) {}
+    public record ScoredCandidate(Candidate candidate, double autoScore, String targetFit,
+                                  EconomicAssessment economics, Double decisionScore) {
+        public ScoredCandidate(Candidate candidate, double autoScore, String targetFit) {
+            this(candidate, autoScore, targetFit, null, null);
+        }
+    }
 
     public record HorizonIdeas(String horizon, List<ScoredCandidate> candidates, List<String> notes) {}
 
@@ -68,12 +76,19 @@ public final class AutoRecommender {
     private final RecommendationEngine engine;
     private final AppConfig cfg;
     private final Clock clock;
+    private EvaluationService evaluations;
 
     public AutoRecommender(SignalEngine signals, RecommendationEngine engine, AppConfig cfg, Clock clock) {
         this.signals = signals;
         this.engine = engine;
         this.cfg = cfg;
         this.clock = clock;
+    }
+
+    /** Wires the same DecisionPolicy used by manual Ideas after both services are constructed. */
+    public AutoRecommender withEvaluationService(EvaluationService service) {
+        this.evaluations = service;
+        return this;
     }
 
     public AutoResult run(AutoRequest req, long buyingPowerCents) {
@@ -220,11 +235,39 @@ public final class AutoRecommender {
             if (s.eventRisk() && "RICH".equals(s.volSignal())) {
                 hNotes.add("Elevated event risk: rich premium often reflects a coming catalyst — gaps can blow through short strikes");
             }
-            List<ScoredCandidate> ranked = pool.stream()
-                    .map(c -> new ScoredCandidate(c, autoScore(c, s), targetFit(c, req.targetProfitCents())))
-                    .sorted(Comparator.comparingDouble(ScoredCandidate::autoScore).reversed())
-                    .limit(CANDIDATES_PER_HORIZON)
-                    .toList();
+            List<ScoredCandidate> assessed;
+            if (evaluations != null && !pool.isEmpty()) {
+                List<StrategyEvaluation> evals = evaluations.evaluate(s.symbol(), intent.name(), thesis, horizon,
+                        req.riskMode(), pool, buyingPowerCents, null, false,
+                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId);
+                assessed = evals.stream().map(e -> new ScoredCandidate(e.candidate(),
+                                e.rankScore() + volatilityFit(e.candidate(), s),
+                                targetFit(e.candidate(), req.targetProfitCents()), e.economics(), e.rankScore()))
+                        .sorted(Comparator
+                                .comparingInt((ScoredCandidate x) -> x.economics() == null
+                                        ? 0 : x.economics().verdict().rank()).reversed()
+                                .thenComparing(Comparator.comparingDouble(ScoredCandidate::autoScore).reversed()))
+                        .toList();
+            } else {
+                assessed = pool.stream()
+                        .map(c -> new ScoredCandidate(c, autoScore(c, s), targetFit(c, req.targetProfitCents())))
+                        .sorted(Comparator.comparingDouble(ScoredCandidate::autoScore).reversed())
+                        .toList();
+            }
+            boolean anyFavorable = assessed.stream().anyMatch(x -> x.economics() != null
+                    && x.economics().verdict() == EconomicAssessment.Verdict.FAVORABLE);
+            if (!anyFavorable && !assessed.isEmpty()) {
+                hNotes.add("No favorable setup was found for this horizon. The structures below remain useful comparisons, not endorsements.");
+            }
+            // Scout is a curated surface rather than the full catalog. Preserve at least one
+            // unfavorable counterexample when present so it teaches why the stronger ideas rank
+            // ahead, without flooding the scan with every family (manual Ideas still exposes all).
+            List<ScoredCandidate> selected = new ArrayList<>(assessed.stream()
+                    .filter(x -> x.economics() == null || !x.economics().teachingCase())
+                    .limit(CANDIDATES_PER_HORIZON).toList());
+            assessed.stream().filter(x -> x.economics() != null && x.economics().teachingCase())
+                    .findFirst().filter(x -> selected.size() < CANDIDATES_PER_HORIZON + 1).ifPresent(selected::add);
+            List<ScoredCandidate> ranked = List.copyOf(selected);
             if (ranked.isEmpty()) hNotes.addAll(result.notes());
             // The UI promises that screened-out ideas are called out with their reason —
             // honor that on the scout too, not only on the manual tab (capped for compactness).
@@ -263,6 +306,14 @@ public final class AutoRecommender {
         if ("RICH".equals(s.volSignal())) score += credit ? 8 : -4;
         if ("CHEAP".equals(s.volSignal())) score += credit ? -4 : 8;
         return score;
+    }
+
+    /** Small within-verdict tie-break only; it can never promote a weaker economic class. */
+    private static double volatilityFit(Candidate c, SignalEngine.Signals s) {
+        boolean credit = c.entryNetPremiumCents() > 0;
+        if ("RICH".equals(s.volSignal())) return credit ? 4 : -2;
+        if ("CHEAP".equals(s.volSignal())) return credit ? -2 : 4;
+        return 0;
     }
 
     private static String targetFit(Candidate c, Long targetProfitCents) {

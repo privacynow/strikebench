@@ -37,7 +37,7 @@ public final class ScoreComposer {
         // ---- NORMALIZE: weighted named components ----
         List<ScoreBreakdown.Component> comps = new ArrayList<>();
         double pop = c.pop() != null ? clamp01(c.pop()) : 0.5;
-        comps.add(comp("Probability of profit", 0.15, pop, c.pop() == null ? "model-dependent — assumed neutral" : "lognormal model"));
+        comps.add(comp("Probability of profit", 0.10, pop, c.pop() == null ? "model-dependent — assumed neutral" : "lognormal model"));
 
         double rr;
         String rrNote;
@@ -46,7 +46,7 @@ public final class ScoreComposer {
             rr = ratio / (ratio + 1.0); // 1:1 -> .5, 3:1 -> .75
             rrNote = String.format("reward:risk %.2f:1", ratio);
         } else { rr = 0.8; rrNote = "uncapped/model-dependent upside"; }
-        comps.add(comp("Reward vs risk", 0.15, rr, rrNote));
+        comps.add(comp("Reward vs risk", 0.08, rr, rrNote));
 
         // EXPECTED VALUE is the primary economics: POP and reward:risk are its ingredients, and
         // scoring them separately without EV let a low-POP/high-payout package double-dip (the MU
@@ -67,9 +67,9 @@ public final class ScoreComposer {
             evNote = String.format("model EV $%s net of ~$%s round-trip fees, vs max loss $%s (risk-neutral)",
                     dollars(evNet), dollars(costs), dollars(risk.maxLossCents()));
         } else { evComp = 0.5; evNote = "EV not computable — assumed neutral"; }
-        comps.add(comp("Expected value", 0.20, evComp, evNote));
+        comps.add(comp("Expected value", 0.35, evComp, evNote));
 
-        comps.add(comp("Liquidity", 0.10, clamp01(c.liquidityScore()), "tighter spreads / more open interest score higher"));
+        comps.add(comp("Liquidity", 0.12, clamp01(c.liquidityScore()), "tighter spreads / more open interest score higher"));
 
         double capComp;
         String capNote;
@@ -77,7 +77,7 @@ public final class ScoreComposer {
             capComp = clamp01(cap.returnOnCapitalPct() / (cap.returnOnCapitalPct() + 50.0));
             capNote = String.format("%.0f%% best-case return on economic capital", cap.returnOnCapitalPct());
         } else { capComp = 0.4; capNote = "return on capital not defined"; }
-        comps.add(comp("Capital efficiency", 0.10, capComp, capNote));
+        comps.add(comp("Capital efficiency", 0.05, capComp, capNote));
 
         double evidComp = 1.0 - evidence.rollup().uncertainty() / 5.0;
         comps.add(comp("Evidence quality", 0.15, evidComp, evidence.rollup().label()));
