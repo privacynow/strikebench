@@ -321,7 +321,12 @@ public final class ApiServer {
             // Token bucket per remote IP: 300 burst, ~50 req/s refill — invisible to humans and
             // to the DOM suites (fixture mode never throttles), decisive against a loop. SSE
             // streams and health stay exempt so monitoring keeps working while throttled.
+            c.routes.after("/api/*", ctx -> {
+                Object t0 = ctx.attribute("reqStartNanos");
+                if (t0 instanceof Long tl) recordLatency((System.nanoTime() - tl) / 1000);
+            });
             c.routes.before("/api/*", ctx -> {
+                ctx.attribute("reqStartNanos", System.nanoTime());
                 apiRequests.incrementAndGet();
                 if (cfg.fixturesOnly()) return;
                 String path = ctx.path();
@@ -523,11 +528,20 @@ public final class ApiServer {
                 ctx.json(Map.of("ok", true));
             });
             c.routes.delete("/api/sim/market/{id}", ctx -> {
+                boolean wasActive = ctx.pathParam("id").equals(activeWorld(ctx));
                 simSessions.finish(ctx.pathParam("id"), ownerId(ctx));
-                // finishing the active world falls back to observed — the fail-safe, always
-                db.exec("UPDATE settings SET v='observed' WHERE k=? AND v=?",
-                        "active_world:" + ownerId(ctx), ctx.pathParam("id"));
-                ctx.json(Map.of("ok", true));
+                // Finishing the ACTIVE world IS a world transition: flip the setting, drop any
+                // synthetic dataset, and PUBLISH it — every tab (including the caller's own SSE)
+                // reconciles through the same event as an explicit return-to-real (review P0 #2).
+                if (wasActive) {
+                    db.exec("UPDATE settings SET v='observed' WHERE k=?", "active_world:" + ownerId(ctx));
+                    if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(datasets.activeId(ownerId(ctx)))) {
+                        datasets.setActive(io.liftandshift.strikebench.db.DatasetService.OBSERVED, ownerId(ctx));
+                    }
+                    events.publish("world.selected", Map.of("world", "observed",
+                            "user", ownerId(ctx) == null ? "local" : ownerId(ctx)));
+                }
+                ctx.json(Map.of("ok", true, "worldReset", wasActive));
             });
             c.routes.get("/api/sim/market/{id}/report", this::simMarketReport);
 
@@ -1416,6 +1430,25 @@ public final class ApiServer {
 
     // ---- Operational metrics + throttle ----
     private final java.util.concurrent.atomic.AtomicLong apiRequests = new java.util.concurrent.atomic.AtomicLong();
+    // Latency ring (p50/p95 in /api/metrics — the admitted performance-gate leftover): last 2048
+    // request durations in MICROS, lock-free index; percentiles computed on read.
+    private final long[] latencyRing = new long[2048];
+    private final java.util.concurrent.atomic.AtomicLong latencyIdx = new java.util.concurrent.atomic.AtomicLong();
+    private void recordLatency(long micros) {
+        latencyRing[(int) (latencyIdx.getAndIncrement() % latencyRing.length)] = micros;
+    }
+    private Map<String, Object> latencyPercentiles() {
+        long n = Math.min(latencyIdx.get(), latencyRing.length);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("samples", n);
+        if (n == 0) return out;
+        long[] copy = java.util.Arrays.copyOf(latencyRing, (int) n);
+        java.util.Arrays.sort(copy);
+        out.put("p50Micros", copy[(int) (n / 2)]);
+        out.put("p95Micros", copy[(int) Math.min(n - 1, (long) Math.ceil(n * 0.95) - 1)]);
+        out.put("maxMicros", copy[(int) n - 1]);
+        return out;
+    }
     private final java.util.concurrent.atomic.AtomicLong apiErrors = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong apiThrottled = new java.util.concurrent.atomic.AtomicLong();
     private final IpThrottle throttle = new IpThrottle(300, 50.0);
@@ -1445,6 +1478,7 @@ public final class ApiServer {
     private void metrics(io.javalin.http.Context ctx) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("requests", apiRequests.get());
+        out.put("latency", latencyPercentiles());
         out.put("errors", apiErrors.get());
         out.put("throttled", apiThrottled.get());
         out.put("throttleActive", !cfg.fixturesOnly());

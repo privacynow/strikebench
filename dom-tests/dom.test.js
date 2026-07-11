@@ -82,7 +82,11 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await page.click('#welcome-skip');
   await page.waitForSelector('.tile-row .tile');
   const app = await page.textContent('#app');
-  assert.match(app, /Learn options by/); // the hero band lives ON the dashboard now
+  // Home is the OPERATIONAL desk (review #10): market mode + account numbers + one contextual
+  // action — the product positioning lives on Welcome only, never repeated here.
+  assert.match(app, /YOUR PRACTICE DESK/);
+  assert.match(app, /OBSERVED MARKET|SIMULATED|SCENARIO/);
+  assert.doesNotMatch(app, /Learn options by/, 'positioning is not repeated on the dashboard');
   assert.match(app, /Buying power/);
   assert.ok(await page.locator('#home-tour-link').isVisible(), 'the full tour is one visible click away');
   assert.ok((await page.locator('.tile-row .tile').count()) === 4, 'four market tiles');
@@ -1918,6 +1922,7 @@ test('simulated market: product creator, loud live band, world-routed research, 
   await page.click('#sim-scenarios .sim-scenario[data-scenario="SELLOFF_REBOUND"]');
   await page.fill('#sim-name', 'DOM sim');
   await page.fill('#sim-symbols', 'ACME');
+  await page.check('#sim-allow-fictional'); // EXPLICIT opt-in — fictional is never inferred (and never pre-checked)
   await page.click('#sim-create');
 
   // Switch happened: the loud band appears with HUMAN wording + live controls.
@@ -1970,17 +1975,26 @@ test('simulated market: product creator, loud live band, world-routed research, 
   // The simulation account is the account inside the world.
   const simAcct = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);
 
-  // Return to real: band gone, world observed, real account back — instantly.
+  // Return to real: band gone, world observed, real account back — and the RECONCILIATION is
+  // total: the universe label, MarketStore lane, and screens must all say observed. The SSE
+  // world.selected hint racing the awaited PUT used to skip this (stale "Dom sim (simulated)").
   await page.click('#world-exit');
   await page.waitForSelector('#world-band', { state: 'detached' });
+  await page.waitForFunction(() => {
+    const u = App.state.universe;
+    return u && u.active && !/simulated/i.test(u.active.label || '') && !u.world
+      && App.Market.world === 'observed';
+  }, { timeout: 15000 });
   const after = await page.evaluate(async () => ({
     world: (await API.getFresh('/api/world')).world,
     acct: (await API.getFresh('/api/account')).account.id,
-    simBody: document.body.classList.contains('in-sim-world')
+    simBody: document.body.classList.contains('in-sim-world'),
+    uniLabel: (App.state.universe && App.state.universe.active && App.state.universe.active.label) || ''
   }));
   assert.equal(after.world, 'observed');
   assert.notEqual(after.acct, simAcct, 'back on the real practice account');
   assert.equal(after.simBody, false);
+  assert.doesNotMatch(after.uniLabel, /simulated/i, 'the universe label reconciled to observed');
 
   // Finish via the app modal (never window.confirm): the REPORT shows before the finish.
   await go('#/data/simulation');
@@ -2012,7 +2026,7 @@ test('golden weekend-trader journey: creator UI, injected shock, UI trade, movin
   await page.type('#sim-symbols', 'AAPL');
   await page.keyboard.press('Enter');
   await page.waitForSelector('#sim-symbol-chips [data-picked-sym="AAPL"]');
-  assert.ok(await page.isChecked('#sim-allow-fictional'), 'fictional symbols are an EXPLICIT, visible control');
+  assert.ok(!(await page.isChecked('#sim-allow-fictional')), 'fictional symbols default OFF — opting in is an action');
   await page.click('#sim-create');
   await page.waitForSelector('#world-band', { timeout: 20000 });
   const wConf = await page.evaluate(async () => {
@@ -2107,10 +2121,55 @@ test('golden weekend-trader journey: creator UI, injected shock, UI trade, movin
   await page.click('#modal-confirm');
   await page.waitForSelector('#world-band', { state: 'detached', timeout: 15000 });
 
+  // FINISH is a full transition too: universe label, store lane, and screens reconcile.
+  await page.waitForFunction(() => {
+    const u = App.state.universe;
+    return u && u.active && !/simulated/i.test(u.active.label || '') && App.Market.world === 'observed';
+  }, { timeout: 15000 });
   const after = await page.evaluate(async () => ({
     world: (await API.getFresh('/api/world')).world,
-    acct: (await API.getFresh('/api/account')).account.id
+    acct: (await API.getFresh('/api/account')).account.id,
+    uniLabel: (App.state.universe && App.state.universe.active && App.state.universe.active.label) || ''
   }));
   assert.equal(after.world, 'observed');
   assert.equal(after.acct, realAcct, 'the real practice account is exactly the one we left');
+  assert.doesNotMatch(after.uniLabel, /simulated/i, 'finish reconciled the universe label');
+});
+
+test('viewport composition: welcome rows share one width, Data Overview fits 1280x720, Home has one Find-an-idea', async () => {
+  // VISUAL GATES (holistic review): composition is tested, not just presence.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await go('#/home/tour');
+  await page.waitForSelector('#welcome-hero');
+  const widths = await page.evaluate(() => {
+    const rows = [document.querySelector('.welcome-top'),
+      ...document.querySelectorAll('.welcome-page > .welcome-section'),
+      document.querySelector('.welcome-footer')].filter(Boolean);
+    return rows.map(r => { const b = r.getBoundingClientRect(); return { l: Math.round(b.left), r: Math.round(b.right) }; });
+  });
+  for (const w of widths) {
+    assert.ok(Math.abs(w.l - widths[0].l) <= 1 && Math.abs(w.r - widths[0].r) <= 1,
+      'welcome rows share ONE frame: ' + JSON.stringify(widths));
+  }
+  // Data Overview: the four dashboard cards fit one desktop viewport (expert: densest case;
+  // at beginner the health detail folds into an expandable and the text is not visible).
+  await page.click('#level-switch button[data-level="expert"]');
+  await go('#/data/overview');
+  await page.waitForSelector('#dc-mode .badge');
+  await page.waitForSelector('#dc-health:has-text("QUOTES")', { timeout: 15000 });
+  const ovBottom = await page.evaluate(() => {
+    const g = document.querySelector('.dc-grid');
+    return g ? Math.round(g.getBoundingClientRect().bottom) : 9999;
+  });
+  assert.ok(ovBottom <= 730, 'Data Overview fits a 720px viewport (bottom=' + ovBottom + ')');
+  // Home: exactly ONE 'Find an idea' doorway (review #9) and no marketing hero.
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1')); // dashboard, not the tour
+  await go('#/home');
+  await page.waitForSelector('#home-stats .stat');
+  const homeText = await page.textContent('#app');
+  const findCount = (homeText.match(/Find an idea/g) || []).length;
+  assert.ok(findCount <= 1, 'one contextual Find-an-idea, not ' + findCount);
+  assert.ok(await page.locator('#next-up').count(), 'one Next up area (journey + continuity merged)');
+  assert.ok(await page.locator('#command-bar .btn').count() >= 5, 'compact command bar');
+  await page.setViewportSize({ width: 1280, height: 900 });
 });

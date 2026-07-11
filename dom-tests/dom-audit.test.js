@@ -66,7 +66,7 @@ const ROUTES = ['#/home', '#/home/tour', '#/research', '#/research/AAPL', '#/tra
   '#/trade/discover/manual', '#/trade/shape', '#/trade/place', '#/trade/verify',
   '#/portfolio', '#/portfolio/activity', '#/portfolio/account', '#/status',
   '#/data/simulation', '#/data/datasets', '#/data/sources', '#/data/admin'];
-const WIDTHS = [1280, 1000, 375];
+const WIDTHS = [1280, 1000, 390, 375, 320]; // clip is GONE — overflow here is real, not masked
 
 // Sanctioned control heights: --ctl-h (38), --ctl-h-sm / --ctl-h-xs (30), plus the
 // tape/level-switch micro scale (<=28) which is exempted by selector below.

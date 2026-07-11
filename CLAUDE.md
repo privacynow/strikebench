@@ -1797,6 +1797,53 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   (10) simulation training library + reviewer exercises; then reporting/sharing, global search,
   operational readiness. ANTI-GOALS: no Lab resurrection, no second backtester, no per-screen
   catalogs, no free-form order text as canonical, never blend historical/MC/risk-neutral bases.
+- V PROGRAM: VIEWPORT COMPOSITION + STATE-TRANSITION P0s (2026-07-10; branch, NOT deployed).
+  Junior's third review (15 findings) + the user's direct catches ("Dom sim (simulated)" after
+  exit, Data Overview too tall, welcome row asymmetry AGAIN, home's wasted trades void) — ALL DONE:
+  - P0 ONE WORLD TRANSITION: App.transitionWorld replaces adoptWorld's same-id early-return —
+    the world.selected SSE hint used to beat the awaited PUT, do a band-only update, and the
+    real caller then SKIPPED universe/render reconciliation (the stale "(simulated)" label).
+    Concurrent same-target transitions COLLAPSE into one full reconciliation (cache flush,
+    MarketStore lane reset, band + scenario banner, universe, route guard, render). Every path
+    goes through it: PUT return, finish, SSE, multi-tab, visibilitychange. finishModal no longer
+    bare-assigns App.state.world; the FINISH route server-side flips active_world + resets the
+    synthetic dataset + PUBLISHES world.selected when the finished world was active.
+  - P1 LANE-KEYED WORKFLOW STATE: transitions stash the outgoing market's thinking and restore
+    the incoming one's (symbol/thesis/study/evidence/forms/scout results via _laneStash) — a
+    simulated symbol or study can no longer leak into observed screens.
+  - P1 FICTIONAL DEFAULT OFF: the checkbox is real consent now; UI tests tick it explicitly.
+  - P0 MOBILE AT THE SOURCE: #app{overflow-x:clip} DELETED. Real fixes: minmax(0,1fr) on every
+    1fr grid (tile-row/grid-2/3/4/form/fact/skel/home-cols), .tile min-width:0 + ellipsis,
+    .tabs/.wb-stages scroll INSIDE themselves, hero-deco hidden <700px, sector-rail-wrap
+    min-width:0 (THE 2,190px culprit: the rail scrolls internally but its min-content propagated
+    up through auto-min 1fr columns), .btn nowrap + max-width/ellipsis. dom-audit widths now
+    [1280,1000,390,375,320]. DEBUG METHOD that found it: hide-probe every element and watch
+    which one shrinks #app.scrollWidth — bounding-box walks only show the STRETCHED victims.
+  - WELCOME ONE-WIDTH: every row (top/sections/footer) shares --welcome-w, centered; gate pins
+    edges within 1px at 1280x720.
+  - DATA OVERVIEW = 2x2 DASHBOARD (.dc-grid ≥1000px): Where-you-are + Running-activity/coverage
+    (specific commands: 'Sources & jobs →', 'Datasets →'), Market engine, Provider health as a
+    per-domain chip summary + Per-source detail expandable at BOTH levels. Fits 720px (gate).
+  - HOME = OPERATIONAL COCKPIT: hero drops the marketing copy for YOUR PRACTICE DESK + market-
+    mode chip + state-aware context line + ONE contextual CTA (Place SYM → when an idea is
+    working, else the single Find-an-idea) + tour ghost. Empty trades card GONE (Next up carries
+    the state); trades render 3 useful rows w/ live Now P/L. Journey + continuity merged into
+    ONE #next-up card; five action cards → one #command-bar row. Gate: ≤1 'Find an idea', no
+    'Learn options by' on the dashboard. Tiles/rows got role/tabindex/keyboard via pressable().
+  - ALSO: tape shows on Data-simulation while in a world; admin tab hidden-until-authorized (no
+    flash, fail-closed); welcome live proof renders last-known from localStorage then refreshes;
+    ONE verification-mode selector on Verify (Observed backtest / Saved scenario / Monte Carlo /
+    Historical analogs / Simulated session — routes to existing engines, honest basis notes,
+    disabled modes navigate to what enables them); research chain refetches on >0.5% streamed
+    spot moves (5s throttle); heroBlock() ProductHero primitive builds BOTH welcome + home
+    heroes; /api/metrics gains latency {samples,p50Micros,p95Micros,maxMicros} via an after-
+    filter nanos ring.
+  - GOTCHA (cost a debug loop): buttons that WRAP break the 30px control-height audit, and
+    nowrap labels then overflow 320px — .btn is nowrap + max-width:100% + ellipsis. And
+    beginner-level health text sits inside an expandable — :has-text visibility assertions must
+    run at expert or open it.
+  - MATRIX: 391 JUnit + 52 fixture + 5 audit (5 widths, clip-free) + 4 seeded + 8 live — ALL
+    GREEN. Screenshots dom-tests/shots/v5-*.png (home desktop/dark/390, welcome, data overview).
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

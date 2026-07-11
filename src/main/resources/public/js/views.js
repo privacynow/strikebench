@@ -40,33 +40,34 @@
       return d;
     })();
     root.appendChild(el('div', { class: 'welcome-top' },
-      el('section', { class: 'hero', id: 'welcome-hero' },
-        deco,
-        el('div', { class: 'hero-inner' },
-          el('div', { class: 'hero-brandline' }, UI.brandMark(30),
-            el('span', { class: 'eyebrow' }, 'PAPER TRADING \u00B7 LOCAL-FIRST \u00B7 FREE')),
-          el('h1', { class: 'hero-title' }, 'Learn options by ', el('span', { class: 'grad' }, 'doing'), ',', el('br', {}),
-            'with honest numbers.'),
-          el('p', { class: 'hero-sub' },
-            'Screen strategies against your goal, practice with \$100,000 in paper money, and verify honestly.'),
-          el('div', { class: 'hero-ctas' },
-            el('button', {
-              class: 'btn btn-lg', onclick: function () {
-                try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
-                App.navigate('#/recommend/manual');
-              }
-            }, 'Find my first idea'),
-            el('button', {
-              class: 'btn btn-lg btn-ghost', onclick: function () {
-                var t = document.getElementById(stepsAnchorId);
-                if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }
-            }, 'See how it works')),
-          el('div', { class: 'trust-row' },
-            ['No signup', 'No cloud', 'Fills at real bid/ask', 'Undefined risk blocked by default']
-              .map(function (t, i) {
-                return el('span', {}, i ? el('span', { class: 'dot-sep' }, '\u00B7') : null, t);
-              })))),
+      heroBlock('welcome', {
+        id: 'welcome-hero',
+        deco: deco,
+        top: el('div', { class: 'hero-brandline' }, UI.brandMark(30),
+          el('span', { class: 'eyebrow' }, 'PAPER TRADING \u00B7 LOCAL-FIRST \u00B7 FREE')),
+        title: el('h1', { class: 'hero-title' }, 'Learn options by ', el('span', { class: 'grad' }, 'doing'), ',', el('br', {}),
+          'with honest numbers.'),
+        sub: el('p', { class: 'hero-sub' },
+          'Screen strategies against your goal, practice with \$100,000 in paper money, and verify honestly.'),
+        ctas: [
+          el('button', {
+            class: 'btn btn-lg', onclick: function () {
+              try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
+              App.navigate('#/recommend/manual');
+            }
+          }, 'Find my first idea'),
+          el('button', {
+            class: 'btn btn-lg btn-ghost', onclick: function () {
+              var t = document.getElementById(stepsAnchorId);
+              if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+          }, 'See how it works')],
+        extras: el('div', { class: 'trust-row' },
+          ['No signup', 'No cloud', 'Fills at real bid/ask', 'Undefined risk blocked by default']
+            .map(function (t, i) {
+              return el('span', {}, i ? el('span', { class: 'dot-sep' }, '\u00B7') : null, t);
+            }))
+      }),
       el('section', { class: 'welcome-section welcome-live-col' },
         el('div', { class: 'live-head' },
           el('div', { class: 'eyebrow' }, 'LIVE FROM THE ENGINE'),
@@ -78,15 +79,27 @@
           el('p', { class: 'showcase-caption' },
             'A real screened idea \u2014 generated this second.')))));
     (async function () {
+      // LAST-KNOWN FIRST (review #15): the opening composition must never be half spinner on a
+      // slow provider. Render the cached proof instantly, then refresh it live and re-store.
+      var cached = null;
+      try { cached = JSON.parse(localStorage.getItem('strikebench.welcomeProof') || 'null'); } catch (e) { /* fresh */ }
+      if (cached) {
+        liveHost.innerHTML = '';
+        liveHost.appendChild(candidateCard(cached, false));
+        liveHost.appendChild(el('p', { class: 'muted small', style: 'margin:4px 0 0' }, 'Refreshing with a live run\u2026'));
+      }
       try {
         var r = await API.post('/api/recommend', { symbol: 'AAPL', thesis: 'bullish', horizon: 'month', riskMode: 'conservative' });
-        liveHost.innerHTML = '';
         if (r.candidates && r.candidates.length) {
+          liveHost.innerHTML = '';
           liveHost.appendChild(candidateCard(r.candidates[0], false));
+          try { localStorage.setItem('strikebench.welcomeProof', JSON.stringify(r.candidates[0])); } catch (e) { /* private mode */ }
         }
       } catch (e) {
-        liveHost.innerHTML = '';
-        liveHost.appendChild(el('p', { class: 'muted', style: 'padding:16px' }, 'The engine needs the server running to demo itself.'));
+        if (!cached) {
+          liveHost.innerHTML = '';
+          liveHost.appendChild(el('p', { class: 'muted', style: 'padding:16px' }, 'The engine needs the server running to demo itself.'));
+        }
       }
     })();
 
@@ -184,31 +197,39 @@
     // The opening page's DNA is folded INTO the dashboard — a welcoming hero band with
     // the account numbers in it, and the full tour one visible click away. Streamlined,
     // not discarded: fresh accounts still open on the full hero page.
+    // OPERATIONAL HERO (review #10): Home is the user's DESK — market mode, account numbers,
+    // and one contextual next action. The product positioning ("Learn options by doing") lives
+    // on the Welcome/tour page only; repeating it here made Home a compressed landing page.
     var statsAnchor = el('div', { class: 'grid grid-4', id: 'home-stats' });
-    var brand = App.state.brand || {};
-    var heroEyebrow = 'PAPER TRADING \u00B7 LOCAL-FIRST \u00B7 HONEST NUMBERS';
-    var heroMode = null;
+    var heroMode = el('span', { class: 'badge badge-ok', id: 'home-mode-chip' }, 'OBSERVED MARKET');
     if (App.state.world && App.state.world !== 'observed') {
       heroMode = el('span', { class: 'badge badge-sim', id: 'home-mode-chip' }, 'SIMULATED MARKET SESSION');
     } else if (App.config && App.config.scenarioMode) {
       heroMode = el('span', { class: 'badge badge-warn', id: 'home-mode-chip' },
         'SCENARIO: ' + (App.config.activeDatasetName || 'generated data'));
     }
-    root.appendChild(el('section', { class: 'home-hero' },
-      el('div', { class: 'home-hero-top' },
-        el('div', { class: 'home-hero-text' },
-          el('div', { class: 'eyebrow' }, heroEyebrow, heroMode ? ' ' : null, heroMode),
-          el('h1', { class: 'home-hero-title' }, 'Learn options by ', el('span', { class: 'grad' }, 'doing'), '.'),
-          el('p', { class: 'home-hero-sub' },
-            brand.tagline || 'Screen ideas against your goal, practice with paper money, and backtest honestly \u2014 all on your machine.')),
-        statsAnchor,
-        el('div', { class: 'home-hero-ctas' },
-          el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find an idea'),
-          el('button', {
-            class: 'btn btn-ghost', id: 'home-tour-link',
-            title: 'The full opening page: how it works, the live engine demo, the two ways to start',
-            onclick: function () { App.navigate('#/home/tour'); }
-          }, 'Take the tour')))));
+    var t0 = App.state.ticket;
+    var heroPlaceable = !!(t0 && (t0.candidate || (t0.custom && t0.legs && t0.legs.length)));
+    var heroSub = el('p', { class: 'home-hero-sub', id: 'home-context-line' },
+      heroPlaceable
+        ? 'A working idea on ' + t0.symbol + ' is ready to place \u2014 or keep exploring.'
+        : 'Screened ideas, honest odds, worst case always known before you commit.');
+    var heroCta = heroPlaceable
+      ? el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/place'); } },
+          'Place ' + t0.symbol + ' \u2192')
+      : el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find an idea');
+    root.appendChild(heroBlock('dashboard', {
+      eyebrow: ['YOUR PRACTICE DESK ', heroMode],
+      title: el('h1', { class: 'home-hero-title' }, 'Your ', el('span', { class: 'grad' }, 'desk'), '.'),
+      sub: heroSub,
+      aside: statsAnchor,
+      ctas: [heroCta,
+        el('button', {
+          class: 'btn btn-ghost', id: 'home-tour-link',
+          title: 'The opening page: what StrikeBench is, how it works, the live engine demo',
+          onclick: function () { App.navigate('#/home/tour'); }
+        }, 'Take the tour')]
+    }));
 
     // First contact: a fresh account that hasn't dismissed the welcome gets the opening
     // page instead — decided by the same account fetch that fills the stat row.
@@ -274,78 +295,74 @@
         return;
       }
       rows.forEach(function (q) {
-        tiles.appendChild(el('div', {
+        tiles.appendChild(pressable(el('div', {
           class: 'tile', onclick: function () { App.navigate('#/research/' + q.symbol); }
         },
           el('div', { class: 't-sym' }, q.symbol, ' ', badge(q.freshness)),
           el('div', { class: 't-px' }, fmtNum(q.last)),
           UI.delta(q.last, q.prevClose),
-          el('div', { class: 't-nm' }, q.description || '')));
+          el('div', { class: 't-nm' }, q.description || '')), 'Research ' + q.symbol));
       });
     })();
 
-    // Open positions: shell + async fill, same pattern
-    var posCard = el('div', { class: 'card' }, UI.cardHeader('Open practice trades',
-      el('a', { href: '#/portfolio' }, 'All trades \u2192')));
-    colL.appendChild(posCard);
+    // Open positions (review #8): a 256px empty card was wasted real estate — with no trades
+    // the whole card stays OFF the page (Next up carries the one-line state + action instead);
+    // with trades, three USEFUL rows: live P/L, max loss, opened.
+    var posAnchor = el('div', { id: 'open-trades-anchor' });
+    colL.appendChild(posAnchor);
+    var hasOpenTrades = false;
     var tradesFill = (async function fillTrades() {
       try {
-        var open = await API.get('/api/trades?status=ACTIVE&size=5');
-        if (!open.trades.length) {
-          posCard.appendChild(UI.emptyState('No open trades yet',
-            'Get risk-screened ideas for a symbol, then walk the guided ticket.',
-            'Find trade ideas', function () { App.navigate('#/recommend'); }));
-        } else {
-          posCard.appendChild(table(['Symbol', 'Strategy', 'Qty', 'Max loss', 'Opened'],
-            open.trades.map(function (t) {
-              return el('tr', { class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); } },
-                el('td', {}, el('b', {}, t.symbol)),
-                el('td', {}, prettyStrategy(t.strategy)),
-                el('td', {}, 'x' + t.qty),
-                el('td', { class: 'loss' }, fmtMoney(t.maxLossCents)),
-                el('td', { class: 'muted' }, UI.fmtDate(t.createdAt)));
-            })));
-        }
+        var open = await API.get('/api/trades?status=ACTIVE&size=3');
+        if (!open.trades.length) { posAnchor.remove(); return; }
+        hasOpenTrades = true;
+        var posCard = el('div', { class: 'card', id: 'open-trades-card' }, UI.cardHeader('Open practice trades',
+          el('a', { href: '#/portfolio' }, 'All trades \u2192')));
+        posCard.appendChild(table(['Symbol', 'Strategy', 'Now', 'Max loss', 'Opened'],
+          open.trades.map(function (t) {
+            return pressable(el('tr', { class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); } },
+              el('td', {}, el('b', {}, t.symbol)),
+              el('td', {}, prettyStrategy(t.strategy) + ' x' + t.qty),
+              el('td', {}, t.unrealizedPnlCents !== undefined && t.unrealizedPnlCents !== null
+                ? pnlSpan(t.unrealizedPnlCents) : el('span', { class: 'muted' }, '\u2014')),
+              el('td', { class: 'loss' }, fmtMoney(t.maxLossCents)),
+              el('td', { class: 'muted' }, UI.fmtDate(t.createdAt))), 'Open ' + t.symbol + ' trade');
+          })));
+        posAnchor.replaceWith(posCard);
       } catch (e) {
-        posCard.appendChild(alertBox('warn', 'Could not load open trades', [e.message]));
+        posAnchor.replaceWith(el('div', { class: 'card' }, alertBox('warn', 'Could not load open trades', [e.message])));
       }
     })();
 
-    // First-week journey: the welcome tour ORIENTS; a visible, check-off-able first path
-    // RETAINS. Beginner + not-yet-traded only — it retires itself the moment it's done its job.
-    if (Learn.currentLevel() === 'beginner' && acct && !acct.hasTraded) {
-      var steps = [
-        { label: 'Research a stock', done: (function () { try { return (JSON.parse(localStorage.getItem('strikebench.recent') || '[]')).length > 0; } catch (e) { return false; } })(), hash: '#/research' },
-        { label: 'Get a screened idea', done: !!App.state.recommendResults || !!App.state.scoutResults, hash: '#/trade/discover' },
-        { label: 'Practice-place it', done: false, hash: '#/trade/discover' },
-        { label: 'Know the exit plan', done: false, hash: '#/trade/discover' }
-      ];
-      colR.appendChild(el('div', { class: 'card card-slim', id: 'journey-card' },
-        UI.cardHeader('Your first trade — four steps'),
-        el('div', { class: 'journey' }, steps.map(function (st2, i) {
+    // NEXT UP (review #9): ONE contextual card replaces the journey card + continuity row +
+    // empty-trades CTA — the single most useful next action first, everything else quiet.
+    (function nextUp() {
+      var card = el('div', { class: 'card card-slim', id: 'next-up' }, UI.cardHeader('Next up'));
+      var any = false;
+      // The beginner first-week path, folded in (retires itself after the first trade).
+      if (Learn.currentLevel() === 'beginner' && acct && !acct.hasTraded) {
+        var steps = [
+          { label: 'Research a stock', done: (function () { try { return (JSON.parse(localStorage.getItem('strikebench.recent') || '[]')).length > 0; } catch (e) { return false; } })(), hash: '#/research' },
+          { label: 'Get a screened idea', done: !!App.state.recommendResults || !!App.state.scoutResults, hash: '#/trade/discover' },
+          { label: 'Practice-place it', done: false, hash: '#/trade/discover' },
+          { label: 'Know the exit plan', done: false, hash: '#/trade/discover' }
+        ];
+        card.appendChild(el('div', { class: 'journey', id: 'journey-card' }, steps.map(function (st2, i) {
           return el('button', { class: 'journey-step' + (st2.done ? ' done' : ''), type: 'button',
             onclick: function () { App.navigate(st2.hash); } },
-            el('span', { class: 'ck-mark' }, st2.done ? '' : String(i + 1)), // done glyph lives in CSS
+            el('span', { class: 'ck-mark' }, st2.done ? '' : String(i + 1)),
             el('span', {}, st2.label));
-        })),
-        explain('Paper money, honest numbers, worst case always known. The list disappears after your first practice trade.')));
-    }
-
-    // Continuity: one-tap re-entry into whatever the user was last doing — the working idea
-    // takes you to Place, the working symbol back to its research page. Renders only when
-    // there is genuinely something to continue (a fresh account sees nothing extra).
-    (function continueRow() {
+        })));
+        any = true;
+      }
       var chips = [];
       var t = App.state.ticket;
-      // Same placeability rule as the Place stage gate — a chip that lands on
-      // "Nothing to place yet" is a dead end, not continuity.
       var placeable = !!(t && (t.candidate || (t.custom && t.legs && t.legs.length)));
       if (placeable) {
-        var what = t.custom ? 'custom strategy' : (t.candidate && t.candidate.strategy
-            ? prettyStrategy(t.candidate.strategy) : 'trade');
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'idea',
           onclick: function () { App.navigate('#/trade/place'); } },
-          'Working idea: ' + t.symbol + ' ' + what + ' →'));
+          'Working idea: ' + t.symbol + ' ' + (t.custom ? 'custom strategy'
+            : (t.candidate && t.candidate.strategy ? prettyStrategy(t.candidate.strategy) : 'trade')) + ' →'));
       }
       var sym = (App.state.lastRecommendSymbol || '').toUpperCase();
       if (sym) {
@@ -354,18 +371,26 @@
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'ideas',
           onclick: function () { App.navigate('#/trade/discover'); } }, 'Ideas for ' + sym + ' →'));
       }
-      if (!chips.length) return;
-      colR.appendChild(el('div', { class: 'card card-slim', id: 'continue-row' },
-        UI.cardHeader('Pick up where you left off'),
-        el('div', { class: 'chip-row' }, chips)));
+      if (chips.length) {
+        card.appendChild(el('div', { class: 'chip-row', id: 'continue-row' }, chips));
+        any = true;
+      }
+      if (!any) {
+        card.appendChild(el('div', { class: 'muted small' },
+          'No open work \u2014 the button above finds a risk-screened idea; the worst case is always shown first.'));
+      }
+      colR.appendChild(card);
     })();
 
-    colR.appendChild(el('div', { class: 'home-actions' },
-      quickAction('Research a symbol', 'Quotes, chains, IV vs HV, history, news.', '#/research', 'scope'),
-      quickAction('Scout opportunities', 'Momentum, sentiment, and volatility views.', '#/trade/discover', 'compass'),
-      quickAction('Build a strategy', 'Multi-leg construction with live risk.', '#/trade/shape', 'target'),
-      quickAction('Backtest a strategy', 'How a rule would have behaved.', '#/trade/verify', 'chart'),
-      quickAction('Practice in a simulated market', 'A market that moves \u2014 any day, any speed.', '#/data/simulation', 'flask')));
+    // Command bar (review #9): five stacked action cards → one compact row of commands.
+    colR.appendChild(el('div', { class: 'card card-slim', id: 'command-bar' },
+      el('div', { class: 'btn-row', style: 'flex-wrap:wrap' },
+        [['Research', '#/research', 'scope'], ['Ideas', '#/trade/discover', 'compass'],
+         ['Builder', '#/trade/shape', 'target'], ['Backtest', '#/trade/verify', 'chart'],
+         ['Simulate', '#/data/simulation', 'flask']].map(function (a) {
+          return el('button', { class: 'btn btn-sm btn-secondary', title: a[0],
+            onclick: function () { App.navigate(a[1]); } }, icon(a[2], 14), ' ', a[0]);
+        }))));
 
     // Wait for the fills so data-ready means READY (tests and users agree on that).
     await Promise.all([marketsFill, tradesFill]);
@@ -386,6 +411,43 @@
     if (!createdAt) return false;
     var t = new Date(createdAt).getTime();
     return isFinite(t) && (Date.now() - t) < 26 * 3600 * 1000;
+  }
+
+  /**
+   * ProductHero primitive (review addendum D / sequence #7): ONE hero composition — frame,
+   * eyebrow, title, sub, CTA row, optional aside — with a variant class. Welcome (landing)
+   * and Home (operational desk) stay DIFFERENT pages sharing identical bones.
+   */
+  function heroBlock(variant, opts) {
+    if (variant === 'welcome') {
+      return el('section', { class: 'hero product-hero-welcome', id: opts.id || null },
+        opts.deco || null,
+        el('div', { class: 'hero-inner' },
+          opts.top || (opts.eyebrow ? el('div', { class: 'eyebrow' }, opts.eyebrow) : null),
+          opts.title,
+          opts.sub || null,
+          opts.ctas ? el('div', { class: 'hero-ctas' }, opts.ctas) : null,
+          opts.extras || null));
+    }
+    return el('section', { class: 'home-hero product-hero-dashboard' },
+      el('div', { class: 'home-hero-top' },
+        el('div', { class: 'home-hero-text' },
+          el('div', { class: 'eyebrow' }, opts.eyebrow),
+          opts.title,
+          opts.sub || null),
+        opts.aside || null,
+        opts.ctas ? el('div', { class: 'home-hero-ctas' }, opts.ctas) : null));
+  }
+
+  /** Keyboard + AT semantics for clickable tiles/rows (review #12: no mouse-only navigation). */
+  function pressable(node, label) {
+    node.setAttribute('role', 'link');
+    node.setAttribute('tabindex', '0');
+    if (label) node.setAttribute('aria-label', label);
+    node.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); node.click(); }
+    });
+    return node;
   }
 
   function quickAction(title, hint, hash, ic) {
@@ -750,6 +812,30 @@
                    : ['', 'Call bid/ask', 'Call Δ', 'Call IV', 'C OI/Vol', 'Strike', 'P OI/Vol', 'Put IV', 'Put Δ', 'Put bid/ask', ''], rows));
       };
       loadChain(r.expirations[0]);
+      // MATERIAL-MOVE refresh (the admitted chain-cadence leftover): when the streamed spot
+      // moves >0.5% from the loaded chain's underlying, refetch the visible expiration —
+      // throttled to one reload per 5s, and only while this chain is on screen.
+      (function chainCadence() {
+        if (!App.Market) return;
+        var lastReload = 0, loadedSpot = null;
+        var origLoad = loadChain;
+        loadChain = async function (exp) { await origLoad(exp); loadedSpot = null; };
+        App.Market.subscribe(function () {
+          if (!App.alive(_rt) || !chainBody.isConnected) return;
+          var q = App.Market.get(symbol);
+          if (!q || !isFinite(parseFloat(q.last))) return;
+          var live = parseFloat(q.last);
+          if (loadedSpot === null) { loadedSpot = live; return; }
+          var nowT = Date.now();
+          if (Math.abs(live - loadedSpot) / loadedSpot > 0.005 && nowT - lastReload > 5000) {
+            lastReload = nowT;
+            loadedSpot = live;
+            API.invalidate(['/api/research/' + symbol + '/chain']);
+            var sel = document.getElementById('expiration-select');
+            origLoad(sel ? sel.value : r.expirations[0]);
+          }
+        }, _rt);
+      })();
     }
     }, function (e) {
       if (!App.alive(_rt)) return;
@@ -3637,27 +3723,67 @@
     // Two ways to verify, at BOTH levels: replay the PAST (historical backtest) or imagine a
     // FUTURE (Monte-Carlo scenario). The scenario mode is often the friendlier one for beginners —
     // "what if it drops then recovers?" needs no data plumbing to be a great lesson.
+    // ONE VERIFICATION-MODE SELECTOR (the admitted Phase-7 leftover): every way to test a
+    // strategy sits behind one explicit choice, each honestly describing its evidence basis.
+    // The five modes route to the EXISTING engines — no duplicate machinery.
     var vf = App.state.verifyForm = App.state.verifyForm || {};
     if (App.state.verifyMode) { vf.mode = App.state.verifyMode; App.state.verifyMode = null; } // handoff wins
     vf.mode = vf.mode || 'history';
+    var inWorld = App.state.world && App.state.world !== 'observed';
+    var scenarioActive = App.config && App.config.scenarioMode;
     var histWrap = el('div', { id: 'bt-history-mode' });
     var scenWrap = el('div', { id: 'bt-scenario-mode' });
+    var modeNote = el('div', { class: 'muted small', id: 'bt-mode-note', style: 'margin:4px 0 8px' });
+    var MODES = [
+      { m: 'history', label: 'Observed backtest',
+        note: 'Replays real (or demo-labeled) daily history with no look-ahead.' },
+      { m: 'dataset', label: 'Saved scenario',
+        note: scenarioActive
+          ? 'Your generated scenario dataset is ACTIVE — the backtest below reads it and says so.'
+          : 'Activate a generated dataset first (Data \u2192 Datasets) — then this backtest replays that story.' },
+      { m: 'scenario', label: 'Monte Carlo futures',
+        note: 'Hundreds of generated paths from a model you pick — odds of a MODEL, not history.' },
+      { m: 'analogs', label: 'Historical analogs',
+        note: 'The exact past occurrences a Research study found — conditional history, not a model.' },
+      { m: 'world', label: 'Simulated session',
+        note: inWorld ? 'You are IN a simulated market — place practice trades and let the session judge them.'
+                      : 'A live generated market with its own clock and account (Data \u2192 Simulated market).' }
+    ];
+    function applyMode(m2) {
+      vf.mode = m2;
+      modeRow.querySelectorAll('.pill').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-mode') === m2); });
+      var meta = MODES.filter(function (x) { return x.m === m2; })[0];
+      modeNote.textContent = meta ? meta.note : '';
+      // dataset mode IS the observed backtest reading the active dataset; analogs mode is the
+      // futures panel in evidence mode — both reuse the same two panels underneath.
+      var showHist = m2 === 'history' || m2 === 'dataset';
+      histWrap.style.display = showHist ? '' : 'none';
+      scenWrap.style.display = (m2 === 'scenario' || m2 === 'analogs') ? '' : 'none';
+      if ((m2 === 'scenario' || m2 === 'analogs') && !scenWrap.hasChildNodes()) scenarioVerifyPanel(scenWrap);
+      if (m2 === 'analogs' && !App.state.evidencePrefill) {
+        modeNote.textContent = 'No study handed over yet — run Past evidence on a Research symbol page, then "Test strategies on these occurrences".';
+      }
+      if (m2 === 'dataset' && !scenarioActive) {
+        // an honest pointer, not a dead panel
+        histWrap.style.display = 'none';
+      }
+      if (m2 === 'world' && !inWorld) histWrap.style.display = 'none';
+    }
     var modeRow = el('div', { class: 'range-pills', id: 'bt-mode' },
-      [{ m: 'history', label: 'Replay the past' }, { m: 'scenario', label: 'Imagine a future' }].map(function (o) {
+      MODES.map(function (o) {
         return el('button', { type: 'button', class: 'pill' + (vf.mode === o.m ? ' active' : ''), 'data-mode': o.m,
           onclick: function () {
-            vf.mode = o.m;
-            modeRow.querySelectorAll('.pill').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-mode') === o.m); });
-            histWrap.style.display = o.m === 'history' ? '' : 'none';
-            scenWrap.style.display = o.m === 'scenario' ? '' : 'none';
-            if (o.m === 'scenario' && !scenWrap.hasChildNodes()) scenarioVerifyPanel(scenWrap);
+            if (o.m === 'dataset' && !scenarioActive) { App.navigate('#/data/datasets'); return; }
+            if (o.m === 'world' && !inWorld) { App.navigate('#/data/simulation'); return; }
+            applyMode(o.m);
           } }, o.label);
       }));
     root.appendChild(modeRow);
+    root.appendChild(modeNote);
     root.appendChild(scenWrap);
     root.appendChild(histWrap);
-    if (vf.mode === 'scenario') { scenarioVerifyPanel(scenWrap); histWrap.style.display = 'none'; }
-    else { scenWrap.style.display = 'none'; }
+    applyMode(vf.mode === 'scenario' || vf.mode === 'analogs' || vf.mode === 'history' ? vf.mode
+      : (scenarioActive && vf.mode === 'dataset' ? 'dataset' : 'history'));
     root = histWrap; // everything below (the historical form + reports) lives in history mode
     var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || bf.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
     // Typing a symbol here makes it the working symbol app-wide (Backtest → Builder carries it).
@@ -3970,6 +4096,9 @@
         return el('button', {
           class: t.key === tab ? 'active' : '', 'data-tab': t.key, role: 'tab',
           'aria-selected': t.key === tab ? 'true' : 'false',
+          // Administration starts HIDDEN and appears only once authorization confirms — the
+          // old version rendered it and hid it later (a flash), and stayed visible on error.
+          style: t.key === 'admin' ? 'display:none' : null,
           onclick: function () { App.navigate('#/data/' + t.key); }
         }, t.label, el('span', { class: 'badge badge-ok', id: 'data-tab-badge-' + t.key,
           style: 'display:none; margin-left:6px' }));
@@ -4006,12 +4135,10 @@
     (async function gateAdminTab() {
       try {
         var ov = await API.get('/api/data/overview');
-        if (!ov || !ov.admin) {
-          var btn = document.querySelector('#data-tabs [data-tab="admin"]');
-          if (btn) btn.style.display = 'none';
-          if (tab === 'admin' && (!ov || !ov.admin)) App.navigate('#/data/overview');
-        }
-      } catch (e) { /* leave visible; the server still refuses */ }
+        var btn = document.querySelector('#data-tabs [data-tab="admin"]');
+        if (ov && ov.admin) { if (btn) btn.style.display = ''; }
+        else if (tab === 'admin') App.navigate('#/data/overview');
+      } catch (e) { /* stays hidden — fail closed both visually and on the server */ }
     })();
     if (App.onEvent) {
       App.onEvent(['job.progress', 'job.complete', 'dataset.selected', 'world.selected'], function () {
@@ -4049,7 +4176,7 @@
       var wt = (App.state.lastRecommendSymbol || '').toUpperCase();
       var curSector = (App.state.universe && App.state.universe.active && App.state.universe.active.sectorKey) || '';
       var st = { scenario: 'CHOP', speed: 26, sectorKey: curSector !== 'world' ? curSector : '',
-        symbolsText: wt, allowFictional: true, rows: [{ symbol: wt || 'ACME', beta: 1, spot: '' }] };
+        symbolsText: wt, allowFictional: false, rows: [{ symbol: wt || 'ACME', beta: 1, spot: '' }] };
 
       async function refreshSim() {
         var box = document.getElementById('dc-sim-sessions');
@@ -4314,8 +4441,12 @@
       function finishModal(sx) {
         var body = el('div', {}, UI.spinner('Loading the session report\u2026'));
         UI.confirmModal('Finish this session?', body, 'Finish session', async function () {
+          var wasActive = App.state.world === sx.id;
           await API.del('/api/sim/market/' + sx.id);
-          if (App.state.world === sx.id) App.state.world = 'observed';
+          // Finishing the ACTIVE world is a full market transition — never a bare state
+          // assignment (review P0 #2: the old path skipped cache/store/universe/render and
+          // left "Dom sim (simulated)" all over the observed screens).
+          if (wasActive) await App.transitionWorld('observed');
           refreshSim(); App.refreshWorldBand();
         }, true);
         API.getFresh('/api/sim/market/' + sx.id + '/report').then(function (rep) {
@@ -4696,7 +4827,7 @@
           el('span', { class: 'badge ' + (run.length ? 'badge-ok' : 'badge-dim') }, run.length + ' RUNNING'),
           el('span', { class: 'muted small' }, failed.length ? failed.length + ' failed \u2014 see Sources & jobs' : 'background jobs'),
           el('span', { class: 'spacer' }),
-          el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/sources'); } }, 'Open')));
+          el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/sources'); } }, 'Sources & jobs \u2192')));
       } catch (e) { /* summary only */ }
       try {
         var cov = await API.get('/api/data/coverage');
@@ -4706,7 +4837,7 @@
           el('span', { class: 'muted small' }, (sum.underlyingSymbols || 0) + ' symbols \u00b7 '
             + (sum.underlyingBars || 0) + ' daily bars stored'),
           el('span', { class: 'spacer' }),
-          el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/datasets'); } }, 'Open')));
+          el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/datasets'); } }, 'Datasets \u2192')));
       } catch (e) { /* summary only */ }
       if (!App.alive(token) || !activityCard.isConnected) return;
       activityCard.innerHTML = '';
@@ -4714,7 +4845,11 @@
       if (!linesA.length) activityCard.appendChild(el('div', { class: 'muted small' }, 'Nothing running.'));
       linesA.forEach(function (l) { activityCard.appendChild(l); });
     }
-    if (tab === 'overview') [modeCard, activityCard, engineCard, healthCard].forEach(function (c) { root.appendChild(c); });
+    if (tab === 'overview') {
+      var ovGrid = el('div', { class: 'dc-grid' });
+      [modeCard, activityCard, engineCard, healthCard].forEach(function (c) { ovGrid.appendChild(c); });
+      root.appendChild(ovGrid);
+    }
     fillMode();
     fillActivity();
     if (tab === 'datasets') [datasetsCard, coverageCard].forEach(function (c) { root.appendChild(c); });
@@ -5013,7 +5148,20 @@
       });
       body.appendChild(grid);
       healthCard.appendChild(UI.cardHeader('Provider health'));
-      healthCard.appendChild(level === 'beginner' ? UI.expandable('Per-source status', function () { return body; }) : body);
+      // OVERVIEW IS A DASHBOARD (review visual #6): a one-line per-domain summary is always
+      // visible; the full per-source grid expands on demand at BOTH levels — the expert
+      // full-grid default alone pushed Overview past a 720px viewport.
+      var sumRow = el('div', { class: 'chip-row' });
+      Object.keys(s.domains || {}).forEach(function (domain) {
+        var items = s.domains[domain] || [];
+        var worst = items.some(function (p) { return p.state === 'ERROR' || p.state === 'COOLDOWN'; }) ? 'badge-danger'
+          : items.some(function (p) { return p.state === 'EMPTY' || p.state === 'STALE'; }) ? 'badge-warn' : 'badge-ok';
+        sumRow.appendChild(el('span', { class: 'chip' },
+          el('span', { class: 'chip-label' }, domain),
+          el('b', {}, el('span', { class: 'badge ' + worst }, items.length ? items[0].state : 'NONE'))));
+      });
+      healthCard.appendChild(sumRow);
+      healthCard.appendChild(UI.expandable('Per-source detail', function () { return body; }));
     })();
 
     // --- Reset (danger; admin-gated) ---

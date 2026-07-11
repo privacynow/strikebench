@@ -127,7 +127,8 @@
       // The ticker is CONTEXT, not chrome: it accompanies market-facing screens only
       var tape = document.getElementById('tape');
       if (tape) {
-        var showTape = route === 'home' || route === 'research';
+        var showTape = route === 'home' || route === 'research'
+          || (route === 'status' && App.state.world && App.state.world !== 'observed');
         tape.classList.toggle('tape-offroute', !showTape);
         var strip = document.getElementById('tape-strip');
         if (showTape && strip && (!strip.children.length || strip.hasAttribute('data-stale'))) {
@@ -366,38 +367,55 @@
     refreshWorldBand();
   }
 
-  /** The one-command world switch: preserves route/symbol/level — it changes the MARKET, not you. */
-  App.switchWorld = async function (worldId) {
-    try {
-      var res = await API.put('/api/world', { world: worldId });
-      // Return to real means REAL: the server also dropped any active synthetic dataset —
-      // clear the scenario banner and say so, or the switch looks only half-done.
-      if (res && res.datasetReset) {
-        refreshScenarioBanner();
-        if (UI.toast) UI.toast('Back on the real market — your scenario dataset was switched off too');
-      }
-      App.adoptWorld(worldId, true);
-    } catch (e) { alert(e.message); }
-  };
+  // ---- ONE idempotent market-context transition (review P0 #1/#2 — never assign
+  // App.state.world directly). Every path lands here: the awaited PUT, the finish flow, the
+  // world.selected SSE hint, multi-tab adoption, and visibility reconciliation. The old
+  // same-id early-return let whichever arrived FIRST (usually the SSE hint) do a band-only
+  // update, and the real caller then skipped the universe/render reconciliation entirely —
+  // the "still says Dom sim (simulated)" defect.
 
-  /** Adopts a world locally (after our own PUT, or another tab's via the world.selected hint). */
-  App.adoptWorld = function (worldId, announced) {
-    if (App.state.world === worldId) { refreshWorldBand(); return; }
-    App.state.world = worldId;
+  // Workflow state is OWNED by the market context (review P1 #4): the outgoing lane's
+  // thinking is stashed, the incoming lane's restored — a simulated symbol, thesis, or study
+  // must never leak into observed screens (or vice versa).
+  var LANE_KEYS = ['lastRecommendSymbol', 'marketThesis', 'researchStudy', 'evidencePrefill',
+    'ideasPrefill', 'backtestPrefill', 'discoverForm', 'builderForm', 'backtestForm',
+    'verifyForm', 'scenarioForm', 'ideasForm', 'scoutResults'];
+  function stashLane(worldId) {
+    App.state._laneStash = App.state._laneStash || {};
+    var box = {};
+    LANE_KEYS.forEach(function (k) { box[k] = App.state[k]; delete App.state[k]; });
+    App.state._laneStash[worldId || 'observed'] = box;
+  }
+  function restoreLane(worldId) {
+    var box = (App.state._laneStash || {})[worldId || 'observed'] || {};
+    LANE_KEYS.forEach(function (k) { if (box[k] !== undefined) App.state[k] = box[k]; });
+  }
+
+  App.transitionWorld = function (worldId) {
+    var target = worldId || 'observed';
+    // Collapse CONCURRENT transitions to the same target into one reconciliation: the SSE
+    // hint and the awaited PUT often land within milliseconds. Skipping was the bug;
+    // doubling the work is merely wasteful — collapsing does it exactly once, fully.
+    if (App._transitionTarget === target && App._transitionP) return App._transitionP;
+    App._transitionTarget = target;
+    var from = App.state.world || 'observed';
+    var changed = from !== target;
+    App.state.world = target;
     App.state.worldGen++;           // discard SSE/stale fills from the world we just left
+    if (changed) { stashLane(from); restoreLane(target); }
     // A working idea priced in the OTHER market cannot survive the switch: its quotes,
     // expirations and account lane belong to a different world (review P2).
-    if (App.state.ticket && (App.state.ticket.world || 'observed') !== worldId) {
+    if (App.state.ticket && (App.state.ticket.world || 'observed') !== target) {
       App.state.ticket = null;
-      if (announced) UI.toast ? UI.toast('Working idea cleared — it was priced in the other market')
-        : console.info('working idea cleared on world switch');
+      if (UI.toast) UI.toast('Working idea cleared — it was priced in the other market');
     }
     API.flushCache();               // every cached GET belonged to the old world
-    if (App.Market) { App.Market.quotes = {}; App.Market.seq = 0; App.Market.world = worldId; App.Market.simTime = null; }
+    if (App.Market) { App.Market.quotes = {}; App.Market.seq = 0; App.Market.world = target; App.Market.simTime = null; }
     refreshWorldBand();
+    refreshScenarioBanner();        // dataset exclusivity is server-enforced; the banner must agree
     // The universe follows the lane: tape, sector rail, and symbol datalist must show THIS
     // market's symbols (P0: they silently emptied because the world schema differed).
-    refreshUniverse().then(function () {
+    App._transitionP = refreshUniverse().then(function () {
       // Route guard: a symbol page the new market cannot serve is a dead end — land on a
       // symbol that EXISTS here instead of preserving a route that 404s its data.
       var m = (window.location.hash || '').match(/^#\/research\/([A-Z0-9._-]+)/i);
@@ -407,9 +425,28 @@
         App.navigate('#/research/' + syms[0]);
         return;
       }
-      App.render();                 // same screen, new market under it — observed never stopped
+      return App.render();          // same screen, new market under it — observed never stopped
+    }).then(function () {
+      App._transitionTarget = null; App._transitionP = null;
+    }, function () {
+      App._transitionTarget = null; App._transitionP = null;
     });
+    return App._transitionP;
   };
+
+  /** The one-command world switch: preserves route/symbol/level — it changes the MARKET, not you. */
+  App.switchWorld = async function (worldId) {
+    try {
+      var res = await API.put('/api/world', { world: worldId });
+      if (res && res.datasetReset && UI.toast) {
+        UI.toast('Back on the real market — your scenario dataset was switched off too');
+      }
+      await App.transitionWorld(worldId);
+    } catch (e) { alert(e.message); }
+  };
+
+  /** Compat alias: every adoption is the SAME full transition. */
+  App.adoptWorld = function (worldId) { return App.transitionWorld(worldId); };
 
   window.App = App;
 
@@ -526,14 +563,14 @@
     // Multi-tab truth: another tab (same user) switched worlds — adopt it here too, band and all.
     App.onEvent('world.selected', function (type, data) {
       if (!data || data.world === undefined) return;
-      if (data.world !== App.state.world) App.adoptWorld(data.world, false);
+      App.transitionWorld(data.world); // idempotent: same-target concurrent calls collapse
     });
     // Belt-and-braces for tabs whose SSE dropped: re-check the server's world on return.
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState !== 'visible') return;
       API.getFresh('/api/world').then(function (w) {
         var srv = (w && w.world) || 'observed';
-        if (srv !== App.state.world) App.adoptWorld(srv, false);
+        if (srv !== App.state.world) App.transitionWorld(srv);
       }).catch(function () { /* offline — next visit retries */ });
     });
     refreshUniverse();

@@ -166,9 +166,9 @@ h3 { font-size: 14.5px; margin: 12px 0 8px; }
 
 .grid { display: grid; gap: 12px; }
 @media (min-width: 700px) {
-  .grid-2 { grid-template-columns: 1fr 1fr; }
-  .grid-3 { grid-template-columns: repeat(3, 1fr); }
-  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+  .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 .stat { padding: 12px 14px; background: var(--surface-2); border-radius: var(--radius-sm); min-width: 0; }
@@ -179,8 +179,9 @@ h3 { font-size: 14.5px; margin: 12px 0 8px; }
 /* ---------- Buttons ---------- */
 .btn {
   background: var(--accent); color: var(--accent-fg); border: none; border-radius: 9px;
-  padding: 9px 16px; font-weight: 650; font-size: 14px; transition: filter .12s, transform .05s;
-}
+  padding: 9px 16px; font-weight: 650; font-size: 14px; transition: filter .12s, transform .05s;;
+  white-space: nowrap; /* a control that wraps is a control that broke the height contract */
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; /* long labels truncate on tiny screens, never widen the page */ }
 .btn:hover { filter: brightness(1.09); }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
@@ -266,7 +267,7 @@ body.lvl-expert .not-expert { display: none !important; }
 .popover-body { color: var(--text-dim); }
 
 /* Big plain-language facts (Learning candidate cards) */
-.fact-grid { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); margin: 10px 0 4px; }
+.fact-grid { display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 10px 0 4px; }
 @media (max-width: 560px) { .fact-grid { grid-template-columns: 1fr; } }
 .fact { background: var(--surface-2); border-radius: var(--radius-sm); padding: 10px 12px; }
 .fact .f-label { font-size: 11px; font-weight: 700; color: var(--text-faint); text-transform: uppercase; letter-spacing: .05em; }
@@ -296,7 +297,7 @@ body.lvl-expert .not-expert { display: none !important; }
 
 /* ---------- Forms ---------- */
 .form-grid { display: grid; gap: 12px; grid-template-columns: 1fr; }
-@media (min-width: 700px) { .form-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 700px) { .form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .field label { display: block; font-size: 12px; font-weight: 700; color: var(--text-dim); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
 .field input, .field select { width: 100%; }
 .inline-check { display: flex; gap: 7px; align-items: center; font-size: 13.5px; }
@@ -318,7 +319,9 @@ body.lvl-expert .not-expert { display: none !important; }
 .tbl-wrap { overflow-x: auto; margin: 0 -6px; padding: 0 6px; }
 
 /* ---------- Tabs & wizard ---------- */
-.tabs { display: flex; gap: 2px; margin-bottom: 14px; border-bottom: 2px solid var(--border); }
+.tabs { display: flex; gap: 2px; margin-bottom: 14px; border-bottom: 2px solid var(--border);
+  overflow-x: auto; scrollbar-width: thin; }
+.tabs > button { flex: 0 0 auto; white-space: nowrap; }
 .tabs button {
   background: none; border: none; padding: 9px 16px; color: var(--text-dim); font-weight: 650; font-size: 14px;
   border-bottom: 2px solid transparent; margin-bottom: -2px;
@@ -381,8 +384,10 @@ body.lvl-expert .not-expert { display: none !important; }
 .quote-hero .sym { font-size: 19px; font-weight: 800; }
 .quote-hero .nm { color: var(--text-dim); font-size: 13.5px; }
 
-.tile-row { display: grid; gap: 12px; grid-template-columns: repeat(2, 1fr); }
-@media (min-width: 700px) { .tile-row { grid-template-columns: repeat(4, 1fr); } }
+.tile-row { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 700px) { .tile-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.tile { min-width: 0; }
+.tile .t-nm, .tile b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .tile {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: var(--shadow); padding: 14px 16px; cursor: pointer; transition: border-color .1s, transform .06s;
@@ -549,7 +554,7 @@ body.lvl-expert .not-expert { display: none !important; }
 #events-card .chip-row a.chip:hover b, .events-strip a.chip:hover b { color: var(--accent); }
 
 /* ---- Sector rail: THE sector affordance everywhere (home / research / trade) ---- */
-.sector-rail-wrap { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.sector-rail-wrap { display: flex; align-items: center; gap: 4px; min-width: 0;; min-width: 0; max-width: 100%; }
 .sector-rail { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px;
   scrollbar-width: none; flex: 1; min-width: 0; }
 .sector-rail::-webkit-scrollbar { display: none; }
@@ -656,6 +661,7 @@ body.lvl-expert .not-expert { display: none !important; }
 .hero-brandline .eyebrow { margin-bottom: 0; }
 .hero-deco { position: absolute; right: -30px; bottom: -12px; width: 340px; height: 150px;
   opacity: .10; pointer-events: none; }
+@media (max-width: 700px) { .hero-deco { display: none; } } /* decorative only — never widens a phone */
 .hero-deco path { stroke: var(--accent); stroke-width: 2.5; fill: none;
   stroke-linecap: round; stroke-linejoin: round; }
 .hero-deco .deco-zero { stroke: var(--text-faint); stroke-width: 1.2; stroke-dasharray: 3 5; }
@@ -678,13 +684,20 @@ body.lvl-expert .not-expert { display: none !important; }
 .hero-sub { font-size: 17px; line-height: 1.6; color: var(--text-dim); max-width: 620px; margin: 0 auto 24px; }
 .hero-ctas { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 22px; }
 .btn-lg { padding: 12px 26px; font-size: 15px; border-radius: 12px; }
+.wb-stages { overflow-x: auto; scrollbar-width: thin; }
+.wb-stages button { flex: 0 0 auto; white-space: nowrap; }
 .wb-stages button[disabled] { opacity: .45; cursor: not-allowed; }
 .btn-ghost { background: transparent; border: 1px solid var(--border-strong); color: var(--text); }
 .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
 .trust-row { font-size: 13px; color: var(--text-faint); }
 .trust-row .dot-sep { margin: 0 10px; }
 
-.welcome-section { max-width: 980px; margin: 0 auto; padding: 34px 8px 6px; text-align: center; }
+/* ONE content-width token for the whole welcome page: every row shares the same centered
+   frame and the same left/right edges — the three-width asymmetry was three separate caps. */
+.welcome-page { --welcome-w: 1040px; }
+.welcome-page .welcome-top, .welcome-page .welcome-section, .welcome-page .welcome-footer {
+  width: 100%; max-width: var(--welcome-w); margin-left: auto; margin-right: auto; }
+.welcome-section { padding: 34px 0 6px; text-align: center; }
 .welcome-h2 { margin: 0 0 20px; font-size: 26px; letter-spacing: -0.01em; }
 .welcome-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; text-align: left; }
 .welcome-card { padding: 22px 20px; }
@@ -812,7 +825,8 @@ body.lvl-expert .not-expert { display: none !important; }
 .form-grid .field, .grid > *, .compact-filters .field { min-width: 0; }
 .field input, .field select { max-width: 100%; }
 .btn-row { min-width: 0; }
-#app { overflow-x: clip; }
+/* No overflow mask: children are sized correctly (minmax(0,1fr) tracks, min-width:0, local
+   scroll containers). A wide element must FAIL the audit, not be silently clipped. */
 
 /* ==================================================================================
    SMOOTH RENDER PIPELINE — skeletons, route crossfade, progressive card arrival.
@@ -836,7 +850,7 @@ body.lvl-expert .not-expert { display: none !important; }
   animation: skel-shimmer 1.3s ease-in-out infinite;
 }
 .skel-title { height: 30px; width: 240px; max-width: 60%; margin: 8px 0 16px; }
-.skel-row { display: grid; gap: 12px; grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; }
+.skel-row { display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 16px; }
 @media (max-width: 700px) { .skel-row { grid-template-columns: 1fr 1fr; } }
 .skel-stat { height: 72px; }
 .skel-card { height: 180px; margin-bottom: 16px; }
@@ -923,7 +937,8 @@ body.lvl-expert .not-expert { display: none !important; }
 .tpl-selected .tpl-blurb { font-size: 12.5px; }
 
 /* ---------- Desktop home: everything important on ONE screen ---------- */
-.home-cols { display: grid; gap: 0 16px; grid-template-columns: 1fr; align-items: start; }
+.home-cols { display: grid; gap: 0 16px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.home-cols > * { min-width: 0; }
 @media (min-width: 1100px) {
   .home-cols { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
   /* Tighter dashboard rhythm on large screens so the fold never hides an action */
@@ -976,6 +991,12 @@ body.lvl-expert .not-expert { display: none !important; }
 .candles .grid { stroke: var(--border); stroke-width: 1; }
 .candles .tick { fill: var(--text-faint); font-size: 11px; }
 .tabs .tabs-aside { margin-left: auto; align-self: center; font-size: 12.5px; padding: 6px 4px; }
+/* Data Overview: a control DASHBOARD on desktop — 2x2 compact grid, not mobile stacking. */
+.dc-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 1000px) {
+  .dc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dc-grid .card { margin-bottom: 0; }
+}
 /* Data's local nav is the same underline-tab language; it just adds live badges + mobile scroll. */
 .data-tabs { overflow-x: auto; scrollbar-width: thin; white-space: nowrap; }
 .data-tabs button { flex: 0 0 auto; }
@@ -1013,7 +1034,7 @@ body.lvl-expert .not-expert { display: none !important; }
   #app:has(.welcome-page) .hero-ctas .btn-lg { min-height: 42px; }
   #app:has(.welcome-page) .hero-sub { margin: 12px 0 16px; max-width: none;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  #app:has(.welcome-page) .welcome-section { margin: 12px 0 0; }
+  #app:has(.welcome-page) .welcome-section { margin: 12px auto 0; }
   #app:has(.welcome-page) .welcome-top > .welcome-section { margin: 0; } /* grid rows align */
   #app:has(.welcome-page) .welcome-section .eyebrow { display: none; } /* the h2 carries it */
   #app:has(.welcome-page) .welcome-live-col .eyebrow { display: block; } /* except the live label */
