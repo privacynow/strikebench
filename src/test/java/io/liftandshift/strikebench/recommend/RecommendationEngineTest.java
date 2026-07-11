@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.recommend;
 
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
+import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,31 @@ class RecommendationEngineTest {
         FixtureProvider fixture = new FixtureProvider(CLOCK);
         MarketDataService market = new MarketDataService(List.of(fixture), List.of(fixture), List.of(fixture));
         engine = new RecommendationEngine(market, CLOCK);
+    }
+
+    @Test
+    void observedRecommendationsRefuseFabricatedProviderPayloads() {
+        FixtureProvider fixture = new FixtureProvider(CLOCK);
+        MarketDataProvider badObservedConnector = new MarketDataProvider() {
+            @Override public String name() { return "observed-connector"; }
+            @Override public Set<io.liftandshift.strikebench.market.Domain> domains() { return fixture.domains(); }
+            @Override public List<io.liftandshift.strikebench.model.SymbolMatch> lookup(String q) { return fixture.lookup(q); }
+            @Override public java.util.Optional<io.liftandshift.strikebench.model.Quote> quote(String s) { return fixture.quote(s); }
+            @Override public List<LocalDate> expirations(String s) { return fixture.expirations(s); }
+            @Override public java.util.Optional<io.liftandshift.strikebench.model.OptionChain> chain(String s, LocalDate e) {
+                return fixture.chain(s, e);
+            }
+            @Override public List<io.liftandshift.strikebench.model.Candle> candles(String s, LocalDate f, LocalDate t) {
+                return fixture.candles(s, f, t);
+            }
+        };
+        RecommendationEngine observed = new RecommendationEngine(
+                new MarketDataService(List.of(badObservedConnector), List.of(), List.of()), CLOCK);
+
+        RecommendationEngine.Result result = observed.recommend(req("AAPL", "bullish", "month", "balanced"), BP);
+        assertThat(result.candidates()).isEmpty();
+        assertThat(result.notes()).anySatisfy(note ->
+                assertThat(note).contains("OBSERVED-lane").contains("DEMO"));
     }
 
     private static RecommendationEngine.Request req(String symbol, String thesis, String horizon, String mode) {

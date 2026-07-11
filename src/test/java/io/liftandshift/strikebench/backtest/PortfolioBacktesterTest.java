@@ -43,7 +43,8 @@ class PortfolioBacktesterTest {
         assertThat(report.equityCurve()).isNotEmpty();
         assertThat(report.trades()).isNotEmpty();
         assertThat(report.concurrentPeak()).isGreaterThanOrEqualTo(1);
-        assertThat(report.pricingMode()).isEqualTo("MODELED_FROM_UNDERLYING"); // fixture-only -> modeled, not demo
+        assertThat(report.pricingMode()).isEqualTo("PAYOFF_ONLY"); // Demo history is never promoted to observed/model evidence
+        assertThat(report.demoUnderlying()).isTrue();
 
         // Every trade is a real defined-risk result with a recognized exit reason.
         for (var t : report.trades()) {

@@ -18,6 +18,8 @@ public record Quote(
         String source,
         Freshness freshness
 ) {
+    public DataEvidence evidence() { return DataEvidence.of(source, freshness); }
+
     /** Best available mark: mid of bid/ask, else last, else prevClose. */
     public BigDecimal mark() {
         if (bid != null && ask != null && bid.signum() > 0 && ask.signum() > 0) {

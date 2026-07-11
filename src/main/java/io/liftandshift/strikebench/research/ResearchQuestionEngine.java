@@ -101,11 +101,17 @@ public final class ResearchQuestionEngine {
                                  List<List<Double>> analogPaths, List<String> eventDates, String studyKey) {}
 
     public QuestionResult run(RunRequest req) {
-        return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null);
     }
 
     /** Context-aware variant: the study runs over the caller's analysis dataset. */
     public QuestionResult run(RunRequest req, io.liftandshift.strikebench.db.AnalysisContext actx) {
+        return run(req, actx, null);
+    }
+
+    /** Dataset and market are separate axes: Demo/Simulated studies read their own candles. */
+    public QuestionResult run(RunRequest req, io.liftandshift.strikebench.db.AnalysisContext actx,
+                              String worldId) {
         String key = req.key() == null ? "" : req.key().trim();
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
@@ -113,18 +119,24 @@ public final class ResearchQuestionEngine {
                 .orElseThrow(() -> new IllegalArgumentException("unknown question: " + key));
         Map<String, Object> p = req.params() == null ? Map.of() : req.params();
 
-        LocalDate to = parseDate(req.to(), LocalDate.now(clockOrDefault()));
+        LocalDate laneToday = market.simInstant(worldId)
+                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                .orElseGet(() -> LocalDate.now(clockOrDefault()));
+        LocalDate to = parseDate(req.to(), laneToday);
         LocalDate from = parseDate(req.from(), to.minusYears(3));
         int forward = clampParam(p, "forward", 10, 1, 120);
         int lookback = clampParam(p, "lookback", 20, 1, 250);
 
         // Pull enough history to warm up the look-back before `from`.
-        CandleSeries series = market.candleSeries(symbol, from.minusDays(lookback + 20L), to, actx);
+        CandleSeries series = market.candleSeries(symbol, from.minusDays(lookback + 20L), to, worldId, actx);
         List<Candle> candles = series.candles().stream().filter(c -> !c.date().isAfter(to)).toList();
-        boolean observed = isObserved(series.freshness());
+        boolean observed = series.evidence().provenance()
+                == io.liftandshift.strikebench.model.DataProvenance.OBSERVED;
         List<String> notes = new ArrayList<>();
         notes.add("A model result over one historical window, not a forecast. Regime and survivorship effects apply.");
-        if (!observed) notes.add("DEMO price history — set YAHOO_ENABLED, or a Polygon/Alpha Vantage key, for a real study.");
+        if (!observed) notes.add(series.evidence().provenance() == io.liftandshift.strikebench.model.DataProvenance.DEMO
+                ? "Built-in DEMO history — fabricated teaching data, not observed market evidence."
+                : "Generated history — useful for scenario exploration, not observed market evidence.");
 
         double[] closes = candles.stream().mapToDouble(c -> c.close().doubleValue()).toArray();
         int n = closes.length;

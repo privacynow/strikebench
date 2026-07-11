@@ -23,11 +23,11 @@ public final class DataResetService {
     // row is schema seed data (bar tables default/FK onto it), never user data, so it survives.
     public enum Tier {
         MARKET_DATA(List.of("option_bar", "underlying_bar", "market_snapshot",
-                "dataset WHERE id <> 'observed'", "settings WHERE k LIKE 'active_dataset%' OR k = 'cboe_cooldown_until'",
+                "dataset WHERE id NOT IN ('observed','demo-fixture')", "settings WHERE k LIKE 'active_dataset%' OR k = 'cboe_cooldown_until'",
                 "data_job_item", "data_job"), false),
         RESEARCH(List.of("recommendation", "strategy_evaluation", "backtests", "research_note"), false),
         PAPER(List.of("trade_marks", "ledger", "positions", "live_orders", "audit", "trades", "accounts"), true),
-        EVERYTHING(List.of("option_bar", "underlying_bar", "market_snapshot", "dataset WHERE id <> 'observed'",
+        EVERYTHING(List.of("option_bar", "underlying_bar", "market_snapshot", "dataset WHERE id NOT IN ('observed','demo-fixture')",
                 "data_job_item", "data_job",
                 "recommendation", "strategy_evaluation", "backtests", "research_note", "workspace",
                 "trade_marks", "ledger", "positions", "live_orders", "audit", "trades",

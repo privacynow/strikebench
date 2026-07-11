@@ -43,13 +43,17 @@ public final class MarketDataService {
     private final List<NewsFilingsProvider> newsProviders;
     private final List<RatesProvider> ratesProviders;
     private final io.liftandshift.strikebench.market.ports.CandleStore candleStore; // stored bars first (nullable)
+    private final boolean fixtureOnlyChain;
+    private volatile MarketDataProvider demoProvider;
+    private volatile NewsFilingsProvider demoNewsProvider;
+    private volatile RatesProvider demoRatesProvider;
 
     private final Cache<String, Quote> quoteCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(15)).maximumSize(500).build();
     private final Cache<String, OptionChain> chainCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(60)).maximumSize(200).build();
     private final Cache<String, List<LocalDate>> expirationsCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(60)).maximumSize(200).build();
     private final Cache<String, CandleSeries> candlesCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(1)).maximumSize(100).build();
     private final Cache<String, List<NewsItem>> newsCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofMinutes(5)).maximumSize(200).build();
-    private final Cache<Integer, Double> rateCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(1)).maximumSize(20).build();
+    private final Cache<Integer, RateQuote> rateCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(1)).maximumSize(20).build();
 
     private final Map<String, ProviderStatusInfo> statusByKey = new ConcurrentHashMap<>();
 
@@ -69,6 +73,10 @@ public final class MarketDataService {
         this.providers = List.copyOf(providers);
         this.newsProviders = List.copyOf(newsProviders);
         this.ratesProviders = List.copyOf(ratesProviders);
+        this.fixtureOnlyChain = !this.providers.isEmpty()
+                && this.providers.stream().allMatch(p -> FIXTURE.equals(p.name()))
+                && this.newsProviders.stream().allMatch(p -> FIXTURE.equals(p.name()))
+                && this.ratesProviders.stream().allMatch(p -> FIXTURE.equals(p.name()));
         // Seed UNKNOWN status so /api/status is complete before first use
         for (MarketDataProvider p : this.providers) {
             for (Domain d : p.domains()) {
@@ -82,6 +90,24 @@ public final class MarketDataService {
         for (RatesProvider p : this.ratesProviders) {
             statusByKey.putIfAbsent(key(p.name(), Domain.RATES), ProviderStatusInfo.unknown(p.name(), Domain.RATES.name()));
         }
+    }
+
+    /** Mounts fixtures behind the explicit Demo lane; it does not add them to Observed. */
+    public void setDemoSources(MarketDataProvider market, NewsFilingsProvider news, RatesProvider rates) {
+        this.demoProvider = market;
+        this.demoNewsProvider = news;
+        this.demoRatesProvider = rates;
+    }
+
+    public MarketLane lane(String worldId) { return MarketLane.of(worldId, fixtureOnlyChain); }
+
+    public void invalidateAll() {
+        quoteCache.invalidateAll();
+        chainCache.invalidateAll();
+        expirationsCache.invalidateAll();
+        candlesCache.invalidateAll();
+        newsCache.invalidateAll();
+        rateCache.invalidateAll();
     }
 
     // ---- Public API ----
@@ -109,7 +135,8 @@ public final class MarketDataService {
     }
 
     private java.util.Optional<io.liftandshift.strikebench.market.sim.SimulatedWorld> world(String worldId) {
-        if (worldId == null || worldId.isBlank() || "observed".equals(worldId) || worldResolver == null) {
+        if (worldId == null || worldId.isBlank() || "observed".equals(worldId)
+                || "demo".equals(worldId) || worldResolver == null) {
             return java.util.Optional.empty();
         }
         try { return worldResolver.apply(worldId); } catch (RuntimeException e) { return java.util.Optional.empty(); }
@@ -123,23 +150,29 @@ public final class MarketDataService {
 
     /** The world's own symbol set (empty optional = observed lane). */
     public Optional<java.util.Set<String>> worldSymbols(String worldId) {
+        if ("demo".equals(worldId) && demoProvider instanceof io.liftandshift.strikebench.market.providers.FixtureProvider f) {
+            return Optional.of(f.symbols());
+        }
         return world(worldId).map(io.liftandshift.strikebench.market.sim.SimulatedWorld::symbols);
     }
 
     /** World-aware quote: a simulated world serves ITS data (labeled SIMULATED); else observed. */
     public Optional<Quote> quote(String symbol, String worldId) {
+        if ("demo".equals(worldId)) return demoProvider == null ? Optional.empty() : demoProvider.quote(norm(symbol));
         var w = world(worldId);
         if (w.isPresent()) return w.get().quote(symbol);
         return quote(symbol);
     }
 
     public List<LocalDate> expirations(String symbol, String worldId) {
+        if ("demo".equals(worldId)) return demoProvider == null ? List.of() : demoProvider.expirations(norm(symbol));
         var w = world(worldId);
         if (w.isPresent()) return w.get().quote(symbol).isPresent() ? w.get().expirations() : List.of();
         return expirations(symbol);
     }
 
     public Optional<OptionChain> chain(String symbol, LocalDate expiration, String worldId) {
+        if ("demo".equals(worldId)) return demoProvider == null ? Optional.empty() : demoProvider.chain(norm(symbol), expiration);
         var w = world(worldId);
         if (w.isPresent()) return w.get().chain(symbol, expiration);
         return chain(symbol, expiration);
@@ -147,6 +180,11 @@ public final class MarketDataService {
 
     public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to, String worldId,
                                      io.liftandshift.strikebench.db.AnalysisContext actx) {
+        if ("demo".equals(worldId)) {
+            if (demoProvider == null) return CandleSeries.EMPTY;
+            List<Candle> cs = demoProvider.candles(norm(symbol), from, to);
+            return cs.size() < 2 ? CandleSeries.EMPTY : new CandleSeries(cs, "fixture", Freshness.FIXTURE);
+        }
         var w = world(worldId);
         if (w.isPresent()) {
             List<Candle> cs = w.get().candles(norm(symbol), from, to);
@@ -243,14 +281,20 @@ public final class MarketDataService {
     private static final String FIXTURE = "fixture";
 
     /**
-     * AGGREGATES every real news provider so filings (EDGAR) and headlines (RSS) COEXIST — the old
-     * winner-take-all returned the first non-empty provider, which let EDGAR filings suppress every
-     * headline in live mode. The fixture stays a strict last-resort fallback, so its demo headlines
-     * never mix into real data (the "fixture masquerading as real" rule).
+     * Aggregates every observed news provider so filings and headlines coexist. An explicitly
+     * configured Demo build may use its demo source; an Observed provider chain never falls back
+     * to fabricated headlines when observed news is unavailable.
      */
     public List<NewsItem> news(String symbol) {
         String sym = norm(symbol);
         List<NewsItem> r = newsCache.get(sym, s -> {
+            if (fixtureOnlyChain) {
+                List<NewsItem> demo = new ArrayList<>();
+                for (NewsFilingsProvider p : newsProviders) {
+                    if (FIXTURE.equals(p.name())) gatherNews(p.name(), () -> p.news(s), demo);
+                }
+                return demo.isEmpty() ? null : dedupSortedNews(demo);
+            }
             List<NewsItem> real = new ArrayList<>();
             for (NewsFilingsProvider p : newsProviders) {
                 if (FIXTURE.equals(p.name())) continue;
@@ -260,18 +304,16 @@ public final class MarketDataService {
                 if (FIXTURE.equals(p.name())) continue;
                 gatherNews(p.name(), () -> p.news(s), real);
             }
-            if (!real.isEmpty()) return dedupSortedNews(real);
-
-            // No real news anywhere — fall back to the fixture (demo) provider.
-            for (NewsFilingsProvider p : newsProviders) {
-                if (!FIXTURE.equals(p.name())) continue;
-                List<NewsItem> demo = new ArrayList<>();
-                gatherNews(p.name(), () -> p.news(s), demo);
-                if (!demo.isEmpty()) return dedupSortedNews(demo);
-            }
-            return null;
+            return real.isEmpty() ? null : dedupSortedNews(real);
         });
         return r == null ? List.of() : r;
+    }
+
+    /** World-aware news: simulated worlds have none; Demo gets Fixture Wire; Observed gets only real sources. */
+    public List<NewsItem> news(String symbol, String worldId) {
+        if ("demo".equals(worldId)) return demoNewsProvider == null ? List.of() : demoNewsProvider.news(norm(symbol));
+        if (world(worldId).isPresent()) return List.of();
+        return news(symbol);
     }
 
     private void gatherNews(String provider, java.util.function.Supplier<List<NewsItem>> call, List<NewsItem> acc) {
@@ -297,12 +339,25 @@ public final class MarketDataService {
     }
 
     /** Annualized risk-free rate for the horizon; falls back to a 4% educational default. */
-    public double riskFreeRate(int days) {
-        Double r = rateCache.get(days, d -> {
+    public RateQuote riskFreeRateQuote(int days) {
+        return riskFreeRateQuote(days, null);
+    }
+
+    public RateQuote riskFreeRateQuote(int days, String worldId) {
+        if ("demo".equals(worldId) && demoRatesProvider != null) {
+            OptionalDouble v = demoRatesProvider.riskFreeRate(days);
+            if (v.isPresent()) return new RateQuote(v.getAsDouble(),
+                    io.liftandshift.strikebench.model.DataEvidence.of("fixture", Freshness.FIXTURE));
+        }
+        RateQuote r = rateCache.get(days, d -> {
             for (RatesProvider p : ratesProviders) {
                 try {
                     OptionalDouble v = p.riskFreeRate(d);
-                    if (v.isPresent()) { recordOk(p.name(), Domain.RATES); return v.getAsDouble(); }
+                    if (v.isPresent()) {
+                        recordOk(p.name(), Domain.RATES);
+                        return new RateQuote(v.getAsDouble(),
+                                io.liftandshift.strikebench.model.DataEvidence.of(p.name(), Freshness.EOD));
+                    }
                     recordEmpty(p.name(), Domain.RATES);
                 } catch (Exception e) {
                     recordError(p.name(), Domain.RATES, e);
@@ -310,7 +365,11 @@ public final class MarketDataService {
             }
             return null;
         });
-        return r == null ? 0.04 : r;
+        return r == null ? RateQuote.modeledDefault(0.04) : r;
+    }
+
+    public double riskFreeRate(int days) {
+        return riskFreeRateQuote(days).annualRate();
     }
 
     /** Per-domain provider health. NEVER throws; complete even with zero providers or zero calls. */

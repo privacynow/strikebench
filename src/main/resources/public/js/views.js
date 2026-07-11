@@ -647,6 +647,20 @@
         }, _rt);
       }
 
+    var evProfile = r.evidence || {};
+    var evInputs = evProfile.inputs || {};
+    var evSummary = evProfile.summary || q.evidence;
+    var evidenceLine = el('div', { class: 'page-evidence', id: 'research-evidence' },
+      el('b', {}, 'Evidence for this analysis'), UI.evidenceBadge(evSummary),
+      evSummary && evSummary.provenance === 'MISSING'
+        ? el('span', { class: 'muted' }, 'Some calculations are unavailable rather than filled with demo data.')
+        : evSummary && evSummary.provenance === 'MIXED'
+          ? el('span', { class: 'muted' }, 'Inputs come from different evidence types; each is named below.') : null,
+      el('span', { class: 'spacer' }),
+      Object.keys(evInputs).map(function (key) {
+        return el('span', { class: 'evidence-input' }, key + ' ', UI.evidenceBadge(evInputs[key]));
+      }));
+
     var hero = el('div', { class: 'card' },
       el('div', { class: 'quote-hero' },
         el('span', { class: 'sym', id: 'research-symbol' }, symbol),
@@ -666,13 +680,14 @@
           }
         }, 'Find strategies') : null),
       el('div', { class: 'nm', style: 'margin-top:2px' }, q.description || ''),
+      evidenceLine,
       el('div', { class: 'chip-row' },
         chip('Bid/Ask', fmtNum(q.bid) + ' / ' + fmtNum(q.ask)),
         chip('Prev close', fmtNum(q.prevClose)),
         chip('Day', fmtNum(q.dayLow) + ' – ' + fmtNum(q.dayHigh)),
         chip('IV (ATM)', fmtPct(r.ivAtm)),
         chip(el('span', {}, 'IV rank', UI.info('ivrank')), 'building history'),
-        chip('HV 30d', fmtPct(r.hv30) + (r.historyDemo ? ' (demo)' : '')),
+        chip('HV 30d', fmtPct(r.hv30)),
         chip('Options', r.optionable ? 'yes' : 'no')),
       explain('IV is the move the options market is pricing in; HV is what the stock actually did lately. IV far above HV → options are relatively expensive to buy (and richer to sell).'),
       (r.benchmarks && r.benchmarks.length) ? el('div', { class: 'chip-row' }, r.benchmarks.map(function (b) {
@@ -986,14 +1001,17 @@
       var candles = hist.candles || [];
       return {
         range: hist.range, candles: candles,
-        badge: hist.demo ? el('span', { class: 'badge badge-warn' }, 'DEMO DATA') : null,
-        note: hist.demo ? explain('This price history is built-in DEMO DATA \u2014 no live candle source is configured. Add a Polygon or Alpha Vantage key for real history.') : null,
+        badge: UI.evidenceBadge(hist.evidence),
+        note: hist.evidence && hist.evidence.provenance === 'DEMO'
+          ? explain('This chart is fabricated teaching data from the explicit Demo market. It is not a substitute for observed history.')
+          : hist.evidence && hist.evidence.provenance === 'MODELED'
+            ? explain('This chart is a generated Scenario dataset. Its modeled path is separate from observed market history.') : null,
         emptyText: candles.length ? null
           : (App.config && App.config.fixturesOnly)
             ? 'Demo mode ships price history for AAPL, SPY, QQQ and TSLA only \u2014 try one of those.'
             : Learn.currentLevel() === 'beginner'
-              ? 'No free daily-history source covers ' + symbol + ' right now. Quotes and option chains still work; the Data screen explains what each source provides.'
-              : 'No daily history for ' + symbol + '. Quotes/chains are live (Cboe); candles need a free Polygon or Alpha Vantage key \u2014 set POLYGON_API_KEY or ALPHAVANTAGE_API_KEY (or polygon.api.key in strikebench.properties) and restart. Per-source health: Data screen.'
+              ? 'Observed daily history is unavailable for ' + symbol + '. Quotes and option chains may still work; Data explains what each source provides.'
+              : 'No observed daily history for ' + symbol + '. Connect or backfill an eligible candle source from Data → Sources & jobs.'
       };
     };
   }
@@ -1246,7 +1264,7 @@
           t2.appendChild(UI.sparkline(row, { height: 36 }));
           // Evidence badge: SERVER-computed kind rendered verbatim (review IC-1) — the client
           // never infers OBSERVED from mere availability.
-          if (row.evidence) t2.appendChild(el('span', { class: 'badge badge-dim spark-ev' }, row.evidence));
+          if (row.evidence) t2.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev' }));
         });
       } catch (e) { /* cards stand without sparklines — quotes are the load-bearing data */ }
     }
@@ -2882,10 +2900,20 @@
           checks.push({ state: 'pass',
             text: 'Covered by shares you already hold — they are locked while this trade is open and can be called away at the strike' });
         }
-        checks.push({ state: p.freshness === 'REALTIME' || p.freshness === 'FIXTURE' ? 'pass' : 'warn',
-          text: p.freshness === 'FIXTURE' ? 'Priced on demo data (practice mode)'
-              : p.freshness === 'REALTIME' ? 'Priced on real-time quotes'
-              : 'Priced on ' + p.freshness + ' quotes — real fills may differ' });
+        var pe = p.evidence || {};
+        var expectedProv = App.state.world === 'demo' ? 'DEMO'
+          : App.state.world && App.state.world !== 'observed' ? 'SIMULATED' : 'OBSERVED';
+        var provenanceMatches = pe.provenance === expectedProv
+          || (expectedProv === 'OBSERVED' && pe.provenance === 'BROKER');
+        checks.push({ state: !provenanceMatches ? 'fail'
+            : pe.age === 'STALE' || pe.age === 'MISSING' ? 'fail'
+            : pe.age === 'DELAYED' || pe.age === 'EOD' ? 'warn' : 'pass',
+          text: !provenanceMatches
+            ? 'Data-lane mismatch: this ' + expectedProv + ' ticket was priced from ' + (pe.provenance || 'unknown') + ' data'
+            : pe.provenance === 'DEMO' ? 'Priced inside the explicit Demo market on fabricated teaching data'
+            : pe.provenance === 'SIMULATED' ? 'Priced inside this simulated market and its isolated account'
+            : pe.age === 'REALTIME' ? 'Priced on observed real-time quotes'
+            : 'Priced on observed ' + (pe.age || p.freshness) + ' quotes — executable prices may move' });
         var zeroDteWarn = warns.some(function (w) { return w.indexOf('0DTE') >= 0; });
         if (zeroDteWarn) checks.push({ state: 'warn', text: 'Expires TODAY — value can go to zero within hours' });
         var closedWarn = warns.some(function (w) { return w.toLowerCase().indexOf('market is closed') >= 0; });
@@ -4509,7 +4537,7 @@
     }
     if (tab === 'overview') {
       root.appendChild(explain('Where your market data comes from, how fresh it is, and what you can pull in. '
-        + brandName() + ' chains several sources per job and falls back gracefully — DEMO DATA means the built-in fixture is serving.'));
+        + brandName() + ' keeps Observed, Demo, Simulated and Scenario data separate. Missing observed data stays unavailable; it is never replaced by fabricated values.'));
     }
 
     var engineCard = el('div', { class: 'card', id: 'dc-engine' }, UI.spinner('Checking the market engine…'));
@@ -4530,6 +4558,14 @@
       explain(beginnerDC()
         ? 'A practice market that MOVES: generated prices and option chains stream like the real thing, on any day, at any speed. Everything is loudly labeled \u2014 nothing here is real, and a separate simulation account keeps your practice account untouched.'
         : 'Deterministic per-session worlds: a real beta factor model on fixed 30-sim-second quanta (speed never changes the path), a full generated option book, replayable from seed + event log. A separate simulation account is the only lane that trades a world.'));
+    simCard.appendChild(el('div', { class: 'demo-market-choice' },
+      el('div', {}, el('b', {}, 'Built-in demo market'),
+        el('p', { class: 'muted small' }, 'A fixed, fabricated market for learning the interface. It is isolated from observed data and uses its own account.')),
+      el('span', { class: 'spacer' }),
+      App.state.world === 'demo'
+        ? el('span', { class: 'badge badge-warn' }, 'ACTIVE')
+        : el('button', { class: 'btn btn-sm btn-secondary', id: 'enter-demo-market',
+          onclick: function () { App.switchWorld('demo'); } }, 'Enter demo market')));
     function beginnerDC() { return window.Learn && Learn.currentLevel() === 'beginner'; }
     if (tab === 'simulation') root.appendChild(simCard);
     (async function () {
@@ -5143,7 +5179,16 @@
       var world = App.state.world || 'observed';
       var lines = [], actions = [];
       try {
-        if (world !== 'observed') {
+        if (world === 'demo') {
+          lines.push(el('div', { class: 'chip-row' },
+            el('span', { class: 'badge badge-warn' }, 'DEMO MARKET'),
+            el('b', {}, 'Built-in fabricated teaching data'),
+            el('span', { class: 'muted small' }, 'isolated demo account')));
+          actions.push(el('button', { class: 'btn', onclick: function () { App.navigate('#/research'); } }, 'Explore demo data'));
+          if (!(App.config && App.config.fixturesOnly)) {
+            actions.push(el('button', { class: 'btn btn-secondary', onclick: function () { App.switchWorld('observed'); } }, 'Return to observed market'));
+          }
+        } else if (world !== 'observed') {
           var ss = (await API.get('/api/sim/market')).sessions || [];
           var cur = null;
           ss.forEach(function (x) { if (x.id === world) cur = x; });
@@ -5401,7 +5446,8 @@
       engineCard.innerHTML = '';
       engineCard.appendChild(UI.cardHeader('Market engine',
         el('button', { class: 'btn btn-sm', id: 'dc-refresh-now', onclick: function () { startJob('refresh_now', {}); } }, 'Refresh now')));
-      if (ov.fixturesOnly) engineCard.appendChild(alertBox('warn', 'Fixtures-only mode: all data is simulated demo data.'));
+      if (ov.marketLane === 'DEMO') engineCard.appendChild(alertBox('warn',
+        'Demo market is active: every price and chain is fabricated teaching data in an isolated account.'));
       if (level === 'beginner') engineCard.appendChild(explain('An in-memory feed keeps your tickers fresh in the background so screens load instantly, instead of downloading on every click.'));
       engineCard.appendChild(el('div', { class: 'chip-row' },
         chip('Market', ov.marketOpen ? 'Open' : 'Closed'),

@@ -17,4 +17,8 @@ public record CandleSeries(List<Candle> candles, String source, Freshness freshn
 
     /** Demo data standing in for real history (fine in fixture mode, must be labeled in live mode). */
     public boolean isFixture() { return freshness == Freshness.FIXTURE; }
+
+    public io.liftandshift.strikebench.model.DataEvidence evidence() {
+        return io.liftandshift.strikebench.model.DataEvidence.of(source, freshness);
+    }
 }

@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.support.TestDb;
+import io.liftandshift.strikebench.support.ObservedFixtureProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -27,12 +28,12 @@ class UnderlyingBackfillTest {
 
     @AfterEach void closeDb() { if (db != null) db.close(); }
 
-    private UnderlyingBackfill backfiller() {
+    private UnderlyingBackfill backfiller(boolean observed) {
         db = TestDb.fresh();
-        AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
         FixtureProvider fixture = new FixtureProvider(clock);
+        MarketDataProvider provider = observed ? new ObservedFixtureProvider(clock) : fixture;
         MarketDataService market = new MarketDataService(
-                List.<MarketDataProvider>of(fixture), List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
+                List.of(provider), List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
         return new UnderlyingBackfill(market, db, clock);
     }
 
@@ -41,28 +42,28 @@ class UnderlyingBackfillTest {
     }
 
     @Test
-    void backfillsDailyBarsAndLabelsFixtureNotObserved() {
-        UnderlyingBackfill bf = backfiller();
+    void demoBackfillIsRefusedInsteadOfEnteringObservedStorage() {
+        UnderlyingBackfill bf = backfiller(false);
         var res = bf.backfill("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-06-30"));
-        assertThat(res.rows()).isGreaterThan(0);
-        assertThat(res.observed()).isFalse();       // fixture history is never passed off as real
+        assertThat(res.rows()).isZero();
+        assertThat(res.observed()).isFalse();
         assertThat(res.source()).isEqualTo("fixture");
-        assertThat(rows("AAPL")).isEqualTo(res.rows());
-        // The stored rows are labeled observed=0 (demo).
-        long observedRows = db.query(
-                "SELECT count(*) c FROM underlying_bar WHERE symbol='AAPL' AND observed=1",
-                r -> r.lng("c")).getFirst();
-        assertThat(observedRows).isZero();
+        assertThat(rows("AAPL")).isZero();
+        assertThat(res.note()).contains("refused");
     }
 
     @Test
     void backfillIsIdempotent() {
-        UnderlyingBackfill bf = backfiller();
+        UnderlyingBackfill bf = backfiller(true);
         var a = bf.backfill("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-06-30"));
+        assertThat(a.observed()).isTrue();
+        assertThat(a.rows()).isGreaterThan(0);
         long after1 = rows("AAPL");
         var b = bf.backfill("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-06-30"));
         long after2 = rows("AAPL");
         assertThat(after2).isEqualTo(after1); // upsert on (symbol, d, source): no duplicate rows
         assertThat(b.rows()).isEqualTo(a.rows());
+        assertThat(db.query("SELECT count(*) c FROM underlying_bar WHERE observed=1", r -> r.lng("c")).getFirst())
+                .isEqualTo(after2);
     }
 }

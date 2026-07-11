@@ -1,7 +1,6 @@
 package io.liftandshift.strikebench.market;
 
 import io.liftandshift.strikebench.db.Db;
-import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.Quote;
@@ -97,28 +96,31 @@ public final class SnapshotService {
 
     /** Writes one symbol's underlying + option rows in a single transaction; returns {underlying, option} counts. */
     private int[] writeSymbol(LocalDate asof, String sym, Quote quote, List<OptionChain> chains) {
+        final Quote observedQuote = quote != null && snapshotEligible(quote.evidence()) ? quote : null;
         return db.tx(c -> {
             int u = 0, o = 0;
-            if (quote != null) {
-                BigDecimal close = quote.last() != null ? quote.last() : quote.mark();
+            if (observedQuote != null) {
+                BigDecimal close = observedQuote.last() != null ? observedQuote.last() : observedQuote.mark();
                 if (close != null) {
-                    boolean observed = isObserved(quote.freshness());
                     Db.execOn(c,
                             "INSERT INTO underlying_bar (symbol, d, open, high, low, close, volume, source, observed) "
                           + "VALUES (?,?,?,?,?,?,?,?,?) "
                           + "ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET "
                           + "open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, "
                           + "volume=excluded.volume, observed=excluded.observed",
-                            sym, asof, null, quote.dayHigh(), quote.dayLow(), close, quote.volume(), SOURCE, observed);
+                            sym, asof, null, observedQuote.dayHigh(), observedQuote.dayLow(), close,
+                            observedQuote.volume(), SOURCE, true);
                     u++;
                 }
             }
             for (OptionChain chain : chains) {
-                boolean observed = isObserved(chain.freshness());
+                if (!snapshotEligible(chain.evidence())) continue;
+                boolean observed = true;
                 BigDecimal underlying = chain.underlyingPrice();
                 List<OptionQuote> legs = new ArrayList<>(chain.calls());
                 legs.addAll(chain.puts());
                 for (OptionQuote q : legs) {
+                    if (!snapshotEligible(q.evidence())) continue;
                     boolean baObserved = observed && q.bid() != null && q.ask() != null;
                     String ivSource = q.iv() != null ? (observed ? "vendor" : "model") : null;
                     boolean anyGreek = q.delta() != null || q.gamma() != null || q.theta() != null || q.vega() != null;
@@ -146,8 +148,13 @@ public final class SnapshotService {
         });
     }
 
-    /** Real market data (even if delayed or a touch stale) counts as observed; fixtures/models do not. */
-    private static boolean isObserved(Freshness f) {
-        return f == Freshness.REALTIME || f == Freshness.DELAYED || f == Freshness.EOD || f == Freshness.STALE;
+    /** Only attributable, current-enough observed inputs may enter the canonical observed tables. */
+    private static boolean snapshotEligible(io.liftandshift.strikebench.model.DataEvidence evidence) {
+        if (evidence == null || evidence.provenance() != io.liftandshift.strikebench.model.DataProvenance.OBSERVED) {
+            return false;
+        }
+        return evidence.age() == io.liftandshift.strikebench.model.DataAge.REALTIME
+                || evidence.age() == io.liftandshift.strikebench.model.DataAge.DELAYED
+                || evidence.age() == io.liftandshift.strikebench.model.DataAge.EOD;
     }
 }

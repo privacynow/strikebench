@@ -16,6 +16,8 @@ public record OptionChain(
         String source,
         Freshness freshness
 ) {
+    public DataEvidence evidence() { return DataEvidence.of(source, freshness); }
+
     public Optional<OptionQuote> find(OptionType type, BigDecimal strike) {
         List<OptionQuote> side = type == OptionType.CALL ? calls : puts;
         return side.stream().filter(q -> q.strike().compareTo(strike) == 0).findFirst();

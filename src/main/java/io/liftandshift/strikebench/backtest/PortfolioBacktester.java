@@ -121,7 +121,7 @@ public final class PortfolioBacktester {
         List<String> notes = new ArrayList<>();
         CandleSeries series = market.candleSeries(symbol, from.minusDays(220), to, actx);
         List<Candle> all = series.candles();
-        boolean demo = series.isFixture() && !cfg.fixturesOnly();
+        boolean demo = series.isFixture();
         if (demo) notes.add("Underlying history is built-in DEMO DATA — add a Polygon/Alpha Vantage key for real candles.");
         List<Candle> window = all.stream().filter(c -> !c.date().isBefore(from) && !c.date().isAfter(to)).toList();
 

@@ -277,19 +277,46 @@
   async function refreshWorldBand() {
     var seq = ++worldBandSeq;
     var world = App.state.world;
-    document.body.classList.toggle('in-sim-world', !!world && world !== 'observed');
+    var isDemo = world === 'demo';
+    document.body.classList.toggle('in-sim-world', !!world && world !== 'observed' && !isDemo);
+    document.body.classList.toggle('in-demo-world', isDemo);
     if (!world || world === 'observed') {
       Array.prototype.slice.call(document.querySelectorAll('#world-band')).forEach(function (b) { b.remove(); });
       return;
     }
     var sess = null;
-    try {
-      var all = (await API.getFresh('/api/sim/market')).sessions || [];
-      sess = all.find(function (x) { return x.id === world; });
-    } catch (e) { /* band still renders minimal */ }
+    if (!isDemo) {
+      try {
+        var all = (await API.getFresh('/api/sim/market')).sessions || [];
+        sess = all.find(function (x) { return x.id === world; });
+      } catch (e) { /* band still renders minimal */ }
+    }
     if (seq !== worldBandSeq || App.state.world !== world) return;
     var cfg = sess && sess.config ? sess.config : {};
     var playing = !!(sess && sess.running);
+
+    if (isDemo) {
+      var existingDemo = document.getElementById('world-band');
+      if (existingDemo && existingDemo.dataset.world === 'demo') return;
+      Array.prototype.slice.call(document.querySelectorAll('#world-band')).forEach(function (b) { b.remove(); });
+      var demoActions = [
+        UI.el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, 'Explore demo data'),
+        UI.el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } }, 'Demo controls')
+      ];
+      if (!(App.config && App.config.fixturesOnly)) {
+        demoActions.push(UI.el('button', { class: 'btn btn-sm', id: 'world-exit',
+          onclick: function () { App.switchWorld('observed'); } }, 'Return to observed market'));
+      }
+      var demoBand = UI.el('div', { id: 'world-band', 'data-world': 'demo', role: 'status' },
+        UI.icon('warn', 15), UI.el('b', { class: 'wb-tag' }, 'DEMO MARKET'),
+        UI.el('span', { class: 'wb-label' },
+          'Every quote, chart, option chain, headline and fill is fabricated teaching data.'),
+        UI.el('span', { class: 'spacer' }), demoActions);
+      document.body.insertBefore(demoBand, document.getElementById('tape') || document.body.firstChild);
+      var demoTopbar = document.querySelector('.topbar');
+      if (demoTopbar) demoBand.style.top = demoTopbar.getBoundingClientRect().height + 'px';
+      return;
+    }
 
     var band = document.getElementById('world-band');
     if (band && band.dataset.world === world) {
@@ -397,8 +424,12 @@
     LANE_KEYS.forEach(function (k) { if (box[k] !== undefined) App.state[k] = box[k]; });
   }
 
-  App.transitionWorld = function (worldId, bootstrap) {
+  App.transitionWorld = function (worldId, bootstrap, revision) {
     var target = worldId || 'observed';
+    var rev = Number(revision || 0);
+    if (rev && rev <= Number(App.state.worldRevision || 0) && App.state.world === target) {
+      return Promise.resolve(); // duplicate PUT/SSE delivery, already reconciled
+    }
     // Collapse CONCURRENT transitions to the same target into one reconciliation: the SSE
     // hint and the awaited PUT often land within milliseconds. Skipping was the bug;
     // doubling the work is merely wasteful — collapsing does it exactly once, fully.
@@ -427,6 +458,7 @@
         var from = App.state.world || 'observed';
         var changed = from !== target;
         App.state.world = target;
+        if (rev) App.state.worldRevision = Math.max(Number(App.state.worldRevision || 0), rev);
         App.state.worldGen++;         // discard SSE/stale fills from the world we just left
         if (changed) { stashLane(from); restoreLane(target); }
         // A working idea priced in the OTHER market cannot survive the switch: its quotes,
@@ -493,7 +525,8 @@
       }
       // Transition failures reject AND paint the #transition-error banner — no alert on top.
       // The PUT's response carries the target bootstrap: server and client commit together.
-      await App.transitionWorld(worldId, res && res.universe).catch(function () { /* visible in the banner */ });
+      await App.transitionWorld(worldId, res && res.universe, res && res.revision)
+        .catch(function () { /* visible in the banner */ });
     } catch (e) { alert(e.message); }
   };
 
@@ -653,7 +686,9 @@
       // BOOT IS A TRANSITION TOO (review P1 #3): reloading inside a simulated world must
       // reconcile the store, universe, lane state, and screens — not just paint the band
       // over observed-market state.
-      if (boot !== 'observed') return App.transitionWorld(boot).catch(function () { /* banner shown */ });
+      if (w && w.revision) App.state.worldRevision = Number(w.revision);
+      if (boot !== 'observed') return App.transitionWorld(boot, null, w && w.revision)
+        .catch(function () { /* banner shown */ });
     }).catch(function () { /* observed */ });
     App.onEvent('world.tick', function (type, data) {
       if (!data || data.world !== App.state.world) return; // a world we already left — discard
@@ -663,14 +698,16 @@
     // Multi-tab truth: another tab (same user) switched worlds — adopt it here too, band and all.
     App.onEvent('world.selected', function (type, data) {
       if (!data || data.world === undefined) return;
-      App.transitionWorld(data.world).catch(function () { /* banner shown */ }); // idempotent: same-target calls collapse
+      App.transitionWorld(data.world, data.universe, data.revision)
+        .catch(function () { /* banner shown */ }); // idempotent: same-target calls collapse
     });
     // Belt-and-braces for tabs whose SSE dropped: re-check the server's world on return.
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState !== 'visible') return;
       API.getFresh('/api/world').then(function (w) {
         var srv = (w && w.world) || 'observed';
-        if (srv !== App.state.world) App.transitionWorld(srv).catch(function () { /* banner shown */ });
+        if (srv !== App.state.world) App.transitionWorld(srv, null, w && w.revision)
+          .catch(function () { /* banner shown */ });
       }).catch(function () { /* offline — next visit retries */ });
     });
     refreshUniverse();
@@ -732,14 +769,20 @@
       // whole ticker jumping every refresh. Rebuild only when the symbol set changes.
       // Honest labeling on the ONE always-visible market surface: demo quotes get a DEMO chip
       // at the tape's leading edge (the tiles were quadruple-badged while the tape said nothing).
-      var allDemo = quotes.length && quotes.every(function (q) { return q.freshness === 'FIXTURE'; });
-      var allSim = quotes.length && quotes.every(function (q) { return q.freshness === 'SIMULATED'; });
+      var marketLane = data.marketLane || (App.config && App.config.marketLane) || 'OBSERVED';
+      var allDemo = marketLane === 'DEMO';
+      var allSim = marketLane === 'SIMULATED';
+      var crossedLane = marketLane === 'OBSERVED' && quotes.some(function (q) {
+        var p = q.evidence && q.evidence.provenance;
+        return p && p !== 'OBSERVED' && p !== 'BROKER';
+      });
       var demoChip = document.getElementById('tape-demo-chip');
-      var chipWanted = allSim ? 'SIMULATED' : (allDemo ? 'DEMO' : null);
+      var chipWanted = crossedLane ? 'DATA UNAVAILABLE' : (allSim ? 'SIMULATED' : (allDemo ? 'DEMO' : null));
       if (chipWanted && (!demoChip || demoChip.textContent !== chipWanted)) {
         if (demoChip) demoChip.remove();
-        tape.insertBefore(UI.el('span', { id: 'tape-demo-chip', class: allSim ? 'badge badge-sim' : 'badge badge-dim',
+        tape.insertBefore(UI.el('span', { id: 'tape-demo-chip', class: allSim ? 'badge badge-sim' : (crossedLane ? 'badge badge-bad' : 'badge badge-dim'),
           title: allSim ? 'These prices are generated by your simulated session \u2014 not the market.'
+                        : crossedLane ? 'A non-observed quote was refused in the Observed market. Open Data for source status.'
                         : 'These prices are built-in demo data, not the market.' }, chipWanted), tape.firstChild);
       } else if (!chipWanted && demoChip) { demoChip.remove(); }
       var symbolsKey = quotes.map(function (q) { return q.symbol; }).join(',');

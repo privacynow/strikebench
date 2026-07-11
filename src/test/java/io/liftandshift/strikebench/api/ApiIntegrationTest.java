@@ -570,33 +570,26 @@ class ApiIntegrationTest {
         // Default in fixture mode is the DEMO sector
         JsonNode u = Json.parse(get("/api/universe").body());
         assertThat(u.at("/active/symbols").toString()).contains("AAPL").contains("SPY");
-        assertThat(u.get("sectors").size()).isGreaterThanOrEqualTo(10);
-
-        // Sector selection persists in settings and drives the batch-quotes default
-        HttpResponse<String> put = put("/api/universe", "{\"sector\":\"DEFENSE\"}");
-        assertThat(put.statusCode()).isEqualTo(200);
-        assertThat(Json.parse(put.body()).at("/active/sectorKey").asText()).isEqualTo("DEFENSE");
-        assertThat(Json.parse(get("/api/universe").body()).at("/active/label").asText()).contains("Defense");
-        assertThat(put("/api/universe", "{\"sector\":\"NOPE\"}").statusCode()).isEqualTo(400);
-
-        // Custom list wins over the sector; junk symbols are 400s
-        assertThat(put("/api/universe", "{\"symbols\":[\"aapl\",\"tsla\",\"AAPL\"]}").statusCode()).isEqualTo(200);
-        JsonNode active = Json.parse(get("/api/universe").body()).get("active");
-        assertThat(active.get("source").asText()).isEqualTo("custom");
-        assertThat(active.get("symbols").size()).isEqualTo(2); // deduped, uppercased
-        assertThat(put("/api/universe", "{\"symbols\":[\"bad symbol!\"]}").statusCode()).isEqualTo(400);
+        assertThat(u.get("sectors")).hasSize(1);
+        assertThat(u.get("lane").asText()).isEqualTo("DEMO");
+        // Demo and Simulated markets own their symbol list. Sector changes cannot mutate
+        // the hidden Observed universe while another lane is active.
+        assertThat(put("/api/universe", "{\"sector\":\"DEFENSE\"}").statusCode()).isEqualTo(409);
 
         // Batch quotes: light rows for whatever has data, silently skipping the unknown
         JsonNode quotes = Json.parse(get("/api/quotes?symbols=AAPL,TSLA,ZZZZ").body()).get("quotes");
         assertThat(quotes.size()).isEqualTo(2);
         assertThat(quotes.get(0).get("last").asText()).isNotBlank();
         // No symbols param -> the active universe
-        assertThat(Json.parse(get("/api/quotes").body()).get("quotes").size()).isEqualTo(2);
+        assertThat(Json.parse(get("/api/quotes").body()).get("quotes").size())
+                .isEqualTo(u.at("/active/symbols").size());
 
         // The scout's default scan list is the selected universe
         JsonNode scan = Json.parse(post("/api/recommend/auto", "{}").body());
+        java.util.Set<String> activeSymbols = new java.util.LinkedHashSet<>();
+        u.at("/active/symbols").forEach(s -> activeSymbols.add(s.asText()));
         for (JsonNode pick : scan.get("picks")) {
-            assertThat(pick.get("symbol").asText()).isIn("AAPL", "TSLA");
+            assertThat(pick.get("symbol").asText()).isIn(activeSymbols);
         }
 
         // History range pills: ytd/5y/max normalize and answer with whatever data exists
@@ -607,8 +600,6 @@ class ApiIntegrationTest {
         }
         assertThat(Json.parse(get("/api/research/AAPL/history?range=bogus").body()).get("range").asText()).isEqualTo("1y");
 
-        // Restore the demo universe for other tests
-        assertThat(put("/api/universe", "{\"sector\":\"DEMO\"}").statusCode()).isEqualTo(200);
     }
 
     @Test
@@ -812,9 +803,12 @@ class ApiIntegrationTest {
         assertThat(server.events.since(0).stream().skip(before))
                 .anyMatch(e -> e.type().equals("dataset.selected") && "observed".equals(e.data().get("active")));
 
-        // SSE endpoint speaks event-stream and replays the ring buffer on connect.
+        // SSE endpoint speaks event-stream and replays from the precise event boundary.
+        long workspaceSeq = server.events.since(0).stream()
+                .filter(e -> e.type().equals("workspace.updated"))
+                .mapToLong(io.liftandshift.strikebench.util.EventBus.Event::seq).max().orElseThrow();
         HttpRequest sse = HttpRequest.newBuilder(URI.create(base + "/api/events"))
-                .header("Accept", "text/event-stream").header("Last-Event-ID", "0")
+                .header("Accept", "text/event-stream").header("Last-Event-ID", String.valueOf(workspaceSeq - 1))
                 .timeout(java.time.Duration.ofSeconds(5)).GET().build();
         HttpResponse<java.io.InputStream> stream = http.send(sse, HttpResponse.BodyHandlers.ofInputStream());
         assertThat(stream.statusCode()).isEqualTo(200);
@@ -1036,7 +1030,7 @@ class ApiIntegrationTest {
             assertThat(row.get("closes").size()).isGreaterThanOrEqualTo(10);
             assertThat(row.get("dates").size()).isEqualTo(row.get("closes").size());
             assertThat(row.get("freshness").asText()).isEqualTo("FIXTURE");
-            assertThat(row.get("demo").asBoolean()).isFalse(); // fixture MODE is not 'demo masquerading'
+            assertThat(row.get("evidence").get("provenance").asText()).isEqualTo("DEMO");
         }
         JsonNode dead = bySym.get("ZZZZ");
         assertThat(dead.get("available").asBoolean()).isFalse();
@@ -1078,9 +1072,11 @@ class ApiIntegrationTest {
         // Fixture-mode candles are DEMO evidence — never inferred OBSERVED (review IC-1).
         JsonNode r = Json.parse(get("/api/sparklines?symbols=AAPL&range=1m").body());
         JsonNode row = r.get("sparklines").get(0);
-        assertThat(row.get("evidence").asText()).isEqualTo("DEMO");
+        assertThat(row.get("evidence").get("provenance").asText()).isEqualTo("DEMO");
         // PUT /api/world responds with the target lane's complete universe bootstrap.
-        JsonNode w = Json.parse(put("/api/world", "{\"world\":\"observed\"}").body());
+        JsonNode w = Json.parse(put("/api/world", "{\"world\":\"demo\"}").body());
         assertThat(w.get("universe").get("active").get("symbols").size()).isGreaterThan(0);
+        assertThat(w.get("universe").get("lane").asText()).isEqualTo("DEMO");
+        assertThat(w.get("revision").asLong()).isPositive();
     }
 }

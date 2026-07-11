@@ -90,6 +90,28 @@
     return el('span', { class: 'badge ' + (FRESH_CLASS[freshness] || 'badge-dim'), title: 'Data freshness' }, label);
   }
 
+  /** Provenance and age are separate facts. Accepts the API DataEvidence object. */
+  function evidenceBadge(evidence, opts) {
+    if (!evidence) return null;
+    if (typeof evidence === 'string') evidence = { provenance: evidence };
+    var p = String(evidence.provenance || 'MISSING').toUpperCase();
+    var age = String(evidence.age || '').toUpperCase();
+    var label = p === 'DEMO' ? 'DEMO · FABRICATED'
+      : p === 'SIMULATED' ? 'SIMULATED'
+      : p === 'MODELED' ? 'MODELED'
+      : p === 'MIXED' ? 'MIXED SOURCES'
+      : p === 'MISSING' ? 'DATA UNAVAILABLE'
+      : p;
+    if ((p === 'OBSERVED' || p === 'BROKER') && age && age !== 'NOT_APPLICABLE') label += ' · ' + age;
+    var cls = p === 'OBSERVED' || p === 'BROKER'
+      ? (age === 'STALE' ? 'badge-danger' : age === 'DELAYED' ? 'badge-warn' : 'badge-ok')
+      : p === 'DEMO' ? 'badge-warn'
+      : p === 'SIMULATED' ? 'badge-sim'
+      : p === 'MODELED' || p === 'MIXED' ? 'badge-caution' : 'badge-danger';
+    return el('span', { class: 'badge evidence-badge ' + cls + (opts && opts.className ? ' ' + opts.className : ''),
+      title: evidence.source ? ('Source: ' + evidence.source) : null }, label);
+  }
+
   function explain(text) {
     var node = el('span', { class: 'explain' }, text);
     var i = icon('info', 13);
@@ -1034,6 +1056,7 @@
     fmtNum: fmtNum,
     delta: delta,
     freshnessBadge: freshnessBadge,
+    evidenceBadge: evidenceBadge,
     explain: explain,
     alertBox: alertBox,
     stat: stat,

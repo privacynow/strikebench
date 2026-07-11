@@ -66,6 +66,8 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
         return Set.of(Domain.QUOTES, Domain.OPTIONS, Domain.CANDLES, Domain.NEWS, Domain.RATES, Domain.HISTORICAL_OPTIONS);
     }
 
+    public Set<String> symbols() { return java.util.Collections.unmodifiableSet(SPECS.keySet()); }
+
     private LocalDate today() { return LocalDate.now(clock); }
 
     private long nowMs() { return clock.millis(); }

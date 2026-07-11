@@ -34,12 +34,18 @@ public final class PositionsService {
     private final MarksSource marks;
     private final AuditLog audit;
     private final Clock clock;
+    private final boolean fixturesOnly;
 
     public PositionsService(Db db, MarksSource marks, AuditLog audit, Clock clock) {
+        this(db, marks, audit, clock, true);
+    }
+
+    public PositionsService(Db db, MarksSource marks, AuditLog audit, Clock clock, boolean fixturesOnly) {
         this.db = db;
         this.marks = marks;
         this.audit = audit;
         this.clock = clock;
+        this.fixturesOnly = fixturesOnly;
     }
 
     public record Position(String id, String accountId, String symbol, long shares, long avgCostCents,
@@ -81,7 +87,8 @@ public final class PositionsService {
 
     /** The account's market lane: a SIMULATION account's shares price against ITS world. */
     private String worldOf(String accountId) {
-        var rows = db.query("SELECT world_id FROM accounts WHERE id=?", r -> r.str("world_id"), accountId);
+        var rows = db.query("SELECT world_id,type FROM accounts WHERE id=?",
+                r -> "DEMO".equals(r.str("type")) ? "demo" : r.str("world_id"), accountId);
         return rows.isEmpty() ? null : rows.getFirst();
     }
 
@@ -105,6 +112,7 @@ public final class PositionsService {
         String world = worldOf(accountId);
         List<String> warnings = validateOrder(shares, world);
         MarksSource.LegMark mark = stockMark(sym, world);
+        requireExecutableEvidence(mark, world, sym);
         BigDecimal ask = mark.executable(LegAction.BUY);
         if (ask == null) {
             throw new TradeRejectedException(List.of("No executable ask for " + sym
@@ -154,6 +162,7 @@ public final class PositionsService {
         String world = worldOf(accountId);
         List<String> warnings = validateOrder(shares, world);
         MarksSource.LegMark mark = stockMark(sym, world);
+        requireExecutableEvidence(mark, world, sym);
         BigDecimal bid = mark.executable(LegAction.SELL);
         if (bid == null) {
             throw new TradeRejectedException(List.of("No executable bid for " + sym
@@ -211,6 +220,14 @@ public final class PositionsService {
     private MarksSource.LegMark stockMark(String sym, String world) {
         return marks.legMark(sym, Leg.stock(LegAction.BUY, 1, BigDecimal.ONE), world)
                 .orElseThrow(() -> new TradeRejectedException(List.of("No quote available for " + sym)));
+    }
+
+    private void requireExecutableEvidence(MarksSource.LegMark mark, String world, String symbol) {
+        var lane = io.liftandshift.strikebench.market.MarketLane.of(world, fixturesOnly);
+        if (!mark.evidence().executableIn(lane)) {
+            throw new TradeRejectedException(List.of("Cannot trade shares of " + symbol + " in the " + lane
+                    + " market using " + mark.evidence().provenance() + " data (" + mark.evidence().source() + ")"));
+        }
     }
 
     // ---- Assignment hooks (called by TradeService inside ITS transaction) ----

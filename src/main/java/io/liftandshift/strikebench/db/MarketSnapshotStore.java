@@ -20,6 +20,9 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
     /** Upsert one symbol's last-known quote (best-effort; called after a successful refresh). */
     @Override public void save(MarketSnapshot s) {
         if (s == null || s.symbol() == null || s.last() == null) return;
+        var evidence = io.liftandshift.strikebench.model.DataEvidence.of(s.source(), s.freshness());
+        if (evidence.provenance() != io.liftandshift.strikebench.model.DataProvenance.OBSERVED
+                && evidence.provenance() != io.liftandshift.strikebench.model.DataProvenance.BROKER) return;
         db.exec("INSERT INTO market_snapshot (symbol, description, last, bid, ask, prev_close, optionable, "
               + "source, freshness, as_of, captured_at) VALUES (?,?,?,?,?,?,?,?,?,?, now()) "
               + "ON CONFLICT (symbol) DO UPDATE SET description=excluded.description, last=excluded.last, "
@@ -32,15 +35,13 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
     /** Load every persisted last-known quote as a STALE snapshot to seed the engine on boot. */
     @Override public List<MarketSnapshot> loadAll() {
         List<MarketSnapshot> out = new ArrayList<>();
-        db.query("SELECT symbol, description, last, bid, ask, prev_close, optionable, source, freshness, as_of FROM market_snapshot",
+        db.query("SELECT symbol, description, last, bid, ask, prev_close, optionable, source, freshness, as_of "
+                        + "FROM market_snapshot WHERE coalesce(lower(source),'') NOT LIKE '%fixture%' "
+                        + "AND coalesce(freshness,'') NOT IN ('FIXTURE','SIMULATED','MODELED')",
                 r -> {
-                    // Provenance survives the round-trip: a persisted FIXTURE quote reloads as
-                    // FIXTURE — switching a local DB from demo to live must never show fake
-                    // prices dressed up as stale MARKET data. Everything real reloads as STALE.
-                    boolean demo = "FIXTURE".equals(r.str("freshness")) || "fixture".equals(r.str("source"));
                     out.add(new MarketSnapshot(r.str("symbol"), r.str("description"), r.bd("last"), r.bd("bid"),
                             r.bd("ask"), r.bd("prev_close"), r.lng("optionable") == 1,
-                            demo ? Freshness.FIXTURE : Freshness.STALE, r.str("source"),
+                            Freshness.STALE, r.str("source"),
                             r.lng("as_of"), r.lng("as_of"), false, null));
                     return null;
                 });

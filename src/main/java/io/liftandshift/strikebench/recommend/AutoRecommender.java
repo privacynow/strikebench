@@ -149,7 +149,7 @@ public final class AutoRecommender {
                 for (HoldingInfo h : eligible) {
                     String sym = h.symbol().toUpperCase(Locale.ROOT);
                     SignalEngine.Signals s = bySymbol.get(sym);
-                    if (s == null) s = signals.analyze(sym).orElse(null);
+                    if (s == null) s = signals.analyze(sym, worldId).orElse(null);
                     if (s == null || !s.optionable()) {
                         skipped.add(sym + ": held, but no listed options to write against");
                         continue;
@@ -207,7 +207,9 @@ public final class AutoRecommender {
             List<String> hNotes = new ArrayList<>();
             List<Candidate> pool = result.candidates();
             if ("0DTE".equals(horizon)) {
-                LocalDate today = LocalDate.now(clock);
+                LocalDate today = worldId == null
+                        ? LocalDate.now(clock)
+                        : engine.marketDate(worldId);
                 pool = pool.stream().filter(c -> expiresOn(c, today)).toList();
                 if (pool.isEmpty()) {
                     hNotes.add("No same-day expiration listed for " + s.symbol() + " — 0DTE skipped");

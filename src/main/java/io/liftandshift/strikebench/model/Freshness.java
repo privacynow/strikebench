@@ -11,16 +11,18 @@ public enum Freshness {
     STALE,      // cached data older than its freshness gate
     MISSING;    // no data available
 
-    /** True when data is fresh enough to base a new trade on (with warnings for DELAYED/EOD). */
+    /**
+     * Legacy age-only check. Execution code must use DataEvidence.executableIn(lane), because
+     * generated data can be coherent inside its own market without being valid in Observed.
+     */
+    @Deprecated
     public boolean tradable() {
-        // SIMULATED is tradable ONLY inside its own world's simulation account — the account
-        // lane enforces that; freshness just says the data is coherent enough to fill against.
-        return this == REALTIME || this == DELAYED || this == FIXTURE || this == SIMULATED;
+        return this == REALTIME || this == DELAYED;
     }
 
     // SIMULATED sits BELOW every observed tier: a generated quote is coherent and tradable in
     // its own lane, but it must never roll up as more trustworthy than real (even delayed) data.
-    private static final Freshness[] RANK = {REALTIME, FIXTURE, DELAYED, EOD, SIMULATED, MODELED, STALE, MISSING};
+    private static final Freshness[] RANK = {REALTIME, DELAYED, EOD, STALE, SIMULATED, MODELED, FIXTURE, MISSING};
 
     /** The less trustworthy of the two — for aggregating a position's overall freshness. */
     public static Freshness worse(Freshness a, Freshness b) {

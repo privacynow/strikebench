@@ -1333,6 +1333,17 @@ body.lvl-expert .showcase-frame { max-height: 375px; }
 #world-band .wb-seed { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 #world-band #world-speed { height: 30px; max-width: 84px; }
 #world-band #world-exit { margin-left: auto; }
+body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn) 18%, var(--bg));
+  border-bottom-color: var(--risk-warn); }
+.demo-market-choice { display: flex; align-items: center; gap: 14px; padding: 12px 0;
+  margin: 8px 0 14px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.demo-market-choice p { margin: 3px 0 0; }
+
+.page-evidence { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0;
+  padding: 9px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; }
+.evidence-input { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim);
+  text-transform: capitalize; font-size: 12.5px; }
+.evidence-badge { font-size: 11px; }
 
 .badge-sim { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); color: var(--accent);
   border: 1px solid var(--accent); }

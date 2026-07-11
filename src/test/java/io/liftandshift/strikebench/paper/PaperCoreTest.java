@@ -62,19 +62,25 @@ class PaperCoreTest {
             return Optional.ofNullable(closeOnValue);
         }
         @Override public Optional<LegMark> legMark(String symbol, Leg leg) {
-            if (leg.isStock()) return Optional.of(new LegMark(underlying, underlying, underlying, null, freshness));
+            if (leg.isStock()) return Optional.of(demoMark(new LegMark(underlying, underlying, underlying, null, freshness)));
             String key = leg.type().name() + leg.strike().stripTrailingZeros().toPlainString();
             LegMark custom = exact.get(key);
-            if (custom != null) return Optional.of(custom);
+            if (custom != null) return Optional.of(demoMark(custom));
             BigDecimal mid = mids.get(key);
-            return mid == null ? Optional.empty() : Optional.of(new LegMark(mid, mid, mid, 0.25, freshness));
+            return mid == null ? Optional.empty() : Optional.of(demoMark(new LegMark(mid, mid, mid, 0.25, freshness)));
+        }
+        private static LegMark demoMark(LegMark m) {
+            return new LegMark(m.bid(), m.ask(), m.mid(), m.iv(), m.freshness(), m.delta(), m.gamma(),
+                    m.theta(), m.vega(), new io.liftandshift.strikebench.model.DataEvidence(
+                            io.liftandshift.strikebench.model.DataProvenance.DEMO,
+                            io.liftandshift.strikebench.model.DataEvidence.of(null, m.freshness()).age(), "test-demo"));
         }
     }
 
     @BeforeEach
     void setUp() {
         db = TestDb.fresh();
-        cfg = new AppConfig(tmp.resolve("none.properties"));
+        cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
         audit = new AuditLog(db, CLOCK);
         accounts = new AccountService(db, cfg, audit, CLOCK);
         marks = new StubMarks();
@@ -99,6 +105,25 @@ class PaperCoreTest {
 
     private static Leg call(LegAction a, String strike, String prem) {
         return Leg.option(a, OptionType.CALL, new BigDecimal(strike), EXP, 1, new BigDecimal(prem));
+    }
+
+    @Test
+    void observedAccountsRejectDemoMarksForOptionsAndShares() {
+        AppConfig live = new AppConfig(Map.of());
+        AccountService liveAccounts = new AccountService(db, live, audit, CLOCK);
+        Account observed = liveAccounts.getOrCreateDefault();
+        TradeService liveTrades = new TradeService(db, live, marks, audit, CLOCK);
+        PositionsService livePositions = new PositionsService(db, marks, audit, CLOCK, false);
+
+        TradePreview option = liveTrades.preview(creditPutSpread(observed.id(), 1));
+        assertThat(option.ok()).isFalse();
+        assertThat(option.blockReasons()).anySatisfy(reason ->
+                assertThat(reason).contains("OBSERVED").contains("DEMO"));
+
+        assertThatThrownBy(() -> livePositions.buy(observed.id(), "AAPL", 1))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("OBSERVED")
+                .hasMessageContaining("DEMO");
     }
 
     @org.junit.jupiter.api.Test

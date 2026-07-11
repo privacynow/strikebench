@@ -19,8 +19,8 @@ public final class Main {
         AppConfig cfg = new AppConfig();
         ApiServer server = ApiServer.create(cfg, Clock.systemDefaultZone());
         server.start(cfg.port());
-        log.info("StrikeBench is up: http://localhost:{}  (db={}, fixturesOnly={})",
-                cfg.port(), cfg.dbUrl(), cfg.fixturesOnly());
+        log.info("StrikeBench is ready at http://localhost:{} (market mode: {})",
+                cfg.port(), cfg.fixturesOnly() ? "demo" : "observed");
         log.info("Educational tool only — paper trading by default, never financial advice.");
     }
 
@@ -31,7 +31,7 @@ public final class Main {
      */
     static void runEtl(String[] args) {
         if (args.length < 2) {
-            System.err.println("usage: java -jar strikebench.jar etl <path-to-legacy-sqlite.db>");
+            System.err.println("usage: java -jar strikebench.jar etl <legacy-data-path>");
             System.exit(2);
             return;
         }
@@ -40,14 +40,14 @@ public final class Main {
             io.liftandshift.strikebench.db.Migrations.run(db);   // ensure the target schema exists (idempotent)
             var result = io.liftandshift.strikebench.db.SqliteToPostgresEtl.runFromFile(args[1], db);
             result.checks().forEach(c -> log.info("  check: {}", c));
-            log.info("ETL migrated {} rows across {} tables from {}",
-                    result.totalRows(), result.tables().size(), args[1]);
+            log.info("Data migration copied {} rows across {} data groups",
+                    result.totalRows(), result.tables().size());
             if (!result.ok()) {
                 result.problems().forEach(p -> log.error("  PROBLEM: {}", p));
                 System.exit(1);
                 return;
             }
-            log.info("ETL verified clean — Postgres at {} is ready; start the app now.", cfg.dbUrl());
+            log.info("Data migration verified clean — the local data store is ready.");
         }
     }
 
@@ -75,11 +75,10 @@ public final class Main {
                     java.nio.file.Files.move(extra, java.nio.file.Path.of(target + suffix));
                 }
             }
-            log.info("Migrated legacy database {} -> {} (rebrand rename; data unchanged)", legacy, target);
+            log.info("Migrated legacy local data to the current StrikeBench location (data unchanged)");
         } catch (Exception e) {
             // Never brick the boot over a rename: fall back to the legacy file untouched.
-            log.warn("Could not migrate legacy database {} -> {}: {} — continuing without the move",
-                    legacy, target, e.toString());
+            log.warn("Could not migrate legacy local data: {} — continuing without the move", e.toString());
         }
     }
 
@@ -136,7 +135,7 @@ public final class Main {
                     }
                 }
             }
-            log.info("Preloaded {} classes in {} ms ({} optional-dependency classes unavailable) — a jar rebuild under this running server can no longer wedge it",
+            log.debug("Preloaded {} classes in {} ms ({} optional-dependency classes unavailable)",
                     loaded, System.currentTimeMillis() - start, unavailable);
         } catch (Exception e) {
             log.warn("class preload skipped (non-fatal): {}", e.toString());

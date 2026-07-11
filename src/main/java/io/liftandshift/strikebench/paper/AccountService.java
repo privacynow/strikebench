@@ -84,6 +84,30 @@ public final class AccountService {
         });
     }
 
+    /** A separate, owner-scoped account for the explicit built-in Demo market. */
+    public Account getOrCreateDemoForUser(String userId) {
+        String owner = userId == null || io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(userId)
+                ? null : userId;
+        return db.tx(c -> {
+            List<Account> existing = owner == null
+                    ? Db.queryOn(c, "SELECT * FROM accounts WHERE user_id IS NULL AND type='DEMO' ORDER BY created_at LIMIT 1",
+                            AccountService::map)
+                    : Db.queryOn(c, "SELECT * FROM accounts WHERE user_id=? AND type='DEMO' ORDER BY created_at LIMIT 1",
+                            AccountService::map, owner);
+            if (!existing.isEmpty()) return existing.getFirst();
+            String id = Ids.account();
+            long cash = cfg.defaultStartingCashCents();
+            String now = now();
+            Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,"
+                            + "has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
+                    id, owner, "Demo Account", "DEMO", cash, cash, 0, now, now);
+            Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,"
+                            + "reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+                    id, null, now, "DEPOSIT", cash, cash, 0, "initial demo funding");
+            return get(c, id);
+        });
+    }
+
     public Account get(String id) {
         return db.with(c -> get(c, id));
     }

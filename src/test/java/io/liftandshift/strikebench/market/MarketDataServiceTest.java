@@ -62,18 +62,19 @@ class MarketDataServiceTest {
     }
 
     @Test
-    void brokenProviderFallsThroughToFixtureAndStatusRecordsBoth() {
+    void observedFailureStaysUnavailableWhileExplicitDemoStillWorks() {
         FixtureProvider fixture = new FixtureProvider(CLOCK);
-        MarketDataService svc = new MarketDataService(List.of(new BrokenProvider(), fixture), List.of(fixture), List.of(fixture));
+        MarketDataService svc = new MarketDataService(List.of(new BrokenProvider()), List.of(), List.of());
+        svc.setDemoSources(fixture, fixture, fixture);
 
-        Quote q = svc.quote("AAPL").orElseThrow();
+        assertThat(svc.quote("AAPL")).isEmpty();
+        Quote q = svc.quote("AAPL", "demo").orElseThrow();
         assertThat(q.source()).isEqualTo("fixture");
 
         Map<String, List<ProviderStatusInfo>> status = svc.status();
         List<ProviderStatusInfo> quotes = status.get("QUOTES");
-        assertThat(quotes).extracting(ProviderStatusInfo::provider).contains("broken", "fixture");
+        assertThat(quotes).extracting(ProviderStatusInfo::provider).containsExactly("broken");
         assertThat(quotes.stream().filter(s -> s.provider().equals("broken")).findFirst().orElseThrow().state()).isEqualTo("ERROR");
-        assertThat(quotes.stream().filter(s -> s.provider().equals("fixture")).findFirst().orElseThrow().state()).isEqualTo("OK");
     }
 
     @Test
@@ -130,10 +131,11 @@ class MarketDataServiceTest {
     }
 
     @Test
-    void newsFallsBackToFixtureOnlyWhenNoRealSourceHasAnything() {
+    void newsNeverFallsBackToFixtureOutsideExplicitDemo() {
         FixtureProvider fixture = new FixtureProvider(CLOCK);
-        var svc = new MarketDataService(List.of(fixture),
-                List.of(new FakeNews("edgar", List.of()), fixture), List.of(fixture)); // real source empty
-        assertThat(svc.news("SPY")).isNotEmpty(); // fixture demo news is the last resort
+        var svc = new MarketDataService(List.of(), List.of(new FakeNews("edgar", List.of())), List.of());
+        svc.setDemoSources(fixture, fixture, fixture);
+        assertThat(svc.news("SPY")).isEmpty();
+        assertThat(svc.news("SPY", "demo")).isNotEmpty();
     }
 }

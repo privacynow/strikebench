@@ -3,7 +3,6 @@ package io.liftandshift.strikebench.db;
 import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
 
 import java.time.Clock;
 import java.time.LocalDate;
@@ -14,7 +13,7 @@ import java.util.Locale;
  * Backfills daily {@code underlying_bar} history for a symbol from whatever candle source the
  * provider chain currently offers (Yahoo/Stooq/Polygon/Alpha Vantage in live mode, fixtures in demo).
  * Provider-agnostic and evidence-honest: rows are tagged with the winning provider's name and an
- * {@code observed} flag derived from its {@link Freshness}, so a fixture backfill is never mistaken
+ * {@code observed} flag derived from its source provenance, so a fixture backfill is never mistaken
  * for real history. Idempotent upsert on {@code (symbol, d, source)}.
  *
  * <p>This is the writer the Data Center's "backfill underlying" job calls per symbol; once loaded,
@@ -49,8 +48,13 @@ public final class UnderlyingBackfill {
             return new BackfillResult(sym, series.source(), false, 0, from, to,
                     "No candle source returned data — set YAHOO_ENABLED, or a Polygon/Alpha Vantage key, for real history.");
         }
-        boolean observed = isObserved(series.freshness());
+        boolean observed = series.evidence().provenance()
+                == io.liftandshift.strikebench.model.DataProvenance.OBSERVED;
         String source = series.source() == null ? "unknown" : series.source();
+        if (!observed) {
+            return new BackfillResult(sym, source, false, 0, from, to,
+                    "The source returned generated/demo data. Observed backfill refused it; enter Demo or create a Scenario dataset explicitly.");
+        }
         int rows = db.tx(c -> {
             int n = 0;
             for (Candle cd : candles) {
@@ -66,13 +70,8 @@ public final class UnderlyingBackfill {
             }
             return n;
         });
-        String note = observed
-                ? "Loaded " + rows + " observed daily bars from " + source + "."
-                : "Loaded " + rows + " DEMO bars from " + source + " — labeled not-observed (no real candle source).";
+        String note = "Loaded " + rows + " observed daily bars from " + source + ".";
         return new BackfillResult(sym, source, observed, rows, from, to, note);
     }
 
-    private static boolean isObserved(Freshness f) {
-        return f == Freshness.REALTIME || f == Freshness.DELAYED || f == Freshness.EOD || f == Freshness.STALE;
-    }
 }

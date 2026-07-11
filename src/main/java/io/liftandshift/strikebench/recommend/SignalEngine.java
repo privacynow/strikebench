@@ -78,14 +78,20 @@ public final class SignalEngine {
         String sym = symbol.trim().toUpperCase(Locale.ROOT);
         Quote quote = market.quote(sym, worldId).orElse(null);
         if (quote == null) return Optional.empty();
+        var lane = market.lane(worldId);
+        if (!quote.evidence().usableIn(lane)) return Optional.empty();
         boolean optionable = quote.optionable() && !market.expirations(sym, worldId).isEmpty();
 
         LocalDate today = market.simInstant(worldId)
                 .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
                 .orElseGet(() -> LocalDate.now(clock));
         io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(sym, today.minusDays(120), today, worldId, null);
+        if (!series.isEmpty() && !series.evidence().usableIn(lane)) {
+            series = io.liftandshift.strikebench.market.CandleSeries.EMPTY;
+        }
         List<Candle> candles = series.candles();
-        boolean demoHistory = series.isFixture() && !fixturesOnly;
+        boolean demoHistory = series.evidence().provenance()
+                == io.liftandshift.strikebench.model.DataProvenance.DEMO;
         Double ret5 = trailingReturn(candles, 5);
         Double ret20 = trailingReturn(candles, 20);
         double hv = HistoricalVol.annualized(candles, 30);
@@ -98,7 +104,7 @@ public final class SignalEngine {
                     .min(Comparator.comparingLong(d -> Math.abs(ChronoUnit.DAYS.between(today, d) - 30)))
                     .orElse(null);
             OptionChain chain = exp == null ? null : market.chain(sym, exp, worldId).orElse(null);
-            if (chain != null && !chain.isEmpty()) {
+            if (chain != null && !chain.isEmpty() && chain.evidence().executableIn(lane)) {
                 OptionQuote atm = chain.calls().stream()
                         .filter(q -> q.iv() != null && q.hasMark())
                         .min(Comparator.comparingDouble(q -> Math.abs(q.strike().doubleValue() - chain.underlyingPrice().doubleValue())))
@@ -113,7 +119,7 @@ public final class SignalEngine {
         Double ivHv = ivAtm != null && hv30 != null && hv30 > 0 ? ivAtm / hv30 : null;
         String volSignal = ivHv == null ? "UNKNOWN" : ivHv > 1.25 ? "RICH" : ivHv < 0.85 ? "CHEAP" : "FAIR";
 
-        List<NewsItem> news = market.news(sym);
+        List<NewsItem> news = market.news(sym, worldId);
         List<String> posHits = new ArrayList<>();
         List<String> negHits = new ArrayList<>();
         boolean eventRisk = false;

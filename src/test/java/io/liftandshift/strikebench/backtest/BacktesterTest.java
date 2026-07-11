@@ -66,7 +66,7 @@ class BacktesterTest {
     void debitSpreadBacktestProducesFullReport() {
         Backtester.BacktestReport report = backtester.run(req("DEBIT_CALL_SPREAD", "2026-01-05", "2026-06-30"));
 
-        assertThat(report.demoUnderlying()).isFalse(); // fixtures-only = fixtures are legit, not "demo"
+        assertThat(report.demoUnderlying()).isTrue(); // explicit Demo is useful, but never observed history
         assertThat(report.sampleSize()).isGreaterThanOrEqualTo(3);
         // sampleSize counts completed (EXPIRED) trades only; a window-end model exit may add one more row
         long expired = report.trades().stream().filter(t -> "EXPIRED".equals(t.exitReason())).count();
@@ -81,7 +81,7 @@ class BacktesterTest {
         }
         assertThat(report.daysCovered()).isPositive().isLessThanOrEqualTo(report.daysRequested());
         assertThat(report.pricingMode()).isEqualTo("MODELED_FROM_UNDERLYING");
-        assertThat(report.confidence()).isEqualTo("medium");
+        assertThat(report.confidence()).isEqualTo("none (demo data)");
         assertThat(report.equityCurve()).hasSize(report.daysCovered());
         assertThat(report.startingCents()).isEqualTo(10_000_000L);
         assertThat(report.assumptions()).containsKeys("slippagePctPerLeg", "feePerContractCents", "ivModel", "fills");

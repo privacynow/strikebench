@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 
 import java.math.BigDecimal;
@@ -43,10 +44,18 @@ default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.u
      * display/marking price. Paper fills must use the executable side, never the mid.
      */
     record LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness,
-                   Double delta, Double gamma, Double theta, Double vega) {
+                   Double delta, Double gamma, Double theta, Double vega, DataEvidence evidence) {
         /** Convenience constructor without greeks (stubs, stock legs). */
         public LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness) {
-            this(bid, ask, mid, iv, freshness, null, null, null, null);
+            this(bid, ask, mid, iv, freshness, null, null, null, null,
+                    DataEvidence.of(null, freshness));
+        }
+
+        /** Compatibility constructor for test ports and non-provider marks. */
+        public LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness,
+                       Double delta, Double gamma, Double theta, Double vega) {
+            this(bid, ask, mid, iv, freshness, delta, gamma, theta, vega,
+                    DataEvidence.of(null, freshness));
         }
 
         /**
@@ -77,4 +86,9 @@ default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.u
 
     /** Annualized risk-free rate for POP/EV modeling. */
     default double riskFreeRate(int days) { return 0.04; }
+
+    /** Provenance of the rate assumption used by POP/EV modeling. */
+    default DataEvidence riskFreeRateEvidence(int days, String worldId) {
+        return DataEvidence.of("educational rate assumption", Freshness.MODELED);
+    }
 }

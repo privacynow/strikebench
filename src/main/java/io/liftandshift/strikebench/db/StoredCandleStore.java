@@ -31,10 +31,14 @@ public final class StoredCandleStore implements CandleStore {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
         if (sym.isEmpty() || from == null || to == null || from.isAfter(to)) return Optional.empty();
         String dataset = datasetId == null || datasetId.isBlank() ? DatasetService.OBSERVED : datasetId;
-        // One row per day, preferring observed real data over demo, then a stable source order.
+        boolean synthetic = !DatasetService.OBSERVED.equals(dataset);
+        // Observed means observed: legacy/demo rows in the canonical dataset are not eligible
+        // even as a weakest-link fallback. Scenario datasets intentionally contain modeled rows.
+        String provenanceClause = synthetic ? " " : " AND observed=1 ";
         List<Row> rows = db.query(
                 "SELECT DISTINCT ON (d) d::text d, open, high, low, close, volume, source, observed "
               + "FROM underlying_bar WHERE symbol=? AND dataset_id=? AND d BETWEEN ? AND ? "
+              + provenanceClause
               + "ORDER BY d, observed DESC, source",
                 r -> new Row(LocalDate.parse(r.str("d")),
                         r.bd("open"), r.bd("high"), r.bd("low"), r.bd("close"),
@@ -55,7 +59,6 @@ public final class StoredCandleStore implements CandleStore {
         }
         if (candles.size() < 2) return Optional.empty();
 
-        boolean synthetic = !DatasetService.OBSERVED.equals(dataset);
         if (synthetic) {
             // Scenario mode: the dataset IS the analysis world — serve whatever it holds, MODELED.
             return Optional.of(new CandleSeries(candles, "synthetic", Freshness.MODELED));
@@ -64,9 +67,7 @@ public final class StoredCandleStore implements CandleStore {
         // requested range — two stray rows must never silence the provider chain on a five-year
         // ask (and, via the backfill path, freeze an incomplete store forever).
         if (!coversRange(candles, from, to)) return Optional.empty();
-        // Weakest-link evidence: a series containing ANY demo bar is labeled FIXTURE, never EOD —
-        // one real row must not launder fabricated neighbors.
-        return Optional.of(new CandleSeries(candles, "stored", allObserved ? Freshness.EOD : Freshness.FIXTURE));
+        return Optional.of(new CandleSeries(candles, "stored-observed", Freshness.EOD));
     }
 
     /** Head within a week of `from`, tail within a week of `to`, and ≥60% of expected trading days. */

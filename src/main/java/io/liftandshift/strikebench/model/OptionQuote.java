@@ -30,6 +30,8 @@ public record OptionQuote(
         String source,
         Freshness freshness
 ) {
+    public DataEvidence evidence() { return DataEvidence.of(source, freshness); }
+
     /** Mid price when both sides exist and are sane, else last. Null if unpriceable. */
     public BigDecimal mid() {
         if (bid != null && ask != null && ask.signum() > 0 && bid.signum() >= 0 && ask.compareTo(bid) >= 0) {

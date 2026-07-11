@@ -41,14 +41,15 @@ public final class MarketDataMarks implements MarksSource {
         if (worldId == null) return legMark(symbol, leg);
         if (leg.isStock()) {
             return market.quote(symbol, worldId).map(q ->
-                    new LegMark(q.bid(), q.ask(), q.mark(), null, q.freshness(), 1.0, 0.0, 0.0, 0.0))
+                    new LegMark(q.bid(), q.ask(), q.mark(), null, q.freshness(), 1.0, 0.0, 0.0, 0.0,
+                            q.evidence()))
                     .filter(m -> m.mid() != null);
         }
         return market.chain(symbol, leg.expiration(), worldId)
                 .flatMap(chain -> chain.find(leg.type(), leg.strike())
                         .filter(io.liftandshift.strikebench.model.OptionQuote::hasMark)
                         .map(q -> new LegMark(q.bid(), q.ask(), q.mid(), q.iv(), q.freshness(),
-                                q.delta(), q.gamma(), q.theta(), q.vega())));
+                                q.delta(), q.gamma(), q.theta(), q.vega(), q.evidence())));
     }
 
     @Override
@@ -83,7 +84,8 @@ public final class MarketDataMarks implements MarksSource {
         if (leg.isStock()) {
             // A share behaves like a delta-1, greek-free contract
             return market.quote(symbol).map(q ->
-                    new LegMark(q.bid(), q.ask(), q.mark(), null, q.freshness(), 1.0, 0.0, 0.0, 0.0))
+                    new LegMark(q.bid(), q.ask(), q.mark(), null, q.freshness(), 1.0, 0.0, 0.0, 0.0,
+                            q.evidence()))
                     .filter(m -> m.mid() != null);
         }
         return market.chain(symbol, leg.expiration())
@@ -97,7 +99,12 @@ public final class MarketDataMarks implements MarksSource {
                                         ? io.liftandshift.strikebench.model.Freshness.worse(q.freshness(),
                                                 io.liftandshift.strikebench.model.Freshness.STALE)
                                         : q.freshness(),
-                                q.delta(), q.gamma(), q.theta(), q.vega())));
+                                q.delta(), q.gamma(), q.theta(), q.vega(),
+                                io.liftandshift.strikebench.model.DataEvidence.of(q.source(),
+                                        q.midIsLastTradeFallback()
+                                                ? io.liftandshift.strikebench.model.Freshness.worse(q.freshness(),
+                                                        io.liftandshift.strikebench.model.Freshness.STALE)
+                                                : q.freshness()))));
     }
 
     @Override
@@ -116,5 +123,10 @@ public final class MarketDataMarks implements MarksSource {
     @Override
     public double riskFreeRate(int days) {
         return market.riskFreeRate(days);
+    }
+
+    @Override
+    public io.liftandshift.strikebench.model.DataEvidence riskFreeRateEvidence(int days, String worldId) {
+        return market.riskFreeRateQuote(days, worldId).evidence();
     }
 }

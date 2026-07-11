@@ -120,7 +120,8 @@ public final class TradeService {
                 acct.cashCents(), blocks.isEmpty() ? cashAfter : acct.cashCents(),
                 acct.reservedCents(), blocks.isEmpty() ? reservedAfter : acct.reservedCents(),
                 acct.buyingPowerCents(), blocks.isEmpty() ? cashAfter - reservedAfter : acct.buyingPowerCents(),
-                p.freshness.name(), p.underlyingCents, p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics());
+                p.freshness.name(), entryEvidence(req.accountId(), p.freshness), p.underlyingCents,
+                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics());
     }
 
     /**
@@ -178,8 +179,8 @@ public final class TradeService {
                   entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,
                   pop_entry,fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,
                   is_live,created_at,closed_at,updated_at,intent,shares_locked,origin,
-                  proposed_net_cents,executed_at,broker,order_ref)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,0,'EXTERNAL',?,?,?,?)""",
+                  proposed_net_cents,executed_at,broker,order_ref,data_provenance,data_age,data_source)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,0,'EXTERNAL',?,?,?,?,?,?,?)""",
                 tradeId, req.accountId(), req.symbol().toUpperCase(java.util.Locale.ROOT),
                 req.strategy(), TradeRecord.ACTIVE, req.qty(), Json.write(p.filledLegs()),
                 req.thesis(), req.horizon(), req.riskMode(),
@@ -188,7 +189,9 @@ public final class TradeService {
                 req.intent() == null || req.intent().isBlank() ? null
                         : io.liftandshift.strikebench.strategy.StrategyIntent.parse(req.intent()).name(),
                 req.proposedNetCents(), executedAt,
-                meta == null ? null : meta.broker(), meta == null ? null : meta.orderRef());
+                meta == null ? null : meta.broker(), meta == null ? null : meta.orderRef(),
+                "BROKER", io.liftandshift.strikebench.model.DataEvidence.of("broker", p.freshness()).age().name(),
+                meta == null || meta.broker() == null ? "external fill" : meta.broker());
         auditSafe(req.accountId(), tradeId, "EXTERNAL_TRADE_RECORDED", "INFO", Map.of(
                 "symbol", req.symbol(), "strategy", req.strategy(), "qty", req.qty(),
                 "fillNetCents", p.entryNet(), "feesCents", p.fees()));
@@ -300,15 +303,19 @@ public final class TradeService {
                         INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
                           entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,
                           pop_entry,fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,
-                          is_live,created_at,closed_at,updated_at,intent,shares_locked,proposed_net_cents)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,?,?)""",
+                          is_live,created_at,closed_at,updated_at,intent,shares_locked,proposed_net_cents,
+                          data_provenance,data_age,data_source)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,?,?,?,?,?)""",
                         tradeId, acct.id(), symbol, req.strategy(), TradeRecord.ACTIVE,
                         req.qty(), Json.write(p.filledLegs), req.thesis(), req.horizon(), req.riskMode(),
                         p.underlyingCents, p.entryNet, p.maxLoss, p.maxProfit, Json.write(p.breakevens),
                         p.pop, p.fees, p.snapshotJson, now, now,
                         req.intent() == null || req.intent().isBlank() ? null
                                 : io.liftandshift.strikebench.strategy.StrategyIntent.parse(req.intent()).name(),
-                        p.sharesToLock(), req.proposedNetCents());
+                        p.sharesToLock(), req.proposedNetCents(),
+                        entryEvidence(acct.id(), p.freshness()).provenance().name(),
+                        entryEvidence(acct.id(), p.freshness()).age().name(),
+                        entryEvidence(acct.id(), p.freshness()).source());
                 Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, has_traded=1, updated_at=? WHERE id=?",
                         cash, reserved, now, acct.id());
                 return getOn(c, tradeId);
@@ -340,12 +347,15 @@ public final class TradeService {
             TradeRecord t = requireStatus(c, tradeId, TradeRecord.ACTIVE);
             Account acct = AccountService.get(c, t.accountId());
             long closeValue = 0;
-            Freshness worst = Freshness.FIXTURE;
+            Freshness worst = Freshness.REALTIME;
+            var lane = laneFor(worldOf(t.accountId()));
             for (Leg leg : t.legs()) {
                 MarksSource.LegMark mark = marks.legMark(t.symbol(), leg, worldOf(t.accountId()))
                         .orElseThrow(() -> new TradeRejectedException(List.of("No current mark for leg " + legDesc(leg) + "; cannot value the close")));
-                if (!mark.freshness().tradable() && mark.freshness() != Freshness.EOD) {
-                    throw new TradeRejectedException(List.of("Marks are " + mark.freshness() + " for " + legDesc(leg) + "; refresh data before closing"));
+                if (!mark.evidence().executableIn(lane)) {
+                    throw new TradeRejectedException(List.of("Cannot close " + legDesc(leg) + " in the " + lane
+                            + " market using " + mark.evidence().provenance() + " data (" + mark.evidence().source()
+                            + ", " + mark.evidence().age() + "). Refresh an executable quote or switch to the market that owns this data."));
                 }
                 worst = worse(worst, mark.freshness());
                 LegAction closingAction = leg.action().opposite();
@@ -564,8 +574,25 @@ public final class TradeService {
 
     /** The world a trade's marks live in: its ACCOUNT's binding (null = observed lanes). */
     private String worldOf(String accountId) {
-        try { return db.with(c -> AccountService.get(c, accountId)).worldId(); }
+        try {
+            Account account = db.with(c -> AccountService.get(c, accountId));
+            return "DEMO".equals(account.type()) ? "demo" : account.worldId();
+        }
         catch (RuntimeException e) { return null; }
+    }
+
+    private io.liftandshift.strikebench.market.MarketLane laneFor(String worldId) {
+        return io.liftandshift.strikebench.market.MarketLane.of(worldId, cfg.fixturesOnly());
+    }
+
+    private io.liftandshift.strikebench.model.DataEvidence entryEvidence(String accountId, Freshness freshness) {
+        var lane = laneFor(worldOf(accountId));
+        return switch (lane) {
+            case DEMO -> io.liftandshift.strikebench.model.DataEvidence.of("built-in demo", Freshness.FIXTURE);
+            case SIMULATED -> io.liftandshift.strikebench.model.DataEvidence.of("simulated market", Freshness.SIMULATED);
+            case SCENARIO -> io.liftandshift.strikebench.model.DataEvidence.of("scenario", Freshness.MODELED);
+            case OBSERVED -> io.liftandshift.strikebench.model.DataEvidence.of("observed market", freshness);
+        };
     }
 
     /** Recomputes marks and writes a trade_marks row. NEVER touches cash or the reserve. */
@@ -662,7 +689,7 @@ public final class TradeService {
 
         long closeValue = 0;
         boolean complete = true;
-        Freshness worst = Freshness.FIXTURE;
+        Freshness worst = Freshness.REALTIME;
         List<Double> ivs = new ArrayList<>();
         double dDelta = 0, dGamma = 0, dTheta = 0, dVega = 0;
         boolean greeksComplete = true;
@@ -741,7 +768,7 @@ public final class TradeService {
         long value = 0, unrealized = 0;
         int counted = 0;
         boolean complete = true;
-        Freshness worst = Freshness.FIXTURE;
+        Freshness worst = Freshness.REALTIME;
         for (TradeRecord t : active) {
             MarkView view = snap.get(t.id());
             if (view == null) { complete = false; continue; }
@@ -909,7 +936,8 @@ public final class TradeService {
 
         List<Leg> filled = new ArrayList<>();
         List<Map<String, Object>> snapshotLegs = new ArrayList<>();
-        Freshness worst = Freshness.FIXTURE;
+        Freshness worst = Freshness.REALTIME;
+        var lane = laneFor(world);
         List<Double> ivs = new ArrayList<>();
         List<Double> legIvs = new ArrayList<>(); // index-aligned with filled (nulls kept)
         for (Leg leg : req.legs()) {
@@ -918,8 +946,11 @@ public final class TradeService {
                 blocks.add("No tradable mark for " + legDesc(leg) + " — symbol may have no listed options");
                 continue;
             }
-            if (!mark.freshness().tradable()) {
-                blocks.add("Mark for " + legDesc(leg) + " is " + mark.freshness() + "; refusing to fill against it");
+            if (!mark.evidence().executableIn(lane)) {
+                blocks.add("Cannot fill " + legDesc(leg) + " in the " + lane + " market using "
+                        + mark.evidence().provenance() + " data (" + mark.evidence().source() + "). "
+                        + "Age: " + mark.evidence().age() + ". "
+                        + "Use an observed executable quote, or explicitly enter Demo/Simulated market.");
                 continue;
             }
             // Fill realism: buys pay the ask, sells receive the bid. A one-sided or empty
@@ -964,6 +995,9 @@ public final class TradeService {
             snap.put("theta", mark.theta());
             snap.put("vega", mark.vega());
             snap.put("freshness", mark.freshness().name());
+            snap.put("provenance", mark.evidence().provenance().name());
+            snap.put("dataAge", mark.evidence().age().name());
+            snap.put("source", mark.evidence().source());
             snapshotLegs.add(snap);
         }
         if (!blocks.isEmpty()) return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0, worst, blocks, warnings, "{}");
@@ -1076,7 +1110,10 @@ public final class TradeService {
         TimeToExpiry tte = timeToNearestExpiry(filled,
                 LocalDate.ofInstant(nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN));
         double t = tte.tYears();
-        double rfr = marks.riskFreeRate((int) Math.max(1, tte.calendarDays()));
+        int rateDays = (int) Math.max(1, tte.calendarDays());
+        double rfr = marks.riskFreeRate(rateDays);
+        io.liftandshift.strikebench.model.DataEvidence rateEvidence =
+                marks.riskFreeRateEvidence(rateDays, world);
         if (ivs.isEmpty()) {
             warnings.add("No implied volatility available — POP/EV assume a 30% placeholder volatility");
         }
@@ -1111,7 +1148,8 @@ public final class TradeService {
             blocks.add("Undefined (unlimited) risk: this position can lose more than any amount reserved. Add a protective leg to cap the loss.");
             Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
                     snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
-                    0, null, null, null, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null), rfr);
+                    0, null, null, null, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
+                    rfr, rateEvidence);
             return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked);
         }
@@ -1133,6 +1171,7 @@ public final class TradeService {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("underlying", underlying.toPlainString());
         snapshot.put("freshness", worst.name());
+        snapshot.put("rateEvidence", rateEvidence);
         snapshot.put("asOf", now());
         // DUAL TIMESTAMPS for world trades: wall time above, the SIMULATED clock here — a session
         // report must place each decision on the lane's own clock (weekend-handoff M9).
@@ -1144,7 +1183,8 @@ public final class TradeService {
 
         Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
                 snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
-                fees, maxLoss, maxProfit, ev, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null), rfr);
+                fees, maxLoss, maxProfit, ev, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
+                rfr, rateEvidence);
         return new Plan(filled, entryNet, fees, reserve, maxLoss, maxProfit,
                 riskCurve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
                 pop, ev, Money.toCents(underlying), worst, blocks, warnings, Json.write(snapshot), sharesToLock,
@@ -1205,7 +1245,8 @@ public final class TradeService {
                                                List<Map<String, Object>> snaps, int qty,
                                                long entryNet, long executableNet, Long packageMid,
                                                Long proposedNet, long fees, Long maxLoss, Long maxProfit,
-                                               Long ev, Freshness freshness, Long sourceAsOf, double rfr) {
+                                               Long ev, Freshness freshness, Long sourceAsOf, double rfr,
+                                               io.liftandshift.strikebench.model.DataEvidence rateEvidence) {
         Map<String, Object> out = new LinkedHashMap<>();
         var map = io.liftandshift.strikebench.pricing.ProbabilityMap.of(curve, spot, ivAvg, t, rfr, shortStrikes);
         Map<String, Object> prob = new LinkedHashMap<>();
@@ -1263,6 +1304,11 @@ public final class TradeService {
         out.put("evaluatedAtEpochMs", clock.millis());
         out.put("asOfEpochMs", clock.millis()); // legacy key, kept for consumers
         out.put("freshness", freshness.name());
+        out.put("rate", Map.of(
+                "annual", rfr,
+                "evidence", rateEvidence == null
+                        ? io.liftandshift.strikebench.model.DataEvidence.missing("rate assumption")
+                        : rateEvidence));
 
         // The assembled verdict: worst-triggered tier wins; the reason names the single biggest problem.
         String verdict = "favorable"; String reason = "Model odds, payoff and execution costs look reasonable together.";
@@ -1451,7 +1497,8 @@ public final class TradeService {
                 r.lngOrNull("realized_pnl_cents"), r.str("close_reason"), r.str("entry_snapshot_json"),
                 r.bool("is_live"), r.str("created_at"), r.str("closed_at"), r.str("updated_at"),
                 r.str("intent"), r.lng("shares_locked"), r.str("origin"),
-                r.lngOrNull("proposed_net_cents"), r.str("executed_at"), r.str("broker"), r.str("order_ref"));
+                r.lngOrNull("proposed_net_cents"), r.str("executed_at"), r.str("broker"), r.str("order_ref"),
+                r.str("data_provenance"), r.str("data_age"), r.str("data_source"));
     }
 
     static String legDesc(Leg leg) {

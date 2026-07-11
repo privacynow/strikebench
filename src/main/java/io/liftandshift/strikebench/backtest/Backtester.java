@@ -138,7 +138,7 @@ public final class Backtester {
         // Lookback padding so HV is available on day one — filtered per-day to <= that day
         io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(symbol, from.minusDays(200), to, actx);
         List<Candle> allCandles = series.candles();
-        boolean demoUnderlying = series.isFixture() && !cfg.fixturesOnly();
+        boolean demoUnderlying = series.isFixture();
         if (demoUnderlying) {
             notes.add("Underlying price history is built-in DEMO DATA (no live candle source is configured — "
                     + "add a Polygon or Alpha Vantage key). These results do not reflect the real market.");

@@ -39,7 +39,10 @@ public record TradeRecord(
         Long proposedNetCents,// the USER'S package price when one was set (provenance), nullable
         String executedAt,    // real execution time for EXTERNAL trades (ISO), nullable
         String broker,        // e.g. ETRADE, nullable
-        String orderRef       // broker order id, nullable
+        String orderRef,      // broker order id, nullable
+        String dataProvenance,
+        String dataAge,
+        String dataSource
 ) {
     /** Pre-provenance shape. */
     public TradeRecord(String id, String accountId, String symbol, String strategy, String status,
@@ -54,7 +57,7 @@ public record TradeRecord(
                 entryUnderlyingCents, entryNetPremiumCents, maxLossCents, maxProfitCents, breakevens,
                 popEntry, feesOpenCents, feesCloseCents, realizedPnlCents, closeReason,
                 entrySnapshotJson, isLive, createdAt, closedAt, updatedAt, intent, sharesLocked, origin,
-                null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     /** Pre-origin shape. */

@@ -41,7 +41,7 @@ public final class Db implements AutoCloseable {
         cfg.setPoolName("strikebench");
         cfg.setConnectionTimeout(10_000);
         this.ds = new HikariDataSource(cfg);
-        log.info("Postgres pool ready ({})", jdbcUrl.replaceAll("password=[^&]*", "password=***"));
+        log.info("Local data store ready");
     }
 
     /** Builds a pool from app config (env > sysprops > properties > local-dev default). */

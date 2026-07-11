@@ -37,19 +37,17 @@ class StoredCandleStoreTest {
     }
 
     @Test
-    void storedBarsAreServedBeforeProviders() {
+    void fixtureBackfillNeverEntersObservedStore() {
         db = TestDb.fresh();
-        // Backfill fixture history into underlying_bar (no store on the writer, so it uses providers).
-        new UnderlyingBackfill(fixtureService(), db, clock).backfill("AAPL", from, to);
+        var result = new UnderlyingBackfill(fixtureService(), db, clock).backfill("AAPL", from, to);
+        assertThat(result.rows()).isZero();
+        assertThat(result.observed()).isFalse();
 
         // A reader WITH the store but NO candle providers must still return the STORED bars.
         MarketDataService reader = new MarketDataService(List.<MarketDataProvider>of(),
                 List.<NewsFilingsProvider>of(), List.<RatesProvider>of(), new StoredCandleStore(db));
         CandleSeries s = reader.candleSeries("AAPL", from, to);
-        assertThat(s.candles()).isNotEmpty();
-        assertThat(s.source()).isEqualTo("stored");
-        // fixture-sourced backfill → labeled demo, never observed
-        assertThat(s.freshness()).isEqualTo(Freshness.FIXTURE);
+        assertThat(s.candles()).isEmpty();
     }
 
     @Test
@@ -82,7 +80,7 @@ class StoredCandleStoreTest {
     }
 
     @Test
-    void mixedObservedAndDemoRowsAreWeakestLinkFixture() {
+    void observedStoreExcludesDemoRowsRatherThanMixingThem() {
         db = TestDb.fresh();
         // One real bar must never launder a fabricated neighbor into an EOD series.
         db.exec("INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,1)",
@@ -90,8 +88,8 @@ class StoredCandleStoreTest {
         db.exec("INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,0)",
                 "AAPL", LocalDate.parse("2026-04-02"), new java.math.BigDecimal("252.00"), "fixture");
         var store = new StoredCandleStore(db);
-        var s = store.candles("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-04-02"), DatasetService.OBSERVED).orElseThrow();
-        assertThat(s.freshness()).isEqualTo(Freshness.FIXTURE); // worst-of, never best-of
+        assertThat(store.candles("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-04-02"),
+                DatasetService.OBSERVED)).isEmpty();
     }
 
     @Test

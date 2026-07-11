@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.paper.AccountService;
 import io.liftandshift.strikebench.paper.AuditLog;
 import io.liftandshift.strikebench.support.TestDb;
+import io.liftandshift.strikebench.support.ObservedFixtureProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -36,10 +37,10 @@ class DataCenterTest {
 
     private Ctx wire() {
         db = TestDb.fresh();
-        AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true", "ENGINE_ENABLED", "false"));
-        FixtureProvider fixture = new FixtureProvider(clock);
+        AppConfig cfg = new AppConfig(Map.of("ENGINE_ENABLED", "false"));
+        MarketDataProvider provider = new ObservedFixtureProvider(clock);
         MarketDataService market = new MarketDataService(
-                List.<MarketDataProvider>of(fixture), List.<NewsFilingsProvider>of(fixture), List.<RatesProvider>of(fixture));
+                List.of(provider), List.of(), List.of());
         UniverseService universe = new UniverseService(db, cfg, clock);
         MarketDataEngine engine = new MarketDataEngine(market, universe, cfg, clock);
         SnapshotService snapshots = new SnapshotService(market, universe, db, clock);
@@ -107,7 +108,7 @@ class DataCenterTest {
         assertThat(cov).anySatisfy(s -> {
             assertThat(s.symbol()).isEqualTo("AAPL");
             assertThat(s.underlyingBars()).isGreaterThan(0);
-            assertThat(s.underlyingObserved()).isFalse(); // fixture = demo, honestly labeled
+            assertThat(s.underlyingObserved()).isTrue();
         });
         assertThat(c.coverage().summary().underlyingSymbols()).isGreaterThanOrEqualTo(1);
     }

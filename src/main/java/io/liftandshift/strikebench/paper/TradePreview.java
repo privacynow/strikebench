@@ -23,6 +23,7 @@ public record TradePreview(
         long buyingPowerBeforeCents,
         long buyingPowerAfterCents,
         String freshness,
+        io.liftandshift.strikebench.model.DataEvidence evidence,
         long underlyingCents,          // spot used for fills/curve (0 when unavailable)
         Double assignmentProb,         // chance ANY short strike finishes ITM; null if no shorts
         List<Map<String, Object>> legs,    // per-leg fills: action/type/strike/expiration/ratio/fill/bid/ask/mid/iv/greeks/freshness

@@ -21,7 +21,7 @@ public final class Migrations {
                 .locations("classpath:db/migrations")
                 .load()
                 .migrate();
-        log.info("Flyway: schema at version {} ({} migration(s) applied this run)",
+        log.info("Local data schema ready at version {} ({} update(s) applied)",
                 result.targetSchemaVersion, result.migrationsExecuted);
     }
 }

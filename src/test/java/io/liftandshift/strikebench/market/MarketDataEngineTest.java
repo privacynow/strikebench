@@ -39,13 +39,22 @@ class MarketDataEngineTest {
     static final class CountingProvider implements MarketDataProvider {
         final FixtureProvider inner;
         final Map<String, AtomicInteger> quoteCalls = new ConcurrentHashMap<>();
-        CountingProvider(Clock c) { inner = new FixtureProvider(c); }
+        final boolean observedQuotes;
+        CountingProvider(Clock c) { this(c, false); }
+        CountingProvider(Clock c, boolean observedQuotes) {
+            inner = new FixtureProvider(c);
+            this.observedQuotes = observedQuotes;
+        }
         public String name() { return "counting"; }
         public java.util.Set<Domain> domains() { return inner.domains(); }
         public List<SymbolMatch> lookup(String q) { return inner.lookup(q); }
         public Optional<Quote> quote(String s) {
             quoteCalls.computeIfAbsent(s, k -> new AtomicInteger()).incrementAndGet();
-            return inner.quote(s);
+            return inner.quote(s).map(q -> observedQuotes
+                    ? new Quote(q.symbol(), q.description(), q.last(), q.bid(), q.ask(), q.prevClose(),
+                            q.dayHigh(), q.dayLow(), q.volume(), q.optionable(), q.asOfEpochMs(),
+                            "counting-observed", io.liftandshift.strikebench.model.Freshness.DELAYED)
+                    : q);
         }
         public List<LocalDate> expirations(String s) { return inner.expirations(s); }
         public Optional<OptionChain> chain(String s, LocalDate e) { return inner.chain(s, e); }
@@ -114,7 +123,7 @@ class MarketDataEngineTest {
     @Test
     void persistsQuotesAndBootsStaleFirstFromDisk() {
         AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
-        CountingProvider p = new CountingProvider(clock);
+        CountingProvider p = new CountingProvider(clock, true);
         db = TestDb.fresh();
         MarketDataService market = new MarketDataService(
                 List.<MarketDataProvider>of(p), List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
@@ -141,6 +150,25 @@ class MarketDataEngineTest {
         } finally {
             eng2.stop();
         }
+    }
+
+    @Test
+    void snapshotStoreQuarantinesFabricatedMarkets() {
+        db = TestDb.fresh();
+        var store = new io.liftandshift.strikebench.db.MarketSnapshotStore(db);
+        store.save(new MarketDataEngine.MarketSnapshot("REAL", "Observed", new java.math.BigDecimal("10"),
+                new java.math.BigDecimal("9.99"), new java.math.BigDecimal("10.01"),
+                new java.math.BigDecimal("9.50"), true, io.liftandshift.strikebench.model.Freshness.DELAYED,
+                "cboe", clock.millis(), clock.millis(), false, null));
+        store.save(new MarketDataEngine.MarketSnapshot("FAKE", "Demo", new java.math.BigDecimal("100"),
+                new java.math.BigDecimal("99"), new java.math.BigDecimal("101"),
+                new java.math.BigDecimal("100"), true, io.liftandshift.strikebench.model.Freshness.FIXTURE,
+                "fixture", clock.millis(), clock.millis(), false, null));
+
+        assertThat(store.loadAll()).extracting(MarketDataEngine.MarketSnapshot::symbol)
+                .containsExactly("REAL");
+        assertThat(db.query("SELECT symbol FROM market_snapshot ORDER BY symbol", r -> r.str("symbol")))
+                .containsExactly("REAL");
     }
 
     @Test

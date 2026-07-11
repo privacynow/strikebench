@@ -121,7 +121,7 @@ public final class MarketDataEngine {
                 for (MarketSnapshot s : snapshotStore.loadAll()) {
                     if (s.last() != null) { snapshots.put(s.symbol(), s); track(s.symbol()); seeded++; }
                 }
-                if (seeded > 0) log.info("market engine seeded {} last-known quotes from disk (stale-first)", seeded);
+                if (seeded > 0) log.info("market engine restored {} last-known quotes from the local snapshot cache", seeded);
             } catch (Exception e) { log.warn("snapshot seed failed: {}", e.toString()); }
         }
         if (!cfg.engineEnabled()) {
@@ -490,6 +490,8 @@ public final class MarketDataEngine {
         row.put("prevClose", s.prevClose() == null ? null : s.prevClose().toPlainString());
         row.put("optionable", s.optionable());
         row.put("freshness", s.freshness().name());
+        row.put("source", s.source());
+        row.put("evidence", io.liftandshift.strikebench.model.DataEvidence.of(s.source(), s.freshness()));
         row.put("asOf", s.asOfEpochMs());
         row.put("refreshing", s.refreshing());
         return row;

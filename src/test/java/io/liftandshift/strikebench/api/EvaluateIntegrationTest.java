@@ -121,12 +121,10 @@ class EvaluateIntegrationTest {
         assertThat(rep.has("note")).isTrue();
     }
 
-    @Test void evaluationsArePersistedAndListable() throws Exception {
+    @Test void demoEvaluationsDoNotPolluteObservedHistory() throws Exception {
         post("/api/evaluate", "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"balanced\"}");
         JsonNode listed = Json.MAPPER.readTree(get("/api/evaluations").body()).get("evaluations");
         assertThat(listed.isArray()).isTrue();
-        assertThat(listed).isNotEmpty();
-        assertThat(listed.get(0).hasNonNull("symbol")).isTrue();
-        assertThat(listed.get(0).get("symbol").asText()).isEqualTo("AAPL");
+        assertThat(listed).isEmpty();
     }
 }
