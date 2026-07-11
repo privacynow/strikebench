@@ -99,6 +99,17 @@ class PathGeneratorTest {
     }
 
     @Test
+    void sharedTrendPresetsPointInOppositeDirections() {
+        double[][] up = gen.generate(ScenarioSpec.preset(ScenarioSpec.Shape.GRIND_UP, 63, 0.25, 44, 800), 100, null);
+        double[][] down = gen.generate(ScenarioSpec.preset(ScenarioSpec.Shape.GRIND_DOWN, 63, 0.25, 44, 800), 100, null);
+        double upMean = java.util.Arrays.stream(up).mapToDouble(p -> p[p.length - 1]).average().orElseThrow();
+        double downMean = java.util.Arrays.stream(down).mapToDouble(p -> p[p.length - 1]).average().orElseThrow();
+        assertThat(upMean).isGreaterThan(100);
+        assertThat(downMean).isLessThan(100);
+        assertThat(upMean).isGreaterThan(downMean);
+    }
+
+    @Test
     void intradayBridgeRespectsOhlcBounds() {
         Rng rng = new Rng(123);
         double open = 100, high = 104, low = 98, close = 101;

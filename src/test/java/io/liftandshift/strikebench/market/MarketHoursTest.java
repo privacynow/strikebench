@@ -62,4 +62,14 @@ class MarketHoursTest {
         org.assertj.core.api.Assertions.assertThat(MarketHours.tradingDaysBetween(
                 java.time.LocalDate.of(2026, 7, 10), java.time.LocalDate.of(2026, 7, 10))).isZero();
     }
+
+    @Test
+    void tradingDateAfterIsTheExactInverseAcrossWeekendsAndHolidays() {
+        LocalDate friday = LocalDate.of(2026, 7, 10);
+        assertThat(MarketHours.tradingDateAfter(friday, 1)).isEqualTo(LocalDate.of(2026, 7, 13));
+        LocalDate beforeJulyFourth = LocalDate.of(2026, 6, 29);
+        LocalDate fourSessionsLater = MarketHours.tradingDateAfter(beforeJulyFourth, 4);
+        assertThat(fourSessionsLater).isEqualTo(LocalDate.of(2026, 7, 6));
+        assertThat(MarketHours.tradingDaysBetween(beforeJulyFourth, fourSessionsLater)).isEqualTo(4);
+    }
 }

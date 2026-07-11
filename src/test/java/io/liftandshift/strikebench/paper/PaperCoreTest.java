@@ -50,6 +50,7 @@ class PaperCoreTest {
         BigDecimal closeOnValue = null; // when set, the close used for settlement (any date)
         Map<LocalDate, BigDecimal> closesByDate = new java.util.HashMap<>();
         Freshness freshness = Freshness.FIXTURE;
+        io.liftandshift.strikebench.model.DataEvidence evidenceOverride;
         Map<String, BigDecimal> mids = new java.util.HashMap<>(Map.of(
                 "PUT100", new BigDecimal("3.00"),
                 "PUT95", new BigDecimal("1.20"),
@@ -69,7 +70,11 @@ class PaperCoreTest {
             BigDecimal mid = mids.get(key);
             return mid == null ? Optional.empty() : Optional.of(demoMark(new LegMark(mid, mid, mid, 0.25, freshness)));
         }
-        private static LegMark demoMark(LegMark m) {
+        private LegMark demoMark(LegMark m) {
+            if (evidenceOverride != null) {
+                return new LegMark(m.bid(), m.ask(), m.mid(), m.iv(), m.freshness(), m.delta(), m.gamma(),
+                        m.theta(), m.vega(), evidenceOverride);
+            }
             return new LegMark(m.bid(), m.ask(), m.mid(), m.iv(), m.freshness(), m.delta(), m.gamma(),
                     m.theta(), m.vega(), new io.liftandshift.strikebench.model.DataEvidence(
                             io.liftandshift.strikebench.model.DataProvenance.DEMO,
@@ -124,6 +129,30 @@ class PaperCoreTest {
                 .isInstanceOf(TradeRejectedException.class)
                 .hasMessageContaining("OBSERVED")
                 .hasMessageContaining("DEMO");
+    }
+
+    @Test
+    void observedPaperExecutionAcceptsDelayedButRejectsEodAndStaleBooks() {
+        AppConfig live = new AppConfig(Map.of());
+        AccountService liveAccounts = new AccountService(db, live, audit, CLOCK);
+        Account observed = liveAccounts.getOrCreateDefault();
+        TradeService liveTrades = new TradeService(db, live, marks, audit, CLOCK);
+
+        marks.freshness = Freshness.DELAYED;
+        marks.evidenceOverride = io.liftandshift.strikebench.model.DataEvidence.of("cboe", Freshness.DELAYED);
+        TradePreview delayed = liveTrades.preview(creditPutSpread(observed.id(), 1));
+        assertThat(delayed.ok()).isTrue();
+        assertThat(liveTrades.create(creditPutSpread(observed.id(), 1)).dataProvenance()).isEqualTo("OBSERVED");
+
+        marks.freshness = Freshness.EOD;
+        marks.evidenceOverride = io.liftandshift.strikebench.model.DataEvidence.of("stored-observed", Freshness.EOD);
+        assertThat(liveTrades.preview(creditPutSpread(observed.id(), 1)).ok()).isFalse();
+
+        marks.freshness = Freshness.STALE;
+        marks.evidenceOverride = io.liftandshift.strikebench.model.DataEvidence.of("cboe", Freshness.STALE);
+        TradePreview stale = liveTrades.preview(creditPutSpread(observed.id(), 1));
+        assertThat(stale.ok()).isFalse();
+        assertThat(stale.blockReasons()).anySatisfy(r -> assertThat(r).contains("STALE"));
     }
 
     @org.junit.jupiter.api.Test
@@ -778,6 +807,25 @@ class PaperCoreTest {
         // short 105C settles at -1500 (its OWN expiry close 120), long 100C worthless at 98
         assertThat(result.realizedPnlCents()).isEqualTo(-14000 - 130 - 150000);
         assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void mixedExpirationSettleNeverUsesOneCurrentPriceForMissingHistoricalCloses() {
+        Account acct = accounts.getOrCreateDefault();
+        LocalDate near = EXP;
+        LocalDate far = EXP.plusDays(28);
+        TradeRecord t = trades.create(new TradeService.OpenRequest(acct.id(), "AAPL", "DIAGONAL_CALL", 1,
+                List.of(Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), far, 1, BigDecimal.ZERO),
+                        Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("105"), near, 1, BigDecimal.ZERO)),
+                "bullish", "month", "aggressive"));
+        marks.closesByDate.put(near, new BigDecimal("120.00"));
+        Clock afterAll = Clock.fixed(Instant.parse("2026-09-21T15:00:00Z"), ZoneId.of("America/New_York"));
+        TradeService laterTrades = new TradeService(db, cfg, marks, audit, afterAll);
+
+        assertThatThrownBy(() -> laterTrades.settle(t.id(), true))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("multi-expiration")
+                .hasMessageContaining("each expiry close");
     }
 
     @Test

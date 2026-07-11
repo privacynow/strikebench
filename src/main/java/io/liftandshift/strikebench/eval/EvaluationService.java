@@ -176,13 +176,13 @@ public final class EvaluationService {
                                 .filter(StrategyEvaluation::viable).findFirst().orElse(null);
                         return new PerSym(top, null); // no-viable is silently dropped, as before
                     } catch (RuntimeException e) {
-                        return new PerSym(null, sym + ": " + e.getClass().getSimpleName());
+                        return new PerSym(null, sym + ": analysis unavailable right now");
                     } finally { gate.release(); }
                 }));
             }
             for (int i = 0; i < futures.size(); i++) {
                 try { out.set(i, futures.get(i).get()); }
-                catch (Exception e) { out.set(i, new PerSym(null, syms.get(i) + ": " + e.getClass().getSimpleName())); }
+                catch (Exception e) { out.set(i, new PerSym(null, syms.get(i) + ": analysis unavailable right now")); }
             }
         }
 
@@ -286,16 +286,22 @@ public final class EvaluationService {
      * only, so fixtures/models are excluded and a fresh DB honestly yields an empty history ->
      * IV rank/percentile stay null rather than fabricated).
      */
-    private List<Double> ivHistory(String symbol) {
+    List<Double> ivHistory(String symbol) {
         return ivHistoryCache.get(symbol, this::queryIvHistory);
     }
 
-    private List<Double> queryIvHistory(String symbol) {
+    List<Double> queryIvHistory(String symbol) {
         return db.query("""
                 SELECT avg(iv) AS iv FROM option_bar
-                WHERE symbol = ? AND iv IS NOT NULL AND iv_source = 'vendor'
+                WHERE symbol = ? AND dataset_id = 'observed'
+                  AND iv IS NOT NULL AND iv_source = 'vendor'
                   AND underlying IS NOT NULL AND abs(strike - underlying) <= underlying * 0.05
                 GROUP BY asof ORDER BY asof DESC LIMIT 90
                 """, r -> r.dbl("iv"), symbol);
+    }
+
+    /** Stored option history changed or was wiped; no cached IV statistic may survive it. */
+    public void invalidateHistoricalData() {
+        ivHistoryCache.invalidateAll();
     }
 }

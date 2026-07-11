@@ -11,7 +11,7 @@ public record TradePreview(
         long entryNetPremiumCents,     // credit > 0, debit < 0
         long feesOpenCents,
         long maxLossCents,
-        Long maxProfitCents,           // null = unbounded upside
+        Long maxProfitCents,           // null = unbounded upside OR model-dependent for multi-expiration structures
         List<String> breakevens,
         Double popEntry,
         Long expectedValueCents,

@@ -481,7 +481,7 @@ public final class ApiServer {
 
             // ---- The simulated market (Block S): per-user runtime switch, never a boot flag ----
             c.routes.get("/api/world", ctx -> ctx.json(Map.of(
-                    "world", activeWorld(ctx), "revision", worldRevision.get())));
+                    "world", activeWorld(ctx), "revision", worldRevision.get(), "epoch", startedAt)));
             c.routes.put("/api/world", ctx -> {
                 var body = requireBody(bodyOrNull(ctx, java.util.Map.class));
                 String w = String.valueOf(body.getOrDefault("world", "observed"));
@@ -525,10 +525,11 @@ public final class ApiServer {
                 event.put("world", w);
                 event.put("user", eventOwner);
                 event.put("revision", revision);
+                event.put("epoch", startedAt);
                 event.put("universe", bootstrap);
                 events.publish("world.selected", event);
                 ctx.json(Map.of("world", w, "datasetReset", datasetReset,
-                        "universe", bootstrap, "revision", revision));
+                        "universe", bootstrap, "revision", revision, "epoch", startedAt));
             });
             c.routes.get("/api/sim/market", ctx -> ctx.json(Map.of("sessions", simSessions.list(ownerId(ctx)))));
             c.routes.get("/api/sim/market/{id}/anchors", ctx ->
@@ -1980,12 +1981,18 @@ public final class ApiServer {
                                      // of generated paths. HISTORICAL_ANALOGS = the study's exact
                                      // analog windows; CONDITIONAL_BOOTSTRAP = whole-path resamples.
                                      String pathSource,
-                                     io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest study) {
+                                     io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest study,
+                                     // Signed TOTAL opening value: debit positive, credit negative.
+                                     // Builder/Review can preserve the exact displayed package price.
+                                     Long entryCostCents,
+                                     // Optional leg-aligned ISO expirations. When present, the
+                                     // listed package is exact: no neighboring expiry/strike snap.
+                                     java.util.List<String> contractExpirations) {
         public StrategySimRequest(String symbol,
                                   java.util.List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
                                   Integer qty, io.liftandshift.strikebench.sim.ScenarioSpec spec,
                                   io.liftandshift.strikebench.sim.IvSpec iv) {
-            this(symbol, legs, qty, spec, iv, null, null);
+            this(symbol, legs, qty, spec, iv, null, null, null, null);
         }
     }
 
@@ -2110,7 +2117,7 @@ public final class ApiServer {
                     results.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareOutcome(it.key(), res));
                 } catch (RuntimeException e) {
                     refusals.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareRefusal(
-                            it.key(), e.getMessage() == null ? "not priceable on this ensemble" : e.getMessage()));
+                            it.key(), io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e)));
                 }
             }
             report = new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareReport(results, refusals);
@@ -2246,7 +2253,23 @@ public final class ApiServer {
         for (var lg : b.legs()) {
             if (lg.ratio() > 10) throw new IllegalArgumentException("ratio must be 1..10");
         }
-        MarketEntry me = marketEntry(sym, b.legs(), qty, worldParam(activeWorld(ctx)));
+        if (b.entryCostCents() != null && Math.abs(b.entryCostCents()) > 1_000_000_000L) {
+            throw new IllegalArgumentException("entry cost is outside the supported range");
+        }
+        if (b.contractExpirations() != null) {
+            if (b.contractExpirations().size() != b.legs().size()) {
+                throw new IllegalArgumentException("contract expirations must align with the legs");
+            }
+            for (String exp : b.contractExpirations()) {
+                if (exp != null && !exp.isBlank()) java.time.LocalDate.parse(exp);
+            }
+        }
+        MarketEntry me = marketEntry(sym, b.legs(), qty, worldParam(activeWorld(ctx)), null,
+                b.contractExpirations());
+        if (b.contractExpirations() != null && me == null) {
+            throw new IllegalArgumentException(
+                    "One of the exact listed contracts is no longer available at an executable price; refresh the position first.");
+        }
         // CALIBRATION: volAnnual<=0 is the "use market vol" sentinel — replace with the chain's
         // ATM IV so a caller with no view on wildness gets THIS symbol's, not a canned 25%.
         io.liftandshift.strikebench.sim.ScenarioSpec spec = b.spec();
@@ -2270,6 +2293,12 @@ public final class ApiServer {
             entryNote = "Entry priced from " + me.source() + " " + quality + " at executable sides (buy at ask, sell at bid)"
                     + (me.snaps().isEmpty() ? "" : ". Snapped to listed contracts: " + String.join("; ", me.snaps()))
                     + ".";
+        }
+        Long entryCost = b.entryCostCents() != null ? b.entryCostCents()
+                : (me == null ? null : me.entryCents());
+        if (b.entryCostCents() != null) {
+            entryNote = "Entry fixed to the exact package price already shown on this screen; "
+                    + "path exits are modeled from the listed contracts.";
         }
         if (b.pathSource() != null && !b.pathSource().isBlank()) {
             // EMPIRICAL ensemble: re-derive the study's analog windows with the SAME deterministic
@@ -2308,7 +2337,7 @@ public final class ApiServer {
             }
             var eresult = new io.liftandshift.strikebench.sim.ScenarioSimulator().runOnPaths(
                     paths, spot, legsToRun, qty, espec, iv, r,
-                    me == null ? null : me.entryCents(), entryNote);
+                    entryCost, entryNote);
             // The interpretation is DIFFERENT and must say so: conditional history, not a model.
             var out = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(eresult);
             out.put("pathSource", source);
@@ -2334,7 +2363,7 @@ public final class ApiServer {
         var result = new io.liftandshift.strikebench.sim.ScenarioSimulator().run(
                 spot, legsToRun, qty, spec, iv, r,
                 simEngine.historicalLogReturns(sym, analysisCtx(ctx)),
-                me == null ? null : me.entryCents(),
+                entryCost,
                 entryNote);
         ctx.json(result);
     }
@@ -2353,12 +2382,17 @@ public final class ApiServer {
     }
 
     private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs, int qty) {
-        return marketEntry(symbol, legs, qty, null, null);
+        return marketEntry(symbol, legs, qty, null, null, null);
     }
 
     private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
                                     int qty, String worldId) {
-        return marketEntry(symbol, legs, qty, worldId, null);
+        return marketEntry(symbol, legs, qty, worldId, null, null);
+    }
+
+    private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
+                                    int qty, String worldId, EntryBook book) {
+        return marketEntry(symbol, legs, qty, worldId, book, null);
     }
 
     /**
@@ -2369,12 +2403,15 @@ public final class ApiServer {
      */
     final class EntryBook {
         final String symbol; final String worldId;
-        final String snapshotAt = clock.instant().toString();
+        final String snapshotAt;
         private final java.util.Map<java.time.LocalDate, java.util.Optional<io.liftandshift.strikebench.model.OptionChain>> chains
                 = new java.util.HashMap<>();
         private java.util.Optional<io.liftandshift.strikebench.model.Quote> quote;
         private List<java.time.LocalDate> exps;
-        EntryBook(String symbol, String worldId) { this.symbol = symbol; this.worldId = worldId; }
+        EntryBook(String symbol, String worldId) {
+            this.symbol = symbol; this.worldId = worldId;
+            this.snapshotAt = market.simInstant(worldId).orElse(clock.instant()).toString();
+        }
         synchronized List<java.time.LocalDate> expirations() {
             if (exps == null) exps = market.expirations(symbol, worldId);
             return exps;
@@ -2389,11 +2426,13 @@ public final class ApiServer {
     }
 
     private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
-                                    int qty, String worldId, EntryBook book) {
+                                    int qty, String worldId, EntryBook book, List<String> contractExpirations) {
         try {
             List<java.time.LocalDate> exps = book != null ? book.expirations() : market.expirations(symbol, worldId);
             if (exps.isEmpty()) return null;
-            java.time.LocalDate today = java.time.LocalDate.now(clock);
+            java.time.LocalDate today = market.simInstant(worldId)
+                    .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                    .orElseGet(() -> java.time.LocalDate.now(clock));
             double entryPerUnit = 0;
             Double atmIv = null;
             String source = null;
@@ -2401,7 +2440,8 @@ public final class ApiServer {
             java.math.BigDecimal spotBd = null;
             List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> resolved = new ArrayList<>();
             List<String> snaps = new ArrayList<>();
-            for (var leg : legs) {
+            for (int legIndex = 0; legIndex < legs.size(); legIndex++) {
+                var leg = legs.get(legIndex);
                 if ("STOCK".equalsIgnoreCase(leg.type())) {
                     var q = (book != null ? book.quote() : market.quote(symbol, worldId)).orElse(null);
                     if (q == null || q.mark() == null) return null;
@@ -2410,11 +2450,20 @@ public final class ApiServer {
                     resolved.add(leg);
                     continue;
                 }
-                // Nearest listed expiration to the leg's trading-day horizon (~7/5 calendar days/step).
-                java.time.LocalDate target = today.plusDays(Math.round(leg.expiryDay() * 7.0 / 5.0));
-                java.time.LocalDate exp = exps.stream()
-                        .min(java.util.Comparator.comparingLong(e2 -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e2, target))))
-                        .orElse(null);
+                String exactRaw = contractExpirations != null ? contractExpirations.get(legIndex) : null;
+                boolean exactContract = exactRaw != null && !exactRaw.isBlank();
+                java.time.LocalDate exp;
+                if (exactContract) {
+                    exp = java.time.LocalDate.parse(exactRaw);
+                    if (!exps.contains(exp)) return null;
+                } else {
+                    // Generic scenario: nearest listed expiration to the requested trading-session horizon.
+                    java.time.LocalDate target = io.liftandshift.strikebench.market.MarketHours
+                            .tradingDateAfter(today, leg.expiryDay());
+                    exp = exps.stream()
+                            .min(java.util.Comparator.comparingLong(e2 -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e2, target))))
+                            .orElse(null);
+                }
                 if (exp == null) return null;
                 var chain = (book != null ? book.chain(exp) : market.chain(symbol, exp, worldId)).orElse(null);
                 if (chain == null || chain.isEmpty()) return null;
@@ -2425,7 +2474,10 @@ public final class ApiServer {
                         .min(java.util.Comparator.comparingDouble(o -> Math.abs(o.strike().doubleValue() - leg.strike())))
                         .orElse(null);
                 // The nearest listed strike must be reasonably close, or this isn't the same trade.
-                if (quote == null || Math.abs(quote.strike().doubleValue() - leg.strike()) > Math.max(2.5, leg.strike() * 0.03)) return null;
+                double strikeGap = quote == null ? Double.POSITIVE_INFINITY
+                        : Math.abs(quote.strike().doubleValue() - leg.strike());
+                if (quote == null || (exactContract ? strikeGap > 1e-9
+                        : strikeGap > Math.max(2.5, leg.strike() * 0.03))) return null;
                 boolean buy = !"SELL".equalsIgnoreCase(leg.action());
                 java.math.BigDecimal px = buy ? quote.ask() : quote.bid(); // executable sides
                 if (px == null || px.signum() <= 0) return null;
@@ -2443,8 +2495,8 @@ public final class ApiServer {
                 // THE SIMULATED LEG IS THE PRICED LEG: exact listed strike + that expiration's
                 // trading-day horizon. Anything that moved is named in the snap note.
                 double listedStrike = quote.strike().doubleValue();
-                int listedDays = (int) Math.max(1, Math.round(
-                        java.time.temporal.ChronoUnit.DAYS.between(today, exp) * 5.0 / 7.0));
+                int listedDays = Math.max(1, io.liftandshift.strikebench.market.MarketHours
+                        .tradingDaysBetween(today, exp));
                 resolved.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg(
                         leg.action(), leg.type(), listedStrike, listedDays, leg.ratio()));
                 if (Math.abs(listedStrike - leg.strike()) > 1e-9 || Math.abs(listedDays - leg.expiryDay()) > 1) {
@@ -2469,7 +2521,19 @@ public final class ApiServer {
         }
         var tier = io.liftandshift.strikebench.db.DataResetService.parseTier(b.tier());
         var result = dataReset.reset(tier);
+        if (tier == io.liftandshift.strikebench.db.DataResetService.Tier.PAPER
+                || tier == io.liftandshift.strikebench.db.DataResetService.Tier.EVERYTHING) {
+            // The rows and simulation accounts are gone; cancel their resident loops and make
+            // every connected tab reconcile to the surviving baseline market immediately.
+            simSessions.clearResident();
+            String baseline = cfg.fixturesOnly() ? "demo" : "observed";
+            long revision = worldRevision.incrementAndGet();
+            events.publish("world.selected", Map.of(
+                    "world", baseline, "revision", revision, "epoch", startedAt));
+        }
         datasets.invalidateActiveCache(); // the settings row is gone; in-memory state must follow
+        market.invalidateAll();
+        invalidateHistoricalViews();
         try { audit.log(null, null, "DATA_RESET", "WARN", Map.of("tier", result.tier(), "areas", result.areasCleared())); }
         catch (Exception e) { /* best-effort; the reset itself succeeded */ }
         ctx.json(result);
@@ -2698,6 +2762,7 @@ public final class ApiServer {
         historicalDataVersion.incrementAndGet();
         sparklineEmptyMemo.invalidateAll();
         market.invalidateHistoricalData();
+        evaluations.invalidateHistoricalData();
     }
 
     private void sparklines(Context ctx) {
@@ -2728,8 +2793,7 @@ public final class ApiServer {
                 : java.util.Arrays.stream(raw.split(",")).map(x -> x.trim().toUpperCase(Locale.ROOT))
                     .filter(x -> !x.isBlank()).distinct().toList();
         int totalRequested = symbols.size();
-        boolean truncated = totalRequested > 16;
-        if (truncated) symbols = symbols.subList(0, 16);
+        if (totalRequested > 16) symbols = symbols.subList(0, 16);
         var actx = analysisCtx(ctx);
         String lane = world != null ? world : "observed";
         long dataVersion = historicalDataVersion.get();
@@ -2811,9 +2875,6 @@ public final class ApiServer {
         body.put("range", range);
         body.put("sparklines", out);
         body.put("totalRequested", totalRequested);
-        body.put("truncated", truncated);
-        body.put("batchLimit", 16);
-        if (truncated) body.put("note", "Showing the first 16 symbols in this response; send additional symbol batches for the rest.");
         if (world != null) body.put("world", world);
         ctx.json(body);
     }

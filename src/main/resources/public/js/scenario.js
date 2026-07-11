@@ -16,6 +16,8 @@
   var SHAPES = [
     { key: 'GRIND_UP', label: 'Climbs steadily', pts: '0,26 50,15 100,5', drift: 0.4, model: 'GBM',
       blurb: 'A patient uptrend with normal day-to-day wiggle.' },
+    { key: 'GRIND_DOWN', label: 'Drifts lower', pts: '0,6 50,16 100,27', drift: -0.4, model: 'GBM',
+      blurb: 'A persistent decline with normal day-to-day wiggle.' },
     { key: 'SELLOFF_REBOUND', label: 'Drops, then recovers', pts: '0,10 45,28 100,7', drift: 0.0, model: 'GBM',
       blurb: 'A slide, a bottom, and a climb back — the round trip.' },
     { key: 'RALLY_FADE', label: 'Rises, then fades', pts: '0,25 45,6 100,23', drift: 0.0, model: 'GBM',
@@ -46,7 +48,26 @@
       + '<polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' });
   }
 
-  function shapeOf(key) { return SHAPES.find(function (s) { return s.key === key; }) || SHAPES[3]; }
+  function shapeOf(key) { return SHAPES.find(function (s) { return s.key === key; }) || SHAPES[4]; }
+
+  /** The symbol's own recent realized volatility, shared by every scenario surface. */
+  function historicalVol(symbol) {
+    if (!symbol) return Promise.resolve(null);
+    return API.get('/api/research/' + symbol + '/history?range=6m').then(function (h) {
+      var cs = h.candles || h.series || [];
+      var closes = cs.map(function (c) { return parseFloat(c.close != null ? c.close : c.value); })
+        .filter(function (v) { return isFinite(v) && v > 0; });
+      if (closes.length < 30) return null;
+      var sum = 0, sum2 = 0, n = 0;
+      for (var i = 1; i < closes.length; i++) {
+        var r = Math.log(closes[i] / closes[i - 1]);
+        sum += r; sum2 += r * r; n++;
+      }
+      var sd = Math.sqrt(Math.max(0, sum2 / n - (sum / n) * (sum / n)));
+      var hv = sd * Math.sqrt(252);
+      return isFinite(hv) && hv > 0.03 && hv < 3 ? hv : null;
+    }).catch(function () { return null; });
+  }
 
   /* ---------------------------------------------------------------------------------------------
    * The scenario form. opts: {compact} → returns {el, getSpec(), getIv(), describe(), onchange}
@@ -83,22 +104,9 @@
       var m2 = MAGS.find(function (x) { return x.key === key; }) || MAGS[1];
       return m2.mult * (hvBase.v || 0.30); // display estimate only, until HV lands
     }
-    if (symbol) {
-      API.get('/api/research/' + symbol + '/history?range=6m').then(function (h) {
-        var cs = h.candles || h.series || [];
-        var closes = cs.map(function (c) { return parseFloat(c.close != null ? c.close : c.value); })
-          .filter(function (v) { return isFinite(v) && v > 0; });
-        if (closes.length < 30) return;
-        var sum = 0, sum2 = 0, n = 0;
-        for (var i = 1; i < closes.length; i++) {
-          var r2 = Math.log(closes[i] / closes[i - 1]);
-          sum += r2; sum2 += r2 * r2; n++;
-        }
-        var sd = Math.sqrt(Math.max(0, sum2 / n - (sum / n) * (sum / n)));
-        var hv = sd * Math.sqrt(252);
-        if (isFinite(hv) && hv > 0.03 && hv < 3) { hvBase.v = hv; if (box._sync) box._sync(); onchange(); }
-      }).catch(function () { /* sentinel path stays */ });
-    }
+    if (symbol) historicalVol(symbol).then(function (hv) {
+      if (hv) { hvBase.v = hv; if (box._sync) box._sync(); onchange(); }
+    });
 
     if (level === 'beginner') {
       // 1) The story — what do you think happens?
@@ -518,8 +526,110 @@
     return out;
   }
 
+  function candidateLegs(candidate) {
+    var base = App.Market && App.Market.simTime ? new Date(App.Market.simTime) : new Date();
+    return (candidate.legs || []).map(function (lg) {
+      if (lg.stock || lg.type === 'STOCK') {
+        return { action: lg.action, type: 'STOCK', strike: 0, expiryDay: 0, ratio: lg.ratio || 1 };
+      }
+      var calDays = lg.expiration ? Math.max(1, Math.ceil((new Date(lg.expiration + 'T16:00:00-04:00') - base) / 86400000)) : 30;
+      return { action: lg.action, type: lg.type, strike: parseFloat(lg.strike),
+        expiryDay: Math.max(1, Math.round(calDays * 5 / 7)), ratio: lg.ratio || 1 };
+    });
+  }
+
+  /**
+   * Theoretical payoff limits stay visible, but these four distributions answer the trader's
+   * practical question: what does this exact package tend to do in plausible market shapes?
+   * It calls the existing strategy simulator; there is no parallel risk or pricing engine.
+   */
+  function realisticOutcomes(symbol, candidate) {
+    symbol = String(symbol || '').toUpperCase();
+    var beginner = Learn.currentLevel() === 'beginner';
+    return UI.expandable(beginner ? 'What this trade could do in realistic markets'
+      : 'Scenario distributions — calm / up / down / choppy', function () {
+      var holder = el('div', { class: 'realistic-outcomes', 'data-realistic-outcomes': candidate.strategy },
+        UI.spinner('Running the exact contracts through shared scenarios…'));
+      if (!symbol || !(candidate.legs || []).length) {
+        holder.innerHTML = '';
+        holder.appendChild(UI.alertBox('warn', 'A symbol and exact contracts are needed for scenario outcomes.'));
+        return holder;
+      }
+      var sourceLegs = candidate.legs || [];
+      var legs = candidateLegs(candidate);
+      var exactExpirations = sourceLegs.map(function (leg) {
+        return leg.stock || String(leg.type || '').toUpperCase() === 'STOCK' ? '' : String(leg.expiration || '');
+      });
+      var hasExactContracts = exactExpirations.every(function (exp, idx) {
+        var leg = sourceLegs[idx] || {};
+        return leg.stock || String(leg.type || '').toUpperCase() === 'STOCK' || !!exp;
+      });
+      var optionDays = legs.filter(function (l) { return l.type !== 'STOCK'; }).map(function (l) { return l.expiryDay; });
+      var days = optionDays.length ? Math.max(1, Math.min.apply(Math, optionDays)) : 21;
+      var cases = [
+        { key: 'calm', label: 'Calm / narrow', shape: 'CHOP', drift: 0, mult: 0.6, seed: 41101 },
+        { key: 'up', label: 'Steady rise', shape: 'GRIND_UP', drift: 0.15, mult: 1.0, seed: 41102 },
+        { key: 'down', label: 'Steady decline', shape: 'GRIND_DOWN', drift: -0.15, mult: 1.0, seed: 41103 },
+        { key: 'chop', label: 'Wide / choppy', shape: 'CHOP', drift: 0, mult: 1.35, seed: 41104 }
+      ];
+      historicalVol(symbol).then(async function (hv) {
+        var rows = [];
+        for (var i = 0; i < cases.length; i++) {
+          // Expandables are lazy, but their async work can outlive the card after navigation
+          // or a level switch. Do not keep feeding the shared simulation budget for a result
+          // nobody can see; an in-flight request may finish, then the remaining cases stop.
+          if (!holder.isConnected) return;
+          var c = cases[i];
+          var vol = hv ? hv * c.mult : 0; // 0 asks the server to use the chain's ATM IV
+          var spec = { model: 'GBM', shape: c.shape, horizonDays: days, stepsPerDay: 4,
+            driftAnnual: c.drift, volAnnual: vol, jumpsPerYear: 0, jumpMean: 0, jumpVol: 0,
+            tailNu: 6, heston: null, seed: c.seed, paths: 180 };
+          try {
+            var request = {
+              symbol: symbol, legs: legs, qty: candidate.qty || 1, spec: spec, iv: null,
+              entryCostCents: typeof candidate.entryNetPremiumCents === 'number'
+                ? -candidate.entryNetPremiumCents : null
+            };
+            if (hasExactContracts) request.contractExpirations = exactExpirations;
+            var result = await API.post('/api/sim/strategy', request);
+            if (!holder.isConnected) return;
+            rows.push({ def: c, result: result });
+          } catch (e) {
+            if (!holder.isConnected) return;
+            rows.push({ def: c, error: e.message || 'Unavailable' });
+          }
+        }
+        if (!holder.isConnected) return;
+        holder.innerHTML = '';
+        holder.appendChild(el('p', { class: 'muted small' },
+          'The theoretical payoff limits above remain the structural truth. These distributions model the exact listed package and its displayed opening price. '
+          + (hv ? 'Volatility is scaled from ' + symbol + '\'s own recent moves.'
+                : 'No usable candle history was available, so the server calibrated from the option market.')
+          + ' They complement those limits; they never replace them.'));
+        var grid = el('div', { class: 'realistic-grid' });
+        rows.forEach(function (row) {
+          if (row.error) {
+            grid.appendChild(el('div', { class: 'realistic-case' }, el('b', {}, row.def.label),
+              el('div', { class: 'muted small' }, row.error)));
+            return;
+          }
+          var r = row.result;
+          grid.appendChild(el('div', { class: 'realistic-case' },
+            el('b', {}, row.def.label),
+            el('div', { class: 'realistic-typical' }, UI.pnlSpan(r.p50Cents)),
+            el('div', { class: 'muted small' }, Math.round(r.winRatePct) + '% profitable'),
+            el('div', { class: 'muted small' }, '1-in-20 range ' + UI.fmtMoneyCompact(r.p5Cents)
+              + ' to ' + UI.fmtMoneyCompact(r.p95Cents))));
+        });
+        holder.appendChild(grid);
+      });
+      return holder;
+    });
+  }
+
   window.Scenario = {
     SHAPES: SHAPES, QUICKS: QUICKS, CATALOG: CATALOG,
-    form: form, fanChart: fanChart, pnlView: pnlView, workingLegs: workingLegs, sketch: sketch
+    form: form, fanChart: fanChart, pnlView: pnlView, workingLegs: workingLegs,
+    realisticOutcomes: realisticOutcomes, sketch: sketch
   };
 })();

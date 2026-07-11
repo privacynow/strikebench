@@ -132,14 +132,30 @@ class DataCenterTest {
     }
 
     @Test
+    void resetPaperAlsoClearsSimulationPracticeSessions() {
+        Ctx c = wire();
+        c.accounts().getOrCreateDefault();
+        db.exec("INSERT INTO sim_session(id,name,config,status) VALUES (?,?,?::jsonb,?)",
+                "world-paper-reset", "Practice world", "{}", "FINISHED");
+
+        var res = c.reset().reset(DataResetService.Tier.PAPER);
+        assertThat(res.areasCleared()).contains("Simulation practice sessions");
+        assertThat(db.query("SELECT count(*) c FROM sim_session", r -> r.lng("c")).getFirst()).isZero();
+        assertThat(db.query("SELECT count(*) c FROM accounts", r -> r.lng("c")).getFirst()).isEqualTo(1L);
+    }
+
+    @Test
     void resetEverythingWipesAndReseedsAFundedAccount() {
         Ctx c = wire();
         c.accounts().getOrCreateDefault();
         c.backfill().backfill("AAPL", java.time.LocalDate.parse("2026-04-01"), java.time.LocalDate.parse("2026-06-30"));
+        db.exec("INSERT INTO sim_session(id,name,config,status) VALUES (?,?,?::jsonb,?)",
+                "world-reset-test", "Reset test", "{}", "FINISHED");
 
         var res = c.reset().reset(DataResetService.Tier.EVERYTHING);
         assertThat(res.reseededAccount()).isTrue();
         assertThat(underlyingRows("AAPL")).isZero();
+        assertThat(db.query("SELECT count(*) c FROM sim_session", r -> r.lng("c")).getFirst()).isZero();
         // exactly one fresh funded account exists after a full reset
         assertThat(db.query("SELECT count(*) c FROM accounts", r -> r.lng("c")).getFirst()).isEqualTo(1L);
     }

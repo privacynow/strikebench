@@ -64,6 +64,18 @@ public final class MarketHours {
         return n;
     }
 
+    /** Date reached after exactly {@code sessions} trading sessions, using the same holiday table. */
+    public static LocalDate tradingDateAfter(LocalDate from, int sessions) {
+        if (from == null || sessions <= 0) return from;
+        LocalDate d = from;
+        int remaining = sessions;
+        while (remaining > 0) {
+            d = d.plusDays(1);
+            if (isTradingDay(d)) remaining--;
+        }
+        return d;
+    }
+
     // ---- NYSE full-day holidays by rule ----
 
     private static Set<LocalDate> buildHolidays(int fromYear, int toYear) {

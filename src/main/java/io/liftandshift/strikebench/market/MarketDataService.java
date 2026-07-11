@@ -291,7 +291,11 @@ public final class MarketDataService {
             if (candleStore != null) {
                 try {
                     Optional<CandleSeries> stored = candleStore.candles(norm(symbol), from, to, dataset);
-                    if (stored.isPresent() && !stored.get().candles().isEmpty()) return stored.get();
+                    if (stored.isPresent() && !stored.get().candles().isEmpty()
+                            && (fixtureOnlyChain || !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
+                                || observedEvidence(stored.get().evidence()))) {
+                        return stored.get();
+                    }
                 } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol, e.toString()); }
             }
             CandleSeries fromProviders = candleSeriesFromProviders(symbol, from, to);
@@ -310,9 +314,15 @@ public final class MarketDataService {
             try {
                 List<Candle> candles = p.candles(norm(symbol), from, to);
                 if (candles != null && !candles.isEmpty()) {
-                    recordOk(p.name(), Domain.CANDLES);
                     Freshness f = "fixture".equals(p.name()) ? Freshness.FIXTURE : Freshness.EOD;
-                    return new CandleSeries(candles, p.name(), f);
+                    CandleSeries series = new CandleSeries(candles, p.name(), f);
+                    if (fixtureOnlyChain || observedEvidence(series.evidence())) {
+                        recordOk(p.name(), Domain.CANDLES);
+                        return series;
+                    }
+                    recordEmpty(p.name(), Domain.CANDLES);
+                    log.warn("Ignoring non-observed candle evidence from provider {} in the observed market", p.name());
+                    continue;
                 }
                 recordEmpty(p.name(), Domain.CANDLES);
             } catch (Exception e) {

@@ -2022,6 +2022,41 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   - FINAL GATES: **408 clean JUnit + 57 fixture DOM + 5 responsive audit widths + 4 grown-state +
     8 live-provider DOM, all green**. Fresh real-browser review covered cold + settled Home, Research,
     Data Overview, and Welcome; responsive audit remains clip-free down to 320px.
+- FINAL INTEGRITY + TRADER-WORKFLOW PASS (2026-07-11; branch, NOT deployed): the observed-lane
+  provenance failure and the user's full interaction/composition review were treated as one release
+  program rather than separate visual patches:
+  - STRICT MARKET TRUTH: fabricated candles, quotes, chains, news and rates are eligible only inside
+    the explicit Demo lane; generated values remain inside Simulated or Scenario lanes. Observed reads
+    reject non-observed provider/store evidence instead of falling through, observed IV history is
+    scoped to `dataset_id='observed'`, imported demo rows cannot enter the observed dataset, and live
+    browser gates forbid Demo substitution in Research and Backtest. Page evidence is input-derived and
+    visible; mixed inputs cannot be promoted by a fresher-looking component.
+  - RESET + WORLD INTEGRITY: market/data resets invalidate candle, sparkline, quote, chain, expiration,
+    news, rates and IV-history caches. Paper/full reset also removes simulation sessions and selections,
+    evicts resident worlds, publishes an authoritative baseline world revision, and creates a clean
+    practice account. World transition revisions are process-epoch scoped, so delayed SSE or old-process
+    events cannot resurrect a stale lane. Multi-expiration settlement refuses to reuse one current spot
+    for legs whose exact expiration-day closes are missing.
+  - RESEARCH + TRADE FLOW: Research cards are direct destination links with non-navigating chart
+    exploration; symbol analysis is one tabbed workspace (Overview, Test view, Options, News) with all
+    prior capability retained. Ideas starts with stock/market context, keeps sector selection available,
+    and carries the chosen symbol through Builder, Verify and Place. Lab routes stay dead. Editable and
+    locked symbol contexts use the same interaction contract instead of local one-off behavior.
+  - PAYOFF TRUTH + REALISTIC OUTCOMES: structural payoff limits are always labeled theoretical. One
+    reusable Scenario engine component adds calm, rising, declining and wide/choppy distributions for
+    the exact listed contracts, expirations and displayed package price; it complements rather than
+    replaces max-profit/max-loss truth. Simulation requests preserve signed package price and refuse
+    missing contracts instead of silently snapping to a different trade. Option horizon follows the
+    active market clock and actual trading sessions.
+  - COMPOSITION + ACCESSIBILITY: the ticker input remains a full-width context surface while only its
+    edit control is purpose-sized; sector selection is available globally and in Ideas. Data Overview is
+    a compact 2x2 desktop console whose real buttons open one detail drawer below (no nested pseudo-button
+    cards and no forced equal-height obsession). Home/Welcome, Research, Ideas and Data were rechecked at
+    desktop and mobile widths; controls remain readable down to 320px with no horizontal clipping.
+  - FINAL GATES: **417 JUnit + 61 fixture DOM + 5 responsive audit widths + 4 grown-state DOM, all green**
+    on the final jar. The 8-test live-provider suite also passed after the strict observed-lane changes;
+    it was not rerun after the final reset-only and Data-control-only hardening to avoid unnecessary live
+    provider traffic. Fresh reviewed screenshots are the curated `dom-tests/shots/final-*.png` set.
 - EXTERNAL OPERATIONAL DEPENDENCIES (not buildable without owner credentials/access): enabling Google
   sign-in needs the OIDC client secret; production cutover needs the deployment host and production data
   session. Optional licensed/provider and brokerage credentials enrich observed history and broker

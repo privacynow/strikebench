@@ -12,12 +12,18 @@ class DataEvidenceTest {
     @Test
     void provenanceAndAgeAreIndependentAndLaneOwned() {
         DataEvidence delayed = DataEvidence.of("cboe", Freshness.DELAYED);
+        DataEvidence eod = DataEvidence.of("stored-observed", Freshness.EOD);
+        DataEvidence stale = DataEvidence.of("cboe", Freshness.STALE);
         DataEvidence demo = DataEvidence.of("fixture", Freshness.FIXTURE);
         DataEvidence simulated = DataEvidence.of("simulated", Freshness.SIMULATED);
 
         assertThat(delayed.provenance()).isEqualTo(DataProvenance.OBSERVED);
         assertThat(delayed.age()).isEqualTo(DataAge.DELAYED);
         assertThat(delayed.executableIn(MarketLane.OBSERVED)).isTrue();
+        assertThat(eod.usableIn(MarketLane.OBSERVED)).isTrue();
+        assertThat(eod.executableIn(MarketLane.OBSERVED)).isFalse();
+        assertThat(stale.usableIn(MarketLane.OBSERVED)).isTrue();
+        assertThat(stale.executableIn(MarketLane.OBSERVED)).isFalse();
         assertThat(demo.executableIn(MarketLane.OBSERVED)).isFalse();
         assertThat(demo.executableIn(MarketLane.DEMO)).isTrue();
         assertThat(simulated.executableIn(MarketLane.SIMULATED)).isTrue();

@@ -463,14 +463,15 @@
       if (v.maxLoss) {
         var cap = Math.round(parseFloat(v.maxLoss) * 100);
         var unbounded = !p.ok && (p.blockReasons || []).some(function (r) { return /undefined|unlimited/i.test(r); });
-        judge('Max loss ≤ ' + fmtMoney(cap), !unbounded && p.maxLossCents > 0 && p.maxLossCents <= cap,
+        judge('Theoretical max loss ≤ ' + fmtMoney(cap), !unbounded && p.maxLossCents > 0 && p.maxLossCents <= cap,
           unbounded ? 'UNLIMITED' : fmtMoney(p.maxLossCents));
       }
       if (expertLimits && v.target) {
         var tgt = Math.round(parseFloat(v.target) * 100);
-        var uncapped = p.maxProfitCents === null || p.maxProfitCents === undefined;
-        judge('Profit target ≥ ' + fmtMoney(tgt), uncapped || p.maxProfitCents >= tgt,
-          uncapped ? 'Uncapped' : fmtMoney(p.maxProfitCents));
+        var profitKind = UI.profitCeilingKind(familyLabel(), null, p.maxProfitCents, p.legs);
+        judge('Profit target ≥ ' + fmtMoney(tgt),
+          profitKind === 'uncapped' || (profitKind === 'finite' && p.maxProfitCents >= tgt),
+          UI.maxProfitLabel(familyLabel(), null, p.maxProfitCents, false, p.legs));
       }
       if (v.minPop) {
         var pop = p.popEntry;
@@ -782,12 +783,12 @@
               }
               impact.appendChild(el('div', { class: 'chip-row' },
                 chip(p.entryNetPremiumCents >= 0 ? 'Collected so far' : 'Paid so far', fmtMoney(Math.abs(p.entryNetPremiumCents))),
-                impactChip('Worst case', b, p, function (x) {
+                impactChip('Theoretical worst case', b, p, function (x) {
                   if (!x.ok && (x.blockReasons || []).some(function (r) { return /undefined|unlimited/i.test(r); })) return 'UNLIMITED';
                   return fmtMoney(x.maxLossCents);
                 }, true),
-                impactChip('Best case', b, p, function (x) {
-                  return x.maxProfitCents === null || x.maxProfitCents === undefined ? 'Uncapped' : fmtMoney(x.maxProfitCents);
+                impactChip('Theoretical best case', b, p, function (x) {
+                  return UI.maxProfitLabel(familyLabel(), null, x.maxProfitCents, level === 'beginner', x.legs);
                 }, false),
                 p.popEntry !== null && p.popEntry !== undefined
                   ? impactChip('Odds of profit', b, p, function (x) {
@@ -1261,13 +1262,14 @@
       hostEl.appendChild(el('div', { class: 'grid grid-2 panel-stats' },
         stat(credit >= 0 ? 'You collect' : 'You pay', fmtMoney(Math.abs(credit)),
           beginnerWording ? (credit >= 0 ? 'Premium received now — yours to keep only if the position works out.' : 'Cash leaving your account now, before fees.') : null),
-        stat('Most you can lose',
+        stat(beginnerWording ? 'Theoretical worst case' : 'Theoretical max loss',
           unlimited ? el('span', { class: 'loss' }, 'UNLIMITED')
             : p.ok || p.maxLossCents > 0 ? el('span', { class: 'loss' }, fmtMoney(p.maxLossCents))
             : el('span', { class: 'muted' }, '—'),
           beginnerWording ? 'The worst case at expiration, including every leg.' : null),
-        stat('Most you can make', p.maxProfitCents === null || p.maxProfitCents === undefined
-          ? el('span', { class: 'gain' }, 'Uncapped') : el('span', { class: 'gain' }, fmtMoney(p.maxProfitCents)),
+        stat(beginnerWording ? 'Theoretical ceiling' : 'Theoretical max profit', el('span', {
+          class: UI.profitCeilingKind(familyLabel(), null, p.maxProfitCents, p.legs) === 'model-dependent' ? 'muted' : 'gain'
+        }, UI.maxProfitLabel(familyLabel(), null, p.maxProfitCents, beginnerWording, p.legs)),
           beginnerWording ? 'The best case at expiration.' : null),
         stat(UI.term('pop', beginnerWording ? 'Chance of any profit' : 'POP'),
           p.popEntry !== null && p.popEntry !== undefined ? fmtPct(p.popEntry) : '—',
@@ -1292,7 +1294,7 @@
         hostEl.appendChild(el('div', { class: 'chip-row', id: 'builder-prob-chips' },
           chip(beginnerWording ? 'Any profit' : 'P(profit)', Math.round(prob.pAnyProfit * 100) + '%'),
           chip(beginnerWording ? 'Full win' : 'P(max profit)', Math.round(prob.pMaxProfit * 100) + '%'),
-          chip(beginnerWording ? 'Worst case' : 'P(max loss)', Math.round(prob.pMaxLoss * 100) + '%'),
+          chip(beginnerWording ? 'Chance of theoretical worst case' : 'P(theoretical max loss)', Math.round(prob.pMaxLoss * 100) + '%'),
           prob.cvar95Cents !== undefined && prob.cvar95Cents !== null
             ? chip('CVaR95', UI.fmtMoneyCompact(prob.cvar95Cents)) : null));
       }
@@ -1308,32 +1310,15 @@
           handles: handles || null
         }));
       } else if (p.legs && p.legs.length) {
-        hostEl.appendChild(explain('Mixed expirations: a single at-expiry payoff line does not exist — the position\u2019s value depends on volatility after the near leg dies. Below: a SIMULATED P&L range instead (Monte-Carlo, honestly labeled MODELED).'));
-        // The sim engine prices calendars/diagonals along paths — point it at the gap the
-        // static payoff curve honestly refuses to fill.
-        (function simFan() {
-          var slot = el('div', { class: 'fan-slot' }, UI.spinner('Simulating the mixed-expiration range\u2026'));
-          hostEl.appendChild(slot);
-          var today = Date.now();
-          var simLegs = [];
-          for (var i = 0; i < p.legs.length; i++) {
-            var lg = p.legs[i];
-            if (!lg.expiration || !lg.strike) { slot.remove(); return; }
-            var days = Math.max(1, Math.round((new Date(lg.expiration) - today) / 86400000 * 5 / 7));
-            simLegs.push({ action: lg.action, type: lg.type, strike: parseFloat(lg.strike), expiryDay: days, ratio: lg.ratio || 1 });
-          }
-          var nearDays = Math.min.apply(null, simLegs.map(function (l) { return l.expiryDay; }));
-          API.post('/api/sim/strategy', { symbol: st.symbol, legs: simLegs, qty: st.qty || 1,
-            spec: { model: 'GBM', shape: 'CHOP', horizonDays: Math.max(2, nearDays), stepsPerDay: 4,
-              driftAnnual: 0, volAnnual: 0, jumpsPerYear: 0, jumpMean: 0, jumpVol: 0, tailNu: 6,
-              heston: null, seed: 4242, paths: 200 } })
-            .then(function (r) {
-              slot.innerHTML = '';
-              slot.appendChild(window.Scenario ? Scenario.pnlView(r, beginnerWording ? 'beginner' : 'expert')
-                : el('div', { class: 'muted small' }, 'Simulated range unavailable.'));
-            })
-            .catch(function () { slot.remove(); });
-        })();
+        hostEl.appendChild(explain('Mixed expirations have no single at-expiry payoff line: the position\u2019s value depends on volatility after the near leg expires. Use the shared scenario distributions below to inspect that model-dependent range.'));
+      }
+      // One lazy scenario component for every structure. It sits BESIDE the structural payoff
+      // truth and uses this preview's exact package price; no parallel pricing implementation.
+      if (p.ok && window.Scenario && p.legs && p.legs.length) {
+        hostEl.appendChild(Scenario.realisticOutcomes(st.symbol, {
+          strategy: familyLabel(), legs: p.legs, qty: st.qty || 1,
+          entryNetPremiumCents: p.entryNetPremiumCents
+        }));
       }
       if (p.ok && p.warnings && p.warnings.length) {
         hostEl.appendChild(alertBox('warn', 'Heads up', p.warnings));

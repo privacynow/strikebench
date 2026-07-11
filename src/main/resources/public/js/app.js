@@ -275,7 +275,26 @@
       worldBandResizeQueued = false;
       var band = document.getElementById('world-band');
       var topbar = document.querySelector('.topbar');
-      if (band && topbar) band.style.top = topbar.getBoundingClientRect().height + 'px';
+      var tape = document.getElementById('tape');
+      if (band && topbar) {
+        var topH = topbar.getBoundingClientRect().height;
+        band.style.top = topH + 'px';
+        // On desktop the ticker joins the sticky stack beneath the permanent market-mode
+        // band. A sticky band above a static tape overlays it by exactly the scroll amount.
+        if (tape && window.innerWidth > 640) {
+          tape.style.position = 'sticky';
+          tape.style.top = (topH + band.getBoundingClientRect().height) + 'px';
+          tape.style.zIndex = '38';
+        } else if (tape) {
+          tape.style.removeProperty('position');
+          tape.style.removeProperty('top');
+          tape.style.removeProperty('z-index');
+        }
+      } else if (tape) {
+        tape.style.removeProperty('position');
+        tape.style.removeProperty('top');
+        tape.style.removeProperty('z-index');
+      }
     });
   }
   window.addEventListener('resize', syncWorldBandTop, { passive: true });
@@ -293,6 +312,7 @@
     document.body.classList.toggle('in-demo-world', isDemo);
     if (!world || world === 'observed') {
       Array.prototype.slice.call(document.querySelectorAll('#world-band')).forEach(function (b) { b.remove(); });
+      syncWorldBandTop();
       return;
     }
     var sess = null;
@@ -431,6 +451,7 @@
   // thinking is stashed, the incoming lane's restored — a simulated symbol, thesis, or study
   // must never leak into observed screens (or vice versa).
   var LANE_KEYS = ['lastRecommendSymbol', 'marketThesis', 'researchStudy', 'evidencePrefill',
+    'researchTabBySymbol',
     'ideasPrefill', 'backtestPrefill', 'discoverForm', 'builderForm', 'backtestForm',
     'verifyForm', 'scenarioForm', 'ideasForm', 'scoutResults', 'tradeReplicator',
     'portfolioOptimizer',
@@ -448,11 +469,26 @@
     LANE_KEYS.forEach(function (k) { if (box[k] !== undefined) App.state[k] = box[k]; });
   }
 
-  App.transitionWorld = function (worldId, bootstrap, revision) {
+  App.transitionWorld = function (worldId, bootstrap, revision, epoch) {
     var target = worldId || 'observed';
     var rev = Number(revision || 0);
-    if (rev && rev <= Number(App.state.worldRevision || 0) && App.state.world === target) {
-      return Promise.resolve(); // duplicate PUT/SSE delivery, already reconciled
+    var knownEpoch = App.state.worldRevisionEpoch || null;
+    var incomingEpoch = epoch || knownEpoch;
+    // Revisions are monotonic only inside ONE server process. A browser can survive a server
+    // restart, so a new boot epoch resets the comparison; otherwise revision 1 after restart
+    // could be rejected behind yesterday's revision 20 while the server had already switched.
+    if (epoch && knownEpoch && epoch !== knownEpoch) {
+      var retired = App.state.worldRevisionRetiredEpochs || [];
+      if (retired.indexOf(epoch) >= 0) return Promise.resolve(); // delayed event from an old process
+      var incomingStarted = Date.parse(epoch), knownStarted = Date.parse(knownEpoch);
+      if (isFinite(incomingStarted) && isFinite(knownStarted) && incomingStarted < knownStarted) {
+        return Promise.resolve(); // an older process cannot become current merely because it was unseen
+      }
+      retired.push(knownEpoch);
+      App.state.worldRevisionRetiredEpochs = retired.slice(-4);
+      App.state.worldRevision = 0;
+    } else if (rev && rev <= Number(App.state.worldRevision || 0)) {
+      return Promise.resolve(); // duplicate or stale delivery within this boot epoch
     }
     // Collapse CONCURRENT transitions to the same target into one reconciliation: the SSE
     // hint and the awaited PUT often land within milliseconds. Skipping was the bug;
@@ -463,7 +499,7 @@
       // earlier SSE hint started a GET-based hydration that fails, consume this payload on a
       // fresh transition instead of throwing the good response away with the failed hint.
       return bootstrap
-        ? currentTransition.catch(function () { return App.transitionWorld(target, bootstrap, revision); })
+        ? currentTransition.catch(function () { return App.transitionWorld(target, bootstrap, revision, epoch); })
         : currentTransition;
     }
     App._transitionTarget = target;
@@ -492,6 +528,7 @@
         var changed = from !== target;
         App.state.world = target;
         if (rev) App.state.worldRevision = Math.max(Number(App.state.worldRevision || 0), rev);
+        if (incomingEpoch) App.state.worldRevisionEpoch = incomingEpoch;
         App.state.worldGen++;         // discard SSE/stale fills from the world we just left
         if (changed) { stashLane(from); restoreLane(target); }
         // A working idea priced in the OTHER market cannot survive the switch: its quotes,
@@ -508,6 +545,7 @@
           dl.innerHTML = '';
           (u.active.symbols || []).forEach(function (sym) { dl.appendChild(UI.el('option', { value: sym })); });
         }
+        syncTapeSector(u);
         refreshWorldBand();
         refreshScenarioBanner();      // dataset exclusivity is server-enforced; the banner must agree
         var oldBar = document.getElementById('transition-error');
@@ -569,7 +607,7 @@
       }
       // Transition failures reject AND paint the #transition-error banner — no alert on top.
       // The PUT's response carries the target bootstrap: server and client commit together.
-      await App.transitionWorld(worldId, res && res.universe, res && res.revision)
+      await App.transitionWorld(worldId, res && res.universe, res && res.revision, res && res.epoch)
         .catch(function () { /* visible in the banner */ });
     } catch (e) { alert(e.message); }
   };
@@ -731,7 +769,7 @@
       // the server's lane. A same-lane reload still has a fresh DOM and empty MarketStore;
       // skipping reconciliation used to drop the DEMO/SIMULATED band, universe bootstrap,
       // and stream subscription while leaving fabricated quotes on screen.
-      return App.transitionWorld(boot, null, w && w.revision)
+      return App.transitionWorld(boot, null, w && w.revision, w && w.epoch)
         .catch(function () { /* transition paints the visible failure state */ });
     }).catch(function () {
       // /api/config carries the server's baseline lane and is already loaded. Preserve the
@@ -747,7 +785,7 @@
     // Multi-tab truth: another tab (same user) switched worlds — adopt it here too, band and all.
     App.onEvent('world.selected', function (type, data) {
       if (!data || data.world === undefined) return;
-      App.transitionWorld(data.world, data.universe, data.revision)
+      App.transitionWorld(data.world, data.universe, data.revision, data.epoch)
         .catch(function () { /* banner shown */ }); // idempotent: same-target calls collapse
     });
     // Belt-and-braces for tabs whose SSE dropped: re-check the server's world on return.
@@ -755,7 +793,7 @@
       if (document.visibilityState !== 'visible') return;
       API.getFresh('/api/world').then(function (w) {
         var srv = (w && w.world) || 'observed';
-        if (srv !== App.state.world) App.transitionWorld(srv, null, w && w.revision)
+        if (srv !== App.state.world) App.transitionWorld(srv, null, w && w.revision, w && w.epoch)
           .catch(function () { /* banner shown */ });
       }).catch(function () { /* offline — next visit retries */ });
     });
@@ -772,6 +810,45 @@
 
   App.refreshUniverse = refreshUniverse;
   App.refreshTape = refreshTape; // exposed so tests can pin the no-rebuild behavior
+
+  /**
+   * Compact global counterpart to the full sector rails used inside Home, Research, and Ideas.
+   * It changes the same persisted universe; it is not a second local selector. Demo/simulated
+   * lanes still name their one market scope, but cannot pretend other observed sectors exist.
+   */
+  function syncTapeSector(u) {
+    var sel = document.getElementById('tape-sector');
+    if (!sel || !u) return;
+    var sectors = u.sectors || [];
+    sel.innerHTML = '';
+    sectors.forEach(function (sec) {
+      var compactLabel = sec.label;
+      if (u.lane === 'DEMO') compactLabel = 'Demo market';
+      else if (u.lane === 'SIMULATED') compactLabel = String(sec.label || 'Simulated market')
+        .replace(/\s*\(simulated\)\s*$/i, '');
+      sel.appendChild(UI.el('option', { value: sec.key }, compactLabel));
+    });
+    sel.hidden = !sectors.length;
+    sel.disabled = sectors.length < 2 || (App.state.world && App.state.world !== 'observed');
+    if (u.active && u.active.sectorKey) sel.value = u.active.sectorKey;
+    sel.onchange = async function () {
+      var old = u.active && u.active.sectorKey;
+      sel.disabled = true;
+      try {
+        await API.put('/api/universe', { sector: sel.value });
+        await refreshUniverse({ strict: true });
+        await App.render();
+      } catch (e) {
+        if (old) sel.value = old;
+        if (UI.toast) UI.toast('Could not change the market sector: ' + (e.message || 'try again'));
+      } finally {
+        var latest = App.state.universe;
+        sel.disabled = !latest || (latest.sectors || []).length < 2
+          || (App.state.world && App.state.world !== 'observed');
+      }
+    };
+  }
+
   async function refreshUniverse(opts) {
     try {
       var u = await API.getFresh('/api/universe'); // transitions must see THIS lane, never a cached one
@@ -783,6 +860,7 @@
           dl.appendChild(UI.el('option', { value: s }));
         });
       }
+      syncTapeSector(u);
       await refreshTape();
       subscribeMarketStream(); // re-subscribe: the stream's default symbol set follows the new universe
     } catch (e) {

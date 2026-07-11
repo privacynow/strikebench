@@ -50,6 +50,18 @@ class MarketDataServiceTest {
         @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) { throw new RuntimeException("boom"); }
     }
 
+    /** A provider accidentally mounted in the observed chain but explicitly returning modeled evidence. */
+    static final class SyntheticCandleProvider implements MarketDataProvider {
+        private final ObservedFixtureProvider inner = new ObservedFixtureProvider(CLOCK);
+        @Override public String name() { return "synthetic"; }
+        @Override public Set<Domain> domains() { return Set.of(Domain.CANDLES); }
+        @Override public List<SymbolMatch> lookup(String q) { return List.of(); }
+        @Override public Optional<Quote> quote(String s) { return Optional.empty(); }
+        @Override public List<LocalDate> expirations(String s) { return List.of(); }
+        @Override public Optional<OptionChain> chain(String s, LocalDate e) { return Optional.empty(); }
+        @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) { return inner.candles(s, f, t); }
+    }
+
     @Test
     void quotesAreCachedWithinTtl() {
         CountingProvider p = new CountingProvider();
@@ -95,6 +107,25 @@ class MarketDataServiceTest {
         assertThat(svc.expirations("AAPL", "demo")).isNotEmpty();
         assertThat(svc.riskFreeRateQuote(30, "demo").evidence().provenance())
                 .isEqualTo(io.liftandshift.strikebench.model.DataProvenance.DEMO);
+    }
+
+    @Test
+    void observedCandleReadRejectsModeledEvidenceEvenWhenProviderIsMounted() {
+        MarketDataService svc = new MarketDataService(List.of(new SyntheticCandleProvider()), List.of(), List.of());
+        LocalDate to = LocalDate.now(CLOCK);
+        assertThat(svc.candleSeries("AAPL", to.minusMonths(3), to).isEmpty()).isTrue();
+    }
+
+    @Test
+    void observedCandleReadRejectsDemoRowsReturnedByTheStore() {
+        LocalDate to = LocalDate.now(CLOCK), from = to.minusDays(5);
+        var candle = new Candle(to.minusDays(1), new java.math.BigDecimal("100"),
+                new java.math.BigDecimal("101"), new java.math.BigDecimal("99"),
+                new java.math.BigDecimal("100.50"), 1_000, true);
+        io.liftandshift.strikebench.market.ports.CandleStore badStore =
+                (symbol, f, t, dataset) -> Optional.of(new CandleSeries(List.of(candle), "fixture", io.liftandshift.strikebench.model.Freshness.FIXTURE));
+        MarketDataService svc = new MarketDataService(List.of(), List.of(), List.of(), badStore);
+        assertThat(svc.candleSeries("AAPL", from, to).isEmpty()).isTrue();
     }
 
     @Test

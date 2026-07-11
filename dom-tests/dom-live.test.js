@@ -94,6 +94,7 @@ test('live: research a real symbol end to end', async () => {
   const quoteBadge = await page.textContent('.quote-hero .badge');
   assert.match(quoteBadge, /REALTIME|DELAYED|EOD|STALE/i, 'observed quote age is labeled');
   assert.doesNotMatch(quoteBadge, /DEMO|SIMULATED/i, 'Observed quote never comes from another lane');
+  await page.click('#research-workspace-tabs [data-research-tab="options"]');
   await page.waitForSelector('#expiration-select', { timeout: 30000 });
   await page.waitForSelector('.tbl tbody tr');
   const hist = await page.textContent('#history-card');
@@ -126,7 +127,8 @@ test('live: manual ideas return candidates for a real chain', async () => {
   await page.click('#rec-go');
   await page.waitForSelector('.candidate, .empty, .alert-warn', { timeout: 60000 });
   const text = await page.textContent('#rec-results');
-  assert.ok(/Most you can lose|Max loss/.test(text) || /Nothing passed/.test(text), 'candidates or a graceful empty state');
+  assert.ok(/Theoretical worst case|Theor\. max loss/.test(text) || /Nothing passed/.test(text),
+    'candidates preserve theoretical risk truth or render a graceful empty state');
   assertClean('ideas-manual');
 });
 

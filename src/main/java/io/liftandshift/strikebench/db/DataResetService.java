@@ -26,15 +26,17 @@ public final class DataResetService {
                         "Market history and snapshots", "Generated datasets", "Background data jobs", "Active data selection"), false),
         RESEARCH(List.of("recommendation", "strategy_evaluation", "backtests", "research_note"), List.of(
                 "Saved recommendations", "Evaluations", "Backtests", "Research notes"), false),
-        PAPER(List.of("trade_marks", "ledger", "positions", "live_orders", "audit", "trades", "accounts"), List.of(
-                "Paper trades and marks", "Share positions", "Paper orders", "Practice ledger and account"), true),
+        PAPER(List.of("trade_marks", "ledger", "positions", "live_orders", "audit", "trades", "accounts", "sim_session",
+                "settings WHERE k LIKE 'active_world:%'"), List.of(
+                "Paper trades and marks", "Share positions", "Paper orders", "Practice ledger and account",
+                "Simulation practice sessions"), true),
         EVERYTHING(List.of("option_bar", "underlying_bar", "market_snapshot", "dataset WHERE id NOT IN ('observed','demo-fixture')",
                 "data_job_item", "data_job",
                 "recommendation", "strategy_evaluation", "backtests", "research_note", "workspace",
                 "trade_marks", "ledger", "positions", "live_orders", "audit", "trades",
-                "secrets", "settings", "accounts"), List.of(
+                "secrets", "settings", "accounts", "sim_session"), List.of(
                         "Market data and datasets", "Research and backtests", "Paper portfolio and account",
-                        "Workspace and local settings"), true);
+                        "Simulation practice sessions", "Workspace and local settings"), true);
 
         final List<String> tables;
         final List<String> areas;

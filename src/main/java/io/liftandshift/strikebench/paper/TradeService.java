@@ -409,6 +409,13 @@ public final class TradeService {
             }
             String memoSuffix = "";
             if (anyCloseMissing) {
+                long distinctOptionExpirations = t.legs().stream().filter(l -> !l.isStock())
+                        .map(Leg::expiration).distinct().count();
+                if (distinctOptionExpirations > 1) {
+                    throw new TradeRejectedException(List.of(
+                            "An expiration-day close is missing for this multi-expiration position. "
+                                    + "Backfill each expiry close before settlement; one current price cannot value different dates honestly."));
+                }
                 // No expiration-day close available (e.g. keyless live mode has no candle
                 // source). Never fabricate from an intraday gap: allow a clearly-labeled
                 // fallback to the current quote only once the expiry is at least a full day old.

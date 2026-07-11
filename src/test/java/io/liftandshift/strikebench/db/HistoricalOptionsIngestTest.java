@@ -63,6 +63,8 @@ class HistoricalOptionsIngestTest {
         var r = ingest(csv, "vendor");
         assertThat(r.optionRows()).isEqualTo(2);
         assertThat(r.skipped()).isEqualTo(1);
+        assertThat(r.problems()).containsExactly("row 3 skipped: invalid or missing field");
+        assertThat(r.problems().toString()).doesNotContain("Exception", "DateTimeParse");
 
         // Re-ingesting the same rows upserts in place — no duplicates.
         HistoricalOptionsIngest.run(new BufferedReader(new StringReader(csv)), "vendor", db);

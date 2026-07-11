@@ -115,8 +115,7 @@ public final class ScenarioSimulator {
                             runInner(paths, spot, item.legs(), qty, s, ivSpec, riskFreeRate,
                                     item.entryOverrideCents(), item.entryNote())));
                 } catch (Exception e) {
-                    refused.add(new CompareRefusal(item.key(),
-                            e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+                    refused.add(new CompareRefusal(item.key(), publicReason(e)));
                 }
             }
             return new CompareReport(out, refused);
@@ -132,6 +131,14 @@ public final class ScenarioSimulator {
      * GENERATION; this bounds leg-by-leg VALUATION, which comparisons multiply.
      */
     private static final long MAX_VALUATION_WORK = 40_000_000L;
+
+    /** Keep validation guidance, but never expose implementation exceptions in product output. */
+    public static String publicReason(Exception e) {
+        if (e instanceof IllegalArgumentException && e.getMessage() != null && !e.getMessage().isBlank()) {
+            return e.getMessage();
+        }
+        return "This structure could not be evaluated with the selected inputs.";
+    }
 
     private static void requireWorkBudget(long work) {
         if (work > MAX_VALUATION_WORK) {

@@ -903,7 +903,7 @@ class ApiIntegrationTest {
         if (sj.get("analogPaths").size() >= 5) {
             // The strategy sim runs on the SAME analogs and SAYS SO (labeled interpretation).
             String simBody = """
-                {"symbol":"AAPL","qty":1,
+                {"symbol":"AAPL","qty":1,"entryCostCents":12345,
                   "legs":[{"action":"BUY","type":"STOCK","strike":0,"expiryDay":0,"ratio":1}],
                   "spec":{"model":"GBM","shape":"CHOP","horizonDays":10,"stepsPerDay":1,
                           "driftAnnual":0,"volAnnual":0.3,"jumpsPerYear":0,"jumpMean":0,
@@ -916,6 +916,8 @@ class ApiIntegrationTest {
             var rj = Json.parse(r.body());
             assertThat(rj.get("pathSource").asText()).isEqualTo("HISTORICAL_ANALOGS");
             assertThat(rj.get("paths").asInt()).isEqualTo(sj.get("analogPaths").size());
+            assertThat(rj.get("entryCostCents").asLong()).isEqualTo(12345L);
+            assertThat(rj.get("notes").toString()).contains("exact package price already shown");
             // This server is FIXTURES_ONLY: the study ran on demo candles, and the note must say
             // so — 'REAL past occurrences' on fixture data was holistic-review blocker #9.
             assertThat(rj.get("sourceNote").asText()).contains("DEMO-data occurrences");
@@ -924,6 +926,21 @@ class ApiIntegrationTest {
             assertThat(sj.get("studyKey").asText()).contains("ev=DEMO_FIXTURE");
             assertThat(rj.get("studyKey").asText()).isEqualTo(sj.get("studyKey").asText());
         }
+
+        // "Exact listed package" is a contract, not copy: an explicit expiration must be
+        // used as-is, and a disappeared expiration is refused rather than snapped nearby.
+        String exact = """
+            {"symbol":"AAPL","qty":1,"entryCostCents":1000,
+              "legs":[{"action":"BUY","type":"CALL","strike":255,"expiryDay":5,"ratio":1}],
+              "contractExpirations":["2026-08-21"],
+              "spec":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":1,
+                      "driftAnnual":0,"volAnnual":0.3,"jumpsPerYear":0,"jumpMean":0,
+                      "jumpVol":0,"tailNu":6,"seed":17,"paths":40}}""";
+        assertThat(post("/api/sim/strategy", exact).statusCode()).isEqualTo(200);
+        String missingExact = exact.replace("2026-08-21", "2099-01-16");
+        var refused = post("/api/sim/strategy", missingExact);
+        assertThat(refused.statusCode()).isEqualTo(400);
+        assertThat(refused.body()).contains("exact listed contracts");
     }
 
     @Test
@@ -1042,9 +1059,7 @@ class ApiIntegrationTest {
         // available:false with a note — never a fabricated line, never a 404.
         JsonNode r = Json.parse(get("/api/sparklines?symbols=AAPL,SPY,ZZZZ&range=1m").body());
         assertThat(r.get("range").asText()).isEqualTo("1m");
-        assertThat(r.get("batchLimit").asInt()).isEqualTo(16);
         assertThat(r.get("totalRequested").asInt()).isEqualTo(3);
-        assertThat(r.get("truncated").asBoolean()).isFalse();
         assertThat(r.get("sparklines")).hasSize(3);
         java.util.Map<String, JsonNode> bySym = new java.util.HashMap<>();
         for (JsonNode row : r.get("sparklines")) bySym.put(row.get("symbol").asText(), row);
@@ -1068,9 +1083,8 @@ class ApiIntegrationTest {
                         .collect(java.util.stream.Collectors.joining(","))).body());
         assertThat(capped.get("sparklines")).hasSize(16);
         assertThat(capped.get("totalRequested").asInt()).isEqualTo(17);
-        assertThat(capped.get("truncated").asBoolean()).isTrue();
-        assertThat(capped.get("batchLimit").asInt()).isEqualTo(16);
-        assertThat(capped.get("note").asText()).contains("additional symbol batches");
+        assertThat(capped.has("batchLimit")).isFalse();
+        assertThat(capped.has("truncated")).isFalse();
     }
 
     @Test
@@ -1111,5 +1125,25 @@ class ApiIntegrationTest {
         assertThat(w.get("universe").get("active").get("symbols").size()).isGreaterThan(0);
         assertThat(w.get("universe").get("lane").asText()).isEqualTo("DEMO");
         assertThat(w.get("revision").asLong()).isPositive();
+        assertThat(w.get("epoch").asText()).isNotBlank();
+        assertThat(Json.parse(get("/api/world").body()).get("epoch").asText()).isEqualTo(w.get("epoch").asText());
+    }
+
+    @Test
+    @Order(35)
+    void paperResetCancelsResidentWorldsAndReturnsToTheBaselineLane() throws Exception {
+        var created = Json.parse(post("/api/sim/market", """
+                {"name":"Reset lifecycle","symbols":{"AAPL":1.0},"scenario":"CHOP","speed":26}
+                """).body());
+        String world = created.get("worldId").asText();
+        assertThat(post("/api/sim/market/" + world + "/start", "{}").statusCode()).isEqualTo(200);
+        assertThat(put("/api/world", "{\"world\":\"" + world + "\"}").statusCode()).isEqualTo(200);
+
+        var reset = post("/api/data/reset", "{\"tier\":\"PAPER\",\"confirm\":true}");
+        assertThat(reset.statusCode()).isEqualTo(200);
+        assertThat(Json.parse(get("/api/world").body()).get("world").asText()).isEqualTo("demo");
+        assertThat(Json.parse(get("/api/sim/market").body()).get("sessions")).isEmpty();
+        assertThat(post("/api/sim/market/" + world + "/step", "{}").statusCode()).isEqualTo(404);
+        assertThat(Json.parse(get("/api/account").body()).get("account").get("id").asText()).isNotBlank();
     }
 }

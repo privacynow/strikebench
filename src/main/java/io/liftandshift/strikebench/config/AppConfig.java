@@ -1,7 +1,6 @@
 package io.liftandshift.strikebench.config;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
@@ -19,6 +18,8 @@ import java.util.Properties;
  */
 public final class AppConfig {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AppConfig.class);
+
     private final Properties fileProps = new Properties();
     private final java.util.Map<String, String> overrides = new java.util.HashMap<>();
 
@@ -33,7 +34,8 @@ public final class AppConfig {
             try (java.io.Reader in = Files.newBufferedReader(propertiesFile, java.nio.charset.StandardCharsets.UTF_8)) {
                 fileProps.load(in);
             } catch (IOException e) {
-                System.err.println("WARN: could not read " + propertiesFile + ": " + e.getMessage());
+                log.warn("Local settings could not be loaded; built-in and environment settings remain active");
+                log.debug("Local settings read failed", e);
             }
         }
     }

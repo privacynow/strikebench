@@ -160,8 +160,19 @@ public final class SimulationSessions {
         worlds.remove(id);
         owners.remove(id);
         lastTouch.remove(id);
+        lastHint.remove(id);
+        lastCheckpoint.remove(id);
         ScheduledFuture<?> f = loops.remove(id);
         if (f != null) f.cancel(false);
+    }
+
+    /**
+     * A global Paper/Everything reset deletes every persisted simulation session and account.
+     * Cancel the matching resident loops as the in-memory half of that same lifecycle change;
+     * otherwise a deleted world can keep ticking until process restart.
+     */
+    public synchronized void clearResident() {
+        new ArrayList<>(worlds.keySet()).forEach(this::evict);
     }
 
     private void enforceActiveCap(String userId) {

@@ -81,6 +81,13 @@
       if (App.state.world && App.state.world !== 'observed') return 'A screened simulated-market idea \u2014 generated, not observed.';
       return 'A screened idea from observed market inputs \u2014 generated this second.';
     }
+    function welcomeProofReady(c) {
+      return c && c.maxLossCents > 0 && c.maxProfitCents !== null
+        && c.maxProfitCents !== undefined && typeof c.pop === 'number';
+    }
+    function welcomeProofChoice(candidates) {
+      return (candidates || []).find(welcomeProofReady) || (candidates || [])[0];
+    }
     (async function () {
       // LAST-KNOWN FIRST (review #15): the opening composition must never be half spinner on a
       // slow provider. Render the cached proof instantly, then refresh it live and re-store.
@@ -103,7 +110,8 @@
       var cached = null;
       try {
         var raw = JSON.parse(localStorage.getItem('strikebench.welcomeProof') || 'null');
-        if (raw && raw.candidate && raw.world === proofCtx.world && raw.scenario === proofCtx.scenario
+        if (raw && welcomeProofReady(raw.candidate)
+            && raw.world === proofCtx.world && raw.scenario === proofCtx.scenario
             && raw.riskMode === proofCtx.riskMode && raw.asOf && (Date.now() - raw.asOf) < 24 * 3600 * 1000) {
           cached = raw.candidate;
         }
@@ -119,11 +127,12 @@
           setTimeout(function () { reject(new Error('The current market check is still running.')); }, 6000);
         })]);
         if (r.candidates && r.candidates.length) {
+          var proofCandidate = welcomeProofChoice(r.candidates);
           liveHost.innerHTML = '';
-          liveHost.appendChild(candidateCard(r.candidates[0], false));
+          liveHost.appendChild(candidateCard(proofCandidate, false));
           try {
             localStorage.setItem('strikebench.welcomeProof', JSON.stringify(
-              Object.assign({ candidate: r.candidates[0], asOf: Date.now() }, proofCtx)));
+              Object.assign({ candidate: proofCandidate, asOf: Date.now() }, proofCtx)));
           } catch (e) { /* private mode */ }
         } else if (!cached) {
           liveHost.innerHTML = '';
@@ -330,7 +339,7 @@
     var marketSymbols = uni && uni.symbols && uni.symbols.length ? uni.symbols.slice(0, 8) : CORE_SYMBOLS;
     var tiles = el('div', { class: 'home-market-grid' });
     colL.appendChild(el('div', { class: 'card home-market-card', id: 'home-market-watch' },
-      UI.cardHeader('Market watch' + (uni ? ' — ' + uni.label : ''),
+      UI.cardHeader('Market watch' + (uni && App.state.world !== 'demo' ? ' — ' + uni.label : ''),
         el('a', { href: '#/research', class: 'muted home-view-all' },
           'View all ' + ((uni && uni.symbols && uni.symbols.length) || marketSymbols.length) + ' symbols →')),
       tiles,
@@ -355,11 +364,13 @@
           href: '#/research/' + q.symbol,
           'aria-label': 'Open ' + q.symbol + ' full analysis'
         },
-          el('div', { class: 't-sym' }, q.symbol, ' ', badge(q.freshness)),
+          el('div', { class: 't-sym' }, q.symbol, ' ',
+            App.state.world === 'demo' ? null : badge(q.freshness)),
           el('div', { class: 't-px' }, fmtNum(q.last)),
           UI.delta(q.last, q.prevClose),
           el('div', { class: 't-nm' }, q.description || ''),
-          sparkSlot));
+          sparkSlot,
+          el('span', { class: 'destination-cue', 'aria-hidden': 'true' }, icon('chevron-right', 16))));
       });
       // The SAME sparkline card as Research, ONE batch call; Home cards go straight to the
       // full analysis (no preview layer here — review P5.8).
@@ -368,7 +379,11 @@
         if (!slot) return;
         slot.innerHTML = '';
         slot.appendChild(UI.sparkline(row, { height: 30 }));
-        if (row.evidence) slot.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev' }));
+        // In Demo, the global band and each quote already say Demo; a second identical history
+        // chip on every card adds noise, not honesty. Other lanes retain separate history evidence.
+        if (row.evidence && !(App.state.world === 'demo' && row.evidence.provenance === 'DEMO')) {
+          slot.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev', compact: true }));
+        }
       }
       try {
         var sp = await API.prefetch('/api/sparklines?symbols=' + rows.map(function (q) { return q.symbol; }).join(',') + '&range=3m');
@@ -402,7 +417,7 @@
         hasOpenTrades = true;
         var posCard = el('div', { class: 'card home-wide', id: 'open-trades-card' }, UI.cardHeader('Open practice trades',
           el('a', { href: '#/portfolio' }, 'All trades \u2192')));
-        posCard.appendChild(table(['Symbol', 'Strategy', 'Now', 'Max loss', 'Opened'],
+        posCard.appendChild(table(['Symbol', 'Strategy', 'Now', 'Theor. max loss', 'Opened'],
           open.trades.map(function (t) {
             return pressable(el('tr', { class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); } },
               el('td', {}, el('b', {}, t.symbol)),
@@ -570,7 +585,7 @@
       mode: 'editable', id: 'research-symbol-context', input: input,
       label: symbol ? 'Change stock' : Learn.currentLevel() === 'beginner'
         ? 'Which stock do you want to understand?' : 'Research symbol',
-      compact: !!symbol, showStatus: !symbol,
+      compact: !!symbol, showStatus: !symbol, hideLabel: !!symbol, class: 'symbol-context-purpose',
       commitLabel: symbol ? 'Go' : 'Open analysis', commitId: 'symbol-go', onCommit: go
     });
     var contextExtras = el('div', { class: 'symbol-context-extras' },
@@ -610,27 +625,64 @@
     root.appendChild(heroCard);
     var researchP = API.get('/api/research/' + symbol);
 
-    root.appendChild(comingUp(symbol, false)); // dated events; self-fetches (never waits on the hero call)
+    // One dense destination becomes a calm workspace. All capabilities remain mounted, but only
+    // one coherent task is visible at a time; the hero and symbol context stay fixed above it.
+    App.state.researchTabBySymbol = App.state.researchTabBySymbol || {};
+    var selectedResearchTab = App.state.researchTabBySymbol[symbol] || 'overview';
+    var researchPanels = {};
+    var researchTabs = el('div', { class: 'tabs research-workspace-tabs', id: 'research-workspace-tabs', role: 'tablist' },
+      [
+        { key: 'overview', label: 'Overview' },
+        { key: 'view', label: 'Test view' },
+        { key: 'options', label: 'Options' },
+        { key: 'news', label: 'News' }
+      ].map(function (t) {
+        return el('button', { type: 'button', role: 'tab', 'data-research-tab': t.key,
+          class: selectedResearchTab === t.key ? 'active' : '',
+          'aria-selected': selectedResearchTab === t.key ? 'true' : 'false',
+          onclick: function () { activateResearchTab(t.key); } }, t.label);
+      }));
+    var researchWorkspace = el('div', { class: 'research-workspace', id: 'research-workspace' });
+    ['overview', 'view', 'options', 'news'].forEach(function (key) {
+      var panel = el('section', { class: 'research-workspace-panel', 'data-research-panel': key,
+        hidden: selectedResearchTab === key ? null : '' });
+      researchPanels[key] = panel;
+      researchWorkspace.appendChild(panel);
+    });
+    function activateResearchTab(key) {
+      selectedResearchTab = key;
+      App.state.researchTabBySymbol[symbol] = key;
+      researchTabs.querySelectorAll('[role="tab"]').forEach(function (b) {
+        var active = b.getAttribute('data-research-tab') === key;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      Object.keys(researchPanels).forEach(function (k) { researchPanels[k].hidden = k !== key; });
+    }
+    root.appendChild(researchTabs);
+    root.appendChild(researchWorkspace);
+
+    researchPanels.overview.appendChild(comingUp(symbol, false)); // dated events; self-fetches
     var actionsAnchor = el('div', { id: 'symbol-actions-anchor' }); // filled after r: the action cards, or the no-options warning
-    root.appendChild(actionsAnchor);
+    researchPanels.options.appendChild(actionsAnchor);
 
     // Price history — its own endpoint, independent of /api/research.
-    root.appendChild(el('div', { class: 'card', id: 'history-card' },
+    researchPanels.overview.appendChild(el('div', { class: 'card', id: 'history-card' },
       UI.cardHeader('Price history'),
       UI.rangeChart({ initial: '1y', fetch: historyFetch(symbol) }),
       explain('Daily OHLC candles: green closed up, red closed down; slide across for open/high/low/close, change, and volume. The evidence badge names whether this history is observed, simulated, modeled, or Demo. Pills change the window; long windows aggregate to weekly candles.')));
 
     // The Research progression on a symbol: NOW (chart/news above) → TEST YOUR VIEW (past
     // evidence + possible futures under ONE thesis) → express it in Trade.
-    root.appendChild(testYourViewSection(symbol));
+    researchPanels.view.appendChild(testYourViewSection(symbol));
 
     var chainAnchor = el('div', { id: 'chain-anchor' });
-    root.appendChild(chainAnchor);
+    researchPanels.options.appendChild(chainAnchor);
 
     // News & filings ALWAYS render (independent endpoint) — a card that silently vanishes reads as
     // "where has news gone?", not as an empty feed.
     var newsCard = el('div', { class: 'card', id: 'news-card' }, UI.cardHeader('News & filings'), UI.spinner('Loading news…'));
-    root.appendChild(newsCard);
+    researchPanels.news.appendChild(newsCard);
     (async function fillNews() {
       var newsItems = [];
       try { newsItems = ((await API.get('/api/research/' + symbol + '/news')).items || []); }
@@ -702,23 +754,43 @@
     var evProfile = r.evidence || {};
     var evInputs = evProfile.inputs || {};
     var evSummary = evProfile.summary || q.evidence;
+    var inputKeys = Object.keys(evInputs);
+    var sig = function (e) { return e ? [e.provenance, e.age, e.source].join('|') : ''; };
+    var allSame = inputKeys.length > 1 && inputKeys.every(function (key) { return sig(evInputs[key]) === sig(evSummary); });
+    var evidenceDetail = inputKeys.length && !allSame ? UI.expandable('Input evidence detail', function () {
+      return el('div', { class: 'chip-row evidence-detail-row' }, inputKeys.map(function (key) {
+        return el('span', { class: 'evidence-input' }, key + ' ', UI.evidenceBadge(evInputs[key], { compact: true }));
+      }));
+    }) : null;
     var evidenceLine = el('div', { class: 'page-evidence', id: 'research-evidence' },
       el('b', {}, 'Evidence for this analysis'), UI.evidenceBadge(evSummary),
       evSummary && evSummary.provenance === 'MISSING'
         ? el('span', { class: 'muted' }, 'Some calculations are unavailable rather than filled with demo data.')
         : evSummary && evSummary.provenance === 'MIXED'
           ? el('span', { class: 'muted' }, 'Inputs come from different evidence types; each is named below.') : null,
+      allSame ? el('span', { class: 'muted small' }, 'All inputs use this same evidence basis.') : null,
       el('span', { class: 'spacer' }),
-      Object.keys(evInputs).map(function (key) {
-        return el('span', { class: 'evidence-input' }, key + ' ', UI.evidenceBadge(evInputs[key]));
-      }));
+      evidenceDetail);
 
-    var hero = el('div', { class: 'card' },
+    var secondaryMarketDetail = UI.expandable(
+      Learn.currentLevel() === 'beginner' ? 'More market detail' : 'Quote, volatility & benchmark detail',
+      function () {
+        return el('div', {},
+          el('div', { class: 'chip-row' },
+            chip('Prev close', fmtNum(q.prevClose)),
+            chip(el('span', {}, 'IV rank', UI.info('ivrank')), 'building history'),
+            chip('Options', r.optionable ? 'yes' : 'no')),
+          explain('IV is the move the options market is pricing in; HV is what the stock actually did lately. IV far above HV means options are relatively expensive to buy and richer to sell.'),
+          (r.benchmarks && r.benchmarks.length) ? el('div', { class: 'chip-row' }, r.benchmarks.map(function (b) {
+            return chip(b.symbol, fmtNum(b.last));
+          })) : null);
+      });
+    var hero = el('div', { class: 'card research-hero-card' },
       el('div', { class: 'quote-hero' },
         el('span', { class: 'sym', id: 'research-symbol' }, symbol),
         el('span', { class: 'px', id: 'research-px' }, fmtNum(q.last)),
         UI.delta(q.last, q.prevClose),
-        badge(r.freshness),
+        evSummary && evSummary.provenance === 'DEMO' ? null : badge(r.freshness),
         el('span', { class: 'spacer' }),
         el('button', {
           class: 'btn btn-sm btn-secondary', id: 'research-buy-shares',
@@ -735,16 +807,10 @@
       evidenceLine,
       el('div', { class: 'chip-row' },
         chip('Bid/Ask', fmtNum(q.bid) + ' / ' + fmtNum(q.ask)),
-        chip('Prev close', fmtNum(q.prevClose)),
         chip('Day', fmtNum(q.dayLow) + ' – ' + fmtNum(q.dayHigh)),
         chip('IV (ATM)', fmtPct(r.ivAtm)),
-        chip(el('span', {}, 'IV rank', UI.info('ivrank')), 'building history'),
-        chip('HV 30d', fmtPct(r.hv30)),
-        chip('Options', r.optionable ? 'yes' : 'no')),
-      explain('IV is the move the options market is pricing in; HV is what the stock actually did lately. IV far above HV → options are relatively expensive to buy (and richer to sell).'),
-      (r.benchmarks && r.benchmarks.length) ? el('div', { class: 'chip-row' }, r.benchmarks.map(function (b) {
-        return chip(b.symbol, fmtNum(b.last));
-      })) : null);
+        chip('HV 30d', fmtPct(r.hv30))),
+      secondaryMarketDetail);
     heroCard.replaceWith(hero);
 
     if (!r.optionable) {
@@ -1054,10 +1120,14 @@
       return {
         range: hist.range, candles: candles,
         badge: UI.evidenceBadge(hist.evidence),
-        note: hist.evidence && hist.evidence.provenance === 'DEMO'
+      note: hist.evidence && hist.evidence.provenance === 'DEMO'
           ? explain('This chart is fabricated teaching data from the explicit Demo market. It is not a substitute for observed history.')
           : hist.evidence && hist.evidence.provenance === 'MODELED'
-            ? explain('This chart is a generated Scenario dataset. Its modeled path is separate from observed market history.') : null,
+            ? explain('This chart is a generated Scenario dataset. Its modeled path is separate from observed market history.')
+            : hist.evidence && hist.evidence.provenance === 'OBSERVED' && candles.length
+              ? explain('These are stored historical observations through ' + candles[candles.length - 1].date
+                  + '. They remain available when the market is closed; closed means no new live session updates, not that past candles disappear.')
+              : null,
         emptyText: candles.length ? null
           : (App.config && App.config.fixturesOnly)
             ? 'Demo mode ships price history for AAPL, SPY, QQQ and TSLA only \u2014 try one of those.'
@@ -1476,7 +1546,8 @@
               ? el('div', { class: 'muted t-move' }, 'no quote right now')
               : el('div', { class: 't-move ' + (pct >= 0 ? 'gain' : 'loss') }, (pct >= 0 ? '\u25B2 ' : '\u25BC ') + Math.abs(pct).toFixed(2) + '%'),
             q && q.description ? el('div', { class: 't-nm muted' }, q.description) : null,
-            sparkSlot);
+            sparkSlot,
+            el('span', { class: 'destination-cue', 'aria-hidden': 'true' }, icon('chevron-right', 16)));
           tile.addEventListener('click', function (e) {
             // The sparkline is a deliberate interaction SUBREGION (hover/keys explore the
             // chart) — clicking it must not yank the user off the page.
@@ -1504,7 +1575,9 @@
             t2.innerHTML = '';
             t2.appendChild(UI.sparkline(row, { height: 36 }));
             // Evidence is server-computed and rendered verbatim; availability never implies Observed.
-            if (row.evidence) t2.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev' }));
+            if (row.evidence && !(App.state.world === 'demo' && row.evidence.provenance === 'DEMO')) {
+              t2.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev', compact: true }));
+            }
           }
         });
         // LIVE CARDS (review gap): prices follow the market stream in place — a simulated
@@ -1601,7 +1674,7 @@
             el('div', { class: 'f-label' }, UI.term('covered', 'New cash at risk')),
             el('div', { class: 'f-value' }, '$0'))
         : el('div', { class: 'fact f-danger' },
-            el('div', { class: 'f-label' }, UI.term('max loss', 'Most you can lose')),
+            el('div', { class: 'f-label' }, UI.term('max loss', 'Theoretical worst case')),
             el('div', { class: 'f-value' }, fmtMoney(c.maxLossCents)));
     var thirdFact = assignGoal && c.assignmentProb !== null && c.assignmentProb !== undefined
         ? el('div', { class: 'fact f-ok' },
@@ -1621,9 +1694,9 @@
       el('div', { class: 'fact-grid' },
         maxLossFact,
         el('div', { class: 'fact f-ok' },
-          el('div', { class: 'f-label' }, UI.term('max profit', 'Most you can make')),
-          el('div', { class: 'f-value' }, c.maxProfitCents === null || c.maxProfitCents === undefined
-              ? 'no ceiling' : fmtMoney(c.maxProfitCents))),
+          el('div', { class: 'f-label' }, UI.term('max profit', 'Theoretical ceiling')),
+          el('div', { class: 'f-value' }, UI.maxProfitLabel(
+            c.strategy, c.structureGroup, c.maxProfitCents, true, c.legs))),
         thirdFact),
       el('p', { style: 'margin:6px 0' },
         c.entryNetPremiumCents >= 0
@@ -1634,6 +1707,7 @@
           : null));
     var gb = guideBlock(c.strategy);
     if (gb) card.appendChild(gb);
+    if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.state.lastRecommendSymbol, c));
     card.appendChild(UI.expandable('The exact contracts \u2014 ' + c.qty + ' lot' + (c.qty > 1 ? 's' : '') + ' (each line \u00d7' + c.qty + ')', function () {
       return el('div', {},
         el('div', { class: 'mono', style: 'margin-bottom:6px' }, c.label),
@@ -1664,11 +1738,11 @@
       intentNoteBlock(c),
       el('div', { class: 'chip-row' },
         chip('Cost/credit', fmtMoney(c.entryNetPremiumCents, { plus: true })),
-        chip('Max loss', el('span', { class: 'loss' }, fmtMoney(c.maxLossCents))),
+        chip('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(c.maxLossCents))),
         c.combinedMaxLossCents !== null && c.combinedMaxLossCents !== undefined
-          ? chip('Worst case w/ shares', el('span', { class: 'loss' }, fmtMoney(c.combinedMaxLossCents))) : null,
-        chip('Max profit', c.maxProfitCents === null || c.maxProfitCents === undefined
-          ? 'uncapped' : el('span', { class: 'gain' }, fmtMoney(c.maxProfitCents))),
+          ? chip('Theoretical worst case w/ shares', el('span', { class: 'loss' }, fmtMoney(c.combinedMaxLossCents))) : null,
+        chip('Theoretical max profit', UI.maxProfitLabel(
+          c.strategy, c.structureGroup, c.maxProfitCents, false, c.legs)),
         chip(el('span', {}, 'POP', UI.info('pop')), fmtPct(c.pop)),
         c.assignmentProb !== null && c.assignmentProb !== undefined
           ? chip(el('span', {}, 'Assignment', UI.info('assignment')), fmtPct(c.assignmentProb)) : null,
@@ -1684,6 +1758,7 @@
         ? chip(el('span', {}, 'Model EV', UI.info('ev')), fmtMoney(c.expectedValueCents, { plus: true })) : null,
       chip('Liquidity', fmtNum(c.liquidityScore, 2)),
       chip(el('span', {}, 'Screen score', UI.info('screenscore')), fmtNum(c.score, 0))));
+    if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.state.lastRecommendSymbol, c));
     if (c.warnings && c.warnings.length) card.appendChild(alertBox('warn', 'Heads up', c.warnings));
     card.appendChild(el('details', { class: 'qa' },
       el('summary', {}, 'Why this idea — and what would kill it'),
@@ -1786,9 +1861,9 @@
       { key: 'rank', label: '#', get: function (c) { return rankOf.get(c); }, render: function (c) { return el('span', { class: 'muted', title: 'Rank in the served ordering (best first)' }, '#' + rankOf.get(c)); } },
       { key: 'displayName', label: 'Strategy', get: function (c) { return c.displayName; }, render: function (c) { return el('b', {}, c.displayName); } },
       { key: 'entryNetPremiumCents', label: 'Cost/Credit', get: function (c) { return c.entryNetPremiumCents; }, render: function (c) { return pnlSpan(c.entryNetPremiumCents); } },
-      { key: 'maxLossCents', label: 'Max loss', get: function (c) { return c.usesHeldShares && c.combinedMaxLossCents ? c.combinedMaxLossCents : c.maxLossCents; }, render: function (c) { return c.usesHeldShares && c.maxLossCents === 0 ? el('span', {}, '$0*') : el('span', { class: 'loss' }, fmtMoney(c.maxLossCents)); } },
-      { key: 'maxProfitCents', label: 'Max profit', get: function (c) { return c.maxProfitCents === null || c.maxProfitCents === undefined ? Infinity : c.maxProfitCents; }, render: function (c) { return c.maxProfitCents === null || c.maxProfitCents === undefined ? el('span', { class: 'gain' }, '\u221E') : el('span', { class: 'gain' }, fmtMoney(c.maxProfitCents)); } },
-      { key: 'rr', label: 'R:R', get: function (c) { var denom = c.maxLossCents > 0 ? c.maxLossCents : (c.combinedMaxLossCents || 0); if (denom <= 0) return -1; return c.maxProfitCents === null || c.maxProfitCents === undefined ? Infinity : c.maxProfitCents / denom; }, render: function (c) { var v = COLS[5].get(c); return el('span', {}, v === -1 ? '\u2014' : v === Infinity ? '\u221E' : fmtNum(v, 2)); } },
+      { key: 'maxLossCents', label: 'Theor. max loss', get: function (c) { return c.usesHeldShares && c.combinedMaxLossCents ? c.combinedMaxLossCents : c.maxLossCents; }, render: function (c) { return c.usesHeldShares && c.maxLossCents === 0 ? el('span', {}, '$0*') : el('span', { class: 'loss' }, fmtMoney(c.maxLossCents)); } },
+      { key: 'maxProfitCents', label: 'Theor. max profit', get: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'uncapped' ? Infinity : k === 'model-dependent' ? -Infinity : c.maxProfitCents; }, render: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'model-dependent' ? el('span', { class: 'muted' }, 'model-dependent') : k === 'uncapped' ? el('span', { class: 'gain' }, '\u221E') : el('span', { class: 'gain' }, fmtMoney(c.maxProfitCents)); } },
+      { key: 'rr', label: 'R:R', get: function (c) { var denom = c.maxLossCents > 0 ? c.maxLossCents : (c.combinedMaxLossCents || 0); if (denom <= 0) return -1; var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'uncapped' ? Infinity : k === 'model-dependent' ? -1 : c.maxProfitCents / denom; }, render: function (c) { var v = COLS[5].get(c); return el('span', {}, v === -1 ? '\u2014' : v === Infinity ? '\u221E' : fmtNum(v, 2)); } },
       { key: 'pop', label: 'POP', get: function (c) { return c.pop === null || c.pop === undefined ? -1 : c.pop; }, render: function (c) { return el('span', {}, fmtPct(c.pop)); } },
       { key: 'expectedValueCents', label: 'EV', get: function (c) { return c.expectedValueCents === null || c.expectedValueCents === undefined ? -Infinity : c.expectedValueCents; }, render: function (c) { return c.expectedValueCents === null || c.expectedValueCents === undefined ? el('span', {}, '\u2014') : pnlSpan(c.expectedValueCents); } },
       { key: 'breakevens', label: 'Breakevens', get: function (c) { return (c.breakevens || []).length ? parseFloat(c.breakevens[0]) : 0; }, render: function (c) { return el('span', { class: 'mono' }, (c.breakevens || []).map(fmtBreakeven).join(' / ') || '\u2014'); } },
@@ -1863,7 +1938,7 @@
       saved = App.state.discoverForm = {
         goal: m0.intent || s0.goal || 'DIRECTIONAL',
         goalExplicit: !!(m0.intent || s0.goal),
-        source: m0.symbol ? 'single' : 'scan',
+        source: 'single',
         symbol: m0.symbol || '', target: m0.target || '',
         universe: s0.universe || '', scanTarget: s0.target || '',
         h0: !!s0.h0, hW: s0.hW !== false, hM: s0.hM !== false
@@ -1882,7 +1957,7 @@
     if (params && params[0] === 'manual') saved.source = 'single';
     if (params && params[0] === 'scout') saved.source = 'scan';
     var goal = saved.goal || 'DIRECTIONAL';
-    var source = saved.source || 'scan';
+    var source = saved.source || 'single';
     function remember(patch) {
       saved = App.state.discoverForm = Object.assign({}, App.state.discoverForm, patch || {});
     }
@@ -2068,22 +2143,10 @@
     }
     var symField = UI.symbolContext({
       mode: 'editable', id: 'ideas-symbol-context', input: sym,
-      label: beginner ? 'Which stock?' : 'Symbol'
+      label: beginner ? 'Which stock?' : 'Symbol', class: 'ideas-symbol-context'
     });
     symChips.classList.add('symbol-context-peers');
     symField.appendChild(symChips);
-    // Chart + headlines for the underlying, one tap away — informative, never in the way
-    var ctxAnchor = el('div', { id: 'symbol-context' });
-    var ctxSym = null;
-    function renderSymbolContext() {
-      var v = source === 'single' ? sym.value.trim().toUpperCase() : '';
-      if (v === ctxSym) return;
-      ctxSym = v;
-      ctxAnchor.innerHTML = '';
-      if (!v) return;
-      ctxAnchor.appendChild(UI.expandable('What\u2019s happening with ' + v + ' \u2014 chart, events & news',
-        function () { return symbolPanel(v, {}); }));
-    }
     var thesisField = el('div', { class: 'field' }, el('label', {}, 'Your view'), thesis);
     var targetField = el('div', { class: 'field', style: 'display:none' },
       el('label', { id: 'rec-target-label' }, 'Target price ($/sh)'), target, targetPresets);
@@ -2093,7 +2156,7 @@
       allow0, el('label', { for: 'rec-0dte', style: 'text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500' },
         beginner ? 'Allow same-day (0DTE) expiry \u2014 fast and unforgiving' : 'Allow same-day (0DTE) expiry'));
     var sectorField = el('div', { class: 'field', style: 'grid-column: 1 / -1' },
-      el('label', {}, 'Universe (applies everywhere)'), sectorSel);
+      el('label', {}, 'Market sector (applies everywhere)'), sectorSel);
     var oneOffField = el('div', { class: 'field', style: 'grid-column: 1 / -1' },
       el('label', {}, 'Scan override'), universe);
     var scanTargetField = el('div', { class: 'field' }, el('label', {}, 'Target profit ($)'), scanTarget);
@@ -2115,7 +2178,9 @@
       sharesField.style.display = !scan && goal === 'ACQUIRE' ? '' : 'none';
       horizonField.style.display = scan ? 'none' : '';
       zeroField.style.display = scan ? 'none' : '';
-      sectorField.style.display = scan && source === 'scan' ? '' : 'none';
+      // Sector context is never hidden. In one-stock mode it updates the peer suggestions;
+      // in scout mode it is also the scan universe. One persisted control, two honest uses.
+      sectorField.style.display = '';
       oneOffField.style.display = scan && source === 'scan' ? '' : 'none';
       scanTargetField.style.display = scan ? '' : 'none';
       expiryRow.style.display = scan ? '' : 'none';
@@ -2128,7 +2193,6 @@
       if (goBtn) goBtn.textContent = scan ? 'Scan for opportunities' : 'Find ideas';
       if (!scan && (goal === 'EXIT' || goal === 'ACQUIRE' || goal === 'HEDGE')) renderTargetPresets();
       renderSymChips();
-      renderSymbolContext();
       refreshHoldingsHint();
     }
 
@@ -2217,8 +2281,16 @@
       }, 0);
     }
 
-    root.appendChild(el('div', { class: 'card' },
-      UI.cardHeader('What are you trying to do?',
+    root.appendChild(el('section', { class: 'card idea-market-card', id: 'idea-market-card' },
+      UI.cardHeader('Start with a stock or market'),
+      explain(beginner
+        ? 'Name the stock already on your mind, or ask the scout to search a sector. This context follows the rest of the workflow.'
+        : 'Choose one symbol or a sector scope before setting the strategy objective.'),
+      sourceRow,
+      el('div', { class: 'idea-market-controls' }, symField, sectorField, oneOffField)));
+
+    root.appendChild(el('section', { class: 'card idea-goal-card', id: 'idea-goal-card' },
+      UI.cardHeader('What do you want the position to do?',
         el('a', {
           class: 'muted', id: 'all-strategies-link', href: '#/trade/shape', style: 'font-size:12.5px',
           onclick: function () {
@@ -2227,24 +2299,18 @@
           }
         }, 'All strategies \u2192')),
       explain(beginner
-        ? 'Two questions: what are you trying to do, and where should ideas come from. "Scan the market for me" looks at how fast each stock has been moving, what the news says, and whether its options look cheap or expensive — and shows its evidence. Only trades whose worst case is known and capped get through, and every refusal is explained.'
-        : 'Two questions: goal + source. "Scan the market for me" is the scout — momentum, news sentiment, and IV vs realized volatility across your universe, evidence shown. Only defined-risk structures pass; refusals are always explained.'),
+        ? 'Choose the job: grow, earn income, protect shares, buy lower, or sell at a target. Every result still shows its evidence and known worst case.'
+        : 'Objective, view, horizon and constraints drive one complete ranked field; the market context above stays fixed.'),
       intentRow,
-      el('div', { class: 'field-label', style: 'margin-top:12px' }, 'Where should ideas come from?'),
-      sourceRow,
       el('div', { class: 'form-grid', style: 'margin-top:10px' },
-        symField,
         thesisField,
         targetField,
         sharesField,
         horizonField,
-        sectorField,
         scanTargetField,
-        zeroField,
-        oneOffField),
+        zeroField),
       expiryRow,
       holdingsHint,
-      ctxAnchor,
       filters.node,
       el('div', { class: 'btn-row' }, goBtn)));
     root.appendChild(results);
@@ -3014,7 +3080,7 @@
               el('span', { class: af.overRiskCapital ? 'loss' : '' }, af.pctOfRiskCapital + '%')) : null));
           if (af.overRiskCapital) {
             body.appendChild(alertBox('warn', 'Bigger than YOUR risk-capital line',
-              ['The worst case exceeds the per-trade risk capital you set for your real account.']));
+              ['The theoretical worst case exceeds the per-trade risk capital you set for your real account.']));
           }
         }
         if (!p.ok) body.appendChild(alertBox('danger', 'Blocked', p.blockReasons));
@@ -3026,10 +3092,10 @@
         var coveredByShares = t.previewReq && t.previewReq.useHeldShares;
         checks.push({ state: p.ok && (p.maxLossCents > 0 || coveredByShares) ? 'pass' : 'fail',
           text: p.maxLossCents > 0
-            ? 'Worst case is known and capped at ' + fmtMoney(p.maxLossCents) + (p.feesOpenCents ? ' (+' + fmtMoney(p.feesOpenCents) + ' fees)' : '')
+            ? 'Theoretical worst case is known and capped at ' + fmtMoney(p.maxLossCents) + (p.feesOpenCents ? ' (+' + fmtMoney(p.feesOpenCents) + ' fees)' : '')
             : coveredByShares
               ? 'No new cash at risk — the trade is backed by shares you already hold (their own downside continues)'
-              : 'Worst case could not be verified' });
+              : 'Theoretical worst case could not be verified' });
         var overBudget = (g ? (g.warnings || []) : []).some(function (w) { return w.indexOf('risk budget') >= 0; });
         checks.push({ state: overBudget ? 'warn' : 'pass',
           text: overBudget ? 'Bigger than your chosen risk-mode budget — allowed, but oversized'
@@ -3067,13 +3133,27 @@
 
         body.appendChild(el('div', { class: 'grid grid-4' },
           stat('Cost / credit', fmtMoney(p.entryNetPremiumCents, { plus: true }), 'Negative = you pay this to open. Positive = you collect it.'),
-          stat('Max loss', el('span', { class: 'loss' }, fmtMoney(p.maxLossCents)), 'The most this position can lose, fees excluded.'),
-          stat('Max profit', p.maxProfitCents === null || p.maxProfitCents === undefined ? 'uncapped' : el('span', { class: 'gain' }, fmtMoney(p.maxProfitCents))),
+          stat('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(p.maxLossCents)), 'The structural worst case for this position, fees excluded.'),
+          stat('Theoretical max profit', UI.maxProfitLabel(t.previewReq && t.previewReq.strategy,
+            t.candidate && t.candidate.structureGroup, p.maxProfitCents, Learn.currentLevel() === 'beginner', p.legs)),
           stat('Fees', fmtMoney(p.feesOpenCents), '$0.65 per contract per leg by default.'),
           stat(UI.term('pop', Learn.currentLevel() === 'beginner' ? 'Chance of any profit' : 'POP'), fmtPct(p.popEntry), 'Modeled probability of any profit at expiration — before commissions, not a promise.'),
           stat('Breakevens', (p.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
-          stat('Buying power after', fmtMoney(p.buyingPowerAfterCents), 'Drops by exactly max loss + fees.'),
+          stat('Buying power after', fmtMoney(p.buyingPowerAfterCents), 'Drops by exactly the theoretical max loss plus fees.'),
           stat('Cash after', fmtMoney(p.cashAfterCents))));
+        if (p.ok && window.Scenario) {
+          var scenarioPkg = t.candidate || {
+            strategy: t.previewReq && t.previewReq.strategy,
+            legs: t.previewReq && t.previewReq.legs,
+            qty: t.previewReq && t.previewReq.qty
+          };
+          if (scenarioPkg && scenarioPkg.legs && scenarioPkg.legs.length) {
+            // Preserve this reviewed ticket's exact opening value, including a user-entered limit.
+            scenarioPkg = Object.assign({}, scenarioPkg, { entryNetPremiumCents: p.entryNetPremiumCents });
+            body.appendChild(Scenario.realisticOutcomes(
+              t.symbol || (t.previewReq && t.previewReq.symbol), scenarioPkg));
+          }
+        }
         // EXPLICIT budget reconciliation (risk/experience decoupling): the header's selected
         // limit is a rule this ticket either fits or exceeds — say which, in dollars and %.
         (function budgetLine() {
@@ -3125,7 +3205,7 @@
                   nav(6);
                 }
               }, 'Re-price'))),
-            el('div', { class: 'muted small' }, 'Max loss, breakevens, POP and EV all follow the price YOU set \u2014 use it to judge a limit order or a real fill.')));
+            el('div', { class: 'muted small' }, 'Theoretical max loss, breakevens, POP and EV all follow the price YOU set \u2014 use it to judge a limit order or a real fill.')));
         }
         // The SERVER's required-acknowledgment list is the contract (client wording is a fallback);
         // the signed token + checked ids travel with the create call, where they are ENFORCED.
@@ -3639,8 +3719,8 @@
     });
     tradesCard.appendChild(table(
       tab === 'active'
-        ? ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Max loss', 'Now', 'Opened', 'Status']
-        : ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Max loss', 'Realized P/L', 'Status'], rows));
+        ? ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Theor. max loss', 'Now', 'Opened', 'Status']
+        : ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Theor. max loss', 'Realized P/L', 'Status'], rows));
     // Inside a simulated session the book visibly MOVES: each world tick (already server-throttled)
     // refreshes the active rows' Now P/L in place — light trades-list fetch, no re-render.
     if (tab === 'active' && App.onEvent && App.state.world && App.state.world !== 'observed') {
@@ -3708,8 +3788,9 @@
         chip('Entry', fmtMoney(t.entryNetPremiumCents, { plus: true })),
         t.sharesLocked > 0 && t.maxLossCents === 0
           ? chip('New cash at risk', '$0 (covered)')
-          : chip('Max loss', el('span', { class: 'loss' }, fmtMoney(t.maxLossCents))),
-        chip('Max profit', t.maxProfitCents === null || t.maxProfitCents === undefined ? 'uncapped' : fmtMoney(t.maxProfitCents)),
+          : chip('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(t.maxLossCents))),
+        chip('Theoretical max profit', UI.maxProfitLabel(t.strategy, null, t.maxProfitCents,
+          Learn.currentLevel() === 'beginner', t.legs)),
         chip('Breakeven', (t.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
         chip('POP entry', fmtPct(t.popEntry)),
         d.current && d.current.popNow !== null && d.current.popNow !== undefined ? chip('POP now', fmtPct(d.current.popNow)) : null,
@@ -4603,7 +4684,7 @@
       if (r.trades && r.trades.length) {
         out.appendChild(el('div', { class: 'card' },
           UI.cardHeader('Trades (' + r.trades.length + ')'),
-          table(['Entry', 'Exit', 'Strategy', 'Credit/Debit', 'P/L', 'Max loss', 'Why closed'],
+          table(['Entry', 'Exit', 'Strategy', 'Credit/Debit', 'P/L', 'Theor. max loss', 'Why closed'],
             r.trades.map(function (t) {
               return el('tr', {},
                 el('td', { class: 'muted' }, t.entryDate), el('td', { class: 'muted' }, t.exitDate),
@@ -4716,7 +4797,7 @@
         'Observed, Demo, Simulated and Scenario data stay separate. Missing observed data stays unavailable; fabricated values never replace it.'));
     }
 
-    var engineCard = el('div', { class: 'card', id: 'dc-engine' }, UI.spinner('Checking the market engine…'));
+    var engineCard = el('div', { class: 'card dc-overview-card', id: 'dc-engine' }, UI.spinner('Checking the market engine…'));
     // ---- Block S: the simulated-market workbench — a product surface, not a technical utility.
     // Beginner: scenario story cards + plain symbol list + speed words, everything else defaulted.
     // Expert: per-symbol beta/price rows, model seed, full knobs. Both levels: labeled fields,
@@ -5405,10 +5486,10 @@
     var coverageCard = el('div', { class: 'card', id: 'dc-coverage' }, UI.cardHeader('What data we hold'), UI.spinner('Loading coverage…'));
     var jobsCard = el('div', { class: 'card', id: 'dc-jobs' }, UI.cardHeader('Jobs'), UI.spinner('Loading jobs…'));
     var sourcesCard = el('div', { class: 'card', id: 'dc-sources' }, UI.cardHeader('Data sources'), UI.spinner('Loading sources…'));
-    var healthCard = el('div', { class: 'card', id: 'dc-health' });
+    var healthCard = el('div', { class: 'card dc-overview-card', id: 'dc-health' });
     var resetCard = el('div', { class: 'card', id: 'dc-reset' });
     // The Overview "where you are" card: current analysis mode + the recommended next action.
-    var modeCard = el('div', { class: 'card', id: 'dc-mode' }, UI.cardHeader('Where you are'), UI.spinner('Checking\u2026'));
+    var modeCard = el('div', { class: 'card dc-overview-card', id: 'dc-mode' }, UI.cardHeader('Where you are'), UI.spinner('Checking\u2026'));
     async function fillMode() {
       if (!modeCard.isConnected) return;
       var world = App.state.world || 'observed';
@@ -5457,8 +5538,9 @@
       modeCard.appendChild(UI.cardHeader('Where you are'));
       lines.forEach(function (l) { modeCard.appendChild(l); });
       modeCard.appendChild(el('div', { class: 'btn-row', style: 'margin-top:8px' }, actions));
+      syncOverviewToggle(modeCard, 'mode');
     }
-    var activityCard = el('div', { class: 'card', id: 'dc-activity' },
+    var activityCard = el('div', { class: 'card dc-overview-card', id: 'dc-activity' },
       UI.cardHeader('Running activity & coverage'), UI.spinner('Checking\u2026'));
     async function fillActivity() {
       if (!activityCard.isConnected) return;
@@ -5477,9 +5559,9 @@
         var cov = await API.get('/api/data/coverage');
         var sum = (cov && cov.summary) || {};
         linesA.push(el('div', { class: 'status-item' },
-          el('span', { class: 'badge badge-dim' }, 'COVERAGE'),
+          el('span', { class: 'badge badge-dim' }, 'OBSERVED STORAGE'),
           el('span', { class: 'muted small' }, (sum.underlyingSymbols || 0) + ' symbols \u00b7 '
-            + (sum.underlyingBars || 0) + ' daily bars stored'),
+            + (sum.underlyingBars || 0) + ' daily bars'),
           el('span', { class: 'spacer' }),
           el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/datasets'); } }, 'Datasets \u2192')));
       } catch (e) { /* summary only */ }
@@ -5488,6 +5570,52 @@
       activityCard.appendChild(UI.cardHeader('Running activity & coverage'));
       if (!linesA.length) activityCard.appendChild(el('div', { class: 'muted small' }, 'Nothing running.'));
       linesA.forEach(function (l) { activityCard.appendChild(l); });
+      syncOverviewToggle(activityCard, 'activity');
+    }
+    var dcDetailBuilders = {};
+    function openOverviewDetail(key, card, forceRefresh) {
+      var host = document.getElementById('dc-detail');
+      if (!host) return;
+      var already = host.getAttribute('data-detail') === key;
+      host.innerHTML = '';
+      host.removeAttribute('data-detail');
+      [modeCard, activityCard, engineCard, healthCard].forEach(function (c) {
+        c.classList.remove('expanded');
+        var toggle = c.querySelector(':scope > .dc-detail-toggle');
+        if (toggle) { toggle.setAttribute('aria-expanded', 'false'); toggle.textContent = 'Open details ›'; }
+      });
+      if (already && !forceRefresh) return;
+      host.setAttribute('data-detail', key);
+      card.classList.add('expanded');
+      var activeToggle = card.querySelector(':scope > .dc-detail-toggle');
+      if (activeToggle) { activeToggle.setAttribute('aria-expanded', 'true'); activeToggle.textContent = 'Close details ‹'; }
+      var detail = el('section', { class: 'card dc-detail-card' },
+        UI.cardHeader(card.getAttribute('data-detail-title') || 'Data details'));
+      var builder = dcDetailBuilders[key];
+      detail.appendChild(builder ? builder() : el('p', { class: 'muted' }, 'Details are still loading.'));
+      host.appendChild(detail);
+      detail.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    }
+    function syncOverviewToggle(card, key) {
+      var toggle = card.querySelector(':scope > .dc-detail-toggle');
+      if (!toggle) {
+        toggle = el('button', { type: 'button', class: 'dc-detail-toggle',
+          'aria-controls': 'dc-detail', onclick: function (e) {
+            e.stopPropagation(); openOverviewDetail(key, card);
+          } }, 'Open details ›');
+        card.appendChild(toggle);
+      }
+      var expanded = document.getElementById('dc-detail')?.getAttribute('data-detail') === key;
+      toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      toggle.textContent = expanded ? 'Close details ‹' : 'Open details ›';
+    }
+    function registerOverviewCard(card, key, title) {
+      card.setAttribute('data-detail-title', title);
+      card.addEventListener('click', function (e) {
+        if (e.target.closest('button,a,input,select')) return;
+        openOverviewDetail(key, card);
+      });
+      syncOverviewToggle(card, key);
     }
     if (tab === 'overview') {
       var ovGrid = el('div', { class: 'dc-grid' });
@@ -5495,7 +5623,37 @@
       root.appendChild(ovGrid);
       // Expanded detail lives BELOW the 2x2 summary (review visual): opening a drawer must
       // never stretch a neighbor card into an empty wall.
-      root.appendChild(el('div', { id: 'dc-detail' }));
+      root.appendChild(el('div', { id: 'dc-detail', 'aria-live': 'polite' }));
+      registerOverviewCard(modeCard, 'mode', 'Market and analysis mode');
+      registerOverviewCard(activityCard, 'activity', 'Stored coverage and background work');
+      registerOverviewCard(engineCard, 'engine', 'Per-symbol market engine state');
+      registerOverviewCard(healthCard, 'health', 'Provider and request health');
+      dcDetailBuilders.mode = function () {
+        return el('div', {},
+          el('p', {}, 'Market lanes stay isolated: Observed uses eligible market sources, Demo uses fabricated teaching data, Simulated uses a generated exchange, and Scenario changes analysis history only.'),
+          el('div', { class: 'btn-row' },
+            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, 'Open Research'),
+            el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/datasets'); } }, 'Manage datasets')));
+      };
+      dcDetailBuilders.activity = function () {
+        var holder = el('div', {}, UI.spinner('Loading stored coverage and jobs…'));
+        Promise.all([API.get('/api/data/coverage'), API.get('/api/data/jobs')]).then(function (vals) {
+          holder.innerHTML = '';
+          var sum = (vals[0] && vals[0].summary) || {}, jobs = (vals[1] && vals[1].jobs) || [];
+          holder.appendChild(el('div', { class: 'chip-row' },
+            chip('Observed symbols', String(sum.underlyingSymbols || 0)),
+            chip('Stored daily bars', String(sum.underlyingBars || 0)),
+            chip('Jobs in progress', String(jobs.filter(function (j) { return j.status === 'RUNNING' || j.status === 'QUEUED'; }).length))));
+          holder.appendChild(el('p', { class: 'muted small' },
+            'Stored coverage is observed historical inventory. Provider health reports the latest source request. '
+            + 'A closed market or unavailable live candle source does not erase stored past observations. '
+            + (App.state.world === 'demo' ? 'Demo charts use separate built-in teaching history and are not counted here.' : '')));
+        }).catch(function () {
+          holder.innerHTML = '';
+          holder.appendChild(el('p', { class: 'muted' }, 'Coverage detail is unavailable right now.'));
+        });
+        return holder;
+      };
     }
     fillMode();
     fillActivity();
@@ -5669,6 +5827,7 @@
         engineCard.innerHTML = ''; engineCard.appendChild(UI.cardHeader(
           el('span', {}, 'Market engine', UI.info('marketengine'))));
         engineCard.appendChild(alertBox('warn', 'Engine status unavailable.'));
+        syncOverviewToggle(engineCard, 'engine');
         renderReset(false); // fail closed on the destructive panel
         return;
       }
@@ -5678,29 +5837,39 @@
       engineCard.innerHTML = '';
       engineCard.appendChild(UI.cardHeader(el('span', {}, 'Market engine', UI.info('marketengine')),
         el('button', { class: 'btn btn-sm', id: 'dc-refresh-now', onclick: function () { startJob('refresh_now', {}); } }, 'Refresh now')));
-      if (ov.marketLane === 'DEMO') engineCard.appendChild(alertBox('warn',
-        'Demo market is active: every price and chain is fabricated teaching data in an isolated account.'));
       engineCard.appendChild(el('div', { class: 'chip-row' },
         ov.marketLane === 'DEMO' ? chip('Feed', 'Static Demo') : chip('Market', ov.marketOpen ? 'Open' : 'Closed'),
         chip('Warmed', (e.warmed || 0) + ' / ' + (e.tracked || 0)),
-        chip('Refreshing', String(e.inFlight || 0)),
-        chip('Stale', String(e.stale || 0)),
-        ov.marketLane === 'DEMO' ? null : chip('Refresh every', (e.refreshInterval || 0) + 's'),
-        chip('Avg latency', (e.avgLatencyMs || 0) + ' ms'),
-        e.errors ? chip('Errors since startup', String(e.errors),
-          'Total provider/refresh errors since this server started — not a current-failure count.') : null));
-      var detailHost = document.getElementById('dc-detail');
-      if (level === 'expert' && e.symbols && e.symbols.length && detailHost) {
-        detailHost.appendChild(UI.expandable('Per-symbol engine state', function () {
-          return table(['Symbol', 'Fresh', 'Source', 'Age', 'State'], e.symbols.map(function (s) {
+        chip('State', e.errors ? 'Needs attention' : e.inFlight ? e.inFlight + ' refreshing'
+          : e.stale ? e.stale + ' stale' : 'Ready')));
+      syncOverviewToggle(engineCard, 'engine');
+      dcDetailBuilders.engine = function () {
+        var detail = el('div', {},
+          ov.marketLane === 'DEMO' ? alertBox('warn',
+            'The explicit Demo market uses fabricated teaching prices and an isolated account.') : null,
+          el('div', { class: 'chip-row' },
+            chip('Refreshing', String(e.inFlight || 0)),
+            chip('Stale', String(e.stale || 0)),
+            ov.marketLane === 'DEMO' ? null : chip('Refresh every', (e.refreshInterval || 0) + 's'),
+            chip('Avg latency', (e.avgLatencyMs || 0) + ' ms'),
+            e.errors ? chip('Errors since startup', String(e.errors),
+              'Total provider/refresh errors since this server started — not a current-failure count.') : null));
+        if (!(e.symbols && e.symbols.length)) {
+          detail.appendChild(el('p', { class: 'muted' }, 'No symbols are tracked yet.'));
+          return detail;
+        }
+        detail.appendChild(table(['Symbol', 'Fresh', 'Source', 'Age', 'State'], e.symbols.map(function (s) {
             return el('tr', {},
               el('td', {}, el('b', {}, s.symbol)),
               el('td', {}, badge(s.freshness)),
               el('td', { class: 'muted' }, s.source || '—'),
               el('td', { class: 'muted' }, s.ageMs >= 0 ? Math.round(s.ageMs / 1000) + 's' : '—'),
               el('td', {}, s.refreshing ? el('span', { class: 'badge badge-caution' }, 'refreshing') : (s.error ? el('span', { class: 'badge badge-danger', title: s.error }, 'error') : el('span', { class: 'muted' }, 'ok'))));
-          }));
-        }));
+          })));
+        return detail;
+      };
+      if (document.getElementById('dc-detail')?.getAttribute('data-detail') === 'engine') {
+        openOverviewDetail('engine', engineCard, true);
       }
     })();
 
@@ -5821,12 +5990,14 @@
           el('b', {}, el('span', { class: 'badge ' + worst }, items.length ? worstState : 'NONE'))));
       });
       healthCard.appendChild(sumRow);
-      var detailHost2 = document.getElementById('dc-detail');
-      if (detailHost2) {
-        detailHost2.appendChild(UI.expandable('Per-source detail', function () { return body; }));
+      healthCard.appendChild(el('p', { class: 'muted small data-health-basis' },
+        'Health is the latest source request. Stored historical coverage is separate and may remain available after the market closes or a source is temporarily empty.'));
+      syncOverviewToggle(healthCard, 'health');
+      dcDetailBuilders.health = function () {
+        var detail = el('div', {}, body);
         // Observability for the operator (review P2 #9): p50/p95 by route class, live.
         if (Learn.currentLevel() === 'expert') {
-          detailHost2.appendChild(UI.expandable('API latency (p50/p95 by route class)', function () {
+          detail.appendChild(UI.expandable('API latency (p50/p95 by route class)', function () {
             var holder = el('div', {}, UI.spinner('Reading metrics\u2026'));
             API.getFresh('/api/metrics').then(function (m) {
               holder.innerHTML = '';
@@ -5852,8 +6023,10 @@
             return holder;
           }));
         }
-      } else {
-        healthCard.appendChild(UI.expandable('Per-source detail', function () { return body; }));
+        return detail;
+      };
+      if (document.getElementById('dc-detail')?.getAttribute('data-detail') === 'health') {
+        openOverviewDetail('health', healthCard, true);
       }
     })();
 
@@ -5986,9 +6159,9 @@
     }
     card.appendChild(el('div', { class: 'chip-row' },
       chip('Cost/credit', fmtMoney(c.entryNetPremiumCents, { plus: true })),
-      chip('Max loss', el('span', { class: 'loss' }, fmtMoney(risk.maxLossCents))),
-      chip('Max profit', risk.maxProfitCents === null || risk.maxProfitCents === undefined
-        ? 'uncapped' : el('span', { class: 'gain' }, fmtMoney(risk.maxProfitCents))),
+      chip('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(risk.maxLossCents))),
+      chip('Theoretical max profit', UI.maxProfitLabel(c.strategy, c.structureGroup,
+        risk.maxProfitCents, level !== 'expert', c.legs)),
       chip('Chance of profit', fmtPct(risk.pop)),
       c.assignmentProb !== null && c.assignmentProb !== undefined ? chip('Assignment', fmtPct(c.assignmentProb)) : null));
     // The honest capital pair — buying power used vs full economic exposure.
@@ -6025,7 +6198,7 @@
         el('div', { class: 'alt-main' }, el('b', {}, c.displayName), el('span', { class: 'muted' }, '  ' + c.label)),
         el('div', { class: 'alt-facts' },
           chip('Decision score', Math.round(e.score.riskAdjustedScore), 'Risk-adjusted: gates, six weighted factors, then haircuts for evidence quality and tail risk. May rank differently than the quick screen score — this one decides.'),
-          chip('Max loss', el('span', { class: 'loss' }, fmtMoney(e.risk.maxLossCents)))),
+          chip('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(e.risk.maxLossCents)))),
         el('button', { class: 'btn btn-sm', onclick: function () { useEval(c, symbol); } }, 'Use'));
     }));
   }
@@ -6039,13 +6212,13 @@
         el('td', {}, evidenceBadge(e.evidence.rollup)),
         el('td', {}, fmtMoney(c.entryNetPremiumCents, { plus: true })),
         el('td', {}, el('span', { class: 'loss' }, fmtMoney(r.maxLossCents))),
-        el('td', {}, r.maxProfitCents == null ? 'uncapped' : fmtMoney(r.maxProfitCents)),
+        el('td', {}, UI.maxProfitLabel(c.strategy, c.structureGroup, r.maxProfitCents, false, c.legs)),
         el('td', {}, fmtPct(r.pop)),
         el('td', {}, el('span', { class: 'loss' }, fmtMoney(r.tailLossCents))),
         el('td', {}, el('button', { class: 'btn btn-sm', onclick: function () { useEval(c, symbol); } }, 'Use')));
     });
     return el('div', { id: 'decision-table' },
-      UI.table(['Structure', 'Decision score', 'Evidence', 'Cost', 'Max loss', 'Max profit', 'POP', 'Tail loss', ''], rows));
+      UI.table(['Structure', 'Decision score', 'Evidence', 'Cost', 'Theor. max loss', 'Theor. max profit', 'POP', 'Tail loss', ''], rows));
   }
 
   /**
@@ -6540,8 +6713,8 @@
     if (prob.pAnyProfit !== undefined) {
       wrap.appendChild(el('div', { class: 'grid grid-4', id: 'prob-map' },
         stat(el('span', {}, beginner ? 'Chance of making anything' : 'P(any profit)', UI.info('pop')), fmtPct(prob.pAnyProfit)),
-        stat(el('span', {}, beginner ? 'Chance of the FULL win' : 'P(max profit)', UI.info('pmaxprofit')), fmtPct(prob.pMaxProfit)),
-        stat(el('span', {}, beginner ? 'Chance of the WORST case' : 'P(max loss)', UI.info('pmaxloss')),
+        stat(el('span', {}, beginner ? 'Chance of the FULL theoretical win' : 'P(theoretical max profit)', UI.info('pmaxprofit')), fmtPct(prob.pMaxProfit)),
+        stat(el('span', {}, beginner ? 'Chance of the theoretical WORST case' : 'P(theoretical max loss)', UI.info('pmaxloss')),
           el('span', { class: prob.pMaxLoss > 0.4 ? 'loss' : '' }, fmtPct(prob.pMaxLoss))),
         stat(el('span', {}, beginner ? 'A very bad run costs' : 'CVaR 95%', UI.info('cvar')),
           el('span', { class: 'loss' }, fmtMoney(prob.cvar95Cents)))));

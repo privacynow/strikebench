@@ -24,7 +24,7 @@ public record ScenarioSpec(
     public enum PathModel { GBM, BROWNIAN_BRIDGE, BLOCK_BOOTSTRAP, STUDENT_T, JUMP_DIFFUSION, HESTON }
 
     /** Shape = a deterministic guide the stochastic model rides on. */
-    public enum Shape { GRIND_UP, SELLOFF_REBOUND, RALLY_FADE, CHOP, GAP_UP, GAP_DOWN, EVENT_JUMP }
+    public enum Shape { GRIND_UP, GRIND_DOWN, SELLOFF_REBOUND, RALLY_FADE, CHOP, GAP_UP, GAP_DOWN, EVENT_JUMP }
 
     /** Heston stochastic variance: dv = κ(θ−v)dt + ξ√v dW_v, corr(dW_s,dW_v)=ρ, v(0)=v0 (variance). */
     public record Heston(double kappa, double theta, double xi, double rho, double v0) {
@@ -45,6 +45,7 @@ public record ScenarioSpec(
         double v = volAnnual <= 0 ? 0.25 : volAnnual;
         return switch (shape) {
             case GRIND_UP -> base(PathModel.GBM, shape, horizonDays, 0.15, v * 0.8, seed, paths);
+            case GRIND_DOWN -> base(PathModel.GBM, shape, horizonDays, -0.15, v * 0.8, seed, paths);
             case SELLOFF_REBOUND -> base(PathModel.GBM, shape, horizonDays, 0.05, v * 1.4, seed, paths);
             case RALLY_FADE -> base(PathModel.GBM, shape, horizonDays, -0.05, v * 1.2, seed, paths);
             case CHOP -> base(PathModel.GBM, shape, horizonDays, 0.0, v, seed, paths);

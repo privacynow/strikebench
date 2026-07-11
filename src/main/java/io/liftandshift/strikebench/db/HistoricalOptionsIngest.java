@@ -100,10 +100,11 @@ public final class HistoricalOptionsIngest {
         String undSql = "INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,1) "
                 + "ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET close=excluded.close, observed=1";
 
-        int opt = 0, skipped = 0;
+        int opt = 0, skipped = 0, rowNumber = 1;
         Map<String, BigDecimal> underlyings = new HashMap<>(); // symbol|date -> underlying close
         try (PreparedStatement ps = c.prepareStatement(optSql)) {
             for (String[] row : rows) {
+                rowNumber++;
                 try {
                     String symbol = up(get(row, col, "symbol"));
                     LocalDate asof = LocalDate.parse(get(row, col, "date").trim());
@@ -138,7 +139,10 @@ public final class HistoricalOptionsIngest {
                     if (opt % 1000 == 0) ps.executeBatch();
                 } catch (RuntimeException e) {
                     skipped++;
-                    if (problems.size() < 20) problems.add("row skipped: " + e.getClass().getSimpleName() + " " + e.getMessage());
+                    log.debug("Historical options import skipped row {}", rowNumber, e);
+                    if (problems.size() < 20) {
+                        problems.add("row " + rowNumber + " skipped: invalid or missing field");
+                    }
                 }
             }
             ps.executeBatch();

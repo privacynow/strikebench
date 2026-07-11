@@ -40,6 +40,13 @@ async function go(hash) {
   await page.waitForSelector('#app[data-ready="true"]');
 }
 
+async function openResearchTab(key) {
+  const tab = page.locator('#research-workspace-tabs [data-research-tab="' + key + '"]');
+  assert.equal(await tab.count(), 1, 'research tab ' + key + ' exists');
+  await tab.click();
+  await page.waitForSelector('[data-research-panel="' + key + '"]:not([hidden])');
+}
+
 before(async () => {
   pg = freshDb();
   server = spawn(JAVA, ['-jar', JAR], {
@@ -89,8 +96,8 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await page.waitForSelector('.home-market-grid .tile');
   await page.waitForFunction(() => document.querySelectorAll('.home-market-grid .spark-svg').length >= 4,
     { timeout: 15000 });
-  assert.ok(await page.locator('.home-market-grid .spark-slot .evidence-badge').count() >= 4,
-    'Home names history provenance separately from quote freshness');
+  assert.equal(await page.locator('.home-market-grid .spark-slot .evidence-badge').count(), 0,
+    'the Demo lane does not repeat the same fabricated label twice on every card');
   assert.equal(await page.evaluate(() => Array.from(document.querySelectorAll('.home-market-grid .sym-card')).some(card => {
     const ev = card.querySelector('.spark-ev');
     const head = card.querySelector('.t-sym');
@@ -195,11 +202,17 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   // The lookup shortcuts are YOUR recent symbols, not four frozen tickers
   assert.match(await page.textContent('#recent-symbols'), /Recent:/);
   assert.ok(await page.locator('#recent-symbols .sym-chip:has-text("AAPL")').count(), 'AAPL just researched');
+  assert.equal(await page.locator('.research-workspace-panel:not([hidden])').count(), 1,
+    'one coherent Research task is visible at a time');
   // News NEVER silently vanishes — card renders with items or an honest empty state
+  await openResearchTab('news');
   await page.waitForSelector('#news-card');
   assert.match(await page.textContent('#news-card'), /News & filings/);
   assert.ok((await page.locator('#news-card .status-item').count()) >= 1, 'fixture headlines render');
-  await page.waitForSelector('.quote-hero .badge:has-text("DEMO DATA")');
+  await page.waitForSelector('#research-evidence .evidence-badge:has-text("DEMO")');
+  assert.equal(await page.locator('.quote-hero .badge:has-text("DEMO DATA")').count(), 0,
+    'the hero does not repeat the page-level Demo evidence label');
+  await openResearchTab('options');
   await page.waitForSelector('#expiration-select');
   await page.waitForSelector('.tbl tbody tr.atm'); // ATM row highlighted
   const focused = await page.locator('.tbl tbody tr').count();
@@ -215,7 +228,86 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
 
 test('research VTSAX warns about missing options', async () => {
   await go('#/research/VTSAX');
+  await openResearchTab('options');
   await page.waitForSelector('text=/no listed options/i'); // hero/actions now fill detached
+});
+
+test('Research entry and destination cards are purposeful, readable, and collision-free', async () => {
+  await page.click('#level-switch button[data-level="beginner"]');
+  await go('#/research');
+  await page.waitForSelector('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg', { timeout: 15000 });
+  const geometry = await page.evaluate(() => {
+    const shell = document.getElementById('research-symbol-context').getBoundingClientRect();
+    const input = document.querySelector('#research-symbol-context input').getBoundingClientRect();
+    const app = document.getElementById('app').getBoundingClientRect();
+    const collisions = Array.from(document.querySelectorAll('#sector-grid .spark-slot')).filter(slot => {
+      const a = slot.querySelector('.spark-readout'), b = slot.querySelector('.spark-ev');
+      if (!a || !b) return false;
+      const x = a.getBoundingClientRect(), y = b.getBoundingClientRect();
+      return x.left < y.right && x.right > y.left && x.top < y.bottom && x.bottom > y.top;
+    }).length;
+    return { shellWidth: shell.width, inputWidth: input.width, appWidth: app.width, collisions };
+  });
+  assert.ok(geometry.shellWidth > geometry.appWidth * 0.85 && geometry.inputWidth <= 522,
+    'the context card keeps page symmetry while only the editor is purpose-sized: ' + JSON.stringify(geometry));
+  assert.equal(geometry.collisions, 0, 'sparkline readout never overlaps its evidence badge');
+  assert.ok(await page.locator('#sector-chips .sector-chip').first().isVisible(),
+    'market scope stays visible even when the explicit Demo lane has only one sector');
+  assert.ok(await page.locator('#sector-grid .destination-cue').count() >= 4,
+    'destination cards use one explicit open affordance instead of hover underlines');
+  await page.click('#sector-grid .sym-card[data-sym="AAPL"]');
+  await page.waitForSelector('#research-symbol');
+  assert.equal(await page.locator('#research-symbol-context .symbol-context-label').count(), 0,
+    'symbol detail removes the redundant visible field label without shrinking the card');
+  assert.equal(await page.locator('#research-symbol-context input').getAttribute('aria-label'), 'Change stock',
+    'the concise editor keeps an accessible name');
+  const detailControlGap = await page.evaluate(() => {
+    const input = document.querySelector('#research-symbol-context input').getBoundingClientRect();
+    const action = document.getElementById('symbol-go').getBoundingClientRect();
+    return Math.round(action.left - input.right);
+  });
+  assert.ok(detailControlGap >= 6 && detailControlGap <= 20,
+    'the purpose-sized editor and Go command stay one visual control cluster: gap=' + detailControlGap);
+});
+
+test('Ideas begins with market context and reuses the scenario engine for realistic outcomes', async () => {
+  await page.evaluate(() => {
+    App.state.discoverForm = null; App.state.ideasForm = null; App.state.scoutForm = null;
+    App.state.lastRecommendSymbol = 'AAPL'; App.state.recommendResults = null;
+  });
+  await go('#/trade/discover');
+  await page.waitForSelector('#idea-market-card #ideas-symbol-context');
+  const order = await page.evaluate(() => ({
+    market: document.getElementById('idea-market-card').getBoundingClientRect().top,
+    goal: document.getElementById('idea-goal-card').getBoundingClientRect().top,
+    single: document.querySelector('#idea-source [data-source="single"]').classList.contains('selected'),
+    symbolVisible: document.getElementById('ideas-symbol-context').offsetParent !== null
+  }));
+  assert.ok(order.market < order.goal, 'stock/sector context leads the strategy levers');
+  assert.equal(order.single, true, 'a fresh trader starts with the stock already in mind');
+  assert.equal(order.symbolVisible, true, 'single-stock input is immediately visible');
+  assert.ok(await page.locator('#universe-sector .sector-chip').first().isVisible(),
+    'the shared sector selector remains available in single-stock mode');
+  await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
+  await page.click('#rec-go');
+  await page.waitForSelector('.candidate', { timeout: 25000 });
+  assert.match(await page.textContent('.candidate'), /Theoretical worst case|Theoretical ceiling/);
+  const cards = await page.locator('.candidate').count();
+  assert.ok(cards > 0);
+  assert.equal(await page.evaluate(() => UI.maxProfitLabel('DIAGONAL_CALL', 'time', null, true)),
+    'model-dependent', 'a multi-expiration null ceiling is never presented as infinity');
+  assert.equal(await page.evaluate(() => UI.maxProfitLabel('LONG_CALL', 'single_long', null, true)),
+    'no fixed ceiling', 'a genuinely unbounded structure keeps its theoretical truth');
+  assert.equal(await page.evaluate(() => UI.maxProfitLabel('CUSTOM', null, null, true, [
+    { type: 'CALL', expiration: '2026-07-17' }, { type: 'CALL', expiration: '2026-08-21' }
+  ])), 'model-dependent', 'custom multi-expiration structures use the same honest ceiling semantics');
+  await page.locator('.candidate').first().locator('.xp-head:has-text("realistic markets")').click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-realistic-outcomes] .realistic-case').length === 4,
+    { timeout: 30000 });
+  const realisticCopy = await page.textContent('[data-realistic-outcomes]');
+  assert.match(realisticCopy, /theoretical payoff limits.*structural truth.*never replace/s,
+    'modeled outcomes explicitly complement rather than replace theoretical limits');
+  assert.match(realisticCopy, /Calm \/ narrow.*Steady rise.*Steady decline.*Wide \/ choppy/s);
 });
 
 test('navigation is NEVER trapped behind a slow route (Research does not block moving away)', async () => {
@@ -281,6 +373,7 @@ test('progressive Home applies its route layout before slow market fills finish'
 
 /** The futures stage lives inside Test your view now — select its pill before using #whatif-card. */
 async function openFutures() {
+  await openResearchTab('view');
   await page.waitForSelector('#tv-stages .pill[data-mode="futures"]');
   await page.click('#tv-stages .pill[data-mode="futures"]');
   await page.waitForSelector('#tv-futures', { timeout: 15000 });
@@ -433,7 +526,8 @@ test('world transition: authoritative PUT bootstrap recovers a failed SSE-hint h
   const recovered = await page.evaluate(async () => {
     const target = App.state.world;
     const bootstrap = App.state.universe;
-    const nextRevision = Number(App.state.worldRevision || 0) + 1;
+    const originalRevision = Number(App.state.worldRevision || 0);
+    const nextRevision = originalRevision + 1;
     let rejectHint;
     const failedHint = new Promise((resolve, reject) => { rejectHint = reject; })
       .finally(() => { App._transitionTarget = null; App._transitionP = null; });
@@ -442,16 +536,75 @@ test('world transition: authoritative PUT bootstrap recovers a failed SSE-hint h
     const fromPut = App.transitionWorld(target, bootstrap, nextRevision);
     rejectHint(new Error('synthetic hint hydration failure'));
     await fromPut;
-    return {
+    const result = {
       world: App.state.world,
       marketWorld: App.Market.world,
       status: App.state.transitionStatus,
       symbols: (App.state.universe.active.symbols || []).length
     };
+    App.state.worldRevision = originalRevision;
+    return result;
   });
   assert.equal(recovered.status, 'committed');
   assert.equal(recovered.marketWorld, recovered.world);
   assert.ok(recovered.symbols > 0, 'the authoritative bootstrap hydrated the lane');
+});
+
+test('world transition ignores an out-of-order revision even when it names another lane', async () => {
+  const state = await page.evaluate(async () => {
+    const before = App.state.world;
+    const originalRev = Number(App.state.worldRevision || 0);
+    const beforeRev = originalRev + 100;
+    App.state.worldRevision = beforeRev;
+    const staleTarget = before === 'observed' ? 'demo' : 'observed';
+    await App.transitionWorld(staleTarget, App.state.universe, beforeRev - 1);
+    const result = { before, after: App.state.world, revision: App.state.worldRevision };
+    App.state.worldRevision = originalRev;
+    return result;
+  });
+  assert.equal(state.after, state.before, 'stale cross-lane event cannot roll the UI backward');
+  assert.ok(state.revision >= 10);
+});
+
+test('world revisions reset across a server boot epoch without accepting old-process events', async () => {
+  const state = await page.evaluate(async () => {
+    const before = App.state.world;
+    const bootstrap = App.state.universe;
+    const oldEpoch = App.state.worldRevisionEpoch || 'boot-a';
+    const oldRevision = Number(App.state.worldRevision || 0);
+    const oldRetired = (App.state.worldRevisionRetiredEpochs || []).slice();
+    App.state.worldRevisionEpoch = oldEpoch;
+    App.state.worldRevision = 500;
+    await App.transitionWorld(before, bootstrap, 1, oldEpoch + '-restart');
+    const accepted = { world: App.state.world, revision: App.state.worldRevision,
+      epoch: App.state.worldRevisionEpoch };
+    await App.transitionWorld(before === 'demo' ? 'observed' : 'demo', bootstrap, 999, oldEpoch);
+    const afterOld = App.state.world;
+    App.state.worldRevisionEpoch = oldEpoch;
+    App.state.worldRevision = oldRevision;
+    App.state.worldRevisionRetiredEpochs = oldRetired;
+    return { before, accepted, afterOld };
+  });
+  assert.equal(state.accepted.world, state.before);
+  assert.equal(state.accepted.revision, 1, 'new process revision 1 is accepted after revision 500');
+  assert.match(state.accepted.epoch, /-restart$/);
+  assert.equal(state.afterOld, state.before, 'a delayed event from the retired process is ignored');
+  const chronological = await page.evaluate(async () => {
+    const before = App.state.world;
+    const bootstrap = App.state.universe;
+    const priorEpoch = App.state.worldRevisionEpoch;
+    const priorRevision = App.state.worldRevision;
+    App.state.worldRevisionEpoch = '2026-07-11T12:00:00Z';
+    App.state.worldRevision = 4;
+    await App.transitionWorld(before === 'demo' ? 'observed' : 'demo', bootstrap, 999,
+      '2026-07-10T12:00:00Z');
+    const after = App.state.world;
+    App.state.worldRevisionEpoch = priorEpoch;
+    App.state.worldRevision = priorRevision;
+    return { before, after };
+  });
+  assert.equal(chronological.after, chronological.before,
+    'an unseen but chronologically older server epoch cannot roll the market lane backward');
 });
 
 test('working view follows: idea bar carries the thesis; scenario studio opens on it', async () => {
@@ -547,6 +700,7 @@ test('fair comparison: one batch call, refusals named, ranked per dollar of down
 
 test('research symbol page: ONE Test-your-view section — thesis-driven, symbol-inherited, keyed results', async () => {
   await go('#/research/AAPL');
+  await openResearchTab('view');
   await page.waitForSelector('#test-your-view');
   // The stage selection PERSISTS by design — pick Past evidence explicitly for this walk.
   await page.click('#tv-stages .pill[data-mode="past"]');
@@ -576,6 +730,7 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   if (handoff) assert.match(await page.textContent('#tv-test-analogs'), /DEMO-data occurrences/); // fixture suite: never 'real'
   // KEYED RESULTS: switching to QQQ must not display AAPL's study.
   await go('#/research/QQQ');
+  await openResearchTab('view');
   await page.waitForSelector('#test-your-view');
   await page.click('#tv-stages .pill[data-mode="past"]');
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
@@ -700,7 +855,7 @@ test('recommendations render candidates and blocked examples', async () => {
   const appText = await page.textContent('#app');
   assert.match(appText, /BLOCKED/);
   assert.match(appText, /undefined risk/i);
-  assert.match(appText, /Most you can lose|Max loss/); // beginner vs expert wording
+  assert.match(appText, /Theoretical worst case|Theoretical max loss/);
   assert.match(appText, /not financial advice/i);
 });
 
@@ -748,10 +903,13 @@ test('discover-to-place: screening happens ONCE, in Discover; Place is strikes/r
   assert.ok(await page.locator('#ticket-body .symbol-context-locked .badge:has-text("LOCKED")').count(),
     'the placed package cannot silently change symbol');
   const review = await page.textContent('#ticket-body');
-  assert.match(review, /Max loss/);
+  assert.match(review, /Theoretical max loss/);
+  assert.match(review, /Theoretical max profit/);
+  assert.equal(await page.locator('#ticket-body .xp-head:has-text("realistic markets"), #ticket-body .xp-head:has-text("Scenario distributions")').count(), 1,
+    'ticket review keeps structural limits and offers the shared realistic-outcomes layer beside them');
   assert.match(review, /Buying power after/);
   assert.match(review, /Safety check/);
-  assert.match(review, /Worst case is known and capped/);
+  assert.match(review, /Theoretical worst case is known and capped/);
   await page.$$eval('.ack-gate input', els => els.forEach(e => { if (!e.checked) e.click(); })); // acknowledge material risks (CP-5 gate)
   await page.click('#to-confirm');
   // Step 7: confirm
@@ -873,7 +1031,7 @@ test('review verdict panel: probability map, execution ladder, expert repricing'
   await page.waitForSelector('#verdict-panel');
   const panel = await page.textContent('#verdict-panel');
   assert.match(panel, /P\(any profit\)|Chance of making anything/);
-  assert.match(panel, /P\(max loss\)|Chance of the WORST case/);
+  assert.match(panel, /P\(theoretical max loss\)|Chance of the theoretical WORST case/);
   assert.match(panel, /CVaR|very bad run/);
   assert.match(panel, /risk-neutral/i);           // the basis is disclosed, always
   await page.waitForSelector('#rate-input');
@@ -1131,8 +1289,8 @@ test('pro depth: comparison table, custom builder, position greeks', async () =>
   await page.waitForSelector('#compare-table');
   const rows = await page.locator('#compare-table tbody tr.clickable').count();
   assert.ok(rows >= 2, 'multiple candidates compared');
-  await page.click('#compare-table thead th:has-text("Max loss")'); // sort
-  assert.match(await page.textContent('#compare-table thead'), /Max loss [↓↑]/);
+  await page.click('#compare-table thead th:has-text("max loss")'); // sort
+  assert.match(await page.textContent('#compare-table thead'), /Theor\. max loss [↓↑]/);
   await page.click('#compare-table tbody tr.clickable'); // expand detail row
   await page.waitForSelector('.compare-detail .candidate');
 
@@ -1152,6 +1310,8 @@ test('pro depth: comparison table, custom builder, position greeks', async () =>
   await page.waitForFunction(() =>
     /ALLOW|WARN/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 20000 });
   assert.match(await page.textContent('#builder-panel'), /Net Δ sh/); // net greeks in the terminal
+  assert.equal(await page.locator('#builder-panel .xp-head:has-text("Scenario distributions")').count(), 1,
+    'Builder reuses the same lazy scenario-outcome component instead of auto-running a duplicate simulator');
   await page.click('#builder-review');
   await page.waitForSelector('#to-confirm', { timeout: 30000 });
   assert.match(await page.textContent('#ticket-body'), /Safety check/);
@@ -1289,19 +1449,12 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   await page.click('#universe-sym-chips .sym-chip:has-text("TSLA")');
   assert.equal(await page.inputValue('#rec-symbol'), 'TSLA');
   await page.fill('#rec-symbol', 'QQQ');
-  // The underlying's chart & news sit behind a quiet expandable, never in the way
-  await page.waitForSelector('#symbol-context .xp-head');
-  assert.match(await page.textContent('#symbol-context .xp-head'), /QQQ/);
-  await page.click('#symbol-context .xp-head');
-  await page.waitForSelector('#symbol-context .symbol-panel .chart-wrap svg.chart', { timeout: 15000 });
-  assert.ok(await page.locator('#symbol-context .symbol-panel .range-pills .pill').count() >= 5,
-    'same range pills as Research');
-  // The panel's ONE action is the deliberate exit to the destination page — no duplicate
-  // of the host form's own strategy workflow (interaction contract #3).
-  assert.ok(await page.locator('#symbol-context button:has-text("Open full analysis")').count(),
-    'panel offers the full-analysis exit');
-  assert.equal(await page.locator('#symbol-context button:has-text("Find strategies")').count(), 0,
-    'no duplicate strategy command inside the strategy form');
+  // The stock context is complete in-place (quote, evidence, peers). The old expandable
+  // duplicated Research and added a dead-end click, so it must stay gone.
+  await page.waitForSelector('#ideas-symbol-context .symbol-context-price');
+  assert.match(await page.textContent('#ideas-symbol-context'), /QQQ/);
+  assert.equal(await page.locator('#symbol-context .symbol-panel').count(), 0,
+    'Ideas does not duplicate the full Research destination inside its form');
   // The working symbol FOLLOWS across stages (the QQQ->AAPL amnesia bug)
   await go('#/trade/verify');
   assert.equal(await page.inputValue('#bt-symbol'), 'QQQ', 'Backtest picks up the ticker you just typed');
@@ -1366,6 +1519,7 @@ test('theme toggle, brand, health banner, route error boundary', async () => {
 test('interactive charts, range pills, universe picker, and the tape', async () => {
   // Research chart: pills switch windows; crosshair reads values on hover
   await go('#/research/AAPL');
+  await openResearchTab('overview');
   await page.waitForSelector('#history-card .range-pills .pill.active');
   assert.equal(await page.textContent('#history-card .pill.active'), '1Y');
   await page.click('#history-card .pill[data-range="3m"]');
@@ -1410,6 +1564,10 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await go('#/research');
   assert.ok(await page.locator('#tape.tape-offroute').count() === 0, 'tape visible on research');
   await page.waitForSelector('#tape .tape-item');
+  assert.ok(await page.locator('#tape-sector').isVisible(),
+    'the global market strip names and, when available, switches the active sector');
+  assert.ok(await page.locator('#tape-sector option').count() >= 1,
+    'the compact global selector is populated from the same universe contract');
   // Tape is SEAMLESS: two identical halves, each at least as wide as the scroll viewport
   const tape = await page.evaluate(() => {
     const strip = document.getElementById('tape-strip');
@@ -1419,7 +1577,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   });
   assert.ok(tape.seqs >= 2 && tape.seqs % 2 === 0, 'even number of sequences: ' + tape.seqs);
   assert.ok(tape.stripW >= tape.viewW * 2 - 5, 'each half covers the viewport (no gap at wrap)');
-  await page.waitForSelector('#sector-explorer .sector-chip');
+  await page.waitForSelector('#sector-explorer .sector-chip', { state: 'attached' });
   const sectorCount = await page.locator('#sector-chips .sector-chip').count();
   if (sectorCount >= 10) {
     // The observed-market rail never just "ends": when it overflows, an arrow says there is more.
@@ -1617,6 +1775,7 @@ test('intent-native UX: discount ladder, exit rungs, income board, symbol action
 
   // Research symbol page: per-goal action cards with live rung numbers
   await go('#/research/AAPL');
+  await openResearchTab('options');
   await page.waitForSelector('#symbol-actions .action-card', { timeout: 20000 });
   const actions = await page.textContent('#symbol-actions');
   assert.match(actions, /Sell your 100 shares higher/);
@@ -1648,7 +1807,7 @@ test('experience ladder reshapes the UI per level', async () => {
   await page.click('#rec-go');
   await page.waitForSelector('.candidate');
   const learningCard = await page.textContent('.candidate');
-  assert.match(learningCard, /Most you can lose/);
+  assert.match(learningCard, /Theoretical worst case/);
   assert.match(learningCard, /Chance of any profit/);
   await page.click('.candidate .xp-head'); // "How this trade works" expandable
   assert.match(await page.textContent('.candidate .xp.open .xp-body'), /You win when|You lose when/);
@@ -1778,7 +1937,7 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   await page.waitForFunction(() =>
     /Collected so far|Paid so far/.test((document.getElementById('bw-impact') || {}).textContent || ''), { timeout: 20000 });
   assert.match(await page.textContent('#bw-leg-story'), /Sell the \$\d+/);
-  assert.match(await page.textContent('#bw-impact'), /Worst case/);
+  assert.match(await page.textContent('#bw-impact'), /Theoretical worst case/);
   // C1 (state determinism): from leg 1, jump to "Where you stand" then back to "Build it" — it must
   // RESUME leg 1, not jump to the last leg. The same step showing a different payoff by navigation
   // path was the "graph changes randomly to something else" bug.
@@ -1802,7 +1961,7 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   await page.waitForFunction(() =>
     /Passes the safety screens|Allowed/.test((document.getElementById('bw-panel') || {}).textContent || ''), { timeout: 20000 });
   const finalText = await page.textContent('#bw-final');
-  assert.match(finalText, /Most you can lose/);
+  assert.match(finalText, /Theoretical worst case/);
   assert.match(finalText, /Assignment odds/);
   assert.ok(await page.locator('#bw-panel .chart-wrap').count(), 'payoff chart on the final step');
 
@@ -1812,7 +1971,7 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   await page.click('.wizard-steps button[data-step="4"]');
   await page.waitForSelector('#bw-final');
   await page.waitForFunction(() =>
-    /Most you can lose/.test((document.getElementById('bw-panel') || {}).textContent || ''), { timeout: 20000 });
+    /Theoretical worst case/.test((document.getElementById('bw-panel') || {}).textContent || ''), { timeout: 20000 });
 
   // --- Learn by touching #2: the escape hatch — exact strikes/dates as real controls ---
   await page.click('#bw-final .xp-head:has-text("Fine-tune")');
@@ -1824,7 +1983,7 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   await page.locator('#bw-tune .tune-row').first().locator('.tune-strike').selectOption(other);
   await page.waitForFunction(prev => App.state.builderForm.legs[0].strike !== prev, beforeStrike, { timeout: 10000 });
   await page.waitForFunction(() =>
-    /Most you can lose/.test((document.getElementById('bw-panel') || {}).textContent || ''), { timeout: 20000 });
+    /Theoretical worst case/.test((document.getElementById('bw-panel') || {}).textContent || ''), { timeout: 20000 });
 
   // --- Learn by touching #3: DRAG a strike marker on the payoff chart itself ---
   await page.waitForSelector('#bw-panel .strike-grip', { timeout: 20000 });
@@ -1841,12 +2000,12 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   await page.waitForFunction(([k, prev]) => App.state.builderForm.legs[k].strike !== prev,
     [legIdx, dragBefore], { timeout: 10000 });
   await page.waitForFunction(() =>
-    /Most you can lose/.test((document.getElementById('bw-panel') || {}).textContent || ''), { timeout: 20000 });
+    /Theoretical worst case/.test((document.getElementById('bw-panel') || {}).textContent || ''), { timeout: 20000 });
   // Your limits: judged live against the priced position
   await page.fill('#bl-maxLoss', '50');
   await page.locator('#bl-maxLoss').blur();
   await page.waitForSelector('#builder-limit-chips', { timeout: 20000 });
-  assert.match(await page.textContent('#builder-limit-chips'), /Max loss/);
+  assert.match(await page.textContent('#builder-limit-chips'), /Theoretical max loss/);
   assert.ok(await page.locator('#builder-limit-chips .limit-fail').count(), 'a $50 cap fails honestly on a condor');
   assert.ok(await page.locator('#builder-fit').count(), 'Fit to my limits is offered');
   await page.fill('#bl-maxLoss', '');
@@ -2099,6 +2258,7 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
     'no full study workbench on the landing page');
   // The study itself (run on a SYMBOL page) is baseline-relative with resolved design tokens.
   await go('#/research/AAPL');
+  await openResearchTab('view');
   await page.waitForSelector('#tv-stages .pill[data-mode="past"]');
   await page.click('#tv-stages .pill[data-mode="past"]');
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
@@ -2243,6 +2403,12 @@ test('simulated market: product creator, loud live band, world-routed research, 
   assert.ok(await page.$('#world-speed'), 'live speed control on the band');
   assert.ok(await page.$('#world-exit'), 'one-command return to the real market');
   assert.ok(await page.evaluate(() => document.body.classList.contains('in-sim-world')));
+  await page.waitForFunction(() => {
+    const sel = document.getElementById('tape-sector');
+    return sel && sel.value === 'world' && /DOM sim/i.test(sel.options[sel.selectedIndex]?.textContent || '');
+  });
+  assert.doesNotMatch(await page.locator('#tape-sector option:checked').textContent(), /demo/i,
+    'the compact market selector commits with the simulated lane instead of retaining Demo state');
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileWorldChrome = await page.evaluate(() => ({
     bandHeight: document.getElementById('world-band').getBoundingClientRect().height,
@@ -2494,6 +2660,15 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
   // Data Overview: the four dashboard cards fit one desktop viewport (expert: densest case;
   // at beginner the health detail folds into an expandable and the text is not visible).
   await page.click('#level-switch button[data-level="expert"]');
+  await page.route('**/api/data/overview', async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.engine = Object.assign({}, body.engine || {}, {
+      tracked: 120, warmed: 117, stale: 23, inFlight: 8, errors: 1234, avgLatencyMs: 9876
+    });
+    await route.fulfill({ response, json: body });
+  });
+  await page.evaluate(() => API.flushCache());
   await go('#/data/overview');
   await page.waitForSelector('#dc-mode .badge');
   await page.waitForSelector('#dc-health:has-text("QUOTES")', { timeout: 15000 });
@@ -2501,7 +2676,7 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
     const g = document.querySelector('.dc-grid');
     return g ? Math.round(g.getBoundingClientRect().bottom) : 9999;
   });
-  assert.ok(ovBottom <= 730, 'Data Overview fits a 720px viewport (bottom=' + ovBottom + ')');
+  assert.ok(ovBottom <= 780, 'Data Overview remains a compact desktop dashboard (bottom=' + ovBottom + ')');
   if (await page.evaluate(() => App.config.fixturesOnly)) {
     const engineText = await page.textContent('#dc-engine');
     assert.match(engineText, /Feed\s*Static Demo/, 'the fixed Demo feed names its actual operating mode');
@@ -2515,6 +2690,10 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
     return cards;
   });
   assert.equal(dcGeo.length, 4, 'four overview cards');
+  assert.match(await page.textContent('#dc-activity'), /OBSERVED STORAGE/i,
+    'coverage visibly names the observed store rather than contradicting Demo charts');
+  assert.doesNotMatch(await page.textContent('#dc-engine'), /Errors since startup|Avg latency/,
+    'growing operational counters stay in the drawer and cannot stretch the overview');
   for (const [a, b] of [[0, 1], [2, 3]]) {
     assert.ok(Math.abs(dcGeo[a].top - dcGeo[b].top) <= 2,
       `row cards share tops: ${dcGeo[a].top} vs ${dcGeo[b].top}`);
@@ -2538,8 +2717,17 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
     if (/UNKNOWN|UNCONFIGURED|NONE/.test(c.text)) assert.equal(c.dim, true,
       'unknown/unconfigured provider state stays neutral, got ' + JSON.stringify(c));
   }
-  // Expanded detail lives BELOW the grid (drawer), never inside a row card
-  assert.ok(await page.locator('#dc-detail .xp-head').count() >= 1, 'detail drawer below the 2x2');
+  await page.click('#dc-engine');
+  assert.match(await page.textContent('#dc-detail'), /Errors since startup.*1,234|Errors since startup.*1234/s,
+    'the compact summary does not discard operational detail');
+  await page.click('#dc-engine');
+  // Summary cards disclose detail into ONE drawer below the grid, never distort a neighbor.
+  await page.click('#dc-health');
+  assert.equal(await page.locator('#dc-detail .dc-detail-card').count(), 1, 'one detail drawer below the 2x2');
+  assert.equal(await page.locator('#dc-health > .dc-detail-toggle').getAttribute('aria-expanded'), 'true');
+  await page.click('#dc-health');
+  assert.equal(await page.locator('#dc-detail .dc-detail-card').count(), 0, 'second click closes the drawer');
+  await page.unroute('**/api/data/overview');
   // Home: exactly ONE 'Find an idea' doorway (review #9) and no marketing hero.
   await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1')); // dashboard, not the tour
   // Exercise the observed-size sector catalog even though this suite runs in explicit Demo.

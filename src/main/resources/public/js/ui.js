@@ -96,13 +96,16 @@
     if (typeof evidence === 'string') evidence = { provenance: evidence };
     var p = String(evidence.provenance || 'MISSING').toUpperCase();
     var age = String(evidence.age || '').toUpperCase();
-    var label = p === 'DEMO' ? 'DEMO · FABRICATED'
+    var compact = !!(opts && opts.compact);
+    var label = p === 'DEMO' ? (compact ? 'DEMO' : 'DEMO · FABRICATED')
       : p === 'SIMULATED' ? 'SIMULATED'
       : p === 'MODELED' ? 'MODELED'
       : p === 'MIXED' ? 'MIXED SOURCES'
       : p === 'MISSING' ? 'DATA UNAVAILABLE'
       : p;
-    if ((p === 'OBSERVED' || p === 'BROKER') && age && age !== 'NOT_APPLICABLE') label += ' · ' + age;
+    if ((p === 'OBSERVED' || p === 'BROKER') && age && age !== 'NOT_APPLICABLE') {
+      label += compact && age === 'REALTIME' ? '' : ' · ' + age;
+    }
     var cls = p === 'OBSERVED' || p === 'BROKER'
       ? (age === 'STALE' ? 'badge-danger' : age === 'DELAYED' ? 'badge-warn' : 'badge-ok')
       : p === 'DEMO' ? 'badge-warn'
@@ -835,7 +838,8 @@
     halftone: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17A8.5 8.5 0 0 0 12 3.5z" fill="currentColor" stroke="none"/>',
     warn: '<path d="M12 3.5L21.5 20h-19z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.2" r="0.6" fill="currentColor"/>',
     info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/>',
-    magnifier: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4L21 21"/>'
+    magnifier: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4L21 21"/>',
+    'chevron-right': '<path d="M9 5l7 7-7 7"/>'
   };
   function icon(name, size) {
     var span = el('span', { class: 'icon' });
@@ -843,6 +847,27 @@
       + '" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
       + (ICON_PATHS[name] || '') + '</svg>';
     return span;
+  }
+
+  var TIME_SPREADS = ['CALENDAR_CALL', 'CALENDAR_PUT', 'DIAGONAL_CALL', 'DIAGONAL_PUT'];
+  function profitCeilingKind(strategy, structureGroup, value, legs) {
+    if (value !== null && value !== undefined) return 'finite';
+    var expirations = {};
+    (legs || []).forEach(function (leg) {
+      if (!leg || leg.stock || String(leg.type || '').toUpperCase() === 'STOCK' || !leg.expiration) return;
+      expirations[String(leg.expiration)] = true;
+    });
+    if (structureGroup === 'time' || Object.keys(expirations).length > 1
+        || TIME_SPREADS.indexOf(String(strategy || '').toUpperCase()) >= 0) {
+      return 'model-dependent';
+    }
+    return 'uncapped';
+  }
+  function maxProfitLabel(strategy, structureGroup, value, beginner, legs) {
+    var kind = profitCeilingKind(strategy, structureGroup, value, legs);
+    if (kind === 'finite') return fmtMoney(value);
+    if (kind === 'model-dependent') return 'model-dependent';
+    return beginner ? 'no fixed ceiling' : 'uncapped';
   }
 
   /**
@@ -1028,7 +1053,9 @@
       showAt(Math.round(((ev.clientX - r.left) / r.width) * (closes.length - 1)));
     });
     svg.addEventListener('pointerleave', clearReadout);
-    var wrap = el('div', { class: 'spark', style: 'height:' + (h + 20) + 'px' }, svg, readout);
+    // The readout may wrap on narrow cards. A fixed h+20 wrapper let that second line spill into
+    // the evidence badge below; reserve a minimum but let the component grow to its real content.
+    var wrap = el('div', { class: 'spark', style: 'min-height:' + (h + 20) + 'px' }, svg, readout);
     // Keyboard exploration when the OWNING card has focus: left/right walk the points.
     wrap.exploreKey = function (key) {
       if (key !== 'ArrowLeft' && key !== 'ArrowRight') return false;
@@ -1056,6 +1083,7 @@
     var symbol = String(opts.symbol || '').toUpperCase();
     var wrap = el('section', {
       class: 'symbol-context-bar symbol-context-' + mode + (opts.compact ? ' symbol-context-compact' : '')
+        + (opts.showStatus === false ? ' symbol-context-no-status' : '')
         + (opts.class ? ' ' + opts.class : ''),
       id: opts.id || null,
       'aria-label': opts.ariaLabel || (mode === 'multi' ? 'Market symbols' : 'Stock context')
@@ -1144,8 +1172,9 @@
       });
       if (!input.id) input.id = (opts.id || 'symbol-context') + '-input';
       input.value = input.value || symbol;
+      if (opts.hideLabel) input.setAttribute('aria-label', labelText);
       var field = el('div', { class: 'symbol-context-field' },
-        el('label', { for: input.id, class: 'symbol-context-label' }, labelText), input);
+        opts.hideLabel ? null : el('label', { for: input.id, class: 'symbol-context-label' }, labelText), input);
       primary.appendChild(field);
       function settle() {
         var next = String(input.value || '').trim().toUpperCase();
@@ -1197,6 +1226,8 @@
     fmtDate: fmtDate,
     el: el,
     icon: icon,
+    profitCeilingKind: profitCeilingKind,
+    maxProfitLabel: maxProfitLabel,
     skeleton: skeleton,
     rangeChart: rangeChart,
     brandMark: brandMark,
