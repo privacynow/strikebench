@@ -81,6 +81,31 @@ class StoredCandleStoreTest {
             assertThat(c.close()).isEqualByComparingTo("200");
             assertThat(c.adjusted()).isTrue();
         });
+        assertThat(series.source()).isEqualTo("stored:official-source");
+        assertThat(series.priceBasis()).isEqualTo("ADJUSTED");
+    }
+
+    @Test
+    void incompleteHighQualitySourceDoesNotGetStitchedIntoCompleteLowerSource() {
+        db = TestDb.fresh();
+        for (String d : List.of("2026-04-01", "2026-04-02", "2026-04-03", "2026-04-06", "2026-04-07")) {
+            db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,quality_rank) VALUES ('AAPL',?,100,'complete',1,70)",
+                    LocalDate.parse(d));
+        }
+        db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,quality_rank) VALUES ('AAPL','2026-04-07',999,'partial-premium',1,99)");
+        var series = new StoredCandleStore(db).candles("AAPL", LocalDate.parse("2026-04-01"),
+                LocalDate.parse("2026-04-07"), DatasetService.OBSERVED).orElseThrow();
+        assertThat(series.source()).isEqualTo("stored:complete");
+        assertThat(series.candles().getLast().close()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    void oneSourceWithMixedRawAndAdjustedRowsIsNotServedAsCoherentHistory() {
+        db = TestDb.fresh();
+        db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,adjusted) VALUES ('AAPL','2026-04-01',100,'mixed',1,0)");
+        db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,adjusted) VALUES ('AAPL','2026-04-02',50,'mixed',1,1)");
+        assertThat(new StoredCandleStore(db).candles("AAPL", LocalDate.parse("2026-04-01"),
+                LocalDate.parse("2026-04-02"), DatasetService.OBSERVED)).isEmpty();
     }
 
     @Test

@@ -141,7 +141,9 @@ Environment variables, or the same keys lowercase-dotted in `./strikebench.prope
 | `ENGINE_ENABLED` | `true` | In-memory market engine: warm the active universe on boot + refresh in the background |
 | `ENGINE_QUOTE_REFRESH_SECONDS` / `ENGINE_QUOTE_REFRESH_CLOSED_SECONDS` | `20` / `300` | Engine refresh cadence (RTH / market-closed) |
 | `ENGINE_MAX_TRACKED` / `ENGINE_STREAM_INTERVAL_SECONDS` | `220` / `3` | Warm-set cap (LRU) / SSE push interval on `/api/market/stream` |
-| `YAHOO_ENABLED` | `false` | **PERSONAL / local-clone only** — keyless Yahoo daily equity candles for underlying backfill (NOT options; you own Yahoo's terms). Never a hosted default |
+| `YAHOO_ENABLED` + `YAHOO_AUTOMATION_PERMISSION_CONFIRMED` | `false` / `false` | **PERSONAL / local-clone only** — both are required; automated Yahoo access remains permission-gated and is never a hosted default |
+| `YAHOO_DAILY_REQUEST_LIMIT` | `100` | Durable local safety cap; does not grant source rights |
+| `STOOQ_ENABLED` | `false` | Opt-in only; automated clients commonly receive an anti-bot response |
 | `AUTH_ENABLED` + `OIDC_*` + `AUTH_ALLOWED_EMAILS` + `AUTH_COOKIE_SECURE` | off | Google sign-in + per-user scoping |
 | `AUTH_ADMIN_EMAILS` / `ADMIN_TOKEN` | — | Who can run destructive ops (data reset, CSV import). With auth on: admin-email allowlist (else the entry allowlist). With auth off: `ADMIN_TOKEN` matched via `X-Admin-Token`, else LOCAL-only (blocked behind the TLS proxy) |
 | `FEE_PER_CONTRACT_CENTS` | `65` | Commission per contract per leg |
@@ -149,8 +151,10 @@ Environment variables, or the same keys lowercase-dotted in `./strikebench.prope
 | `DEFAULT_STARTING_CASH_CENTS` | `10000000` | New paper account ($100k) |
 | `HTTP_TIMEOUT_MS` | `10000` | Provider timeout |
 | `AUTO_UNIVERSE` | — | Fallback scout universe (the in-app sector picker overrides) |
-| `POLYGON_API_KEY` | — | Historical candles + historical option chains (backtest tier) |
-| `ALPHAVANTAGE_API_KEY` | — | Daily adjusted candles |
+| `POLYGON_API_KEY` / `POLYGON_DAILY_REQUEST_LIMIT` | — / `0` | Plan-governed historical candles + option chains; zero means no invented StrikeBench cap |
+| `ALPHAVANTAGE_API_KEY` | — | Compact adjusted daily candles through the official keyed API |
+| `ALPHAVANTAGE_FULL_HISTORY_ENABLED` | `false` | Use full daily history only when the key's plan is entitled |
+| `ALPHAVANTAGE_DAILY_REQUEST_LIMIT` | `25` | Durable daily request safety cap shared by screens and jobs |
 | `FRED_API_KEY` | — | Risk-free rates (else keyless Treasury XML) |
 | `ETRADE_CONSUMER_KEY` / `ETRADE_CONSUMER_SECRET` | — | Enables the E*TRADE adapter |
 | `ETRADE_SANDBOX` | `true` | Sandbox vs live E*TRADE |

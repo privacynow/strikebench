@@ -94,19 +94,25 @@ and US Treasury yields when those sources answer. Missing observed data stays un
 Built-in fabricated data exists only after you explicitly enter the isolated **Demo** market;
 it never fills a gap in Observed.
 
-Two optional free keys unlock more:
+Daily price history has several lawful, additive paths. StrikeBench never assumes that a key
+grants storage or redistribution rights; the source's plan and terms remain authoritative.
 
-| Configure | What it unlocks |
+| Path | What it unlocks |
 |---|---|
-| `POLYGON_API_KEY` | Eligible daily price history and historical option chains that can upgrade backtests from modeled to observed pricing |
-| `ALPHAVANTAGE_API_KEY` | Eligible daily price history (alternative to Polygon) |
+| Your own CSV export | Broker/vendor/Yahoo-exported daily OHLCV or closes, validated and stored locally with its source and raw/adjusted basis |
+| `POLYGON_API_KEY` | Official keyed daily history and plan-dependent historical option data; your subscribed terms apply |
+| `ALPHAVANTAGE_API_KEY` | Official keyed adjusted daily history; compact access is request-limited and full history requires an entitled plan |
+| Authorized Yahoo automation | Disabled unless both local opt-in and permission confirmation are set; never a hosted default |
 
-The **Data** screen shows the live health of every source, per domain.
+Data → Sources & jobs previews missing sessions and request cost before downloading, resumes
+per symbol after interruption, quarantines invalid rows, and can run once after each completed
+market session. Daily bars are intentionally not re-downloaded every hour.
 
 ## Good to know
 
-- **Charts empty for some stocks?** Price *history* needs one of the free keys above; quotes
-  and chains work keyless.
+- **Charts empty for some stocks?** Quotes, option chains, and daily history are separate domains.
+  Import a file you may use or connect an eligible daily-history source; StrikeBench leaves the
+  chart blank rather than substituting Demo data.
 - **"Market is closed" warnings** are real: after 4pm ET, quotes are the last session's and
   paper fills are simulated. The app refuses to trade contracts that are already dead.
 - **Updated the app while it was running?** Restart it — the UI shows a red banner when it

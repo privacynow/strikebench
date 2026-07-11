@@ -1181,6 +1181,7 @@
                   ? 'These are observed closing prices through ' + candles[candles.length - 1].date
                     + '. Daily highs and lows were not in the source and are not drawn as candles. '
                   : 'These are stored historical OHLC observations through ' + candles[candles.length - 1].date + '. ')
+                  + (hist.priceBasis === 'ADJUSTED' ? 'Prices are adjusted for corporate actions. ' : '')
                   + 'They remain available when the market is closed; closed means no new session updates, not that past observations disappear.')
               : null,
         emptyText: candles.length ? null

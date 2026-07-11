@@ -36,38 +36,42 @@ public final class StoredCandleStore implements CandleStore {
         // even as a weakest-link fallback. Scenario datasets intentionally contain modeled rows.
         String provenanceClause = synthetic ? " " : " AND observed=1 ";
         List<Row> rows = db.query(
-                "SELECT DISTINCT ON (d) d::text d, open, high, low, close, volume, source, observed,adjusted,bar_kind "
+                "SELECT d::text d, open, high, low, close, volume, source, observed,adjusted,bar_kind,quality_rank "
               + "FROM underlying_bar WHERE symbol=? AND dataset_id=? AND d BETWEEN ? AND ? "
               + provenanceClause
-              + "ORDER BY d, observed DESC, quality_rank DESC, created_at DESC, source",
+              + "ORDER BY source,d",
                 r -> new Row(LocalDate.parse(r.str("d")),
                         r.bd("open"), r.bd("high"), r.bd("low"), r.bd("close"),
-                        r.lng("volume"), r.lng("observed") == 1, r.lng("adjusted") == 1, r.str("bar_kind")),
+                        r.lng("volume"), r.str("source"), r.lng("observed") == 1,
+                        r.lng("adjusted") == 1, r.str("bar_kind"), r.intv("quality_rank")),
                 sym, dataset, from, to);
         if (rows.size() < 2) return Optional.empty(); // not enough to be useful; fall through to providers
-
-        List<Candle> candles = new java.util.ArrayList<>(rows.size());
-        boolean allObserved = true;
-        for (Row r : rows) {
-            if (r.close == null) continue;
-            allObserved &= r.observed;
-            candles.add(new Candle(r.d,
-                    r.open == null ? r.close : r.open,
-                    r.high == null ? r.close : r.high,
-                    r.low == null ? r.close : r.low,
-                    r.close, r.volume, r.adjusted));
-        }
-        if (candles.size() < 2) return Optional.empty();
-
-        if (synthetic) {
-            // Scenario mode: the dataset IS the analysis world — serve whatever it holds, MODELED.
-            return Optional.of(new CandleSeries(candles, "synthetic", Freshness.MODELED, basis(rows)));
-        }
-        // Observed dataset: the store satisfies the request ONLY when it actually COVERS the
-        // requested range — two stray rows must never silence the provider chain on a five-year
-        // ask (and, via the backfill path, freeze an incomplete store forever).
-        if (!coversRange(candles, from, to)) return Optional.empty();
-        return Optional.of(new CandleSeries(candles, "stored-observed", Freshness.EOD, basis(rows)));
+        java.util.Map<String, List<Row>> bySource = rows.stream().collect(java.util.stream.Collectors.groupingBy(
+                r -> r.source == null ? "unknown" : r.source, java.util.LinkedHashMap::new,
+                java.util.stream.Collectors.toList()));
+        List<Candidate> candidates = new java.util.ArrayList<>();
+        bySource.forEach((source, sourceRows) -> {
+            List<Candle> candles = sourceRows.stream().filter(r -> r.close != null).map(r -> new Candle(r.d,
+                    r.open == null ? r.close : r.open, r.high == null ? r.close : r.high,
+                    r.low == null ? r.close : r.low, r.close, r.volume, r.adjusted)).toList();
+            boolean coherentAdjustment = sourceRows.stream().map(r -> r.adjusted).distinct().count() <= 1;
+            boolean allObserved = sourceRows.stream().allMatch(r -> r.observed);
+            int quality = sourceRows.stream().mapToInt(r -> r.qualityRank).max().orElse(0);
+            if (candles.size() >= 2 && coherentAdjustment && (synthetic || allObserved)
+                    && coversRange(candles, from, to)) {
+                candidates.add(new Candidate(source, sourceRows, candles, quality));
+            }
+        });
+        if (candidates.isEmpty()) return Optional.empty();
+        // Never stitch sources or adjustment bases into one curve. Among coherent sources that
+        // each cover the requested range, prefer declared quality then the denser series.
+        candidates.sort(java.util.Comparator.comparingInt(Candidate::quality).reversed()
+                .thenComparing(java.util.Comparator.comparingInt((Candidate c) -> c.candles.size()).reversed())
+                .thenComparing(Candidate::source));
+        Candidate chosen = candidates.getFirst();
+        Freshness freshness = synthetic ? Freshness.MODELED : Freshness.EOD;
+        String source = synthetic ? "synthetic" : "stored:" + chosen.source;
+        return Optional.of(new CandleSeries(chosen.candles, source, freshness, basis(chosen.rows)));
     }
 
     /** Head within a week of `from`, tail within a week of `to`, and ≥60% of expected trading days. */
@@ -84,7 +88,8 @@ public final class StoredCandleStore implements CandleStore {
 
     private record Row(LocalDate d, java.math.BigDecimal open, java.math.BigDecimal high,
                        java.math.BigDecimal low, java.math.BigDecimal close, long volume,
-                       boolean observed, boolean adjusted, String barKind) {}
+                       String source, boolean observed, boolean adjusted, String barKind, int qualityRank) {}
+    private record Candidate(String source, List<Row> rows, List<Candle> candles, int quality) {}
 
     private static String basis(List<Row> rows) {
         java.util.Set<String> kinds = rows.stream().map(r -> r.barKind == null ? "OHLCV" : r.barKind).collect(java.util.stream.Collectors.toSet());

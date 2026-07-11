@@ -63,7 +63,14 @@ public final class UnderlyingBackfill {
         String actualSource = sourceRequest;
         LocalDate last = null;
         try {
-            for (MissingRangePlanner.Range range : plan.ranges()) {
+            List<MissingRangePlanner.Range> ranges = plan.ranges();
+            // Alpha's daily endpoint returns a compact/full snapshot regardless of the requested
+            // sub-range. One request per symbol is sufficient; fragmented gaps must not multiply it.
+            if ("alphavantage".equals(sourceRequest) && ranges.size() > 1) {
+                ranges = List.of(new MissingRangePlanner.Range(ranges.getFirst().from(),
+                        ranges.getLast().to(), plan.missingSessions()));
+            }
+            for (MissingRangePlanner.Range range : ranges) {
                 // Providers ONLY: a partial store must never answer its own backfill request.
                 CandleSeries series = "auto".equals(sourceRequest)
                         ? market.candleSeriesFromProviders(sym, range.from(), range.to())

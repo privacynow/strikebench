@@ -322,6 +322,8 @@ public final class DataJobService {
             }
             case "backfill_underlying", "sync_underlying" -> {
                 LocalDate to = dateParam(params, "to", LocalDate.now(clock));
+                LocalDate completed = DataSyncScheduler.latestCompletedSession(clock);
+                if (to.isAfter(completed)) to = completed;
                 LocalDate from = dateParam(params, "from", to.minusYears(yearsParam(params)));
                 String source = strParam(params, "source", "auto").trim().toLowerCase(Locale.ROOT);
                 if ("sync_underlying".equals(kind)) {

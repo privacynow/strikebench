@@ -9,13 +9,18 @@ import java.util.List;
  * Candles plus where they came from. Explicit Demo, Simulated, and Scenario lanes may return
  * generated history; the Observed provider chain never substitutes it.
  */
-public record CandleSeries(List<Candle> candles, String source, Freshness freshness, String barBasis) {
+public record CandleSeries(List<Candle> candles, String source, Freshness freshness,
+                           String barBasis, String priceBasis) {
 
     public CandleSeries(List<Candle> candles, String source, Freshness freshness) {
-        this(candles, source, freshness, "OHLCV");
+        this(candles, source, freshness, "OHLCV", inferPriceBasis(candles));
     }
 
-    public static final CandleSeries EMPTY = new CandleSeries(List.of(), null, Freshness.MISSING, "NONE");
+    public CandleSeries(List<Candle> candles, String source, Freshness freshness, String barBasis) {
+        this(candles, source, freshness, barBasis, inferPriceBasis(candles));
+    }
+
+    public static final CandleSeries EMPTY = new CandleSeries(List.of(), null, Freshness.MISSING, "NONE", "NONE");
 
     public boolean isEmpty() { return candles.isEmpty(); }
 
@@ -24,5 +29,12 @@ public record CandleSeries(List<Candle> candles, String source, Freshness freshn
 
     public io.liftandshift.strikebench.model.DataEvidence evidence() {
         return io.liftandshift.strikebench.model.DataEvidence.of(source, freshness);
+    }
+
+    private static String inferPriceBasis(List<Candle> candles) {
+        if (candles == null || candles.isEmpty()) return "NONE";
+        boolean anyAdjusted = candles.stream().anyMatch(Candle::adjusted);
+        boolean anyRaw = candles.stream().anyMatch(c -> !c.adjusted());
+        return anyAdjusted && anyRaw ? "MIXED" : anyAdjusted ? "ADJUSTED" : "RAW";
     }
 }

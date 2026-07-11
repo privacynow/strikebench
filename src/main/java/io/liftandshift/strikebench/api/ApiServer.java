@@ -1993,6 +1993,9 @@ public final class ApiServer {
         LocalDate to = b.to() == null || b.to().isBlank()
                 ? io.liftandshift.strikebench.db.DataSyncScheduler.latestCompletedSession(clock)
                 : LocalDate.parse(b.to());
+        LocalDate latestCompleted = io.liftandshift.strikebench.db.DataSyncScheduler.latestCompletedSession(clock);
+        boolean futureCapped = to.isAfter(latestCompleted);
+        if (futureCapped) to = latestCompleted;
         int years = b.years() == null ? 5 : Math.max(1, Math.min(20, b.years()));
         LocalDate from = b.from() == null || b.from().isBlank() ? to.minusYears(years) : LocalDate.parse(b.from());
         String source = b.source() == null || b.source().isBlank() ? "auto" : b.source();
@@ -2011,9 +2014,11 @@ public final class ApiServer {
         int requests = 0, missing = 0;
         for (String symbol : symbols.stream().distinct().limit(120).toList()) {
             var plan = planner.plan(symbol, effectiveFrom, to);
-            requests += plan.ranges().size(); missing += plan.missingSessions();
+            int symbolRequests = "alphavantage".equals(connector.key()) && !plan.complete()
+                    ? 1 : plan.ranges().size();
+            requests += symbolRequests; missing += plan.missingSessions();
             plans.add(Map.of("symbol", symbol, "existingSessions", plan.existingSessions(),
-                    "missingSessions", plan.missingSessions(), "requests", plan.ranges().size(),
+                    "missingSessions", plan.missingSessions(), "requests", symbolRequests,
                     "complete", plan.complete(), "ranges", plan.ranges()));
         }
         Map<String, Object> out = new LinkedHashMap<>();
@@ -2021,6 +2026,7 @@ public final class ApiServer {
         out.put("to", to); out.put("symbols", symbols.size()); out.put("missingSessions", missing);
         out.put("estimatedRequests", requests); out.put("plans", plans);
         if (limitation != null) out.put("limitation", limitation);
+        if (futureCapped) out.put("dateNote", "The end date was capped at the latest completed market session.");
         ctx.json(out);
     }
 
@@ -2809,6 +2815,7 @@ public final class ApiServer {
             out.put("hv30", Double.isNaN(hv30) ? null : hv30);
             out.put("historyDemo", demoHistory);
             out.put("historyBarBasis", candleSeries.barBasis());
+            out.put("historyPriceBasis", candleSeries.priceBasis());
             Map<String, io.liftandshift.strikebench.model.DataEvidence> evidenceInputs = new LinkedHashMap<>();
             evidenceInputs.put("quote", q.evidence());
             evidenceInputs.put("history", candleSeries.isEmpty()
@@ -3050,6 +3057,7 @@ public final class ApiServer {
         out.put("source", series.source());
         out.put("freshness", series.freshness().name());
         out.put("barBasis", series.barBasis());
+        out.put("priceBasis", series.priceBasis());
         out.put("evidence", series.evidence());
         ctx.json(out);
     }

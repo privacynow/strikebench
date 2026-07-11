@@ -50,7 +50,10 @@ public final class DataSyncState {
                         + "last_success_date,last_attempt_at,failure_count,rows_written,note) "
                         + "VALUES (?,?,?,?,?,?,?,now(),0,?,?) ON CONFLICT(owner_key,source_key,symbol,domain,interval_key) "
                         + "DO UPDATE SET status=excluded.status,requested_from=excluded.requested_from,"
-                        + "requested_to=excluded.requested_to,last_success_date=excluded.last_success_date,"
+                        + "requested_to=excluded.requested_to,last_success_date=CASE "
+                        + "WHEN data_sync_cursor.last_success_date IS NULL THEN excluded.last_success_date "
+                        + "WHEN excluded.last_success_date IS NULL THEN data_sync_cursor.last_success_date "
+                        + "ELSE greatest(data_sync_cursor.last_success_date,excluded.last_success_date) END,"
                         + "last_attempt_at=now(),failure_count=0,rows_written=data_sync_cursor.rows_written+excluded.rows_written,"
                         + "note=excluded.note,updated_at=now()",
                 ownerKey(ownerId), source, symbol, complete ? "COMPLETE" : "PARTIAL",

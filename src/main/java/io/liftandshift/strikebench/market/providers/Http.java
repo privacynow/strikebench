@@ -86,10 +86,19 @@ public final class Http {
         private final int statusCode;
 
         public ProviderHttpException(String url, int status, String detail) {
-            super("HTTP " + (status > 0 ? status : "error") + " from " + url + (detail == null || detail.isBlank() ? "" : ": " + detail));
+            super("HTTP " + (status > 0 ? status : "error") + " from " + redact(url)
+                    + (detail == null || detail.isBlank() ? "" : ": " + redact(detail)));
             this.statusCode = status;
         }
 
         public int statusCode() { return statusCode; }
+    }
+
+    /** Provider errors may reach debug logs; credentials in query strings or JSON stay redacted. */
+    static String redact(String value) {
+        if (value == null) return null;
+        return value
+                .replaceAll("(?i)([?&](?:api_?key|apikey|token|access_token|client_secret|consumer_key)=)[^&\\s]+", "$1<redacted>")
+                .replaceAll("(?i)([\\\"](?:api_?key|apikey|token|access_token|client_secret|consumer_key)[\\\"]\\s*:\\s*[\\\"])[^\\\"]+", "$1<redacted>");
     }
 }

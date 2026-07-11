@@ -41,7 +41,8 @@ public final class UnderlyingCsvIngest {
                              Basis basis, Db db, DataSyncState state, Clock clock, String ownerId) throws IOException {
         if (input == null) throw new IllegalArgumentException("CSV file is required");
         String fallback = normalizeSymbol(fallbackSymbol);
-        String source = "user-csv:" + safeLabel(sourceLabel == null || sourceLabel.isBlank() ? fileName : sourceLabel);
+        String sourceBase = "user-csv:" + safeLabel(sourceLabel == null || sourceLabel.isBlank() ? fileName : sourceLabel);
+        String source = sourceBase;
         Basis chosen = basis == null ? Basis.AUTO : basis;
         Map<String, Bar> accepted = new LinkedHashMap<>();
         java.util.Set<String> conflictingKeys = new java.util.HashSet<>();
@@ -58,6 +59,9 @@ public final class UnderlyingCsvIngest {
             if (!columns.containsKey("symbol") && fallback.isBlank()) {
                 throw new IllegalArgumentException("Enter a symbol because this CSV has no Symbol column");
             }
+            boolean fileAdjusted = chosen == Basis.ADJUSTED
+                    || (chosen == Basis.AUTO && columns.containsKey("adjclose"));
+            source = sourceBase + (fileAdjusted ? ":adjusted" : ":raw");
             String line;
             int row = 1;
             while ((line = reader.readLine()) != null) {
@@ -73,12 +77,12 @@ public final class UnderlyingCsvIngest {
                     BigDecimal rawClose = positive(values, columns, "close", true);
                     BigDecimal adj = positive(values, columns, "adjclose", false);
                     BigDecimal factor = BigDecimal.ONE;
-                    boolean adjusted = false;
-                    if (chosen == Basis.ADJUSTED || (chosen == Basis.AUTO && adj != null)) {
-                        adjusted = true;
-                        if (adj != null) factor = adj.divide(rawClose, MathContext.DECIMAL64);
+                    boolean adjusted = fileAdjusted;
+                    if (chosen == Basis.AUTO && fileAdjusted && adj == null) {
+                        throw new IllegalArgumentException("missing adjusted close in an adjusted file");
                     }
-                    BigDecimal close = adj != null && adjusted ? adj : rawClose;
+                    if (adjusted && adj != null) factor = adj.divide(rawClose, MathContext.DECIMAL64);
+                    BigDecimal close = adjusted && adj != null ? adj : rawClose;
                     BigDecimal open = scaled(values, columns, "open", factor);
                     BigDecimal high = scaled(values, columns, "high", factor);
                     BigDecimal low = scaled(values, columns, "low", factor);
@@ -110,8 +114,9 @@ public final class UnderlyingCsvIngest {
                     "No eligible rows were imported. Review the quarantine summary.");
         }
 
+        String sourceForWrite = source;
         db.tx(c -> {
-            for (Bar bar : accepted.values()) write(c, source, bar);
+            for (Bar bar : accepted.values()) write(c, sourceForWrite, bar);
             return null;
         });
         LocalDate from = accepted.values().stream().map(Bar::date).min(LocalDate::compareTo).orElse(null);
