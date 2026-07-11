@@ -1844,6 +1844,42 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     run at expert or open it.
   - MATRIX: 391 JUnit + 52 fixture + 5 audit (5 widths, clip-free) + 4 seeded + 8 live — ALL
     GREEN. Screenshots dom-tests/shots/v5-*.png (home desktop/dark/390, welcome, data overview).
+- R2 PROGRAM: LANE PURITY + RISK/EXPERIENCE DECOUPLING (2026-07-10; branch, NOT deployed).
+  Junior's request-changes on 946fe14 (10 findings) + the user's risk-selector confusion — ALL DONE:
+  - P0 RESULT CACHES ARE LANE STATE: LANE_KEYS gains recommendResults/decisionCache/decisionInflight/
+    filterState/scoutForm (stashed+restored per market lane); the decision cache key appends
+    world + active-scenario identity — a candidate priced in one market can never render in another.
+  - P0 STORE REJECTS FOREIGN FRAMES: MarketStore.onFrame DROPS any frame whose data.world differs
+    from App.state.world (only transitionWorld switches lanes); same-lane store lag aligns quietly.
+  - P1 BOOT IS A TRANSITION: boot never bare-assigns App.state.world — a non-observed /api/world
+    answer goes through App.transitionWorld (full reconciliation). refreshUniverse(strict) uses
+    getFresh + RETHROWS inside transitions; one 1.5s retry, then a visible #transition-error
+    banner with Retry (universe failures no longer silently leave the wrong lane's symbols).
+  - P1 SIMULATED-SESSION VERIFY MODE IS REAL: worldVerifyPanel (#world-verify) — session chips,
+    live sim-trade table (Now P/L), Find-ideas + Control-room actions; verify-mode init accepts
+    world/dataset modes when available instead of falling into a blank pane.
+  - RISK ≠ EXPERIENCE (the user's question, junior's analysis): the header Risk select is now a
+    pure CAPITAL BUDGET — 3 options, Cautious 1% / Standard 2% / High 5% per idea, labels carry
+    the LIVE dollar consequence from buying power ("Cautious — 1%/idea (~$1.0k)"); 'Learning'
+    REMOVED from risk (Beginner/Expert owns presentation). Changing risk invalidates results +
+    re-renders immediately; beginner's forced-High correction persists + dispatches change.
+    ENGINE: the catalog rank-gate applies ONLY to the internal LEARNING mode — all three
+    selectable modes see the identical defined-risk catalog; budget + DecisionPolicy differentiate.
+    NEW structural-diversity trim: max 2 candidates per structuralGroup (time/pin/credit/debit/
+    long/other) in the top-5, so one shape can't monopolize. Ticket review adds #budget-reconcile:
+    "This position risks $X — N% of your selected $Y per-idea limit (Cautious)", red past 100%.
+  - ALSO: welcome proof cache keyed {world,scenario,riskMode,asOf<24h}; /api/metrics latency is
+    per-route-class (chain/research/quotes/compute/trading/other, synchronized 1024-ring p50/p95);
+    mobile Home hierarchy (action column order:-1 ≤1099px, 2×2 stats across the whole ≤1099 band —
+    4-across broke $100,000.00 mid-number at ~1000px); heroBlock emits a real .product-hero frame
+    (.ph-welcome/.ph-dashboard + .ph-inner/.ph-text/.ph-ctas shared skeleton).
+  - GOTCHAS: decision ranking can put a CALENDAR first — DOM tests that click the top candidate/row
+    and expect a probability map or "Backtest this" must skip calendars/diagonals (collapsed
+    compare-table details stay in the DOM display:none — filter :visible). And the mobile
+    home-cols MUST STAY GRID: a column FLEX line sizes to its widest item's fit-content, so the
+    sector rail's min-content re-widened the page at ≤1099px (order:-1 works on grid items too).
+  - MATRIX: 391 JUnit + 52 fixture + 5 audit + 4 seeded + 8 live — ALL GREEN. Screenshots
+    dom-tests/shots/r2-home-{mobile,1000,desktop}.png.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

@@ -629,6 +629,10 @@ body.lvl-expert .not-expert { display: none !important; }
 .xhair, .xhair-dot { pointer-events: none; } /* the crosshair is decoration, never a target */
 
 /* ---- Home hero band: the opening page's DNA folded into the dashboard ---- */
+/* The shared ProductHero frame: BOTH variants inherit these; page-specific rules layer on. */
+.product-hero { border: 1px solid var(--border); border-radius: var(--hero-radius); position: relative; overflow: hidden; }
+.product-hero .ph-text .eyebrow { margin-bottom: 4px; }
+.product-hero .ph-ctas { display: flex; gap: 10px; flex-wrap: wrap; }
 :root { --hero-pad: 18px 20px 14px; --hero-radius: 16px;
   --hero-glow: radial-gradient(900px 320px at 10% -50%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 70%); }
 .home-hero { position: relative; overflow: hidden; padding: var(--hero-pad); margin-bottom: 14px;
@@ -939,6 +943,20 @@ body.lvl-expert .not-expert { display: none !important; }
 /* ---------- Desktop home: everything important on ONE screen ---------- */
 .home-cols { display: grid; gap: 0 16px; grid-template-columns: minmax(0, 1fr); align-items: start; }
 .home-cols > * { min-width: 0; }
+/* MOBILE HIERARCHY (review P2 #9): the action column (Next up + commands) leads on phones;
+   account stats compact to a 2x2 strip with explainers behind their info affordances.
+   STAY GRID: the base minmax(0,1fr) column is what stops the sector rail's min-content from
+   widening the page — a column FLEX line sizes to its widest item's fit-content and re-broke
+   horizontal overflow at <=1099px. Grid items honor `order` just as well. */
+@media (max-width: 1099px) { .home-col-side { order: -1; }
+  /* 2x2 stats for the whole narrow band: 4-across at ~1000px broke $100,000.00 mid-number */
+  #home-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+}
+@media (max-width: 640px) {
+  #home-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  #home-stats .stat .explain { display: none; }
+  .home-hero-sub { display: none; } /* the context line yields to the numbers on a phone */
+}
 @media (min-width: 1100px) {
   .home-cols { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
   /* Tighter dashboard rhythm on large screens so the fold never hides an action */

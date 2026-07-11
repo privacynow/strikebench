@@ -46,11 +46,10 @@
               title="Theme: follows your system. Click to cycle System / Light / Dark."></button>
       <label class="risk-select" title="Risk mode used for new ideas and tickets">
         <span>Risk</span>
-        <select id="risk-mode">
-          <option value="learning">Learning</option>
-          <option value="conservative" selected>Conservative</option>
-          <option value="balanced">Balanced</option>
-          <option value="aggressive">Aggressive</option>
+        <select id="risk-mode" title="How much capital one new idea may put at risk. It never changes the math — the same contract has the same odds in every mode.">
+          <option value="conservative" selected>Cautious — 1%/idea</option>
+          <option value="balanced">Standard — 2%/idea</option>
+          <option value="aggressive">High — 5%/idea</option>
         </select>
       </label>
       <div class="level-switch" id="level-switch" role="group" aria-label="Experience level"

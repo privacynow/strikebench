@@ -323,7 +323,7 @@ public final class ApiServer {
             // streams and health stay exempt so monitoring keeps working while throttled.
             c.routes.after("/api/*", ctx -> {
                 Object t0 = ctx.attribute("reqStartNanos");
-                if (t0 instanceof Long tl) recordLatency((System.nanoTime() - tl) / 1000);
+                if (t0 instanceof Long tl) recordLatency(ctx.path(), (System.nanoTime() - tl) / 1000);
             });
             c.routes.before("/api/*", ctx -> {
                 ctx.attribute("reqStartNanos", System.nanoTime());
@@ -1430,23 +1430,45 @@ public final class ApiServer {
 
     // ---- Operational metrics + throttle ----
     private final java.util.concurrent.atomic.AtomicLong apiRequests = new java.util.concurrent.atomic.AtomicLong();
-    // Latency ring (p50/p95 in /api/metrics — the admitted performance-gate leftover): last 2048
-    // request durations in MICROS, lock-free index; percentiles computed on read.
-    private final long[] latencyRing = new long[2048];
-    private final java.util.concurrent.atomic.AtomicLong latencyIdx = new java.util.concurrent.atomic.AtomicLong();
-    private void recordLatency(long micros) {
-        latencyRing[(int) (latencyIdx.getAndIncrement() % latencyRing.length)] = micros;
+    /**
+     * Route-class latency rings (review P2 #8: one global ring let fast health calls hide slow
+     * chain/scan requests). Writes are synchronized per ring (cheap at these request rates and
+     * removes the incremented-slot-before-write race); percentiles computed on read.
+     */
+    static final class LatencyRing {
+        private final long[] ring = new long[1024];
+        private long count;
+        synchronized void record(long micros) { ring[(int) (count++ % ring.length)] = micros; }
+        synchronized Map<String, Object> percentiles() {
+            long n = Math.min(count, ring.length);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("samples", n);
+            if (n == 0) return out;
+            long[] copy = java.util.Arrays.copyOf(ring, (int) n);
+            java.util.Arrays.sort(copy);
+            out.put("p50Micros", copy[(int) (n / 2)]);
+            out.put("p95Micros", copy[(int) Math.min(n - 1, (long) Math.ceil(n * 0.95) - 1)]);
+            out.put("maxMicros", copy[(int) n - 1]);
+            return out;
+        }
+    }
+    private final java.util.Map<String, LatencyRing> latencyByClass = new java.util.concurrent.ConcurrentHashMap<>();
+    private static String latencyClass(String path) {
+        if (path == null) return "other";
+        if (path.contains("/chain")) return "chain";
+        if (path.startsWith("/api/research")) return "research";
+        if (path.startsWith("/api/quotes") || path.startsWith("/api/market")) return "quotes";
+        if (path.startsWith("/api/recommend") || path.startsWith("/api/evaluate")
+                || path.startsWith("/api/opportunities") || path.startsWith("/api/sim")) return "compute";
+        if (path.startsWith("/api/trades") || path.startsWith("/api/portfolio")) return "trading";
+        return "other";
+    }
+    private void recordLatency(String path, long micros) {
+        latencyByClass.computeIfAbsent(latencyClass(path), k -> new LatencyRing()).record(micros);
     }
     private Map<String, Object> latencyPercentiles() {
-        long n = Math.min(latencyIdx.get(), latencyRing.length);
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("samples", n);
-        if (n == 0) return out;
-        long[] copy = java.util.Arrays.copyOf(latencyRing, (int) n);
-        java.util.Arrays.sort(copy);
-        out.put("p50Micros", copy[(int) (n / 2)]);
-        out.put("p95Micros", copy[(int) Math.min(n - 1, (long) Math.ceil(n * 0.95) - 1)]);
-        out.put("maxMicros", copy[(int) n - 1]);
+        latencyByClass.forEach((k, v) -> out.put(k, v.percentiles()));
         return out;
     }
     private final java.util.concurrent.atomic.AtomicLong apiErrors = new java.util.concurrent.atomic.AtomicLong();

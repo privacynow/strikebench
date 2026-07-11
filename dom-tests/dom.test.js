@@ -712,7 +712,10 @@ test('review verdict panel: probability map, execution ladder, expert repricing'
   await page.selectOption('#rec-thesis', 'bullish');
   await page.click('#rec-go');
   await page.waitForSelector('#rec-results .candidate', { timeout: 30000 });
-  await page.locator('#rec-results .candidate button:has-text("Practice this trade"), #rec-results .candidate button:has-text("Use in trade ticket")').first().click();
+  // With the full catalog competing (risk no longer gates complexity), a CALENDAR can rank
+  // first — its review honestly has no probability map. Pick a single-expiration structure.
+  const single = page.locator('#rec-results .candidate:not([data-strategy*="CALENDAR"]):not([data-strategy*="DIAGONAL"])');
+  await single.first().locator('button:has-text("Practice this trade"), button:has-text("Use in trade ticket")').first().click();
   await page.waitForSelector('#to-review');
   await page.click('#to-review');
   await page.waitForSelector('#to-confirm');
@@ -764,7 +767,9 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   await page.selectOption('#rec-thesis', 'bullish');
   await page.click('#rec-go');
   await page.waitForSelector('#rec-results .candidate', { timeout: 30000 });
-  await page.locator('#rec-results .candidate button:has-text("Practice this trade"), #rec-results .candidate button:has-text("Use in trade ticket")').first().click();
+  // Same single-expiration pick as the verdict test: a calendar's review has no probability map.
+  const singleExp = page.locator('#rec-results .candidate:not([data-strategy*="CALENDAR"]):not([data-strategy*="DIAGONAL"])');
+  await singleExp.first().locator('button:has-text("Practice this trade"), button:has-text("Use in trade ticket")').first().click();
   await page.waitForSelector('#to-review');
   await page.click('#to-review');
   await page.waitForSelector('#verdict-panel .info-trigger', { timeout: 20000 });
@@ -875,12 +880,22 @@ test('candidate cards cross-link into backtest with the form pre-answered', asyn
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#rec-go');
   // Expert results are a comparison table — the full card (with its Backtest link) lives
-  // in the expandable detail row
+  // in the expandable detail row. Decision ranking can put a CALENDAR first, whose card
+  // honestly has no Backtest button (the Backtester rejects multi-expiration) — walk the
+  // rows until one offers it.
   await page.waitForSelector('#compare-table tbody tr.clickable', { timeout: 30000 });
-  await page.click('#compare-table tbody tr.clickable');
-  await page.waitForSelector('.compare-detail .candidate');
-  const card = page.locator('.compare-detail .candidate:has(button:has-text("Backtest this"))').first();
-  assert.ok(await card.count(), 'candidates offer Backtest this');
+  const rows = page.locator('#compare-table tbody tr.clickable');
+  const rowCount = await rows.count();
+  let card = null;
+  for (let i = 0; i < rowCount; i++) {
+    await rows.nth(i).click();
+    // collapsed details stay in the DOM display:none — only the VISIBLE one is this row's
+    await page.waitForSelector('.compare-detail .candidate:visible');
+    const c = page.locator('.compare-detail .candidate:visible:has(button:has-text("Backtest this"))').first();
+    if (await c.count()) { card = c; break; }
+    await rows.nth(i).click(); // collapse before trying the next row
+  }
+  assert.ok(card, 'candidates offer Backtest this');
   const strategy = await card.getAttribute('data-strategy');
   await card.locator('button:has-text("Backtest this")').click();
   await page.waitForSelector('#bt-symbol');

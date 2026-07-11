@@ -81,8 +81,22 @@
     (async function () {
       // LAST-KNOWN FIRST (review #15): the opening composition must never be half spinner on a
       // slow provider. Render the cached proof instantly, then refresh it live and re-store.
+      // The proof cache carries its CONTEXT (review P2 #7): a candidate produced in a
+      // simulated world, under a scenario dataset, or a week ago must not flash as
+      // "LIVE FROM THE ENGINE" on an observed page.
+      var proofCtx = {
+        world: App.state.world || 'observed',
+        scenario: (App.config && App.config.scenarioMode && App.config.activeDatasetName) || 'observed',
+        riskMode: 'conservative'
+      };
       var cached = null;
-      try { cached = JSON.parse(localStorage.getItem('strikebench.welcomeProof') || 'null'); } catch (e) { /* fresh */ }
+      try {
+        var raw = JSON.parse(localStorage.getItem('strikebench.welcomeProof') || 'null');
+        if (raw && raw.candidate && raw.world === proofCtx.world && raw.scenario === proofCtx.scenario
+            && raw.riskMode === proofCtx.riskMode && raw.asOf && (Date.now() - raw.asOf) < 24 * 3600 * 1000) {
+          cached = raw.candidate;
+        }
+      } catch (e) { /* fresh */ }
       if (cached) {
         liveHost.innerHTML = '';
         liveHost.appendChild(candidateCard(cached, false));
@@ -93,7 +107,10 @@
         if (r.candidates && r.candidates.length) {
           liveHost.innerHTML = '';
           liveHost.appendChild(candidateCard(r.candidates[0], false));
-          try { localStorage.setItem('strikebench.welcomeProof', JSON.stringify(r.candidates[0])); } catch (e) { /* private mode */ }
+          try {
+            localStorage.setItem('strikebench.welcomeProof', JSON.stringify(
+              Object.assign({ candidate: r.candidates[0], asOf: Date.now() }, proofCtx)));
+          } catch (e) { /* private mode */ }
         }
       } catch (e) {
         if (!cached) {
@@ -251,9 +268,9 @@
     }
 
     var colL = el('div', { class: 'home-col' });
-    var colR = el('div', { class: 'home-col' });
+    var colR = el('div', { class: 'home-col home-col-side' });
     root.appendChild(el('div', { class: 'home-cols' }, colL, colR));
-    colR.appendChild(el('div', { id: 'sector-pulse-anchor' }));
+    var pulseAnchor = el('div', { id: 'sector-pulse-anchor' });
     // Sector pulse: the shared sector rail — same affordance as Research and Trade.
     // Renders instantly (usable before quotes answer); day moves fill in async.
     (function sectorPulse() {
@@ -268,8 +285,8 @@
           }
         }),
         explain('Day change of each sector\u2019s ETF proxy. Tap a sector to open its symbols in the explorer.'));
-      var anchor = document.getElementById('sector-pulse-anchor');
-      if (anchor) anchor.replaceWith(pulse);
+      if (pulseAnchor.isConnected) pulseAnchor.replaceWith(pulse);
+      else pulseAnchor.appendChild(pulse); // not yet mounted: fill in place, mount later
     })();
 
 
@@ -391,6 +408,7 @@
           return el('button', { class: 'btn btn-sm btn-secondary', title: a[0],
             onclick: function () { App.navigate(a[1]); } }, icon(a[2], 14), ' ', a[0]);
         }))));
+    colR.appendChild(pulseAnchor); // sector pulse LAST: on phones the next action leads
 
     // Wait for the fills so data-ready means READY (tests and users agree on that).
     await Promise.all([marketsFill, tradesFill]);
@@ -418,25 +436,31 @@
    * eyebrow, title, sub, CTA row, optional aside — with a variant class. Welcome (landing)
    * and Home (operational desk) stay DIFFERENT pages sharing identical bones.
    */
+  /**
+   * ONE structural class system (`.product-hero` / `.ph-inner` / `.ph-text` / `.ph-ctas`) with
+   * variant modifiers — the legacy classes ride along for existing CSS, but shared styling
+   * targets the ph-* frame so the two pages cannot drift structurally (review P3 #10).
+   */
   function heroBlock(variant, opts) {
     if (variant === 'welcome') {
-      return el('section', { class: 'hero product-hero-welcome', id: opts.id || null },
+      return el('section', { class: 'product-hero ph-welcome hero', id: opts.id || null },
         opts.deco || null,
-        el('div', { class: 'hero-inner' },
-          opts.top || (opts.eyebrow ? el('div', { class: 'eyebrow' }, opts.eyebrow) : null),
-          opts.title,
-          opts.sub || null,
-          opts.ctas ? el('div', { class: 'hero-ctas' }, opts.ctas) : null,
+        el('div', { class: 'ph-inner hero-inner' },
+          el('div', { class: 'ph-text' },
+            opts.top || (opts.eyebrow ? el('div', { class: 'eyebrow' }, opts.eyebrow) : null),
+            opts.title,
+            opts.sub || null),
+          opts.ctas ? el('div', { class: 'ph-ctas hero-ctas' }, opts.ctas) : null,
           opts.extras || null));
     }
-    return el('section', { class: 'home-hero product-hero-dashboard' },
-      el('div', { class: 'home-hero-top' },
-        el('div', { class: 'home-hero-text' },
+    return el('section', { class: 'product-hero ph-dashboard home-hero' },
+      el('div', { class: 'ph-inner home-hero-top' },
+        el('div', { class: 'ph-text home-hero-text' },
           el('div', { class: 'eyebrow' }, opts.eyebrow),
           opts.title,
           opts.sub || null),
         opts.aside || null,
-        opts.ctas ? el('div', { class: 'home-hero-ctas' }, opts.ctas) : null));
+        opts.ctas ? el('div', { class: 'ph-ctas home-hero-ctas' }, opts.ctas) : null));
   }
 
   /** Keyboard + AT semantics for clickable tiles/rows (review #12: no mouse-only navigation). */
@@ -2643,6 +2667,23 @@
           stat('Breakevens', (p.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
           stat('Buying power after', fmtMoney(p.buyingPowerAfterCents), 'Drops by exactly max loss + fees.'),
           stat('Cash after', fmtMoney(p.cashAfterCents))));
+        // EXPLICIT budget reconciliation (risk/experience decoupling): the header's selected
+        // limit is a rule this ticket either fits or exceeds — say which, in dollars and %.
+        (function budgetLine() {
+          try {
+          var riskSel = document.getElementById('risk-mode');
+          var pct = { conservative: 0.01, balanced: 0.02, aggressive: 0.05 }[riskSel ? riskSel.value : 'conservative'] || 0.01;
+          var budget = Math.round((p.buyingPowerBeforeCents || 0) * pct);
+          if (!budget || !p.maxLossCents) return;
+          var ratio = Math.round(p.maxLossCents / budget * 100);
+          body.appendChild(el('div', { class: 'muted small', id: 'budget-reconcile',
+            style: ratio > 100 ? 'color: var(--risk-danger-solid, #c53030)' : '' },
+            'This position risks ' + fmtMoney(p.maxLossCents) + ' \u2014 ' + ratio + '% of your selected '
+            + fmtMoney(budget) + ' per-idea limit ('
+            + (riskSel ? riskSel.options[riskSel.selectedIndex].textContent.split(' \u2014 ')[0] : 'Cautious') + ').'
+            + (ratio > 100 ? ' Exceeding it is allowed here \u2014 deliberately, and acknowledged below.' : '')));
+          } catch (e) { /* the reconciliation line is context, never a blocker */ }
+        })();
         // Expert: judge the package at YOUR limit, not the model's executable assumption.
         if (Learn.currentLevel() === 'expert') {
           var netIn = el('input', { type: 'number', step: '0.01', id: 'proposed-net',
@@ -3733,7 +3774,48 @@
     var scenarioActive = App.config && App.config.scenarioMode;
     var histWrap = el('div', { id: 'bt-history-mode' });
     var scenWrap = el('div', { id: 'bt-scenario-mode' });
+    var worldWrap = el('div', { id: 'bt-world-mode' });
     var modeNote = el('div', { class: 'muted small', id: 'bt-mode-note', style: 'margin:4px 0 8px' });
+    // The SIMULATED SESSION verification surface (review P1 #5: a labeled mode must never be a
+    // blank screen): the session's own trades ARE its verification — live P/L, the report, and
+    // one-tap paths to place more or open the console.
+    async function worldVerifyPanel(host) {
+      host.innerHTML = '';
+      host.appendChild(UI.spinner('Loading your session\u2019s record\u2026'));
+      try {
+        var sessions = (await API.getFresh('/api/sim/market')).sessions || [];
+        var cur = sessions.filter(function (x) { return x.id === App.state.world; })[0];
+        var open = await API.getFresh('/api/trades?status=ACTIVE&size=10');
+        host.innerHTML = '';
+        host.appendChild(el('div', { class: 'card', id: 'world-verify' },
+          UI.cardHeader('This simulated session judges your DECISIONS',
+            el('span', { class: 'badge badge-sim' }, 'SIMULATED')),
+          explain('Place practice trades inside this generated market; every entry is judged at the session\u2019s own clock and prices. The report scores decisions vs outcomes when you finish.'),
+          cur ? el('div', { class: 'chip-row' },
+            chip('Session', cur.name || cur.id),
+            chip('Sim clock', String(cur.simTime || '').replace('T', ' ')),
+            chip('Scenario', App.scenarioLabel((cur.config || {}).scenario)),
+            cur.anchorSummary ? chip('Anchored', String(cur.anchorSummary.anchored || 0)) : null) : null,
+          open.trades && open.trades.length
+            ? table(['Symbol', 'Strategy', 'Now', 'Max loss'], open.trades.map(function (t) {
+                return pressable(el('tr', { class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); } },
+                  el('td', {}, el('b', {}, t.symbol)),
+                  el('td', {}, prettyStrategy(t.strategy) + ' x' + t.qty),
+                  el('td', {}, t.unrealizedPnlCents !== undefined && t.unrealizedPnlCents !== null
+                    ? pnlSpan(t.unrealizedPnlCents) : el('span', { class: 'muted' }, '\u2014')),
+                  el('td', { class: 'loss' }, fmtMoney(t.maxLossCents))), 'Open ' + t.symbol);
+              }))
+            : UI.emptyState('No practice trades in this session yet',
+                'Find a screened idea and place it \u2014 the session report will judge the decision.',
+                'Find ideas in this market', function () { App.navigate('#/trade/discover'); }),
+          el('div', { class: 'btn-row' },
+            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find ideas'),
+            el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } }, 'Open the control room'))));
+      } catch (e) {
+        host.innerHTML = '';
+        host.appendChild(alertBox('warn', 'Session record unavailable', [String((e && e.message) || e)]));
+      }
+    }
     var MODES = [
       { m: 'history', label: 'Observed backtest',
         note: 'Replays real (or demo-labeled) daily history with no look-ahead.' },
@@ -3759,7 +3841,9 @@
       var showHist = m2 === 'history' || m2 === 'dataset';
       histWrap.style.display = showHist ? '' : 'none';
       scenWrap.style.display = (m2 === 'scenario' || m2 === 'analogs') ? '' : 'none';
+      worldWrap.style.display = m2 === 'world' ? '' : 'none';
       if ((m2 === 'scenario' || m2 === 'analogs') && !scenWrap.hasChildNodes()) scenarioVerifyPanel(scenWrap);
+      if (m2 === 'world' && inWorld) worldVerifyPanel(worldWrap);
       if (m2 === 'analogs' && !App.state.evidencePrefill) {
         modeNote.textContent = 'No study handed over yet — run Past evidence on a Research symbol page, then "Test strategies on these occurrences".';
       }
@@ -3767,7 +3851,7 @@
         // an honest pointer, not a dead panel
         histWrap.style.display = 'none';
       }
-      if (m2 === 'world' && !inWorld) histWrap.style.display = 'none';
+
     }
     var modeRow = el('div', { class: 'range-pills', id: 'bt-mode' },
       MODES.map(function (o) {
@@ -3782,8 +3866,12 @@
     root.appendChild(modeNote);
     root.appendChild(scenWrap);
     root.appendChild(histWrap);
+    root.appendChild(worldWrap);
+    // Init accepts every mode that is genuinely available (review P1 #5: 'world' used to be
+    // rejected here and silently fall back to History on re-render).
     applyMode(vf.mode === 'scenario' || vf.mode === 'analogs' || vf.mode === 'history' ? vf.mode
-      : (scenarioActive && vf.mode === 'dataset' ? 'dataset' : 'history'));
+      : (vf.mode === 'world' && inWorld) ? 'world'
+      : (vf.mode === 'dataset' && scenarioActive) ? 'dataset' : 'history');
     root = histWrap; // everything below (the historical form + reports) lives in history mode
     var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || bf.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
     // Typing a symbol here makes it the working symbol app-wide (Backtest → Builder carries it).
@@ -5375,7 +5463,8 @@
     // pick as a recommendation for calibration, so a cosmetic re-render would double-record.
     // Cache by the exact inputs; an in-flight guard also collapses the nav+render double-call
     // (and view-transition re-renders) onto ONE request. Refresh busts the cache.
-    var cacheKey = JSON.stringify(body);
+    var cacheKey = JSON.stringify(body) + '|world=' + (App.state.world || 'observed')
+      + '|scenario=' + ((App.config && App.config.scenarioMode && App.config.activeDatasetName) || 'observed');
     var cached = App.state.decisionCache;
     var data;
     if (cached && cached.key === cacheKey) {
