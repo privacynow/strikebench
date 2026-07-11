@@ -505,7 +505,7 @@ body.lvl-expert .not-expert { display: none !important; }
 .tape-sector:hover { color: var(--text); border-color: var(--border-strong); }
 .tape-sector:disabled { cursor: default; opacity: .85; }
 @media (max-width: 640px) { .tape-sector { max-width: 118px; } }
-.tape-scroll { overflow: hidden; white-space: nowrap; flex: 1; min-width: 0; margin-left: 8px;
+.tape-scroll { position: relative; overflow: hidden; contain: paint; white-space: nowrap; flex: 1; min-width: 0; margin-left: 8px;
   -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 56px, #000 calc(100% - 40px), transparent);
   mask-image: linear-gradient(90deg, transparent 0, #000 56px, #000 calc(100% - 40px), transparent); }
 .tape-seq { display: inline-flex; }

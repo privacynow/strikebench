@@ -1730,7 +1730,19 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
 
   // Tape click-through navigates to research (hovering pauses the marquee — same as a user)
   await page.hover('#tape');
-  await page.click('#tape .tape-item >> nth=4');
+  const tapeHit = await page.evaluate(() => {
+    const viewport = document.querySelector('#tape .tape-scroll').getBoundingClientRect();
+    for (const item of document.querySelectorAll('#tape .tape-item')) {
+      const r = item.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      if (x <= viewport.left || x >= viewport.right) continue;
+      const hit = document.elementFromPoint(x, y);
+      if (hit && hit.closest('.tape-item') === item) return { x, y };
+    }
+    return null;
+  });
+  assert.ok(tapeHit, 'the paused ticker exposes at least one unobstructed clickable quote');
+  await page.mouse.click(tapeHit.x, tapeHit.y);
   await page.waitForSelector('#app[data-route="research"][data-ready="true"]');
   // Explicit Demo owns this universe already; no hidden sector mutation is needed.
 });

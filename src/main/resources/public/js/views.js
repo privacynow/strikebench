@@ -1791,7 +1791,10 @@
     var econ = economicAssessmentBlock(c);
     if (econ) card.insertBefore(econ, card.children[2] || null);
     var gb = guideBlock(c.strategy);
-    if (gb) card.appendChild(gb);
+    // Beginner's first disclosure must explain the structure itself. The economic verdict
+    // remains prominent above the facts, while its deeper scoring rationale follows the
+    // plain-language win/loss mechanics instead of displacing them.
+    if (gb) card.insertBefore(gb, econ || card.children[2] || null);
     if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.state.lastRecommendSymbol, c));
     card.appendChild(UI.expandable('The exact contracts \u2014 ' + c.qty + ' lot' + (c.qty > 1 ? 's' : '') + ' (each line \u00d7' + c.qty + ')', function () {
       return el('div', {},
