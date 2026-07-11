@@ -110,8 +110,6 @@ were doing and quietly prepares the next step.
   a synthetic active dataset shows the loud SCENARIO MODE banner, and Home offers
   "Pick up where you left off" chips into the working context.
 
-The engineering log — every decision, incident, and gotcha — is `CLAUDE.md` at the repo root.
-
 ## Tests
 
 ```bash
