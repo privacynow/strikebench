@@ -183,4 +183,62 @@ class ResearchQuestionEngineTest {
                 new ResearchQuestionEngine.RunRequest("make_me_rich", "TEST", null, null, Map.of())))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @org.junit.jupiter.api.Test
+    void analogEnsembleIsTheStudysExactSampleAndDeterministic() {
+        // EVIDENCE CONSOLIDATION: the study exposes its EXACT analog windows as a path ensemble —
+        // one per independent event, each starting at 1.0, spanning the forward horizon — and two
+        // identical runs produce byte-identical paths + the same study key (event detection has no RNG).
+        var candles = walk();
+        var eng = engine(candles, io.liftandshift.strikebench.model.Freshness.EOD);
+        var req = new ResearchQuestionEngine.RunRequest("pullback_rebound", "AAPL", "", "",
+                java.util.Map.of("dropPct", 3, "lookback", 20, "forward", 10));
+        var a = eng.run(req);
+        var b = eng.run(req);
+        org.assertj.core.api.Assertions.assertThat(a.analogPaths()).isNotNull();
+        org.assertj.core.api.Assertions.assertThat(a.analogPaths()).hasSize(a.conditioned().sample());
+        org.assertj.core.api.Assertions.assertThat(a.eventDates()).hasSize(a.conditioned().sample());
+        for (var path : a.analogPaths()) {
+            org.assertj.core.api.Assertions.assertThat(path).hasSize(a.forwardDays() + 1);
+            org.assertj.core.api.Assertions.assertThat(path.getFirst()).isEqualTo(1.0);
+        }
+        org.assertj.core.api.Assertions.assertThat(b.analogPaths()).isEqualTo(a.analogPaths());
+        org.assertj.core.api.Assertions.assertThat(b.studyKey()).isEqualTo(a.studyKey());
+        // ...and the strategy simulator prices THOSE paths: terminal-day expected P&L of pure stock
+        // over the analogs equals the analogs' own mean return (identity of sample, to the cent-ish).
+        double spot = 100.0;
+        double[][] abs = a.analogPaths().stream()
+                .map(rel -> rel.stream().mapToDouble(x -> spot * x).toArray())
+                .toArray(double[][]::new);
+        var spec = new io.liftandshift.strikebench.sim.ScenarioSpec(
+                io.liftandshift.strikebench.sim.ScenarioSpec.PathModel.GBM,
+                io.liftandshift.strikebench.sim.ScenarioSpec.Shape.CHOP,
+                a.forwardDays(), 1, 0, 0.3, 0, 0, 0, 0, null, 1L, abs.length);
+        var sim = new io.liftandshift.strikebench.sim.ScenarioSimulator().runOnPaths(
+                abs, spot,
+                java.util.List.of(new io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg("BUY", "STOCK", 0, 0, 1)),
+                1, spec, null, 0.03, null, null);
+        org.assertj.core.api.Assertions.assertThat(sim.paths()).isEqualTo(abs.length);
+        double meanTerminal = a.analogPaths().stream().mapToDouble(pp -> pp.getLast() - 1.0).average().orElse(0);
+        org.assertj.core.api.Assertions.assertThat(sim.expectedPnlCents())
+                .isCloseTo(Math.round(meanTerminal * spot * 100 * 100), org.assertj.core.api.Assertions.within(200L));
+    }
+
+    @org.junit.jupiter.api.Test
+    void conditionalBootstrapIsDeterministicAndWholePath() {
+        var analogs = java.util.List.of(
+                java.util.List.of(1.0, 1.01, 1.02),
+                java.util.List.of(1.0, 0.99, 0.97),
+                java.util.List.of(1.0, 1.00, 1.05),
+                java.util.List.of(1.0, 0.98, 0.99),
+                java.util.List.of(1.0, 1.02, 1.01));
+        var r1 = BootstrapSampler.resamplePaths(analogs, 50, 7L);
+        var r2 = BootstrapSampler.resamplePaths(analogs, 50, 7L);
+        org.assertj.core.api.Assertions.assertThat(r1).isEqualTo(r2);           // deterministic
+        org.assertj.core.api.Assertions.assertThat(r1).hasSize(50);
+        // WHOLE paths only — no day-mixing across events.
+        for (var path : r1) org.assertj.core.api.Assertions.assertThat(analogs).contains(path);
+        // A different seed reshuffles.
+        org.assertj.core.api.Assertions.assertThat(BootstrapSampler.resamplePaths(analogs, 50, 8L)).isNotEqualTo(r1);
+    }
 }

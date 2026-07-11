@@ -448,10 +448,9 @@
       UI.rangeChart({ initial: '1y', fetch: historyFetch(symbol) }),
       explain('Real OHLC candles: green closed up, red closed down; slide across for open/high/low/close, change, and volume. Pills change the window; long windows aggregate to weekly candles.')));
 
-    // The Research progression on a symbol: NOW (chart/news above) → HISTORICAL EVIDENCE
-    // (did this behavior happen before?) → POSSIBLE FUTURES (simulate the view) → express in Trade.
-    root.appendChild(hypothesisCard(Learn.currentLevel(), { symbol: symbol }));
-    root.appendChild(whatIfCard(symbol));
+    // The Research progression on a symbol: NOW (chart/news above) → TEST YOUR VIEW (past
+    // evidence + possible futures under ONE thesis) → express it in Trade.
+    root.appendChild(testYourViewSection(symbol));
 
     var chainAnchor = el('div', { id: 'chain-anchor' });
     root.appendChild(chainAnchor);
@@ -3342,6 +3341,20 @@
     symInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') switchSymbol(symInput.value); });
     card.appendChild(UI.cardHeader('Imagine a future for ' + symbol,
       el('span', { class: 'btn-row', style: 'margin:0' }, symInput)));
+    // EVIDENCE MODE banner: Research handed over its analog windows — the runs below price on
+    // THOSE real occurrences (clearable; falls back to generated futures).
+    var evb = App.state.evidencePrefill;
+    if (evb && evb.symbol === symbol && evb.source) {
+      var evBanner = el('div', { class: 'alert alert-caution', id: 'evidence-mode' },
+        el('b', {}, 'Evidence mode: '),
+        'strategies below run on ' + (evb.label || 'the study\u2019s historical analog windows')
+          + ' \u2014 conditional history, not a model. Horizon locked to the study\u2019s '
+          + evb.horizonDays + ' days. ',
+        el('button', { class: 'btn btn-sm btn-secondary', id: 'evidence-clear', onclick: function () {
+          App.state.evidencePrefill = null; App.render();
+        } }, 'Use generated futures instead'));
+      card.appendChild(evBanner);
+    }
     // Sector first: picking one switches the shared universe (same behavior as Ideas/Research)
     // and refreshes the peer rail below.
     card.appendChild(el('div', { class: 'field' },
@@ -3411,11 +3424,22 @@
         }
         // The position AND the do-nothing baseline, on the SAME seeded paths — comparative
         // evidence is what makes a 51% world actionable ("better than just holding shares?").
-        var rP = API.post('/api/sim/strategy', { symbol: symbol, legs: legs, qty: 1, spec: spec, iv: f.getIv() });
-        var basP = API.post('/api/sim/strategy', { symbol: symbol, qty: 1, spec: spec,
-          legs: [{ action: 'BUY', type: 'STOCK', strike: 0, expiryDay: 0, ratio: 1 }] }).catch(function () { return null; });
+        // EVIDENCE MODE: when Research handed over its analog windows, the strategy runs on the
+        // EXACT historical occurrences the study displayed — one conditional sample, two views.
+        var ev = App.state.evidencePrefill;
+        var evActive = ev && ev.symbol === symbol && ev.source;
+        var extra = evActive ? { pathSource: ev.source, study: ev.study } : {};
+        var rP = API.post('/api/sim/strategy', Object.assign(
+          { symbol: symbol, legs: legs, qty: 1, spec: spec, iv: f.getIv() }, extra));
+        var basP = API.post('/api/sim/strategy', Object.assign({ symbol: symbol, qty: 1, spec: spec,
+          legs: [{ action: 'BUY', type: 'STOCK', strike: 0, expiryDay: 0, ratio: 1 }] }, extra))
+          .catch(function () { return null; });
         var r = await rP, bas = await basP;
         out.innerHTML = '';
+        if (r.sourceNote) {
+          out.appendChild(alertBox('caution', evActive && ev.source === 'HISTORICAL_ANALOGS'
+            ? 'Priced on REAL history, not a model' : 'Priced on resampled history', [r.sourceNote]));
+        }
         out.appendChild(el('div', { class: 'muted small', style: 'margin:4px 0' },
           f.describe() + ' · entry cost ' + UI.fmtMoneyCompact(r.entryCostCents)));
         out.appendChild(Scenario.pnlView(r, level));
@@ -4923,88 +4947,179 @@
   // "Test an idea" — a real research-question workbench: pick a question, and we compare what happened
   // AFTER the signal against the stock's own normal behavior (baseline), with sample size, a win-rate
   // edge, a significance test, a bootstrap confidence interval, a distribution, and example dates.
-  function hypothesisCard(level, ctx) {
-    App.state.labForm = App.state.labForm || {}; // also mounted on symbol pages now — no study-view prerequisite
-    var f = App.state.labForm.hyp = App.state.labForm.hyp || {};
-    var card = el('div', { class: 'card lab-card', id: 'what-has-happened' });
-    card.appendChild(labHeader('magnifier', 'Historical evidence — did this happen before?'));
-    card.appendChild(explain('Tests a market belief against the REAL past: find every day the pattern occurred, measure what followed, and compare it with the stock\u2019s normal behavior — honest verdict, sample size, confidence. Its partner below simulates possible FUTURES under the same view. This is about the stock, not an options strategy (that lives in Trade).'));
+  /**
+   * TEST YOUR VIEW — the thesis stage of Research on a symbol (adversarial-review refactor):
+   * one shared MarketThesis (direction + horizon) drives BOTH connected stages —
+   *   Past evidence  : what followed similar conditions in THIS stock's real history
+   *   Possible futures: what a stochastic model says could happen from here
+   * Both inherit the page symbol (no nested ticker), results are keyed by symbol+question+
+   * params+range and never restored across a mismatch, and the evidence hands its EXACT analog
+   * windows to Trade as a path source. Not a Lab tool: the next answer after you state a view.
+   */
+  function testYourViewSection(symbol) {
+    var level = Learn.currentLevel();
+    App.state.marketThesis = App.state.marketThesis || {};
+    var th = App.state.marketThesis[symbol] = App.state.marketThesis[symbol]
+      || { direction: 'rebound', horizonDays: 10 };
+    var wrap = el('div', { class: 'card', id: 'test-your-view' });
+    wrap.appendChild(UI.cardHeader('Test your view \u2014 ' + symbol));
+    wrap.appendChild(explain(level === 'beginner'
+      ? 'Say what you think ' + symbol + ' does next. StrikeBench checks the REAL past for similar moments (and what followed), and draws possible futures — then you can test strategies against either.'
+      : 'One thesis drives both lenses: the observed event study (conditional history, bootstrap CI) and the parametric Monte Carlo fan. The analog windows behind the study are reusable as a strategy path source in Trade.'));
 
-    var symbol = el('input', { type: 'text', id: 'lab-hyp-sym', value: (ctx && ctx.symbol) || f.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
-    card.appendChild(el('div', { class: 'form-grid' }, labField('Stock', symbol)));
+    // ---- The shared thesis row ----
+    var dirSel = el('select', { id: 'tv-direction' },
+      el('option', { value: 'rebound' }, level === 'beginner' ? 'It fell — I expect a rebound' : 'Pullback \u2192 rebound'),
+      el('option', { value: 'bounce' }, level === 'beginner' ? 'Big down day — I expect a bounce' : 'Oversold \u2192 bounce'),
+      el('option', { value: 'breakout' }, level === 'beginner' ? 'New high — I expect follow-through' : 'Breakout \u2192 follow-through'),
+      el('option', { value: 'momentum' }, level === 'beginner' ? 'It has been strong — I expect more' : 'Momentum persists'),
+      el('option', { value: 'streak' }, level === 'beginner' ? 'Up-day streak — I expect it to continue' : 'Streak continues'));
+    dirSel.value = th.direction;
+    var horIn = el('input', { type: 'number', id: 'tv-horizon', value: String(th.horizonDays), min: '1', max: '60' });
+    var thesisRow = el('div', { class: 'form-grid' },
+      el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'What do you think happens?'), dirSel),
+      el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Over how many trading days?'), horIn));
+    wrap.appendChild(thesisRow);
 
-    var picker = el('div', { id: 'lab-q-picker' }, UI.spinner('Loading questions…'));
-    card.appendChild(picker);
+    // ---- Two connected stages: pills + one expanded panel ----
+    var tvState = App.state.researchStudy = App.state.researchStudy || {};
+    tvState.mode = tvState.mode || 'past';
+    var stagePills = el('div', { class: 'range-pills', id: 'tv-stages' },
+      el('button', { class: 'pill' + (tvState.mode === 'past' ? ' active' : ''), 'data-mode': 'past',
+        onclick: function () { tvState.mode = 'past'; renderStage(); } },
+        'Past evidence \u2014 what followed similar conditions?'),
+      el('button', { class: 'pill' + (tvState.mode === 'futures' ? ' active' : ''), 'data-mode': 'futures',
+        onclick: function () { tvState.mode = 'futures'; renderStage(); } },
+        'Possible futures \u2014 what could happen from here?'));
+    wrap.appendChild(stagePills);
+    var stageHost = el('div', { id: 'tv-stage' });
+    wrap.appendChild(stageHost);
+
+    dirSel.addEventListener('change', function () { th.direction = dirSel.value; renderStage(); });
+    horIn.addEventListener('change', function () {
+      th.horizonDays = Math.max(1, Math.min(60, parseInt(horIn.value, 10) || 10)); renderStage();
+    });
+
+    function renderStage() {
+      stagePills.querySelectorAll('.pill').forEach(function (b) {
+        b.classList.toggle('active', b.dataset.mode === tvState.mode);
+      });
+      stageHost.innerHTML = '';
+      if (tvState.mode === 'past') stageHost.appendChild(evidenceStage(symbol, th, level));
+      else stageHost.appendChild(futuresStage(symbol, th, level));
+    }
+    renderStage();
+    return wrap;
+  }
+
+  /** thesis direction -> the event-study question that tests it. */
+  var THESIS_QUESTION = { rebound: 'pullback_rebound', bounce: 'oversold_bounce',
+    breakout: 'breakout_followthrough', momentum: 'momentum', streak: 'up_streak' };
+
+  /** The study's identity: results may only render when the visible controls match this key. */
+  function studyClientKey(symbol, qKey, params, from, to) {
+    var ordered = {};
+    Object.keys(params || {}).sort().forEach(function (k) { ordered[k] = params[k]; });
+    return symbol + '|' + qKey + '|' + (from || '') + '..' + (to || '') + '|' + JSON.stringify(ordered);
+  }
+
+  /** PAST EVIDENCE: the event study, inheriting the page symbol + the shared thesis. */
+  function evidenceStage(symbol, thesis, level) {
+    var f = App.state.researchStudy;
+    f.results = f.results || {};
+    var stage = el('div', { id: 'what-has-happened' });
+    var qKey = THESIS_QUESTION[thesis.direction] || 'pullback_rebound';
+    var picker = el('div', { id: 'lab-q-picker' });
+    stage.appendChild(picker);
     var out = el('div', { id: 'lab-hyp-out', class: 'lab-out' });
-    var run = el('button', { class: 'btn', id: 'lab-hyp-run', disabled: 'disabled' }, 'Run the test');
-    card.appendChild(el('div', { class: 'btn-row' }, run));
-    card.appendChild(out);
+    var run = el('button', { class: 'btn', id: 'lab-hyp-run', disabled: 'disabled' }, 'Check the past');
+    stage.appendChild(el('div', { class: 'btn-row' }, run));
+    stage.appendChild(out);
 
-    var paramInputs = {}; // key -> input (expert)
-    function selectedQuestion(cat) { return cat.find(function (q) { return q.key === f.questionKey; }) || cat[0]; }
+    var paramInputs = {};
+    function currentParams(q) {
+      var params = {};
+      (q.params || []).forEach(function (pr) {
+        params[pr.key] = paramInputs[pr.key] ? +paramInputs[pr.key].value
+          : (f.params && f.params[q.key] && f.params[q.key][pr.key]) != null
+            ? f.params[q.key][pr.key] : pr.def;
+      });
+      params.forward = thesis.horizonDays; // the THESIS horizon is the study horizon — one truth
+      return params;
+    }
 
     function buildPicker(cat) {
       picker.innerHTML = '';
       paramInputs = {};
-      if (!f.questionKey) f.questionKey = cat[0].key;
+      var q = cat.find(function (x) { return x.key === qKey; }) || cat[0];
       if (level === 'beginner') {
-        // Question cards — pick one (consistent with the intent chooser)
-        var grid = el('div', { class: 'q-grid' });
-        cat.forEach(function (q) {
-          var b = el('button', { class: 'q-card' + (q.key === f.questionKey ? ' active' : ''), type: 'button',
-            onclick: function () { f.questionKey = q.key; buildPicker(cat); } },
-            el('b', {}, q.title), el('div', { class: 'muted small' }, q.plain));
-          grid.appendChild(b);
-        });
-        picker.appendChild(grid);
+        // The thesis chose the question — restate it as the human sentence, no second chooser.
+        picker.appendChild(el('div', { class: 'muted', id: 'tv-question-line' },
+          el('b', {}, q.title + ' '), q.plain + ' (over your ' + thesis.horizonDays + '-day horizon)'));
       } else {
-        // Question select + its parameters
-        var sel = el('select', { id: 'lab-q-select' }, cat.map(function (q) { return el('option', { value: q.key }, q.title); }));
-        sel.value = f.questionKey;
-        sel.addEventListener('change', function () { f.questionKey = sel.value; buildPicker(cat); });
-        var q = selectedQuestion(cat);
-        var fields = [labField('Question', sel)];
+        var fields = [];
         (q.params || []).forEach(function (pr) {
+          if (pr.key === 'forward') return; // the thesis horizon owns this
           var saved = (f.params && f.params[q.key] && f.params[q.key][pr.key]);
-          var inp = el('input', { type: 'number', id: 'lab-q-' + pr.key, value: saved == null ? pr.def : saved, min: String(pr.min), max: String(pr.max), step: '1' });
+          var inp = el('input', { type: 'number', id: 'lab-q-' + pr.key,
+            value: saved == null ? pr.def : saved, min: String(pr.min), max: String(pr.max), step: '1' });
           paramInputs[pr.key] = inp;
           fields.push(labField(pr.label + ' (' + pr.unit + ')', inp));
         });
-        picker.appendChild(el('div', { class: 'form-grid' }, fields));
-        picker.appendChild(el('p', { class: 'muted small', id: 'lab-q-desc' }, q.description));
+        if (fields.length) picker.appendChild(el('div', { class: 'form-grid' }, fields));
+        picker.appendChild(el('p', { class: 'muted small', id: 'tv-question-line' }, q.description));
       }
       run.disabled = false;
+      // KEYED RESTORE: show a stored result ONLY when its key matches the visible controls —
+      // an AAPL result may never flash on a QQQ page (adversarial review P1).
+      var key = studyClientKey(symbol, q.key, currentParams(q), '', today());
+      out.innerHTML = '';
+      if (f.results[key]) renderQuestion(out, f.results[key], level, symbol, thesis);
     }
 
+    function today() { return new Date().toISOString().slice(0, 10); }
+
     run.addEventListener('click', async function () {
-      var cat = App.state.labForm.questions || [];
-      var q = selectedQuestion(cat);
+      var cat = f.questions || [];
+      var q = cat.find(function (x) { return x.key === qKey; }) || cat[0];
       if (!q) return;
-      f.symbol = symbol.value.toUpperCase();
-      var params = {};
-      (q.params || []).forEach(function (pr) { params[pr.key] = paramInputs[pr.key] ? +paramInputs[pr.key].value : pr.def; });
+      var params = currentParams(q);
       f.params = f.params || {}; f.params[q.key] = params;
-      run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Replaying history…'));
-      var to = (ctx && ctx.to) || new Date().toISOString().slice(0, 10);
-      var body = { key: q.key, symbol: symbol.value, from: (ctx && ctx.from) || '', to: to, params: params };
-      try { var _d = await API.post('/api/lab/question', body); f.result = _d; renderQuestion(out, _d, level); }
-      catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Test failed', [String((e && e.message) || e)])); }
+      run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Replaying ' + symbol + '\u2019s history\u2026'));
+      var body = { key: q.key, symbol: symbol, from: '', to: today(), params: params };
+      try {
+        var _d = await API.post('/api/research/event-studies', body);
+        var key = _d.studyKey || studyClientKey(symbol, q.key, params, '', today());
+        f.results[key] = _d;
+        f.results[studyClientKey(symbol, q.key, params, '', today())] = _d; // client-key alias
+        var keys = Object.keys(f.results);
+        if (keys.length > 16) delete f.results[keys[0]]; // bounded memory
+        renderQuestion(out, _d, level, symbol, thesis);
+      }
+      catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Study failed', [String((e && e.message) || e)])); }
       finally { run.disabled = false; }
     });
 
-    // Load the catalog (cached), build the picker, restore a prior result.
     (async function loadCatalog() {
-      var cat = App.state.labForm.questions;
+      var cat = f.questions;
       if (!cat) {
-        try { cat = (await API.get('/api/lab/questions')).questions || []; App.state.labForm.questions = cat; }
-        catch (e) { picker.innerHTML = ''; picker.appendChild(alertBox('warn', 'Could not load questions.')); return; }
+        try { cat = (await API.get('/api/research/questions')).questions || []; f.questions = cat; }
+        catch (e) { picker.appendChild(alertBox('warn', 'Could not load the question catalog.')); return; }
       }
-      if (!cat.length) { picker.innerHTML = ''; picker.appendChild(alertBox('warn', 'No questions available.')); return; }
+      if (!cat.length) { picker.appendChild(alertBox('warn', 'No questions available.')); return; }
       buildPicker(cat);
-      if (f.result) renderQuestion(out, f.result, level); // survive a level flip / nav
     })();
+    return stage;
+  }
 
-    return card;
+  /** POSSIBLE FUTURES: the Monte-Carlo fan, inheriting symbol + thesis horizon. */
+  function futuresStage(symbol, thesis, level) {
+    var host = el('div', { id: 'tv-futures' });
+    var inner = whatIfCard(symbol);
+    // Composed stage: the card chrome is the section's — strip the duplicate card skin.
+    inner.classList.remove('card');
+    host.appendChild(inner);
+    return host;
   }
 
   /**
@@ -5085,13 +5200,24 @@
     return { node: wrap, requiredAcks: acks };
   }
 
-  function renderQuestion(out, r, level) {
+  function renderQuestion(out, r, level, symbol, thesis) {
     out.innerHTML = '';
     var few = r.conditioned.sample < 15;
     var kind = few ? 'warn' : (r.significant ? (r.winRateEdgePct > 0 ? 'ok' : 'danger') : 'caution');
     out.appendChild(alertBox(kind, r.verdict));
     out.appendChild(el('p', { class: 'muted small' }, r.question));
-    out.appendChild(el('div', { class: 'chip-row', style: 'margin-top:2px' }, evidenceBadge(r.evidence)));
+    // EVIDENCE STRENGTH in one word (beginner-first), never z-score-first: sample size,
+    // significance, effect size and split-half consistency roll into weak/moderate/strong.
+    var strength = few ? 'weak'
+      : (r.significant && Math.abs(r.effectSize || 0) >= 0.2 && r.holdout === 'held') ? 'strong'
+      : r.significant ? 'moderate' : 'weak';
+    out.appendChild(el('div', { class: 'chip-row', style: 'margin-top:2px' },
+      evidenceBadge(r.evidence),
+      chip('Evidence', strength,
+        'Rolls up sample size, statistical significance, effect size and split-half consistency. Even strong evidence describes the PAST — use it to raise or lower your confidence, never as a prediction.'),
+      chip('Independent events', String(r.conditioned.sample))));
+    out.appendChild(el('div', { class: 'muted small' },
+      'Use this to raise or lower your confidence in the view \u2014 it does not predict the next occurrence.'));
     // Conditioned win rate vs the baseline (the baseline bar marker) — the honest comparison.
     out.appendChild(gaugeChart(r.conditioned.winRatePct / 100, r.baseline.winRatePct / 100,
       'Positive ' + Math.round(r.conditioned.winRatePct) + '% of the time after the signal vs ' + Math.round(r.baseline.winRatePct) + '% normally — over ' + r.conditioned.sample + ' signals'));
@@ -5127,6 +5253,26 @@
       out.appendChild(el('div', { class: 'muted small', style: 'margin-top:4px' }, 'Example signal dates: ' + r.exampleDates.join(', ')));
     }
     (r.notes || []).forEach(function (n) { out.appendChild(el('div', { class: 'muted small' }, n)); });
+    // THE DOWNSTREAM CONSEQUENCE: the exact analog windows become a strategy path source —
+    // research completed here is the starting point in Trade, not a report with no next step.
+    if (symbol && r.analogPaths && r.analogPaths.length >= 5) {
+      out.appendChild(el('div', { class: 'btn-row', style: 'margin-top:8px' },
+        el('button', { class: 'btn', id: 'tv-test-analogs', onclick: function () {
+          App.state.evidencePrefill = {
+            symbol: symbol,
+            source: 'HISTORICAL_ANALOGS',
+            study: { key: r.key, from: r.from, to: r.to,
+              params: (App.state.researchStudy.params || {})[r.key] || {} },
+            studyKey: r.studyKey,
+            events: r.conditioned.sample,
+            horizonDays: r.forwardDays,
+            label: r.conditioned.sample + ' real past occurrences (' + r.from + ' to ' + r.to + ')'
+          };
+          App.state.lastRecommendSymbol = symbol;       // Verify anchors on the study's symbol
+          App.state.verifyMode = 'scenario';            // ...and opens on "Imagine a future"
+          App.navigate('#/trade/verify');
+        } }, 'Test strategies on these ' + r.conditioned.sample + ' real past occurrences \u2192')));
+    }
   }
 
   // ---- ETF / exposure replicator ----
@@ -5264,22 +5410,27 @@
     var grid = el('div', { class: 'lab-grid' });
     root.appendChild(grid);
     grid.appendChild(optimizerCard(level, ctx));   // spans full width on desktop
-    grid.appendChild(hypothesisCard(level, ctx));
+    // The event study moved into each stock's Research page (Test your view) — one thesis
+    // workflow, no orphan tool. This alias card points there instead of duplicating it.
+    var evPointer = el('div', { class: 'card lab-card' });
+    evPointer.appendChild(labHeader('magnifier', 'Historical evidence'));
+    evPointer.appendChild(explain('Now part of each stock\u2019s Research page: state your view under \u201cTest your view\u201d and the past evidence runs against it \u2014 same engine, in the flow it belongs to.'));
+    evPointer.appendChild(el('button', { class: 'btn btn-sm', onclick: function () {
+      App.navigate('#/research/' + ((ctx && ctx.symbol) || App.state.lastRecommendSymbol || 'AAPL'));
+    } }, 'Open Research \u2192'));
+    grid.appendChild(evPointer);
     grid.appendChild(replicateCard(level, ctx));
     grid.appendChild(await notebookCard());        // spans full width on desktop
   }
 
   /** The Lab's STUDY tools (signal test + notebook), rendered inside Research where studying lives. */
   async function studyToolsSection() {
-    App.state.labForm = App.state.labForm || {};
-    var level = Learn.currentLevel();
-    var ctx = App.state.labForm.ctx = App.state.labForm.ctx || {};
-    if (!ctx.symbol) ctx.symbol = App.state.lastRecommendSymbol || 'AAPL';
+    // The landing page is a MARKET-ENTRY surface: sectors, symbols, recents, saved work.
+    // The event-study workbench lives on the SYMBOL page, inside the thesis workflow —
+    // a full study tool here was an orphaned Lab card (adversarial review).
     var wrap = el('div', { id: 'research-study-tools' });
-    wrap.appendChild(el('h2', { class: 'section-h' }, 'Research tools'));
-    if (level === 'beginner') wrap.appendChild(explain('Test whether a price signal is real before you trust it, and keep notes on what you learn.'));
+    wrap.appendChild(el('h2', { class: 'section-h' }, 'Your research notes'));
     var grid = el('div', { class: 'lab-grid' });
-    grid.appendChild(hypothesisCard(level, ctx));
     grid.appendChild(await notebookCard());
     wrap.appendChild(grid);
     return wrap;

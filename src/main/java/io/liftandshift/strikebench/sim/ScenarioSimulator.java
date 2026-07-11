@@ -56,6 +56,34 @@ public final class ScenarioSimulator {
         }
     }
 
+    /**
+     * EXTERNAL-PATH variant (evidence consolidation): the ensemble came from HISTORY — the exact
+     * analog windows behind an event study, or a conditional bootstrap of them — and the simulator
+     * reprices the strategy over it exactly as it would over generated paths. The simulator does
+     * not care where paths came from; the CALLER labels the interpretation (empirical frequencies
+     * are conditional on the selected past, never a parametric model's odds).
+     * Paths must be absolute prices with spec.totalSteps()+1 points each.
+     */
+    public SimResult runOnPaths(double[][] paths, double spot, List<SimLeg> legs, int qty, ScenarioSpec spec,
+                                IvSpec ivSpec, double riskFreeRate, Long entryOverrideCents, String entryNote) {
+        try (AutoCloseable permit = SimBudget.acquire()) {
+            ScenarioSpec s = spec.sane();
+            if (paths == null || paths.length == 0) throw new IllegalArgumentException("no paths in the ensemble");
+            for (double[] pth : paths) {
+                if (pth.length != s.totalSteps() + 1) {
+                    throw new IllegalArgumentException("ensemble paths must have " + (s.totalSteps() + 1)
+                            + " points (got " + pth.length + ") — the horizon and the study forward window must match");
+                }
+            }
+            requireWorkBudget((long) paths.length * (s.totalSteps() + 1) * Math.max(1, legs.size()));
+            return runInner(paths, spot, legs, qty, s, ivSpec, riskFreeRate, entryOverrideCents, entryNote);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     /** One structure to compare: resolved legs + an optional market-priced entry. */
     public record CompareItem(String key, List<SimLeg> legs, Long entryOverrideCents, String entryNote) {}
 

@@ -167,10 +167,19 @@ test('navigation is NEVER trapped behind a slow route (Research does not block m
   }
 });
 
+
+/** The futures stage lives inside Test your view now — select its pill before using #whatif-card. */
+async function openFutures() {
+  await page.waitForSelector('#tv-stages .pill[data-mode="futures"]');
+  await page.click('#tv-stages .pill[data-mode="futures"]');
+  await page.waitForSelector('#tv-futures', { timeout: 15000 });
+}
+
 test('scenario studio: beginner story cards → fan of futures → strategy verdict in plain dollars', async () => {
   await page.click('#level-switch button[data-level="beginner"]');
   await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = null; });
   await go('#/research/AAPL');
+  await openFutures();
   // The thesis workbench: story cards with shape sketches, plain horizon/wildness chips.
   await page.waitForSelector('#whatif-card #sc-shapes .sc-card');
   assert.ok((await page.locator('#whatif-card .sc-card').count()) >= 6, 'story cards');
@@ -227,6 +236,7 @@ test('scenario studio expert: model menu incl. Heston, IV knobs, the math on dem
   await page.click('#level-switch button[data-level="expert"]');
   await page.evaluate(() => { App.state.scenarioForm = null; });
   await go('#/research/AAPL');
+  await openFutures();
   await page.waitForSelector('#whatif-card #sc-model');
   const models = await page.$$eval('#sc-model option', os => os.map(o => o.value));
   assert.ok(models.includes('HESTON') && models.includes('BLOCK_BOOTSTRAP') && models.includes('JUMP_DIFFUSION'), 'full model menu');
@@ -325,6 +335,7 @@ test('working view follows: idea bar carries the thesis; scenario studio opens o
   assert.match(wv, /~1 month/);
   // A fresh Scenario Studio opens on the bearish story (Rises, then fades) — not a random default.
   await go('#/research/QQQ');
+  await openFutures();
   await page.waitForSelector('#whatif-card .sc-card.active');
   assert.equal(await page.getAttribute('#whatif-card .sc-card.active', 'data-shape'), 'RALLY_FADE');
   // Cleanup for downstream tests: a persisted bearish default must not surprise them.
@@ -388,16 +399,45 @@ test('fair comparison: one batch call, refusals named, ranked per dollar of down
   await page.evaluate(() => { if (App.state.verifyForm) App.state.verifyForm.mode = 'history'; });
 });
 
-test('research symbol page: Historical evidence sits between the chart and the futures card', async () => {
+test('research symbol page: ONE Test-your-view section — thesis-driven, symbol-inherited, keyed results', async () => {
   await go('#/research/AAPL');
+  await page.waitForSelector('#test-your-view');
+  // The stage selection PERSISTS by design — pick Past evidence explicitly for this walk.
+  await page.click('#tv-stages .pill[data-mode="past"]');
+  // The composed section sits after the chart; the two old floating cards are gone.
+  const layout = await page.evaluate(() => ({
+    chartTop: document.getElementById('history-card').getBoundingClientRect().top + window.scrollY,
+    tvTop: document.getElementById('test-your-view').getBoundingClientRect().top + window.scrollY,
+    orphanCards: document.querySelectorAll('#test-your-view ~ #whatif-card, .card > #what-has-happened').length,
+    nestedSymbolInputs: document.querySelectorAll('#test-your-view input[list="universe-symbols"]').length
+  }));
+  assert.ok(layout.chartTop < layout.tvTop, 'NOW (chart) precedes Test your view');
+  assert.equal(layout.nestedSymbolInputs, 0, 'the evidence stage INHERITS the page symbol — no nested ticker input');
+  // Both stages are visible as connected pills; Past evidence expands by default.
+  assert.equal(await page.locator('#tv-stages .pill').count(), 2, 'two connected stages');
   await page.waitForSelector('#what-has-happened');
-  const order = await page.evaluate(() => {
-    const ids = ['history-card', 'what-has-happened', 'whatif-card'];
-    const tops = ids.map(id => { const n = document.getElementById(id); return n ? n.getBoundingClientRect().top + window.scrollY : -1; });
-    return tops;
-  });
-  assert.ok(order.every(t => t >= 0), 'all three cards present: ' + order.join(','));
-  assert.ok(order[0] < order[1] && order[1] < order[2], 'NOW → evidence → futures order: ' + order.join(','));
+  // The thesis question line names the CONDITION — "did this happen before" never leaves "this" undefined.
+  await page.waitForSelector('#tv-question-line');
+  // Run the study; the conclusion is decision-useful (evidence strength + confidence guidance + handoff).
+  await page.waitForSelector('#lab-hyp-run:not([disabled])', { timeout: 15000 });
+  await page.click('#lab-hyp-run');
+  await page.waitForSelector('#lab-hyp-out .alert', { timeout: 20000 });
+  const outText = await page.textContent('#lab-hyp-out');
+  assert.match(outText, /Evidence/, 'evidence-strength label present');
+  assert.match(outText, /raise or lower your confidence/, 'confidence guidance, never a prediction');
+  // The handoff exists when enough analogs matched.
+  const handoff = await page.locator('#tv-test-analogs').count();
+  if (handoff) assert.match(await page.textContent('#tv-test-analogs'), /real past occurrences/);
+  // KEYED RESULTS: switching to QQQ must not display AAPL's study.
+  await go('#/research/QQQ');
+  await page.waitForSelector('#test-your-view');
+  await page.click('#tv-stages .pill[data-mode="past"]');
+  await page.waitForSelector('#lab-hyp-run:not([disabled])', { timeout: 15000 });
+  assert.equal(await page.locator('#lab-hyp-out .alert').count(), 0,
+    'an AAPL result may never appear on a QQQ page (result identity is keyed)');
+  // Possible futures is the second stage of the SAME section.
+  await page.click('#tv-stages .pill[data-mode="futures"]');
+  await page.waitForSelector('#tv-futures #whatif-card, #tv-futures #sc-shapes', { timeout: 15000 });
 });
 
 test('form geometry: controls in one grid row share a vertical origin (labels never push them)', async () => {
@@ -1734,22 +1774,25 @@ test('consolidated Lab tools live in their homes: optimizer on Decision, study t
   assert.ok((await page.locator('.lab-optimizer table tbody tr').count()) >= 1, 'allocations table rows');
   assert.ok((await page.locator('#lab-opt-out .alert-caution').count()) >= 1, 'diagnostic set labeled not-a-recommendation');
 
-  // STUDY TOOLS (signal test + notebook) now live on the Research index.
+  // The Research LANDING is a market-entry surface: notes stay; the event-study workbench does
+  // NOT render here (it lives on symbol pages inside Test your view — no orphan Lab card).
   await go('#/research');
   await page.waitForSelector('#research-study-tools .lab-grid', { timeout: 15000 });
-  // Icons render (magnifier was missing from ICON_PATHS -> empty box) — now in the study-tool header.
-  assert.ok((await page.locator('#research-study-tools .lab-title .icon svg > *').count()) >= 1, 'study-tool icons render paths');
-  // Research-question workbench: a REAL question (not the degenerate 20-day-momentum toy), run and
-  // reported baseline-relative. The run button enables once the question catalog loads.
+  assert.equal(await page.locator('#research-study-tools #lab-hyp-run').count(), 0,
+    'no full study workbench on the landing page');
+  // The study itself (run on a SYMBOL page) is baseline-relative with resolved design tokens.
+  await go('#/research/AAPL');
+  await page.waitForSelector('#tv-stages .pill[data-mode="past"]');
+  await page.click('#tv-stages .pill[data-mode="past"]');
   await page.waitForSelector('#lab-hyp-run:not([disabled])', { timeout: 15000 });
-  assert.ok((await page.locator('#lab-q-picker').count()) >= 1, 'question picker present');
   await page.click('#lab-hyp-run');
   await page.waitForSelector('#lab-hyp-out .alert', { timeout: 20000 });
   assert.ok((await page.locator('#lab-hyp-out .lab-chart svg').count()) >= 2, 'win-rate gauge + distribution histogram');
   assert.match(await page.textContent('#lab-hyp-out'), /After the signal|Normally/); // baseline-relative, not "vs 50% chance"
-  // Charts use resolved design tokens, not the undefined --line/--fg (which rendered black).
   const gaugeHtml = await page.locator('#lab-hyp-out .lab-chart').first().innerHTML();
   assert.ok(gaugeHtml.indexOf('var(--line)') < 0 && gaugeHtml.indexOf('var(--fg)') < 0, 'gauge uses no unresolved CSS vars');
+  await go('#/research');
+  await page.waitForSelector('#research-study-tools .lab-grid', { timeout: 15000 });
 
   // Notebook: create + delete (delete regression: button called the non-existent API.delete).
   await page.click('#lab-note-new');

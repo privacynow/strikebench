@@ -871,4 +871,41 @@ class ApiIntegrationTest {
         assertThat(h.has("totalMaxLossCents")).isTrue();
         assertThat(h.has("assignmentCashCents")).isTrue();
     }
+
+    @Test
+    @Order(28)
+    void researchEventStudyRoutesAndAnalogStrategySim() throws Exception {
+        // PRIMARY routes live under /api/research; /api/lab/* stays as a compatibility alias.
+        var q1 = get("/api/research/questions");
+        var q2 = get("/api/lab/questions");
+        assertThat(q1.statusCode()).isEqualTo(200);
+        assertThat(q2.body()).isEqualTo(q1.body()); // same handler, byte-identical
+        String study = """
+            {"key":"pullback_rebound","symbol":"AAPL","from":"","to":"",
+              "params":{"dropPct":2,"lookback":20,"forward":10}}""";
+        var s1 = post("/api/research/event-studies", study);
+        assertThat(s1.statusCode()).isEqualTo(200);
+        var sj = Json.parse(s1.body());
+        assertThat(sj.has("analogPaths")).isTrue();
+        assertThat(sj.has("studyKey")).isTrue();
+        if (sj.get("analogPaths").size() >= 5) {
+            // The strategy sim runs on the SAME analogs and SAYS SO (labeled interpretation).
+            String simBody = """
+                {"symbol":"AAPL","qty":1,
+                  "legs":[{"action":"BUY","type":"STOCK","strike":0,"expiryDay":0,"ratio":1}],
+                  "spec":{"model":"GBM","shape":"CHOP","horizonDays":10,"stepsPerDay":1,
+                          "driftAnnual":0,"volAnnual":0.3,"jumpsPerYear":0,"jumpMean":0,
+                          "jumpVol":0,"tailNu":0,"seed":7,"paths":100},
+                  "pathSource":"HISTORICAL_ANALOGS",
+                  "study":{"key":"pullback_rebound","symbol":"AAPL","from":"","to":"",
+                           "params":{"dropPct":2,"lookback":20,"forward":10}}}""";
+            var r = post("/api/sim/strategy", simBody);
+            assertThat(r.statusCode()).isEqualTo(200);
+            var rj = Json.parse(r.body());
+            assertThat(rj.get("pathSource").asText()).isEqualTo("HISTORICAL_ANALOGS");
+            assertThat(rj.get("paths").asInt()).isEqualTo(sj.get("analogPaths").size());
+            assertThat(rj.get("sourceNote").asText()).contains("REAL past occurrences");
+            assertThat(rj.get("studyKey").asText()).isEqualTo(sj.get("studyKey").asText());
+        }
+    }
 }

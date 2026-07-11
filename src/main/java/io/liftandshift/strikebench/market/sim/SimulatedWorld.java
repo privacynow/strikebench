@@ -136,21 +136,13 @@ public final class SimulatedWorld {
         }
     }
 
-    // ---- deterministic counter-based gaussian: pure function of (seed, stream, key, index) ----
+    // ---- deterministic randomness: THE shared counter-based foundation (RandomStreams) ----
     private double gaussian(long stream, long key, long index) {
-        long h = cfg.seed();
-        h = mix(h ^ stream); h = mix(h ^ key); h = mix(h ^ index);
-        // Box–Muller from two mixed uniforms — stateless, independent per (stream,key,index).
-        long h2 = mix(h ^ 0xD1B54A32D192ED03L);
-        double u1 = (h >>> 11) * 0x1.0p-53 + 1e-12;
-        double u2 = (h2 >>> 11) * 0x1.0p-53;
-        return Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+        return io.liftandshift.strikebench.sim.RandomStreams.gaussian(cfg.seed(), stream, key, index);
     }
 
-    private static long mix(long z) { // splitmix64 finalizer
-        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
-        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
-        return z ^ (z >>> 31);
+    private static long mix(long z) {
+        return io.liftandshift.strikebench.sim.RandomStreams.mix(z);
     }
 
     /** ~250 daily bars of coherent history ending at the sim start (vol-scaled ranges). */

@@ -404,6 +404,18 @@ public final class ApiServer {
             c.routes.get("/api/account", this::account);
             c.routes.post("/api/account/reset", this::accountReset);
 
+            // Historical event studies: PRIMARY routes under /api/research (the capability's real
+            // home); the /api/lab/* names remain as compatibility ALIASES to the same handlers.
+            io.javalin.http.Handler questionsHandler = ctx ->
+                    ctx.json(Map.of("questions", new io.liftandshift.strikebench.research.ResearchQuestionEngine(market).catalog()));
+            io.javalin.http.Handler studyHandler = ctx ->
+                    ctx.json(new io.liftandshift.strikebench.research.ResearchQuestionEngine(market)
+                            .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest.class)),
+                                    analysisCtx(ctx)));
+            c.routes.get("/api/research/questions", questionsHandler);
+            c.routes.post("/api/research/event-studies", studyHandler);
+            c.routes.get("/api/lab/questions", questionsHandler);   // compatibility alias
+            c.routes.post("/api/lab/question", studyHandler);       // compatibility alias
             c.routes.get("/api/research/{symbol}", this::research);
             c.routes.get("/api/research/{symbol}/expirations", this::expirations);
             c.routes.get("/api/research/{symbol}/chain", this::chain);
@@ -426,13 +438,7 @@ public final class ApiServer {
                     ctx.json(new io.liftandshift.strikebench.research.HypothesisTester(market)
                             .test(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.HypothesisTester.HypothesisRequest.class)),
                                     analysisCtx(ctx))));
-            // Research-question workbench (replaces the degenerate momentum toy in the UI).
-            c.routes.get("/api/lab/questions", ctx ->
-                    ctx.json(Map.of("questions", new io.liftandshift.strikebench.research.ResearchQuestionEngine(market).catalog())));
-            c.routes.post("/api/lab/question", ctx ->
-                    ctx.json(new io.liftandshift.strikebench.research.ResearchQuestionEngine(market)
-                            .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest.class)),
-                                    analysisCtx(ctx))));
+            // (event-study routes registered above the /api/research/{symbol} param route)
             c.routes.post("/api/lab/replicate", ctx ->
                     ctx.json(new io.liftandshift.strikebench.research.ETFReplicator(market)
                             .replicate(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ETFReplicator.ReplicationRequest.class)))));
@@ -1372,7 +1378,19 @@ public final class ApiServer {
                                      java.util.List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
                                      Integer qty,
                                      io.liftandshift.strikebench.sim.ScenarioSpec spec,
-                                     io.liftandshift.strikebench.sim.IvSpec iv) {}
+                                     io.liftandshift.strikebench.sim.IvSpec iv,
+                                     // Evidence-consolidation: run the strategy over HISTORY instead
+                                     // of generated paths. HISTORICAL_ANALOGS = the study's exact
+                                     // analog windows; CONDITIONAL_BOOTSTRAP = whole-path resamples.
+                                     String pathSource,
+                                     io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest study) {
+        public StrategySimRequest(String symbol,
+                                  java.util.List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
+                                  Integer qty, io.liftandshift.strikebench.sim.ScenarioSpec spec,
+                                  io.liftandshift.strikebench.sim.IvSpec iv) {
+            this(symbol, legs, qty, spec, iv, null, null);
+        }
+    }
 
     public record ActiveDatasetRequest(String id) {}
 
@@ -1573,6 +1591,57 @@ public final class ApiServer {
             entryNote = "Entry priced from " + me.source() + " " + quality + " at executable sides (buy at ask, sell at bid)"
                     + (me.snaps().isEmpty() ? "" : ". Snapped to listed contracts: " + String.join("; ", me.snaps()))
                     + ".";
+        }
+        if (b.pathSource() != null && !b.pathSource().isBlank()) {
+            // EMPIRICAL ensemble: re-derive the study's analog windows with the SAME deterministic
+            // engine (event detection has no RNG), so the paths priced here are IDENTICAL to the
+            // ones the Research page displayed — one conditional sample, two views of it.
+            if (b.study() == null) throw new IllegalArgumentException("pathSource needs the study request (key/params/range)");
+            var studyReq = new io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest(
+                    b.study().key(), sym, b.study().from(), b.study().to(), b.study().params());
+            var studyRes = new io.liftandshift.strikebench.research.ResearchQuestionEngine(market)
+                    .run(studyReq, analysisCtx(ctx));
+            java.util.List<java.util.List<Double>> analogs = studyRes.analogPaths();
+            if (analogs == null || analogs.size() < 5) {
+                throw new IllegalArgumentException("Only " + (analogs == null ? 0 : analogs.size())
+                        + " historical analogs match this condition — too few to price a strategy against. Relax the condition or widen the dates.");
+            }
+            String source = b.pathSource().trim().toUpperCase(Locale.ROOT);
+            if ("CONDITIONAL_BOOTSTRAP".equals(source)) {
+                analogs = io.liftandshift.strikebench.research.BootstrapSampler.resamplePaths(
+                        analogs, Math.max(analogs.size(), spec.sane().paths()), spec.sane().seed());
+            } else if (!"HISTORICAL_ANALOGS".equals(source)) {
+                throw new IllegalArgumentException("unknown pathSource: " + source
+                        + " (use HISTORICAL_ANALOGS or CONDITIONAL_BOOTSTRAP)");
+            }
+            // Daily granularity: the study's forward window IS the horizon (1 step/day).
+            var sane = spec.sane();
+            var espec = new io.liftandshift.strikebench.sim.ScenarioSpec(
+                    sane.model(), sane.shape(), studyRes.forwardDays(), 1,
+                    sane.driftAnnual(), sane.volAnnual(), sane.jumpsPerYear(), sane.jumpMean(),
+                    sane.jumpVol(), sane.tailNu(), sane.heston(), sane.seed(), analogs.size());
+            double[][] paths = new double[analogs.size()][];
+            for (int i = 0; i < analogs.size(); i++) {
+                var rel = analogs.get(i);
+                double[] abs = new double[rel.size()];
+                for (int k = 0; k < rel.size(); k++) abs[k] = spot * rel.get(k);
+                paths[i] = abs;
+            }
+            var eresult = new io.liftandshift.strikebench.sim.ScenarioSimulator().runOnPaths(
+                    paths, spot, legsToRun, qty, espec, iv, r,
+                    me == null ? null : me.entryCents(), entryNote);
+            // The interpretation is DIFFERENT and must say so: conditional history, not a model.
+            var out = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(eresult);
+            out.put("pathSource", source);
+            out.put("studyKey", studyRes.studyKey());
+            out.put("analogEvents", studyRes.eventDates() == null ? 0 : studyRes.eventDates().size());
+            out.put("sourceNote", "HISTORICAL_ANALOGS".equals(source)
+                    ? "Priced over " + analogs.size() + " REAL past occurrences of this condition ("
+                        + studyRes.from() + " to " + studyRes.to() + ") — conditional history, not a model's odds, and not a forecast."
+                    : "Priced over " + analogs.size() + " whole-path resamples of " + studyRes.eventDates().size()
+                        + " real occurrences (conditional bootstrap) — empirical shape preserved; sampling uncertainty, not a model.");
+            ctx.json(out);
+            return;
         }
         var result = new io.liftandshift.strikebench.sim.ScenarioSimulator().run(
                 spot, legsToRun, qty, spec, iv, r,

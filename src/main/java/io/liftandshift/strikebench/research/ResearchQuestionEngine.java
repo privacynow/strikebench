@@ -80,7 +80,11 @@ public final class ResearchQuestionEngine {
                                  double ciLowPct, double ciHighPct, List<Bucket> distribution,
                                  List<String> exampleDates, String evidence, boolean observed,
                                  String verdict, List<String> notes,
-                                 Double effectSize, String holdout) {}
+                                 Double effectSize, String holdout,
+                                 // The EMPIRICAL PATH ENSEMBLE: each non-overlapping event's forward
+                                 // window as day-by-day RELATIVE prices (1.0 = the event close) — the
+                                 // exact analogs behind the inference, reusable as a scenario source.
+                                 List<List<Double>> analogPaths, List<String> eventDates, String studyKey) {}
 
     public QuestionResult run(RunRequest req) {
         return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
@@ -132,6 +136,8 @@ public final class ResearchQuestionEngine {
         List<Double> baseFwd = new ArrayList<>();  // non-signal complement = "normally"
         List<Double> condFwd = new ArrayList<>();
         List<String> examples = new ArrayList<>();
+        List<List<Double>> analogPaths = new ArrayList<>(); // one full forward window per event
+        List<String> eventDates = new ArrayList<>();
         int mergedFirings = 0;
         int eventOpenUntil = -1;
         for (int i = startIdx; i + forward < n; i++) {
@@ -141,6 +147,10 @@ public final class ResearchQuestionEngine {
                 condFwd.add(fwd);
                 eventOpenUntil = i + forward;
                 if (examples.size() < 6) examples.add(candles.get(i).date().toString());
+                eventDates.add(candles.get(i).date().toString());
+                List<Double> path = new ArrayList<>(forward + 1);
+                for (int k = 0; k <= forward; k++) path.add(Math.round(closes[i + k] / closes[i] * 1e6) / 1e6);
+                analogPaths.add(path);
             } else if (i >= eventOpenUntil) {
                 baseFwd.add(fwd);
             }
@@ -154,7 +164,7 @@ public final class ResearchQuestionEngine {
         // still overlaps by (forward-1) days, so only ITS effective sample is deflated for the z-test.
         double z = twoPropZ(conditioned, baseline, forward);
         boolean significant = conditioned.sample() >= MIN_SAMPLE && Math.abs(z) >= Z_95;
-        double[] ci = bootstrapMeanCi(condFwd, symbol.hashCode() ^ key.hashCode(), 1); // events are independent
+        double[] ci = BootstrapSampler.meanCi(condFwd, symbol.hashCode() ^ key.hashCode(), 1, BOOTSTRAP); // events are independent
         if (mergedFirings > 0) notes.add("Back-to-back firings inside one hold window count as ONE event ("
                 + mergedFirings + " merged) — the " + conditioned.sample() + " events are non-overlapping.");
         if (forward > 1) notes.add("The baseline's windows still overlap by the hold length, so its effective "
@@ -186,10 +196,13 @@ public final class ResearchQuestionEngine {
                     + pct(conditioned.winRatePct()) + " vs " + pct(baseline.winRatePct()) + ").";
         }
 
+        // The study's IDENTITY: any consumer (UI cache, strategy sim) may only pair artifacts
+        // whose keys match — the anti-"AAPL result on a QQQ page" contract.
+        String studyKey = symbol + "|" + key + "|" + from + ".." + to + "|" + new java.util.TreeMap<>(p);
         return new QuestionResult(key, symbol, questionText(q, symbol, forward, lookback, p), from.toString(), to.toString(),
                 forward, baseline, conditioned, winEdge, meanEdge, round(z), significant,
                 round(ci[0]), round(ci[1]), dist, examples, evidenceLabel(series.freshness()), observed, verdict, notes,
-                effectSize, holdout);
+                effectSize, holdout, analogPaths, eventDates, studyKey);
     }
 
     // ---- Signals (no look-ahead) ----
@@ -288,28 +301,7 @@ public final class ResearchQuestionEngine {
         return (double) wins / rs.size() * 100.0;
     }
 
-    /**
-     * Deterministic MOVING-BLOCK bootstrap 90% CI on the conditioned mean forward return (percent).
-     * With non-overlapping events the caller passes block=1 (iid resampling of independent events);
-     * the block machinery remains for any future overlapping series.
-     */
-    private static double[] bootstrapMeanCi(List<Double> rs, long seed, int forward) {
-        int n = rs.size();
-        if (n < 5) return new double[]{0, 0};
-        int block = Math.max(1, Math.min(forward, n));
-        Random rnd = new Random(seed);
-        double[] means = new double[BOOTSTRAP];
-        for (int b = 0; b < BOOTSTRAP; b++) {
-            double s = 0; int c = 0;
-            while (c < n) {
-                int start = rnd.nextInt(n);
-                for (int k = 0; k < block && c < n; k++) { s += rs.get((start + k) % n); c++; }
-            }
-            means[b] = s / n;
-        }
-        java.util.Arrays.sort(means);
-        return new double[]{means[(int) (0.05 * BOOTSTRAP)] * 100, means[(int) (0.95 * BOOTSTRAP)] * 100};
-    }
+    // bootstrapMeanCi moved to the SHARED BootstrapSampler (identical algorithm + seeding).
 
     /** Fixed-bucket histogram of forward returns (percent) for the distribution chart. */
     private static List<Bucket> histogram(List<Double> rs) {
@@ -354,7 +346,8 @@ public final class ResearchQuestionEngine {
         Stat z = new Stat(0, 0, 0, 0, 0, 0);
         return new QuestionResult(q.key(), symbol, q.title(), from.toString(), to.toString(), forward,
                 z, z, 0, 0, 0, false, 0, 0, List.of(), List.of(), evidenceLabel(f), observed, verdict, notes,
-                null, null);
+                null, null, List.of(), List.of(),
+                symbol + "|" + q.key() + "|" + from + ".." + to + "|{}");
     }
 
     private static boolean isObserved(Freshness f) {

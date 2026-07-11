@@ -1579,6 +1579,45 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     Playwright's auto-scroll; Escape's return-focus needs a reopen-suppression window or the
     focus handler reopens the bubble; page.evaluate(Learn.setLevel) does NOT re-render — call
     App.render() after it.
+- EVIDENCE-CONSOLIDATION PROGRAM (2026-07-10; the "Research straggler" fix): the event study is
+  no longer a relocated Lab card — it is the PAST-EVIDENCE stage of the thesis workflow, and its
+  analog windows are a first-class path source for the strategy simulator.
+  - PRODUCT: research landing = market-entry only (sectors/symbols/recents/notes; workbench gone);
+    symbol pages get ONE composed 'Test your view' section — a shared MarketThesis row
+    (direction+horizon) drives two connected stages, 'Past evidence — what followed similar
+    conditions?' (thesis picks the question; the horizon IS the study forward window; NO nested
+    ticker input — the page symbol is inherited) and 'Possible futures' (whatIfCard mounted as the
+    second stage). Conclusions are decision-useful: evidence strength (weak/moderate/strong from
+    sample+significance+effect+holdout), N independent events, 'use this to raise or lower your
+    confidence — never a prediction', and the DOWNSTREAM HANDOFF: 'Test strategies on these N real
+    past occurrences →' → Trade Verify in EVIDENCE MODE (banner + clear button; the horizon locks
+    to the study's window). The #/lab alias keeps a pointer card, not a duplicate tool.
+  - STATE: App.state.researchStudy + App.state.marketThesis[symbol] replace labForm.hyp; results
+    are KEYED by symbol|question|params|range (server studyKey authoritative) and NEVER restored
+    across a mismatch — an AAPL study cannot flash on a QQQ page (pinned in dom.test).
+  - BACKEND: QuestionResult += analogPaths (per-event forward windows as relative prices, 1.0 =
+    event close) + eventDates + studyKey (appended fields, wire-compat); /api/research/questions +
+    /api/research/event-studies are the PRIMARY routes (registered ABOVE /api/research/{symbol} —
+    Javalin matches the param route first otherwise, pinned by the alias-parity test); /api/lab/*
+    stays as byte-identical compatibility aliases. ScenarioSimulator.runOnPaths(paths,...) consumes
+    ANY ensemble; /api/sim/strategy accepts pathSource HISTORICAL_ANALOGS (re-derives the SAME
+    analogs deterministically — event detection has no RNG — so Research and Trade price ONE
+    conditional sample, pinned) or CONDITIONAL_BOOTSTRAP (whole-path resamples via the shared
+    sampler), horizon = the study's forward window (1 step/day), result carries pathSource/
+    studyKey/analogEvents/sourceNote ('conditional history, not a model's odds, not a forecast').
+  - SHARED FOUNDATION: sim/RandomStreams (counter-based mix64+gaussian+uniformInt — SimulatedWorld
+    now delegates to it, identical outputs) + research/BootstrapSampler (the event study's CI moved
+    verbatim — validated outputs unchanged — plus deterministic whole-path resampling). RECORDED
+    SEAM (deliberately not silently done): migrating PathGenerator's stateful RNG onto RandomStreams
+    CHANGES every generated path — do it only with a model-version bump and re-pinned goldens.
+  - INTERPRETATION STAYS DISTINCT: historical frequency (conditional on selected past events),
+    bootstrap uncertainty, parametric Monte Carlo, and risk-neutral pricing share machinery and
+    paths but are always separately labeled; evidence mode in Trade banners its basis.
+  - GATES: analog ensemble = the study's exact sample and deterministic (paths==conditioned.sample,
+    start 1.0, run-twice identical, stock-over-analogs EV == analogs' own mean, pinned);
+    conditional bootstrap deterministic + whole-path only; API alias parity + pathSource contract;
+    DOM: composed section, no nested symbol input, keyed no-cross-symbol restore, landing clean,
+    futures as second stage, studio tests open the futures stage via openFutures().
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE
