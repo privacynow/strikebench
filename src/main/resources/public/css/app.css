@@ -976,6 +976,15 @@ body.lvl-expert .not-expert { display: none !important; }
 .candles .grid { stroke: var(--border); stroke-width: 1; }
 .candles .tick { fill: var(--text-faint); font-size: 11px; }
 .tabs .tabs-aside { margin-left: auto; align-self: center; font-size: 12.5px; padding: 6px 4px; }
+/* Data's local nav is the same underline-tab language; it just adds live badges + mobile scroll. */
+.data-tabs { overflow-x: auto; scrollbar-width: thin; white-space: nowrap; }
+.data-tabs button { flex: 0 0 auto; }
+.data-tabs .badge { font-size: 10.5px; vertical-align: 1px; }
+/* Tokenized symbol picker chips (F10): removable, warn-styled when unrecognized. */
+.chip-warn { border-color: var(--risk-warn, #d69e2e); }
+.chip .chip-x { background: none; border: none; color: var(--text-dim); padding: 0 2px; margin-left: 4px;
+  cursor: pointer; font-size: 13px; line-height: 1; }
+.chip .chip-x:hover { color: var(--risk-danger-solid, #c53030); }
 
 /* ---------- Welcome: the whole pitch on ONE desktop screen — comfortable, not crammed ---------- */
 .welcome-top { display: grid; gap: 20px; grid-template-columns: 1fr; align-items: stretch; }

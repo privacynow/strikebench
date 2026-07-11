@@ -67,6 +67,22 @@ public final class SimulationSessions {
     private record Checkpoint(long quantum, String simTime, double speed, boolean running) {}
 
     public synchronized SimulatedWorld create(SimulatedWorld.Config raw, String userId) {
+        return createAtomic(raw, userId, null, null, null).world();
+    }
+
+    public record Created(SimulatedWorld world, String accountId) {}
+
+    /** F1: capacity is checked BEFORE any anchor/provider work — never after seconds of it. */
+    public void ensureCapacity(String userId) { enforceActiveCap(userId); }
+
+    /**
+     * F2 ATOMIC CREATE: the session row (config + durable anchors) and the simulation account
+     * commit in ONE transaction; the world is admitted to memory only afterwards. A failure
+     * anywhere leaves NOTHING behind — no half-created world a client retry could double.
+     */
+    public synchronized Created createAtomic(SimulatedWorld.Config raw, String userId, String anchorsJson,
+                                             String accountName,
+                                             io.liftandshift.strikebench.paper.AccountService accounts) {
         if (raw.symbolBetas().size() > MAX_SYMBOLS) {
             throw new IllegalArgumentException("at most " + MAX_SYMBOLS + " symbols per simulated session");
         }
@@ -78,13 +94,46 @@ public final class SimulationSessions {
         SimulatedWorld.Config cfg = new SimulatedWorld.Config(id, raw.name(), raw.symbolBetas(),
                 raw.startSpots() == null ? Map.of() : raw.startSpots(), raw.scenario(), raw.volAnnual(),
                 raw.seed(), raw.startSimTime(), raw.speed(), raw.symbolVols(), raw.symbolIvs());
-        SimulatedWorld w = new SimulatedWorld(cfg);
+        SimulatedWorld w = new SimulatedWorld(cfg); // construct BEFORE any write: validation can throw
+        String[] acctId = new String[1];
+        db.tx(c -> {
+            Db.execOn(c, "INSERT INTO sim_session(id,name,user_id,config,status,model_version,events,anchors) "
+                            + "VALUES (?,?,?,?::jsonb,'CREATED',?,'[]'::jsonb,?::jsonb)",
+                    id, cfg.name() == null ? id : cfg.name(), owner(userId), Json.write(cfg),
+                    SimulatedWorld.MODEL_VERSION, anchorsJson);
+            if (accounts != null) {
+                acctId[0] = accounts.createForWorldOn(c, id,
+                        accountName == null ? "Simulation account" : accountName);
+            }
+            return null;
+        });
         admit(id, w, owner(userId));
-        db.exec("INSERT INTO sim_session(id,name,user_id,config,status,model_version,events) "
-                        + "VALUES (?,?,?,?::jsonb,'CREATED',?,'[]'::jsonb)",
-                id, cfg.name() == null ? id : cfg.name(), owner(userId), Json.write(cfg),
-                SimulatedWorld.MODEL_VERSION);
-        return w;
+        return new Created(w, acctId[0]);
+    }
+
+    /**
+     * F1 ASYNC RESOLUTION SEAM: background anchor/calibration work may ENRICH a world that has
+     * not started ticking (quantum 0, paused) by replacing it wholesale — config, anchors, and
+     * the resident instance. Once a world has stepped, its config is immutable (replay identity).
+     * Returns false (with no changes) when the world already moved.
+     */
+    public synchronized boolean replaceUnstarted(String worldId, String userId,
+                                                 SimulatedWorld.Config newCfg, String anchorsJson) {
+        SimulatedWorld cur = get(worldId, userId).orElse(null);
+        if (cur == null || cur.running() || cur.ticks() > 0) return false;
+        SimulatedWorld.Config cfg = new SimulatedWorld.Config(worldId, newCfg.name(), newCfg.symbolBetas(),
+                newCfg.startSpots() == null ? Map.of() : newCfg.startSpots(), newCfg.scenario(),
+                newCfg.volAnnual(), newCfg.seed(), newCfg.startSimTime(), newCfg.speed(),
+                newCfg.symbolVols(), newCfg.symbolIvs());
+        SimulatedWorld w = new SimulatedWorld(cfg);
+        db.exec("UPDATE sim_session SET config=?::jsonb, anchors=?::jsonb WHERE id=?",
+                Json.write(cfg), anchorsJson, worldId);
+        worlds.put(worldId, w);
+        if (events != null) {
+            events.publish("world.resolving", Map.of("world", worldId, "user", owner(userId),
+                    "state", "complete"));
+        }
+        return true;
     }
 
     private void admit(String id, SimulatedWorld w, String owner) {
@@ -127,6 +176,16 @@ public final class SimulationSessions {
             throw new IllegalStateException("at most " + MAX_ACTIVE_PER_OWNER
                     + " simulated sessions may run at once — pause or finish one of yours");
         }
+    }
+
+    /** F8: the full durable anchor/provenance document for one owned session. */
+    public Map<String, Object> anchors(String worldId, String userId) {
+        var rows = db.query("SELECT anchors::text a FROM sim_session WHERE id=? AND user_id=?",
+                r -> r.str("a"), worldId, owner(userId));
+        if (rows.isEmpty()) throw new java.util.NoSuchElementException("no such simulated session: " + worldId);
+        String a = rows.getFirst();
+        if (a == null) return Map.of("anchors", List.of(), "excluded", List.of(), "pending", List.of());
+        return Json.read(a, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
     }
 
     /** Owner-checked lookup — memory-resident worlds are checked exactly like restored ones. */
@@ -285,7 +344,7 @@ public final class SimulationSessions {
     public List<Map<String, Object>> list(String userId) {
         List<Map<String, Object>> out = new ArrayList<>();
         db.query("SELECT id, name, status, config::text c, model_version, created_at::text ca, "
-                        + "state::text st, events::text ev FROM sim_session "
+                        + "state::text st, events::text ev, anchors::text an FROM sim_session "
                         + "WHERE user_id=? ORDER BY (status='FINISHED'), created_at DESC",
                 r -> {
                     Map<String, Object> m = new java.util.LinkedHashMap<>();
@@ -297,6 +356,19 @@ public final class SimulationSessions {
                     m.put("createdAt", r.str("ca"));
                     String ev = r.str("ev");
                     m.put("eventCount", ev == null ? 0 : Json.parse(ev).size());
+                    // F8: anchor COVERAGE rides on every row (counts, not the full provenance —
+                    // the detail endpoint serves that), so the UI can show what this world is
+                    // anchored to before it starts and throughout.
+                    String an = r.str("an");
+                    if (an != null) {
+                        var doc = Json.parse(an);
+                        Map<String, Object> cov = new java.util.LinkedHashMap<>();
+                        cov.put("anchored", doc.has("anchors") ? doc.get("anchors").size() : 0);
+                        cov.put("excluded", doc.has("excluded") ? doc.get("excluded").size() : 0);
+                        cov.put("pending", doc.has("pending") ? doc.get("pending").size() : 0);
+                        if (doc.has("note")) cov.put("note", doc.get("note").asText());
+                        m.put("anchorSummary", cov);
+                    }
                     SimulatedWorld w = worlds.get(r.str("id"));
                     if (w != null) {
                         m.put("running", w.running());

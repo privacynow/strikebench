@@ -1736,6 +1736,67 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
     one-selector verification-mode unification, chain-refresh cadence on material spot/IV moves,
     research chart intraday appends (daily bars roll at sim close by design), Phase 10 golden-case
     expansion, and the perf p95 instrumentation gates. B4 auth stays the multi-reviewer gate.
+- HR2 REMEDIATION (2026-07-10; branch, NOT deployed): junior's request-changes review of 67f8e30
+  (14 findings) + the user's design-language complaint — ALL EXECUTED:
+  - F1 ASYNC CREATE: capacity checked BEFORE any resolution work; fixture mode resolves inline
+    (local data); LIVE mode reads engine MEMORY only on the request path, cold active symbols go
+    PENDING to a governed background resolver (Thread.startVirtualThread + marketEngine.quotes)
+    that ENRICHES the world pre-start via SimulationSessions.replaceUnstarted (immutable once
+    ticked; late resolution recorded honestly in the anchors doc + world.resolving SSE hints).
+    Response carries pending[]/resolving.
+  - F2 ATOMIC CREATE: createAtomic writes sim_session (config + anchors) AND the simulation
+    account in ONE db.tx (AccountService.createForWorldOn), memory admission after commit — no
+    half-created worlds on retry.
+  - F3 EXPLICIT FICTIONAL: allowFictional request flag + visible creator checkbox (default ON,
+    labeled); without it an unrecognized priceless symbol is EXCLUDED with a reason — fictional
+    status is never inferred. Order(29) pins both branches.
+  - F4 STUDY IDENTITY: studyKey += |src=<source>|data=<candle-content-hash> (order-sensitive
+    RandomStreams.mix fold over date+close) — a backfill/correction CHANGES the key, so the
+    client's drift warning actually fires; deterministic engine + content-keyed identity means a
+    matching key IS the artifact (bit-identical analogs).
+  - F5 ENFORCED SNAPSHOT: ApiServer.EntryBook — one lazily-filled, memoized quote/expirations/
+    chains snapshot shared by EVERY structure in /api/sim/compare (in a RUNNING world each
+    structure used to re-price at a later quantum); snapshotAt disclosed in the response.
+  - F6 WORKSPACE: researchStudy serializes SELECTION ONLY (mode+params) — the old snapshot
+    persisted the full results cache (analogPaths!) and 'deleted' a key that never existed.
+  - F7 STORE LANE-PURITY: App.Market resets on world change (frame-level AND adoptWorld);
+    /api/quotes world cap 40→MAX_SYMBOLS; updateTapePrices is per-symbol delta (the whole-list
+    identity check silently discarded every superset/reordered frame).
+  - F8 ANCHORS EXPOSED: sessions.list() carries anchorSummary counts; GET /api/sim/market/{id}/
+    anchors serves the full provenance doc; the control room shows coverage + a provenance table.
+  - F9 REAL CONTROL ROOM: focus candle chart (symbol chips switch it; Research via chart link),
+    market breadth (up/down vs prevClose from the store), LIVE P/L (refetched on stream frames,
+    8s throttle) + book heat, anchors/provenance expandable, event-timeline expandable (report
+    events), pause/step/inject/report/find-strategies/portfolio/finish/return.
+  - F10 TOKENIZED PICKER: beginner symbols input = type+Enter → removable chips (paste 'A, B'
+    still splits as a convenience), sector/position suggestions, unknown-symbol warn styling.
+    GOTCHA (cost a debugging session): the on-blur change handler added a chip and SHIFTED the
+    Create button mid-click — Playwright's committed click landed elsewhere and the POST never
+    fired, with zero errors anywhere. STABLE GEOMETRY fixed it: chips + suggestions rows exist
+    from first paint with reserved min-heights and fill IN PLACE. Layout shift on blur near a
+    submit button is a silent click-killer.
+  - F11 DATASET HANDOFFS: saved rows gained Research / Test strategies (activate + carry symbol),
+    same structured handoff as fresh generations.
+  - F12 UI JOURNEY: the golden test drives the PRODUCT — beginner tokenized creator, control-room
+    inject modal, expert Discover→comparison-table Use→Place (acks)→detail, SSE-moving portfolio,
+    trade-detail Unwind modal, control-room Finish/report, clean return. NOTE: expert results
+    render the COMPARISON TABLE, not .candidate cards — tests must pick via the table's Use.
+  - F13 nextSimOpen: after the 16:00 ET close, 'next open' is the NEXT trading day.
+  - F14 + DESIGN LANGUAGE: Data tabs now use the product's canonical .tabs underline pattern
+    (Portfolio's), not the Trade-stage pills; Administration tab hidden for non-admin callers
+    (server still enforces); Overview gained the Running-activity/coverage summary card.
+  - MATRIX: 391 JUnit + 51 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
+- PRODUCT NORTH-STAR PROGRAM (recorded 2026-07-10 from the user's product audit; THE standing
+  roadmap): turn the engines into a persistent decide→act→manage→learn system. Sequence:
+  (1) persistent Case/thesis object across Research/Trade/Portfolio/review; (2) watchlists +
+  alert center + resume state; (3) data/evidence correctness + guided source setup; (4)
+  TRADE/WATCH/PASS verdicts + no-trade intelligence; (5) paper execution (pending/limit orders,
+  partial fills, replace/modify); (6) active trade management (what-changed attribution, roll
+  comparison, adherence); (7) portfolio risk concentration + scenario stress; (8) journal +
+  attribution + calibration loop; (9) experiment discipline (versioned, walk-forward, sensitivity);
+  (10) simulation training library + reviewer exercises; then reporting/sharing, global search,
+  operational readiness. ANTI-GOALS: no Lab resurrection, no second backtester, no per-screen
+  catalogs, no free-form order text as canonical, never blend historical/MC/risk-neutral bases.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

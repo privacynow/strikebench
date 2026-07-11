@@ -68,6 +68,17 @@ public final class ResearchQuestionEngine {
     /** Bumped whenever detection/stats change — persisted study keys must not collide across engines. */
     static final int ENGINE_VERSION = 2;
 
+    /** Order-sensitive fold over every bar's date + close: any content change changes the hash. */
+    static String contentHash(java.util.List<Candle> candles, String source) {
+        long h = io.liftandshift.strikebench.sim.RandomStreams.mix(
+                source == null ? 0 : source.hashCode());
+        for (Candle c : candles) {
+            h = io.liftandshift.strikebench.sim.RandomStreams.mix(h ^ c.date().toEpochDay());
+            h = io.liftandshift.strikebench.sim.RandomStreams.mix(h ^ c.close().unscaledValue().longValue());
+        }
+        return Long.toHexString(h);
+    }
+
     // ---- Request / result ----
 
     public record RunRequest(String key, String symbol, String from, String to, Map<String, Object> params) {}
@@ -205,8 +216,14 @@ public final class ResearchQuestionEngine {
         // synthetic, or observed candles is a DIFFERENT study (holistic review #9).
         String ds = actx == null || actx.datasetId() == null
                 ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : actx.datasetId();
+        // F4: the key carries the CANDLE CONTENT hash + source — a backfill or correction that
+        // changes the underlying bars changes the key, so drift detection actually fires. With a
+        // deterministic engine, matching keys guarantee bit-identical analogs: the re-derivation
+        // IS the persisted artifact.
+        String dataHash = contentHash(candles, series.source());
         String studyKey = symbol + "|" + key + "|" + from + ".." + to + "|" + new java.util.TreeMap<>(p)
-                + "|ds=" + ds + "|ev=" + evidenceLabel(series.freshness()) + "|v=" + ENGINE_VERSION;
+                + "|ds=" + ds + "|ev=" + evidenceLabel(series.freshness()) + "|src=" + series.source()
+                + "|data=" + dataHash + "|v=" + ENGINE_VERSION;
         return new QuestionResult(key, symbol, questionText(q, symbol, forward, lookback, p), from.toString(), to.toString(),
                 forward, baseline, conditioned, winEdge, meanEdge, round(z), significant,
                 round(ci[0]), round(ci[1]), dist, examples, evidenceLabel(series.freshness()), observed, verdict, notes,

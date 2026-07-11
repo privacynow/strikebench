@@ -393,6 +393,7 @@
         : console.info('working idea cleared on world switch');
     }
     API.flushCache();               // every cached GET belonged to the old world
+    if (App.Market) { App.Market.quotes = {}; App.Market.seq = 0; App.Market.world = worldId; App.Market.simTime = null; }
     refreshWorldBand();
     // The universe follows the lane: tape, sector rail, and symbol datalist must show THIS
     // market's symbols (P0: they silently emptied because the world schema differed).
@@ -651,8 +652,9 @@
   function updateTapePrices(quotes) {
     var strip = document.getElementById('tape-strip');
     if (!strip || !strip.children.length) return false;
-    var symbolsKey = quotes.map(function (q) { return q.symbol; }).join(',');
-    if (strip.getAttribute('data-symbols') !== symbolsKey) return false;
+    // F7: PER-SYMBOL delta updates — the old whole-list identity check silently discarded every
+    // frame whose symbol set or ORDER differed from the strip's (SSE supersets, world frames).
+    // Symbols without a matching tape item simply don't paint; rebuilds stay refreshTape's job.
     quotes.forEach(function (q) {
       var last = parseFloat(q.last), prev = parseFloat(q.prevClose);
       if (!isFinite(last)) return;
@@ -682,6 +684,12 @@
     onFrame: function (data) {
       if (!data || !data.quotes) return;
       if (data.seq && data.seq <= App.Market.seq && data.world === App.Market.world) return; // stale frame
+      // F7 LANE PURITY: a frame from a different world RESETS the store — a shared symbol must
+      // never briefly show the previous lane's price after a switch.
+      if ((data.world || 'observed') !== App.Market.world) {
+        App.Market.quotes = {};
+        App.Market.seq = 0;
+      }
       App.Market.seq = data.seq || (App.Market.seq + 1);
       App.Market.world = data.world || 'observed';
       App.Market.simTime = data.simTime || null;

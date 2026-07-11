@@ -3965,10 +3965,10 @@
     var tab = params && params[0] ? String(params[0]).toLowerCase() : 'overview';
     if (!TABS.some(function (t) { return t.key === tab; })) tab = 'overview';
     root.appendChild(el('h1', {}, 'Data center'));
-    root.appendChild(el('div', { class: 'wb-stages', id: 'data-tabs', role: 'tablist' },
+    root.appendChild(el('div', { class: 'tabs data-tabs', id: 'data-tabs', role: 'tablist' },
       TABS.map(function (t) {
         return el('button', {
-          class: 'pill' + (t.key === tab ? ' active' : ''), 'data-tab': t.key, role: 'tab',
+          class: t.key === tab ? 'active' : '', 'data-tab': t.key, role: 'tab',
           'aria-selected': t.key === tab ? 'true' : 'false',
           onclick: function () { App.navigate('#/data/' + t.key); }
         }, t.label, el('span', { class: 'badge badge-ok', id: 'data-tab-badge-' + t.key,
@@ -4001,6 +4001,18 @@
       } catch (e) { /* badge only */ }
     }
     fillTabBadges();
+    // F14: Administration is authorization-gated — hidden entirely for non-admin users (the
+    // server enforces regardless; the tab must not advertise what the caller cannot do).
+    (async function gateAdminTab() {
+      try {
+        var ov = await API.get('/api/data/overview');
+        if (!ov || !ov.admin) {
+          var btn = document.querySelector('#data-tabs [data-tab="admin"]');
+          if (btn) btn.style.display = 'none';
+          if (tab === 'admin' && (!ov || !ov.admin)) App.navigate('#/data/overview');
+        }
+      } catch (e) { /* leave visible; the server still refuses */ }
+    })();
     if (App.onEvent) {
       App.onEvent(['job.progress', 'job.complete', 'dataset.selected', 'world.selected'], function () {
         clearTimeout(badgeTimer);
@@ -4037,7 +4049,7 @@
       var wt = (App.state.lastRecommendSymbol || '').toUpperCase();
       var curSector = (App.state.universe && App.state.universe.active && App.state.universe.active.sectorKey) || '';
       var st = { scenario: 'CHOP', speed: 26, sectorKey: curSector !== 'world' ? curSector : '',
-        symbolsText: wt, rows: [{ symbol: wt || 'ACME', beta: 1, spot: '' }] };
+        symbolsText: wt, allowFictional: true, rows: [{ symbol: wt || 'ACME', beta: 1, spot: '' }] };
 
       async function refreshSim() {
         var box = document.getElementById('dc-sim-sessions');
@@ -4120,22 +4132,64 @@
             el('button', { class: 'btn btn-sm btn-danger', onclick: function () { finishModal(sx); } }, 'Finish'),
             el('button', { class: 'btn btn-sm btn-secondary', id: 'cr-exit', onclick: function () {
               App.switchWorld('observed'); } }, 'Return to real market')));
+        // ---- The CONSOLE parts (F9): breadth, anchor coverage, focus chart, live P/L, heat,
+        // event timeline. Everything below reuses existing primitives — no duplicate engines.
+        var breadthChip = el('span', { class: 'chip', id: 'cr-breadth' },
+          el('span', { class: 'chip-label' }, 'Breadth'), el('b', {}, '\u2026'));
+        room.querySelector('.chip-row').appendChild(breadthChip);
+        if (sx.anchorSummary) {
+          var cov = sx.anchorSummary;
+          room.querySelector('.chip-row').appendChild(chip('Anchored',
+            String(cov.anchored || 0) + (cov.excluded ? ' \u00b7 ' + cov.excluded + ' excluded' : '')
+              + (cov.pending ? ' \u00b7 ' + cov.pending + ' resolving' : ''),
+            'Symbols with a priced start anchor; excluded symbols are named in the provenance table below.'));
+        }
+        // Focus chart: the same range-pill chart Research uses, on the tapped symbol.
+        var focusSym = syms[0];
+        var chartHost = el('div', { id: 'cr-chart', style: 'margin-top:6px' });
+        room.appendChild(chartHost);
+        function drawFocus() {
+          chartHost.innerHTML = '';
+          chartHost.appendChild(el('div', { class: 'muted small', style: 'margin-bottom:2px' },
+            focusSym + ' \u2014 tap another symbol chip to switch \u00b7 ',
+            el('a', { href: '#/research/' + focusSym, onclick: function () { App.navigate('#/research/' + focusSym); } },
+              'Full research \u2192')));
+          chartHost.appendChild(UI.rangeChart({ initial: '3m', fetch: historyFetch(focusSym) }));
+        }
+        drawFocus();
+        room.querySelectorAll('#cr-symbols .chip').forEach(function (chipEl) {
+          var symBtn = chipEl.querySelector('[data-cr-sym]');
+          if (!symBtn) return;
+          var sym = symBtn.getAttribute('data-cr-sym');
+          chipEl.onclick = function () { focusSym = sym; drawFocus(); }; // chart focus; Research via the chart link
+          chipEl.title = 'Chart ' + sym + ' here';
+        });
         function paint() {
-          syms.slice(0, 12).forEach(function (sym) {
+          var up = 0, down = 0;
+          syms.forEach(function (sym) {
             var q = App.Market && App.Market.get(sym);
+            if (!q) return;
+            var last = parseFloat(q.last), prev = parseFloat(q.prevClose);
+            if (isFinite(last) && isFinite(prev) && prev) (last >= prev ? up++ : down++);
             var slot = room.querySelector('[data-cr-sym="' + sym + '"]');
-            if (q && slot) slot.textContent = fmtNum(q.last);
+            if (slot) slot.textContent = fmtNum(q.last);
           });
+          var b = room.querySelector('#cr-breadth b');
+          if (b && (up + down) > 0) {
+            b.textContent = up + '\u25B2 / ' + down + '\u25BC';
+          }
           var c = room.querySelector('#cr-clock');
           if (App.Market && App.Market.simTime && c) c.textContent = App.Market.simTime.replace('T', ' ');
         }
         paint();
-        if (App.Market) App.Market.subscribe(function () { if (room.isConnected) paint(); }, token);
-        (async function fillPl() {
+        // Live P/L: refreshed on stream frames, throttled to the server's mark-memo cadence —
+        // the old version fetched ONCE and went stale (F9).
+        var plLast = 0;
+        async function fillPl() {
           try {
-            var sum = await API.get('/api/portfolio/summary');
+            var sum = await API.getFresh('/api/portfolio/summary');
             var pl = room.querySelector('#cr-pl');
-            if (!pl || !sum) return;
+            if (!pl || !sum || !room.isConnected) return;
             pl.innerHTML = '';
             if (sum.totalValueCents !== undefined && sum.totalValueCents !== null) {
               pl.appendChild(chip('Simulation account', UI.fmtMoney(sum.totalValueCents)));
@@ -4143,8 +4197,64 @@
             if (sum.totalPnlCents !== undefined && sum.totalPnlCents !== null) {
               pl.appendChild(chip('P/L this session', pnlSpan(sum.totalPnlCents)));
             }
+            try {
+              var heat = await API.get('/api/portfolio/heat');
+              if (heat && heat.totalWorstCaseCents !== undefined && heat.totalWorstCaseCents !== null) {
+                pl.appendChild(chip('Book heat', UI.fmtMoney(heat.totalWorstCaseCents),
+                  'Total worst case across open simulated positions.'));
+              }
+            } catch (e2) { /* heat is optional decoration here */ }
           } catch (e) { var pl2 = room.querySelector('#cr-pl'); if (pl2) pl2.innerHTML = ''; }
-        })();
+        }
+        fillPl();
+        if (App.Market) App.Market.subscribe(function () {
+          if (!room.isConnected) return;
+          paint();
+          var nowT = Date.now();
+          if (nowT - plLast > 8000) { plLast = nowT; fillPl(); }
+        }, token);
+        // Anchor provenance + event timeline: on-demand expandables (the detail endpoints load
+        // only when opened — same only-what-you-open discipline as the tabs).
+        room.appendChild(UI.expandable('Anchors & provenance \u2014 what this world is built on', function () {
+          var slot = el('div', {}, UI.spinner('Loading provenance\u2026'));
+          API.getFresh('/api/sim/market/' + sx.id + '/anchors').then(function (doc) {
+            slot.innerHTML = '';
+            var rows = (doc.anchors || []).map(function (a) {
+              return el('tr', {},
+                el('td', {}, el('b', {}, a.symbol)),
+                el('td', {}, a.tier || ''),
+                el('td', {}, a.price !== undefined ? fmtNum(a.price) : '\u2014'),
+                el('td', { class: 'muted small' }, a.basis || ''),
+                el('td', { class: 'muted small' }, a.calibration || ''));
+            });
+            (doc.excluded || []).forEach(function (x) {
+              rows.push(el('tr', {},
+                el('td', {}, el('b', {}, x.symbol)),
+                el('td', {}, el('span', { class: 'badge badge-warn' }, 'EXCLUDED')),
+                el('td', {}, '\u2014'),
+                el('td', { class: 'muted small', colspan: '2' }, x.reason || '')));
+            });
+            if (doc.note) slot.appendChild(alertBox('caution', 'Late resolution', [doc.note]));
+            slot.appendChild(table(['Symbol', 'Tier', 'Anchor', 'Basis', 'Calibration'], rows));
+          }).catch(function (e) { slot.innerHTML = ''; slot.appendChild(alertBox('warn', 'Provenance unavailable: ' + e.message)); });
+          return slot;
+        }));
+        room.appendChild(UI.expandable('Event timeline \u2014 every injected shock, replayable', function () {
+          var slot = el('div', {}, UI.spinner('Loading events\u2026'));
+          API.getFresh('/api/sim/market/' + sx.id + '/report').then(function (rep) {
+            slot.innerHTML = '';
+            var evs = rep.events || [];
+            if (!evs.length) { slot.appendChild(el('div', { class: 'muted small' }, 'No injected events yet.')); return; }
+            slot.appendChild(table(['Quantum', 'Kind', 'Symbol', 'Value'], evs.map(function (e2) {
+              return el('tr', {},
+                el('td', {}, String(e2.quantum)),
+                el('td', {}, e2.kind),
+                el('td', {}, e2.symbol || '\u2014'),
+                el('td', {}, String(e2.value)));
+            })));
+          }).catch(function (e) { slot.innerHTML = ''; slot.appendChild(alertBox('warn', 'Events unavailable: ' + e.message)); });
+          return slot;
+        }));
         return room;
       }
 
@@ -4329,12 +4439,79 @@
         var grid = el('div', { class: 'form-grid', style: 'margin-top:8px' }, labeled('Session name', nameIn));
 
         if (beginner) {
-          // Beginner: working ticker prefilled; "use current sector" is the DEFAULT so the world
-          // feels like a market, not one lonely ticker (holistic review Phase 1/9).
-          var symsIn = el('input', { type: 'text', id: 'sim-symbols', value: st.symbolsText || '',
-            placeholder: 'AAPL, SPY' });
-          symsIn.oninput = function () { st.symbolsText = symsIn.value; };
-          grid.appendChild(labeled('Stocks to include (comma-separated)', symsIn));
+          // F10 TOKENIZED PICKER: type a symbol, press Enter — it becomes a removable chip.
+          // Pasting "AAPL, MSFT" still works as a convenience, but comma syntax is never
+          // required knowledge. Suggestions offer the current sector + held symbols one-tap.
+          st.symbolsList = st.symbolsList || (st.symbolsText
+            ? st.symbolsText.split(',').map(function (x) { return x.trim().toUpperCase(); }).filter(Boolean)
+            : []);
+          function syncSymbolsText() { st.symbolsText = st.symbolsList.join(', '); }
+          var known = {};
+          ((App.state.universe && App.state.universe.sectors) || []).forEach(function (sec) {
+            (sec.symbols || []).forEach(function (x) { known[x] = true; });
+          });
+          // STABLE GEOMETRY: both rows exist from the first paint with reserved height — a chip
+          // appearing on blur must never shift the Create button mid-click (level-geometry law).
+          var chipsWrap = el('div', { class: 'btn-row', id: 'sim-symbol-chips',
+            style: 'flex-wrap:wrap; gap:4px; margin:2px 0; min-height:30px' });
+          var suggWrap = el('div', { class: 'btn-row muted small', id: 'sim-symbol-suggestions',
+            style: 'flex-wrap:wrap; gap:4px; min-height:30px' });
+          var symsIn = el('input', { type: 'text', id: 'sim-symbols', value: '',
+            list: 'universe-symbols', placeholder: 'Type a symbol, press Enter' });
+          function renderChips() {
+            chipsWrap.innerHTML = '';
+            st.symbolsList.forEach(function (sym, i) {
+              var unknown = !known[sym];
+              chipsWrap.appendChild(el('span', {
+                class: 'chip' + (unknown ? ' chip-warn' : ''), 'data-picked-sym': sym,
+                title: unknown ? 'Not a recognized ticker — it will be excluded unless "made-up tickers" is allowed below' : null
+              }, el('b', {}, sym), unknown ? el('span', { class: 'muted small' }, ' ?') : null,
+                el('button', { class: 'chip-x', 'aria-label': 'Remove ' + sym, onclick: function () {
+                  st.symbolsList.splice(i, 1); syncSymbolsText(); renderChips();
+                } }, '\u00d7')));
+            });
+          }
+          function addTokens(text) {
+            String(text || '').split(/[,\s]+/).forEach(function (part) {
+              var sym = part.trim().toUpperCase();
+              if (sym && st.symbolsList.indexOf(sym) < 0) st.symbolsList.push(sym);
+            });
+            syncSymbolsText(); renderChips();
+          }
+          symsIn.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTokens(symsIn.value); symsIn.value = ''; }
+          });
+          symsIn.addEventListener('change', function () { if (symsIn.value.trim()) { addTokens(symsIn.value); symsIn.value = ''; } });
+          symsIn.addEventListener('paste', function () {
+            setTimeout(function () { addTokens(symsIn.value); symsIn.value = ''; }, 0);
+          });
+          st.addPickerTokens = addTokens; // create-time: consume any residue still in the box
+          st.pickerInput = function () { return symsIn.value; };
+          grid.appendChild(labeled('Stocks to include', symsIn));
+          creator.appendChild(chipsWrap);
+          creator.appendChild(suggWrap);
+          renderChips();
+          // One-tap suggestions: current sector leaders + your held symbols — filled IN PLACE
+          // (the row is already mounted with reserved height, so nothing below it moves).
+          (function () {
+            var sugg = [];
+            var u = App.state.universe;
+            if (u && u.active && u.active.symbols) sugg = sugg.concat(u.active.symbols.slice(0, 8));
+            API.get('/api/positions').then(function (ps) {
+              ((ps && ps.positions) || []).forEach(function (pp) { if (pp.shares > 0) sugg.push(pp.symbol); });
+              renderSugg();
+            }).catch(renderSugg);
+            function renderSugg() {
+              if (!suggWrap.isConnected) return;
+              var uniq = sugg.filter(function (x, i) { return sugg.indexOf(x) === i && st.symbolsList.indexOf(x) < 0; });
+              if (!uniq.length) return;
+              suggWrap.appendChild(el('span', {}, 'Suggestions:'));
+              uniq.slice(0, 10).forEach(function (sym) {
+                suggWrap.appendChild(el('button', { class: 'btn btn-sm btn-secondary',
+                  onclick: function () { addTokens(sym); this.remove(); } }, sym));
+              });
+            }
+          })();
           var sectorChk = el('input', { type: 'checkbox', id: 'sim-use-sector' });
           sectorChk.checked = !!st.sectorKey;
           sectorChk.onchange = function () {
@@ -4409,15 +4586,22 @@
           creator.appendChild(grid);
         }
 
+        var fictChk = el('input', { type: 'checkbox', id: 'sim-allow-fictional' });
+        fictChk.checked = !!st.allowFictional;
+        fictChk.onchange = function () { st.allowFictional = fictChk.checked; };
+        creator.appendChild(el('label', { class: 'btn-row muted small', style: 'align-items:center; gap:6px; margin-top:6px' },
+          fictChk, el('span', {}, 'Made-up tickers start at $100 (explicit demo instruments \u2014 never inferred)')));
         var createBtn = el('button', { class: 'btn', id: 'sim-create', style: 'margin-top:8px', onclick: async function () {
           createBtn.disabled = true;
           try {
             var symbols = {}, spots = {};
             if (beginner) {
-              (st.symbolsText || 'ACME').split(',').forEach(function (part) {
-                var sym = part.trim().toUpperCase();
-                if (sym) symbols[sym] = 1.0;
-              });
+              if (st.addPickerTokens && st.pickerInput && st.pickerInput().trim()) {
+                st.addPickerTokens(st.pickerInput()); // whatever is still typed counts too
+              }
+              (st.symbolsList && st.symbolsList.length ? st.symbolsList
+                : (st.symbolsText || 'ACME').split(',').map(function (x) { return x.trim().toUpperCase(); }))
+                .forEach(function (sym) { if (sym) symbols[sym] = 1.0; });
             } else {
               st.rows.forEach(function (r) {
                 var sym = (r.symbol || '').trim().toUpperCase();
@@ -4429,7 +4613,7 @@
             }
             if (!Object.keys(symbols).length) throw new Error('Add at least one symbol');
             var payload = { name: st.name || 'Simulated session', symbols: symbols,
-              scenario: st.scenario, speed: st.speed };
+              scenario: st.scenario, speed: st.speed, allowFictional: !!st.allowFictional };
             if (st.sectorKey) payload.sectorKey = st.sectorKey;
             if (Object.keys(spots).length) payload.spots = spots;
             if (!beginner && st.vol) payload.volAnnual = st.vol / 100;
@@ -4499,8 +4683,40 @@
       lines.forEach(function (l) { modeCard.appendChild(l); });
       modeCard.appendChild(el('div', { class: 'btn-row', style: 'margin-top:8px' }, actions));
     }
-    if (tab === 'overview') [modeCard, engineCard, healthCard].forEach(function (c) { root.appendChild(c); });
+    var activityCard = el('div', { class: 'card', id: 'dc-activity' },
+      UI.cardHeader('Running activity & coverage'), UI.spinner('Checking\u2026'));
+    async function fillActivity() {
+      if (!activityCard.isConnected) return;
+      var linesA = [];
+      try {
+        var jj = (await API.get('/api/data/jobs')).jobs || [];
+        var run = jj.filter(function (x) { return x.status === 'RUNNING' || x.status === 'QUEUED'; });
+        var failed = jj.filter(function (x) { return x.status === 'FAILED'; });
+        linesA.push(el('div', { class: 'status-item' },
+          el('span', { class: 'badge ' + (run.length ? 'badge-ok' : 'badge-dim') }, run.length + ' RUNNING'),
+          el('span', { class: 'muted small' }, failed.length ? failed.length + ' failed \u2014 see Sources & jobs' : 'background jobs'),
+          el('span', { class: 'spacer' }),
+          el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/sources'); } }, 'Open')));
+      } catch (e) { /* summary only */ }
+      try {
+        var cov = await API.get('/api/data/coverage');
+        var sum = (cov && cov.summary) || {};
+        linesA.push(el('div', { class: 'status-item' },
+          el('span', { class: 'badge badge-dim' }, 'COVERAGE'),
+          el('span', { class: 'muted small' }, (sum.underlyingSymbols || 0) + ' symbols \u00b7 '
+            + (sum.underlyingBars || 0) + ' daily bars stored'),
+          el('span', { class: 'spacer' }),
+          el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/datasets'); } }, 'Open')));
+      } catch (e) { /* summary only */ }
+      if (!App.alive(token) || !activityCard.isConnected) return;
+      activityCard.innerHTML = '';
+      activityCard.appendChild(UI.cardHeader('Running activity & coverage'));
+      if (!linesA.length) activityCard.appendChild(el('div', { class: 'muted small' }, 'Nothing running.'));
+      linesA.forEach(function (l) { activityCard.appendChild(l); });
+    }
+    if (tab === 'overview') [modeCard, activityCard, engineCard, healthCard].forEach(function (c) { root.appendChild(c); });
     fillMode();
+    fillActivity();
     if (tab === 'datasets') [datasetsCard, coverageCard].forEach(function (c) { root.appendChild(c); });
     if (tab === 'sources') [sourcesCard, jobsCard].forEach(function (c) { root.appendChild(c); });
     if (tab === 'admin') {
@@ -4538,6 +4754,24 @@
                 App.refreshScenarioBanner && App.refreshScenarioBanner();
                 loadDatasets();
               } }, 'Use'),
+          d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm', title: 'Activate and explore in Research',
+            onclick: async function () {
+              try {
+                await API.put('/api/datasets/active', { id: d.id });
+                App.refreshScenarioBanner && App.refreshScenarioBanner();
+                App.state.lastRecommendSymbol = d.symbol;
+                App.navigate('#/research/' + d.symbol);
+              } catch (e) { alert(e.message); }
+            } }, 'Research') : null,
+          d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm', title: 'Activate and compare strategies under it',
+            onclick: async function () {
+              try {
+                await API.put('/api/datasets/active', { id: d.id });
+                App.refreshScenarioBanner && App.refreshScenarioBanner();
+                App.state.lastRecommendSymbol = d.symbol;
+                App.navigate('#/trade/verify');
+              } catch (e) { alert(e.message); }
+            } }, 'Test strategies') : null,
           d.id !== 'observed' ? el('button', { class: 'btn btn-sm btn-secondary', title: 'Delete this run',
             onclick: async function () { await API.del('/api/datasets/' + d.id); App.refreshScenarioBanner && App.refreshScenarioBanner(); loadDatasets(); } }, 'Delete') : null));
       });

@@ -33,7 +33,13 @@
       // market thesis, the keyed research study selection, and an active evidence handoff all
       // survive a reload — losing them mid-investigation reset the user's thinking.
       marketThesis: (window.App && App.state.marketThesis) || null,
-      researchStudy: (window.App && App.state.researchStudy) || null,
+      // F6: SELECTION ONLY — the results cache holds full study payloads (analog paths and all);
+      // persisting it restored stale evidence and could blow the 128KB workspace cap. Results
+      // are keyed server-side and refetched fresh.
+      researchStudy: (window.App && App.state.researchStudy)
+        ? { mode: App.state.researchStudy.mode || 'past',
+            params: App.state.researchStudy.params || null }
+        : null,
       evidencePrefill: (window.App && App.state.evidencePrefill) || null,
       savedAt: Date.now()
     };
@@ -45,8 +51,11 @@
     if (!s || s.v !== 1 || !window.App) return false;
     if (s.symbol) App.state.lastRecommendSymbol = s.symbol;
     if (s.marketThesis) App.state.marketThesis = s.marketThesis;
-    // Study RESULTS are refetched (keyed server-side); only the selection/mode restores.
-    if (s.researchStudy) { App.state.researchStudy = s.researchStudy; delete App.state.researchStudy.result; }
+    // Selection only (F6): results/questions rebuild fresh — never restore stale evidence.
+    if (s.researchStudy) {
+      App.state.researchStudy = { mode: s.researchStudy.mode || 'past',
+        params: s.researchStudy.params || null };
+    }
     if (s.evidencePrefill) App.state.evidencePrefill = s.evidencePrefill;
     Object.keys(s.forms || {}).forEach(function (k) {
       if (FORM_KEYS.indexOf(k) >= 0 && s.forms[k]) App.state[k] = s.forms[k];

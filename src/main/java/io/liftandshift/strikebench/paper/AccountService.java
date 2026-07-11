@@ -151,6 +151,17 @@ public final class AccountService {
     }
 
     /** The SIMULATION account for a world — the ONLY lane allowed to trade against it. */
+    /** On-connection variant for SimulationSessions.createAtomic — one transaction, no orphans. */
+    public String createForWorldOn(java.sql.Connection c, String worldId, String name) throws java.sql.SQLException {
+        String id = io.liftandshift.strikebench.util.Ids.newId("acct");
+        String now = java.time.Instant.now().toString();
+        Db.execOn(c, "INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at,world_id) "
+                        + "VALUES (?,?,?,?,?,?,0,?,?,?)",
+                id, name == null ? "Simulation" : name, "SIMULATION",
+                10_000_000L, 10_000_000L, 0L, now, now, worldId);
+        return id;
+    }
+
     public Account getOrCreateForWorld(String worldId, String name) {
         var rows = db.query("SELECT * FROM accounts WHERE world_id=? LIMIT 1", AccountService::map, worldId);
         if (!rows.isEmpty()) return rows.getFirst();

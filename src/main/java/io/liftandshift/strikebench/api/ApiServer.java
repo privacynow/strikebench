@@ -499,6 +499,8 @@ public final class ApiServer {
                 ctx.json(Map.of("world", w, "datasetReset", datasetReset));
             });
             c.routes.get("/api/sim/market", ctx -> ctx.json(Map.of("sessions", simSessions.list(ownerId(ctx)))));
+            c.routes.get("/api/sim/market/{id}/anchors", ctx ->
+                    ctx.json(simSessions.anchors(ctx.pathParam("id"), ownerId(ctx)))); // F8: provenance detail
             c.routes.post("/api/sim/market", this::simMarketCreate);
             c.routes.post("/api/sim/market/{id}/start", ctx -> { simSessions.start(ctx.pathParam("id"), ownerId(ctx)); ctx.json(Map.of("ok", true)); });
             c.routes.post("/api/sim/market/{id}/pause", ctx -> { simSessions.pause(ctx.pathParam("id"), ownerId(ctx)); ctx.json(Map.of("ok", true)); });
@@ -768,16 +770,19 @@ public final class ApiServer {
                                   java.util.Map<String, Double> spots, String scenario,
                                   Double volAnnual, Long seed, String startSimTime, Double speed,
                                   String sectorKey /* include this curated sector as the background tier */,
-                                  Boolean includePositions /* default true: held symbols ride along */) {}
+                                  Boolean includePositions /* default true: held symbols ride along */,
+                                  Boolean allowFictional /* F3: $100 demo instruments only on explicit request */) {}
 
     private void simMarketCreate(Context ctx) {
         SimMarketCreate b = requireBody(bodyOrNull(ctx, SimMarketCreate.class));
+        String owner = ownerId(ctx);
+        // F1: the ACTIVE-SESSION CAP is checked before ANY resolution work — a user at the cap
+        // must hear "no" in milliseconds, not after seconds of provider traffic.
+        simSessions.ensureCapacity(owner);
         String start = b.startSimTime() != null && !b.startSimTime().isBlank() ? b.startSimTime()
                 : nextSimOpen().toString();
+        boolean allowFictional = Boolean.TRUE.equals(b.allowFictional());
         // ---- WORLD UNIVERSE BUILDER (holistic review Phase 1) ----
-        // A world you can actually WORK in: the user's explicit symbols + their held positions +
-        // the SPY/QQQ benchmarks form the ACTIVE tier (anchored + calibrated); the requested
-        // curated sector rides along as the BACKGROUND tier (anchored from warm memory only).
         java.util.LinkedHashMap<String, Double> active = new java.util.LinkedHashMap<>();
         if (b.symbols() != null) {
             b.symbols().forEach((k, v) -> active.put(k.trim().toUpperCase(Locale.ROOT), v == null ? 1.0 : v));
@@ -809,11 +814,13 @@ public final class ApiServer {
         }
         if (all.isEmpty()) throw new IllegalArgumentException("a simulated world needs at least one symbol");
 
-        // ---- ANCHOR RESOLVER (snapshot-first, bounded, honest) ----
-        // Order: explicit user price -> engine memory / governed quote (ACTIVE tier) -> engine
-        // memory ONLY (background tier — a cold sector must never trigger a provider burst) ->
-        // recognized-but-priceless symbols are EXCLUDED with a reason, never invented at $100.
-        // Only unrecognized made-up tickers (the ACME demo lever) start at $100, and say so.
+        // ---- ANCHOR RESOLVER ----
+        // F1: the request path does ONLY instant work. Fixture mode is local data, so everything
+        // (anchors + calibration) resolves inline. Against LIVE providers the request reads engine
+        // MEMORY only; cold active-tier symbols go to a governed BACKGROUND job that enriches the
+        // world before it starts (never a blocking provider loop under the Create button).
+        // F3: fictional status is never inferred — an unrecognized, unresolvable symbol becomes a
+        // $100 demo instrument ONLY when the request explicitly allows it; otherwise excluded.
         java.util.Map<String, Double> spots = new java.util.LinkedHashMap<>(
                 b.spots() == null ? java.util.Map.of() : b.spots());
         java.util.Map<String, String> spotBasis = new java.util.LinkedHashMap<>();
@@ -822,20 +829,25 @@ public final class ApiServer {
         java.util.Map<String, String> calibrationBasis = new java.util.LinkedHashMap<>();
         List<Map<String, Object>> anchors = new ArrayList<>();
         List<Map<String, Object>> excluded = new ArrayList<>();
+        List<String> pending = new ArrayList<>();
         java.util.Set<String> curated = new java.util.HashSet<>();
         io.liftandshift.strikebench.market.Universes.SECTORS.values()
                 .forEach(sec -> sec.symbols().forEach(x -> curated.add(x.toUpperCase(Locale.ROOT))));
-        // ONE governed batch primes the active tier (engine memory first; cold symbols fill
-        // through the politeness-governed engine — never a raw per-symbol provider loop). In
-        // fixture mode data is LOCAL and free, so the background tier batches too; against live
-        // providers the background tier stays memory-only (a cold sector must never cause a burst).
         boolean cheapData = cfg.fixturesOnly();
-        List<String> needQuote = (cheapData ? all : active).keySet().stream()
-                .filter(sym -> !spots.containsKey(sym)).toList();
         java.util.Map<String, io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot> snaps
                 = new java.util.HashMap<>();
-        if (!needQuote.isEmpty()) {
-            for (var snap : marketEngine.quotes(needQuote)) snaps.put(snap.symbol(), snap);
+        if (cheapData) {
+            // Local fixtures: one instant batch primes everything.
+            List<String> needQuote = all.keySet().stream().filter(sym -> !spots.containsKey(sym)).toList();
+            if (!needQuote.isEmpty()) {
+                for (var snap : marketEngine.quotes(needQuote)) snaps.put(snap.symbol(), snap);
+            }
+        } else {
+            // Live: MEMORY ONLY on the request path — zero provider calls under the button.
+            for (String sym : all.keySet()) {
+                if (spots.containsKey(sym)) continue;
+                marketEngine.peek(sym).ifPresent(snap -> snaps.put(snap.symbol(), snap));
+            }
         }
         long nowMs = clock.millis();
         java.time.LocalDate today = java.time.LocalDate.now(clock);
@@ -852,7 +864,7 @@ public final class ApiServer {
                 anchors.add(a);
                 continue;
             }
-            var snap = isActive || cheapData ? snaps.get(sym) : marketEngine.peek(sym).orElse(null);
+            var snap = snaps.get(sym);
             var mark = snap == null || snap.last() == null ? null : snap.last();
             boolean realQuote = snap != null && switch (snap.freshness()) {
                 case REALTIME, DELAYED, EOD, STALE -> true;
@@ -874,8 +886,15 @@ public final class ApiServer {
                 a.put("prevClose", snap.prevClose() == null ? null : snap.prevClose().toPlainString());
                 a.put("basis", basis);
                 anchors.add(a);
+            } else if (!cheapData && isActive && curated.contains(sym)) {
+                // Cold but real: the background resolver will fetch it (governed) and enrich the
+                // world before it starts. It is NOT in the initial world.
+                all.remove(sym);
+                pending.add(sym);
+                a.put("pending", true);
+                a.put("basis", "resolving in the background — will join before the session starts");
+                spotBasis.put(sym, "RESOLVING — joins when its price arrives");
             } else if (curated.contains(sym)) {
-                // A RECOGNIZED real ticker with no resolvable price is excluded, never invented.
                 all.remove(sym);
                 a.put("excluded", true);
                 a.put("reason", isActive
@@ -883,25 +902,90 @@ public final class ApiServer {
                         : "not warm in the engine — background symbols never trigger provider calls; excluded");
                 excluded.add(a);
                 spotBasis.put(sym, "EXCLUDED — " + a.get("reason"));
-            } else {
+            } else if (allowFictional) {
                 spots.put(sym, 100.0);
-                spotBasis.put(sym, "made-up ticker — starts at $100");
+                spotBasis.put(sym, "made-up ticker — starts at $100 (you allowed fictional symbols)");
                 a.put("price", 100.0);
                 a.put("source", "synthetic");
-                a.put("basis", "made-up ticker — starts at $100");
+                a.put("basis", "made-up ticker — starts at $100 (explicitly allowed)");
                 anchors.add(a);
+            } else {
+                // F3: never INFER that an unknown symbol is fictional.
+                all.remove(sym);
+                a.put("excluded", true);
+                a.put("reason", "unrecognized ticker with no price — enable 'made-up tickers start at $100' "
+                        + "or set an explicit start price to include it");
+                excluded.add(a);
+                spotBasis.put(sym, "EXCLUDED — " + a.get("reason"));
             }
         }
-        if (all.isEmpty()) {
+        if (all.isEmpty() && pending.isEmpty()) {
             throw new IllegalStateException("No symbol in this world could be priced — check the data "
-                    + "sources on the Data screen, or set explicit start prices.");
+                    + "sources on the Data screen, set explicit start prices, or allow made-up tickers.");
         }
-        // ---- Per-symbol calibration: ACTIVE tier only (the eager candles+chain loop across a
-        // whole sector was the provider-pressure defect), capped, basis disclosed. ----
+        // ---- Calibration: inline only when data is LOCAL; live calibration is background work. ----
+        if (cheapData) {
+            calibrateInto(all, active, spots, spotBasis, symVols, symIvs, calibrationBasis, anchors, today);
+        }
+        java.util.Map<String, Double> spotsInWorld = new java.util.LinkedHashMap<>();
+        all.keySet().forEach(sym -> { if (spots.containsKey(sym)) spotsInWorld.put(sym, spots.get(sym)); });
+        long seed = b.seed() != null ? b.seed() : Math.floorMod(clock.millis(), 1_000_000L);
+        var worldCfg = new io.liftandshift.strikebench.market.sim.SimulatedWorld.Config(null,
+                b.name() == null ? "Simulated session" : b.name(),
+                all, spotsInWorld,
+                b.scenario() == null ? "CHOP" : b.scenario(),
+                b.volAnnual() == null || b.volAnnual() <= 0 ? 0.3 : b.volAnnual(),
+                seed, start, b.speed() == null ? 1 : b.speed(),
+                symVols.isEmpty() ? null : symVols, symIvs.isEmpty() ? null : symIvs);
+        Map<String, Object> anchorDoc = new LinkedHashMap<>();
+        anchorDoc.put("anchors", anchors);
+        anchorDoc.put("excluded", excluded);
+        anchorDoc.put("pending", pending);
+        anchorDoc.put("trimmed", trimmed);
+        anchorDoc.put("resolvedAt", clock.instant().toString());
+        // F2: session + anchors + account in ONE transaction; memory admission after commit.
+        var created = simSessions.createAtomic(worldCfg, owner, Json.write(anchorDoc),
+                (b.name() == null ? "Simulation" : b.name()) + " account", accounts);
+        var w = created.world();
+        // F1: the governed BACKGROUND resolver — cold actives + live calibration enrich the world
+        // while it is still unstarted; a started world keeps its immutable config (disclosed).
+        if (!cheapData && (!pending.isEmpty() || !active.isEmpty())) {
+            final var fActive = new java.util.LinkedHashMap<>(active);
+            final var fAll = new java.util.LinkedHashMap<>(all);
+            final var fSpots = new java.util.LinkedHashMap<>(spots);
+            final var fSpotBasis = new java.util.LinkedHashMap<>(spotBasis);
+            final var fPending = List.copyOf(pending);
+            final var fAnchors = new ArrayList<>(anchors);
+            final var fExcluded = new ArrayList<>(excluded);
+            final String worldId = w.worldId();
+            Thread.startVirtualThread(() -> resolveWorldInBackground(worldId, owner, worldCfg,
+                    fActive, fAll, fSpots, fSpotBasis, fPending, fAnchors, fExcluded, trimmed));
+        }
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("worldId", w.worldId());
+        resp.put("accountId", created.accountId());
+        resp.put("config", w.config());
+        resp.put("simTime", w.simTime().toString());
+        resp.put("spotBasis", spotBasis);
+        resp.put("calibration", calibrationBasis);
+        resp.put("anchors", anchors);
+        resp.put("excluded", excluded);
+        resp.put("pending", pending);
+        resp.put("resolving", !cheapData && (!pending.isEmpty() || !active.isEmpty()));
+        resp.put("trimmed", trimmed);
+        resp.put("modelVersion", w.modelVersion());
+        ctx.status(201).json(resp);
+    }
+
+    /** Per-symbol HV30 + chain-ATM-IV calibration for the ACTIVE tier (capped, basis disclosed). */
+    private void calibrateInto(java.util.Map<String, Double> all, java.util.Map<String, Double> active,
+                               java.util.Map<String, Double> spots, java.util.Map<String, String> spotBasis,
+                               java.util.Map<String, Double> symVols, java.util.Map<String, Double> symIvs,
+                               java.util.Map<String, String> calibrationBasis,
+                               List<Map<String, Object>> anchors, java.time.LocalDate today) {
         int calBudget = 12;
         for (String sym : active.keySet()) {
             if (!all.containsKey(sym) || !spots.containsKey(sym) || calBudget <= 0) continue;
-            if ("user".equals(spotBasis.get(sym))) { /* user-priced symbols still calibrate */ }
             calBudget--;
             StringBuilder cal = new StringBuilder();
             try {
@@ -937,49 +1021,105 @@ public final class ApiServer {
                 }
             } catch (RuntimeException ignored) { /* chainless symbol — session knob applies */ }
             calibrationBasis.put(sym, cal.isEmpty() ? "session vol knob (no per-symbol data)" : cal.toString());
-            // Attach the calibration to the durable anchor record too.
             for (var a : anchors) {
                 if (sym.equals(a.get("symbol"))) { a.put("calibration", calibrationBasis.get(sym)); break; }
             }
         }
-        java.util.Map<String, Double> spotsInWorld = new java.util.LinkedHashMap<>();
-        all.keySet().forEach(sym -> { if (spots.containsKey(sym)) spotsInWorld.put(sym, spots.get(sym)); });
-        // Seed default varies per session (still shown + persisted — same seed replays the world).
-        long seed = b.seed() != null ? b.seed() : Math.floorMod(clock.millis(), 1_000_000L);
-        var cfg = new io.liftandshift.strikebench.market.sim.SimulatedWorld.Config(null,
-                b.name() == null ? "Simulated session" : b.name(),
-                all, spotsInWorld,
-                b.scenario() == null ? "CHOP" : b.scenario(),
-                b.volAnnual() == null || b.volAnnual() <= 0 ? 0.3 : b.volAnnual(),
-                seed, start, b.speed() == null ? 1 : b.speed(),
-                symVols.isEmpty() ? null : symVols, symIvs.isEmpty() ? null : symIvs);
-        var w = simSessions.create(cfg, ownerId(ctx));
-        // DURABLE anchor provenance: the audit record of what this world was anchored to.
-        Map<String, Object> anchorDoc = new LinkedHashMap<>();
-        anchorDoc.put("anchors", anchors);
-        anchorDoc.put("excluded", excluded);
-        anchorDoc.put("trimmed", trimmed);
-        anchorDoc.put("resolvedAt", clock.instant().toString());
-        db.exec("UPDATE sim_session SET anchors=?::jsonb WHERE id=?", Json.write(anchorDoc), w.worldId());
-        // The SIMULATION ACCOUNT: the only lane allowed to trade against this world.
-        var acct = accounts.getOrCreateForWorld(w.worldId(), (b.name() == null ? "Simulation" : b.name()) + " account");
-        Map<String, Object> resp = new LinkedHashMap<>();
-        resp.put("worldId", w.worldId());
-        resp.put("accountId", acct.id());
-        resp.put("config", w.config());
-        resp.put("simTime", w.simTime().toString());
-        resp.put("spotBasis", spotBasis);
-        resp.put("calibration", calibrationBasis);
-        resp.put("anchors", anchors);
-        resp.put("excluded", excluded);
-        resp.put("trimmed", trimmed);
-        resp.put("modelVersion", w.modelVersion());
-        ctx.status(201).json(resp);
+    }
+
+    /**
+     * F1: the governed background resolver. Fetches the pending cold symbols through the
+     * politeness-governed engine, calibrates the active tier, and ENRICHES the world if it has
+     * not started ticking. A started world keeps its immutable config; the durable anchor record
+     * says what arrived too late. Publishes world.resolving hints either way.
+     */
+    private void resolveWorldInBackground(String worldId, String owner,
+                                          io.liftandshift.strikebench.market.sim.SimulatedWorld.Config baseCfg,
+                                          java.util.Map<String, Double> active, java.util.Map<String, Double> all,
+                                          java.util.Map<String, Double> spots, java.util.Map<String, String> spotBasis,
+                                          List<String> pending, List<Map<String, Object>> anchors,
+                                          List<Map<String, Object>> excluded, List<String> trimmed) {
+        try {
+            long nowMs = clock.millis();
+            if (!pending.isEmpty()) {
+                for (var snap : marketEngine.quotes(pending)) { // governed: priorities + politeness apply
+                    var mark = snap.last();
+                    if (mark == null || mark.signum() <= 0) continue;
+                    String sym = snap.symbol();
+                    all.put(sym, active.getOrDefault(sym, 1.0));
+                    spots.put(sym, mark.doubleValue());
+                    boolean realQuote = switch (snap.freshness()) {
+                        case REALTIME, DELAYED, EOD, STALE -> true;
+                        default -> false;
+                    };
+                    String basis = (realQuote ? "anchored to the real market's last "
+                            + snap.freshness().name().toLowerCase() + " price"
+                            : "anchored to a built-in DEMO quote — not a live price") + " (resolved in background)";
+                    spotBasis.put(sym, basis);
+                    Map<String, Object> a = new LinkedHashMap<>();
+                    a.put("symbol", sym);
+                    a.put("tier", "active");
+                    a.put("price", mark.doubleValue());
+                    a.put("source", snap.source());
+                    a.put("freshness", snap.freshness().name());
+                    a.put("sourceAsOf", snap.asOfEpochMs());
+                    a.put("ageSeconds", Math.max(0, (nowMs - snap.asOfEpochMs()) / 1000));
+                    a.put("basis", basis);
+                    anchors.removeIf(x -> sym.equals(x.get("symbol")));
+                    anchors.add(a);
+                }
+                for (String sym : pending) {
+                    if (all.containsKey(sym)) continue;
+                    Map<String, Object> a = new LinkedHashMap<>();
+                    a.put("symbol", sym);
+                    a.put("excluded", true);
+                    a.put("reason", "background resolution found no price — excluded rather than invented");
+                    excluded.add(a);
+                    anchors.removeIf(x -> sym.equals(x.get("symbol")));
+                }
+            }
+            java.util.Map<String, Double> symVols = new java.util.LinkedHashMap<>();
+            java.util.Map<String, Double> symIvs = new java.util.LinkedHashMap<>();
+            java.util.Map<String, String> calibrationBasis = new java.util.LinkedHashMap<>();
+            calibrateInto(all, active, spots, spotBasis, symVols, symIvs, calibrationBasis, anchors,
+                    java.time.LocalDate.now(clock));
+            java.util.Map<String, Double> spotsInWorld = new java.util.LinkedHashMap<>();
+            all.keySet().forEach(sym -> { if (spots.containsKey(sym)) spotsInWorld.put(sym, spots.get(sym)); });
+            var enriched = new io.liftandshift.strikebench.market.sim.SimulatedWorld.Config(worldId,
+                    baseCfg.name(), all, spotsInWorld, baseCfg.scenario(), baseCfg.volAnnual(),
+                    baseCfg.seed(), baseCfg.startSimTime(), baseCfg.speed(),
+                    symVols.isEmpty() ? null : symVols, symIvs.isEmpty() ? null : symIvs);
+            Map<String, Object> anchorDoc = new LinkedHashMap<>();
+            anchorDoc.put("anchors", anchors);
+            anchorDoc.put("excluded", excluded);
+            anchorDoc.put("pending", List.of());
+            anchorDoc.put("trimmed", trimmed);
+            anchorDoc.put("calibration", calibrationBasis);
+            anchorDoc.put("resolvedAt", clock.instant().toString());
+            boolean applied = simSessions.replaceUnstarted(worldId, owner, enriched, Json.write(anchorDoc));
+            if (!applied) {
+                // The world already moved: record the truth without touching its immutable config.
+                anchorDoc.put("note", "resolved AFTER the session started — not applied; finish and "
+                        + "recreate to include the late symbols/calibration");
+                db.exec("UPDATE sim_session SET anchors=?::jsonb WHERE id=?", Json.write(anchorDoc), worldId);
+                events.publish("world.resolving", Map.of("world", worldId,
+                        "user", owner == null ? "local" : owner, "state", "late"));
+            }
+        } catch (RuntimeException e) {
+            log.warn("background world resolution failed for {}: {}", worldId, e.toString());
+        }
     }
 
     /** The next sim session open: today 09:30 ET if a trading day and before close, else next open. */
     private java.time.LocalDateTime nextSimOpen() {
-        java.time.LocalDate d = java.time.LocalDate.now(clock);
+        java.time.ZonedDateTime nowEt = clock.instant().atZone(io.liftandshift.strikebench.market.MarketHours.EASTERN);
+        java.time.LocalDate d = nowEt.toLocalDate();
+        // After today's close, "next open" is the NEXT trading day (F13: the old version returned
+        // a 09:30 start for a session that had already ended).
+        if (io.liftandshift.strikebench.market.MarketHours.isTradingDay(d)
+                && !nowEt.toLocalTime().isBefore(java.time.LocalTime.of(16, 0))) {
+            d = d.plusDays(1);
+        }
         while (!io.liftandshift.strikebench.market.MarketHours.isTradingDay(d)) d = d.plusDays(1);
         return java.time.LocalDateTime.of(d, java.time.LocalTime.of(9, 30));
     }
@@ -1357,7 +1497,10 @@ public final class ApiServer {
                     : java.util.Arrays.stream(raw.split(",")).map(x -> x.trim().toUpperCase(Locale.ROOT))
                         .filter(x -> !x.isBlank()).distinct().toList();
             List<Map<String, Object>> rows = new ArrayList<>();
-            for (String sym : syms.stream().limit(40).toList()) {
+            // F7: world quotes are LOCAL memory — serve the whole world (<=120), not a 40-cap
+            // that made the tape and SSE disagree about which symbols exist.
+            for (String sym : syms.stream()
+                    .limit(io.liftandshift.strikebench.market.sim.SimulationSessions.MAX_SYMBOLS).toList()) {
                 market.quote(sym, world).ifPresent(q -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("symbol", q.symbol());
@@ -1729,13 +1872,14 @@ public final class ApiServer {
         }
         List<io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem> items = new ArrayList<>();
         List<Map<String, Object>> refusedEarly = new ArrayList<>();
+        EntryBook book = new EntryBook(sym, worldParam(activeWorld(ctx))); // F5: one snapshot for ALL
         for (CompareStructure st : b.structures()) {
             String legProblem = validateSimLegs(st.legs());
             if (legProblem != null) {
                 refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(), "reason", legProblem));
                 continue;
             }
-            MarketEntry me = marketEntry(sym, st.legs(), qty, worldParam(activeWorld(ctx)));
+            MarketEntry me = marketEntry(sym, st.legs(), qty, worldParam(activeWorld(ctx)), book);
             var legsToRun = me != null && me.resolvedLegs() != null ? me.resolvedLegs() : st.legs();
             items.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem(
                     st.key(), legsToRun,
@@ -1833,6 +1977,7 @@ public final class ApiServer {
         } else {
             outCmp.put("fairness", "one quote snapshot, one seeded path set — every structure judged on identical futures");
         }
+        outCmp.put("snapshotAt", book.snapshotAt); // the ENFORCED shared book, identified
         ctx.json(outCmp);
     }
 
@@ -2032,13 +2177,45 @@ public final class ApiServer {
     }
 
     private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs, int qty) {
-        return marketEntry(symbol, legs, qty, null);
+        return marketEntry(symbol, legs, qty, null, null);
     }
 
     private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
                                     int qty, String worldId) {
+        return marketEntry(symbol, legs, qty, worldId, null);
+    }
+
+    /**
+     * F5: ONE immutable quote/chain snapshot for a whole comparison. Without it every structure
+     * refetched the book independently — in a RUNNING simulated (or live) market prices advance
+     * between structures and "identical futures, identical entry book" was prose, not a property.
+     * First access per expiration fills the book; every later structure reuses the same object.
+     */
+    final class EntryBook {
+        final String symbol; final String worldId;
+        final String snapshotAt = clock.instant().toString();
+        private final java.util.Map<java.time.LocalDate, java.util.Optional<io.liftandshift.strikebench.model.OptionChain>> chains
+                = new java.util.HashMap<>();
+        private java.util.Optional<io.liftandshift.strikebench.model.Quote> quote;
+        private List<java.time.LocalDate> exps;
+        EntryBook(String symbol, String worldId) { this.symbol = symbol; this.worldId = worldId; }
+        synchronized List<java.time.LocalDate> expirations() {
+            if (exps == null) exps = market.expirations(symbol, worldId);
+            return exps;
+        }
+        synchronized java.util.Optional<io.liftandshift.strikebench.model.Quote> quote() {
+            if (quote == null) quote = market.quote(symbol, worldId);
+            return quote;
+        }
+        synchronized java.util.Optional<io.liftandshift.strikebench.model.OptionChain> chain(java.time.LocalDate exp) {
+            return chains.computeIfAbsent(exp, e -> market.chain(symbol, e, worldId));
+        }
+    }
+
+    private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
+                                    int qty, String worldId, EntryBook book) {
         try {
-            List<java.time.LocalDate> exps = market.expirations(symbol, worldId);
+            List<java.time.LocalDate> exps = book != null ? book.expirations() : market.expirations(symbol, worldId);
             if (exps.isEmpty()) return null;
             java.time.LocalDate today = java.time.LocalDate.now(clock);
             double entryPerUnit = 0;
@@ -2050,7 +2227,7 @@ public final class ApiServer {
             List<String> snaps = new ArrayList<>();
             for (var leg : legs) {
                 if ("STOCK".equalsIgnoreCase(leg.type())) {
-                    var q = market.quote(symbol, worldId).orElse(null);
+                    var q = (book != null ? book.quote() : market.quote(symbol, worldId)).orElse(null);
                     if (q == null || q.mark() == null) return null;
                     double sign = "SELL".equalsIgnoreCase(leg.action()) ? -1 : 1;
                     entryPerUnit += sign * Math.max(1, leg.ratio()) * 100 * q.mark().doubleValue();
@@ -2063,7 +2240,7 @@ public final class ApiServer {
                         .min(java.util.Comparator.comparingLong(e2 -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e2, target))))
                         .orElse(null);
                 if (exp == null) return null;
-                var chain = market.chain(symbol, exp, worldId).orElse(null);
+                var chain = (book != null ? book.chain(exp) : market.chain(symbol, exp, worldId)).orElse(null);
                 if (chain == null || chain.isEmpty()) return null;
                 if (spotBd == null) spotBd = chain.underlyingPrice();
                 boolean call = "CALL".equalsIgnoreCase(leg.type());

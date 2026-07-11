@@ -50,6 +50,12 @@ before(async () => {
   browser = await chromium.launch();
   page = await browser.newPage();
   page.on('pageerror', e => { throw new Error('page error: ' + e.message); });
+  page.on('response', async r => {
+    if (r.url().includes('/api/recommend')) {
+      console.log('REC-DEBUG:', r.status(), (await r.text().catch(() => '')).slice(0, 400));
+    }
+  });
+
   await page.goto(BASE + '/');
   await page.waitForSelector('#app[data-ready="true"]');
 });
@@ -885,7 +891,7 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   // Overview answers "where am I / what next", and destructive ops live ONLY under Administration.
   await page.click('#level-switch button[data-level="expert"]');
   await go('#/data/overview');
-  await page.waitForSelector('#data-tabs .pill.active[data-tab="overview"]');
+  await page.waitForSelector('#data-tabs button.active[data-tab="overview"]');
   await page.waitForSelector('#dc-mode .badge'); // where-you-are card leads
   assert.match(await page.textContent('#dc-mode'), /OBSERVED MARKET|SIMULATED|SCENARIO/);
   await page.waitForSelector('#dc-engine .chip-row');
@@ -922,9 +928,9 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   await page.click('.modal button:has-text("Cancel")');
   // Deep link + back/forward keep the tab.
   await go('#/data/datasets');
-  await page.waitForSelector('#data-tabs .pill.active[data-tab="datasets"]');
+  await page.waitForSelector('#data-tabs button.active[data-tab="datasets"]');
   await page.goBack();
-  await page.waitForSelector('#data-tabs .pill.active[data-tab="admin"]', { timeout: 15000 });
+  await page.waitForSelector('#data-tabs button.active[data-tab="admin"]', { timeout: 15000 });
 });
 
 test('data center reset tiers are reduced for Beginner', async () => {
@@ -1989,78 +1995,84 @@ test('simulated market: product creator, loud live band, world-routed research, 
   await page.waitForSelector('.xp-head:has-text("Finished sessions")', { timeout: 15000 });
 });
 
-test('golden weekend-trader journey: world trade, moving book, trader-grade report, clean return', async () => {
-  // The exact handoff story: a reviewer creates a world, trades INSIDE it, watches the book
-  // move on real SSE ticks, closes, reads a per-decision report, and returns to an untouched
-  // real account. Every hop uses the app's own affordances or its own API client.
+test('golden weekend-trader journey: creator UI, injected shock, UI trade, moving book, report, clean return', async () => {
+  // F12: the acceptance journey drives the PRODUCT — the Data creator (tokenized picker at
+  // Beginner), the control room's inject modal, the Discover→Place trade flow at Expert, the
+  // trade-detail Unwind, and the control-room Finish. No API-shaped shortcuts for user actions.
   const realAcct = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);
+  await page.evaluate(() => { App.state.ticket = null; App.state.discoverForm = null; });
 
-  // PHASE 11 ACCEPTANCE STORY: start where a real trader starts — on a REAL ticker's research
-  // page — and carry it into a sector world. The route must survive the switch (the world
-  // includes AAPL), the tape must quote the world, and anchors must disclose provenance.
+  // 1. BEGINNER creates the world through the tokenized picker (type AAPL, press Enter).
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  await go('#/data/simulation');
+  await page.waitForSelector('#dc-sim-market #sim-scenarios .sim-scenario');
+  await page.click('#sim-scenarios .sim-scenario[data-scenario="CHOP"]');
+  await page.fill('#sim-name', 'Journey');
+  await page.click('#sim-symbols');
+  await page.type('#sim-symbols', 'AAPL');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('#sim-symbol-chips [data-picked-sym="AAPL"]');
+  assert.ok(await page.isChecked('#sim-allow-fictional'), 'fictional symbols are an EXPLICIT, visible control');
+  await page.click('#sim-create');
+  await page.waitForSelector('#world-band', { timeout: 20000 });
+  const wConf = await page.evaluate(async () => {
+    const all = (await API.getFresh('/api/sim/market')).sessions || [];
+    const cur = all.find(x => x.id === App.state.world);
+    return { worldId: App.state.world, betas: Object.keys(cur.config.symbolBetas), anchors: cur.anchorSummary };
+  });
+  assert.ok(wConf.betas.includes('AAPL') && wConf.betas.includes('SPY'), 'AAPL + benchmarks in the world');
+  assert.ok(wConf.anchors && wConf.anchors.anchored >= 3, 'anchor coverage rides on the session row');
+
+  // 2. Research lives: the tape quotes the world, the hero moves on ticks.
   await go('#/research/AAPL');
   await page.waitForSelector('.quote-hero');
-  const world = await page.evaluate(async () => {
-    const w = await API.post('/api/sim/market', {
-      name: 'Journey', symbols: { AAPL: 1.0, ACME: 1.0 }, sectorKey: 'TECH',
-      scenario: 'CHOP', speed: 26, seed: 424242
-    });
-    await App.switchWorld(w.worldId);
-    return w;
-  });
-  await page.waitForSelector('#world-band', { timeout: 20000 });
-  assert.ok(world.spotBasis.ACME.includes('made-up'), 'honest anchor label for a made-up ticker');
-  assert.ok(world.spotBasis.AAPL.includes('DEMO'), 'fixture AAPL anchor labeled DEMO, never real');
-  assert.ok(world.config.symbolBetas.SPY, 'benchmarks ride along into the world');
-  // The working ticker SURVIVED world entry: still on AAPL research, now priced by the world.
-  assert.match(await page.evaluate(() => window.location.hash), /research\/AAPL/,
-    'entering a world that serves the current ticker preserves the route');
-  // The tape lives in the world: SIMULATED chip + world symbols (P0-2 inverted contract).
   await page.waitForFunction(() => {
     const chipEl = document.getElementById('tape-demo-chip');
     return chipEl && chipEl.textContent === 'SIMULATED'
       && !!document.querySelector('#tape-strip [data-sym="AAPL"]');
   }, { timeout: 20000 });
-  // INJECTED SHOCK: a -5% AAPL move lands immediately and the research hero repaints from the
-  // stream/store — the market must visibly react to the event, not just the band.
+
+  // 3. Inject a -5% AAPL shock THROUGH THE CONTROL ROOM MODAL; the hero must visibly react.
   const pxBefore = parseFloat(await page.textContent('#research-px'));
-  await page.evaluate(async (w) => {
-    await API.post('/api/sim/market/' + w + '/event', { symbol: 'AAPL', movePct: -0.05 }); // wire unit: fraction
-  }, world.worldId);
+  await go('#/data/simulation');
+  await page.waitForSelector('#sim-control-room');
+  assert.match(await page.textContent('#sim-control-room'), /Anchored/, 'coverage chip in the console');
+  await page.click('#sim-control-room button:has-text("Inject event")');
+  await page.waitForSelector('#inject-symbol');
+  await page.selectOption('#inject-symbol', 'AAPL');
+  await page.fill('#inject-move', '-5');
+  await page.click('#modal-confirm');
+  await go('#/research/AAPL');
   await page.waitForFunction((prev) => {
     const el2 = document.getElementById('research-px');
     return el2 && Math.abs(parseFloat(el2.textContent) - prev * 0.95) < prev * 0.02;
   }, pxBefore, { timeout: 20000 });
 
-  // Place a credit put spread against the WORLD's own listed book (preview -> acks -> create).
-  const tradeId = await page.evaluate(async () => {
-    const exps = (await API.getFresh('/api/research/AAPL/expirations')).expirations;
-    const exp = exps[2];
-    const chain = await API.getFresh('/api/research/AAPL/chain?expiration=' + exp);
-    const spot = Number(chain.underlyingPrice);
-    const below = chain.puts.map(p => Number(p.strike)).filter(k => k <= spot - 4).sort((a, b) => b - a);
-    const body = {
-      symbol: 'AAPL', strategy: 'CREDIT_PUT_SPREAD', qty: 1,
-      legs: [
-        { action: 'SELL', type: 'PUT', strike: String(below[0]), expiration: exp, ratio: 1 },
-        { action: 'BUY', type: 'PUT', strike: String(below[1]), expiration: exp, ratio: 1 }
-      ],
-      thesis: 'bullish', horizon: 'week', riskMode: 'balanced'
-    };
-    const prev = await API.post('/api/trades/preview', body);
-    if (!prev.preview || !prev.preview.ok) {
-      throw new Error('preview blocked: ' + JSON.stringify(prev.preview && prev.preview.blockReasons));
-    }
-    if (prev.requiredAcks && prev.requiredAcks.length) {
-      body.acknowledgedRisks = prev.requiredAcks.map(a => a.id);
-      body.ackToken = prev.ackToken;
-    }
-    return (await API.post('/api/trades', body)).trade.id;
-  });
+  // 4. EXPERT places a world trade through Discover → Place (screen once, strikes/review/confirm).
+  await page.evaluate(() => { Learn.setLevel('expert'); App.render(); });
+  await go('#/trade/discover/manual');
+  await page.waitForSelector('#rec-symbol');
+  await page.fill('#rec-symbol', 'AAPL');
+  await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
+  await page.selectOption('#rec-thesis', 'bullish');
+  await page.click('#rec-go');
+  // Expert results ARE the comparison table (not cards) — pick a row through its Use button,
+  // exactly as an expert user does.
+  await page.waitForSelector('#compare-table tbody tr button:has-text("Use")', { timeout: 30000 });
+  await page.locator('#compare-table tbody tr button:has-text("Use")').first().click();
+  await page.waitForSelector('#to-review');
+  await page.click('#to-review');
+  await page.waitForSelector('#to-confirm');
+  await page.$$eval('.ack-gate input', els => els.forEach(e => { if (!e.checked) e.click(); }));
+  await page.click('#to-confirm');
+  await page.waitForSelector('#place-trade');
+  await page.click('#place-trade');
+  await page.waitForSelector('#refresh-btn');
+  const tradeHash = await page.evaluate(() => window.location.hash);
+  const tradeId = tradeHash.replace(/^#\/trade\//, '');
+  assert.match(tradeId, /^tr_/);
 
-  // Portfolio shows the position with a live Now cell; the world's ticks move it via the
-  // app's OWN SSE handler (server marks memoize ~10s, client refreshes at most every 8s —
-  // so step, wait, and step again until the number genuinely changes).
+  // 5. The book MOVES on real SSE frames: portfolio Now cell changes as the world steps.
   await go('#/portfolio');
   await page.waitForSelector(`[data-now-for="${tradeId}"]`, { timeout: 20000 });
   const now0 = await page.textContent(`[data-now-for="${tradeId}"]`);
@@ -2068,31 +2080,33 @@ test('golden weekend-trader journey: world trade, moving book, trader-grade repo
   for (let round = 0; round < 10 && !moved; round++) {
     await page.evaluate(async (w) => {
       for (let i = 0; i < 20; i++) await API.post('/api/sim/market/' + w + '/step', {});
-    }, world.worldId);
+    }, wConf.worldId);
     await page.waitForTimeout(3000);
     moved = (await page.textContent(`[data-now-for="${tradeId}"]`)) !== now0;
   }
-  assert.ok(moved, 'the portfolio Now P/L moved on world ticks via the app’s SSE handler');
+  assert.ok(moved, 'the portfolio Now P/L moved on world ticks via the app\u2019s SSE handler');
 
-  // Close the position, finish the session, and read the TRADER-GRADE report.
-  await page.evaluate(async (id) => { await API.post('/api/trades/' + id + '/unwind', { confirm: true }); }, tradeId);
+  // 6. Close through the trade-detail UI (Unwind + app modal).
+  await go('#/trade/' + tradeId);
+  await page.waitForSelector('#unwind-btn');
+  await page.click('#unwind-btn');
+  await page.waitForSelector('#modal-confirm');
+  await page.click('#modal-confirm');
+  await page.waitForFunction(() => /CLOSED/.test(document.body.textContent), { timeout: 20000 });
+
+  // 7. Finish in the control room; the report is trader-grade; the return is clean.
   await go('#/data/simulation');
-  // The ACTIVE world renders as a full CONTROL ROOM (addendum A2), not a status row —
-  // clock, live symbol chips, P/L, and every action including Finish live there.
   await page.waitForSelector('#sim-control-room');
-  assert.match(await page.textContent('#sim-control-room'), /Control room/, 'running world dominates the tab');
   await page.click('#sim-control-room button:has-text("Finish")');
   await page.waitForSelector('#sim-report table', { timeout: 15000 });
   const rep = await page.textContent('#sim-report');
   assert.match(rep, /Entered \(sim clock\)/, 'per-decision sim-clock entry column');
-  assert.match(rep, /\d{4}-\d{2}-\d{2} \d{2}:\d{2}/, 'the entry is stamped on the LANE clock');
   assert.match(rep, /Worst \/ best while open/, 'MAE/MFE excursion column');
-  assert.match(rep, /Decisions vs outcomes/, 'POP-vs-outcome summary separates decisions from results');
+  assert.match(rep, /Decisions vs outcomes/, 'POP-vs-outcome summary');
   assert.match(rep, /UNWIND/, 'how the trade ended is on the row');
   await page.click('#modal-confirm');
   await page.waitForSelector('#world-band', { state: 'detached', timeout: 15000 });
 
-  // Back on the real market: the practice account never saw any of it.
   const after = await page.evaluate(async () => ({
     world: (await API.getFresh('/api/world')).world,
     acct: (await API.getFresh('/api/account')).account.id

@@ -920,8 +920,20 @@ class ApiIntegrationTest {
         // Release blocker B3: this server runs FIXTURES_ONLY, so an AAPL anchor comes from a
         // DEMO quote — the creator must say so, never "the real market's last price". A made-up
         // ticker starts at $100 and says that. Per-symbol calibration is disclosed with basis.
+        // F3: fictional status is NEVER inferred — without the explicit flag, the unknown
+        // ticker is EXCLUDED with a reason instead of silently becoming a $100 instrument.
+        String noFlag = """
+            {"name":"Anchor gate strict","symbols":{"AAPL":1.0,"ZZZFAKE":1.0},"scenario":"CHOP","speed":26}""";
+        var rStrict = post("/api/sim/market", noFlag);
+        assertThat(rStrict.statusCode()).isEqualTo(201);
+        var jStrict = Json.parse(rStrict.body());
+        assertThat(jStrict.get("config").get("symbolBetas").has("ZZZFAKE")).isFalse();
+        assertThat(jStrict.get("spotBasis").get("ZZZFAKE").asText()).containsIgnoringCase("excluded");
+        delete("/api/sim/market/" + jStrict.get("worldId").asText());
+
         String body = """
-            {"name":"Anchor gate","symbols":{"AAPL":1.0,"ZZZFAKE":1.0},"scenario":"CHOP","speed":26}""";
+            {"name":"Anchor gate","symbols":{"AAPL":1.0,"ZZZFAKE":1.0},"scenario":"CHOP","speed":26,
+             "allowFictional":true}""";
         var r = post("/api/sim/market", body);
         assertThat(r.statusCode()).isEqualTo(201);
         var j = Json.parse(r.body());
