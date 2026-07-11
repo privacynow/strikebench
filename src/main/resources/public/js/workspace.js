@@ -29,6 +29,12 @@
       symbol: (window.App && App.state.lastRecommendSymbol) || null,
       forms: {},
       ticket: (window.App && App.state.ticket) || null,
+      // The THESIS WORKFLOW is part of the workspace (holistic review #11): the per-symbol
+      // market thesis, the keyed research study selection, and an active evidence handoff all
+      // survive a reload — losing them mid-investigation reset the user's thinking.
+      marketThesis: (window.App && App.state.marketThesis) || null,
+      researchStudy: (window.App && App.state.researchStudy) || null,
+      evidencePrefill: (window.App && App.state.evidencePrefill) || null,
       savedAt: Date.now()
     };
     FORM_KEYS.forEach(function (k) { if (App.state[k]) s.forms[k] = App.state[k]; });
@@ -38,6 +44,10 @@
   function apply(s) {
     if (!s || s.v !== 1 || !window.App) return false;
     if (s.symbol) App.state.lastRecommendSymbol = s.symbol;
+    if (s.marketThesis) App.state.marketThesis = s.marketThesis;
+    // Study RESULTS are refetched (keyed server-side); only the selection/mode restores.
+    if (s.researchStudy) { App.state.researchStudy = s.researchStudy; delete App.state.researchStudy.result; }
+    if (s.evidencePrefill) App.state.evidencePrefill = s.evidencePrefill;
     Object.keys(s.forms || {}).forEach(function (k) {
       if (FORM_KEYS.indexOf(k) >= 0 && s.forms[k]) App.state[k] = s.forms[k];
     });

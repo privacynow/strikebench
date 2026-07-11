@@ -61,7 +61,7 @@
       // Lab dissolved: its tools moved to their natural homes (study→Research, optimizer→Decision,
       // replicator→Builder template). #/lab* keeps working by redirecting to Research (the study home).
       if (route === 'lab') { route = 'research'; params = []; }
-      if (route === 'data') { route = 'status'; params = []; } // the nav says Data; the URL should too
+      if (route === 'data') { route = 'status'; } // the nav says Data; params carry the Data tab
       if (route === 'recommend') { route = 'trade'; params = ['discover'].concat(params); }
       if (route === 'backtest') { route = 'trade'; params = ['verify']; }
       if (route === 'ticket') {
@@ -195,11 +195,38 @@
         existing.forEach(function (b, i) { if (i === 0) b.childNodes[1].textContent = label; else b.remove(); });
         return;
       }
+      // The banner LEADS somewhere (holistic review #8): the scenario's symbol drives one-tap
+      // Research and strategy testing, and returning to observed data is right here — not a
+      // dead-end state switch you can only undo by hunting through Data.
       var banner = UI.el('div', { id: 'scenario-banner' },
         UI.icon('warn', 15),
         document.createTextNode(label),
-        UI.el('a', { href: '#/status', onclick: function () { App.navigate('#/status'); } }, 'Switch back in Data'));
+        UI.el('button', { class: 'btn btn-sm', id: 'scenario-research', onclick: function () {
+          App.navigate('#/research'); } }, 'Research'),
+        UI.el('button', { class: 'btn btn-sm', id: 'scenario-test', onclick: function () {
+          App.navigate('#/trade/verify'); } }, 'Test strategies'),
+        UI.el('a', { href: '#/data/datasets', onclick: function () { App.navigate('#/data/datasets'); } }, 'Manage'),
+        UI.el('button', { class: 'btn btn-sm btn-secondary', id: 'scenario-exit', onclick: async function () {
+          try {
+            await API.put('/api/datasets/active', { id: 'observed' });
+            refreshScenarioBanner();
+            App.render();
+          } catch (e) { alert(e.message); }
+        } }, 'Back to observed data'));
       document.body.insertBefore(banner, document.getElementById('tape') || document.body.firstChild);
+      // The scenario's own SYMBOL powers the Research/Test buttons (dataset rows carry it).
+      (async function () {
+        try {
+          var ds = await API.get('/api/datasets');
+          var act = (ds.datasets || []).filter(function (d) { return d.id === ds.active; })[0];
+          var sym = act && (act.symbol || (act.symbols && act.symbols[0]));
+          if (!sym) return;
+          var rBtn = document.getElementById('scenario-research');
+          var tBtn = document.getElementById('scenario-test');
+          if (rBtn) { rBtn.textContent = 'Research ' + sym; rBtn.onclick = function () { App.navigate('#/research/' + sym); }; }
+          if (tBtn) { tBtn.onclick = function () { App.state.lastRecommendSymbol = sym; App.navigate('#/trade/verify'); }; }
+        } catch (e) { /* generic buttons stay */ }
+      })();
     } else {
       existing.forEach(function (b) { b.remove(); });
     }
@@ -310,7 +337,7 @@
         catch (e) { alert(e.message); }
       } }, 'Step'),
       speedSel,
-      UI.el('button', { class: 'btn btn-sm', id: 'world-report', onclick: function () { App.navigate('#/data'); } },
+      UI.el('button', { class: 'btn btn-sm', id: 'world-report', onclick: function () { App.navigate('#/data/simulation'); } },
         'Report'),
       UI.el('button', { class: 'btn btn-sm', id: 'world-exit', onclick: function () { App.switchWorld('observed'); } },
         'Return to real market'));
@@ -326,8 +353,16 @@
    * A tick landed: the market MOVED. Flush the world's cached GETs and let the current screen
    * refresh its visible numbers in place (views register via App.onEvent with their route token).
    */
+  var _lastTickFlush = 0;
   function worldTicked() {
-    API.flushCache(); // the old prices are gone — every world GET is stale now
+    // NOT a global cache flush per tick (holistic review #12): live surfaces are fed by the
+    // MarketStore/SSE; cached GETs self-expire in 20s anyway. A rate-limited, TARGETED
+    // invalidation keeps navigation fresh without refetch storms and tape flicker.
+    var now = Date.now();
+    if (now - _lastTickFlush > 10000) {
+      _lastTickFlush = now;
+      API.invalidate(['/api/research', '/api/quotes', '/api/trades', '/api/portfolio', '/api/positions']);
+    }
     refreshWorldBand();
   }
 
@@ -359,7 +394,20 @@
     }
     API.flushCache();               // every cached GET belonged to the old world
     refreshWorldBand();
-    App.render();                   // same screen, new market under it — observed never stopped
+    // The universe follows the lane: tape, sector rail, and symbol datalist must show THIS
+    // market's symbols (P0: they silently emptied because the world schema differed).
+    refreshUniverse().then(function () {
+      // Route guard: a symbol page the new market cannot serve is a dead end — land on a
+      // symbol that EXISTS here instead of preserving a route that 404s its data.
+      var m = (window.location.hash || '').match(/^#\/research\/([A-Z0-9._-]+)/i);
+      var syms = (App.state.universe && App.state.universe.active && App.state.universe.active.symbols) || [];
+      if (m && syms.length && syms.indexOf(m[1].toUpperCase()) < 0) {
+        if (UI.toast) UI.toast(m[1].toUpperCase() + ' is not in this market \u2014 showing ' + syms[0]);
+        App.navigate('#/research/' + syms[0]);
+        return;
+      }
+      App.render();                 // same screen, new market under it — observed never stopped
+    });
   };
 
   window.App = App;
@@ -544,11 +592,15 @@
       // Honest labeling on the ONE always-visible market surface: demo quotes get a DEMO chip
       // at the tape's leading edge (the tiles were quadruple-badged while the tape said nothing).
       var allDemo = quotes.length && quotes.every(function (q) { return q.freshness === 'FIXTURE'; });
+      var allSim = quotes.length && quotes.every(function (q) { return q.freshness === 'SIMULATED'; });
       var demoChip = document.getElementById('tape-demo-chip');
-      if (allDemo && !demoChip) {
-        tape.insertBefore(UI.el('span', { id: 'tape-demo-chip', class: 'badge badge-dim',
-          title: 'These prices are built-in demo data, not the market.' }, 'DEMO'), tape.firstChild);
-      } else if (!allDemo && demoChip) { demoChip.remove(); }
+      var chipWanted = allSim ? 'SIMULATED' : (allDemo ? 'DEMO' : null);
+      if (chipWanted && (!demoChip || demoChip.textContent !== chipWanted)) {
+        if (demoChip) demoChip.remove();
+        tape.insertBefore(UI.el('span', { id: 'tape-demo-chip', class: allSim ? 'badge badge-sim' : 'badge badge-dim',
+          title: allSim ? 'These prices are generated by your simulated session \u2014 not the market.'
+                        : 'These prices are built-in demo data, not the market.' }, chipWanted), tape.firstChild);
+      } else if (!chipWanted && demoChip) { demoChip.remove(); }
       var symbolsKey = quotes.map(function (q) { return q.symbol; }).join(',');
       if (strip.getAttribute('data-symbols') === symbolsKey && strip.children.length) {
         updateTapePrices(quotes);
@@ -620,6 +672,31 @@
    * from server memory instead of a 45s poll. Pure enhancement: if EventSource is unavailable or
    * the stream errors, the poll (below) keeps the tape fresh. Reconnects on universe change.
    */
+  /**
+   * The frontend MARKET STORE: one home for streamed quote state. The SSE stream writes frames
+   * here; the tape, quote heroes, and tiles SUBSCRIBE instead of refetching — a world tick paints
+   * the screen from memory, not from another GET (holistic review Phase 3).
+   */
+  App.Market = {
+    quotes: {}, seq: 0, world: 'observed', simTime: null, _subs: [],
+    onFrame: function (data) {
+      if (!data || !data.quotes) return;
+      if (data.seq && data.seq <= App.Market.seq && data.world === App.Market.world) return; // stale frame
+      App.Market.seq = data.seq || (App.Market.seq + 1);
+      App.Market.world = data.world || 'observed';
+      App.Market.simTime = data.simTime || null;
+      data.quotes.forEach(function (q) { App.Market.quotes[q.symbol] = q; });
+      App.Market._subs = App.Market._subs.filter(function (h) {
+        return h.token === undefined || App.alive(h.token);
+      });
+      App.Market._subs.forEach(function (h) {
+        try { h.fn(data); } catch (e) { /* one bad subscriber never kills the feed */ }
+      });
+    },
+    subscribe: function (fn, token) { App.Market._subs.push({ fn: fn, token: token }); },
+    get: function (symbol) { return App.Market.quotes[(symbol || '').toUpperCase()]; }
+  };
+
   function subscribeMarketStream() {
     if (!window.EventSource) return; // older engines fall back to polling
     try { if (App._marketES) { App._marketES.close(); App._marketES = null; } } catch (e) { /* ignore */ }
@@ -630,7 +707,10 @@
     es.addEventListener('quotes', function (ev) {
       try {
         var data = JSON.parse(ev.data);
-        if (data && data.quotes) updateTapePrices(data.quotes);
+        if (data && data.quotes) {
+          App.Market.onFrame(data);      // the store first — heroes/tiles subscribe there
+          updateTapePrices(data.quotes); // then the tape's in-place update
+        }
       } catch (e) { /* ignore a malformed frame */ }
     });
     es.onerror = function () {

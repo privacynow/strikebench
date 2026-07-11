@@ -65,6 +65,9 @@ public final class ResearchQuestionEngine {
         );
     }
 
+    /** Bumped whenever detection/stats change — persisted study keys must not collide across engines. */
+    static final int ENGINE_VERSION = 2;
+
     // ---- Request / result ----
 
     public record RunRequest(String key, String symbol, String from, String to, Map<String, Object> params) {}
@@ -197,8 +200,13 @@ public final class ResearchQuestionEngine {
         }
 
         // The study's IDENTITY: any consumer (UI cache, strategy sim) may only pair artifacts
-        // whose keys match — the anti-"AAPL result on a QQQ page" contract.
-        String studyKey = symbol + "|" + key + "|" + from + ".." + to + "|" + new java.util.TreeMap<>(p);
+        // whose keys match — the anti-"AAPL result on a QQQ page" contract. The key includes the
+        // DATA identity (dataset + evidence level + engine version): the same window over demo,
+        // synthetic, or observed candles is a DIFFERENT study (holistic review #9).
+        String ds = actx == null || actx.datasetId() == null
+                ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : actx.datasetId();
+        String studyKey = symbol + "|" + key + "|" + from + ".." + to + "|" + new java.util.TreeMap<>(p)
+                + "|ds=" + ds + "|ev=" + evidenceLabel(series.freshness()) + "|v=" + ENGINE_VERSION;
         return new QuestionResult(key, symbol, questionText(q, symbol, forward, lookback, p), from.toString(), to.toString(),
                 forward, baseline, conditioned, winEdge, meanEdge, round(z), significant,
                 round(ci[0]), round(ci[1]), dist, examples, evidenceLabel(series.freshness()), observed, verdict, notes,

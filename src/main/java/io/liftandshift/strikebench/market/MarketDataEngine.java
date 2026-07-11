@@ -198,6 +198,12 @@ public final class MarketDataEngine {
      * warm state instantly and fetching only the genuinely-missing ones (in parallel). Stale-but-
      * present symbols are returned immediately and refreshed in the background.
      */
+    /** MEMORY-ONLY read: what the engine already knows, with zero fetch side effects — the
+     *  anchor resolver's background tier reads this so a cold sector can never cause a burst. */
+    public java.util.Optional<MarketSnapshot> peek(String symbol) {
+        return java.util.Optional.ofNullable(snapshots.get(norm(symbol)));
+    }
+
     public List<MarketSnapshot> quotes(List<String> symbols) {
         List<String> missing = new ArrayList<>();
         for (String raw : symbols) {

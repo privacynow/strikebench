@@ -33,7 +33,9 @@ public final class SimulationSessions {
 
     private static final int MAX_ACTIVE_PER_OWNER = 3;
     private static final int MAX_RESIDENT_WORLDS = 16;
-    private static final int MAX_SYMBOLS = 40;
+    /** Room for a full curated sector + positions + benchmarks; simulating spots is cheap —
+     *  anchor resolution and calibration are the bounded parts (tiered in the creator). */
+    public static final int MAX_SYMBOLS = 120;
     private static final long TICK_MS = 1000;
     private static final long CHECKPOINT_EVERY_MS = 30_000; // real time — slow worlds checkpoint too
 

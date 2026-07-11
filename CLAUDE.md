@@ -1670,6 +1670,72 @@ Owner: Ahmedfaraz (babarahmedfaraz@gmail.com). This file is the single source of
   - MATRIX: 390 JUnit + 51 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
   - HANDOFF: YES for single-reviewer weekend sessions on this build; B4 (auth on) remains the gate
     for multiple simultaneous reviewers — blocked on the Google OIDC client secret.
+- HOLISTIC-REVIEW REMEDIATION (2026-07-10, branch; NOT deployed). Junior's holistic review at
+  b4aefda: engines capable but the UI delivers "separate tools, incomplete handoffs, a reduced
+  simulated product"; ghost-town behavior implemented AND asserted correct by tests. Executed the
+  sequenced program (Phases 0-3 + Data-IA addendum + 5/6 workflow phases; 12 critical findings):
+  - P0 GHOST TOWN ROOT CAUSE: /api/universe returned a DIFFERENT schema in world mode
+    ({key,name,symbols}) and refreshUniverse's u.active.symbols deref crashed — tape, rails,
+    datalists, downstream controls all silently vanished. ONE UniverseView schema now (world =
+    active{source:'world',label,symbols} + sectors[the session]). CSS hiding #tape/#sector-pulse/
+    .sector-rail-wrap in worlds DELETED; the tape quotes the world (SIMULATED chip) and the rail
+    becomes world navigation. The 'tape yields' DOM assertion INVERTED to a tape-lives contract.
+  - P0 MODE EXCLUSIVITY: entering a world drops the active synthetic dataset (both directions now);
+    activating a dataset inside a world → 422 'separate worlds'. adoptWorld refreshes the universe
+    and guards symbol routes (research/SYM the world can't serve → first world symbol + toast).
+  - P0 EVIDENCE HONESTY: 'REAL past occurrences' only when the study ran on OBSERVED candles —
+    fixture ⇒ 'DEMO-data occurrences', synthetic ⇒ 'GENERATED-scenario occurrences' (server
+    sourceNote + client occurrenceWord + single-run banner). studyKey gains DATA IDENTITY:
+    |ds=<dataset>|ev=<evidence>|v=<engine version> (ENGINE_VERSION=2).
+  - PHASE 1 WORLD BUILDER + ANCHOR RESOLVER: SimMarketCreate += sectorKey/includePositions;
+    active tier = explicit symbols + practice positions + SPY/QQQ (calibrated, ≤12); background
+    tier = curated sector (engine-memory-only against live providers — fixture mode batches);
+    MAX_SYMBOLS 40→120 w/ disclosed trimming; recognized-but-priceless symbols EXCLUDED with a
+    durable reason (never a silent $100 — only unrecognized demo tickers get $100, labeled);
+    V13 sim_session.anchors JSONB persists per-symbol source/asOf/age/bid/ask/prevClose/basis/
+    calibration/tier + exclusions. MarketDataEngine.peek = memory-only read (no fetch side
+    effects). Creator: beginner 'bring my current sector along' default ON + working-ticker
+    prefill; expert background-sector select. GOTCHA: fixture provider prices only
+    AAPL/SPY/QQQ/TSLA/VTSAX — sector worlds in fixture mode honestly EXCLUDE the rest (pinned).
+  - PHASE 2/3 MARKET-STATE PIPELINE: stream frames carry seq + world + simTime and skip identical
+    frames; frontend App.Market store (quotes/seq/simTime, subscribe w/ route token) fed by the
+    SSE stream; research hero paints from the STORE (no per-tick GETs); worldTicked() no longer
+    global-flushes — rate-limited (10s) TARGETED invalidation of /api/{research,quotes,trades,
+    portfolio,positions}.
+  - DATA IA (addendum A/B): #/data/{overview,simulation,datasets,sources,admin} route-backed
+    sticky tabs (#data-tabs, .wb-stages pills), ONLY the active tab mounts+loads its cards
+    (isConnected gates on every fill; renderReset got its OWN fill — it used to ride on
+    fillEngine and broke when the tabs split them, pinned), SSE-updated tab badges
+    (RUNNING/1 ACTIVE/N RUNNING). Overview = 'Where you are' mode card (observed/scenario/world
+    + recommended action) + engine + health. Simulation = workbench; a RUNNING world renders a
+    CONTROL ROOM (#sim-control-room: sim clock + live symbol chips from the MarketStore + session
+    P/L + pause/step/inject/report/find-strategies/portfolio/finish/return) and the creator
+    collapses behind 'Create another session…'. Datasets = library + coverage + generate.
+    Sources & jobs merged. Administration = tiered reset ONLY (typed confirm), separated.
+  - PHASE 5 SCENARIO WORKFLOW: generation ends in a 'SCENARIO READY' card (use-in-Research /
+    compare-strategies / delete — dataset response field is datasetId); the scenario banner
+    carries Research <sym> / Test strategies / Manage / Back to observed data actions.
+  - PHASE 6/#10/#11 EVIDENCE CORRECTNESS: /api/sim/compare accepts pathSource+study — evidence
+    mode compares EVERY structure on ONE analog ensemble (runOnPaths per structure; basis + observed
+    disclosed; fairness line says 'historical analog windows', demo labeled); client passes it and
+    warns on studyKey DRIFT (data changed since the study); workspace.js persists marketThesis/
+    researchStudy(minus results)/evidencePrefill.
+  - ADDENDUM D: home hero carries the market context (SIMULATED SESSION / SCENARIO chip in the
+    eyebrow); hero frame tokens (--hero-pad/--hero-radius/--hero-glow) shared by home + welcome.
+  - PHASE 11 GOLDEN JOURNEY (rewritten): research/AAPL → TECH-sector world (route PRESERVED, tape
+    SIMULATED w/ AAPL, anchors honest incl. benchmarks) → injected -5% AAPL shock visibly repaints
+    the hero (wire unit: movePct is a FRACTION) → world trade → Now P/L moves on real SSE →
+    control-room Finish → trader-grade report → clean return, real account byte-identical.
+  - TEST SWEEPS: #/data walks → tab routes; info-term audit walks #/data/simulation; audit suite
+    +4 Data tab routes × 3 widths; multi-card data test split across tabs w/ deep-link + back/
+    forward pins; Order(29/30) integration gates (anchors disclose provenance + builder expands
+    sector/adds benchmarks/excludes honestly).
+  - MATRIX: 391 JUnit + 51 fixture + 3 audit + 4 seeded + 8 live DOM — ALL GREEN.
+  - STILL OPEN from the review (recorded, not silently dropped): full ProductHero component
+    extraction (shared tokens shipped; the welcome/home DOM unification is follow-up), Phase 7
+    one-selector verification-mode unification, chain-refresh cadence on material spot/IV moves,
+    research chart intraday appends (daily bars roll at sim close by design), Phase 10 golden-case
+    expansion, and the perf p95 instrumentation gates. B4 auth stays the multi-reviewer gate.
 - Remaining/optional follow-ups: E*TRADE sandbox end-to-end with real keys, richer calendar modeling,
   candles-source labeling in /api/research/{symbol}/history (currently unlabeled when fixture serves in
   live mode), Backtest-stage prefill from the working idea (symbol lands in the form; family/window/DTE

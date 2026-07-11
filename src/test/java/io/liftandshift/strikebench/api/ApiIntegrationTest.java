@@ -904,7 +904,12 @@ class ApiIntegrationTest {
             var rj = Json.parse(r.body());
             assertThat(rj.get("pathSource").asText()).isEqualTo("HISTORICAL_ANALOGS");
             assertThat(rj.get("paths").asInt()).isEqualTo(sj.get("analogPaths").size());
-            assertThat(rj.get("sourceNote").asText()).contains("REAL past occurrences");
+            // This server is FIXTURES_ONLY: the study ran on demo candles, and the note must say
+            // so — 'REAL past occurrences' on fixture data was holistic-review blocker #9.
+            assertThat(rj.get("sourceNote").asText()).contains("DEMO-data occurrences");
+            assertThat(rj.get("sourceNote").asText()).doesNotContain("REAL past");
+            assertThat(rj.get("observed").asBoolean()).isFalse();
+            assertThat(sj.get("studyKey").asText()).contains("ev=DEMO_FIXTURE");
             assertThat(rj.get("studyKey").asText()).isEqualTo(sj.get("studyKey").asText());
         }
     }
@@ -932,5 +937,37 @@ class ApiIntegrationTest {
         // Cleanup: finish the world so later tests see no extra running sessions.
         String wid = j.get("worldId").asText();
         delete("/api/sim/market/" + wid);
+    }
+
+    @Test
+    @Order(30)
+    void worldUniverseBuilderExpandsSectorAndAddsBenchmarks() throws Exception {
+        // Holistic review Phase 1: a world is a MARKET — the current sector rides along as the
+        // background tier, benchmarks are always present, and anchors are durable records.
+        String body = "{\"name\":\"Builder gate\",\"symbols\":{\"AAPL\":1.0},"
+                + "\"sectorKey\":\"TECH\",\"scenario\":\"CHOP\",\"speed\":26}";
+        var r = post("/api/sim/market", body);
+        assertThat(r.statusCode()).isEqualTo(201);
+        var j = Json.parse(r.body());
+        var betas = j.get("config").get("symbolBetas");
+        assertThat(betas.has("AAPL")).isTrue();
+        assertThat(betas.has("SPY")).as("benchmarks ride along").isTrue();
+        assertThat(betas.has("QQQ")).isTrue();
+        // The fixture provider prices only AAPL/SPY/QQQ/TSLA/VTSAX: every other TECH-sector
+        // symbol has NO price here, and the no-silent-invention contract requires it to be
+        // EXCLUDED with a reason — a recognized real ticker must never start at a made-up $100.
+        assertThat(betas.has("MSFT")).as("no price available => excluded, never invented").isFalse();
+        boolean msftExcluded = false;
+        for (var x : j.get("excluded")) {
+            if ("MSFT".equals(x.get("symbol").asText())) {
+                msftExcluded = true;
+                assertThat(x.get("reason").asText()).containsIgnoringCase("excluded");
+            }
+        }
+        assertThat(msftExcluded).as("the exclusion is a durable, reasoned record").isTrue();
+        // Durable anchor records with tier + provenance for everything that DID resolve.
+        assertThat(j.get("anchors").size()).isGreaterThanOrEqualTo(3);
+        for (var a : j.get("anchors")) assertThat(a.has("basis")).isTrue();
+        delete("/api/sim/market/" + j.get("worldId").asText());
     }
 }

@@ -250,7 +250,7 @@ test('scenario studio expert: model menu incl. Heston, IV knobs, the math on dem
 
 test('data center: generate a scenario dataset, activate it (loud banner), switch back', async () => {
   await page.click('#level-switch button[data-level="expert"]');
-  await go('#/status');
+  await go('#/data/datasets');
   await page.waitForSelector('#dc-datasets .status-item');
   assert.match(await page.textContent('#dc-datasets'), /Observed market data/);
   // Generate a synthetic run.
@@ -427,7 +427,7 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   assert.match(outText, /raise or lower your confidence/, 'confidence guidance, never a prediction');
   // The handoff exists when enough analogs matched.
   const handoff = await page.locator('#tv-test-analogs').count();
-  if (handoff) assert.match(await page.textContent('#tv-test-analogs'), /real past occurrences/);
+  if (handoff) assert.match(await page.textContent('#tv-test-analogs'), /DEMO-data occurrences/); // fixture suite: never 'real'
   // KEYED RESULTS: switching to QQQ must not display AAPL's study.
   await go('#/research/QQQ');
   await page.waitForSelector('#test-your-view');
@@ -687,7 +687,7 @@ test('review verdict panel: probability map, execution ladder, expert repricing'
   // WALK the surfaces that render info terms elsewhere in the app FIRST (the audit used to be
   // blind to anything rendering after its snapshot): builder, backtest, data center (sim
   // workbench + account risk card live there and in portfolio).
-  for (const hash of ['#/trade/shape', '#/trade/verify', '#/data', '#/portfolio/account']) {
+  for (const hash of ['#/trade/shape', '#/trade/verify', '#/data/simulation', '#/portfolio/account']) {
     await go(hash);
     await page.waitForTimeout(250);
   }
@@ -739,7 +739,7 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   // WALK the surfaces that render info terms elsewhere in the app FIRST (the audit used to be
   // blind to anything rendering after its snapshot): builder, backtest, data center (sim
   // workbench + account risk card live there and in portfolio).
-  for (const hash of ['#/trade/shape', '#/trade/verify', '#/data', '#/portfolio/account']) {
+  for (const hash of ['#/trade/shape', '#/trade/verify', '#/data/simulation', '#/portfolio/account']) {
     await go(hash);
     await page.waitForTimeout(250);
   }
@@ -880,28 +880,39 @@ test('candidate cards cross-link into backtest with the form pre-answered', asyn
   await page.waitForSelector('#app[data-ready="true"]');
 });
 
-test('data center: engine status, sources with license modes, coverage, jobs, tiered reset', async () => {
-  await go('#/status');
+test('data center tabs: overview dashboard, sources+jobs, coverage backfill, admin-only reset', async () => {
+  // ROUTE-BACKED TABS (holistic review addendum A): each workspace loads only on its route,
+  // Overview answers "where am I / what next", and destructive ops live ONLY under Administration.
   await page.click('#level-switch button[data-level="expert"]');
-  // Engine status card
+  await go('#/data/overview');
+  await page.waitForSelector('#data-tabs .pill.active[data-tab="overview"]');
+  await page.waitForSelector('#dc-mode .badge'); // where-you-are card leads
+  assert.match(await page.textContent('#dc-mode'), /OBSERVED MARKET|SIMULATED|SCENARIO/);
   await page.waitForSelector('#dc-engine .chip-row');
   assert.match(await page.textContent('#dc-engine'), /Market engine/);
-  assert.match(await page.textContent('#dc-engine'), /Warmed/);
-  // Source cards disclose each connector's license/use mode (Yahoo = personal-only)
+  await page.waitForSelector('#dc-health:has-text("QUOTES")', { timeout: 15000 });
+  // Inactive workspaces are NOT mounted from Overview (only-active-tab loading).
+  assert.equal(await page.locator('#dc-sources').count(), 0, 'sources not mounted on overview');
+  assert.equal(await page.locator('#dc-reset').count(), 0, 'reset not mounted on overview');
+
+  // Sources & jobs tab
+  await page.click('#data-tabs [data-tab="sources"]');
   await page.waitForSelector('#dc-sources .dc-source');
   const sources = await page.textContent('#dc-sources');
   assert.match(sources, /Yahoo Finance/);
   assert.match(sources, /PERSONAL/);
   assert.match(sources, /licensed · internal-use/); // the owned-CSV path
-  // Coverage + provider health (kept) render (health fills detached — wait for it)
-  await page.waitForSelector('#dc-coverage');
-  await page.waitForSelector('#dc-health:has-text("QUOTES")', { timeout: 15000 });
-  assert.match(await page.textContent('#app'), /Fixtures-only|simulated demo/i);
-  // Jobs: backfill the universe → its job row appears (other suites' jobs may already be listed)
+
+  // Datasets tab hosts coverage + backfill; the job then shows under Sources & jobs.
+  await page.click('#data-tabs [data-tab="datasets"]');
+  await page.waitForSelector('#dc-coverage #dc-backfill');
   await page.click('#dc-backfill');
+  await page.click('#data-tabs [data-tab="sources"]');
   await page.waitForSelector('#dc-jobs .dc-job:has-text("backfill_underlying")', { timeout: 15000 });
-  assert.match(await page.textContent('#dc-jobs'), /backfill_underlying/);
-  // Expert reset exposes all four tiers; the confirm needs the typed word
+
+  // Administration: reset lives here and only here, typed confirmation enforced.
+  await page.click('#data-tabs [data-tab="admin"]');
+  await page.waitForSelector('#dc-reset-tier');
   const tiers = await page.$$eval('#dc-reset-tier option', os => os.map(o => o.value));
   assert.ok(tiers.includes('MARKET_DATA') && tiers.includes('EVERYTHING'), 'expert reset tiers');
   await page.click('#dc-reset-btn');
@@ -909,10 +920,15 @@ test('data center: engine status, sources with license modes, coverage, jobs, ti
   await page.click('#modal-confirm'); // empty confirm -> refused, modal stays
   assert.ok(await page.locator('#dc-reset-confirm').count(), 'reset refused without typing RESET');
   await page.click('.modal button:has-text("Cancel")');
+  // Deep link + back/forward keep the tab.
+  await go('#/data/datasets');
+  await page.waitForSelector('#data-tabs .pill.active[data-tab="datasets"]');
+  await page.goBack();
+  await page.waitForSelector('#data-tabs .pill.active[data-tab="admin"]', { timeout: 15000 });
 });
 
 test('data center reset tiers are reduced for Beginner', async () => {
-  await go('#/status');
+  await go('#/data/admin');
   await page.click('#level-switch button[data-level="beginner"]');
   // Wait for the BEGINNER re-render (2-tier select), not the lingering expert one mid-transition.
   await page.waitForFunction(() => {
@@ -1889,7 +1905,7 @@ test('D3: the competition renders INLINE in Ideas (no orphan Decision page navig
 
 test('simulated market: product creator, loud live band, world-routed research, instant return', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
-  await go('#/data');
+  await go('#/data/simulation');
   // The PRODUCT creator: scenario story cards, labeled fields, no micro-syntax, no prompt().
   await page.waitForSelector('#dc-sim-market #sim-scenarios .sim-scenario');
   assert.ok((await page.locator('#sim-scenarios .sim-scenario').count()) >= 6, 'scenario story cards');
@@ -1898,7 +1914,7 @@ test('simulated market: product creator, loud live band, world-routed research, 
   await page.fill('#sim-symbols', 'ACME');
   await page.click('#sim-create');
 
-  // Switch happened: the loud band appears with HUMAN wording + live controls; tape yields.
+  // Switch happened: the loud band appears with HUMAN wording + live controls.
   await page.waitForSelector('#world-band', { timeout: 20000 });
   const band = await page.$eval('#world-band', el => el.textContent);
   assert.match(band, /SIMULATED MARKET/, 'band names the world loudly');
@@ -1915,6 +1931,22 @@ test('simulated market: product creator, loud live band, world-routed research, 
   // Research is world-routed AND the market VISIBLY MOVES: the hero price updates on ticks.
   await go('#/research/ACME');
   await page.waitForSelector('.quote-hero');
+  // INVERTED CONTRACT (holistic review P0-2): the tape must stay VISIBLE inside the world and
+  // honestly quote the WORLD's symbols with a SIMULATED chip — hiding the primary market
+  // navigation made simulation a ghost town, and the old test asserted that as 'tape yields'.
+  await page.waitForFunction(() => {
+    const t = document.getElementById('tape');
+    if (!t || t.hidden) return false;
+    if (getComputedStyle(t).display === 'none') return false;
+    const chip = document.getElementById('tape-demo-chip');
+    return chip && chip.textContent === 'SIMULATED'
+      && !!document.querySelector('#tape-strip [data-sym="ACME"]');
+  }, { timeout: 20000 });
+  // The universe schema is STABLE across modes: active.symbols exists and carries the world.
+  const uni = await page.evaluate(async () => await API.getFresh('/api/universe'));
+  assert.ok(uni.active && Array.isArray(uni.active.symbols), 'one UniverseView schema in world mode');
+  assert.ok(uni.active.symbols.includes('ACME'), 'world symbols drive the universe');
+  assert.ok(Array.isArray(uni.sectors) && uni.sectors.length >= 1, 'sectors present (the session)');
   const badges = await page.$$eval('.quote-hero .badge', els => els.map(e => e.textContent).join(' '));
   assert.match(badges, /SIMULATED/, 'sim quotes carry the SIMULATED label');
   const px0 = await page.textContent('#research-px');
@@ -1945,7 +1977,7 @@ test('simulated market: product creator, loud live band, world-routed research, 
   assert.equal(after.simBody, false);
 
   // Finish via the app modal (never window.confirm): the REPORT shows before the finish.
-  await go('#/data');
+  await go('#/data/simulation');
   await page.waitForSelector('.sim-session-row button:has-text("Finish")');
   await page.click('.sim-session-row button:has-text("Finish")');
   await page.waitForSelector('#modal-confirm');
@@ -1963,26 +1995,52 @@ test('golden weekend-trader journey: world trade, moving book, trader-grade repo
   // real account. Every hop uses the app's own affordances or its own API client.
   const realAcct = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);
 
-  // Create + enter the world through the app's client (cache flush + world adoption included).
+  // PHASE 11 ACCEPTANCE STORY: start where a real trader starts — on a REAL ticker's research
+  // page — and carry it into a sector world. The route must survive the switch (the world
+  // includes AAPL), the tape must quote the world, and anchors must disclose provenance.
+  await go('#/research/AAPL');
+  await page.waitForSelector('.quote-hero');
   const world = await page.evaluate(async () => {
     const w = await API.post('/api/sim/market', {
-      name: 'Journey', symbols: { ACME: 1.0 }, scenario: 'CHOP', speed: 26, seed: 424242
+      name: 'Journey', symbols: { AAPL: 1.0, ACME: 1.0 }, sectorKey: 'TECH',
+      scenario: 'CHOP', speed: 26, seed: 424242
     });
     await App.switchWorld(w.worldId);
     return w;
   });
   await page.waitForSelector('#world-band', { timeout: 20000 });
   assert.ok(world.spotBasis.ACME.includes('made-up'), 'honest anchor label for a made-up ticker');
+  assert.ok(world.spotBasis.AAPL.includes('DEMO'), 'fixture AAPL anchor labeled DEMO, never real');
+  assert.ok(world.config.symbolBetas.SPY, 'benchmarks ride along into the world');
+  // The working ticker SURVIVED world entry: still on AAPL research, now priced by the world.
+  assert.match(await page.evaluate(() => window.location.hash), /research\/AAPL/,
+    'entering a world that serves the current ticker preserves the route');
+  // The tape lives in the world: SIMULATED chip + world symbols (P0-2 inverted contract).
+  await page.waitForFunction(() => {
+    const chipEl = document.getElementById('tape-demo-chip');
+    return chipEl && chipEl.textContent === 'SIMULATED'
+      && !!document.querySelector('#tape-strip [data-sym="AAPL"]');
+  }, { timeout: 20000 });
+  // INJECTED SHOCK: a -5% AAPL move lands immediately and the research hero repaints from the
+  // stream/store — the market must visibly react to the event, not just the band.
+  const pxBefore = parseFloat(await page.textContent('#research-px'));
+  await page.evaluate(async (w) => {
+    await API.post('/api/sim/market/' + w + '/event', { symbol: 'AAPL', movePct: -0.05 }); // wire unit: fraction
+  }, world.worldId);
+  await page.waitForFunction((prev) => {
+    const el2 = document.getElementById('research-px');
+    return el2 && Math.abs(parseFloat(el2.textContent) - prev * 0.95) < prev * 0.02;
+  }, pxBefore, { timeout: 20000 });
 
   // Place a credit put spread against the WORLD's own listed book (preview -> acks -> create).
   const tradeId = await page.evaluate(async () => {
-    const exps = (await API.getFresh('/api/research/ACME/expirations')).expirations;
+    const exps = (await API.getFresh('/api/research/AAPL/expirations')).expirations;
     const exp = exps[2];
-    const chain = await API.getFresh('/api/research/ACME/chain?expiration=' + exp);
+    const chain = await API.getFresh('/api/research/AAPL/chain?expiration=' + exp);
     const spot = Number(chain.underlyingPrice);
     const below = chain.puts.map(p => Number(p.strike)).filter(k => k <= spot - 4).sort((a, b) => b - a);
     const body = {
-      symbol: 'ACME', strategy: 'CREDIT_PUT_SPREAD', qty: 1,
+      symbol: 'AAPL', strategy: 'CREDIT_PUT_SPREAD', qty: 1,
       legs: [
         { action: 'SELL', type: 'PUT', strike: String(below[0]), expiration: exp, ratio: 1 },
         { action: 'BUY', type: 'PUT', strike: String(below[1]), expiration: exp, ratio: 1 }
@@ -2018,9 +2076,12 @@ test('golden weekend-trader journey: world trade, moving book, trader-grade repo
 
   // Close the position, finish the session, and read the TRADER-GRADE report.
   await page.evaluate(async (id) => { await API.post('/api/trades/' + id + '/unwind', { confirm: true }); }, tradeId);
-  await go('#/data');
-  const row = page.locator('.sim-session-row', { hasText: 'Journey' });
-  await row.locator('button:has-text("Finish")').click();
+  await go('#/data/simulation');
+  // The ACTIVE world renders as a full CONTROL ROOM (addendum A2), not a status row —
+  // clock, live symbol chips, P/L, and every action including Finish live there.
+  await page.waitForSelector('#sim-control-room');
+  assert.match(await page.textContent('#sim-control-room'), /Control room/, 'running world dominates the tab');
+  await page.click('#sim-control-room button:has-text("Finish")');
   await page.waitForSelector('#sim-report table', { timeout: 15000 });
   const rep = await page.textContent('#sim-report');
   assert.match(rep, /Entered \(sim clock\)/, 'per-decision sim-clock entry column');
