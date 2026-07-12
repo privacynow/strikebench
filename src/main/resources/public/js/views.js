@@ -43,6 +43,7 @@
     // and both primary actions land above the fold on a desktop ----
     var liveHost = el('div', { class: 'showcase-frame', id: 'welcome-live' },
       el('div', { class: 'showcase-loading' }, UI.spinner('Asking the engine for a live example\u2026')));
+    var liveEyebrow = el('div', { class: 'eyebrow', id: 'welcome-proof-role' }, 'FROM THE ENGINE');
     var deco = (function () {
       var svgNS = 'http://www.w3.org/2000/svg';
       var d = document.createElementNS(svgNS, 'svg');
@@ -86,7 +87,7 @@
       }),
       el('section', { class: 'welcome-section welcome-live-col' },
         el('div', { class: 'live-head' },
-          el('div', { class: 'eyebrow' }, 'FROM THE ENGINE'),
+          liveEyebrow,
           el('button', { class: 'btn-link', id: 'welcome-skip', onclick: function () {
             try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
             App.navigate('#/home');
@@ -104,7 +105,28 @@
         && c.maxProfitCents !== undefined && typeof c.pop === 'number';
     }
     function welcomeProofChoice(candidates) {
-      return (candidates || []).find(welcomeProofReady) || (candidates || [])[0];
+      var ready = (candidates || []).filter(welcomeProofReady);
+      return ready.find(function (c) { return economicVerdict(c) === 'FAVORABLE'; })
+        || ready.find(function (c) { return economicVerdict(c) === 'MIXED'; })
+        || ready[0] || (candidates || [])[0];
+    }
+    function frameWelcomeProof(candidate) {
+      var verdict = economicVerdict(candidate);
+      var caption = welcomeProofCaption();
+      if (verdict === 'UNFAVORABLE' || verdict === 'UNAVAILABLE') {
+        liveEyebrow.textContent = 'HOW STRIKEBENCH SAYS NO';
+        caption += ' This is a counterexample, not an endorsement.';
+      } else if (verdict === 'MIXED') {
+        liveEyebrow.textContent = 'COMPARE CAREFULLY';
+        caption += ' It is worth comparing, but no robust edge is claimed.';
+      } else {
+        liveEyebrow.textContent = 'WORTH INVESTIGATING';
+        caption += App.state.world === 'observed'
+          ? ' The after-cost evidence passed the favorable screen.'
+          : ' Favorable here means inside this explicit teaching market, not a live-market edge.';
+      }
+      var proofCaption = document.getElementById('welcome-proof-caption');
+      if (proofCaption) proofCaption.textContent = caption;
     }
     (async function () {
       // LAST-KNOWN FIRST (review #15): the opening composition must never be half spinner on a
@@ -137,6 +159,7 @@
       if (cached) {
         liveHost.innerHTML = '';
         liveHost.appendChild(candidateCard(cached, false));
+        frameWelcomeProof(cached);
         liveHost.appendChild(el('p', { class: 'muted small', style: 'margin:4px 0 0' }, 'Refreshing with a live run\u2026'));
       }
       try {
@@ -148,6 +171,7 @@
           var proofCandidate = welcomeProofChoice(r.candidates);
           liveHost.innerHTML = '';
           liveHost.appendChild(candidateCard(proofCandidate, false));
+          frameWelcomeProof(proofCandidate);
           try {
             localStorage.setItem('strikebench.welcomeProof', JSON.stringify(
               Object.assign({ candidate: proofCandidate, asOf: Date.now() }, proofCtx)));

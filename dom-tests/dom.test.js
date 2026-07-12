@@ -102,6 +102,12 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
     'a Demo candidate is never promoted as real');
   assert.match(await page.textContent('#welcome-hero'), /Uses bid\/ask, not midpoint/,
     'fill realism is described without claiming Demo books are real');
+  const welcomeVerdict = await page.locator('#welcome-live .candidate').getAttribute('data-economic-verdict');
+  if (welcomeVerdict === 'UNFAVORABLE' || welcomeVerdict === 'UNAVAILABLE') {
+    assert.match(await page.textContent('#welcome-proof-role'), /HOW STRIKEBENCH SAYS NO/);
+    assert.match(await page.textContent('#welcome-proof-caption'), /counterexample, not an endorsement/i,
+      'an adverse teaching case cannot sit under recommendation-shaped welcome framing');
+  }
   // Skip to the dashboard; the choice persists
   await page.click('#welcome-skip');
   await page.waitForSelector('.home-market-grid .tile');
