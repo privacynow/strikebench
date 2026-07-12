@@ -154,6 +154,8 @@ public record EconomicAssessment(
                 .filter(l -> !"STOCK".equalsIgnoreCase(l.type()))
                 .mapToLong(l -> Math.max(1, l.ratio()))
                 .sum() * Math.max(1, c.qty());
-        return contracts * Math.max(0, ctx.feePerContractCents()) * 2;
+        long contractFees = contracts * Math.max(0, ctx.feePerContractCents()) * 2;
+        long orderFees = c.legs().isEmpty() ? 0 : Math.max(0, ctx.feePerOrderCents()) * 2;
+        return contractFees + orderFees;
     }
 }

@@ -32,7 +32,7 @@ class StrategyEvaluatorTest {
     private EvalContext ctx() {
         return new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25,
                 List.of(0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.29),
-                10_000_000L, true, 65, 0.04,
+                10_000_000L, true, 65, 0, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD));
     }
 
@@ -93,7 +93,7 @@ class StrategyEvaluatorTest {
 
     @Test void generatedPricingCannotBeSoftenedByModeledVolatilityOrRates() {
         EvalContext generated = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25, List.of(),
-                10_000_000L, true, 65, 0.04,
+                10_000_000L, true, 65, 0, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of(
                         "simulated rate", io.liftandshift.strikebench.model.Freshness.SIMULATED));
         StrategyEvaluation simulated = evaluator.evaluate(debitCallSpread("SIMULATED", 0.6), null, generated);
@@ -106,7 +106,7 @@ class StrategyEvaluatorTest {
 
     @Test void gateBlocksInsufficientBuyingPower() {
         EvalContext broke = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25, List.of(), 100L, true, 65,
-                0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD));
+                0, 0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD));
         StrategyEvaluation e = evaluator.evaluate(debitCallSpread("DELAYED", 0.6), null, broke);
         assertThat(e.viable()).isFalse();
         assertThat(e.score().gateFailures()).anyMatch(f -> f.contains("buying power"));

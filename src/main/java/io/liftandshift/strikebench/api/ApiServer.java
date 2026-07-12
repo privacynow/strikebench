@@ -211,7 +211,7 @@ public final class ApiServer {
         io.liftandshift.strikebench.market.SnapshotService snapshots = new io.liftandshift.strikebench.market.SnapshotService(market, universe, db, clock);
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
         io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, engine, db, clock)
-                .withFeePerContractCents(cfg.feePerContractCents()); // decision EV judged net of the REAL commission
+                .withFees(cfg.feePerContractCents(), cfg.feePerOrderCents()); // decision EV matches the REAL commission
         auto.withEvaluationService(evaluations);
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
         server.db = db;
@@ -2206,7 +2206,8 @@ public final class ApiServer {
                     st.key(), legsToRun,
                     st.entryCostCents() != null ? st.entryCostCents() : me == null ? null : me.entryCents(),
                     st.entryCostCents() != null ? "entry fixed to the supplied package price"
-                            : me == null ? null : "entry at " + me.source() + " executable quotes"));
+                            : me == null ? null : "entry at " + me.source() + " executable quotes",
+                    scenarioRoundTripFees(legsToRun, qty)));
         }
         var pathBasis = b.pathBasis() == null
                 ? io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC : b.pathBasis();
@@ -2223,14 +2224,13 @@ public final class ApiServer {
         for (var oc : report.results()) {
             // ONE fee convention product-wide (ledger rule): OPTION contracts only, ratio-aware —
             // a 1x2 backspread pays for 3 contracts, a buy-write's stock leg pays none.
-            long contractsN = items.stream().filter(it -> it.key().equals(oc.key()))
-                    .findFirst().map(it -> it.legs().stream()
-                            .filter(l -> !"STOCK".equalsIgnoreCase(l.type()))
-                            .mapToLong(l -> Math.max(1, l.ratio())).sum()).orElse(0L);
+            long fees = items.stream().filter(it -> it.key().equals(oc.key()))
+                    .findFirst().map(io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem::roundTripFeesCents)
+                    .orElse(0L);
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("key", oc.key());
             m.put("result", oc.result());
-            m.put("feesCents", contractsN * cfg.feePerContractCents() * 2L * qty);
+            m.put("feesCents", fees);
             feeAware.add(m);
         }
         Map<String, Object> outCmp = new LinkedHashMap<>();
@@ -2272,6 +2272,15 @@ public final class ApiServer {
             if (!"BUY".equalsIgnoreCase(l.action()) && !"SELL".equalsIgnoreCase(l.action())) return "unknown leg action";
         }
         return null;
+    }
+
+    private long scenarioRoundTripFees(
+            List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs, int qty) {
+        long contracts = (legs == null ? List.<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg>of() : legs)
+                .stream().filter(l -> !"STOCK".equalsIgnoreCase(l.type()))
+                .mapToLong(l -> Math.max(1, l.ratio())).sum() * Math.max(1, qty);
+        long orderFees = legs == null || legs.isEmpty() ? 0 : cfg.feePerOrderCents() * 2L;
+        return contracts * cfg.feePerContractCents() * 2L + orderFees;
     }
 
     private Object simScenarioResult(Context ctx, ScenarioRequest b) {
@@ -2399,7 +2408,8 @@ public final class ApiServer {
         var evaluated = new io.liftandshift.strikebench.sim.ScenarioSimulator().run(
                 pathEnsembles,
                 new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(sym, world, analysisCtx(ctx)),
-                pathBasis, spec, b.study(), spot, legsToRun, qty, iv, r, entryCost, entryNote);
+                pathBasis, spec, b.study(), spot, legsToRun, qty, iv, r, entryCost, entryNote,
+                scenarioRoundTripFees(legsToRun, qty));
         var studyRes = evaluated.ensemble().study();
         String pathModelVersion = evaluated.ensemble().modelVersion();
         if (studyRes != null) {
@@ -3371,7 +3381,8 @@ public final class ApiServer {
                 curve, book.quote().orElseThrow().mark().doubleValue(), iv, time.years(), rate, shorts);
         long contracts = entry.pricedLegs().stream().filter(l -> !l.isStock())
                 .mapToLong(Leg::ratio).sum() * qty;
-        long roundTripFees = contracts * cfg.feePerContractCents() * 2L;
+        long roundTripFees = contracts * cfg.feePerContractCents() * 2L
+                + cfg.feePerOrderCents() * 2L;
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("probabilityMap", analyzed.probabilityMap());
         out.put("expectedValueCents", analyzed.expectedValueCents());

@@ -36,7 +36,7 @@ public final class ProbabilityMap {
      * @param curve        exact payoff (includes any package-level price adjustment)
      * @param spot         current underlying
      * @param sigma        annualized volatility (the chain's own IV — risk-neutral basis)
-     * @param tYears       time to expiry in YEARS (trading-day time for short-dated positions)
+     * @param tYears       time to expiry in calendar years (ACT/365, matching listed-option IV convention)
      * @param riskFreeRate annualized r used in the risk-neutral drift (r − q − σ²/2), with q=0
      * @param shortStrikes strikes of SHORT legs (touch/assignment interest); may be empty
      */

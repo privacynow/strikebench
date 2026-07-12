@@ -260,7 +260,7 @@ class ResearchQuestionEngineTest {
         var sim = new io.liftandshift.strikebench.sim.ScenarioSimulator().runOnPaths(
                 abs, spot,
                 java.util.List.of(new io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg("BUY", "STOCK", 0, 0, 1)),
-                1, spec, null, 0.03, null, null);
+                1, spec, null, 0.03, null, null, 0);
         org.assertj.core.api.Assertions.assertThat(sim.paths()).isEqualTo(abs.length);
         double meanTerminal = a.analogPaths().stream().mapToDouble(pp -> pp.getLast() - 1.0).average().orElse(0);
         org.assertj.core.api.Assertions.assertThat(sim.expectedPnlCents())

@@ -1500,13 +1500,15 @@ public final class TradeService {
     }
 
     private static long decisionPnlAtSettlement(TradeRecord t, BigDecimal underlyingClose, long incrementalPnl) {
+        long expirations = t.legs().stream().filter(l -> !l.isStock())
+                .map(Leg::expiration).distinct().count();
+        if (underlyingClose == null || expirations > 1) return incrementalPnl;
         long totalLots = heldShareContextLots(t);
-        if (totalLots <= 0 || underlyingClose == null || t.qty() <= 0 || totalLots % t.qty() != 0) {
-            return incrementalPnl;
-        }
         List<Leg> combined = new ArrayList<>(t.legs());
-        combined.add(Leg.stock(LegAction.BUY, (int) (totalLots / t.qty()),
-                BigDecimal.valueOf(t.entryUnderlyingCents(), 2)));
+        if (totalLots > 0 && t.qty() > 0 && totalLots % t.qty() == 0 && t.entryUnderlyingCents() > 0) {
+            combined.add(Leg.stock(LegAction.BUY, (int) (totalLots / t.qty()),
+                    BigDecimal.valueOf(t.entryUnderlyingCents(), 2)));
+        }
         long tradedLegEntry = PayoffCurve.of(t.legs(), t.qty()).entryNetPremiumCents();
         long adjustment = t.entryNetPremiumCents() - tradedLegEntry;
         return PayoffCurve.of(combined, t.qty(), adjustment).profitAtCents(underlyingClose)

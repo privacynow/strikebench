@@ -18,6 +18,7 @@ public record EvalContext(
         long buyingPowerCents,    // for the capital gate
         boolean marketOpen,
         long feePerContractCents, // so EV can be judged NET of commissions
+        long feePerOrderCents,    // flat fee, charged once on entry and once on close
         double riskFreeRate,      // annualized r used by the shared risk-neutral approximation
         DataEvidence rateEvidence
 ) {

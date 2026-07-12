@@ -11,6 +11,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
 
@@ -116,6 +117,26 @@ class RecommendationEngineTest {
         assertThat(Double.parseDouble(cc.effectivePrice())).isGreaterThan(260.0);
         assertThat(cc.intentNote()).contains("sell 300 shares").contains("goal");
         assertThat(cc.assignmentProb()).isNotNull();
+    }
+
+    @Test
+    void assignmentProbabilityDoesNotDoubleCountNestedShortStrikes() {
+        LocalDate expiration = TODAY.plusDays(30);
+        var call100 = io.liftandshift.strikebench.model.Leg.option(
+                io.liftandshift.strikebench.model.LegAction.SELL,
+                io.liftandshift.strikebench.model.OptionType.CALL, new BigDecimal("100"), expiration, 1,
+                BigDecimal.ONE);
+        var call110 = io.liftandshift.strikebench.model.Leg.option(
+                io.liftandshift.strikebench.model.LegAction.SELL,
+                io.liftandshift.strikebench.model.OptionType.CALL, new BigDecimal("110"), expiration, 1,
+                BigDecimal.ONE);
+
+        Double one = RecommendationEngine.assignmentProbabilityFromIvs(
+                List.of(call100), List.of(0.30), new BigDecimal("100"), TODAY, 0.30, 0.04);
+        Double nested = RecommendationEngine.assignmentProbabilityFromIvs(
+                List.of(call100, call110), List.of(0.30, 0.30), new BigDecimal("100"), TODAY, 0.30, 0.04);
+
+        assertThat(nested).isEqualTo(one);
     }
 
     @Test

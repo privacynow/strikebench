@@ -1157,6 +1157,9 @@ class PaperCoreTest {
 
         // Shares put to you at the strike; premium stays option income; reserve fully released
         assertThat(res.realizedPnlCents()).isEqualTo(credit - fees);
+        assertThat(res.trade().decisionPnlCents())
+                .as("assignment calibration uses premium plus the shares' mark-vs-strike loss")
+                .isEqualTo(credit - fees - 100_000);
         assertThat(res.trade().closeReason()).contains("bought 100 sh");
         var view = positions.get(acct.id(), "AAPL");
         assertThat(view.shares()).isEqualTo(100);

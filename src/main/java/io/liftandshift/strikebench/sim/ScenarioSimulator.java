@@ -37,7 +37,8 @@ public final class ScenarioSimulator {
      * Paths must be absolute prices with spec.totalSteps()+1 points each.
      */
     public SimResult runOnPaths(double[][] paths, double spot, List<SimLeg> legs, int qty, ScenarioSpec spec,
-                                IvSpec ivSpec, double riskFreeRate, Long entryOverrideCents, String entryNote) {
+                                IvSpec ivSpec, double riskFreeRate, Long entryOverrideCents, String entryNote,
+                                long roundTripFeesCents) {
         try (AutoCloseable permit = SimBudget.acquire()) {
             ScenarioSpec s = spec.sane();
             if (paths == null || paths.length == 0) throw new IllegalArgumentException("no paths in the ensemble");
@@ -48,7 +49,8 @@ public final class ScenarioSimulator {
                 }
             }
             requireWorkBudget((long) paths.length * (s.totalSteps() + 1) * Math.max(1, legs.size()));
-            return runInner(paths, spot, legs, qty, s, ivSpec, riskFreeRate, entryOverrideCents, entryNote);
+            return runInner(paths, spot, legs, qty, s, ivSpec, riskFreeRate, entryOverrideCents,
+                    entryNote, roundTripFeesCents);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -63,7 +65,8 @@ public final class ScenarioSimulator {
                            PathEnsembleService.Basis basis, ScenarioSpec spec,
                            io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest study,
                            double spot, List<SimLeg> legs, int qty, IvSpec ivSpec,
-                           double riskFreeRate, Long entryOverrideCents, String entryNote) {
+                           double riskFreeRate, Long entryOverrideCents, String entryNote,
+                           long roundTripFeesCents) {
         try (AutoCloseable permit = SimBudget.acquire()) {
             PathEnsembleService.Ensemble ensemble = source.build(scope, basis, spec, study, spot);
             ScenarioSpec sane = ensemble.spec().sane();
@@ -71,7 +74,7 @@ public final class ScenarioSimulator {
             requireWorkBudget((long) ensemble.paths().length * (sane.totalSteps() + 1)
                     * Math.max(1, legs.size()));
             return new EnsembleRun(ensemble, runInner(ensemble.paths(), ensemble.spot(), legs, qty,
-                    sane, ivSpec, riskFreeRate, entryOverrideCents, entryNote));
+                    sane, ivSpec, riskFreeRate, entryOverrideCents, entryNote, roundTripFeesCents));
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -80,7 +83,8 @@ public final class ScenarioSimulator {
     }
 
     /** One structure to compare: resolved legs + an optional market-priced entry. */
-    public record CompareItem(String key, List<SimLeg> legs, Long entryOverrideCents, String entryNote) {}
+    public record CompareItem(String key, List<SimLeg> legs, Long entryOverrideCents, String entryNote,
+                              long roundTripFeesCents) {}
 
     public record CompareOutcome(String key, SimResult result) {}
 
@@ -108,7 +112,7 @@ public final class ScenarioSimulator {
                 try {
                     out.add(new CompareOutcome(item.key(), runInner(ensemble.paths(), ensemble.spot(),
                             item.legs(), qty, s, ivSpec, riskFreeRate,
-                            item.entryOverrideCents(), item.entryNote())));
+                            item.entryOverrideCents(), item.entryNote(), item.roundTripFeesCents())));
                 } catch (RuntimeException e) {
                     refused.add(new CompareRefusal(item.key(), publicReason(e)));
                 }
@@ -154,7 +158,7 @@ public final class ScenarioSimulator {
 
     private SimResult runInner(double[][] paths, double spot, List<SimLeg> legs, int qty, ScenarioSpec s,
                                IvSpec ivSpec, double riskFreeRate,
-                               Long entryOverrideCents, String entryNote) {
+                               Long entryOverrideCents, String entryNote, long roundTripFeesCents) {
         IvSpec iv = (ivSpec == null ? IvSpec.flat(s.volAnnual()) : ivSpec).sane();
         int steps = s.totalSteps();
         int spd = Math.max(1, s.stepsPerDay());
@@ -162,6 +166,7 @@ public final class ScenarioSimulator {
         double[] ivPath = iv.path(steps, dt, spd);
 
         int q = Math.max(1, qty);
+        double fees = Math.max(0, roundTripFeesCents) / 100.0;
         double entry = entryOverrideCents != null
                 ? entryOverrideCents / 100.0
                 : portfolioValue(legs, paths[0], 0, steps, spd, dt, ivPath[0], riskFreeRate) * q;
@@ -172,7 +177,7 @@ public final class ScenarioSimulator {
         for (int p = 0; p < n; p++) {
             for (int i = 0; i <= steps; i++) {
                 double v = portfolioValue(legs, paths[p], i, steps, spd, dt, ivPath[i], riskFreeRate) * q;
-                pnl[p][i] = v - entry;
+                pnl[p][i] = v - entry - fees;
             }
         }
 
@@ -220,7 +225,9 @@ public final class ScenarioSimulator {
         notes.add(entryOverrideCents != null
                 ? "Exit values along each path are MODELED (Black-Scholes on the IV path); the entry reflects the quotes named above."
                 : "Synthetic scenario — entry AND exits are MODELED (Black-Scholes on the IV path), never observed market quotes.");
-        notes.add("Seed " + s.seed() + " reproduces this exact run. Fills, commissions, and early assignment are not modeled here.");
+        notes.add("Seed " + s.seed() + " reproduces this exact run. The distribution includes "
+                + io.liftandshift.strikebench.util.Money.fmt(Math.max(0, roundTripFeesCents))
+                + " of configured round-trip commissions; modeled exits do not include future bid/ask slippage or early assignment.");
         if (s.model() == ScenarioSpec.PathModel.STUDENT_T) {
             notes.add("Student-t uses non-integer ν=" + s.tailNu()
                     + ", bounded at ±8 standardized deviations and re-compensated so the scenario guide remains the expected price path.");

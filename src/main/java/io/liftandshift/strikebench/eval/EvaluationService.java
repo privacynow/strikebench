@@ -57,10 +57,12 @@ public final class EvaluationService {
             Caffeine.newBuilder().maximumSize(256).expireAfterWrite(Duration.ofSeconds(60)).build();
 
     private long feePerContractCents = 65;
+    private long feePerOrderCents;
 
-    /** Wire the platform's real commission so decision EV is judged net of the ACTUAL fee. */
-    public EvaluationService withFeePerContractCents(long cents) {
-        this.feePerContractCents = Math.max(0, cents);
+    /** Wire the complete platform commission so decision EV matches the eventual ticket. */
+    public EvaluationService withFees(long perContractCents, long perOrderCents) {
+        this.feePerContractCents = Math.max(0, perContractCents);
+        this.feePerOrderCents = Math.max(0, perOrderCents);
         return this;
     }
 
@@ -244,7 +246,7 @@ public final class EvaluationService {
         var rate = market.riskFreeRateQuote(Math.max(1, dte), worldId);
 
         return new EvalContext(symbol, underlyingCents, dte, atmIv, realizedVol, ivHistory, buyingPowerCents, open,
-                feePerContractCents, rate.annualRate(), rate.evidence());
+                feePerContractCents, feePerOrderCents, rate.annualRate(), rate.evidence());
     }
 
     private static LocalDate frontExpiration(List<Candidate> candidates) {

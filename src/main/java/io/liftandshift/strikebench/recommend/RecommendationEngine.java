@@ -732,8 +732,10 @@ public final class RecommendationEngine {
     /**
      * Modeled chance that at least one short leg finishes in the money at ITS expiration —
      * risk-neutral N(d2)/N(-d2) at each leg's own IV and the lane's rate (q=0 assumption),
-     * with no early-assignment model.
-     * Distinct short strikes are summed (disjoint regions for condor-like shapes), capped at 1.
+     * with no early-assignment model. At one expiration, nested same-side strikes collapse to the
+     * outer event (lowest call / highest put); put and call tails are disjoint unless they overlap.
+     * Different expirations are summed and capped, making the multi-expiration result a conservative
+     * upper bound rather than a false claim of joint-path precision.
      */
     private static Double assignmentProbability(List<Leg> legs, List<OptionQuote> quotes,
                                                 BigDecimal spot, LocalDate today, double ivFallback,
@@ -747,7 +749,7 @@ public final class RecommendationEngine {
     }
 
     /**
-     * N(d2)/N(-d2) per DISTINCT short strike, summed and capped at 1 -- shared with the
+     * N(d2)/N(-d2) over the UNION of short-ITM regions at each expiration -- shared with the
      * trade-preview path so the builder shows the same number the engine would.
      * {@code ivsAligned} is index-aligned with {@code legs} (null entries fall back).
      */
@@ -755,24 +757,52 @@ public final class RecommendationEngine {
                                                       BigDecimal spot, LocalDate today, double ivFallback,
                                                       double riskFreeRate) {
         if (spot == null || spot.signum() <= 0) return null;
-        java.util.Set<String> seen = new java.util.HashSet<>();
-        double total = 0;
-        boolean any = false;
+        java.util.Map<LocalDate, Integer> lowestCall = new java.util.LinkedHashMap<>();
+        java.util.Map<LocalDate, Integer> highestPut = new java.util.LinkedHashMap<>();
         for (int i = 0; i < legs.size(); i++) {
             Leg l = legs.get(i);
             if (l.isStock() || l.action() != LegAction.SELL) continue;
-            String key = l.type() + "|" + l.strike().stripTrailingZeros().toPlainString() + "|" + l.expiration();
-            if (!seen.add(key)) continue; // ratio>1 on the same contract is one event
-            any = true;
-            Double iv = ivsAligned != null && i < ivsAligned.size() ? ivsAligned.get(i) : null;
-            double sigma = iv != null && iv > 0 ? iv : ivFallback;
-            double t = Math.max(ChronoUnit.DAYS.between(today, l.expiration()), 0.5) / 365.0;
-            double d1 = BlackScholes.d1(spot.doubleValue(), l.strike().doubleValue(), t,
-                    riskFreeRate, 0, sigma);
-            double d2 = d1 - sigma * Math.sqrt(t);
-            total += l.type() == OptionType.CALL ? BlackScholes.normCdf(d2) : BlackScholes.normCdf(-d2);
+            java.util.Map<LocalDate, Integer> target = l.type() == OptionType.CALL ? lowestCall : highestPut;
+            Integer prior = target.get(l.expiration());
+            if (prior == null || (l.type() == OptionType.CALL
+                    ? l.strike().compareTo(legs.get(prior).strike()) < 0
+                    : l.strike().compareTo(legs.get(prior).strike()) > 0)) {
+                target.put(l.expiration(), i);
+            }
         }
-        return any ? Math.min(1.0, total) : null;
+        java.util.Set<LocalDate> expirations = new java.util.LinkedHashSet<>(lowestCall.keySet());
+        expirations.addAll(highestPut.keySet());
+        if (expirations.isEmpty()) return null;
+
+        double total = 0;
+        for (LocalDate expiration : expirations) {
+            Integer ci = lowestCall.get(expiration);
+            Integer pi = highestPut.get(expiration);
+            if (ci != null && pi != null
+                    && legs.get(pi).strike().compareTo(legs.get(ci).strike()) >= 0) {
+                total += 1.0; // S<put OR S>call covers the whole line when the regions overlap
+                continue;
+            }
+            if (ci != null) total += finishItmProbability(legs.get(ci), alignedIv(ivsAligned, ci),
+                    spot, today, ivFallback, riskFreeRate);
+            if (pi != null) total += finishItmProbability(legs.get(pi), alignedIv(ivsAligned, pi),
+                    spot, today, ivFallback, riskFreeRate);
+        }
+        return Math.min(1.0, total);
+    }
+
+    private static Double alignedIv(List<Double> ivs, int index) {
+        return ivs != null && index < ivs.size() ? ivs.get(index) : null;
+    }
+
+    private static double finishItmProbability(Leg leg, Double iv, BigDecimal spot, LocalDate today,
+                                               double ivFallback, double riskFreeRate) {
+        double sigma = iv != null && iv > 0 ? iv : ivFallback;
+        double t = Math.max(ChronoUnit.DAYS.between(today, leg.expiration()), 0.5) / 365.0;
+        double d1 = BlackScholes.d1(spot.doubleValue(), leg.strike().doubleValue(), t,
+                riskFreeRate, 0, sigma);
+        double d2 = d1 - sigma * Math.sqrt(t);
+        return leg.type() == OptionType.CALL ? BlackScholes.normCdf(d2) : BlackScholes.normCdf(-d2);
     }
 
     /** Human framing of the candidate against the user's goal, holdings and target price. */

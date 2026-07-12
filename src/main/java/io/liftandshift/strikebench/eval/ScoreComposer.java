@@ -61,7 +61,8 @@ public final class ScoreComposer {
             long contracts = c.legs() == null ? 0
                     : c.legs().stream().filter(l -> !"STOCK".equalsIgnoreCase(l.type()))
                         .mapToLong(l -> Math.max(1, l.ratio())).sum() * Math.max(1, c.qty());
-            long costs = contracts * ctx.feePerContractCents() * 2; // open + close
+            long costs = contracts * ctx.feePerContractCents() * 2
+                    + (c.legs() == null || c.legs().isEmpty() ? 0 : ctx.feePerOrderCents() * 2); // open + close
             long evNet = ev - costs;
             evComp = clamp01(0.5 + (double) evNet / (2.0 * risk.maxLossCents())); // -maxLoss -> 0, 0 -> .5, +maxLoss -> 1
             evNote = String.format("model EV $%s net of ~$%s round-trip fees, vs max loss $%s (risk-neutral)",

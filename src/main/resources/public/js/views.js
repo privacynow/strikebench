@@ -4630,12 +4630,13 @@
                    fees: x.feesCents || 0 };
         }).filter(function (x) { return x.q; });
         if (!results.length) throw new Error('Nothing could be priced for ' + symbol + '.');
-        // FAIR ranking: expected P&L per dollar of realistic downside (|p5|) — raw dollars would
-        // let a 100-share CSP dwarf a small spread purely by size. EV stays visible alongside.
+        // FAIR ranking: the shared simulator has already shifted EVERY path by the configured
+        // round-trip commissions, so win rate, expected P/L and p5 are one after-cost distribution.
+        // Expected P&L per dollar of realistic downside prevents a 100-share CSP from winning on size.
         results.forEach(function (x) {
-          var evNet = x.r.expectedPnlCents - x.fees; // R9: judged net of round-trip commissions
-          x.evNet = evNet;
-          x.ror = x.r.p5Cents < 0 ? evNet / Math.abs(x.r.p5Cents) : (evNet > 0 ? 99 : 0);
+          x.evNet = x.r.expectedPnlCents;
+          x.p5Net = x.r.p5Cents;
+          x.ror = x.p5Net < 0 ? x.evNet / Math.abs(x.p5Net) : (x.evNet > 0 ? 99 : 0);
         });
         results.sort(function (a, b) { return b.ror - a.ror; });
         out.innerHTML = '';
@@ -4652,10 +4653,11 @@
           return el('tr', {},
             el('td', {}, el('b', {}, x.q.label), ' ', el('span', { class: 'muted small' }, x.q.group)),
             el('td', {}, Math.round(x.r.winRatePct) + '%'),
-            el('td', {}, pnlSpan(x.r.expectedPnlCents)),
-            el('td', {}, pnlSpan(x.r.p5Cents)),
+            el('td', {}, pnlSpan(x.evNet)),
+            el('td', {}, pnlSpan(x.p5Net)),
             el('td', { title: 'expected P&L per $1 of 1-in-20 downside' },
               x.ror >= 99 ? '∞' : x.ror.toFixed(2)),
+            el('td', {}, fmtMoney(x.fees)),
             level === 'beginner' ? null : el('td', {}, UI.fmtMoneyCompact(x.r.entryCostCents)),
             el('td', {}, el('button', { class: 'btn btn-sm', onclick: (function (key) { return function () {
               picked.key = key; vf.quick = key;
@@ -4664,8 +4666,8 @@
             }; })(x.q.key) }, 'Details')));
         }
         var headers = level === 'beginner'
-          ? ['Strategy', 'Chance of profit', 'Expected', 'Bad run (1 in 20)', 'Gain per $ risked', '']
-          : ['Structure', 'Win %', 'E[P&L]', 'p5', 'RoR', 'Entry', ''];
+          ? ['Strategy', 'Chance after costs', 'Expected after costs', 'Bad run after costs', 'Gain per $ risked', 'Fees', '']
+          : ['Structure', 'Win % after costs', 'E[P&L] after costs', 'p5 after costs', 'RoR', 'Fees', 'Entry', ''];
         if (level === 'beginner' && results.length > 3) {
           // Progressive disclosure: the best three expressions first; the full field one tap away.
           out.appendChild(el('div', { class: 'field-label' }, 'Best three fits for this story'));

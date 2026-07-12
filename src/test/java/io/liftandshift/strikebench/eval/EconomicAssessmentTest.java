@@ -23,7 +23,7 @@ class EconomicAssessmentTest {
 
     private EvalContext ctx() {
         return new EvalContext("AAPL", 10_000, 30, 0.30, 0.25, List.of(), 1_000_000, true, 65,
-                0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD));
+                0, 0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD));
     }
 
     private EvidenceProfile observed() {
@@ -44,6 +44,22 @@ class EconomicAssessmentTest {
         assertThat(a.placement()).isEqualTo("LEARN_FROM");
         assertThat(a.summary()).contains("mechanically valid").contains("not mistake availability for endorsement");
         assertThat(a.marketEvAfterCostsCents()).isNegative();
+    }
+
+    @Test void economicVerdictIncludesFlatOrderFeesAsWellAsContractFees() {
+        EvalContext withOrderFee = new EvalContext("AAPL", 10_000, 30, 0.30, 0.25, List.of(),
+                1_000_000, true, 65, 100, 0.04,
+                io.liftandshift.strikebench.model.DataEvidence.of(
+                        "treasury", io.liftandshift.strikebench.model.Freshness.EOD));
+        RiskProfile risk = new RiskProfile(20_000, 30_000L, 0.50, 1_000L,
+                20_000, 0.20, List.of(), 1_000L, "test");
+
+        EconomicAssessment a = EconomicAssessment.assess(candidate(0.50), risk, observed(), pass(), withOrderFee);
+
+        // 2 option legs x $0.65 x entry/close + $1.00 order fee x entry/close.
+        assertThat(a.estimatedRoundTripFeesCents()).isEqualTo(460L);
+        assertThat(a.marketEvAfterCostsCents()).isEqualTo(540L);
+        assertThat(a.realizedVolEvAfterCostsCents()).isEqualTo(540L);
     }
 
     @Test void lowProbabilityAloneNeverRejectsAPositivePayoffTrade() {

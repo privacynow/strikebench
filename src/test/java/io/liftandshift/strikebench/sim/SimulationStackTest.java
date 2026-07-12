@@ -49,7 +49,7 @@ class SimulationStackTest {
                                               double[] historicalReturns) {
         ScenarioSpec spec = raw.sane();
         double[][] paths = new PathGenerator().generate(spec, spot, historicalReturns);
-        return simulator.runOnPaths(paths, spot, legs, qty, spec, iv, rate, null, null);
+        return simulator.runOnPaths(paths, spot, legs, qty, spec, iv, rate, null, null, 0);
     }
 
     @Test
@@ -131,6 +131,27 @@ class SimulationStackTest {
         var b = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.CHOP, 0, 42), IvSpec.flat(0.3), 0.04, null);
         assertThat(a.p50Cents()).isEqualTo(b.p50Cents());
         assertThat(a.expectedPnlCents()).isEqualTo(b.expectedPnlCents());
+    }
+
+    @Test
+    void configuredRoundTripFeesShiftTheWholeOutcomeDistribution() {
+        var simulator = new ScenarioSimulator();
+        var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
+        ScenarioSpec sane = spec(ScenarioSpec.Shape.CHOP, 0, 55).sane();
+        double[][] paths = new PathGenerator().generate(sane, 100, null);
+
+        var gross = simulator.runOnPaths(paths, 100, legs, 1, sane, IvSpec.flat(0.3), 0.04,
+                null, null, 0);
+        var net = simulator.runOnPaths(paths, 100, legs, 1, sane, IvSpec.flat(0.3), 0.04,
+                null, null, 500);
+
+        assertThat(net.expectedPnlCents()).isEqualTo(gross.expectedPnlCents() - 500);
+        assertThat(net.p5Cents()).isEqualTo(gross.p5Cents() - 500);
+        assertThat(net.p50Cents()).isEqualTo(gross.p50Cents() - 500);
+        assertThat(net.p95Cents()).isEqualTo(gross.p95Cents() - 500);
+        assertThat(net.bands().getLast().p50Cents()).isEqualTo(gross.bands().getLast().p50Cents() - 500);
+        assertThat(net.winRatePct()).isLessThanOrEqualTo(gross.winRatePct());
+        assertThat(net.notes()).anyMatch(n -> n.contains("$5.00") && n.contains("round-trip"));
     }
 
     @Test
