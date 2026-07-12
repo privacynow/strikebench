@@ -1797,6 +1797,7 @@ test('non-admin Data access stays informative without dead app-wide mutation con
     body.admin = false;
     await route.fulfill({ response, json: body });
   });
+  await page.evaluate(() => API.flushCache());
   await go('#/data/sources');
   await page.waitForSelector('#dc-history-sync:has-text("requires admin access")');
   assert.equal(await page.locator('#data-tabs [data-tab="admin"]:visible').count(), 0,
