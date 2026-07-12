@@ -1,6 +1,7 @@
 /* StrikeBench — design system. No build step, CSS variables, light+dark, mobile-first. */
 
 :root {
+  --sticky-stack-h: 54px;
   --bg: #f4f6f9;
   --surface: #ffffff;
   --surface-2: #eef1f6;
@@ -1546,6 +1547,37 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .demo-market-choice .spacer { display: none; }
   .demo-market-choice > .btn,
   .demo-market-choice > .badge { align-self: flex-start; }
+}
+
+/* A simulated world is a multi-symbol market, not a single chart with hidden ticker pills. */
+#sim-control-room, #cr-symbols { scroll-margin-top: calc(var(--sticky-stack-h) + 12px); }
+.sim-market-overview { margin: 12px 0 10px; padding: 10px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); }
+.sim-active-note { margin: -2px 0 10px; }
+.sim-overview-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.sim-symbol-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(155px, 100%), 1fr)); gap: 8px; }
+.sim-symbol-tile { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: start;
+  gap: 2px 8px; min-width: 0; min-height: 104px; padding: 9px 10px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); text-align: left;
+  cursor: pointer; transition: border-color .15s ease, background .15s ease, transform .12s ease; }
+.sim-symbol-tile:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.sim-symbol-tile.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.sim-symbol-head { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.sim-symbol-head b { font-size: 14px; }
+.sim-symbol-price { justify-self: end; font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.sim-symbol-delta { grid-column: 1 / -1; min-height: 18px; font-size: 12.5px; }
+.sim-symbol-tile .spark-slot { grid-column: 1 / -1; min-height: 48px; overflow: hidden; }
+.sim-symbol-tile .spark { margin-top: 1px; min-height: 44px !important; }
+.sim-symbol-tile .spark-readout { font-size: 12.5px; min-height: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sim-focus-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 14px 0 4px; }
+.sim-focus-head > div { display: flex; align-items: baseline; gap: 8px; }
+.sim-focus-head b { font-size: 17px; }
+@media (max-width: 640px) {
+  .sim-symbol-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sim-symbol-tile { min-height: 94px; }
+}
+@media (max-width: 350px) {
+  .sim-symbol-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .page-evidence { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0;

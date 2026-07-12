@@ -379,6 +379,10 @@
   }
 
   var worldBandResizeQueued = false;
+  var worldBandObserved = typeof WeakSet === 'function' ? new WeakSet() : null;
+  var worldBandObserver = window.ResizeObserver ? new ResizeObserver(function () {
+    syncWorldBandTop();
+  }) : null;
   function syncWorldBandTop() {
     if (worldBandResizeQueued) return;
     worldBandResizeQueued = true;
@@ -387,15 +391,25 @@
       var band = document.getElementById('world-band');
       var topbar = document.querySelector('.topbar');
       var tape = document.getElementById('tape');
+      [topbar, band, tape].forEach(function (node) {
+        if (!node || !worldBandObserver || !worldBandObserved || worldBandObserved.has(node)) return;
+        worldBandObserved.add(node);
+        worldBandObserver.observe(node);
+      });
+      var stickyHeight = topbar ? topbar.getBoundingClientRect().height : 0;
       if (band && topbar) {
         var topH = topbar.getBoundingClientRect().height;
         band.style.top = topH + 'px';
+        stickyHeight += band.getBoundingClientRect().height;
         // On desktop the ticker joins the sticky stack beneath the permanent market-mode
         // band. A sticky band above a static tape overlays it by exactly the scroll amount.
         if (tape && window.innerWidth > 640) {
           tape.style.position = 'sticky';
           tape.style.top = (topH + band.getBoundingClientRect().height) + 'px';
           tape.style.zIndex = '38';
+          if (!tape.hidden && !tape.classList.contains('tape-offroute')) {
+            stickyHeight += tape.getBoundingClientRect().height;
+          }
         } else if (tape) {
           tape.style.removeProperty('position');
           tape.style.removeProperty('top');
@@ -406,6 +420,7 @@
         tape.style.removeProperty('top');
         tape.style.removeProperty('z-index');
       }
+      document.documentElement.style.setProperty('--sticky-stack-h', Math.ceil(stickyHeight) + 'px');
     });
   }
   window.addEventListener('resize', syncWorldBandTop, { passive: true });

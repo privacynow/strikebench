@@ -5283,19 +5283,29 @@
       { key: 'RALLY_FADE', blurb: 'Rises first, then gives it back.' },
       { key: 'VOL_EVENT', blurb: 'Calm prices, jumpy options \u2014 volatility is the story.' }
     ];
-    var simCard = el('div', { class: 'card', id: 'dc-sim-market' },
-      UI.cardHeader('Simulated market'),
-      explain(beginnerDC()
+    var activeSimulation = App.state.world && App.state.world !== 'observed' && App.state.world !== 'demo';
+    var simCard = el('div', { class: 'card', id: 'dc-sim-market' }, UI.cardHeader('Simulated market'));
+    if (activeSimulation) {
+      simCard.appendChild(el('p', { class: 'muted small sim-active-note' },
+        'Generated prices and fills stay inside this session and its separate simulation account.'));
+    } else {
+      simCard.appendChild(explain(beginnerDC()
         ? 'A practice market that MOVES: generated prices and option chains stream like the real thing, on any day, at any speed. Everything is loudly labeled \u2014 nothing here is real, and a separate simulation account keeps your practice account untouched.'
         : 'Deterministic per-session worlds: a beta factor model on fixed 30-sim-second quanta (speed never changes the path), a full generated option book, replayable from seed + event log. A separate simulation account is the only lane that trades a world.'));
-    simCard.appendChild(el('div', { class: 'demo-market-choice' },
-      el('div', {}, el('b', {}, 'Built-in demo market'),
-        el('p', { class: 'muted small' }, 'A fixed, fabricated market for learning the interface. It is isolated from observed data and uses its own account.')),
-      el('span', { class: 'spacer' }),
-      App.state.world === 'demo'
-        ? el('span', { class: 'badge badge-warn' }, 'ACTIVE')
-        : el('button', { class: 'btn btn-sm btn-secondary', id: 'enter-demo-market',
-          onclick: function () { App.switchWorld('demo'); } }, 'Enter demo market')));
+    }
+    // Demo remains reachable through the market switcher, but it must not compete with the
+    // active world's control room. Two simultaneous primary market choices made the lane look
+    // unresolved even though the backend was already inside the simulation.
+    if (!activeSimulation) {
+      simCard.appendChild(el('div', { class: 'demo-market-choice' },
+        el('div', {}, el('b', {}, 'Built-in demo market'),
+          el('p', { class: 'muted small' }, 'A fixed, fabricated market for learning the interface. It is isolated from observed data and uses its own account.')),
+        el('span', { class: 'spacer' }),
+        App.state.world === 'demo'
+          ? el('span', { class: 'badge badge-warn' }, 'ACTIVE')
+          : el('button', { class: 'btn btn-sm btn-secondary', id: 'enter-demo-market',
+            onclick: function () { App.switchWorld('demo'); } }, 'Enter demo market')));
+    }
     function beginnerDC() { return window.Learn && Learn.currentLevel() === 'beginner'; }
     if (tab === 'simulation') root.appendChild(simCard);
     (async function () {
@@ -5325,7 +5335,16 @@
         // control room, other live sessions as rows, and the creator collapses to a side action.
         var current = null;
         live.forEach(function (x) { if (x.id === App.state.world) current = x; });
-        if (current) box.appendChild(controlRoom(current));
+        if (current) {
+          box.appendChild(controlRoom(current));
+          if (App.state.focusSimControlRoom === current.id) {
+            delete App.state.focusSimControlRoom;
+            window.requestAnimationFrame(function () { window.requestAnimationFrame(function () {
+              var room = document.getElementById('sim-control-room');
+              if (room) room.scrollIntoView({ block: 'start' });
+            }); });
+          }
+        }
         live.forEach(function (sx) { if (!current || sx.id !== current.id) box.appendChild(sessionRow(sx, false)); });
         var creatorEl = document.getElementById('sim-creator');
         var creatorToggle = document.getElementById('sim-creator-toggle');
@@ -5359,19 +5378,34 @@
       function controlRoom(sx) {
         var cfg = sx.config || {};
         var syms = Object.keys(cfg.symbolBetas || {});
-        var focusSym = syms[0];
+        App.state.simFocus = App.state.simFocus || {};
+        var focusSym = syms.indexOf(App.state.simFocus[sx.id]) >= 0 ? App.state.simFocus[sx.id] : syms[0];
         var chartHost = null;
-        var marketSelector = UI.symbolContext({
-          mode: 'multi', id: 'cr-symbols', symbols: syms.slice(0, 12), symbol: focusSym,
-          label: 'Session symbols', hint: 'Select one to focus the chart',
-          onPick: function (sym) { focusSym = sym; if (chartHost) drawFocus(); }
+        var marketOverview = el('div', { class: 'sim-symbol-grid', id: 'cr-symbols', role: 'listbox',
+          'aria-label': 'Session symbols' });
+        syms.forEach(function (sym) {
+          var tile = el('div', {
+            class: 'sim-symbol-tile sym-card' + (sym === focusSym ? ' active' : ''),
+            'data-symbol': sym, 'data-sym': sym, role: 'option', 'aria-selected': String(sym === focusSym),
+            onclick: function () { selectFocus(sym); }
+          },
+            el('span', { class: 'sim-symbol-head' },
+              el('b', {}, sym),
+              el('span', { class: 'sim-symbol-price', 'data-cr-sym': sym }, '\u2026')),
+            el('span', { class: 'sim-symbol-delta', 'data-cr-delta': sym }),
+            el('span', { class: 'spark-slot' }, el('span', { class: 'muted small' }, 'chart queued')));
+          marketOverview.appendChild(pressable(tile, 'Focus ' + sym + ' in this simulated market', 'option'));
         });
-        marketSelector.querySelectorAll('[data-symbol]').forEach(function (btn) {
-          var s0 = btn.getAttribute('data-symbol');
-          btn.appendChild(el('b', { 'data-cr-sym': s0 }, '\u2026'));
-        });
-        if (syms.length > 12) marketSelector.querySelector('.symbol-context-symbols').appendChild(
-          el('span', { class: 'muted small' }, '+' + (syms.length - 12) + ' more'));
+        function selectFocus(sym) {
+          focusSym = sym;
+          App.state.simFocus[sx.id] = sym;
+          marketOverview.querySelectorAll('[role="option"]').forEach(function (btn) {
+            var active = btn.getAttribute('data-symbol') === sym;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-selected', String(active));
+          });
+          if (chartHost) drawFocus();
+        }
         var room = el('div', { class: 'card-slim', id: 'sim-control-room', 'data-sim-id': sx.id,
           style: 'margin:6px 0; padding:12px' },
           UI.cardHeader('Control room \u2014 ' + (sx.name || sx.id),
@@ -5383,7 +5417,11 @@
             chip('Speed', el('span', { id: 'cr-speed' }, (sx.speed || cfg.speed || 1) + '\u00d7')),
             chip('Seed', String(cfg.seed)),
             sx.modelVersion ? chip('Model', sx.modelVersion) : null),
-          marketSelector,
+          el('div', { class: 'sim-market-overview' },
+            el('div', { class: 'sim-overview-head' },
+              el('div', {}, el('b', {}, 'Market overview'),
+                el('div', { class: 'muted small' }, syms.length + ' symbols in this session \u00b7 select one to focus'))),
+            marketOverview),
           el('div', { class: 'chip-row', id: 'cr-pl' }, el('span', { class: 'muted small' }, 'Loading positions\u2026')),
           el('div', { class: 'btn-row', style: 'margin-top:6px' },
             el('button', { class: 'btn btn-sm', id: 'cr-toggle', 'data-running': String(!!sx.running), onclick: async function () {
@@ -5400,9 +5438,7 @@
             el('button', { class: 'btn btn-sm', onclick: function () { showReport(sx); } }, 'Report'),
             el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/context'); } }, 'Find strategies'),
             el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/portfolio'); } }, 'Simulated portfolio'),
-            el('button', { class: 'btn btn-sm btn-danger', onclick: function () { finishModal(sx); } }, 'Finish'),
-            el('button', { class: 'btn btn-sm btn-secondary', id: 'cr-exit', onclick: function () {
-              App.switchWorld(App.baseWorldId()); } }, App.config && App.config.fixturesOnly ? 'Return to demo market' : 'Return to observed market')));
+            el('button', { class: 'btn btn-sm btn-danger', onclick: function () { finishModal(sx); } }, 'Finish')));
         // ---- The CONSOLE parts (F9): breadth, anchor coverage, focus chart, live P/L, heat,
         // event timeline. Everything below reuses existing primitives — no duplicate engines.
         var breadthChip = el('span', { class: 'chip', id: 'cr-breadth' },
@@ -5420,13 +5456,23 @@
         room.appendChild(chartHost);
         function drawFocus() {
           chartHost.innerHTML = '';
-          chartHost.appendChild(el('div', { class: 'muted small', style: 'margin-bottom:2px' },
-            focusSym + ' \u2014 tap another symbol chip to switch \u00b7 ',
+          chartHost.appendChild(el('div', { class: 'sim-focus-head' },
+            el('div', {}, el('span', { class: 'muted small' }, 'FOCUS'), el('b', {}, focusSym)),
             el('a', { href: '#/research/' + focusSym, onclick: function () { App.navigate('#/research/' + focusSym); } },
               'Full research \u2192')));
           chartHost.appendChild(UI.rangeChart({ initial: '3m', fetch: historyFetch(focusSym) }));
         }
         drawFocus();
+        var overviewSparks = lazySparklines(marketOverview, syms, {
+          range: function () { return '1m'; },
+          valid: function () { return room.isConnected && App.state.world === sx.id; },
+          paint: function (row) {
+            var slot = marketOverview.querySelector('.sim-symbol-tile[data-sym="' + row.symbol + '"] .spark-slot');
+            if (!slot) return;
+            slot.innerHTML = '';
+            slot.appendChild(UI.sparkline(row, { height: 26 }));
+          }
+        });
         function paint() {
           var up = 0, down = 0;
           syms.forEach(function (sym) {
@@ -5436,6 +5482,8 @@
             if (isFinite(last) && isFinite(prev) && prev) (last >= prev ? up++ : down++);
             var slot = room.querySelector('[data-cr-sym="' + sym + '"]');
             if (slot) slot.textContent = fmtNum(q.last);
+            var dslot = room.querySelector('[data-cr-delta="' + sym + '"]');
+            if (dslot) { dslot.innerHTML = ''; dslot.appendChild(UI.delta(q.last, q.prevClose)); }
           });
           var b = room.querySelector('#cr-breadth b');
           if (b && (up + down) > 0) {
@@ -5448,6 +5496,7 @@
         // Live P/L: refreshed on stream frames, throttled to the server's mark-memo cadence —
         // the old version fetched ONCE and went stale (F9).
         var plLast = 0;
+        var sparkLast = 0;
         async function fillPl() {
           try {
             var sum = await API.getFresh('/api/portfolio/summary');
@@ -5475,6 +5524,7 @@
           paint();
           var nowT = Date.now();
           if (nowT - plLast > 8000) { plLast = nowT; fillPl(); }
+          if (nowT - sparkLast > 30000) { sparkLast = nowT; overviewSparks.reload(); }
         }, token);
         // Anchor provenance + event timeline: on-demand expandables (the detail endpoints load
         // only when opened — same only-what-you-open discipline as the tabs).
@@ -5534,6 +5584,7 @@
             + (sx.simTime ? ' \u00b7 ' + String(sx.simTime).replace('T', ' ') : '')));
         if (!finished) {
           row.appendChild(el('button', { class: 'btn btn-sm', onclick: function () {
+            if (!active) App.state.focusSimControlRoom = sx.id;
             App.switchWorld(active ? App.baseWorldId() : sx.id); } }, active
               ? (App.config && App.config.fixturesOnly ? 'Back to demo' : 'Back to real')
               : 'Enter this market'));
@@ -5556,7 +5607,7 @@
         row.addEventListener('click', function (e) {
           if (e.target.closest('button,a,input,select,textarea')) return;
           if (finished) showReport(sx);
-          else App.switchWorld(sx.id);
+          else { App.state.focusSimControlRoom = sx.id; App.switchWorld(sx.id); }
         });
         return pressable(row, finished ? 'Open report for ' + (sx.name || sx.id)
           : 'Enter simulated market ' + (sx.name || sx.id), 'link');
@@ -5925,8 +5976,9 @@
                 + res.excluded.map(function (x) { return x.symbol; }).join(', '));
             }
             await API.post('/api/sim/market/' + res.worldId + '/start', {});
+            App.state.focusSimControlRoom = res.worldId;
             await App.switchWorld(res.worldId);
-            refreshSim();
+            await refreshSim();
           } catch (e) { UI.toast(e.message || 'Could not create the simulated session', 'error'); }
           createBtn.disabled = false;
         } }, 'Create & enter');

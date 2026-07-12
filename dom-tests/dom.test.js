@@ -3054,6 +3054,43 @@ test('simulated market: product creator, loud live band, world-routed research, 
   const baselineWorld = await page.evaluate(() => App.baseWorldId());
   assert.ok(created.worldId && created.worldId !== baselineWorld);
 
+  // The active world owns this screen. Every ordinary session symbol is represented at once,
+  // one focus chart is explicit, and Demo is not offered as a competing primary market.
+  await go('#/data/simulation');
+  await page.waitForSelector('#sim-control-room #cr-symbols .sim-symbol-tile', { timeout: 20000 });
+  const controlRoom = await page.evaluate(async () => {
+    const sessions = (await API.getFresh('/api/sim/market')).sessions || [];
+    const current = sessions.find(x => x.id === App.state.world);
+    const room = document.getElementById('sim-control-room');
+    room.scrollIntoView({ block: 'start' });
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const tiles = Array.from(document.querySelectorAll('#cr-symbols .sim-symbol-tile'));
+    const first = tiles[0];
+    const rect = first.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + 12);
+    return {
+      expected: Object.keys((current && current.config && current.config.symbolBetas) || {}).length,
+      rendered: tiles.length,
+      demoAction: !!document.getElementById('enter-demo-market'),
+      focusCharts: document.querySelectorAll('#cr-chart svg.chart.candles').length,
+      stickyHeight: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sticky-stack-h')) || 0,
+      firstTop: rect.top,
+      firstHit: !!(hit && hit.closest('.sim-symbol-tile') === first)
+    };
+  });
+  assert.equal(controlRoom.rendered, controlRoom.expected, 'all session symbols have visible overview tiles');
+  assert.equal(controlRoom.demoAction, false, 'an active simulation has no competing Enter demo action');
+  assert.equal(controlRoom.focusCharts, 1, 'one explicit focus chart, with overview tiles for breadth');
+  assert.ok(controlRoom.firstTop >= controlRoom.stickyHeight - 2 && controlRoom.firstHit,
+    'the measured sticky stack does not cover the symbol overview: ' + JSON.stringify(controlRoom));
+  const focusTarget = await page.locator('#cr-symbols .sim-symbol-tile').nth(1).getAttribute('data-symbol');
+  await page.locator('#cr-symbols .sim-symbol-tile').nth(1).click();
+  await page.waitForFunction((sym) => {
+    const head = document.querySelector('.sim-focus-head');
+    const active = document.querySelector('#cr-symbols .sim-symbol-tile.active');
+    return head && head.textContent.includes(sym) && active && active.getAttribute('data-symbol') === sym;
+  }, focusTarget);
+
   // Research is world-routed AND the market VISIBLY MOVES: the hero price updates on ticks.
   await go('#/research/ACME');
   await page.waitForSelector('.quote-hero');
