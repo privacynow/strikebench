@@ -226,6 +226,23 @@ class PaperCoreTest {
     }
 
     @Test
+    void owningWorkflowHookRollsBackTheEntirePaperTrade() {
+        Account before = accounts.getOrCreateDefault();
+        long tradesBefore = db.query("SELECT COUNT(*) n FROM trades", row -> row.lng("n")).getFirst();
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+
+        assertThatThrownBy(() -> trades.create(creditPutSpread(before.id(), 1), (connection, trade) -> {
+            throw new java.sql.SQLException("owner snapshot failed");
+        })).hasMessageContaining("owner snapshot failed");
+
+        Account after = accounts.getOrCreateDefault();
+        assertThat(after.cashCents()).isEqualTo(before.cashCents());
+        assertThat(after.reservedCents()).isEqualTo(before.reservedCents());
+        assertThat(db.query("SELECT COUNT(*) n FROM trades", row -> row.lng("n")).getFirst()).isEqualTo(tradesBefore);
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst()).isEqualTo(ledgerBefore);
+    }
+
+    @Test
     void heldSharePopNowKeepsTheEntrySpotAsItsShareBasis() {
         Account acct = accounts.getOrCreateDefault();
         positions.buy(acct.id(), "AAPL", 100);

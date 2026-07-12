@@ -39,7 +39,6 @@
       context: (window.App && App.state.marketContext)
         ? Object.assign({}, App.state.marketContext) : null,
       forms: {},
-      ticket: (window.App && App.state.ticket) || null,
       // The THESIS WORKFLOW is part of the workspace (holistic review #11): the per-symbol
       // market thesis, the keyed research study selection, and an active evidence handoff all
       // survive a reload — losing them mid-investigation reset the user's thinking.
@@ -85,15 +84,6 @@
     Object.keys(s.forms || {}).forEach(function (k) {
       if (FORM_KEYS.indexOf(k) >= 0 && s.forms[k]) App.state[k] = s.forms[k];
     });
-    if (s.ticket) {
-      // HONESTY GUARD: a restored ticket re-enters at the strikes step, never at a
-      // review/confirm armed with the OLD session's prices — marks have moved since. The
-      // normal flow re-previews at current marks before anything can be placed.
-      var t = s.ticket;
-      if (t.step && t.step > 5) t.step = 5;
-      delete t.preview;
-      App.state.ticket = t;
-    }
     return true;
   }
 

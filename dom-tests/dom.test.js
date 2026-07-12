@@ -430,6 +430,62 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
     'historical replay retains its useful controls at Beginner rather than hiding capability');
 });
 
+test('Plan Decide freezes one server-owned package and opens the linked paper position atomically', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const plan = await openPlan('AAPL', 'strategy');
+  await page.click('#plan-run-strategy');
+  await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
+  await page.evaluate(async planId => {
+    const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
+    const candidate = latest.strategy.result.candidates.find(item => {
+      const expirations = new Set((item.legs || []).filter(leg => leg.type !== 'STOCK').map(leg => leg.expiration));
+      return expirations.size === 1;
+    });
+    const live = await PlanStore.get(planId, true);
+    await PlanStore.selectCandidate(live, candidate.id);
+    await App.render();
+  }, plan.id);
+  await page.locator('.plan-rail button').filter({ hasText: 'Decide' }).click();
+  await page.waitForSelector('#plan-review-order');
+  assert.equal(await page.locator('#plan-stage-decide input[name="symbol"], #plan-stage-decide select[name="strategy"]').count(), 0,
+    'Decide derives symbol, intent, structure and legs from the Plan');
+  await page.click('#plan-review-order');
+  await page.waitForSelector('#plan-decision-review .plan-decision-math', { timeout: 30000 });
+  const reviewText = await page.textContent('#plan-decision-review');
+  assert.match(reviewText, /Theoretical max loss/);
+  assert.match(reviewText, /Theoretical max profit/);
+  assert.match(reviewText, /Market EV after costs/);
+  assert.match(reviewText, /Realized-vol scenario EV/);
+  assert.match(reviewText, /Chance of any profit/);
+  assert.ok(Number(await page.inputValue('#plan-decision-price')) !== 0,
+    'blank limit freezes to the executable package price reviewed by the server');
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p5-decide-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p5-decide-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  for (const checkbox of await page.locator('#plan-decision-review .ack-gate input[type="checkbox"]').all()) {
+    await checkbox.check();
+  }
+  await page.click('#plan-place-trade');
+  await page.waitForFunction(id => location.hash === '#/plan/' + id + '/manage-review', plan.id, { timeout: 30000 });
+  const frozen = await page.evaluate(async id => API.getFresh('/api/plans/' + id + '/decision/latest'), plan.id);
+  assert.equal(frozen.plan.status, 'POSITION_OPEN');
+  assert.equal(frozen.plan.activeStage, 'MANAGE_REVIEW');
+  assert.equal(frozen.decision.action, 'TRADE');
+  assert.ok(frozen.decision.tradeId, 'the paper trade is linked inside the frozen decision');
+
+  await page.locator('.plan-rail button').filter({ hasText: 'Decide' }).click();
+  await page.waitForSelector('.plan-decision-facts');
+  assert.match(await page.textContent('#plan-stage-decide'), /Decision frozen/);
+  assert.match(await page.textContent('#plan-stage-decide'), /Market EV after costs/);
+});
+
 test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {
   const safety = await page.evaluate(() => ({
     money: UI.fmtMoney(Number.NaN), compact: UI.fmtMoneyCompact(Infinity),

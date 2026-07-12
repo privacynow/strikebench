@@ -101,6 +101,7 @@ public final class ApiServer {
     io.liftandshift.strikebench.plan.PlanEvidenceService planEvidence;
     io.liftandshift.strikebench.plan.PlanStrategyService planStrategy;
     io.liftandshift.strikebench.plan.PlanOutcomeService planOutcomes;
+    io.liftandshift.strikebench.plan.PlanDecisionService planDecisions;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
@@ -249,6 +250,7 @@ public final class ApiServer {
                 new io.liftandshift.strikebench.research.ResearchQuestionEngine(market, clock), clock);
         server.planStrategy = new io.liftandshift.strikebench.plan.PlanStrategyService(db, clock);
         server.planOutcomes = new io.liftandshift.strikebench.plan.PlanOutcomeService(db, clock);
+        server.planDecisions = new io.liftandshift.strikebench.plan.PlanDecisionService(db, clock);
         server.dataJobs.setEvents(server.events);
         server.dataJobs.setDataChangedHook(server::invalidateHistoricalViews);
         datasetSvc.setEvents(server.events);
@@ -434,6 +436,10 @@ public final class ApiServer {
             c.routes.post("/api/plans/{id}/outcomes/ensemble", this::planEnsembleRun);
             c.routes.post("/api/plans/{id}/outcomes/run", this::planOutcomeRun);
             c.routes.post("/api/plans/{id}/outcomes/backtest", this::planBacktestRun);
+            c.routes.get("/api/plans/{id}/decision/latest", this::planDecisionLatest);
+            c.routes.post("/api/plans/{id}/decision/preview", this::planDecisionPreview);
+            c.routes.post("/api/plans/{id}/decision/trade", this::planDecisionTrade);
+            c.routes.post("/api/plans/{id}/decision/cash", this::planDecisionCash);
 
             // ---- Data Center ----
             c.routes.get("/api/data/overview", this::dataOverview);
@@ -2056,6 +2062,9 @@ public final class ApiServer {
                                       Integer qty, Double slippagePct, Long startingCashCents,
                                       Double shortDelta, Double widthPct, Double profitTargetPct,
                                       Double stopFraction, Integer rollDte) {}
+    public record PlanDecisionRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
+                                      Long feesOverrideCents, List<String> acknowledgedRisks,
+                                      String ackToken, String note) {}
 
     private void planStrategyLatest(Context ctx) {
         var saved = planStrategy.latestCompetition(ownerId(ctx), ctx.pathParam("id"));
@@ -2382,6 +2391,98 @@ public final class ApiServer {
         var saved = planOutcomes.saveBacktest(ownerId(ctx), plan, body.expectedVersion(),
                 candidate.path("id").asText(), engineKind, reportJson, Json.MAPPER.valueToTree(body));
         ctx.json(Map.of("plan", plan, "backtest", saved, "report", report));
+    }
+
+    private void planDecisionLatest(Context ctx) {
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("plan", plan);
+        out.put("selected", planStrategy.selectedCandidate(ownerId(ctx), plan.id()));
+        out.put("decision", planDecisions.latest(ownerId(ctx), plan.id()));
+        ctx.json(out);
+    }
+
+    private void planDecisionPreview(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanDecisionRequest.class));
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        requirePlanVersion(plan, body.expectedVersion());
+        ObjectNode candidate = selectedPlanCandidate(ctx, plan);
+        TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
+        Map<String, Object> payload = tradePreviewPayload(ctx, order);
+        var first = (io.liftandshift.strikebench.paper.TradePreview) payload.get("preview");
+        if (order.proposedNetCents() == null) {
+            body = new PlanDecisionRequest(body.expectedVersion(), body.qty(), first.entryNetPremiumCents(),
+                    body.feesOverrideCents(), body.acknowledgedRisks(), body.ackToken(), body.note());
+            order = planDecisionOrder(plan, candidate, body);
+            payload = tradePreviewPayload(ctx, order);
+        }
+        Map<String, Object> out = new LinkedHashMap<>(payload);
+        out.put("plan", plan);
+        out.put("selected", candidate);
+        out.put("order", Map.of("qty", order.qty(), "proposedNetCents", order.proposedNetCents(),
+                "feesOverrideCents", order.feesOverrideCents() == null ? 0L : order.feesOverrideCents()));
+        ctx.json(out);
+    }
+
+    private void planDecisionTrade(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanDecisionRequest.class));
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        requirePlanVersion(plan, body.expectedVersion());
+        ObjectNode candidate = selectedPlanCandidate(ctx, plan);
+        TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
+        Map<String, Object> payload = tradePreviewPayload(ctx, order);
+        var decisionInput = planDecisionInput(ctx, plan, body, candidate, payload);
+        var prepared = planDecisions.prepareTrade(decisionInput);
+        CreatedTrade created = executeTrade(ctx, order, prepared.hook());
+        var updated = planSvc.get(ownerId(ctx), plan.id());
+        ctx.status(201).json(Map.of("plan", updated, "trade", TradeView.of(created.trade()),
+                "warnings", created.verdict().warnings(), "decision", planDecisions.latest(ownerId(ctx), plan.id())));
+    }
+
+    private void planDecisionCash(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanDecisionRequest.class));
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        requirePlanVersion(plan, body.expectedVersion());
+        ObjectNode candidate = selectedPlanCandidate(ctx, plan);
+        TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
+        Map<String, Object> payload = tradePreviewPayload(ctx, order);
+        ObjectNode decision = planDecisions.chooseCash(planDecisionInput(ctx, plan, body, candidate, payload));
+        var updated = planSvc.get(ownerId(ctx), plan.id());
+        ctx.status(201).json(Map.of("plan", updated, "decision", decision));
+    }
+
+    private TradeOpenRequest planDecisionOrder(io.liftandshift.strikebench.plan.Plan.View plan,
+                                               ObjectNode candidate, PlanDecisionRequest body) {
+        List<LegView> legs = new ArrayList<>();
+        for (JsonNode leg : candidate.withArray("legs")) {
+            legs.add(new LegView(leg.path("action").asText(), leg.path("type").asText(),
+                    leg.path("strike").isMissingNode() || leg.path("strike").isNull() ? null : leg.path("strike").asText(),
+                    leg.path("expiration").isMissingNode() || leg.path("expiration").isNull() ? null : leg.path("expiration").asText(),
+                    leg.path("ratio").asInt(1), leg.path("entryPrice").isMissingNode() ? null : leg.path("entryPrice").asText(null)));
+        }
+        int qty = body.qty() == null ? candidate.path("qty").asInt(1) : body.qty();
+        return new TradeOpenRequest(plan.symbol(), candidate.path("strategy").asText("CUSTOM"), qty, legs,
+                plan.context().thesis(), (plan.context().horizonDays() == null ? 30 : plan.context().horizonDays()) + "d",
+                plan.context().riskMode(),
+                plan.intent(), candidate.path("usesHeldShares").asBoolean(false),
+                candidate.path("recommendationId").asText(null), body.proposedNetCents(), body.feesOverrideCents(),
+                "PLAN", null, null, null, false, body.acknowledgedRisks(), body.ackToken());
+    }
+
+    @SuppressWarnings("unchecked")
+    private io.liftandshift.strikebench.plan.PlanDecisionService.Input planDecisionInput(
+            Context ctx, io.liftandshift.strikebench.plan.Plan.View plan, PlanDecisionRequest body,
+            ObjectNode candidate, Map<String, Object> payload) {
+        return new io.liftandshift.strikebench.plan.PlanDecisionService.Input(ownerId(ctx), plan,
+                body.expectedVersion(), candidate.path("id").asText(), currentAccount(ctx),
+                (io.liftandshift.strikebench.paper.TradePreview) payload.get("preview"),
+                (io.liftandshift.strikebench.eval.EconomicAssessment) payload.get("economics"),
+                io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx)),
+                body.acknowledgedRisks() == null ? List.of() : body.acknowledgedRisks(), body.note());
     }
 
     private io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble resolvePlanEnsemble(
@@ -4563,8 +4664,12 @@ public final class ApiServer {
     }
 
     private void tradePreview(Context ctx) {
+        ctx.json(tradePreviewPayload(ctx, bodyOrNull(ctx, TradeOpenRequest.class)));
+    }
+
+    private Map<String, Object> tradePreviewPayload(Context ctx, TradeOpenRequest body) {
         Account acct = currentAccount(ctx);
-        TradeService.OpenRequest req = toOpenRequest(bodyOrNull(ctx, TradeOpenRequest.class), acct);
+        TradeService.OpenRequest req = toOpenRequest(body, acct);
         Verdict verdict = guardrailCheck(req, acct, riskCapCents(ctx));
         var preview = trades.preview(req);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -4622,7 +4727,7 @@ public final class ApiServer {
             }
             out.put("accountFit", fit);
         }
-        ctx.json(out);
+        return out;
     }
 
     /** Builds the evaluator's position contract from the SERVER-priced preview. Package entry,
@@ -4666,8 +4771,14 @@ public final class ApiServer {
     }
 
     private void tradeCreate(Context ctx) {
+        CreatedTrade created = executeTrade(ctx, bodyOrNull(ctx, TradeOpenRequest.class), null);
+        ctx.status(201).json(Map.of("trade", TradeView.of(created.trade()), "warnings", created.verdict().warnings()));
+    }
+
+    private record CreatedTrade(TradeRecord trade, Verdict verdict) {}
+
+    private CreatedTrade executeTrade(Context ctx, TradeOpenRequest body, TradeService.TransactionHook hook) {
         Account acct = currentAccount(ctx);
-        TradeOpenRequest body = bodyOrNull(ctx, TradeOpenRequest.class);
         TradeService.OpenRequest req = toOpenRequest(body, acct);
         // Structural eligibility comes before discretionary risk acknowledgments. An impossible
         // covered call, stale book, or undefined-risk package must say WHY it cannot be placed;
@@ -4695,7 +4806,7 @@ public final class ApiServer {
                 throw new TradeRejectedException(List.of("Acknowledgment token missing or stale — preview this exact package again"));
             }
         }
-        TradeRecord t = trades.create(req);
+        TradeRecord t = trades.create(req, hook);
         // Close the calibration loop: link the placed trade to the recommendation it came from —
         // REAL LANE ONLY: a simulated market's outcomes never feed 'Your record' (review P0).
         if (body != null && body.recommendationId() != null && !body.recommendationId().isBlank()
@@ -4706,7 +4817,7 @@ public final class ApiServer {
                 log.debug("Recommendation-link detail", e);
             }
         }
-        ctx.status(201).json(Map.of("trade", TradeView.of(t), "warnings", verdict.warnings()));
+        return new CreatedTrade(t, verdict);
     }
 
     private void tradeList(Context ctx) {

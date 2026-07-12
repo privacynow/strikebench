@@ -627,8 +627,9 @@
   }
   /** Legs from the working idea (ticket candidate/custom), mapped to sim legs. Null if none. */
   function workingLegs() {
-    var t = App.state.ticket;
-    var legs = t && t.candidate ? t.candidate.legs : (t && t.custom ? t.custom.legs : null);
+    var plan = window.PlanStore && PlanStore.active();
+    var candidate = plan && PlanStore.ui(plan.id).selectedCandidate;
+    var legs = candidate && candidate.legs;
     if (!legs || !legs.length) return null;
     var out = [];
     for (var i = 0; i < legs.length; i++) {
@@ -646,18 +647,15 @@
 
   /** Exact listed package and displayed entry, when Research and the ticket share a symbol. */
   function workingPosition(symbol) {
-    var t = App.state.ticket;
-    if (!t || String(t.symbol || '').toUpperCase() !== String(symbol || '').toUpperCase()) return null;
-    var candidate = t.candidate || null;
-    var sourceLegs = candidate && candidate.legs && candidate.legs.length ? candidate.legs
-      : t.previewReq && t.previewReq.legs && t.previewReq.legs.length ? t.previewReq.legs
-      : t.custom && t.custom.legs && t.custom.legs.length ? t.custom.legs : null;
+    var plan = window.PlanStore && PlanStore.active();
+    var candidate = plan && PlanStore.ui(plan.id).selectedCandidate;
+    if (!plan || String(plan.symbol || '').toUpperCase() !== String(symbol || '').toUpperCase()) return null;
+    var sourceLegs = candidate && candidate.legs && candidate.legs.length ? candidate.legs : null;
     if (!sourceLegs || !sourceLegs.length) return null;
     var entryNet = candidate && typeof candidate.entryNetPremiumCents === 'number'
-      ? candidate.entryNetPremiumCents
-      : t.preview && typeof t.preview.entryNetPremiumCents === 'number' ? t.preview.entryNetPremiumCents : null;
-    return App.outcomePosition(candidate && candidate.strategy || t.customFamily || 'WORKING', sourceLegs,
-      t.qty || candidate && candidate.qty || 1, entryNet == null ? null : -entryNet);
+      ? candidate.entryNetPremiumCents : null;
+    return App.outcomePosition(candidate && candidate.strategy || 'WORKING', sourceLegs,
+      candidate && candidate.qty || 1, entryNet == null ? null : -entryNet);
   }
 
   function candidateLegs(candidate) {

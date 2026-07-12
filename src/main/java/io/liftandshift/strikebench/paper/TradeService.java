@@ -81,6 +81,12 @@ public final class TradeService {
 
     public record CloseResult(TradeRecord trade, long realizedPnlCents) {}
 
+    /** Optional owner hook for workflows that must commit their identity beside the paper trade. */
+    @FunctionalInterface
+    public interface TransactionHook {
+        void afterTradeCreated(Connection connection, TradeRecord trade) throws SQLException;
+    }
+
     // ---- Preview / create ----
 
     public TradePreview preview(OpenRequest req) {
@@ -247,6 +253,11 @@ public final class TradeService {
 
     /** Opens the trade or throws TradeRejectedException (audit row only, zero mutation). */
     public TradeRecord create(OpenRequest req) {
+        return create(req, null);
+    }
+
+    /** Opens the trade and an owning workflow record in one database transaction. */
+    public TradeRecord create(OpenRequest req, TransactionHook hook) {
         Plan p = computePlan(req);
         if (!p.blocks.isEmpty()) {
             reject(req, p.blocks);
@@ -307,7 +318,9 @@ public final class TradeService {
                         entryEvidence(acct.id(), p.freshness()).source());
                 Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, has_traded=1, updated_at=? WHERE id=?",
                         cash, reserved, now, acct.id());
-                return getOn(c, tradeId);
+                TradeRecord created = getOn(c, tradeId);
+                if (hook != null) hook.afterTradeCreated(c, created);
+                return created;
             });
             auditSafe(req.accountId(), tradeId, "TRADE_OPENED", "INFO", Map.of(
                     "symbol", req.symbol(), "strategy", req.strategy(), "qty", req.qty(),
