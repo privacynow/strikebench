@@ -579,7 +579,8 @@
   var LANE_KEYS = ['marketContext', 'marketThesis', 'researchStudy', 'evidencePrefill',
     'researchTabBySymbol',
     'ideasPrefill', 'backtestPrefill', 'discoverForm', 'builderForm', 'backtestForm',
-    'verifyForm', 'scenarioForm', 'scoutResults', 'outcomeReceipt',
+    'verifyForm', 'scenarioForm', 'scenarioAnalysis', 'scenarioHandoff', 'simulationPrefill',
+    'scoutResults', 'outcomeReceipt',
     'portfolioOptimizer',
     // Result objects are market-DERIVED state (review P0 #1): an observed evaluation must
     // never render inside a simulated market. HTTP-cache flushes don't touch these.

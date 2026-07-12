@@ -430,7 +430,7 @@ async function openFutures() {
   await page.waitForSelector('#tv-futures', { timeout: 15000 });
 }
 
-test('scenario studio: beginner story cards → fan of futures → strategy verdict in plain dollars', async () => {
+test('scenario studio: beginner view → decision facts → same-receipt strategy outcomes', async () => {
   await page.click('#level-switch button[data-level="beginner"]');
   await page.evaluate(() => {
     App.state.scenarioForm = null; App.state.verifyForm = null; App.state.marketThesis = null;
@@ -453,18 +453,34 @@ test('scenario studio: beginner story cards → fan of futures → strategy verd
   assert.match(await page.textContent('#whatif-card'), /Drops, then recovers/);
   assert.match(await page.textContent('#sc-mag-note'), /±\d+%/); // live magnitude preview
   await page.click('#whatif-card .sc-card[data-shape="SELLOFF_REBOUND"]');
+  await page.fill('#whatif-target', '260');
   await page.click('#whatif-run');
   await page.waitForSelector('#whatif-out .fan-chart svg', { timeout: 20000 });
-  assert.match(await page.textContent('#whatif-out'), /8 in 10 end between/); // plain-language fan summary
+  const decisionText = await page.textContent('#whatif-out');
+  assert.match(decisionText, /Likely ending range/);
+  assert.match(decisionText, /Middle 68% end between/);
+  assert.match(decisionText, /Your price level/);
+  assert.match(decisionText, /end (above|below)/);
+  assert.match(decisionText, /touch it/);
+  assert.match(decisionText, /OPTIONS MARKET IMPLIED/);
+  assert.match(decisionText, /2,000 paths/);
+  assert.match(decisionText, /receipt [a-f0-9]{24}/);
   assert.match(await page.textContent('#whatif-out'), /never a forecast/i);   // honesty note
+  assert.ok(await page.locator('#whatif-reroll:visible').count(), 'sampling check replaces seed-shopping language');
+  await page.click('#whatif-reroll');
+  await page.waitForSelector('#whatif-out .alert', { timeout: 20000 });
+  assert.match(await page.textContent('#whatif-out .alert'), /Sampling check|seed-sensitive/);
 
-  // Handoff: "Test a strategy under this" opens Verify in scenario mode.
+  // Handoff opens full Outcomes with the exact Research receipt, not a blind rerun.
+  const researchReceipt = await page.evaluate(() => App.state.scenarioAnalysis.result.receipt.fingerprint);
   await page.evaluate(() => { App.state.evidencePrefill = { studyKey: 'stale-analog-proof' }; });
   await page.click('#whatif-verify');
   await page.waitForSelector('#bt-scenario-card', { timeout: 15000 });
   assert.ok(await page.locator('#trade-outcomes-nav .outcome-basis.active[data-basis="scenario"]').count(), 'Verify opened in scenario mode');
   assert.equal(await page.evaluate(() => App.state.evidencePrefill), null,
     'generated-futures handoff cleared the prior historical-analog ensemble');
+  assert.equal(await page.evaluate(() => App.state.scenarioHandoff && App.state.scenarioHandoff.fingerprint), researchReceipt,
+    'Research and Outcomes share the exact ensemble receipt');
   // The FULL strategy catalog with payoff-shape sketches + a visible symbol picker.
   assert.ok((await page.locator('#sc-pos .sc-card').count()) >= 16, 'full strategy catalog, not a subset');
   // ANTI-DRIFT: identity, names, grouping, payoff glyphs and surface eligibility are all
@@ -516,6 +532,60 @@ test('scenario studio expert: model menu incl. Heston, IV knobs, the math on dem
   await page.click('#whatif-card .xp-head');
   assert.match(await page.textContent('#whatif-card'), /Heston/);
   assert.match(await page.textContent('#whatif-card'), /κ|kappa/i);
+});
+
+test('Research prices a working package on the fan receipt and Outcomes reuses the result', async () => {
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => {
+    App.state.scenarioForm = { shape: 'CHOP', horizon: 5, mag: 'typical', seed: 55119 };
+    App.context.update({ symbol: 'AAPL', goal: 'DIRECTIONAL', horizon: 'week', thesis: 'neutral' });
+    App.state.ticket = { symbol: 'AAPL', qty: 1, candidate: {
+      strategy: 'DEBIT_CALL_SPREAD', displayName: 'Debit call spread', qty: 1,
+      entryNetPremiumCents: -32500, breakevens: [258.25], legs: [
+        { action: 'BUY', type: 'CALL', strike: 255, expiration: '2026-08-14', ratio: 1 },
+        { action: 'SELL', type: 'CALL', strike: 260, expiration: '2026-08-14', ratio: 1 }
+      ]
+    } };
+  });
+  await go('#/research/AAPL');
+  await openFutures();
+  await page.click('#whatif-run');
+  await page.waitForSelector('#whatif-out .scenario-position-outcome', { timeout: 25000 });
+  const identity = await page.evaluate(() => ({
+    fan: App.state.scenarioAnalysis.result.receipt.fingerprint,
+    position: App.state.scenarioAnalysis.result.positionEnsembleFingerprint
+  }));
+  assert.equal(identity.position, identity.fan, 'the working package and price fan use one immutable path matrix');
+  await page.click('#whatif-verify');
+  await page.waitForSelector('#scenario-handoff', { timeout: 15000 });
+  assert.match(await page.textContent('#sc-verify-out'), /Exact Research result — no rerun/);
+  assert.match(await page.textContent('#scenario-handoff'), new RegExp(identity.fan));
+  await page.evaluate(() => { App.state.ticket = null; App.state.scenarioHandoff = null; App.state.scenarioAnalysis = null; });
+});
+
+test('scenario practice handoff configures one honest realization without creating it', async () => {
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => {
+    App.state.scenarioForm = { shape: 'CHOP', horizon: 10, mag: 'typical', seed: 4488 };
+    App.state.simulationPrefill = null;
+    App.context.update({ symbol: 'AAPL', goal: 'DIRECTIONAL', horizon: 'week', thesis: 'neutral' });
+  });
+  await go('#/research/AAPL');
+  await openFutures();
+  await page.click('#whatif-run');
+  await page.waitForSelector('#whatif-practice-random', { timeout: 20000 });
+  const worldBefore = await page.evaluate(() => App.state.world);
+  await page.click('#whatif-practice-random');
+  await page.waitForSelector('#app[data-route="data"][data-ready="true"] #sim-creator', { timeout: 15000 });
+  const creator = await page.textContent('#sim-creator');
+  assert.match(creator, /Practice setup from Research/);
+  assert.match(creator, /fresh random realization/i);
+  assert.match(creator, /not one of the displayed sample lines/i);
+  assert.ok(await page.locator('#sim-scenarios .sim-scenario[data-scenario="CHOP"][aria-pressed="true"]').count(),
+    'the broad Research story prefills the simulated-market creator');
+  assert.ok(await page.locator('#sim-symbol-chips [data-picked-sym="AAPL"]').count(), 'the Research symbol is carried');
+  assert.equal(await page.evaluate(() => App.state.world), worldBefore,
+    'handoff only configures the creator; it never mutates the active market without confirmation');
 });
 
 test('data center: generate a scenario dataset, activate it (loud banner), switch back', async () => {

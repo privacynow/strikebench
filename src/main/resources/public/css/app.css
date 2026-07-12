@@ -1408,6 +1408,62 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 .sc-sketch svg { width: 100%; height: 30px; }
 .fan-chart { margin: 8px 0 4px; }
 .sc-math p { margin: 4px 0; font-size: 12.5px; }
+.scenario-question { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
+  gap: 16px; align-items: end; margin: 14px 0 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+.scenario-question label { display: block; margin-bottom: 3px; font-weight: 700; }
+.scenario-question p { margin: 0; }
+.scenario-decision { margin: 18px 0 12px; padding-top: 14px; border-top: 2px solid var(--accent); }
+.scenario-decision-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.scenario-decision-head h3, .scenario-chart-head h3 { margin: 0 0 3px; font-size: 17px; }
+.scenario-decision-head p, .scenario-chart-head p { margin: 0; }
+.scenario-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 12px 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.scenario-fact { min-width: 0; padding: 11px 12px; }
+.scenario-fact + .scenario-fact { border-left: 1px solid var(--border); }
+.scenario-fact > span, .scenario-fact > b, .scenario-fact > small { display: block; }
+.scenario-fact > span { color: var(--muted); font-size: 12px; }
+.scenario-fact > b { margin: 3px 0; font-size: 18px; }
+.scenario-fact > small { color: var(--text-dim); font-size: 11.5px; }
+.scenario-levels { border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 10px 0; }
+.scenario-level { display: grid; grid-template-columns: minmax(160px, .8fr) minmax(210px, 1fr) minmax(220px, 1.3fr);
+  gap: 12px; align-items: center; padding: 9px 11px; }
+.scenario-level + .scenario-level { border-top: 1px solid var(--border); }
+.scenario-level-name { display: flex; gap: 8px; align-items: baseline; }
+.scenario-level-name span { color: var(--risk-caution-text, #b98a00); font-weight: 700; }
+.scenario-level-odds { display: flex; gap: 14px; }
+.scenario-lens-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0; margin: 12px 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.scenario-lens { min-width: 0; padding: 11px 12px; }
+.scenario-lens + .scenario-lens { border-left: 1px solid var(--border); }
+.scenario-lens > span, .scenario-lens > b, .scenario-lens > small { display: block; }
+.scenario-lens > b { margin: 4px 0; font-size: 17px; }
+.scenario-lens > small { color: var(--text-dim); }
+.scenario-lens-takeaway { grid-column: 1 / -1; margin: 0; padding: 8px 12px;
+  border-top: 1px solid var(--border); background: var(--surface-2); font-weight: 650; }
+.scenario-sampling { margin: 7px 0 0; }
+.scenario-position-outcome { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.scenario-handoff { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  margin: 10px 0; padding: 10px 12px; border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  background: var(--accent-soft); }
+.scenario-handoff p { margin: 2px 0 0; }
+.scenario-chart-head { margin: 18px 0 4px; }
+.scenario-next { display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.scenario-next p { margin: 2px 0 0; }
+.scenario-practice { display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.scenario-practice p { margin: 2px 0 0; }
+@media (max-width: 760px) {
+  .scenario-question { grid-template-columns: minmax(0, 1fr); gap: 7px; }
+  .scenario-question input { width: 100%; }
+  .scenario-facts { grid-template-columns: minmax(0, 1fr); }
+  .scenario-fact + .scenario-fact { border-left: 0; border-top: 1px solid var(--border); }
+  .scenario-level { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .scenario-lens-compare { grid-template-columns: minmax(0, 1fr); }
+  .scenario-lens + .scenario-lens { border-left: 0; border-top: 1px solid var(--border); }
+  .scenario-next, .scenario-practice, .scenario-handoff { align-items: stretch; flex-direction: column; }
+  .scenario-next .btn-row, .scenario-practice .btn-row { margin-top: 0; }
+}
 /* In normal flow (NOT sticky): stacking it over the topbar/stale-banner hid more urgent
    chrome once the page scrolled. It sits loudly at the top; DEMO/MODELED badges carry the
    honesty for anything below the fold. */

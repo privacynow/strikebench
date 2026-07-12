@@ -2146,6 +2146,7 @@
     if (prefill.intent) { saved.goal = prefill.intent; saved.goalExplicit = true; }
     if (prefill.horizon) saved.horizon = prefill.horizon;
     if (prefill.thesis) saved.thesis = prefill.thesis;
+    if (prefill.target != null && isFinite(Number(prefill.target))) saved.target = String(prefill.target);
     // COMPLETED INTENT IS NOT REQUESTED TWICE (interaction contract #4): a 'Find strategies'
     // click arrives with the symbol; when a goal is already known (handed over, or chosen
     // before and persisted) the search RUNS. Only a genuinely ambiguous goal asks.
@@ -4399,41 +4400,171 @@
 
   // ---------- 7b. Scenario surfaces (the thesis workbench + "imagine a future") ----------
 
-  /** Research: "I think X happens next" → hundreds of simulated futures → hand off to Verify. */
+  /** Research: state a future → convert its distribution into a target/strike/trade decision. */
   function whatIfCard(symbol, seedContext) {
     var level = Learn.currentLevel();
     var historyBasis = activeHistoryBasis();
     var card = el('div', { class: 'card', id: 'whatif-card' });
-    card.appendChild(UI.cardHeader('What COULD happen next?'));
+    card.appendChild(UI.cardHeader('Possible futures — turn a view into a decision'));
     card.appendChild(explain(level === 'beginner'
-      ? 'Your starting view sets the first story and horizon. Refine them here, then draw hundreds of model-generated possible futures for ' + symbol + ' and test a strategy against them. Past evidence remains a separate check of what followed a chosen historical setup in ' + historyBasis.plain + '.'
+      ? 'Choose a story and horizon, then ask a concrete price question. StrikeBench turns many model-generated futures into a likely range, odds of reaching your level, and — when you have a working trade — its profit and loss on those exact same futures. Past evidence remains a separate check using ' + historyBasis.plain + '.'
       : 'The shared market view seeds this model terminal; its drift, volatility, jumps and IV path remain explicit scenario assumptions. The paired historical lens is a separate ' + historyBasis.expert + ', never a blended probability.'));
     var f = Scenario.form(level, symbol, seedContext);
     card.appendChild(f.el);
+    var sf = App.state.scenarioForm = App.state.scenarioForm || {};
+    var target = el('input', { type: 'number', id: 'whatif-target', step: 'any', min: '0.01',
+      value: sf.targetPrice || '', placeholder: 'Optional' });
+    target.addEventListener('input', function () { sf.targetPrice = target.value; });
+    card.appendChild(el('div', { class: 'scenario-question' },
+      el('div', {}, el('label', { for: 'whatif-target' }, 'Price you care about'),
+        el('p', { class: 'muted small' }, level === 'beginner'
+          ? 'Optional — enter a buy price, sell target, hedge floor, strike, or any level you want the model to answer.'
+          : 'Optional decision level. The result separates probability of ending beyond it from probability of touching it first.')),
+      target));
     var out = el('div', { id: 'whatif-out' });
     var previewSeq = 0;
-    var toVerify = el('button', { class: 'btn btn-secondary', id: 'whatif-verify', style: 'display:none' }, 'Test a strategy under this »');
-    var run = el('button', { class: 'btn', id: 'whatif-run' }, level === 'beginner' ? 'Show me 200 possible futures' : 'Preview the fan');
-    var reroll = el('button', { class: 'btn btn-sm btn-secondary', id: 'whatif-reroll', title: 'New random seed — a different set of futures' }, 'Re-roll');
-    run.addEventListener('click', async function () {
+    var latest = null, latestSpec = null;
+    var toVerify = el('button', { class: 'btn btn-secondary', id: 'whatif-verify', style: 'display:none' }, 'Open full Outcomes analysis →');
+    var run = el('button', { class: 'btn', id: 'whatif-run' }, 'Analyze this scenario');
+    var reroll = el('button', { class: 'btn btn-sm btn-secondary', id: 'whatif-reroll', style: 'display:none' }, 'Run a sampling check');
+    function scenarioPrice(value) {
+      return '$' + fmtNum(Number(value) || 0, 2);
+    }
+
+    function decisionLevels() {
+      var levels = [], seen = {};
+      function add(key, raw) {
+        var value = Number(raw);
+        if (!(value > 0) || !isFinite(value) || seen[value.toFixed(6)]) return;
+        seen[value.toFixed(6)] = true; levels.push({ key: key, price: value });
+      }
+      add('target', target.value);
+      var candidate = App.state.ticket && App.state.ticket.symbol === symbol && App.state.ticket.candidate;
+      (candidate && candidate.breakevens || []).forEach(function (x, i) { add('breakeven-' + (i + 1), x); });
+      var putN = 0, callN = 0;
+      (candidate && candidate.legs || []).forEach(function (leg) {
+        if (leg.action !== 'SELL' || leg.stock || !leg.strike) return;
+        var isPut = String(leg.type).toUpperCase() === 'PUT';
+        add((isPut ? 'short-put-' + (++putN) : 'short-call-' + (++callN)), leg.strike);
+      });
+      return levels;
+    }
+
+    function goalAction(p, spec) {
+      var t = p.decisionMap.terminal;
+      var goal = App.context.goal('DIRECTIONAL');
+      var chosen = Number(target.value);
+      if (!(chosen > 0)) chosen = goal === 'EXIT' ? t.p84 : (goal === 'ACQUIRE' || goal === 'HEDGE') ? t.p16 : null;
+      var labels = {
+        ACQUIRE: 'Find ways to buy near ' + scenarioPrice(chosen),
+        EXIT: 'Find ways to sell near ' + scenarioPrice(chosen),
+        HEDGE: 'Find protection below ' + scenarioPrice(chosen),
+        INCOME: 'Find income strategies for this range',
+        DIRECTIONAL: 'Find strategies for this view'
+      };
+      var action = el('button', { class: 'btn', id: 'whatif-act' }, labels[goal] || labels.DIRECTIONAL);
+      action.addEventListener('click', function () {
+        var horizon = contextHorizonForDays(spec.horizonDays);
+        App.context.update({ symbol: symbol, goal: goal, horizon: horizon,
+          thesis: App.context.thesis(seedContext && seedContext.thesis || 'neutral') });
+        App.state.discoverForm = Object.assign({}, App.state.discoverForm || {}, {
+          source: 'single', symbol: symbol, goal: goal, goalExplicit: true, horizon: horizon,
+          thesis: App.context.thesis('neutral'), target: chosen ? String(chosen) : ''
+        });
+        App.state.ideasPrefill = { symbol: symbol, intent: goal, horizon: horizon,
+          thesis: App.context.thesis('neutral'), target: chosen || null, autorun: true };
+        App.navigate('#/trade/context');
+      });
+      return el('div', { class: 'scenario-next' },
+        el('div', {}, el('b', {}, 'Use the result'),
+          el('p', { class: 'muted small' }, 'Carry the symbol, goal, horizon and decision level into the shared Trade workflow.')),
+        el('div', { class: 'btn-row' }, action,
+          el('button', { class: 'btn btn-secondary', onclick: function () {
+            App.state.ideasPrefill = { symbol: symbol, horizon: contextHorizonForDays(spec.horizonDays) };
+            App.navigate('#/trade/context');
+          } }, 'Choose another goal')));
+    }
+
+    function practiceAction(p, spec) {
+      var shapeMap = { GRIND_UP: 'TREND_UP', GRIND_DOWN: 'TREND_DOWN',
+        SELLOFF_REBOUND: 'SELLOFF_REBOUND', RALLY_FADE: 'RALLY_FADE',
+        CHOP: 'CHOP', GAP_DOWN: 'VOL_EVENT', GAP_UP: 'VOL_EVENT', EVENT_JUMP: 'VOL_EVENT' };
+      function openPractice(kind) {
+        var stress = kind === 'stress';
+        App.state.simulationPrefill = {
+          source: 'scenario-analysis', symbol: symbol,
+          scenario: stress ? (spec.driftAnnual >= 0 ? 'TREND_DOWN' : 'VOL_EVENT')
+            : (shapeMap[spec.shape] || 'CHOP'),
+          name: (stress ? 'Stress drill' : 'Scenario practice') + ' — ' + symbol,
+          seed: Math.floor(Math.random() * 100000000), speed: 26,
+          receipt: p.receipt && p.receipt.fingerprint,
+          note: stress
+            ? 'A deliberate adverse training drill based on this setup — not a random draw and not an estimate of likelihood.'
+            : 'A fresh random realization using the same broad story — not one of the displayed sample lines and not representative by itself.'
+        };
+        App.navigate('#/data/simulation');
+      }
+      return el('div', { class: 'scenario-practice' },
+        el('div', {}, el('b', {}, 'Practice managing one path'),
+          el('p', { class: 'muted small' },
+            'A simulated market is one lived realization for management practice. It does not validate or replace the distribution above.')),
+        el('div', { class: 'btn-row' },
+          el('button', { class: 'btn btn-secondary', id: 'whatif-practice-random',
+            onclick: function () { openPractice('random'); } }, 'Set up a random realization'),
+          el('button', { class: 'btn btn-secondary', id: 'whatif-practice-stress',
+            onclick: function () { openPractice('stress'); } }, 'Set up a stress drill')));
+    }
+
+    async function analyze(isSamplingCheck) {
       var seq = ++previewSeq;
-      run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Drawing futures…'));
+      run.disabled = true; reroll.disabled = true; out.innerHTML = '';
+      out.appendChild(UI.spinner(isSamplingCheck ? 'Checking sampling stability…' : 'Analyzing the scenario…'));
       try {
-        var p = await App.evaluateOutcome('PATHS', 'PARAMETRIC', symbol, { over: f.getSpec() });
+        var previous = latest;
+        if (isSamplingCheck) f.reroll();
+        var spec = f.getSpec();
+        var position = Scenario.workingPosition(symbol);
+        var payload = { over: spec, iv: f.getIv(), levels: decisionLevels() };
+        if (position) payload.position = position;
+        var p = await App.evaluateOutcome('PATHS', 'PARAMETRIC', symbol, payload);
         if (seq !== previewSeq) return;
+        latest = p; latestSpec = spec;
+        App.state.scenarioAnalysis = { symbol: symbol, result: p, spec: spec, iv: f.getIv(), position: position };
+        App.state.outcomeReceipt = { basis: 'PARAMETRIC', symbol: symbol,
+          detail: 'Scenario receipt ' + p.receipt.fingerprint, fingerprint: p.receipt.fingerprint,
+          at: new Date().toISOString() };
         out.innerHTML = '';
+        if (isSamplingCheck && previous) {
+          var oldT = previous.decisionMap.terminal, newT = p.decisionMap.terminal;
+          var move = Math.max(Math.abs(oldT.p16 - newT.p16), Math.abs(oldT.p50 - newT.p50), Math.abs(oldT.p84 - newT.p84));
+          out.appendChild(alertBox(move <= p.spot * 0.01 ? 'ok' : 'caution',
+            move <= p.spot * 0.01 ? 'Sampling check is stable' : 'This result is seed-sensitive',
+            ['The largest change across the central range was ' + scenarioPrice(move)
+              + '. Treat the distribution, not any one sample path, as the result.']));
+        }
+        out.appendChild(Scenario.decisionView(p, level));
+        out.appendChild(el('div', { class: 'scenario-chart-head' },
+          el('div', {}, el('h3', {}, 'How the range unfolds'),
+            el('p', { class: 'muted small' }, 'Shaded range and median by day; sample lines are illustrative paths, not forecasts to choose from.'))));
         out.appendChild(Scenario.fanChart(p));
-        toVerify.style.display = '';
+        out.appendChild(goalAction(p, spec));
+        out.appendChild(practiceAction(p, spec));
+        toVerify.style.display = ''; reroll.style.display = '';
+        if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
       } catch (e) {
         if (seq === previewSeq) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Could not simulate', [String((e && e.message) || e)])); }
       }
-      finally { if (seq === previewSeq) run.disabled = false; }
-    });
-    reroll.addEventListener('click', function () { f.reroll(); run.click(); });
+      finally { if (seq === previewSeq) { run.disabled = false; reroll.disabled = false; } }
+    }
+    run.addEventListener('click', function () { analyze(false); });
+    reroll.addEventListener('click', function () { analyze(true); });
     toVerify.addEventListener('click', function () {
       App.context.selectSymbol(symbol);
       App.state.evidencePrefill = null; // generated futures must never inherit an earlier analog ensemble
-      App.state.verifyMode = 'scenario'; // the handoff: Verify opens in "Imagine a future"
+      App.state.scenarioHandoff = latest ? { symbol: symbol, result: latest, spec: latestSpec,
+        fingerprint: latest.receipt && latest.receipt.fingerprint,
+        position: Scenario.workingPosition(symbol) } : null;
+      App.state.verifyMode = 'scenario';
       App.navigate('#/trade/outcomes');
     });
     card.appendChild(el('div', { class: 'btn-row' }, run, reroll, toVerify));
@@ -4448,6 +4579,8 @@
     var vf = App.state.verifyForm = App.state.verifyForm || {};
     var symbol = ((App.context.symbol() || vf.simSymbol || 'AAPL') + '').toUpperCase();
     vf.simSymbol = symbol;
+    var researchHandoff = App.state.scenarioHandoff && App.state.scenarioHandoff.symbol === symbol
+      ? App.state.scenarioHandoff : null;
     var card = el('div', { class: 'card', id: 'bt-scenario-card' });
 
     // The MARKET CONTEXT SELECTOR: sector (the same polished rail as everywhere else) +
@@ -4469,6 +4602,20 @@
       label: level === 'beginner' ? 'Which stock?' : 'Scenario symbol',
       commitLabel: 'Apply', onCommit: switchSymbol
     }));
+    if (researchHandoff) {
+      var rt = researchHandoff.result && researchHandoff.result.decisionMap
+        && researchHandoff.result.decisionMap.terminal;
+      card.appendChild(el('div', { class: 'scenario-handoff', id: 'scenario-handoff' },
+        el('div', {}, el('b', {}, 'Research scenario carried here'),
+          el('p', { class: 'muted small' }, researchHandoff.result && researchHandoff.result.positionOutcome
+            ? 'The working position below was already valued on the exact Research path matrix; its result is ready without another run.'
+            : 'The price distribution is preserved as context. A newly selected structure still needs its own evaluation; StrikeBench will name the new receipt if the anchor moved.')),
+        el('div', { class: 'chip-row' },
+          rt ? chip('Research range', fmtNum(rt.p16, 2) + ' – ' + fmtNum(rt.p84, 2)) : null,
+          chip('Receipt', researchHandoff.fingerprint || 'unavailable'),
+          researchHandoff.result && researchHandoff.result.receipt
+            ? chip('Anchor', fmtNum(researchHandoff.result.receipt.anchorSpot, 2)) : null)));
+    }
     // EVIDENCE MODE banner: Research handed over its analog windows — the runs below price on
     // THOSE real occurrences (clearable; falls back to generated futures).
     var evb = App.state.evidencePrefill;
@@ -4537,6 +4684,12 @@
     card.appendChild(posWrap);
 
     var out = el('div', { id: 'sc-verify-out' });
+    if (researchHandoff && researchHandoff.result && researchHandoff.result.positionOutcome) {
+      out.appendChild(alertBox('ok', 'Exact Research result — no rerun', [
+        'This position used path receipt ' + researchHandoff.fingerprint + '. Change the scenario or position and run again only when you want a new decision.'
+      ]));
+      out.appendChild(Scenario.pnlView(researchHandoff.result.positionOutcome, level));
+    }
     var actionSeq = 0;
     async function spotFor() {
       var qd = await API.get('/api/quotes?symbols=' + symbol);
@@ -5321,10 +5474,15 @@
       if (!simCard.isConnected) return; // inactive tab: none of this loads (addendum B)
       var activeUniverse = (App.state.universe && App.state.universe.active) || {};
       var activeSymbols = (activeUniverse.symbols || []).slice();
-      var wt = (App.context.symbol() || activeSymbols[0] || 'SPY').toUpperCase();
+      var simPrefill = App.state.simulationPrefill || null;
+      App.state.simulationPrefill = null;
+      var wt = (simPrefill && simPrefill.symbol || App.context.symbol() || activeSymbols[0] || 'SPY').toUpperCase();
       var curSector = activeUniverse.sectorKey || '';
-      var st = { scenario: 'CHOP', speed: 26, sectorKey: curSector !== 'world' ? curSector : '',
+      var st = { scenario: simPrefill && simPrefill.scenario || 'CHOP',
+        speed: simPrefill && simPrefill.speed || 26,
+        sectorKey: curSector !== 'world' ? curSector : '',
         includeActiveUniverse: curSector === 'world', symbolsText: wt, allowFictional: false,
+        name: simPrefill && simPrefill.name || '', seed: simPrefill && simPrefill.seed || '',
         rows: [{ symbol: wt, beta: 1, spot: '' }] };
 
       async function refreshSim() {
@@ -5740,6 +5898,7 @@
 
       // ---- The creator ----
       var creator = el('div', { id: 'sim-creator', style: 'margin-top:10px' });
+      if (simPrefill) creator.dataset.forced = '1';
       simCard.appendChild(creator);
       renderCreator();
 
@@ -5768,6 +5927,13 @@
       function renderCreator() {
         creator.innerHTML = '';
         var beginner = beginnerDC();
+        if (simPrefill) {
+          creator.appendChild(alertBox('caution', 'Practice setup from Research', [
+            simPrefill.note,
+            'The creator includes your current sector so the tape and cross-symbol context stay alive. Confirm the settings below; creating a session is a separate action.',
+            simPrefill.receipt ? 'Source distribution receipt: ' + simPrefill.receipt + '.' : ''
+          ].filter(Boolean)));
+        }
         creator.appendChild(el('div', { class: 'muted small', style: 'margin-bottom:6px' },
           'Create a session'));
         // Scenario: story cards at both levels (the story IS the configuration).

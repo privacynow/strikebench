@@ -160,7 +160,7 @@
       var jumpSize = num('sc-jumpsize', f.jumpSize != null ? f.jumpSize : -4, -50, 50, function (v) { f.jumpSize = v; onchange(); });
       var tailNu = num('sc-nu', f.nu != null ? f.nu : 6, 2.5, 200, function (v) { f.nu = v; onchange(); });
       var seed = num('sc-seed', f.seed, 0, 99999999, function (v) { f.seed = v; onchange(); });
-      var paths = num('sc-paths', f.paths || 300, 20, 2000, function (v) { f.paths = v; onchange(); });
+      var paths = num('sc-paths', f.paths || 2000, 20, 2000, function (v) { f.paths = v; onchange(); });
       var ivStart = num('sc-iv', f.ivStart != null ? f.ivStart : 30, 3, 400, function (v) { f.ivStart = v; onchange(); });
       var ivEvent = num('sc-ivday', f.ivEventDay != null ? f.ivEventDay : -1, -1, 756, function (v) { f.ivEventDay = v; onchange(); });
       var ivShock = num('sc-ivshock', f.ivShock != null ? f.ivShock : -35, -90, 300, function (v) { f.ivShock = v; onchange(); });
@@ -171,8 +171,8 @@
       expertInputs = { model: model, seed: seed };
       box.appendChild(el('div', { class: 'form-grid compact-filters' },
         fld('Model', model), fld('Shape guide', shapeSel), fld('Days', horizon), fld('Steps/day', spd),
-        fld('Vol σ %/yr', vol), fld('Drift μ %/yr', drift),
-        fld('Jumps /yr', jumps), fld('Jump size %', jumpSize), fld('Tail ν', tailNu)));
+        fld('Volatility σ (%/yr)', vol), fld('Drift μ (%/yr)', drift),
+        fld('Jump frequency (/yr)', jumps), fld('Jump size (%)', jumpSize), fld('Tail ν', tailNu)));
       box.appendChild(el('div', { class: 'form-grid compact-filters' },
         fld('Heston κ', hKappa), fld('Heston ξ', hXi), fld('Heston ρ', hRho),
         fld('IV start %', ivStart), fld('Event day', ivEvent), fld('IV change %', ivShock),
@@ -235,7 +235,7 @@
       return { model: s.model, shape: f.shape, horizonDays: f.horizon, stepsPerDay: 4,
           driftAnnual: s.drift, volAnnual: magVolFor(f.mag), jumpsPerYear: jumpy ? 8 : 0,
           jumpMean: f.shape === 'GAP_DOWN' ? -0.05 : (f.shape === 'GAP_UP' ? 0.05 : 0),
-          jumpVol: jumpy ? 0.04 : 0, tailNu: 6, heston: null, seed: f.seed, paths: 200 };
+          jumpVol: jumpy ? 0.04 : 0, tailNu: 6, heston: null, seed: f.seed, paths: 2000 };
       }
       var vol = (f.vol != null ? f.vol : 30) / 100;
       var wantHeston = (f.model || s.model) === 'HESTON';
@@ -246,7 +246,7 @@
         tailNu: f.nu || 6,
         heston: wantHeston ? { kappa: f.hKappa != null ? f.hKappa : 3, theta: vol * vol,
           xi: f.hXi != null ? f.hXi : Math.max(0.05, vol * 0.5), rho: f.hRho != null ? f.hRho : -0.6, v0: vol * vol } : null,
-        seed: f.seed, paths: f.paths || 300 };
+        seed: f.seed, paths: f.paths || 2000 };
     }
 
     function getIv() {
@@ -286,6 +286,9 @@
     var lo = Infinity, hi = -Infinity;
     p.bands.forEach(function (b) { lo = Math.min(lo, b.p10); hi = Math.max(hi, b.p90); });
     (p.samples || []).forEach(function (s) { s.forEach(function (v) { lo = Math.min(lo, v); hi = Math.max(hi, v); }); });
+    ((p.decisionMap && p.decisionMap.levels) || []).forEach(function (lv) {
+      lo = Math.min(lo, lv.price); hi = Math.max(hi, lv.price);
+    });
     var span = Math.max(hi - lo, 0.01); lo -= span * 0.06; hi += span * 0.06;
     function x(day) { return padL + (W - padL - padR) * day / Math.max(1, days); }
     function y(v) { return padT + (H - padT - padB) * (1 - (v - lo) / (hi - lo)); }
@@ -315,12 +318,27 @@
     var spotLine = '<line x1="' + padL + '" y1="' + y(p.spot).toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y(p.spot).toFixed(1)
       + '" stroke="var(--text)" stroke-width="0.8" stroke-dasharray="4 4" opacity="0.55"/>'
       + '<text x="' + (W - padR) + '" y="' + (y(p.spot) - 4).toFixed(1) + '" text-anchor="end" font-size="10" fill="var(--text-dim)">now ' + p.spot + '</text>';
+    function levelName(key) {
+      if (key === 'target') return 'your level';
+      if (key.indexOf('breakeven') === 0) return 'breakeven';
+      if (key.indexOf('short-put') === 0) return 'short put';
+      if (key.indexOf('short-call') === 0) return 'short call';
+      return key.replace(/[-_]/g, ' ');
+    }
+    var levelLines = ((p.decisionMap && p.decisionMap.levels) || []).map(function (lv, i) {
+      var yy = y(lv.price).toFixed(1), labelY = Math.max(10, y(lv.price) - 4 - (i % 2) * 9).toFixed(1);
+      return '<line x1="' + padL + '" y1="' + yy + '" x2="' + (W - padR) + '" y2="' + yy
+        + '" stroke="var(--risk-caution-solid,#b98a00)" stroke-width="1.1" stroke-dasharray="6 4" opacity="0.9"/>'
+        + '<text x="' + (padL + 4) + '" y="' + labelY + '" font-size="10" fill="var(--risk-caution-solid,#b98a00)">'
+        + levelName(lv.key) + ' ' + Number(lv.price).toFixed(2) + '</text>';
+    }).join('');
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="possible futures">'
       + gridY
       + '<path d="' + band + '" fill="var(--accent)" opacity="0.14"/>'
       + samples
       + '<path d="' + median + '" fill="none" stroke="var(--accent)" stroke-width="2.2"/>'
       + spotLine
+      + levelLines
       + '<text x="' + padL + '" y="' + (H - 6) + '" font-size="10" fill="var(--text-dim)">today</text>'
       + '<text x="' + (W - padR) + '" y="' + (H - 6) + '" text-anchor="end" font-size="10" fill="var(--text-dim)">+' + days + 'd</text>'
       + '</svg>';
@@ -367,14 +385,100 @@
         wrap.appendChild(readout);
       });
     })();
-    var pctDown = Math.round((p.endP10 / p.spot - 1) * 100), pctUp = Math.round((p.endP90 / p.spot - 1) * 100);
+    var terminal = p.decisionMap && p.decisionMap.terminal;
+    var likelyLo = terminal ? terminal.p16 : p.endP10;
+    var likelyHi = terminal ? terminal.p84 : p.endP90;
+    var pctDown = Math.round((likelyLo / p.spot - 1) * 100), pctUp = Math.round((likelyHi / p.spot - 1) * 100);
     wrap.appendChild(el('div', { class: 'chip-row chart-summary' },
       UI.chip('Futures drawn', String(p.paths)),
-      UI.chip('Middle path ends', String(p.endP50)),
-      UI.chip('8 in 10 end between', p.endP10 + ' and ' + p.endP90),
+      UI.chip('Median ending price', String(terminal ? terminal.p50 : p.endP50)),
+      UI.chip('Middle 68% end between', likelyLo + ' and ' + likelyHi),
       UI.chip('That’s', (pctDown >= 0 ? '+' : '') + pctDown + '% to ' + (pctUp >= 0 ? '+' : '') + pctUp + '%')));
     if (!opts.noNotes) (p.notes || []).forEach(function (n) { wrap.appendChild(el('div', { class: 'muted small' }, n)); });
     return wrap;
+  }
+
+  function pct0(v) { return Math.round((Number(v) || 0) * 100) + '%'; }
+  function price(v) { return '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+  /**
+   * Collapse a path cloud into decisions. Scenario probabilities and option-market-implied
+   * ranges are adjacent but never blended; an optional working position is priced on the exact
+   * path receipt behind the chart.
+   */
+  function decisionView(p, level) {
+    var d = p.decisionMap || {}, t = d.terminal || {};
+    var beginner = level === 'beginner';
+    var root = el('section', { class: 'scenario-decision', 'aria-label': 'Scenario decision summary' });
+    root.appendChild(el('div', { class: 'scenario-decision-head' },
+      el('div', {}, el('h3', {}, 'What this scenario says'),
+        el('p', { class: 'muted small' }, beginner
+          ? 'A range and direct odds you can use for a target, strike, or trade — not a prediction.'
+          : 'Empirical counts on this exact seeded ensemble; terminal and first-touch questions stay distinct.')),
+      el('span', { class: 'badge badge-modeled' }, 'SCENARIO MODEL')));
+    root.appendChild(el('div', { class: 'scenario-facts' },
+      el('div', { class: 'scenario-fact' }, el('span', {}, 'Likely ending range'),
+        el('b', {}, price(t.p16) + ' – ' + price(t.p84)),
+        el('small', {}, 'middle 68% of these futures')),
+      el('div', { class: 'scenario-fact' }, el('span', {}, 'Median ending price'),
+        el('b', {}, price(t.p50)), el('small', {}, 'half finished above, half below')),
+      el('div', { class: 'scenario-fact' }, el('span', {}, 'Outer range'),
+        el('b', {}, price(t.p5) + ' – ' + price(t.p95)),
+        el('small', {}, 'middle 90%; tails still exist'))));
+
+    var levels = d.levels || [];
+    if (levels.length) {
+      var levelWrap = el('div', { class: 'scenario-levels' });
+      levels.forEach(function (lv) {
+        var name = lv.key === 'target' ? 'Your price level'
+          : lv.key.indexOf('breakeven') === 0 ? 'Position breakeven'
+          : lv.key.indexOf('short-put') === 0 ? 'Short put strike'
+          : lv.key.indexOf('short-call') === 0 ? 'Short call strike'
+          : lv.key.replace(/[-_]/g, ' ');
+        var dir = lv.direction === 'ABOVE' ? 'above' : 'below';
+        levelWrap.appendChild(el('div', { class: 'scenario-level' },
+          el('div', { class: 'scenario-level-name' }, el('b', {}, name), el('span', {}, price(lv.price))),
+          el('div', { class: 'scenario-level-odds' },
+            el('span', {}, el('b', {}, pct0(lv.endBeyondProbability)), ' end ' + dir),
+            el('span', {}, el('b', {}, pct0(lv.touchProbability)), ' touch it')),
+          el('div', { class: 'muted small' },
+            'Touch estimate 95% interval ' + pct0(lv.touchCiLow) + '–' + pct0(lv.touchCiHigh)
+            + (lv.medianFirstTouchDay == null ? '' : ' · median first touch day ' + lv.medianFirstTouchDay))));
+      });
+      root.appendChild(levelWrap);
+    }
+
+    if (p.marketImplied) {
+      var m = p.marketImplied;
+      var sw = Math.max(0.01, t.p84 - t.p16), mw = Math.max(0.01, m.p84 - m.p16);
+      var rel = Math.round((sw / mw - 1) * 100);
+      root.appendChild(el('div', { class: 'scenario-lens-compare' },
+        el('div', { class: 'scenario-lens' }, el('span', { class: 'eyebrow' }, 'UNDER YOUR SCENARIO'),
+          el('b', {}, price(t.p16) + ' – ' + price(t.p84)),
+          el('small', {}, 'generated from your story, volatility and model settings')),
+        el('div', { class: 'scenario-lens' }, el('span', { class: 'eyebrow' }, 'OPTIONS MARKET IMPLIED'),
+          el('b', {}, price(m.p16) + ' – ' + price(m.p84)),
+          el('small', {}, 'nearest-horizon ATM IV · risk-neutral pricing, not a forecast')),
+        el('p', { class: 'scenario-lens-takeaway' },
+          rel === 0 ? 'Your scenario and the option market imply about the same central width.'
+            : 'Your scenario is about ' + Math.abs(rel) + '% ' + (rel > 0 ? 'wider' : 'narrower')
+              + ' than the option market’s central range.')));
+      if (!beginner) root.appendChild(el('p', { class: 'muted small scenario-basis' }, m.basis));
+    }
+
+    root.appendChild(el('div', { class: 'scenario-sampling muted small' },
+      'Sampling check: ' + p.paths.toLocaleString() + ' paths · worst-case 95% probability margin about ±'
+      + (Number(d.maxProbabilityMargin95 || 0) * 100).toFixed(1) + ' percentage points · receipt '
+      + (p.receipt && p.receipt.fingerprint || 'unavailable') + '.'));
+
+    if (p.positionOutcome) {
+      root.appendChild(el('div', { class: 'scenario-position-outcome' },
+        el('div', { class: 'scenario-decision-head' },
+          el('div', {}, el('h3', {}, 'Your working position on these exact futures'),
+            el('p', { class: 'muted small' }, 'Same anchor, same path matrix, same receipt — the fan is now tied to a trade.'))),
+        pnlView(p.positionOutcome, level)));
+    }
+    return root;
   }
 
   /* ---- The strategy verdict: distribution → plain sentences (beginner) or stats (expert) ---- */
@@ -390,7 +494,7 @@
         + ' · p95 ' + UI.fmtMoneyCompact(r.p95Cents) + ' over ' + r.paths + ' paths.';
     out.appendChild(UI.alertBox(kind, verdict));
     out.appendChild(el('div', { class: 'grid grid-4' },
-      UI.stat('Chance of profit', winPct + '%', level === 'beginner' ? 'Share of simulated futures that ended green.' : null),
+      UI.stat('Chance of profit', winPct + '%'),
       UI.stat('Typical outcome', UI.pnlSpan(r.p50Cents)),
       UI.stat('Bad run (1 in 20)', UI.pnlSpan(r.p5Cents)),
       UI.stat('Great run (1 in 20)', UI.pnlSpan(r.p95Cents))));
@@ -417,8 +521,8 @@
         + '<text x="' + padL + '" y="' + (H - 5) + '" font-size="10" fill="var(--text-dim)">entry</text>'
         + '<text x="' + (W - padR) + '" y="' + (H - 5) + '" text-anchor="end" font-size="10" fill="var(--text-dim)">+' + days + 'd</text></svg>' }));
       out.appendChild(el('div', { class: 'muted small' },
-        level === 'beginner' ? 'The shaded band is where 8 of 10 futures sat, day by day; the line is the middle path.'
-          : 'p10–p90 band with the median path; day granularity.'));
+        level === 'beginner' ? 'The shaded band holds the middle 8 of 10 outcomes, day by day; the line is the median P&L at each day.'
+          : 'Pointwise p10–p90 P&L band with the pointwise median; day granularity.'));
     }
 
     // Terminal distribution histogram — with a REAL dollar axis (edges + a $0 marker), because
@@ -529,6 +633,22 @@
     return out;
   }
 
+  /** Exact listed package and displayed entry, when Research and the ticket share a symbol. */
+  function workingPosition(symbol) {
+    var t = App.state.ticket;
+    if (!t || String(t.symbol || '').toUpperCase() !== String(symbol || '').toUpperCase()) return null;
+    var candidate = t.candidate || null;
+    var sourceLegs = candidate && candidate.legs && candidate.legs.length ? candidate.legs
+      : t.previewReq && t.previewReq.legs && t.previewReq.legs.length ? t.previewReq.legs
+      : t.custom && t.custom.legs && t.custom.legs.length ? t.custom.legs : null;
+    if (!sourceLegs || !sourceLegs.length) return null;
+    var entryNet = candidate && typeof candidate.entryNetPremiumCents === 'number'
+      ? candidate.entryNetPremiumCents
+      : t.preview && typeof t.preview.entryNetPremiumCents === 'number' ? t.preview.entryNetPremiumCents : null;
+    return App.outcomePosition(candidate && candidate.strategy || t.customFamily || 'WORKING', sourceLegs,
+      t.qty || candidate && candidate.qty || 1, entryNet == null ? null : -entryNet);
+  }
+
   function candidateLegs(candidate) {
     var base = App.Market && App.Market.simTime ? new Date(App.Market.simTime) : new Date();
     return (candidate.legs || []).map(function (lg) {
@@ -630,7 +750,8 @@
 
   window.Scenario = {
     SHAPES: SHAPES, CATALOG: CATALOG,
-    form: form, fanChart: fanChart, pnlView: pnlView, workingLegs: workingLegs,
+    form: form, fanChart: fanChart, decisionView: decisionView, pnlView: pnlView,
+    workingLegs: workingLegs, workingPosition: workingPosition,
     realisticOutcomes: realisticOutcomes, sketch: sketch, applyCatalog: applyCatalog
   };
 })();
