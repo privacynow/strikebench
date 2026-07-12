@@ -211,7 +211,7 @@
             el('b', {}, 'No AAPL idea passes right now'),
             el('p', { class: 'muted small' },
               'That is a valid engine result, not a missing demo. Open Research to inspect the evidence or choose another stock.'),
-            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/AAPL'); } }, 'Research AAPL')));
+            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/plan/new?symbol=AAPL'); } }, 'Plan AAPL')));
         }
       } catch (e) {
         if (!cached) {
@@ -234,7 +234,7 @@
         toast: 'Step 1: pick a stock that interests you \u2014 the Next-up list on Home walks the rest.' },
       { level: 'expert', title: 'Give me the terminal', ic: 'bolt',
         blurb: 'Dense tables, greeks, per-leg impact, inline filters.',
-        cta: 'Open the terminal', go: '#/research/AAPL' }
+        cta: 'Start an AAPL plan', go: '#/plan/new?symbol=AAPL' }
     ];
     root.appendChild(section('CHOOSE YOUR ALTITUDE', 'How do you want to start?',
       el('div', { class: 'welcome-grid', id: 'welcome-levels' }, LEVEL_CARDS.map(function (c) {
@@ -437,7 +437,7 @@
         var sparkSlot = el('div', { class: 'spark-slot' });
         tiles.appendChild(el('a', {
           class: 'tile sym-card' + (q ? '' : ' tile-nodata'), 'data-sym': symbol,
-          href: '#/research/' + symbol,
+          href: '#/plan/new?symbol=' + encodeURIComponent(symbol),
           'aria-label': 'Open ' + symbol + ' full analysis'
         },
           el('div', { class: 't-sym' }, symbol, ' ',
@@ -546,7 +546,7 @@
       if (sym) {
         // Context, not command duplication (review P5): these chips RESUME where you were.
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'research',
-          onclick: function () { App.navigate('#/research/' + sym); } }, 'Resume: ' + sym + ' analysis →'));
+          onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(sym)); } }, 'Start: ' + sym + ' plan →'));
       }
       if (chips.length) {
         card.appendChild(el('div', { class: 'chip-row', id: 'continue-row' }, chips));
@@ -653,13 +653,23 @@
 
   // ---------- 2. Research ----------
 
-  async function research(root, params) {
-    var symbol = (params[0] || '').toUpperCase();
+  async function research(root, params, embedded) {
+    var inPlan = !!(embedded && embedded.plan);
+    var symbol = inPlan ? embedded.plan.symbol : (params[0] || '').toUpperCase();
+    if (!inPlan && symbol) {
+      // The standalone symbol workspace is gone. Product links create a Plan directly; a
+      // stale hand-entered subroute is canonicalized to the Research plan opener, not kept as
+      // a compatibility alias to the new workspace.
+      window.history.replaceState(null, '', '#/research');
+      symbol = '';
+    }
     if (symbol) App.context.selectSymbol(symbol);
     var input = el('input', { type: 'text', id: 'symbol-input', placeholder: 'Ticker, e.g. AAPL', value: symbol });
-    var go = function () { if (input.value.trim()) App.navigate('#/research/' + input.value.trim().toUpperCase()); };
+    var go = function () {
+      if (input.value.trim()) App.navigate('#/plan/new?symbol=' + encodeURIComponent(input.value.trim().toUpperCase()));
+    };
 
-    root.appendChild(el('h1', {}, 'Research'));
+    if (!inPlan) root.appendChild(el('h1', {}, 'Research'));
     var recentBox = el('div', { class: 'research-recents', id: 'recent-symbols' });
     var researchContext = UI.symbolContext({
       mode: 'editable', id: 'research-symbol-context', input: input,
@@ -671,7 +681,7 @@
     var contextExtras = el('div', { class: 'symbol-context-extras' },
       symbol ? el('a', { href: '#/research', class: 'context-extras-action', id: 'back-to-sectors' }, 'All sectors') : null,
       recentBox);
-    root.appendChild(el('div', { class: 'research-symbol-shell' }, researchContext, contextExtras));
+    if (!inPlan) root.appendChild(el('div', { class: 'research-symbol-shell' }, researchContext, contextExtras));
     function renderRecents() {
       recentBox.innerHTML = '';
       var list = recentSymbols();
@@ -679,7 +689,7 @@
       recentBox.appendChild(el('span', { class: 'context-extras-label' }, 'Recent'));
       list.forEach(function (s) {
         recentBox.appendChild(el('button', { class: 'sym-chip' + (s === symbol ? ' active' : ''),
-          onclick: function () { App.navigate('#/research/' + s); } }, s));
+          onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(s)); } }, s));
       });
     }
     renderRecents();
@@ -698,95 +708,48 @@
       return;
     }
 
-    // PROGRESSIVE PAINT: the shell + independent sections (events, price history, news) render
-    // immediately; the hero, "what you can do", and the chain fill when /api/research lands (now a
-    // parallelized, faster call). No more all-or-nothing blank page behind one request.
-    var heroCard = el('div', { class: 'card', id: 'research-hero' }, UI.spinner('Loading ' + symbol + '…'));
-    root.appendChild(heroCard);
-    var researchP = API.get('/api/research/' + symbol);
-
-    // One dense destination becomes a calm workspace. All capabilities remain mounted, but only
-    // one coherent task is visible at a time; the hero and symbol context stay fixed above it.
-    App.state.researchTabBySymbol = App.state.researchTabBySymbol || {};
-    var selectedResearchTab = App.state.researchTabBySymbol[symbol] || 'overview';
-    var researchPanels = {};
-    var researchTabDefs = [
-      { key: 'overview', label: 'Market picture', sub: 'Price, events and latest news', icon: 'chart' },
-      { key: 'view', label: 'Evidence & scenarios', sub: 'Historical analogs and possible futures', icon: 'scope' },
-      { key: 'options', label: 'Options', sub: 'Chains, expirations and trade paths', icon: 'grid' },
-      { key: 'news', label: 'News & filings', sub: 'Headlines and source documents', icon: 'flag' }
-    ];
-    var researchTabs = el('div', { class: 'research-local-tabs', id: 'research-workspace-tabs', role: 'tablist' },
-      researchTabDefs.map(function (t) {
-        return el('button', { type: 'button', role: 'tab', id: 'research-tab-' + t.key,
-          'data-research-tab': t.key, 'aria-controls': 'research-panel-' + t.key,
-          tabindex: selectedResearchTab === t.key ? '0' : '-1',
-          class: selectedResearchTab === t.key ? 'active' : '',
-          'aria-selected': selectedResearchTab === t.key ? 'true' : 'false',
-          onclick: function () { activateResearchTab(t.key); },
-          onkeydown: function (e) {
-            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-            e.preventDefault();
-            var i = researchTabDefs.findIndex(function (x) { return x.key === t.key; });
-            var step = e.key === 'ArrowRight' ? 1 : -1;
-            var next = researchTabDefs[(i + step + researchTabDefs.length) % researchTabDefs.length];
-            activateResearchTab(next.key, true);
-          }
-        }, icon(t.icon, 16), el('span', {}, el('b', {}, t.label), el('small', {}, t.sub)));
-      }));
-    var researchNav = el('nav', { class: 'research-local-nav', 'aria-label': symbol + ' research workspace' },
-      el('div', { class: 'research-local-nav-head' },
-        el('b', {}, 'Explore ' + symbol),
-        el('span', { class: 'muted' }, 'One workspace, four connected views.')),
-      researchTabs);
-    var researchWorkspace = el('div', { class: 'research-workspace', id: 'research-workspace' });
-    ['overview', 'view', 'options', 'news'].forEach(function (key) {
-      var panel = el('section', { class: 'research-workspace-panel', id: 'research-panel-' + key,
-        role: 'tabpanel', 'aria-labelledby': 'research-tab-' + key, 'data-research-panel': key,
-        hidden: selectedResearchTab === key ? null : '' });
-      researchPanels[key] = panel;
-      researchWorkspace.appendChild(panel);
-    });
-    function activateResearchTab(key, focus) {
-      selectedResearchTab = key;
-      App.state.researchTabBySymbol[symbol] = key;
-      researchTabs.querySelectorAll('[role="tab"]').forEach(function (b) {
-        var active = b.getAttribute('data-research-tab') === key;
-        b.classList.toggle('active', active);
-        b.setAttribute('aria-selected', active ? 'true' : 'false');
-        b.setAttribute('tabindex', active ? '0' : '-1');
-        if (active && focus) b.focus();
-      });
-      Object.keys(researchPanels).forEach(function (k) { researchPanels[k].hidden = k !== key; });
+    var section = embedded && embedded.stage || 'understand';
+    if (section === 'evidence') {
+      root.appendChild(testYourViewSection(symbol, embedded.plan));
+      return;
     }
-    root.appendChild(researchNav);
-    root.appendChild(researchWorkspace);
 
-    researchPanels.overview.appendChild(comingUp(symbol, false)); // dated events; self-fetches
+    // Understand and Strategy consume the same research producer without recreating a local
+    // symbol workspace. Understand owns quote/history/events/news; Strategy temporarily owns
+    // the existing option-chain/action surface until the full strategy move in P3.
+    var heroCard = el('div', { class: 'card', id: 'research-hero' }, UI.spinner('Loading ' + symbol + '…'));
+    if (section === 'understand') root.appendChild(heroCard);
+    var researchP = API.get('/api/research/' + symbol);
+    var researchPanels = {
+      overview: el('section', { class: 'plan-understand-grid', id: 'plan-understand-content' }),
+      options: el('section', { class: 'plan-strategy-market', id: 'plan-strategy-market' })
+    };
+    root.appendChild(section === 'strategy' ? researchPanels.options : researchPanels.overview);
+
+    if (section === 'understand') researchPanels.overview.appendChild(comingUp(symbol, false));
     var newsOverviewCard = el('div', { class: 'card', id: 'news-overview-card' },
       UI.cardHeader('Latest news & filings'), UI.spinner('Loading headlines…'));
-    researchPanels.overview.appendChild(newsOverviewCard);
+    if (section === 'understand') researchPanels.overview.appendChild(newsOverviewCard);
     var actionsAnchor = el('div', { id: 'symbol-actions-anchor' }); // filled after r: the action cards, or the no-options warning
-    researchPanels.options.appendChild(actionsAnchor);
+    if (section === 'strategy') researchPanels.options.appendChild(actionsAnchor);
 
     // Price history — its own endpoint, independent of /api/research.
-    researchPanels.overview.appendChild(el('div', { class: 'card', id: 'history-card' },
+    if (section === 'understand') researchPanels.overview.appendChild(el('div', { class: 'card', id: 'history-card' },
       UI.cardHeader('Price history'),
       UI.rangeChart({ initial: '1y', fetch: historyFetch(symbol) }),
       explain('When observed OHLC is available, candles show open/high/low/close and volume. Close-only imports render as a line instead of inventing ranges. The evidence badge names whether history is observed, simulated, modeled, or Demo.')));
 
-    // The Research progression on a symbol: NOW (chart/news above) → TEST YOUR VIEW (past
-    // evidence + possible futures under ONE thesis) → express it in Trade.
-    researchPanels.view.appendChild(testYourViewSection(symbol));
-
     var chainAnchor = el('div', { id: 'chain-anchor' });
-    researchPanels.options.appendChild(chainAnchor);
+    if (section === 'strategy') researchPanels.options.appendChild(chainAnchor);
 
     // News & filings ALWAYS render (independent endpoint) — a card that silently vanishes reads as
     // "where has news gone?", not as an empty feed.
     var newsCard = el('div', { class: 'card', id: 'news-card' }, UI.cardHeader('News & filings'), UI.spinner('Loading news…'));
-    researchPanels.news.appendChild(newsCard);
-    (async function fillNews() {
+    if (section === 'understand') {
+      newsCard.hidden = true;
+      researchPanels.overview.appendChild(newsCard);
+    }
+    if (section === 'understand') (async function fillNews() {
       var newsItems = [];
       try { newsItems = ((await API.get('/api/research/' + symbol + '/news')).items || []); }
       catch (e) { /* empty state below */ }
@@ -813,9 +776,15 @@
       newsOverviewCard.innerHTML = '';
       newsOverviewCard.appendChild(UI.cardHeader('Latest news & filings',
         el('button', { type: 'button', class: 'btn btn-sm btn-secondary', id: 'open-news-tab',
-          onclick: function () { activateResearchTab('news', true); } }, 'View all')));
+          onclick: function () {
+            newsOverviewCard.hidden = true;
+            newsCard.hidden = false;
+            newsCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          } }, 'View all')));
       newsCard.innerHTML = '';
-      newsCard.appendChild(UI.cardHeader('News & filings'));
+      newsCard.appendChild(UI.cardHeader('News & filings',
+        el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
+          onclick: function () { newsCard.hidden = true; newsOverviewCard.hidden = false; } }, 'Show latest')));
       if (!newsItems.length) {
         newsOverviewCard.appendChild(el('p', { class: 'muted' },
           'No headline or filing source answered for ' + symbol + '. Price research remains available.'));
@@ -922,15 +891,12 @@
         r.priceIsPreviousClose ? el('span', { class: 'muted small' }, 'previous close') : UI.delta(q.last, q.prevClose),
         evSummary && evSummary.provenance === 'DEMO' ? null : badge(r.freshness),
         el('span', { class: 'spacer' }),
-        el('button', {
-          class: 'btn btn-sm btn-secondary', id: 'research-buy-shares',
-          onclick: function () { stockOrderModal('buy', symbol); }
-        }, 'Buy shares'),
-        r.optionable ? el('button', {
-          class: 'btn btn-sm', onclick: function () {
-            beginIdeaSearch({ symbol: symbol, autorun: true }, '#/trade/context/manual');
-          }
-        }, 'Find strategies') : null),
+        el('button', { class: 'btn btn-sm', id: 'plan-understand-next', onclick: async function () {
+          try {
+            var moved = await PlanStore.setStage(embedded.plan, 'EVIDENCE');
+            App.navigate(PlanStore.path(moved, 'EVIDENCE'));
+          } catch (e) { UI.toast(e.message, 'error'); }
+        } }, 'Test this view')),
       el('div', { class: 'nm', style: 'margin-top:2px' }, q.description || ''),
       evidenceLine,
       el('div', { class: 'chip-row' },
@@ -939,15 +905,15 @@
         chip('IV (ATM)', fmtPct(r.ivAtm)),
         chip('HV 30d', fmtPct(r.hv30))),
       secondaryMarketDetail);
-    heroCard.replaceWith(hero);
+    if (section === 'understand') heroCard.replaceWith(hero);
 
-    if (!r.optionable) {
+    if (section === 'strategy' && !r.optionable) {
       actionsAnchor.replaceWith(alertBox('warn', symbol + ' has no listed options (mutual funds and some securities cannot be option-traded). You can still study its price history below.'));
     }
 
     // What you can do with this symbol — each GOAL gets its own live one-liner, computed
     // from real ladder rungs (not marketing copy), with one-tap handoff into that flow.
-    if (r.optionable) {
+    if (section === 'strategy' && r.optionable) {
       (async function symbolActions() {
         try {
           var level = Learn.currentLevel();
@@ -1030,7 +996,7 @@
     }
 
     // Option chain (fills the anchor placed above the news card, so page order is preserved).
-    if (r.optionable && r.expirations && r.expirations.length) {
+    if (section === 'strategy' && r.optionable && r.expirations && r.expirations.length) {
       var showAll = false;
       var chainBody = el('div', {});
       var select = el('select', { id: 'expiration-select' }, r.expirations.map(function (d) {
@@ -1152,8 +1118,12 @@
     }
     }, function (e) {
       if (!App.alive(_rt)) return;
-      heroCard.replaceWith(alertBox('danger', 'No data for ' + symbol + '. Check the ticker.'));
-      actionsAnchor.remove(); chainAnchor.remove();
+      if (section === 'understand') {
+        heroCard.replaceWith(alertBox('danger', 'No data for ' + symbol + '. Check the ticker.'));
+      } else {
+        actionsAnchor.replaceWith(alertBox('danger', 'No option market for ' + symbol + '. Check the ticker or data status.'));
+        chainAnchor.remove();
+      }
       // The scenario studio must not offer to simulate futures for a symbol the app just said
       // it knows nothing about — swap it for the same honest empty state its siblings show.
       var wi = document.getElementById('whatif-card');
@@ -1527,7 +1497,7 @@
     return UI.symbolContext({
       mode: 'locked', symbol: symbol, id: opts.id || 'locked-symbol',
       label: opts.label || 'Position symbol',
-      onResearch: function () { App.navigate('#/research/' + symbol); },
+      onResearch: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(symbol)); },
       onChange: opts.noChange ? null : function () {
         beginIdeaSearch({}, '#/trade/context');
       }
@@ -1575,7 +1545,7 @@
       // The panel lives where leaving the screen loses work (a Trade form); its one action
       // is the deliberate exit to the destination page — never a duplicate of the host form.
       panel.appendChild(el('div', { class: 'btn-row' },
-        el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/' + symbol); } }, 'Open full analysis')));
+        el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(symbol)); } }, 'Start a plan')));
     }
     return panel;
   }
@@ -1615,7 +1585,7 @@
         }, r.l);
       }));
     var instruction = el('p', { class: 'muted explorer-hint', id: 'explorer-hint' },
-      'Choose a stock to open its full analysis \u2014 chart, events, headlines, chains and strategies.');
+      'Choose a stock to start a plan \u2014 understand it, test the view, compare strategies, then decide.');
     var quoteBasis = App.state.world === 'demo'
       ? 'Fabricated Demo quotes for this teaching universe.'
       : App.state.world && App.state.world !== 'observed'
@@ -1623,7 +1593,7 @@
         : 'Observed-source quotes for the selected sector.';
     var card = el('div', { class: 'card', id: 'sector-explorer' },
       UI.cardHeader('Explore by sector'), rail, head, instruction, rangeRow, grid,
-      explain(quoteBasis + ' Tap a card to open the stock, or point the scout at a whole sector. '
+      explain(quoteBasis + ' Tap a card to begin a plan, or point the scout at a whole sector. '
         + (u.note ? u.note : '')));
     root.appendChild(card);
 
@@ -1675,10 +1645,8 @@
         // clickable. Symbols without a live quote say so honestly but still link onward.
         var bySym = {};
         (data.quotes || []).forEach(function (q) { bySym[q.symbol] = q; });
-        // DESTINATION CARDS NAVIGATE (interaction contract #1): a card that says AAPL opens
-        // AAPL's full analysis in ONE action — the old in-place preview repeated a subset of
-        // that page and cost an extra decision. Sector, range, and scroll are preserved so
-        // Back lands exactly where you left.
+        // Destination cards create the provisional Plan in one action. Sector, range and scroll
+        // stay here so returning to Research restores the market-entry context.
         sector.symbols.forEach(function (s) {
           var q = bySym[s];
           var last = q ? parseFloat(q.last) : null;
@@ -1687,9 +1655,8 @@
           var sparkSlot = el('div', { class: 'spark-slot' });
           var tile = el('a', { class: 'tile sector-tile sym-card clickable' + (q ? '' : ' tile-nodata'),
             'data-sym': s,
-            href: '#/research/' + s,
-            'aria-label': 'Open ' + s + ' full analysis',
-            title: 'Open ' + s + ' \u2014 full analysis' },
+            href: '#/plan/new?symbol=' + encodeURIComponent(s),
+            'aria-label': 'Start a plan for ' + s },
             el('div', { class: 't-sym' }, s,
               q && !q.optionable ? el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO OPTIONS') : null,
               q ? null : el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO QUOTE')),
@@ -2876,7 +2843,7 @@
   ];
 
   function planMarketLabel(plan) {
-    return plan.marketKind === 'SIMULATED' ? 'Simulated · ' + (plan.worldId || 'session')
+    return plan.marketKind === 'SIMULATED' ? 'Simulated market'
       : plan.marketKind === 'DEMO' ? 'Demo market' : 'Observed market';
   }
 
@@ -3018,8 +2985,8 @@
 
   function transitionalPlanStage(root, plan, stage) {
     var routes = {
-      UNDERSTAND: { title: 'Understand ' + plan.symbol, body: 'Review the market picture before choosing a structure.', route: '#/research/' + plan.symbol, action: 'Open current analysis' },
-      EVIDENCE: { title: 'Test the view', body: 'Study past analogs and possible futures without requiring a structure.', route: '#/research/' + plan.symbol, action: 'Open current evidence tools' },
+      UNDERSTAND: { title: 'Understand ' + plan.symbol, body: 'Review the market picture before choosing a structure.', route: PlanStore.path(plan, 'UNDERSTAND'), action: 'Open market picture' },
+      EVIDENCE: { title: 'Test the view', body: 'Study past analogs and possible futures without requiring a structure.', route: PlanStore.path(plan, 'EVIDENCE'), action: 'Open evidence' },
       STRATEGY: { title: 'Choose an expression', body: 'Compare ranked structures or build the exact package you want.', route: '#/trade/structure', action: 'Open current strategy tools' },
       OUTCOMES: { title: 'Evaluate the exact position', body: 'Use model futures, historical analogs and backtests as separately labeled lenses.', route: '#/trade/outcomes', action: 'Open current outcome tools' },
       DECIDE: { title: 'Trade it, or stay in cash', body: 'Reprice the exact package, review economics and pass every acknowledgment gate.', route: '#/trade/decide', action: 'Open current decision tools' },
@@ -3032,6 +2999,25 @@
       el('div', { class: 'card plan-stage-transition' },
         el('p', {}, 'Carried forward: ', el('b', {}, plan.title)),
         el('button', { type: 'button', class: 'btn', onclick: function () { App.navigate(copy.route); } }, copy.action))));
+  }
+
+  function planOwnedStage(root, plan, stage) {
+    var copy = stage.key === 'UNDERSTAND'
+      ? { title: 'Understand ' + plan.symbol,
+          body: 'Read the price, volatility, dated events and source-backed news before forming a trade.' }
+      : stage.key === 'EVIDENCE'
+        ? { title: 'Test the view',
+            body: 'Compare conditional history with explicit possible-futures models. They inform one plan but remain separate evidence bases.' }
+        : { title: 'Choose an expression',
+            body: 'Inspect the option market now; ranked structures, the builder and in-plan Scout join this stage next.' };
+    var content = el('div', { class: 'plan-stage-content', id: 'plan-stage-content' });
+    root.appendChild(el('section', { class: 'plan-stage-frame', id: 'plan-stage-' + stage.path },
+      el('div', { class: 'plan-stage-heading' },
+        el('div', { class: 'eyebrow' }, stage.question),
+        el('h2', {}, copy.title),
+        el('p', { class: 'muted' }, copy.body)),
+      content));
+    return content;
   }
 
   async function planWorkspace(root, params) {
@@ -3048,6 +3034,9 @@
     var targetWorld = plan.marketKind === 'SIMULATED' ? plan.worldId : plan.marketKind === 'DEMO' ? 'demo' : 'observed';
     if (App.state.world !== targetWorld) { await PlanStore.focus(plan, rawStage); return; }
     App.state.activePlanId = plan.id;
+    App.context.update({ symbol: plan.symbol, goal: plan.intent,
+      horizon: plan.context && plan.context.horizonDays ? plan.context.horizonDays + 'd' : null,
+      thesis: plan.context && plan.context.thesis });
     PlanStore.renderBar();
     var stage = planStageByPath(rawStage);
     if (plan.activeStage !== stage.key) {
@@ -3057,7 +3046,17 @@
     root.appendChild(planHeader(plan, false));
     root.appendChild(planRail(plan, stage, false));
     root.appendChild(planContextEditor(plan));
-    transitionalPlanStage(root, plan, stage);
+    if (stage.key === 'UNDERSTAND' || stage.key === 'EVIDENCE') {
+      var owned = planOwnedStage(root, plan, stage);
+      await research(owned, ['__plan', plan.symbol, stage.path], { plan: plan, stage: stage.path });
+    } else if (stage.key === 'STRATEGY') {
+      var strategyOwned = planOwnedStage(root, plan, stage);
+      await research(strategyOwned, ['__plan', plan.symbol, 'strategy'], { plan: plan, stage: 'strategy' });
+      strategyOwned.appendChild(el('div', { class: 'card plan-stage-transition' },
+        el('p', {}, 'Your current competition and builder remain available while this stage is consolidated.'),
+        el('button', { type: 'button', class: 'btn', onclick: function () { App.navigate('#/trade/structure'); } },
+          'Open strategy tools')));
+    } else transitionalPlanStage(root, plan, stage);
   }
 
   /** One decision loop. Research can feed Context; every Trade capability lives in one stage. */
@@ -3117,7 +3116,7 @@
     if (symbol) {
       bar.appendChild(el('button', { class: 'workflow-symbol', type: 'button',
         title: 'Open full analysis for ' + symbol,
-        onclick: function () { App.navigate('#/research/' + encodeURIComponent(symbol)); } }, symbol));
+        onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(symbol)); } }, symbol));
     }
     var label = summary && summary.label;
     if (label) {
@@ -3382,7 +3381,7 @@
     var s = pick.signals;
     var card = el('div', { class: 'card pick-card' },
       el('div', { class: 'quote-hero' },
-        el('a', { class: 'sym pick-symbol-link', href: '#/research/' + pick.symbol,
+        el('a', { class: 'sym pick-symbol-link', href: '#/plan/new?symbol=' + encodeURIComponent(pick.symbol),
           title: 'Open full analysis for ' + pick.symbol }, pick.symbol),
         intentBadge(pick.intent),
         el('span', { class: 'badge ' + (THESIS_BADGE[s.thesis] || 'badge-dim') }, s.thesis),
@@ -4555,7 +4554,7 @@
           : null,
         el('button', { class: 'btn btn-sm btn-secondary', style: 'margin-left:8px',
           title: 'Full analysis for ' + t.symbol + ' \u2014 the trade itself stays exactly as placed',
-          onclick: function () { App.navigate('#/research/' + t.symbol); } }, 'Research')),
+          onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(t.symbol)); } }, 'Start plan')),
       el('div', { class: 'muted' },
         (combinedOutcome ? (active ? 'Decision P/L now (held shares + options, before close fees)' : 'Decision outcome (held shares + options)')
           : (active ? 'Unrealized (before close fees)' : 'Realized P/L')) + ' · opened ' + UI.fmtDate(t.createdAt)
@@ -4756,17 +4755,24 @@
   function whatIfCard(symbol, seedContext) {
     var level = Learn.currentLevel();
     var historyBasis = activeHistoryBasis();
+    seedContext = seedContext || {};
+    var ownedState = seedContext.state || null;
+    var plan = seedContext.plan || null;
     var card = el('div', { class: 'card', id: 'whatif-card' });
     card.appendChild(UI.cardHeader('Possible futures — turn a view into a decision'));
     card.appendChild(explain(level === 'beginner'
       ? 'Choose a story and horizon, then ask a concrete price question. StrikeBench turns many model-generated futures into a likely range, odds of reaching your level, and — when you have a working trade — its profit and loss on those exact same futures. Past evidence remains a separate check using ' + historyBasis.plain + '.'
       : 'The shared market view seeds this model terminal; its drift, volatility, jumps and IV path remain explicit scenario assumptions. The paired historical lens is a separate ' + historyBasis.expert + ', never a blended probability.'));
-    var f = Scenario.form(level, symbol, seedContext);
+    var scenarioFormState = ownedState
+      ? (ownedState.scenarioForm = ownedState.scenarioForm || {}) : null;
+    var f = Scenario.form(level, symbol, seedContext, scenarioFormState);
     card.appendChild(f.el);
-    App.state.scenarioTargets = App.state.scenarioTargets || {};
+    var scenarioTargets = ownedState
+      ? (ownedState.scenarioTargets = ownedState.scenarioTargets || {})
+      : (App.state.scenarioTargets = App.state.scenarioTargets || {});
     var target = el('input', { type: 'number', id: 'whatif-target', step: 'any', min: '0.01',
-      value: App.state.scenarioTargets[symbol] || '', placeholder: 'Optional' });
-    target.addEventListener('input', function () { App.state.scenarioTargets[symbol] = target.value; });
+      value: scenarioTargets[symbol] || '', placeholder: 'Optional' });
+    target.addEventListener('input', function () { scenarioTargets[symbol] = target.value; });
     card.appendChild(el('div', { class: 'scenario-question' },
       el('div', {}, el('label', { for: 'whatif-target' }, 'Price you care about'),
         el('p', { class: 'muted small' }, level === 'beginner'
@@ -4791,7 +4797,7 @@
         seen[value.toFixed(6)] = true; levels.push({ key: key, price: value });
       }
       add('target', target.value);
-      var candidate = App.state.ticket && App.state.ticket.symbol === symbol && App.state.ticket.candidate;
+      var candidate = !plan && App.state.ticket && App.state.ticket.symbol === symbol && App.state.ticket.candidate;
       (candidate && candidate.breakevens || []).forEach(function (x, i) { add('breakeven-' + (i + 1), x); });
       var putN = 0, callN = 0;
       (candidate && candidate.legs || []).forEach(function (leg) {
@@ -4804,7 +4810,7 @@
 
     function goalAction(p, spec) {
       var t = p.decisionMap.terminal;
-      var goal = App.context.goal('DIRECTIONAL');
+      var goal = plan && plan.intent || App.context.goal('DIRECTIONAL');
       var chosen = Number(target.value);
       if (!(chosen > 0)) chosen = goal === 'EXIT' ? t.p84 : (goal === 'ACQUIRE' || goal === 'HEDGE') ? t.p16 : null;
       var labels = {
@@ -4815,7 +4821,14 @@
         DIRECTIONAL: 'Find strategies for this view'
       };
       var action = el('button', { class: 'btn', id: 'whatif-act' }, labels[goal] || labels.DIRECTIONAL);
-      action.addEventListener('click', function () {
+      action.addEventListener('click', async function () {
+        if (plan) {
+          try {
+            var moved = await PlanStore.setStage(plan, 'STRATEGY');
+            App.navigate(PlanStore.path(moved, 'STRATEGY'));
+          } catch (e) { UI.toast(e.message, 'error'); }
+          return;
+        }
         var horizon = contextHorizonForDays(spec.horizonDays);
         beginIdeaSearch({ symbol: symbol, intent: goal, horizon: horizon,
           thesis: App.context.thesis(seedContext && seedContext.thesis || 'neutral'),
@@ -4823,9 +4836,11 @@
       });
       return el('div', { class: 'scenario-next' },
         el('div', {}, el('b', {}, 'Use the result'),
-          el('p', { class: 'muted small' }, 'Carry the symbol, goal, horizon and decision level into the shared Trade workflow.')),
+          el('p', { class: 'muted small' }, plan
+            ? 'Keep the same symbol, goal, horizon and decision level as this plan moves into Strategy.'
+            : 'Carry the symbol, goal, horizon and decision level into the shared Trade workflow.')),
         el('div', { class: 'btn-row' }, action,
-          el('button', { class: 'btn btn-secondary', onclick: function () {
+          plan ? null : el('button', { class: 'btn btn-secondary', onclick: function () {
             beginIdeaSearch({ symbol: symbol, horizon: contextHorizonForDays(spec.horizonDays) },
               '#/trade/context');
           } }, 'Choose another goal')));
@@ -4854,6 +4869,7 @@
             ? 'A deliberate adverse training drill based on this setup — not a random draw and not an estimate of likelihood.'
             : 'A fresh random realization using the same broad story — not one of the displayed sample lines and not representative by itself.'
         };
+        if (plan) App.state.planReturn = { planId: plan.id, stage: 'EVIDENCE', label: plan.title + ' · Evidence' };
         App.navigate('#/data/simulation');
       }
       return el('div', { class: 'scenario-practice' },
@@ -4875,14 +4891,15 @@
         var previous = latest;
         if (isSamplingCheck) f.reroll();
         var spec = f.getSpec();
-        var position = Scenario.workingPosition(symbol);
+        var position = plan ? null : Scenario.workingPosition(symbol);
         var payload = { over: spec, iv: f.getIv(), levels: decisionLevels() };
         if (position) payload.position = position;
         var p = await App.evaluateOutcome('PATHS', 'PARAMETRIC', symbol, payload);
         if (seq !== previewSeq) return;
         latest = p; latestSpec = spec;
-        App.state.scenarioAnalysis = { symbol: symbol, result: p, spec: spec, iv: f.getIv(), position: position };
-        App.state.outcomeReceipt = { basis: 'PARAMETRIC', symbol: symbol,
+        var resultState = ownedState || App.state;
+        resultState.scenarioAnalysis = { symbol: symbol, result: p, spec: spec, iv: f.getIv(), position: position };
+        resultState.outcomeReceipt = { basis: 'PARAMETRIC', symbol: symbol,
           detail: 'Scenario receipt ' + p.receipt.fingerprint, fingerprint: p.receipt.fingerprint,
           at: new Date().toISOString() };
         out.innerHTML = '';
@@ -4901,7 +4918,8 @@
         out.appendChild(Scenario.fanChart(p));
         out.appendChild(goalAction(p, spec));
         out.appendChild(practiceAction(p, spec));
-        toVerify.style.display = ''; reroll.style.display = '';
+        if (!plan) toVerify.style.display = '';
+        reroll.style.display = '';
         if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
       } catch (e) {
         if (seq === previewSeq) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Could not simulate', [String((e && e.message) || e)])); }
@@ -4919,7 +4937,7 @@
       App.state.verifyMode = 'scenario';
       App.navigate('#/trade/outcomes');
     });
-    card.appendChild(el('div', { class: 'btn-row' }, run, reroll, toVerify));
+    card.appendChild(el('div', { class: 'btn-row' }, run, reroll, plan ? null : toVerify));
     card.appendChild(out);
     return card;
   }
@@ -5366,7 +5384,7 @@
           note: 'Every strategy runs on the exact conditional-history sample Research found.',
           unavailableReason: 'Run Past evidence on a Research symbol, then hand its occurrences to Trade.',
           setupLabel: 'Find historical analogs',
-          setup: function () { App.navigate('#/research/' + App.context.symbol('AAPL')); },
+          setup: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(App.context.symbol('AAPL'))); },
           render: function (host) {
             if (!scenWrap.hasChildNodes()) scenarioVerifyPanel(scenWrap);
             host.appendChild(scenWrap);
@@ -5997,7 +6015,7 @@
           chartHost.innerHTML = '';
           chartHost.appendChild(el('div', { class: 'sim-focus-head' },
             el('div', {}, el('span', { class: 'muted small' }, 'FOCUS'), el('b', {}, focusSym)),
-            el('a', { href: '#/research/' + focusSym, onclick: function () { App.navigate('#/research/' + focusSym); } },
+            el('a', { href: '#/plan/new?symbol=' + encodeURIComponent(focusSym), onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(focusSym)); } },
               'Full research \u2192')));
           chartHost.appendChild(UI.rangeChart({ initial: '3m', fetch: historyFetch(focusSym) }));
         }
@@ -6820,7 +6838,7 @@
           isActive && d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm',
             title: 'Open this active scenario on the stock analysis page', onclick: function () {
               App.context.selectSymbol(d.symbol);
-              App.navigate('#/research/' + d.symbol);
+              App.navigate('#/plan/new?symbol=' + encodeURIComponent(d.symbol));
             } }, 'Open Research') : null,
           isActive && d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm',
             title: 'Compare strategies while this scenario remains active', onclick: function () {
@@ -6864,7 +6882,7 @@
                     await API.put('/api/datasets/active', { id: r.datasetId });
                     App.refreshScenarioBanner && App.refreshScenarioBanner();
                     App.context.selectSymbol(sym.value);
-                    App.navigate('#/research/' + (sym.value || '').toUpperCase());
+                    App.navigate('#/plan/new?symbol=' + encodeURIComponent((sym.value || '').toUpperCase()));
                   } catch (e2) { UI.toast(e2.message || 'Could not activate this scenario', 'error'); }
                 } }, 'Use it — explore in Research'),
                 el('button', { class: 'btn btn-sm', onclick: async function () {
@@ -7275,7 +7293,9 @@
               r.barBasis === 'CLOSE_ONLY' ? 'Observed closes are present; intraday high/low are not observed.' : 'Observed OHLC fields are present.'),
             r.quarantined ? chip('Quarantined', r.quarantined + ' rows') : null));
           if (r.rowsWritten && !(App.config && App.config.fixturesOnly)) csvResult.appendChild(
-            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/' + (csvSymbol.value || App.context.symbol('SPY')).toUpperCase()); } }, 'Open in Research'));
+            el('button', { class: 'btn btn-sm', onclick: function () {
+              App.navigate('#/plan/new?symbol=' + encodeURIComponent((csvSymbol.value || App.context.symbol('SPY')).toUpperCase()));
+            } }, 'Start a plan'));
           loadJobs();
         } catch (e) { csvResult.innerHTML = ''; csvResult.appendChild(alertBox('warn', e.message)); }
         uploadBtn.disabled = false;
@@ -7984,22 +8004,25 @@
    * Past evidence asks what followed a named historical condition; Possible futures applies the
    * user's view as a model seed. They share symbol and horizon, but never blend probabilities.
    */
-  function testYourViewSection(symbol) {
+  function testYourViewSection(symbol, plan) {
     var level = Learn.currentLevel();
     var historyBasis = activeHistoryBasis();
+    var planUi = plan ? PlanStore.ui(plan.id) : null;
     App.state.marketThesis = App.state.marketThesis || {};
-    var th = App.state.marketThesis[symbol] = App.state.marketThesis[symbol] || {};
+    var th = planUi
+      ? (planUi.thesis = planUi.thesis || {})
+      : (App.state.marketThesis[symbol] = App.state.marketThesis[symbol] || {});
     // Persisted-workspace migration only: the old field called a historical condition a
     // "direction", even though it was not the user's market direction.
     th.setup = th.setup || THESIS_QUESTION[th.direction] || 'pullback_rebound';
     delete th.direction;
-    th.horizonDays = th.horizonDays || contextHorizonDays(App.context.horizon('month'));
-    th.thesis = App.context.thesis(th.thesis || 'bullish');
+    th.horizonDays = plan && plan.context.horizonDays || th.horizonDays || contextHorizonDays(App.context.horizon('month'));
+    th.thesis = plan && plan.context.thesis || App.context.thesis(th.thesis || 'bullish');
     var wrap = el('div', { class: 'card', id: 'test-your-view' });
     wrap.appendChild(UI.cardHeader('Test your view \u2014 ' + symbol));
     wrap.appendChild(explain(level === 'beginner'
       ? 'State your view and horizon once. Past evidence asks what followed a named setup in ' + historyBasis.plain + '; possible futures turns your view into explicit model scenarios. They inform each other but never become one blended probability.'
-      : 'One market context seeds two labeled interpretations: a ' + historyBasis.expert + ' (conditional history, bootstrap CI) and a parametric Monte Carlo fan. The analog windows remain reusable as a distinct strategy path source in Trade.'));
+      : 'One Plan context seeds two labeled interpretations: a ' + historyBasis.expert + ' (conditional history, bootstrap CI) and a parametric Monte Carlo fan. The analog windows remain reusable as a distinct path source in this Plan’s Outcomes stage.'));
 
     var viewSel = el('select', { id: 'tv-view' },
       el('option', { value: 'bullish' }, level === 'beginner' ? 'I expect it to rise' : 'Bullish'),
@@ -8022,35 +8045,59 @@
     wrap.appendChild(thesisRow);
 
     // ---- Two connected evidence bases through the shared Outcomes component ----
-    var tvState = App.state.researchStudy = App.state.researchStudy || {};
+    if (planUi && planUi.contextRev !== plan.context.rev) {
+      var carriedMode = planUi.evidence && planUi.evidence.mode;
+      planUi.contextRev = plan.context.rev;
+      planUi.evidence = carriedMode ? { mode: carriedMode } : {};
+    }
+    var tvState = planUi
+      ? (planUi.evidence = planUi.evidence || {})
+      : (App.state.researchStudy = App.state.researchStudy || {});
     tvState.mode = tvState.mode || 'past';
     var outcomeWorkspace = Outcomes.workspace({
       id: 'research-outcomes', state: tvState, label: symbol + ' evidence basis',
+      onChange: function () { if (plan && window.Workspace) Workspace.save(); },
       modes: [
         { key: 'past', label: 'Past evidence',
           description: 'What followed similar conditions?',
           note: 'Conditional history: independent signal episodes compared with the stock\u2019s normal behavior.',
-          render: function (host) { host.appendChild(evidenceStage(symbol, th, level)); } },
+          render: function (host) { host.appendChild(evidenceStage(symbol, th, level, tvState, plan)); } },
         { key: 'futures', label: 'Possible futures',
           description: 'What could happen from here?',
           note: 'Parametric scenarios: generated paths from an explicit model, never a forecast.',
-          render: function (host) { host.appendChild(futuresStage(symbol, th, level)); } }
+          render: function (host) { host.appendChild(futuresStage(symbol, th, level, tvState, plan)); } }
       ]
     });
     wrap.appendChild(outcomeWorkspace.el);
 
-    viewSel.addEventListener('change', function () {
+    viewSel.addEventListener('change', async function () {
       th.thesis = viewSel.value;
-      App.context.update({ thesis: th.thesis });
-      App.state.scenarioForm = null;
-      outcomeWorkspace.refresh();
+      if (plan) {
+        try {
+          plan = await PlanStore.updateContext(plan, { thesis: th.thesis });
+          App.context.update({ thesis: th.thesis });
+          App.render();
+        } catch (e) { UI.toast(e.message, 'error'); App.render(); }
+      } else {
+        App.context.update({ thesis: th.thesis });
+        App.state.scenarioForm = null;
+        outcomeWorkspace.refresh();
+      }
     });
     setupSel.addEventListener('change', function () { th.setup = setupSel.value; outcomeWorkspace.refresh(); });
-    horIn.addEventListener('change', function () {
+    horIn.addEventListener('change', async function () {
       th.horizonDays = Math.max(1, Math.min(63, parseInt(horIn.value, 10) || 10));
-      App.context.update({ horizon: contextHorizonForDays(th.horizonDays) });
-      App.state.scenarioForm = null;
-      outcomeWorkspace.refresh();
+      if (plan) {
+        try {
+          plan = await PlanStore.updateContext(plan, { horizonDays: th.horizonDays });
+          App.context.update({ horizon: th.horizonDays + 'd' });
+          App.render();
+        } catch (e) { UI.toast(e.message, 'error'); App.render(); }
+      } else {
+        App.context.update({ horizon: contextHorizonForDays(th.horizonDays) });
+        App.state.scenarioForm = null;
+        outcomeWorkspace.refresh();
+      }
     });
     return wrap;
   }
@@ -8067,8 +8114,8 @@
   }
 
   /** PAST EVIDENCE: the event study, inheriting page symbol and shared horizon. */
-  function evidenceStage(symbol, thesis, level) {
-    var f = App.state.researchStudy;
+  function evidenceStage(symbol, thesis, level, ownedState, plan) {
+    var f = ownedState || App.state.researchStudy;
     f.results = f.results || {};
     f.protocolBySymbol = f.protocolBySymbol || {};
     var protocol = f.protocolBySymbol[symbol] = Object.assign({
@@ -8253,7 +8300,7 @@
       rememberProtocol();
       var key = studyClientKey(symbol, q.key, currentParams(q), protocol.from, protocol.to);
       out.innerHTML = '';
-      if (f.results[key]) renderQuestion(out, f.results[key], level, symbol, thesis);
+      if (f.results[key]) renderQuestion(out, f.results[key], level, symbol, thesis, plan, f);
     }
 
     run.addEventListener('click', async function () {
@@ -8266,7 +8313,9 @@
       run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Replaying ' + symbol + '\u2019s history\u2026'));
       var body = { key: q.key, symbol: symbol, from: protocol.from, to: protocol.to, params: params };
       try {
-        var _d = await API.post('/api/research/event-studies', body);
+        var saved = await API.post(plan ? '/api/plans/' + plan.id + '/evidence/study'
+          : '/api/research/event-studies', body);
+        var _d = plan ? saved.result : saved;
         var key = _d.studyKey || studyClientKey(symbol, q.key, params, protocol.from, protocol.to);
         f.results[key] = _d;
         // Keep a deterministic local lookup key alongside the server identity so changing a
@@ -8274,7 +8323,7 @@
         f.results[studyClientKey(symbol, q.key, params, protocol.from, protocol.to)] = _d;
         var keys = Object.keys(f.results);
         if (keys.length > 16) delete f.results[keys[0]]; // bounded memory
-        renderQuestion(out, _d, level, symbol, thesis);
+        renderQuestion(out, _d, level, symbol, thesis, plan, f);
       }
       catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Study failed', [String((e && e.message) || e)])); }
       finally { run.disabled = false; }
@@ -8287,15 +8336,43 @@
         catch (e) { picker.appendChild(alertBox('warn', 'Could not load the question catalog.')); return; }
       }
       if (!cat.length) { picker.appendChild(alertBox('warn', 'No questions available.')); return; }
+      if (plan && !f.restoredCurrentEvidence) {
+        f.restoredCurrentEvidence = true;
+        try {
+          var savedDoc = await API.getFresh('/api/plans/' + plan.id + '/evidence/latest');
+          var savedStudy = savedDoc && savedDoc.evidence;
+          if (savedStudy && savedStudy.result && savedStudy.request) {
+            var sr = savedStudy.request;
+            var sp = sr.params || {};
+            thesis.setup = sr.key || thesis.setup;
+            qKey = thesis.setup;
+            var setupControl = document.getElementById('tv-setup');
+            if (setupControl) setupControl.value = qKey;
+            f.params = f.params || {};
+            f.params[qKey] = sp;
+            protocol.from = sr.from || protocol.from;
+            protocol.to = sr.to || protocol.to;
+            ['eventSpacing','minSample','confidencePct','bootstrapSamples','regime','multiplicity'].forEach(function (key) {
+              if (sp[key] !== undefined && sp[key] !== null) protocol[key] = sp[key];
+            });
+            if (sp.splitHalf !== undefined) protocol.splitHalf = !!sp.splitHalf;
+            var restoreKey = studyClientKey(symbol, qKey, sp, protocol.from, protocol.to);
+            f.results[restoreKey] = savedStudy.result;
+            if (savedStudy.result.studyKey) f.results[savedStudy.result.studyKey] = savedStudy.result;
+          }
+        } catch (e) { /* no saved result is a normal first-run state */ }
+      }
       buildPicker(cat);
     })();
     return stage;
   }
 
   /** POSSIBLE FUTURES: the Monte-Carlo fan, inheriting symbol + thesis horizon. */
-  function futuresStage(symbol, thesis, level) {
+  function futuresStage(symbol, thesis, level, ownedState, plan) {
     var host = el('div', { id: 'tv-futures' });
-    var inner = whatIfCard(symbol, { thesis: thesis.thesis, horizonDays: thesis.horizonDays });
+    ownedState = ownedState || {};
+    var inner = whatIfCard(symbol, { thesis: thesis.thesis, horizonDays: thesis.horizonDays,
+      state: ownedState, plan: plan });
     // Composed stage: the card chrome is the section's — strip the duplicate card skin.
     inner.classList.remove('card');
     host.appendChild(inner);
@@ -8391,7 +8468,7 @@
     return { node: wrap, requiredAcks: acks };
   }
 
-  function renderQuestion(out, r, level, symbol, thesis) {
+  function renderQuestion(out, r, level, symbol, thesis, plan, ownedState) {
     out.innerHTML = '';
     var protocol = r.protocol || { minSample: 15, confidencePct: 95, bootstrapSamples: 800,
       eventSpacingDays: r.forwardDays, effectiveEventBlock: 1, regime: 'ALL',
@@ -8477,21 +8554,32 @@
     // research completed here is the starting point in Trade, not a report with no next step.
     if (symbol && r.analogPaths && r.analogPaths.length >= 5) {
       out.appendChild(el('div', { class: 'btn-row', style: 'margin-top:8px' },
-        el('button', { class: 'btn', id: 'tv-test-analogs', onclick: function () {
-          App.state.evidencePrefill = {
+        el('button', { class: 'btn', id: 'tv-test-analogs', onclick: async function () {
+          var selection = {
             symbol: symbol,
             source: 'HISTORICAL_ANALOGS',
             study: { key: r.key, from: r.from, to: r.to,
-              params: (App.state.researchStudy.params || {})[r.key] || {} },
+              params: ((ownedState && ownedState.params)
+                || (App.state.researchStudy && App.state.researchStudy.params) || {})[r.key] || {} },
             studyKey: r.studyKey,
             events: r.conditioned.sample,
             horizonDays: r.forwardDays,
             label: r.conditioned.sample + ' ' + occurrenceWord(r) + ' (' + r.from + ' to ' + r.to + ')'
           };
+          if (plan) {
+            ownedState.analogSelection = selection;
+            try {
+              var moved = await PlanStore.setStage(plan, 'STRATEGY');
+              App.navigate(PlanStore.path(moved, 'STRATEGY'));
+            } catch (e) { UI.toast(e.message, 'error'); }
+            return;
+          }
+          App.state.evidencePrefill = selection;
           App.context.selectSymbol(symbol);             // Outcomes anchors on the study's symbol
           App.state.verifyMode = 'analogs';             // ...and names the empirical basis visibly
           App.navigate('#/trade/outcomes');
-        } }, 'Test strategies on these ' + r.conditioned.sample + ' ' + occurrenceWord(r) + ' \u2192')));
+        } }, (plan ? 'Use these ' : 'Test strategies on these ') + r.conditioned.sample + ' '
+          + occurrenceWord(r) + (plan ? ' when testing a strategy \u2192' : ' \u2192'))));
     }
   }
 

@@ -90,6 +90,11 @@
     return items.find(function (p) { return p.id === App.state.activePlanId; }) || null;
   }
 
+  function ui(planId) {
+    App.state.planUi = App.state.planUi || {};
+    return App.state.planUi[planId] = App.state.planUi[planId] || {};
+  }
+
   function path(plan, stage) {
     var key = String(stage || plan.activeStage || 'UNDERSTAND').toUpperCase().replace('-', '_');
     return '#/plan/' + plan.id + '/' + (STAGE_PATH[key] || 'understand');
@@ -174,11 +179,14 @@
     var inner = UI.el('div', { class: 'plan-bar-inner' });
     inner.appendChild(UI.el('span', { class: 'plan-bar-label' }, 'Plans'));
     items.forEach(function (plan) {
-      var chip = UI.el('div', { class: 'plan-chip' + (plan.id === App.state.activePlanId ? ' active' : '') },
-        UI.el('button', { type: 'button', class: 'plan-chip-main', 'aria-label': 'Open ' + plan.title,
+      var planLabel = plan.title.replace(plan.symbol + ' · ', '')
+        + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' days' : '');
+      var chip = UI.el('div', { class: 'plan-chip' + (plan.id === App.state.activePlanId ? ' active' : ''),
+        'data-plan-id': plan.id },
+        UI.el('button', { type: 'button', class: 'plan-chip-main', 'aria-label': 'Open ' + plan.symbol + ' · ' + planLabel,
           onclick: function () { focus(plan).catch(function (e) { UI.toast(e.message, 'error'); }); } },
           UI.el('span', { class: 'plan-chip-symbol' }, plan.symbol),
-          UI.el('span', { class: 'plan-chip-title' }, plan.title.replace(plan.symbol + ' · ', ''))),
+          UI.el('span', { class: 'plan-chip-title' }, planLabel)),
         UI.el('button', { type: 'button', class: 'plan-chip-close', 'aria-label': 'Remove ' + plan.title + ' from open plans',
           onclick: function (event) {
             event.stopPropagation(); closeChip(plan).catch(function (e) { UI.toast(e.message, 'error'); });
@@ -194,7 +202,7 @@
     init: function () { return load(true); }, load: load, get: get, create: create, promote: promote,
     provisional: provisional, active: active, focus: focus, path: path, setStage: setStage,
     updateContext: updateContext, claimIntent: claimIntent, closeChip: closeChip,
-    marketChanged: marketChanged, renderBar: renderBar,
+    marketChanged: marketChanged, renderBar: renderBar, ui: ui,
     all: function () { return items.slice(); }
   };
 })();

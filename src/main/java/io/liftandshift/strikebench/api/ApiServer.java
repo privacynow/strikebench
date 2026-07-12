@@ -95,6 +95,7 @@ public final class ApiServer {
     final io.liftandshift.strikebench.util.EventBus events = new io.liftandshift.strikebench.util.EventBus();
     io.liftandshift.strikebench.db.WorkspaceService workspaceSvc;
     io.liftandshift.strikebench.plan.PlanService planSvc;
+    io.liftandshift.strikebench.plan.PlanEvidenceService planEvidence;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
@@ -239,6 +240,8 @@ public final class ApiServer {
         server.workspaceSvc.setEvents(server.events);
         server.planSvc = new io.liftandshift.strikebench.plan.PlanService(db, clock);
         server.planSvc.setEvents(server.events);
+        server.planEvidence = new io.liftandshift.strikebench.plan.PlanEvidenceService(db,
+                new io.liftandshift.strikebench.research.ResearchQuestionEngine(market, clock), clock);
         server.dataJobs.setEvents(server.events);
         server.dataJobs.setDataChangedHook(server::invalidateHistoricalViews);
         datasetSvc.setEvents(server.events);
@@ -411,6 +414,8 @@ public final class ApiServer {
             c.routes.put("/api/plans/{id}/stage", this::planStagePut);
             c.routes.put("/api/plans/{id}/open", this::planOpenPut);
             c.routes.post("/api/plans/{id}/archive", this::planArchive);
+            c.routes.get("/api/plans/{id}/evidence/latest", this::planEvidenceLatest);
+            c.routes.post("/api/plans/{id}/evidence/study", this::planEvidenceStudy);
 
             // ---- Data Center ----
             c.routes.get("/api/data/overview", this::dataOverview);
@@ -1996,6 +2001,31 @@ public final class ApiServer {
     private void planArchive(Context ctx) {
         var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.ArchiveRequest.class));
         ctx.json(planSvc.archive(ownerId(ctx), ctx.pathParam("id"), request));
+    }
+
+    private void requireActivePlanMarket(Context ctx, io.liftandshift.strikebench.plan.Plan.View plan) {
+        var active = activePlanMarket(ctx);
+        String activeWorld = active == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
+                ? activeWorld(ctx) : null;
+        if (plan.marketKind() != active || !java.util.Objects.equals(plan.worldId(), activeWorld)) {
+            throw new IllegalStateException("Open this plan's market before running its evidence");
+        }
+    }
+
+    private void planEvidenceLatest(Context ctx) {
+        var saved = planEvidence.latest(ownerId(ctx), ctx.pathParam("id"));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("evidence", saved);
+        ctx.json(out);
+    }
+
+    private void planEvidenceStudy(Context ctx) {
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        var request = requireBody(bodyOrNull(ctx,
+                io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest.class));
+        ctx.json(planEvidence.run(ownerId(ctx), plan, request, analysisCtx(ctx),
+                worldParam(activeWorld(ctx))));
     }
 
     // ---- Data Center ----

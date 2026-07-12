@@ -71,6 +71,7 @@ public final class ResearchQuestionEngine {
 
     /** Bumped whenever detection/stats change — persisted study keys must not collide across engines. */
     static final int ENGINE_VERSION = 3;
+    public static final String MODEL_VERSION = "research-question-" + ENGINE_VERSION;
 
     /** Order-sensitive fold over every bar's date + close: any content change changes the hash. */
     static String contentHash(java.util.List<Candle> candles, String source) {
