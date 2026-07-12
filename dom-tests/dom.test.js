@@ -549,6 +549,21 @@ test('scenario decision prices are isolated by symbol', async () => {
   assert.equal(await page.inputValue('#whatif-target'), '270', 'AAPL decision level restores in its own symbol context');
 });
 
+test('scenario calibration names Demo history honestly', async () => {
+  await page.click('#level-switch button[data-level="beginner"]');
+  await go('#/research/AAPL');
+  await openFutures();
+  await page.waitForFunction(() => {
+    const note = document.getElementById('sc-mag-note');
+    return note && !/Loading volatility calibration/.test(note.textContent);
+  });
+  const note = await page.textContent('#sc-mag-note');
+  assert.match(note, /fabricated Demo history|No eligible daily history/,
+    'Demo history is never described as real or observed volatility');
+  assert.doesNotMatch(note, /real volatility|observed recent history/,
+    'generated history cannot borrow observed-market wording');
+});
+
 test('Research prices a working package on the fan receipt and Outcomes reuses the result', async () => {
   await page.click('#level-switch button[data-level="beginner"]');
   await page.evaluate(() => {

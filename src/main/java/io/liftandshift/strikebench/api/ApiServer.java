@@ -2396,9 +2396,13 @@ public final class ApiServer {
         io.liftandshift.strikebench.sim.ScenarioSpec spec = fixedEnsemble != null ? fixedEnsemble.spec() : b.spec();
         if (fixedEnsemble == null && spec.volAnnual() <= 0 && me != null && me.atmIv() != null) spec = spec.withVol(me.atmIv());
         io.liftandshift.strikebench.sim.IvSpec iv = b.iv();
+        boolean marketCalibratedIv = iv == null;
+        double ivAnchor = me != null && me.atmIv() != null ? me.atmIv() : spec.sane().volAnnual();
         if (iv == null) {
-            double atm = me != null && me.atmIv() != null ? me.atmIv() : spec.sane().volAnnual();
-            iv = io.liftandshift.strikebench.sim.IvSpec.flat(atm);
+            iv = spec.sane().shape() == io.liftandshift.strikebench.sim.ScenarioSpec.Shape.EVENT_JUMP
+                    ? io.liftandshift.strikebench.sim.IvSpec.eventCrushAround(ivAnchor,
+                        Math.max(1, Math.round(spec.sane().horizonDays() / 3.0f)))
+                    : io.liftandshift.strikebench.sim.IvSpec.flat(ivAnchor);
         }
         // CONTRACT IDENTITY: when the entry was priced from listed contracts, SIMULATE THOSE
         // CONTRACTS — pricing one strike/expiry and simulating another silently compared two
@@ -2421,6 +2425,12 @@ public final class ApiServer {
             entryNote = "Entry fixed to the exact package price already shown on this screen; "
                     + "path exits are modeled from the listed contracts.";
         }
+        String ivBasis = marketCalibratedIv
+                ? (me != null && me.atmIv() != null
+                    ? "IV path anchored to the active lane's nearest-horizon ATM option volatility"
+                    : "IV path anchored to the scenario volatility because no eligible ATM option volatility was available")
+                : "IV path set explicitly by the scenario controls";
+        entryNote = (entryNote == null || entryNote.isBlank() ? "" : entryNote + " ") + ivBasis + ".";
         var pathBasis = b.pathBasis() == null
                 ? io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC : b.pathBasis();
         io.liftandshift.strikebench.sim.ScenarioSimulator.EnsembleRun evaluated;
@@ -2448,6 +2458,9 @@ public final class ApiServer {
             var out = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(eresult);
             out.put("pathSource", pathBasis.name());
             out.put("pathModelVersion", pathModelVersion);
+            out.put("ivStart", iv.sane().startIv());
+            out.put("ivLongRun", iv.sane().longRunIv());
+            out.put("ivBasis", ivBasis);
             out.put("studyKey", studyRes.studyKey());
             out.put("analogEvents", studyRes.eventDates() == null ? 0 : studyRes.eventDates().size());
             out.put("evidence", studyRes.evidence());
@@ -2468,6 +2481,9 @@ public final class ApiServer {
         }
         var out = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(evaluated.result());
         out.put("pathModelVersion", pathModelVersion);
+        out.put("ivStart", iv.sane().startIv());
+        out.put("ivLongRun", iv.sane().longRunIv());
+        out.put("ivBasis", ivBasis);
         return out;
     }
 

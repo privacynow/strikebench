@@ -26,6 +26,12 @@ public record IvSpec(
         return new IvSpec(v * 1.15, 0, 1.5, v * 0.85, eventDay, -0.35, 0.03, 4.0);
     }
 
+    /** Earnings-style teaching path anchored to the active market's ATM IV, not a canned level. */
+    public static IvSpec eventCrushAround(double atmIv, int eventDay) {
+        double v = atmIv <= 0 ? 0.30 : atmIv;
+        return new IvSpec(v * 1.40, 0, 1.5, v, eventDay, -0.35, 0.03, 4.0);
+    }
+
     public IvSpec sane() {
         double lo = minIv <= 0 ? 0.03 : minIv, hi = maxIv <= lo ? 4.0 : maxIv;
         return new IvSpec(clamp(startIv <= 0 ? 0.30 : startIv, lo, hi), clamp(driftPerYear, -3, 3),

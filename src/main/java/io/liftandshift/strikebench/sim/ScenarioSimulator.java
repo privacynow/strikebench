@@ -221,7 +221,7 @@ public final class ScenarioSimulator {
         for (int day = 0; day <= steps / spd; day++) example.add(round2(paths[medianIdx][Math.min(steps, day * spd)]));
 
         List<String> notes = new ArrayList<>();
-        if (entryOverrideCents != null && entryNote != null) notes.add(entryNote);
+        if (entryNote != null && !entryNote.isBlank()) notes.add(entryNote);
         notes.add(entryOverrideCents != null
                 ? "Exit values along each path are MODELED (Black-Scholes on the IV path); the entry reflects the quotes named above."
                 : "Synthetic scenario — entry AND exits are MODELED (Black-Scholes on the IV path), never observed market quotes.");

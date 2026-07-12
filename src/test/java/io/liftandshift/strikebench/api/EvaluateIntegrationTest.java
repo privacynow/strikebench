@@ -217,6 +217,29 @@ class EvaluateIntegrationTest {
         assertThat(post("/api/trade/replicate", "{}").statusCode()).isEqualTo(404);
     }
 
+    @Test void beginnerEventScenarioAnchorsIvCrushToTheActiveMarket() throws Exception {
+        String body = """
+                {"operation":"PATHS","basis":"PARAMETRIC",
+                 "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+                 "over":{"model":"JUMP_DIFFUSION","shape":"EVENT_JUMP","horizonDays":10,"stepsPerDay":2,
+                         "driftAnnual":0,"volAnnual":0,"jumpsPerYear":8,"jumpMean":0,
+                         "jumpVol":0.04,"tailNu":6,"seed":91,"paths":80},
+                 "position":{"key":"PUT_SPREAD","qty":1,"legs":[
+                   {"action":"SELL","type":"PUT","strike":255,"expiration":"2026-08-14","ratio":1},
+                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1}]}}
+                """;
+        JsonNode result = Json.MAPPER.readTree(post("/api/evaluate", body).body()).get("result");
+        double atm = result.at("/marketImplied/atmIv").asDouble();
+        assertThat(result.at("/positionOutcome/ivStart").asDouble())
+                .isCloseTo(atm * 1.40, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(result.at("/positionOutcome/ivLongRun").asDouble())
+                .isCloseTo(atm, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(result.at("/positionOutcome/ivBasis").asText())
+                .contains("active lane").contains("ATM option volatility");
+        assertThat(result.at("/positionOutcome/notes").toString())
+                .contains("ATM option volatility").contains("IV crush");
+    }
+
     @Test void riskNeutralBasisEvaluatesExactListedPackagesThroughTheSameContract() throws Exception {
         String body = """
                 {"operation":"POSITION","basis":"RISK_NEUTRAL",

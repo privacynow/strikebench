@@ -57,7 +57,7 @@
       var cs = h.candles || h.series || [];
       var closes = cs.map(function (c) { return parseFloat(c.close != null ? c.close : c.value); })
         .filter(function (v) { return isFinite(v) && v > 0; });
-      if (closes.length < 30) return null;
+      if (closes.length < 30) return { vol: null, evidence: h.evidence || null };
       var sum = 0, sum2 = 0, n = 0;
       for (var i = 1; i < closes.length; i++) {
         var r = Math.log(closes[i] / closes[i - 1]);
@@ -65,8 +65,9 @@
       }
       var sd = Math.sqrt(Math.max(0, sum2 / n - (sum / n) * (sum / n)));
       var hv = sd * Math.sqrt(252);
-      return isFinite(hv) && hv > 0.03 && hv < 3 ? hv : null;
-    }).catch(function () { return null; });
+      return { vol: isFinite(hv) && hv > 0.03 && hv < 3 ? hv : null,
+        evidence: h.evidence || null };
+    }).catch(function () { return { vol: null, evidence: null }; });
   }
 
   /* ---------------------------------------------------------------------------------------------
@@ -96,17 +97,17 @@
     // Per-ticker calibration: annualized HV from the symbol's (usually prefetched) history.
     // While unknown, magVolFor returns 0 — the server-side sentinel for "use market vol"
     // (the chain's ATM IV) — so no symbol ever gets a hardcoded 30%.
-    var hvBase = { v: null };
+    var hvBase = { v: null, evidence: null, loaded: false };
     function magVolFor(key) {
       var m2 = MAGS.find(function (x) { return x.key === key; }) || MAGS[1];
       return hvBase.v ? m2.mult * hvBase.v : 0;
     }
-    function magVolForDisplay(key) {
-      var m2 = MAGS.find(function (x) { return x.key === key; }) || MAGS[1];
-      return m2.mult * (hvBase.v || 0.30); // display estimate only, until HV lands
-    }
-    if (symbol) historicalVol(symbol).then(function (hv) {
-      if (hv) { hvBase.v = hv; if (box._sync) box._sync(); onchange(); }
+    if (symbol) historicalVol(symbol).then(function (calibration) {
+      hvBase.loaded = true;
+      hvBase.v = calibration && calibration.vol;
+      hvBase.evidence = calibration && calibration.evidence;
+      if (box._sync) box._sync();
+      onchange();
     });
 
     if (level === 'beginner') {
@@ -142,9 +143,20 @@
           el('p', {}, 'Option prices along each path come from a standard pricing model, so time decay and volatility changes are included. Every run is labeled as simulated.'));
       }));
       function sync() {
-        magNote.textContent = 'Typically within ±' + magPct(magVolForDisplay(f.mag), f.horizon) + '% by the end'
-          + (hvBase.v ? ' — scaled to ' + (symbol || 'this stock') + '\u2019s own recent volatility.'
-                      : ' — calibrating to ' + (symbol || 'this stock') + '\u2019s real volatility\u2026');
+        if (!hvBase.loaded) {
+          magNote.textContent = 'Loading volatility calibration for this market lane\u2026';
+        } else if (!hvBase.v) {
+          magNote.textContent = 'No eligible daily history here; the run will use this lane\u2019s nearest-horizon option volatility.';
+        } else {
+          var provenance = String(hvBase.evidence && hvBase.evidence.provenance || '').toUpperCase();
+          var basis = provenance === 'DEMO' ? 'fabricated Demo history'
+            : provenance === 'SIMULATED' ? 'this simulated session\u2019s generated history'
+            : provenance === 'MODELED' ? 'modeled history'
+            : provenance === 'OBSERVED' || provenance === 'BROKER' ? 'observed recent history'
+            : 'the eligible recent history in this lane';
+          magNote.textContent = 'Typically within ±' + magPct(magVolFor(f.mag), f.horizon)
+            + '% by the end — scaled to ' + basis + ' for ' + (symbol || 'this stock') + '.';
+        }
         onchange();
       }
       box._sync = sync;
@@ -251,13 +263,9 @@
 
     function getIv() {
       if (level === 'beginner') {
-        if (f.shape === 'EVENT_JUMP') { // earnings-style: IV rich into the event, crushed after
-          var mv = magVolForDisplay(f.mag); // IV SHAPE needs a level; the crush profile matters more than its exact base
-          return { startIv: mv * 1.4, driftPerYear: 0, meanRevertSpeed: 1.5, longRunIv: mv,
-            eventDay: Math.max(1, Math.round(f.horizon / 3)), eventShockPct: -0.35, minIv: 0.03, maxIv: 4 };
-        }
-        // null on purpose: the server prices the IV path off the REAL chain's ATM IV, so the
-        // verdict measures the user's scenario against the market's actual option prices.
+        // Null on purpose: the server anchors the IV path to this lane's nearest-horizon ATM IV.
+        // EVENT_JUMP adds its rich-IV-then-crush shape there too; it must never fall back to a
+        // hidden canned 30% merely because daily history is unavailable.
         return null;
       }
       return { startIv: (f.ivStart != null ? f.ivStart : 30) / 100, driftPerYear: 0, meanRevertSpeed: 0.5,
