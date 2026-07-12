@@ -1049,6 +1049,22 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   await page.waitForSelector('#tv-futures #whatif-card, #tv-futures #sc-shapes', { timeout: 15000 });
 });
 
+test('Research Coming up never relabels a past expiration as 0d', async () => {
+  await page.route('**/api/research/AAPL/expirations', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ symbol: 'AAPL', asOfDate: '2026-07-12',
+      expirations: ['2026-07-10', '2026-07-13', '2026-07-17'] })
+  }));
+  await page.evaluate(() => API.invalidate(['/api/research/AAPL/expirations']));
+  await go('#/research/AAPL');
+  await page.waitForSelector('#events-card:has-text("2026-07-13")');
+  const events = await page.textContent('#events-card');
+  assert.doesNotMatch(events, /2026-07-10/, 'past contracts are absent from Coming up');
+  assert.match(events, /2026-07-13\s*·\s*1d/, 'DTE follows the lane date, not the browser timezone');
+  await page.unroute('**/api/research/AAPL/expirations');
+  await page.evaluate(() => API.invalidate(['/api/research/AAPL/expirations']));
+});
+
 test('form geometry: controls in one grid row share a vertical origin (labels never push them)', async () => {
   await page.click('#level-switch button[data-level="expert"]');
   await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = { mode: 'scenario' }; });

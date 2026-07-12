@@ -2726,7 +2726,7 @@ public final class ApiServer {
                      io.liftandshift.strikebench.model.DataEvidence evidence) {}
         try (var exec = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             var ivExpF = exec.submit(() -> {
-                List<LocalDate> e = market.expirations(symbol, world);
+                List<LocalDate> e = activeExpirations(symbol, world);
                 OptionChain ch = e.isEmpty() ? null : market.chain(symbol, e.getFirst(), world).orElse(null);
                 boolean allowed = ch != null && ch.evidence().usableIn(
                         lane == io.liftandshift.strikebench.market.MarketLane.SCENARIO
@@ -2829,8 +2829,24 @@ public final class ApiServer {
 
     private void expirations(Context ctx) {
         String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
+        String world = activeWorld(ctx);
+        java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
         ctx.json(Map.of("symbol", symbol,
-                "expirations", market.expirations(symbol, activeWorld(ctx)).stream().map(LocalDate::toString).toList()));
+                "asOfDate", LocalDate.ofInstant(now, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString(),
+                "expirations", activeExpirations(market.expirations(symbol, world), now).stream()
+                        .map(LocalDate::toString).toList()));
+    }
+
+    private List<LocalDate> activeExpirations(String symbol, String world) {
+        java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
+        return activeExpirations(market.expirations(symbol, world), now);
+    }
+
+    static List<LocalDate> activeExpirations(List<LocalDate> expirations, java.time.Instant now) {
+        if (expirations == null || expirations.isEmpty()) return List.of();
+        return expirations.stream()
+                .filter(exp -> !io.liftandshift.strikebench.market.MarketHours.contractDead(exp, now))
+                .sorted().toList();
     }
 
     private void chain(Context ctx) {
@@ -2840,7 +2856,12 @@ public final class ApiServer {
             throw new IllegalArgumentException("expiration query parameter is required (YYYY-MM-DD)");
         }
         LocalDate exp = LocalDate.parse(expStr.trim());
-        Optional<OptionChain> chain = market.chain(symbol, exp, activeWorld(ctx));
+        String world = activeWorld(ctx);
+        java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
+        if (io.liftandshift.strikebench.market.MarketHours.contractDead(exp, now)) {
+            throw new IllegalArgumentException("expiration is no longer active: " + exp);
+        }
+        Optional<OptionChain> chain = market.chain(symbol, exp, world);
         if (chain.isEmpty()) {
             ctx.attribute("apiErrorWritten", true);
             ctx.status(404).json(Map.of("error", "no_chain", "detail", "No option chain for " + symbol + " " + exp));

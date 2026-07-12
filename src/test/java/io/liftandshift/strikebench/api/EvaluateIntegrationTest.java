@@ -17,6 +17,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -274,6 +275,15 @@ class EvaluateIntegrationTest {
                 java.time.LocalDate.parse("2026-07-06"))).isEqualTo(1); // July 3 observed holiday + weekend
         assertThat(ApiServer.outcomeExpiryDay(java.time.LocalDate.parse("2026-07-08"),
                 java.time.LocalDate.parse("2026-07-13"))).isEqualTo(3); // Thu, Fri, Mon
+    }
+
+    @Test void currentExpirationContractFiltersAfterItsFinalBell() {
+        var expirations = List.of(java.time.LocalDate.parse("2026-07-10"),
+                java.time.LocalDate.parse("2026-07-13"));
+        assertThat(ApiServer.activeExpirations(expirations, Instant.parse("2026-07-10T19:59:59Z")))
+                .containsExactly(java.time.LocalDate.parse("2026-07-10"), java.time.LocalDate.parse("2026-07-13"));
+        assertThat(ApiServer.activeExpirations(expirations, Instant.parse("2026-07-10T20:00:00Z")))
+                .containsExactly(java.time.LocalDate.parse("2026-07-13"));
     }
 
     @Test void ideasDecisionAndTicketShareOneRiskNeutralCalculation() throws Exception {

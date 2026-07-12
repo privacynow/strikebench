@@ -1143,6 +1143,21 @@
 
   var EARNINGS_RE = /earnings|quarterly results|guidance|earnings call/i;
 
+  function laneDateString() {
+    var d = App.Market && App.Market.simTime ? new Date(App.Market.simTime) : new Date();
+    try {
+      var parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
+        year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d);
+      var byType = {};
+      parts.forEach(function (p) { byType[p.type] = p.value; });
+      return byType.year + '-' + byType.month + '-' + byType.day;
+    } catch (e) { return d.toISOString().slice(0, 10); }
+  }
+
+  function calendarDayDistance(fromIso, toIso) {
+    return Math.round((Date.parse(toIso + 'T00:00:00Z') - Date.parse(fromIso + 'T00:00:00Z')) / 86400000);
+  }
+
   /**
    * "Coming up" — the dated events that can move a symbol: option expirations, earnings
    * signals from headlines, and the latest SEC filing. One helper, two shapes: a full card
@@ -1162,14 +1177,15 @@
       // Expirations + news are independent \u2014 fetch them together. If the caller already
       // has the expirations (the research page loads them with the quote), skip that call.
       var exP = (preExpirations && preExpirations.length)
-        ? Promise.resolve({ expirations: preExpirations })
+        ? Promise.resolve({ expirations: preExpirations, asOfDate: laneDateString() })
         : API.get('/api/research/' + symbol + '/expirations').catch(function () { return { expirations: [] }; });
       var newsP = API.get('/api/research/' + symbol + '/news').catch(function () { return { items: [] }; });
       try {
-        var ex = (await exP).expirations || [];
-        var now = Date.now();
+        var exDoc = await exP;
+        var today = exDoc.asOfDate || laneDateString();
+        var ex = (exDoc.expirations || []).filter(function (d) { return calendarDayDistance(today, d) >= 0; });
         ex.slice(0, 3).forEach(function (d) {
-          var dte = Math.max(0, Math.round((new Date(d + 'T16:00:00') - now) / 86400000));
+          var dte = calendarDayDistance(today, d);
           body.appendChild(chip('Expiry', d + ' \u00B7 ' + dte + 'd'));
           had = true;
         });
