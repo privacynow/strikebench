@@ -701,12 +701,6 @@
         if (incomingEpoch) App.state.worldRevisionEpoch = incomingEpoch;
         App.state.worldGen++;         // discard SSE/stale fills from the world we just left
         if (changed) { stashLane(from); restoreLane(target); }
-        // A working idea priced in the OTHER market cannot survive the switch: its quotes,
-        // expirations and account lane belong to a different world (review P2).
-        if (App.state.ticket && (App.state.ticket.world || 'observed') !== target) {
-          App.state.ticket = null;
-          if (UI.toast) UI.toast('Working idea cleared — it was priced in the other market');
-        }
         API.flushCache();             // every cached GET belonged to the old world
         if (App.Market) { App.Market.quotes = {}; App.Market.seq = 0; App.Market.world = target; App.Market.simTime = null; }
         App.state.universe = u;

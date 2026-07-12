@@ -264,6 +264,71 @@ class PlanApiIntegrationTest {
         assertThat(latestAfterReplay.at("/backtests/0/maxDrawdownPct").isNumber()).isTrue();
     }
 
+    @Test void decideFreezesTheServerSelectedPackageAndLinksTradeOrCash() throws Exception {
+        JsonNode tradePlan = json(post("/api/plans", """
+                {"clientRequestId":"decision-trade-plan","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                """));
+        String tradePlanId = tradePlan.get("id").asText();
+        JsonNode field = json(post("/api/plans/" + tradePlanId + "/strategy/run", "{}"));
+        JsonNode candidate = null;
+        for (JsonNode item : field.at("/strategy/result/candidates")) {
+            java.util.Set<String> expirations = new java.util.HashSet<>();
+            for (JsonNode leg : item.withArray("legs")) if (!"STOCK".equals(leg.path("type").asText())) {
+                expirations.add(leg.path("expiration").asText());
+            }
+            if (expirations.size() == 1) { candidate = item; break; }
+        }
+        assertThat(candidate).as("fixture field has a same-expiry package").isNotNull();
+        JsonNode selected = json(put("/api/plans/" + tradePlanId + "/strategy/select",
+                "{\"candidateId\":\"" + candidate.get("id").asText() + "\",\"expectedVersion\":"
+                        + field.at("/plan/version").asLong() + "}"));
+        long version = selected.at("/plan/version").asLong();
+
+        JsonNode preview = json(post("/api/plans/" + tradePlanId + "/decision/preview",
+                "{\"expectedVersion\":" + version + ",\"qty\":1}"));
+        assertThat(preview.at("/selected/id").asText()).isEqualTo(candidate.get("id").asText());
+        assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
+        assertThat(preview.at("/order/proposedNetCents").isNumber()).isTrue();
+        assertThat(preview.at("/preview/entryNetPremiumCents").asLong())
+                .isEqualTo(preview.at("/order/proposedNetCents").asLong());
+
+        var tradeRequest = Json.MAPPER.createObjectNode();
+        tradeRequest.put("expectedVersion", version);
+        tradeRequest.put("qty", 1);
+        tradeRequest.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+        if (preview.has("ackToken")) tradeRequest.put("ackToken", preview.get("ackToken").asText());
+        var acknowledgments = tradeRequest.putArray("acknowledgedRisks");
+        for (JsonNode ack : preview.withArray("requiredAcks")) acknowledgments.add(ack.get("id").asText());
+        JsonNode opened = json(post("/api/plans/" + tradePlanId + "/decision/trade", tradeRequest.toString()));
+        assertThat(opened.at("/plan/status").asText()).isEqualTo("POSITION_OPEN");
+        assertThat(opened.at("/plan/activeStage").asText()).isEqualTo("MANAGE_REVIEW");
+        assertThat(opened.at("/decision/action").asText()).isEqualTo("TRADE");
+        assertThat(opened.at("/decision/tradeId").asText()).isEqualTo(opened.at("/trade/id").asText());
+        assertThat(opened.at("/decision/legs")).hasSize(candidate.withArray("legs").size());
+        assertThat(opened.at("/decision/proposedNetCents").asLong())
+                .isEqualTo(opened.at("/trade/entryNetPremiumCents").asLong());
+
+        JsonNode cashPlan = json(post("/api/plans", """
+                {"clientRequestId":"decision-cash-plan","symbol":"QQQ","intent":"INCOME",
+                 "thesis":"neutral","horizonDays":30,"riskMode":"conservative"}
+                """));
+        String cashPlanId = cashPlan.get("id").asText();
+        JsonNode cashField = json(post("/api/plans/" + cashPlanId + "/strategy/run", "{}"));
+        JsonNode cashCandidate = cashField.at("/strategy/result/candidates/0");
+        JsonNode cashSelected = json(put("/api/plans/" + cashPlanId + "/strategy/select",
+                "{\"candidateId\":\"" + cashCandidate.get("id").asText() + "\",\"expectedVersion\":"
+                        + cashField.at("/plan/version").asLong() + "}"));
+        JsonNode cash = json(post("/api/plans/" + cashPlanId + "/decision/cash",
+                "{\"expectedVersion\":" + cashSelected.at("/plan/version").asLong()
+                        + ",\"qty\":1,\"note\":\"Costs outweighed the modeled edge\"}"));
+        assertThat(cash.at("/plan/status").asText()).isEqualTo("DECIDED_CASH");
+        assertThat(cash.at("/decision/action").asText()).isEqualTo("CASH");
+        assertThat(cash.at("/decision/tradeId").isMissingNode()).isTrue();
+        assertThat(cash.at("/decision/metrics/decisionNote").asText())
+                .isEqualTo("Costs outweighed the modeled edge");
+    }
+
     private static HttpResponse<String> get(String path) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(base + path)).GET().build(),
                 HttpResponse.BodyHandlers.ofString());

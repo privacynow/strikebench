@@ -1899,25 +1899,36 @@
       ? intent : 'DIRECTIONAL';
   }
 
-  function ticketForCandidate(c, rawSymbol, extra) {
+  async function openCandidateAsPlan(c, rawSymbol, extra) {
     var symbol = String(rawSymbol || App.context.symbol('AAPL')).toUpperCase();
     var intent = tradeIntent(c && c.intent || App.context.goal());
     var horizon = App.context.horizon('month');
     var thesis = App.context.thesis('neutral');
     App.context.update({ symbol: symbol, goal: intent, horizon: horizon, thesis: thesis });
-    return Object.assign({
-      world: App.state.world || 'observed', candidate: c, symbol: symbol, step: 5,
-      intent: intent, horizon: horizon, thesis: thesis
+    var days = horizon === '0DTE' ? 1 : horizon === 'week' ? 7 : horizon === 'quarter' ? 63
+      : /^\d+d$/.test(horizon || '') ? parseInt(horizon, 10) : 30;
+    var plan = await PlanStore.create({ symbol: symbol, intent: intent, thesis: thesis,
+      horizonDays: days, riskMode: riskMode() });
+    var position = Object.assign({ symbol: symbol, strategy: c.strategy || 'CUSTOM', qty: c.qty || 1,
+      legs: (c.legs || []).map(function (leg) { return {
+        action: leg.action, type: leg.stock ? 'STOCK' : leg.type,
+        strike: leg.stock || leg.type === 'STOCK' ? null : String(leg.strike),
+        expiration: leg.stock || leg.type === 'STOCK' ? null : leg.expiration,
+        ratio: leg.ratio || 1, entryPrice: leg.entryPrice == null ? null : String(leg.entryPrice)
+      }; }), thesis: thesis, horizon: horizon, riskMode: riskMode(), intent: intent,
+      useHeldShares: !!c.usesHeldShares, recommendationId: c.recommendationId || null, source: 'PLAN'
     }, extra || {});
+    var selected = await PlanStore.saveCustom(plan, position);
+    await PlanStore.focus(selected.plan, 'DECIDE');
+    return selected.plan;
   }
 
   function candidateWorkflowActions(c, symbolForTicket, beginner) {
     var symbol = symbolForTicket || App.context.symbol();
     return el('div', { class: 'btn-row candidate-workflow-actions' },
       el('button', { class: 'btn', onclick: function () {
-        startPlan({ symbol: symbol, intent: tradeIntent(c && c.intent),
-          horizon: App.context.horizon(), thesis: App.context.thesis() }, 'STRATEGY');
-      } }, beginner ? 'Open this in a Plan' : 'Continue in a Plan'));
+        openCandidateAsPlan(c, symbol).catch(function (e) { UI.toast(e.message, 'error'); });
+      } }, beginner ? 'Use this in a Plan' : 'Continue with this package'));
   }
 
   /** Learning-level card: plain language first, numbers second, mechanics on tap. */
@@ -2358,7 +2369,6 @@
     var routes = {
       UNDERSTAND: { title: 'Understand ' + plan.symbol, body: 'Review the market picture before choosing a structure.', route: PlanStore.path(plan, 'UNDERSTAND'), action: 'Open market picture' },
       EVIDENCE: { title: 'Test the view', body: 'Study past analogs and possible futures without requiring a structure.', route: PlanStore.path(plan, 'EVIDENCE'), action: 'Open evidence' },
-      DECIDE: { title: 'Trade it, or stay in cash', body: 'Reprice the exact package, review economics and pass every acknowledgment gate.', route: '#/trade/decide', action: 'Open current decision tools' },
       MANAGE_REVIEW: { title: 'Manage & Review', body: 'Compare what happened with the expectation frozen at the decision.', route: '#/portfolio', action: 'Open Portfolio' }
     };
     var copy = routes[stage.key];
@@ -2379,7 +2389,9 @@
       STRATEGY: { title: 'Choose an expression',
         body: 'Compare the ranked field, shape exact contracts, inspect the option book, or scout a linked alternative without leaving this Plan.' },
       OUTCOMES: { title: 'Test the exact position',
-        body: 'Judge the selected contracts under market-implied odds, the same stored futures, matching past episodes, and a no-look-ahead rule replay.' }
+        body: 'Judge the selected contracts under market-implied odds, the same stored futures, matching past episodes, and a no-look-ahead rule replay.' },
+      DECIDE: { title: 'Trade it, or stay in cash',
+        body: 'Reprice the exact Plan package, retain theoretical risk and realistic context, then freeze one deliberate decision.' }
     }[stage.key];
     var content = el('div', { class: 'plan-stage-content', id: 'plan-stage-content' });
     root.appendChild(el('section', { class: 'plan-stage-frame', id: 'plan-stage-' + stage.path },
@@ -2414,6 +2426,7 @@
         planRef.result.candidates.forEach(function (c) { c.selected = c.id === candidate.id; });
       }
       planRef.selected = candidate;
+      ui.selectedCandidate = candidate;
       candidate.selected = true;
       if (adjust) {
         ui.buildState = ui.buildState || {};
@@ -2463,6 +2476,7 @@
             planRef.plan = out.plan;
             candidates.forEach(function (x) { x.selected = x.id === c.id; });
             planRef.selected = c;
+            ui.selectedCandidate = c;
             return repaint();
           }).catch(function (e) { UI.toast(e.message, 'error'); });
         };
@@ -2520,6 +2534,7 @@
       var latest = await PlanStore.latestStrategy(initialPlan.id, true);
       planRef.result = latest && latest.strategy && latest.strategy.result || null;
       planRef.selected = latest && latest.selected || null;
+      ui.selectedCandidate = planRef.selected;
     } catch (e) {
       body.appendChild(alertBox('warn', 'Could not restore the last strategy comparison', [e.message]));
     }
@@ -3004,6 +3019,178 @@
     }
   }
 
+  function renderFrozenPlanDecision(host, plan, decision) {
+    function label(value) { return String(value || '').replaceAll('_', ' ').toLowerCase(); }
+    var traded = decision.action === 'TRADE';
+    host.appendChild(alertBox(traded ? 'ok' : 'caution',
+      traded ? 'Paper position opened from this Plan' : 'Cash was the decision', [
+        traded ? 'The exact priced package and account snapshot are frozen beside the linked paper trade.'
+          : 'Doing nothing is a first-class decision. The rejected package remains frozen for review against cash.',
+        'Decision time: ' + (decision.quoteAsOf || decision.createdAt || 'captured by the server')
+      ]));
+    host.appendChild(el('div', { class: 'grid grid-4 plan-decision-facts' },
+      stat('Action', traded ? 'TRADE' : 'CASH'),
+      stat('Theoretical max loss', decision.maxLossCents == null ? '—' : fmtMoney(decision.maxLossCents)),
+      stat('Chance of any profit', decision.pop == null ? '—' : fmtPct(decision.pop)),
+      stat('Market EV after costs', decision.evMarketCents == null ? '—' : pnlSpan(decision.evMarketCents)),
+      stat('Realized-vol scenario EV', decision.evHistvolCents == null ? '—' : pnlSpan(decision.evHistvolCents)),
+      stat('Economic placement', label(decision.economicVerdict || 'UNAVAILABLE')),
+      stat('Evidence', label(decision.evidenceProvenance || 'UNKNOWN')),
+      stat('Buying power at decision', decision.buyingPowerCents == null ? '—' : fmtMoney(decision.buyingPowerCents))));
+    if (decision.legs && decision.legs.length) host.appendChild(UI.expandable('Frozen listed contracts', function () {
+      return table(['Side', 'Contract', 'Bid', 'Ask', 'Fill'], decision.legs.map(function (leg) {
+        var strike = leg.strikeCents == null ? '' : ' ' + fmtMoney(leg.strikeCents);
+        return el('tr', {}, el('td', {}, leg.action), el('td', {}, leg.type + strike + (leg.expiration ? ' · ' + leg.expiration : '')),
+          el('td', {}, leg.bidCents == null ? '—' : fmtMoney(leg.bidCents)),
+          el('td', {}, leg.askCents == null ? '—' : fmtMoney(leg.askCents)),
+          el('td', {}, leg.fillCents == null ? '—' : fmtMoney(leg.fillCents)));
+      }));
+    }));
+    host.appendChild(el('div', { class: 'plan-next-action' },
+      el('div', {}, el('b', {}, 'Decision frozen'), el('p', { class: 'muted' },
+        'Manage & Review now compares what happens with what this decision expected.')),
+      el('button', { type: 'button', class: 'btn', onclick: async function () {
+        try { await PlanStore.focus(await PlanStore.get(plan.id, true), 'MANAGE_REVIEW'); }
+        catch (e) { UI.toast(e.message, 'error'); }
+      } }, 'Open Manage & Review')));
+  }
+
+  async function planDecideStage(root, initialPlan, stage) {
+    var planRef = { plan: initialPlan };
+    var ui = PlanStore.ui(initialPlan.id);
+    ui.decision = ui.decision || { qty: 1, proposedNetCents: null, feesOverrideCents: null, note: '' };
+    var state = ui.decision;
+    var content = planOwnedStage(root, initialPlan, stage);
+    var latest = await PlanStore.latestDecision(initialPlan.id, true);
+    if (latest.decision) {
+      renderFrozenPlanDecision(content, initialPlan, latest.decision);
+      return;
+    }
+    var selected = latest.selected;
+    if (!selected) {
+      content.appendChild(UI.emptyState('Choose a structure before deciding',
+        'Decide never invents or recaptures a package. Select exact contracts in Strategy first.',
+        'Open Strategy', function () { PlanStore.focus(planRef.plan, 'STRATEGY'); }));
+      return;
+    }
+    if (!state.qty) state.qty = selected.qty || 1;
+    content.appendChild(el('div', { class: 'card plan-decision-position' },
+      UI.cardHeader('Exact package under decision', el('span', { class: 'badge badge-ok' }, 'LOCKED TO PLAN')),
+      el('div', { class: 'chip-row' }, chip('Structure', selected.displayName || prettyStrategy(selected.strategy)),
+        chip('Contracts', (selected.legs || []).length + ' legs'), chip('Plan intent', planIntentLabel(initialPlan.intent))),
+      UI.expandable('Show the selected contracts and prior economics', function () { return candidateCard(selected, false, initialPlan.symbol); })));
+
+    var qty = el('input', { type: 'number', min: '1', max: '100', value: state.qty, id: 'plan-decision-qty' });
+    var limit = el('input', { type: 'number', step: '0.01', id: 'plan-decision-price',
+      placeholder: 'Use executable package price', value: state.proposedNetCents == null ? '' : (state.proposedNetCents / 100).toFixed(2) });
+    var fees = el('input', { type: 'number', step: '0.01', min: '0', id: 'plan-decision-fees',
+      placeholder: 'Platform default', value: state.feesOverrideCents == null ? '' : (state.feesOverrideCents / 100).toFixed(2) });
+    var note = el('textarea', { id: 'plan-decision-note', rows: '2', placeholder: 'Optional: what would make this decision right or wrong?' }, state.note || '');
+    var review = el('div', { id: 'plan-decision-review', 'aria-live': 'polite' });
+    function dollars(input, label, nonnegative) {
+      if (!input.value) return null;
+      var value = Number(input.value);
+      if (!isFinite(value) || (nonnegative && value < 0)) throw new Error(label + ' is not a valid dollar amount.');
+      return Math.round(value * 100);
+    }
+    function request() {
+      state.qty = positiveInteger(qty.value, 'Quantity', 100);
+      state.proposedNetCents = dollars(limit, 'Package price', false);
+      state.feesOverrideCents = dollars(fees, 'Fees', true);
+      state.note = note.value.trim();
+      return { qty: state.qty, proposedNetCents: state.proposedNetCents,
+        feesOverrideCents: state.feesOverrideCents, note: state.note };
+    }
+    content.appendChild(el('div', { class: 'card plan-decision-controls' }, UI.cardHeader('Price the decision now'),
+      el('p', { class: 'muted' }, 'The server reprices the Plan’s contracts against the current book. A blank price freezes the executable package price shown by this review.'),
+      el('div', { class: 'form-grid plan-decision-form' },
+        el('div', { class: 'field' }, el('label', { for: 'plan-decision-qty' }, 'Quantity'), qty),
+        el('div', { class: 'field' }, el('label', { for: 'plan-decision-price' }, 'Net price $ (+credit / −debit)'), limit)),
+      UI.expandable('Fees and decision note', function () { return el('div', { class: 'form-grid' },
+        el('div', { class: 'field' }, el('label', { for: 'plan-decision-fees' }, 'Fees per side $'), fees),
+        el('div', { class: 'field' }, el('label', { for: 'plan-decision-note' }, 'Decision note'), note)); }),
+      el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', id: 'plan-review-order', onclick: async function () {
+        this.disabled = true; review.innerHTML = ''; review.appendChild(UI.spinner('Repricing the exact package…'));
+        try {
+          var live = await PlanStore.get(planRef.plan.id, true); planRef.plan = live;
+          state.preview = await PlanStore.previewDecision(live, request());
+          state.proposedNetCents = state.preview.order.proposedNetCents;
+          limit.value = (state.proposedNetCents / 100).toFixed(2);
+          paintPreview();
+        } catch (e) { review.innerHTML = ''; review.appendChild(alertBox('danger', 'Could not review this order', [e.message])); }
+        finally { this.disabled = false; }
+      } }, state.preview ? 'Refresh exact review' : 'Review exact order'))));
+    content.appendChild(review);
+
+    function paintPreview() {
+      var result = state.preview;
+      if (!result) return;
+      var p = result.preview, economics = result.economics;
+      review.innerHTML = '';
+      review.appendChild(economicAssessmentBlock({ economics: economics, economicVerdict: economics && economics.verdict }));
+      review.appendChild(verdictPanel(p, Learn.currentLevel() === 'beginner', true).node);
+      var blocks = (p.blockReasons || []).concat(result.guardrails && result.guardrails.blockReasons || []);
+      var warnings = (p.warnings || []).concat(result.guardrails && result.guardrails.warnings || []);
+      if (blocks.length) review.appendChild(alertBox('danger', 'This package cannot be opened', blocks));
+      if (warnings.length) review.appendChild(alertBox('caution', 'Review these conditions', warnings));
+      review.appendChild(el('div', { class: 'grid grid-4 plan-decision-math' },
+        stat('Cost / credit', fmtMoney(p.entryNetPremiumCents, { plus: true })),
+        stat('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(p.maxLossCents))),
+        stat('Theoretical max profit', UI.maxProfitLabel(selected.strategy, selected.structureGroup,
+          p.maxProfitCents, Learn.currentLevel() === 'beginner', p.legs)),
+        stat('Chance of any profit', fmtPct(p.popEntry)),
+        stat('Market EV after costs', economics && economics.marketEvAfterCostsCents != null ? pnlSpan(economics.marketEvAfterCostsCents) : '—'),
+        stat('Realized-vol scenario EV', economics && economics.realizedVolEvAfterCostsCents != null ? pnlSpan(economics.realizedVolEvAfterCostsCents) : '—'),
+        stat('Buying power after', fmtMoney(p.buyingPowerAfterCents)),
+        stat('Opening fees', fmtMoney(p.feesOpenCents))));
+      if (window.Scenario && selected.legs && selected.legs.length) review.appendChild(UI.expandable(
+        'Realistic calm, up, down and choppy outcomes', function () {
+          return Scenario.realisticOutcomes(initialPlan.symbol,
+            Object.assign({}, selected, { qty: state.qty, entryNetPremiumCents: p.entryNetPremiumCents }));
+        }));
+      var required = result.requiredAcks || [];
+      state.acks = {};
+      var trade = el('button', { type: 'button', class: 'btn', id: 'plan-place-trade', disabled: 'disabled' }, 'Open paper position');
+      function refresh() {
+        var complete = required.every(function (ack) { return state.acks[ack.id]; });
+        trade.disabled = !p.ok || !complete;
+      }
+      if (required.length) review.appendChild(el('div', { class: 'card card-slim ack-gate' },
+        UI.cardHeader('Acknowledge material risks'), required.map(function (ack) {
+          var box = el('input', { type: 'checkbox', id: 'plan-' + ack.id, onchange: function () { state.acks[ack.id] = box.checked; refresh(); } });
+          return el('label', { class: 'ack-row', for: 'plan-' + ack.id }, box, el('span', {}, ack.label));
+        })));
+      trade.onclick = async function () {
+        trade.disabled = true;
+        try {
+          var live = await PlanStore.get(planRef.plan.id, true);
+          var req = request(); req.ackToken = result.ackToken;
+          req.acknowledgedRisks = required.filter(function (ack) { return state.acks[ack.id]; }).map(function (ack) { return ack.id; });
+          var out = await PlanStore.tradeDecision(live, req);
+          state.preview = null;
+          await PlanStore.focus(out.plan, 'MANAGE_REVIEW');
+        } catch (e) { trade.disabled = false; review.appendChild(alertBox('danger', 'The position was not opened', [e.message])); }
+      };
+      var cash = el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-stay-cash', onclick: function () {
+        UI.confirmModal('Stay in cash for this Plan?', el('p', {},
+          'StrikeBench will freeze this package and its current odds as the rejected alternative, then review cash against it.'),
+        'Choose cash', async function () {
+          try {
+            var live = await PlanStore.get(planRef.plan.id, true);
+            var out = await PlanStore.cashDecision(live, request());
+            state.preview = null;
+            await PlanStore.focus(out.plan, 'MANAGE_REVIEW');
+          } catch (e) { UI.toast(e.message, 'error'); }
+        });
+      } }, 'Stay in cash');
+      review.appendChild(el('div', { class: 'plan-decision-actions' },
+        el('div', {}, el('b', {}, 'Make the decision'), el('p', { class: 'muted' },
+          'Trade and cash both preserve this exact comparison for later review.')),
+        el('div', { class: 'btn-row' }, trade, cash)));
+      refresh();
+    }
+  }
+
   async function planWorkspace(root, params) {
     var id = params[0] || '';
     var rawStage = (params[1] || 'understand').split('?')[0];
@@ -3037,6 +3224,8 @@
       await planStrategyStage(root, plan, stage);
     } else if (stage.key === 'OUTCOMES') {
       await planOutcomesStage(root, plan, stage);
+    } else if (stage.key === 'DECIDE') {
+      await planDecideStage(root, plan, stage);
     } else transitionalPlanStage(root, plan, stage);
   }
 
@@ -3052,7 +3241,6 @@
 
   async function trade(root, params) {
     if (params[0] && /^tr_/.test(params[0])) return tradeDetail(root, params);
-    if (params[0] === 'decide' || params[0] === 'place') return ticket(root);
     root.appendChild(UI.emptyState('This Trade route no longer exists',
       'Start or resume a Plan. Context and Structure now live together in its six-stage workspace.',
       'Open Research', function () { App.navigate('#/research'); }));
@@ -3357,8 +3545,7 @@
           el('div', { class: 'ladder-row-copy' }, sentence(c)),
           el('button', {
             class: 'btn btn-sm ladder-row-action', onclick: function () {
-              App.state.ticket = ticketForCandidate(c, ctx.symbol);
-              App.navigate('#/trade/decide');
+              openCandidateAsPlan(c, ctx.symbol).catch(function (e) { UI.toast(e.message, 'error'); });
             }
           }, 'Practice this'));
         list.appendChild(row);
@@ -3400,8 +3587,7 @@
         tds.push(el('td', {}, el('button', {
           class: 'btn btn-sm', onclick: function (e) {
             e.stopPropagation();
-            App.state.ticket = ticketForCandidate(c, ctx.symbol);
-            App.navigate('#/trade/decide');
+            openCandidateAsPlan(c, ctx.symbol).catch(function (error) { UI.toast(error.message, 'error'); });
           }
         }, 'Use')));
         var detail = el('tr', { class: 'compare-detail', style: 'display:none' },
@@ -3447,377 +3633,6 @@
   }
 
   // ---- Manual: "I have a view" ----
-
-  // ---------- 4. Guided ticket ----------
-
-  // Screening lives in Discover now — Place is purely: Strikes -> Review -> Confirm.
-  var STEPS = ['Strikes', 'Review', 'Confirm']; // displayed; internal t.step stays 5/6/7
-
-  async function ticket(root) {
-    var t = App.state.ticket = App.state.ticket || {};
-    t.symbol = t.symbol || App.context.symbol('AAPL');
-    t.intent = tradeIntent(t.intent || t.candidate && t.candidate.intent || App.context.goal());
-    t.horizon = t.horizon || App.context.horizon('month');
-    t.thesis = t.thesis || App.context.thesis('neutral');
-    // The engine sizes candidates (qty may be 3 for "cover all 300 shares") — never
-    // silently reset that to 1; the user can still change it on the Strikes step.
-    t.qty = t.qty || (t.candidate && t.candidate.qty) || 1;
-    var hasIdea = !!(t.candidate || (t.custom && t.legs && t.legs.length));
-    if (!hasIdea) {
-      root.appendChild(el('div', { class: 'card' },
-        UI.emptyState('Nothing to place yet',
-          'Choose a Plan in Research, compare structures, and carry the selected package through Outcomes before deciding.',
-          'Open Research', function () { App.navigate('#/research'); }),
-        el('div', { class: 'btn-row', style: 'justify-content:center' },
-          el('button', { class: 'btn btn-secondary btn-sm', onclick: function () {
-            var active = PlanStore.active();
-            if (active) PlanStore.focus(active, 'STRATEGY'); else App.navigate('#/research');
-          } }, 'Open a Plan’s Builder'))));
-      return;
-    }
-    t.step = Math.max(5, Math.min(7, t.step || 5));
-
-    root.appendChild(el('div', { class: 'wizard-steps' }, STEPS.map(function (s, i) {
-      var n = i + 5; // internal numbering
-      var cls = n === t.step ? ' active' : (n < t.step ? ' done' : '');
-      return el('span', { class: 'step' + cls },
-        el('span', { class: 'dot' }, n < t.step ? '✓' : String(i + 1)), s);
-    })));
-    var body = el('div', { class: 'card', id: 'ticket-body' });
-    root.appendChild(body);
-
-    function rerender() { App.render(); }
-    function nav(step) {
-      if (step < 5) {
-        var active = PlanStore.active();
-        if (active) PlanStore.focus(active, 'STRATEGY'); else App.navigate('#/research');
-        return;
-      }
-      t.step = step;
-      rerender();
-    }
-
-    function backNext(backStep, nextNode) {
-      return el('div', { class: 'btn-row' },
-        el('button', { class: 'btn btn-secondary', onclick: function () { nav(backStep); } }, '← Back'),
-        nextNode || null);
-    }
-
-    function priceEvaluationFields(p) {
-      var netIn = el('input', { type: 'number', step: '0.01', id: 'proposed-net',
-        placeholder: 'e.g. ' + (p.entryNetPremiumCents / 100).toFixed(2),
-        value: t.proposedNetCents !== undefined && t.proposedNetCents !== null ? (t.proposedNetCents / 100).toFixed(2) : '' });
-      var feesIn = el('input', { type: 'number', step: '0.01', min: '0', id: 'fees-override',
-        value: t.feesOverrideCents !== undefined && t.feesOverrideCents !== null ? (t.feesOverrideCents / 100).toFixed(2) : '' });
-      function parseCents(input, label, nonnegative) {
-        if (input.value === '') return null;
-        var value = Number(input.value);
-        if (!isFinite(value) || (nonnegative && value < 0)) {
-          throw new Error(label + (nonnegative ? ' must be zero or greater.' : ' must be a valid dollar amount.'));
-        }
-        return Math.round(value * 100);
-      }
-      return el('div', { class: 'price-eval-fields' },
-        el('div', { class: 'form-grid' },
-          el('div', { class: 'field' }, el('label', { for: 'proposed-net' }, 'Net price $ (+credit / −debit)'), netIn),
-          el('div', { class: 'field' }, el('label', { for: 'fees-override' }, 'Fees per side $ (blank = default)'), feesIn),
-          el('div', { class: 'field price-eval-command' }, el('button', {
-            class: 'btn btn-sm', id: 'reprice-btn', onclick: function () {
-              try {
-                t.proposedNetCents = parseCents(netIn, 'Net price', false);
-                t.feesOverrideCents = parseCents(feesIn, 'Fees', true);
-                nav(6);
-              } catch (e) { UI.toast(e.message, 'error'); }
-            }
-          }, 'Re-price'))),
-        el('div', { class: 'muted small' }, 'Theoretical max loss, breakevens, modeled chance of profit and both EV lanes follow the price you set. A fee override is applied once to enter and once to unwind.'));
-    }
-
-    if (t.step === 5) {
-      var c = t.candidate;
-      if (!c) { t.step = 6; rerender(); return; } // custom legs skip the strike picker
-      t.legs = t.legs && t.legsFor === c.label ? t.legs : JSON.parse(JSON.stringify(c.legs));
-      t.legsFor = c.label;
-      body.appendChild(el('h2', { class: 'mt0' }, 'Strikes & size'));
-      body.appendChild(explain('These strikes came from the screen. Adjust them if you like — the preview re-checks everything against live data.'));
-      var expirations = t.legs.filter(function (l) { return l.type !== 'STOCK' && l.expiration; })
-        .map(function (l) { return l.expiration; })
-        .filter(function (x, i, all) { return all.indexOf(x) === i; });
-      var chains = {}, chainErrors = [];
-      await Promise.all(expirations.map(async function (exp) {
-        try { chains[exp] = await API.get('/api/research/' + t.symbol + '/chain?expiration=' + exp); }
-        catch (e) { chainErrors.push(exp + ': ' + (e.message || 'unavailable')); }
-      }));
-      if (chainErrors.length) {
-        body.appendChild(alertBox('warn', 'Could not load the option chain',
-          ['Affected legs keep the candidate\u2019s original strikes. ' + chainErrors.join(' · ')]));
-      }
-      t.legs.forEach(function (leg, i) {
-        if (leg.type === 'STOCK') {
-          body.appendChild(el('div', { class: 'chip-row' }, chip('Leg ' + (i + 1), legLabel(leg))));
-          return;
-        }
-        var legChain = chains[leg.expiration];
-        var quotes = legChain ? (leg.type === 'PUT' ? legChain.puts : legChain.calls) || [] : [];
-        var legStrikes = quotes.map(function (q) { return q.strike; });
-        // A feed can omit a thin or stale contract that the candidate was priced on. Preserve the
-        // exact selected contract instead of silently snapping the ticket to a nearby strike.
-        if (!legStrikes.some(function (k) { return parseFloat(k) === parseFloat(leg.strike); })) {
-          legStrikes.push(leg.strike);
-          legStrikes.sort(function (a, b) { return parseFloat(a) - parseFloat(b); });
-        }
-        var select = el('select', { id: 'leg-strike-' + i, style: 'max-width:130px' }, legStrikes.map(function (k) {
-          return el('option', { value: k, selected: parseFloat(k) === parseFloat(leg.strike) ? '' : null }, stripZeros(k));
-        }));
-        select.addEventListener('change', function () { leg.strike = select.value; });
-        body.appendChild(el('div', { class: 'btn-row', style: 'margin-top:6px' },
-          el('span', { class: 'badge ' + (leg.action === 'BUY' ? 'badge-ok' : 'badge-warn') }, leg.action),
-          el('span', {}, leg.ratio + 'x'), select,
-          el('span', { class: 'muted' }, leg.type + ' · expires ' + leg.expiration)));
-      });
-      var qtyInput = el('input', { type: 'number', id: 'ticket-qty', min: '1', max: '100', value: t.qty || c.qty || 1, style: 'max-width:110px' });
-      body.appendChild(el('div', { class: 'field', style: 'margin-top:12px' }, el('label', {}, 'Quantity'), qtyInput));
-      body.appendChild(backNext(4, el('button', {
-        class: 'btn', id: 'to-review', onclick: function () {
-          try { t.qty = positiveInteger(qtyInput.value || '1', 'Quantity', 100); }
-          catch (e) { UI.toast(e.message, 'error'); return; }
-          if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
-          nav(6);
-        }
-      }, 'Review →')));
-    }
-
-    if (t.step === 6) {
-      var c6 = t.candidate;
-      if (!c6 && !t.custom) { nav(4); return; }
-      body.appendChild(el('h2', { class: 'mt0' }, 'Review before you commit'));
-      body.appendChild(UI.spinner('Previewing against live data…'));
-      try {
-        var previewReq = {
-          symbol: t.symbol, strategy: t.custom ? (t.customFamily || 'CUSTOM') : c6.strategy, qty: t.qty,
-          legs: t.legs, thesis: t.thesis, horizon: t.horizon, riskMode: riskMode()
-        };
-        var previewIntent = tradeIntent(c6 && c6.intent || t.intent || App.context.goal());
-        if (previewIntent !== 'DIRECTIONAL') previewReq.intent = previewIntent;
-        if (c6 && c6.usesHeldShares) previewReq.useHeldShares = true;
-        if (t.proposedNetCents !== undefined && t.proposedNetCents !== null) previewReq.proposedNetCents = t.proposedNetCents;
-        if (t.feesOverrideCents !== undefined && t.feesOverrideCents !== null) previewReq.feesOverrideCents = t.feesOverrideCents;
-        var res = await API.post('/api/trades/preview', previewReq);
-        t.previewReq = previewReq;
-        var p = res.preview, g = res.guardrails;
-        body.innerHTML = '';
-        body.appendChild(el('h2', { class: 'mt0' }, 'Review before you commit'));
-        // LOCKED CONTEXT (interaction contract #5): the reviewed package's symbol cannot
-        // silently mutate — changing goes back through the workflow.
-        body.appendChild(lockedSymbolBar(t.symbol));
-        var exactEconomics = res.economics ? economicAssessmentBlock({ economics: res.economics,
-          economicVerdict: res.economics.verdict }) : null;
-        if (exactEconomics) body.appendChild(exactEconomics);
-        var vp = verdictPanel(p, Learn.currentLevel() === 'beginner', !!exactEconomics);
-        body.appendChild(vp.node);
-        if (res.accountFit) {
-          var af = res.accountFit;
-          body.appendChild(el('div', { class: 'chip-row', id: 'account-fit' },
-            el('b', { style: 'margin-right:4px' }, 'Your real account'),
-            af.pctOfNlv !== undefined ? chip('of NLV', af.pctOfNlv + '%') : null,
-            af.pctOfCashBp !== undefined ? chip('of cash BP', af.pctOfCashBp + '%') : null,
-            af.pctOfMarginBp !== undefined ? chip('of margin BP', af.pctOfMarginBp + '%') : null,
-            af.pctOfRiskCapital !== undefined ? chip('of risk capital',
-              el('span', { class: af.overRiskCapital ? 'loss' : '' }, af.pctOfRiskCapital + '%')) : null));
-          if (af.overRiskCapital) {
-            body.appendChild(alertBox('warn', 'Bigger than YOUR risk-capital line',
-              ['The theoretical worst case exceeds the per-trade risk capital you set for your real account.']));
-          }
-        }
-        if (!p.ok) body.appendChild(alertBox('danger', 'Blocked', p.blockReasons));
-        if (g && g.blockReasons && g.blockReasons.length) body.appendChild(alertBox('danger', 'Guardrails', g.blockReasons));
-        var warns = (p.warnings || []).concat(g ? g.warnings || [] : []);
-        if (warns.length) body.appendChild(alertBox('warn', 'Heads up', warns));
-        // Safety checklist: the guardrail verdict, restated as things a human can verify
-        var checks = [];
-        var coveredByShares = t.previewReq && t.previewReq.useHeldShares;
-        checks.push({ state: p.ok && (p.maxLossCents > 0 || coveredByShares) ? 'pass' : 'fail',
-          text: p.maxLossCents > 0
-            ? 'Theoretical worst case is known and capped at ' + fmtMoney(p.maxLossCents) + (p.feesOpenCents ? ' (+' + fmtMoney(p.feesOpenCents) + ' fees)' : '')
-            : coveredByShares
-              ? 'No new cash at risk — the trade is backed by shares you already hold (their own downside continues)'
-              : 'Theoretical worst case could not be verified' });
-        var overBudget = (g ? (g.warnings || []) : []).some(function (w) { return w.indexOf('risk budget') >= 0; });
-        checks.push({ state: overBudget ? 'warn' : 'pass',
-          text: overBudget ? 'Bigger than your chosen risk-mode budget — allowed, but oversized'
-                           : 'Fits inside your risk-mode budget' });
-        if (t.previewReq && t.previewReq.useHeldShares) {
-          checks.push({ state: 'pass',
-            text: 'Covered by shares you already hold — they are locked while this trade is open and can be called away at the strike' });
-        }
-        var pe = p.evidence || {};
-        var expectedProv = App.state.world === 'demo' ? 'DEMO'
-          : App.state.world && App.state.world !== 'observed' ? 'SIMULATED' : 'OBSERVED';
-        var provenanceMatches = pe.provenance === expectedProv
-          || (expectedProv === 'OBSERVED' && pe.provenance === 'BROKER');
-        checks.push({ state: !provenanceMatches ? 'fail'
-            : pe.age === 'STALE' || pe.age === 'MISSING' ? 'fail'
-            : pe.age === 'DELAYED' || pe.age === 'EOD' ? 'warn' : 'pass',
-          text: !provenanceMatches
-            ? 'Data-lane mismatch: this ' + expectedProv + ' ticket was priced from ' + (pe.provenance || 'unknown') + ' data'
-            : pe.provenance === 'DEMO' ? 'Priced inside the explicit Demo market on fabricated teaching data'
-            : pe.provenance === 'SIMULATED' ? 'Priced inside this simulated market and its isolated account'
-            : pe.age === 'REALTIME' ? 'Priced on observed real-time quotes'
-            : 'Priced on observed ' + (pe.age || p.freshness) + ' quotes — executable prices may move' });
-        var zeroDteWarn = warns.some(function (w) { return w.indexOf('0DTE') >= 0; });
-        if (zeroDteWarn) checks.push({ state: 'warn', text: 'Expires TODAY — value can go to zero within hours' });
-        var closedWarn = warns.some(function (w) { return w.toLowerCase().indexOf('market is closed') >= 0; });
-        if (closedWarn) checks.push({ state: 'warn', text: 'Market is closed — fills simulate against the last session' });
-        (p.blockReasons || []).forEach(function (r) { checks.push({ state: 'fail', text: r }); });
-        body.appendChild(el('div', { class: 'card', style: 'margin:10px 0; box-shadow:none' },
-          el('h3', { class: 'mt0' }, 'Safety check'),
-          el('div', { class: 'checklist' }, checks.map(function (ck) {
-            return el('div', { class: 'ck ck-' + ck.state },
-              el('span', { class: 'ck-mark' }, ck.state === 'pass' ? '\u2713' : ck.state === 'warn' ? '!' : '\u2715'),
-              el('span', {}, ck.text));
-          }))));
-
-        var heldCombinedLoss = p.analytics && p.analytics.combinedMaxLossCents;
-        body.appendChild(el('div', { class: 'grid grid-4' },
-          stat('Cost / credit', fmtMoney(p.entryNetPremiumCents, { plus: true }), 'Negative = you pay this to open. Positive = you collect it.'),
-          stat(heldCombinedLoss != null ? 'New cash at risk' : 'Theoretical max loss',
-            el('span', { class: 'loss' }, fmtMoney(p.maxLossCents)),
-            heldCombinedLoss != null ? 'Incremental cash this option package can lose; your held shares keep their own downside.'
-              : 'The structural worst case for this position, fees excluded.'),
-          heldCombinedLoss != null ? stat('Theoretical max loss with shares',
-            el('span', { class: 'loss' }, fmtMoney(heldCombinedLoss)),
-            'The structural worst case of the option package plus the shares it protects or covers, measured from today.') : null,
-          stat('Theoretical max profit', UI.maxProfitLabel(t.previewReq && t.previewReq.strategy,
-            t.candidate && t.candidate.structureGroup, p.maxProfitCents, Learn.currentLevel() === 'beginner', p.legs)),
-          stat('Fees', fmtMoney(p.feesOpenCents), '$0.65 per contract per leg by default.'),
-          stat(Learn.currentLevel() === 'beginner' ? 'Chance of any profit'
-            : el('span', {}, 'POP', UI.info('pop')), fmtPct(p.popEntry),
-            'Modeled probability of any profit at expiration — before commissions, not a promise.'),
-          stat('Breakevens', (p.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
-          stat('Buying power after', fmtMoney(p.buyingPowerAfterCents), 'Drops by exactly the theoretical max loss plus fees.'),
-          stat('Cash after', fmtMoney(p.cashAfterCents))));
-        if (p.ok && window.Scenario) {
-          var scenarioPkg = t.candidate || {
-            strategy: t.previewReq && t.previewReq.strategy,
-            legs: t.previewReq && t.previewReq.legs,
-            qty: t.previewReq && t.previewReq.qty
-          };
-          if (scenarioPkg && scenarioPkg.legs && scenarioPkg.legs.length) {
-            // Preserve this reviewed ticket's exact opening value, including a user-entered limit.
-            scenarioPkg = Object.assign({}, scenarioPkg, { entryNetPremiumCents: p.entryNetPremiumCents });
-            body.appendChild(Scenario.realisticOutcomes(
-              t.symbol || (t.previewReq && t.previewReq.symbol), scenarioPkg));
-          }
-        }
-        // EXPLICIT budget reconciliation (risk/experience decoupling): the header's selected
-        // limit is a rule this ticket either fits or exceeds — say which, in dollars and %.
-        (function budgetLine() {
-          try {
-          // ONE SOURCE OF TRUTH (review P0): the SERVER's /api/risk-budget numbers — the same
-          // effective budget the engine sized with and the guardrail advisory warned against.
-          // No client percentage arithmetic; if the contract hasn't loaded, the line waits.
-          var riskSel = document.getElementById('risk-mode');
-          var modeKey = riskSel ? riskSel.value : 'conservative';
-          function renderLine(rb) {
-            if (!rb || !rb.modes || !p.maxLossCents) return;
-            var m = null;
-            rb.modes.forEach(function (x) { if (x.mode === modeKey) m = x; });
-            if (!m || !m.effectiveBudgetCents) return;
-            var budget = m.effectiveBudgetCents;
-            var ratio = Math.round(p.maxLossCents / budget * 100);
-            var line = el('div', { class: 'muted small', id: 'budget-reconcile',
-              style: ratio > 100 ? 'color: var(--risk-danger-solid, #c53030)' : '' },
-              'This position risks ' + fmtMoney(p.maxLossCents) + ' \u2014 ' + ratio + '% of your selected '
-              + fmtMoney(budget) + ' per-idea limit (' + m.label
-              + (m.capped ? ', capped by your declared risk capital' : '') + ').'
-              + (ratio > 100 ? ' Exceeding it is allowed here \u2014 deliberately, and acknowledged below.' : ''));
-            var stale = body.querySelector('#budget-reconcile');
-            if (stale) stale.replaceWith(line); else body.appendChild(line);
-          }
-          if (App.state.riskBudget) renderLine(App.state.riskBudget);
-          else API.get('/api/risk-budget').then(function (rb) {
-            App.state.riskBudget = rb;
-            if (body.isConnected) renderLine(rb);
-          }).catch(function () { /* context line only */ });
-          } catch (e) { /* the reconciliation line is context, never a blocker */ }
-        })();
-        // Same capability at both levels: Expert keeps the controls in the dense review;
-        // Beginner gets a plain-language disclosure, never a reduced or different ticket.
-        if (Learn.currentLevel() === 'expert') {
-          body.appendChild(el('section', { class: 'price-eval' },
-            el('h3', { class: 'mt0' }, 'Evaluate at your price'), priceEvaluationFields(p)));
-        } else {
-          body.appendChild(UI.expandable('Evaluate a limit price or real fill', function () {
-            return priceEvaluationFields(p);
-          }));
-        }
-        // The SERVER's required-acknowledgment list is the contract (client wording is a fallback);
-        // the signed token + checked ids travel with the create call, where they are ENFORCED.
-        var serverAcks = res.requiredAcks || vp.requiredAcks;
-        t.ackToken = res.ackToken || null;
-        var ackState = {};
-        var continueBtn = el('button', {
-          class: 'btn', id: 'to-confirm', disabled: 'disabled',
-          onclick: function () {
-            t.preview = p;
-            t.ackIds = serverAcks.filter(function (ak) { return ackState[ak.id]; })
-              .map(function (ak) { return ak.id; });
-            nav(7);
-          }
-        }, 'Continue →');
-        function refreshGate() {
-          var allAcked = serverAcks.every(function (ak) { return ackState[ak.id]; });
-          if (p.ok && allAcked) continueBtn.removeAttribute('disabled');
-          else continueBtn.setAttribute('disabled', 'disabled');
-        }
-        if (serverAcks.length) {
-          body.appendChild(el('div', { class: 'card card-slim ack-gate', style: 'margin:8px 0' },
-            el('h3', { class: 'mt0' }, 'Before you continue'),
-            serverAcks.map(function (ak) {
-              var cb = el('input', { type: 'checkbox', id: ak.id });
-              cb.addEventListener('change', function () { ackState[ak.id] = cb.checked; refreshGate(); });
-              return el('label', { class: 'ack-row', for: ak.id }, cb, el('span', {}, ak.label));
-            })));
-        }
-        body.appendChild(backNext(5, continueBtn));
-        refreshGate();
-      } catch (e) {
-        body.innerHTML = '';
-        body.appendChild(alertBox('danger', e.message));
-        body.appendChild(backNext(5));
-      }
-    }
-
-    if (t.step === 7) {
-      var p7 = t.preview;
-      if (!p7) { nav(6); return; }
-      body.appendChild(el('h2', { class: 'mt0' }, 'Place paper trade'));
-      body.appendChild(alertBox('warn', 'This is a PAPER trade — practice money only. It will reserve ' + fmtMoney(p7.reserveCents) +
-        ' and reduce buying power by ' + fmtMoney(p7.buyingPowerBeforeCents - p7.buyingPowerAfterCents) + '.'));
-      body.appendChild(el('div', { class: 'chip-row' }, t.legs.map(function (l, i) { return chip('Leg ' + (i + 1), legLabel(l)); })));
-      body.appendChild(backNext(6, el('button', {
-        class: 'btn', id: 'place-trade', onclick: async function () {
-          var btn = document.getElementById('place-trade');
-          btn.disabled = true;
-          try {
-            var placeBody = Object.assign({}, t.previewReq);
-            if (t.recommendationId) placeBody.recommendationId = t.recommendationId; // close the calibration loop
-            if (t.ackToken) { placeBody.ackToken = t.ackToken; placeBody.acknowledgedRisks = t.ackIds || []; }
-            var res = await API.post('/api/trades', placeBody);
-            App.state.ticket = null;
-            App.navigate('#/trade/' + res.trade.id);
-          } catch (e) {
-            btn.disabled = false;
-            var prev = document.getElementById('place-error');
-            if (prev) prev.remove();
-            var err = alertBox('danger', e.message, e.payload && e.payload.reasons);
-            err.id = 'place-error';
-            body.appendChild(err);
-          }
-        }
-      }, 'Place paper trade')));
-    }
-  }
 
   function stockOrderModal(side, symbol, maxShares) {
     var symInput = el('input', { type: 'text', id: 'stock-symbol', value: symbol || '' });
@@ -4630,7 +4445,7 @@
         seen[value.toFixed(6)] = true; levels.push({ key: key, price: value });
       }
       add('target', target.value);
-      var candidate = !plan && App.state.ticket && App.state.ticket.symbol === symbol && App.state.ticket.candidate;
+      var candidate = plan && PlanStore.ui(plan.id).selectedCandidate;
       (candidate && candidate.breakevens || []).forEach(function (x, i) { add('breakeven-' + (i + 1), x); });
       var putN = 0, callN = 0;
       (candidate && candidate.legs || []).forEach(function (leg) {
@@ -6668,8 +6483,8 @@
   }
 
   function useEval(c, symbol, recId) {
-    App.state.ticket = ticketForCandidate(c, symbol, { recommendationId: recId || null });
-    App.navigate('#/trade/decide');
+    openCandidateAsPlan(c, symbol, { recommendationId: recId || null })
+      .catch(function (e) { UI.toast(e.message, 'error'); });
   }
 
   function decisionTop(e, symbol, level, recId) {

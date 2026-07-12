@@ -212,6 +212,30 @@
     return out;
   }
 
+  function latestDecision(planId, force) {
+    var path = '/api/plans/' + planId + '/decision/latest';
+    return force ? API.getFresh(path) : API.get(path);
+  }
+
+  async function previewDecision(plan, request) {
+    return API.post('/api/plans/' + plan.id + '/decision/preview',
+      Object.assign({ expectedVersion: plan.version }, request || {}));
+  }
+
+  async function tradeDecision(plan, request) {
+    var out = await API.post('/api/plans/' + plan.id + '/decision/trade',
+      Object.assign({ expectedVersion: plan.version }, request || {}));
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
+  async function cashDecision(plan, request) {
+    var out = await API.post('/api/plans/' + plan.id + '/decision/cash',
+      Object.assign({ expectedVersion: plan.version }, request || {}));
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
   async function closeChip(plan) {
     var wasActive = App.state.activePlanId === plan.id;
     var updated = await API.put('/api/plans/' + plan.id + '/open', {
@@ -279,6 +303,8 @@
     latestScout: latestScout, runScout: runScout, spawnScoutedPlan: spawnScoutedPlan,
     latestOutcomes: latestOutcomes, runEnsemble: runEnsemble,
     runOutcome: runOutcome, runBacktest: runBacktest,
+    latestDecision: latestDecision, previewDecision: previewDecision,
+    tradeDecision: tradeDecision, cashDecision: cashDecision,
     marketChanged: marketChanged, renderBar: renderBar, ui: ui,
     all: function () { return items.slice(); }
   };

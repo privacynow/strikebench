@@ -617,7 +617,11 @@
         horizon: options.horizon
       });
       if (typeof options.onComplete === 'function') options.onComplete(ticket, st);
-      else App.navigate('#/trade/decide');
+      else {
+        var active = window.PlanStore && PlanStore.active();
+        if (active) PlanStore.focus(active, 'STRATEGY');
+        else App.navigate('#/research');
+      }
     }
 
     try {

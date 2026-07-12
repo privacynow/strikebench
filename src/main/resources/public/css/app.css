@@ -2030,6 +2030,19 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-outcome-summary-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .plan-outcome-summary-card p { margin: 8px 0 0; }
 .plan-outcome-panel, .plan-market-outcome { min-width: 0; }
+.plan-decision-position, .plan-decision-controls { margin-bottom: 10px; }
+.plan-decision-form { grid-template-columns: minmax(120px, .35fr) minmax(220px, 1fr); }
+.plan-decision-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  margin-top: 12px; padding: 14px; border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm); background: var(--surface); }
+.plan-decision-actions p { margin: 4px 0 0; }
+.plan-decision-facts, .plan-decision-math { margin: 10px 0; }
+.plan-outcome-action-status .alert { margin-top: 10px; }
+@media (max-width: 640px) {
+  .plan-decision-form { grid-template-columns: minmax(0, 1fr); }
+  .plan-decision-actions { align-items: stretch; flex-direction: column; }
+  .plan-decision-actions .btn-row { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; }
+}
 .plan-market-outcome { display: grid; gap: 10px; }
 .research-plan-scout { margin-top: 18px; }
 .universe-scout-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
