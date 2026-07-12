@@ -2827,6 +2827,39 @@ test('completed context flows into Structure once, with an honest edit affordanc
     'the carried goal remains editable through the normal Builder flow');
 });
 
+test('a new Research handoff cannot leave an old structure over a different symbol', async () => {
+  await page.evaluate(() => {
+    Learn.setLevel('beginner');
+    App.state.ticket = { symbol: 'QQQ', world: App.state.world,
+      candidate: { displayName: 'Old QQQ structure', qty: 1 }, qty: 1 };
+    App.state.builderForm = { symbol: 'QQQ', legs: [{ type: 'CALL' }] };
+    App.state.outcomeReceipt = { symbol: 'QQQ', basis: 'PARAMETRIC' };
+    App.state.discoverForm = { source: 'single', symbol: 'QQQ', goal: 'ACQUIRE',
+      goalExplicit: true, horizon: 'month', thesis: 'bullish' };
+    App.context.update({ symbol: 'QQQ', goal: 'ACQUIRE', horizon: 'month', thesis: 'bullish' });
+  });
+  await go('#/research/AAPL');
+  await page.waitForSelector('.quote-hero button:has-text("Find strategies")', { timeout: 15000 });
+  await page.click('.quote-hero button:has-text("Find strategies")');
+  await page.waitForSelector('#rec-symbol');
+  const state = await page.evaluate(() => ({
+    symbol: document.getElementById('rec-symbol').value,
+    ticket: App.state.ticket,
+    builder: App.state.builderForm,
+    outcome: App.state.outcomeReceipt,
+    goal: App.context.goal(),
+    explicit: App.state.discoverForm.goalExplicit,
+    bar: document.getElementById('idea-bar').textContent
+  }));
+  assert.equal(state.symbol, 'AAPL');
+  assert.equal(state.ticket, null);
+  assert.equal(state.builder, null);
+  assert.equal(state.outcome, null);
+  assert.equal(state.goal, 'DIRECTIONAL', 'the visible default replaces, rather than inherits, QQQ ACQUIRE');
+  assert.equal(state.explicit, false, 'the prior QQQ acquisition goal cannot auto-run on AAPL');
+  assert.doesNotMatch(state.bar, /QQQ/, 'the workflow bar and editable context share one symbol');
+});
+
 test('builder recovers from a failing symbol and follows the working symbol', async () => {
   // The reported trap: builder stuck on a symbol that fails to load, retrying forever
   await page.evaluate(() => Learn.setLevel('beginner'));

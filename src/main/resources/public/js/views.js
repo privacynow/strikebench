@@ -28,6 +28,35 @@
 
   var icon = UI.icon;
 
+  function beginIdeaSearch(prefill, route) {
+    prefill = Object.assign({}, prefill || {});
+    var prior = App.state.ticket && App.state.ticket.symbol
+      || App.state.builderForm && App.state.builderForm.symbol;
+    var hadStructure = !!(App.state.ticket
+      || App.state.builderForm && App.state.builderForm.legs && App.state.builderForm.legs.length);
+    App.state.ticket = null;
+    App.state.builderForm = null;
+    App.state.outcomeReceipt = null;
+    App.state.decisionCache = null;
+    App.state.decisionInflight = null;
+    App.state.recommendResults = null;
+
+    var patch = {};
+    if (prefill.symbol) patch.symbol = prefill.symbol;
+    patch.goal = prefill.intent || null;
+    if (prefill.horizon) patch.horizon = prefill.horizon;
+    if (prefill.thesis) patch.thesis = prefill.thesis;
+    App.context.update(patch);
+    App.state.discoverForm = Object.assign({}, App.state.discoverForm || {}, {
+      source: 'single', symbol: prefill.symbol || App.context.symbol() || '',
+      goal: prefill.intent || 'DIRECTIONAL', goalExplicit: !!prefill.intent
+    });
+    App.state.ideasPrefill = prefill;
+    if (hadStructure && UI.toast) UI.toast((prior ? prior + ' working structure' : 'Working structure')
+      + ' cleared \u2014 starting a new strategy search.');
+    App.navigate(route || '#/trade/context/manual');
+  }
+
   /**
    * The opening page: what this is, who it's for, and three one-click ways in — shown to
    * fresh accounts (and always at #/home/tour). The competition leads with a landing page;
@@ -899,9 +928,7 @@
         }, 'Buy shares'),
         r.optionable ? el('button', {
           class: 'btn btn-sm', onclick: function () {
-            App.context.selectSymbol(symbol);
-            App.state.ideasPrefill = { symbol: symbol, autorun: true }; // asks for a goal, then runs
-            App.navigate('#/trade/context/manual');
+            beginIdeaSearch({ symbol: symbol, autorun: true }, '#/trade/context/manual');
           }
         }, 'Find strategies') : null),
       el('div', { class: 'nm', style: 'margin-top:2px' }, q.description || ''),
@@ -943,8 +970,8 @@
               el('p', { class: 'muted action-line' }, lineNode),
               el('button', {
                 class: 'btn btn-sm', onclick: function () {
-                  App.state.ideasPrefill = { intent: intentKey, symbol: symbol, autorun: true };
-                  App.navigate('#/trade/context/manual');
+                  beginIdeaSearch({ intent: intentKey, symbol: symbol, autorun: true },
+                    '#/trade/context/manual');
                 }
               }, cta));
           }
@@ -1502,8 +1529,7 @@
       label: opts.label || 'Position symbol',
       onResearch: function () { App.navigate('#/research/' + symbol); },
       onChange: opts.noChange ? null : function () {
-        App.state.ideasPrefill = {};
-        App.navigate('#/trade/context');
+        beginIdeaSearch({}, '#/trade/context');
       }
     });
   }
@@ -4046,8 +4072,7 @@
                 pv.gainPct !== null && pv.gainPct !== undefined && pv.gainPct >= 5 && pv.freeShares >= 100
                   ? el('button', {
                       class: 'btn btn-sm', onclick: function () {
-                        App.state.ideasPrefill = { intent: 'EXIT', symbol: pv.symbol };
-                        App.navigate('#/trade/context/manual');
+                        beginIdeaSearch({ intent: 'EXIT', symbol: pv.symbol }, '#/trade/context/manual');
                       }
                     }, 'Sell at a target\u2026') : null,
                 el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { stockOrderModal('buy', pv.symbol); } }, 'Buy'),
@@ -4528,23 +4553,17 @@
       var action = el('button', { class: 'btn', id: 'whatif-act' }, labels[goal] || labels.DIRECTIONAL);
       action.addEventListener('click', function () {
         var horizon = contextHorizonForDays(spec.horizonDays);
-        App.context.update({ symbol: symbol, goal: goal, horizon: horizon,
-          thesis: App.context.thesis(seedContext && seedContext.thesis || 'neutral') });
-        App.state.discoverForm = Object.assign({}, App.state.discoverForm || {}, {
-          source: 'single', symbol: symbol, goal: goal, goalExplicit: true, horizon: horizon,
-          thesis: App.context.thesis('neutral'), target: chosen ? String(chosen) : ''
-        });
-        App.state.ideasPrefill = { symbol: symbol, intent: goal, horizon: horizon,
-          thesis: App.context.thesis('neutral'), target: chosen || null, autorun: true };
-        App.navigate('#/trade/context');
+        beginIdeaSearch({ symbol: symbol, intent: goal, horizon: horizon,
+          thesis: App.context.thesis(seedContext && seedContext.thesis || 'neutral'),
+          target: chosen || null, autorun: true }, '#/trade/context');
       });
       return el('div', { class: 'scenario-next' },
         el('div', {}, el('b', {}, 'Use the result'),
           el('p', { class: 'muted small' }, 'Carry the symbol, goal, horizon and decision level into the shared Trade workflow.')),
         el('div', { class: 'btn-row' }, action,
           el('button', { class: 'btn btn-secondary', onclick: function () {
-            App.state.ideasPrefill = { symbol: symbol, horizon: contextHorizonForDays(spec.horizonDays) };
-            App.navigate('#/trade/context');
+            beginIdeaSearch({ symbol: symbol, horizon: contextHorizonForDays(spec.horizonDays) },
+              '#/trade/context');
           } }, 'Choose another goal')));
     }
 
