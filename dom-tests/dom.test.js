@@ -2571,6 +2571,37 @@ test('undefined-risk framing: synthetic short is BLOCKED, synthetic long is not'
     'synthetic long is defined-risk — no BLOCKED badge');
 });
 
+test('synthetic exposure sizing lives inside the selected Builder structure', async () => {
+  await page.evaluate(() => {
+    Learn.setLevel('expert');
+    App.state.builderForm = null;
+    App.state.ticket = null;
+    App.context.selectSymbol('AAPL');
+  });
+  await go('#/home');
+  await go('#/trade/shape');
+  await page.waitForSelector('#builder-template', { timeout: 15000 });
+  assert.equal(await page.locator('#replicate-run, #replicate-output').count(), 0,
+    'the retired standalone replication tool is not mounted');
+
+  await page.selectOption('#builder-template', 'SYNTHETIC_LONG');
+  await page.waitForSelector('#builder-exposure-sizer');
+  await page.fill('#builder-exposure-target', '100000');
+  await page.click('#builder-size-exposure');
+  await page.waitForSelector('#builder-exposure-output:has-text("Contracts")', { timeout: 10000 });
+  const qty = Number(await page.inputValue('#builder-qty'));
+  assert.ok(qty >= 1, 'sizing updates the Builder quantity');
+  assert.match(await page.textContent('#builder-exposure-output'), /Delta exposure[\s\S]*Equivalent shares would cost/);
+
+  await page.selectOption('#builder-template', 'SYNTHETIC_SHORT');
+  await page.waitForSelector('#builder-exposure-sizer');
+  await page.click('#builder-size-exposure');
+  await page.waitForSelector('#builder-exposure-output:has-text("UNDEFINED RISK")', { timeout: 10000 });
+  await page.waitForSelector('#builder-review[disabled]', { timeout: 10000 });
+  assert.equal(await page.locator('#builder-review:not([disabled])').count(), 0,
+    'undefined-risk synthetic short remains blocked by the ordinary Builder review');
+});
+
 test('D3: the competition renders INLINE in Ideas (no orphan Decision page navigation)', async () => {
   await page.evaluate(() => Learn.setLevel('expert'));
   await page.evaluate(() => { App.state.filterState = {}; App.state.discoverForm = null; App.state.recommendResults = null; });

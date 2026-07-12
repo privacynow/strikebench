@@ -5,7 +5,6 @@ import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
-import io.liftandshift.strikebench.model.DataProvenance;
 import io.liftandshift.strikebench.support.ObservedFixtureProvider;
 import org.junit.jupiter.api.Test;
 
@@ -16,7 +15,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Research tools: canonical event studies + ETF (delta-1) replicator. */
+/** Research tools: canonical event studies. */
 class ResearchToolsTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("America/New_York"));
@@ -58,39 +57,15 @@ class ResearchToolsTest {
         assertThat(r.verdict()).containsIgnoringCase("too few");
     }
 
-    @Test void etfReplicationSizesASyntheticExposure() {
-        var rep = new ETFReplicator(market()).replicate(
-                new ETFReplicator.ReplicationRequest("AAPL", 10_000_000L, true)); // ~$100k long
-
-        assertThat(rep.underlyingCents()).isPositive();
-        assertThat(rep.contracts()).isGreaterThanOrEqualTo(1);
-        assertThat(rep.structure()).contains("Synthetic LONG");
-        assertThat(rep.deltaExposureCents()).isPositive();
-        assertThat(rep.shareCostCents()).isPositive();
-        assertThat(rep.notes()).anyMatch(n -> n.contains("Delta-1"));
-        assertThat(rep.evidence().provenance()).isEqualTo(DataProvenance.DEMO);
-    }
-
-    @Test void bearishReplicationIsAShortSynthetic() {
-        var rep = new ETFReplicator(market()).replicate(
-                new ETFReplicator.ReplicationRequest("AAPL", 10_000_000L, false));
-        assertThat(rep.structure()).contains("Synthetic SHORT");
-        assertThat(rep.deltaExposureCents()).isNegative();
-    }
-
     @Test void explicitUnknownWorldNeverFallsThroughToObservedResearchInputs() {
         var market = observedMarketWithNoWorlds();
         var study = new ResearchQuestionEngine(market, CLOCK).run(new ResearchQuestionEngine.RunRequest(
                 "momentum", "AAPL", "2026-01-02", "2026-06-01",
                 java.util.Map.of("lookback", 20, "thresholdPct", 0.0, "forward", 10)),
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, "missing-world");
-        var replication = new ETFReplicator(market).replicate(
-                new ETFReplicator.ReplicationRequest("AAPL", 10_000_000L, true), "missing-world");
 
         assertThat(study.conditioned().sample()).isZero();
         assertThat(study.evidence()).isEqualTo("MISSING");
         assertThat(study.verdict()).containsIgnoringCase("unavailable");
-        assertThat(replication.contracts()).isZero();
-        assertThat(replication.evidence().provenance()).isEqualTo(DataProvenance.MISSING);
     }
 }

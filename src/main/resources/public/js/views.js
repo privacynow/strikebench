@@ -2745,15 +2745,6 @@
     if (stage === 'discover') await discoverStage(root, params.slice(1));
     else if (stage === 'shape') {
       await Builder.render(root);
-      // Exposure replication belongs with construction: size a
-      // synthetic to a dollar exposure, then hand the legs to the builder above. Collapsed —
-      // genuinely optional detail (interaction contract #3).
-      App.state.tradeReplicator = App.state.tradeReplicator || {};
-      var rctx = { symbol: (App.state.builderForm && App.state.builderForm.symbol)
-        || App.context.symbol() || App.state.tradeReplicator.symbol || 'SPY' };
-      root.appendChild(UI.expandable('Replicate an ETF exposure \u2014 synthetic sizing', function () {
-        return replicateCard(Learn.currentLevel(), rctx);
-      }));
     }
     else if (stage === 'verify') await backtest(root);
     else await ticket(root);
@@ -7504,78 +7495,6 @@
           App.navigate('#/trade/verify');
         } }, 'Test strategies on these ' + r.conditioned.sample + ' ' + occurrenceWord(r) + ' \u2192')));
     }
-  }
-
-  // ---- ETF / exposure replicator ----
-  function replicateCard(level, ctx) {
-    var f = App.state.tradeReplicator = App.state.tradeReplicator || {};
-    var card = el('div', { class: 'card tool-card' });
-    card.appendChild(toolHeader('coins', 'Replicate an exposure'));
-    card.appendChild(explain('Get the price exposure of owning shares — for far less capital — with a synthetic options position.'));
-
-    var symbol = el('input', { type: 'text', id: 'replicate-symbol', value: (ctx && ctx.symbol) || f.symbol || 'SPY', list: 'universe-symbols' });
-    var target = el('input', { type: 'number', id: 'replicate-target', value: f.target || 50000, min: '0', step: '1000' });
-    var dir = el('select', { id: 'replicate-direction' }, el('option', { value: 'long' }, 'Bullish (long)'), el('option', { value: 'short' }, 'Bearish (short)'));
-    dir.value = f.dir || 'long';
-    card.appendChild(el('div', { class: 'form-grid' },
-      toolField('Underlying', symbol), toolField('Target exposure ($)', target), toolField('Direction', dir)));
-
-    var out = el('div', { id: 'replicate-output', class: 'tool-output' });
-    var run = el('button', { class: 'btn', id: 'replicate-run' }, 'Size it');
-    run.addEventListener('click', async function () {
-      f.symbol = symbol.value.toUpperCase(); f.target = +target.value; f.dir = dir.value;
-      run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Sizing…'));
-      var body = { symbol: symbol.value, targetExposureCents: Math.round((+target.value || 0) * 100), bullish: dir.value === 'long' };
-      try { var _d = await API.post('/api/trade/replicate', body); f.result = _d; renderReplication(out, _d); }
-      catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Replicate failed', [String((e && e.message) || e)])); }
-      finally { run.disabled = false; }
-    });
-    card.appendChild(el('div', { class: 'btn-row' }, run));
-    card.appendChild(out);
-    if (f.result) renderReplication(out, f.result); // survive a level flip / nav
-    return card;
-  }
-
-  function renderReplication(out, r) {
-    out.innerHTML = '';
-    if (!r.contracts) {
-      out.appendChild(alertBox('warn', (r.notes && r.notes[0]) || 'Could not size a replication.'));
-      if (r.evidence) out.appendChild(UI.evidenceBadge(r.evidence));
-      return;
-    }
-    out.appendChild(el('p', { class: 'decision-why' }, r.structure));
-    if (r.evidence) out.appendChild(el('div', { class: 'chip-row' }, UI.evidenceBadge(r.evidence)));
-    out.appendChild(el('div', { class: 'chip-row' },
-      chip('Contracts', String(r.contracts)),
-      chip('Delta exposure', pnlSpan(r.deltaExposureCents)),
-      chip('Shares would cost', fmtMoney(r.shareCostCents)),
-      chip('Est. margin', fmtMoney(r.estMarginCents))));
-    // Capital efficiency: margin vs full share cost.
-    var eff = r.shareCostCents > 0 ? r.estMarginCents / r.shareCostCents : 0;
-    out.appendChild(gaugeChart(eff, 1, 'Ties up about ' + fmtPct(eff) + ' of the share cost'));
-    (r.notes || []).forEach(function (n) { out.appendChild(el('div', { class: 'muted small' }, n)); });
-    // Hand-off into the Trade builder for live risk. A BEARISH synthetic (long put + short call) has
-    // an uncovered short call — unlimited upside risk — so the builder will BLOCK placement and show
-    // the cliff. Label honestly per direction: "place" only when it's actually placeable.
-    var isShort = r.deltaExposureCents < 0;
-    if (isShort) {
-      out.appendChild(el('div', { class: 'muted small', style: 'margin-top:6px' },
-        el('b', { class: 'loss' }, 'Advanced / undefined risk: '),
-        'the short synthetic’s uncovered call has unlimited upside risk — the builder will block placing it and show why.'));
-    }
-    out.appendChild(el('div', { class: 'btn-row' },
-      el('button', {
-        class: 'btn btn-sm', id: 'replicate-build', onclick: function () {
-          App.context.selectSymbol(r.symbol);
-          App.state.builderForm = {
-            symbol: (r.symbol || '').toUpperCase(),
-            qty: r.contracts || 1, goal: 'DIRECTIONAL',
-            templateKey: isShort ? 'SYNTHETIC_SHORT' : 'SYNTHETIC_LONG',
-            step: 3, legIdx: 0, excluded: {}, legs: []
-          };
-          App.navigate('#/trade/shape');
-        }
-      }, isShort ? 'Build & inspect in the Trade builder' : 'Build & place in the Trade builder')));
   }
 
   // ---- Notebook ----

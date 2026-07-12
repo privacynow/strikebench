@@ -463,9 +463,10 @@ public final class ApiServer {
             c.routes.post("/api/evaluate", this::evaluate);
             c.routes.post("/api/opportunities", this::opportunities);
             c.routes.post("/api/optimize", this::optimize);
-            c.routes.post("/api/trade/replicate", ctx ->
-                    ctx.json(new io.liftandshift.strikebench.research.ETFReplicator(market)
-                            .replicate(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ETFReplicator.ReplicationRequest.class)),
+            c.routes.post("/api/builder/exposure", ctx ->
+                    ctx.json(new io.liftandshift.strikebench.strategy.ExposureSizer(market)
+                            .size(requireBody(bodyOrNull(ctx,
+                                    io.liftandshift.strikebench.strategy.ExposureSizer.Request.class)),
                                     worldParam(activeWorld(ctx)))));
             c.routes.get("/api/evaluations", ctx -> {
                 String uid = auth.currentUserId(ctx);

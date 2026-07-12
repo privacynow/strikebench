@@ -1745,10 +1745,28 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .outcome-basis-state { margin-top: 5px; color: var(--risk-warn); font-size: 11.5px; font-weight: 700; }
 .outcome-basis-note { min-height: 20px; margin: 2px 0 8px; font-size: 12.5px; }
 .outcome-basis-panel > :first-child { margin-top: 0; }
+.builder-exposure-sizer {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.builder-exposure-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) max-content;
+  gap: 10px;
+  align-items: end;
+  margin-top: 8px;
+}
+.builder-exposure-controls .btn { margin-bottom: 1px; }
+.builder-exposure-output { margin-top: 8px; }
 @media (max-width: 640px) {
   .outcome-basis-nav { grid-template-columns: 1fr 1fr; }
   .outcome-basis-nav[data-count="5"] .outcome-basis:last-child { grid-column: 1 / -1; }
   .outcome-basis { min-height: 62px; padding: 9px 10px; }
+  .builder-exposure-controls { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   .outcome-basis { transition: none; }

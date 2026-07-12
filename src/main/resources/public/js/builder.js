@@ -222,7 +222,9 @@
       wizNode: saved.wizNode || null,   // rehydrate the mid-question wizard node across re-renders/level flips
       legs: saved.legs ? saved.legs.map(function (l) { return Object.assign({}, l); }) : [],
       excluded: saved.excluded || {},
-      limits: saved.limits || {}
+      limits: saved.limits || {},
+      exposureTargetDollars: saved.exposureTargetDollars || 50000,
+      exposureResult: saved.exposureResult || null
     };
     // Cross-level coherence: a position built in the Expert terminal (or handed off) must not vanish
     // into Beginner's step-1 goal chooser and get overwritten — land it on Beginner's recap instead.
@@ -333,6 +335,75 @@
     }
     function activeLegs() {
       return st.legs.filter(function (_, i) { return !st.excluded[i]; });
+    }
+    function syntheticDirection() {
+      return st.templateKey === 'SYNTHETIC_LONG' ? 'long'
+        : st.templateKey === 'SYNTHETIC_SHORT' ? 'short' : null;
+    }
+    function renderExposureResult(host, result) {
+      host.innerHTML = '';
+      if (!result || !result.contracts) {
+        host.appendChild(alertBox('warn', result && result.notes && result.notes[0]
+          || 'This exposure could not be sized in the active market.'));
+        return;
+      }
+      host.appendChild(el('div', { class: 'chip-row' },
+        UI.evidenceBadge(result.evidence),
+        chip('Contracts', String(result.contracts)),
+        chip('Delta exposure', UI.pnlSpan(result.deltaExposureCents)),
+        chip('Equivalent shares would cost', fmtMoney(result.shareCostCents))));
+      (result.notes || []).forEach(function (note) {
+        host.appendChild(el('div', { class: 'muted small' }, note));
+      });
+    }
+    /** Synthetic exposure sizing belongs to the selected Builder structure, not a separate tool. */
+    function exposureSizer(onApplied) {
+      var direction = syntheticDirection();
+      if (!direction) return null;
+      var target = el('input', { type: 'number', id: 'builder-exposure-target', min: '1',
+        max: '100000000', step: '1000',
+        value: String(st.exposureTargetDollars) });
+      var output = el('div', { class: 'builder-exposure-output', id: 'builder-exposure-output' });
+      var run = el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-size-exposure' },
+        'Size contracts');
+      var savedResult = st.exposureResult && st.exposureResult.templateKey === st.templateKey
+        ? st.exposureResult.data : null;
+      if (savedResult) renderExposureResult(output, savedResult);
+      run.addEventListener('click', async function () {
+        st.exposureTargetDollars = Math.max(1, parseFloat(target.value) || 1);
+        target.value = String(st.exposureTargetDollars);
+        run.disabled = true;
+        output.innerHTML = '';
+        output.appendChild(UI.spinner('Sizing the selected synthetic…'));
+        try {
+          var result = await API.post('/api/builder/exposure', {
+            symbol: st.symbol,
+            targetExposureCents: Math.round(st.exposureTargetDollars * 100),
+            bullish: direction === 'long'
+          });
+          st.exposureResult = { templateKey: st.templateKey, data: result };
+          if (result.contracts) st.qty = result.contracts;
+          remember();
+          renderExposureResult(output, result);
+          if (result.contracts && typeof onApplied === 'function') onApplied(result);
+        } catch (error) {
+          output.innerHTML = '';
+          output.appendChild(alertBox('danger', 'Could not size this exposure',
+            [String(error && error.message || error)]));
+        } finally {
+          run.disabled = false;
+        }
+      });
+      return el('section', { class: 'builder-exposure-sizer', id: 'builder-exposure-sizer' },
+        el('div', { class: 'field-label' },
+          direction === 'long' ? 'Size this synthetic long by exposure' : 'Size this synthetic short by exposure'),
+        explain(direction === 'long'
+          ? 'Name the dollar exposure you would otherwise hold in shares. StrikeBench converts it to roughly 100-delta option lots; the exact position still goes through the same payoff and risk review.'
+          : 'Name the bearish dollar exposure. This structure includes an uncovered short call, so sizing is educational and placement remains blocked as undefined risk.'),
+        el('div', { class: 'builder-exposure-controls' },
+          el('div', { class: 'field' }, el('label', { for: 'builder-exposure-target' }, 'Target exposure ($)'), target),
+          run),
+        output);
     }
     // ---- Your limits: the same screens Ideas offers, wired into the builder ----
     // Set a number and the panel judges the live position against it; "Fit to my limits"
@@ -579,6 +650,7 @@
         var built = await buildFromTemplate(t.key, offset);
         if (seq !== buildSeq) return;           // a newer pick won — drop this stale build
         st.templateKey = t.key; st.legs = built; // assign TOGETHER so label + legs always agree
+        st.exposureResult = null;
         st.legIdx = 0; st.step = 3;
         repaint();
       }
@@ -792,6 +864,7 @@
           }),
           el('div', { class: 'form-grid', style: 'margin-top:8px' },
             [el('div', { class: 'field' }, el('label', {}, 'Contracts (qty)'), qtyInput())].concat(limitsFields(true))),
+          exposureSizer(function () { repaint(); }),
           el('div', { class: 'btn-row', style: 'margin-top:2px' },
             el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-fit', onclick: function () { fitToLimits(fitStatus); } },
               'Fit to my limits'),
@@ -863,9 +936,11 @@
       var addBtn = el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-add-leg' }, '+ Leg');
       var clearBtn = el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-clear', onclick: function () {
         st.legs = []; st.excluded = {}; st.templateKey = null; tplSel.value = '';
-        remember(); renderLegs(); schedulePreview();
+        st.exposureResult = null;
+        remember(); renderLegs(); renderExposureSizer(); schedulePreview();
       } }, 'Clear');
       var panel = el('div', { class: 'card builder-panel', id: 'builder-panel' });
+      var exposureHost = el('div', { id: 'builder-exposure-host' });
 
       var fitStatus = el('div', { id: 'builder-fit-status' });
       root.appendChild(UI.symbolContext({
@@ -883,7 +958,16 @@
           el('div', { class: 'field builder-bar-end' },
             el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-fit', title: 'Engine re-picks strikes/size so the limits hold',
               onclick: function () { fitToLimits(fitStatus); } }, 'Fit to my limits'))),
-        fitStatus));
+        fitStatus,
+        exposureHost));
+      function renderExposureSizer() {
+        exposureHost.innerHTML = '';
+        var sizer = exposureSizer(function () {
+          qtyIn.value = String(st.qty);
+          schedulePreview();
+        });
+        if (sizer) exposureHost.appendChild(sizer);
+      }
       // Depth on demand, even at Expert: what the structure does and what each leg is FOR —
       // collapsed by default so the terminal stays naked until asked.
       var eduHost = el('div', { id: 'builder-edu' });
@@ -985,11 +1069,19 @@
           if (isStock) { l.strike = null; l.expiration = null; }
           else if (!l.expiration) { l.expiration = expirations[Math.min(2, expirations.length - 1)]; exp.value = l.expiration; }
         }
-        action.addEventListener('change', function () { l.action = action.value; remember(); schedulePreview(); });
+        function markCustom() {
+          st.templateKey = null;
+          st.exposureResult = null;
+          tplSel.value = '';
+          renderExposureSizer();
+        }
+        action.addEventListener('change', function () {
+          l.action = action.value; markCustom(); remember(); schedulePreview();
+        });
         type.addEventListener('change', async function () {
           l.type = type.value; syncStockMode();
           if (l.type !== 'STOCK') { l.strike = null; await fillStrikes(); } else { mkt.textContent = ''; }
-          remember(); schedulePreview();
+          markCustom(); remember(); schedulePreview();
         });
         exp.addEventListener('change', async function () {
           l.expiration = exp.value; l.strike = null;
@@ -1000,7 +1092,7 @@
         });
         ratio.addEventListener('change', function () {
           l.ratio = Math.max(1, Math.min(10, parseInt(ratio.value, 10) || 1));
-          ratio.value = String(l.ratio); remember(); schedulePreview();
+          ratio.value = String(l.ratio); markCustom(); remember(); schedulePreview();
         });
         var remove = el('button', {
           class: 'btn btn-sm btn-secondary leg-remove', type: 'button', title: 'Remove this leg',
@@ -1014,7 +1106,8 @@
             });
             st.excluded = ex;
             st.templateKey = null; tplSel.value = '';
-            remember(); renderLegs(); schedulePreview();
+            st.exposureResult = null;
+            remember(); renderLegs(); renderExposureSizer(); schedulePreview();
           }
         }, '✕');
         row.appendChild(el('div', { class: 'leg-controls' }, onToggle, action, type, exp, strike, ratio, mkt, remove));
@@ -1113,13 +1206,16 @@
         st.templateKey = tplSel.value;
         st.legs = await buildFromTemplate(tplSel.value);
         st.excluded = {};
+        st.exposureResult = null;
         remember();
         await renderLegs();
+        renderExposureSizer();
         schedulePreview();
       });
       addBtn.addEventListener('click', async function () {
         st.legs.push(leg('BUY', 'CALL', null, expirations[Math.min(2, expirations.length - 1)] || null));
         st.templateKey = null; tplSel.value = '';
+        st.exposureResult = null;
         remember(); await renderLegs(); schedulePreview();
       });
       symInput.addEventListener('change', async function () {
@@ -1132,6 +1228,8 @@
           await loadSymbol();
           if (st.templateKey) st.legs = await buildFromTemplate(st.templateKey);
           await renderLegs();
+          st.exposureResult = null;
+          renderExposureSizer();
           schedulePreview();
         } catch (e) {
           legsHost.innerHTML = '';
@@ -1147,6 +1245,7 @@
 
       schedulePreviewHook = schedulePreview;
       onLegsReplaced = async function () { await renderLegs(); schedulePreview(); };
+      renderExposureSizer();
       if (!expirations.length) {
         legsHost.appendChild(UI.emptyState(st.symbol + ' has no listed options', 'Pick an optionable symbol (try AAPL or SPY).'));
         panelEmpty();
