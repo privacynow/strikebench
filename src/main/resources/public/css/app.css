@@ -154,6 +154,12 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
   animation: spin .7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+.world-switch-busy { pointer-events: none; cursor: progress !important; opacity: .78; }
+.world-switch-busy::after {
+  content: ''; display: inline-block; width: 12px; height: 12px; margin-left: 7px;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
 
 h1 { font-size: 21px; letter-spacing: -.01em; margin: 2px 0 16px; }
 h2 { font-size: 15.5px; margin: 22px 0 10px; letter-spacing: -.005em; }

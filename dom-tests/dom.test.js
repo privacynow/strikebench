@@ -801,6 +801,25 @@ test('world transition ignores an out-of-order revision even when it names anoth
   assert.ok(state.revision >= 10);
 });
 
+test('world transition reconciles an equal revision when client lane owners disagree', async () => {
+  const state = await page.evaluate(async () => {
+    const target = App.state.world;
+    const originalRev = Number(App.state.worldRevision || 0);
+    const originalMarketWorld = App.Market.world;
+    const revision = originalRev + 20;
+    App.state.worldRevision = revision;
+    App.Market.world = target === 'demo' ? 'observed' : 'demo';
+    await App.transitionWorld(target, App.state.universe, revision, App.state.worldRevisionEpoch);
+    const result = { app: App.state.world, market: App.Market.world,
+      status: App.state.transitionStatus, revision: App.state.worldRevision };
+    App.state.worldRevision = originalRev;
+    App.Market.world = originalMarketWorld;
+    return result;
+  });
+  assert.equal(state.app, state.market, 'equal revision repairs the stale market store');
+  assert.equal(state.status, 'committed');
+});
+
 test('world revisions reset across a server boot epoch without accepting old-process events', async () => {
   const state = await page.evaluate(async () => {
     const before = App.state.world;

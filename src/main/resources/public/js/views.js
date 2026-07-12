@@ -5514,7 +5514,7 @@
         App.state.world === 'demo'
           ? el('span', { class: 'badge badge-warn' }, 'ACTIVE')
           : el('button', { class: 'btn btn-sm btn-secondary', id: 'enter-demo-market',
-            onclick: function () { App.switchWorld('demo'); } }, 'Enter demo market')));
+            onclick: function () { App.switchWorld('demo', this); } }, 'Enter demo market')));
     }
     function beginnerDC() { return window.Learn && Learn.currentLevel() === 'beginner'; }
     if (tab === 'simulation') root.appendChild(simCard);
@@ -5800,7 +5800,7 @@
         if (!finished) {
           row.appendChild(el('button', { class: 'btn btn-sm', onclick: function () {
             if (!active) App.state.focusSimControlRoom = sx.id;
-            App.switchWorld(active ? App.baseWorldId() : sx.id); } }, active
+            App.switchWorld(active ? App.baseWorldId() : sx.id, this); } }, active
               ? (App.config && App.config.fixturesOnly ? 'Back to demo' : 'Back to real')
               : 'Enter this market'));
           row.appendChild(el('button', { class: 'btn btn-sm', onclick: async function () {
@@ -5822,7 +5822,7 @@
         row.addEventListener('click', function (e) {
           if (e.target.closest('button,a,input,select,textarea')) return;
           if (finished) showReport(sx);
-          else { App.state.focusSimControlRoom = sx.id; App.switchWorld(sx.id); }
+          else { App.state.focusSimControlRoom = sx.id; App.switchWorld(sx.id, row); }
         });
         return pressable(row, finished ? 'Open report for ' + (sx.name || sx.id)
           : 'Enter simulated market ' + (sx.name || sx.id), 'link');
@@ -5857,11 +5857,12 @@
         var body = el('div', {}, UI.spinner('Loading the session report\u2026'));
         UI.confirmModal('Finish this session?', body, 'Finish session', async function () {
           var wasActive = App.state.world === sx.id;
-          await API.del('/api/sim/market/' + sx.id);
+          var result = await API.del('/api/sim/market/' + sx.id);
           // Finishing the ACTIVE world is a full market transition — never a bare state
           // assignment (review P0 #2: the old path skipped cache/store/universe/render and
           // left "Dom sim (simulated)" all over the observed screens).
-          if (wasActive) await App.transitionWorld(App.baseWorldId());
+          if (wasActive) await App.transitionWorld(result.world || App.baseWorldId(), result.universe,
+            result.revision, result.epoch);
           refreshSim(); App.refreshWorldBand();
         }, true);
         API.getFresh('/api/sim/market/' + sx.id + '/report').then(function (rep) {
@@ -6200,7 +6201,8 @@
             }
             await API.post('/api/sim/market/' + res.worldId + '/start', {});
             App.state.focusSimControlRoom = res.worldId;
-            await App.switchWorld(res.worldId);
+            var entered = await App.switchWorld(res.worldId, createBtn);
+            if (!entered) return;
             await refreshSim();
           } catch (e) { UI.toast(e.message || 'Could not create the simulated session', 'error'); }
           createBtn.disabled = false;
@@ -6259,7 +6261,9 @@
             el('span', { class: 'muted small' }, 'isolated demo account')));
           actions.push(el('button', { class: 'btn', onclick: function () { App.navigate('#/research'); } }, 'Explore demo data'));
           if (!(App.config && App.config.fixturesOnly)) {
-            actions.push(el('button', { class: 'btn btn-secondary', onclick: function () { App.switchWorld('observed'); } }, 'Return to observed market'));
+            actions.push(el('button', { class: 'btn btn-secondary', onclick: function () {
+              App.switchWorld('observed', this);
+            } }, 'Return to observed market'));
           }
         } else if (world !== 'observed') {
           var ss = (await API.get('/api/sim/market')).sessions || [];

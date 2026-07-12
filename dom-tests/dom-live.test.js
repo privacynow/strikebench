@@ -92,6 +92,61 @@ test('live: dashboard renders observed cards or an explicit unavailable state', 
   assertClean('dashboard');
 });
 
+test('live: visible market controls return Demo and simulated sessions to Observed', async () => {
+  const observedAccount = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);
+  await go('#/data/simulation');
+  await page.waitForSelector('#enter-demo-market');
+  await page.click('#enter-demo-market');
+  await page.waitForFunction(() => App.state.world === 'demo' && App.Market.world === 'demo'
+    && document.body.classList.contains('in-demo-world'), { timeout: 30000 });
+  const demoAccount = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);
+  assert.notEqual(demoAccount, observedAccount, 'Demo uses its isolated account');
+
+  await page.click('#world-exit');
+  await page.waitForFunction(() => App.state.world === 'observed' && App.Market.world === 'observed'
+    && !document.getElementById('world-band') && App.state.universe && App.state.universe.active,
+    { timeout: 30000 });
+  let returned = await page.evaluate(async () => ({
+    server: (await API.getFresh('/api/world')).world,
+    client: App.state.world,
+    store: App.Market.world,
+    account: (await API.getFresh('/api/account')).account.id,
+    transition: App.state.transitionStatus
+  }));
+  assert.deepEqual(returned, { server: 'observed', client: 'observed', store: 'observed',
+    account: observedAccount, transition: 'committed' });
+
+  // Build from the explicit Demo lane so the live test never depends on provider availability.
+  await go('#/data/simulation');
+  await page.click('#enter-demo-market');
+  await page.waitForFunction(() => App.state.world === 'demo' && App.Market.world === 'demo',
+    { timeout: 30000 });
+  await go('#/data/simulation');
+  await page.waitForSelector('#sim-create');
+  await page.fill('#sim-name', 'Live return contract');
+  await page.click('#sim-create');
+  await page.waitForFunction(() => App.state.world !== 'demo' && App.state.world !== 'observed'
+    && App.Market.world === App.state.world && document.body.classList.contains('in-sim-world'),
+    { timeout: 30000 });
+  const simulatedAccount = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);
+  assert.notEqual(simulatedAccount, observedAccount, 'the simulated session uses its own account');
+
+  await page.click('#world-exit');
+  await page.waitForFunction(() => App.state.world === 'observed' && App.Market.world === 'observed'
+    && !document.body.classList.contains('in-sim-world') && App.state.universe && App.state.universe.active,
+    { timeout: 30000 });
+  returned = await page.evaluate(async () => ({
+    server: (await API.getFresh('/api/world')).world,
+    client: App.state.world,
+    store: App.Market.world,
+    account: (await API.getFresh('/api/account')).account.id,
+    transition: App.state.transitionStatus
+  }));
+  assert.deepEqual(returned, { server: 'observed', client: 'observed', store: 'observed',
+    account: observedAccount, transition: 'committed' });
+  assertClean('market-return-controls');
+});
+
 test('live: research a real symbol end to end', async () => {
   await go('#/research/AAPL');
   await page.waitForSelector('#research-symbol', { timeout: 30000 });

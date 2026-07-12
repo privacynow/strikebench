@@ -293,7 +293,12 @@
           document.documentElement.style.removeProperty('--stale-banner-h');
         }
       }
-    } catch (e) { /* health is best-effort; the error boundary already told the user */ }
+      return !App.state.serverStale;
+    } catch (e) {
+      // Health is best-effort when the server is merely unreachable. Once a stale runtime
+      // was positively identified, a failed recheck cannot make it mutable again.
+      return !App.state.serverStale;
+    }
   }
   App.checkServerHealth = checkServerHealth;
 
@@ -471,7 +476,7 @@
       ];
       if (!(App.config && App.config.fixturesOnly)) {
         demoActions.push(UI.el('button', { class: 'btn btn-sm', id: 'world-exit',
-          onclick: function () { App.switchWorld('observed'); } }, 'Return to observed market'));
+          onclick: function () { App.switchWorld('observed', this); } }, 'Return to observed market'));
       }
       var demoTruth = 'Fabricated teaching data — not real market prices or history.';
       var demoBand = UI.el('div', { id: 'world-band', 'data-world': 'demo', role: 'status' },
@@ -545,7 +550,7 @@
         'Report'),
       UI.el('button', { class: 'btn btn-sm', id: 'world-exit',
         'aria-label': App.config && App.config.fixturesOnly ? 'Return to demo market' : 'Return to observed market',
-        onclick: function () { App.switchWorld(App.baseWorldId()); } },
+        onclick: function () { App.switchWorld(App.baseWorldId(), this); } },
         UI.el('span', { class: 'wb-exit-wide', 'aria-hidden': 'true' },
           App.config && App.config.fixturesOnly ? 'Return to demo market' : 'Return to observed market'),
         UI.el('span', { class: 'wb-exit-short', 'aria-hidden': 'true' },
@@ -623,8 +628,17 @@
       retired.push(knownEpoch);
       App.state.worldRevisionRetiredEpochs = retired.slice(-4);
       App.state.worldRevision = 0;
-    } else if (rev && rev <= Number(App.state.worldRevision || 0)) {
-      return Promise.resolve(); // duplicate or stale delivery within this boot epoch
+    } else if (rev && rev < Number(App.state.worldRevision || 0)) {
+      return Promise.resolve(); // stale delivery within this boot epoch
+    } else if (rev && rev === Number(App.state.worldRevision || 0)) {
+      // Equal revisions are duplicates only after every client-side owner of the lane agrees.
+      // An earlier client failure can leave the revision advanced while the view/store stayed
+      // behind; treating that as a duplicate made the visible Return button a permanent no-op.
+      var alreadyCommitted = App.state.world === target
+        && (!App.Market || App.Market.world === target)
+        && App.state.universe && App.state.universe.active
+        && App.state.transitionStatus !== 'failed';
+      if (alreadyCommitted) return Promise.resolve();
     }
     // Collapse CONCURRENT transitions to the same target into one reconciliation: the SSE
     // hint and the awaited PUT often land within milliseconds. Skipping was the bug;
@@ -733,19 +747,57 @@
   };
 
   /** The one-command world switch: preserves route/symbol/level — it changes the MARKET, not you. */
-  App.switchWorld = async function (worldId) {
+  App.switchWorld = async function (worldId, trigger) {
+    var target = worldId || App.baseWorldId();
+    var control = trigger && trigger.nodeType === 1 ? trigger : null;
+    var wasDisabled = control && 'disabled' in control ? !!control.disabled : false;
+    if (control) {
+      control.classList.add('world-switch-busy');
+      control.setAttribute('aria-busy', 'true');
+      if ('disabled' in control) control.disabled = true;
+    }
     try {
-      var res = await API.put('/api/world', { world: worldId });
+      await checkServerHealth();
+      if (App.state.serverStale) {
+        throw new Error('Restart StrikeBench and reload before switching markets.');
+      }
+      var res = await API.put('/api/world', { world: target });
       if (res && res.datasetReset && UI.toast) {
         UI.toast(App.baseWorldId() === 'demo'
           ? 'Back on the Demo baseline — your scenario dataset was switched off too'
           : 'Back on the observed market — your scenario dataset was switched off too');
       }
-      // Transition failures reject AND paint the #transition-error banner — no alert on top.
       // The PUT's response carries the target bootstrap: server and client commit together.
-      await App.transitionWorld(worldId, res && res.universe, res && res.revision, res && res.epoch)
-        .catch(function () { /* visible in the banner */ });
-    } catch (e) { UI.toast(e.message || 'Could not switch markets', 'error'); }
+      await App.transitionWorld(target, res && res.universe, res && res.revision, res && res.epoch);
+
+      // Verify the whole contract, not just the request: server selector, app state, market
+      // store and universe must name the same lane before the click can report success.
+      var authoritative = await API.getFresh('/api/world');
+      if (!authoritative || authoritative.world !== target) {
+        throw new Error('The server did not confirm the requested market.');
+      }
+      if (App.state.world !== target || (App.Market && App.Market.world !== target)
+          || !App.state.universe || !App.state.universe.active) {
+        await App.transitionWorld(target, res && res.universe,
+          authoritative.revision || (res && res.revision), authoritative.epoch || (res && res.epoch));
+      }
+      if (App.state.world !== target || (App.Market && App.Market.world !== target)
+          || !App.state.universe || !App.state.universe.active) {
+        throw new Error('The market changed on the server, but this screen did not finish switching.');
+      }
+      if (UI.toast) UI.toast(target === 'observed' ? 'Observed market active'
+        : target === 'demo' ? 'Demo market active' : 'Simulated market active');
+      return true;
+    } catch (e) {
+      if (UI.toast) UI.toast(e.message || 'Could not switch markets', 'error');
+      return false;
+    } finally {
+      if (control) {
+        control.classList.remove('world-switch-busy');
+        control.removeAttribute('aria-busy');
+        if ('disabled' in control) control.disabled = wasDisabled;
+      }
+    }
   };
 
   window.App = App;
