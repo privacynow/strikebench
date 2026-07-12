@@ -23,7 +23,7 @@ public final class PortfolioOptimizer {
             Long maxPerPositionCents,   // null -> 25% of budget
             Integer maxPositions,       // null -> 10
             Double maxSymbolPct,        // null -> 0.40 of budget per symbol
-            String objective,           // "score" (default) | "ev"
+            String objective,           // DECISION (default) | MARKET_EV | HISTORY_EV
             boolean diagnostic          // false (default): fund only positive-EV ideas; true: least-bad set, LABELED
     ) {}
 
@@ -33,7 +33,8 @@ public final class PortfolioOptimizer {
             List<Allocation> allocations,
             long capitalUsedCents,
             long totalTailLossCents,
-            long expectedValueCents,
+            Long marketEvAfterCostsCents,
+            Long realizedVolEvAfterCostsCents,
             double avgScore,
             Map<String, Long> perSymbolCents,
             boolean diagnostic,         // true when this is a least-bad (possibly negative-EV) diagnostic set
@@ -46,27 +47,27 @@ public final class PortfolioOptimizer {
         int maxPositions = c.maxPositions() != null ? Math.max(1, c.maxPositions()) : 10;
         double maxSymbolPct = c.maxSymbolPct() != null ? Math.clamp(c.maxSymbolPct(), 0.05, 1.0) : 0.40;
         long perSymbolCap = (long) (budget * maxSymbolPct);
-        boolean byEv = "ev".equalsIgnoreCase(c.objective());
+        Objective objective = Objective.parse(c.objective());
         boolean diagnostic = c.diagnostic();
 
-        // Viable + capital-shaped candidates. In NORMAL mode we additionally require a POSITIVE modeled
-        // expected value — an optimizer must not present a portfolio the model expects to LOSE money on as
-        // an answer (the project's honesty non-negotiable). null-EV = "unknown value", not fundable in
-        // normal mode. Diagnostic mode keeps the old least-bad behavior but is LABELED as such.
+        // Viable + capital-shaped candidates. Normal mode funds only evaluations the shared economic
+        // policy calls FAVORABLE; every mixed/adverse/unavailable structure remains inspectable through
+        // the explicitly labeled diagnostic mode instead of being presented as an allocation answer.
         List<StrategyEvaluation> capitalOk = evals.stream()
                 .filter(StrategyEvaluation::viable)
                 .filter(e -> e.capitalIncrementalCents() != null && e.capitalIncrementalCents() > 0)
                 .toList();
-        long rejectedNonPositive = capitalOk.stream().filter(e -> !hasPositiveEv(e)).count();
+        long rejectedEconomics = capitalOk.stream().filter(e -> !hasFavorableEconomics(e)).count();
         List<StrategyEvaluation> fundable = capitalOk.stream()
-                .filter(e -> diagnostic || hasPositiveEv(e))
-                .sorted(Comparator.comparingDouble((StrategyEvaluation e) -> density(e, byEv)).reversed())
+                .filter(e -> diagnostic || hasFavorableEconomics(e))
+                .sorted(Comparator.comparingDouble((StrategyEvaluation e) -> density(e, objective)).reversed())
                 .toList();
 
         List<Allocation> allocations = new ArrayList<>();
         List<String> notes = new ArrayList<>();
         Map<String, Long> perSymbol = new LinkedHashMap<>();
-        long used = 0, tail = 0, ev = 0;
+        long used = 0, tail = 0, marketEv = 0, historyEv = 0;
+        boolean marketEvComplete = true, historyEvComplete = true;
         double scoreSum = 0;
 
         for (StrategyEvaluation e : fundable) {
@@ -84,36 +85,65 @@ public final class PortfolioOptimizer {
             allocations.add(new Allocation(e, units, capital));
             used += capital;
             tail += (long) units * e.tailLossCents();
-            ev += (long) units * (e.evCents() == null ? 0 : e.evCents());
-            scoreSum += e.rankScore();
+            Long oneMarketEv = marketEv(e), oneHistoryEv = historyEv(e);
+            if (oneMarketEv == null) marketEvComplete = false;
+            else marketEv += (long) units * oneMarketEv;
+            if (oneHistoryEv == null) historyEvComplete = false;
+            else historyEv += (long) units * oneHistoryEv;
+            scoreSum += e.decisionScore();
             perSymbol.merge(sym, capital, Long::sum);
         }
 
         double avgScore = allocations.isEmpty() ? 0 : Math.round(scoreSum / allocations.size() * 100) / 100.0;
         if (allocations.isEmpty()) {
-            if (!diagnostic && rejectedNonPositive > 0) {
-                notes.add("No idea in this universe has positive modeled expected value at current marks — nothing funded. "
-                        + rejectedNonPositive + " viable idea" + (rejectedNonPositive == 1 ? " was" : "s were")
-                        + " rejected as negative or unknown EV. Switch to Expert diagnostic mode to inspect the least-bad set.");
+            if (!diagnostic && rejectedEconomics > 0) {
+                notes.add("No idea in this universe earned a favorable after-cost economic verdict — nothing funded. "
+                        + rejectedEconomics + " viable idea" + (rejectedEconomics == 1 ? " was" : "s were")
+                        + " mixed, adverse, or economically unavailable. Use Expert diagnostic mode to inspect them without treating them as recommendations.");
             } else {
                 notes.add("Nothing funded — no viable evaluations fit the budget.");
             }
-        } else if (diagnostic && ev < 0) {
-            notes.add("DIAGNOSTIC set: this is the least-bad allocation, not a recommendation — its modeled expected value is negative.");
+        } else if (diagnostic) {
+            notes.add("DIAGNOSTIC set: this is a comparison allocation, not a recommendation; one or both after-cost EV lanes may be adverse or unavailable.");
         }
-        return new OptimizationResult(allocations, used, tail, ev, avgScore, perSymbol, diagnostic, notes);
+        return new OptimizationResult(allocations, used, tail,
+                marketEvComplete ? marketEv : null,
+                historyEvComplete ? historyEv : null,
+                avgScore, perSymbol, diagnostic, notes);
     }
 
-    /** An idea is fundable in normal mode only if its modeled expected value is affirmatively positive. */
-    private static boolean hasPositiveEv(StrategyEvaluation e) {
-        return e.evCents() != null && e.evCents() > 0;
+    private enum Objective {
+        DECISION, MARKET_EV, HISTORY_EV;
+
+        static Objective parse(String raw) {
+            if (raw == null || raw.isBlank()) return DECISION;
+            try { return valueOf(raw.trim().toUpperCase()); }
+            catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("objective must be DECISION, MARKET_EV, or HISTORY_EV");
+            }
+        }
+    }
+
+    private static boolean hasFavorableEconomics(StrategyEvaluation e) {
+        return e.economics() != null && e.economics().verdict() == io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.FAVORABLE;
+    }
+
+    private static Long marketEv(StrategyEvaluation e) {
+        return e.economics() == null ? null : e.economics().marketEvAfterCostsCents();
+    }
+
+    private static Long historyEv(StrategyEvaluation e) {
+        return e.economics() == null ? null : e.economics().realizedVolEvAfterCostsCents();
     }
 
     /** Objective value per cent of capital — the greedy ranking key. */
-    private static double density(StrategyEvaluation e, boolean byEv) {
+    private static double density(StrategyEvaluation e, Objective objective) {
         double cap = e.capitalIncrementalCents();
         if (cap <= 0) return 0;
-        double value = byEv ? (e.evCents() == null ? 0 : e.evCents()) : e.rankScore();
+        Long economicValue = objective == Objective.MARKET_EV ? marketEv(e)
+                : objective == Objective.HISTORY_EV ? historyEv(e) : null;
+        double value = objective == Objective.DECISION ? e.decisionScore()
+                : economicValue == null ? Double.NEGATIVE_INFINITY : economicValue;
         return value / cap;
     }
 }

@@ -655,7 +655,7 @@ class ApiIntegrationTest {
 
         // HEDGE: floors below spot, each rung costs its premium
         JsonNode hedge = Json.parse(post("/api/recommend/ladder",
-                "{\"symbol\":\"AAPL\",\"intent\":\"hedge\"}").body());
+                "{\"symbol\":\"AAPL\",\"intent\":\"hedge\",\"riskMode\":\"aggressive\",\"maxLossCents\":100000}").body());
         assertThat(hedge.get("rungs").size()).isGreaterThanOrEqualTo(3);
         for (JsonNode r : hedge.get("rungs")) {
             assertThat(r.get("maxLossCents").asLong()).isPositive();
@@ -1136,12 +1136,17 @@ class ApiIntegrationTest {
         long cap = 50_000L; // $500 — well under 1% of the default $100k account
         assertThat(put("/api/account/risk-context",
                 "{\"riskCapitalCents\":" + cap + "}").statusCode()).isEqualTo(200);
+        JsonNode policy = Json.parse(get("/api/risk-budget").body());
+        long expected = java.util.stream.StreamSupport.stream(policy.get("modes").spliterator(), false)
+                .filter(m -> "balanced".equals(m.get("mode").asText()))
+                .findFirst().orElseThrow().get("effectiveBudgetCents").asLong();
+        assertThat(expected).isLessThanOrEqualTo(cap);
         JsonNode manual = Json.parse(post("/api/recommend",
                 "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"balanced\"}").body());
-        assertThat(manual.get("riskBudgetCents").asLong()).isEqualTo(cap);
+        assertThat(manual.get("riskBudgetCents").asLong()).isEqualTo(expected);
         JsonNode auto = Json.parse(post("/api/recommend/auto",
                 "{\"universe\":[\"AAPL\"],\"riskMode\":\"balanced\"}").body());
-        assertThat(auto.get("riskBudgetCents").asLong()).isEqualTo(cap);
+        assertThat(auto.get("riskBudgetCents").asLong()).isEqualTo(expected);
         for (JsonNode pick : auto.get("picks")) {
             for (JsonNode hz : pick.get("horizons")) {
                 for (JsonNode c : hz.get("candidates")) {
@@ -1195,14 +1200,18 @@ class ApiIntegrationTest {
                 {"symbol":"AAPL","thesis":"neutral","horizon":"month","riskMode":"conservative"}
                 """).body());
         assertThat(r.get("candidates")).isNotEmpty();
-        assertThat(r.get("economicPolicy").asText()).isEqualTo("eligibility_then_economics_then_score");
+        assertThat(r.get("economicPolicy").asText()).isEqualTo("decision_score");
         assertThat(r.get("economicMessage").asText()).isNotBlank();
         boolean teachingCase = false;
         boolean favorableTeachingCase = false;
+        double previousDecisionScore = Double.MAX_VALUE;
         for (JsonNode c : r.get("candidates")) {
             assertThat(c.has("structurallyEligible")).isTrue();
             assertThat(c.has("economicVerdict")).isTrue();
             assertThat(c.has("economics")).isTrue();
+            double decisionScore = c.get("decisionScore").asDouble();
+            assertThat(decisionScore).isLessThanOrEqualTo(previousDecisionScore);
+            previousDecisionScore = decisionScore;
             if ("FAVORABLE".equals(c.get("economicVerdict").asText())) {
                 assertThat(c.get("economics").get("observedEvidence").asBoolean()).isFalse();
                 assertThat(c.get("economics").get("label").asText()).containsIgnoringCase("teaching market");

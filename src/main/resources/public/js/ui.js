@@ -223,10 +223,10 @@
   }
 
   /** 0–100 score as a small colored meter. */
-  function scoreBar(score) {
+  function scoreBar(score, label) {
     var pct = Math.max(0, Math.min(100, score));
     var cls = pct >= 70 ? 'ok' : pct >= 45 ? 'caution' : 'danger';
-    return el('span', { class: 'score-wrap', title: 'Composite rank: risk validity, freshness, liquidity, risk:reward, POP, capital efficiency' },
+    return el('span', { class: 'score-wrap', title: label || 'Score' },
       el('span', { class: 'score-num' }, Math.round(pct)),
       el('span', { class: 'score-bar' }, el('span', { class: 'score-fill score-' + cls, style: 'width:' + pct + '%' })));
   }

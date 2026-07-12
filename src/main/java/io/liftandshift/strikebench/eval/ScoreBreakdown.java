@@ -7,14 +7,16 @@ import java.util.List;
  *  1. GATE — hard validity checks (finite risk, live-enough data, buying power). A failed gate
  *     disqualifies the candidate regardless of an attractive score.
  *  2. NORMALIZE — weighted, named components each in 0..1, combined to a 0..100 raw score.
- *  3. RISK-ADJUST — the raw score haircut by evidence uncertainty and tail risk.
+ *  3. RISK-ADJUST — the raw score haircut by evidence uncertainty and tail risk. This is the
+ *     within-economic-tier quality score; {@link StrategyEvaluation#decisionScore()} adds the
+ *     mechanical/economic ordering bands used by every final ranked surface.
  * Produced by {@code ScoreComposer}.
  */
 public record ScoreBreakdown(
         boolean gatePassed,
         List<String> gateFailures,
         double normalizedScore,   // 0..100 before risk adjustment
-        double riskAdjustedScore, // 0..100 final rank value (0 when the gate fails)
+        double riskAdjustedScore, // 0..100 quality within an economic tier (0 when gate fails)
         List<Component> components
 ) {
     public ScoreBreakdown {

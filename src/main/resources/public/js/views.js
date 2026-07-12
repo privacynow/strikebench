@@ -1738,6 +1738,24 @@
     return (c && (c.economicVerdict || (c.economics && c.economics.verdict))) || null;
   }
 
+  function economicRank(c) {
+    var v = economicVerdict(c);
+    return v === 'FAVORABLE' ? 3 : v === 'MIXED' ? 2 : v === 'UNAVAILABLE' ? 1 : 0;
+  }
+
+  function decisionScoreOf(e) {
+    var value = Number(e && e.decisionScore);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function marketEvAfterCosts(c) {
+    return c && c.economics && c.economics.marketEvAfterCostsCents;
+  }
+
+  function historyEvAfterCosts(c) {
+    return c && c.economics && c.economics.realizedVolEvAfterCostsCents;
+  }
+
   function economicAssessmentBlock(c) {
     var e = c && c.economics;
     if (!e) return null;
@@ -1826,13 +1844,13 @@
         : el('div', { class: 'fact f-danger' },
             el('div', { class: 'f-label' }, UI.term('max loss', 'Theoretical worst case')),
             el('div', { class: 'f-value' }, fmtMoney(c.maxLossCents)));
-    var thirdFact = assignGoal && c.assignmentProb !== null && c.assignmentProb !== undefined
-        ? el('div', { class: 'fact f-ok' },
-            el('div', { class: 'f-label' }, UI.term('assignment', c.intent === 'EXIT' ? 'Chance you sell' : 'Chance you buy')),
-            el('div', { class: 'f-value' }, fmtPct(c.assignmentProb)))
-        : el('div', { class: 'fact' },
-            el('div', { class: 'f-label' }, UI.term('pop', 'Chance of any profit')),
-            el('div', { class: 'f-value' }, fmtPct(c.pop)));
+    var profitFact = el('div', { class: 'fact' },
+      el('div', { class: 'f-label' }, UI.term('pop', 'Chance of any profit')),
+      el('div', { class: 'f-value' }, fmtPct(c.pop)));
+    var assignmentFact = assignGoal && c.assignmentProb !== null && c.assignmentProb !== undefined
+      ? el('div', { class: 'fact f-ok' },
+          el('div', { class: 'f-label' }, UI.term('assignment', c.intent === 'EXIT' ? 'Chance you sell' : 'Chance you buy')),
+          el('div', { class: 'f-value' }, fmtPct(c.assignmentProb))) : null;
     var card = el('div', { class: 'candidate', 'data-strategy': c.strategy,
       'data-economic-verdict': economicVerdict(c) || 'UNKNOWN' },
       el('div', { class: 'head' },
@@ -1848,7 +1866,8 @@
           el('div', { class: 'f-label' }, UI.term('max profit', 'Theoretical ceiling')),
           el('div', { class: 'f-value' }, UI.maxProfitLabel(
             c.strategy, c.structureGroup, c.maxProfitCents, true, c.legs))),
-        thirdFact),
+        profitFact,
+        assignmentFact),
       el('p', { style: 'margin:6px 0' },
         c.entryNetPremiumCents >= 0
           ? el('span', {}, 'You collect ', el('b', { class: 'gain' }, fmtMoney(c.entryNetPremiumCents)), ' up front (a ', UI.term('credit'), ').')
@@ -1857,7 +1876,7 @@
           ? el('span', {}, ' The ', UI.term('breakeven'), ' is at ', el('b', {}, c.breakevens.map(fmtBreakeven).join(' / ')), '.')
           : null));
     var econ = economicAssessmentBlock(c);
-    if (econ) card.insertBefore(econ, card.children[2] || null);
+    if (econ) card.insertBefore(econ, card.querySelector('.fact-grid'));
     var gb = guideBlock(c.strategy);
     // Beginner's first disclosure must explain the structure itself. The economic verdict
     // remains prominent above the facts, while its deeper scoring rationale follows the
@@ -1884,7 +1903,7 @@
         intentBadge(c.intent),
         heldSharesBadge(c),
         badge(c.freshness),
-        UI.scoreBar(c.score)),
+        UI.scoreBar(c.score, 'Screen score — fast candidate fit before the full decision analysis')),
       el('div', { class: 'label-line' }, c.label + '  ·  qty ' + c.qty),
       intentNoteBlock(c),
       el('div', { class: 'chip-row' },
@@ -1903,12 +1922,13 @@
         chip('Confidence', fmtPct(c.confidence))),
       explain(c.beginnerExplanation));
     var econ = economicAssessmentBlock(c);
-    if (econ) card.insertBefore(econ, card.children[2] || null);
+    if (econ) card.insertBefore(econ, card.querySelector('.chip-row'));
     card.appendChild(el('div', { class: 'chip-row expert-only' },
       c.decisionScore !== null && c.decisionScore !== undefined
         ? chip(el('span', {}, 'Decision score', UI.info('decisionscore')), fmtNum(c.decisionScore, 0)) : null,
-      c.expectedValueCents !== null && c.expectedValueCents !== undefined
-        ? chip(el('span', {}, 'Model EV', UI.info('ev')), fmtMoney(c.expectedValueCents, { plus: true })) : null,
+      !c.economics && c.expectedValueCents !== null && c.expectedValueCents !== undefined
+        ? chip(el('span', {}, 'Market EV (pre-fee)', UI.info('ev')), fmtMoney(c.expectedValueCents, { plus: true })) : null,
+      !c.economics ? chip(el('span', {}, 'History EV', UI.info('evhistvol')), 'Unavailable') : null,
       chip('Liquidity', fmtNum(c.liquidityScore, 2)),
       chip(el('span', {}, 'Screen score', UI.info('screenscore')), fmtNum(c.score, 0))));
     if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.context.symbol(), c));
@@ -2025,14 +2045,15 @@
     }
     var COLS = [
       { key: 'rank', label: '#', get: function (c) { return rankOf.get(c); }, render: function (c) { return el('span', { class: 'muted', title: 'Rank in the served ordering (best first)' }, '#' + rankOf.get(c)); } },
-      { key: 'economicVerdict', label: 'Economic view', get: function (c) { var v = economicVerdict(c); return v === 'FAVORABLE' ? 3 : v === 'MIXED' ? 2 : v === 'UNFAVORABLE' ? 1 : 0; }, render: function (c) { var v = economicVerdict(c); return el('span', { class: 'badge economic-table-' + String(v || 'unknown').toLowerCase() }, (c.economics && c.economics.label) || v || '—'); } },
+      { key: 'economicVerdict', label: 'Economic view', get: economicRank, render: function (c) { var v = economicVerdict(c); return el('span', { class: 'badge economic-table-' + String(v || 'unknown').toLowerCase() }, (c.economics && c.economics.label) || v || '—'); } },
       { key: 'displayName', label: 'Strategy', get: function (c) { return c.displayName; }, render: function (c) { return el('b', {}, c.displayName); } },
       { key: 'entryNetPremiumCents', label: 'Cost/Credit', get: function (c) { return c.entryNetPremiumCents; }, render: function (c) { return pnlSpan(c.entryNetPremiumCents); } },
       { key: 'maxLossCents', label: 'Theor. max loss', get: function (c) { return c.usesHeldShares && c.combinedMaxLossCents ? c.combinedMaxLossCents : c.maxLossCents; }, render: function (c) { return c.usesHeldShares && c.maxLossCents === 0 ? el('span', {}, '$0*') : el('span', { class: 'loss' }, fmtMoney(c.maxLossCents)); } },
       { key: 'maxProfitCents', label: 'Theor. max profit', get: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'uncapped' ? Infinity : k === 'model-dependent' ? -Infinity : c.maxProfitCents; }, render: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'model-dependent' ? el('span', { class: 'muted' }, 'model-dependent') : k === 'uncapped' ? el('span', { class: 'gain' }, '\u221E') : el('span', { class: 'gain' }, fmtMoney(c.maxProfitCents)); } },
       { key: 'rr', label: 'R:R', get: rrValue, render: function (c) { var v = rrValue(c); return el('span', {}, v === -1 ? '\u2014' : v === Infinity ? '\u221E' : fmtNum(v, 2)); } },
       { key: 'pop', label: 'POP', get: function (c) { return c.pop === null || c.pop === undefined ? -1 : c.pop; }, render: function (c) { return el('span', {}, fmtPct(c.pop)); } },
-      { key: 'expectedValueCents', label: 'EV', get: function (c) { return c.expectedValueCents === null || c.expectedValueCents === undefined ? -Infinity : c.expectedValueCents; }, render: function (c) { return c.expectedValueCents === null || c.expectedValueCents === undefined ? el('span', {}, '\u2014') : pnlSpan(c.expectedValueCents); } },
+      { key: 'marketEv', label: 'Market EV', get: function (c) { var v = marketEvAfterCosts(c); return v === null || v === undefined ? (c.expectedValueCents == null ? -Infinity : c.expectedValueCents) : v; }, render: function (c) { var v = marketEvAfterCosts(c); return v !== null && v !== undefined ? pnlSpan(v) : c.expectedValueCents !== null && c.expectedValueCents !== undefined ? el('span', {}, pnlSpan(c.expectedValueCents), el('small', { class: 'muted' }, ' pre-fee')) : '—'; } },
+      { key: 'historyEv', label: 'History EV', get: function (c) { var v = historyEvAfterCosts(c); return v === null || v === undefined ? -Infinity : v; }, render: function (c) { var v = historyEvAfterCosts(c); return v === null || v === undefined ? '—' : pnlSpan(v); } },
       { key: 'breakevens', label: 'Breakevens', get: function (c) { return (c.breakevens || []).length ? parseFloat(c.breakevens[0]) : 0; }, render: function (c) { return el('span', { class: 'mono' }, (c.breakevens || []).map(fmtBreakeven).join(' / ') || '\u2014'); } },
       { key: 'assignmentProb', label: 'Assign%', get: function (c) { return c.assignmentProb === null || c.assignmentProb === undefined ? -1 : c.assignmentProb; }, render: function (c) { return el('span', {}, c.assignmentProb === null || c.assignmentProb === undefined ? '\u2014' : fmtPct(c.assignmentProb)); } },
       { key: 'annualizedYieldPct', label: 'Yield/yr', get: function (c) { return c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? -1 : c.annualizedYieldPct; }, render: function (c) { return el('span', {}, c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? '\u2014' : fmtNum(c.annualizedYieldPct, 1) + '%'); } },
@@ -2084,7 +2105,7 @@
       wrap.appendChild(el('div', { class: 'tbl-wrap' },
         el('table', { class: 'tbl' }, el('thead', {}, head), body)));
       wrap.appendChild(el('p', { class: 'muted', style: 'margin:8px 0 0' },
-        'Click a column to sort, a row to expand the full card. Candidates priced at executable bid/ask.'
+        'Click a column to sort, a row to expand the full card. EV lanes are after estimated round-trip fees unless a fallback cell explicitly says pre-fee. Candidates are priced at executable bid/ask.'
         + (candidates.some(function (c) { return c.usesHeldShares && c.maxLossCents === 0; })
             ? ' $0* = no new cash at risk, covered by held shares (sorted by the worst case including those shares).' : '')));
     }
@@ -6780,7 +6801,8 @@
     return el('div', { class: 'evidence-grid' }, rows);
   }
 
-  function scoreGrid(sc) {
+  function scoreGrid(e) {
+    var sc = e.score || {};
     var wrap = el('div', {});
     if (!sc.gatePassed && sc.gateFailures && sc.gateFailures.length) {
       wrap.appendChild(alertBox('warn', 'Failed a hard check', sc.gateFailures));
@@ -6791,7 +6813,8 @@
     })));
     wrap.appendChild(el('p', { class: 'muted small' },
       'Normalized ' + Math.round(sc.normalizedScore) + ' → risk-adjusted ' + Math.round(sc.riskAdjustedScore)
-      + ' (haircut for evidence + tail risk).'));
+      + ' within the ' + String(economicVerdict(e) || 'unavailable').toLowerCase()
+      + ' economic tier → final Decision score ' + Math.round(decisionScoreOf(e)) + '.'));
     return wrap;
   }
 
@@ -6818,7 +6841,7 @@
     var card = el('div', { class: 'card decision-pick', 'data-strategy': c.strategy });
     card.appendChild(UI.cardHeader(
       el('span', {}, el('span', { class: 'pick-badge' }, placement), ' ', c.displayName),
-      el('span', { class: 'row-gap' }, evidenceBadge(e.evidence.rollup), UI.scoreBar(sc.riskAdjustedScore))));
+      el('span', { class: 'row-gap' }, evidenceBadge(e.evidence.rollup), UI.scoreBar(decisionScoreOf(e), 'Decision score'))));
     if (e.explanation && (e.explanation.whySelected || e.explanation.headline)) {
       card.appendChild(el('p', { class: 'decision-why' }, e.explanation.whySelected || e.explanation.headline));
     }
@@ -6844,7 +6867,7 @@
     }
     if (level === 'expert') {
       card.appendChild(UI.expandable('Evidence by dimension', function () { return evidenceGrid(e.evidence); }));
-      card.appendChild(UI.expandable('How this score was built', function () { return scoreGrid(sc); }));
+      card.appendChild(UI.expandable('How this score was built', function () { return scoreGrid(e); }));
     }
     card.appendChild(UI.expandable('The plan after you enter', function () { return planList(e.management); },
       { open: level === 'beginner' }));
@@ -6867,7 +6890,7 @@
             (e.economics && e.economics.label) || 'Economics unavailable'),
           el('span', { class: 'muted' }, '  ' + c.label)),
         el('div', { class: 'alt-facts' },
-          chip('Decision score', Math.round(e.score.riskAdjustedScore), 'Risk-adjusted: gates, six weighted factors, then haircuts for evidence quality and tail risk. May rank differently than the quick screen score — this one decides.'),
+          chip('Decision score', Math.round(decisionScoreOf(e)), 'Mechanical eligibility and economic tier set the score band; weighted factors, evidence and tail risk order ideas inside it.'),
           chip('Market EV', e.economics && e.economics.marketEvAfterCostsCents != null
             ? fmtMoney(e.economics.marketEvAfterCostsCents, { plus: true }) : 'Unavailable'),
           chip('History EV', e.economics && e.economics.realizedVolEvAfterCostsCents != null
@@ -6884,7 +6907,7 @@
         el('td', {}, c.displayName),
         el('td', {}, el('span', { class: 'badge economic-table-' + String(economicVerdict(e) || 'unknown').toLowerCase() },
           (e.economics && e.economics.label) || 'Unavailable')),
-        el('td', {}, UI.scoreBar(e.score.riskAdjustedScore)),
+        el('td', {}, UI.scoreBar(decisionScoreOf(e), 'Decision score')),
         el('td', {}, evidenceBadge(e.evidence.rollup)),
         el('td', {}, fmtMoney(c.entryNetPremiumCents, { plus: true })),
         el('td', {}, el('span', { class: 'loss' }, fmtMoney(r.maxLossCents))),
@@ -6962,8 +6985,8 @@
     if (evals.length > 1) {
       host.appendChild(el('h2', { class: 'section-h' }, level === 'beginner' ? 'Other ways to play it' : 'The full field'));
       host.appendChild(el('p', { class: 'muted small decision-order-note' }, level === 'beginner'
-        ? 'Order: trades that pass the checks, then the economic read, then Decision score. A learning example never outranks a mechanically sound idea whose economics are simply unavailable.'
-        : 'Sort policy: mechanical eligibility → economic tier (favorable, mixed, unavailable, unfavorable) → Decision score within each tier.'));
+        ? 'Decision score already includes the safety checks, economic read, evidence and tail risk. Higher always means earlier in this list.'
+        : 'Decision score is monotonic with the served order: eligibility → economic tier (favorable, mixed, unavailable, unfavorable) → risk/evidence quality inside the tier.'));
       host.appendChild(level === 'beginner' ? decisionAltList(evals.slice(1), symbol) : decisionTable(evals, symbol));
     }
     // The portfolio optimizer — "size the strongest ideas across a budget" — lives with the
@@ -7034,7 +7057,7 @@
     var defaultBudget = f.budget || (ctx && ctx.accountCents ? Math.round(ctx.accountCents / 100) : 25000);
     var card = el('div', { class: 'card tool-card portfolio-optimizer' });
     card.appendChild(toolHeader('grid', 'Build a portfolio'));
-    card.appendChild(explain('Allocate your account across the strongest ideas in your universe — diversified by symbol and capped per position. Only ideas that pass the risk screens are funded.'));
+    card.appendChild(explain('Allocate your account across the strongest ideas in your universe — diversified by symbol and capped per position. Normal mode funds only ideas that pass the safety checks and earn a favorable after-cost economic verdict.'));
 
     var budget = el('input', { type: 'number', id: 'portfolio-budget', value: defaultBudget, min: '0', step: '1000' });
     var goal = el('select', { id: 'portfolio-goal' },
@@ -7049,17 +7072,19 @@
     var fields = [toolField('Budget ($)', budget), toolField('Ideas from', scope), toolField('Goal', goal)];
     var objective = null, maxPos = null, maxSym = null;
     if (level === 'expert') {
-      objective = el('select', { id: 'portfolio-objective' }, el('option', { value: 'score' }, 'Best score'), el('option', { value: 'ev' }, 'Best expected value'));
-      if (f.objective) objective.value = f.objective;
+      objective = el('select', { id: 'portfolio-objective' },
+        el('option', { value: 'DECISION' }, 'Best Decision score'),
+        el('option', { value: 'MARKET_EV' }, 'Best market EV after costs'),
+        el('option', { value: 'HISTORY_EV' }, 'Best history EV after costs'));
+      if (['DECISION', 'MARKET_EV', 'HISTORY_EV'].indexOf(f.objective) >= 0) objective.value = f.objective;
       maxPos = el('input', { type: 'number', id: 'portfolio-max-positions', value: f.maxPos || 8, min: '1', max: '20' });
       maxSym = el('input', { type: 'number', id: 'portfolio-max-symbol-pct', value: f.maxSym || 40, min: '5', max: '100', step: '5' });
       fields.push(toolField('Rank by', objective), toolField('Max positions', maxPos), toolField('Max % per symbol', maxSym));
     }
     card.appendChild(el('div', { class: 'form-grid' }, fields));
 
-    // Expert-only diagnostic mode: normally the optimizer funds ONLY positive-expected-value ideas
-    // (it must not present a money-losing portfolio as an answer). Diagnostic mode surfaces the
-    // least-bad set anyway, clearly labeled — for inspecting a weak universe, not for acting on.
+    // Expert-only diagnostic mode: normal mode funds only FAVORABLE evaluations. Diagnostic mode
+    // preserves every viable comparison, but labels the result as inspection rather than advice.
     var diag = null;
     if (level === 'expert') {
       diag = el('input', { type: 'checkbox', id: 'portfolio-diagnostics' });
@@ -7079,7 +7104,7 @@
       var body = {
         totalCapitalCents: Math.round((+budget.value || 0) * 100),
         intent: goal.value || null,
-        objective: objective ? objective.value : 'score',
+        objective: objective ? objective.value : 'DECISION',
         maxPositions: maxPos ? +maxPos.value : null,
         maxSymbolPct: maxSym ? +maxSym.value / 100 : null,
         diagnostic: diag ? diag.checked : false
@@ -7108,23 +7133,27 @@
     // Diagnostic sets are NOT a recommendation — say so loudly before anything reads as an answer.
     if (o.diagnostic) {
       out.appendChild(alertBox('caution', 'Diagnostic set — NOT a recommendation. '
-        + 'No idea in this universe has positive modeled expected value; this is the least-bad allocation, shown for inspection only.'));
+        + 'This set may include mixed, adverse, or economically unavailable ideas; it is shown for comparison only.'));
     }
     // Conclusion first: what this portfolio IS, in one sentence. In diagnostic mode it is the
     // "least-bad set", never "Funded" (which reads as an endorsement).
     var lead = o.diagnostic ? 'Least-bad set: ' : 'Funded ';
+    var marketEv = o.marketEvAfterCostsCents;
+    var historyEv = o.realizedVolEvAfterCostsCents;
     out.appendChild(el('div', { class: 'tool-verdict' },
       el('b', {}, lead + allocs.length + ' position' + (allocs.length === 1 ? '' : 's')
         + ' across ' + nSym + ' symbol' + (nSym === 1 ? '' : 's') + ' for ' + fmtMoney(o.capitalUsedCents) + '.'),
-      ' Expected value ', pnlSpan(o.expectedValueCents),
+      ' Market EV after costs ', marketEv == null ? el('span', { class: 'muted' }, 'unavailable') : pnlSpan(marketEv),
+      '; history EV after costs ', historyEv == null ? el('span', { class: 'muted' }, 'unavailable') : pnlSpan(historyEv),
       ', worst-case tail ', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0))), '.'));
 
     out.appendChild(el('div', { class: 'fact-grid', id: 'portfolio-summary' },
       metricFact('Capital used', fmtMoney(o.capitalUsedCents)),
       metricFact('Positions', String(allocs.length)),
-      metricFact('Expected value', pnlSpan(o.expectedValueCents), o.expectedValueCents >= 0 ? 'f-ok' : 'f-danger'),
+      metricFact('Market EV after costs', marketEv == null ? '—' : pnlSpan(marketEv), marketEv != null && marketEv >= 0 ? 'f-ok' : 'f-danger'),
+      metricFact('History EV after costs', historyEv == null ? '—' : pnlSpan(historyEv), historyEv != null && historyEv >= 0 ? 'f-ok' : 'f-danger'),
       metricFact('Tail risk', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0))), 'f-danger'),
-      metricFact('Avg score', String(Math.round(o.avgScore || 0)))));
+      metricFact('Avg Decision score', String(Math.round(o.avgScore || 0)))));
 
     var segments = Object.keys(perSym).map(function (k) { return { label: k, value: perSym[k] }; });
     if (segments.length) {
@@ -7133,13 +7162,17 @@
     }
 
     var rows = allocs.map(function (a) {
-      var e = a.eval || {}, sp = e.spec || {}, cand = e.candidate || {}, sc = e.score || {};
+      var e = a.eval || {}, sp = e.spec || {}, cand = e.candidate || {};
       var name = cand.displayName || sp.family || '—';
       if (level === 'expert') {
         return el('tr', {},
           el('td', {}, sp.symbol || '—'), el('td', {}, name),
           el('td', {}, String(a.units)), el('td', {}, fmtMoney(a.capitalCents)),
-          el('td', {}, UI.scoreBar(sc.riskAdjustedScore || 0)));
+          el('td', {}, UI.scoreBar(decisionScoreOf(e), 'Decision score')),
+          el('td', {}, e.economics && e.economics.marketEvAfterCostsCents != null
+            ? pnlSpan(e.economics.marketEvAfterCostsCents) : '—'),
+          el('td', {}, e.economics && e.economics.realizedVolEvAfterCostsCents != null
+            ? pnlSpan(e.economics.realizedVolEvAfterCostsCents) : '—'));
       }
       return el('tr', {},
         el('td', {}, el('b', {}, sp.symbol || '—')),
@@ -7147,7 +7180,7 @@
         el('td', {}, a.units + '×  ' + fmtMoney(a.capitalCents)));
     });
     out.appendChild(level === 'expert'
-      ? UI.table(['Symbol', 'Structure', 'Units', 'Capital', 'Score'], rows)
+      ? UI.table(['Symbol', 'Structure', 'Units', 'Capital', 'Decision score', 'Market EV', 'History EV'], rows)
       : UI.table(['Symbol', 'Idea', 'Allocation'], rows));
     (o.notes || []).forEach(function (n) { out.appendChild(el('div', { class: 'muted small' }, n)); });
   }

@@ -37,7 +37,7 @@ class StrategyEvaluatorTest {
 
     @Test void assemblesEveryDimensionCoherently() {
         StrategyEvaluation e = evaluator.evaluate(debitCallSpread("DELAYED", 0.6),
-                new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL", "month", "bullish", "balanced", "risk_adjusted"),
+                new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL", "month", "bullish", "balanced", "decision"),
                 ctx());
 
         // Capital: incremental == economic (defined risk); best-case ROC $300/$200 = 150%.
@@ -67,6 +67,7 @@ class StrategyEvaluatorTest {
         assertThat(e.score().gatePassed()).isTrue();
         assertThat(e.score().components()).hasSize(7); // +Expected value: the DecisionPolicy's primary economics
         assertThat(e.rankScore()).isBetween(0.0, 100.0);
+        assertThat(e.decisionScore()).isBetween(1.0, 100.0);
 
         // Management: a real plan with a debit-trade summary and rules.
         assertThat(e.management().summary()).containsIgnoringCase("debit");
@@ -93,6 +94,7 @@ class StrategyEvaluatorTest {
         assertThat(e.viable()).isFalse();
         assertThat(e.score().gateFailures()).anyMatch(f -> f.contains("buying power"));
         assertThat(e.rankScore()).isZero();
+        assertThat(e.decisionScore()).isZero();
     }
 
     @Test void ranksViableFirstThenByScore() {
@@ -117,5 +119,8 @@ class StrategyEvaluatorTest {
         assertThat(java.util.stream.Stream.of(adverseEval, unknownEval)
                 .sorted(StrategyEvaluator.RANKING).map(StrategyEvaluation::id).toList())
                 .containsExactly("unknown", "adverse");
+        assertThat(unknownEval.decisionScore()).isGreaterThan(adverseEval.decisionScore());
+        assertThat(unknownEval.decisionScore()).isBetween(26.0, 50.0);
+        assertThat(adverseEval.decisionScore()).isBetween(1.0, 25.0);
     }
 }

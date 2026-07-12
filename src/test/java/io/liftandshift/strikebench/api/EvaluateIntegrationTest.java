@@ -83,6 +83,7 @@ class EvaluateIntegrationTest {
         assertThat(top.get("risk").get("scenarios")).hasSize(7);
         assertThat(top.get("evidence").hasNonNull("rollup")).isTrue();
         assertThat(top.get("score").hasNonNull("riskAdjustedScore")).isTrue();
+        assertThat(top.hasNonNull("decisionScore")).isTrue();
         assertThat(top.get("score").get("components")).isNotEmpty();
         assertThat(top.get("management").get("rules")).isNotEmpty();
         assertThat(top.get("explanation").get("assumptions")).isNotEmpty();
@@ -90,25 +91,13 @@ class EvaluateIntegrationTest {
         // Fixture data is honestly labeled, never observed.
         assertThat(top.get("evidence").get("rollup").asText()).isEqualTo("DEMO_FIXTURE");
 
-        // Ranking: mechanical eligibility, then economic tier, then score within a tier.
-        // A mechanically valid but economically unknown calendar may precede a known-adverse
-        // lottery even when its numeric Decision score is lower.
-        int previousTier = Integer.MAX_VALUE;
-        double previousScoreInTier = Double.MAX_VALUE;
+        // The served Decision score is the complete monotonic ordering: eligibility, economic
+        // tier, then risk/evidence quality within that tier.
+        double previousDecisionScore = Double.MAX_VALUE;
         for (JsonNode e : evals) {
-            String verdict = e.path("economics").path("verdict").asText("UNAVAILABLE");
-            int tier = switch (verdict) {
-                case "FAVORABLE" -> 3;
-                case "MIXED" -> 2;
-                case "UNAVAILABLE" -> 1;
-                default -> 0;
-            };
-            double s = e.get("score").get("riskAdjustedScore").asDouble();
-            assertThat(tier).isLessThanOrEqualTo(previousTier);
-            if (tier == previousTier) assertThat(s).isLessThanOrEqualTo(previousScoreInTier);
-            else previousScoreInTier = Double.MAX_VALUE;
-            previousTier = tier;
-            previousScoreInTier = s;
+            double decisionScore = e.get("decisionScore").asDouble();
+            assertThat(decisionScore).isLessThanOrEqualTo(previousDecisionScore);
+            previousDecisionScore = decisionScore;
         }
     }
 
@@ -123,25 +112,14 @@ class EvaluateIntegrationTest {
         assertThat(ranked).isNotEmpty();
 
         // Each winner is a full evaluation carrying its symbol; the list uses the same explicit
-        // viable -> economic tier -> Decision score order as a single-symbol competition.
-        int previousTier = Integer.MAX_VALUE;
-        double previousScoreInTier = Double.MAX_VALUE;
+        // monotonic Decision-score order as a single-symbol competition.
+        double previousDecisionScore = Double.MAX_VALUE;
         java.util.Set<String> symbols = new java.util.HashSet<>();
         for (JsonNode e : ranked) {
             symbols.add(e.get("spec").get("symbol").asText());
-            String verdict = e.path("economics").path("verdict").asText("UNAVAILABLE");
-            int tier = switch (verdict) {
-                case "FAVORABLE" -> 3;
-                case "MIXED" -> 2;
-                case "UNAVAILABLE" -> 1;
-                default -> 0;
-            };
-            double s = e.get("score").get("riskAdjustedScore").asDouble();
-            assertThat(tier).isLessThanOrEqualTo(previousTier);
-            if (tier == previousTier) assertThat(s).isLessThanOrEqualTo(previousScoreInTier);
-            else previousScoreInTier = Double.MAX_VALUE;
-            previousTier = tier;
-            previousScoreInTier = s;
+            double decisionScore = e.get("decisionScore").asDouble();
+            assertThat(decisionScore).isLessThanOrEqualTo(previousDecisionScore);
+            previousDecisionScore = decisionScore;
         }
         assertThat(symbols).isNotEmpty(); // at least one symbol's best idea surfaced
     }

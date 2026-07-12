@@ -15,10 +15,7 @@ import java.util.List;
 public final class StrategyEvaluator {
 
     static final Comparator<StrategyEvaluation> RANKING =
-            Comparator.comparing(StrategyEvaluation::viable).reversed()
-                    .thenComparing(Comparator.comparingInt(
-                            (StrategyEvaluation e) -> e.economicVerdict().rank()).reversed())
-                    .thenComparing(Comparator.comparingDouble(StrategyEvaluation::rankScore).reversed());
+            Comparator.comparingDouble(StrategyEvaluation::decisionScore).reversed();
 
     private final CapitalProfiler capital = new CapitalProfiler();
     private final VolatilityProfiler volatility = new VolatilityProfiler();
@@ -42,8 +39,9 @@ public final class StrategyEvaluator {
 
     /**
      * Evaluates a set of alternatives and ranks them for the competition: viable (gate-passing)
-     * first, then by risk-adjusted score descending. A single score never stands alone — the caller
-     * shows each evaluation's full breakdown, evidence, and management plan.
+     * first, then by economic tier, then by risk/evidence quality inside that tier. The monotonic
+     * Decision score encodes that exact order; it still travels with its full breakdown, evidence,
+     * economics and management plan.
      */
     public List<StrategyEvaluation> evaluateAndRank(List<Candidate> candidates, StrategySpec spec, EvalContext ctx) {
         return candidates.stream()

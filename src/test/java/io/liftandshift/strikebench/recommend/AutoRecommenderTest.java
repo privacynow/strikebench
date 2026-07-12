@@ -126,7 +126,7 @@ class AutoRecommenderTest {
             for (AutoRecommender.HorizonIdeas h : p.horizons()) {
                 for (AutoRecommender.ScoredCandidate sc : h.candidates()) {
                     if (sc.candidate().entryNetPremiumCents() > 0) {
-                        assertThat(sc.autoScore()).isGreaterThan(sc.candidate().score());
+                        assertThat(sc.rankingScore()).isGreaterThan(sc.candidate().score());
                     }
                 }
             }

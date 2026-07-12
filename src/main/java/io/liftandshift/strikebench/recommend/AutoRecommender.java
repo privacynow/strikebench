@@ -49,7 +49,7 @@ public final class AutoRecommender {
     /** A held equity position, injected by the API layer for EXIT/HEDGE/INCOME scans. */
     public record HoldingInfo(String symbol, int freeShares, long avgCostCents) {}
 
-    public record ScoredCandidate(Candidate candidate, double autoScore, String targetFit,
+    public record ScoredCandidate(Candidate candidate, double rankingScore, String targetFit,
                                   EconomicAssessment economics, Double decisionScore) {}
 
     public record HorizonIdeas(String horizon, List<ScoredCandidate> candidates, List<String> notes) {}
@@ -229,17 +229,14 @@ public final class AutoRecommender {
                         req.riskMode(), pool, buyingPowerCents, null, false,
                         io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId);
                 assessed = evals.stream().map(e -> new ScoredCandidate(e.candidate(),
-                                e.rankScore() + volatilityFit(e.candidate(), s),
-                                targetFit(e.candidate(), req.targetProfitCents()), e.economics(), e.rankScore()))
-                        .sorted(Comparator
-                                .comparingInt((ScoredCandidate x) -> x.economics() == null
-                                        ? 0 : x.economics().verdict().rank()).reversed()
-                                .thenComparing(Comparator.comparingDouble(ScoredCandidate::autoScore).reversed()))
+                                e.decisionScore(),
+                                targetFit(e.candidate(), req.targetProfitCents()), e.economics(), e.decisionScore()))
+                        .sorted(Comparator.comparingDouble(ScoredCandidate::rankingScore).reversed())
                         .toList();
             } else {
                 assessed = pool.stream()
                         .map(c -> new ScoredCandidate(c, autoScore(c, s), targetFit(c, req.targetProfitCents()), null, null))
-                        .sorted(Comparator.comparingDouble(ScoredCandidate::autoScore).reversed())
+                        .sorted(Comparator.comparingDouble(ScoredCandidate::rankingScore).reversed())
                         .toList();
             }
             boolean anyFavorable = assessed.stream().anyMatch(x -> x.economics() != null
@@ -294,14 +291,6 @@ public final class AutoRecommender {
         if ("RICH".equals(s.volSignal())) score += credit ? 8 : -4;
         if ("CHEAP".equals(s.volSignal())) score += credit ? -4 : 8;
         return score;
-    }
-
-    /** Small within-verdict tie-break only; it can never promote a weaker economic class. */
-    private static double volatilityFit(Candidate c, SignalEngine.Signals s) {
-        boolean credit = c.entryNetPremiumCents() > 0;
-        if ("RICH".equals(s.volSignal())) return credit ? 4 : -2;
-        if ("CHEAP".equals(s.volSignal())) return credit ? -2 : 4;
-        return 0;
     }
 
     private static String targetFit(Candidate c, Long targetProfitCents) {

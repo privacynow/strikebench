@@ -204,7 +204,7 @@ public final class EvaluationService {
                                           io.liftandshift.strikebench.db.AnalysisContext actx, String worldId) {
         EvalContext ctx = buildContext(symbol, candidates, buyingPowerCents, actx, worldId);
         String family = candidates.isEmpty() ? null : candidates.getFirst().strategy();
-        StrategySpec spec = new StrategySpec(symbol, family, intent, horizon, thesis, riskMode, "risk_adjusted");
+        StrategySpec spec = new StrategySpec(symbol, family, intent, horizon, thesis, riskMode, "decision");
         return evaluator.evaluateAndRank(candidates, spec, ctx);
     }
 

@@ -32,7 +32,7 @@ class EvaluationStoreTest {
         EvalContext ctx = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25,
                 List.of(0.2, 0.25, 0.3, 0.35, 0.4, 0.28, 0.31, 0.27, 0.33, 0.29, 0.26, 0.32), 10_000_000L, true);
         return new StrategyEvaluator().evaluate(c,
-                new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL", "month", "bullish", "balanced", "risk_adjusted"),
+                new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL", "month", "bullish", "balanced", "decision"),
                 ctx);
     }
 
@@ -45,7 +45,7 @@ class EvaluationStoreTest {
 
         var row = db.query("""
                 SELECT symbol, strategy, score, ev_cents, max_loss_cents, capital_economic_cents,
-                       evidence_level, risk_json, explanation_json
+                       evidence_level, risk_json, economics_json, explanation_json
                 FROM strategy_evaluation WHERE id=?""",
                 r -> Map.of(
                         "symbol", r.str("symbol"),
@@ -56,12 +56,13 @@ class EvaluationStoreTest {
                         "economic", r.lng("capital_economic_cents"),
                         "evidence", r.str("evidence_level"),
                         "riskJson", r.str("risk_json"),
+                        "economicsJson", r.str("economics_json"),
                         "explJson", r.str("explanation_json")),
                 e.id()).getFirst();
 
         assertThat(row.get("symbol")).isEqualTo("AAPL");
         assertThat(row.get("strategy")).isEqualTo("DEBIT_CALL_SPREAD");
-        assertThat((double) row.get("score")).isEqualTo(e.rankScore());
+        assertThat((double) row.get("score")).isEqualTo(e.decisionScore());
         assertThat((long) row.get("maxLoss")).isEqualTo(20_000L);
         assertThat((long) row.get("economic")).isEqualTo(20_000L);
         assertThat(row.get("evidence")).isEqualTo(e.evidenceLevel().name());
@@ -71,6 +72,9 @@ class EvaluationStoreTest {
         Map<String, Object> risk = Json.read((String) row.get("riskJson"), Map.class);
         assertThat(risk).containsKey("scenarios");
         assertThat((List<?>) risk.get("scenarios")).hasSize(7);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> economics = Json.read((String) row.get("economicsJson"), Map.class);
+        assertThat(economics).containsKeys("verdict", "marketEvAfterCostsCents", "realizedVolEvAfterCostsCents");
         @SuppressWarnings("unchecked")
         Map<String, Object> expl = Json.read((String) row.get("explJson"), Map.class);
         assertThat(expl).containsKeys("assumptions", "failureModes");

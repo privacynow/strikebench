@@ -3013,10 +3013,10 @@ public final class ApiServer {
                     (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(result);
             com.fasterxml.jackson.databind.node.ArrayNode cands = out.putArray("candidates");
             int favorable = 0, mixed = 0, unfavorable = 0, unavailable = 0;
-            for (var e : evals) { // evaluateAndRank order: viable first, then risk-adjusted desc
+            for (var e : evals) { // evaluateAndRank order is exactly the monotonic Decision score
                 com.fasterxml.jackson.databind.node.ObjectNode m =
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(e.candidate());
-                m.put("decisionScore", Math.round(e.rankScore()));
+                m.put("decisionScore", e.decisionScore());
                 m.put("decisionViable", e.viable());
                 m.put("structurallyEligible", e.viable());
                 if (e.economics() != null) {
@@ -3036,7 +3036,7 @@ public final class ApiServer {
                 cands.add(m);
             }
             out.put("ranking", "decision"); // disclosed: what ordered this list
-            out.put("economicPolicy", "eligibility_then_economics_then_score");
+            out.put("economicPolicy", "decision_score");
             out.put("favorableCount", favorable);
             out.put("mixedCount", mixed);
             out.put("unfavorableCount", unfavorable);
@@ -3597,7 +3597,7 @@ public final class ApiServer {
                             (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(c);
                     var e = byCand.get(c);
                     if (e != null) {
-                        m.put("decisionScore", Math.round(e.rankScore()));
+                        m.put("decisionScore", e.decisionScore());
                         m.put("decisionViable", e.viable());
                         m.put("structurallyEligible", e.viable());
                         if (e.economics() != null) {

@@ -954,6 +954,7 @@ test('discover scan: a blank symbol box auto-recommends with evidence and target
 });
 
 test('recommendations render candidates and blocked examples', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
   await go('#/trade/context/manual');
   await page.fill('#rec-symbol', 'AAPL');
   await page.selectOption('#rec-thesis', 'bullish');
@@ -969,7 +970,16 @@ test('recommendations render candidates and blocked examples', async () => {
   assert.match(appText, /BLOCKED/);
   assert.match(appText, /undefined risk/i);
   assert.match(appText, /Theoretical worst case|Theoretical max loss/);
+  assert.match(appText, /Chance of any profit/, 'Beginner retains POP rather than replacing it with an intent-specific assignment outcome');
   assert.match(appText, /not financial advice/i);
+  const firstCandidateOrder = await page.locator('.candidate').first().evaluate(card => ({
+    economic: Array.from(card.children).indexOf(card.querySelector('.economic-assessment')),
+    facts: Array.from(card.children).indexOf(card.querySelector('.fact-grid'))
+  }));
+  if (firstCandidateOrder.economic >= 0 && firstCandidateOrder.facts >= 0) {
+    assert.ok(firstCandidateOrder.economic < firstCandidateOrder.facts,
+      'economic verdict precedes the theoretical payoff facts even when optional story blocks are absent');
+  }
 });
 
 let tradeUrlHash = null;
@@ -2458,7 +2468,7 @@ test('inline competition: the pick, evidence, scenarios, plan, and handoff', asy
     'mechanical availability is not presented as an endorsement');
   const evBadge = (await page.locator('.decision-pick .row-gap .badge').first().innerText()).trim();
   assert.match(evBadge, /Demo data|Observed|Modeled|Unknown/, 'evidence badge is labeled honestly');
-  assert.ok(await page.locator('.decision-pick .score-wrap').first().isVisible(), 'risk-adjusted score meter');
+  assert.ok(await page.locator('.decision-pick .score-wrap[title="Decision score"]').first().isVisible(), 'final Decision score meter');
   assert.ok(await page.locator('.decision-pick [data-economic-verdict]').count(), 'Decision consumes the shared economic verdict');
   assert.match(await page.textContent('.decision-pick [data-economic-verdict]'), /Market-implied EV/);
   assert.match(await page.textContent('.decision-pick [data-economic-verdict]'), /Realized-vol scenario EV/);
@@ -2472,7 +2482,13 @@ test('inline competition: the pick, evidence, scenarios, plan, and handoff', asy
   // When there is a field of alternatives, Expert ranks them in a comparison table.
   if ((await page.locator('.section-h').count()) > 0) {
     assert.ok((await page.locator('#decision-table').count()) > 0, 'expert comparison table for the field');
-    assert.match(await page.textContent('.decision-order-note'), /economic tier/i, 'the non-score sort key is disclosed');
+    assert.match(await page.textContent('.decision-order-note'), /monotonic/i, 'the final score/order contract is disclosed');
+    assert.match(await page.textContent('#decision-table thead'), /Market EV/);
+    assert.match(await page.textContent('#decision-table thead'), /History EV/);
+    const scores = await page.locator('#decision-table tbody .score-num').allTextContents();
+    const numeric = scores.map(Number);
+    assert.deepEqual(numeric, numeric.slice().sort((a, b) => b - a),
+      'displayed Decision scores descend in exactly the served order');
   }
 
   // Handing the winner to Decide carries the working structure.
