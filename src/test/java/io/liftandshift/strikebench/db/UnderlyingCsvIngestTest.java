@@ -52,18 +52,19 @@ class UnderlyingCsvIngestTest {
         String csv = "Date,Close\n"
                 + "2026-07-08,100\n"
                 + "2026-07-09,-1\n"
+                + "2026-07-09,101\n"
                 + "2026-07-10,102\n";
         var state = new DataSyncState(db, clock);
         var result = UnderlyingCsvIngest.run(stream(csv), "closes.csv", "QQQ", "My closes",
                 UnderlyingCsvIngest.Basis.RAW, db, state, clock, null);
-        assertThat(result.rowsWritten()).isEqualTo(2);
+        assertThat(result.rowsWritten()).isEqualTo(3);
         assertThat(result.quarantined()).isEqualTo(1);
         assertThat(result.barBasis()).isEqualTo("CLOSE_ONLY");
         assertThat(state.quarantineSummary(null).total()).isEqualTo(1);
         var series = new StoredCandleStore(db).candles("QQQ", java.time.LocalDate.parse("2026-07-08"),
                 java.time.LocalDate.parse("2026-07-10"), DatasetService.OBSERVED).orElseThrow();
         assertThat(series.barBasis()).isEqualTo("CLOSE_ONLY");
-        assertThat(series.candles()).hasSize(2);
+        assertThat(series.candles()).hasSize(3);
     }
 
     @Test
