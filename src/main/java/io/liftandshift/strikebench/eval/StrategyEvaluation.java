@@ -22,13 +22,6 @@ public record StrategyEvaluation(
         EconomicAssessment economics,
         Explanation explanation
 ) {
-    /** Compatibility constructor for persisted/test evaluations created before economic classification. */
-    public StrategyEvaluation(String id, StrategySpec spec, Candidate candidate, CapitalProfile capital,
-                              VolatilityProfile volatility, RiskProfile risk, EvidenceProfile evidence,
-                              ManagementPlan management, ScoreBreakdown score, Explanation explanation) {
-        this(id, spec, candidate, capital, volatility, risk, evidence, management, score, null, explanation);
-    }
-
     /** Quality within one economic tier: weighted factors after evidence/tail/DTE haircuts. */
     public double rankScore() { return score == null ? 0.0 : score.riskAdjustedScore(); }
     public boolean viable() { return score != null && score.gatePassed(); }

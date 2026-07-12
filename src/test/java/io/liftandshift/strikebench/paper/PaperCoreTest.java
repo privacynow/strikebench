@@ -857,9 +857,11 @@ class PaperCoreTest {
         Account acct = accounts.getOrCreateDefault();
         // Short put delta -0.30 -> short leg contributes +0.30*100; long put delta -0.10 -> -0.10*100
         marks.exact.put("PUT100", new MarksSource.LegMark(new BigDecimal("3.00"), new BigDecimal("3.00"),
-                new BigDecimal("3.00"), 0.25, Freshness.FIXTURE, -0.30, 0.02, -0.05, 0.10));
+                new BigDecimal("3.00"), 0.25, Freshness.FIXTURE, -0.30, 0.02, -0.05, 0.10,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
         marks.exact.put("PUT95", new MarksSource.LegMark(new BigDecimal("1.20"), new BigDecimal("1.20"),
-                new BigDecimal("1.20"), 0.25, Freshness.FIXTURE, -0.10, 0.01, -0.02, 0.05));
+                new BigDecimal("1.20"), 0.25, Freshness.FIXTURE, -0.10, 0.01, -0.02, 0.05,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
         TradeRecord t = trades.create(creditPutSpread(acct.id(), 2)); // qty 2
 
         TradeService.MarkView view = trades.currentMark(t.id());

@@ -11,15 +11,6 @@ public enum Freshness {
     STALE,      // cached data older than its freshness gate
     MISSING;    // no data available
 
-    /**
-     * Legacy age-only check. Execution code must use DataEvidence.executableIn(lane), because
-     * generated data can be coherent inside its own market without being valid in Observed.
-     */
-    @Deprecated
-    public boolean tradable() {
-        return this == REALTIME || this == DELAYED;
-    }
-
     // SIMULATED sits BELOW every observed tier: a generated quote is coherent and tradable in
     // its own lane, but it must never roll up as more trustworthy than real (even delayed) data.
     private static final Freshness[] RANK = {REALTIME, DELAYED, EOD, STALE, SIMULATED, MODELED, FIXTURE, MISSING};

@@ -51,13 +51,6 @@ default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.u
                     DataEvidence.of(null, freshness));
         }
 
-        /** Compatibility constructor for test ports and non-provider marks. */
-        public LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness,
-                       Double delta, Double gamma, Double theta, Double vega) {
-            this(bid, ask, mid, iv, freshness, delta, gamma, theta, vega,
-                    DataEvidence.of(null, freshness));
-        }
-
         /**
          * Price at which this leg can actually be traded right now, or null.
          * A crossed book (bid > ask) is a stale-quote artifact — "buying the ask and selling
