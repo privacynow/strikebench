@@ -1745,6 +1745,25 @@ test('interaction contract: clickable surfaces are keyboard-operable, errors are
     'Escape closes and restores focus to the trigger');
 });
 
+test('destination navigation starts at the top while Research owns its explicit Back restoration', async () => {
+  await go('#/research/AAPL');
+  await openResearchTab('overview');
+  await page.waitForSelector('#history-card .chart-wrap');
+  await page.evaluate(() => window.scrollTo(0, Math.min(700, document.documentElement.scrollHeight - innerHeight)));
+  assert.ok(await page.evaluate(() => window.scrollY > 100), 'source screen is genuinely scrolled');
+
+  // Exercise a native hash transition, not App.navigate: both paths share the same contract.
+  await page.evaluate(() => {
+    document.getElementById('app').setAttribute('data-ready', 'false');
+    location.hash = '#/data/simulation';
+  });
+  await page.waitForSelector('#app[data-route="data"][data-ready="true"]');
+  await page.waitForSelector('#dc-sim-market');
+  const destinationY = await page.evaluate(() => window.scrollY);
+  assert.ok(destinationY <= 1,
+    'a destination never inherits the prior screen\'s vertical offset; got y=' + destinationY);
+});
+
 test('interactive charts, range pills, universe picker, and the tape', async () => {
   // Research chart: pills switch windows; crosshair reads values on hover
   await go('#/research/AAPL');
@@ -1883,6 +1902,9 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
     'Demo research never promotes fabricated history to real');
   await page.goBack();
   await page.waitForSelector('#sector-grid .sector-tile', { timeout: 15000 });
+  await page.waitForFunction(() => window.scrollY >= 100, { timeout: 5000 });
+  assert.ok(await page.evaluate(() => window.scrollY >= 100),
+    'Back restores the explorer\'s saved vertical position after the route-level top reset');
   const restoredSector = sectorCount >= 10 ? 'TECH' : 'world';
   assert.ok(await page.locator('#sector-chips .sector-chip[data-sector="' + restoredSector + '"].active').count(),
     'Back restores the SAME market selection');

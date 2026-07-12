@@ -75,7 +75,11 @@
     alive: function (token) { return token === App.navToken; },
 
     navigate: function (hash) {
+      // A destination route starts at its own top. Research's sector explorer is the
+      // deliberate exception: it restores its saved position after the index repaints.
+      window.scrollTo(0, 0);
       if (window.location.hash === hash) {
+        App._scrollOnRender = true;
         App.render();
       } else {
         window.location.hash = hash;
@@ -221,6 +225,13 @@
       }
       root.setAttribute('data-ready', 'true');
       root.setAttribute('data-route', route);
+      // Reset after the destination has replaced the old, potentially much taller DOM.
+      // Resetting only before paint lets the browser clamp back to the inherited offset
+      // while the new page is assembled (visible as headings hidden behind fixed chrome).
+      if (App._scrollOnRender) {
+        App._scrollOnRender = false;
+        window.scrollTo(0, 0);
+      }
       prefetchForRoute(route, params); // idle-time warm-up of the likely next step (server-governed)
       if (window.Workspace) Workspace.save(); // navigation is a save point (dirty-checked, debounced push)
       // The ticker is MARKET CONTEXT, not decoration. Research, trading, and portfolio work
@@ -918,7 +929,13 @@
     subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
     subscribeEvents();                // typed workspace events (jobs, datasets, provider cooldowns)
     setInterval(refreshTape, 45 * 1000);
-    window.addEventListener('hashchange', App.render);
+    window.addEventListener('hashchange', function () {
+      // Native hash links (ticker cards, tabs and browser Back) do not pass through
+      // App.navigate, so enforce the same destination contract here as well.
+      window.scrollTo(0, 0);
+      App._scrollOnRender = true;
+      App.render();
+    });
     App.render();
   }
 
