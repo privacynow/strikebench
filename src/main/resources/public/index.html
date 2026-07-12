@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
+  <a class="skip-link" href="#app">Skip to main content</a>
   <header class="topbar">
     <a class="brand" href="#/home" title="StrikeBench — your practice desk">
       <svg class="brand-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
@@ -67,10 +68,11 @@
   </div>
   <datalist id="universe-symbols"></datalist>
 
-  <main id="app" class="app">
+  <main id="app" class="app" tabindex="-1">
     <noscript>StrikeBench needs JavaScript enabled.</noscript>
     <div class="loading">Loading…</div>
   </main>
+  <div id="route-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
   <footer class="disclaimer" id="disclaimer">
     Educational tool only — paper trading by default. Options involve substantial risk of loss.

@@ -2095,6 +2095,10 @@ test('theme toggle, brand, health banner, route error boundary', async () => {
 test('interaction contract: clickable surfaces are keyboard-operable, errors are nonblocking, modals own focus', async () => {
   for (const hash of ['#/home/tour', '#/home', '#/research', '#/portfolio']) {
     await go(hash);
+    assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('#app h1')), true,
+      'a real route change moves focus to its page heading on ' + hash);
+    assert.match(await page.textContent('#route-announcer'), /page loaded/i,
+      'a real route change is announced on ' + hash);
     const violations = await page.$$eval('.clickable', nodes => nodes.filter(n => {
       const native = n.matches('a[href],button');
       const role = n.getAttribute('role');
@@ -2102,6 +2106,15 @@ test('interaction contract: clickable surfaces are keyboard-operable, errors are
     }).map(n => n.outerHTML.slice(0, 160)));
     assert.deepEqual(violations, [], 'dead/mouse-only clickable surface on ' + hash + ': ' + violations.join('\n'));
   }
+
+  assert.equal(await page.locator('.skip-link').getAttribute('href'), '#app');
+  await page.locator('.skip-link').focus();
+  assert.equal(await page.locator('.skip-link').isVisible(), true, 'keyboard users can reveal the skip link');
+  const routeBeforeSkip = await page.evaluate(() => location.hash);
+  await page.locator('.skip-link').click();
+  assert.equal(await page.evaluate(() => location.hash), routeBeforeSkip,
+    'skip navigation does not mutate the SPA route hash');
+  assert.equal(await page.evaluate(() => document.activeElement === document.getElementById('app')), true);
 
   const assets = await page.evaluate(async () => ({
     app: await (await fetch('/js/app.js')).text(),
@@ -2168,6 +2181,17 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   const tip = await page.textContent('#history-card .chart-tip');
   assert.match(tip, /% in window/);
   assert.match(tip, /O .*H /); // open/high/low/close readout
+  const chart = page.locator('#history-card svg.chart');
+  assert.match(await chart.getAttribute('aria-label'), /arrow keys/i, 'chart names its keyboard interaction');
+  assert.equal(await chart.getAttribute('tabindex'), '0');
+  await chart.focus();
+  await page.keyboard.press('Home');
+  await page.waitForSelector('#history-card .chart-tip:not([style*="display: none"])');
+  const firstKeyboardReadout = await page.textContent('#history-card .chart-tip');
+  await page.keyboard.press('End');
+  const lastKeyboardReadout = await page.textContent('#history-card .chart-tip');
+  assert.notEqual(firstKeyboardReadout, lastKeyboardReadout,
+    'keyboard users can inspect different chart sessions without a pointer');
   // MAX pill answers with everything the fixture has (~3y)
   await page.click('#history-card .pill[data-range="max"]');
   await page.waitForSelector('#history-card .pill.active[data-range="max"]');
@@ -2207,6 +2231,11 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   assert.ok(tape.seqs >= 2 && tape.seqs % 2 === 0, 'even number of sequences: ' + tape.seqs);
   assert.ok(tape.stripW >= tape.viewW * 2 - 5, 'each half covers the viewport (no gap at wrap)');
   await page.waitForSelector('#sector-explorer .sector-chip', { state: 'attached' });
+  assert.equal(await page.locator('#sector-chips .sector-rail').getAttribute('role'), 'group',
+    'the market-sector filter does not masquerade as page tabs');
+  assert.equal(await page.locator('#sector-chips .sector-chip').first().getAttribute('role'), null);
+  assert.ok(['true', 'false'].includes(await page.locator('#sector-chips .sector-chip').first().getAttribute('aria-pressed')),
+    'sector buttons expose pressed selector state');
   const sectorCount = await page.locator('#sector-chips .sector-chip').count();
   if (sectorCount >= 10) {
     // The observed-market rail never just "ends": when it overflows, an arrow says there is more.

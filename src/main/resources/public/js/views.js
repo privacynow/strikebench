@@ -1439,7 +1439,7 @@
   function sectorRail(opts) {
     opts = opts || {};
     var u = App.state.universe;
-    var rail = el('div', { class: 'sector-rail', role: 'tablist' });
+    var rail = el('div', { class: 'sector-rail', role: 'group', 'aria-label': 'Market sector' });
     var wrap = el('div', { class: 'sector-rail-wrap', id: opts.id || null });
     if (!u) return wrap;
     // Overflow must be VISIBLE: arrows appear whenever there is more rail off-screen
@@ -1472,14 +1472,14 @@
       deltas[sec.key] = d;
       rail.appendChild(el('button', {
         class: 'sector-chip' + (opts.active === sec.key ? ' active' : ''),
-        'data-sector': sec.key, type: 'button', role: 'tab',
-        'aria-selected': opts.active === sec.key ? 'true' : 'false',
+        'data-sector': sec.key, type: 'button',
+        'aria-pressed': opts.active === sec.key ? 'true' : 'false',
         title: sec.symbols.length + ' symbols',
         onclick: function () {
           var me = this;
           rail.querySelectorAll('.sector-chip').forEach(function (x) {
             x.classList.toggle('active', x === me);
-            x.setAttribute('aria-selected', x === me ? 'true' : 'false');
+            x.setAttribute('aria-pressed', x === me ? 'true' : 'false');
           });
           opts.onPick(sec);
         }

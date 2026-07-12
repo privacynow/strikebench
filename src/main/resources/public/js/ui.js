@@ -405,10 +405,17 @@
    * (or null when out of range); the tooltip shows `lines` and a dot rides the curve.
    * Pointer events cover mouse AND touch — the finance-app "slide to read values" feel.
    */
-  function interactiveChart(svg, geom, probe) {
+  function interactiveChart(svg, geom, probe, accessibleLabel) {
     var wrap = el('div', { class: 'chart-wrap' });
+    interactiveChart._seq = (interactiveChart._seq || 0) + 1;
+    var tipId = 'chart-readout-' + interactiveChart._seq;
+    svg.setAttribute('tabindex', '0');
+    svg.setAttribute('role', 'group');
+    svg.setAttribute('aria-label', accessibleLabel || 'Interactive chart. Use left and right arrow keys to inspect values.');
+    svg.setAttribute('aria-describedby', tipId);
     wrap.appendChild(svg);
-    var tip = el('div', { class: 'chart-tip', style: 'display:none' });
+    var tip = el('div', { class: 'chart-tip', id: tipId, style: 'display:none',
+      'aria-live': 'polite', 'aria-atomic': 'true' });
     wrap.appendChild(tip);
     var vline = svgEl('line', { class: 'xhair', x1: 0, y1: geom.padT, x2: 0, y2: geom.H - geom.padB, style: 'display:none' });
     var dot = svgEl('circle', { class: 'xhair-dot', r: 4, style: 'display:none' });
@@ -420,16 +427,12 @@
       vline.style.display = 'none';
       dot.style.display = 'none';
     }
-    svg.addEventListener('pointerleave', hide);
-    svg.addEventListener('pointermove', function (ev) {
-      var box = svg.getBoundingClientRect();
-      if (!box.width) return;
-      var plotX0 = geom.padL / geom.W * box.width;
-      var plotX1 = (geom.W - geom.padR) / geom.W * box.width;
-      var frac = (ev.clientX - box.left - plotX0) / Math.max(1, plotX1 - plotX0);
-      if (frac < 0 || frac > 1) { hide(); return; }
+    function showAt(frac, box) {
+      frac = Math.max(0, Math.min(1, frac));
+      box = box || svg.getBoundingClientRect();
+      if (!box.width) return false;
       var hit = probe(frac);
-      if (!hit) { hide(); return; }
+      if (!hit) { hide(); return false; }
       vline.setAttribute('x1', hit.x); vline.setAttribute('x2', hit.x);
       dot.setAttribute('cx', hit.x); dot.setAttribute('cy', hit.y);
       vline.style.display = ''; dot.style.display = '';
@@ -439,12 +442,40 @@
           typeof l === 'string' ? l : l.text));
       });
       tip.style.display = '';
-      // Position in wrapper pixels; flip sides near the right edge
       var px = hit.x / geom.W * box.width;
       var flip = px > box.width * 0.62;
       tip.style.left = flip ? '' : (px + 12) + 'px';
       tip.style.right = flip ? (box.width - px + 12) + 'px' : '';
       tip.style.top = Math.max(0, hit.y / geom.H * box.height - 14) + 'px';
+      return true;
+    }
+    var keyboardFrac = 0.5;
+    svg.addEventListener('pointerleave', hide);
+    svg.addEventListener('pointermove', function (ev) {
+      var box = svg.getBoundingClientRect();
+      if (!box.width) return;
+      var plotX0 = geom.padL / geom.W * box.width;
+      var plotX1 = (geom.W - geom.padR) / geom.W * box.width;
+      var frac = (ev.clientX - box.left - plotX0) / Math.max(1, plotX1 - plotX0);
+      if (frac < 0 || frac > 1) { hide(); return; }
+      keyboardFrac = frac;
+      showAt(frac, box);
+    });
+    svg.addEventListener('focus', function (ev) {
+      if (ev.target === svg) showAt(keyboardFrac);
+    });
+    svg.addEventListener('blur', function (ev) {
+      if (!svg.contains(ev.relatedTarget)) hide();
+    });
+    svg.addEventListener('keydown', function (ev) {
+      if (ev.target !== svg) return; // strike sliders inside payoff charts own their keys
+      if (ev.key === 'Home') keyboardFrac = 0;
+      else if (ev.key === 'End') keyboardFrac = 1;
+      else if (ev.key === 'ArrowLeft') keyboardFrac = Math.max(0, keyboardFrac - 0.04);
+      else if (ev.key === 'ArrowRight') keyboardFrac = Math.min(1, keyboardFrac + 0.04);
+      else return;
+      ev.preventDefault();
+      showAt(keyboardFrac);
     });
     return wrap;
   }
@@ -605,7 +636,8 @@
         ].filter(Boolean)
       };
     }
-    return interactiveChart(svg.node(), { W: W, H: H, padL: padL, padR: padR, padT: padT, padB: padB }, probe);
+    return interactiveChart(svg.node(), { W: W, H: H, padL: padL, padR: padR, padT: padT, padB: padB }, probe,
+      'Price candlestick chart. Use left and right arrow keys to inspect trading sessions.');
   }
 
   function payoffChart(points, opts) {
@@ -821,7 +853,7 @@
           { text: 'P/L ' + fmtMoney(pl, { plus: true }), cls: pl >= 0 ? 'gain' : 'loss' }
         ]
       };
-    });
+    }, 'Expiration payoff chart. Use left and right arrow keys to inspect profit or loss by expiration price.');
   }
 
   /** Line/area chart for [{date, value}] series. opts: {money} */
@@ -885,7 +917,7 @@
           { text: (pct >= 0 ? '+' : '') + pct.toFixed(1) + '% in window', cls: pct >= 0 ? 'gain' : 'loss' }
         ]
       };
-    });
+    }, 'Price history chart. Use left and right arrow keys to inspect dates and values.');
   }
 
   // ---- SVG icon system: the ONLY pictographic language in the app (no emoji, ever). ----

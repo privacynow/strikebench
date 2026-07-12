@@ -233,6 +233,22 @@
         App._scrollOnRender = false;
         window.scrollTo(0, 0);
       }
+      // A hash route is a new page to keyboard and screen-reader users. Announce and move
+      // focus only when that route identity changes; quote refreshes and form re-renders on
+      // the same route must not steal focus from the control somebody is using.
+      var routeKey = '#/' + [route].concat(params).join('/');
+      if (App._lastAnnouncedRoute !== routeKey) {
+        App._lastAnnouncedRoute = routeKey;
+        var heading = root.querySelector('h1');
+        var focusTarget = heading || root;
+        if (heading) heading.setAttribute('tabindex', '-1');
+        try { focusTarget.focus({ preventScroll: true }); } catch (focusErr) { focusTarget.focus(); }
+        var announcer = document.getElementById('route-announcer');
+        if (announcer) {
+          var name = heading && heading.textContent ? heading.textContent.trim() : route;
+          announcer.textContent = name + ' page loaded';
+        }
+      }
       prefetchForRoute(route, params); // idle-time warm-up of the likely next step (server-governed)
       if (window.Workspace) Workspace.save(); // navigation is a save point (dirty-checked, debounced push)
       // The ticker is MARKET CONTEXT, not decoration. Research, trading, and portfolio work
@@ -907,6 +923,14 @@
     applyLevelSideEffects();
     initTheme();
     initSearch();
+    var skip = document.querySelector('.skip-link');
+    if (skip) skip.addEventListener('click', function (ev) {
+      // The app uses the URL hash for routing, so a normal #app jump would be mistaken for
+      // an unknown route. Preserve the current route and move focus directly instead.
+      ev.preventDefault();
+      var main = document.getElementById('app');
+      if (main) main.focus();
+    });
     // Instant feedback: paint a skeleton into #app while the bootstrap loads (App.render swaps it).
     var app = document.getElementById('app');
     if (app && !app.firstChild) app.appendChild(UI.skeleton());
