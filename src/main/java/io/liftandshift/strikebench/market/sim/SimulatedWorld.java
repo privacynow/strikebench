@@ -68,12 +68,6 @@ public final class SimulatedWorld {
                          Map<String, Double> startSpots, String scenario, double volAnnual,
                          long seed, String startSimTime /* ISO LocalDateTime, ET */, double speed,
                          Map<String, Double> symbolVols, Map<String, Double> symbolIvs) {
-        public Config(String worldId, String name, Map<String, Double> symbolBetas,
-                      Map<String, Double> startSpots, String scenario, double volAnnual,
-                      long seed, String startSimTime, double speed) {
-            this(worldId, name, symbolBetas, startSpots, scenario, volAnnual, seed, startSimTime,
-                    speed, null, null);
-        }
         public Config {
             if (symbolBetas == null || symbolBetas.isEmpty())
                 throw new IllegalArgumentException("a simulated world needs at least one symbol");

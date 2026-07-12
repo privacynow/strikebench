@@ -7447,8 +7447,8 @@
             el('h3', { class: 'mt0' }, 'Your plan for this trade (' + (plan.regime || '') + ')'), planBody)
         : UI.expandable('Management plan \u00b7 ' + (plan.regime || ''), planBody, false));
     }
-    if (a.evaluatedAtEpochMs || a.asOfEpochMs) {
-      var evalMs = a.evaluatedAtEpochMs || a.asOfEpochMs;
+    if (a.evaluatedAtEpochMs) {
+      var evalMs = a.evaluatedAtEpochMs;
       var ageMin = Math.max(0, Math.round((Date.now() - evalMs) / 60000));
       var srcTxt = '';
       if (a.sourceAsOfEpochMs) {

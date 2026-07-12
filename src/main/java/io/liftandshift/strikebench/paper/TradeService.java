@@ -62,23 +62,9 @@ public final class TradeService {
                               String thesis, String horizon, String riskMode,
                               String intent, Boolean useHeldShares,
                               Long proposedNetCents, Long feesOverrideCents, String source) {
-        /** Jackson must bind the CANONICAL constructor — with the compat overloads present it can
-         *  otherwise pick a shorter one and silently DROP the package-level fields. */
+        /** Jackson and every internal caller bind one complete position contract. */
         @com.fasterxml.jackson.annotation.JsonCreator
         public OpenRequest {}
-
-        /** Pre-package 10-field shape (no proposed price / fees / source). */
-        public OpenRequest(String accountId, String symbol, String strategy, int qty, List<Leg> legs,
-                           String thesis, String horizon, String riskMode,
-                           String intent, Boolean useHeldShares) {
-            this(accountId, symbol, strategy, qty, legs, thesis, horizon, riskMode, intent, useHeldShares,
-                    null, null, null);
-        }
-        /** Historical 8-field shape (no intent, buys any stock legs explicitly). */
-        public OpenRequest(String accountId, String symbol, String strategy, int qty, List<Leg> legs,
-                           String thesis, String horizon, String riskMode) {
-            this(accountId, symbol, strategy, qty, legs, thesis, horizon, riskMode, null, null, null, null, null);
-        }
         public boolean heldShares() { return Boolean.TRUE.equals(useHeldShares); }
     }
 
@@ -1311,7 +1297,6 @@ public final class TradeService {
         // collapses into sourceAsOf for feeds without a distinct source stamp.)
         out.put("sourceAsOfEpochMs", sourceAsOf);
         out.put("evaluatedAtEpochMs", clock.millis());
-        out.put("asOfEpochMs", clock.millis()); // legacy key, kept for consumers
         out.put("freshness", freshness.name());
         out.put("rate", Map.of(
                 "annual", rfr,

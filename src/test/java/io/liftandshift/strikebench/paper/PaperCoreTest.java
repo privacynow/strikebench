@@ -40,6 +40,30 @@ class PaperCoreTest {
     private PositionsService positions;
     private StubMarks marks;
 
+    private static TradeService.OpenRequest openRequest(String accountId, String symbol, String strategy,
+                                                        int qty, List<Leg> legs, String thesis,
+                                                        String horizon, String riskMode) {
+        return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
+                riskMode, null, null, null, null, null);
+    }
+
+    private static TradeService.OpenRequest openRequest(String accountId, String symbol, String strategy,
+                                                        int qty, List<Leg> legs, String thesis,
+                                                        String horizon, String riskMode, String intent,
+                                                        Boolean useHeldShares) {
+        return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
+                riskMode, intent, useHeldShares, null, null, null);
+    }
+
+    private static TradeService.OpenRequest openRequest(String accountId, String symbol, String strategy,
+                                                        int qty, List<Leg> legs, String thesis,
+                                                        String horizon, String riskMode, String intent,
+                                                        Boolean useHeldShares, Long proposedNetCents,
+                                                        Long feesOverrideCents, String source) {
+        return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
+                riskMode, intent, useHeldShares, proposedNetCents, feesOverrideCents, source);
+    }
+
     /**
      * Deterministic mark source: underlying $100; zero-spread books keyed by type+strike
      * (bid = ask = mid, so legacy arithmetic is unchanged). Exact per-contract books with
@@ -99,7 +123,7 @@ class PaperCoreTest {
     }
 
     private TradeService.OpenRequest coveredCallOnHeldShares(String accountId) {
-        return new TradeService.OpenRequest(accountId, "AAPL", "COVERED_CALL", 1,
+        return openRequest(accountId, "AAPL", "COVERED_CALL", 1,
                 List.of(call(LegAction.SELL, "105", "0")),
                 "neutral", "month", "balanced", "EXIT", true);
     }
@@ -165,7 +189,7 @@ class PaperCoreTest {
 
         // The SAME package at YOUR price ($1.60 credit — a worse fill): max loss, breakevens and
         // the ledgered economics all follow the real number, and the override is disclosed.
-        TradeService.OpenRequest mine = new TradeService.OpenRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+        TradeService.OpenRequest mine = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
                 List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
                 "bullish", "month", "balanced", null, null, 160_00L, 200L, "IMPORT");
         TradePreview atMine = trades.preview(mine);
@@ -198,7 +222,7 @@ class PaperCoreTest {
         // Same spread expiring in 3 calendar days (1-2 sessions from the fixed clock 2026-07-08):
         // the near-expiry tier must fire and the plan must NOT say "roll at 21 DTE".
         LocalDate soon = LocalDate.of(2026, 7, 10); // Friday, 2 sessions from Wed Jul 8
-        TradeService.OpenRequest shortDte = new TradeService.OpenRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+        TradeService.OpenRequest shortDte = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"), soon, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), soon, 1, BigDecimal.ZERO)),
                 "bullish", "week", "balanced");
@@ -219,7 +243,7 @@ class PaperCoreTest {
         Account acct = accounts.getOrCreateDefault();
         // Legs that expired LAST WEEK (dead vs the fixed 2026-07-08 clock) with the user's fills.
         LocalDate dead = LocalDate.of(2026, 7, 2);
-        TradeService.OpenRequest past = new TradeService.OpenRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+        TradeService.OpenRequest past = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"), dead, 1, new BigDecimal("3.10")),
                         Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), dead, 1, new BigDecimal("1.35"))),
                 "bullish", "week", "balanced", null, null, null, 200L, "IMPORT");
@@ -242,7 +266,7 @@ class PaperCoreTest {
         long cashBefore = acct.cashCents(), reservedBefore = acct.reservedCents();
 
         // Record a REAL fill: the exact spread at MY price, with MY fees.
-        TradeService.OpenRequest real = new TradeService.OpenRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+        TradeService.OpenRequest real = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
                 List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
                 "bullish", "month", "balanced", null, null, 173L * 100, 200L, "IMPORT");
         TradeRecord t = trades.createExternal(real);
@@ -285,7 +309,7 @@ class PaperCoreTest {
         java.util.function.BiFunction<LegAction, String, Leg> callL = (a, k) ->
                 Leg.option(a, OptionType.CALL, new BigDecimal(k), soon, 1, BigDecimal.ZERO);
         // The user's ACTUAL fill: slightly below the stub executable, with real fees.
-        TradeService.OpenRequest condor = new TradeService.OpenRequest(acct.id(), "AAPL", "IRON_BUTTERFLY", 1,
+        TradeService.OpenRequest condor = openRequest(acct.id(), "AAPL", "IRON_BUTTERFLY", 1,
                 List.of(putL.apply(LegAction.SELL, "100"), putL.apply(LegAction.BUY, "95"),
                         callL.apply(LegAction.SELL, "100"), callL.apply(LegAction.BUY, "105")),
                 "neutral", "week", "balanced", null, null, 330_00L, 200L, "IMPORT");
@@ -317,7 +341,7 @@ class PaperCoreTest {
     @org.junit.jupiter.api.Test
     void golden_longStraddle_uncappedMapStaysCoherent() {
         Account acct = accounts.getOrCreateDefault();
-        TradeService.OpenRequest straddle = new TradeService.OpenRequest(acct.id(), "AAPL", "LONG_STRADDLE", 1,
+        TradeService.OpenRequest straddle = openRequest(acct.id(), "AAPL", "LONG_STRADDLE", 1,
                 List.of(put(LegAction.BUY, "100", "0"),
                         Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), EXP, 1, BigDecimal.ZERO)),
                 "volatile", "month", "balanced");
@@ -341,10 +365,10 @@ class PaperCoreTest {
         Account acct = accounts.getOrCreateDefault();
         List<TradeService.OpenRequest> packages = List.of(
                 creditPutSpread(acct.id(), 1),
-                new TradeService.OpenRequest(acct.id(), "AAPL", "LONG_CALL", 1,
+                openRequest(acct.id(), "AAPL", "LONG_CALL", 1,
                         List.of(Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), EXP, 1, BigDecimal.ZERO)),
                         "bullish", "month", "balanced"),
-                new TradeService.OpenRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
+                openRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
                         List.of(put(LegAction.SELL, "95", "0")), "neutral", "month", "balanced"));
         for (TradeService.OpenRequest req : packages) {
             TradePreview p = trades.preview(req);
@@ -355,7 +379,7 @@ class PaperCoreTest {
     }
 
     private TradeService.OpenRequest creditPutSpread(String accountId, int qty) {
-        return new TradeService.OpenRequest(accountId, "AAPL", "CREDIT_PUT_SPREAD", qty,
+        return openRequest(accountId, "AAPL", "CREDIT_PUT_SPREAD", qty,
                 List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
                 "bullish", "month", "balanced");
     }
@@ -409,7 +433,7 @@ class PaperCoreTest {
     @Test
     void debitTradeReservesNothingExtra() {
         Account acct = accounts.getOrCreateDefault();
-        TradeRecord t = trades.create(new TradeService.OpenRequest(acct.id(), "AAPL", "LONG_CALL", 1,
+        TradeRecord t = trades.create(openRequest(acct.id(), "AAPL", "LONG_CALL", 1,
                 List.of(call(LegAction.BUY, "100", "0")), "bullish", "month", "balanced"));
         assertThat(t.entryNetPremiumCents()).isEqualTo(-25000); // $2.50 debit
         assertThat(t.maxLossCents()).isEqualTo(25000);
@@ -478,7 +502,7 @@ class PaperCoreTest {
     void rejectionMutatesNothingButAudit() {
         Account acct = accounts.getOrCreateDefault();
         // 100 cash-secured puts need ~$970k buying power on a $100k account (within the qty cap)
-        TradeService.OpenRequest oversized = new TradeService.OpenRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 100,
+        TradeService.OpenRequest oversized = openRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 100,
                 List.of(put(LegAction.SELL, "100", "0")), "bullish", "month", "balanced");
         assertThatThrownBy(() -> trades.create(oversized))
                 .isInstanceOf(TradeRejectedException.class)
@@ -500,7 +524,7 @@ class PaperCoreTest {
     @Test
     void nakedShortCallIsBlockedByUndefinedRisk() {
         Account acct = accounts.getOrCreateDefault();
-        TradeService.OpenRequest naked = new TradeService.OpenRequest(acct.id(), "AAPL", "NAKED_CALL", 1,
+        TradeService.OpenRequest naked = openRequest(acct.id(), "AAPL", "NAKED_CALL", 1,
                 List.of(call(LegAction.SELL, "105", "0")), "neutral", "month", "aggressive");
         TradePreview preview = trades.preview(naked);
         assertThat(preview.ok()).isFalse();
@@ -566,7 +590,7 @@ class PaperCoreTest {
         Account acct = accounts.getOrCreateDefault();
         LocalDate far = EXP.plusDays(28);
         // Net debit, but 2 short near calls covered by only 1 long far call -> undefined risk
-        TradeService.OpenRequest reverse = new TradeService.OpenRequest(acct.id(), "AAPL", "CUSTOM", 1,
+        TradeService.OpenRequest reverse = openRequest(acct.id(), "AAPL", "CUSTOM", 1,
                 List.of(Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), far, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("105"), EXP, 2, BigDecimal.ZERO)),
                 "neutral", "month", "aggressive");
@@ -576,7 +600,7 @@ class PaperCoreTest {
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START);
 
         // Short leg outliving its cover is equally blocked, debit or not
-        TradeService.OpenRequest reverseCalendar = new TradeService.OpenRequest(acct.id(), "AAPL", "CUSTOM", 1,
+        TradeService.OpenRequest reverseCalendar = openRequest(acct.id(), "AAPL", "CUSTOM", 1,
                 List.of(Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), EXP, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("105"), far, 1, BigDecimal.ZERO)),
                 "neutral", "month", "aggressive");
@@ -587,7 +611,7 @@ class PaperCoreTest {
     void legitimateDiagonalIsAllowedAndPopStaysNull() {
         Account acct = accounts.getOrCreateDefault();
         LocalDate far = EXP.plusDays(28);
-        TradeRecord t = trades.create(new TradeService.OpenRequest(acct.id(), "AAPL", "DIAGONAL_CALL", 1,
+        TradeRecord t = trades.create(openRequest(acct.id(), "AAPL", "DIAGONAL_CALL", 1,
                 List.of(Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), far, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("105"), EXP, 1, BigDecimal.ZERO)),
                 "bullish", "month", "aggressive"));
@@ -622,7 +646,7 @@ class PaperCoreTest {
     void expiredContractsCannotBeOpened() {
         Account acct = accounts.getOrCreateDefault();
         LocalDate past = LocalDate.of(2026, 6, 19); // before the fixed clock's today
-        TradeService.OpenRequest expired = new TradeService.OpenRequest(acct.id(), "AAPL", "LONG_CALL", 1,
+        TradeService.OpenRequest expired = openRequest(acct.id(), "AAPL", "LONG_CALL", 1,
                 List.of(Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), past, 1, BigDecimal.ZERO)),
                 "bullish", "week", "balanced");
         assertThat(trades.preview(expired).ok()).isFalse();
@@ -645,7 +669,7 @@ class PaperCoreTest {
         TradeService tslaTrades = new TradeService(db, cfg, tsla, audit, afterClose);
         LocalDate deadExpiry = LocalDate.of(2026, 7, 6);
 
-        TradeService.OpenRequest collar = new TradeService.OpenRequest(acct.id(), "TSLA", "PROTECTIVE_COLLAR", 1,
+        TradeService.OpenRequest collar = openRequest(acct.id(), "TSLA", "PROTECTIVE_COLLAR", 1,
                 List.of(Leg.stock(LegAction.BUY, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("417.5"), deadExpiry, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("420"), deadExpiry, 1, BigDecimal.ZERO)),
@@ -668,7 +692,7 @@ class PaperCoreTest {
         tsla.underlying = new BigDecimal("416.97");
         tsla.exact.put("PUT417.5", new MarksSource.LegMark(new BigDecimal("0.00"), new BigDecimal("0.01"), new BigDecimal("0.005"), 0.30, Freshness.DELAYED));
         TradeService tslaTrades = new TradeService(db, cfg, tsla, audit, CLOCK); // Wed 11:30 ET, open
-        TradeService.OpenRequest req = new TradeService.OpenRequest(acct.id(), "TSLA", "LONG_PUT", 1,
+        TradeService.OpenRequest req = openRequest(acct.id(), "TSLA", "LONG_PUT", 1,
                 List.of(Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("417.5"), LocalDate.of(2026, 7, 10), 1, BigDecimal.ZERO)),
                 "bearish", "week", "balanced");
         assertThatThrownBy(() -> tslaTrades.create(req))
@@ -730,7 +754,7 @@ class PaperCoreTest {
         Account acct = accounts.getOrCreateDefault();
         // Stale crossed book: bid 1.40 > ask 1.00 — buying the ask and selling the bid would mint money
         marks.exact.put("CALL100", new MarksSource.LegMark(new BigDecimal("1.40"), new BigDecimal("1.00"), new BigDecimal("1.20"), 0.25, Freshness.FIXTURE));
-        TradePreview p = trades.preview(new TradeService.OpenRequest(acct.id(), "AAPL", "LONG_CALL", 1,
+        TradePreview p = trades.preview(openRequest(acct.id(), "AAPL", "LONG_CALL", 1,
                 List.of(call(LegAction.BUY, "100", "0")), "bullish", "month", "balanced"));
         assertThat(p.ok()).isFalse();
         assertThat(p.blockReasons()).anySatisfy(r -> assertThat(r).containsIgnoringCase("crossed"));
@@ -742,7 +766,7 @@ class PaperCoreTest {
         // try to cash-settle intraday — the contract is alive until 16:00 ET.
         Account acct = accounts.getOrCreateDefault();
         LocalDate today = LocalDate.of(2026, 7, 8);
-        TradeService.OpenRequest zeroDte = new TradeService.OpenRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+        TradeService.OpenRequest zeroDte = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"), today, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), today, 1, BigDecimal.ZERO)),
                 "bullish", "0DTE", "aggressive");
@@ -764,7 +788,7 @@ class PaperCoreTest {
     void settleWithoutExpiryCloseRejectedUntilNextDayThenLabeledFallback() {
         Account acct = accounts.getOrCreateDefault();
         LocalDate today = LocalDate.of(2026, 7, 8);
-        TradeRecord t = trades.create(new TradeService.OpenRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+        TradeRecord t = trades.create(openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"), today, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), today, 1, BigDecimal.ZERO)),
                 "bullish", "0DTE", "aggressive"));
@@ -791,7 +815,7 @@ class PaperCoreTest {
         Account acct = accounts.getOrCreateDefault();
         LocalDate near = EXP;                    // 2026-08-21
         LocalDate far = EXP.plusDays(28);        // 2026-09-18
-        TradeRecord t = trades.create(new TradeService.OpenRequest(acct.id(), "AAPL", "DIAGONAL_CALL", 1,
+        TradeRecord t = trades.create(openRequest(acct.id(), "AAPL", "DIAGONAL_CALL", 1,
                 List.of(Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), far, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("105"), near, 1, BigDecimal.ZERO)),
                 "bullish", "month", "aggressive"));
@@ -814,7 +838,7 @@ class PaperCoreTest {
         Account acct = accounts.getOrCreateDefault();
         LocalDate near = EXP;
         LocalDate far = EXP.plusDays(28);
-        TradeRecord t = trades.create(new TradeService.OpenRequest(acct.id(), "AAPL", "DIAGONAL_CALL", 1,
+        TradeRecord t = trades.create(openRequest(acct.id(), "AAPL", "DIAGONAL_CALL", 1,
                 List.of(Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), far, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("105"), near, 1, BigDecimal.ZERO)),
                 "bullish", "month", "aggressive"));
@@ -952,7 +976,7 @@ class PaperCoreTest {
         assertThatThrownBy(() -> trades.create(coveredCallOnHeldShares(acct.id())))
                 .isInstanceOf(TradeRejectedException.class).hasMessageContaining("free shares");
         // And without useHeldShares the same single short call is undefined risk
-        assertThatThrownBy(() -> trades.create(new TradeService.OpenRequest(acct.id(), "AAPL", "NAKED_CALL", 1,
+        assertThatThrownBy(() -> trades.create(openRequest(acct.id(), "AAPL", "NAKED_CALL", 1,
                 List.of(call(LegAction.SELL, "105", "0")), "neutral", "month", "balanced")))
                 .isInstanceOf(TradeRejectedException.class).hasMessageContaining("Undefined");
         assertLedgerInvariants(acct.id());
@@ -1004,7 +1028,7 @@ class PaperCoreTest {
     @Test
     void cashSecuredPutAssignmentBuysSharesAtTheStrike() {
         Account acct = accounts.getOrCreateDefault();
-        TradeRecord t = trades.create(new TradeService.OpenRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
+        TradeRecord t = trades.create(openRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
                 List.of(put(LegAction.SELL, "100", "0")), "neutral", "month", "balanced", "ACQUIRE", null));
         long credit = 30_000; // PUT100 mid 3.00
         long fees = 65;
@@ -1044,7 +1068,7 @@ class PaperCoreTest {
         // A defined-risk put spread labeled CASH_SECURED_PUT must cash-settle: the label is
         // user-supplied, and physical delivery would spend strike cash the reserve never held.
         Account acct = accounts.getOrCreateDefault();
-        TradeRecord t = trades.create(new TradeService.OpenRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
+        TradeRecord t = trades.create(openRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
                 List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
                 "bullish", "month", "balanced", "INCOME", null));
         long reserveHeld = accounts.get(acct.id()).reservedCents();
@@ -1073,7 +1097,7 @@ class PaperCoreTest {
         // and cash-settle the remaining unit, never touching shares beyond the lock.
         Account acct = accounts.getOrCreateDefault();
         positions.buy(acct.id(), "AAPL", 100);
-        TradeRecord t = trades.create(new TradeService.OpenRequest(acct.id(), "AAPL", "CUSTOM", 1,
+        TradeRecord t = trades.create(openRequest(acct.id(), "AAPL", "CUSTOM", 1,
                 List.of(Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("105"), EXP, 2, BigDecimal.ZERO),
                         call(LegAction.BUY, "100", "0")),
                 "neutral", "month", "balanced", null, true));
@@ -1102,7 +1126,7 @@ class PaperCoreTest {
         // a bare long put's "profit when the stock falls" framing is the opposite of a hedge.
         Account acct = accounts.getOrCreateDefault();
         positions.buy(acct.id(), "AAPL", 100);
-        TradeService.OpenRequest pp = new TradeService.OpenRequest(acct.id(), "AAPL", "PROTECTIVE_PUT", 1,
+        TradeService.OpenRequest pp = openRequest(acct.id(), "AAPL", "PROTECTIVE_PUT", 1,
                 List.of(put(LegAction.BUY, "95", "0")), "bullish", "month", "balanced", "HEDGE", true);
         TradePreview preview = trades.preview(pp);
         assertThat(preview.ok()).as(String.join("; ", preview.blockReasons())).isTrue();
@@ -1113,7 +1137,7 @@ class PaperCoreTest {
         assertThat(t.sharesLocked()).isZero(); // long options never lock shares
 
         // Without the shares, the same request is refused — the combined framing needs them
-        TradeService.OpenRequest noShares = new TradeService.OpenRequest(acct.id(), "SPY", "PROTECTIVE_PUT", 1,
+        TradeService.OpenRequest noShares = openRequest(acct.id(), "SPY", "PROTECTIVE_PUT", 1,
                 List.of(put(LegAction.BUY, "95", "0")), "bullish", "month", "balanced", "HEDGE", true);
         assertThatThrownBy(() -> trades.create(noShares))
                 .isInstanceOf(TradeRejectedException.class).hasMessageContaining("free shares");

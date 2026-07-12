@@ -21,7 +21,7 @@ class SimulatedMarketTest {
         return new SimulatedWorld(new SimulatedWorld.Config(
                 "w-test", "Test world", Map.of("ACME", 1.0, "BETA", 0.6),
                 Map.of("ACME", 100.0, "BETA", 50.0), "CHOP", 0.30, seed,
-                "2026-07-13T09:30:00", 300)); // 300x: one tick(=1 real second) = ten 30-sec quanta
+                "2026-07-13T09:30:00", 300, null, null)); // 300x: one tick(=1 real second) = ten 30-sec quanta
     }
 
     @Test

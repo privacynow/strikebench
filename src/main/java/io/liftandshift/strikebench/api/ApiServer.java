@@ -184,7 +184,7 @@ public final class ApiServer {
         // feed the read path; the active-dataset switch decides which dataset serves.
         io.liftandshift.strikebench.db.DatasetService datasetSvc = new io.liftandshift.strikebench.db.DatasetService(db, clock);
         MarketDataService market = new MarketDataService(providers, newsProviders, ratesProviders,
-                new io.liftandshift.strikebench.db.StoredCandleStore(db, datasetSvc));
+                new io.liftandshift.strikebench.db.StoredCandleStore(db));
         market.setDemoSources(fixture, fixture, fixture);
         AuditLog audit = new AuditLog(db, clock);
         AccountService accounts = new AccountService(db, cfg, audit, clock);

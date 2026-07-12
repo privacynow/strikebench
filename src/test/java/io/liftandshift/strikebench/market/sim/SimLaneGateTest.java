@@ -52,6 +52,20 @@ class SimLaneGateTest {
     private static PositionsService positions;
     private static AuditLog audit;
 
+    private static SimulatedWorld.Config config(String worldId, String name, Map<String, Double> symbolBetas,
+                                                Map<String, Double> startSpots, String scenario,
+                                                double volAnnual, long seed, String startSimTime, double speed) {
+        return new SimulatedWorld.Config(worldId, name, symbolBetas, startSpots, scenario, volAnnual,
+                seed, startSimTime, speed, null, null);
+    }
+
+    private static TradeService.OpenRequest openRequest(String accountId, String symbol, String strategy,
+                                                        int qty, List<Leg> legs, String thesis,
+                                                        String horizon, String riskMode) {
+        return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
+                riskMode, null, null, null, null, null);
+    }
+
     @BeforeAll
     static void up() {
         db = TestDb.fresh();
@@ -71,7 +85,7 @@ class SimLaneGateTest {
     static void down() { db.close(); }
 
     private static SimulatedWorld createWorld(String userId) {
-        return sessions.create(new SimulatedWorld.Config(null, "Weekend review",
+        return sessions.create(config(null, "Weekend review",
                 Map.of("ACME", 1.0), Map.of("ACME", 100.0), "CHOP", 0.30, 99L,
                 "2026-07-13T09:30:00", 300), userId); // 300x = ten 30-sec quanta per tick
     }
@@ -89,7 +103,7 @@ class SimLaneGateTest {
                 .filter(k -> k.doubleValue() <= spot - 4).max(BigDecimal::compareTo).orElseThrow();
         BigDecimal longK = shortK.subtract(new BigDecimal("2.5"));
 
-        TradePreview p = trades.preview(new TradeService.OpenRequest(sim.id(), "ACME",
+        TradePreview p = trades.preview(openRequest(sim.id(), "ACME",
                 "CREDIT_PUT_SPREAD", 1,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, shortK, exp, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.BUY, OptionType.PUT, longK, exp, 1, BigDecimal.ZERO)),
@@ -102,7 +116,7 @@ class SimLaneGateTest {
         Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
         assertThat(String.valueOf(prob.get("timeBasis"))).contains("calendar days");
 
-        var t = trades.create(new TradeService.OpenRequest(sim.id(), "ACME", "CREDIT_PUT_SPREAD", 1,
+        var t = trades.create(openRequest(sim.id(), "ACME", "CREDIT_PUT_SPREAD", 1,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, shortK, exp, 1, BigDecimal.ZERO),
                         Leg.option(LegAction.BUY, OptionType.PUT, longK, exp, 1, BigDecimal.ZERO)),
                 "bullish", "week", "balanced"));
@@ -119,7 +133,7 @@ class SimLaneGateTest {
         BigDecimal k = chain.calls().stream().map(q -> q.strike())
                 .filter(x -> x.doubleValue() >= spot + 2).min(BigDecimal::compareTo).orElseThrow();
 
-        var t = trades.create(new TradeService.OpenRequest(sim.id(), "ACME", "LONG_CALL", 1,
+        var t = trades.create(openRequest(sim.id(), "ACME", "LONG_CALL", 1,
                 List.of(Leg.option(LegAction.BUY, OptionType.CALL, k, exp, 1, BigDecimal.ZERO)),
                 "bullish", "week", "balanced"));
 

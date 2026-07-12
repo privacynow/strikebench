@@ -32,7 +32,8 @@ class AutoRecommenderTest {
     }
 
     private static AutoRecommender.AutoRequest req(List<String> horizons, Long targetProfit, Boolean allow0dte) {
-        return new AutoRecommender.AutoRequest(null, horizons, 3, targetProfit, null, null, null, "balanced", allow0dte);
+        return new AutoRecommender.AutoRequest(null, horizons, 3, targetProfit, null, null, null,
+                "balanced", allow0dte, null, null);
     }
 
     @Test
@@ -66,7 +67,8 @@ class AutoRecommenderTest {
     @Test
     void explicitUniverseSkipsNonOptionableWithReason() {
         AutoRecommender.AutoRequest request = new AutoRecommender.AutoRequest(
-                List.of("AAPL", "VTSAX", "ZZZZ"), null, 3, null, null, null, null, "balanced", false);
+                List.of("AAPL", "VTSAX", "ZZZZ"), null, 3, null, null, null, null,
+                "balanced", false, null, null);
         AutoRecommender.AutoResult result = auto.run(request, BP);
         assertThat(result.picks()).extracting(AutoRecommender.Pick::symbol).containsExactly("AAPL");
         assertThat(result.skipped()).anySatisfy(s -> assertThat(s).contains("VTSAX").contains("no listed options"));
@@ -82,7 +84,8 @@ class AutoRecommenderTest {
         assertThat(without.notes()).anySatisfy(n -> assertThat(n).containsIgnoringCase("allow0dte"));
 
         AutoRecommender.AutoRequest spyOnly = new AutoRecommender.AutoRequest(
-                List.of("SPY"), List.of("0DTE"), 1, null, null, null, null, "aggressive", true);
+                List.of("SPY"), List.of("0DTE"), 1, null, null, null, null,
+                "aggressive", true, null, null);
         AutoRecommender.AutoResult with = auto.run(spyOnly, BP);
         assertThat(with.picks()).hasSize(1);
         AutoRecommender.HorizonIdeas zeroDte = with.picks().getFirst().horizons().getFirst();
@@ -133,7 +136,8 @@ class AutoRecommenderTest {
     @Test
     void respectsMaxLossBudget() {
         AutoRecommender.AutoRequest request = new AutoRecommender.AutoRequest(
-                null, List.of("month"), 3, null, 50_000L, null, null, "balanced", false);
+                null, List.of("month"), 3, null, 50_000L, null, null, "balanced", false,
+                null, null);
         AutoRecommender.AutoResult result = auto.run(request, BP);
         for (AutoRecommender.Pick p : result.picks()) {
             for (AutoRecommender.HorizonIdeas h : p.horizons()) {

@@ -86,15 +86,7 @@ public final class RecommendationEngine {
             String intent,               // StrategyIntent name; null/blank = DIRECTIONAL (historic behavior)
             Holdings holdings,           // shares context for EXIT/HEDGE/ACQUIRE flows, optional
             Filters filters              // hard screens on candidate metrics, optional
-    ) {
-        /** Historical 10-field shape (directional flow, no holdings, no filters). */
-        public Request(String symbol, String thesis, String horizon, String riskMode, Long maxLossCents,
-                       Double maxRiskPctOfAccount, Double minConfidence, List<String> allowedStrategies,
-                       Boolean avoidEarnings, Boolean allow0dte) {
-            this(symbol, thesis, horizon, riskMode, maxLossCents, maxRiskPctOfAccount, minConfidence,
-                    allowedStrategies, avoidEarnings, allow0dte, null, null, null);
-        }
-    }
+    ) {}
 
     /**
      * Shares context. sharesOwned must be the FREE (unlocked) share count; costBasisCents is the

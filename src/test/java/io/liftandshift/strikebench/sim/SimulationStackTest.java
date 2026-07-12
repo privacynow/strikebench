@@ -117,7 +117,7 @@ class SimulationStackTest {
         FixtureProvider fixture = new FixtureProvider(clock);
         DatasetService datasets = new DatasetService(db, clock);
         MarketDataService market = new MarketDataService(List.<MarketDataProvider>of(fixture),
-                List.<NewsFilingsProvider>of(), List.<RatesProvider>of(), new StoredCandleStore(db, datasets));
+                List.<NewsFilingsProvider>of(), List.<RatesProvider>of(), new StoredCandleStore(db));
         var ensembles = new PathEnsembleService(market, clock);
         SimulationEngine engine = new SimulationEngine(market, datasets, db, clock, ensembles);
 

@@ -89,8 +89,7 @@ public final class SimulationSessions {
         enforceActiveCap(userId);
         // World ids are SERVER-GENERATED only — a client-chosen id would be a forgeable capability.
         String id = Ids.newId("simw");
-        // Rebuild with the FULL ctor: the 9-arg compat ctor would silently drop the per-symbol
-        // calibration maps (the record-adapter defect class pinned in CP-1).
+        // Rebuild the server-owned identity while preserving every calibrated input.
         SimulatedWorld.Config cfg = new SimulatedWorld.Config(id, raw.name(), raw.symbolBetas(),
                 raw.startSpots() == null ? Map.of() : raw.startSpots(), raw.scenario(), raw.volAnnual(),
                 raw.seed(), raw.startSimTime(), raw.speed(), raw.symbolVols(), raw.symbolIvs());

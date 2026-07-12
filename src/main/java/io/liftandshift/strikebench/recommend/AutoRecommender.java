@@ -44,25 +44,13 @@ public final class AutoRecommender {
             Boolean allow0dte,
             List<String> intents,           // StrategyIntent names; default DIRECTIONAL
             RecommendationEngine.Filters filters // optional hard screens per candidate
-    ) {
-        /** Historical 9-field shape (directional scan only). */
-        public AutoRequest(List<String> universe, List<String> horizons, Integer maxPicks, Long targetProfitCents,
-                           Long maxLossCents, Double maxRiskPctOfAccount, Double minConfidence, String riskMode,
-                           Boolean allow0dte) {
-            this(universe, horizons, maxPicks, targetProfitCents, maxLossCents, maxRiskPctOfAccount,
-                    minConfidence, riskMode, allow0dte, null, null);
-        }
-    }
+    ) {}
 
     /** A held equity position, injected by the API layer for EXIT/HEDGE/INCOME scans. */
     public record HoldingInfo(String symbol, int freeShares, long avgCostCents) {}
 
     public record ScoredCandidate(Candidate candidate, double autoScore, String targetFit,
-                                  EconomicAssessment economics, Double decisionScore) {
-        public ScoredCandidate(Candidate candidate, double autoScore, String targetFit) {
-            this(candidate, autoScore, targetFit, null, null);
-        }
-    }
+                                  EconomicAssessment economics, Double decisionScore) {}
 
     public record HorizonIdeas(String horizon, List<ScoredCandidate> candidates, List<String> notes) {}
 
@@ -250,7 +238,7 @@ public final class AutoRecommender {
                         .toList();
             } else {
                 assessed = pool.stream()
-                        .map(c -> new ScoredCandidate(c, autoScore(c, s), targetFit(c, req.targetProfitCents())))
+                        .map(c -> new ScoredCandidate(c, autoScore(c, s), targetFit(c, req.targetProfitCents()), null, null))
                         .sorted(Comparator.comparingDouble(ScoredCandidate::autoScore).reversed())
                         .toList();
             }

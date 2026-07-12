@@ -19,8 +19,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class SimWorldGateTest {
 
+    private static SimulatedWorld.Config config(String worldId, String name, Map<String, Double> symbolBetas,
+                                                Map<String, Double> startSpots, String scenario,
+                                                double volAnnual, long seed, String startSimTime, double speed) {
+        return new SimulatedWorld.Config(worldId, name, symbolBetas, startSpots, scenario, volAnnual,
+                seed, startSimTime, speed, null, null);
+    }
+
     private static SimulatedWorld world(long seed, double speed) {
-        return new SimulatedWorld(new SimulatedWorld.Config(
+        return new SimulatedWorld(config(
                 "w-gate", "Gate world", Map.of("ACME", 1.0, "BETA", 0.3, "HIBETA", 1.5),
                 Map.of("ACME", 100.0, "BETA", 50.0, "HIBETA", 200.0), "CHOP", 0.30, seed,
                 "2026-07-13T09:30:00", speed));
@@ -177,11 +184,11 @@ class SimWorldGateTest {
         assertThatThrownBy(() -> w.injectMove("ACME", -1.5)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> w.injectMove("NOPE", -0.05)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> w.injectVolShift(Double.NaN)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SimulatedWorld.Config("x", "x", Map.of("A", 9.0), Map.of(),
+        assertThatThrownBy(() -> config("x", "x", Map.of("A", 9.0), Map.of(),
                 "CHOP", 0.3, 1, "2026-07-13T09:30:00", 1)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SimulatedWorld.Config("x", "x", Map.of("A", 1.0), Map.of("A", -5.0),
+        assertThatThrownBy(() -> config("x", "x", Map.of("A", 1.0), Map.of("A", -5.0),
                 "CHOP", 0.3, 1, "2026-07-13T09:30:00", 1)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SimulatedWorld.Config("x", "x", Map.of("A", 1.0), Map.of(),
+        assertThatThrownBy(() -> config("x", "x", Map.of("A", 1.0), Map.of(),
                 "CHOP", 9.9, 1, "2026-07-13T09:30:00", 1)).isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -199,12 +206,12 @@ class SimWorldGateTest {
     @Test
     void zeroDteStaysListedUntilTheBellAndHolidayFridaysRollBack() {
         // A Friday-morning world lists ITS OWN day as the front expiry until 16:00.
-        SimulatedWorld fri = new SimulatedWorld(new SimulatedWorld.Config(
+        SimulatedWorld fri = new SimulatedWorld(config(
                 "w-fri", "Friday", Map.of("ACME", 1.0), Map.of("ACME", 100.0), "CHOP", 0.3, 5,
                 "2026-07-17T10:00:00", 1)); // 2026-07-17 is a Friday
         assertThat(fri.expirations().getFirst()).isEqualTo(LocalDate.parse("2026-07-17"));
         // Holiday Friday (2026-07-03 observed Independence Day) rolls the weekly BACK to Thursday.
-        SimulatedWorld hol = new SimulatedWorld(new SimulatedWorld.Config(
+        SimulatedWorld hol = new SimulatedWorld(config(
                 "w-hol", "Holiday", Map.of("ACME", 1.0), Map.of("ACME", 100.0), "CHOP", 0.3, 5,
                 "2026-06-29T10:00:00", 1));
         assertThat(hol.expirations()).contains(LocalDate.parse("2026-07-02"));
@@ -234,7 +241,7 @@ class SimWorldGateTest {
     void volEventScenarioActuallyMovesImpliedVol() {
         // M7: a "vol event" must BE one — IV builds ~1.5x into the event, crushes to ~0.75x at
         // the second open, and mean-reverts. The old scenario only shaped the PRICE path.
-        SimulatedWorld w = new SimulatedWorld(new SimulatedWorld.Config(
+        SimulatedWorld w = new SimulatedWorld(config(
                 "w-vol", "Vol event", Map.of("ACME", 1.0), Map.of("ACME", 100.0), "VOL_EVENT", 0.30,
                 13, "2026-07-13T09:30:00", 30));
         LocalDate exp = w.expirations().get(2); // far enough that intrinsic never dominates
@@ -247,7 +254,7 @@ class SimWorldGateTest {
         assertThat(ivCrushed).isLessThan(ivPeak * 0.65);
         assertThat(ivCrushed).isLessThan(ivStart);
         // And the arc REPLAYS: a restored world reaches the same IV at the same quantum.
-        SimulatedWorld r = new SimulatedWorld(new SimulatedWorld.Config(
+        SimulatedWorld r = new SimulatedWorld(config(
                 "w-vol", "Vol event", Map.of("ACME", 1.0), Map.of("ACME", 100.0), "VOL_EVENT", 0.30,
                 13, "2026-07-13T09:30:00", 30));
         r.replayTo(w.ticks(), w.eventLog());

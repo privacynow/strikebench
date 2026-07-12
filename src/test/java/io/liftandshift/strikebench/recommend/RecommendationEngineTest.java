@@ -57,7 +57,8 @@ class RecommendationEngineTest {
     }
 
     private static RecommendationEngine.Request req(String symbol, String thesis, String horizon, String mode) {
-        return new RecommendationEngine.Request(symbol, thesis, horizon, mode, null, null, null, null, true, false);
+        return new RecommendationEngine.Request(symbol, thesis, horizon, mode, null, null, null, null,
+                true, false, null, null, null);
     }
 
     private static RecommendationEngine.Request intentReq(String intent, RecommendationEngine.Holdings holdings,
@@ -250,7 +251,8 @@ class RecommendationEngineTest {
     @Test
     void zeroDteAllowedWhenOptedIn() {
         RecommendationEngine.Request request = new RecommendationEngine.Request(
-                "SPY", "neutral", "0DTE", "aggressive", null, null, null, null, true, true);
+                "SPY", "neutral", "0DTE", "aggressive", null, null, null, null,
+                true, true, null, null, null);
         RecommendationEngine.Result result = engine.recommend(request, BP);
         assertThat(result.candidates()).isNotEmpty();
         assertThat(result.candidates()).anySatisfy(c -> {
@@ -276,7 +278,8 @@ class RecommendationEngineTest {
     @Test
     void minConfidenceFiltersEverything() {
         RecommendationEngine.Request request = new RecommendationEngine.Request(
-                "AAPL", "bullish", "month", "balanced", null, null, 0.999, null, true, false);
+                "AAPL", "bullish", "month", "balanced", null, null, 0.999, null,
+                true, false, null, null, null);
         RecommendationEngine.Result result = engine.recommend(request, BP);
         assertThat(result.candidates()).isEmpty();
         assertThat(result.rejected()).anySatisfy(r ->
@@ -286,7 +289,8 @@ class RecommendationEngineTest {
     @Test
     void allowedStrategiesWhitelistRespected() {
         RecommendationEngine.Request request = new RecommendationEngine.Request(
-                "AAPL", "bullish", "month", "aggressive", null, null, null, List.of("LONG_CALL"), true, false);
+                "AAPL", "bullish", "month", "aggressive", null, null, null, List.of("LONG_CALL"),
+                true, false, null, null, null);
         RecommendationEngine.Result result = engine.recommend(request, BP);
         assertThat(result.candidates()).isNotEmpty();
         assertThat(result.candidates()).allSatisfy(c -> assertThat(c.strategy()).isEqualTo("LONG_CALL"));
@@ -295,7 +299,8 @@ class RecommendationEngineTest {
     @Test
     void riskBudgetScalesWithPctAndCapsQty() {
         RecommendationEngine.Request request = new RecommendationEngine.Request(
-                "AAPL", "bullish", "month", "balanced", null, 0.10, null, null, true, false);
+                "AAPL", "bullish", "month", "balanced", null, 0.10, null, null,
+                true, false, null, null, null);
         RecommendationEngine.Result result = engine.recommend(request, BP);
         assertThat(result.riskBudgetCents()).isEqualTo(1_000_000L); // 10% of $100k
         for (Candidate c : result.candidates()) {

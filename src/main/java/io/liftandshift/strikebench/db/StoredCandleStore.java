@@ -23,9 +23,6 @@ public final class StoredCandleStore implements CandleStore {
 
     public StoredCandleStore(Db db) { this.db = db; }
 
-    /** Back-compat ctor: the dataset now arrives per call, so the service handle is unused. */
-    public StoredCandleStore(Db db, DatasetService datasets) { this(db); }
-
     @Override
     public Optional<CandleSeries> candles(String symbol, LocalDate from, LocalDate to, String datasetId) {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
