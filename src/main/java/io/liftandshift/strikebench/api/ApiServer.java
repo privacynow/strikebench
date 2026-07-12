@@ -416,10 +416,9 @@ public final class ApiServer {
                 datasets.delete(ctx.pathParam("id"), ownerId(ctx)); // ownership enforced in the service
                 ctx.json(Map.of("ok", true));
             });
-            c.routes.post("/api/sim/scenario", this::simScenario);   // pure compute: the fan preview
-            c.routes.post("/api/sim/strategy", this::simStrategy);   // pure compute: strategy P&L distribution
-            c.routes.post("/api/sim/compare", this::simCompare);     // pure compute: ALL structures on ONE path set
-            c.routes.post("/api/sim/dataset", this::simDataset);     // persists a synthetic dataset
+            // Pure outcome work has ONE contract: POST /api/evaluate. Dataset generation is a
+            // separate command because it persists durable analysis material.
+            c.routes.post("/api/datasets/generate", this::simDataset);
 
             c.routes.get("/api/account", this::account);
             c.routes.post("/api/account/reset", this::accountReset);
@@ -2155,7 +2154,10 @@ public final class ApiServer {
                 "scenarioMode", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(nowActive)));
     }
 
-    public record CompareStructure(String key, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs) {}
+    public record CompareStructure(String key,
+                                   List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
+                                   Long entryCostCents,
+                                   List<String> contractExpirations) {}
     public record CompareRequest(String symbol, io.liftandshift.strikebench.sim.ScenarioSpec spec,
                                  io.liftandshift.strikebench.sim.IvSpec iv, Integer qty,
                                  List<CompareStructure> structures,
@@ -2168,11 +2170,10 @@ public final class ApiServer {
     /**
      * The comparative-evidence engine: every requested structure priced on the SAME seeded path
      * set (one generation, one budget permit), entries resolved to exact listed contracts where a
-     * chain matches, refusals reported by name. This replaces N sequential /api/sim/strategy
-     * calls that each re-generated identical paths.
+     * chain matches, refusals reported by name. One COMPARE operation replaces N sequential
+     * POSITION evaluations that would each regenerate identical paths.
      */
-    private void simCompare(Context ctx) {
-        CompareRequest b = requireBody(bodyOrNull(ctx, CompareRequest.class));
+    private Object simCompareResult(Context ctx, CompareRequest b) {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
         if (b.structures() == null || b.structures().isEmpty()) throw new IllegalArgumentException("structures are required");
         if (b.structures().size() > 30) throw new IllegalArgumentException("at most 30 structures");
@@ -2200,15 +2201,22 @@ public final class ApiServer {
                 refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(), "reason", legProblem));
                 continue;
             }
-            MarketEntry me = marketEntry(sym, st.legs(), qty, worldParam(activeWorld(ctx)), book);
+            MarketEntry me = marketEntry(sym, st.legs(), qty, worldParam(activeWorld(ctx)), book,
+                    st.contractExpirations());
+            if (st.contractExpirations() != null && me == null) {
+                refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(),
+                        "reason", "one of the exact listed contracts is unavailable at an executable price"));
+                continue;
+            }
             var legsToRun = me != null && me.resolvedLegs() != null ? me.resolvedLegs() : st.legs();
             items.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem(
                     st.key(), legsToRun,
-                    me == null ? null : me.entryCents(),
-                    me == null ? null : "entry at " + me.source() + " executable quotes"));
+                    st.entryCostCents() != null ? st.entryCostCents() : me == null ? null : me.entryCents(),
+                    st.entryCostCents() != null ? "entry fixed to the supplied package price"
+                            : me == null ? null : "entry at " + me.source() + " executable quotes"));
         }
         // EVIDENCE MODE: one analog ensemble, every structure priced on it. The same
-        // deterministic re-derivation as /api/sim/strategy, so Research, the single run, and
+        // deterministic re-derivation as a POSITION evaluation, so Research, the single run, and
         // this comparison all price ONE conditional sample.
         io.liftandshift.strikebench.research.ResearchQuestionEngine.QuestionResult evStudy = null;
         double[][] evPaths = null;
@@ -2299,7 +2307,7 @@ public final class ApiServer {
             outCmp.put("fairness", "one quote snapshot, one seeded path set — every structure judged on identical futures");
         }
         outCmp.put("snapshotAt", book.snapshotAt); // the ENFORCED shared book, identified
-        ctx.json(outCmp);
+        return outCmp;
     }
 
     /** Uniform structural validation for simulation legs; null = fine, else the refusal reason. */
@@ -2320,10 +2328,9 @@ public final class ApiServer {
         return null;
     }
 
-    private void simScenario(Context ctx) {
-        ScenarioRequest b = requireBody(bodyOrNull(ctx, ScenarioRequest.class));
+    private Object simScenarioResult(Context ctx, ScenarioRequest b) {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
-        ctx.json(simEngine.preview(b.symbol(), calibrateVol(b.symbol(), b.spec(), worldParam(activeWorld(ctx))), worldParam(activeWorld(ctx))));
+        return simEngine.preview(b.symbol(), calibrateVol(b.symbol(), b.spec(), worldParam(activeWorld(ctx))), worldParam(activeWorld(ctx)));
     }
 
     /** volAnnual<=0 = "use market vol": the chain's ATM IV, so every symbol gets ITS OWN wildness. */
@@ -2365,8 +2372,7 @@ public final class ApiServer {
         ctx.json(simEngine.toJson(simEngine.runAndPersist(b.symbol(), spec, ownerId(ctx))));
     }
 
-    private void simStrategy(Context ctx) {
-        StrategySimRequest b = requireBody(bodyOrNull(ctx, StrategySimRequest.class));
+    private Object simStrategyResult(Context ctx, StrategySimRequest b) {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
         if (b.legs() == null || b.legs().isEmpty()) throw new IllegalArgumentException("legs are required");
         String sym = b.symbol() == null ? "" : b.symbol().trim().toUpperCase(Locale.ROOT);
@@ -2495,15 +2501,14 @@ public final class ApiServer {
                         + studyRes.from() + " to " + studyRes.to() + ") — conditional history, not a model's odds, and not a forecast."
                     : "Priced over " + analogs.size() + " whole-path resamples of " + studyRes.eventDates().size()
                         + " " + occurrences + " (conditional bootstrap) — empirical shape preserved; sampling uncertainty, not a model.");
-            ctx.json(out);
-            return;
+            return out;
         }
         var result = new io.liftandshift.strikebench.sim.ScenarioSimulator().run(
                 spot, legsToRun, qty, spec, iv, r,
                 simEngine.historicalLogReturns(sym, analysisCtx(ctx)),
                 entryCost,
                 entryNote);
-        ctx.json(result);
+        return result;
     }
 
     private record MarketEntry(long entryCents, Double atmIv, String source, String freshness,
@@ -2517,20 +2522,6 @@ public final class ApiServer {
      */
     private static String trimNum(double v) {
         return v == Math.rint(v) ? String.valueOf((long) v) : String.valueOf(v);
-    }
-
-    private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs, int qty) {
-        return marketEntry(symbol, legs, qty, null, null, null);
-    }
-
-    private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
-                                    int qty, String worldId) {
-        return marketEntry(symbol, legs, qty, worldId, null, null);
-    }
-
-    private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
-                                    int qty, String worldId, EntryBook book) {
-        return marketEntry(symbol, legs, qty, worldId, book, null);
     }
 
     /**
@@ -3141,7 +3132,10 @@ public final class ApiServer {
 
     /** Parses the recommend request (injecting real holdings for hold-based intents) and runs the engine. */
     private RecommendationEngine.Result resolveAndRecommend(Context ctx) {
-        RecommendationEngine.Request req = bodyOrNull(ctx, RecommendationEngine.Request.class);
+        return resolveAndRecommend(ctx, bodyOrNull(ctx, RecommendationEngine.Request.class));
+    }
+
+    private RecommendationEngine.Result resolveAndRecommend(Context ctx, RecommendationEngine.Request req) {
         if (req == null || req.symbol() == null || req.symbol().isBlank()) {
             throw new IllegalArgumentException("symbol is required");
         }
@@ -3179,7 +3173,12 @@ public final class ApiServer {
      * ranks them, and persists the competition for later review. Feeds the Phase-3 decision UI.
      */
     private void evaluate(Context ctx) {
-        RecommendationEngine.Result result = resolveAndRecommend(ctx);
+        ctx.json(evaluateOutcomes(ctx, requireBody(bodyOrNull(ctx,
+                io.liftandshift.strikebench.outcomes.OutcomeContract.Request.class))));
+    }
+
+    private Object decisionEvaluationResult(Context ctx, RecommendationEngine.Request decision) {
+        RecommendationEngine.Result result = resolveAndRecommend(ctx, decision);
         Account acct = currentAccount(ctx);
         String world = activeWorld(ctx);
         boolean inWorld = !"observed".equals(world);
@@ -3255,7 +3254,199 @@ public final class ApiServer {
         if (recommendationId != null) out.put("recommendationId", recommendationId);
         if (inWorld) out.put("calibrationNote",
                 "Simulated market — this competition is NOT recorded in your calibration record.");
-        ctx.json(out);
+        return out;
+    }
+
+    /**
+     * Versioned cross-surface contract. It delegates to the already-validated kernels in this
+     * phase; the following phase moves their duplicated path assembly behind one service.
+     */
+    private io.liftandshift.strikebench.outcomes.OutcomeContract.Response evaluateOutcomes(
+            Context ctx, io.liftandshift.strikebench.outcomes.OutcomeContract.Request request) {
+        if (request == null) throw new IllegalArgumentException("outcome request is required");
+        if (request.contractVersion() == null) {
+            throw new IllegalArgumentException("contractVersion is required");
+        }
+        int version = request.contractVersion();
+        if (version != io.liftandshift.strikebench.outcomes.OutcomeContract.VERSION) {
+            throw new IllegalArgumentException("Unsupported outcome contract version " + version);
+        }
+        if (request.operation() == null) throw new IllegalArgumentException("operation is required");
+        var basis = request.basis() == null
+                ? request.operation() == io.liftandshift.strikebench.outcomes.OutcomeContract.Operation.DECISION
+                    ? io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.DECISION_POLICY
+                    : io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.PARAMETRIC
+                : request.basis();
+        Map<String, Object> resolved = resolveOutcomeContext(ctx, request.context());
+        String symbol = String.valueOf(resolved.get("symbol"));
+        Object result;
+        String interpretation;
+
+        switch (request.operation()) {
+            case DECISION -> {
+                if (basis != io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.DECISION_POLICY) {
+                    throw new IllegalArgumentException("DECISION uses DECISION_POLICY basis");
+                }
+                if (request.decision() == null) throw new IllegalArgumentException("decision inputs are required");
+                if (request.decision().symbol() == null
+                        || !symbol.equalsIgnoreCase(request.decision().symbol())) {
+                    throw new IllegalArgumentException("decision symbol must match context.symbol");
+                }
+                result = decisionEvaluationResult(ctx, request.decision());
+                interpretation = "One decision policy ranks mechanically eligible structures by after-cost economics, evidence and risk.";
+            }
+            case PATHS -> {
+                if (basis != io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.PARAMETRIC) {
+                    throw new IllegalArgumentException("PATHS currently uses PARAMETRIC basis; historical paths come from a Research study");
+                }
+                result = simScenarioResult(ctx, new ScenarioRequest(symbol, requireOutcomeSpec(request.over())));
+                interpretation = "Model-generated price paths: possible futures, never a forecast or historical frequency.";
+            }
+            case POSITION -> {
+                if (basis == io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.RISK_NEUTRAL) {
+                    throw new IllegalArgumentException("RISK_NEUTRAL position evaluation requires listed expirations and is exposed by package preview");
+                }
+                var position = requireOutcomePosition(request.position());
+                var legs = toSimLegs(ctx, position.legs());
+                String source = basis == io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.PARAMETRIC
+                        ? null : basis.name();
+                result = simStrategyResult(ctx, new StrategySimRequest(symbol, legs,
+                        position.qty(), requireOutcomeSpec(request.over()), request.iv(), source,
+                        request.study(), position.entryCostCents(), contractExpirations(position.legs())));
+                interpretation = basis == io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.PARAMETRIC
+                        ? "The exact position is repriced over model-generated paths; probabilities are scenario-conditional, not a forecast."
+                        : basis == io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.HISTORICAL_ANALOGS
+                            ? "The exact position is repriced over matching historical occurrences; this is conditional history, not model odds."
+                            : "The exact position is repriced over whole-path resamples of matching history; this measures sampling uncertainty.";
+            }
+            case COMPARE -> {
+                if (basis == io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.RISK_NEUTRAL) {
+                    throw new IllegalArgumentException("RISK_NEUTRAL comparison is not a path ensemble");
+                }
+                if (request.positions() == null || request.positions().isEmpty()) {
+                    throw new IllegalArgumentException("positions are required for COMPARE");
+                }
+                if (request.positions().size() > 30) throw new IllegalArgumentException("at most 30 positions");
+                int qty = request.positions().getFirst().qty() == null ? 1 : request.positions().getFirst().qty();
+                List<CompareStructure> structures = new ArrayList<>();
+                for (var position : request.positions()) {
+                    requireOutcomePosition(position);
+                    int pq = position.qty() == null ? 1 : position.qty();
+                    if (pq != qty) throw new IllegalArgumentException("COMPARE positions must use the same quantity");
+                    structures.add(new CompareStructure(position.key(), toSimLegs(ctx, position.legs()),
+                            position.entryCostCents(), contractExpirations(position.legs())));
+                }
+                String source = basis == io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.PARAMETRIC
+                        ? null : basis.name();
+                result = simCompareResult(ctx, new CompareRequest(symbol, requireOutcomeSpec(request.over()),
+                        request.iv(), qty, structures, source, request.study()));
+                interpretation = basis == io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.PARAMETRIC
+                        ? "Every position uses one quote snapshot and the same seeded model paths."
+                        : "Every position uses one quote snapshot and the same conditional historical ensemble.";
+            }
+            default -> throw new IllegalArgumentException("Unknown outcome operation");
+        }
+        return new io.liftandshift.strikebench.outcomes.OutcomeContract.Response(version,
+                request.operation(), basis, resolved, interpretation, result);
+    }
+
+    private io.liftandshift.strikebench.sim.ScenarioSpec requireOutcomeSpec(
+            io.liftandshift.strikebench.sim.ScenarioSpec spec) {
+        if (spec == null) throw new IllegalArgumentException("over (scenario specification) is required");
+        return spec;
+    }
+
+    private io.liftandshift.strikebench.outcomes.OutcomeContract.Position requireOutcomePosition(
+            io.liftandshift.strikebench.outcomes.OutcomeContract.Position position) {
+        if (position == null || position.legs() == null || position.legs().isEmpty()) {
+            throw new IllegalArgumentException("position with at least one leg is required");
+        }
+        if (position.qty() != null && (position.qty() < 1 || position.qty() > 100)) {
+            throw new IllegalArgumentException("position quantity must be 1..100");
+        }
+        return position;
+    }
+
+    private List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> toSimLegs(
+            Context ctx, List<io.liftandshift.strikebench.outcomes.OutcomeContract.Leg> legs) {
+        List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> out = new ArrayList<>();
+        java.time.LocalDate laneToday = market.simInstant(worldParam(activeWorld(ctx)))
+                .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                .orElseGet(() -> java.time.LocalDate.now(clock));
+        for (var leg : legs) {
+            if (leg == null || leg.action() == null || leg.type() == null) {
+                throw new IllegalArgumentException("each position leg needs action and type");
+            }
+            String type = leg.type().trim().toUpperCase(Locale.ROOT);
+            int ratio = leg.ratio() == null ? 1 : leg.ratio();
+            if ("STOCK".equals(type)) {
+                out.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg(
+                        leg.action().trim().toUpperCase(Locale.ROOT), "STOCK", 0, 0, ratio));
+                continue;
+            }
+            if (leg.strike() == null || leg.strike().signum() <= 0) {
+                throw new IllegalArgumentException("option legs need a positive strike");
+            }
+            int expiryDay;
+            if (leg.expiryDay() != null) expiryDay = leg.expiryDay();
+            else if (leg.expiration() != null && !leg.expiration().isBlank()) {
+                long calendarDays = Math.max(1, java.time.temporal.ChronoUnit.DAYS.between(
+                        laneToday, java.time.LocalDate.parse(leg.expiration())));
+                expiryDay = Math.max(1, (int) Math.round(calendarDays * 5.0 / 7.0));
+            } else throw new IllegalArgumentException("option legs need expiration or expiryDay");
+            out.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg(
+                    leg.action().trim().toUpperCase(Locale.ROOT), type,
+                    leg.strike().doubleValue(), expiryDay, ratio));
+        }
+        return out;
+    }
+
+    private List<String> contractExpirations(
+            List<io.liftandshift.strikebench.outcomes.OutcomeContract.Leg> legs) {
+        boolean any = legs.stream().anyMatch(l -> l != null && l.expiration() != null && !l.expiration().isBlank());
+        if (!any) return null;
+        return legs.stream().map(l -> l == null ? null : l.expiration()).toList();
+    }
+
+    private Map<String, Object> resolveOutcomeContext(Context ctx,
+            io.liftandshift.strikebench.outcomes.OutcomeContract.MarketContext requested) {
+        if (requested == null || requested.symbol() == null || requested.symbol().isBlank()) {
+            throw new IllegalArgumentException("context.symbol is required");
+        }
+        String symbol = requested.symbol().trim().toUpperCase(Locale.ROOT);
+        String world = activeWorld(ctx);
+        var analysis = analysisCtx(ctx);
+        String lane = io.liftandshift.strikebench.market.MarketLane
+                .of(world, cfg.fixturesOnly(), analysis).name();
+        if (requested.worldId() != null && !requested.worldId().isBlank()
+                && !world.equals(requested.worldId())) {
+            throw new IllegalStateException("Evaluation context changed: active market is " + world);
+        }
+        if (requested.datasetId() != null && !requested.datasetId().isBlank()
+                && !analysis.datasetId().equals(requested.datasetId())) {
+            throw new IllegalStateException("Evaluation context changed: active dataset is " + analysis.datasetId());
+        }
+        if (requested.marketLane() != null && !requested.marketLane().isBlank()
+                && !lane.equalsIgnoreCase(requested.marketLane())) {
+            throw new IllegalStateException("Evaluation context changed: active lane is " + lane);
+        }
+        var quote = market.quote(symbol, worldParam(world)).orElse(null);
+        String asOf = quote == null || quote.asOfEpochMs() <= 0 ? null
+                : java.time.Instant.ofEpochMilli(quote.asOfEpochMs()).toString();
+        if (requested.asOf() != null && !requested.asOf().isBlank()) {
+            java.time.Instant expected = java.time.Instant.parse(requested.asOf());
+            if (asOf == null || !expected.equals(java.time.Instant.parse(asOf))) {
+                throw new IllegalStateException("Evaluation context changed: the quote snapshot advanced; refresh before comparing");
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("symbol", symbol);
+        out.put("marketLane", lane);
+        out.put("worldId", world);
+        out.put("datasetId", analysis.datasetId());
+        if (asOf != null) out.put("asOf", asOf);
+        out.put("serverTime", market.simInstant(worldParam(world)).orElse(clock.instant()).toString());
+        return out;
     }
 
     public record OpportunitiesRequest(List<String> universe, String thesis, String horizon,

@@ -932,17 +932,20 @@ class ApiIntegrationTest {
         if (sj.get("analogPaths").size() >= 5) {
             // The strategy sim runs on the SAME analogs and SAYS SO (labeled interpretation).
             String simBody = """
-                {"symbol":"AAPL","qty":1,"entryCostCents":12345,
-                  "legs":[{"action":"BUY","type":"STOCK","strike":0,"expiryDay":0,"ratio":1}],
-                  "spec":{"model":"GBM","shape":"CHOP","horizonDays":10,"stepsPerDay":1,
+                {"contractVersion":1,"operation":"POSITION","basis":"HISTORICAL_ANALOGS",
+                  "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+                  "position":{"key":"BUY_AND_HOLD","qty":1,"entryCostCents":12345,
+                    "legs":[{"action":"BUY","type":"STOCK","strike":0,"expiryDay":0,"ratio":1}]},
+                  "over":{"model":"GBM","shape":"CHOP","horizonDays":10,"stepsPerDay":1,
                           "driftAnnual":0,"volAnnual":0.3,"jumpsPerYear":0,"jumpMean":0,
                           "jumpVol":0,"tailNu":0,"seed":7,"paths":100},
-                  "pathSource":"HISTORICAL_ANALOGS",
                   "study":{"key":"pullback_rebound","symbol":"AAPL","from":"","to":"",
                            "params":{"dropPct":2,"lookback":20,"forward":10}}}""";
-            var r = post("/api/sim/strategy", simBody);
+            var r = post("/api/evaluate", simBody);
             assertThat(r.statusCode()).isEqualTo(200);
-            var rj = Json.parse(r.body());
+            var envelope = Json.parse(r.body());
+            assertThat(envelope.get("basis").asText()).isEqualTo("HISTORICAL_ANALOGS");
+            var rj = envelope.get("result");
             assertThat(rj.get("pathSource").asText()).isEqualTo("HISTORICAL_ANALOGS");
             assertThat(rj.get("paths").asInt()).isEqualTo(sj.get("analogPaths").size());
             assertThat(rj.get("entryCostCents").asLong()).isEqualTo(12345L);
@@ -959,15 +962,16 @@ class ApiIntegrationTest {
         // "Exact listed package" is a contract, not copy: an explicit expiration must be
         // used as-is, and a disappeared expiration is refused rather than snapped nearby.
         String exact = """
-            {"symbol":"AAPL","qty":1,"entryCostCents":1000,
-              "legs":[{"action":"BUY","type":"CALL","strike":255,"expiryDay":5,"ratio":1}],
-              "contractExpirations":["2026-08-21"],
-              "spec":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":1,
+            {"contractVersion":1,"operation":"POSITION","basis":"PARAMETRIC",
+              "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+              "position":{"key":"LONG_CALL","qty":1,"entryCostCents":1000,
+                "legs":[{"action":"BUY","type":"CALL","strike":255,"expiration":"2026-08-21","expiryDay":5,"ratio":1}]},
+              "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":1,
                       "driftAnnual":0,"volAnnual":0.3,"jumpsPerYear":0,"jumpMean":0,
                       "jumpVol":0,"tailNu":6,"seed":17,"paths":40}}""";
-        assertThat(post("/api/sim/strategy", exact).statusCode()).isEqualTo(200);
+        assertThat(post("/api/evaluate", exact).statusCode()).isEqualTo(200);
         String missingExact = exact.replace("2026-08-21", "2099-01-16");
-        var refused = post("/api/sim/strategy", missingExact);
+        var refused = post("/api/evaluate", missingExact);
         assertThat(refused.statusCode()).isEqualTo(400);
         assertThat(refused.body()).contains("exact listed contracts");
     }

@@ -590,13 +590,11 @@
             driftAnnual: c.drift, volAnnual: vol, jumpsPerYear: 0, jumpMean: 0, jumpVol: 0,
             tailNu: 6, heston: null, seed: c.seed, paths: 180 };
           try {
-            var request = {
-              symbol: symbol, legs: legs, qty: candidate.qty || 1, spec: spec, iv: null,
-              entryCostCents: typeof candidate.entryNetPremiumCents === 'number'
-                ? -candidate.entryNetPremiumCents : null
-            };
-            if (hasExactContracts) request.contractExpirations = exactExpirations;
-            var result = await API.post('/api/sim/strategy', request);
+            var position = App.outcomePosition(candidate.strategy, legs, candidate.qty || 1,
+              typeof candidate.entryNetPremiumCents === 'number' ? -candidate.entryNetPremiumCents : null,
+              hasExactContracts ? exactExpirations : null);
+            var result = await App.evaluateOutcome('POSITION', 'PARAMETRIC', symbol,
+              { position: position, over: spec, iv: null });
             if (!holder.isConnected) return;
             rows.push({ def: c, result: result });
           } catch (e) {

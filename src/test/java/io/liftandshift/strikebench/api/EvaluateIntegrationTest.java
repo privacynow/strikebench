@@ -56,11 +56,21 @@ class EvaluateIntegrationTest {
                 HttpResponse.BodyHandlers.ofString());
     }
 
+    private static String decisionBody() {
+        return """
+                {"contractVersion":1,"operation":"DECISION","basis":"DECISION_POLICY",
+                 "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+                 "decision":{"symbol":"AAPL","thesis":"bullish","horizon":"month","riskMode":"balanced"}}
+                """;
+    }
+
     @Test void evaluateReturnsRankedCompetitionWithEveryDimension() throws Exception {
-        HttpResponse<String> r = post("/api/evaluate",
-                "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"balanced\"}");
+        HttpResponse<String> r = post("/api/evaluate", decisionBody());
         assertThat(r.statusCode()).isEqualTo(200);
         JsonNode body = Json.MAPPER.readTree(r.body());
+        assertThat(body.get("contractVersion").asInt()).isEqualTo(1);
+        assertThat(body.get("operation").asText()).isEqualTo("DECISION");
+        body = body.get("result");
         JsonNode evals = body.get("evaluations");
         assertThat(evals.isArray()).isTrue();
         assertThat(evals).isNotEmpty();
@@ -137,7 +147,7 @@ class EvaluateIntegrationTest {
     }
 
     @Test void calibrationEndpointReports() throws Exception {
-        post("/api/evaluate", "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"balanced\"}");
+        post("/api/evaluate", decisionBody());
         HttpResponse<String> r = get("/api/calibration");
         assertThat(r.statusCode()).isEqualTo(200);
         JsonNode rep = Json.MAPPER.readTree(r.body());
@@ -147,9 +157,36 @@ class EvaluateIntegrationTest {
     }
 
     @Test void demoEvaluationsDoNotPolluteObservedHistory() throws Exception {
-        post("/api/evaluate", "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"balanced\"}");
+        post("/api/evaluate", decisionBody());
         JsonNode listed = Json.MAPPER.readTree(get("/api/evaluations").body()).get("evaluations");
         assertThat(listed.isArray()).isTrue();
         assertThat(listed).isEmpty();
+    }
+
+    @Test void oneVersionedContractOwnsPureOutcomeWorkAndPinsItsLane() throws Exception {
+        String paths = """
+                {"contractVersion":1,"operation":"PATHS","basis":"PARAMETRIC",
+                 "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+                 "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":2,
+                         "driftAnnual":0,"volAnnual":0.25,"jumpsPerYear":0,"jumpMean":0,
+                         "jumpVol":0,"tailNu":6,"seed":77,"paths":40}}
+                """;
+        HttpResponse<String> r = post("/api/evaluate", paths);
+        assertThat(r.statusCode()).isEqualTo(200);
+        JsonNode envelope = Json.MAPPER.readTree(r.body());
+        assertThat(envelope.get("operation").asText()).isEqualTo("PATHS");
+        assertThat(envelope.get("basis").asText()).isEqualTo("PARAMETRIC");
+        assertThat(envelope.at("/context/marketLane").asText()).isEqualTo("DEMO");
+        assertThat(envelope.at("/result/bands").isArray()).isTrue();
+
+        assertThat(post("/api/evaluate", paths.replace("\"DEMO\"", "\"OBSERVED\"")).statusCode())
+                .isEqualTo(409);
+        // No public compatibility burden: internal callers move atomically and old contracts die.
+        assertThat(post("/api/evaluate",
+                "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\"}").statusCode())
+                .isEqualTo(400);
+        assertThat(post("/api/sim/scenario", "{}").statusCode()).isEqualTo(404);
+        assertThat(post("/api/sim/strategy", "{}").statusCode()).isEqualTo(404);
+        assertThat(post("/api/sim/compare", "{}").statusCode()).isEqualTo(404);
     }
 }

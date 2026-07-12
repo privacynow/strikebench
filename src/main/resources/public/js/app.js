@@ -22,6 +22,51 @@
       }
     },
 
+    /** One explicit market context for every outcome engine. It asserts the active lane. */
+    outcomeContext: function (symbol) {
+      var world = App.state.world || (App.config && App.config.world) || 'observed';
+      var lane = world !== 'observed' && world !== 'demo' ? 'SIMULATED'
+        : App.config && App.config.scenarioMode ? 'SCENARIO'
+        : App.config && App.config.fixturesOnly ? 'DEMO' : 'OBSERVED';
+      return {
+        symbol: String(symbol || '').trim().toUpperCase(), marketLane: lane, worldId: world,
+        datasetId: (App.config && App.config.activeDataset) || 'observed'
+      };
+    },
+
+    outcomePosition: function (key, legs, qty, entryCostCents, expirations) {
+      return {
+        key: key || 'POSITION', qty: qty || 1,
+        entryCostCents: typeof entryCostCents === 'number' ? entryCostCents : null,
+        legs: (legs || []).map(function (leg, i) {
+          return {
+            action: leg.action, type: leg.type || (leg.stock ? 'STOCK' : null),
+            strike: leg.strike == null ? null : leg.strike,
+            expiration: expirations && expirations[i] || leg.expiration || null,
+            expiryDay: leg.expiryDay == null ? null : leg.expiryDay,
+            ratio: leg.ratio || 1
+          };
+        })
+      };
+    },
+
+    evaluateEnvelope: function (operation, basis, symbol, payload) {
+      var request = Object.assign({
+        contractVersion: 1, operation: operation, basis: basis,
+        context: App.outcomeContext(symbol)
+      }, payload || {});
+      return API.post('/api/evaluate', request).then(function (response) {
+        if (!response || response.contractVersion !== 1 || response.operation !== operation) {
+          throw new Error('The outcome engine returned an incompatible contract. Restart and reload StrikeBench.');
+        }
+        return response;
+      });
+    },
+
+    evaluateOutcome: function (operation, basis, symbol, payload) {
+      return App.evaluateEnvelope(operation, basis, symbol, payload).then(function (response) { return response.result; });
+    },
+
     /** Renders the current route into #app. Sets data-ready="true" when done (used by tests). */
     render: async function () {
       // Serialize: a render kicked off mid-render (filter change -> blur -> render, then a tab

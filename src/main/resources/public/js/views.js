@@ -4166,7 +4166,7 @@
       var seq = ++previewSeq;
       run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Drawing futures…'));
       try {
-        var p = await API.post('/api/sim/scenario', { symbol: symbol, spec: f.getSpec() });
+        var p = await App.evaluateOutcome('PATHS', 'PARAMETRIC', symbol, { over: f.getSpec() });
         if (seq !== previewSeq) return;
         out.innerHTML = '';
         out.appendChild(Scenario.fanChart(p));
@@ -4242,9 +4242,13 @@
           onclick: function () { switchSymbol(u); } }, u));
       });
     card.appendChild(el('div', { class: 'field' }, el('label', {}, 'Stocks in this universe'), peerRail));
+    var demoLane = App.config && App.config.fixturesOnly && (App.state.world || 'demo') === 'demo';
+    var entryBasis = demoLane
+      ? 'the built-in demo option book (fabricated teaching prices)'
+      : 'the active market\u2019s executable option quotes when a listed contract matches';
     card.appendChild(explain(level === 'beginner'
-      ? 'Three choices: which stock, what story you believe (the price path), and which position (the payoff shape). We run the position through hundreds of simulated futures and report, in plain dollars, how it tends to end — priced against today’s real option quotes when available.'
-      : 'Monte-Carlo the position across the scenario paths. Entry is priced from LIVE market quotes (executable sides) when a chain matches; exits are BSM along the IV path (default: the chain’s ATM IV). The verdict measures your scenario against the market’s price.'));
+      ? 'Three choices: which stock, what story you believe (the price path), and which position (the payoff shape). We run the position through hundreds of simulated futures and report, in plain dollars, how it tends to end. The entry is priced from ' + entryBasis + '.'
+      : 'Monte-Carlo the position across the scenario paths. Entry is priced from ' + entryBasis + '; exits are BSM along the IV path (default: the active chain\u2019s ATM IV). The verdict measures your scenario against that entry basis.'));
     var f = Scenario.form(level, symbol);
     card.appendChild(f.el);
 
@@ -4307,11 +4311,16 @@
         // EXACT historical occurrences the study displayed — one conditional sample, two views.
         var ev = App.state.evidencePrefill;
         var evActive = ev && ev.symbol === symbol && ev.source;
-        var extra = evActive ? { pathSource: ev.source, study: ev.study } : {};
-        var rP = API.post('/api/sim/strategy', Object.assign(
-          { symbol: symbol, legs: legs, qty: 1, spec: spec, iv: f.getIv() }, extra));
-        var basP = API.post('/api/sim/strategy', Object.assign({ symbol: symbol, qty: 1, spec: spec,
-          legs: [{ action: 'BUY', type: 'STOCK', strike: 0, expiryDay: 0, ratio: 1 }] }, extra))
+        var basis = evActive ? ev.source : 'PARAMETRIC';
+        var study = evActive ? ev.study : null;
+        var rP = App.evaluateOutcome('POSITION', basis, symbol, {
+          position: App.outcomePosition(picked.key, legs, 1), over: spec, iv: f.getIv(), study: study
+        });
+        var basP = App.evaluateOutcome('POSITION', basis, symbol, {
+          position: App.outcomePosition('BUY_AND_HOLD',
+            [{ action: 'BUY', type: 'STOCK', strike: 0, expiryDay: 0, ratio: 1 }], 1),
+          over: spec, iv: f.getIv(), study: study
+        })
           .catch(function () { return null; });
         var r = await rP, bas = await basP;
         if (seq !== actionSeq) return;
@@ -4357,12 +4366,11 @@
         // never silently compare on generated Monte Carlo paths (holistic review #10).
         var evC = App.state.evidencePrefill;
         var evOnC = evC && evC.symbol === symbol && evC.source;
-        var cmpBody = { symbol: symbol, qty: 1, spec: spec, iv: f.getIv(),
-          structures: Scenario.CATALOG.map(function (q2) {
-            return { key: q2.key, legs: q2.legs(spot, spec.horizonDays + 10) };
-          }) };
-        if (evOnC) { cmpBody.pathSource = evC.source; cmpBody.study = evC.study; }
-        var cmp = await API.post('/api/sim/compare', cmpBody);
+        var positions = Scenario.CATALOG.map(function (q2) {
+          return App.outcomePosition(q2.key, q2.legs(spot, spec.horizonDays + 10), 1);
+        });
+        var cmp = await App.evaluateOutcome('COMPARE', evOnC ? evC.source : 'PARAMETRIC', symbol,
+          { positions: positions, over: spec, iv: f.getIv(), study: evOnC ? evC.study : null });
         if (seq !== actionSeq) return;
         if (evOnC && evC.studyKey && cmp.studyKey && cmp.studyKey !== evC.studyKey) {
           out.appendChild(alertBox('warn', 'The underlying data changed since the study was run',
@@ -5954,7 +5962,7 @@
         go.addEventListener('click', async function () {
           go.disabled = true; note.textContent = 'Generating…';
           try {
-            var r = await API.post('/api/sim/dataset', { symbol: sym.value.toUpperCase(), spec: f.getSpec() });
+            var r = await API.post('/api/datasets/generate', { symbol: sym.value.toUpperCase(), spec: f.getSpec() });
             // SCENARIO READY (holistic review Phase 5): a finished generation is a decision
             // point with next actions, not a bare "Saved" line the user must go hunting after.
             note.innerHTML = '';
@@ -6764,7 +6772,7 @@
       if (inflight && inflight.key === cacheKey) {
         promise = inflight.promise;                       // a concurrent render already asked
       } else {
-        promise = API.post('/api/evaluate', body);
+        promise = App.evaluateOutcome('DECISION', 'DECISION_POLICY', symbol, { decision: body });
         App.state.decisionInflight = { key: cacheKey, promise: promise };
       }
       try { data = await promise; }

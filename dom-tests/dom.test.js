@@ -718,11 +718,11 @@ test('fair comparison: one batch call, refusals named, ranked per dollar of down
   });
   await page.waitForSelector('#app[data-route="trade"][data-ready="true"]');
   await page.waitForSelector('#sc-compare-all');
-  // Count network calls: the comparison must be ONE POST, not 18.
+  // Count network calls: the comparison must be ONE versioned evaluation, not 18.
   const calls = await page.evaluate(() => new Promise((resolve, reject) => {
     let n = 0;
     const orig = window.fetch;
-    window.fetch = function (u, o) { if (String(u).includes('/api/sim/')) n++; return orig.apply(window, arguments); };
+    window.fetch = function (u, o) { if (String(u).includes('/api/evaluate')) n++; return orig.apply(window, arguments); };
     document.getElementById('sc-compare-all').click();
     const t0 = Date.now();
     (function poll() {
@@ -731,7 +731,7 @@ test('fair comparison: one batch call, refusals named, ranked per dollar of down
       else setTimeout(poll, 300);
     })();
   }));
-  assert.ok(calls <= 2, 'batched: ' + calls + ' sim calls (was 18 sequential)');
+  assert.equal(calls, 1, 'one COMPARE request replaces 18 sequential POSITION calls');
   const txt = await page.textContent('#sc-verify-out');
   assert.match(txt, /per dollar of realistic downside|RoR/i);
   assert.match(txt, /undefined risk is blocked by design/i); // catalog completeness disclosed
@@ -2498,7 +2498,9 @@ test('cache: read-only compute POST (/api/evaluate) keeps the GET cache warm', a
     try {
       await API.get('/api/config');           // warm (or already cached from boot)
       const before = n;
-      await API.post('/api/evaluate', { symbol: 'AAPL', thesis: 'bullish', horizon: 'month', riskMode: 'balanced' });
+      await App.evaluateOutcome('DECISION', 'DECISION_POLICY', 'AAPL', {
+        decision: { symbol: 'AAPL', thesis: 'bullish', horizon: 'month', riskMode: 'balanced' }
+      });
       await API.get('/api/config');           // must be served from cache — the compute POST must not flush it
       return { added: n - before };
     } finally { window.fetch = orig; }
