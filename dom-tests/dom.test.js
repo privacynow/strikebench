@@ -1502,6 +1502,9 @@ test('pro depth: comparison table, custom builder, position greeks', async () =>
   await page.waitForSelector('#compare-table');
   const rows = await page.locator('#compare-table tbody tr.clickable').count();
   assert.ok(rows >= 2, 'multiple candidates compared');
+  assert.match(await page.textContent('#compare-table thead'), /Market EV/);
+  assert.match(await page.textContent('#compare-table thead'), /History EV/,
+    'the candidate comparison keeps both economic lanes co-equal');
   await page.click('#compare-table thead th:has-text("max loss")'); // sort
   assert.match(await page.textContent('#compare-table thead'), /Theor\. max loss [↓↑]/);
   await page.click('#compare-table tbody tr.clickable'); // expand detail row
@@ -2071,7 +2074,8 @@ test('large Research markets progressively load every sparkline in governed batc
 });
 
 test('intent-native UX: discount ladder, exit rungs, income board, symbol actions', async () => {
-  // ACQUIRE at Learning: the ladder reads as sentences with a recommended rung
+  // ACQUIRE at Learning: the ladder reads as sentences with a target/midpoint reference rung.
+  await page.evaluate(() => { App.state.filterState = {}; });
   await go('#/trade/context/manual');
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
