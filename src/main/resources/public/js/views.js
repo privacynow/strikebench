@@ -1771,13 +1771,11 @@
         chip(el('span', {}, 'Market-implied EV', UI.info('ev')),
           e.marketEvAfterCostsCents !== null && e.marketEvAfterCostsCents !== undefined
             ? el('span', { class: e.marketEvAfterCostsCents >= 0 ? 'gain' : 'loss' },
-                fmtMoney(e.marketEvAfterCostsCents, { plus: true })) : 'Unavailable',
-          'Expected result under the option market’s implied distribution, after estimated round-trip fees.'),
-        chip(el('span', {}, 'Realized-vol scenario EV', UI.info('vrp')),
+                fmtMoney(e.marketEvAfterCostsCents, { plus: true })) : 'Unavailable'),
+        chip(el('span', {}, 'Realized-vol scenario EV', UI.info('evhistvol')),
           e.realizedVolEvAfterCostsCents !== null && e.realizedVolEvAfterCostsCents !== undefined
             ? el('span', { class: e.realizedVolEvAfterCostsCents >= 0 ? 'gain' : 'loss' },
-                fmtMoney(e.realizedVolEvAfterCostsCents, { plus: true })) : 'Unavailable',
-          'Expected result if this stock’s observed realized volatility is the better guide, after estimated round-trip fees.'),
+                fmtMoney(e.realizedVolEvAfterCostsCents, { plus: true })) : 'Unavailable'),
         chip('Estimated round-trip fees', fmtMoney(e.estimatedRoundTripFeesCents || 0))));
     if (e.reasons && e.reasons.length) {
       block.appendChild(UI.expandable('Why this classification', function () {
@@ -1839,17 +1837,17 @@
     var assignGoal = c.intent === 'EXIT' || c.intent === 'ACQUIRE';
     var maxLossFact = c.usesHeldShares && c.maxLossCents === 0
         ? el('div', { class: 'fact' },
-            el('div', { class: 'f-label' }, UI.term('covered', 'New cash at risk')),
+            el('div', { class: 'f-label' }, 'New cash at risk'),
             el('div', { class: 'f-value' }, '$0'))
         : el('div', { class: 'fact f-danger' },
-            el('div', { class: 'f-label' }, UI.term('max loss', 'Theoretical worst case')),
+            el('div', { class: 'f-label' }, 'Theoretical worst case'),
             el('div', { class: 'f-value' }, fmtMoney(c.maxLossCents)));
     var profitFact = el('div', { class: 'fact' },
-      el('div', { class: 'f-label' }, UI.term('pop', 'Chance of any profit')),
+      el('div', { class: 'f-label' }, 'Chance of any profit'),
       el('div', { class: 'f-value' }, fmtPct(c.pop)));
     var assignmentFact = assignGoal && c.assignmentProb !== null && c.assignmentProb !== undefined
       ? el('div', { class: 'fact f-ok' },
-          el('div', { class: 'f-label' }, UI.term('assignment', c.intent === 'EXIT' ? 'Chance you sell' : 'Chance you buy')),
+          el('div', { class: 'f-label' }, c.intent === 'EXIT' ? 'Chance you sell' : 'Chance you buy'),
           el('div', { class: 'f-value' }, fmtPct(c.assignmentProb))) : null;
     var card = el('div', { class: 'candidate', 'data-strategy': c.strategy,
       'data-economic-verdict': economicVerdict(c) || 'UNKNOWN' },
@@ -1863,7 +1861,7 @@
       el('div', { class: 'fact-grid' },
         maxLossFact,
         el('div', { class: 'fact f-ok' },
-          el('div', { class: 'f-label' }, UI.term('max profit', 'Theoretical ceiling')),
+          el('div', { class: 'f-label' }, 'Theoretical ceiling'),
           el('div', { class: 'f-value' }, UI.maxProfitLabel(
             c.strategy, c.structureGroup, c.maxProfitCents, true, c.legs))),
         profitFact,
@@ -2924,25 +2922,18 @@
     // ALL FIVE limits exist at BOTH levels (presentation-only levels, review P0): Beginner gets
     // them collapsed behind the expandable in plain words; Expert gets the same five inline.
     // A value set anywhere applies everywhere — persisted selections are never dropped.
-    var fieldRow = function (label, input, tip) {
-      return el('div', { class: 'field', title: tip }, el('label', {}, label), input);
-    };
-    var TIPS = {
-      pop: 'POP — the modeled probability the trade ends with ANY profit. 70 keeps only ideas with at least a 70% chance. Model output, pre-commission.',
-      assign: 'Probability of ending up assigned shares on the short leg(s). For sell-at-target and buy-at-discount goals assignment IS the point — leave blank there.',
-      yld: 'Share-backed income only (covered calls, cash-secured puts, collars). Annualized so a 2-week and a 2-month trade compare fairly — 0.5% over two weeks is about 13%/yr. Blank = no floor.',
-      cost: 'The most you pay up front (debit trades). Credit trades collect cash instead — cap those with the worst case.',
-      loss: 'Hard cap on the modeled maximum loss — your per-idea risk budget in dollars. Blank = sized by the header risk mode.'
+    var fieldRow = function (label, input, infoKey) {
+      return el('div', { class: 'field' }, el('label', {}, label, UI.info(infoKey)), input);
     };
     if (level === 'beginner') {
       node = UI.expandable('Only show ideas that fit my limits', function () {
         return el('div', {},
           el('div', { class: 'form-grid' },
-            fieldRow(UI.term('max loss', 'The most I am willing to lose ($)'), maxLoss, TIPS.loss),
-            fieldRow(UI.term('pop', 'Minimum chance of any profit (%)'), minPop, TIPS.pop),
-            fieldRow(UI.term('assignment', 'Chance I end up with shares (max %)'), maxAssign, TIPS.assign),
-            fieldRow('Income pace (min %/yr)', minYield, TIPS.yld),
-            fieldRow('Cash I pay up front (max $)', maxCost, TIPS.cost)),
+            fieldRow('The most I am willing to lose ($)', maxLoss, 'filterloss'),
+            fieldRow('Minimum chance of any profit (%)', minPop, 'filterpop'),
+            fieldRow('Chance I end up with shares (max %)', maxAssign, 'filterassignment'),
+            fieldRow('Income pace (min %/yr)', minYield, 'filteryield'),
+            fieldRow('Cash I pay up front (max $)', maxCost, 'filtercost')),
           explain('Ideas outside your limits are not hidden silently — the results call them out with the exact reason, so you can see what you are screening out.'));
       });
     } else {
@@ -2951,13 +2942,13 @@
       // into it; the header risk mode still sizes ideas when this is blank).
       node = el('div', { class: 'card compact-filters' },
         el('div', { class: 'form-grid grid-5' },
-          fieldRow('Chance of profit \u2265 %', minPop, TIPS.pop),
-          fieldRow('Assignment risk \u2264 %', maxAssign, TIPS.assign),
-          fieldRow('Income rate \u2265 %/yr', minYield, TIPS.yld),
-          fieldRow('Cash outlay \u2264 $', maxCost, TIPS.cost),
-          fieldRow('Worst case \u2264 $', maxLoss, TIPS.loss)),
+          fieldRow('Chance of profit \u2265 %', minPop, 'filterpop'),
+          fieldRow('Assignment risk \u2264 %', maxAssign, 'filterassignment'),
+          fieldRow('Income rate \u2265 %/yr', minYield, 'filteryield'),
+          fieldRow('Cash outlay \u2264 $', maxCost, 'filtercost'),
+          fieldRow('Worst case \u2264 $', maxLoss, 'filterloss')),
         el('p', { class: 'muted', style: 'margin:6px 0 0; font-size:12px' },
-          'Blank = no limit. Hover a label for exactly what it means; refused ideas always say which limit they broke.'));
+          'Blank = no limit. The info controls explain what each screen includes; refused ideas always say which limit they broke.'));
     }
     node.id = idPrefix + '-filters';
     return {
@@ -3458,7 +3449,9 @@
           stat('Theoretical max profit', UI.maxProfitLabel(t.previewReq && t.previewReq.strategy,
             t.candidate && t.candidate.structureGroup, p.maxProfitCents, Learn.currentLevel() === 'beginner', p.legs)),
           stat('Fees', fmtMoney(p.feesOpenCents), '$0.65 per contract per leg by default.'),
-          stat(UI.term('pop', Learn.currentLevel() === 'beginner' ? 'Chance of any profit' : 'POP'), fmtPct(p.popEntry), 'Modeled probability of any profit at expiration — before commissions, not a promise.'),
+          stat(Learn.currentLevel() === 'beginner' ? 'Chance of any profit'
+            : el('span', {}, 'POP', UI.info('pop')), fmtPct(p.popEntry),
+            'Modeled probability of any profit at expiration — before commissions, not a promise.'),
           stat('Breakevens', (p.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
           stat('Buying power after', fmtMoney(p.buyingPowerAfterCents), 'Drops by exactly the theoretical max loss plus fees.'),
           stat('Cash after', fmtMoney(p.cashAfterCents))));
@@ -5776,8 +5769,7 @@
           volIn.oninput = function () { st.vol = parseFloat(volIn.value); };
           var seedIn = el('input', { type: 'number', id: 'sim-seed', value: st.seed || '', placeholder: 'auto' });
           seedIn.oninput = function () { st.seed = seedIn.value; };
-          var speedIn = el('input', { type: 'number', id: 'sim-speed', value: String(st.speed), min: '1', max: '2000',
-            title: 'Sim-seconds per real second. 1 = real time; 26 \u2248 one 6.5h session in 15 min; 390 \u2248 one session per minute.' });
+          var speedIn = el('input', { type: 'number', id: 'sim-speed', value: String(st.speed), min: '1', max: '2000' });
           speedIn.oninput = function () { st.speed = parseFloat(speedIn.value); };
           grid.appendChild(labeled('Market volatility %/yr', volIn));
           grid.appendChild(labeled('Seed (blank = fresh)', seedIn, 'seed'));

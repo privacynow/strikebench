@@ -1356,11 +1356,12 @@
           class: UI.profitCeilingKind(familyLabel(), null, p.maxProfitCents, p.legs) === 'model-dependent' ? 'muted' : 'gain'
         }, UI.maxProfitLabel(familyLabel(), null, p.maxProfitCents, beginnerWording, p.legs)),
           beginnerWording ? 'The best case at expiration.' : null),
-        stat(UI.term('pop', beginnerWording ? 'Chance of any profit' : 'POP'),
+        stat(beginnerWording ? 'Chance of any profit' : el('span', {}, 'POP', UI.info('pop')),
           p.popEntry !== null && p.popEntry !== undefined ? fmtPct(p.popEntry) : '—',
           beginnerWording ? 'Model estimate under current volatility. Not a promise.' : null),
         p.assignmentProb !== null && p.assignmentProb !== undefined
-          ? stat(UI.term('assignment', assignmentLabel(beginnerWording)), fmtPct(p.assignmentProb),
+          ? stat(beginnerWording ? assignmentLabel(true)
+              : el('span', {}, assignmentLabel(false), UI.info('assignment')), fmtPct(p.assignmentProb),
               beginnerWording ? 'Chance any short strike finishes in the money and shares change hands.' : null) : null,
         stat('Fees', fmtMoney(p.feesOpenCents), null)));
       if (p.breakevens && p.breakevens.length) {
@@ -1369,8 +1370,7 @@
       }
       hostEl.appendChild(el('div', { class: 'chip-row' },
         chip('Buying power after', fmtMoney(p.buyingPowerAfterCents)),
-        p.reserveCents ? chip(UI.term('reserve', 'Set aside'), fmtMoney(p.reserveCents),
-          'Cash held while the trade is open. For credit trades this is the full width between strikes (it already contains the worst case); for debit trades the premium has left your account, so nothing extra is held. It is released when you close.') : null));
+        p.reserveCents ? chip(UI.term('reserve', 'Set aside'), fmtMoney(p.reserveCents)) : null));
       // One line kills the "three different risk numbers" confusion: everything here is a TOTAL.
       hostEl.appendChild(el('div', { class: 'muted small' },
         'All figures are totals for this exact position and quantity. "Set aside" and "most you can lose" differ on credit trades because the set-aside is the gross width — the worst case lives inside it.'));

@@ -103,7 +103,8 @@
   function freshnessBadge(freshness) {
     if (!freshness) return null;
     var label = freshness === 'FIXTURE' ? 'DEMO DATA' : freshness;
-    return el('span', { class: 'badge ' + (FRESH_CLASS[freshness] || 'badge-dim'), title: 'Data freshness' }, label);
+    return el('span', { class: 'badge ' + (FRESH_CLASS[freshness] || 'badge-dim'),
+      'aria-label': 'Data freshness: ' + label }, label);
   }
 
   /** Provenance and age are separate facts. Accepts the API DataEvidence object. */
@@ -200,7 +201,9 @@
   }
 
   function chip(label, valueNode, title) {
-    return el('span', { class: 'chip', title: title || null },
+    var structuredHelp = label && label.nodeType === 1
+      && (label.matches('.info-trigger,.term') || label.querySelector('.info-trigger,.term'));
+    return el('span', { class: 'chip', title: structuredHelp ? null : title || null },
       el('span', { class: 'chip-label' }, label), el('b', {}, valueNode));
   }
 
@@ -226,7 +229,7 @@
   function scoreBar(score, label) {
     var pct = Math.max(0, Math.min(100, score));
     var cls = pct >= 70 ? 'ok' : pct >= 45 ? 'caution' : 'danger';
-    return el('span', { class: 'score-wrap', title: label || 'Score' },
+    return el('span', { class: 'score-wrap', 'aria-label': label || 'Score' },
       el('span', { class: 'score-num' }, Math.round(pct)),
       el('span', { class: 'score-bar' }, el('span', { class: 'score-fill score-' + cls, style: 'width:' + pct + '%' })));
   }

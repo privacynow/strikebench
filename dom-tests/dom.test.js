@@ -1008,6 +1008,11 @@ test('recommendations render candidates and blocked examples', async () => {
   assert.match(appText, /undefined risk/i);
   assert.match(appText, /Theoretical worst case|Theoretical max loss/);
   assert.match(appText, /Chance of any profit/, 'Beginner retains POP rather than replacing it with an intent-specific assignment outcome');
+  assert.equal(await page.locator('.candidate .fact-grid .f-label .term, .candidate .fact-grid .f-label .info-trigger').count(), 0,
+    'plain Beginner fact labels do not open a second explanation that restates the card');
+  const evPairs = await page.locator('.candidate .economic-assessment').allTextContents();
+  assert.ok(evPairs.length > 0 && evPairs.every(t => /Market-implied EV/.test(t) && /Realized-vol scenario EV/.test(t)),
+    'both EV lanes stay co-equal on every candidate card');
   assert.match(appText, /not financial advice/i);
   const firstCandidateOrder = await page.locator('.candidate').first().evaluate(card => ({
     economic: Array.from(card.children).indexOf(card.querySelector('.economic-assessment')),
@@ -1178,6 +1183,14 @@ test('review verdict panel: probability map, execution ladder, expert repricing'
   await go('#/home');
   await go('#/trade/context/manual');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
+  await page.click('#rec-filters .xp-head');
+  assert.equal(await page.locator('#rec-filters .field .info-trigger').count(), 5,
+    'each candidate limit has one visible, registry-backed explanation control');
+  assert.equal(await page.locator('#rec-filters .field[title]').count(), 0,
+    'candidate limits do not add a second native hover tooltip');
+  assert.equal(await page.$$eval('#rec-filters .info-trigger', els =>
+    els.filter(e => e.closest('[title]')).length), 0,
+    'structured filter help never sits inside a native title tooltip');
   await page.fill('#rec-symbol', 'AAPL');
   await page.selectOption('#rec-thesis', 'bullish');
   await page.click('#rec-go');
@@ -1262,12 +1275,21 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   await page.waitForSelector('#info-pop');
   const shortText = await page.textContent('#info-pop .info-short');
   assert.ok(shortText.length > 20, 'one-liner present');
+  assert.match(shortText, /\$1 gain|compare/i,
+    'the POP one-liner adds a decision distinction instead of repeating its label');
   assert.equal(await page.isVisible('#info-pop .info-detail'), false, 'detail starts collapsed');
   await page.click('#info-pop .info-expand');
   const begDetail = await page.textContent('#info-pop .info-detail');
   assert.ok(begDetail.length > 40, 'beginner detail present');
   // Escape closes AND returns focus to the trigger (keyboard a11y).
   await page.keyboard.press('Escape');
+  const distinctProbabilityHelp = await page.evaluate(() => ({
+    profit: Learn.INFO.pop.short,
+    fullWin: Learn.INFO.pmaxprofit.short,
+    fullLoss: Learn.INFO.pmaxloss.short
+  }));
+  assert.match(distinctProbabilityHelp.fullWin, /ordinary profitable outcomes are excluded/i);
+  assert.match(distinctProbabilityHelp.fullLoss, /smaller losses are excluded/i);
   assert.equal(await page.locator('#info-pop').count(), 0, 'Escape closes the bubble');
   // KEYBOARD PATH: focus opens the bubble, Tab reaches [+] (DOM-adjacent, not body-appended).
   // Escape already returned focus to the trigger, so blur first — refocusing a focused element
@@ -2573,7 +2595,7 @@ test('inline competition: the pick, evidence, scenarios, plan, and handoff', asy
     'mechanical availability is not presented as an endorsement');
   const evBadge = (await page.locator('.decision-pick .row-gap .badge').first().innerText()).trim();
   assert.match(evBadge, /Demo data|Observed|Modeled|Unknown/, 'evidence badge is labeled honestly');
-  assert.ok(await page.locator('.decision-pick .score-wrap[title="Decision score"]').first().isVisible(), 'final Decision score meter');
+  assert.ok(await page.locator('.decision-pick .score-wrap[aria-label="Decision score"]').first().isVisible(), 'final Decision score meter');
   assert.ok(await page.locator('.decision-pick [data-economic-verdict]').count(), 'Decision consumes the shared economic verdict');
   assert.match(await page.textContent('.decision-pick [data-economic-verdict]'), /Market-implied EV/);
   assert.match(await page.textContent('.decision-pick [data-economic-verdict]'), /Realized-vol scenario EV/);
