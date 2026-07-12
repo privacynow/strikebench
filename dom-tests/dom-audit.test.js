@@ -6,6 +6,7 @@
  *   1. The page NEVER scrolls horizontally.
  *   2. No emoji anywhere in rendered text — pictograms are the shared SVG icon set.
  *   3. Form controls come in exactly the sanctioned sizes (--ctl-h / --ctl-h-sm / --ctl-h-xs).
+ *   4. Non-finite numeric sentinels never reach visible financial text.
  *
  * Run:  node --test dom-audit.test.js
  */
@@ -18,13 +19,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7181';
 const BASE = `http://localhost:${PORT}`;
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
-let server, browser, page;
+let server, browser, page, pg;
 
 async function waitForServer(tries = 60) {
   for (let i = 0; i < tries; i++) {
@@ -35,15 +37,19 @@ async function waitForServer(tries = 60) {
 }
 
 async function go(hash) {
-  await page.evaluate(h => { window.location.hash = h; }, hash);
+  await page.evaluate(h => {
+    document.getElementById('app').setAttribute('data-ready', 'false');
+    if (window.location.hash === h) return App.render();
+    window.location.hash = h;
+  }, hash);
   await page.waitForSelector('#app[data-ready="true"]', { timeout: 30000 });
   await page.waitForTimeout(400); // async cards (explorer tiles, ladders) settle
 }
 
 before(async () => {
-  const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strikebench-audit-'));
+  pg = freshDb();
   server = spawn(JAVA, ['-jar', JAR], {
-    env: { ...process.env, PORT, DB_PATH: path.join(dbDir, 'audit.db'), FIXTURES_ONLY: 'true' },
+    env: { ...process.env, PORT, ...pg.env, FIXTURES_ONLY: 'true' },
     stdio: 'ignore'
   });
   await waitForServer();
@@ -58,30 +64,38 @@ before(async () => {
 after(async () => {
   if (browser) await browser.close();
   if (server) server.kill();
+  if (pg) pg.drop();
 });
 
-const ROUTES = ['#/home', '#/home/tour', '#/research', '#/research/AAPL', '#/trade/discover',
-  '#/trade/discover/manual', '#/trade/shape', '#/trade/place', '#/trade/verify',
-  '#/portfolio', '#/portfolio/activity', '#/portfolio/account', '#/status'];
-const WIDTHS = [1280, 1000, 375];
+const ROUTES = ['#/home', '#/home/tour', '#/research', '#/research/AAPL', '#/trade/context',
+  '#/trade/context/manual', '#/trade/structure', '#/trade/decide', '#/trade/outcomes',
+  '#/portfolio', '#/portfolio/activity', '#/portfolio/account', '#/data/overview',
+  '#/data/simulation', '#/data/datasets', '#/data/sources', '#/data/admin'];
+const WIDTHS = [2048, 1920, 1440, 1280, 1000, 390, 375, 320]; // include the wide desktop that exposed the trade-form spill
 
 // Sanctioned control heights: --ctl-h (38), --ctl-h-sm / --ctl-h-xs (30), plus the
 // tape/level-switch micro scale (<=28) which is exempted by selector below.
-const ALLOWED_HEIGHTS = [38, 30, 46]; // 46 = .btn-lg on the welcome hero
+const ALLOWED_HEIGHTS = [38, 30, 42, 46]; // welcome hero uses a deliberate 42px desktop CTA and 46px default
 const TOLERANCE = 1.5;
 
 function auditInPage() {
-  const out = { overflow: [], emoji: [], controls: [] };
+  const out = { overflow: [], emoji: [], controls: [], numbers: [] };
   const doc = document.documentElement;
   if (doc.scrollWidth > doc.clientWidth + 2) {
-    // name the widest offender to make failures actionable
-    let worst = null, worstW = 0;
+    // Animated/local-scroll children can be thousands of pixels wide without widening the
+    // document. Name the elements nearest the page edge instead; those are the constraints
+    // that actually produce small whole-page overflows.
+    const edge = [];
     document.querySelectorAll('body *').forEach(el => {
       const r = el.getBoundingClientRect();
-      if (r.right > worstW) { worstW = r.right; worst = el; }
+      if (r.right > doc.clientWidth + .5 && r.right <= doc.clientWidth + 12 && r.left >= -12) {
+        const cs = getComputedStyle(el);
+        edge.push((el.id || el.className || el.tagName).toString().slice(0, 42)
+          + '@' + r.left.toFixed(1) + '..' + r.right.toFixed(1)
+          + '/w=' + cs.width + '/min=' + cs.minWidth + '/ox=' + cs.overflowX);
+      }
     });
-    out.overflow.push('page ' + doc.scrollWidth + '>' + doc.clientWidth + ' widest=' +
-      (worst ? (worst.id || worst.className || worst.tagName).toString().slice(0, 60) : '?'));
+    out.overflow.push('page ' + doc.scrollWidth + '>' + doc.clientWidth + ' edge=' + edge.slice(0, 8).join(','));
   }
   const emojiRe = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/u;
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -92,6 +106,8 @@ function auditInPage() {
       out.emoji.push((p.id || p.className || p.tagName).toString().slice(0, 40) + '::' + n.textContent.trim().slice(0, 20));
     }
   }
+  const badNumbers = (document.body.innerText || '').match(/\$?NaN(?:\.NaN)?|NaN%/g) || [];
+  if (badNumbers.length) out.numbers.push(...badNumbers.slice(0, 8));
   document.querySelectorAll(
     '#app input:not([type=checkbox]):not([type=radio]), #app select, #app .btn, #app .goal-chip'
   ).forEach(el => {
@@ -117,6 +133,7 @@ for (const width of WIDTHS) {
       for (const o of res.overflow) failures.push(`${route}@${width}: OVERFLOW ${o}`);
       for (const e of res.emoji) failures.push(`${route}@${width}: EMOJI ${e}`);
       for (const c of res.controls) failures.push(`${route}@${width}: CONTROL-HEIGHT ${c}`);
+      for (const n of res.numbers) failures.push(`${route}@${width}: NON-FINITE ${n}`);
     }
     assert.deepEqual(failures, [], failures.join('\n'));
   });

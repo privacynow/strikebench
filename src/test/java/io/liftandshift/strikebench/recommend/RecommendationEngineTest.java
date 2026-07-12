@@ -1,0 +1,386 @@
+package io.liftandshift.strikebench.recommend;
+
+import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.providers.FixtureProvider;
+import io.liftandshift.strikebench.market.ports.MarketDataProvider;
+import io.liftandshift.strikebench.strategy.StrategyFamily;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Set;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class RecommendationEngineTest {
+
+    private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("America/New_York"));
+    private static final LocalDate TODAY = LocalDate.of(2026, 7, 8);
+    private static final long BP = 10_000_000L; // $100k
+
+    private RecommendationEngine engine;
+
+    @BeforeEach
+    void setUp() {
+        FixtureProvider fixture = new FixtureProvider(CLOCK);
+        MarketDataService market = new MarketDataService(List.of(fixture), List.of(fixture), List.of(fixture));
+        engine = new RecommendationEngine(market, CLOCK);
+    }
+
+    @Test
+    void observedRecommendationsRefuseFabricatedProviderPayloads() {
+        FixtureProvider fixture = new FixtureProvider(CLOCK);
+        MarketDataProvider badObservedConnector = new MarketDataProvider() {
+            @Override public String name() { return "observed-connector"; }
+            @Override public Set<io.liftandshift.strikebench.market.Domain> domains() { return fixture.domains(); }
+            @Override public List<io.liftandshift.strikebench.model.SymbolMatch> lookup(String q) { return fixture.lookup(q); }
+            @Override public java.util.Optional<io.liftandshift.strikebench.model.Quote> quote(String s) { return fixture.quote(s); }
+            @Override public List<LocalDate> expirations(String s) { return fixture.expirations(s); }
+            @Override public java.util.Optional<io.liftandshift.strikebench.model.OptionChain> chain(String s, LocalDate e) {
+                return fixture.chain(s, e);
+            }
+            @Override public List<io.liftandshift.strikebench.model.Candle> candles(String s, LocalDate f, LocalDate t) {
+                return fixture.candles(s, f, t);
+            }
+        };
+        RecommendationEngine observed = new RecommendationEngine(
+                new MarketDataService(List.of(badObservedConnector), List.of(), List.of()), CLOCK);
+
+        RecommendationEngine.Result result = observed.recommend(req("AAPL", "bullish", "month", "balanced"), BP);
+        assertThat(result.candidates()).isEmpty();
+        assertThat(result.notes()).anySatisfy(note ->
+                assertThat(note).contains("OBSERVED-lane").contains("DEMO"));
+    }
+
+    private static RecommendationEngine.Request req(String symbol, String thesis, String horizon, String mode) {
+        return new RecommendationEngine.Request(symbol, thesis, horizon, mode, null, null, null, null,
+                true, false, null, null, null);
+    }
+
+    private static RecommendationEngine.Request intentReq(String intent, RecommendationEngine.Holdings holdings,
+                                                          RecommendationEngine.Filters filters) {
+        return new RecommendationEngine.Request("AAPL", null, "month", "balanced", null, null, null, null,
+                true, false, intent, holdings, filters);
+    }
+
+    @Test
+    void incomeIntentSelectsIncomeFamiliesWithYieldAndAssignmentMetrics() {
+        RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(100, 20_000L, null);
+        RecommendationEngine.Result result = engine.recommend(intentReq("income", h, null), BP);
+        assertThat(result.intent()).isEqualTo("INCOME");
+        assertThat(result.candidates()).isNotEmpty();
+        for (Candidate c : result.candidates()) {
+            StrategyFamily family = StrategyFamily.valueOf(c.strategy());
+            assertThat(family.servesIntent(io.liftandshift.strikebench.strategy.StrategyIntent.INCOME)).isTrue();
+            assertThat(c.intent()).isEqualTo("INCOME");
+            if (c.entryNetPremiumCents() > 0 && !family.multiExpiration()) {
+                assertThat(c.assignmentProb()).isNotNull().isBetween(0.0, 1.0);
+                assertThat(c.intentNote()).contains("Collect");
+            }
+        }
+        // Covered call against the held shares: share-backed yield, sane magnitude (not a
+        // four-digit annualized best case — that bug is pinned here)
+        Candidate cc = result.candidates().stream()
+                .filter(c -> c.strategy().equals("COVERED_CALL")).findFirst().orElseThrow();
+        assertThat(cc.usesHeldShares()).isTrue();
+        assertThat(cc.annualizedYieldPct()).isNotNull().isBetween(1.0, 100.0);
+        // Defined-risk spreads never quote an annualized "yield" — R:R covers that honestly
+        result.candidates().stream()
+                .filter(c -> !StrategyFamily.valueOf(c.strategy()).needsStock()
+                        && !c.strategy().equals("CASH_SECURED_PUT"))
+                .forEach(c -> assertThat(c.annualizedYieldPct()).isNull());
+    }
+
+    @Test
+    void exitIntentWritesCoveredCallsAgainstHeldSharesAtTheTargetPrice() {
+        // User story: holds 300 AAPL from $200, wants out at $260+
+        RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(300, 20_000L, 26_000L);
+        RecommendationEngine.Result result = engine.recommend(intentReq("exit", h, null), BP);
+        Candidate cc = result.candidates().stream()
+                .filter(c -> c.strategy().equals("COVERED_CALL")).findFirst().orElseThrow();
+        assertThat(cc.usesHeldShares()).isTrue();
+        assertThat(cc.legs()).allSatisfy(l -> assertThat(l.type()).isNotEqualTo("STOCK")); // no stock buy — uses held shares
+        assertThat(cc.qty()).isEqualTo(3); // covers all 300 shares
+        assertThat(cc.sharesNeeded()).isEqualTo(300);
+        assertThat(cc.maxLossCents()).isZero(); // no NEW cash at risk
+        assertThat(cc.combinedMaxLossCents()).isPositive(); // but the shares' own downside is disclosed
+        assertThat(cc.entryNetPremiumCents()).isPositive();
+        // Short strike honors the target sell price
+        double strike = Double.parseDouble(cc.legs().getFirst().strike());
+        assertThat(strike).isGreaterThanOrEqualTo(260.0);
+        assertThat(cc.effectivePrice()).isNotNull();
+        assertThat(Double.parseDouble(cc.effectivePrice())).isGreaterThan(260.0);
+        assertThat(cc.intentNote()).contains("sell 300 shares").contains("goal");
+        assertThat(cc.assignmentProb()).isNotNull();
+    }
+
+    @Test
+    void assignmentProbabilityDoesNotDoubleCountNestedShortStrikes() {
+        LocalDate expiration = TODAY.plusDays(30);
+        var call100 = io.liftandshift.strikebench.model.Leg.option(
+                io.liftandshift.strikebench.model.LegAction.SELL,
+                io.liftandshift.strikebench.model.OptionType.CALL, new BigDecimal("100"), expiration, 1,
+                BigDecimal.ONE);
+        var call110 = io.liftandshift.strikebench.model.Leg.option(
+                io.liftandshift.strikebench.model.LegAction.SELL,
+                io.liftandshift.strikebench.model.OptionType.CALL, new BigDecimal("110"), expiration, 1,
+                BigDecimal.ONE);
+
+        Double one = RecommendationEngine.assignmentProbabilityFromIvs(
+                List.of(call100), List.of(0.30), new BigDecimal("100"), TODAY, 0.30, 0.04);
+        Double nested = RecommendationEngine.assignmentProbabilityFromIvs(
+                List.of(call100, call110), List.of(0.30, 0.30), new BigDecimal("100"), TODAY, 0.30, 0.04);
+
+        assertThat(nested).isEqualTo(one);
+    }
+
+    @Test
+    void acquireIntentSellsPutsAtOrBelowTheDesiredBuyPrice() {
+        RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(null, null, 24_000L); // want AAPL at $240
+        RecommendationEngine.Result result = engine.recommend(intentReq("acquire", h, null), BP);
+        Candidate csp = result.candidates().stream()
+                .filter(c -> c.strategy().equals("CASH_SECURED_PUT")).findFirst().orElseThrow();
+        double strike = Double.parseDouble(csp.legs().getFirst().strike());
+        assertThat(strike).isLessThanOrEqualTo(240.0);
+        assertThat(csp.qty()).isEqualTo(1); // never silently scale into the whole account
+        assertThat(Double.parseDouble(csp.effectivePrice())).isLessThan(strike); // strike minus premium
+        assertThat(csp.intentNote()).contains("buy 100 shares").contains("below today's");
+        // The blocked naked-put educational rejection should mention undefined risk
+        assertThat(result.rejected()).anySatisfy(r -> assertThat(r.strategy()).isEqualTo("NAKED_PUT"));
+    }
+
+    @Test
+    void cashSecuredPutYieldAndEffectivePriceUseNetPremiumOverFullStrikeCash() {
+        engine.withFees(100, 500); // $1/contract + $5/order at entry
+        RecommendationEngine.Result result = engine.recommend(intentReq("acquire",
+                new RecommendationEngine.Holdings(null, null, 24_000L), null), BP);
+        Candidate csp = result.candidates().stream()
+                .filter(c -> c.strategy().equals("CASH_SECURED_PUT")).findFirst().orElseThrow();
+        assertThat(csp.qty()).isEqualTo(1);
+        double strike = Double.parseDouble(csp.legs().getFirst().strike());
+        long openingFees = 600;
+        long netPremium = csp.entryNetPremiumCents() - openingFees;
+        int dte = (int) java.time.temporal.ChronoUnit.DAYS.between(TODAY,
+                LocalDate.parse(csp.legs().getFirst().expiration()));
+        double expectedYield = Math.round(100.0 * (netPremium / (strike * 100.0 * 100.0))
+                * (365.0 / Math.max(1, dte)) * 100.0) / 100.0;
+        assertThat(csp.annualizedYieldPct()).isEqualTo(expectedYield);
+        assertThat(Double.parseDouble(csp.effectivePrice()))
+                .isCloseTo(strike - netPremium / 10_000.0, org.assertj.core.data.Offset.offset(0.011));
+        assertThat(csp.intentNote()).contains("after opening fees");
+    }
+
+    @Test
+    void hedgeIntentProtectsHeldSharesWithPutsAndCollars() {
+        RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(200, 21_000L, null);
+        RecommendationEngine.Result result = engine.recommend(intentReq("hedge", h, null), BP);
+        assertThat(result.candidates()).isNotEmpty();
+        Candidate pp = result.candidates().stream()
+                .filter(c -> c.strategy().equals("PROTECTIVE_PUT")).findFirst().orElseThrow();
+        assertThat(pp.usesHeldShares()).isTrue();
+        assertThat(pp.maxLossCents()).isPositive(); // the hedge costs its debit
+        assertThat(pp.intentNote()).contains("Guarantees a sale price");
+        assertThat(pp.qty()).isLessThanOrEqualTo(2); // never hedge more lots than held
+        for (Candidate c : result.candidates()) {
+            assertThat(StrategyFamily.valueOf(c.strategy()).servesIntent(io.liftandshift.strikebench.strategy.StrategyIntent.HEDGE)).isTrue();
+        }
+    }
+
+    @Test
+    void filtersRejectCandidatesWithHumanReadableReasons() {
+        RecommendationEngine.Filters strictPop = new RecommendationEngine.Filters(0.99, null, null, null);
+        RecommendationEngine.Result r1 = engine.recommend(intentReq("income", null, strictPop), BP);
+        assertThat(r1.candidates()).isEmpty();
+        assertThat(r1.rejected()).anySatisfy(rej ->
+                assertThat(String.join(" ", rej.reasons())).contains("below your minimum"));
+
+        RecommendationEngine.Filters noAssignment = new RecommendationEngine.Filters(null, 0.0001, null, null);
+        RecommendationEngine.Result r2 = engine.recommend(intentReq("income", null, noAssignment), BP);
+        assertThat(r2.rejected()).anySatisfy(rej ->
+                assertThat(String.join(" ", rej.reasons())).contains("Assignment probability"));
+
+        RecommendationEngine.Filters richYield = new RecommendationEngine.Filters(null, null, 500.0, null);
+        RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(100, 20_000L, null);
+        RecommendationEngine.Result r3 = engine.recommend(intentReq("income", h, richYield), BP);
+        assertThat(r3.candidates()).isEmpty();
+        assertThat(r3.rejected()).anySatisfy(rej ->
+                assertThat(String.join(" ", rej.reasons())).containsAnyOf("yield", "minimum"));
+    }
+
+    @Test
+    void unknownIntentIsRejectedLoudly() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                engine.recommend(intentReq("yolo", null, null), BP))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("intent");
+    }
+
+    @Test
+    void bullishConservativeReturnsDefinedRiskCandidatesWithFullNarratives() {
+        RecommendationEngine.Result result = engine.recommend(req("AAPL", "bullish", "month", "conservative"), BP);
+        assertThat(result.riskMode()).isEqualTo("CONSERVATIVE");
+        assertThat(result.candidates()).isNotEmpty();
+        for (Candidate c : result.candidates()) {
+            StrategyFamily family = StrategyFamily.valueOf(c.strategy());
+            assertThat(family.definedRisk()).isTrue();
+            assertThat(c.maxLossCents()).isPositive().isLessThanOrEqualTo(result.riskBudgetCents());
+            assertThat(c.legs()).isNotEmpty();
+            assertThat(c.whyConsidered()).isNotBlank();
+            assertThat(c.bestUpside()).isNotBlank();
+            assertThat(c.biggestRisk()).isNotBlank();
+            assertThat(c.wouldInvalidate()).isNotBlank();
+            assertThat(c.beginnerExplanation()).isNotBlank();
+            assertThat(c.confidence()).isBetween(0.0, 1.0);
+            // conservative risk budget = 1% of $100k = $1,000
+            assertThat(result.riskBudgetCents()).isEqualTo(100_000L);
+        }
+        assertThat(result.disclaimer()).containsIgnoringCase("not financial advice");
+    }
+
+    @Test
+    void retiredRiskModesAreRejectedInsteadOfSilentlyChangingTheBudget() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                engine.recommend(req("AAPL", "bullish", "month", "learning"), BP))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("riskMode");
+    }
+
+    @Test
+    void neutralConservativeIncludesCreditStructuresAndRejectsNakedCall() {
+        RecommendationEngine.Result result = engine.recommend(req("AAPL", "neutral", "month", "conservative"), BP);
+        assertThat(result.candidates()).isNotEmpty();
+        assertThat(result.candidates()).extracting(Candidate::strategy)
+                .anyMatch(s -> s.equals("IRON_CONDOR") || s.equals("CREDIT_PUT_SPREAD") || s.equals("CREDIT_CALL_SPREAD"));
+        assertThat(result.rejected()).anySatisfy(r -> {
+            assertThat(r.strategy()).isEqualTo("NAKED_CALL");
+            assertThat(String.join(" ", r.reasons())).containsIgnoringCase("undefined risk");
+        });
+    }
+
+    @Test
+    void everyRiskModeSeesTheSameDefinedRiskCatalog() {
+        // Risk modes differ ONLY by budget: the family sets offered for the same view must be
+        // identical across all three (sizing/qty may differ; naked structures stay blocked).
+        RecommendationEngine.Result cons = engine.recommend(req("AAPL", "neutral", "month", "conservative"), BP);
+        RecommendationEngine.Result aggr = engine.recommend(req("AAPL", "neutral", "month", "aggressive"), BP);
+        Set<String> consFams = new java.util.HashSet<>();
+        cons.candidates().forEach(c -> consFams.add(c.strategy()));
+        cons.rejected().forEach(r -> consFams.add(r.strategy()));
+        Set<String> aggrFams = new java.util.HashSet<>();
+        aggr.candidates().forEach(c -> aggrFams.add(c.strategy()));
+        aggr.rejected().forEach(r -> aggrFams.add(r.strategy()));
+        assertThat(consFams).isEqualTo(aggrFams);
+        assertThat(cons.candidates()).extracting(Candidate::strategy).noneMatch(f -> StrategyFamily.valueOf(f).blockedByDefault());
+    }
+
+    @Test
+    void zeroDteExcludedByDefault() {
+        RecommendationEngine.Result result = engine.recommend(req("SPY", "neutral", "0DTE", "aggressive"), BP);
+        for (Candidate c : result.candidates()) {
+            for (LegView leg : c.legs()) {
+                if (leg.expiration() != null) {
+                    assertThat(LocalDate.parse(leg.expiration())).isAfter(TODAY);
+                }
+            }
+        }
+        assertThat(result.notes()).anySatisfy(n -> assertThat(n).containsIgnoringCase("0DTE"));
+    }
+
+    @Test
+    void zeroDteAllowedWhenOptedIn() {
+        RecommendationEngine.Request request = new RecommendationEngine.Request(
+                "SPY", "neutral", "0DTE", "aggressive", null, null, null, null,
+                true, true, null, null, null);
+        RecommendationEngine.Result result = engine.recommend(request, BP);
+        assertThat(result.candidates()).isNotEmpty();
+        assertThat(result.candidates()).anySatisfy(c -> {
+            assertThat(c.legs()).anySatisfy(l -> assertThat(l.expiration()).isEqualTo(TODAY.toString()));
+            assertThat(c.warnings()).anySatisfy(w -> assertThat(w).contains("0DTE"));
+        });
+    }
+
+    @Test
+    void nonOptionableSymbolYieldsNoCandidates() {
+        RecommendationEngine.Result result = engine.recommend(req("VTSAX", "bullish", "month", "balanced"), BP);
+        assertThat(result.candidates()).isEmpty();
+        assertThat(result.notes()).anySatisfy(n -> assertThat(n).containsIgnoringCase("no listed options"));
+    }
+
+    @Test
+    void unknownSymbolYieldsNote() {
+        RecommendationEngine.Result result = engine.recommend(req("ZZZZ", "bullish", "month", "balanced"), BP);
+        assertThat(result.candidates()).isEmpty();
+        assertThat(result.notes()).anySatisfy(n -> assertThat(n).containsIgnoringCase("no market data"));
+    }
+
+    @Test
+    void minConfidenceFiltersEverything() {
+        RecommendationEngine.Request request = new RecommendationEngine.Request(
+                "AAPL", "bullish", "month", "balanced", null, null, 0.999, null,
+                true, false, null, null, null);
+        RecommendationEngine.Result result = engine.recommend(request, BP);
+        assertThat(result.candidates()).isEmpty();
+        assertThat(result.rejected()).anySatisfy(r ->
+                assertThat(String.join(" ", r.reasons())).containsIgnoringCase("confidence"));
+    }
+
+    @Test
+    void allowedStrategiesWhitelistRespected() {
+        RecommendationEngine.Request request = new RecommendationEngine.Request(
+                "AAPL", "bullish", "month", "aggressive", null, null, null, List.of("LONG_CALL"),
+                true, false, null, null, null);
+        RecommendationEngine.Result result = engine.recommend(request, BP);
+        assertThat(result.candidates()).isNotEmpty();
+        assertThat(result.candidates()).allSatisfy(c -> assertThat(c.strategy()).isEqualTo("LONG_CALL"));
+    }
+
+    @Test
+    void riskBudgetScalesWithPctAndCapsQty() {
+        RecommendationEngine.Request request = new RecommendationEngine.Request(
+                "AAPL", "bullish", "month", "balanced", null, 0.10, null, null,
+                true, false, null, null, null);
+        RecommendationEngine.Result result = engine.recommend(request, BP);
+        assertThat(result.riskBudgetCents()).isEqualTo(1_000_000L); // 10% of $100k
+        for (Candidate c : result.candidates()) {
+            assertThat(c.maxLossCents()).isLessThanOrEqualTo(result.riskBudgetCents());
+            assertThat(c.qty()).isBetween(1, 5);
+        }
+    }
+
+    @Test
+    void candidatesAreRankedByScoreDescendingAndComplete() {
+        // RANKING TRUTH: the engine returns the COMPLETE score-sorted list — presentation may
+        // summarize with diverse representatives, but the engine never hides a ranked candidate.
+        RecommendationEngine.Result result = engine.recommend(req("AAPL", "neutral", "month", "aggressive"), BP);
+        List<Candidate> c = result.candidates();
+        assertThat(c.size()).isGreaterThanOrEqualTo(2);
+        for (int i = 1; i < c.size(); i++) {
+            assertThat(c.get(i - 1).score()).isGreaterThanOrEqualTo(c.get(i).score());
+        }
+        // Every defined-risk family that fits the thesis and passed screens is present — no
+        // top-N cap, no structural-group trim (a neutral month view offers many structures).
+        assertThat(c.size()).isGreaterThanOrEqualTo(5);
+    }
+
+    @Test
+    void volatileThesisOffersStraddlesAndStrangles() {
+        // "Big move, direction unknown" must offer the canonical structures for it —
+        // long straddle/strangle are first-class families, defined risk (the debit).
+        RecommendationEngine.Result result = engine.recommend(req("AAPL", "volatile", "month", "balanced"), BP);
+        Set<String> offered = new java.util.HashSet<>();
+        for (Candidate c : result.candidates()) offered.add(c.strategy());
+        assertThat(offered).containsAnyOf("LONG_STRADDLE", "LONG_STRANGLE");
+        for (Candidate c : result.candidates()) {
+            if (!c.strategy().equals("LONG_STRADDLE") && !c.strategy().equals("LONG_STRANGLE")) continue;
+            assertThat(c.legs()).hasSize(2);
+            assertThat(c.entryNetPremiumCents()).isNegative();              // both legs bought
+            assertThat(c.maxLossCents()).isEqualTo(-c.entryNetPremiumCents()); // risk = the debit
+            assertThat(c.maxProfitCents()).isNull();                        // uncapped either way
+            assertThat(c.breakevens()).hasSize(2);                          // one below, one above
+        }
+    }
+}

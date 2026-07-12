@@ -1,7 +1,7 @@
 {
-  "name": "options-lab-dom-tests",
+  "name": "strikebench-dom-tests",
   "version": "1.0.0",
-  "description": "Playwright DOM tests driving the Options Lab jar end-to-end",
+  "description": "Playwright DOM tests driving StrikeBench end-to-end",
   "scripts": {
     "test": "node --test dom.test.js"
   },

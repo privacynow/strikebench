@@ -1,0 +1,10 @@
+# Keep the build context small; the app image copies only the prebuilt jar.
+target/*
+!target/strikebench.jar
+.git/
+dom-tests/node_modules/
+dom-tests/shots/
+data/
+*.db
+*.db-wal
+*.db-shm

@@ -31,6 +31,11 @@ BRANCH="${BRANCH:-main}"
 RUN_USER="${RUN_USER:-$(id -un)}"
 JAVA_BIN="${JAVA_BIN:-$(command -v java)}"
 JAVA_HEAP="${JAVA_HEAP:-768m}"
+# Postgres connection. DB_URL/DB_USER go in the systemd unit; the PASSWORD is NOT put there —
+# it lives in strikebench.properties (db.password=...), chmod 600, so it never shows in
+# `systemctl show`. Provision the local Postgres first with scripts/provision-postgres.sh.
+DB_URL="${DB_URL:-jdbc:postgresql://localhost:5432/strikebench}"
+DB_USER="${DB_USER:-strikebench}"
 
 health() { curl -sf "localhost:${PORT}/api/health"; }
 
@@ -44,19 +49,30 @@ install_service() {
 #   polygon.api.key=...
 #   alphavantage.api.key=...
 brand.name=StrikeBench
+# Postgres password (the URL/user are set in the systemd unit). Uncomment + set:
+#   db.password=CHANGE_ME
+# To require Google sign-in (see scripts/README / DEVELOPER.md), also set here:
+#   auth.enabled=true
+#   auth.cookie.secure=true
+#   oidc.client.id=...
+#   oidc.client.secret=...
+#   auth.allowed.emails=you@example.com
 PROPS
   fi
+  sudo chmod 600 "${APP_DIR}/strikebench.properties" || true
   sudo chown -R "${RUN_USER}:${RUN_USER}" "${APP_DIR}"
   sudo tee "/etc/systemd/system/${SERVICE}.service" > /dev/null <<UNIT
 [Unit]
 Description=StrikeBench options paper-trading app
-After=network.target
+After=network.target postgresql.service
+Wants=postgresql.service
 
 [Service]
 User=${RUN_USER}
 WorkingDirectory=${APP_DIR}
 Environment=PORT=${PORT}
-Environment=DB_PATH=${APP_DIR}/data/strikebench.db
+Environment=DB_URL=${DB_URL}
+Environment=DB_USER=${DB_USER}
 Environment=JAVA_TOOL_OPTIONS=-Xmx${JAVA_HEAP}
 ExecStart=${JAVA_BIN} -jar ${APP_DIR}/strikebench.jar
 Restart=on-failure

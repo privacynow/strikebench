@@ -10,3 +10,7 @@ optionslab.properties
 .vscode/
 node_modules/
 nohup.out
+
+# Local engineering log / agent handoff notes — not part of the shipped codebase
+CLAUDE.md
+AGENTS.md

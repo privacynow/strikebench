@@ -1,0 +1,49 @@
+# Local development infrastructure for StrikeBench.
+#
+# Default `docker compose up -d` starts Postgres ONLY — the app runs natively (mvn / java)
+# for a fast inner loop and so the Playwright DOM suites can spawn and own the jar directly.
+# The optional `app` profile brings the whole stack up for a full-stack smoke check or as the
+# basis for a future containerized production image:  `docker compose --profile app up --build`.
+#
+# Postgres is pinned to the same major version we run on the box, bound to localhost only.
+name: strikebench
+
+services:
+  db:
+    image: postgres:16
+    container_name: strikebench-db
+    environment:
+      POSTGRES_USER: strikebench
+      POSTGRES_PASSWORD: strikebench
+      POSTGRES_DB: strikebench_dev
+    ports:
+      - "127.0.0.1:5432:5432"          # localhost only — never exposed to the network
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U strikebench -d strikebench_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Optional: the app in a container against the db above. Not the inner loop.
+  # Requires target/strikebench.jar to be built first (mvn package) — see the Dockerfile.
+  app:
+    profiles: ["app"]
+    build: .
+    container_name: strikebench-app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: "7070"
+      DB_URL: "jdbc:postgresql://db:5432/strikebench_dev"
+      DB_USER: strikebench
+      DB_PASSWORD: strikebench
+      FIXTURES_ONLY: "false"
+    ports:
+      - "127.0.0.1:7070:7070"
+
+volumes:
+  pgdata:

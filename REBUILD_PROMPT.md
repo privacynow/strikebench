@@ -34,7 +34,7 @@ Where a rule below seems oddly specific, it is a scar. Treat every MUST as non-n
   to title/header/copy; internal identifiers (properties file `strikebench.properties`, jar name,
   localStorage `strikebench.*` keys, EDGAR User-Agent) stay consistent with the product name, while
   genuinely brand-neutral internals (env var names, table names, id prefixes, the `io.liftandshift`
-  package/groupId owner namespace) stay neutral.
+  Maven groupId owner namespace) stay neutral. The Java package root is `io.liftandshift.strikebench`.
 - The app must be FULLY functional with **zero API keys and zero network** (deterministic fixtures),
   degrade gracefully through free keyless sources, and get better with keys. Live trading is the ONLY
   feature that requires credentials.
@@ -42,8 +42,8 @@ Where a rule below seems oddly specific, it is a scar. Treat every MUST as non-n
 ## 2. Non-negotiable engineering decisions
 
 1. Java 25 (pom property `java.release`, overridable `-Djava.release=21`), Maven, single fat jar:
-   `mvn test package` → `java -jar target/strikebench.jar`. Package root `io.liftandshift`,
-   artifact `strikebench`.
+   `mvn test package` → `java -jar target/strikebench.jar`. Java package root
+   `io.liftandshift.strikebench` (Maven groupId stays `io.liftandshift`), artifact `strikebench`.
 2. **Money discipline**: money is ONLY `BigDecimal` (per-share prices, scale ≤ 4) or `long` integer
    cents (ledger, balances, contract totals). Never float/double for money. Doubles allowed only for
    non-money ratios (IV, greeks, probabilities) and inside the Black-Scholes kernel; convert at the
@@ -65,7 +65,7 @@ Where a rule below seems oddly specific, it is a scar. Treat every MUST as non-n
 7. All timestamps/clocks are injected (`java.time.Clock`) — every service takes a Clock; tests use
    `Clock.fixed`. This is what makes the entire suite deterministic.
 
-## 3. Architecture (packages under io.liftandshift)
+## 3. Architecture (packages under io.liftandshift.strikebench)
 
 ```
 config    AppConfig — env > sysprops > ./strikebench.properties (UTF-8 reader — Properties.load(InputStream)
