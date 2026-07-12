@@ -13,7 +13,7 @@ public final class DataSyncState {
                          long rowsWritten, String note, String updatedAt) {}
 
     public record Schedule(String ownerKey, boolean enabled, String source, List<String> symbols,
-                           int years, String adjustment, LocalDate lastRunDate,
+                           int years, LocalDate lastRunDate,
                            String lastStatus, String lastJobId, String updatedAt) {}
 
     public record QuarantineSummary(long total, List<QuarantineReason> reasons) {}
@@ -111,30 +111,28 @@ public final class DataSyncState {
     }
 
     public Schedule schedule(String ownerId) {
-        return db.query("SELECT owner_key,enabled,source_key,symbols,years,adjustment,last_run_date::text lrd,"
+        return db.query("SELECT owner_key,enabled,source_key,symbols,years,last_run_date::text lrd,"
                         + "last_status,last_job_id,updated_at::text ua FROM data_sync_schedule WHERE owner_key=?",
                 r -> mapSchedule(r), ownerKey(ownerId)).stream().findFirst()
-                .orElse(new Schedule(ownerKey(ownerId), false, "auto", List.of(), 5, "AUTO",
+                .orElse(new Schedule(ownerKey(ownerId), false, "auto", List.of(), 5,
                         null, null, null, null));
     }
 
     public Schedule saveSchedule(String ownerId, boolean enabled, String source, List<String> symbols,
-                                 int years, String adjustment) {
+                                 int years) {
         String joined = String.join(",", symbols == null ? List.of() : symbols.stream()
                 .map(s -> s.trim().toUpperCase()).filter(s -> !s.isBlank()).distinct().limit(120).toList());
         String src = source == null || source.isBlank() ? "auto" : source.trim().toLowerCase();
-        String adj = adjustment == null ? "AUTO" : adjustment.trim().toUpperCase();
-        if (!List.of("AUTO", "RAW", "ADJUSTED").contains(adj)) throw new IllegalArgumentException("bad adjustment basis");
         int y = Math.max(1, Math.min(20, years));
-        db.exec("INSERT INTO data_sync_schedule(owner_key,enabled,source_key,symbols,years,adjustment) VALUES (?,?,?,?,?,?) "
+        db.exec("INSERT INTO data_sync_schedule(owner_key,enabled,source_key,symbols,years) VALUES (?,?,?,?,?) "
                         + "ON CONFLICT(owner_key) DO UPDATE SET enabled=excluded.enabled,source_key=excluded.source_key,"
-                        + "symbols=excluded.symbols,years=excluded.years,adjustment=excluded.adjustment,updated_at=now()",
-                ownerKey(ownerId), enabled, src, joined, y, adj);
+                        + "symbols=excluded.symbols,years=excluded.years,updated_at=now()",
+                ownerKey(ownerId), enabled, src, joined, y);
         return schedule(ownerId);
     }
 
     public List<Schedule> enabledSchedules() {
-        return db.query("SELECT owner_key,enabled,source_key,symbols,years,adjustment,last_run_date::text lrd,"
+        return db.query("SELECT owner_key,enabled,source_key,symbols,years,last_run_date::text lrd,"
                         + "last_status,last_job_id,updated_at::text ua FROM data_sync_schedule WHERE enabled=1",
                 DataSyncState::mapSchedule);
     }
@@ -148,7 +146,7 @@ public final class DataSyncState {
         String raw = r.str("symbols");
         List<String> symbols = raw == null || raw.isBlank() ? List.of() : List.of(raw.split(","));
         return new Schedule(r.str("owner_key"), r.bool("enabled"), r.str("source_key"), symbols,
-                r.intv("years"), r.str("adjustment"), date(r.str("lrd")), r.str("last_status"),
+                r.intv("years"), date(r.str("lrd")), r.str("last_status"),
                 r.str("last_job_id"), r.str("ua"));
     }
 

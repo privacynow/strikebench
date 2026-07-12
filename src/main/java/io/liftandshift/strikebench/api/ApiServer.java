@@ -1968,7 +1968,7 @@ public final class ApiServer {
 
     public record DataSyncPlanRequest(List<String> symbols, String source, String from, String to, Integer years) {}
     public record DataSyncScheduleRequest(Boolean enabled, String source, List<String> symbols,
-                                          Integer years, String adjustment) {}
+                                          Integer years) {}
 
     private void dataSyncStatus(Context ctx) {
         var schedule = dataSyncState.schedule(ownerId(ctx));
@@ -2034,7 +2034,7 @@ public final class ApiServer {
         List<String> symbols = normalizeSymbols(b.symbols());
         if (symbols.isEmpty()) symbols = universe.active().symbols();
         ctx.json(dataSyncState.saveSchedule(ownerId(ctx), enabled, source, symbols,
-                b.years() == null ? 5 : b.years(), b.adjustment()));
+                b.years() == null ? 5 : b.years()));
     }
 
     private void dataUnderlyingImport(Context ctx) throws java.io.IOException {

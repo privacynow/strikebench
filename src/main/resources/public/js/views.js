@@ -6733,7 +6733,7 @@
       var defaultSymbols = (active.symbols || []).join(', ');
       var st = App.state.dataSyncForm || (App.state.dataSyncForm = {
         scope: 'sector', symbols: defaultSymbols, source: doc.recommendedSource || '', years: 5,
-        from: '', to: doc.latestCompletedSession || '', basis: 'AUTO'
+        from: '', to: doc.latestCompletedSession || ''
       });
       if (!st.symbols) st.symbols = defaultSymbols;
       if (!st.source || !automated.some(function (c) { return c.key === st.source && c.eligible; })) {
@@ -6901,7 +6901,7 @@
           disabled: !st.source || App.config && App.config.fixturesOnly, onclick: async function () {
           try {
             var saved = await API.put('/api/data/sync/schedule', { enabled: scheduleToggle.checked,
-              source: st.source, symbols: parseSymbolText(st.symbols), years: Number(st.years) || 5, adjustment: st.basis || 'AUTO' });
+              source: st.source, symbols: parseSymbolText(st.symbols), years: Number(st.years) || 5 });
             scheduleStatus.textContent = saved.enabled ? 'Automatic daily maintenance is on.' : 'Automatic maintenance is off.';
           } catch (e) { scheduleStatus.textContent = e.message; scheduleToggle.checked = false; }
         } }, 'Save maintenance setting')), scheduleStatus);

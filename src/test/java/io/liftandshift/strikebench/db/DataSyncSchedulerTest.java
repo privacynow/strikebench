@@ -46,7 +46,7 @@ class DataSyncSchedulerTest {
         var catalog = new DataConnectorCatalog(cfg, new ProviderRequestBudget(db, clock));
         jobs = new DataJobService(db, clock, engine, new SnapshotService(market, universe, db, clock),
                 new UnderlyingBackfill(market, db, clock), universe, cfg, catalog);
-        state.saveSchedule(null, true, "stooq", List.of("AAPL"), 1, "AUTO");
+        state.saveSchedule(null, true, "stooq", List.of("AAPL"), 1);
         var scheduler = new DataSyncScheduler(cfg, clock, state, jobs);
         scheduler.tick();
         scheduler.tick();

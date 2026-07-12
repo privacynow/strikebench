@@ -71,7 +71,6 @@ public final class DataSyncScheduler implements AutoCloseable {
             params.put("symbols", schedule.symbols());
             params.put("from", completed.minusYears(schedule.years()).toString());
             params.put("to", completed.toString());
-            params.put("adjustment", schedule.adjustment());
             try {
                 var job = jobs.start("sync_underlying", params, DataSyncState.ownerId(schedule.ownerKey()));
                 state.markScheduleRun(schedule.ownerKey(), completed, "QUEUED", job.id());

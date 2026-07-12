@@ -40,7 +40,8 @@ class MigrationImmutabilityTest {
             Map.entry("V17__underlying_import_basis.sql", "057a2faa9588667d96a807279ecef7faed2f7fc1eb2a8c1dc86e94cdda746ed2"),
             Map.entry("V18__scope_data_quarantine.sql", "6872901ee1546600fd90967f2e9060678feb81f6c16032f5cf338f9030d23d77"),
             Map.entry("V19__persist_economic_assessment.sql", "a4099623d9efe12a4a2fe6e6a494894ce1228e5c9ea0999a9e3d0ffc6513e5f0"),
-            Map.entry("V20__decision_outcomes.sql", "93874e5fcc621c5454cc7048c1276f8c1a75ce438100bc6a2f5f6539ed3e2a56")
+            Map.entry("V20__decision_outcomes.sql", "93874e5fcc621c5454cc7048c1276f8c1a75ce438100bc6a2f5f6539ed3e2a56"),
+            Map.entry("V21__remove_unused_sync_adjustment.sql", "185fd6064d706b0d201757d4b2180544a4933da5223e42eaf72ae0bc0ea5d97e")
     );
 
     @Test
