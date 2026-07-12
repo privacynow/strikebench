@@ -820,7 +820,7 @@ class ApiIntegrationTest {
         assertThat(put1.statusCode()).isEqualTo(200);
         long rev1 = Json.parse(put1.body()).get("rev").asLong();
         long rev2 = Json.parse(put("/api/workspace",
-                "{\"route\":\"#/trade/discover\",\"symbol\":\"QQQ\"}").body()).get("rev").asLong();
+                "{\"route\":\"#/trade/context\",\"symbol\":\"QQQ\"}").body()).get("rev").asLong();
         assertThat(rev2).isEqualTo(rev1 + 1);
         JsonNode got = Json.parse(get("/api/workspace").body());
         assertThat(got.get("rev").asLong()).isEqualTo(rev2);

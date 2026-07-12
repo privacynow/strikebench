@@ -61,7 +61,7 @@
           el('button', {
             class: 'btn btn-lg', onclick: function () {
               try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
-              App.navigate('#/recommend/manual');
+              App.navigate('#/trade/context/manual');
             }
           }, 'Find my first idea'),
           el('button', {
@@ -281,9 +281,9 @@
         ? 'A working idea on ' + t0.symbol + ' is ready to place \u2014 or keep exploring.'
         : 'Screened ideas, honest odds, worst case always known before you commit.');
     var heroCta = heroPlaceable
-      ? el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/place'); } },
+      ? el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/decide'); } },
           'Place ' + t0.symbol + ' \u2192')
-      : el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find an idea');
+      : el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/context'); } }, 'Find an idea');
     // The hero owns THE single primary next action (review P5): the tour demoted to a
     // quiet entry at the bottom of the page — onboarding is not a permanent command.
     root.appendChild(heroBlock('dashboard', {
@@ -451,10 +451,10 @@
       // The beginner first-week path, folded in (retires itself after the first trade).
       if (Learn.currentLevel() === 'beginner' && acct && !acct.hasTraded) {
         var steps = [
-          { label: 'Research a stock', done: (function () { try { return (JSON.parse(localStorage.getItem('strikebench.recent') || '[]')).length > 0; } catch (e) { return false; } })(), hash: '#/research' },
-          { label: 'Get a screened idea', done: !!App.state.recommendResults || !!App.state.scoutResults, hash: '#/trade/discover' },
-          { label: 'Practice-place it', done: false, hash: '#/trade/discover' },
-          { label: 'Know the exit plan', done: false, hash: '#/trade/discover' }
+          { label: 'Set the context', done: workflowStepReady('context'), hash: '#/trade/context' },
+          { label: 'Choose a structure', done: workflowStepReady('structure'), hash: '#/trade/structure' },
+          { label: 'Test the outcomes', done: workflowStepReady('outcomes'), hash: '#/trade/outcomes' },
+          { label: 'Review and decide', done: false, hash: '#/trade/decide' }
         ];
         card.appendChild(el('div', { class: 'journey', id: 'journey-card' }, steps.map(function (st2, i) {
           return el('button', { class: 'journey-step' + (st2.done ? ' done' : ''), type: 'button',
@@ -469,7 +469,7 @@
       var placeable = !!(t && (t.candidate || (t.custom && t.legs && t.legs.length)));
       if (placeable) {
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'idea',
-          onclick: function () { App.navigate('#/trade/place'); } },
+          onclick: function () { App.navigate('#/trade/decide'); } },
           'Working idea: ' + t.symbol + ' ' + (t.custom ? 'custom strategy'
             : (t.candidate && t.candidate.strategy ? prettyStrategy(t.candidate.strategy) : 'trade')) + ' →'));
       }
@@ -497,8 +497,8 @@
     colR.appendChild(el('div', { class: 'card card-slim', id: 'command-bar' },
       UI.cardHeader('Tools'),
       el('div', { class: 'btn-row', style: 'flex-wrap:wrap' },
-        [['Builder', '#/trade/shape', 'target'], ['Backtest', '#/trade/verify', 'chart'],
-         ['Simulate', '#/data/simulation', 'flask']].map(function (a) {
+        [['Structure', '#/trade/structure', 'target'], ['Outcomes', '#/trade/outcomes', 'chart'],
+         ['Simulated market', '#/data/simulation', 'flask']].map(function (a) {
           return el('button', { class: 'btn btn-sm btn-secondary', title: a[0],
             onclick: function () { App.navigate(a[1]); } }, icon(a[2], 14), ' ', a[0]);
         }))));
@@ -861,7 +861,7 @@
           class: 'btn btn-sm', onclick: function () {
             App.context.selectSymbol(symbol);
             App.state.ideasPrefill = { symbol: symbol, autorun: true }; // asks for a goal, then runs
-            App.navigate('#/recommend/manual');
+            App.navigate('#/trade/context/manual');
           }
         }, 'Find strategies') : null),
       el('div', { class: 'nm', style: 'margin-top:2px' }, q.description || ''),
@@ -904,7 +904,7 @@
               el('button', {
                 class: 'btn btn-sm', onclick: function () {
                   App.state.ideasPrefill = { intent: intentKey, symbol: symbol, autorun: true };
-                  App.navigate('#/recommend/manual');
+                  App.navigate('#/trade/context/manual');
                 }
               }, cta));
           }
@@ -1022,7 +1022,7 @@
               onclick: function () {
                 App.state.builderForm = { symbol: symbol, qty: 1, goal: 'BROWSE', templateKey: null, step: 4, legIdx: 0,
                   legs: [{ action: 'BUY', type: type, strike: String(k), expiration: select.value, ratio: 1 }], excluded: {} };
-                App.navigate('#/trade/shape');
+                App.navigate('#/trade/structure');
               } }, 'B');
           }
           return el('tr', { class: isAtm ? 'atm' : '' },
@@ -1445,7 +1445,7 @@
       onResearch: function () { App.navigate('#/research/' + symbol); },
       onChange: opts.noChange ? null : function () {
         App.state.ideasPrefill = {};
-        App.navigate('#/trade/discover');
+        App.navigate('#/trade/context');
       }
     });
   }
@@ -1579,7 +1579,7 @@
         class: 'btn btn-sm', onclick: function () {
           App.state.discoverForm = Object.assign({}, App.state.discoverForm || {},
             { universe: sector.symbols.join(','), symbol: '' });
-          App.navigate('#/recommend/scout');
+          App.navigate('#/trade/context/scout');
         }
       }, 'Scout this sector'));
       try {
@@ -1768,6 +1768,34 @@
     return block;
   }
 
+  function candidateWorkflowActions(c, symbolForTicket, beginner) {
+    var symbol = symbolForTicket || App.context.symbol();
+    function select() {
+      App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbol, step: 5 };
+      return App.state.ticket;
+    }
+    return el('div', { class: 'btn-row candidate-workflow-actions' },
+      el('button', { class: 'btn', onclick: function () {
+        select(); App.navigate('#/trade/decide');
+      } }, 'Review & decide'),
+      el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
+        var ticket = select();
+        if (window.Builder) Builder.adoptTicket(ticket);
+        App.navigate('#/trade/structure');
+      } }, beginner ? 'Adjust structure' : 'Edit structure'),
+      el('button', { class: 'btn btn-sm btn-secondary',
+        'data-outcome-default': canBacktest(c.strategy) ? 'history' : 'scenario', onclick: function () {
+        select();
+        if (canBacktest(c.strategy)) {
+          App.state.backtestPrefill = { symbol: symbol, strategy: c.strategy };
+          App.state.verifyMode = 'history';
+        } else {
+          App.state.verifyMode = 'scenario';
+        }
+        App.navigate('#/trade/outcomes');
+      } }, 'Test outcomes'));
+  }
+
   /** Learning-level card: plain language first, numbers second, mechanics on tap. */
   function beginnerCandidateCard(c, withUse, symbolForTicket) {
     var g = Learn.STRATEGY_GUIDE[c.strategy] || {};
@@ -1824,13 +1852,7 @@
         el('p', {}, 'Prices shown are the executable ', UI.term('bid/ask', 'bid/ask'), ' sides — what a fill would actually cost right now.'));
     }));
     if (c.warnings && c.warnings.length) card.appendChild(alertBox('warn', 'Before you decide', c.warnings));
-    card.appendChild(el('div', { class: 'btn-row' },
-      withUse ? el('button', {
-        class: 'btn', onclick: function () {
-          App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbolForTicket || App.context.symbol(), step: 5 };
-          App.navigate('#/trade/place');
-        }
-      }, 'Practice this trade') : null));
+    if (withUse) card.appendChild(candidateWorkflowActions(c, symbolForTicket, true));
     return card;
   }
 
@@ -1879,35 +1901,7 @@
         el('dt', {}, 'Best upside'), el('dd', {}, c.bestUpside),
         el('dt', {}, 'Biggest risk'), el('dd', {}, c.biggestRisk),
         el('dt', {}, 'What would invalidate it'), el('dd', {}, c.wouldInvalidate))));
-    if (withUse) {
-      card.appendChild(el('div', { class: 'btn-row' },
-        el('button', {
-          class: 'btn', onclick: function () {
-            App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbolForTicket || App.context.symbol(), step: 5 };
-            App.navigate('#/trade/place');
-          }
-        }, 'Use in trade ticket'),
-        el('button', {
-          class: 'btn btn-sm btn-secondary', onclick: function () {
-            App.state.builderForm = {
-              symbol: symbolForTicket || App.context.symbol(),
-              qty: c.qty || 1, goal: null, templateKey: null, step: 4, legIdx: 0, excluded: {},
-              legs: (c.legs || []).map(function (l) {
-                return { action: l.action, type: l.stock ? 'STOCK' : l.type,
-                         strike: l.stock ? null : String(l.strike),
-                         expiration: l.stock ? null : l.expiration, ratio: l.ratio || 1 };
-              })
-            };
-            App.navigate('#/trade/shape');
-          }
-        }, 'Open in builder'),
-        canBacktest(c.strategy) ? el('button', {
-          class: 'btn btn-sm btn-secondary', onclick: function () {
-            App.state.backtestPrefill = { symbol: symbolForTicket || App.context.symbol(), strategy: c.strategy };
-            App.navigate('#/trade/verify');
-          }
-        }, 'Backtest this') : null));
-    }
+    if (withUse) card.appendChild(candidateWorkflowActions(c, symbolForTicket, false));
     return card;
   }
 
@@ -2062,7 +2056,7 @@
             class: 'btn btn-sm', onclick: function (e) {
               e.stopPropagation();
               App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: App.context.symbol(), step: 5 };
-              App.navigate('#/trade/place');
+              App.navigate('#/trade/decide');
             }
           }, 'Use'))])), 'Show details for ' + c.displayName, 'button');
         body.appendChild(row);
@@ -2108,7 +2102,7 @@
     // before and persisted) the search RUNS. Only a genuinely ambiguous goal asks.
     var autorun = !!prefill.autorun && !!prefill.symbol && !!saved.goalExplicit;
     var pendingAutorun = !!prefill.autorun && !!prefill.symbol && !saved.goalExplicit;
-    // Route seeds keep every old link honest: /manual = one-stock mode, /scout = scan mode
+    // Canonical Context routes may open directly in one-stock or scout mode.
     if (params && params[0] === 'manual') saved.source = 'single';
     if (params && params[0] === 'scout') saved.source = 'scan';
     var goal = saved.goal || 'DIRECTIONAL';
@@ -2447,7 +2441,7 @@
     root.appendChild(el('section', { class: 'card idea-goal-card', id: 'idea-goal-card' },
       UI.cardHeader('What do you want the position to do?',
         el('a', {
-          class: 'muted', id: 'all-strategies-link', href: '#/trade/shape', style: 'font-size:12.5px',
+          class: 'muted', id: 'all-strategies-link', href: '#/trade/structure', style: 'font-size:12.5px',
           onclick: function () {
             App.state.builderForm = { symbol: App.context.symbol('AAPL'), qty: 1,
               goal: 'BROWSE', templateKey: null, step: 2, legIdx: 0, legs: [], excluded: {} };
@@ -2658,52 +2652,137 @@
     }
   }
 
-  /**
-   * THE TRADE WORKBENCH: one place, four stages — Discover (scout / my idea), Shape (the
-   * builder), Verify (backtest), Place (strikes -> review -> confirm). A persistent idea bar
-   * carries the working idea between stages so nothing is lost crossing them.
-   * #/trade/tr_* stays the trade DETAIL page (dispatcher below).
-   */
-  // Plain words only — "Shape" and "Verify" read as jargon to anyone who didn't build
-  // this app. The keys stay stable (they live in URLs and tests); the LABELS say what
-  // each section actually is.
-  var WB_STAGES = [
-    { key: 'discover', label: 'Ideas', hint: 'find or describe a trade idea' },
-    { key: 'shape', label: 'Builder', hint: 'build multi-leg strategies with live risk' },
-    { key: 'verify', label: 'Backtest', hint: 'how the strategy would have gone, honestly' },
-    { key: 'place', label: 'Place', hint: 'strikes, review, paper confirm' }
+  /** One decision loop. Research can feed Context; every Trade capability lives in one stage. */
+  var WORKFLOW_STAGES = [
+    { key: 'context', label: 'Context', beginner: 'Pick a stock and goal', expert: 'Symbol · intent · horizon' },
+    { key: 'structure', label: 'Structure', beginner: 'Choose how to express it', expert: 'Contracts · strikes · sizing' },
+    { key: 'outcomes', label: 'Outcomes', beginner: 'Replay and simulate', expert: 'History · analogs · models' },
+    { key: 'decide', label: 'Decide', beginner: 'Review risk and practice', expert: 'Execution · risk · confirm' }
   ];
 
-  function ideaBar(stage) {
+  function hasWorkingStructure() {
     var t = App.state.ticket;
     var b = App.state.builderForm;
-    var label = null, symbol = null;
-    if (t && t.candidate) { symbol = t.symbol; label = t.candidate.displayName + ' · qty ' + (t.qty || t.candidate.qty || 1); }
-    else if (t && t.custom && t.legs && t.legs.length) { symbol = t.symbol; label = t.legs.length + '-leg custom · qty ' + (t.qty || 1); }
-    else if (b && b.legs && b.legs.length) { symbol = b.symbol; label = b.legs.length + ' leg' + (b.legs.length > 1 ? 's' : '') + ' in the builder'; }
-    var bar = el('div', { class: 'idea-bar', id: 'idea-bar' });
+    return !!(t && (t.candidate || (t.custom && t.legs && t.legs.length))
+      || b && b.legs && b.legs.length);
+  }
+
+  function hasEvaluatedOutcome() {
+    var t = App.state.ticket;
+    var summary = workingTradeSummary();
+    var expected = summary && summary.symbol || App.context.symbol();
+    var receipt = App.state.outcomeReceipt;
+    return !!(receipt && receipt.symbol === expected
+      || t && t.candidate && (t.candidate.economics || t.candidate.economicVerdict));
+  }
+
+  function workingTradeSummary(stage) {
+    var t = App.state.ticket;
+    var b = App.state.builderForm;
+    if (stage === 'structure' && b && b.legs && b.legs.length) return { symbol: b.symbol,
+      label: b.legs.length + ' leg' + (b.legs.length > 1 ? 's' : '') + ' in Structure', ticket: false };
+    if (t && t.candidate) return { symbol: t.symbol,
+      label: t.candidate.displayName + ' · qty ' + (t.qty || t.candidate.qty || 1), ticket: true };
+    if (t && t.custom && t.legs && t.legs.length) return { symbol: t.symbol,
+      label: t.legs.length + '-leg ' + (t.customFamily ? prettyStrategy(t.customFamily) : 'custom')
+        + ' · qty ' + (t.qty || 1), ticket: true };
+    if (b && b.legs && b.legs.length) return { symbol: b.symbol,
+      label: b.legs.length + ' leg' + (b.legs.length > 1 ? 's' : '') + ' in Structure', ticket: false };
+    return null;
+  }
+
+  function workflowStepReady(key) {
+    if (key === 'context') {
+      var f = App.state.discoverForm || {};
+      return !!(hasWorkingStructure() || f.goalExplicit && (App.context.symbol() || f.source === 'scan'));
+    }
+    if (key === 'structure') return hasWorkingStructure();
+    if (key === 'outcomes') return hasEvaluatedOutcome();
+    return false;
+  }
+
+  function workflowContextBar(stage) {
+    var summary = workingTradeSummary(stage);
+    var bar = el('div', { class: 'workflow-context', id: 'idea-bar' });
+    var symbol = summary && summary.symbol || App.context.symbol();
+    if (symbol) {
+      bar.appendChild(el('button', { class: 'workflow-symbol', type: 'button',
+        title: 'Open full analysis for ' + symbol,
+        onclick: function () { App.navigate('#/research/' + encodeURIComponent(symbol)); } }, symbol));
+    }
+    var label = summary && summary.label;
     if (label) {
-      bar.appendChild(el('span', { class: 'idea-chip' }, icon('target', 14), el('b', {}, symbol), ' ', label));
-      if (stage !== 'place' && t && (t.candidate || (t.custom && t.legs && t.legs.length))) {
-        bar.appendChild(el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/place'); } }, 'Place \u2192'));
+      bar.appendChild(el('span', { class: 'workflow-summary' }, icon('target', 14), label));
+      if (stage !== 'outcomes' && summary.ticket) {
+        bar.appendChild(el('button', { class: 'btn btn-sm btn-secondary',
+          onclick: function () { App.navigate('#/trade/outcomes'); } }, 'Test outcomes'));
+      }
+      if (stage !== 'decide' && summary.ticket) {
+        bar.appendChild(el('button', { class: 'btn btn-sm',
+          onclick: function () { App.navigate('#/trade/decide'); } }, 'Review & decide \u2192'));
       }
       bar.appendChild(el('button', {
-        class: 'btn btn-sm btn-secondary', id: 'idea-clear', title: 'Drop the working idea',
-        onclick: function () { App.state.ticket = null; App.state.builderForm = null; App.render(); }
-      }, 'Clear'));
+        class: 'btn-link workflow-clear', id: 'idea-clear', title: 'Clear the working structure',
+        onclick: function () {
+          App.state.ticket = null; App.state.builderForm = null; App.state.outcomeReceipt = null;
+          App.render();
+        }
+      }, 'Clear structure'));
     } else {
-      // No working IDEA yet \u2014 but the working VIEW (symbol \u00b7 goal \u00b7 thesis \u00b7 horizon) still
-      // follows the user, so the bar offers context instead of a dead sentence.
       var wv = workingViewLabel();
       if (wv) {
-        bar.appendChild(el('span', { class: 'idea-chip', id: 'working-view-chip' }, icon('compass', 14), wv));
-        bar.appendChild(el('button', { class: 'btn btn-sm btn-secondary',
-          onclick: function () { App.navigate('#/trade/discover'); } }, 'Find ideas'));
+        bar.appendChild(el('span', { class: 'workflow-summary', id: 'working-view-chip' }, icon('compass', 14), wv));
+        if (stage !== 'context') bar.appendChild(el('button', { class: 'btn btn-sm btn-secondary',
+          onclick: function () { App.navigate('#/trade/context'); } }, 'Complete context'));
       } else {
-        bar.appendChild(el('span', { class: 'muted' }, 'No working idea yet \u2014 pick one from Ideas or make one in the Builder.'));
+        bar.appendChild(el('span', { class: 'muted' },
+          'Choose a stock and goal, or ask the scout to find a starting point.'));
+        if (stage !== 'context') bar.appendChild(el('button', { class: 'btn btn-sm',
+          onclick: function () { App.navigate('#/trade/context'); } }, 'Start with context'));
       }
     }
     return bar;
+  }
+
+  function workflowChrome(stage) {
+    var shell = el('div', { class: 'workflow-chrome' });
+    function paint() {
+      shell.innerHTML = '';
+      var beginner = Learn.currentLevel() === 'beginner';
+      shell.appendChild(el('nav', { class: 'workflow-rail', 'aria-label': 'Trade workflow' },
+        el('ol', { class: 'workflow-steps' }, WORKFLOW_STAGES.map(function (s, i) {
+          var current = s.key === stage;
+          var ready = workflowStepReady(s.key);
+          return el('li', { class: 'workflow-step' + (current ? ' active' : '') + (ready ? ' ready' : '') },
+            el('button', { type: 'button', id: 'wf-' + s.key,
+              'aria-current': current ? 'step' : null,
+              onclick: function () {
+                if (s.key === 'structure' && App.state.ticket && window.Builder) {
+                  Builder.adoptTicket(App.state.ticket);
+                }
+                if ((s.key === 'outcomes' || s.key === 'decide') && hasWorkingStructure()
+                    && window.Builder && (stage === 'structure' || !App.state.ticket)) {
+                  Builder.prepareTicket();
+                }
+                App.navigate('#/trade/' + s.key);
+              } },
+              el('span', { class: 'workflow-step-number' }, ready && !current ? icon('check', 13) : String(i + 1)),
+              el('span', { class: 'workflow-step-copy' },
+                el('b', {}, s.label), el('span', {}, beginner ? s.beginner : s.expert))));
+        }))));
+      shell.appendChild(workflowContextBar(stage));
+    }
+    App.refreshWorkflowContext = paint;
+    paint();
+    return shell;
+  }
+
+  function recordOutcomeReceipt(basis, symbol, detail) {
+    App.state.outcomeReceipt = {
+      basis: basis, symbol: (symbol || App.context.symbol() || '').toUpperCase(),
+      detail: detail || '', at: new Date().toISOString()
+    };
+    if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
   }
 
   /**
@@ -2725,28 +2804,16 @@
   }
 
   async function workbench(root, params) {
-    var stage = 'discover';
-    WB_STAGES.forEach(function (s2) { if (params[0] === s2.key) stage = s2.key; });
+    var stage = 'context';
+    WORKFLOW_STAGES.forEach(function (s2) { if (params[0] === s2.key) stage = s2.key; });
     root.appendChild(el('h1', {}, 'Trade'));
-    // Place is GATED until an idea exists: a clickable stage that lands on an empty
-    // screen reads as broken, not as guidance.
-    var t0 = App.state.ticket;
-    var hasPlaceable = !!(t0 && (t0.candidate || (t0.custom && t0.legs && t0.legs.length)));
-    root.appendChild(el('div', { class: 'tabs wb-stages' }, WB_STAGES.map(function (s2, i) {
-      var gated = s2.key === 'place' && !hasPlaceable && stage !== 'place';
-      return el('button', {
-        class: (s2.key === stage ? 'active' : ''), id: 'wb-' + s2.key,
-        disabled: gated ? '' : null,
-        title: gated ? 'Nothing to place yet — pick one from Ideas or make one in the Builder' : s2.hint,
-        onclick: function () { App.navigate('#/trade/' + s2.key); }
-      }, s2.label);
-    })));
-    root.appendChild(ideaBar(stage));
-    if (stage === 'discover') await discoverStage(root, params.slice(1));
-    else if (stage === 'shape') {
+    root.appendChild(workflowChrome(stage));
+    if (stage === 'context') await discoverStage(root, params.slice(1));
+    else if (stage === 'structure') {
       await Builder.render(root);
+      if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
     }
-    else if (stage === 'verify') await backtest(root);
+    else if (stage === 'outcomes') await backtest(root);
     else await ticket(root);
   }
 
@@ -3025,7 +3092,7 @@
           el('button', {
             class: 'btn btn-sm', style: 'margin-left:auto', onclick: function () {
               App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: ctx.symbol, step: 5 };
-              App.navigate('#/trade/place');
+              App.navigate('#/trade/decide');
             }
           }, 'Practice this'));
         list.appendChild(row);
@@ -3067,7 +3134,7 @@
           class: 'btn btn-sm', onclick: function (e) {
             e.stopPropagation();
             App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: ctx.symbol, step: 5 };
-            App.navigate('#/trade/place');
+            App.navigate('#/trade/decide');
           }
         }, 'Use')));
         var detail = el('tr', { class: 'compare-detail', style: 'display:none' },
@@ -3130,9 +3197,9 @@
       root.appendChild(el('div', { class: 'card' },
         UI.emptyState('Nothing to place yet',
           'Pick an idea on the Ideas tab or build one leg-by-leg in the Builder — it lands here for the strike check, the honest review, and the paper confirm.',
-          'Find an idea', function () { App.navigate('#/trade/discover'); }),
+          'Find an idea', function () { App.navigate('#/trade/context'); }),
         el('div', { class: 'btn-row', style: 'justify-content:center' },
-          el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { App.navigate('#/trade/shape'); } },
+          el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { App.navigate('#/trade/structure'); } },
             'Or open the builder'))));
       return;
     }
@@ -3149,7 +3216,7 @@
 
     function rerender() { App.render(); }
     function nav(step) {
-      if (step < 5) { App.navigate('#/trade/discover/manual'); return; } // back past Strikes = re-discover
+      if (step < 5) { App.navigate('#/trade/context/manual'); return; } // back past Strikes = re-discover
       t.step = step;
       rerender();
     }
@@ -3200,6 +3267,7 @@
         class: 'btn', id: 'to-review', onclick: function () {
           try { t.qty = positiveInteger(qtyInput.value || '1', 'Quantity', 100); }
           catch (e) { UI.toast(e.message, 'error'); return; }
+          if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
           nav(6);
         }
       }, 'Review →')));
@@ -3730,7 +3798,7 @@
                   ? el('button', {
                       class: 'btn btn-sm', onclick: function () {
                         App.state.ideasPrefill = { intent: 'EXIT', symbol: pv.symbol };
-                        App.navigate('#/recommend/manual');
+                        App.navigate('#/trade/context/manual');
                       }
                     }, 'Sell at a target\u2026') : null,
                 el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { stockOrderModal('buy', pv.symbol); } }, 'Buy'),
@@ -3864,7 +3932,7 @@
     if (!data.trades.length) {
       tradesCard.classList.add('is-empty');
       tradesCard.appendChild(tab === 'active'
-        ? UI.emptyState('No open practice trades', 'Find a risk-screened idea and practice it — the worst case is known before you commit.', 'Find an idea', function () { App.navigate('#/trade/discover'); })
+        ? UI.emptyState('No open practice trades', 'Find a risk-screened idea and practice it — the worst case is known before you commit.', 'Find an idea', function () { App.navigate('#/trade/context'); })
         : UI.emptyState('Nothing closed yet', 'Closed, settled, and voided trades land here.'));
       return;
     }
@@ -4080,7 +4148,7 @@
                   });
                   App.state.builderForm = { symbol: t.symbol, qty: t.qty, goal: 'BROWSE', templateKey: null,
                     step: 4, legIdx: 0, legs: rolled, excluded: {} };
-                  App.navigate('#/trade/shape');
+                  App.navigate('#/trade/structure');
                 });
             }
           }, 'Roll…', el('span', { class: 'btn-sub' }, 'close + reopen ~1 month out')),
@@ -4173,7 +4241,7 @@
       App.context.selectSymbol(symbol);
       App.state.evidencePrefill = null; // generated futures must never inherit an earlier analog ensemble
       App.state.verifyMode = 'scenario'; // the handoff: Verify opens in "Imagine a future"
-      App.navigate('#/trade/verify');
+      App.navigate('#/trade/outcomes');
     });
     card.appendChild(el('div', { class: 'btn-row' }, run, reroll, toVerify));
     card.appendChild(out);
@@ -4337,6 +4405,8 @@
               UI.fmtMoneyCompact(r.expectedPnlCents - bas.expectedPnlCents),
               'Expected P&L difference on IDENTICAL paths. Positive = the structure adds value under your scenario.')));
         }
+        recordOutcomeReceipt(evActive ? 'HISTORICAL_ANALOGS' : 'PARAMETRIC', symbol,
+          picked.key === 'WORKING' ? 'Working structure' : picked.key);
       } catch (e) {
         if (seq === actionSeq) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Simulation failed', [String((e && e.message) || e)])); }
       }
@@ -4432,6 +4502,8 @@
         out.appendChild(el('div', { class: 'muted small' },
           'Naked calls/puts and short straddles/strangles are not simulated — undefined risk is blocked by design across the app. '
           + 'A different story re-ranks the whole table; the honest conclusion can be that nothing beats the baseline.'));
+        recordOutcomeReceipt(evOnC ? 'HISTORICAL_ANALOGS' : 'PARAMETRIC', symbol,
+          'Compared ' + results.length + ' structures');
       } catch (e) {
         if (seq === actionSeq) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Comparison failed', [String((e && e.message) || e)])); }
       }
@@ -4446,17 +4518,19 @@
   // ---------- 8. Backtest ----------
 
   async function backtest(root) {
-    // A candidate card's "Backtest this" lands here with the form pre-answered.
+    // A candidate's "Test outcomes" handoff lands here with the named rule pre-answered.
     var prefill = App.state.backtestPrefill || {};
     App.state.backtestPrefill = null;
     // The WORKING IDEA prefills the whole form, not just the symbol: family from the candidate,
     // target DTE from its legs' actual expiration — verify the trade you are about to place.
-    if (!prefill.strategy && App.state.ticket && App.state.ticket.candidate) {
+    if (!prefill.strategy && App.state.ticket
+        && (App.state.ticket.candidate || App.state.ticket.customFamily)) {
       var wt = App.state.ticket;
       prefill.symbol = prefill.symbol || wt.symbol;
-      prefill.strategy = wt.candidate.strategy;
+      prefill.strategy = wt.candidate ? wt.candidate.strategy : wt.customFamily;
       try {
-        var wexp = (wt.legs || []).map(function (l) { return l.expiration; }).filter(Boolean).sort()[0];
+        var wexp = (wt.legs || wt.candidate && wt.candidate.legs || [])
+          .map(function (l) { return l.expiration; }).filter(Boolean).sort()[0];
         if (wexp) prefill.dte = Math.max(1, Math.round((new Date(wexp + 'T16:00:00') - Date.now()) / 86400000));
       } catch (e) { /* dte stays default */ }
     }
@@ -4475,8 +4549,13 @@
     // strategy sits behind one explicit choice, each honestly describing its evidence basis.
     // The five modes route to the EXISTING engines — no duplicate machinery.
     var vf = App.state.verifyForm = App.state.verifyForm || {};
-    if (App.state.verifyMode) { vf.mode = App.state.verifyMode; App.state.verifyMode = null; } // handoff wins
+    if (App.state.verifyMode) { vf.mode = App.state.verifyMode; App.state.verifyMode = null; } // explicit handoff wins
+    else if (App.state.ticket && App.state.ticket.outcomeBasisHint) {
+      vf.mode = App.state.ticket.outcomeBasisHint;
+      App.state.ticket.outcomeBasisHint = null;
+    }
     vf.mode = vf.mode || 'history';
+    var exactCustom = !!(App.state.ticket && App.state.ticket.custom && !App.state.ticket.customFamily);
     var inWorld = App.state.world && App.state.world !== App.baseWorldId();
     var scenarioActive = App.config && App.config.scenarioMode;
     var histWrap = el('div', { id: 'bt-history-mode' });
@@ -4530,7 +4609,7 @@
                 }))
             : UI.emptyState('No practice trades in this session yet',
                 'Find a screened idea and place it \u2014 the session report will judge the decision.',
-                'Find ideas in this market', function () { App.navigate('#/trade/discover'); }),
+                'Find ideas in this market', function () { App.navigate('#/trade/context'); }),
           pvo && (pvo.highPopTrades || pvo.lowPopTrades)
             ? el('p', { class: 'muted', style: 'margin:8px 0 0' },
                 'Calibration so far: ' + (pvo.highPopTrades || 0) + ' high-confidence entries (\u226550% predicted) won '
@@ -4540,16 +4619,20 @@
                 + (pvo.note || ''))
             : null,
           el('div', { class: 'btn-row' },
-            rows.length ? el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find ideas') : null,
+            rows.length ? el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/context'); } }, 'Find ideas') : null,
             el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } }, 'Open the control room'),
             el('button', { class: 'btn btn-sm btn-secondary', title: 'Your observed-market record \u2014 simulated sessions are scored here, in their own report, never mixed into it',
               onclick: function () { App.navigate('#/portfolio/record'); } }, 'Your observed record \u2192'))));
+        if (rows.length) recordOutcomeReceipt('SIMULATED_SESSION', App.context.symbol(),
+          rows.length + ' session decision' + (rows.length === 1 ? '' : 's'));
       } catch (e) {
         host.innerHTML = '';
         host.appendChild(alertBox('warn', 'Session record unavailable', [String((e && e.message) || e)]));
       }
     }
-    var historyNote = App.state.world === 'demo'
+    var historyNote = exactCustom
+      ? 'Historical replay needs a named strategy rule. The form below is a separate rule you choose; Monte Carlo futures tests your exact custom legs.'
+      : App.state.world === 'demo'
       ? 'Replays fabricated Demo history with no look-ahead; every result stays labeled DEMO.'
       : App.state.world && App.state.world !== 'observed'
         ? 'Replays this simulated market\u2019s generated history with no look-ahead.'
@@ -4627,6 +4710,8 @@
     // Beginner sees the same menu with the foundational structures first in each goal group —
     // progressive ordering, never a locked door.
     var btDefaultStrat = prefill.strategy || bf.strategy || 'DEBIT_CALL_SPREAD';
+    var portfolioFamilies = ['CREDIT_PUT_SPREAD', 'DEBIT_CALL_SPREAD'];
+    function portfolioSupports(strategy) { return portfolioFamilies.indexOf(strategy) >= 0; }
     var strat = el('select', { id: 'bt-strategy' },
       BT_GROUPS.map(function (g) {
         return el('optgroup', { label: g.label }, g.families.map(function (s) {
@@ -4634,7 +4719,10 @@
           return el('option', { value: s, selected: s === btDefaultStrat ? '' : null }, meta ? meta.display : prettyStrategy(s));
         }));
       }));
-    strat.addEventListener('change', function () { bf.strategy = strat.value; });
+    strat.addEventListener('change', function () {
+      bf.strategy = strat.value;
+      if (engine) syncEngineEligibility(true);
+    });
     var today = new Date();
     var toDefault = today.toISOString().slice(0, 10);
     var fromDefault = new Date(today.getTime() - 182 * 86400000).toISOString().slice(0, 10);
@@ -4677,11 +4765,26 @@
 
     // BOTH levels get both engines (presentation-only levels): beginner default stays the
     // simpler single-position engine, with plain words explaining the difference.
+    var portfolioOption = el('option', { value: 'portfolio' },
+      btLevel === 'beginner' ? 'A book of trades at once' : 'Portfolio (concurrent positions, mechanical exits)');
     var engine = el('select', { id: 'bt-engine' },
       el('option', { value: 'single' }, btLevel === 'beginner' ? 'One trade at a time (simplest)' : 'Single position (one trade at a time)'),
-      el('option', { value: 'portfolio' }, btLevel === 'beginner' ? 'A book of trades at once' : 'Portfolio (concurrent positions, mechanical exits)'));
+      portfolioOption);
     engine.value = bf.engine || 'single';
-    engine.addEventListener('change', function () { bf.engine = engine.value; });
+    function syncEngineEligibility(notify) {
+      var eligible = portfolioSupports(strat.value);
+      portfolioOption.disabled = !eligible;
+      if (!eligible && engine.value === 'portfolio') {
+        engine.value = 'single';
+        bf.engine = 'single';
+        if (notify) UI.toast('The portfolio replay currently supports bull call and bull put spreads; using one-trade replay for this structure.');
+      }
+    }
+    engine.addEventListener('change', function () {
+      syncEngineEligibility(true);
+      bf.engine = engine.value;
+    });
+    syncEngineEligibility(false);
     root.appendChild(el('div', { class: 'card' },
       btLevel === 'beginner'
         ? explain('Every strategy is here — the simpler ones lead each group. Target DTE is how far out each trade’s expiration is: Monthly (30 days) is the classic starting point.')
@@ -4758,6 +4861,8 @@
 
     function renderReport(r) {
       out.innerHTML = '';
+      recordOutcomeReceipt(vf.mode === 'dataset' ? 'SAVED_SCENARIO' : 'HISTORICAL_REPLAY',
+        r.symbol || sym.value, prettyStrategy(r.strategy || strat.value));
       // LOUD, FIRST: demo underlying. The strikes are anchored to a FAKE price series, so they can
       // look absurd next to the real quote (a trader saw 210 strikes on AAPL-at-$315). Say so before
       // anything reads as a real result.
@@ -4837,6 +4942,8 @@
     // D4: the Expert portfolio engine's report (concurrent positions + mechanical exits).
     function renderPortfolioReport(r) {
       out.innerHTML = '';
+      recordOutcomeReceipt(vf.mode === 'dataset' ? 'SAVED_SCENARIO' : 'HISTORICAL_PORTFOLIO',
+        r.symbol || sym.value, prettyStrategy(r.strategy || strat.value));
       if (r.demoUnderlying) {
         out.appendChild(alertBox('danger', 'Demo price data — NOT the real market. ' + r.symbol
           + '’s price history here is placeholder data, so every result below is anchored to fake '
@@ -5100,7 +5207,7 @@
               try { await API.post('/api/sim/market/' + sx.id + '/step', {}); } catch (e) { UI.toast(e.message || 'Could not advance the simulated market', 'error'); } } }, 'Step'),
             el('button', { class: 'btn btn-sm', onclick: function () { injectModal(sx); } }, 'Inject event'),
             el('button', { class: 'btn btn-sm', onclick: function () { showReport(sx); } }, 'Report'),
-            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find strategies'),
+            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/context'); } }, 'Find strategies'),
             el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/portfolio'); } }, 'Simulated portfolio'),
             el('button', { class: 'btn btn-sm btn-danger', onclick: function () { finishModal(sx); } }, 'Finish'),
             el('button', { class: 'btn btn-sm btn-secondary', id: 'cr-exit', onclick: function () {
@@ -5711,7 +5818,7 @@
             lines.push(el('div', { class: 'chip-row' },
               el('span', { class: 'badge badge-ok' }, 'OBSERVED MARKET'),
               el('span', { class: 'muted small' }, u && u.active ? ('universe: ' + (u.active.label || '') + ' \u00b7 ' + (u.active.symbols || []).length + ' symbols') : '')));
-            actions.push(el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find an idea'));
+            actions.push(el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/context'); } }, 'Find an idea'));
             actions.push(el('button', { class: 'btn btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } }, 'Practice in a simulated market'));
           }
         }
@@ -5903,7 +6010,7 @@
           isActive && d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm',
             title: 'Compare strategies while this scenario remains active', onclick: function () {
               App.context.selectSymbol(d.symbol);
-              App.navigate('#/trade/verify');
+              App.navigate('#/trade/outcomes');
             } }, 'Compare strategies') : null,
           d.id !== 'observed' ? el('button', { class: 'btn btn-sm btn-secondary', title: 'Delete this run',
             onclick: async function () {
@@ -5950,7 +6057,7 @@
                     await API.put('/api/datasets/active', { id: r.datasetId });
                     App.refreshScenarioBanner && App.refreshScenarioBanner();
                     App.context.selectSymbol(sym.value);
-                    App.navigate('#/trade/verify');
+                    App.navigate('#/trade/outcomes');
                   } catch (e2) { UI.toast(e2.message || 'Could not activate this scenario', 'error'); }
                 } }, 'Compare strategies under it'),
                 el('button', { class: 'btn btn-sm btn-secondary', onclick: async function () {
@@ -6607,7 +6714,7 @@
 
   function useEval(c, symbol, recId) {
     App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbol, step: 5, recommendationId: recId || null };
-    App.navigate('#/trade/place');
+    App.navigate('#/trade/decide');
   }
 
   function decisionTop(e, symbol, level, recId) {
@@ -6655,7 +6762,7 @@
       }));
     }
     card.appendChild(el('div', { class: 'btn-row' },
-      el('button', { class: 'btn', id: 'decision-use', onclick: function () { useEval(c, symbol, recId); } }, 'Practice this trade')));
+      el('button', { class: 'btn', id: 'decision-use', onclick: function () { useEval(c, symbol, recId); } }, 'Review & decide')));
     return card;
   }
 
@@ -6783,7 +6890,7 @@
     }
     if (!symbol) {
       root.appendChild(UI.emptyState('No stock chosen yet', 'Pick a stock and a goal first, then compare the ideas.',
-        'Find ideas', function () { App.navigate('#/trade/discover'); }));
+        'Find ideas', function () { App.navigate('#/trade/context'); }));
       return;
     }
     var decisionContext = lockedSymbolBar(symbol, { id: 'decision-symbol-context', label: 'Compared symbol' });
@@ -7490,9 +7597,9 @@
             horizonDays: r.forwardDays,
             label: r.conditioned.sample + ' ' + occurrenceWord(r) + ' (' + r.from + ' to ' + r.to + ')'
           };
-          App.context.selectSymbol(symbol);             // Verify anchors on the study's symbol
-          App.state.verifyMode = 'scenario';            // ...and opens on "Imagine a future"
-          App.navigate('#/trade/verify');
+          App.context.selectSymbol(symbol);             // Outcomes anchors on the study's symbol
+          App.state.verifyMode = 'analogs';             // ...and names the empirical basis visibly
+          App.navigate('#/trade/outcomes');
         } }, 'Test strategies on these ' + r.conditioned.sample + ' ' + occurrenceWord(r) + ' \u2192')));
     }
   }

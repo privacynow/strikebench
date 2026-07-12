@@ -283,7 +283,7 @@ test('Ideas begins with market context and reuses the scenario engine for realis
     App.state.discoverForm = null; App.state.ideasForm = null; App.state.scoutForm = null;
     App.context.selectSymbol('AAPL'); App.state.recommendResults = null;
   });
-  await go('#/trade/discover');
+  await go('#/trade/context');
   await page.waitForSelector('#idea-market-card #ideas-symbol-context');
   const order = await page.evaluate(() => ({
     market: document.getElementById('idea-market-card').getBoundingClientRect().top,
@@ -520,7 +520,7 @@ test('dataset actions fail visibly instead of looking like dead buttons', async 
 
 test('workspace continuity: forms, symbol, and route survive a full reload', async () => {
   // Work: pick a goal + symbol in Ideas (one-stock mode), then wander off to Research.
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.waitForSelector('#rec-symbol');
   await page.fill('#rec-symbol', 'QQQ');
   await page.evaluate(() => { App.state.discoverForm.symbol = 'QQQ'; App.context.selectSymbol('QQQ'); });
@@ -651,7 +651,7 @@ test('world revisions reset across a server boot epoch without accepting old-pro
 test('working view follows: idea bar carries the thesis; scenario studio opens on it', async () => {
   await page.click('#level-switch button[data-level="beginner"]');
   // State the view in Ideas: QQQ, bearish, ~1 month.
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.waitForSelector('#rec-symbol');
   await page.fill('#rec-symbol', 'QQQ');
   await page.evaluate(() => {
@@ -662,7 +662,7 @@ test('working view follows: idea bar carries the thesis; scenario studio opens o
     App.state.ticket = null; App.state.builderForm = null; App.state.scenarioForm = null;
   });
   // The Trade idea bar shows the working VIEW even with no working idea yet.
-  await go('#/trade/verify');
+  await go('#/trade/outcomes');
   await page.waitForSelector('#working-view-chip');
   const wv = await page.textContent('#working-view-chip');
   assert.match(wv, /QQQ/);
@@ -682,7 +682,7 @@ test('every scenario story runs at both levels (the Big-news-shock crash class)'
   // Run EVERY beginner story card end-to-end, then every expert shape via the select.
   await page.click('#level-switch button[data-level="beginner"]');
   await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = { mode: 'scenario' }; App.context.selectSymbol('AAPL'); });
-  await go('#/trade/verify');
+  await go('#/trade/outcomes');
   await page.waitForSelector('#bt-scenario-card #sc-shapes .sc-card');
   const shapes = await page.$$eval('#sc-shapes .sc-card', cs => cs.map(c => c.getAttribute('data-shape')));
   assert.ok(shapes.length >= 7, 'all story cards render');
@@ -696,7 +696,7 @@ test('every scenario story runs at both levels (the Big-news-shock crash class)'
   // Expert: every model prices without error on one story.
   await page.click('#level-switch button[data-level="expert"]');
   await page.evaluate(() => { App.state.scenarioForm = null; });
-  await go('#/trade/verify');
+  await go('#/trade/outcomes');
   await page.waitForSelector('#sc-model');
   for (const model of ['GBM', 'STUDENT_T', 'JUMP_DIFFUSION', 'HESTON', 'BLOCK_BOOTSTRAP', 'BROWNIAN_BRIDGE']) {
     await page.selectOption('#sc-model', model);
@@ -714,7 +714,7 @@ test('fair comparison: one batch call, refusals named, ranked per dollar of down
     App.state.scenarioForm = null;
     App.state.verifyForm = { mode: 'scenario' };
     App.context.selectSymbol('AAPL');
-    App.navigate('#/trade/verify'); // same hash still means an explicit rerender
+    App.navigate('#/trade/outcomes'); // same hash still means an explicit rerender
   });
   await page.waitForSelector('#app[data-route="trade"][data-ready="true"]');
   await page.waitForSelector('#sc-compare-all');
@@ -778,7 +778,17 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   assert.match(outText, /raise or lower your confidence/, 'confidence guidance, never a prediction');
   // The handoff exists when enough analogs matched.
   const handoff = await page.locator('#tv-test-analogs').count();
-  if (handoff) assert.match(await page.textContent('#tv-test-analogs'), /DEMO-data occurrences/); // fixture suite: never 'real'
+  if (handoff) {
+    assert.match(await page.textContent('#tv-test-analogs'), /DEMO-data occurrences/); // fixture suite: never 'real'
+    await page.click('#tv-test-analogs');
+    await page.waitForSelector('#trade-outcomes-basis-analogs[aria-selected="true"]');
+    assert.match(await page.textContent('#evidence-mode'), /Evidence mode/i,
+      'Research hands the sample to the visibly named Historical analogs basis');
+    await go('#/research/AAPL');
+    await openResearchTab('view');
+    await page.click('#research-outcomes-nav .outcome-basis[data-basis="past"]');
+    await page.waitForSelector('#study-results .alert');
+  }
   assert.match(await page.textContent('#study-results'), /How this evidence was checked/);
 
   // Expert sees the SAME engine and every protocol knob, not a reduced or separate tool.
@@ -810,7 +820,7 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
 test('form geometry: controls in one grid row share a vertical origin (labels never push them)', async () => {
   await page.click('#level-switch button[data-level="expert"]');
   await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = { mode: 'scenario' }; });
-  await go('#/trade/verify');
+  await go('#/trade/outcomes');
   await page.waitForSelector('#sc-model');
   const misaligned = await page.evaluate(() => {
     const out = [];
@@ -889,7 +899,7 @@ test('market stream (SSE): the browser receives live quote frames from the engin
 });
 
 test('discover scan: a blank symbol box auto-recommends with evidence and targets', async () => {
-  await go('#/recommend/scout'); // legacy alias — forces scan mode
+  await go('#/trade/context/scout'); // legacy alias — forces scan mode
   await page.waitForSelector('#auto-target'); // scan-scope fields visible in scan mode
   assert.ok(await page.locator('#idea-source .choice[data-source="scan"].selected').count(),
     '"Scan the market for me" is an explicit, visible choice');
@@ -913,7 +923,7 @@ test('discover scan: a blank symbol box auto-recommends with evidence and target
 });
 
 test('recommendations render candidates and blocked examples', async () => {
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.fill('#rec-symbol', 'AAPL');
   await page.selectOption('#rec-thesis', 'bullish');
   await page.click('#rec-go');
@@ -933,17 +943,17 @@ test('recommendations render candidates and blocked examples', async () => {
 
 let tradeUrlHash = null;
 
-test('discover-to-place: screening happens ONCE, in Discover; Place is strikes/review/confirm', async () => {
-  // Place without an idea = an honest empty state, never a duplicate wizard
-  await page.evaluate(() => { App.state.ticket = null; });
-  await go('#/trade/place');
+test('Context-to-Decide: screening happens once; Decide is review and paper confirmation', async () => {
+  // Decide without a structure = an honest setup state, never a duplicate wizard.
+  await page.evaluate(() => { Learn.setLevel('beginner'); App.state.ticket = null; });
+  await go('#/trade/decide');
   assert.match(await page.textContent('#app'), /Nothing to place yet/);
-  // The four Trade sections carry PLAIN names — no invented jargon
-  await go('#/trade/discover/manual');
-  assert.equal(await page.textContent('#wb-discover'), 'Ideas');
-  assert.equal(await page.textContent('#wb-shape'), 'Builder');
-  assert.equal(await page.textContent('#wb-verify'), 'Backtest');
-  assert.equal(await page.textContent('#wb-place'), 'Place');
+  // One explicit decision loop; every step remains reachable and explains its job.
+  await go('#/trade/context/manual');
+  assert.match(await page.textContent('#wf-context'), /Context[\s\S]*Pick a stock and goal/);
+  assert.match(await page.textContent('#wf-structure'), /Structure[\s\S]*Choose how to express it/);
+  assert.match(await page.textContent('#wf-outcomes'), /Outcomes[\s\S]*Replay and simulate/);
+  assert.match(await page.textContent('#wf-decide'), /Decide[\s\S]*Review risk and practice/);
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
   await page.selectOption('#rec-thesis', 'bullish');
@@ -955,12 +965,12 @@ test('discover-to-place: screening happens ONCE, in Discover; Place is strikes/r
   assert.deepEqual(await page.locator('#rec-results .candidate').evaluateAll(nodes =>
     nodes.map(n => n.getAttribute('data-strategy'))), firstPaintStrategies,
     'ranked cards never change identity after first paint');
-  // Button label differs by level (beginner: Practice this trade / expert: Use in trade ticket).
+  // Both levels expose the same action; surrounding detail changes with experience level.
   // Prefer a CREDIT structure: downstream ledger tests pin RESERVE_HOLD/RELEASE rows, which only
   // credit trades produce (candidates are decision-ranked, so the first card's family can change).
   const creditCard = page.locator('#rec-results .candidate[data-strategy^="CREDIT"]');
   const pickCard = (await creditCard.count()) ? creditCard.first() : page.locator('#rec-results .candidate').first();
-  await pickCard.locator('button:has-text("Practice this trade"), button:has-text("Use in trade ticket")').first().click();
+  await pickCard.locator('button:has-text("Review & decide")').first().click();
   // Place opens at Strikes with the idea in the bar
   await page.waitForSelector('#to-review');
   assert.match(await page.textContent('#idea-bar'), /AAPL/);
@@ -1075,7 +1085,7 @@ test('review verdict panel: probability map, execution ladder, expert repricing'
   // WALK the surfaces that render info terms elsewhere in the app FIRST (the audit used to be
   // blind to anything rendering after its snapshot): builder, backtest, data center (sim
   // workbench + account risk card live there and in portfolio).
-  for (const hash of ['#/trade/shape', '#/trade/verify', '#/data/simulation', '#/portfolio/account']) {
+  for (const hash of ['#/trade/structure', '#/trade/outcomes', '#/data/simulation', '#/portfolio/account']) {
     await go(hash);
     await page.waitForTimeout(250);
   }
@@ -1084,7 +1094,7 @@ test('review verdict panel: probability map, execution ladder, expert repricing'
   assert.ok(preTerms.includes('scenario'), 'sim workbench wires info(scenario)');
   assert.ok(preTerms.includes('speed'), 'sim workbench wires info(speed)');
   await go('#/home');
-  await go('#/trade/discover/manual');
+  await go('#/trade/context/manual');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
   await page.fill('#rec-symbol', 'AAPL');
   await page.selectOption('#rec-thesis', 'bullish');
@@ -1093,7 +1103,7 @@ test('review verdict panel: probability map, execution ladder, expert repricing'
   // With the full catalog competing (risk no longer gates complexity), a CALENDAR can rank
   // first — its review honestly has no probability map. Pick a single-expiration structure.
   const single = page.locator('#rec-results .candidate:not([data-strategy*="CALENDAR"]):not([data-strategy*="DIAGONAL"])');
-  await single.first().locator('button:has-text("Practice this trade"), button:has-text("Use in trade ticket")').first().click();
+  await single.first().locator('button:has-text("Review & decide")').first().click();
   await page.waitForSelector('#to-review');
   await page.click('#to-review');
   await page.waitForSelector('#to-confirm');
@@ -1134,7 +1144,7 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   // WALK the surfaces that render info terms elsewhere in the app FIRST (the audit used to be
   // blind to anything rendering after its snapshot): builder, backtest, data center (sim
   // workbench + account risk card live there and in portfolio).
-  for (const hash of ['#/trade/shape', '#/trade/verify', '#/data/simulation', '#/portfolio/account']) {
+  for (const hash of ['#/trade/structure', '#/trade/outcomes', '#/data/simulation', '#/portfolio/account']) {
     await go(hash);
     await page.waitForTimeout(250);
   }
@@ -1143,7 +1153,7 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   assert.ok(preTerms.includes('scenario'), 'sim workbench wires info(scenario)');
   assert.ok(preTerms.includes('speed'), 'sim workbench wires info(speed)');
   await go('#/home');
-  await go('#/trade/discover/manual');
+  await go('#/trade/context/manual');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
   await page.fill('#rec-symbol', 'AAPL');
   await page.selectOption('#rec-thesis', 'bullish');
@@ -1151,7 +1161,7 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   await page.waitForSelector('#rec-results .candidate', { timeout: 30000 });
   // Same single-expiration pick as the verdict test: a calendar's review has no probability map.
   const singleExp = page.locator('#rec-results .candidate:not([data-strategy*="CALENDAR"]):not([data-strategy*="DIAGONAL"])');
-  await singleExp.first().locator('button:has-text("Practice this trade"), button:has-text("Use in trade ticket")').first().click();
+  await singleExp.first().locator('button:has-text("Review & decide")').first().click();
   await page.waitForSelector('#to-review');
   await page.click('#to-review');
   await page.waitForSelector('#verdict-panel .info-trigger', { timeout: 20000 });
@@ -1219,7 +1229,7 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
 });
 
 test('backtest runs and reports mode, coverage, assumptions', async () => {
-  await go('#/backtest');
+  await go('#/trade/outcomes');
   await page.click('#trade-outcomes-nav .outcome-basis[data-basis="history"]');
   assert.match(await page.textContent('#trade-outcomes-nav .outcome-basis[data-basis="world"]'), /Setup needed/,
     'the Demo baseline is not misrepresented as a running simulated session');
@@ -1271,10 +1281,10 @@ test('backtest runs and reports mode, coverage, assumptions', async () => {
 });
 
 test('candidate cards cross-link into backtest with the form pre-answered', async () => {
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#app[data-ready="true"]');
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#rec-go');
   // Expert results are a comparison table — the full card (with its Backtest link) lives
@@ -1289,13 +1299,13 @@ test('candidate cards cross-link into backtest with the form pre-answered', asyn
     await rows.nth(i).click();
     // collapsed details stay in the DOM display:none — only the VISIBLE one is this row's
     await page.waitForSelector('.compare-detail .candidate:visible');
-    const c = page.locator('.compare-detail .candidate:visible:has(button:has-text("Backtest this"))').first();
+    const c = page.locator('.compare-detail .candidate:visible:has(button[data-outcome-default="history"])').first();
     if (await c.count()) { card = c; break; }
     await rows.nth(i).click(); // collapse before trying the next row
   }
-  assert.ok(card, 'candidates offer Backtest this');
+  assert.ok(card, 'candidates offer Test outcomes');
   const strategy = await card.getAttribute('data-strategy');
-  await card.locator('button:has-text("Backtest this")').click();
+  await card.locator('button[data-outcome-default="history"]').click();
   await page.waitForSelector('#bt-symbol');
   assert.equal(await page.inputValue('#bt-symbol'), 'AAPL');
   assert.equal(await page.inputValue('#bt-strategy'), strategy, 'strategy carried over');
@@ -1380,7 +1390,7 @@ test('data center reset tiers are reduced for Beginner', async () => {
 
 test('pro depth: comparison table, custom builder, position greeks', async () => {
   // Comparison table on Ideas at Pro
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#app[data-ready="true"]');
   await page.fill('#rec-symbol', 'AAPL');
@@ -1395,7 +1405,7 @@ test('pro depth: comparison table, custom builder, position greeks', async () =>
 
   // Expert terminal: build a call spread by hand, place it through the standard review
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
-  await go('#/ticket/builder');
+  await go('#/trade/structure');
   await page.waitForSelector('#builder-add-leg');
   await page.click('#builder-add-leg');
   await page.waitForSelector('#builder-legs .leg-row');
@@ -1443,6 +1453,7 @@ test('pro depth: comparison table, custom builder, position greeks', async () =>
 });
 
 test('holdings + intents: buy shares, covered call at a target, filters, assignment framing', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
   // 1. Buy 100 AAPL from the portfolio holdings card
   await go('#/portfolio');
   await page.waitForSelector('#holdings-card');
@@ -1457,7 +1468,7 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   assert.match(holdingsRow, /100/);
 
   // 2. Ideas: "Sell at a target" intent proposes a covered call ON the held shares
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.waitForSelector('#intent-choices');
   await page.click('#intent-choices .choice[data-intent="EXIT"]');
   await page.fill('#rec-symbol', 'AAPL');
@@ -1516,7 +1527,7 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   assert.equal(await page.locator('#holdings-card .badge-caution').count(), 0, 'no locked badge after unwind+sell');
 
   // 6. Filters reject loudly: an impossible POP floor leaves only refusals
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.waitForSelector('#intent-choices');
   await page.click('#intent-choices .choice[data-intent="INCOME"]');
   await page.fill('#rec-symbol', 'AAPL');
@@ -1528,7 +1539,7 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   assert.match(results, /below your minimum/);
 
   // 7. Goal chooser: ONE goal at a time (radio semantics) plus "Everything" for scans
-  await go('#/recommend/scout');
+  await go('#/trade/context/scout');
   await page.waitForSelector('#intent-choices');
   await page.click('#intent-choices .choice[data-intent="INCOME"]');
   assert.equal(await page.locator('#intent-choices .choice.selected').count(), 1, 'exactly one goal selected');
@@ -1555,12 +1566,12 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   assert.equal(await page.locator('#symbol-context .symbol-panel').count(), 0,
     'Ideas does not duplicate the full Research destination inside its form');
   // The working symbol FOLLOWS across stages (the QQQ->AAPL amnesia bug)
-  await go('#/trade/verify');
+  await go('#/trade/outcomes');
   assert.equal(await page.inputValue('#bt-symbol'), 'QQQ', 'Backtest picks up the ticker you just typed');
   assert.match(await page.textContent('#trade-outcomes-nav .outcome-basis[data-basis="history"]'), /Historical replay/,
     'the reusable history engine does not overclaim Observed data in Demo/Scenario lanes');
   assert.match(await page.textContent('#trade-outcomes-note'), /fabricated Demo history/);
-  await go('#/recommend/scout');
+  await go('#/trade/context/scout');
   await page.waitForSelector('#intent-choices');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
 });
@@ -1679,7 +1690,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
 
   // Payoff crosshair: place nothing new — reuse any active trade? Instead assert on preview later.
   // Universe: the SAME sector rail as home/research picks the scan scope, globally
-  await go('#/recommend/scout');
+  await go('#/trade/context/scout');
   await page.waitForSelector('#universe-sector .sector-chip');
   const pickedSector = await page.locator('#universe-sector .sector-chip').first().getAttribute('data-sector');
   await page.click('#universe-sector .sector-chip[data-sector="' + pickedSector + '"]');
@@ -1849,7 +1860,7 @@ test('wide Trade market controls stay inside the workbench with a full sector ca
     App.state.discoverForm = Object.assign({}, App.state.discoverForm || {}, {
       source: 'single', goal: 'DIRECTIONAL', symbol: 'AAPL', horizon: 'month', thesis: 'bullish'
     });
-    window.location.hash = '#/trade/discover';
+    window.location.hash = '#/trade/context';
     await App.render();
   });
   await page.waitForSelector('#idea-market-card #universe-sector .sector-chip');
@@ -1930,7 +1941,7 @@ test('large Research markets progressively load every sparkline in governed batc
 
 test('intent-native UX: discount ladder, exit rungs, income board, symbol actions', async () => {
   // ACQUIRE at Learning: the ladder reads as sentences with a recommended rung
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
   await page.click('#intent-choices .choice[data-intent="ACQUIRE"]');
@@ -1969,7 +1980,7 @@ test('intent-native UX: discount ladder, exit rungs, income board, symbol action
   await page.waitForSelector('#to-review', { timeout: 30000 });
 
   // INCOME: the board shows YOUR capital, not an abstract list
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.click('#intent-choices .choice[data-intent="INCOME"]');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#rec-go');
@@ -2006,7 +2017,7 @@ test('experience ladder reshapes the UI per level', async () => {
   // Learning candidate cards use plain language and expandable mechanics.
   // The ideas form persists intent/symbol/target/filters across renders by design — reset here.
   await page.evaluate(() => { App.state.filterState = {}; App.state.discoverForm = null; });
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#rec-go');
@@ -2031,7 +2042,7 @@ test('experience ladder reshapes the UI per level', async () => {
   // 0DTE is a visible, explained choice at beginner — not a hidden capability
   assert.ok(await page.locator('#rec-horizon option[value="0DTE"]').count(), '0DTE horizon exists at beginner');
   // Beginner backtest menu is the FULL catalog (foundational structures lead each group)
-  await go('#/backtest');
+  await go('#/trade/outcomes');
   assert.ok(await page.locator('#bt-strategy option[value="IRON_CONDOR"]').count(), 'condor reachable at beginner');
   assert.ok(await page.locator('#bt-strategy option[value="COVERED_CALL"]').count(), 'covered call available at beginner');
   assert.ok(await page.locator('#bt-engine').count(), 'both engines selectable at beginner');
@@ -2043,7 +2054,7 @@ test('experience ladder reshapes the UI per level', async () => {
   await go('#/portfolio/account');
   assert.ok(!(await page.locator('.explain').first().isVisible()), 'explainers hidden at Pro');
   // Pro: compact intent segments, filters inline (no expandable), full backtest menu
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.waitForSelector('#intent-choices.intent-compact');
   assert.ok(await page.locator('#rec-f-yield').isVisible(), 'all five filters inline at Pro');
   assert.equal(await page.locator('#rec-filters .xp-head').count(), 0, 'no expandable around Pro filters');
@@ -2051,13 +2062,13 @@ test('experience ladder reshapes the UI per level', async () => {
   assert.match(filterText, /Chance of profit/);
   assert.match(filterText, /Worst case/);
   assert.doesNotMatch(filterText, /Min POP|Max assign %|% of account/i); // the old jargon is gone
-  await go('#/backtest');
+  await go('#/trade/outcomes');
   assert.ok(await page.locator('#bt-strategy option[value="IRON_BUTTERFLY"]').count(), 'full strategy menu at Expert');
   // The identical menu at both levels (one catalog): compare option sets
   const expertOpts = await page.evaluate(() => Array.from(document.querySelectorAll('#bt-strategy option')).map(o => o.value).join(','));
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
-  await go('#/backtest');
+  await go('#/trade/outcomes');
   const begOpts = await page.evaluate(() => Array.from(document.querySelectorAll('#bt-strategy option')).map(o => o.value).join(','));
   assert.equal(begOpts, expertOpts, 'one strategy catalog at both levels');
   await page.click('#level-switch button[data-level="expert"]');
@@ -2125,7 +2136,7 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
-  await go('#/ticket/builder');
+  await go('#/trade/structure');
   await page.waitForSelector('#bw-goals .choice');
   // Q&A, not text: goal cards -> one shaping question -> the structure
   await page.click('#bw-goals .choice[data-goal="DIRECTIONAL"]');
@@ -2224,7 +2235,7 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
 
   // Browse-all catalog: every structure with its payoff shape, risky ones labeled
   await page.evaluate(() => { App.state.builderForm = null; });
-  await go('#/ticket/builder');
+  await go('#/trade/structure');
   await page.waitForSelector('#bw-goals .choice');
   await page.click('#bw-browse');
   await page.waitForSelector('#builder-catalog .tpl');
@@ -2236,7 +2247,7 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#app[data-ready="true"]');
   await page.evaluate(() => { App.state.builderForm = null; });
-  await go('#/ticket/builder');
+  await go('#/trade/structure');
   await page.waitForSelector('#builder-template');
   await page.selectOption('#builder-template', 'IRON_CONDOR');
   await page.waitForFunction(() => document.querySelectorAll('#builder-legs .leg-row').length === 4, { timeout: 20000 });
@@ -2276,7 +2287,7 @@ test('builder recovers from a failing symbol and follows the working symbol', as
   await page.evaluate(() => Learn.setLevel('beginner'));
   await go('#/home'); // same-hash navigation renders nothing — leave the route first
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; App.context.selectSymbol('ZZZZQQ'); });
-  await go('#/ticket/builder');
+  await go('#/trade/structure');
   await page.waitForSelector('#builder-load-error');
   assert.match(await page.textContent('#builder-load-error'), /Could not load ZZZZQQ/);
   assert.ok(await page.locator('#builder-retry').isVisible(), 'retry is right there');
@@ -2296,13 +2307,13 @@ test('pipeline streamline: candidates open in the builder; Ideas links the full 
   await page.waitForSelector('#app[data-ready="true"]');
   // Filters persist by design now — clear them so a prior test's limits don't reject everything.
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; App.state.filterState = {}; App.state.discoverForm = null; });
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#rec-go');
   await page.waitForSelector('#compare-table tbody tr.clickable', { timeout: 30000 });
   await page.click('#compare-table tbody tr.clickable');
   await page.waitForSelector('.compare-detail .candidate');
-  await page.locator('.compare-detail .candidate button:has-text("Open in builder")').first().click();
+  await page.locator('.compare-detail .candidate button:has-text("Edit structure")').first().click();
   await page.waitForSelector('#builder-legs .leg-row', { timeout: 30000 }); // Shape-stage landmark
   assert.ok(await page.locator('#builder-legs .leg-row').count() >= 1, 'candidate legs loaded into the terminal');
   await page.waitForFunction(() =>
@@ -2311,7 +2322,7 @@ test('pipeline streamline: candidates open in the builder; Ideas links the full 
   // Beginner: "All strategies" on Ideas lands on the browsable shape-card catalog
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.waitForSelector('#all-strategies-link');
   await page.click('#all-strategies-link');
   await page.waitForSelector('#builder-catalog .tpl', { timeout: 20000 });
@@ -2400,9 +2411,9 @@ test('decision page: recommendations-as-a-competition — the pick, evidence, sc
     assert.match(await page.textContent('.decision-order-note'), /economic tier/i, 'the non-score sort key is disclosed');
   }
 
-  // Handing the winner off to the Place stage carries the working idea.
+  // Handing the winner to Decide carries the working structure.
   await page.click('#decision-use');
-  await page.waitForFunction(() => location.hash.indexOf('/trade/place') >= 0);
+  await page.waitForFunction(() => location.hash.indexOf('/trade/decide') >= 0);
   await page.waitForSelector('#app[data-ready="true"]');
 
   // Reset shared state so later tests' assumptions hold.
@@ -2533,7 +2544,7 @@ test('cross-level invariance: identical persisted inputs produce the identical e
       try { body = JSON.parse(route.request().postData() || '{}'); } catch (e) {}
       route.continue();
     });
-    await go('#/recommend/manual');
+    await go('#/trade/context/manual');
     await page.fill('#rec-symbol', 'AAPL');
     await page.click('#rec-go');
     await page.waitForTimeout(1200);
@@ -2559,7 +2570,7 @@ test('cross-level invariance: identical persisted inputs produce the identical e
 test('undefined-risk framing: synthetic short is BLOCKED, synthetic long is not', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
-  await go('#/trade/shape');
+  await go('#/trade/structure');
   await page.waitForSelector('#bw-goals .choice, #builder-catalog', { timeout: 15000 });
   // Open the full catalog (browse-all) and find the two synthetics.
   const browse = page.locator('#bw-browse, button:has-text("Browse all structures")').first();
@@ -2579,7 +2590,7 @@ test('synthetic exposure sizing lives inside the selected Builder structure', as
     App.context.selectSymbol('AAPL');
   });
   await go('#/home');
-  await go('#/trade/shape');
+  await go('#/trade/structure');
   await page.waitForSelector('#builder-template', { timeout: 15000 });
   assert.equal(await page.locator('#replicate-run, #replicate-output').count(), 0,
     'the retired standalone replication tool is not mounted');
@@ -2602,10 +2613,60 @@ test('synthetic exposure sizing lives inside the selected Builder structure', as
     'undefined-risk synthetic short remains blocked by the ordinary Builder review');
 });
 
+test('the workflow carries one exact structure through Outcomes and back into Structure', async () => {
+  await page.evaluate(() => {
+    Learn.setLevel('expert');
+    App.state.builderForm = null;
+    App.state.ticket = null;
+    App.state.backtestForm = null;
+    App.context.selectSymbol('AAPL');
+  });
+  await go('#/trade/structure');
+  await page.waitForSelector('#builder-template');
+  await page.selectOption('#builder-template', 'DEBIT_CALL_SPREAD');
+  await page.waitForFunction(() => App.state.builderForm && App.state.builderForm.legs.length === 2);
+  const before = await page.evaluate(() => JSON.parse(JSON.stringify(App.state.builderForm.legs)));
+
+  await page.click('#wf-outcomes');
+  await page.waitForSelector('#trade-outcomes');
+  assert.equal(await page.inputValue('#bt-strategy'), 'DEBIT_CALL_SPREAD',
+    'Outcomes inherits the named Builder structure');
+  assert.deepEqual(await page.evaluate(() => App.state.ticket.legs), before,
+    'the workflow normalizes the exact Builder legs into its shared position contract');
+
+  await page.click('#wf-structure');
+  await page.waitForSelector('#builder-panel');
+  assert.deepEqual(await page.evaluate(() => App.state.builderForm.legs), before,
+    'returning to Structure preserves every contract instead of rebuilding a nearby template');
+
+  await page.selectOption('#builder-template', 'CREDIT_PUT_SPREAD');
+  await page.waitForFunction(() => App.state.builderForm && App.state.builderForm.templateKey === 'CREDIT_PUT_SPREAD');
+  const revised = await page.evaluate(() => JSON.parse(JSON.stringify(App.state.builderForm.legs)));
+  await page.click('#wf-outcomes');
+  await page.waitForSelector('#bt-strategy');
+  assert.equal(await page.inputValue('#bt-strategy'), 'CREDIT_PUT_SPREAD');
+  assert.equal(await page.evaluate(() => App.state.ticket.customFamily), 'CREDIT_PUT_SPREAD',
+    'leaving Structure replaces an older ticket with the newly edited package');
+  await page.click('#wf-structure');
+  await page.waitForSelector('#builder-panel');
+  assert.deepEqual(await page.evaluate(() => App.state.builderForm.legs), revised);
+
+  await page.evaluate(() => {
+    App.state.ticket = null;
+    App.state.builderForm.templateKey = null;
+    App.render();
+  });
+  await page.waitForSelector('#builder-panel');
+  await page.click('#wf-outcomes');
+  await page.waitForSelector('#trade-outcomes-basis-scenario[aria-selected="true"]');
+  assert.ok(await page.isVisible('#bt-scenario-card'),
+    'an unnamed custom package defaults to the exact-leg Monte Carlo basis, not an unrelated historical rule');
+});
+
 test('D3: the competition renders INLINE in Ideas (no orphan Decision page navigation)', async () => {
   await page.evaluate(() => Learn.setLevel('expert'));
   await page.evaluate(() => { App.state.filterState = {}; App.state.discoverForm = null; App.state.recommendResults = null; });
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#rec-go');
   await page.waitForSelector('#compare-ideas-btn', { timeout: 25000 });
@@ -2814,7 +2875,7 @@ test('golden weekend-trader journey: creator UI, injected shock, UI trade, movin
 
   // 4. EXPERT places a world trade through Discover → Place (screen once, strikes/review/confirm).
   await page.evaluate(() => { Learn.setLevel('expert'); App.render(); });
-  await go('#/trade/discover/manual');
+  await go('#/trade/context/manual');
   await page.waitForSelector('#rec-symbol');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');

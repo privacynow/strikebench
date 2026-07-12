@@ -1221,15 +1221,51 @@ body.lvl-expert .not-expert { display: none !important; }
 /* Contextual ticker: market context on Home, Research, Trade, Portfolio, and active simulation. */
 .tape.tape-offroute { display: none; }
 
-/* ---------- Trade workbench: stage pills + the working-idea bar ---------- */
-.wb-stages .wb-num { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 2px; }
-.idea-bar {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
-  padding: 7px 12px; margin: 0 0 14px; background: var(--surface);
+/* ---------- Trade workflow: one Context → Structure → Outcomes → Decide spine ---------- */
+.workflow-chrome { margin-bottom: 14px; }
+.workflow-rail { border-bottom: 1px solid var(--border-strong); }
+.workflow-steps {
+  list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0; padding: 0; margin: 0;
 }
-.idea-chip { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; }
-.idea-chip .icon { color: var(--accent); display: inline-flex; }
+.workflow-step { min-width: 0; }
+.workflow-step > button {
+  width: 100%; min-height: 56px; display: flex; align-items: center; gap: 9px;
+  padding: 8px 10px; color: var(--muted); text-align: left; background: transparent;
+  border: 0; border-bottom: 3px solid transparent; cursor: pointer;
+}
+.workflow-step > button:hover { color: var(--text); background: var(--surface-2); }
+.workflow-step.active > button { color: var(--text); border-bottom-color: var(--accent); }
+.workflow-step-number {
+  width: 24px; height: 24px; flex: 0 0 24px; display: inline-flex; align-items: center;
+  justify-content: center; border: 1px solid var(--border-strong); border-radius: 50%;
+  font-size: 12px; font-weight: 800; color: var(--muted);
+}
+.workflow-step.active .workflow-step-number { border-color: var(--accent); color: var(--accent); }
+.workflow-step.ready:not(.active) .workflow-step-number { border-color: var(--risk-ok); color: var(--risk-ok); }
+.workflow-step-copy { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.workflow-step-copy b { font-size: 13px; }
+.workflow-step-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.workflow-context {
+  min-height: 42px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  padding: 7px 10px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.workflow-symbol {
+  padding: 0; border: 0; color: var(--accent); background: transparent;
+  font-size: 14px; font-weight: 800; cursor: pointer;
+}
+.workflow-symbol:hover { text-decoration: underline; text-underline-offset: 3px; }
+.workflow-summary { display: inline-flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; }
+.workflow-summary .icon { color: var(--accent); display: inline-flex; flex: none; }
+.workflow-clear { margin-left: auto; }
+@media (max-width: 720px) {
+  .workflow-steps { grid-template-columns: 1fr 1fr; }
+  .workflow-step > button { min-height: 62px; align-items: flex-start; }
+  .workflow-step-copy > span { white-space: normal; line-height: 1.25; }
+  .workflow-context { align-items: flex-start; }
+  .workflow-summary { flex: 1 1 calc(100% - 55px); }
+  .workflow-clear { margin-left: 0; }
+}
 
 /* Private-instance sign-in screen (only rendered when AUTH_ENABLED and signed out). */
 .signin-card { max-width: 420px; margin: 15vh auto; text-align: center; }

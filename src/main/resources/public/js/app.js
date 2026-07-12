@@ -107,6 +107,10 @@
       // and fills the rest from a detached block guarded by App.alive(token); a later
       // navigation bumps the token so that stale fill bails instead of painting the wrong screen.
       var token = ++App.navToken;
+      // Route-owned live refresh hooks must never survive into the next screen. The Trade
+      // workflow installs this while mounted so Builder/ticket edits can refresh its context
+      // strip without rerendering the whole route.
+      App.refreshWorkflowContext = null;
       // The readiness flag drops SYNCHRONOUSLY on render start — the crossfade below is
       // async, and anything watching data-ready (tests, tooling) must never catch the
       // outgoing screen still claiming to be ready for the new route.
@@ -119,17 +123,11 @@
       var parts = hash.replace(/^#\//, '').split('/').filter(function (p) { return p.length; });
       var route = parts[0] || 'home';
       var params = parts.slice(1);
-      // IA merges keep old URLs alive: the tour lives inside Home, Account inside Portfolio,
-      // and Ideas/Ticket/Backtest are stages of the Trade workbench
+      // The tour and account are subviews of their owning screens. Trade has only its
+      // canonical Context/Structure/Outcomes/Decide routes; there are no internal aliases.
       if (route === 'welcome') { route = 'home'; params = ['tour']; }
       if (route === 'account') { route = 'portfolio'; params = ['account']; }
       if (route === 'data') { route = 'status'; } // the nav says Data; params carry the Data tab
-      if (route === 'recommend') { route = 'trade'; params = ['discover'].concat(params); }
-      if (route === 'backtest') { route = 'trade'; params = ['verify']; }
-      if (route === 'ticket') {
-        route = 'trade';
-        params = params[0] === 'builder' ? ['shape'] : ['place'];
-      }
       var view = window.Views[route];
       if (!view) {
         route = 'home';
@@ -270,7 +268,7 @@
         UI.el('button', { class: 'btn btn-sm', id: 'scenario-research', onclick: function () {
           App.navigate('#/research'); } }, 'Research'),
         UI.el('button', { class: 'btn btn-sm', id: 'scenario-test', onclick: function () {
-          App.navigate('#/trade/verify'); } }, 'Test strategies'),
+          App.navigate('#/trade/outcomes'); } }, 'Test strategies'),
         UI.el('a', { href: '#/data/datasets', onclick: function () { App.navigate('#/data/datasets'); } }, 'Manage'),
         UI.el('button', { class: 'btn btn-sm btn-secondary', id: 'scenario-exit', onclick: async function () {
           try {
@@ -290,7 +288,7 @@
           var rBtn = document.getElementById('scenario-research');
           var tBtn = document.getElementById('scenario-test');
           if (rBtn) { rBtn.textContent = 'Research ' + sym; rBtn.onclick = function () { App.navigate('#/research/' + sym); }; }
-          if (tBtn) { tBtn.onclick = function () { App.context.selectSymbol(sym); App.navigate('#/trade/verify'); }; }
+          if (tBtn) { tBtn.onclick = function () { App.context.selectSymbol(sym); App.navigate('#/trade/outcomes'); }; }
         } catch (e) { /* generic buttons stay */ }
       })();
     } else {
@@ -517,7 +515,7 @@
   var LANE_KEYS = ['marketContext', 'marketThesis', 'researchStudy', 'evidencePrefill',
     'researchTabBySymbol',
     'ideasPrefill', 'backtestPrefill', 'discoverForm', 'builderForm', 'backtestForm',
-    'verifyForm', 'scenarioForm', 'ideasForm', 'scoutResults',
+    'verifyForm', 'scenarioForm', 'ideasForm', 'scoutResults', 'outcomeReceipt',
     'portfolioOptimizer',
     // Result objects are market-DERIVED state (review P0 #1): an observed evaluation must
     // never render inside a simulated market. HTTP-cache flushes don't touch these.

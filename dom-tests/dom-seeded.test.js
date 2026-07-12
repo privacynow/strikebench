@@ -145,8 +145,8 @@ after(async () => {
   if (pg) pg.drop();
 });
 
-const ROUTES = ['#/home', '#/research/AAPL', '#/trade/discover', '#/trade/discover/manual',
-  '#/trade/shape', '#/trade/place', '#/trade/verify', '#/portfolio', '#/portfolio/closed',
+const ROUTES = ['#/home', '#/research/AAPL', '#/trade/context', '#/trade/context/manual',
+  '#/trade/structure', '#/trade/decide', '#/trade/outcomes', '#/portfolio', '#/portfolio/closed',
   '#/portfolio/activity', '#/portfolio/account', '#/status'];
 
 for (const level of ['beginner', 'expert']) {

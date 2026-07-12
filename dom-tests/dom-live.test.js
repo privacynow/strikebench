@@ -121,7 +121,7 @@ test('live: research handles unknown and non-optionable symbols gracefully', asy
 });
 
 test('live: manual ideas return candidates for a real chain', async () => {
-  await go('#/recommend/manual');
+  await go('#/trade/context/manual');
   await page.fill('#rec-symbol', 'AAPL');
   await page.selectOption('#rec-thesis', 'bullish');
   await page.click('#rec-go');
@@ -133,7 +133,7 @@ test('live: manual ideas return candidates for a real chain', async () => {
 });
 
 test('live: scout scans and reports with evidence within budget', async () => {
-  await go('#/recommend/scout');
+  await go('#/trade/context/scout');
   await page.waitForSelector('#auto-target');
   const t0 = Date.now();
   await page.click('#rec-go');
@@ -147,12 +147,12 @@ test('live: scout scans and reports with evidence within budget', async () => {
 });
 
 test('live: full ticket flow places and unwinds a paper trade at real marks', async () => {
-  await go('#/trade/discover/manual');
+  await go('#/trade/context/manual');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
   await page.selectOption('#rec-thesis', 'bullish');
   await page.click('#rec-go');
-  const useBtn = '#rec-results .candidate button:has-text("Practice this trade"), #rec-results .candidate button:has-text("Use in trade ticket")';
+  const useBtn = '#rec-results .candidate button:has-text("Review & decide")';
   await page.waitForSelector(useBtn + ', .alert-warn', { timeout: 60000 });
   if (!(await page.locator(useBtn).count())) {
     assert.ok(true, 'no candidates passed screens right now — graceful, not a failure');
@@ -181,7 +181,7 @@ test('live: full ticket flow places and unwinds a paper trade at real marks', as
 });
 
 test('live: observed backtest never substitutes demo history', async () => {
-  await go('#/backtest');
+  await go('#/trade/outcomes');
   await page.click('#bt-run');
   await page.waitForSelector('#bt-results .stat, #bt-results .alert-danger', { timeout: 120000 });
   const text = await page.textContent('#bt-results');

@@ -7,7 +7,7 @@
  *   EXPERT: a naked terminal — structure quick-pick, editable leg grid with inline market
  *   data, per-leg include/exclude toggles for instant impact analysis, net greeks, and a
  *   sticky analytics panel.
- * Lives on the Trade screen (#/ticket/builder). Hands off to the standard ticket review.
+ * Lives in Trade → Structure. Hands off to the standard review-and-decide stage.
  */
 (function () {
   'use strict';
@@ -57,6 +57,51 @@
     NAKED_PUT: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; }
   };
   var TEMPLATES = [];
+
+  function wireLegs(legs) {
+    return (legs || [])
+      .filter(function (l) { return l.type === 'STOCK' || (l.strike && l.expiration); })
+      .map(function (l) {
+        return { action: l.action, type: l.type, strike: l.type === 'STOCK' ? null : String(l.strike),
+                 expiration: l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1 };
+      });
+  }
+
+  /** Normalize the live Builder state into the one position contract consumed by Outcomes/Decide. */
+  function prepareTicket() {
+    var st = App.state.builderForm;
+    if (!st || !st.symbol || !st.legs || !st.legs.length) return null;
+    var active = st.legs.filter(function (_, i) { return !(st.excluded || {})[i]; });
+    var legs = wireLegs(active);
+    if (!legs.length) return null;
+    var tpl = st.templateKey ? TEMPLATES.find(function (t) { return t.key === st.templateKey; }) : null;
+    App.state.ticket = {
+      world: App.state.world || 'observed', symbol: st.symbol, custom: true, customFor: st.symbol,
+      customFamily: tpl && tpl.family ? tpl.family : null,
+      legs: legs, qty: st.qty || 1, step: 6, thesis: 'neutral', horizon: 'month',
+      outcomeBasisHint: tpl ? 'history' : 'scenario'
+    };
+    return App.state.ticket;
+  }
+
+  /** Bring a screened/reviewed package back into Structure without changing its contracts. */
+  function adoptTicket(ticket) {
+    if (!ticket || !ticket.symbol) return null;
+    var family = ticket.candidate && ticket.candidate.strategy || ticket.customFamily || null;
+    var tpl = family && TEMPLATES.find(function (t) { return t.family === family; });
+    var sourceLegs = ticket.legs && ticket.legs.length ? ticket.legs
+      : ticket.candidate && ticket.candidate.legs || [];
+    App.state.builderForm = {
+      symbol: ticket.symbol, qty: ticket.qty || ticket.candidate && ticket.candidate.qty || 1,
+      goal: 'BROWSE', templateKey: tpl ? tpl.key : null, step: 4, legIdx: 0, excluded: {},
+      legs: sourceLegs.map(function (l) {
+        return { action: l.action, type: l.stock ? 'STOCK' : l.type,
+          strike: l.stock || l.type === 'STOCK' ? null : String(l.strike),
+          expiration: l.stock || l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1 };
+      }), limits: {}, exposureResult: null
+    };
+    return App.state.builderForm;
+  }
 
   function applyCatalog(doc) {
     var entries = doc && doc.templates || [];
@@ -229,7 +274,10 @@
     // Cross-level coherence: a position built in the Expert terminal (or handed off) must not vanish
     // into Beginner's step-1 goal chooser and get overwritten — land it on Beginner's recap instead.
     if (level === 'beginner' && st.legs.length && st.step < 3) { st.step = 4; }
-    function remember() { App.state.builderForm = st; }
+    function remember() {
+      App.state.builderForm = st;
+      if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
+    }
 
     var research = null, chainCache = {}, expirations = [], spot = null;
     // Monotonic supersede token: whenever the STRUCTURE changes (pick/seed/fit), bump this and drop any
@@ -314,14 +362,6 @@
       return out;
     }
 
-    function wireLegs(legs) {
-      return legs
-        .filter(function (l) { return l.type === 'STOCK' || (l.strike && l.expiration); })
-        .map(function (l) {
-          return { action: l.action, type: l.type, strike: l.type === 'STOCK' ? null : String(l.strike),
-                   expiration: l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1 };
-        });
-    }
     function familyLabel() {
       var t = TEMPLATES.find(function (x) { return x.key === st.templateKey; });
       return t ? t.family : 'CUSTOM';
@@ -523,17 +563,8 @@
     var onLegsReplaced = null; // each surface wires its own re-render
 
     function handoff() {
-      // A structure picked from a NAMED template keeps its identity all the way to the
-      // portfolio row — an 'Iron condor' must never place as 'Custom' (naming is education).
-      var tpl = st.templateKey ? TEMPLATES.find(function (t2) { return t2.key === st.templateKey; }) : null;
-      App.state.ticket = {
-        world: App.state.world || 'observed',
-        symbol: st.symbol, custom: true, customFor: st.symbol,
-        customFamily: tpl && tpl.family ? tpl.family : null,
-        legs: wireLegs(activeLegs()), qty: st.qty, step: 6,
-        thesis: 'neutral', horizon: 'month'
-      };
-      App.navigate('#/trade/place');
+      prepareTicket();
+      App.navigate('#/trade/decide');
     }
 
     try {
@@ -1340,5 +1371,6 @@
     }
   }
 
-  window.Builder = { render: render, TEMPLATES: TEMPLATES, WIZARD: WIZARD, applyCatalog: applyCatalog };
+  window.Builder = { render: render, TEMPLATES: TEMPLATES, WIZARD: WIZARD,
+    applyCatalog: applyCatalog, prepareTicket: prepareTicket, adoptTicket: adoptTicket };
 })();
