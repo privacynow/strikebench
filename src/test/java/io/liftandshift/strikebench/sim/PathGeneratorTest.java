@@ -26,6 +26,14 @@ class PathGeneratorTest {
     }
 
     @Test
+    void eachPathIsIndependentOfHowManyOtherPathsAreRequested() {
+        double[][] small = gen.generate(gbm(42, 2), 100, null);
+        double[][] large = gen.generate(gbm(42, 20), 100, null);
+        assertThat(large[0]).containsExactly(small[0]);
+        assertThat(large[1]).containsExactly(small[1]);
+    }
+
+    @Test
     void pathsStartAtSpotAndStayPositive() {
         double[][] paths = gen.generate(gbm(7, 30), 250, null);
         for (double[] path : paths) {
@@ -111,9 +119,8 @@ class PathGeneratorTest {
 
     @Test
     void intradayBridgeRespectsOhlcBounds() {
-        Rng rng = new Rng(123);
         double open = 100, high = 104, low = 98, close = 101;
-        double[] path = gen.intradayBridge(open, high, low, close, 40, rng);
+        double[] path = gen.intradayBridge(open, high, low, close, 40, 123);
         assertThat(path[0]).isEqualTo(open);
         assertThat(path[path.length - 1]).isEqualTo(close);
         double mn = Double.MAX_VALUE, mx = -Double.MAX_VALUE;
@@ -186,7 +193,7 @@ class PathGeneratorTest {
     @Test
     void bootstrapRespectsTheVolKnobAndTheStepSize() {
         // History with ~50% annualized vol; the user asks for 20% — the knob must win.
-        Rng hr = new Rng(99);
+        RandomStreams.Cursor hr = RandomStreams.cursor(99, 0x5445535448495354L, 0);
         double[] hist = new double[500];
         double histDaily = 0.50 / Math.sqrt(252);
         for (int i = 0; i < hist.length; i++) hist[i] = histDaily * hr.gaussian();

@@ -41,6 +41,7 @@ public final class SimulationEngine {
     }
 
     public record DatasetRun(String datasetId, String name, String symbol, int bars, long seed,
+                             String pathModelVersion,
                              double startPrice, double endPrice, List<String> notes) {}
 
     /** Generate + persist one synthetic future for a symbol. Returns the auto-saved dataset. */
@@ -68,7 +69,8 @@ public final class SimulationEngine {
         int days = spec.totalSteps() / spd;
 
         String name = symbol + " · " + pretty(spec.shape()) + " · " + days + "d · seed " + spec.seed();
-        String id = datasets.create(name, "SYNTHETIC_PURE", symbol, spec.seed(), spec, userId);
+        String id = datasets.create(name, "SYNTHETIC_PURE", symbol, spec.seed(),
+                Map.of("pathModelVersion", generated.modelVersion(), "scenario", spec), userId);
 
         // FRAMING: the bars are written as the RECENT PAST, ending today — "imagine this had just
         // happened". Future-dated bars satisfied nothing (Research asks for history ending today;
@@ -94,12 +96,13 @@ public final class SimulationEngine {
             notes.add("Block-bootstrap inputs, when available, come from " + symbol
                     + " in the active market and dataset named by this request.");
         }
-        return new DatasetRun(id, name, symbol, bars.size(), spec.seed(), round2(path[0]), round2(path[path.length - 1]), notes);
+        return new DatasetRun(id, name, symbol, bars.size(), spec.seed(), generated.modelVersion(),
+                round2(path[0]), round2(path[path.length - 1]), notes);
     }
 
     public record PreviewBand(int day, double p10, double p50, double p90) {}
 
-    public record Preview(String symbol, double spot, int paths, int horizonDays,
+    public record Preview(String symbol, double spot, int paths, int horizonDays, String pathModelVersion,
                           List<PreviewBand> bands, List<List<Double>> samples,
                           double endP10, double endP50, double endP90, List<String> notes) {}
 
@@ -149,7 +152,7 @@ public final class SimulationEngine {
         notes.add("Synthetic futures from seed " + spec.seed() + " — a model of what COULD happen, never a forecast.");
         if (spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP)
             notes.add("Block-bootstrap history is resolved from this request's active market and dataset; if unavailable, the model falls back to Gaussian noise.");
-        return new Preview(symbol, round2(spot), paths.length, days, bands, samples,
+        return new Preview(symbol, round2(spot), paths.length, days, generated.modelVersion(), bands, samples,
                 end.p10(), end.p50(), end.p90(), notes);
     }
 
@@ -196,6 +199,7 @@ public final class SimulationEngine {
 
     public Map<String, Object> toJson(DatasetRun r) {
         return Map.of("datasetId", r.datasetId(), "name", r.name(), "symbol", r.symbol(), "bars", r.bars(),
-                "seed", r.seed(), "startPrice", r.startPrice(), "endPrice", r.endPrice(), "notes", r.notes());
+                "seed", r.seed(), "pathModelVersion", r.pathModelVersion(),
+                "startPrice", r.startPrice(), "endPrice", r.endPrice(), "notes", r.notes());
     }
 }

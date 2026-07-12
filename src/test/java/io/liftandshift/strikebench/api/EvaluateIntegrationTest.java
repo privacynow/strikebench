@@ -178,6 +178,7 @@ class EvaluateIntegrationTest {
         assertThat(envelope.get("basis").asText()).isEqualTo("PARAMETRIC");
         assertThat(envelope.at("/context/marketLane").asText()).isEqualTo("DEMO");
         assertThat(envelope.at("/result/bands").isArray()).isTrue();
+        assertThat(envelope.at("/result/pathModelVersion").asText()).isEqualTo("paths-2");
 
         assertThat(post("/api/evaluate", paths.replace("\"DEMO\"", "\"OBSERVED\"")).statusCode())
                 .isEqualTo(409);
@@ -188,6 +189,7 @@ class EvaluateIntegrationTest {
         assertThat(post("/api/sim/scenario", "{}").statusCode()).isEqualTo(404);
         assertThat(post("/api/sim/strategy", "{}").statusCode()).isEqualTo(404);
         assertThat(post("/api/sim/compare", "{}").statusCode()).isEqualTo(404);
+        assertThat(post("/api/trade/replicate", "{}").statusCode()).isEqualTo(404);
     }
 
     @Test void riskNeutralBasisEvaluatesExactListedPackagesThroughTheSameContract() throws Exception {

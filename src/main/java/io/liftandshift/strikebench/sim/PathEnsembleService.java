@@ -32,7 +32,8 @@ public final class PathEnsembleService {
     }
 
     public record Ensemble(Basis basis, Scope scope, double spot, ScenarioSpec spec,
-                           double[][] paths, ResearchQuestionEngine.QuestionResult study) {
+                           double[][] paths, ResearchQuestionEngine.QuestionResult study,
+                           String modelVersion) {
         public Ensemble {
             if (paths == null || paths.length == 0) throw new IllegalArgumentException("no paths in the ensemble");
         }
@@ -76,7 +77,8 @@ public final class PathEnsembleService {
 
         if (basis == Basis.PARAMETRIC) {
             return new Ensemble(basis, scope, spot, spec,
-                    generator.generate(spec, spot, historicalLogReturns(scope)), null);
+                    generator.generate(spec, spot, historicalLogReturns(scope)), null,
+                    PathGenerator.MODEL_VERSION);
         }
         if (studyRequest == null) {
             throw new IllegalArgumentException(basis + " requires a historical study request");
@@ -102,7 +104,9 @@ public final class PathEnsembleService {
             absolute[i] = new double[relative.size()];
             for (int k = 0; k < relative.size(); k++) absolute[i][k] = spot * relative.get(k);
         }
-        return new Ensemble(basis, scope, spot, empiricalSpec, absolute, study);
+        String version = basis == Basis.HISTORICAL_ANALOGS
+                ? "historical-analogs-1" : "conditional-bootstrap-1";
+        return new Ensemble(basis, scope, spot, empiricalSpec, absolute, study, version);
     }
 
     /** Lane- and dataset-aware inputs for the block-bootstrap path model. */

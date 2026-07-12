@@ -43,6 +43,15 @@ class SimulationStackTest {
                 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.25), seed, 300);
     }
 
+    private ScenarioSimulator.SimResult run(ScenarioSimulator simulator, double spot,
+                                              List<ScenarioSimulator.SimLeg> legs, int qty,
+                                              ScenarioSpec raw, IvSpec iv, double rate,
+                                              double[] historicalReturns) {
+        ScenarioSpec spec = raw.sane();
+        double[][] paths = new PathGenerator().generate(spec, spot, historicalReturns);
+        return simulator.runOnPaths(paths, spot, legs, qty, spec, iv, rate, null, null);
+    }
+
     @Test
     void ivPathCrushesAtTheEventAndStaysBounded() {
         IvSpec iv = new IvSpec(0.40, 0, 0, 0.40, 5, -0.5, 0.03, 4.0);
@@ -57,8 +66,8 @@ class SimulationStackTest {
     void longCallWinsMoreInAGrindUpThanASelloff() {
         var sim = new ScenarioSimulator();
         var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
-        var up = sim.run(100, legs, 1, spec(ScenarioSpec.Shape.GRIND_UP, 0.6, 7), IvSpec.flat(0.25), 0.04, null);
-        var down = sim.run(100, legs, 1, spec(ScenarioSpec.Shape.SELLOFF_REBOUND, -0.6, 7), IvSpec.flat(0.25), 0.04, null);
+        var up = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.GRIND_UP, 0.6, 7), IvSpec.flat(0.25), 0.04, null);
+        var down = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.SELLOFF_REBOUND, -0.6, 7), IvSpec.flat(0.25), 0.04, null);
         assertThat(up.winRatePct()).isGreaterThan(down.winRatePct());
         assertThat(up.expectedPnlCents()).isGreaterThan(down.expectedPnlCents());
         // the report is a real distribution: ordered percentiles, bands, histogram, example path
@@ -77,8 +86,8 @@ class SimulationStackTest {
         // IV — which is exactly where a crush bites. (At expiry, value is intrinsic and IV is moot.)
         var straddle = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 45, 1),
                 new ScenarioSimulator.SimLeg("BUY", "PUT", 100, 45, 1));
-        var flatIv = sim.run(100, straddle, 1, spec(ScenarioSpec.Shape.CHOP, 0, 9), IvSpec.flat(0.40), 0.04, null);
-        var crushed = sim.run(100, straddle, 1, spec(ScenarioSpec.Shape.CHOP, 0, 9),
+        var flatIv = run(sim, 100, straddle, 1, spec(ScenarioSpec.Shape.CHOP, 0, 9), IvSpec.flat(0.40), 0.04, null);
+        var crushed = run(sim, 100, straddle, 1, spec(ScenarioSpec.Shape.CHOP, 0, 9),
                 new IvSpec(0.40, 0, 0, 0.40, 2, -0.5, 0.03, 4.0), 0.04, null);
         // Same underlying paths (same seed) — the crush strictly lowers the long-vol P&L.
         assertThat(crushed.expectedPnlCents()).isLessThan(flatIv.expectedPnlCents());
@@ -93,7 +102,7 @@ class SimulationStackTest {
         var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 5, 1));
         var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP, 20, 1, 0, 0.4,
                 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.4), 77, 1); // ONE path -> bands ARE that path
-        var r = sim.run(100, legs, 1, spec, IvSpec.flat(0.4), 0.04, null);
+        var r = run(sim, 100, legs, 1, spec, IvSpec.flat(0.4), 0.04, null);
         long settled = r.bands().get(5).p50Cents();
         for (int d = 6; d <= 20; d++) {
             assertThat(r.bands().get(d).p50Cents()).as("day " + d + " stays at the settled value").isEqualTo(settled);
@@ -104,8 +113,8 @@ class SimulationStackTest {
     void seedReproducesTheExactDistribution() {
         var sim = new ScenarioSimulator();
         var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
-        var a = sim.run(100, legs, 1, spec(ScenarioSpec.Shape.CHOP, 0, 42), IvSpec.flat(0.3), 0.04, null);
-        var b = sim.run(100, legs, 1, spec(ScenarioSpec.Shape.CHOP, 0, 42), IvSpec.flat(0.3), 0.04, null);
+        var a = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.CHOP, 0, 42), IvSpec.flat(0.3), 0.04, null);
+        var b = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.CHOP, 0, 42), IvSpec.flat(0.3), 0.04, null);
         assertThat(a.p50Cents()).isEqualTo(b.p50Cents());
         assertThat(a.expectedPnlCents()).isEqualTo(b.expectedPnlCents());
     }
@@ -124,7 +133,11 @@ class SimulationStackTest {
         var run = engine.runAndPersist("AAPL", spec(ScenarioSpec.Shape.SELLOFF_REBOUND, 0, 3), null,
                 "observed", io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         assertThat(run.bars()).isGreaterThan(10);
-        assertThat(datasets.list(null)).anySatisfy(d -> assertThat(d.id()).isEqualTo(run.datasetId()));
+        assertThat(run.pathModelVersion()).isEqualTo("paths-2");
+        DatasetService.DatasetRow saved = datasets.list(null).stream()
+                .filter(d -> d.id().equals(run.datasetId())).findFirst().orElseThrow();
+        assertThat(io.liftandshift.strikebench.util.Json.parse(saved.spec()).get("pathModelVersion").asText())
+                .isEqualTo("paths-2");
         // Observed rows are untouched: the synthetic bars live ONLY under the new dataset_id.
         long observedRows = db.query("SELECT count(*) c FROM underlying_bar WHERE dataset_id='observed'",
                 r -> r.lng("c")).getFirst();

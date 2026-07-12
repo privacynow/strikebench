@@ -5,11 +5,7 @@ package io.liftandshift.strikebench.sim;
  * of (seed, stream, key, index). No hidden state, no consumption order — two callers can never
  * shift each other's draws, and any draw is reproducible in isolation. The live simulated market
  * ({@code SimulatedWorld}) and the research resampling machinery ({@code BootstrapSampler},
- * conditional-bootstrap path producers) all draw from here.
- *
- * <p>{@code PathGenerator}'s legacy stateful RNG remains for its existing modes because migrating
- * it CHANGES every generated path — that migration is a recorded, model-version-gated follow-up,
- * never a silent swap (validated outputs must not drift under a refactor).
+ * conditional-bootstrap path producers, and parametric {@code PathGenerator}) all draw from here.
  */
 public final class RandomStreams {
 
@@ -32,10 +28,66 @@ public final class RandomStreams {
         return Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
     }
 
+    /** Uniform draw in [0,1), pure in the same coordinates as {@link #gaussian}. */
+    public static double uniform(long seed, long stream, long key, long index) {
+        long h = seed;
+        h = mix(h ^ stream); h = mix(h ^ key); h = mix(h ^ index);
+        return (h >>> 11) * 0x1.0p-53;
+    }
+
     /** Uniform int in [0, bound), pure in (seed, stream, key, index). */
     public static int uniformInt(long seed, long stream, long key, long index, int bound) {
         long h = seed;
         h = mix(h ^ stream); h = mix(h ^ key); h = mix(h ^ index);
         return (int) Math.floorMod(h, Math.max(1, bound));
+    }
+
+    /**
+     * A local cursor over one independent counter stream. Consumption order is confined to one
+     * path/key; adding another path, symbol, or comparison cannot shift this stream.
+     */
+    public static Cursor cursor(long seed, long stream, long key) {
+        return new Cursor(seed, stream, key);
+    }
+
+    public static final class Cursor {
+        private final long seed;
+        private final long stream;
+        private final long key;
+        private long index;
+
+        private Cursor(long seed, long stream, long key) {
+            this.seed = seed;
+            this.stream = stream;
+            this.key = key;
+        }
+
+        public double uniform() { return RandomStreams.uniform(seed, stream, key, index++); }
+        public double gaussian() { return RandomStreams.gaussian(seed, stream, key, index++); }
+        public int nextInt(int bound) { return RandomStreams.uniformInt(seed, stream, key, index++, bound); }
+
+        /** Standardized Student-t draw (unit variance) for nu &gt; 2. */
+        public double studentT(double nu) {
+            if (nu <= 2.5) nu = 2.5;
+            double z = gaussian();
+            int k = Math.max(1, (int) Math.round(nu));
+            double chi2 = 0;
+            for (int i = 0; i < k; i++) {
+                double g = gaussian();
+                chi2 += g * g;
+            }
+            double t = z / Math.sqrt(chi2 / k);
+            return t / Math.sqrt(nu / (nu - 2.0));
+        }
+
+        /** Knuth Poisson draw; scenario step intensities are deliberately small. */
+        public int poisson(double lambda) {
+            if (lambda <= 0) return 0;
+            double limit = Math.exp(-lambda);
+            int k = 0;
+            double product = 1;
+            do { k++; product *= uniform(); } while (product > limit);
+            return k - 1;
+        }
     }
 }

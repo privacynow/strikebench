@@ -2231,6 +2231,7 @@ public final class ApiServer {
         outCmp.put("results", feeAware);
         outCmp.put("refused", refused);
         outCmp.put("volAnnual", spec.sane().volAnnual());
+        outCmp.put("pathModelVersion", comparison.ensemble().modelVersion());
         // The alternatives every structure must beat + the fairness contract, disclosed.
         outCmp.put("cashBaseline", Map.of("key", "CASH", "note",
                 "Doing nothing: $0 expected, $0 at risk, zero costs — any structure below a coin flip after costs loses to this."));
@@ -2394,11 +2395,13 @@ public final class ApiServer {
                 new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(sym, world, analysisCtx(ctx)),
                 pathBasis, spec, b.study(), spot, legsToRun, qty, iv, r, entryCost, entryNote);
         var studyRes = evaluated.ensemble().study();
+        String pathModelVersion = evaluated.ensemble().modelVersion();
         if (studyRes != null) {
             var eresult = evaluated.result();
             // The interpretation is DIFFERENT and must say so: conditional history, not a model.
             var out = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(eresult);
             out.put("pathSource", pathBasis.name());
+            out.put("pathModelVersion", pathModelVersion);
             out.put("studyKey", studyRes.studyKey());
             out.put("analogEvents", studyRes.eventDates() == null ? 0 : studyRes.eventDates().size());
             out.put("evidence", studyRes.evidence());
@@ -2417,7 +2420,9 @@ public final class ApiServer {
                         + " " + occurrences + " (conditional bootstrap) — empirical shape preserved; sampling uncertainty, not a model.");
             return out;
         }
-        return evaluated.result();
+        var out = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(evaluated.result());
+        out.put("pathModelVersion", pathModelVersion);
+        return out;
     }
 
     private record MarketEntry(long entryCents, Double atmIv, Double averageIv,

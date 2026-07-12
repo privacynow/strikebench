@@ -12,6 +12,11 @@ package io.liftandshift.strikebench.sim;
  */
 public final class PathGenerator {
 
+    public static final String MODEL_VERSION = "paths-2";
+    private static final long NOISE_STREAM = 0x504154484E4F4953L;
+    private static final long EVENT_STREAM = 0x5041544845564E54L;
+    private static final long OHLC_STREAM = 0x4F484C4342524944L;
+
     /** Paths as prices: result[pathIndex][0..totalSteps], result[*][0] == s0. */
     public double[][] generate(ScenarioSpec spec, double s0, double[] historicalLogReturns) {
         ScenarioSpec s = spec.sane();
@@ -25,7 +30,6 @@ public final class PathGenerator {
 
         double[] guide = shapeGuide(s.shape(), steps, muTot, amp, sigmaT);
         double[][] out = new double[s.paths()][steps + 1];
-        Rng rng = new Rng(s.seed());
 
         // Timed shocks are OVERNIGHT events, not diffusion steps: at the shock step the
         // deterministic move REPLACES that step's noise (noise increment suppressed), so the
@@ -37,10 +41,13 @@ public final class PathGenerator {
         double eventSize = Math.max(0.05, sigmaT);
 
         for (int p = 0; p < s.paths(); p++) {
+            RandomStreams.Cursor rng = RandomStreams.cursor(s.seed(),
+                    NOISE_STREAM + s.model().ordinal(), p);
             double[] noise = noisePath(s, sigma, dt, steps, rng, historicalLogReturns);
             if (gapStep > 0) suppressStepNoise(noise, gapStep);
             if (eventStep > 0) suppressStepNoise(noise, eventStep);
-            double eventShock = eventStep > 0 ? (rng.uniform() < 0.5 ? -eventSize : eventSize) : 0;
+            RandomStreams.Cursor eventRng = RandomStreams.cursor(s.seed(), EVENT_STREAM, p);
+            double eventShock = eventStep > 0 ? (eventRng.uniform() < 0.5 ? -eventSize : eventSize) : 0;
             for (int i = 0; i <= steps; i++) {
                 double shock = eventStep > 0 && i >= eventStep ? eventShock : 0;
                 out[p][i] = s0 * Math.exp(guide[i] + noise[i] + shock);
@@ -86,7 +93,8 @@ public final class PathGenerator {
 
     private static final double GAUSSIAN = 1_000; // nu above the t/gaussian switch = normal innovations
 
-    private double[] noisePath(ScenarioSpec s, double sigma, double dt, int steps, Rng rng, double[] hist) {
+    private double[] noisePath(ScenarioSpec s, double sigma, double dt, int steps,
+                               RandomStreams.Cursor rng, double[] hist) {
         return switch (s.model()) {
             case GBM -> gbmNoise(sigma, dt, steps, rng, GAUSSIAN);           // GBM is GAUSSIAN by definition
             case STUDENT_T -> gbmNoise(sigma, dt, steps, rng, s.tailNu());   // fat tails only when asked for
@@ -97,7 +105,7 @@ public final class PathGenerator {
         };
     }
 
-    private static double[] gbmNoise(double sigma, double dt, int steps, Rng rng, double nu) {
+    private static double[] gbmNoise(double sigma, double dt, int steps, RandomStreams.Cursor rng, double nu) {
         double[] n = new double[steps + 1];
         double sd = sigma * Math.sqrt(dt);
         double drag = 0.5 * sigma * sigma * dt; // Itô correction: keeps E[S] on the guide
@@ -108,7 +116,7 @@ public final class PathGenerator {
         return n;
     }
 
-    private static double[] jumpNoise(ScenarioSpec s, double sigma, double dt, int steps, Rng rng) {
+    private static double[] jumpNoise(ScenarioSpec s, double sigma, double dt, int steps, RandomStreams.Cursor rng) {
         double[] n = new double[steps + 1];
         double sd = sigma * Math.sqrt(dt);
         double lambdaDt = s.jumpsPerYear() * dt;
@@ -124,7 +132,7 @@ public final class PathGenerator {
         return n;
     }
 
-    private static double[] hestonNoise(ScenarioSpec s, double dt, int steps, Rng rng) {
+    private static double[] hestonNoise(ScenarioSpec s, double dt, int steps, RandomStreams.Cursor rng) {
         ScenarioSpec.Heston h = s.heston();
         double[] n = new double[steps + 1];
         double v = Math.max(1e-8, h.v0());
@@ -145,7 +153,8 @@ public final class PathGenerator {
      * The resampled returns are RESCALED to the requested σ (the vol knob works even with history)
      * and to the step size (daily returns must not be applied verbatim per intraday step).
      */
-    private static double[] bootstrapNoise(double sigma, double dt, int steps, Rng rng, double[] hist) {
+    private static double[] bootstrapNoise(double sigma, double dt, int steps,
+                                           RandomStreams.Cursor rng, double[] hist) {
         if (hist == null || hist.length < 5) {
             // no history to bootstrap from — fall back to plain gaussian noise at the requested vol
             return gbmNoise(sigma, dt, steps, rng, GAUSSIAN);
@@ -184,8 +193,9 @@ public final class PathGenerator {
      * An intraday path constrained to the real daily O/H/L/C. Endpoints are exactly open→close; the
      * running max touches high and the running min touches low (values respected, timing synthetic).
      */
-    public double[] intradayBridge(double open, double high, double low, double close, int steps, Rng rng) {
+    public double[] intradayBridge(double open, double high, double low, double close, int steps, long seed) {
         steps = Math.max(2, steps);
+        RandomStreams.Cursor rng = RandomStreams.cursor(seed, OHLC_STREAM, steps);
         low = Math.min(low, Math.min(open, close));
         high = Math.max(high, Math.max(open, close));
         // A Brownian bridge in price space from open to close.

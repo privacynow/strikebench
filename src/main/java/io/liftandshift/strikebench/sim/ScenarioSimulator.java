@@ -28,34 +28,6 @@ public final class ScenarioSimulator {
                             double breachProbPct, List<Band> bands, List<Bucket> distribution,
                             List<Double> examplePath, List<String> notes) {}
 
-    private final PathGenerator generator = new PathGenerator();
-
-    public SimResult run(double spot, List<SimLeg> legs, int qty, ScenarioSpec spec, IvSpec ivSpec,
-                         double riskFreeRate, double[] historicalLogReturns) {
-        return run(spot, legs, qty, spec, ivSpec, riskFreeRate, historicalLogReturns, null, null);
-    }
-
-    /**
-     * With an OBSERVED entry: when the caller priced the position from live market quotes
-     * (executable sides), the whole exercise measures YOUR SCENARIO vs THE MARKET'S PRICE —
-     * which is the actionable question. A model-priced entry against the same model's paths
-     * converges to a coin flip by construction.
-     */
-    public SimResult run(double spot, List<SimLeg> legs, int qty, ScenarioSpec spec, IvSpec ivSpec,
-                         double riskFreeRate, double[] historicalLogReturns,
-                         Long entryOverrideCents, String entryNote) {
-        try (AutoCloseable permit = SimBudget.acquire()) {
-            ScenarioSpec s = spec.sane();
-            requireWorkBudget((long) s.paths() * (s.totalSteps() + 1) * Math.max(1, legs.size()));
-            double[][] paths = generator.generate(s, spot, historicalLogReturns);
-            return runInner(paths, spot, legs, qty, s, ivSpec, riskFreeRate, entryOverrideCents, entryNote);
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new IllegalStateException(e);
-        }
-    }
-
     /**
      * EXTERNAL-PATH variant (evidence consolidation): the ensemble came from HISTORY — the exact
      * analog windows behind an event study, or a conditional bootstrap of them — and the simulator
@@ -115,39 +87,6 @@ public final class ScenarioSimulator {
     public record CompareRefusal(String key, String reason) {}
 
     public record CompareReport(List<CompareOutcome> results, List<CompareRefusal> refused) {}
-
-    /**
-     * FAIR comparison: every structure is priced along the SAME generated path set (one budget
-     * permit, one generation — not N re-generations), and a structure that cannot be priced is
-     * REPORTED as refused, never silently dropped ("all strategies" must mean all).
-     */
-    public CompareReport compare(double spot, List<CompareItem> items, int qty, ScenarioSpec spec,
-                                 IvSpec ivSpec, double riskFreeRate, double[] historicalLogReturns) {
-        try (AutoCloseable permit = SimBudget.acquire()) {
-            ScenarioSpec s = spec.sane();
-            // Total valuation work is budgeted as paths x steps x TOTAL LEGS across the whole
-            // comparison — one path set does not make thirty structures free.
-            long totalLegs = items.stream().mapToLong(it -> Math.max(1, it.legs().size())).sum();
-            requireWorkBudget((long) s.paths() * (s.totalSteps() + 1) * Math.max(1, totalLegs));
-            double[][] paths = generator.generate(s, spot, historicalLogReturns);
-            List<CompareOutcome> out = new ArrayList<>();
-            List<CompareRefusal> refused = new ArrayList<>();
-            for (CompareItem item : items) {
-                try {
-                    out.add(new CompareOutcome(item.key(),
-                            runInner(paths, spot, item.legs(), qty, s, ivSpec, riskFreeRate,
-                                    item.entryOverrideCents(), item.entryNote())));
-                } catch (Exception e) {
-                    refused.add(new CompareRefusal(item.key(), publicReason(e)));
-                }
-            }
-            return new CompareReport(out, refused);
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new IllegalStateException(e);
-        }
-    }
 
     public record EnsembleComparison(PathEnsembleService.Ensemble ensemble, CompareReport report) {}
 
