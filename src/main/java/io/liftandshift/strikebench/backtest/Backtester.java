@@ -60,6 +60,7 @@ public final class Backtester {
     private final AppConfig cfg;
     private final Db db;
     private final Clock clock;
+    private final HistoricalReplayKernel replay;
 
     public Backtester(MarketDataService market, List<HistoricalOptionsProvider> historical,
                       AppConfig cfg, Db db, Clock clock) {
@@ -68,6 +69,7 @@ public final class Backtester {
         this.cfg = cfg;
         this.db = db;
         this.clock = clock;
+        this.replay = new HistoricalReplayKernel(market, db);
     }
 
     public record BacktestRequest(
@@ -105,6 +107,24 @@ public final class Backtester {
             String disclaimer
     ) {}
 
+    public record PortfolioRequest(
+            String symbol, String strategy, String from, String to,
+            Integer targetDte, Integer entryEveryDays, Integer maxConcurrent, Integer qty,
+            Double shortDelta, Double widthPct, Double profitTargetPct, Double stopFraction,
+            Integer rollDte, Long startingCashCents) {}
+
+    public record PortfolioTrade(String entryDate, String exitDate, String strategy,
+                                 long creditCents, long pnlCents, long maxLossCents,
+                                 Double returnOnRisk, String exitReason) {}
+
+    public record PortfolioReport(
+            String id, String symbol, String strategy, String from, String to,
+            String pricingMode, String confidence, int daysCovered, int sampleSize, int concurrentPeak,
+            Double winRate, Double avgReturnOnRisk, long startingCents, long endingCents,
+            double maxDrawdownPct, List<PortfolioTrade> trades,
+            List<Map<String, Object>> equityCurve, List<String> notes,
+            boolean demoUnderlying, String disclaimer) {}
+
     public BacktestReport run(BacktestRequest req) {
         return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
     }
@@ -134,17 +154,17 @@ public final class Backtester {
         List<Map<String, String>> skipped = new ArrayList<>();
         List<TradeResult> trades = new ArrayList<>();
         List<Map<String, Object>> equityCurve = new ArrayList<>();
+        HistoricalReplayKernel.Evidence replayEvidence = new HistoricalReplayKernel.Evidence();
 
         // Lookback padding so HV is available on day one — filtered per-day to <= that day
-        io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(symbol, from.minusDays(200), to, actx);
-        List<Candle> allCandles = series.candles();
-        boolean demoUnderlying = series.isFixture();
+        HistoricalReplayKernel.Window replayWindow = replay.window(symbol, from, to, 200, actx);
+        List<Candle> allCandles = replayWindow.all();
+        boolean demoUnderlying = replayWindow.demo();
         if (demoUnderlying) {
             notes.add("Underlying price history is built-in DEMO DATA (no live candle source is configured — "
                     + "add a Polygon or Alpha Vantage key). These results do not reflect the real market.");
         }
-        List<Candle> window = allCandles.stream()
-                .filter(c -> !c.date().isBefore(from) && !c.date().isAfter(to)).toList();
+        List<Candle> window = replayWindow.requested();
         int daysRequested = countWeekdays(from, to);
         int daysCovered = window.size();
         if (window.isEmpty()) {
@@ -179,7 +199,7 @@ public final class Backtester {
                 BigDecimal expiryClose = known.stream()
                         .filter(c -> !c.date().isAfter(exp))
                         .reduce((a, b) -> b).map(Candle::close).orElse(day.close());
-                long exitValue = intrinsicValueCents(open.legs, open.qty, expiryClose);
+                long exitValue = HistoricalReplayKernel.intrinsicValueCents(open.legs, open.qty, expiryClose);
                 boolean assigned = open.legs.stream().anyMatch(l -> !l.isStock()
                         && l.action() == io.liftandshift.strikebench.model.LegAction.SELL
                         && l.intrinsicPerShare(expiryClose).signum() > 0);
@@ -214,8 +234,9 @@ public final class Backtester {
                 daysSinceFlat++;
             }
 
-            long equity = cash + (open == null ? 0
-                    : modelValueCents(open.legs, open.qty, close, ivProxy, date, !hvKnown));
+            long equity = cash + (open == null ? 0 : replay.valueCents(symbol, open.legs, open.qty,
+                    close, ivProxy, date, HistoricalReplayKernel.PriceIntent.MARK,
+                    !hvKnown, replayEvidence));
             equityCurve.add(Map.of("date", date.toString(), "equityCents", equity));
         }
 
@@ -225,8 +246,9 @@ public final class Backtester {
             List<Candle> known = allCandles;
             double hv = HistoricalVol.annualized(known, HV_WINDOW);
             boolean hvKnown = !Double.isNaN(hv);
-            long exitValue = modelValueCents(open.legs, open.qty, last.close().doubleValue(),
-                    hvKnown ? hv : FLAT_IV, last.date(), !hvKnown);
+            long exitValue = replay.valueCents(symbol, open.legs, open.qty, last.close().doubleValue(),
+                    hvKnown ? hv : FLAT_IV, last.date(), HistoricalReplayKernel.PriceIntent.EXIT,
+                    !hvKnown, replayEvidence);
             long feesClose = feesFor(open.legs, open.qty);
             cash += exitValue - feesClose;
             reserved -= Math.max(0, open.maxLossCents + open.entryNetCents);
@@ -234,6 +256,8 @@ public final class Backtester {
             trades.add(closeOut(open, last.date(), exitValue, "WINDOW_END", null));
             notes.add("Final trade closed at model value (with close fees) because the window ended before expiration; "
                     + "it is excluded from win-rate and return statistics");
+            equityCurve.set(equityCurve.size() - 1,
+                    Map.of("date", last.date().toString(), "equityCents", cash));
         }
 
         if (pricingMode == null) pricingMode = "MODELED_FROM_UNDERLYING";
@@ -265,9 +289,260 @@ public final class Backtester {
 
         return persist(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                 pricingMode, confidence, daysRequested, daysCovered, n, winRate, avgRoR,
-                startingCash, cash, maxDrawdownPct(equityCurve), worst, trades, skipped,
+                startingCash, cash, HistoricalReplayKernel.maxDrawdownPct(equityCurve), worst, trades, skipped,
                 assumptions(slippage, notes, family), equityCurve, notes, assignments, demoUnderlying, DISCLAIMER), req);
     }
+
+    // ---- Managed portfolio replay: same candles, pricing, evidence and expiry kernel ----
+
+    private enum ManagedFamily { CREDIT_PUT_SPREAD, DEBIT_CALL_SPREAD }
+
+    private static final class ManagedPosition {
+        LocalDate entryDate;
+        LocalDate expiration;
+        List<Leg> legs;
+        int qty;
+        long entryValueCents;
+        long creditCents;
+        long maxProfitCents;
+        long maxLossCents;
+        long openFeesCents;
+        ManagedFamily family;
+    }
+
+    public PortfolioReport runPortfolio(PortfolioRequest req) {
+        return runPortfolio(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+    }
+
+    public PortfolioReport runPortfolio(PortfolioRequest req,
+            io.liftandshift.strikebench.db.AnalysisContext analysis) {
+        String symbol = require(req.symbol(), "symbol").trim().toUpperCase(Locale.ROOT);
+        ManagedFamily family = parseManagedFamily(req.strategy());
+        LocalDate from = LocalDate.parse(require(req.from(), "from"));
+        LocalDate to = LocalDate.parse(require(req.to(), "to"));
+        if (!to.isAfter(from)) throw new IllegalArgumentException("'to' must be after 'from'");
+        int targetDte = clamp(req.targetDte(), 30, 1, 365);
+        int entryEvery = clamp(req.entryEveryDays(), 5, 1, 60);
+        int maxConcurrent = clamp(req.maxConcurrent(), 4, 1, 20);
+        int qty = clamp(req.qty(), 1, 1, 100);
+        double shortDelta = clampD(req.shortDelta(), 0.30, 0.05, 0.60);
+        double widthPct = clampD(req.widthPct(), 0.05, 0.01, 0.30);
+        double profitTarget = clampD(req.profitTargetPct(), 0.50, 0.10, 1.0);
+        double stopFraction = clampD(req.stopFraction(), 0.80, 0.20, 1.0);
+        int rollDte = clamp(req.rollDte(), 7, 0, Math.max(0, targetDte - 1));
+        long startingCash = req.startingCashCents() == null ? 10_000_000L : req.startingCashCents();
+        if (startingCash <= 0) throw new IllegalArgumentException("startingCashCents must be positive");
+
+        HistoricalReplayKernel.Window rw = replay.window(symbol, from, to, 220, analysis);
+        List<Candle> all = rw.all();
+        List<Candle> window = rw.requested();
+        HistoricalReplayKernel.Evidence evidence = new HistoricalReplayKernel.Evidence();
+        List<String> notes = new ArrayList<>();
+        List<PortfolioTrade> trades = new ArrayList<>();
+        List<Map<String, Object>> equity = new ArrayList<>();
+        if (rw.demo()) notes.add("Underlying history is built-in DEMO DATA — fabricated teaching history, not observed evidence.");
+        if (window.isEmpty()) {
+            notes.add("No underlying data for " + symbol + " in the requested window");
+            return persistPortfolio(new PortfolioReport(Ids.backtest(), symbol, family.name(), from.toString(),
+                    to.toString(), "PAYOFF_ONLY", "none", 0, 0, 0, null, null,
+                    startingCash, startingCash, 0, trades, equity, notes, rw.demo(), DISCLAIMER), req);
+        }
+
+        List<ManagedPosition> open = new ArrayList<>();
+        long realized = 0;
+        int peakConcurrent = 0;
+        int dayIndex = 0;
+        for (Candle day : window) {
+            LocalDate date = day.date();
+            double spot = day.close().doubleValue();
+            List<Candle> known = HistoricalReplayKernel.known(all, date);
+            double iv = HistoricalReplayKernel.volatility(known, HV_WINDOW, FLAT_IV);
+
+            for (ManagedPosition position : new ArrayList<>(open)) {
+                if (!date.isBefore(position.expiration)) {
+                    BigDecimal expiryClose = known.stream().filter(c -> !c.date().isAfter(position.expiration))
+                            .reduce((a, b) -> b).map(Candle::close).orElse(day.close());
+                    long pnl = HistoricalReplayKernel.intrinsicValueCents(position.legs, position.qty, expiryClose)
+                            - position.entryValueCents - position.openFeesCents;
+                    realized += pnl;
+                    trades.add(closeManaged(position, date, pnl, "EXPIRED"));
+                    open.remove(position);
+                    continue;
+                }
+                long exitValue = replay.valueCents(symbol, position.legs, position.qty, spot, iv, date,
+                        HistoricalReplayKernel.PriceIntent.EXIT, false, evidence);
+                long closeFees = feesFor(position.legs, position.qty);
+                long pnlIfClosed = exitValue - position.entryValueCents - position.openFeesCents - closeFees;
+                String reason = null;
+                if (position.maxProfitCents > 0 && pnlIfClosed >= profitTarget * position.maxProfitCents)
+                    reason = "PROFIT_TARGET";
+                else if (position.maxLossCents > 0 && pnlIfClosed <= -stopFraction * position.maxLossCents)
+                    reason = "STOP";
+                else if (ChronoUnit.DAYS.between(date, position.expiration) <= rollDte)
+                    reason = "TIME";
+                if (reason != null) {
+                    realized += pnlIfClosed;
+                    trades.add(closeManaged(position, date, pnlIfClosed, reason));
+                    open.remove(position);
+                }
+            }
+
+            if (dayIndex % entryEvery == 0 && open.size() < maxConcurrent) {
+                ManagedPosition position = buildManagedPosition(symbol, family, spot, iv, date,
+                        targetDte, qty, shortDelta, widthPct, evidence);
+                if (position != null) {
+                    long committed = open.stream().mapToLong(x -> x.maxLossCents).sum();
+                    long currentCapital = Math.max(0, startingCash + realized);
+                    if (committed + position.maxLossCents <= currentCapital) open.add(position);
+                }
+            }
+
+            long openPnl = 0;
+            for (ManagedPosition position : open) {
+                long mark = replay.valueCents(symbol, position.legs, position.qty, spot, iv, date,
+                        HistoricalReplayKernel.PriceIntent.MARK, false, evidence);
+                openPnl += mark - position.entryValueCents - position.openFeesCents;
+            }
+            long accountValue = startingCash + realized + openPnl;
+            equity.add(Map.of("date", date.toString(), "equityCents", accountValue));
+            peakConcurrent = Math.max(peakConcurrent, open.size());
+            dayIndex++;
+        }
+
+        Candle last = window.getLast();
+        double lastIv = HistoricalReplayKernel.volatility(all, HV_WINDOW, FLAT_IV);
+        for (ManagedPosition position : new ArrayList<>(open)) {
+            long exit = replay.valueCents(symbol, position.legs, position.qty, last.close().doubleValue(),
+                    lastIv, last.date(), HistoricalReplayKernel.PriceIntent.EXIT, false, evidence);
+            long pnl = exit - position.entryValueCents - position.openFeesCents
+                    - feesFor(position.legs, position.qty);
+            realized += pnl;
+            trades.add(closeManaged(position, last.date(), pnl, "WINDOW_END"));
+        }
+        equity.set(equity.size() - 1,
+                Map.of("date", last.date().toString(), "equityCents", startingCash + realized));
+
+        List<PortfolioTrade> completed = trades.stream()
+                .filter(t -> !"WINDOW_END".equals(t.exitReason())).toList();
+        int sample = completed.size();
+        Double winRate = sample == 0 ? null
+                : round3((double) completed.stream().filter(t -> t.pnlCents() > 0).count() / sample);
+        Double avgRor = sample == 0 ? null : round3(completed.stream()
+                .filter(t -> t.returnOnRisk() != null).mapToDouble(PortfolioTrade::returnOnRisk)
+                .average().orElse(0));
+        if (evidence.gridModeledEntries() > 0) {
+            notes.add(evidence.gridModeledEntries() + " entries had no listed contracts in owned history; their strikes are modeled and labeled.");
+        }
+        boolean observed = evidence.mostlyObserved();
+        String pricingMode = rw.demo() ? "PAYOFF_ONLY" : observed
+                ? "OBSERVED_FROM_HISTORY" : "MODELED_FROM_UNDERLYING";
+        String confidence = rw.demo() ? "none (demo data)" : observed ? "observed"
+                : evidence.observedMarks() > 0
+                    ? "modeled (" + (evidence.observedMarks() * 100 / Math.max(1, evidence.totalMarks())) + "% observed marks)"
+                    : "modeled";
+        return persistPortfolio(new PortfolioReport(Ids.backtest(), symbol, family.name(), from.toString(),
+                to.toString(), pricingMode, confidence, window.size(), sample, peakConcurrent,
+                winRate, avgRor, startingCash, startingCash + realized,
+                HistoricalReplayKernel.maxDrawdownPct(equity), trades, equity, notes,
+                rw.demo(), DISCLAIMER), req);
+    }
+
+    private ManagedPosition buildManagedPosition(String symbol, ManagedFamily family, double spot,
+            double iv, LocalDate date, int targetDte, int qty, double shortDelta, double widthPct,
+            HistoricalReplayKernel.Evidence evidence) {
+        OptionType optionType = family == ManagedFamily.CREDIT_PUT_SPREAD
+                ? OptionType.PUT : OptionType.CALL;
+        LocalDate expiration = replay.listedExpirationNear(symbol, date, targetDte, optionType);
+        if (expiration == null) expiration = date.plusDays(targetDte);
+        double years = Math.max(1, ChronoUnit.DAYS.between(date, expiration)) / 365.0;
+        double step = managedStrikeStep(spot);
+        double width = Math.max(step, Math.round(spot * widthPct / step) * step);
+        List<Double> listed = replay.listedStrikes(symbol, date, expiration, optionType);
+        List<Leg> legs = new ArrayList<>();
+        if (family == ManagedFamily.CREDIT_PUT_SPREAD) {
+            double shortStrike = snapStrike(strikeForDelta(false, spot, years, iv, -shortDelta, step), listed);
+            double longStrike = snapStrike(shortStrike - width, listed);
+            if (longStrike <= 0 || longStrike >= shortStrike) return null;
+            legs.add(Leg.option(LegAction.SELL, OptionType.PUT, BigDecimal.valueOf(shortStrike), expiration, 1, BigDecimal.ZERO));
+            legs.add(Leg.option(LegAction.BUY, OptionType.PUT, BigDecimal.valueOf(longStrike), expiration, 1, BigDecimal.ZERO));
+        } else {
+            double longStrike = snapStrike(strikeForDelta(true, spot, years, iv, 0.50, step), listed);
+            double shortStrike = snapStrike(longStrike + width, listed);
+            if (shortStrike <= longStrike) return null;
+            legs.add(Leg.option(LegAction.BUY, OptionType.CALL, BigDecimal.valueOf(longStrike), expiration, 1, BigDecimal.ZERO));
+            legs.add(Leg.option(LegAction.SELL, OptionType.CALL, BigDecimal.valueOf(shortStrike), expiration, 1, BigDecimal.ZERO));
+        }
+        if (listed.isEmpty()) evidence.gridModeledEntry();
+        ManagedPosition position = new ManagedPosition();
+        position.entryDate = date;
+        position.expiration = expiration;
+        position.legs = legs;
+        position.qty = qty;
+        position.family = family;
+        position.openFeesCents = feesFor(legs, qty);
+        position.entryValueCents = replay.valueCents(symbol, legs, qty, spot, iv, date,
+                HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence);
+        position.creditCents = -position.entryValueCents;
+        long best = Long.MIN_VALUE, worst = Long.MAX_VALUE;
+        List<Double> probes = new ArrayList<>(List.of(0.01, spot * 3));
+        legs.stream().map(Leg::strike).map(BigDecimal::doubleValue).forEach(probes::add);
+        for (double terminal : probes) {
+            long pnl = HistoricalReplayKernel.intrinsicValueCents(legs, qty, BigDecimal.valueOf(terminal))
+                    - position.entryValueCents - position.openFeesCents;
+            best = Math.max(best, pnl);
+            worst = Math.min(worst, pnl);
+        }
+        position.maxProfitCents = Math.max(0, best);
+        position.maxLossCents = Math.max(0, -worst);
+        return position.maxLossCents == 0 ? null : position;
+    }
+
+    private PortfolioTrade closeManaged(ManagedPosition position, LocalDate date, long pnl, String reason) {
+        Double ror = position.maxLossCents > 0 ? round3((double) pnl / position.maxLossCents) : null;
+        return new PortfolioTrade(position.entryDate.toString(), date.toString(), position.family.name(),
+                position.creditCents, pnl, position.maxLossCents, ror, reason);
+    }
+
+    private static ManagedFamily parseManagedFamily(String raw) {
+        if (raw == null) return ManagedFamily.CREDIT_PUT_SPREAD;
+        try { return ManagedFamily.valueOf(raw.trim().toUpperCase(Locale.ROOT)); }
+        catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Managed portfolio replay supports CREDIT_PUT_SPREAD or DEBIT_CALL_SPREAD");
+        }
+    }
+
+    private static double strikeForDelta(boolean call, double spot, double years, double iv,
+                                         double targetDelta, double step) {
+        double best = spot, error = Double.MAX_VALUE;
+        for (double strike = Math.max(step, spot * 0.6); strike <= spot * 1.4; strike += step) {
+            double delta = BlackScholes.delta(call, spot, strike, years, RISK_FREE, 0, iv);
+            double candidate = Math.abs(delta - targetDelta);
+            if (candidate < error) { error = candidate; best = strike; }
+        }
+        return best;
+    }
+
+    private static double snapStrike(double modeled, List<Double> listed) {
+        if (listed == null || listed.isEmpty()) return modeled;
+        double best = listed.getFirst();
+        for (double strike : listed)
+            if (Math.abs(strike - modeled) < Math.abs(best - modeled)) best = strike;
+        return best;
+    }
+
+    private static double managedStrikeStep(double spot) {
+        return spot < 25 ? 0.5 : spot < 100 ? 1.0 : spot < 300 ? 2.5 : 5.0;
+    }
+
+    private static int clamp(Integer value, int fallback, int min, int max) {
+        return Math.clamp(value == null ? fallback : value, min, max);
+    }
+
+    private static double clampD(Double value, double fallback, double min, double max) {
+        return Math.clamp(value == null ? fallback : value, min, max);
+    }
+
+    private static double round3(double value) { return Math.round(value * 1000.0) / 1000.0; }
 
     // ---- Entry ----
 
@@ -387,38 +662,6 @@ public final class Backtester {
 
     // ---- Valuation ----
 
-    /** Cash to close: long legs sold, short legs bought back. */
-    private static long intrinsicValueCents(List<Leg> legs, int qty, BigDecimal spot) {
-        long total = 0;
-        for (Leg leg : legs) {
-            long sign = leg.action() == LegAction.BUY ? 1 : -1;
-            total += sign * Money.centsFromPrice(leg.intrinsicPerShare(spot), (long) Leg.SHARES_PER_CONTRACT * leg.ratio() * qty);
-        }
-        return total;
-    }
-
-    private static long modelValueCents(List<Leg> legs, int qty, double spot, double ivProxy, LocalDate asOf, boolean payoffOnly) {
-        double total = 0;
-        for (Leg leg : legs) {
-            double value;
-            if (leg.isStock()) {
-                value = spot;
-            } else {
-                double t = ChronoUnit.DAYS.between(asOf, leg.expiration()) / 365.0;
-                double k = leg.strike().doubleValue();
-                if (payoffOnly || t <= 0) {
-                    value = leg.type() == OptionType.CALL ? Math.max(spot - k, 0) : Math.max(k - spot, 0);
-                } else {
-                    double iv = VolSurface.smile(ivProxy, spot, k, t);
-                    value = BlackScholes.price(leg.type() == OptionType.CALL, spot, k, t, RISK_FREE, 0, iv);
-                }
-            }
-            double sign = leg.action() == LegAction.BUY ? 1 : -1;
-            total += sign * value * Leg.SHARES_PER_CONTRACT * leg.ratio() * qty;
-        }
-        return Money.toCents(BigDecimal.valueOf(total));
-    }
-
     /** Synthetic chain from the underlying: BSM mids over an HV smile. MODELED, never real. */
     private OptionChain modeledChain(String symbol, LocalDate asOf, LocalDate exp, BigDecimal close, double ivProxy) {
         double s = close.doubleValue();
@@ -476,16 +719,6 @@ public final class Backtester {
         return out;
     }
 
-    private static double maxDrawdownPct(List<Map<String, Object>> equityCurve) {
-        double peak = Double.NEGATIVE_INFINITY, maxDd = 0;
-        for (Map<String, Object> point : equityCurve) {
-            double eq = ((Number) point.get("equityCents")).doubleValue();
-            peak = Math.max(peak, eq);
-            if (peak > 0) maxDd = Math.max(maxDd, (peak - eq) / peak);
-        }
-        return Math.round(maxDd * 10000.0) / 10000.0;
-    }
-
     private static LocalDate pickExpiration(List<LocalDate> exps, LocalDate date, int targetDte) {
         return exps.stream().filter(e -> e.isAfter(date))
                 .min(java.util.Comparator.comparingLong(e -> Math.abs(ChronoUnit.DAYS.between(date, e) - targetDte)))
@@ -531,6 +764,12 @@ public final class Backtester {
     // ---- Persistence ----
 
     private BacktestReport persist(BacktestReport report, BacktestRequest req) {
+        db.exec("INSERT INTO backtests(id, created_at, request_json, report_json) VALUES (?,?,?,?)",
+                report.id(), Instant.now(clock).toString(), Json.write(req), Json.write(report));
+        return report;
+    }
+
+    private PortfolioReport persistPortfolio(PortfolioReport report, PortfolioRequest req) {
         db.exec("INSERT INTO backtests(id, created_at, request_json, report_json) VALUES (?,?,?,?)",
                 report.id(), Instant.now(clock).toString(), Json.write(req), Json.write(report));
         return report;

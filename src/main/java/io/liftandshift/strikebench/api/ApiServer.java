@@ -666,9 +666,8 @@ public final class ApiServer {
             });
             c.routes.post("/api/backtest/portfolio", ctx -> {
                 requireObservedLane(ctx, "Portfolio backtesting replays the REAL market's history");
-                ctx.json(new io.liftandshift.strikebench.backtest.PortfolioBacktester(market, cfg, clock, db)
-                        .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.backtest.PortfolioBacktester.PortfolioRequest.class)),
-                                analysisCtx(ctx)));
+                ctx.json(backtester.runPortfolio(
+                        requireBody(bodyOrNull(ctx, Backtester.PortfolioRequest.class)), analysisCtx(ctx)));
             });
             c.routes.get("/api/backtests", ctx -> ctx.json(Map.of("backtests", backtester.list())));
             c.routes.get("/api/backtests/{id}", ctx -> ctx.json(backtester.get(ctx.pathParam("id"))));
