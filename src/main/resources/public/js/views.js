@@ -400,19 +400,23 @@
           'Check data status', function () { App.navigate('#/data/overview'); }));
         return;
       }
-      tiles.setAttribute('data-count', String(Math.min(rows.length, 8)));
-      rows.forEach(function (q) {
+      var bySymbol = {};
+      rows.forEach(function (q) { bySymbol[q.symbol] = q; });
+      tiles.setAttribute('data-count', String(Math.min(marketSymbols.length, 8)));
+      marketSymbols.forEach(function (symbol) {
+        var q = bySymbol[symbol];
         var sparkSlot = el('div', { class: 'spark-slot' });
         tiles.appendChild(el('a', {
-          class: 'tile sym-card', 'data-sym': q.symbol,
-          href: '#/research/' + q.symbol,
-          'aria-label': 'Open ' + q.symbol + ' full analysis'
+          class: 'tile sym-card' + (q ? '' : ' tile-nodata'), 'data-sym': symbol,
+          href: '#/research/' + symbol,
+          'aria-label': 'Open ' + symbol + ' full analysis'
         },
-          el('div', { class: 't-sym' }, q.symbol, ' ',
-            App.state.world === 'demo' ? null : badge(q.freshness)),
-          el('div', { class: 't-px' }, fmtNum(q.last)),
-          UI.delta(q.last, q.prevClose),
-          el('div', { class: 't-nm' }, q.description || ''),
+          el('div', { class: 't-sym' }, symbol, ' ',
+            q && App.state.world !== 'demo' ? badge(q.freshness) : null,
+            q ? null : badge('NO QUOTE')),
+          el('div', { class: 't-px' }, q ? fmtNum(q.last) : '\u2014'),
+          q ? UI.delta(q.last, q.prevClose) : el('div', { class: 'muted t-move' }, 'quote unavailable'),
+          el('div', { class: 't-nm' }, q && q.description || ''),
           sparkSlot,
           el('span', { class: 'destination-cue', 'aria-hidden': 'true' }, icon('chevron-right', 16))));
       });
@@ -426,13 +430,14 @@
         // In Demo, the global band and each quote already say Demo; a second identical history
         // chip on every card adds noise, not honesty. Other lanes retain separate history evidence.
         if (row.evidence && !(App.state.world === 'demo' && row.evidence.provenance === 'DEMO')) {
-          slot.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev', compact: true }));
+          slot.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev', compact: true,
+            missingLabel: 'HISTORY UNAVAILABLE' }));
         }
       }
       try {
-        var sp = await API.prefetch('/api/sparklines?symbols=' + rows.map(function (q) { return q.symbol; }).join(',') + '&range=3m');
+        var sp = await API.prefetch('/api/sparklines?symbols=' + marketSymbols.join(',') + '&range=3m');
         if (!sp) {
-          rows.forEach(function (q) { paintHomeSpark(missingSparkRow(q.symbol,
+          marketSymbols.forEach(function (symbol) { paintHomeSpark(missingSparkRow(symbol,
             'History lookup yielded to interactive market work. Open analysis to try on demand.')); });
           return;
         }
@@ -441,11 +446,11 @@
           returned[row.symbol] = true;
           paintHomeSpark(row);
         });
-        rows.forEach(function (q) {
-          if (!returned[q.symbol]) paintHomeSpark(missingSparkRow(q.symbol, 'Daily history was not returned for this symbol.'));
+        marketSymbols.forEach(function (symbol) {
+          if (!returned[symbol]) paintHomeSpark(missingSparkRow(symbol, 'Daily history was not returned for this symbol.'));
         });
       } catch (e) {
-        rows.forEach(function (q) { paintHomeSpark(missingSparkRow(q.symbol,
+        marketSymbols.forEach(function (symbol) { paintHomeSpark(missingSparkRow(symbol,
           'Chart unavailable right now; the quote remains usable.')); });
       }
     })();
@@ -1654,9 +1659,8 @@
             sparkSlot,
             el('span', { class: 'destination-cue', 'aria-hidden': 'true' }, icon('chevron-right', 16)));
           tile.addEventListener('click', function (e) {
-            // The sparkline is a deliberate interaction SUBREGION (hover/keys explore the
-            // chart) — clicking it must not yank the user off the page.
-            if (e.target.closest('.spark')) { e.preventDefault(); return; }
+            // Pointer movement and arrow keys explore the chart; a click still honors the
+            // destination-card contract and opens the full analysis from anywhere on the card.
             App.state.explorerScroll = window.scrollY; // Back restores the exact spot
           });
           tile.addEventListener('keydown', function (e) {
@@ -1681,7 +1685,8 @@
             t2.appendChild(UI.sparkline(row, { height: 36 }));
             // Evidence is server-computed and rendered verbatim; availability never implies Observed.
             if (row.evidence && !(App.state.world === 'demo' && row.evidence.provenance === 'DEMO')) {
-              t2.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev', compact: true }));
+              t2.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev', compact: true,
+                missingLabel: 'HISTORY UNAVAILABLE' }));
             }
           }
         });

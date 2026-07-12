@@ -2169,11 +2169,13 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   });
   assert.deepEqual(cardA11y, { tag: 'A', href: '#/research/AAPL', tab: 0, exp: null },
     'card is a native link without disclosure semantics');
-  // Sparkline interaction is a SUBREGION: clicking the chart explores, never navigates
+  // Pointer movement/arrow keys explore; clicking anywhere on a destination card navigates.
   await page.locator('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg').click();
-  assert.ok((await page.evaluate(() => window.location.hash)).startsWith('#/research') === true
-    && !(await page.evaluate(() => window.location.hash)).includes('AAPL'),
-    'chart click stays on the explorer');
+  await page.waitForSelector('.quote-hero', { timeout: 15000 });
+  assert.equal(await page.evaluate(() => window.location.hash), '#/research/AAPL',
+    'the chart area does not create a dead middle inside the destination card');
+  await page.goBack();
+  await page.waitForSelector('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg', { timeout: 15000 });
   // Card click -> the full analysis, ONE action; Back restores sector + scroll
   await page.evaluate(() => window.scrollTo(0, 200));
   await page.locator('#sector-grid .sym-card[data-sym="AAPL"]').click();
@@ -2235,6 +2237,37 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.mouse.click(tapeHit.x, tapeHit.y);
   await page.waitForSelector('#app[data-route="research"][data-ready="true"]');
   // Explicit Demo owns this universe already; no hidden sector mutation is needed.
+});
+
+test('Home keeps a partial quote batch actionable instead of leaving an empty well', async () => {
+  await page.evaluate(() => {
+    localStorage.setItem('strikebench.welcomed', '1');
+    window.__partialHomeUniverse = App.state.universe;
+    App.state.universe = Object.assign({}, App.state.universe, {
+      active: Object.assign({}, App.state.universe.active, {
+        label: 'Eight-symbol audit',
+        symbols: ['AAPL', 'SPY', 'QQQ', 'TSLA', 'VTSAX', 'NOQ1', 'NOQ2', 'NOQ3']
+      })
+    });
+    API.flushCache();
+  });
+  await go('#/home');
+  await page.waitForFunction(() => document.querySelectorAll('#home-market-watch .sym-card').length === 8,
+    { timeout: 15000 });
+  const state = await page.evaluate(() => ({
+    cards: document.querySelectorAll('#home-market-watch .sym-card').length,
+    noQuote: document.querySelectorAll('#home-market-watch .tile-nodata').length,
+    linked: Array.from(document.querySelectorAll('#home-market-watch .sym-card'))
+      .every(c => /^#\/research\//.test(c.getAttribute('href') || ''))
+  }));
+  assert.equal(state.cards, 8, 'the selected market determines the card count, not a partial response');
+  assert.ok(state.noQuote >= 3, 'missing quotes stay visible and honest');
+  assert.equal(state.linked, true, 'every selected symbol still opens its own analysis');
+  await page.evaluate(() => {
+    App.state.universe = window.__partialHomeUniverse;
+    delete window.__partialHomeUniverse;
+    API.flushCache();
+  });
 });
 
 test('wide Trade market controls stay inside the workbench with a full sector catalog', async () => {

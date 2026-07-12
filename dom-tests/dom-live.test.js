@@ -83,8 +83,14 @@ test('live: dashboard renders observed cards or an explicit unavailable state', 
   await page.waitForSelector('#home-market-watch .sym-card, #home-market-watch .empty', { timeout: 60000 });
   const cards = page.locator('#home-market-watch .sym-card');
   if (await cards.count()) {
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('#home-market-watch .sym-card'))
+      .every(c => c.querySelector('.spark-svg, .spark-empty')), { timeout: 30000 });
     assert.doesNotMatch(await page.textContent('#home-market-watch'), /DEMO DATA/i,
       'Observed Home never substitutes Demo quotes');
+    const missingHistoryLabels = await page.$$eval('#home-market-watch .sym-card:has(.spark-empty) .spark-ev',
+      els => els.map(e => e.textContent.trim()));
+    missingHistoryLabels.forEach(label => assert.equal(label, 'HISTORY UNAVAILABLE',
+      'a usable quote with no candles names the missing dimension, not all data'));
   } else {
     assert.match(await page.textContent('#home-market-watch'), /market data unavailable/i,
       'provider outage is an explicit state');

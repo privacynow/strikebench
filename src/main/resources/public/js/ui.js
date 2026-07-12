@@ -118,7 +118,7 @@
       : p === 'SIMULATED' ? 'SIMULATED'
       : p === 'MODELED' ? 'MODELED'
       : p === 'MIXED' ? 'MIXED SOURCES'
-      : p === 'MISSING' ? 'DATA UNAVAILABLE'
+      : p === 'MISSING' ? ((opts && opts.missingLabel) || 'DATA UNAVAILABLE')
       : p;
     if ((p === 'OBSERVED' || p === 'BROKER') && age && age !== 'NOT_APPLICABLE') {
       label += compact && age === 'REALTIME' ? '' : ' · ' + age;
@@ -1064,7 +1064,11 @@
       if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
       // the bubble persists so the pointer can travel into it; outside-click/Escape closes
     });
-    t.addEventListener('click', function (ev) { ev.stopPropagation(); openInfo(t, termKey); });
+    t.addEventListener('click', function (ev) {
+      // Info triggers sometimes live inside a destination card. Their one deliberate
+      // exception to card navigation must suppress both bubbling and the anchor default.
+      ev.preventDefault(); ev.stopPropagation(); openInfo(t, termKey);
+    });
     t.addEventListener('focus', function () { if (!infoSuppressFocusOpen) openInfo(t, termKey); });
     t.addEventListener('blur', function () { setTimeout(function () {
       if (infoPop && !infoPop.contains(document.activeElement) && document.activeElement !== t) closeInfo();
