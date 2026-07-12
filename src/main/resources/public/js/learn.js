@@ -43,7 +43,7 @@
       beginner: 'Imagine running this exact trade in every future the market thinks is possible, and averaging the results. Negative means the market charges more than the position is worth by its own odds.',
       expert: 'Present-value risk-neutral expectation at chain IV and the disclosed rate, with q=0 assumed. Entry cash stays at time zero; terminal payoff is discounted. The Decision score judges it net of round-trip commissions.' },
     evhistvol: { short: 'Use this second lane to test whether the result changes when recent stock movement replaces option-implied movement.',
-      beginner: 'If the stock keeps moving the way it recently has (rather than the bigger move options are pricing), this is the average outcome. The gap between the two numbers is what option sellers get paid for.',
+      beginner: 'If the stock keeps moving the way it recently has (rather than the move options are pricing), this is the average outcome. The gap can illustrate a volatility-premium thesis; it does not prove the edge will persist.',
       expert: 'Historical-vol SCENARIO EV: the identical integral at 30-day realized \u03c3, zero drift. NOT the physical measure (no drift estimate); the spread vs risk-neutral EV visualizes the volatility risk premium.' },
     cvar: { short: 'The average result of your worst 1-in-20 outcomes — the \u201cbad night\u201d number.',
       beginner: 'Ignore the typical case: if you only look at the worst 5% of ways this can go, this is what an average one of THOSE costs you.',
@@ -146,7 +146,7 @@
       expert: 'Speed = sim-seconds per real second (a session holds 23,400). The path lives on fixed 30-sim-second quanta; ticks accumulate fractional quanta and step whole ones. Same seed + same sim-time \u21d2 identical prices at any speed (pinned).' },
     assignment: { short: 'For buy-at-discount or sell-at-target, assignment can be success; elsewhere it may create unwanted shares.',
       beginner: 'For covered calls and cash-secured puts this is often the GOAL (your shares sell / you buy at your price). For other trades it is the chance of ending up with a stock position.',
-      expert: 'N(d2)/N(\u2212d2) per distinct short strike, summed and capped at 1, at per-leg smile IVs.' }
+      expert: 'Expire-in-the-money probability from N(d2)/N(\u2212d2) at per-leg smile IV. Same-expiry short puts/calls are combined as exact disjoint tails; different expirations are conservatively summed and capped at 1.' }
   };
 
   var GLOSSARY = {

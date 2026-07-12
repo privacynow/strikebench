@@ -42,7 +42,8 @@ public final class RecommendationEngine {
             + "current (possibly delayed or simulated) data. Options involve substantial risk; you can lose the "
             + "entire amount at risk and, in undefined-risk strategies, more. Nothing here promises any profit. "
             + "POP and market EV use a present-value risk-neutral lognormal approximation at the lane's "
-            + "risk-free rate (q=0 dividend-yield assumption); breakevens are payoff geometry. All are before commissions.";
+            + "risk-free rate (q=0 dividend-yield assumption); breakevens are payoff geometry. Raw model outputs "
+            + "exclude commissions; any EV labeled after costs subtracts the disclosed estimated round-trip commissions.";
 
     /** Structural shape group — delegates to the catalog's explicit metadata (presentation only). */
     static String structuralGroup(String family) {

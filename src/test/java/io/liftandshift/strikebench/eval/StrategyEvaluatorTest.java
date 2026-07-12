@@ -76,7 +76,8 @@ class StrategyEvaluatorTest {
 
         // Explanation: carries the honest assumptions.
         assertThat(e.explanation().assumptions())
-                .anyMatch(a -> a.toLowerCase().contains("before commissions"));
+                .anyMatch(a -> a.toLowerCase().contains("raw model outputs")
+                        && a.toLowerCase().contains("after costs"));
     }
 
     @Test void demoDataIsHaircutAndLabeled() {
