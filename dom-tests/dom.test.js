@@ -1367,6 +1367,12 @@ test('Context-to-Decide: screening happens once; Decide is review and paper conf
   assert.match(review, /Buying power after/);
   assert.match(review, /Safety check/);
   assert.match(review, /Theoretical worst case is known and capped/);
+  const beginnerPrice = page.locator('#ticket-body .xp:has(.xp-head:has-text("Evaluate a limit price or real fill"))');
+  assert.equal(await beginnerPrice.count(), 1,
+    'Beginner keeps the exact-price evaluation capability behind plain-language disclosure');
+  await beginnerPrice.locator('.xp-head').click();
+  await page.waitForSelector('#proposed-net');
+  assert.ok(await page.locator('#fees-override').count(), 'Beginner can also judge explicit per-side fees');
   await page.$$eval('.ack-gate input', els => els.forEach(e => { if (!e.checked) e.click(); })); // acknowledge material risks (CP-5 gate)
   await page.click('#to-confirm');
   // Step 7: confirm
@@ -1394,6 +1400,10 @@ test('unwind flow shows cash effect and closes the trade', async () => {
   await page.waitForSelector('#modal-confirm');
   const modalText = await page.textContent('.modal');
   assert.match(modalText, /reserve.*released|released/i);
+  assert.match(modalText, /executable closing sides/i);
+  assert.match(modalText, /opening premium and opening fees/i);
+  assert.doesNotMatch(modalText, /marked at the midpoint/i,
+    'unwind copy follows executable marks instead of describing a midpoint that is not used');
   await page.click('#modal-confirm');
   await page.waitForSelector('#app[data-ready="true"]:has-text("CLOSED")');
   const text = await page.textContent('#app');
@@ -3093,6 +3103,8 @@ test('inline competition: the pick, evidence, scenarios, plan, and handoff', asy
   assert.ok(await page.locator('.decision-pick [data-economic-verdict]').count(), 'Decision consumes the shared economic verdict');
   assert.match(await page.textContent('.decision-pick [data-economic-verdict]'), /Market-implied EV/);
   assert.match(await page.textContent('.decision-pick [data-economic-verdict]'), /Realized-vol scenario EV/);
+  assert.match(await page.textContent('.decision-pick'), /Modeled chance of profit/,
+    'Decision never presents model probability as an unlabeled promise');
 
   // Real risk scenarios + the honest capital pair + the co-equal management plan.
   assert.ok((await page.locator('.decision-pick .scenario-strip .scenario-cell').count()) >= 3, 'payoff scenario strip');
@@ -3483,6 +3495,14 @@ test('simulated market: product creator, loud live band, world-routed research, 
   assert.equal(controlRoom.demoAction, false, 'an active simulation has no competing Enter demo action');
   assert.equal(controlRoom.focusCharts, 1, 'one explicit focus chart, with overview tiles for breadth');
   assert.equal(controlRoom.queuedCharts, 0, 'every visible overview chart resolves beyond the queued state');
+  await page.route('**/api/portfolio/summary', route => route.abort());
+  await page.evaluate(async () => { API.flushCache(); await App.render(); });
+  await page.waitForSelector('#cr-pl:has-text("temporarily unavailable")', { timeout: 15000 });
+  assert.ok(await page.locator('#cr-pl button:has-text("Retry")').count(),
+    'a failed control-room account refresh stays visible and recoverable');
+  await page.unroute('**/api/portfolio/summary');
+  await page.click('#cr-pl button:has-text("Retry")');
+  await page.waitForSelector('#cr-pl:has-text("Simulation account")', { timeout: 15000 });
   assert.ok(controlRoom.firstTop >= controlRoom.stickyHeight - 2 && controlRoom.firstHit,
     'the measured sticky stack does not cover the symbol overview: ' + JSON.stringify(controlRoom));
   const focusTarget = await page.locator('#cr-symbols .sim-symbol-tile').nth(1).getAttribute('data-symbol');

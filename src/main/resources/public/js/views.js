@@ -3482,6 +3482,36 @@
         nextNode || null);
     }
 
+    function priceEvaluationFields(p) {
+      var netIn = el('input', { type: 'number', step: '0.01', id: 'proposed-net',
+        placeholder: 'e.g. ' + (p.entryNetPremiumCents / 100).toFixed(2),
+        value: t.proposedNetCents !== undefined && t.proposedNetCents !== null ? (t.proposedNetCents / 100).toFixed(2) : '' });
+      var feesIn = el('input', { type: 'number', step: '0.01', min: '0', id: 'fees-override',
+        value: t.feesOverrideCents !== undefined && t.feesOverrideCents !== null ? (t.feesOverrideCents / 100).toFixed(2) : '' });
+      function parseCents(input, label, nonnegative) {
+        if (input.value === '') return null;
+        var value = Number(input.value);
+        if (!isFinite(value) || (nonnegative && value < 0)) {
+          throw new Error(label + (nonnegative ? ' must be zero or greater.' : ' must be a valid dollar amount.'));
+        }
+        return Math.round(value * 100);
+      }
+      return el('div', { class: 'price-eval-fields' },
+        el('div', { class: 'form-grid' },
+          el('div', { class: 'field' }, el('label', { for: 'proposed-net' }, 'Net price $ (+credit / −debit)'), netIn),
+          el('div', { class: 'field' }, el('label', { for: 'fees-override' }, 'Fees per side $ (blank = default)'), feesIn),
+          el('div', { class: 'field price-eval-command' }, el('button', {
+            class: 'btn btn-sm', id: 'reprice-btn', onclick: function () {
+              try {
+                t.proposedNetCents = parseCents(netIn, 'Net price', false);
+                t.feesOverrideCents = parseCents(feesIn, 'Fees', true);
+                nav(6);
+              } catch (e) { UI.toast(e.message, 'error'); }
+            }
+          }, 'Re-price'))),
+        el('div', { class: 'muted small' }, 'Theoretical max loss, breakevens, modeled chance of profit and both EV lanes follow the price you set. A fee override is applied once to enter and once to unwind.'));
+    }
+
     if (t.step === 5) {
       var c = t.candidate;
       if (!c) { t.step = 6; rerender(); return; } // custom legs skip the strike picker
@@ -3690,26 +3720,15 @@
           }).catch(function () { /* context line only */ });
           } catch (e) { /* the reconciliation line is context, never a blocker */ }
         })();
-        // Expert: judge the package at YOUR limit, not the model's executable assumption.
+        // Same capability at both levels: Expert keeps the controls in the dense review;
+        // Beginner gets a plain-language disclosure, never a reduced or different ticket.
         if (Learn.currentLevel() === 'expert') {
-          var netIn = el('input', { type: 'number', step: '0.01', id: 'proposed-net',
-            placeholder: 'e.g. ' + (p.entryNetPremiumCents / 100).toFixed(2),
-            value: t.proposedNetCents !== undefined && t.proposedNetCents !== null ? (t.proposedNetCents / 100).toFixed(2) : '' });
-          var feesIn = el('input', { type: 'number', step: '0.01', id: 'fees-override',
-            value: t.feesOverrideCents !== undefined && t.feesOverrideCents !== null ? (t.feesOverrideCents / 100).toFixed(2) : '' });
-          body.appendChild(el('div', { class: 'card card-slim', style: 'margin:8px 0' },
-            el('h3', { class: 'mt0' }, 'Evaluate at your price'),
-            el('div', { class: 'form-grid' },
-              el('div', { class: 'field' }, el('label', {}, 'Net price $ (+credit / \u2212debit)'), netIn),
-              el('div', { class: 'field' }, el('label', {}, 'Fees per side $ (blank = default)'), feesIn),
-              el('div', { class: 'field' }, el('label', {}, '\u00a0'), el('button', {
-                class: 'btn btn-sm', id: 'reprice-btn', onclick: function () {
-                  t.proposedNetCents = netIn.value === '' ? null : Math.round(parseFloat(netIn.value) * 100);
-                  t.feesOverrideCents = feesIn.value === '' ? null : Math.round(parseFloat(feesIn.value) * 100);
-                  nav(6);
-                }
-              }, 'Re-price'))),
-            el('div', { class: 'muted small' }, 'Theoretical max loss, breakevens, POP and EV all follow the price YOU set. A fee override is applied once to enter and once to unwind.')));
+          body.appendChild(el('section', { class: 'price-eval' },
+            el('h3', { class: 'mt0' }, 'Evaluate at your price'), priceEvaluationFields(p)));
+        } else {
+          body.appendChild(UI.expandable('Evaluate a limit price or real fill', function () {
+            return priceEvaluationFields(p);
+          }));
         }
         // The SERVER's required-acknowledgment list is the contract (client wording is a fallback);
         // the signed token + checked ids travel with the create call, where they are ENFORCED.
@@ -4435,8 +4454,9 @@
           el('button', {
             class: 'btn', id: 'unwind-btn', onclick: function () {
               var est = d.current && d.current.closeCostCents !== null && d.current.closeCostCents !== undefined
-                ? 'Closing now brings ' + fmtMoney(d.current.closeCostCents, { plus: true }) + ' before fees. '
-                  + 'This is the executable close (selling at bid, buying back at ask) — the header\u2019s P/L is marked at the midpoint, so the two differ by the spread you pay to exit. ' : '';
+                ? 'Closing now brings ' + fmtMoney(d.current.closeCostCents, { plus: true }) + ' before close fees. '
+                  + 'This uses executable closing sides: sell longs at bid and buy shorts at ask. '
+                  + 'The header P/L uses those same closing sides and also includes the opening premium and opening fees, so it is not the same number as this close cash flow. ' : '';
               UI.confirmModal('Close (unwind) this trade?',
                 el('div', {},
                   el('p', {}, est + 'The reserve of this trade is released and the result becomes final.'),
@@ -5839,7 +5859,14 @@
                   'Total worst case across open simulated positions.'));
               }
             } catch (e2) { /* heat is optional decoration here */ }
-          } catch (e) { var pl2 = room.querySelector('#cr-pl'); if (pl2) pl2.innerHTML = ''; }
+          } catch (e) {
+            var pl2 = room.querySelector('#cr-pl');
+            if (pl2 && room.isConnected) {
+              pl2.innerHTML = '';
+              pl2.appendChild(el('span', { class: 'muted small' }, 'Simulation account summary is temporarily unavailable.'));
+              pl2.appendChild(el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick: fillPl }, 'Retry'));
+            }
+          }
         }
         fillPl();
         if (App.Market) App.Market.subscribe(function () {
@@ -7381,7 +7408,7 @@
       chip('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(risk.maxLossCents))),
       chip('Theoretical max profit', UI.maxProfitLabel(c.strategy, c.structureGroup,
         risk.maxProfitCents, level !== 'expert', c.legs)),
-      chip('Chance of profit', fmtPct(risk.pop)),
+      chip(el('span', {}, 'Modeled chance of profit ', UI.info('pop')), fmtPct(risk.pop)),
       c.assignmentProb !== null && c.assignmentProb !== undefined ? chip('Assignment', fmtPct(c.assignmentProb)) : null));
     // The honest capital pair — buying power used vs full economic exposure.
     card.appendChild(el('div', { class: 'chip-row' },

@@ -497,8 +497,8 @@ body.lvl-expert .not-expert { display: none !important; }
 /* Confident: blurbs clamp to one line (tap a card to select; the title attr has the rest) */
 /* Pro: filters sit inline, no card chrome doubling */
 .compact-filters { padding: 10px 14px; margin: 8px 0; }
-.compact-filters .form-grid.grid-5 { grid-template-columns: repeat(5, 1fr); gap: 8px; }
-@media (max-width: 700px) { .compact-filters .form-grid.grid-5 { grid-template-columns: repeat(2, 1fr); } }
+.compact-filters .form-grid.grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 700px) { .compact-filters .form-grid.grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 #intent-choices .choice { text-align: left; }
 #intent-choices .choice b { display: block; margin-bottom: 2px; }
 #holdings-card td .btn-row { flex-wrap: nowrap; }
@@ -1072,9 +1072,9 @@ body.lvl-expert .not-expert { display: none !important; }
   #app[data-route="home"] .stat .explain { margin: 4px 0 0; }
   #app[data-route="home"] h1 { margin-bottom: 10px; }
 }
-.home-actions { display: grid; gap: 12px; grid-template-columns: 1fr; margin-bottom: 16px; }
+.home-actions { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); margin-bottom: 16px; }
 @media (min-width: 640px) and (max-width: 1099px) {
-  .home-actions { grid-template-columns: repeat(2, 1fr); }
+  .home-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* ---------- Builder v2: shape glyphs, expert bar, leg toggles ---------- */
@@ -1173,7 +1173,7 @@ body.lvl-expert .not-expert { display: none !important; }
 .chip .chip-x:hover { color: var(--risk-danger-solid, #c53030); }
 
 /* ---------- Welcome: the whole pitch on ONE desktop screen — comfortable, not crammed ---------- */
-.welcome-top { display: grid; gap: 20px; grid-template-columns: 1fr; align-items: stretch; }
+.welcome-top { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); align-items: stretch; }
 /* SYMMETRY: both top-fold columns share one frame — same border, radius, padding, height.
    The hero keeps its gradient fill; the live column keeps a calm surface. */
 .welcome-top > * { border: 1px solid var(--border); border-radius: var(--hero-radius);
@@ -1194,7 +1194,7 @@ body.lvl-expert .not-expert { display: none !important; }
   #app:has(.welcome-page) .hero { padding: 38px 16px 28px; }
 }
 @media (min-width: 1100px) {
-  .welcome-top { grid-template-columns: 1fr 1fr; }
+  .welcome-top { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #app:has(.welcome-page) .hero { padding: 14px 22px 16px; margin: 0; }
   #app:has(.welcome-page) .hero-inner { text-align: left; margin: 0; max-width: none; }
   #app:has(.welcome-page) .hero-ctas { justify-content: flex-start; }
@@ -1217,7 +1217,7 @@ body.lvl-expert .not-expert { display: none !important; }
   #app:has(.welcome-page) .welcome-card .btn { grid-column: 3; grid-row: 1 / span 2; }
   #app:has(.welcome-page) .welcome-card .icon-tile { grid-row: 1 / span 2; }
   /* Steps: four IDENTICAL columns — ghost numeral + verb, detail beneath. A grid, not a rag. */
-  #app:has(.welcome-page) .stepper { display: grid; grid-template-columns: repeat(4, 1fr);
+  #app:has(.welcome-page) .stepper { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 14px; text-align: left; }
   #app:has(.welcome-page) .step-block { flex-direction: row; align-items: baseline; gap: 10px; padding: 0; }
   #app:has(.welcome-page) .step-block::after { display: none; }
@@ -1421,8 +1421,8 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 .q-card b { display: block; margin-bottom: 2px; }
 
 /* ---- Scenario Studio ---- */
-.sc-grid { grid-template-columns: repeat(2, 1fr); }
-@media (min-width: 900px) { .sc-grid { grid-template-columns: repeat(4, 1fr); } }
+.sc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 900px) { .sc-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .sc-card { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .sc-sketch { display: block; width: 100%; height: 30px; }
 .sc-sketch svg { width: 100%; height: 30px; }
@@ -1505,8 +1505,12 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 .sc-tip { position: absolute; pointer-events: none; background: var(--bg-raised, var(--bg)); border: 1px solid var(--border);
   border-radius: 6px; padding: 3px 8px; font-size: 12px; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.12); z-index: 5; }
 .scenario-form label .glyph { text-transform: none; }
-.sc-pos-grid { grid-template-columns: repeat(3, 1fr); }
-@media (min-width: 900px) { .sc-pos-grid { grid-template-columns: repeat(6, 1fr); } }
+.sc-pos-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (min-width: 900px) { .sc-pos-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+
+.price-eval { margin: 10px 0; padding-top: 12px; border-top: 1px solid var(--border); }
+.price-eval-fields .form-grid { align-items: end; }
+.price-eval-command { justify-content: flex-end; }
 
 /* UX-reconciliation pass */
 .btn-sub { display: block; font-size: 10px; font-weight: 400; opacity: .75; letter-spacing: 0; text-transform: none; }
