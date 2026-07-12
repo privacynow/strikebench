@@ -2005,7 +2005,7 @@ public final class ApiServer {
         List<Map<String, Object>> plans = new ArrayList<>();
         int requests = 0, missing = 0;
         for (String symbol : symbols.stream().distinct().limit(120).toList()) {
-            var plan = planner.plan(symbol, effectiveFrom, to);
+            var plan = planner.plan(symbol, effectiveFrom, to, connector.key());
             int symbolRequests = "alphavantage".equals(connector.key()) && !plan.complete()
                     ? 1 : plan.ranges().size();
             requests += symbolRequests; missing += plan.missingSessions();
@@ -3998,6 +3998,15 @@ public final class ApiServer {
         Account acct = currentAccount(ctx);
         TradeOpenRequest body = bodyOrNull(ctx, TradeOpenRequest.class);
         TradeService.OpenRequest req = toOpenRequest(body, acct);
+        // Structural eligibility comes before discretionary risk acknowledgments. An impossible
+        // covered call, stale book, or undefined-risk package must say WHY it cannot be placed;
+        // asking the user to acknowledge EV on an order that can never pass is incoherent.
+        Verdict verdict = guardrailCheck(req, acct, riskCapCents(ctx));
+        if (verdict.blocked()) {
+            audit.log(acct.id(), null, "TRADE_REJECTED", "BLOCK",
+                    Map.of("symbol", req.symbol(), "strategy", req.strategy(), "reasons", verdict.blockReasons()));
+            throw new TradeRejectedException(verdict.blockReasons());
+        }
         // R2: recompute the material risks for THIS package and enforce acknowledgment + the
         // signed token — a raw API call can no longer skip what the Review made explicit.
         var rcAck = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
@@ -4014,12 +4023,6 @@ public final class ApiServer {
             if (!verifyAckToken(body.ackToken(), req)) {
                 throw new TradeRejectedException(List.of("Acknowledgment token missing or stale — preview this exact package again"));
             }
-        }
-        Verdict verdict = guardrailCheck(req, acct, riskCapCents(ctx));
-        if (verdict.blocked()) {
-            audit.log(acct.id(), null, "TRADE_REJECTED", "BLOCK",
-                    Map.of("symbol", req.symbol(), "strategy", req.strategy(), "reasons", verdict.blockReasons()));
-            throw new TradeRejectedException(verdict.blockReasons());
         }
         TradeRecord t = trades.create(req);
         // Close the calibration loop: link the placed trade to the recommendation it came from —

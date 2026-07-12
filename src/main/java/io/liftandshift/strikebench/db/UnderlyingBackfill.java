@@ -51,7 +51,7 @@ public final class UnderlyingBackfill {
 
         String sourceRequest = requestedSource == null || requestedSource.isBlank()
                 ? "auto" : requestedSource.trim().toLowerCase(Locale.ROOT);
-        MissingRangePlanner.Plan plan = planner.plan(sym, from, to);
+        MissingRangePlanner.Plan plan = planner.plan(sym, from, to, sourceRequest);
         if (plan.complete()) {
             String note = "Observed daily history already covers this range; no provider request was needed.";
             syncState.succeeded(ownerId, sourceRequest, sym, from, to, to, 0, true, note);
@@ -107,7 +107,8 @@ public final class UnderlyingBackfill {
                     rows += accepted.size();
                 }
             }
-            MissingRangePlanner.Plan after = planner.plan(sym, from, to);
+            MissingRangePlanner.Plan after = planner.plan(sym, from, to,
+                    "auto".equals(sourceRequest) ? actualSource : sourceRequest);
             boolean complete = after.complete();
             String note = rows == 0
                     ? "The selected source returned no eligible daily bars for the missing range."

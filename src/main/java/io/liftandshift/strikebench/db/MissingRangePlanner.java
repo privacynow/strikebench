@@ -23,12 +23,19 @@ public final class MissingRangePlanner {
 
     public MissingRangePlanner(Db db) { this.db = db; }
 
-    public Plan plan(String symbol, LocalDate from, LocalDate to) {
+    public Plan plan(String symbol, LocalDate from, LocalDate to, String source) {
         String sym = normalize(symbol);
         if (from == null || to == null || from.isAfter(to)) throw new IllegalArgumentException("bad date range");
-        Set<LocalDate> existing = new HashSet<>(db.query(
-                "SELECT DISTINCT d::text d FROM underlying_bar WHERE symbol=? AND dataset_id='observed' "
-                        + "AND observed=1 AND d BETWEEN ? AND ?", r -> LocalDate.parse(r.str("d")), sym, from, to));
+        String src = source == null || source.isBlank() || "auto".equalsIgnoreCase(source)
+                ? null : source.trim().toLowerCase(Locale.ROOT);
+        List<LocalDate> rows = src == null
+                ? db.query("SELECT DISTINCT d::text d FROM underlying_bar WHERE symbol=? AND dataset_id='observed' "
+                                + "AND observed=1 AND d BETWEEN ? AND ?",
+                        r -> LocalDate.parse(r.str("d")), sym, from, to)
+                : db.query("SELECT DISTINCT d::text d FROM underlying_bar WHERE symbol=? AND dataset_id='observed' "
+                                + "AND observed=1 AND lower(source)=? AND d BETWEEN ? AND ?",
+                        r -> LocalDate.parse(r.str("d")), sym, src, from, to);
+        Set<LocalDate> existing = new HashSet<>(rows);
         List<LocalDate> missing = new ArrayList<>();
         int expected = 0;
         for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {

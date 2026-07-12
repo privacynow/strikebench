@@ -75,16 +75,15 @@ public final class StoredCandleStore implements CandleStore {
         return Optional.of(new CandleSeries(chosen.candles, source, freshness, basis(chosen.rows)));
     }
 
-    /** Head within a week of `from`, tail within a week of `to`, and ≥60% of expected trading days. */
+    /** Head/tail near the requested boundaries and at least 90% of actual trading sessions. */
     private static boolean coversRange(List<Candle> candles, LocalDate from, LocalDate to) {
         LocalDate first = candles.getFirst().date(), last = candles.getLast().date();
         if (first.isAfter(from.plusDays(7)) || last.isBefore(to.minusDays(7))) return false;
-        long weekdays = 0;
+        long sessions = 0;
         for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
-            java.time.DayOfWeek w = d.getDayOfWeek();
-            if (w != java.time.DayOfWeek.SATURDAY && w != java.time.DayOfWeek.SUNDAY) weekdays++;
+            if (io.liftandshift.strikebench.market.MarketHours.isTradingDay(d)) sessions++;
         }
-        return candles.size() >= Math.max(2, Math.round(weekdays * 0.6));
+        return candles.size() >= Math.max(2, Math.round(sessions * 0.9));
     }
 
     private record Row(LocalDate d, java.math.BigDecimal open, java.math.BigDecimal high,
