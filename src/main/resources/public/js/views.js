@@ -6165,23 +6165,53 @@
       if (!App.alive(token)) return;
       renderReset(!!ov.admin); // the reset panel is admin-gated
       var e = ov.engine || {};
+      var isDemoEngine = ov.marketLane === 'DEMO';
+      var isObservedEngine = ov.marketLane === 'OBSERVED';
+      var activeUniverseSize = App.state.universe && App.state.universe.active
+        ? (App.state.universe.active.symbols || []).length : 0;
       engineCard.innerHTML = '';
       engineCard.appendChild(UI.cardHeader(el('span', {}, 'Market engine', UI.info('marketengine')),
         el('button', { class: 'btn btn-sm', id: 'dc-refresh-now', onclick: function () { startJob('refresh_now', {}); } }, 'Refresh now')));
       engineCard.appendChild(el('div', { class: 'chip-row' },
-        ov.marketLane === 'DEMO' ? chip('Feed', 'Static Demo') : chip('Market', ov.marketOpen ? 'Open' : 'Closed'),
-        chip('Warmed', (e.warmed || 0) + ' / ' + (e.tracked || 0)),
-        chip('State', e.errors ? 'Needs attention' : e.inFlight ? e.inFlight + ' refreshing'
+        isDemoEngine ? chip('Feed', 'Static Demo')
+          : !isObservedEngine ? chip('Engine', 'Observed background')
+          : chip('Market', ov.marketOpen ? 'Open' : 'Closed'),
+        isDemoEngine ? chip('Symbols', String(activeUniverseSize)) : chip('Warmed', (e.warmed || 0) + ' / ' + (e.tracked || 0)),
+        chip('State', isDemoEngine ? 'Ready' : e.errors ? 'Needs attention' : e.inFlight ? e.inFlight + ' refreshing'
           : e.stale ? e.stale + ' stale' : 'Ready')));
+      if (isDemoEngine) {
+        engineCard.appendChild(el('p', { class: 'muted small data-health-basis' },
+          'Fabricated prices and chains are ready without provider requests.'));
+      } else if (!isObservedEngine) {
+        engineCard.appendChild(el('p', { class: 'muted small data-health-basis' },
+          'Observed data keeps refreshing in the background for an immediate return.'));
+      } else if (e.symbols && e.symbols.length) {
+        var tracked = el('div', { class: 'chip-row dc-engine-tracked' },
+          el('span', { class: 'muted small' }, 'Tracked'));
+        e.symbols.slice(0, 6).forEach(function (s) {
+          tracked.appendChild(el('span', { class: 'badge ' + (s.error ? 'badge-danger'
+            : s.refreshing ? 'badge-caution' : 'badge-dim') }, s.symbol));
+        });
+        if (e.symbols.length > 6) tracked.appendChild(el('span', { class: 'muted small' }, '+' + (e.symbols.length - 6) + ' more'));
+        engineCard.appendChild(tracked);
+      }
       syncOverviewToggle(engineCard, 'engine');
       dcDetailBuilders.engine = function () {
         var detail = el('div', {},
-          ov.marketLane === 'DEMO' ? alertBox('warn',
+          isDemoEngine ? alertBox('warn',
             'The explicit Demo market uses fabricated teaching prices and an isolated account.') : null,
+          !isObservedEngine && !ov.fixturesOnly ? el('p', { class: 'muted small' },
+            'The observed provider engine remains active in the background. The metrics below describe that observed engine, not the active generated market.') : null);
+        if (isDemoEngine && ov.fixturesOnly) {
+          detail.appendChild(el('p', {},
+            'This review build is Demo-only. Its static teaching feed does not contact market-data providers.'));
+          return detail;
+        }
+        detail.appendChild(
           el('div', { class: 'chip-row' },
             chip('Refreshing', String(e.inFlight || 0)),
             chip('Stale', String(e.stale || 0)),
-            ov.marketLane === 'DEMO' ? null : chip('Refresh every', (e.refreshInterval || 0) + 's'),
+            isDemoEngine ? null : chip('Refresh every', (e.refreshInterval || 0) + 's'),
             chip('Avg latency', (e.avgLatencyMs || 0) + ' ms'),
             e.errors ? chip('Errors since startup', String(e.errors),
               'Total provider/refresh errors since this server started — not a current-failure count.') : null));
@@ -6559,10 +6589,13 @@
       });
       healthCard.appendChild(sumRow);
       healthCard.appendChild(el('p', { class: 'muted small data-health-basis' },
-        'Health is the latest source request. Stored historical coverage is separate and may remain available after the market closes or a source is temporarily empty.'));
+        'Latest source requests; stored history is tracked separately.'));
       syncOverviewToggle(healthCard, 'health');
       dcDetailBuilders.health = function () {
-        var detail = el('div', {}, body);
+        var detail = el('div', {},
+          el('p', { class: 'muted small' },
+            'Health is the latest source request. Stored historical coverage is separate and may remain available after the market closes or a source is temporarily empty.'),
+          body);
         // Observability for the operator (review P2 #9): p50/p95 by route class, live.
         if (Learn.currentLevel() === 'expert') {
           detail.appendChild(UI.expandable('API latency (p50/p95 by route class)', function () {

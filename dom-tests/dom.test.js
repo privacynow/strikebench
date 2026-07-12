@@ -3008,9 +3008,13 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
     return g ? Math.round(g.getBoundingClientRect().bottom) : 9999;
   });
   assert.ok(ovBottom <= 780, 'Data Overview remains a compact desktop dashboard (bottom=' + ovBottom + ')');
-  if (await page.evaluate(() => App.config.fixturesOnly)) {
+  const fixtureMode = await page.evaluate(() => App.config.fixturesOnly);
+  if (fixtureMode) {
     const engineText = await page.textContent('#dc-engine');
     assert.match(engineText, /Feed\s*Static Demo/, 'the fixed Demo feed names its actual operating mode');
+    assert.match(engineText, /State\s*Ready/, 'the active Demo feed is not contaminated by observed-engine errors');
+    assert.doesNotMatch(engineText, /Needs attention|\bstale\b/i,
+      'background or persisted observed state is not presented as an active Demo-feed failure');
     assert.doesNotMatch(engineText, /Market\s*Closed/, 'Demo is static teaching data, not a closed real session');
   }
   // VERTICAL SYMMETRY (review): each desktop row's paired cards share top AND bottom edges
@@ -3049,8 +3053,16 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
       'unknown/unconfigured provider state stays neutral, got ' + JSON.stringify(c));
   }
   await page.click('#dc-engine');
-  assert.match(await page.textContent('#dc-detail'), /Errors since startup.*1,234|Errors since startup.*1234/s,
-    'the compact summary does not discard operational detail');
+  const engineDetail = await page.textContent('#dc-detail');
+  if (fixtureMode) {
+    assert.match(engineDetail, /Demo-only.*does not contact market-data providers/s,
+      'Demo detail explains why observed-provider counters do not apply');
+    assert.doesNotMatch(engineDetail, /Errors since startup/,
+      'observed-engine failures are not blended into the Demo lane');
+  } else {
+    assert.match(engineDetail, /Errors since startup.*1,234|Errors since startup.*1234/s,
+      'the compact summary does not discard observed-engine detail');
+  }
   await page.click('#dc-engine');
   // Summary cards disclose detail into ONE drawer below the grid, never distort a neighbor.
   await page.click('#dc-health');
