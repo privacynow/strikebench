@@ -140,6 +140,52 @@
     }));
   }
 
+  async function latestStrategy(planId, force) {
+    return force ? API.getFresh('/api/plans/' + planId + '/strategy/latest')
+      : API.get('/api/plans/' + planId + '/strategy/latest');
+  }
+
+  async function runStrategy(plan, controls) {
+    var out = await API.post('/api/plans/' + plan.id + '/strategy/run', controls || {});
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
+  async function selectCandidate(plan, candidateId) {
+    var out = await API.put('/api/plans/' + plan.id + '/strategy/select', {
+      expectedVersion: plan.version, candidateId: candidateId
+    });
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
+  async function saveCustom(plan, position) {
+    var out = await API.post('/api/plans/' + plan.id + '/strategy/custom', {
+      expectedVersion: plan.version, position: position
+    });
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
+  function latestScout(planId, scope, force) {
+    var path = '/api/plans/' + planId + '/scout/latest?scope=' + encodeURIComponent(scope || 'PEERS');
+    return force ? API.getFresh(path) : API.get(path);
+  }
+
+  async function runScout(plan, controls) {
+    return API.post('/api/plans/' + plan.id + '/scout/run', controls || {});
+  }
+
+  async function spawnScoutedPlan(plan, candidateId, role) {
+    var out = await API.post('/api/plans/' + plan.id + '/scout/spawn', {
+      clientRequestId: requestId(), candidateId: candidateId, role: role
+    });
+    if (out.plan) {
+      replace(out.plan); App.state.activePlanId = out.plan.id;
+    }
+    return out;
+  }
+
   async function closeChip(plan) {
     var wasActive = App.state.activePlanId === plan.id;
     var updated = await API.put('/api/plans/' + plan.id + '/open', {
@@ -202,6 +248,9 @@
     init: function () { return load(true); }, load: load, get: get, create: create, promote: promote,
     provisional: provisional, active: active, focus: focus, path: path, setStage: setStage,
     updateContext: updateContext, claimIntent: claimIntent, closeChip: closeChip,
+    latestStrategy: latestStrategy, runStrategy: runStrategy,
+    selectCandidate: selectCandidate, saveCustom: saveCustom,
+    latestScout: latestScout, runScout: runScout, spawnScoutedPlan: spawnScoutedPlan,
     marketChanged: marketChanged, renderBar: renderBar, ui: ui,
     all: function () { return items.slice(); }
   };

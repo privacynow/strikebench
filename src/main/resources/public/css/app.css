@@ -1994,6 +1994,38 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-understand-grid #history-card,
 .plan-understand-grid #news-card { grid-column: 1 / -1; }
 .plan-strategy-market { min-width: 0; display: grid; gap: 12px; }
+.plan-tool-selector { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
+  background: var(--surface); }
+.plan-tool { min-width: 0; min-height: 64px; padding: 9px 12px; border: 0;
+  border-right: 1px solid var(--border); background: transparent; color: var(--muted);
+  display: flex; align-items: center; justify-content: flex-start; gap: 9px; text-align: left;
+  cursor: pointer; }
+.plan-tool:last-child { border-right: 0; }
+.plan-tool span:not(.icon) { min-width: 0; display: grid; gap: 2px; }
+.plan-tool b { color: var(--text); font-size: 14px; }
+.plan-tool small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-tool:hover { background: var(--surface-2); }
+.plan-tool.active { color: var(--accent); background: var(--accent-soft);
+  box-shadow: inset 0 -3px 0 var(--accent); }
+.plan-strategy-body { min-width: 0; display: grid; gap: 12px; }
+.plan-tool-intro { padding: 2px 2px 0; }
+.plan-tool-intro h3 { margin: 0 0 3px; }
+.plan-strategy-controls .check-row { margin-top: 10px; }
+.plan-next-action { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px 16px; border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  background: var(--accent-soft); }
+.plan-next-action p { margin: 3px 0 0; }
+.plan-candidate-actions { margin-top: 10px; }
+.plan-scout-scopes { margin: 10px 0 2px; }
+.plan-scout-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.plan-scout-symbol { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: -2px 0 8px; padding-bottom: 7px; border-bottom: 1px solid var(--border); }
+.research-plan-scout { margin-top: 18px; }
+.universe-scout-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.universe-scout-pick .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.universe-scout-pick .head h3 { margin: 0; }
+.field-end { display: flex; align-items: end; }
 .plan-stage-transition { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .plan-stage-transition p { margin: 0; }
 .plan-intent-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -2015,6 +2047,13 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .plan-understand-grid #history-card,
   .plan-understand-grid #news-card { grid-column: auto; }
   .plan-intent-grid { grid-template-columns: minmax(0, 1fr); }
+  .plan-tool-selector { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plan-tool:nth-child(2n) { border-right: 0; }
+  .plan-tool:nth-child(n + 3) { border-top: 1px solid var(--border); }
+  .plan-tool { min-height: 58px; padding: 8px 9px; }
+  .plan-next-action { align-items: flex-start; flex-direction: column; }
+  .plan-scout-results { grid-template-columns: minmax(0, 1fr); }
+  .universe-scout-grid { grid-template-columns: minmax(0, 1fr); }
   .plan-stage-transition { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 420px) {

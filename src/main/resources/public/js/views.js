@@ -28,33 +28,21 @@
 
   var icon = UI.icon;
 
-  function beginIdeaSearch(prefill, route) {
+  function startPlan(prefill, stage) {
     prefill = Object.assign({}, prefill || {});
-    var prior = App.state.ticket && App.state.ticket.symbol
-      || App.state.builderForm && App.state.builderForm.symbol;
-    var hadStructure = !!(App.state.ticket
-      || App.state.builderForm && App.state.builderForm.legs && App.state.builderForm.legs.length);
-    App.state.ticket = null;
-    App.state.builderForm = null;
-    App.state.outcomeReceipt = null;
-    App.state.decisionCache = null;
-    App.state.decisionInflight = null;
-    App.state.recommendResults = null;
-
-    var patch = {};
-    if (prefill.symbol) patch.symbol = prefill.symbol;
-    patch.goal = prefill.intent || null;
-    if (prefill.horizon) patch.horizon = prefill.horizon;
-    if (prefill.thesis) patch.thesis = prefill.thesis;
-    App.context.update(patch);
-    App.state.discoverForm = Object.assign({}, App.state.discoverForm || {}, {
-      source: 'single', symbol: prefill.symbol || App.context.symbol() || '',
-      goal: prefill.intent || 'DIRECTIONAL', goalExplicit: !!prefill.intent
-    });
-    App.state.ideasPrefill = prefill;
-    if (hadStructure && UI.toast) UI.toast((prior ? prior + ' working structure' : 'Working structure')
-      + ' cleared \u2014 starting a new strategy search.');
-    App.navigate(route || '#/trade/context/manual');
+    var symbol = String(prefill.symbol || App.context.symbol() || '').trim().toUpperCase();
+    if (!symbol) { App.navigate('#/research'); return Promise.resolve(null); }
+    var horizon = prefill.horizon || App.context.horizon('month');
+    var days = horizon === '0DTE' ? 1 : horizon === 'week' ? 7 : horizon === 'quarter' ? 63
+      : /^\d+d$/.test(horizon || '') ? parseInt(horizon, 10) : 30;
+    var risk = document.getElementById('risk-mode');
+    return PlanStore.create({
+      symbol: symbol, intent: prefill.intent || App.context.goal('DIRECTIONAL'),
+      thesis: prefill.thesis || App.context.thesis('neutral'), horizonDays: days,
+      targetCents: prefill.target ? Math.round(parseFloat(prefill.target) * 100) : null,
+      riskMode: risk ? risk.value : 'conservative'
+    }).then(function (plan) { return PlanStore.focus(plan, stage || 'UNDERSTAND'); })
+      .catch(function (e) { UI.toast(e.message, 'error'); return null; });
   }
 
   /**
@@ -101,7 +89,7 @@
           el('button', {
             class: 'btn btn-lg', onclick: function () {
               try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
-              App.navigate('#/trade/context/manual');
+              App.navigate('#/research');
             }
           }, 'Find my first idea'),
           el('button', {
@@ -337,16 +325,15 @@
     } else if (App.state.world && App.state.world !== 'observed') {
       heroMode = el('span', { class: 'badge badge-sim', id: 'home-mode-chip' }, 'SIMULATED MARKET SESSION');
     }
-    var t0 = App.state.ticket;
-    var heroPlaceable = !!(t0 && (t0.candidate || (t0.custom && t0.legs && t0.legs.length)));
+    var activePlan = window.PlanStore && PlanStore.active();
     var heroSub = el('p', { class: 'home-hero-sub', id: 'home-context-line' },
-      heroPlaceable
-        ? 'A working idea on ' + t0.symbol + ' is ready to place \u2014 or keep exploring.'
+      activePlan
+        ? activePlan.title + ' is at ' + String(activePlan.activeStage || 'UNDERSTAND').replace('_', ' ').toLowerCase() + '.'
         : 'Screened ideas, honest odds, worst case always known before you commit.');
-    var heroCta = heroPlaceable
-      ? el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/decide'); } },
-          'Place ' + t0.symbol + ' \u2192')
-      : el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/context'); } }, 'Find an idea');
+    var heroCta = activePlan
+      ? el('button', { class: 'btn', onclick: function () { PlanStore.focus(activePlan); } },
+          'Continue ' + activePlan.symbol + ' Plan \u2192')
+      : el('button', { class: 'btn', onclick: function () { App.navigate('#/research'); } }, 'Start a Plan');
     // The hero owns THE single primary next action (review P5): the tour demoted to a
     // quiet entry at the bottom of the page — onboarding is not a permanent command.
     root.appendChild(heroBlock('dashboard', {
@@ -519,34 +506,22 @@
       var any = false;
       // The beginner first-week path, folded in (retires itself after the first trade).
       if (Learn.currentLevel() === 'beginner' && acct && !acct.hasTraded) {
-        var steps = [
-          { label: 'Set the context', done: workflowStepReady('context'), hash: '#/trade/context' },
-          { label: 'Choose a structure', done: workflowStepReady('structure'), hash: '#/trade/structure' },
-          { label: 'Test the outcomes', done: workflowStepReady('outcomes'), hash: '#/trade/outcomes' },
-          { label: 'Review and decide', done: false, hash: '#/trade/decide' }
-        ];
+        var activeIndex = activePlan ? PLAN_STAGES.findIndex(function (stage) { return stage.key === activePlan.activeStage; }) : -1;
+        var steps = PLAN_STAGES.slice(0, 5).map(function (stage, index) {
+          return { label: stage.label, done: activeIndex > index, stage: stage.key };
+        });
         card.appendChild(el('div', { class: 'journey', id: 'journey-card' }, steps.map(function (st2, i) {
           return el('button', { class: 'journey-step' + (st2.done ? ' done' : ''), type: 'button',
-            onclick: function () { App.navigate(st2.hash); } },
+            onclick: function () { if (activePlan) PlanStore.focus(activePlan, st2.stage); else App.navigate('#/research'); } },
             el('span', { class: 'ck-mark' }, st2.done ? '' : String(i + 1)),
             el('span', {}, st2.label));
         })));
         any = true;
       }
       var chips = [];
-      var t = App.state.ticket;
-      var placeable = !!(t && (t.candidate || (t.custom && t.legs && t.legs.length)));
-      if (placeable) {
-        chips.push(el('button', { class: 'sym-chip', 'data-continue': 'idea',
-          onclick: function () { App.navigate('#/trade/decide'); } },
-          'Working idea: ' + t.symbol + ' ' + (t.custom ? 'custom strategy'
-            : (t.candidate && t.candidate.strategy ? prettyStrategy(t.candidate.strategy) : 'trade')) + ' →'));
-      }
-      var sym = App.context.symbol();
-      if (sym) {
-        // Context, not command duplication (review P5): these chips RESUME where you were.
-        chips.push(el('button', { class: 'sym-chip', 'data-continue': 'research',
-          onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(sym)); } }, 'Start: ' + sym + ' plan →'));
+      if (activePlan) {
+        chips.push(el('button', { class: 'sym-chip', 'data-continue': 'plan',
+          onclick: function () { PlanStore.focus(activePlan); } }, 'Resume: ' + activePlan.title + ' →'));
       }
       if (chips.length) {
         card.appendChild(el('div', { class: 'chip-row', id: 'continue-row' }, chips));
@@ -566,8 +541,7 @@
     colR.appendChild(el('div', { class: 'card card-slim', id: 'command-bar' },
       UI.cardHeader('Tools'),
       el('div', { class: 'btn-row', style: 'flex-wrap:wrap' },
-        [['Structure', '#/trade/structure', 'target'], ['Outcomes', '#/trade/outcomes', 'chart'],
-         ['Simulated market', '#/data/simulation', 'flask']].map(function (a) {
+        [['New Plan', '#/research', 'target'], ['Simulated market', '#/data/simulation', 'flask']].map(function (a) {
           return el('button', { class: 'btn btn-sm btn-secondary',
             onclick: function () { App.navigate(a[1]); } }, icon(a[2], 14), ' ', a[0]);
         }))));
@@ -703,6 +677,7 @@
       (async function fillIndex() {
         await sectorExplorer(idxBody, 'research');
         if (!App.alive(_it)) return;
+        idxBody.appendChild(universePlanScout());
         idxBody.appendChild(await studyToolsSection());
       })();
       return;
@@ -913,7 +888,7 @@
 
     // What you can do with this symbol — each GOAL gets its own live one-liner, computed
     // from real ladder rungs (not marketing copy), with one-tap handoff into that flow.
-    if (section === 'strategy' && r.optionable) {
+    if (section === 'strategy' && r.optionable && !embedded.chainOnly) {
       (async function symbolActions() {
         try {
           var level = Learn.currentLevel();
@@ -936,8 +911,7 @@
               el('p', { class: 'muted action-line' }, lineNode),
               el('button', {
                 class: 'btn btn-sm', onclick: function () {
-                  beginIdeaSearch({ intent: intentKey, symbol: symbol, autorun: true },
-                    '#/trade/context/manual');
+                  startPlan({ intent: intentKey, symbol: symbol }, 'STRATEGY');
                 }
               }, cta));
           }
@@ -1048,17 +1022,31 @@
           var isAtm = k === strikes[atmIdx];
           if (learning) {
             return el('tr', { class: isAtm ? 'atm' : '' },
+              el('td', {}, buildBtn('CALL')),
               el('td', { class: k < spot ? 'itm' : '' }, c.bid !== undefined ? fmtNum(c.bid) + ' / ' + fmtNum(c.ask) : '—'),
               el('td', {}, el('b', {}, stripZeros(k))),
-              el('td', { class: k > spot ? 'itm' : '' }, p.bid !== undefined ? fmtNum(p.bid) + ' / ' + fmtNum(p.ask) : '—'));
+              el('td', { class: k > spot ? 'itm' : '' }, p.bid !== undefined ? fmtNum(p.bid) + ' / ' + fmtNum(p.ask) : '—'),
+              el('td', {}, buildBtn('PUT')));
           }
           function buildBtn(type) {
             return el('button', { class: 'btn btn-sm btn-secondary chain-build', title: 'Start a build with this ' + type.toLowerCase() + ' leg in the strategy builder',
               onclick: function () {
-                App.state.builderForm = { symbol: symbol, qty: 1, goal: 'BROWSE', templateKey: null, step: 4, legIdx: 0,
+                var seed = { symbol: symbol, qty: 1,
+                  goal: embedded.plan && embedded.plan.intent || 'BROWSE', templateKey: null,
+                  step: 4, legIdx: 0,
                   legs: [{ action: 'BUY', type: type, strike: String(k), expiration: select.value, ratio: 1 }], excluded: {} };
-                App.navigate('#/trade/structure');
-              } }, 'B');
+                if (typeof embedded.onBuildLeg === 'function') embedded.onBuildLeg(seed);
+                else {
+                  startPlan({ symbol: symbol, intent: seed.goal }, 'STRATEGY').then(function (plan) {
+                    if (!plan) return;
+                    var planUi = PlanStore.ui(plan.id);
+                    planUi.strategyView = 'builder';
+                    planUi.buildState = planUi.buildState || {};
+                    planUi.buildState.builderForm = seed;
+                    App.render();
+                  });
+                }
+              }, 'aria-label': 'Start a custom package with this ' + type.toLowerCase() }, 'Add');
           }
           return el('tr', { class: isAtm ? 'atm' : '' },
             el('td', {}, buildBtn('CALL')),
@@ -1087,7 +1075,7 @@
           }));
         }
         chainBody.appendChild(table(
-          learning ? ['Call price', 'Strike', 'Put price']
+          learning ? ['Build', 'Call price', 'Strike', 'Put price', 'Build']
                    : ['', 'Call bid/ask', 'Call Δ', 'Call IV', 'C OI/Vol', 'Strike', 'P OI/Vol', 'Put IV', 'Put Δ', 'Put bid/ask', ''], rows));
       };
       loadChain(r.expirations[0]);
@@ -1136,6 +1124,79 @@
             : 'Simulations start from the active market lane\'s disclosed price. Check the ticker, or Data for source health.'));
       }
     });
+  }
+
+  function universePlanScout() {
+    var intent = el('select', { id: 'universe-scout-intent' }, (Learn.INTENTS || []).map(function (meta) {
+      return el('option', { value: meta.key }, meta.label);
+    }));
+    var horizon = el('select', { id: 'universe-scout-horizon' },
+      el('option', { value: 'week' }, 'About 1 week'),
+      el('option', { value: 'month', selected: '' }, 'About 1 month'),
+      el('option', { value: 'quarter' }, 'About 3 months'),
+      el('option', { value: '0DTE' }, 'Today (0DTE)'));
+    var results = el('div', { id: 'universe-scout-results' });
+    var run = el('button', { type: 'button', class: 'btn', id: 'universe-scout-run', onclick: async function () {
+      run.disabled = true; run.setAttribute('aria-busy', 'true');
+      results.innerHTML = ''; results.appendChild(UI.spinner('Scanning this universe…'));
+      try {
+        var universe = App.state.universe && App.state.universe.active && App.state.universe.active.symbols || [];
+        var risk = document.getElementById('risk-mode');
+        var response = await API.post('/api/recommend/auto', {
+          universe: universe, horizons: [horizon.value], maxPicks: 5,
+          riskMode: risk ? risk.value : 'conservative', allow0dte: horizon.value === '0DTE',
+          intents: [intent.value]
+        });
+        results.innerHTML = '';
+        if (!response.picks || !response.picks.length) {
+          results.appendChild(UI.emptyState('No symbol passed this Scout',
+            (response.notes || []).join(' ') || 'Try another goal, horizon, or sector.'));
+          return;
+        }
+        var grid = el('div', { class: 'universe-scout-grid' });
+        response.picks.forEach(function (pick) {
+          var h = (pick.horizons || []).find(function (item) { return item.horizon === horizon.value; })
+            || (pick.horizons || [])[0];
+          var top = h && h.candidates && h.candidates[0];
+          var candidate = top && top.candidate;
+          var card = el('article', { class: 'card universe-scout-pick' },
+            el('div', { class: 'head' }, el('h3', {}, pick.symbol),
+              el('span', { class: 'badge ' + (THESIS_BADGE[pick.signals.thesis] || 'badge-dim') }, pick.signals.thesis)),
+            el('div', { class: 'chip-row' },
+              chip('Signal confidence', fmtPct(pick.signals.confidence)),
+              pick.signals.ivHvRatio !== null && pick.signals.ivHvRatio !== undefined
+                ? chip('IV / recent movement', fmtNum(pick.signals.ivHvRatio, 2) + '×') : null,
+              candidate ? chip('Leading expression', candidate.displayName) : null),
+            el('p', { class: 'muted' }, (pick.signals.rationale || []).slice(0, 2).join(' ')),
+            candidate && top.economics ? economicAssessmentBlock(Object.assign({}, candidate, { economics: top.economics })) : null,
+            el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', onclick: async function () {
+              this.disabled = true; this.setAttribute('aria-busy', 'true');
+              try {
+                var days = horizon.value === '0DTE' ? 1 : horizon.value === 'week' ? 7 : horizon.value === 'quarter' ? 63 : 30;
+                var plan = await PlanStore.create({ symbol: pick.symbol, intent: pick.intent,
+                  thesis: String(pick.signals.thesis || '').toLowerCase(), horizonDays: days,
+                  riskMode: risk ? risk.value : 'conservative' });
+                await PlanStore.focus(plan, 'UNDERSTAND');
+              } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
+            } }, 'Open ' + pick.symbol + ' Plan')));
+          grid.appendChild(card);
+        });
+        results.appendChild(grid);
+        if (response.notes && response.notes.length) results.appendChild(UI.expandable('Scout notes', function () {
+          return el('ul', { class: 'rationale' }, response.notes.map(function (note) { return el('li', {}, note); }));
+        }));
+      } catch (e) {
+        results.innerHTML = ''; results.appendChild(alertBox('danger', 'Scout could not finish', [e.message]));
+      } finally { run.disabled = false; run.removeAttribute('aria-busy'); }
+    } }, 'Scout this universe');
+    return el('section', { class: 'research-plan-scout', id: 'research-plan-scout' },
+      el('div', { class: 'section-heading' }, el('div', {}, el('h2', {}, 'Scout for a new Plan'),
+        el('p', { class: 'muted' }, 'Scan the current sector when you do not already have a ticker. A pick starts the same six-stage Plan journey.'))),
+      el('div', { class: 'card' },
+        el('div', { class: 'form-grid grid-3' },
+          el('div', { class: 'field' }, el('label', { for: 'universe-scout-intent' }, 'Goal'), intent),
+          el('div', { class: 'field' }, el('label', { for: 'universe-scout-horizon' }, 'Horizon'), horizon),
+          el('div', { class: 'field field-end' }, run))), results);
   }
 
   var EARNINGS_RE = /earnings|quarterly results|guidance|earnings call/i;
@@ -1498,9 +1559,7 @@
       mode: 'locked', symbol: symbol, id: opts.id || 'locked-symbol',
       label: opts.label || 'Position symbol',
       onResearch: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(symbol)); },
-      onChange: opts.noChange ? null : function () {
-        beginIdeaSearch({}, '#/trade/context');
-      }
+      onChange: opts.noChange ? null : function () { App.navigate('#/research'); }
     });
   }
 
@@ -1631,9 +1690,8 @@
       }
       head.appendChild(el('button', {
         class: 'btn btn-sm', onclick: function () {
-          App.state.discoverForm = Object.assign({}, App.state.discoverForm || {},
-            { universe: sector.symbols.join(','), symbol: '' });
-          App.navigate('#/trade/context/scout');
+          var target = document.getElementById('research-plan-scout');
+          if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
       }, 'Scout this sector'));
       try {
@@ -1855,30 +1913,11 @@
 
   function candidateWorkflowActions(c, symbolForTicket, beginner) {
     var symbol = symbolForTicket || App.context.symbol();
-    function select() {
-      App.state.ticket = ticketForCandidate(c, symbol);
-      return App.state.ticket;
-    }
     return el('div', { class: 'btn-row candidate-workflow-actions' },
       el('button', { class: 'btn', onclick: function () {
-        select(); App.navigate('#/trade/decide');
-      } }, 'Review & decide'),
-      el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
-        var ticket = select();
-        if (window.Builder) Builder.adoptTicket(ticket);
-        App.navigate('#/trade/structure');
-      } }, beginner ? 'Adjust structure' : 'Edit structure'),
-      el('button', { class: 'btn btn-sm btn-secondary',
-        'data-outcome-default': canBacktest(c.strategy) ? 'history' : 'scenario', onclick: function () {
-        select();
-        if (canBacktest(c.strategy)) {
-          App.state.backtestPrefill = { symbol: symbol, strategy: c.strategy };
-          App.state.verifyMode = 'history';
-        } else {
-          App.state.verifyMode = 'scenario';
-        }
-        App.navigate('#/trade/outcomes');
-      } }, 'Test outcomes'));
+        startPlan({ symbol: symbol, intent: tradeIntent(c && c.intent),
+          horizon: App.context.horizon(), thesis: App.context.thesis() }, 'STRATEGY');
+      } }, beginner ? 'Open this in a Plan' : 'Continue in a Plan'));
   }
 
   /** Learning-level card: plain language first, numbers second, mechanics on tap. */
@@ -2143,10 +2182,10 @@
           el('td', {}, el('button', {
             class: 'btn btn-sm', onclick: function (e) {
               e.stopPropagation();
-              App.state.ticket = ticketForCandidate(c, App.context.symbol());
-              App.navigate('#/trade/decide');
+              startPlan({ symbol: App.context.symbol(), intent: tradeIntent(c && c.intent),
+                horizon: App.context.horizon(), thesis: App.context.thesis() }, 'STRATEGY');
             }
-          }, 'Use'))])), 'Show details for ' + c.displayName, 'button');
+          }, 'Open Plan'))])), 'Show details for ' + c.displayName, 'button');
         body.appendChild(row);
         body.appendChild(detailRow);
       });
@@ -2161,677 +2200,6 @@
     return wrap;
   }
 
-  async function discoverStage(root, params) {
-    // ONE form, no second nav row. Two questions, in the user's own order: WHAT are you
-    // trying to do (goal chips), and WHERE should ideas come from — an EXPLICIT choice
-    // between "Scan the market for me" (the scout) and "I have a stock in mind", exactly
-    // the two experiences the old tabs held, minus the second navigation level. Every
-    // goal keeps the ticker box, so "Buy at a discount" can name a stock.
-    var saved = App.state.discoverForm;
-    if (!saved) {
-      saved = App.state.discoverForm = {
-        goal: App.context.goal('DIRECTIONAL'),
-        goalExplicit: false,
-        source: 'single',
-        symbol: '', target: '', universe: '', scanTarget: '',
-        horizon: App.context.horizon('month'), thesis: App.context.thesis('bullish'),
-        h0: false, hW: true, hM: true
-      };
-    }
-    var prefill = App.state.ideasPrefill || {};
-    App.state.ideasPrefill = null;
-    if (prefill.symbol) { saved.symbol = prefill.symbol; saved.source = 'single'; }
-    if (prefill.intent) { saved.goal = prefill.intent; saved.goalExplicit = true; }
-    if (prefill.horizon) saved.horizon = prefill.horizon;
-    if (prefill.thesis) saved.thesis = prefill.thesis;
-    if (prefill.target != null && isFinite(Number(prefill.target))) saved.target = String(prefill.target);
-    // COMPLETED INTENT IS NOT REQUESTED TWICE (interaction contract #4): a 'Find strategies'
-    // click arrives with the symbol; when a goal is already known (handed over, or chosen
-    // before and persisted) the search RUNS. Only a genuinely ambiguous goal asks.
-    var autorun = !!prefill.autorun && !!prefill.symbol && !!saved.goalExplicit;
-    var pendingAutorun = !!prefill.autorun && !!prefill.symbol && !saved.goalExplicit;
-    // Canonical Context routes may open directly in one-stock or scout mode.
-    if (params && params[0] === 'manual') saved.source = 'single';
-    if (params && params[0] === 'scout') saved.source = 'scan';
-    // An explicit handoff wins; otherwise an in-progress draft owns its controls. A fresh
-    // draft was already seeded from App.context above. Reversing this precedence silently
-    // rewrote saved 0DTE/goal choices whenever an older shared context existed.
-    var goal = prefill.intent || saved.goal || App.context.goal() || 'DIRECTIONAL';
-    var source = saved.source || 'single';
-    function remember(patch) {
-      saved = App.state.discoverForm = Object.assign({}, App.state.discoverForm, patch || {});
-      var contextPatch = {};
-      if (patch && patch.symbol !== undefined && patch.symbol) contextPatch.symbol = patch.symbol;
-      if (patch && patch.goal !== undefined) contextPatch.goal = patch.goal;
-      if (patch && patch.horizon !== undefined) contextPatch.horizon = patch.horizon;
-      if (patch && patch.thesis !== undefined) contextPatch.thesis = patch.thesis;
-      if (Object.keys(contextPatch).length) App.context.update(contextPatch);
-    }
-    var level = Learn.currentLevel();
-    var beginner = level === 'beginner';
-    var sym = el('input', { type: 'text', id: 'rec-symbol', list: 'universe-symbols',
-      placeholder: 'AAPL',
-      value: prefill.symbol || saved.symbol || App.context.symbol() || 'AAPL' });
-    var activeThesis = prefill.thesis || saved.thesis || App.context.thesis() || 'bullish';
-    var thesis = el('select', { id: 'rec-thesis' },
-      ['bullish', 'bearish', 'neutral', 'volatile'].map(function (t) {
-        return el('option', { value: t, selected: t === activeThesis ? '' : null }, t);
-      }));
-    // PRESENTATION-ONLY LEVELS (review P0): 0DTE exists at BOTH levels — beginner defaults
-    // steer away from it, the engine's same-day warnings still fire, but nothing is unreachable
-    // and no persisted choice is silently rewritten.
-    var horizons = ['week', 'month', 'quarter', '0DTE'];
-    var activeHorizon = prefill.horizon || saved.horizon || App.context.horizon() || 'month';
-    var horizon = el('select', { id: 'rec-horizon' },
-      horizons.map(function (h) { return el('option', { value: h, selected: h === activeHorizon ? '' : null }, h); }));
-    remember({ symbol: sym.value, goal: goal, horizon: activeHorizon, thesis: activeThesis });
-    horizon.addEventListener('change', function () {
-      remember({ horizon: horizon.value });
-      invalidateScanResults();
-    });
-    var allow0 = el('input', { type: 'checkbox', id: 'rec-0dte', checked: saved.allow0 ? '' : null });
-    allow0.addEventListener('change', function () {
-      remember({ allow0: allow0.checked });
-      invalidateScanResults();
-    });
-    var target = el('input', { type: 'number', id: 'rec-target', min: '0', step: '0.5', placeholder: 'optional',
-      value: prefill.symbol ? '' : (saved.target || '') });
-    target.addEventListener('change', function () {
-      remember({ target: target.value });
-      invalidateScanResults();
-    });
-    // One-tap targets anchored to the live price: +5/+10/+20% for exits, -5/-10/-15% for buys/floors
-    var targetPresets = el('div', { class: 'chip-row', id: 'target-presets', style: 'margin-top:4px' });
-    var presetSeq = 0; // sequence token: a slow response for the PREVIOUS symbol must never win
-    async function renderTargetPresets() {
-      var seq = ++presetSeq;
-      targetPresets.innerHTML = '';
-      if (!sym.value.trim()) return;
-      var offsets = goal === 'EXIT' ? [5, 10, 20] : [-5, -10, -15];
-      try {
-        var q = await API.get('/api/quotes?symbols=' + sym.value.trim().toUpperCase());
-        if (seq !== presetSeq) return; // superseded by a newer symbol/goal
-        targetPresets.innerHTML = '';
-        if (!q.quotes.length) return;
-        var last = parseFloat(q.quotes[0].last);
-        // Pre-open/after-hours the "last" price is the PRIOR CLOSE, not a live quote \u2014 say so instead
-        // of implying it's today's price (a trader taps "+10% exit" thinking it's off the live price).
-        var closed = App.config && App.config.marketOpen === false;
-        offsets.forEach(function (o) {
-          var px = last * (1 + o / 100);
-          targetPresets.appendChild(el('button', {
-            class: 'sym-chip', type: 'button', onclick: function () {
-              target.value = px.toFixed(2);
-              remember({ target: target.value });
-              invalidateScanResults();
-            }
-          }, (o > 0 ? '+' : '') + o + '% \u2192 $' + px.toFixed(2)));
-        });
-        if (closed) targetPresets.appendChild(el('span', { class: 'muted', style: 'font-size:11.5px' },
-          'vs the prior close $' + last.toFixed(2) + ' \u2014 market closed'));
-      } catch (e) { /* presets are sugar */ }
-    }
-    var wantShares = el('input', { type: 'number', id: 'rec-shares', min: '100', step: '100', placeholder: '100',
-      value: saved.wantShares || '' });
-    wantShares.addEventListener('change', function () {
-      remember({ wantShares: wantShares.value });
-      invalidateScanResults();
-    });
-
-    // Scan-scope fields (shown when there is no symbol): universe, expirations, $ goal
-    var universe = el('input', { type: 'text', id: 'auto-universe',
-      placeholder: 'override just this scan (comma-separated)', value: saved.universe || '' });
-    var uniData = App.state.universe;
-    var sectorSel = sectorRail({
-      id: 'universe-sector', active: uniData && uniData.active ? uniData.active.sectorKey : null,
-      onPick: async function (sec) {
-        invalidateScanResults();
-        try {
-          if (sec.key === 'world' || (App.state.world && App.state.world !== 'observed')) {
-            if (UI.toast) UI.toast('You are in a simulated session \u2014 its symbols ARE the market here.');
-            return;
-          }
-          await API.put('/api/universe', { sector: sec.key });
-          await App.refreshUniverse();
-          App.render(); // header tape + labels update everywhere
-        } catch (e) { UI.toast(e.message || 'Could not change the active universe', 'error'); }
-      }
-    });
-    // The rail must SHOW the persisted selection even when this screen is the first one rendered
-    // (App.state.universe not warmed yet) — an unhighlighted rail reads as an inert control.
-    if (!uniData || !uniData.active) {
-      API.get('/api/universe').then(function (u2) {
-        App.state.universe = u2;
-        var k2 = u2 && u2.active && u2.active.sectorKey;
-        var chip2 = k2 && sectorSel.querySelector('.sector-chip[data-sector="' + k2 + '"]');
-        if (chip2) {
-          sectorSel.querySelectorAll('.sector-chip').forEach(function (x) { x.classList.remove('active'); });
-          chip2.classList.add('active');
-          chip2.setAttribute('aria-selected', 'true');
-        }
-      }).catch(function () { /* rail stays usable without the highlight */ });
-    }
-    var scanTarget = el('input', { type: 'number', id: 'auto-target', min: '0', step: '50',
-      placeholder: 'optional', value: saved.scanTarget || '' });
-    var h0 = el('input', { type: 'checkbox', id: 'auto-h-0dte', checked: saved.h0 ? '' : null });
-    var hW = el('input', { type: 'checkbox', id: 'auto-h-week', checked: saved.hW === false ? null : '' });
-    var hM = el('input', { type: 'checkbox', id: 'auto-h-month', checked: saved.hM === false ? null : '' });
-    [h0, hW, hM].forEach(function (n) {
-      n.addEventListener('change', function () {
-        remember({ h0: h0.checked, hW: hW.checked, hM: hM.checked });
-        invalidateScanResults();
-      });
-    });
-    universe.addEventListener('input', function () { remember({ universe: universe.value }); invalidateScanResults(); });
-    scanTarget.addEventListener('input', function () { remember({ scanTarget: scanTarget.value }); invalidateScanResults(); });
-    thesis.addEventListener('change', function () {
-      remember({ thesis: thesis.value });
-      invalidateScanResults();
-    });
-
-    var filters = filterPanel('rec');
-    var results = el('div', { id: 'rec-results' });
-    filters.node.addEventListener('input', invalidateScanResults);
-    var holdingsHint = el('div', { id: 'rec-holdings-hint' });
-
-    // 1. WHY are you here — the goal decides which questions even make sense.
-    // Beginner gets story cards; Expert gets a compact segmented row.
-    var GOAL_CHOICES = (Learn.INTENTS || []).concat([{
-      key: 'ALL', label: 'Everything', icon: 'grid',
-      blurb: 'Scan every goal at once — ideas come back grouped by goal.'
-    }]);
-    var expertChooser = !beginner;
-    var intentRow = el('div', {
-      class: 'choice-row' + (expertChooser ? ' intent-compact' : ''), id: 'intent-choices'
-    }, GOAL_CHOICES.map(function (i) {
-        return el('button', {
-          class: 'choice' + (goal === i.key ? ' selected' : ''), 'data-intent': i.key,
-          title: expertChooser ? i.blurb : null,
-          onclick: function () {
-            goal = i.key;
-            remember({ goal: goal, goalExplicit: true });
-            results.innerHTML = ''; App.state.recommendResults = null; App.state.scoutResults = null;
-            intentRow.querySelectorAll('.choice').forEach(function (b) { b.classList.remove('selected'); });
-            this.classList.add('selected');
-            sync();
-            if (pendingAutorun && source === 'single') {
-              pendingAutorun = false;
-              setTimeout(function () { if (goBtn && goBtn.isConnected) goBtn.click(); }, 0);
-            }
-          }
-        }, expertChooser
-             ? el('b', {}, i.label)
-             : el('span', { class: 'choice-head' }, icon(i.icon, 17), el('b', {}, i.label)),
-           expertChooser ? null : el('span', { class: 'muted' }, i.blurb));
-      }));
-
-    var SOURCES = [
-      { key: 'scan', label: beginner ? 'Scan the market for me' : 'Scan for me', icon: 'magnifier',
-        blurb: 'The scout reads momentum, news and volatility across your universe and brings back ideas with evidence.' },
-      { key: 'single', label: beginner ? 'I have a stock in mind' : 'One stock', icon: 'tag',
-        blurb: 'Name the ticker and every idea is built for it.' }
-    ];
-    var sourceRow = el('div', {
-      class: 'choice-row' + (expertChooser ? ' intent-compact' : ''), id: 'idea-source'
-    }, SOURCES.map(function (o) {
-        return el('button', {
-          class: 'choice' + (source === o.key ? ' selected' : ''), 'data-source': o.key,
-          title: expertChooser ? o.blurb : null,
-          onclick: function () {
-            source = o.key;
-            remember({ source: source });
-            results.innerHTML = ''; App.state.recommendResults = null; App.state.scoutResults = null;
-            sourceRow.querySelectorAll('.choice').forEach(function (b) { b.classList.remove('selected'); });
-            this.classList.add('selected');
-            sync();
-          }
-        }, expertChooser
-             ? el('b', {}, o.label)
-             : el('span', { class: 'choice-head' }, icon(o.icon, 17), el('b', {}, o.label)),
-           expertChooser ? null : el('span', { class: 'muted' }, o.blurb));
-      }));
-    // The active universe/sector stays visible as one-tap chips even while a symbol
-    // sits in the box (the datalist only helps when typing — this is always there).
-    var symChips = el('div', { class: 'sym-chips', id: 'universe-sym-chips' });
-    function renderSymChips() {
-      symChips.innerHTML = '';
-      var syms = (App.state.universe && App.state.universe.active.symbols) || [];
-      var cur = sym.value.trim().toUpperCase();
-      syms.forEach(function (s2) {
-        symChips.appendChild(el('button', {
-          class: 'sym-chip' + (s2 === cur ? ' active' : ''), type: 'button',
-          onclick: function () {
-            sym.value = s2;
-            App.context.selectSymbol(s2);
-            remember({ symbol: s2 });
-            sync();
-          }
-        }, s2));
-      });
-    }
-    var symField = UI.symbolContext({
-      mode: 'editable', id: 'ideas-symbol-context', input: sym,
-      label: beginner ? 'Which stock?' : 'Symbol', class: 'ideas-symbol-context'
-    });
-    symChips.classList.add('symbol-context-peers');
-    symField.appendChild(symChips);
-    var thesisField = el('div', { class: 'field' }, el('label', {}, 'Your view'), thesis);
-    var targetField = el('div', { class: 'field', style: 'display:none' },
-      el('label', { id: 'rec-target-label' }, 'Target price ($/sh)'), target, targetPresets);
-    var sharesField = el('div', { class: 'field', style: 'display:none' }, el('label', {}, 'Shares you want'), wantShares);
-    var horizonField = el('div', { class: 'field' }, el('label', {}, 'Horizon'), horizon);
-    var zeroField = el('div', { class: 'field inline-check', style: 'align-self:end' },
-      allow0, el('label', { for: 'rec-0dte', style: 'text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500' },
-        beginner ? 'Allow same-day (0DTE) expiry \u2014 fast and unforgiving' : 'Allow same-day (0DTE) expiry'));
-    var sectorField = el('div', { class: 'field', style: 'grid-column: 1 / -1' },
-      el('label', {}, 'Market sector (applies everywhere)'), sectorSel);
-    var oneOffField = el('div', { class: 'field', style: 'grid-column: 1 / -1' },
-      el('label', {}, 'Scan override'), universe);
-    var scanTargetField = el('div', { class: 'field' }, el('label', {}, 'Target profit ($)'), scanTarget);
-    var expiryRow = el('div', { class: 'btn-row' },
-      el('span', { class: 'muted' }, 'Expirations:'),
-      el('label', { class: 'inline-check' }, h0, ' 0DTE'),
-      el('label', { class: 'inline-check' }, hW, ' Weekly'),
-      el('label', { class: 'inline-check' }, hM, ' Monthly'));
-    var goBtn; // created below; sync() relabels it
-
-    // scan = the scout pipeline; "Everything" on one named stock also scans (universe = [it])
-    function scanMode() { return source === 'scan' || goal === 'ALL'; }
-
-    function buildScanBody() {
-      var horizonsSel = [];
-      if (h0.checked) horizonsSel.push('0DTE');
-      if (hW.checked) horizonsSel.push('week');
-      if (hM.checked) horizonsSel.push('month');
-      var body = { horizons: horizonsSel, riskMode: riskMode(), allow0dte: h0.checked };
-      body.intents = goal === 'ALL'
-        ? (Learn.INTENTS || []).map(function (i) { return i.key; })
-        : [goal];
-      var f = filters.value();
-      if (f) body.filters = f;
-      var flMax = filters.maxLossCents();
-      if (flMax) body.maxLossCents = flMax;
-      var symVal = sym.value.trim().toUpperCase();
-      if (source === 'single' && symVal) body.universe = [symVal];
-      else if (universe.value.trim()) {
-        body.universe = universe.value.split(',').map(function (x) {
-          return x.trim().toUpperCase();
-        }).filter(Boolean);
-      }
-      if (scanTarget.value) body.targetProfitCents = Math.round(parseFloat(scanTarget.value) * 100);
-      return body;
-    }
-
-    function scanRequestKey(body) {
-      var active = (App.state.universe && App.state.universe.active) || {};
-      var effectiveSymbols = (body.universe || active.symbols || []).map(function (s) {
-        return String(s).toUpperCase();
-      });
-      return JSON.stringify({
-        lane: App.state.world || 'observed', sector: active.sectorKey || null,
-        symbols: effectiveSymbols, intents: body.intents || [], horizons: body.horizons || [],
-        riskMode: body.riskMode, allow0dte: !!body.allow0dte,
-        filters: body.filters || null, maxLossCents: body.maxLossCents || null,
-        targetProfitCents: body.targetProfitCents || null
-      });
-    }
-
-    function invalidateScanResults() {
-      App.state.scoutResults = null;
-      App.state.recommendResults = null;
-      if (typeof goSeq === 'number') goSeq++;
-      if (results) results.innerHTML = '';
-    }
-
-    function sync() {
-      var scan = scanMode();
-      symField.style.display = source === 'single' ? '' : 'none';
-      thesisField.style.display = !scan && goal === 'DIRECTIONAL' ? '' : 'none';
-      targetField.style.display = !scan && (goal === 'EXIT' || goal === 'ACQUIRE' || goal === 'HEDGE') ? '' : 'none';
-      sharesField.style.display = !scan && goal === 'ACQUIRE' ? '' : 'none';
-      horizonField.style.display = scan ? 'none' : '';
-      zeroField.style.display = scan ? 'none' : '';
-      // Sector context is never hidden. In one-stock mode it updates the peer suggestions;
-      // in scout mode it is also the scan universe. One persisted control, two honest uses.
-      sectorField.style.display = '';
-      oneOffField.style.display = scan && source === 'scan' ? '' : 'none';
-      scanTargetField.style.display = scan ? '' : 'none';
-      expiryRow.style.display = scan ? '' : 'none';
-      var lbl = document.getElementById('rec-target-label');
-      if (lbl) {
-        lbl.textContent = goal === 'EXIT' ? 'Price you would happily sell at ($/sh)'
-          : goal === 'ACQUIRE' ? 'Price you would happily pay ($/sh)'
-          : 'Protect below ($/sh, optional)';
-      }
-      if (goBtn) goBtn.textContent = scan ? 'Scan for opportunities' : 'Find ideas';
-      if (!scan && (goal === 'EXIT' || goal === 'ACQUIRE' || goal === 'HEDGE')) renderTargetPresets();
-      renderSymChips();
-      refreshHoldingsHint();
-    }
-
-    var holdingsSeq = 0;
-    async function refreshHoldingsHint() {
-      var seq = ++holdingsSeq;
-      holdingsHint.innerHTML = '';
-      if (goal === 'DIRECTIONAL' || goal === 'ALL') return;
-      try {
-        var all = (await API.get('/api/positions')).positions || [];
-        if (seq !== holdingsSeq) return; // superseded
-        holdingsHint.innerHTML = '';
-        // EXIT/HEDGE start from what you OWN: your holdings as one-tap chips
-        if ((goal === 'EXIT' || goal === 'HEDGE') && all.length) {
-          holdingsHint.appendChild(el('div', { class: 'chip-row', id: 'holdings-chips' },
-            el('span', { class: 'muted' }, 'Your holdings:'),
-            all.map(function (p) {
-              var g = p.gainPct !== null && p.gainPct !== undefined
-                ? el('b', { class: p.gainPct >= 0 ? 'gain' : 'loss' }, ' ' + (p.gainPct >= 0 ? '+' : '') + p.gainPct.toFixed(1) + '%')
-                : null;
-              return el('button', {
-                class: 'sym-chip' + (p.symbol === sym.value.trim().toUpperCase() ? ' active' : ''),
-                onclick: function () {
-                  sym.value = p.symbol;
-                  source = 'single';
-                  App.context.selectSymbol(p.symbol);
-                  remember({ symbol: p.symbol, source: 'single' });
-                  sourceRow.querySelectorAll('.choice').forEach(function (b) {
-                    b.classList.toggle('selected', b.getAttribute('data-source') === 'single');
-                  });
-                  sync();
-                }
-              }, p.symbol + ' \u00B7 ' + p.shares + ' sh', g);
-            })));
-        }
-        if (scanMode()) {
-          if (goal === 'EXIT' || goal === 'HEDGE') {
-            holdingsHint.appendChild(explain(all.length
-              ? 'The scan covers every holding above — tap one to focus on it.'
-              : 'You hold no shares yet — buy shares first, or name a stock to see buy-write style ideas.'));
-          }
-          return;
-        }
-        var mine = all.find(function (x) { return x.symbol === sym.value.trim().toUpperCase(); });
-        if (mine) {
-          holdingsHint.appendChild(el('div', { class: 'chip-row' },
-            chip('You hold', mine.shares + ' sh'),
-            chip('Free', mine.freeShares + ' sh'),
-            chip(UI.term('cost basis', 'Avg basis'), fmtMoney(mine.avgCostCents) + '/sh'),
-            mine.gainPct !== null && mine.gainPct !== undefined
-              ? chip('Since purchase', el('span', { class: mine.gainPct >= 0 ? 'gain' : 'loss' },
-                  (mine.gainPct >= 0 ? '+' : '') + mine.gainPct.toFixed(1) + '%')) : null));
-        } else if (goal === 'EXIT' || goal === 'HEDGE') {
-          holdingsHint.appendChild(explain('You do not hold ' + (sym.value.trim().toUpperCase() || 'this symbol')
-            + ' — ideas below include buying the shares first (buy-write style). Options work in 100-share lots.'));
-        }
-      } catch (e) { /* hint only */ }
-    }
-    sym.addEventListener('input', function () {
-      var v = sym.value.trim().toUpperCase();
-      remember({ symbol: v });
-      invalidateScanResults();
-      // The working symbol follows you: Builder, Backtest and the ticket all seed from it.
-      if (v) App.context.selectSymbol(v);
-      sync();
-    });
-
-
-    goBtn = el('button', {
-      class: 'btn', id: 'rec-go', onclick: async function () {
-        results.innerHTML = '';
-        if (scanMode()) return runScan();
-        return runSingle();
-      }
-    }, 'Find ideas');
-    if (autorun) {
-      // Deferred one tick: the form below must be in the DOM before results paint into it.
-      setTimeout(function () {
-        if (!goBtn.isConnected) return; // navigated away before the tick
-        if (saved.goalExplicit && !scanMode()) {
-          goBtn.click();
-        } else {
-          var chooser = document.getElementById('intent-choices');
-          if (chooser) { chooser.scrollIntoView({ block: 'center' }); }
-          if (UI.toast) UI.toast('Pick a goal \u2014 ideas for ' + (saved.symbol || '') + ' run the moment you do.');
-        }
-      }, 0);
-    }
-
-    root.appendChild(el('section', { class: 'card idea-market-card', id: 'idea-market-card' },
-      UI.cardHeader('Start with a stock or market'),
-      explain(beginner
-        ? 'Name the stock already on your mind, or ask the scout to search a sector. This context follows the rest of the workflow.'
-        : 'Choose one symbol or a sector scope before setting the strategy objective.'),
-      sourceRow,
-      el('div', { class: 'idea-market-controls' }, symField, sectorField, oneOffField)));
-
-    root.appendChild(el('section', { class: 'card idea-goal-card', id: 'idea-goal-card' },
-      UI.cardHeader('What do you want the position to do?',
-        el('a', {
-          class: 'muted', id: 'all-strategies-link', href: '#/trade/structure', style: 'font-size:12.5px',
-          onclick: function () {
-            App.state.builderForm = { symbol: App.context.symbol('AAPL'), qty: 1,
-              goal: 'BROWSE', templateKey: null, step: 2, legIdx: 0, legs: [], excluded: {} };
-          }
-        }, 'All strategies \u2192')),
-      explain(beginner
-        ? 'Choose the job: grow, earn income, protect shares, buy lower, or sell at a target. Every result still shows its evidence and known worst case.'
-        : 'Objective, view, horizon and constraints drive one complete ranked field; the market context above stays fixed.'),
-      intentRow,
-      el('div', { class: 'form-grid', style: 'margin-top:10px' },
-        thesisField,
-        targetField,
-        sharesField,
-        horizonField,
-        scanTargetField,
-        zeroField),
-      expiryRow,
-      holdingsHint,
-      filters.node,
-      el('div', { class: 'btn-row' }, goBtn)));
-    root.appendChild(results);
-    sync();
-    // A finished scan OR single-symbol result survives navigation / level switch — losing a scan
-    // (or having to re-click "Find ideas") was rightly a complaint. Restore from cache when it
-    // matches the current symbol+goal; the render fns already take the level, so a level flip
-    // re-renders the cached payload instead of re-fetching.
-    if (scanMode() && App.state.scoutResults) {
-      var restoreBody = buildScanBody();
-      if (App.state.scoutResults.key === scanRequestKey(restoreBody)) {
-        renderScoutResults(results, App.state.scoutResults.scan);
-      } else {
-        App.state.scoutResults = null;
-      }
-    } else if (!scanMode() && App.state.recommendResults
-        && App.state.recommendResults.symbol === (sym.value || '').trim().toUpperCase()
-        && App.state.recommendResults.goal === goal) {
-      var rr = App.state.recommendResults;
-      renderResults(rr.r, rr.goal, rr.body, rr.extras);
-    }
-
-    var goSeq = 0; // supersede token: a slow scan/ideas run must not overwrite (or persist) fresher results
-    async function runScan() {
-      var seq = ++goSeq;
-      results.appendChild(UI.spinner('Scanning and deriving views\u2026'));
-      try {
-        App.context.update({ goal: goal });
-        var body = buildScanBody();
-        var requestKey = scanRequestKey(body);
-        var scan = await API.post('/api/recommend/auto', body);
-        if (seq !== goSeq) return; // a newer run superseded this
-        if (requestKey !== scanRequestKey(buildScanBody())) return; // controls changed during the scan
-        App.state.scoutResults = { key: requestKey, scan: scan };
-        renderScoutResults(results, scan);
-      } catch (e) {
-        if (seq !== goSeq) return;
-        results.innerHTML = '';
-        results.appendChild(alertBox('danger', e.message));
-      }
-    }
-
-    async function runSingle() {
-      var seq = ++goSeq;
-      results.appendChild(UI.spinner('Screening strategies\u2026'));
-      try {
-        App.context.update({ symbol: sym.value, goal: goal, horizon: horizon.value,
-          thesis: goal === 'DIRECTIONAL' ? thesis.value : App.context.thesis('neutral') });
-        // The 0DTE controls are VISIBLE at both levels (presentation-only levels, review P0):
-        // what the user set is what the engine receives — no silent rewrites.
-        var body = {
-          symbol: sym.value.trim(), horizon: horizon.value,
-          riskMode: riskMode(), allow0dte: allow0.checked, avoidEarnings: true,
-          intent: goal
-        };
-        if (goal === 'DIRECTIONAL') body.thesis = thesis.value;
-        var f = filters.value();
-        if (f) body.filters = f;
-        var flMax = filters.maxLossCents();
-        if (flMax) body.maxLossCents = flMax;
-        // Holdings context: real position (if any) + the user's target price.
-        if (goal !== 'DIRECTIONAL') {
-          var holdings = {};
-          var targetApplies = goal === 'EXIT' || goal === 'ACQUIRE' || goal === 'HEDGE';
-          if (targetApplies && target.value) holdings.targetPriceCents = Math.round(parseFloat(target.value) * 100);
-          if (goal === 'ACQUIRE' && wantShares.value) holdings.sharesOwned = parseInt(wantShares.value, 10);
-          if (goal !== 'ACQUIRE') {
-            try {
-              var all = (await API.get('/api/positions')).positions || [];
-              var mine = all.find(function (x) { return x.symbol === sym.value.trim().toUpperCase(); });
-              if (mine) {
-                holdings.sharesOwned = mine.freeShares;
-                holdings.costBasisCents = mine.avgCostCents;
-              }
-            } catch (e) { /* engine copes without */ }
-          }
-          if (Object.keys(holdings).length) body.holdings = holdings;
-        }
-        // recommend + the goal-native ladder + spot quote all depend only on `body` — the
-        // ladder does NOT need the recommend result — so fire them together instead of chaining.
-        var isLadderGoal = goal === 'ACQUIRE' || goal === 'EXIT' || goal === 'HEDGE';
-        var recP = API.post('/api/recommend', body);
-        var ladderP = isLadderGoal ? API.post('/api/recommend/ladder', body).catch(function () { return null; }) : null;
-        var quotesP = isLadderGoal ? API.get('/api/quotes?symbols=' + body.symbol.toUpperCase()).catch(function () { return null; }) : null;
-        var acctP = goal === 'INCOME' ? API.get('/api/account').catch(function () { return null; }) : null;
-        var incHeldP = goal === 'INCOME' ? API.get('/api/positions').catch(function () { return null; }) : null;
-
-        var r = await recP;
-        var extras = {};
-        if (isLadderGoal) {
-          var lad = await ladderP; if (lad) extras.ladder = lad;                 // rungs across strikes
-          var q = await quotesP; if (q) extras.spot = q.quotes.length ? parseFloat(q.quotes[0].last) : null;
-        }
-        if (goal === 'INCOME') {
-          var ac = await acctP; if (ac) extras.acct = ac.account;
-          var hd = await incHeldP; if (hd) extras.held = hd.positions;           // board is optional
-        }
-        if (seq !== goSeq) return; // a newer run superseded this
-        App.state.recommendResults = { symbol: (body.symbol || '').toUpperCase(), goal: goal, r: r, body: body, extras: extras };
-        renderResults(r, goal, body, extras);
-      } catch (e) {
-        if (seq !== goSeq) return;
-        results.innerHTML = '';
-        results.appendChild(alertBox('danger', e.message));
-      }
-    }
-
-    function renderResults(r, intentKey, body, extras) {
-      extras = extras || {};
-      results.innerHTML = '';
-      var ladderRungs = extras.ladder && extras.ladder.rungs ? extras.ladder.rungs : [];
-      var hasLadder = ladderRungs.length > 0;
-      var ladderFamilies = new Set(ladderRungs.map(function (c) { return c.strategy; }).filter(Boolean));
-      // The ladder is the canonical expression of its family for ACQUIRE/EXIT/HEDGE. Keep the
-      // complete server ranking untouched, but do not repeat that exact family below as though
-      // it were another idea. Distinct structures and the full Structure catalog remain intact.
-      var visibleCandidates = hasLadder
-        ? (r.candidates || []).filter(function (c) { return !ladderFamilies.has(c.strategy); })
-        : (r.candidates || []);
-      // What's coming up for this symbol — the dates that can invalidate an idea
-      if (body && body.symbol) results.appendChild(comingUp(body.symbol.toUpperCase(), true));
-      // Intent-native lead view first: the ladder IS the product for these goals
-      if (extras.ladder) {
-        results.appendChild(ladderView(extras.ladder, intentKey, {
-          symbol: (body && body.symbol ? body.symbol : r.symbol).toUpperCase(),
-          spot: extras.spot,
-          targetPrice: body && body.holdings && body.holdings.targetPriceCents ? body.holdings.targetPriceCents / 100 : null,
-          basisCents: body && body.holdings ? body.holdings.costBasisCents : null
-        }));
-      }
-      if (intentKey === 'INCOME' && extras.acct) {
-        results.appendChild(incomeBoard(r, extras.acct, extras.held));
-      }
-      results.appendChild(el('div', { class: 'chip-row' },
-        chip(intentKey === 'ACQUIRE' ? 'Purchase budget' : 'Risk budget (this trade)', fmtMoney(r.riskBudgetCents),
-          intentKey === 'ACQUIRE'
-            ? 'Cash-secured acquisition reserves the full share-purchase commitment; this is buying capacity, not a disguised small-risk options trade.'
-            : 'The most this one trade may risk under your header risk mode.'),
-        chip('Mode', r.riskMode.toLowerCase()),
-        hasLadder ? chip('Ladder rungs', String(ladderRungs.length)) : null,
-        !hasLadder || visibleCandidates.length ? chip(hasLadder ? 'Other structures' : 'Candidates', String(visibleCandidates.length)) : null));
-      if (visibleCandidates.length || hasLadder) {
-        results.appendChild(el('div', { class: 'economic-baseline', id: 'cash-baseline' },
-          el('div', {}, el('b', {}, 'Cash / no trade'), el('span', { class: 'badge badge-dim' }, 'BASELINE')),
-          el('p', {}, 'Doing nothing has $0 market P/L and no option execution cost. A structure should earn its place by improving the outcome under your evidence and risk limits.')));
-      }
-      // Recommendations-as-a-competition: score these side by side INLINE (D3 — no orphan surface).
-      if (!hasLadder && body && body.symbol && visibleCandidates.length > 1) {
-        var compareHost = el('div', { id: 'decision-host', style: 'margin-top:8px' });
-        results.appendChild(el('div', { class: 'btn-row', style: 'margin:8px 0' },
-          el('button', {
-            class: 'btn btn-secondary', id: 'compare-ideas-btn',
-            onclick: function () { renderCompetition(compareHost, body.symbol.toUpperCase()); }
-          }, 'Compare these side by side →')));
-        results.appendChild(compareHost);
-      }
-      (r.notes || []).forEach(function (n) {
-        if (hasLadder && /^No strategy passed the risk screens/i.test(n)) {
-          results.appendChild(alertBox('caution', 'The standard structure did not fit your limits', [
-            'The strike ladder above shows the alternate rungs that passed those same limits.'
-          ]));
-        } else {
-          results.appendChild(alertBox('warn', n));
-        }
-      });
-      if (!visibleCandidates.length && !hasLadder) {
-        results.appendChild(UI.emptyState('Nothing passed the risk screens',
-          'Try a different horizon, a wider risk budget, or another symbol.'));
-      }
-      if (hasLadder && visibleCandidates.length) {
-        results.appendChild(el('h3', {}, 'Other structures for this goal'));
-      }
-      if (r.economicMessage && !hasLadder) {
-        results.appendChild(alertBox(r.favorableCount > 0 ? 'ok' : 'warn', r.economicMessage));
-      }
-      if (Learn.currentLevel() === 'expert' && visibleCandidates.length > 1) {
-        // Expert receives the COMPLETE ranking immediately (ranking truth, review P1).
-        results.appendChild(comparisonTable(visibleCandidates));
-      } else {
-        // Beginner receives every capability, organized by economic meaning rather than hidden.
-        renderEconomicGroups(results, visibleCandidates);
-      }
-      if (r.rejected && r.rejected.length) {
-        var rej = el('div', { class: 'card' },
-          UI.cardHeader('Looked at and refused'),
-          explain('Learning what gets blocked — and why — matters as much as what gets suggested.'));
-        r.rejected.forEach(function (x) {
-          var reasons = (x.reasons || []).join(' ');
-          // The covered call is the strategy beginners come FOR — a jargon refusal at the
-          // default settings read as a dead end. Say what to do about it, with a way there.
-          var needsShares = /shares|covered|free share/i.test(reasons) || /COVERED_CALL|PROTECTIVE/i.test(x.strategy || '');
-          rej.appendChild(el('div', { class: 'status-item' },
-            el('span', { class: 'badge badge-danger' }, 'BLOCKED'),
-            el('span', {}, el('b', {}, x.displayName), ' \u2014 ',
-              needsShares && Learn.currentLevel() === 'beginner'
-                ? 'needs 100 shares you own first — covered trades rent out shares you hold. '
-                : reasons + ' ',
-              needsShares ? el('a', { href: '#/portfolio', onclick: function () { App.navigate('#/portfolio'); } },
-                'Buy practice shares in Portfolio \u2192') : null)));
-        });
-        results.appendChild(rej);
-      }
-      results.appendChild(el('p', { class: 'muted' }, r.disclaimer));
-    }
-  }
-
-  // ---------- Plan-centered journey ----------
 
   var PLAN_STAGES = [
     { key: 'UNDERSTAND', path: 'understand', n: '1', label: 'Understand', question: 'What is this market doing?' },
@@ -2987,7 +2355,6 @@
     var routes = {
       UNDERSTAND: { title: 'Understand ' + plan.symbol, body: 'Review the market picture before choosing a structure.', route: PlanStore.path(plan, 'UNDERSTAND'), action: 'Open market picture' },
       EVIDENCE: { title: 'Test the view', body: 'Study past analogs and possible futures without requiring a structure.', route: PlanStore.path(plan, 'EVIDENCE'), action: 'Open evidence' },
-      STRATEGY: { title: 'Choose an expression', body: 'Compare ranked structures or build the exact package you want.', route: '#/trade/structure', action: 'Open current strategy tools' },
       OUTCOMES: { title: 'Evaluate the exact position', body: 'Use model futures, historical analogs and backtests as separately labeled lenses.', route: '#/trade/outcomes', action: 'Open current outcome tools' },
       DECIDE: { title: 'Trade it, or stay in cash', body: 'Reprice the exact package, review economics and pass every acknowledgment gate.', route: '#/trade/decide', action: 'Open current decision tools' },
       MANAGE_REVIEW: { title: 'Manage & Review', body: 'Compare what happened with the expectation frozen at the decision.', route: '#/portfolio', action: 'Open Portfolio' }
@@ -3009,7 +2376,7 @@
         ? { title: 'Test the view',
             body: 'Compare conditional history with explicit possible-futures models. They inform one plan but remain separate evidence bases.' }
         : { title: 'Choose an expression',
-            body: 'Inspect the option market now; ranked structures, the builder and in-plan Scout join this stage next.' };
+            body: 'Compare the ranked field, shape exact contracts, inspect the option book, or scout a linked alternative without leaving this Plan.' };
     var content = el('div', { class: 'plan-stage-content', id: 'plan-stage-content' });
     root.appendChild(el('section', { class: 'plan-stage-frame', id: 'plan-stage-' + stage.path },
       el('div', { class: 'plan-stage-heading' },
@@ -3018,6 +2385,367 @@
         el('p', { class: 'muted' }, copy.body)),
       content));
     return content;
+  }
+
+  function planHorizonName(plan) {
+    var days = plan.context && plan.context.horizonDays;
+    if (!days) return 'month';
+    if (days <= 1) return '0DTE';
+    if (days <= 10) return 'week';
+    if (days <= 45) return 'month';
+    return 'quarter';
+  }
+
+  function planIntentLabel(intent) {
+    var meta = (Learn.INTENTS || []).find(function (item) { return item.key === intent; });
+    return meta ? meta.label : String(intent || '').replaceAll('_', ' ').toLowerCase();
+  }
+
+  function planCandidateActions(planRef, candidate, ui, repaint) {
+    async function choose(adjust) {
+      var livePlan = await PlanStore.get(planRef.plan.id, true);
+      var out = await PlanStore.selectCandidate(livePlan, candidate.id);
+      planRef.plan = out.plan;
+      if (planRef.result && planRef.result.candidates) {
+        planRef.result.candidates.forEach(function (c) { c.selected = c.id === candidate.id; });
+      }
+      planRef.selected = candidate;
+      candidate.selected = true;
+      if (adjust) {
+        ui.buildState = ui.buildState || {};
+        Builder.adoptTicket({
+          world: App.state.world, symbol: planRef.plan.symbol, candidate: candidate,
+          qty: candidate.qty || 1, intent: planRef.plan.intent,
+          horizon: planHorizonName(planRef.plan),
+          thesis: planRef.plan.context && planRef.plan.context.thesis
+        }, ui.buildState, {
+          goal: planRef.plan.intent, horizon: planHorizonName(planRef.plan),
+          thesis: planRef.plan.context && planRef.plan.context.thesis
+        });
+        ui.strategyView = 'builder';
+      }
+      await repaint();
+    }
+    return el('div', { class: 'btn-row plan-candidate-actions' },
+      el('button', { type: 'button', class: 'btn', disabled: candidate.selected ? '' : null,
+        onclick: function () { choose(false).catch(function (e) { UI.toast(e.message, 'error'); }); } },
+        candidate.selected ? 'Selected for this Plan' : 'Select this structure'),
+      el('button', { type: 'button', class: 'btn btn-secondary',
+        onclick: function () { choose(true).catch(function (e) { UI.toast(e.message, 'error'); }); } },
+        'Adjust exact contracts'));
+  }
+
+  function renderPlanCandidateField(host, planRef, ui, repaint) {
+    var candidates = planRef.result && planRef.result.candidates || [];
+    if (!candidates.length) {
+      host.appendChild(UI.emptyState('No structure passed this screen',
+        'The refused list below keeps the reasons visible. Change a limit only if it still matches your Plan.'));
+      return;
+    }
+    if (Learn.currentLevel() === 'expert') {
+      var tableCard = comparisonTable(candidates);
+      tableCard.querySelectorAll('.compare-detail').forEach(function (row) { row.remove(); });
+      tableCard.querySelectorAll('tbody tr').forEach(function (row, index) {
+        var old = row.lastElementChild && row.lastElementChild.querySelector('button');
+        if (!old) return;
+        var c = candidates[index];
+        old.textContent = c.selected ? 'Selected' : 'Select';
+        old.disabled = c.selected;
+        old.onclick = function (event) {
+          event.stopPropagation();
+          PlanStore.get(planRef.plan.id, true).then(function (live) {
+            return PlanStore.selectCandidate(live, c.id);
+          }).then(function (out) {
+            planRef.plan = out.plan;
+            candidates.forEach(function (x) { x.selected = x.id === c.id; });
+            planRef.selected = c;
+            return repaint();
+          }).catch(function (e) { UI.toast(e.message, 'error'); });
+        };
+        row.onclick = function () {
+          var detail = document.getElementById('plan-candidate-detail');
+          if (!detail) return;
+          detail.innerHTML = '';
+          detail.appendChild(candidateCard(c, false, planRef.plan.symbol));
+          detail.appendChild(planCandidateActions(planRef, c, ui, repaint));
+          detail.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        };
+      });
+      host.appendChild(tableCard);
+      host.appendChild(el('div', { id: 'plan-candidate-detail' }));
+      return;
+    }
+    candidates.forEach(function (c, index) {
+      c._servedRank = index + 1;
+      var card = candidateCard(c, false, planRef.plan.symbol);
+      var heading = card.querySelector('h3') || card.firstChild;
+      if (heading) heading.insertBefore(el('span', { class: 'badge badge-dim rank-badge' }, '#' + (index + 1)), heading.firstChild);
+      card.appendChild(planCandidateActions(planRef, c, ui, repaint));
+      host.appendChild(card);
+    });
+  }
+
+  async function planStrategyStage(root, initialPlan, stage) {
+    var planRef = { plan: initialPlan, result: null, selected: null };
+    var ui = PlanStore.ui(initialPlan.id);
+    ui.strategyView = ui.strategyView || 'compare';
+    ui.strategyFilters = ui.strategyFilters || {};
+    ui.buildState = ui.buildState || {};
+    var content = planOwnedStage(root, initialPlan, stage);
+    var selector = el('div', { class: 'plan-tool-selector', role: 'tablist',
+      'aria-label': 'Strategy tools' });
+    var body = el('div', { class: 'plan-strategy-body', id: 'plan-strategy-body' });
+    content.appendChild(selector);
+    content.appendChild(body);
+
+    if (!initialPlan.intent) {
+      body.appendChild(el('div', { class: 'card' },
+        UI.cardHeader('What should this Plan do?'),
+        el('p', { class: 'muted' }, 'This choice becomes part of the Plan. It does not hide any strategy or change the math.'),
+        el('div', { class: 'choice-grid plan-intent-grid' }, (Learn.INTENTS || []).map(function (meta) {
+          return el('button', { type: 'button', class: 'choice-card', onclick: function () {
+            PlanStore.claimIntent(planRef.plan, meta.key).then(function (updated) {
+              planRef.plan = updated; App.render();
+            }).catch(function (e) { UI.toast(e.message, 'error'); });
+          } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb));
+        }))));
+      return;
+    }
+
+    try {
+      var latest = await PlanStore.latestStrategy(initialPlan.id, true);
+      planRef.result = latest && latest.strategy && latest.strategy.result || null;
+      planRef.selected = latest && latest.selected || null;
+    } catch (e) {
+      body.appendChild(alertBox('warn', 'Could not restore the last strategy comparison', [e.message]));
+    }
+
+    var modes = [
+      { key: 'compare', label: 'Compare', icon: 'scope', note: 'Rank structures' },
+      { key: 'builder', label: 'Build', icon: 'pen', note: 'Shape exact contracts' },
+      { key: 'chain', label: 'Chain', icon: 'grid', note: 'Inspect the book' },
+      { key: 'scout', label: 'Scout', icon: 'compass', note: 'Find related plans' }
+    ];
+    modes.forEach(function (mode) {
+      selector.appendChild(el('button', { type: 'button', role: 'tab',
+        class: 'plan-tool' + (ui.strategyView === mode.key ? ' active' : ''),
+        'aria-selected': ui.strategyView === mode.key ? 'true' : 'false',
+        onclick: function () { ui.strategyView = mode.key; paint().catch(function (e) { UI.toast(e.message, 'error'); }); }
+      }, icon(mode.icon), el('span', {}, el('b', {}, mode.label), el('small', {}, mode.note))));
+    });
+
+    async function paint() {
+      selector.querySelectorAll('.plan-tool').forEach(function (button, index) {
+        var active = modes[index].key === ui.strategyView;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', String(active));
+      });
+      body.innerHTML = '';
+      if (ui.strategyView === 'builder') {
+        body.appendChild(el('div', { class: 'plan-tool-intro' },
+          el('h3', {}, 'Build the exact package'),
+          el('p', { class: 'muted' }, 'The Plan fixes ' + planRef.plan.symbol + ' and ' + planIntentLabel(planRef.plan.intent)
+            + '. Every structure, strike, quantity and limit remains available here.')));
+        await Builder.render(body, {
+          state: ui.buildState, lockedSymbol: planRef.plan.symbol, lockedGoal: planRef.plan.intent,
+          thesis: planRef.plan.context && planRef.plan.context.thesis,
+          horizon: planHorizonName(planRef.plan),
+          completeLabel: 'Save exact package to Plan',
+          onComplete: function (ticket) {
+            if (!ticket) return;
+            var position = {
+              symbol: planRef.plan.symbol, strategy: ticket.customFamily || 'CUSTOM', qty: ticket.qty,
+              legs: ticket.legs, thesis: planRef.plan.context && planRef.plan.context.thesis,
+              horizon: planHorizonName(planRef.plan), riskMode: planRef.plan.context && planRef.plan.context.riskMode,
+              intent: planRef.plan.intent, source: 'BUILDER'
+            };
+            PlanStore.get(planRef.plan.id, true).then(function (live) {
+              planRef.plan = live;
+              return PlanStore.saveCustom(live, position);
+            }).then(function (out) {
+              planRef.plan = out.plan;
+              planRef.selected = out.strategy && out.strategy.result && out.strategy.result.candidate;
+              ui.strategyView = 'compare';
+              UI.toast('Exact contracts saved to this Plan');
+              return paint();
+            }).catch(function (e) { UI.toast(e.message, 'error'); });
+          }
+        });
+        return;
+      }
+      if (ui.strategyView === 'chain') {
+        body.appendChild(el('div', { class: 'plan-tool-intro' },
+          el('h3', {}, planRef.plan.symbol + ' option chain'),
+          el('p', { class: 'muted' }, 'Inspect the live book. In Expert, B starts a custom package from that exact contract.')));
+        await research(body, ['__plan', planRef.plan.symbol, 'strategy'], {
+          plan: planRef.plan, stage: 'strategy', chainOnly: true,
+          onBuildLeg: function (seed) { ui.buildState.builderForm = seed; ui.strategyView = 'builder'; paint(); }
+        });
+        return;
+      }
+      if (ui.strategyView === 'scout') {
+        ui.scoutScope = ui.scoutScope || 'PEERS';
+        ui.scoutResults = ui.scoutResults || {};
+        var scoutScopes = [
+          { key: 'PEERS', label: 'Peers', role: 'PEER', note: 'Same sector and same derived view' },
+          { key: 'ALTERNATIVES', label: 'Alternatives', role: 'ALTERNATIVE', note: 'Same goal, wider symbol search' },
+          { key: 'HEDGES', label: 'Complements', role: 'HEDGE', note: 'Sector and macro offsets to assess' }
+        ];
+        var scopeRow = el('div', { class: 'segmented plan-scout-scopes', role: 'tablist', 'aria-label': 'Scout job' });
+        scoutScopes.forEach(function (scope) {
+          scopeRow.appendChild(el('button', { type: 'button', role: 'tab',
+            class: ui.scoutScope === scope.key ? 'active' : '',
+            'aria-selected': String(ui.scoutScope === scope.key), onclick: function () {
+              ui.scoutScope = scope.key; paint().catch(function (e) { UI.toast(e.message, 'error'); });
+            } }, scope.label));
+        });
+        var scopeMeta = scoutScopes.find(function (scope) { return scope.key === ui.scoutScope; });
+        var scoutHead = el('div', { class: 'card plan-scout-head' },
+          UI.cardHeader('Scout around ' + planRef.plan.symbol),
+          el('p', { class: 'muted' }, scopeMeta.note + '. Results never add another underlying to this package; a pick creates a linked sibling Plan.'),
+          scopeRow,
+          el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', id: 'plan-run-scout',
+            onclick: async function () {
+              this.disabled = true; this.setAttribute('aria-busy', 'true');
+              try {
+                var out = await PlanStore.runScout(planRef.plan, { scope: ui.scoutScope, maxPicks: 4, allow0dte: false });
+                ui.scoutResults[ui.scoutScope] = out.scout && out.scout.result;
+                await paint();
+              } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
+            } }, ui.scoutResults[ui.scoutScope] ? 'Run this Scout again' : 'Run ' + scopeMeta.label + ' Scout')));
+        body.appendChild(scoutHead);
+        if (!ui.scoutResults[ui.scoutScope]) {
+          try {
+            var restoredScout = await PlanStore.latestScout(planRef.plan.id, ui.scoutScope, true);
+            ui.scoutResults[ui.scoutScope] = restoredScout && restoredScout.scout && restoredScout.scout.result || null;
+          } catch (e) { /* a missing prior run is the normal first-use state */ }
+        }
+        var scoutResult = ui.scoutResults[ui.scoutScope];
+        if (!scoutResult) {
+          body.appendChild(UI.emptyState('No ' + scopeMeta.label.toLowerCase() + ' scan yet',
+            'The Scout reuses the same signal, recommendation, economic-assessment, account, and market-lane engines as the ranked field.'));
+          return;
+        }
+        if (!scoutResult.candidates || !scoutResult.candidates.length) {
+          body.appendChild(UI.emptyState('Nothing matched this Scout job', scoutResult.economicMessage || 'No related symbol passed.'));
+        } else {
+          body.appendChild(el('p', { class: 'muted' }, scoutResult.economicMessage));
+          var scoutGrid = el('div', { class: 'plan-scout-results', id: 'plan-scout-results' });
+          scoutResult.candidates.forEach(function (candidate) {
+            var card = candidateCard(candidate, false, candidate.symbol);
+            card.insertBefore(el('div', { class: 'plan-scout-symbol' },
+              el('b', {}, candidate.symbol),
+              el('span', { class: 'badge badge-dim' }, String(candidate.scoutThesis || 'unknown').toLowerCase())), card.firstChild);
+            card.appendChild(el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn',
+              onclick: async function () {
+                this.disabled = true; this.setAttribute('aria-busy', 'true');
+                try {
+                  var out = await PlanStore.spawnScoutedPlan(planRef.plan, candidate.id, scopeMeta.role);
+                  UI.toast(candidate.symbol + ' opened as a linked ' + scopeMeta.label.toLowerCase() + ' Plan');
+                  await PlanStore.focus(out.plan, 'STRATEGY');
+                } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
+              } }, 'Open as linked Plan')));
+            scoutGrid.appendChild(card);
+          });
+          body.appendChild(scoutGrid);
+        }
+        if (scoutResult.notes && scoutResult.notes.length) {
+          body.appendChild(UI.expandable('Scout notes and skipped symbols', function () {
+            return el('ul', { class: 'rationale' }, scoutResult.notes.map(function (note) { return el('li', {}, note); }));
+          }));
+        }
+        return;
+      }
+
+      var filters = ui.strategyFilters;
+      function numField(key, id, label, attrs) {
+        var input = el('input', Object.assign({ type: 'number', id: id, placeholder: 'any', value: filters[key] || '' }, attrs || {}));
+        input.addEventListener('input', function () { filters[key] = input.value; });
+        return el('div', { class: 'field' }, el('label', { for: id }, label), input);
+      }
+      var allow0 = el('input', { type: 'checkbox', id: 'plan-strategy-0dte', checked: filters.allow0dte ? '' : null });
+      allow0.addEventListener('change', function () { filters.allow0dte = allow0.checked; });
+      var controls = el('div', { class: 'card plan-strategy-controls' },
+        UI.cardHeader('Compare structures for this Plan',
+          el('span', { class: 'badge badge-dim' }, planRef.plan.symbol + ' · ' + planIntentLabel(planRef.plan.intent))),
+        el('p', { class: 'muted' }, 'The server uses the Plan’s thesis, horizon, holdings, target, account and risk budget. These optional screens narrow the same complete catalog.'),
+        el('div', { class: 'form-grid grid-5' },
+          numField('maxLoss', 'plan-f-maxloss', 'Worst case ≤ $', { min: '0', step: '50' }),
+          numField('minPop', 'plan-f-pop', 'Chance of profit ≥ %', { min: '0', max: '100', step: '5' }),
+          numField('maxAssign', 'plan-f-assign', 'Assignment ≤ %', { min: '0', max: '100', step: '5' }),
+          numField('minYield', 'plan-f-yield', 'Income ≥ %/yr', { min: '0', step: '1' }),
+          numField('maxCost', 'plan-f-cost', 'Cash outlay ≤ $', { min: '0', step: '50' })),
+        el('label', { class: 'check-row', for: 'plan-strategy-0dte' }, allow0, ' Include same-day expirations (0DTE)'),
+        el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', id: 'plan-run-strategy',
+          onclick: async function () {
+            this.disabled = true; this.setAttribute('aria-busy', 'true');
+            try {
+              var f = {};
+              if (filters.minPop) f.minPop = parseFloat(filters.minPop) / 100;
+              if (filters.maxAssign) f.maxAssignmentProb = parseFloat(filters.maxAssign) / 100;
+              if (filters.minYield) f.minAnnualizedYieldPct = parseFloat(filters.minYield);
+              if (filters.maxCost) f.maxCostCents = Math.round(parseFloat(filters.maxCost) * 100);
+              var out = await PlanStore.runStrategy(planRef.plan, {
+                allow0dte: !!filters.allow0dte,
+                maxLossCents: filters.maxLoss ? Math.round(parseFloat(filters.maxLoss) * 100) : null,
+                filters: Object.keys(f).length ? f : null
+              });
+              planRef.plan = out.plan;
+              planRef.result = out.strategy && out.strategy.result;
+              await paint();
+            } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
+          } }, planRef.result ? 'Run again with these limits' : 'Compare strategies')));
+      body.appendChild(controls);
+      var selectedInField = planRef.result && planRef.selected
+        && (planRef.result.candidates || []).some(function (candidate) { return candidate.id === planRef.selected.id; });
+      if (planRef.selected && !selectedInField) {
+        var selectedCard = el('div', { class: 'card plan-selected-structure' },
+          UI.cardHeader('Selected structure', el('span', { class: 'badge badge-ok' }, 'PLAN OWNED')),
+          el('p', { class: 'muted' }, 'This exact package came from the Builder or a linked Scout pick. Run Compare to place it beside the full field.'));
+        selectedCard.appendChild(candidateCard(planRef.selected, false, planRef.plan.symbol));
+        selectedCard.appendChild(planCandidateActions(planRef, planRef.selected, ui, paint));
+        body.appendChild(selectedCard);
+      }
+      if (!planRef.result) {
+        body.appendChild(UI.emptyState('No comparison has run yet',
+          'Run the complete field once. The Plan saves the exact ranked result so a reload cannot change what you saw.'));
+        if (planRef.selected) appendPlanStrategyNext(body, planRef, paint);
+        return;
+      }
+      body.appendChild(el('div', { class: 'card plan-strategy-summary' },
+        UI.cardHeader('Ranked field', el('span', { class: 'badge badge-dim' }, planRef.result.candidates.length + ' candidates')),
+        el('p', {}, planRef.result.economicMessage || 'Compare mechanics, evidence, costs and economic placement together.'),
+        el('div', { class: 'chip-row' },
+          chip('Favorable', planRef.result.favorableCount || 0), chip('Mixed', planRef.result.mixedCount || 0),
+          chip('Unfavorable', planRef.result.unfavorableCount || 0), chip('Unavailable', planRef.result.unavailableCount || 0))));
+      var field = el('div', { id: 'plan-strategy-results' });
+      body.appendChild(field);
+      renderPlanCandidateField(field, planRef, ui, paint);
+      if (planRef.result.rejected && planRef.result.rejected.length) {
+        body.appendChild(UI.expandable('Why ' + planRef.result.rejected.length + ' structures were refused', function () {
+          return el('div', {}, planRef.result.rejected.map(function (r) {
+            return alertBox('warn', r.displayName || r.strategy || 'Structure', (r.reasons || [r.reason]).filter(Boolean));
+          }));
+        }));
+      }
+      if (planRef.selected || (planRef.result.candidates || []).some(function (c) { return c.selected; })) {
+        appendPlanStrategyNext(body, planRef, paint);
+      }
+    }
+    await paint();
+  }
+
+  function appendPlanStrategyNext(host, planRef) {
+    host.appendChild(el('div', { class: 'plan-next-action' },
+      el('div', {}, el('b', {}, 'Structure chosen'),
+        el('p', { class: 'muted' }, 'Next, test this exact package across separate outcome bases.')),
+      el('button', { type: 'button', class: 'btn', onclick: async function () {
+        try {
+          var live = await PlanStore.get(planRef.plan.id, true);
+          var moved = await PlanStore.setStage(live, 'OUTCOMES');
+          App.navigate(PlanStore.path(moved, 'OUTCOMES'));
+        } catch (e) { UI.toast(e.message, 'error'); }
+      } }, 'Continue to Outcomes')));
   }
 
   async function planWorkspace(root, params) {
@@ -3050,141 +2778,10 @@
       var owned = planOwnedStage(root, plan, stage);
       await research(owned, ['__plan', plan.symbol, stage.path], { plan: plan, stage: stage.path });
     } else if (stage.key === 'STRATEGY') {
-      var strategyOwned = planOwnedStage(root, plan, stage);
-      await research(strategyOwned, ['__plan', plan.symbol, 'strategy'], { plan: plan, stage: 'strategy' });
-      strategyOwned.appendChild(el('div', { class: 'card plan-stage-transition' },
-        el('p', {}, 'Your current competition and builder remain available while this stage is consolidated.'),
-        el('button', { type: 'button', class: 'btn', onclick: function () { App.navigate('#/trade/structure'); } },
-          'Open strategy tools')));
+      await planStrategyStage(root, plan, stage);
     } else transitionalPlanStage(root, plan, stage);
   }
 
-  /** One decision loop. Research can feed Context; every Trade capability lives in one stage. */
-  var WORKFLOW_STAGES = [
-    { key: 'context', label: 'Context', beginner: 'Pick a stock and goal', expert: 'Symbol · intent · horizon' },
-    { key: 'structure', label: 'Structure', beginner: 'Choose how to express it', expert: 'Contracts · strikes · sizing' },
-    { key: 'outcomes', label: 'Outcomes', beginner: 'Replay and simulate', expert: 'History · analogs · models' },
-    { key: 'decide', label: 'Decide', beginner: 'Review risk and practice', expert: 'Execution · risk · confirm' }
-  ];
-
-  function hasWorkingStructure() {
-    var t = App.state.ticket;
-    var b = App.state.builderForm;
-    return !!(t && (t.candidate || (t.custom && t.legs && t.legs.length))
-      || b && b.legs && b.legs.length);
-  }
-
-  function hasEvaluatedOutcome() {
-    var t = App.state.ticket;
-    var summary = workingTradeSummary();
-    var expected = summary && summary.symbol || App.context.symbol();
-    var receipt = App.state.outcomeReceipt;
-    return !!(receipt && receipt.symbol === expected
-      || t && t.candidate && (t.candidate.economics || t.candidate.economicVerdict));
-  }
-
-  function workingTradeSummary(stage) {
-    var t = App.state.ticket;
-    var b = App.state.builderForm;
-    if (stage === 'structure' && b && b.legs && b.legs.length) return { symbol: b.symbol,
-      label: b.legs.length + ' leg' + (b.legs.length > 1 ? 's' : '') + ' in Structure', ticket: false };
-    if (t && t.candidate) return { symbol: t.symbol,
-      label: t.candidate.displayName + ' · qty ' + (t.qty || t.candidate.qty || 1), ticket: true };
-    if (t && t.custom && t.legs && t.legs.length) return { symbol: t.symbol,
-      label: t.legs.length + '-leg ' + (t.customFamily ? prettyStrategy(t.customFamily) : 'custom')
-        + ' · qty ' + (t.qty || 1), ticket: true };
-    if (b && b.legs && b.legs.length) return { symbol: b.symbol,
-      label: b.legs.length + ' leg' + (b.legs.length > 1 ? 's' : '') + ' in Structure', ticket: false };
-    return null;
-  }
-
-  function workflowStepReady(key) {
-    if (key === 'context') {
-      var f = App.state.discoverForm || {};
-      return !!(hasWorkingStructure()
-        || (App.context.goal() || f.goalExplicit) && (App.context.symbol() || f.source === 'scan'));
-    }
-    if (key === 'structure') return hasWorkingStructure();
-    if (key === 'outcomes') return hasEvaluatedOutcome();
-    return false;
-  }
-
-  function workflowContextBar(stage) {
-    var summary = workingTradeSummary(stage);
-    var bar = el('div', { class: 'workflow-context', id: 'idea-bar' });
-    var symbol = summary && summary.symbol || App.context.symbol();
-    if (symbol) {
-      bar.appendChild(el('button', { class: 'workflow-symbol', type: 'button',
-        title: 'Open full analysis for ' + symbol,
-        onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(symbol)); } }, symbol));
-    }
-    var label = summary && summary.label;
-    if (label) {
-      bar.appendChild(el('span', { class: 'workflow-summary' }, icon('target', 14), label));
-      if (stage !== 'outcomes' && summary.ticket) {
-        bar.appendChild(el('button', { class: 'btn btn-sm btn-secondary',
-          onclick: function () { App.navigate('#/trade/outcomes'); } }, 'Test outcomes'));
-      }
-      if (stage !== 'decide' && summary.ticket) {
-        bar.appendChild(el('button', { class: 'btn btn-sm',
-          onclick: function () { App.navigate('#/trade/decide'); } }, 'Review & decide \u2192'));
-      }
-      bar.appendChild(el('button', {
-        class: 'btn-link workflow-clear', id: 'idea-clear', title: 'Clear the working structure',
-        onclick: function () {
-          App.state.ticket = null; App.state.builderForm = null; App.state.outcomeReceipt = null;
-          App.render();
-        }
-      }, 'Clear structure'));
-    } else {
-      var wv = workingViewLabel(!!symbol);
-      if (wv) {
-        bar.appendChild(el('span', { class: 'workflow-summary', id: 'working-view-chip' }, icon('compass', 14), wv));
-        if (stage !== 'context') bar.appendChild(el('button', { class: 'btn btn-sm btn-secondary',
-          onclick: function () { App.navigate('#/trade/context'); } },
-        workflowStepReady('context') ? 'Edit context' : 'Complete context'));
-      } else {
-        bar.appendChild(el('span', { class: 'muted' },
-          'Choose a stock and goal, or ask the scout to find a starting point.'));
-        if (stage !== 'context') bar.appendChild(el('button', { class: 'btn btn-sm',
-          onclick: function () { App.navigate('#/trade/context'); } }, 'Start with context'));
-      }
-    }
-    return bar;
-  }
-
-  function workflowChrome(stage) {
-    var shell = el('div', { class: 'workflow-chrome' });
-    function paint() {
-      shell.innerHTML = '';
-      var beginner = Learn.currentLevel() === 'beginner';
-      shell.appendChild(el('nav', { class: 'workflow-rail', 'aria-label': 'Trade workflow' },
-        el('ol', { class: 'workflow-steps' }, WORKFLOW_STAGES.map(function (s, i) {
-          var current = s.key === stage;
-          var ready = workflowStepReady(s.key);
-          return el('li', { class: 'workflow-step' + (current ? ' active' : '') + (ready ? ' ready' : '') },
-            el('button', { type: 'button', id: 'wf-' + s.key,
-              'aria-current': current ? 'step' : null,
-              onclick: function () {
-                if (s.key === 'structure' && App.state.ticket && window.Builder) {
-                  Builder.adoptTicket(App.state.ticket);
-                }
-                if ((s.key === 'outcomes' || s.key === 'decide') && hasWorkingStructure()
-                    && window.Builder && (stage === 'structure' || !App.state.ticket)) {
-                  Builder.prepareTicket();
-                }
-                App.navigate('#/trade/' + s.key);
-              } },
-              el('span', { class: 'workflow-step-number' }, ready && !current ? icon('check', 13) : String(i + 1)),
-              el('span', { class: 'workflow-step-copy' },
-                el('b', {}, s.label), el('span', {}, beginner ? s.beginner : s.expert))));
-        }))));
-      shell.appendChild(workflowContextBar(stage));
-    }
-    App.refreshWorkflowContext = paint;
-    paint();
-    return shell;
-  }
 
   function recordOutcomeReceipt(basis, symbol, detail) {
     App.state.outcomeReceipt = {
@@ -3194,48 +2791,14 @@
     if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
   }
 
-  /**
-   * The working VIEW in one plain sentence \u2014 the thesis context that follows the user across
-   * Research and Trade (persisted in the workspace): "QQQ \u00b7 Trade a view: bearish \u00b7 ~1 month".
-   * Null when there's nothing meaningful yet.
-   */
-  function workingViewLabel(omitSymbol) {
-    var f = App.state.discoverForm || {};
-    var sym = (App.context.symbol() || f.symbol || '').toUpperCase();
-    if (!sym) return null;
-    var parts = omitSymbol ? [] : [sym];
-    var goal = App.context.goal() || f.goal;
-    goal = goal && goal !== 'ALL' && goal !== 'BROWSE' ? goal : null;
-    var meta = goal && (Learn.INTENTS || []).find(function (i) { return i.key === goal; });
-    var thesis = App.context.thesis() || f.thesis;
-    if (meta) parts.push(meta.label + ((goal === 'DIRECTIONAL' && thesis) ? ': ' + thesis : ''));
-    var HZ = { '0DTE': 'today', week: '~1 week', month: '~1 month', quarter: '~3 months' };
-    var horizon = App.context.horizon() || f.horizon;
-    if (horizon && HZ[horizon]) parts.push(HZ[horizon]);
-    return parts.join(' \u00b7 ');
-  }
-
-  async function workbench(root, params) {
-    if (params[0] && !WORKFLOW_STAGES.some(function (s) { return s.key === params[0]; })) {
-      App.navigate('#/home');
-      return;
-    }
-    var stage = 'context';
-    WORKFLOW_STAGES.forEach(function (s2) { if (params[0] === s2.key) stage = s2.key; });
-    root.appendChild(el('h1', {}, 'Trade'));
-    root.appendChild(workflowChrome(stage));
-    if (stage === 'context') await discoverStage(root, params.slice(1));
-    else if (stage === 'structure') {
-      await Builder.render(root);
-      if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
-    }
-    else if (stage === 'outcomes') await backtest(root);
-    else await ticket(root);
-  }
 
   async function trade(root, params) {
     if (params[0] && /^tr_/.test(params[0])) return tradeDetail(root, params);
-    return workbench(root, params);
+    if (params[0] === 'outcomes') return backtest(root);
+    if (params[0] === 'decide' || params[0] === 'place') return ticket(root);
+    root.appendChild(UI.emptyState('This Trade route no longer exists',
+      'Start or resume a Plan. Context and Structure now live together in its six-stage workspace.',
+      'Open Research', function () { App.navigate('#/research'); }));
   }
 
   // ---- Shared intent + filter controls ----
@@ -3646,11 +3209,13 @@
     if (!hasIdea) {
       root.appendChild(el('div', { class: 'card' },
         UI.emptyState('Nothing to place yet',
-          'Pick an idea on the Ideas tab or build one leg-by-leg in the Builder — it lands here for the strike check, the honest review, and the paper confirm.',
-          'Find an idea', function () { App.navigate('#/trade/context'); }),
+          'Choose a Plan in Research, compare structures, and carry the selected package through Outcomes before deciding.',
+          'Open Research', function () { App.navigate('#/research'); }),
         el('div', { class: 'btn-row', style: 'justify-content:center' },
-          el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { App.navigate('#/trade/structure'); } },
-            'Or open the builder'))));
+          el('button', { class: 'btn btn-secondary btn-sm', onclick: function () {
+            var active = PlanStore.active();
+            if (active) PlanStore.focus(active, 'STRATEGY'); else App.navigate('#/research');
+          } }, 'Open a Plan’s Builder'))));
       return;
     }
     t.step = Math.max(5, Math.min(7, t.step || 5));
@@ -3666,7 +3231,11 @@
 
     function rerender() { App.render(); }
     function nav(step) {
-      if (step < 5) { App.navigate('#/trade/context/manual'); return; } // back past Strikes = re-discover
+      if (step < 5) {
+        var active = PlanStore.active();
+        if (active) PlanStore.focus(active, 'STRATEGY'); else App.navigate('#/research');
+        return;
+      }
       t.step = step;
       rerender();
     }
@@ -4334,7 +3903,7 @@
                 pv.gainPct !== null && pv.gainPct !== undefined && pv.gainPct >= 5 && pv.freeShares >= 100
                   ? el('button', {
                       class: 'btn btn-sm', onclick: function () {
-                        beginIdeaSearch({ intent: 'EXIT', symbol: pv.symbol }, '#/trade/context/manual');
+                        startPlan({ intent: 'EXIT', symbol: pv.symbol }, 'STRATEGY');
                       }
                     }, 'Sell at a target\u2026') : null,
                 el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { stockOrderModal('buy', pv.symbol); } }, 'Buy'),
@@ -4468,7 +4037,7 @@
     if (!data.trades.length) {
       tradesCard.classList.add('is-empty');
       tradesCard.appendChild(tab === 'active'
-        ? UI.emptyState('No open practice trades', 'Find a risk-screened idea and practice it — the worst case is known before you commit.', 'Find an idea', function () { App.navigate('#/trade/context'); })
+        ? UI.emptyState('No open practice trades', 'Start a Plan, compare risk-screened structures, and decide with the worst case visible before you commit.', 'Start a Plan', function () { App.navigate('#/research'); })
         : UI.emptyState('Nothing closed yet', 'Closed, settled, and voided trades land here.'));
       return;
     }
@@ -4691,9 +4260,17 @@
                     }
                     return leg;
                   });
-                  App.state.builderForm = { symbol: t.symbol, qty: t.qty, goal: 'BROWSE', templateKey: null,
+                  var seed = { symbol: t.symbol, qty: t.qty, goal: t.intent || 'DIRECTIONAL', templateKey: null,
                     step: 4, legIdx: 0, legs: rolled, excluded: {} };
-                  App.navigate('#/trade/structure');
+                  var plan = await startPlan({ symbol: t.symbol, intent: t.intent || 'DIRECTIONAL',
+                    horizon: 'month', thesis: 'neutral' }, 'STRATEGY');
+                  if (plan) {
+                    var planUi = PlanStore.ui(plan.id);
+                    planUi.strategyView = 'builder';
+                    planUi.buildState = planUi.buildState || {};
+                    planUi.buildState.builderForm = seed;
+                    App.render();
+                  }
                 });
             }
           }, 'Roll…', el('span', { class: 'btn-sub' }, 'close + reopen ~1 month out')),
@@ -4830,9 +4407,9 @@
           return;
         }
         var horizon = contextHorizonForDays(spec.horizonDays);
-        beginIdeaSearch({ symbol: symbol, intent: goal, horizon: horizon,
+        startPlan({ symbol: symbol, intent: goal, horizon: horizon,
           thesis: App.context.thesis(seedContext && seedContext.thesis || 'neutral'),
-          target: chosen || null, autorun: true }, '#/trade/context');
+          target: chosen || null }, 'STRATEGY');
       });
       return el('div', { class: 'scenario-next' },
         el('div', {}, el('b', {}, 'Use the result'),
@@ -4841,8 +4418,7 @@
             : 'Carry the symbol, goal, horizon and decision level into the shared Trade workflow.')),
         el('div', { class: 'btn-row' }, action,
           plan ? null : el('button', { class: 'btn btn-secondary', onclick: function () {
-            beginIdeaSearch({ symbol: symbol, horizon: contextHorizonForDays(spec.horizonDays) },
-              '#/trade/context');
+            startPlan({ symbol: symbol, horizon: contextHorizonForDays(spec.horizonDays) }, 'STRATEGY');
           } }, 'Choose another goal')));
     }
 
@@ -5331,8 +4907,8 @@
                     el('td', { class: 'muted' }, open ? 'still open' : (t.closeReason || '\u2014'))), 'Open ' + t.symbol);
                 }))
             : UI.emptyState('No practice trades in this session yet',
-                'Find a screened idea and place it \u2014 the session report will judge the decision.',
-                'Find ideas in this market', function () { App.navigate('#/trade/context'); }),
+                'Start a Plan in this market, compare screened structures, and place one \u2014 the session report will judge the decision.',
+                'Start a Plan in this market', function () { App.navigate('#/research'); }),
           pvo && (pvo.highPopTrades || pvo.lowPopTrades)
             ? el('p', { class: 'muted', style: 'margin:8px 0 0' },
                 'Calibration so far: ' + (pvo.highPopTrades || 0) + ' high-confidence entries (\u226550% predicted) won '
@@ -5342,7 +4918,7 @@
                 + (pvo.note || ''))
             : null,
           el('div', { class: 'btn-row' },
-            rows.length ? el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/context'); } }, 'Find ideas') : null,
+            rows.length ? el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, 'Start another Plan') : null,
             el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } }, 'Open the control room'),
             el('button', { class: 'btn btn-sm btn-secondary', title: 'Your observed-market record \u2014 simulated sessions are scored here, in their own report, never mixed into it',
               onclick: function () { App.navigate('#/portfolio/record'); } }, 'Your observed record \u2192'))));
@@ -5993,7 +5569,7 @@
               try { await API.post('/api/sim/market/' + sx.id + '/step', {}); } catch (e) { UI.toast(e.message || 'Could not advance the simulated market', 'error'); } } }, 'Step'),
             el('button', { class: 'btn btn-sm', onclick: function () { injectModal(sx); } }, 'Inject event'),
             el('button', { class: 'btn btn-sm', onclick: function () { showReport(sx); } }, 'Report'),
-            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/context'); } }, 'Find strategies'),
+            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, 'Start a Plan'),
             el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/portfolio'); } }, 'Simulated portfolio'),
             el('button', { class: 'btn btn-sm btn-danger', onclick: function () { finishModal(sx); } }, 'Finish')));
         // ---- The CONSOLE parts (F9): breadth, anchor coverage, focus chart, live P/L, heat,
@@ -6651,7 +6227,7 @@
             lines.push(el('div', { class: 'chip-row' },
               el('span', { class: 'badge badge-ok' }, 'OBSERVED MARKET'),
               el('span', { class: 'muted small' }, u && u.active ? ('universe: ' + (u.active.label || '') + ' \u00b7 ' + (u.active.symbols || []).length + ' symbols') : '')));
-            actions.push(el('button', { class: 'btn', onclick: function () { App.navigate('#/trade/context'); } }, 'Find an idea'));
+            actions.push(el('button', { class: 'btn', onclick: function () { App.navigate('#/research'); } }, 'Start a Plan'));
             actions.push(el('button', { class: 'btn btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } }, 'Practice in a simulated market'));
           }
         }

@@ -7,7 +7,9 @@
  *   EXPERT: a naked terminal — structure quick-pick, editable leg grid with inline market
  *   data, per-leg include/exclude toggles for instant impact analysis, net greeks, and a
  *   sticky analytics panel.
- * Lives in Trade → Structure. Hands off to the standard review-and-decide stage.
+ * Mounted by a Plan's Strategy stage. The optional owner contract keeps in-progress
+ * state inside that Plan; the temporary standalone mount uses App.state until its
+ * route is deleted at the end of the Strategy migration.
  */
 (function () {
   'use strict';
@@ -73,39 +75,44 @@
   }
 
   /** Normalize the live Builder state into the one position contract consumed by Outcomes/Decide. */
-  function prepareTicket() {
-    var st = App.state.builderForm;
+  function prepareTicket(owner, context) {
+    owner = owner || App.state;
+    context = context || {};
+    var st = owner.builderForm;
     if (!st || !st.symbol || !st.legs || !st.legs.length) return null;
     var active = st.legs.filter(function (_, i) { return !(st.excluded || {})[i]; });
     var legs = wireLegs(active);
     if (!legs.length) return null;
     var tpl = st.templateKey ? TEMPLATES.find(function (t) { return t.key === st.templateKey; }) : null;
-    var contextGoal = tradeGoal(st.goal,
+    var contextGoal = tradeGoal(context.goal || st.goal,
       tradeGoal(tpl && tpl.primaryIntent, tradeGoal(App.context.goal(), 'DIRECTIONAL')));
-    App.context.update({ symbol: st.symbol, goal: contextGoal });
-    App.state.ticket = {
+    if (owner === App.state) App.context.update({ symbol: st.symbol, goal: contextGoal });
+    owner.ticket = {
       world: App.state.world || 'observed', symbol: st.symbol, custom: true, customFor: st.symbol,
       customFamily: tpl && tpl.family ? tpl.family : null,
       legs: legs, qty: st.qty || 1, step: 6, intent: contextGoal,
-      thesis: App.context.thesis('neutral'), horizon: App.context.horizon('month'),
+      thesis: context.thesis || App.context.thesis('neutral'),
+      horizon: context.horizon || App.context.horizon('month'),
       outcomeBasisHint: tpl ? 'history' : 'scenario'
     };
-    return App.state.ticket;
+    return owner.ticket;
   }
 
   /** Bring a screened/reviewed package back into Structure without changing its contracts. */
-  function adoptTicket(ticket) {
+  function adoptTicket(ticket, owner, context) {
     if (!ticket || !ticket.symbol) return null;
+    owner = owner || App.state;
+    context = context || {};
     var family = ticket.candidate && ticket.candidate.strategy || ticket.customFamily || null;
     var tpl = family && TEMPLATES.find(function (t) { return t.family === family; });
     var sourceLegs = ticket.legs && ticket.legs.length ? ticket.legs
       : ticket.candidate && ticket.candidate.legs || [];
-    var adoptedGoal = tradeGoal(ticket.candidate && ticket.candidate.intent || ticket.intent,
+    var adoptedGoal = tradeGoal(context.goal || ticket.candidate && ticket.candidate.intent || ticket.intent,
       tradeGoal(App.context.goal(), 'DIRECTIONAL'));
-    App.context.update({ symbol: ticket.symbol, goal: adoptedGoal,
-      horizon: ticket.horizon || App.context.horizon('month'),
-      thesis: ticket.thesis || App.context.thesis('neutral') });
-    App.state.builderForm = {
+    if (owner === App.state) App.context.update({ symbol: ticket.symbol, goal: adoptedGoal,
+      horizon: context.horizon || ticket.horizon || App.context.horizon('month'),
+      thesis: context.thesis || ticket.thesis || App.context.thesis('neutral') });
+    owner.builderForm = {
       symbol: ticket.symbol, qty: ticket.qty || ticket.candidate && ticket.candidate.qty || 1,
       goal: adoptedGoal, templateKey: tpl ? tpl.key : null, step: 4, legIdx: 0, excluded: {},
       legs: sourceLegs.map(function (l) {
@@ -114,7 +121,7 @@
           expiration: l.stock || l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1 };
       }), limits: {}, exposureResult: null
     };
-    return App.state.builderForm;
+    return owner.builderForm;
   }
 
   function applyCatalog(doc) {
@@ -270,17 +277,21 @@
 
   // ==================================================================================
 
-  async function render(root) {
+  async function render(root, options) {
+    options = options || {};
+    var owner = options.state || App.state;
+    var lockedSymbol = options.lockedSymbol ? String(options.lockedSymbol).toUpperCase() : null;
+    var lockedGoal = options.lockedGoal ? tradeGoal(options.lockedGoal) : null;
     var level = Learn.currentLevel();
-    var saved = App.state.builderForm || {};
+    var saved = owner.builderForm || {};
     var st = {
       // An in-progress build owns its symbol; an EMPTY builder follows the working
       // symbol from Ideas/Research ("I chose another stock" must not reload the old one)
-      symbol: ((saved.legs && saved.legs.length ? saved.symbol : null)
+      symbol: (lockedSymbol || (saved.legs && saved.legs.length ? saved.symbol : null)
         || App.context.symbol() || saved.symbol || 'AAPL').toUpperCase(),
       qty: saved.qty || 1,
-      goal: saved.goal === 'BROWSE' ? 'BROWSE'
-        : ((saved.legs && saved.legs.length ? saved.goal : App.context.goal()) || saved.goal || null),
+      goal: lockedGoal || (saved.goal === 'BROWSE' ? 'BROWSE'
+        : ((saved.legs && saved.legs.length ? saved.goal : App.context.goal()) || saved.goal || null)),
       templateKey: saved.templateKey || null,
       step: saved.step || 1,
       legIdx: saved.legIdx || 0,
@@ -300,11 +311,14 @@
     // into Beginner's step-1 goal chooser and get overwritten — land it on Beginner's recap instead.
     if (level === 'beginner' && st.legs.length && st.step < 3) { st.step = 4; }
     function remember() {
-      App.state.builderForm = st;
+      owner.builderForm = st;
       var goal = TRADE_GOALS.indexOf(st.goal) >= 0 ? st.goal : null;
-      var patch = { symbol: st.symbol, goal: goal };
-      App.context.update(patch);
-      if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
+      if (owner === App.state) {
+        var patch = { symbol: st.symbol, goal: goal };
+        App.context.update(patch);
+        if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
+      }
+      if (typeof options.onStateChange === 'function') options.onStateChange(st);
     }
 
     var research = null, chainCache = {}, expirations = [], spot = null;
@@ -597,14 +611,28 @@
     var onLegsReplaced = null; // each surface wires its own re-render
 
     function handoff() {
-      prepareTicket();
-      App.navigate('#/trade/decide');
+      var ticket = prepareTicket(owner, {
+        goal: lockedGoal || st.goal,
+        thesis: options.thesis,
+        horizon: options.horizon
+      });
+      if (typeof options.onComplete === 'function') options.onComplete(ticket, st);
+      else App.navigate('#/trade/decide');
     }
 
     try {
       await loadSymbol();
     } catch (e) {
       // Never a dead end: say what failed, offer the universe one tap away, and retry
+      if (lockedSymbol) {
+        root.appendChild(el('div', { class: 'card', id: 'builder-load-error' },
+          alertBox('danger', 'Could not load ' + st.symbol, [e.message,
+            'This Plan keeps its symbol fixed. Restore its quote and option-chain data, then retry.']),
+          el('div', { class: 'btn-row' },
+            el('button', { class: 'btn', type: 'button', onclick: function () { App.render(); } }, 'Retry'),
+            el('a', { class: 'btn btn-secondary', href: '#/data/overview' }, 'Check Data'))));
+        return;
+      }
       var failInput = el('input', { type: 'text', id: 'builder-symbol', list: 'universe-symbols', value: st.symbol });
       var retryWith = function (sym) {
         st.symbol = (sym || failInput.value.trim() || st.symbol).toUpperCase();
@@ -650,13 +678,13 @@
       function stepHeader() {
         // Every step you have EARNED is a live link — go back to change your mind, jump
         // forward to where you were. Unreached steps say what unlocks them.
-        var names = ['Goal', 'Structure', 'Build it', 'Where you stand'];
+        var names = [lockedGoal ? 'Plan goal' : 'Goal', 'Structure', 'Build it', 'Where you stand'];
         var reachable = [true, !!st.goal, st.legs.length > 0, st.legs.length > 0];
         var why = [null, 'Pick a goal first', 'Choose a structure first', 'Choose a structure first'];
         return el('div', { class: 'wizard-steps builder-wizard-steps' }, names.map(function (n, i) {
           var here = i + 1 === st.step;
           var cls = here ? ' active' : (i + 1 < st.step ? ' done' : '');
-          var can = reachable[i] && !here;
+          var can = reachable[i] && !here && !(lockedGoal && i === 0);
           return el('button', {
             class: 'step' + cls + (can ? ' step-link' : ''), type: 'button', 'data-step': i + 1,
             disabled: reachable[i] ? null : '',
@@ -721,12 +749,14 @@
       }
 
       function paint() {
-        var contextInput = symbolInput();
-        host.appendChild(UI.symbolContext({
-          mode: 'editable', id: 'builder-symbol-context', input: contextInput,
-          label: 'Which stock are you building around?', commitLabel: 'Load',
-          onCommit: function () { contextInput.dispatchEvent(new Event('change')); }
-        }));
+        if (!lockedSymbol) {
+          var contextInput = symbolInput();
+          host.appendChild(UI.symbolContext({
+            mode: 'editable', id: 'builder-symbol-context', input: contextInput,
+            label: 'Which stock are you building around?', commitLabel: 'Load',
+            onCommit: function () { contextInput.dispatchEvent(new Event('change')); }
+          }));
+        }
         host.appendChild(stepHeader());
 
         if (st.step === 1) {
@@ -754,7 +784,7 @@
               el('h3', { class: 'mt0' }, 'Every structure, with its payoff shape'),
               explain('The little chart on each card is the SHAPE of profit (up) vs the stock price (right) at expiration. Red-badged structures carry unlimited risk — you can walk through one to see exactly why it gets refused.'),
               catalogGrid(function (t) { pickTemplate(t); }),
-              el('div', { class: 'btn-row' },
+              lockedGoal ? null : el('div', { class: 'btn-row' },
                 el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.step = 1; repaint(); } }, '← Back'))));
             return;
           }
@@ -778,9 +808,10 @@
             })),
             el('div', { class: 'btn-row' },
               el('button', { class: 'btn btn-secondary btn-sm', onclick: function () {
-                if (st.wizNode) { st.wizNode = null; } else { st.step = 1; }
+                if (st.wizNode) { st.wizNode = null; }
+                else if (!lockedGoal) { st.step = 1; }
                 repaint();
-              } }, '← Back'),
+              }, disabled: lockedGoal && !st.wizNode ? '' : null }, '← Back'),
               el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.wizNode = null; st.goal = 'BROWSE'; repaint(); } }, 'Browse all structures'))));
           return;
         }
@@ -944,8 +975,12 @@
           el('div', { id: 'bw-panel' }, UI.spinner('Pricing the whole position…')),
           el('div', { class: 'btn-row' },
             el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.legIdx = 0; st.step = 3; repaint(); } }, '← Walk the legs again'),
-            el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.step = 1; st.legs = []; st.templateKey = null; st.goal = null; repaint(); } }, 'Start over'),
-            el('button', { class: 'btn', id: 'builder-review', onclick: handoff }, 'Review & place (paper) →'))));
+            el('button', { class: 'btn btn-secondary btn-sm', onclick: function () {
+              st.step = lockedGoal ? 2 : 1; st.legs = []; st.templateKey = null;
+              st.goal = lockedGoal || null; repaint();
+            } }, 'Start over'),
+            el('button', { class: 'btn', id: 'builder-review', onclick: handoff },
+              options.completeLabel || 'Review & place (paper) →'))));
         (async function price() {
           var seq = ++walkSeq;
           var panel = document.getElementById('bw-panel');
@@ -1014,11 +1049,13 @@
       var exposureHost = el('div', { id: 'builder-exposure-host' });
 
       var fitStatus = el('div', { id: 'builder-fit-status' });
-      root.appendChild(UI.symbolContext({
-        mode: 'editable', id: 'builder-symbol-context', input: symInput,
-        label: 'Builder symbol', commitLabel: 'Load',
-        onCommit: function () { symInput.dispatchEvent(new Event('change')); }
-      }));
+      if (!lockedSymbol) {
+        root.appendChild(UI.symbolContext({
+          mode: 'editable', id: 'builder-symbol-context', input: symInput,
+          label: 'Builder symbol', commitLabel: 'Load',
+          onCommit: function () { symInput.dispatchEvent(new Event('change')); }
+        }));
+      }
       root.appendChild(el('div', { class: 'card' },
         el('div', { class: 'builder-bar' },
           el('div', { class: 'field' }, el('label', {}, 'Qty'), qtyIn),
@@ -1253,7 +1290,7 @@
             class: 'btn', id: 'builder-review', disabled: p.ok ? null : '',
             title: p.ok ? null : 'Blocked — see reasons above',
             onclick: handoff
-          }, 'Review & place →')));
+          }, options.completeLabel || 'Review & place →')));
       }
       function netGreeks(p) {
         if (!p.legs || !p.legs.length) return null;

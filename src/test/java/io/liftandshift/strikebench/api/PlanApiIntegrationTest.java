@@ -159,6 +159,46 @@ class PlanApiIntegrationTest {
         assertThat(!afterRevision.has("strategy") || afterRevision.get("strategy").isNull()).isTrue();
     }
 
+    @Test void customBuilderAndScoutPicksRemainExactPlanOwnedStructures() throws Exception {
+        JsonNode customPlan = json(post("/api/plans", """
+                {"clientRequestId":"custom-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                """));
+        String customId = customPlan.get("id").asText();
+        JsonNode competition = json(post("/api/plans/" + customId + "/strategy/run", "{}"));
+        JsonNode source = competition.at("/strategy/result/candidates/0");
+        var customBody = Json.MAPPER.createObjectNode();
+        customBody.put("expectedVersion", customPlan.get("version").asLong());
+        var position = customBody.putObject("position");
+        position.put("symbol", "AAPL"); position.put("strategy", source.get("strategy").asText());
+        position.put("qty", source.get("qty").asInt()); position.set("legs", source.get("legs"));
+        JsonNode custom = json(post("/api/plans/" + customId + "/strategy/custom", customBody.toString()));
+        assertThat(custom.at("/strategy/result/candidate/selected").asBoolean()).isTrue();
+        assertThat(custom.at("/strategy/result/candidate/legs")).isEqualTo(source.get("legs"));
+        assertThat(json(get("/api/plans/" + customId + "/strategy/latest")).at("/selected/id").asText())
+                .isEqualTo(custom.at("/strategy/result/candidate/id").asText());
+
+        JsonNode scoutPlan = json(post("/api/plans", """
+                {"clientRequestId":"scout-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                """));
+        String scoutId = scoutPlan.get("id").asText();
+        JsonNode scout = json(post("/api/plans/" + scoutId + "/scout/run",
+                "{\"scope\":\"ALTERNATIVES\",\"maxPicks\":4}"));
+        JsonNode scoutCandidates = scout.at("/scout/result/candidates");
+        assertThat(scoutCandidates.size()).isGreaterThan(0);
+        JsonNode pick = scoutCandidates.get(0);
+        assertThat(pick.get("symbol").asText()).isNotEqualTo("AAPL");
+
+        JsonNode child = json(post("/api/plans/" + scoutId + "/scout/spawn", """
+                {"clientRequestId":"spawn-scout-api-1","candidateId":"%s","role":"ALTERNATIVE"}
+                """.formatted(pick.get("id").asText())));
+        assertThat(child.at("/plan/originPlanId").asText()).isEqualTo(scoutId);
+        assertThat(child.at("/plan/symbol").asText()).isEqualTo(pick.get("symbol").asText());
+        assertThat(json(get("/api/plans/" + child.at("/plan/id").asText() + "/strategy/latest"))
+                .at("/selected/legs")).isEqualTo(pick.get("legs"));
+    }
+
     private static HttpResponse<String> get(String path) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(base + path)).GET().build(),
                 HttpResponse.BodyHandlers.ofString());

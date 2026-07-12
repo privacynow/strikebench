@@ -111,6 +111,82 @@ public final class PlanStrategyService {
         });
     }
 
+    public SavedRun saveScout(String userId, Plan.View plan, String rawScope, JsonNode request, ObjectNode result) {
+        String scope = normalizeScope(rawScope);
+        if (result == null) throw new IllegalArgumentException("scout result is required");
+        String runId = Ids.newId("psr");
+        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        String inputHash = sha256(request == null ? Json.MAPPER.createObjectNode() : request);
+        String state = db.tx(c -> {
+            CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
+            boolean stillCurrent = current.contextRev() == plan.context().rev();
+            String runState = stillCurrent ? "CURRENT" : "STALE";
+            if (stillCurrent) {
+                Db.execOn(c, "UPDATE plan_strategy_run SET state='STALE' WHERE plan_id=? AND run_kind='SCOUT' " +
+                                "AND scope_kind=? AND state='CURRENT'", plan.id(), scope);
+                Db.execOn(c, "UPDATE plan_candidate SET state='STALE' WHERE run_id IN " +
+                                "(SELECT id FROM plan_strategy_run WHERE plan_id=? AND run_kind='SCOUT' AND scope_kind=? AND state='STALE')",
+                        plan.id(), scope);
+            }
+            Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
+                            "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
+                            "unfavorable_count,unavailable_count,disclaimer,input_hash,engine_version,state,created_at) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    runId, plan.id(), plan.context().rev(), "SCOUT", scope,
+                    text(result, "thesis"), text(result, "horizon"), text(result, "riskMode"),
+                    text(result, "intent"), longOrNull(result, "riskBudgetCents"), "SCOUT_OPPORTUNITY",
+                    text(result, "economicMessage"), integer(result, "favorableCount"), integer(result, "mixedCount"),
+                    integer(result, "unfavorableCount"), integer(result, "unavailableCount"),
+                    text(result, "disclaimer"), inputHash, ENGINE_VERSION, runState, now);
+            persistParams(c, runId, "", request == null ? Json.MAPPER.createObjectNode() : request);
+            persistNotes(c, runId, result.path("notes"));
+            int rank = 0;
+            for (JsonNode candidate : result.path("candidates")) {
+                String id = persistCandidate(c, runId, plan, candidate, ++rank, runState, now, "SCOUT");
+                if (candidate instanceof ObjectNode object) object.put("id", id);
+            }
+            return runState;
+        });
+        result.put("strategyRunId", runId);
+        result.put("strategyRunState", state);
+        return new SavedRun(runId, state, result, now.toString());
+    }
+
+    public SavedRun latestScout(String userId, String planId, String rawScope) {
+        String scope = normalizeScope(rawScope);
+        return db.with(c -> {
+            CurrentPlan plan = ownedPlanOn(c, planId, userId, false);
+            List<RunRow> runs = Db.queryOn(c, "SELECT id,thesis,horizon,risk_mode,intent,risk_budget_cents," +
+                            "ranking_policy,economic_message,favorable_count,mixed_count,unfavorable_count," +
+                            "unavailable_count,disclaimer,state,created_at::text created_at FROM plan_strategy_run " +
+                            "WHERE plan_id=? AND context_rev=? AND run_kind='SCOUT' AND scope_kind=? AND state='CURRENT' " +
+                            "ORDER BY created_at DESC LIMIT 1",
+                    r -> new RunRow(r.str("id"), r.str("thesis"), r.str("horizon"), r.str("risk_mode"),
+                            r.str("intent"), r.lngOrNull("risk_budget_cents"), r.str("ranking_policy"),
+                            r.str("economic_message"), r.intv("favorable_count"), r.intv("mixed_count"),
+                            r.intv("unfavorable_count"), r.intv("unavailable_count"), r.str("disclaimer"),
+                            r.str("state"), r.str("created_at")), planId, plan.contextRev(), scope);
+            if (runs.isEmpty()) return null;
+            RunRow run = runs.getFirst();
+            ObjectNode result = Json.MAPPER.createObjectNode();
+            result.put("symbol", plan.symbol()); result.put("scope", scope);
+            put(result, "thesis", run.thesis()); put(result, "horizon", run.horizon());
+            put(result, "riskMode", run.riskMode()); put(result, "intent", run.intent());
+            put(result, "riskBudgetCents", run.riskBudgetCents()); put(result, "economicMessage", run.economicMessage());
+            result.put("favorableCount", run.favorable()); result.put("mixedCount", run.mixed());
+            result.put("unfavorableCount", run.unfavorable()); result.put("unavailableCount", run.unavailable());
+            put(result, "disclaimer", run.disclaimer());
+            result.set("notes", loadStrings(c, "plan_strategy_note", "note_index", "note", "run_id", run.id()));
+            ArrayNode candidates = result.putArray("candidates");
+            List<CandidateRow> rows = Db.queryOn(c,
+                    candidateSelect() + " WHERE pc.run_id=? ORDER BY pc.rank_number,pc.created_at",
+                    PlanStrategyService::candidateRow, run.id());
+            for (CandidateRow row : rows) candidates.add(loadCandidate(c, row));
+            result.put("strategyRunId", run.id()); result.put("strategyRunState", run.state());
+            return new SavedRun(run.id(), run.state(), result, run.createdAt());
+        });
+    }
+
     public Selection select(String userId, String planId, String candidateId, long expectedVersion) {
         return db.tx(c -> {
             CurrentPlan plan = ownedPlanOn(c, planId, userId, true);
@@ -128,13 +204,117 @@ public final class PlanStrategyService {
         });
     }
 
+    /** Persist one exact, server-priced Builder package and make it the Plan's selected structure. */
+    public SavedRun saveCustom(String userId, Plan.View plan, JsonNode request, ObjectNode candidate,
+                               long expectedVersion) {
+        if (candidate == null) throw new IllegalArgumentException("custom candidate is required");
+        String runId = Ids.newId("psr");
+        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        String inputHash = sha256(request == null ? Json.MAPPER.createObjectNode() : request);
+        String candidateId = db.tx(c -> {
+            CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
+            if (current.version() != expectedVersion) {
+                throw new IllegalStateException("This plan changed in another tab. Reload it before saving the structure.");
+            }
+            if (current.contextRev() != plan.context().rev()) {
+                throw new IllegalStateException("This plan's assumptions changed. Reprice the structure before saving it.");
+            }
+            Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
+                            "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
+                            "unfavorable_count,unavailable_count,disclaimer,input_hash,engine_version,state,created_at) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    runId, plan.id(), plan.context().rev(), "CUSTOM", "PLAN",
+                    plan.context().thesis(), horizonName(plan.context().horizonDays()), plan.context().riskMode(),
+                    plan.intent(), null, "EXACT_PACKAGE", "Exact Builder package", 0, 0, 0, 0,
+                    "Server-priced exact contracts", inputHash, ENGINE_VERSION, "CURRENT", now);
+            persistParams(c, runId, "", request == null ? Json.MAPPER.createObjectNode() : request);
+            Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?",
+                    plan.id(), plan.context().rev());
+            String id = persistCandidate(c, runId, plan, candidate, 1, "CURRENT", now, "CUSTOM");
+            Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", id);
+            Db.execOn(c, "UPDATE plans SET version=version+1,updated_at=now() WHERE id=?", plan.id());
+            return id;
+        });
+        candidate.put("id", candidateId);
+        candidate.put("selected", true);
+        ObjectNode result = Json.MAPPER.createObjectNode();
+        result.set("candidate", candidate);
+        result.put("strategyRunId", runId);
+        result.put("strategyRunState", "CURRENT");
+        return new SavedRun(runId, "CURRENT", result, now.toString());
+    }
+
+    public JsonNode selectedCandidate(String userId, String planId) {
+        return db.with(c -> {
+            CurrentPlan plan = ownedPlanOn(c, planId, userId, false);
+            List<CandidateRow> rows = Db.queryOn(c, candidateSelect() +
+                            " WHERE pc.plan_id=? AND pc.context_rev=? AND pc.state='CURRENT' AND pc.selected=1 " +
+                            "ORDER BY pc.created_at DESC LIMIT 1",
+                    PlanStrategyService::candidateRow, planId, plan.contextRev());
+            return rows.isEmpty() ? null : loadCandidate(c, rows.getFirst());
+        });
+    }
+
+    /** Copy an exact scouted package into its newly-created sibling Plan as the selected structure. */
+    public SavedRun copyScoutSelection(String userId, String originPlanId, String candidateId, Plan.View child) {
+        ObjectNode candidate = scoutedCandidate(userId, originPlanId, candidateId);
+        if (!child.symbol().equalsIgnoreCase(text(candidate, "symbol"))) {
+            throw new IllegalArgumentException("scouted candidate symbol does not match the sibling Plan");
+        }
+        return saveLinkedSelection(userId, child, candidate);
+    }
+
+    public ObjectNode scoutedCandidate(String userId, String originPlanId, String candidateId) {
+        return (ObjectNode) db.with(c -> {
+            ownedPlanOn(c, originPlanId, userId, false);
+            List<CandidateRow> rows = Db.queryOn(c, candidateSelect() +
+                            " WHERE pc.id=? AND pc.plan_id=? AND pc.source_kind='SCOUT' AND pc.state='CURRENT'",
+                    PlanStrategyService::candidateRow, candidateId, originPlanId);
+            if (rows.isEmpty()) throw new NoSuchElementException("no current scouted candidate " + candidateId);
+            return loadCandidate(c, rows.getFirst());
+        });
+    }
+
+    private SavedRun saveLinkedSelection(String userId, Plan.View plan, ObjectNode candidate) {
+        String runId = Ids.newId("psr");
+        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        String candidateId = db.tx(c -> {
+            CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
+            if (current.version() != plan.version()) throw new IllegalStateException("The sibling Plan changed before its structure was saved");
+            Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
+                            "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
+                            "unfavorable_count,unavailable_count,disclaimer,input_hash,engine_version,state,created_at) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    runId, plan.id(), plan.context().rev(), "SCOUT", "PLAN", plan.context().thesis(),
+                    horizonName(plan.context().horizonDays()), plan.context().riskMode(), plan.intent(), null,
+                    "SCOUT_SELECTION", "Linked from " + text(candidate, "symbol"), 0, 0, 0, 0,
+                    "Exact package selected from a linked Scout run", sha256(candidate), ENGINE_VERSION, "CURRENT", now);
+            String id = persistCandidate(c, runId, plan, candidate, 1, "CURRENT", now, "SCOUT");
+            Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", id);
+            Db.execOn(c, "UPDATE plans SET version=version+1,updated_at=now() WHERE id=?", plan.id());
+            return id;
+        });
+        candidate.put("id", candidateId); candidate.put("selected", true);
+        ObjectNode result = Json.MAPPER.createObjectNode(); result.set("candidate", candidate);
+        result.put("strategyRunId", runId); result.put("strategyRunState", "CURRENT");
+        return new SavedRun(runId, "CURRENT", result, now.toString());
+    }
+
     private static String persistCandidate(java.sql.Connection c, String runId, Plan.View plan, JsonNode n,
                                            int rank, String state, OffsetDateTime now) throws java.sql.SQLException {
+        return persistCandidate(c, runId, plan, n, rank, state, now, "RANKED");
+    }
+
+    private static String persistCandidate(java.sql.Connection c, String runId, Plan.View plan, JsonNode n,
+                                           int rank, String state, OffsetDateTime now, String sourceKind)
+            throws java.sql.SQLException {
         String id = Ids.newId("pcand");
         JsonNode economics = n.path("economics");
         String family = requiredText(n, "strategy");
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("id", id); values.put("plan_id", plan.id()); values.put("context_rev", plan.context().rev());
+        values.put("underlying_symbol", text(n, "symbol") == null ? plan.symbol() : text(n, "symbol"));
+        values.put("scout_thesis", text(n, "scoutThesis"));
         values.put("recommendation_id", text(n, "recommendationId"));
         values.put("evaluation_id", text(n, "evaluationId")); values.put("family", family);
         values.put("structure_group", text(n, "structureGroup")); values.put("rank_number", rank);
@@ -146,7 +326,7 @@ public final class PlanStrategyService {
         values.put("max_loss_cents", longOrNull(n, "maxLossCents")); values.put("max_profit_cents", longOrNull(n, "maxProfitCents"));
         values.put("cvar_cents", longOrNull(n, "cvarCents")); values.put("economic_verdict", text(n, "economicVerdict"));
         values.put("evidence_provenance", text(n, "freshness")); values.put("input_hash", sha256(n));
-        values.put("state", state); values.put("selected", 0); values.put("run_id", runId); values.put("source_kind", "RANKED");
+        values.put("state", state); values.put("selected", 0); values.put("run_id", runId); values.put("source_kind", sourceKind);
         values.put("display_name", text(n, "displayName")); values.put("position_label", text(n, "label"));
         values.put("qty", integerOrNull(n, "qty")); values.put("expected_value_cents", longOrNull(n, "expectedValueCents"));
         values.put("liquidity_score", doubleOrNull(n, "liquidityScore")); values.put("freshness", text(n, "freshness"));
@@ -179,7 +359,8 @@ public final class PlanStrategyService {
 
     private static ObjectNode loadCandidate(java.sql.Connection c, CandidateRow r) throws java.sql.SQLException {
         ObjectNode n = Json.MAPPER.createObjectNode();
-        put(n, "id", r.id()); put(n, "strategy", r.family()); put(n, "displayName", r.displayName());
+        put(n, "id", r.id()); put(n, "symbol", r.symbol()); put(n, "scoutThesis", r.scoutThesis());
+        put(n, "strategy", r.family()); put(n, "displayName", r.displayName());
         put(n, "structureGroup", r.structureGroup()); put(n, "label", r.label()); put(n, "qty", r.qty());
         put(n, "entryNetPremiumCents", r.entryNet()); put(n, "maxProfitCents", r.maxProfit());
         put(n, "maxLossCents", r.maxLoss()); put(n, "pop", r.pop()); put(n, "expectedValueCents", r.expectedValue());
@@ -212,7 +393,7 @@ public final class PlanStrategyService {
     }
 
     private static String candidateSelect() {
-        return "SELECT pc.id,pc.family,pc.display_name,pc.structure_group,pc.position_label,pc.qty," +
+        return "SELECT pc.id,pc.underlying_symbol,pc.scout_thesis,pc.source_kind,pc.family,pc.display_name,pc.structure_group,pc.position_label,pc.qty," +
                 "pc.entry_net_cents,pc.max_profit_cents,pc.max_loss_cents,pc.pop,pc.expected_value_cents," +
                 "pc.liquidity_score,pc.freshness,pc.screen_score,pc.confidence,pc.why_considered,pc.best_upside," +
                 "pc.biggest_risk,pc.would_invalidate,pc.beginner_explanation,pc.assignment_probability," +
@@ -225,7 +406,8 @@ public final class PlanStrategyService {
     }
 
     private static CandidateRow candidateRow(Db.Row r) {
-        return new CandidateRow(r.str("id"), r.str("family"), r.str("display_name"), r.str("structure_group"),
+        return new CandidateRow(r.str("id"), r.str("underlying_symbol"), r.str("scout_thesis"), r.str("source_kind"),
+                r.str("family"), r.str("display_name"), r.str("structure_group"),
                 r.str("position_label"), integerOrNull(r, "qty"), r.lngOrNull("entry_net_cents"),
                 r.lngOrNull("max_profit_cents"), r.lngOrNull("max_loss_cents"), r.dblOrNull("pop"),
                 r.lngOrNull("expected_value_cents"), r.dblOrNull("liquidity_score"), r.str("freshness"),
@@ -425,6 +607,20 @@ public final class PlanStrategyService {
     private static String decimalString(long cents) {
         return BigDecimal.valueOf(cents, 2).stripTrailingZeros().toPlainString();
     }
+    private static String horizonName(Integer days) {
+        if (days == null) return "month";
+        if (days <= 1) return "0DTE";
+        if (days <= 10) return "week";
+        if (days <= 45) return "month";
+        return "quarter";
+    }
+    private static String normalizeScope(String raw) {
+        String value = raw == null ? "PEERS" : raw.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!List.of("PEERS", "ALTERNATIVES", "HEDGES").contains(value)) {
+            throw new IllegalArgumentException("scope must be PEERS, ALTERNATIVES, or HEDGES");
+        }
+        return value;
+    }
     private static void put(ObjectNode n, String key, String value) { if (value != null) n.put(key, value); }
     private static void put(ObjectNode n, String key, Long value) { if (value != null) n.put(key, value); }
     private static void put(ObjectNode n, String key, Integer value) { if (value != null) n.put(key, value); }
@@ -440,7 +636,8 @@ public final class PlanStrategyService {
                           String createdAt) {}
     private record LegRow(String action, String type, Long strikeCents, String expiration, int ratio,
                           Long entryPriceCents) {}
-    private record CandidateRow(String id, String family, String displayName, String structureGroup, String label,
+    private record CandidateRow(String id, String symbol, String scoutThesis, String sourceKind,
+                                String family, String displayName, String structureGroup, String label,
                                 Integer qty, Long entryNet, Long maxProfit, Long maxLoss, Double pop,
                                 Long expectedValue, Double liquidity, String freshness, Double screenScore,
                                 Double confidence, String why, String upside, String risk, String invalidate,

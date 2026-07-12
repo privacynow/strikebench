@@ -1,6 +1,8 @@
 package io.liftandshift.strikebench.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.http.staticfiles.Location;
@@ -421,7 +423,11 @@ public final class ApiServer {
             c.routes.post("/api/plans/{id}/evidence/study", this::planEvidenceStudy);
             c.routes.get("/api/plans/{id}/strategy/latest", this::planStrategyLatest);
             c.routes.post("/api/plans/{id}/strategy/run", this::planStrategyRun);
+            c.routes.post("/api/plans/{id}/strategy/custom", this::planStrategyCustom);
             c.routes.put("/api/plans/{id}/strategy/select", this::planStrategySelect);
+            c.routes.get("/api/plans/{id}/scout/latest", this::planScoutLatest);
+            c.routes.post("/api/plans/{id}/scout/run", this::planScoutRun);
+            c.routes.post("/api/plans/{id}/scout/spawn", this::planScoutSpawn);
 
             // ---- Data Center ----
             c.routes.get("/api/data/overview", this::dataOverview);
@@ -2034,14 +2040,18 @@ public final class ApiServer {
                 worldParam(activeWorld(ctx))));
     }
 
-    public record PlanStrategyRunRequest(Boolean allow0dte, List<String> allowedStrategies,
+    public record PlanStrategyRunRequest(Boolean allow0dte, Long maxLossCents, List<String> allowedStrategies,
                                          RecommendationEngine.Filters filters) {}
     public record PlanStrategySelectRequest(String candidateId, Long expectedVersion) {}
+    public record PlanStrategyCustomRequest(Long expectedVersion, TradeOpenRequest position) {}
+    public record PlanScoutRequest(String scope, Integer maxPicks, Boolean allow0dte) {}
+    public record PlanScoutSpawnRequest(String clientRequestId, String candidateId, String role) {}
 
     private void planStrategyLatest(Context ctx) {
         var saved = planStrategy.latestCompetition(ownerId(ctx), ctx.pathParam("id"));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("strategy", saved);
+        out.put("selected", planStrategy.selectedCandidate(ownerId(ctx), ctx.pathParam("id")));
         ctx.json(out);
     }
 
@@ -2059,7 +2069,7 @@ public final class ApiServer {
                         : Math.toIntExact(Math.min(Integer.MAX_VALUE, c.holdingsShares())),
                         c.costBasisCents(), c.targetCents());
         RecommendationEngine.Request request = new RecommendationEngine.Request(plan.symbol(),
-                c.thesis(), planHorizon(c.horizonDays()), c.riskMode(), null, null, null,
+                c.thesis(), planHorizon(c.horizonDays()), c.riskMode(), controls == null ? null : controls.maxLossCents(), null, null,
                 controls == null ? null : controls.allowedStrategies(), true,
                 controls != null && Boolean.TRUE.equals(controls.allow0dte()), plan.intent(), holdings,
                 controls == null ? null : controls.filters());
@@ -2078,6 +2088,190 @@ public final class ApiServer {
         var selected = planStrategy.select(ownerId(ctx), ctx.pathParam("id"), request.candidateId(),
                 request.expectedVersion());
         ctx.json(Map.of("selection", selected, "plan", planSvc.get(ownerId(ctx), ctx.pathParam("id"))));
+    }
+
+    private void planStrategyCustom(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanStrategyCustomRequest.class));
+        if (body.expectedVersion() == null || body.position() == null) {
+            throw new IllegalArgumentException("expectedVersion and position are required");
+        }
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        if (plan.intent() == null || plan.intent().isBlank()) {
+            throw new IllegalStateException("Choose what this plan should do before saving a structure");
+        }
+        TradeOpenRequest supplied = body.position();
+        if (supplied.symbol() != null && !supplied.symbol().isBlank()
+                && !plan.symbol().equalsIgnoreCase(supplied.symbol())) {
+            throw new IllegalArgumentException("A Plan can contain structures for " + plan.symbol() + " only");
+        }
+        var c = plan.context();
+        TradeOpenRequest exactBody = new TradeOpenRequest(plan.symbol(), supplied.strategy(), supplied.qty(),
+                supplied.legs(), c.thesis(), planHorizon(c.horizonDays()), c.riskMode(), plan.intent(),
+                supplied.useHeldShares(), supplied.recommendationId(), supplied.proposedNetCents(),
+                supplied.feesOverrideCents(), "BUILDER", null, null, null, null, null, null);
+        Account account = currentAccount(ctx);
+        TradeService.OpenRequest request = toOpenRequest(exactBody, account);
+        var preview = trades.preview(request);
+        Candidate candidate = exactPreviewCandidate(request, preview);
+        ObjectNode candidateJson = Json.MAPPER.valueToTree(candidate);
+        long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
+        io.liftandshift.strikebench.eval.EconomicAssessment economics;
+        try {
+            economics = evaluations.assessExact(plan.symbol(), candidate, account.buyingPowerCents(),
+                    analysisCtx(ctx), worldParam(activeWorld(ctx)), preview.ok(), preview.blockReasons(),
+                    roundTripFees);
+        } catch (RuntimeException e) {
+            log.debug("Plan custom-package economic assessment is unavailable", e);
+            var provenance = preview.evidence().provenance();
+            boolean observed = provenance == io.liftandshift.strikebench.model.DataProvenance.OBSERVED
+                    || provenance == io.liftandshift.strikebench.model.DataProvenance.BROKER;
+            economics = new io.liftandshift.strikebench.eval.EconomicAssessment(
+                    io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE,
+                    "MECHANICS_ONLY", "Economics unavailable",
+                    "The exact package passed through the mechanical preview, but its evidence cannot support an economic verdict.",
+                    preview.expectedValueCents() == null ? null : preview.expectedValueCents() - roundTripFees,
+                    null, roundTripFees, null, observed,
+                    List.of("No favorable claim is made without complete economic evidence."));
+        }
+        candidateJson.set("economics", Json.MAPPER.valueToTree(economics));
+        candidateJson.put("economicVerdict", economics.verdict().name());
+        candidateJson.put("economicPlacement", economics.placement());
+        candidateJson.put("decisionViable", preview.ok());
+        candidateJson.put("structurallyEligible", preview.ok());
+        JsonNode requestJson = Json.MAPPER.valueToTree(exactBody);
+        var saved = planStrategy.saveCustom(ownerId(ctx), plan, requestJson, candidateJson, body.expectedVersion());
+        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "strategy", saved,
+                "preview", preview));
+    }
+
+    private void planScoutLatest(Context ctx) {
+        String scope = java.util.Objects.requireNonNullElse(ctx.queryParam("scope"), "PEERS");
+        var saved = planStrategy.latestScout(ownerId(ctx), ctx.pathParam("id"), scope);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("scout", saved);
+        ctx.json(out);
+    }
+
+    private void planScoutRun(Context ctx) {
+        PlanScoutRequest controls = bodyOrNull(ctx, PlanScoutRequest.class);
+        String scope = controls == null || controls.scope() == null ? "PEERS" : controls.scope().trim().toUpperCase(Locale.ROOT);
+        if (!List.of("PEERS", "ALTERNATIVES", "HEDGES").contains(scope)) {
+            throw new IllegalArgumentException("scope must be PEERS, ALTERNATIVES, or HEDGES");
+        }
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        List<String> scanUniverse;
+        if (cfg.fixturesOnly()) {
+            scanUniverse = io.liftandshift.strikebench.market.Universes.SECTORS.get("DEMO").symbols().stream()
+                    .filter(symbol -> !symbol.equals(plan.symbol())).toList();
+        } else if ("HEDGES".equals(scope)) {
+            scanUniverse = io.liftandshift.strikebench.market.Universes.complementsFor(plan.symbol());
+        } else {
+            scanUniverse = io.liftandshift.strikebench.market.Universes.peersOf(plan.symbol());
+        }
+        String world = worldParam(activeWorld(ctx));
+        if (world != null) {
+            var available = market.worldSymbols(world).map(java.util.HashSet::new).orElseGet(java.util.HashSet::new);
+            scanUniverse = scanUniverse.stream().filter(available::contains).toList();
+        }
+        if (scanUniverse.isEmpty()) {
+            throw new IllegalStateException("This market has no eligible " + scope.toLowerCase(Locale.ROOT)
+                    + " for " + plan.symbol());
+        }
+        Account account = currentAccount(ctx);
+        List<AutoRecommender.HoldingInfo> held = positions.list(account.id()).stream()
+                .map(p -> new AutoRecommender.HoldingInfo(p.symbol(),
+                        (int) Math.min(Integer.MAX_VALUE, p.freeShares()), p.avgCostCents())).toList();
+        String requestedIntent = plan.intent();
+        if ("HEDGES".equals(scope) || "HEDGE".equals(requestedIntent) || "EXIT".equals(requestedIntent)) {
+            // A cross-symbol complement is not a covered-share hedge. Screen it as a
+            // directional package, then preserve HEDGE as the typed relationship.
+            requestedIntent = "DIRECTIONAL";
+        }
+        boolean allow0 = controls != null && Boolean.TRUE.equals(controls.allow0dte());
+        var request = new AutoRecommender.AutoRequest(scanUniverse, List.of(planHorizon(plan.context().horizonDays())),
+                controls == null ? 4 : controls.maxPicks(), null, null, null, null,
+                plan.context().riskMode(), allow0, List.of(requestedIntent), null);
+        AutoRecommender.AutoResult raw = auto.run(request, account.buyingPowerCents(), held, world);
+        ObjectNode result = flattenPlanScout(plan, scope, raw);
+        var saved = planStrategy.saveScout(ownerId(ctx), plan, scope, Json.MAPPER.valueToTree(request), result);
+        ctx.json(Map.of("plan", plan, "scout", saved));
+    }
+
+    private static ObjectNode flattenPlanScout(io.liftandshift.strikebench.plan.Plan.View plan, String scope,
+                                               AutoRecommender.AutoResult raw) {
+        ObjectNode result = Json.MAPPER.createObjectNode();
+        result.put("symbol", plan.symbol()); result.put("scope", scope);
+        if (plan.context().thesis() != null) result.put("thesis", plan.context().thesis());
+        result.put("horizon", planHorizon(plan.context().horizonDays()));
+        result.put("riskMode", plan.context().riskMode());
+        result.put("intent", plan.intent()); result.put("riskBudgetCents", raw.riskBudgetCents());
+        result.put("disclaimer", raw.disclaimer());
+        ArrayNode candidates = result.putArray("candidates");
+        int favorable = 0, mixed = 0, unfavorable = 0, unavailable = 0;
+        String wantedThesis = plan.context().thesis() == null ? null : plan.context().thesis().toUpperCase(Locale.ROOT);
+        for (AutoRecommender.Pick pick : raw.picks()) {
+            if ("PEERS".equals(scope) && wantedThesis != null
+                    && !wantedThesis.equalsIgnoreCase(pick.signals().thesis())) continue;
+            for (AutoRecommender.HorizonIdeas horizon : pick.horizons()) {
+                for (AutoRecommender.ScoredCandidate scored : horizon.candidates()) {
+                    ObjectNode candidate = Json.MAPPER.valueToTree(scored.candidate());
+                    candidate.put("symbol", pick.symbol()); candidate.put("scoutThesis", pick.signals().thesis());
+                    candidate.put("scoutScope", scope); candidate.put("scoutHorizon", horizon.horizon());
+                    candidate.put("opportunityScore", pick.opportunityScore());
+                    candidate.put("rankingScore", scored.rankingScore());
+                    if (scored.targetFit() != null) candidate.put("targetFit", scored.targetFit());
+                    if (scored.decisionScore() != null) candidate.put("decisionScore", scored.decisionScore());
+                    if (scored.economics() != null) {
+                        candidate.set("economics", Json.MAPPER.valueToTree(scored.economics()));
+                        candidate.put("economicVerdict", scored.economics().verdict().name());
+                        candidate.put("economicPlacement", scored.economics().placement());
+                        switch (scored.economics().verdict()) {
+                            case FAVORABLE -> favorable++;
+                            case MIXED -> mixed++;
+                            case UNFAVORABLE -> unfavorable++;
+                            case UNAVAILABLE -> unavailable++;
+                        }
+                    } else unavailable++;
+                    candidates.add(candidate);
+                }
+            }
+        }
+        result.put("favorableCount", favorable); result.put("mixedCount", mixed);
+        result.put("unfavorableCount", unfavorable); result.put("unavailableCount", unavailable);
+        result.put("economicMessage", candidates.isEmpty()
+                ? "No related symbol matched this Plan's evidence and mechanical screens."
+                : "Related symbols remain separate Plans; compare their evidence, tail risk, and capital use before treating one as an alternative.");
+        ArrayNode notes = result.putArray("notes");
+        raw.notes().forEach(notes::add);
+        raw.skipped().stream().limit(8).forEach(skip -> notes.add("Skipped: " + skip));
+        return result;
+    }
+
+    private void planScoutSpawn(Context ctx) {
+        var request = requireBody(bodyOrNull(ctx, PlanScoutSpawnRequest.class));
+        if (request.clientRequestId() == null || request.clientRequestId().isBlank()
+                || request.candidateId() == null || request.candidateId().isBlank()) {
+            throw new IllegalArgumentException("clientRequestId and candidateId are required");
+        }
+        var origin = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, origin);
+        ObjectNode candidate = planStrategy.scoutedCandidate(ownerId(ctx), origin.id(), request.candidateId());
+        String symbol = candidate.path("symbol").asText();
+        String role = request.role() == null ? "ALTERNATIVE" : request.role().trim().toUpperCase(Locale.ROOT);
+        String childIntent = "HEDGE".equals(role) ? "DIRECTIONAL" : candidate.path("intent").asText(origin.intent());
+        var childRequest = new io.liftandshift.strikebench.plan.Plan.CreateRequest(request.clientRequestId(),
+                symbol, childIntent, origin.id(), null, candidate.path("scoutThesis").asText(origin.context().thesis()),
+                origin.context().horizonDays(), origin.context().targetCents(), origin.context().riskMode(),
+                null, null, origin.context().priceAssumptionCents());
+        var child = planSvc.create(ownerId(ctx), origin.marketKind(), origin.worldId(), origin.accountId(), childRequest);
+        planSvc.linkRelated(ownerId(ctx), origin.id(), child.id(), role);
+        if (planStrategy.selectedCandidate(ownerId(ctx), child.id()) == null) {
+            planStrategy.copyScoutSelection(ownerId(ctx), origin.id(), request.candidateId(), child);
+        }
+        child = planSvc.get(ownerId(ctx), child.id());
+        ctx.json(Map.of("origin", origin, "plan", child, "role", role));
     }
 
     private static String planHorizon(Integer days) {
