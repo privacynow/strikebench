@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.market;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashSet;
 
 /**
  * Curated sector universes: liquid, optionable US names plus the sector ETF, sized so a scout
@@ -17,6 +18,43 @@ public final class Universes {
     public record Sector(String key, String label, List<String> symbols) {}
 
     public static final Map<String, Sector> SECTORS = build();
+
+    /** Same-sector discovery set, preserving the curated order and excluding the anchor. */
+    public static List<String> peersOf(String rawSymbol) {
+        String symbol = normalize(rawSymbol);
+        LinkedHashSet<String> peers = new LinkedHashSet<>();
+        for (Sector sector : SECTORS.values()) {
+            if ("CORE".equals(sector.key()) || "ETFS".equals(sector.key()) || "DEMO".equals(sector.key())) continue;
+            if (sector.symbols().contains(symbol)) peers.addAll(sector.symbols());
+        }
+        if (peers.isEmpty()) {
+            for (Sector sector : SECTORS.values()) if (sector.symbols().contains(symbol)) peers.addAll(sector.symbols());
+        }
+        peers.remove(symbol);
+        return List.copyOf(peers);
+    }
+
+    /** Liquid sector/macro instruments suitable for a separately-evaluated complement Plan. */
+    public static List<String> complementsFor(String rawSymbol) {
+        String symbol = normalize(rawSymbol);
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (Sector sector : SECTORS.values()) {
+            if (!sector.symbols().contains(symbol)) continue;
+            sector.symbols().stream().filter(Universes::looksLikeSectorEtf).forEach(out::add);
+        }
+        out.addAll(List.of("SPY", "QQQ", "IWM", "TLT", "GLD"));
+        out.remove(symbol);
+        return List.copyOf(out);
+    }
+
+    private static boolean looksLikeSectorEtf(String symbol) {
+        return symbol.startsWith("XL") || List.of("SMH", "ITA").contains(symbol);
+    }
+
+    private static String normalize(String symbol) {
+        if (symbol == null || symbol.isBlank()) throw new IllegalArgumentException("symbol is required");
+        return symbol.trim().toUpperCase(java.util.Locale.ROOT);
+    }
 
     private static Map<String, Sector> build() {
         Map<String, Sector> m = new LinkedHashMap<>();

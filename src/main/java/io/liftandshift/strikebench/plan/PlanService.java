@@ -231,6 +231,24 @@ public final class PlanService {
         return changed;
     }
 
+    /** Typed relationship between two owner-matched Plans; idempotent for retry-safe Scout spawning. */
+    public void linkRelated(String userId, String planId, String relatedPlanId, String rawRole) {
+        String role = required(rawRole, "role").toUpperCase(Locale.ROOT);
+        if (!Set.of("PEER", "ALTERNATIVE", "HEDGE", "COMPARISON").contains(role)) {
+            throw new IllegalArgumentException("related Plan role must be PEER, ALTERNATIVE, HEDGE, or COMPARISON");
+        }
+        if (planId.equals(relatedPlanId)) throw new IllegalArgumentException("a Plan cannot link to itself");
+        db.tx(c -> {
+            requireOwnedOn(c, planId, userId, true);
+            requireOwnedOn(c, relatedPlanId, userId, false);
+            Db.execOn(c, "INSERT INTO plan_link(id,plan_id,role,related_plan_id,created_at) VALUES(?,?,?,?,?) " +
+                            "ON CONFLICT (plan_id,role,related_plan_id) WHERE related_plan_id IS NOT NULL DO NOTHING",
+                    Ids.newId("plink"), planId, role, relatedPlanId,
+                    OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC));
+            return null;
+        });
+    }
+
     private static String viewSelect() {
         return "SELECT p.id,p.origin_plan_id,p.symbol,p.intent,p.market_kind,p.world_id,p.account_id," +
                 "p.custom_title,p.status,p.active_stage,p.version,p.is_open,p.created_at::text p_created," +

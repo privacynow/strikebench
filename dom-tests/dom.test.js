@@ -288,6 +288,69 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'closing a chip removes only that durable plan from the open collection');
 });
 
+test('Plan Strategy owns the ranked field, exact Builder, and chain without route handoffs', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const plan = await openPlan('AAPL', 'strategy');
+  await page.waitForSelector('#plan-strategy-body', { timeout: 15000 }).catch(async error => {
+    throw new Error('Strategy stage did not compose: ' + (await page.locator('#app').textContent())
+      + '\n' + error.message);
+  });
+  assert.equal(await page.locator('.plan-tool').count(), 4, 'one in-stage selector owns all Strategy tools');
+  assert.equal(await page.locator('#plan-stage-strategy a[href^="#/trade"], #plan-stage-strategy button:has-text("Open strategy tools")').count(), 0,
+    'Strategy has no cross-section Trade handoff');
+
+  await page.click('#plan-run-strategy');
+  await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
+  const first = page.locator('#plan-strategy-results .candidate').first();
+  assert.match(await first.textContent(), /Theoretical|Chance of any profit/);
+  await first.locator('button').filter({ hasText: 'Select this structure' }).click();
+  await page.waitForSelector('#plan-strategy-results button:has-text("Selected for this Plan")');
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p3-strategy-compare.png'), fullPage: true });
+
+  await page.reload();
+  await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
+  await page.waitForSelector('#plan-strategy-results button:has-text("Selected for this Plan")', { timeout: 20000 });
+  assert.match(await page.evaluate(() => location.hash), new RegExp('/plan/' + plan.id + '/strategy$'),
+    'reload restores the Plan-owned Strategy stage');
+
+  await page.locator('.plan-tool').filter({ hasText: 'Build' }).click();
+  await page.waitForSelector('#builder');
+  assert.equal(await page.locator('#builder-symbol-context').count(), 0,
+    'the Builder does not recapture the Plan symbol');
+  assert.match(await page.textContent('#plan-header'), /AAPL/);
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p3-strategy-builder.png'), fullPage: true });
+
+  await page.locator('.plan-tool').filter({ hasText: 'Chain' }).click();
+  await page.waitForSelector('#chain-anchor .card, #chain-anchor + .card, #expiration-select', { timeout: 20000 });
+  assert.equal(await page.locator('#symbol-actions').count(), 0,
+    'the Chain tool does not duplicate the old strategy-action surface');
+  assert.equal(await page.locator('a[href="#/trade/structure"]').count(), 0,
+    'the Plan chain cannot escape to the removed Structure route');
+
+  await page.locator('.plan-tool').filter({ hasText: 'Scout' }).click();
+  await page.waitForSelector('#plan-run-scout');
+  await page.locator('.plan-scout-scopes button').filter({ hasText: 'Alternatives' }).click();
+  await page.click('#plan-run-scout');
+  await page.waitForSelector('#plan-scout-results .candidate', { timeout: 30000 });
+  const scoutedSymbol = (await page.locator('#plan-scout-results .plan-scout-symbol b').first().textContent()).trim();
+  assert.notEqual(scoutedSymbol, 'AAPL', 'in-Plan Scout returns a separate underlying');
+  await page.locator('#plan-scout-results button').filter({ hasText: 'Open as linked Plan' }).first().click();
+  await page.waitForFunction((symbol) => location.hash.includes('/plan/')
+    && document.querySelector('#plan-header h1')?.textContent.includes(symbol), scoutedSymbol);
+  assert.match(await page.textContent('#plan-header'), new RegExp(scoutedSymbol),
+    'the pick opens as a linked sibling rather than changing the origin Plan symbol');
+  assert.ok(await page.locator('#plan-strategy-results button:has-text("Selected for this Plan")').count()
+      || await page.locator('#plan-run-strategy').count(),
+    'the sibling Plan owns Strategy rather than a cross-underlying handoff');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p3-strategy-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
 test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {
   const safety = await page.evaluate(() => ({
     money: UI.fmtMoney(Number.NaN), compact: UI.fmtMoneyCompact(Infinity),
