@@ -3,7 +3,7 @@
   'use strict';
 
   var App = {
-    state: { ticket: null, serverStale: false, plans: [], activePlanId: null, provisionalPlan: null,
+    state: { ticket: null, serverStale: false, plans: [], activePlanId: null, provisionalPlan: null, planUi: {},
       marketContext: { symbol: null, goal: null, horizon: null, thesis: null } },
     navToken: 0,
 
@@ -366,7 +366,7 @@
           if (!sym) return;
           var rBtn = document.getElementById('scenario-research');
           var tBtn = document.getElementById('scenario-test');
-          if (rBtn) { rBtn.textContent = 'Research ' + sym; rBtn.onclick = function () { App.navigate('#/research/' + sym); }; }
+          if (rBtn) { rBtn.textContent = 'Plan ' + sym; rBtn.onclick = function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(sym)); }; }
           if (tBtn) { tBtn.onclick = function () { App.context.selectSymbol(sym); App.navigate('#/trade/outcomes'); }; }
         } catch (e) { /* generic buttons stay */ }
       })();
@@ -607,7 +607,6 @@
   // thinking is stashed, the incoming lane's restored — a simulated symbol, thesis, or study
   // must never leak into observed screens (or vice versa).
   var LANE_KEYS = ['marketContext', 'marketThesis', 'researchStudy', 'evidencePrefill',
-    'researchTabBySymbol',
     'ideasPrefill', 'backtestPrefill', 'discoverForm', 'builderForm', 'backtestForm',
     'verifyForm', 'scenarioForm', 'scenarioTargets', 'scenarioAnalysis', 'scenarioHandoff', 'simulationPrefill',
     'scoutResults', 'outcomeReceipt',
@@ -731,7 +730,7 @@
         var syms = (u.active && u.active.symbols) || [];
         if (m && syms.length && syms.indexOf(m[1].toUpperCase()) < 0) {
           if (UI.toast) UI.toast(m[1].toUpperCase() + ' is not in this market \u2014 showing ' + syms[0]);
-          App.navigate('#/research/' + syms[0]);
+          App.navigate('#/plan/new?symbol=' + encodeURIComponent(syms[0]));
           return;
         }
         try {
@@ -1178,7 +1177,7 @@
           var pct = prev ? (last - prev) / prev * 100 : 0;
           seq.appendChild(UI.el('button', {
             class: 'tape-item', type: 'button', tabindex: interactive ? '0' : '-1', 'data-sym': q.symbol,
-            onclick: function () { App.navigate('#/research/' + q.symbol); }
+            onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(q.symbol)); }
           },
             UI.el('b', {}, q.symbol),
             UI.el('span', {}, last.toFixed(2)),
@@ -1384,13 +1383,12 @@
   function prefetchForRoute(route, params) {
     if (!window.API || !API.prefetch) return;
     var sym = null;
-    if (route === 'research' && params[0] && /^[A-Z.\-]{1,10}$/.test(params[0])) sym = params[0];
-    else if (route === 'trade') sym = App.context.symbol() || null;
+    if (route === 'plan' || route === 'trade') sym = App.context.symbol() || null;
     if (!sym) return;
     var run = function () {
-      // Research → Trade: the ticket/builder need expirations + a quote first thing.
+      // A Plan's next stages need expirations, while Evidence calibrates from recent history.
       API.prefetch('/api/research/' + sym + '/expirations');
-      if (route === 'trade') API.prefetch('/api/research/' + sym + '/history?range=6m');
+      if (route === 'plan' || route === 'trade') API.prefetch('/api/research/' + sym + '/history?range=6m');
     };
     if (window.requestIdleCallback) requestIdleCallback(run, { timeout: 2500 });
     else setTimeout(run, 700);
@@ -1427,7 +1425,7 @@
     if (!box) return;
     box.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && box.value.trim()) {
-        App.navigate('#/research/' + box.value.trim().toUpperCase());
+        App.navigate('#/plan/new?symbol=' + encodeURIComponent(box.value.trim().toUpperCase()));
         box.value = '';
         box.blur();
       }

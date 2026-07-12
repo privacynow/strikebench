@@ -409,7 +409,7 @@ public final class PlanService {
             case "DIRECTIONAL" -> context.thesis() == null ? "Trade a view" : context.thesis() + " view";
             default -> "Understand and plan";
         };
-        return symbol + " · " + goal + (context.horizonDays() == null ? "" : " · " + context.horizonDays() + " days");
+        return symbol + " · " + goal;
     }
 
     private static String ownerClause(String column) {

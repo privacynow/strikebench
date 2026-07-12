@@ -40,7 +40,7 @@ class PlanApiIntegrationTest {
     @Test void planCrudIsServerMarketOwnedVersionedAndIdempotent() throws Exception {
         JsonNode empty = json(get("/api/plans"));
         assertThat(empty.get("market").asText()).isEqualTo("DEMO");
-        assertThat(empty.get("plans")).isEmpty();
+        int baselinePlans = empty.get("plans").size();
 
         String body = """
                 {"clientRequestId":"browser-create-1","symbol":"AAPL","intent":"INCOME",
@@ -60,7 +60,7 @@ class PlanApiIntegrationTest {
         assertThat(replay.get("id").asText()).isEqualTo(id);
         JsonNode duplicate = json(post("/api/plans", body.replace("browser-create-1", "browser-create-2")));
         assertThat(duplicate.get("id").asText()).isNotEqualTo(id);
-        assertThat(json(get("/api/plans")).get("plans")).hasSize(2);
+        assertThat(json(get("/api/plans")).get("plans")).hasSize(baselinePlans + 2);
 
         JsonNode updated = json(put("/api/plans/" + id + "/context",
                 "{\"expectedVersion\":" + version + ",\"thesis\":\"bearish\",\"horizonDays\":45}"));
@@ -75,6 +75,40 @@ class PlanApiIntegrationTest {
         HttpResponse<String> locked = put("/api/plans/" + id + "/stage",
                 "{\"expectedVersion\":" + updated.get("version").asLong() + ",\"stage\":\"manage_review\"}");
         assertThat(locked.statusCode()).isEqualTo(409);
+    }
+
+    @Test void historicalEvidenceIsPlanOwnedExactAndInvalidatedByAContextRevision() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"evidence-plan-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "thesis":"bullish","horizonDays":10,"riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        JsonNode saved = json(post("/api/plans/" + id + "/evidence/study", """
+                {"key":"pullback_rebound","symbol":"AAPL","from":"2023-01-01","to":"2026-07-10",
+                 "params":{"lookback":20,"dropPct":5,"forward":63,"eventSpacing":10,
+                 "minSample":5,"confidencePct":95,"bootstrapSamples":200,
+                 "regime":"ALL","multiplicity":"CATALOG_BONFERRONI","splitHalf":true}}
+                """));
+
+        assertThat(saved.get("state").asText()).isEqualTo("CURRENT");
+        assertThat(saved.at("/result/symbol").asText()).isEqualTo("AAPL");
+        assertThat(saved.at("/result/forwardDays").asInt())
+                .as("the Plan horizon, not a client override, owns the study window")
+                .isEqualTo(10);
+        assertThat(saved.at("/result/studyKey").asText()).isNotBlank();
+        assertThat(saved.at("/result/analogPaths").size()).isGreaterThanOrEqualTo(5);
+
+        JsonNode latest = json(get("/api/plans/" + id + "/evidence/latest")).get("evidence");
+        assertThat(latest.at("/result/studyKey").asText())
+                .isEqualTo(saved.at("/result/studyKey").asText());
+        assertThat(latest.at("/result/analogPaths"))
+                .isEqualTo(saved.at("/result/analogPaths"));
+        assertThat(latest.at("/request/params/forward").asInt()).isEqualTo(10);
+
+        json(put("/api/plans/" + id + "/context",
+                "{\"expectedVersion\":" + plan.get("version").asLong() + ",\"horizonDays\":21}"));
+        JsonNode afterRevision = json(get("/api/plans/" + id + "/evidence/latest"));
+        assertThat(!afterRevision.has("evidence") || afterRevision.get("evidence").isNull()).isTrue();
     }
 
     private static HttpResponse<String> get(String path) throws Exception {

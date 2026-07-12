@@ -74,9 +74,11 @@
    * The scenario form. opts: {compact} → returns {el, getSpec(), getIv(), describe(), onchange}
    * State persists in App.state.scenarioForm so level flips / navigation never lose the setup.
    * ------------------------------------------------------------------------------------------- */
-  function form(level, symbol, seedContext) {
+  function form(level, symbol, seedContext, ownedState) {
     seedContext = seedContext || {};
-    var f = App.state.scenarioForm = App.state.scenarioForm || {};
+    // A Plan supplies its own transient editor state. Other callers retain their existing
+    // workspace-owned state until those surfaces move into the Plan journey.
+    var f = ownedState || (App.state.scenarioForm = App.state.scenarioForm || {});
     if (f.seed == null) f.seed = Math.floor(Math.random() * 1000000);
     // A fresh studio opens on the user's WORKING VIEW — the thesis they picked in Ideas seeds
     // the story (bullish → climbs, bearish → fades, volatile → news shock). Pure default: the

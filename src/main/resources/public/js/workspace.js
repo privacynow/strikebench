@@ -29,6 +29,13 @@
       route: window.location.hash || '#/home',
       world: (window.App && App.state.world) || null,
       activePlanId: (window.App && App.state.activePlanId) || null,
+      planPresentation: window.App && App.state.planUi
+        ? Object.keys(App.state.planUi).reduce(function (out, id) {
+            var e = App.state.planUi[id] && App.state.planUi[id].evidence;
+            if (e && e.mode) out[id] = { evidenceMode: e.mode,
+              contextRev: App.state.planUi[id].contextRev || null };
+            return out;
+          }, {}) : null,
       context: (window.App && App.state.marketContext)
         ? Object.assign({}, App.state.marketContext) : null,
       forms: {},
@@ -68,6 +75,13 @@
     }
     if (s.evidencePrefill) App.state.evidencePrefill = s.evidencePrefill;
     if (s.activePlanId) App.state.activePlanId = s.activePlanId;
+    Object.keys(s.planPresentation || {}).forEach(function (id) {
+      App.state.planUi = App.state.planUi || {};
+      var ui = App.state.planUi[id] = App.state.planUi[id] || {};
+      ui.contextRev = s.planPresentation[id].contextRev || null;
+      ui.evidence = ui.evidence || {};
+      ui.evidence.mode = s.planPresentation[id].evidenceMode || 'past';
+    });
     Object.keys(s.forms || {}).forEach(function (k) {
       if (FORM_KEYS.indexOf(k) >= 0 && s.forms[k]) App.state[k] = s.forms[k];
     });
@@ -106,7 +120,7 @@
     if (!started || !window.App || !window.API) return;
     var s = snapshot();
     var json = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId, context: s.context,
-      forms: s.forms, ticket: s.ticket });
+      planPresentation: s.planPresentation, forms: s.forms, ticket: s.ticket });
     if (json === lastSavedJson) return;
     lastSavedJson = json;
     persistLocal(s);
@@ -176,7 +190,7 @@
         // change after this may write again.
         var s = snapshot();
         lastSavedJson = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId, context: s.context,
-          forms: s.forms, ticket: s.ticket });
+          planPresentation: s.planPresentation, forms: s.forms, ticket: s.ticket });
         persistLocal(s);
         adoptedWhileHidden = true; // the DOM still shows pre-adoption state — refresh on return
       }
