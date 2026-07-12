@@ -46,7 +46,8 @@ class MigrationImmutabilityTest {
             Map.entry("V23__plan_evidence_results.sql", "8e9101583f19cfc78e3aa997a245a7b1f2d175101d83743b4986a40516065516"),
             Map.entry("V24__plan_strategy_results.sql", "9f04083e4d192bc2c7dbb6299e371e800f8194e0a1ef820c3247575dcaad06ef"),
             Map.entry("V25__plan_custom_strategy.sql", "14daafec2451186fbb1530dabe6b9df374ebf0105d21f4464ee33fce2e90a890"),
-            Map.entry("V26__plan_scout_identity.sql", "e9b1021e62e50062465d005cb5182372ffc44d4f3dfc23a8ecabdae89902d32c")
+            Map.entry("V26__plan_scout_identity.sql", "e9b1021e62e50062465d005cb5182372ffc44d4f3dfc23a8ecabdae89902d32c"),
+            Map.entry("V27__plan_outcome_results.sql", "2759e71c020e8917b75dec6799ced565ca32b228b4482f8b1c74c3a0de3a94c2")
     );
 
     @Test

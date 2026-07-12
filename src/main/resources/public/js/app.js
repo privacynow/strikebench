@@ -347,7 +347,7 @@
         UI.el('button', { class: 'btn btn-sm', id: 'scenario-research', onclick: function () {
           App.navigate('#/research'); } }, 'Research'),
         UI.el('button', { class: 'btn btn-sm', id: 'scenario-test', onclick: function () {
-          App.navigate('#/trade/outcomes'); } }, 'Test strategies'),
+          App.navigate('#/research'); } }, 'Start a Plan'),
         UI.el('a', { href: '#/data/datasets', onclick: function () { App.navigate('#/data/datasets'); } }, 'Manage'),
         UI.el('button', { class: 'btn btn-sm btn-secondary', id: 'scenario-exit', onclick: async function () {
           try {
@@ -367,7 +367,9 @@
           var rBtn = document.getElementById('scenario-research');
           var tBtn = document.getElementById('scenario-test');
           if (rBtn) { rBtn.textContent = 'Plan ' + sym; rBtn.onclick = function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(sym)); }; }
-          if (tBtn) { tBtn.onclick = function () { App.context.selectSymbol(sym); App.navigate('#/trade/outcomes'); }; }
+          if (tBtn) { tBtn.textContent = 'Plan ' + sym; tBtn.onclick = function () {
+            App.navigate('#/plan/new?symbol=' + encodeURIComponent(sym));
+          }; }
         } catch (e) { /* generic buttons stay */ }
       })();
     } else {

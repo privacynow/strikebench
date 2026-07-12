@@ -86,6 +86,19 @@ public final class PathEnsembleService {
         var normalized = new ResearchQuestionEngine.RunRequest(studyRequest.key(), scope.symbol(),
                 studyRequest.from(), studyRequest.to(), studyRequest.params());
         var study = research.run(normalized, scope.analysis(), scope.worldId());
+        return fromStudy(scope, basis, spec, study, spot);
+    }
+
+    /** Build from the exact Plan-owned study result instead of silently re-deriving after data changes. */
+    public Ensemble fromStudy(Scope scope, Basis basis, ScenarioSpec raw,
+                              ResearchQuestionEngine.QuestionResult study, double spot) {
+        if (basis != Basis.HISTORICAL_ANALOGS && basis != Basis.CONDITIONAL_BOOTSTRAP) {
+            throw new IllegalArgumentException("a historical study requires a historical path basis");
+        }
+        if (study == null) throw new IllegalArgumentException("historical study result is required");
+        if (!(spot > 0)) throw new IllegalArgumentException("path anchor must be positive");
+        ScenarioSpec spec = raw == null ? null : raw.sane();
+        if (spec == null) throw new IllegalArgumentException("scenario specification is required");
         List<List<Double>> analogs = study.analogPaths();
         if (analogs == null || analogs.size() < 5) {
             throw new IllegalArgumentException("Only " + (analogs == null ? 0 : analogs.size())

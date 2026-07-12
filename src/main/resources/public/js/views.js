@@ -2264,7 +2264,10 @@
             onclick: async function () {
               if (selected || provisional) return;
               try {
-                var updated = await PlanStore.setStage(plan, stage.key);
+                // Other controls on the current stage may have advanced the durable Plan version.
+                // Navigation must use the current server-owned Plan, not the render-time snapshot.
+                var live = await PlanStore.get(plan.id, true);
+                var updated = await PlanStore.setStage(live, stage.key);
                 App.navigate(PlanStore.path(updated, stage.key));
               } catch (e) { UI.toast(e.message, 'error'); }
             } },
@@ -2355,7 +2358,6 @@
     var routes = {
       UNDERSTAND: { title: 'Understand ' + plan.symbol, body: 'Review the market picture before choosing a structure.', route: PlanStore.path(plan, 'UNDERSTAND'), action: 'Open market picture' },
       EVIDENCE: { title: 'Test the view', body: 'Study past analogs and possible futures without requiring a structure.', route: PlanStore.path(plan, 'EVIDENCE'), action: 'Open evidence' },
-      OUTCOMES: { title: 'Evaluate the exact position', body: 'Use model futures, historical analogs and backtests as separately labeled lenses.', route: '#/trade/outcomes', action: 'Open current outcome tools' },
       DECIDE: { title: 'Trade it, or stay in cash', body: 'Reprice the exact package, review economics and pass every acknowledgment gate.', route: '#/trade/decide', action: 'Open current decision tools' },
       MANAGE_REVIEW: { title: 'Manage & Review', body: 'Compare what happened with the expectation frozen at the decision.', route: '#/portfolio', action: 'Open Portfolio' }
     };
@@ -2369,14 +2371,16 @@
   }
 
   function planOwnedStage(root, plan, stage) {
-    var copy = stage.key === 'UNDERSTAND'
-      ? { title: 'Understand ' + plan.symbol,
-          body: 'Read the price, volatility, dated events and source-backed news before forming a trade.' }
-      : stage.key === 'EVIDENCE'
-        ? { title: 'Test the view',
-            body: 'Compare conditional history with explicit possible-futures models. They inform one plan but remain separate evidence bases.' }
-        : { title: 'Choose an expression',
-            body: 'Compare the ranked field, shape exact contracts, inspect the option book, or scout a linked alternative without leaving this Plan.' };
+    var copy = {
+      UNDERSTAND: { title: 'Understand ' + plan.symbol,
+        body: 'Read the price, volatility, dated events and source-backed news before forming a trade.' },
+      EVIDENCE: { title: 'Test the view',
+        body: 'Compare conditional history with explicit possible-futures models. They inform one plan but remain separate evidence bases.' },
+      STRATEGY: { title: 'Choose an expression',
+        body: 'Compare the ranked field, shape exact contracts, inspect the option book, or scout a linked alternative without leaving this Plan.' },
+      OUTCOMES: { title: 'Test the exact position',
+        body: 'Judge the selected contracts under market-implied odds, the same stored futures, matching past episodes, and a no-look-ahead rule replay.' }
+    }[stage.key];
     var content = el('div', { class: 'plan-stage-content', id: 'plan-stage-content' });
     root.appendChild(el('section', { class: 'plan-stage-frame', id: 'plan-stage-' + stage.path },
       el('div', { class: 'plan-stage-heading' },
@@ -2748,6 +2752,258 @@
       } }, 'Continue to Outcomes')));
   }
 
+  function planOutcomeBasisCard(run) {
+    var result = run && run.result || run || {};
+    var title = { RISK_NEUTRAL: 'Market-implied odds', PARAMETRIC: 'Model futures',
+      HISTORICAL_ANALOGS: 'Past analogs', CONDITIONAL_BOOTSTRAP: 'Analog resamples' }[run.basis] || run.basis;
+    var ev = result.expectedPnlCents;
+    if (ev == null) ev = result.expectedValueAfterFeesCents;
+    if (ev == null && result.metrics) ev = result.metrics.expectedValueAfterFeesCents;
+    var pop = result.winRatePct;
+    if (pop == null && result.probabilityMap) pop = result.probabilityMap.pAnyProfit * 100;
+    if (pop == null && result.metrics) pop = Number(result.metrics['probabilityMap.pAnyProfit']) * 100;
+    return el('div', { class: 'plan-outcome-summary-card', 'data-basis-summary': run.basis },
+      el('div', { class: 'plan-outcome-summary-head' }, el('b', {}, title),
+        run.ensembleId ? el('span', { class: 'badge badge-dim' }, 'PINNED PATHS') : null),
+      el('div', { class: 'chip-row' },
+        pop != null && isFinite(pop) ? chip('Chance of profit', Math.round(pop) + '%') : null,
+        ev != null ? chip('Expected P/L', pnlSpan(ev)) : null,
+        result.p50Cents != null ? chip('Typical', pnlSpan(result.p50Cents)) : null),
+      el('p', { class: 'muted small' }, run.interpretation || 'A separate outcome lens.'));
+  }
+
+  function renderPlanMarketOutcome(result) {
+    result = result || {};
+    var metrics = result.metrics || {};
+    function value(key) { return result[key] != null ? result[key] : metrics[key]; }
+    var map = result.probabilityMap || {};
+    function prob(key) {
+      var v = map[key] != null ? map[key] : metrics['probabilityMap.' + key];
+      return v == null ? null : Number(v);
+    }
+    var pAny = prob('pAnyProfit'), pMax = prob('pMaxProfit'), pLoss = prob('pMaxLoss');
+    var ev = value('expectedValueAfterFeesCents');
+    return el('div', { class: 'plan-market-outcome' },
+      alertBox(ev != null && ev >= 0 ? 'ok' : 'caution',
+        'Market-implied economics for the exact package', [
+          'These are the option market’s risk-neutral odds at the captured executable entry, not a forecast.',
+          ev == null ? 'Expected value is unavailable.' : 'Expected value after estimated round-trip fees: ' + UI.fmtMoneyCompact(ev) + '.'
+        ]),
+      el('div', { class: 'grid grid-4' },
+        stat('Chance of any profit', pAny == null ? '—' : Math.round(pAny * 100) + '%'),
+        stat('Chance of theoretical max profit', pMax == null ? '—' : Math.round(pMax * 100) + '%'),
+        stat('Chance of theoretical max loss', pLoss == null ? '—' : Math.round(pLoss * 100) + '%'),
+        stat('Expected P/L after costs', ev == null ? '—' : pnlSpan(ev))),
+      el('p', { class: 'muted small' }, value('source') ? 'Priced from ' + value('source') + ' · ' + (value('freshness') || 'source age unavailable') : 'The saved result retains its captured market inputs.'));
+  }
+
+  function renderPlanBacktestReport(host, report) {
+    host.innerHTML = '';
+    if (!report) return;
+    if (report.demoUnderlying) host.appendChild(alertBox('danger',
+      'Demo price history — this replay teaches mechanics and does not describe the real market.'));
+    host.appendChild(alertBox(report.pricingMode === 'HISTORICAL_CHAIN' || report.pricingMode === 'OBSERVED_FROM_HISTORY' ? 'ok' : 'caution',
+      'Pricing: ' + prettyPricingMode(report.pricingMode) + ' · confidence ' + (report.confidence || 'unknown'),
+      [report.pricingMode === 'HISTORICAL_CHAIN'
+        ? 'Historical option observations were available.'
+        : 'At least some option prices were modeled from the underlying history; the result is not a record of executable historical fills.']));
+    host.appendChild(el('div', { class: 'grid grid-4' },
+      stat('Completed trades', String(report.sampleSize || 0)),
+      stat('Win rate', fmtPct(report.winRate)),
+      stat('Average return on risk', fmtPct(report.avgReturnOnRisk)),
+      stat('Max drawdown', fmtPct(report.maxDrawdownPct)),
+      report.concurrentPeak != null ? stat('Peak positions', String(report.concurrentPeak)) : null,
+      report.startingCents != null ? stat('Start → end', UI.fmtMoneyCompact(report.startingCents) + ' → ' + UI.fmtMoneyCompact(report.endingCents)) : null));
+    if (report.equityCurve && report.equityCurve.length > 1) {
+      host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Equity curve'),
+        UI.lineChart(report.equityCurve.map(function (point) {
+          return { date: point.date, value: point.equityCents };
+        }), { money: true })));
+    }
+    if (report.trades && report.trades.length) {
+      host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Trades (' + report.trades.length + ')'),
+        table(['Entry', 'Exit', 'Position', 'P/L', 'Worst case', 'Why closed'], report.trades.map(function (trade) {
+          return el('tr', {}, el('td', { class: 'muted' }, trade.entryDate),
+            el('td', { class: 'muted' }, trade.exitDate),
+            el('td', {}, trade.label || prettyStrategy(trade.strategy)),
+            el('td', {}, pnlSpan(trade.pnlCents)),
+            el('td', { class: 'loss' }, trade.maxLossCents != null ? fmtMoney(trade.maxLossCents) : '—'),
+            el('td', { class: 'muted' }, trade.exitReason));
+        }))));
+    }
+    (report.notes || []).forEach(function (note) { host.appendChild(alertBox('warn', note)); });
+    if (report.disclaimer) host.appendChild(el('p', { class: 'muted small' }, report.disclaimer));
+  }
+
+  async function planOutcomesStage(root, initialPlan, stage) {
+    var planRef = { plan: initialPlan };
+    var ui = PlanStore.ui(initialPlan.id);
+    ui.outcomes = ui.outcomes || { mode: 'market' };
+    ui.outcomeRuns = ui.outcomeRuns || {};
+    ui.backtest = ui.backtest || {};
+    var content = planOwnedStage(root, initialPlan, stage);
+    var latest = await PlanStore.latestOutcomes(initialPlan.id, true);
+    var selected = latest.selected;
+    if (!selected) {
+      content.appendChild(UI.emptyState('Choose a structure first',
+        'Outcomes evaluates one exact package. Return to Strategy, select it, then every lens here uses those same contracts.',
+        'Open Strategy', function () { PlanStore.focus(planRef.plan, 'STRATEGY'); }));
+      return;
+    }
+    (latest.outcomes || []).forEach(function (run) { ui.outcomeRuns[run.basis] = run; });
+    var latestBacktest = latest.backtests && latest.backtests[0];
+    content.appendChild(el('div', { class: 'card plan-outcome-position' },
+      UI.cardHeader('Exact position being tested', el('span', { class: 'badge badge-ok' }, 'PLAN OWNED')),
+      el('div', { class: 'chip-row' }, chip('Structure', selected.displayName || prettyStrategy(selected.strategy)),
+        chip('Contracts', (selected.legs || []).length + ' legs · x' + (selected.qty || 1)),
+        chip('Entry', fmtMoney(selected.entryNetPremiumCents, { plus: true }))),
+      UI.expandable('Show the exact contracts and structural risk', function () {
+        return candidateCard(selected, false, planRef.plan.symbol);
+      })));
+
+    var comparison = el('section', { class: 'plan-outcome-comparison', id: 'plan-outcome-comparison' },
+      el('div', { class: 'plan-section-head' }, el('div', {}, el('h3', {}, 'One position, separate lenses'),
+        el('p', { class: 'muted' }, 'Each result keeps its own interpretation. Agreement raises confidence; disagreement is information, never an averaged probability.'))));
+    function paintComparison() {
+      comparison.querySelectorAll('.plan-outcome-summary-grid,.empty').forEach(function (node) { node.remove(); });
+      var runs = Object.keys(ui.outcomeRuns).map(function (key) { return ui.outcomeRuns[key]; }).filter(Boolean);
+      if (!runs.length) comparison.appendChild(UI.emptyState('No outcome lens has run yet', 'Start with market-implied odds, then add a model or historical lens.'));
+      else comparison.appendChild(el('div', { class: 'plan-outcome-summary-grid' }, runs.map(planOutcomeBasisCard)));
+    }
+    paintComparison();
+    content.appendChild(comparison);
+
+    var workspace = Outcomes.workspace({ id: 'plan-outcomes', state: ui.outcomes, label: 'Outcome basis',
+      modes: [
+        { key: 'market', label: 'Market odds', description: 'Implied by the option book',
+          note: 'Risk-neutral odds and after-cost EV from the captured executable package; market pricing, not a forecast.',
+          render: renderMarket },
+        { key: 'model', label: 'Model futures', description: 'The Evidence ensemble',
+          note: 'The exact position on the same stored path matrix and IV trajectory shown in Evidence.', render: renderModel },
+        { key: 'analogs', label: 'Past analogs', description: 'Matching historical episodes',
+          note: 'Direct analog occurrences or whole-path bootstrap resamples. Conditional history, never model odds.', render: renderAnalogs },
+        { key: 'backtest', label: 'Rule replay', description: 'Repeated historical entries',
+          note: 'A named strategy rule replayed without look-ahead. This is not the exact listed contract package.', render: renderBacktest }
+      ] });
+    content.appendChild(workspace.el);
+
+    async function runBasis(basis, button, extra) {
+      button.disabled = true; button.setAttribute('aria-busy', 'true');
+      try {
+        var live = await PlanStore.get(planRef.plan.id, true); planRef.plan = live;
+        var out = await PlanStore.runOutcome(live, Object.assign({ basis: basis }, extra || {}));
+        ui.outcomeRuns[basis] = out.outcome;
+        paintComparison();
+        return out.outcome;
+      } finally { button.disabled = false; button.removeAttribute('aria-busy'); }
+    }
+
+    function renderMarket(host) {
+      var saved = ui.outcomeRuns.RISK_NEUTRAL;
+      var status = el('div', { class: 'plan-outcome-action-status', 'aria-live': 'polite' });
+      host.appendChild(el('div', { class: 'card' }, UI.cardHeader('What is the option market pricing?'),
+        el('p', { class: 'muted' }, 'This is the common market-implied baseline used by Strategy and the exact ticket. It does not claim to predict the stock.'),
+        el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', onclick: async function () {
+          try { saved = await runBasis('RISK_NEUTRAL', this); workspace.refresh(); }
+          catch (e) { status.innerHTML = ''; status.appendChild(alertBox('caution', 'Market odds are unavailable for this package', [e.message])); }
+        } }, saved ? 'Refresh market odds' : 'Calculate market odds')), status));
+      if (saved) host.appendChild(renderPlanMarketOutcome(saved.result || saved));
+    }
+
+    function renderModel(host) {
+      var saved = ui.outcomeRuns.PARAMETRIC;
+      var evidenceUi = PlanStore.ui(planRef.plan.id);
+      var status = el('div', { class: 'plan-outcome-action-status', 'aria-live': 'polite' });
+      host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Use the Evidence ensemble'),
+        el('p', { class: 'muted' }, evidenceUi.planEnsembleFingerprint
+          ? 'Ready: exact stored receipt ' + evidenceUi.planEnsembleFingerprint.slice(0, 12) + '…'
+          : 'If Evidence already ran possible futures, the server restores that exact matrix. Otherwise open Evidence and set the scenario first.'),
+        el('div', { class: 'btn-row' },
+          el('button', { type: 'button', class: 'btn', onclick: async function () {
+            try { saved = await runBasis('PARAMETRIC', this,
+              evidenceUi.planEnsembleId ? { ensembleId: evidenceUi.planEnsembleId } : {}); workspace.refresh(); }
+            catch (e) { status.innerHTML = ''; status.appendChild(alertBox('danger', 'Could not test the position on these futures', [e.message])); }
+          } }, saved ? 'Run again on stored futures' : 'Test this position on the stored futures'),
+          el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () {
+            PlanStore.focus(planRef.plan, 'EVIDENCE');
+          } }, 'Review or change the scenario')), status));
+      if (saved) host.appendChild(Scenario.pnlView(saved.result || saved, Learn.currentLevel()));
+    }
+
+    function renderAnalogs(host) {
+      var direct = ui.outcomeRuns.HISTORICAL_ANALOGS;
+      var bootstrap = ui.outcomeRuns.CONDITIONAL_BOOTSTRAP;
+      var status = el('div', { class: 'plan-outcome-action-status', 'aria-live': 'polite' });
+      host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Price the package on the Plan’s stored analog sample'),
+        el('p', { class: 'muted' }, 'Direct occurrences answer “what happened in these matches?” Bootstrap resamples the whole paths to show sampling uncertainty. Neither becomes a forecast.'),
+        el('div', { class: 'btn-row' },
+          el('button', { type: 'button', class: 'btn', onclick: async function () {
+            try { direct = await runBasis('HISTORICAL_ANALOGS', this); workspace.refresh(); }
+            catch (e) { status.innerHTML = ''; status.appendChild(alertBox('danger', 'Direct analog outcomes are unavailable', [e.message])); }
+          } }, direct ? 'Refresh direct analogs' : 'Run on direct analogs'),
+          el('button', { type: 'button', class: 'btn btn-secondary', onclick: async function () {
+            try { bootstrap = await runBasis('CONDITIONAL_BOOTSTRAP', this); workspace.refresh(); }
+            catch (e) { status.innerHTML = ''; status.appendChild(alertBox('danger', 'Bootstrap outcomes are unavailable', [e.message])); }
+          } }, bootstrap ? 'Refresh bootstrap' : 'Run conditional bootstrap'),
+          el('button', { type: 'button', class: 'btn btn-ghost', onclick: function () { PlanStore.focus(planRef.plan, 'EVIDENCE'); } }, 'Review Past evidence')), status));
+      if (direct) host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Direct occurrences'), Scenario.pnlView(direct.result || direct, Learn.currentLevel())));
+      if (bootstrap) host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Whole-path bootstrap'), Scenario.pnlView(bootstrap.result || bootstrap, Learn.currentLevel())));
+    }
+
+    function renderBacktest(host) {
+      var form = ui.backtest;
+      var today = new Date();
+      var toDefault = today.toISOString().slice(0, 10);
+      var fromDefault = new Date(today.getTime() - 365 * 86400000).toISOString().slice(0, 10);
+      var from = el('input', { type: 'date', value: form.from || fromDefault });
+      var to = el('input', { type: 'date', value: form.to || toDefault });
+      var engine = el('select', {}, el('option', { value: 'single' }, 'One trade at a time'),
+        el('option', { value: 'portfolio' }, 'A book of overlapping trades'));
+      engine.value = form.engine || 'single';
+      var dte = el('input', { type: 'number', min: '1', max: '365', value: form.targetDte || planRef.plan.context.horizonDays || 30 });
+      var qty = el('input', { type: 'number', min: '1', max: '100', value: form.qty || 1 });
+      var every = el('input', { type: 'number', min: '1', max: '60', value: form.entryEveryDays || 5 });
+      var cash = el('input', { type: 'number', min: '1', step: '1000', value: form.startingCash || 100000 });
+      var slip = el('input', { type: 'number', min: '0', max: '10', step: '0.1', value: form.slippagePct == null ? 0.5 : form.slippagePct });
+      [from,to,engine,dte,qty,every,cash,slip].forEach(function (input) { input.addEventListener('change', function () {
+        form.from=from.value; form.to=to.value; form.engine=engine.value; form.targetDte=dte.value;
+        form.qty=qty.value; form.entryEveryDays=every.value; form.startingCash=cash.value; form.slippagePct=slip.value;
+      }); });
+      var results = el('div', { id: 'plan-backtest-result' });
+      host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Replay ' + (selected.displayName || prettyStrategy(selected.strategy))),
+        el('p', { class: 'muted' }, 'Symbol and strategy come from this Plan. The replay builds the named rule repeatedly; it does not pretend today’s exact strikes existed in the past.'),
+        el('div', { class: 'form-grid' },
+          el('div', { class: 'field' }, el('label', {}, 'From'), from),
+          el('div', { class: 'field' }, el('label', {}, 'To'), to),
+          el('div', { class: 'field' }, el('label', {}, 'Target DTE', UI.info('dte')), dte),
+          el('div', { class: 'field' }, el('label', {}, 'Replay engine'), engine)),
+        UI.expandable('Replay controls', function () { return el('div', { class: 'form-grid' },
+          el('div', { class: 'field' }, el('label', {}, 'Contracts per entry'), qty),
+          el('div', { class: 'field' }, el('label', {}, 'Enter every N sessions'), every),
+          el('div', { class: 'field' }, el('label', {}, 'Starting capital $'), cash),
+          el('div', { class: 'field' }, el('label', {}, 'Extra slippage per leg %'), slip)); }),
+        el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', onclick: async function () {
+          this.disabled=true; this.setAttribute('aria-busy','true'); results.innerHTML=''; results.appendChild(UI.spinner('Replaying without look-ahead…'));
+          try {
+            var live=await PlanStore.get(planRef.plan.id,true); planRef.plan=live;
+            var out=await PlanStore.runBacktest(live,{engine:engine.value,from:from.value,to:to.value,
+              targetDte:positiveInteger(dte.value,'Target DTE',365),entryEveryDays:positiveInteger(every.value,'Entry spacing',60),
+              qty:positiveInteger(qty.value,'Quantity',100),slippagePct:Math.max(0,Number(slip.value))/100,
+              startingCashCents:Math.round(Number(cash.value)*100),maxConcurrent:4,shortDelta:0.30,widthPct:0.05,
+              profitTargetPct:0.5,stopFraction:0.8,rollDte:7});
+            latestBacktest=out.backtest; renderPlanBacktestReport(results,out.report);
+          } catch(e){results.innerHTML='';results.appendChild(alertBox('danger','Replay failed',[e.message]));}
+          finally{this.disabled=false;this.removeAttribute('aria-busy');}
+        } }, latestBacktest ? 'Run another replay' : 'Run historical replay'))));
+      host.appendChild(results);
+      if (latestBacktest && latestBacktest.backtestId) {
+        API.get('/api/backtests/' + latestBacktest.backtestId).then(function (report) {
+          if (results.isConnected && !results.hasChildNodes()) renderPlanBacktestReport(results, report);
+        }).catch(function () { /* summary remains in the comparison; rerun is available */ });
+      }
+    }
+  }
+
   async function planWorkspace(root, params) {
     var id = params[0] || '';
     var rawStage = (params[1] || 'understand').split('?')[0];
@@ -2779,6 +3035,8 @@
       await research(owned, ['__plan', plan.symbol, stage.path], { plan: plan, stage: stage.path });
     } else if (stage.key === 'STRATEGY') {
       await planStrategyStage(root, plan, stage);
+    } else if (stage.key === 'OUTCOMES') {
+      await planOutcomesStage(root, plan, stage);
     } else transitionalPlanStage(root, plan, stage);
   }
 
@@ -2794,7 +3052,6 @@
 
   async function trade(root, params) {
     if (params[0] && /^tr_/.test(params[0])) return tradeDetail(root, params);
-    if (params[0] === 'outcomes') return backtest(root);
     if (params[0] === 'decide' || params[0] === 'place') return ticket(root);
     root.appendChild(UI.emptyState('This Trade route no longer exists',
       'Start or resume a Plan. Context and Structure now live together in its six-stage workspace.',
@@ -4358,8 +4615,7 @@
       target));
     var out = el('div', { id: 'whatif-out' });
     var previewSeq = 0;
-    var latest = null, latestSpec = null;
-    var toVerify = el('button', { class: 'btn btn-secondary', id: 'whatif-verify', style: 'display:none' }, 'Open full Outcomes analysis →');
+    var latest = null;
     var run = el('button', { class: 'btn', id: 'whatif-run' }, 'Analyze this scenario');
     var reroll = el('button', { class: 'btn btn-sm btn-secondary', id: 'whatif-reroll', style: 'display:none' }, 'Run a sampling check');
     function scenarioPrice(value) {
@@ -4470,9 +4726,19 @@
         var position = plan ? null : Scenario.workingPosition(symbol);
         var payload = { over: spec, iv: f.getIv(), levels: decisionLevels() };
         if (position) payload.position = position;
-        var p = await App.evaluateOutcome('PATHS', 'PARAMETRIC', symbol, payload);
+        var p;
+        if (plan) {
+          var planRun = await PlanStore.runEnsemble(plan, payload);
+          p = planRun.preview;
+          if (ownedState) {
+            ownedState.planEnsembleId = planRun.ensemble && planRun.ensemble.id;
+            ownedState.planEnsembleFingerprint = planRun.ensemble && planRun.ensemble.fingerprint;
+          }
+        } else {
+          p = await App.evaluateOutcome('PATHS', 'PARAMETRIC', symbol, payload);
+        }
         if (seq !== previewSeq) return;
-        latest = p; latestSpec = spec;
+        latest = p;
         var resultState = ownedState || App.state;
         resultState.scenarioAnalysis = { symbol: symbol, result: p, spec: spec, iv: f.getIv(), position: position };
         resultState.outcomeReceipt = { basis: 'PARAMETRIC', symbol: symbol,
@@ -4494,7 +4760,6 @@
         out.appendChild(Scenario.fanChart(p));
         out.appendChild(goalAction(p, spec));
         out.appendChild(practiceAction(p, spec));
-        if (!plan) toVerify.style.display = '';
         reroll.style.display = '';
         if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
       } catch (e) {
@@ -4504,782 +4769,11 @@
     }
     run.addEventListener('click', function () { analyze(false); });
     reroll.addEventListener('click', function () { analyze(true); });
-    toVerify.addEventListener('click', function () {
-      App.context.selectSymbol(symbol);
-      App.state.evidencePrefill = null; // generated futures must never inherit an earlier analog ensemble
-      App.state.scenarioHandoff = latest ? { symbol: symbol, result: latest, spec: latestSpec,
-        fingerprint: latest.receipt && latest.receipt.fingerprint,
-        position: Scenario.workingPosition(symbol) } : null;
-      App.state.verifyMode = 'scenario';
-      App.navigate('#/trade/outcomes');
-    });
-    card.appendChild(el('div', { class: 'btn-row' }, run, reroll, plan ? null : toVerify));
+    card.appendChild(el('div', { class: 'btn-row' }, run, reroll));
     card.appendChild(out);
     return card;
   }
 
-  /** Verify → "Imagine a future": run a position through the scenario's Monte Carlo. */
-  function scenarioVerifyPanel(host) {
-    host.innerHTML = '';
-    var level = Learn.currentLevel();
-    var vf = App.state.verifyForm = App.state.verifyForm || {};
-    var symbol = ((App.context.symbol() || vf.simSymbol || 'AAPL') + '').toUpperCase();
-    vf.simSymbol = symbol;
-    var researchHandoff = App.state.scenarioHandoff && App.state.scenarioHandoff.symbol === symbol
-      ? App.state.scenarioHandoff : null;
-    var card = el('div', { class: 'card', id: 'bt-scenario-card' });
-
-    // The MARKET CONTEXT SELECTOR: sector (the same polished rail as everywhere else) +
-    // searchable symbol + the FULL universe as one non-wrapping peer rail. The old version
-    // wrapped eight bare pills with no way to change sector — scattered, and a dead end.
-    var symInput = el('input', { type: 'text', id: 'sc-symbol', value: symbol, list: 'universe-symbols', style: 'max-width:120px' });
-    function switchSymbol(raw) {
-      var s2 = (raw || '').trim().toUpperCase();
-      if (!s2 || s2 === vf.simSymbol) return;
-      vf.simSymbol = s2;
-      App.context.selectSymbol(s2);
-      scenarioVerifyPanel(host); // self-rebuild: header, peers, working-idea eligibility all follow
-    }
-    symInput.addEventListener('change', function () { switchSymbol(symInput.value); });
-    symInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') switchSymbol(symInput.value); });
-    card.appendChild(UI.cardHeader('Imagine a future for ' + symbol));
-    card.appendChild(UI.symbolContext({
-      mode: 'editable', id: 'scenario-symbol-context', input: symInput,
-      label: level === 'beginner' ? 'Which stock?' : 'Scenario symbol',
-      commitLabel: 'Apply', onCommit: switchSymbol
-    }));
-    if (researchHandoff) {
-      var rt = researchHandoff.result && researchHandoff.result.decisionMap
-        && researchHandoff.result.decisionMap.terminal;
-      card.appendChild(el('div', { class: 'scenario-handoff', id: 'scenario-handoff' },
-        el('div', {}, el('b', {}, 'Research scenario carried here'),
-          el('p', { class: 'muted small' }, researchHandoff.result && researchHandoff.result.positionOutcome
-            ? 'The working position below was already valued on the exact Research path matrix; its result is ready without another run.'
-            : 'The price distribution is preserved as context. A newly selected structure still needs its own evaluation; StrikeBench will name the new receipt if the anchor moved.')),
-        el('div', { class: 'chip-row' },
-          rt ? chip('Research range', fmtNum(rt.p16, 2) + ' – ' + fmtNum(rt.p84, 2)) : null,
-          chip('Receipt', researchHandoff.fingerprint || 'unavailable'),
-          researchHandoff.result && researchHandoff.result.receipt
-            ? chip('Anchor', fmtNum(researchHandoff.result.receipt.anchorSpot, 2)) : null)));
-    }
-    // EVIDENCE MODE banner: Research handed over its analog windows — the runs below price on
-    // THOSE real occurrences (clearable; falls back to generated futures).
-    var evb = App.state.evidencePrefill;
-    if (evb && evb.symbol === symbol && evb.source) {
-      var evBanner = el('div', { class: 'alert alert-caution', id: 'evidence-mode' },
-        el('b', {}, 'Evidence mode: '),
-        'strategies below run on ' + (evb.label || 'the study\u2019s historical analog windows')
-          + ' \u2014 conditional history, not a model. Horizon locked to the study\u2019s '
-          + evb.horizonDays + ' days. ',
-        el('button', { class: 'btn btn-sm btn-secondary', id: 'evidence-clear', onclick: function () {
-          App.state.evidencePrefill = null; App.render();
-        } }, 'Use generated futures instead'));
-      card.appendChild(evBanner);
-    }
-    // Sector first: picking one switches the shared universe (same behavior as Ideas/Research)
-    // and refreshes the peer rail below.
-    card.appendChild(el('div', { class: 'field' },
-      el('label', {}, 'Universe'),
-      sectorRail({ onPick: function () { setTimeout(function () { scenarioVerifyPanel(host); }, 250); } })));
-    var peerRail = el('div', { class: 'peer-rail', id: 'sc-uni-chips' });
-    ((App.state.universe && App.state.universe.active && App.state.universe.active.symbols) || [])
-      .forEach(function (u) {
-        peerRail.appendChild(el('button', { type: 'button', class: 'sym-chip' + (u === symbol ? ' active' : ''),
-          onclick: function () { switchSymbol(u); } }, u));
-      });
-    card.appendChild(el('div', { class: 'field' }, el('label', {}, 'Stocks in this universe'), peerRail));
-    var demoLane = App.config && App.config.fixturesOnly && (App.state.world || 'demo') === 'demo';
-    var entryBasis = demoLane
-      ? 'the built-in demo option book (fabricated teaching prices)'
-      : 'the active market\u2019s executable option quotes when a listed contract matches';
-    card.appendChild(explain(level === 'beginner'
-      ? 'Three choices: which stock, what story you believe (the price path), and which position (the payoff shape). We run the position through hundreds of simulated futures and report, in plain dollars, how it tends to end. The entry is priced from ' + entryBasis + '.'
-      : 'Monte-Carlo the position across the scenario paths. Entry is priced from ' + entryBasis + '; exits are BSM along the IV path (default: the active chain\u2019s ATM IV). The verdict measures your scenario against that entry basis.'));
-    var f = Scenario.form(level, symbol, {
-      thesis: App.context.thesis('neutral'),
-      horizonDays: contextHorizonDays(App.context.horizon('month'))
-    });
-    card.appendChild(f.el);
-
-    // The position: your working idea (same symbol only) or the FULL strategy catalog —
-    // the same breadth as "All strategies", each with its payoff-shape sketch. The sketch is
-    // the strategy's profit-vs-price identity; the story cards above sketch the PRICE PATH.
-    var working = Scenario.workingLegs();
-    var workingSymbol = App.state.ticket && App.state.ticket.symbol;
-    var workingHere = working && workingSymbol === symbol;
-    var picked = { key: workingHere ? (vf.quick === undefined ? 'WORKING' : vf.quick) : (vf.quick || 'DEBIT_CALL_SPREAD') };
-    if (!workingHere && picked.key === 'WORKING') picked.key = 'DEBIT_CALL_SPREAD';
-    var posWrap = el('div', { id: 'sc-pos' });
-    function posCard(key, label, pay, group) {
-      return el('button', { type: 'button', 'data-pos': key,
-        class: 'q-card sc-card' + (picked.key === key ? ' active' : ''),
-        onclick: function () {
-          picked.key = key; vf.quick = key;
-          posWrap.querySelectorAll('.sc-card').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-pos') === key); });
-        } },
-        pay ? Scenario.sketch(pay) : null,
-        el('b', {}, label),
-        group ? el('div', { class: 'muted small' }, group) : null);
-    }
-    posWrap.appendChild(el('div', { class: 'field-label', style: 'margin-top:10px' },
-      'The position — payoff shape at expiry' + (level === 'beginner' ? ' (what you make or lose at each price)' : '')));
-    var posGrid = el('div', { class: 'q-grid sc-grid sc-pos-grid' });
-    if (workingHere) posGrid.appendChild(posCard('WORKING', 'Your working idea', null, working.length + ' leg' + (working.length > 1 ? 's' : '') + ' from the ticket'));
-    Scenario.CATALOG.forEach(function (q) { posGrid.appendChild(posCard(q.key, q.label, q.pay, q.group)); });
-    posWrap.appendChild(posGrid);
-    card.appendChild(posWrap);
-
-    var out = el('div', { id: 'sc-verify-out' });
-    if (researchHandoff && researchHandoff.result && researchHandoff.result.positionOutcome) {
-      out.appendChild(alertBox('ok', 'Exact Research result — no rerun', [
-        'This position used path receipt ' + researchHandoff.fingerprint + '. Change the scenario or position and run again only when you want a new decision.'
-      ]));
-      out.appendChild(Scenario.pnlView(researchHandoff.result.positionOutcome, level));
-    }
-    var actionSeq = 0;
-    async function spotFor() {
-      var qd = await API.get('/api/quotes?symbols=' + symbol);
-      var row = (qd.quotes || [])[0] || {};
-      var spot = parseFloat(row.last || row.prevClose);
-      if (!isFinite(spot) || spot <= 0) throw new Error('No price for ' + symbol + ' — check the ticker.');
-      return spot;
-    }
-    var run = el('button', { class: 'btn', id: 'sc-verify-run' }, level === 'beginner' ? 'Run it through the futures' : 'Run Monte Carlo');
-    run.addEventListener('click', async function () {
-      var seq = ++actionSeq;
-      run.disabled = true;
-      if (compareBtn) compareBtn.disabled = true;
-      out.innerHTML = ''; out.appendChild(UI.spinner('Simulating…'));
-      try {
-        var spec = f.getSpec();
-        var legs, spot = null;
-        if (picked.key === 'WORKING' && workingHere) {
-          legs = working;
-        } else {
-          spot = await spotFor();
-          var qk = Scenario.CATALOG.find(function (x) { return x.key === picked.key; }) || Scenario.CATALOG[0];
-          legs = qk.legs(spot, spec.horizonDays + 10);
-        }
-        // The position AND the do-nothing baseline, on the SAME seeded paths — comparative
-        // evidence is what makes a 51% world actionable ("better than just holding shares?").
-        // EVIDENCE MODE: when Research handed over its analog windows, the strategy runs on the
-        // EXACT historical occurrences the study displayed — one conditional sample, two views.
-        var ev = App.state.evidencePrefill;
-        var evActive = ev && ev.symbol === symbol && ev.source;
-        var basis = evActive ? ev.source : 'PARAMETRIC';
-        var study = evActive ? ev.study : null;
-        var rP = App.evaluateOutcome('POSITION', basis, symbol, {
-          position: App.outcomePosition(picked.key, legs, 1), over: spec, iv: f.getIv(), study: study
-        });
-        var basP = App.evaluateOutcome('POSITION', basis, symbol, {
-          position: App.outcomePosition('BUY_AND_HOLD',
-            [{ action: 'BUY', type: 'STOCK', strike: 0, expiryDay: 0, ratio: 1 }], 1),
-          over: spec, iv: f.getIv(), study: study
-        })
-          .catch(function () { return null; });
-        var r = await rP, bas = await basP;
-        if (seq !== actionSeq) return;
-        out.innerHTML = '';
-        if (evActive && ev.studyKey && r.studyKey && r.studyKey !== ev.studyKey) {
-          out.appendChild(alertBox('warn', 'The underlying data changed since the study was run',
-            ['This run re-derived the analogs against CURRENT data \u2014 re-run Past evidence in Research if this surprises you.']));
-        }
-        if (r.sourceNote) {
-          out.appendChild(alertBox('caution', evActive && ev.source === 'HISTORICAL_ANALOGS'
-            ? (r.observed ? 'Priced on REAL history, not a model' : 'Priced on DEMO/generated history \u2014 not real, not a model')
-            : 'Priced on resampled history', [r.sourceNote]));
-        }
-        out.appendChild(el('div', { class: 'muted small', style: 'margin:4px 0' },
-          f.describe() + ' · entry cost ' + UI.fmtMoneyCompact(r.entryCostCents)));
-        out.appendChild(Scenario.pnlView(r, level));
-        if (bas) {
-          out.appendChild(el('div', { class: 'chip-row' },
-            chip('Baseline: just hold 100 shares', UI.fmtMoneyCompact(bas.expectedPnlCents) + ' · ' + Math.round(bas.winRatePct) + '%',
-              'The same simulated futures applied to plain stock — the strategy has to beat doing nothing.'),
-            chip('This position vs baseline',
-              UI.fmtMoneyCompact(r.expectedPnlCents - bas.expectedPnlCents),
-              'Expected P&L difference on IDENTICAL paths. Positive = the structure adds value under your scenario.')));
-        }
-        recordOutcomeReceipt(evActive ? 'HISTORICAL_ANALOGS' : 'PARAMETRIC', symbol,
-          picked.key === 'WORKING' ? 'Working structure' : picked.key);
-      } catch (e) {
-        if (seq === actionSeq) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Simulation failed', [String((e && e.message) || e)])); }
-      }
-      finally { if (seq === actionSeq) { run.disabled = false; if (compareBtn) compareBtn.disabled = false; } }
-    });
-
-    // The junior's core ask: ONE market view, EVERY compatible structure, identical paths.
-    var compareBtn = el('button', { class: 'btn btn-secondary', id: 'sc-compare-all' },
-      level === 'beginner' ? 'Which strategy fits this story best?' : 'Compare all strategies');
-    compareBtn.addEventListener('click', async function () {
-      var seq = ++actionSeq;
-      compareBtn.disabled = true; run.disabled = true;
-      out.innerHTML = '';
-      out.appendChild(UI.spinner('Running every structure on one identical set of futures…'));
-      try {
-        var spec = f.getSpec(); // one spec, one seed — every structure sees the SAME futures
-        var spot = await spotFor();
-        // Evidence mode carries into the COMPARISON too: a screen that says Evidence Mode must
-        // never silently compare on generated Monte Carlo paths (holistic review #10).
-        var evC = App.state.evidencePrefill;
-        var evOnC = evC && evC.symbol === symbol && evC.source;
-        var positions = Scenario.CATALOG.map(function (q2) {
-          return App.outcomePosition(q2.key, q2.legs(spot, spec.horizonDays + 10), 1);
-        });
-        var cmp = await App.evaluateOutcome('COMPARE', evOnC ? evC.source : 'PARAMETRIC', symbol,
-          { positions: positions, over: spec, iv: f.getIv(), study: evOnC ? evC.study : null });
-        if (seq !== actionSeq) return;
-        if (evOnC && evC.studyKey && cmp.studyKey && cmp.studyKey !== evC.studyKey) {
-          out.appendChild(alertBox('warn', 'The underlying data changed since the study was run',
-            ['The comparison re-derived the analogs against CURRENT data — re-run Past evidence in Research if this surprises you.']));
-        }
-        var results = (cmp.results || []).map(function (x) {
-          return { q: Scenario.CATALOG.find(function (c2) { return c2.key === x.key; }), r: x.result,
-                   fees: x.feesCents || 0 };
-        }).filter(function (x) { return x.q; });
-        if (!results.length) throw new Error('Nothing could be priced for ' + symbol + '.');
-        // FAIR ranking: the shared simulator has already shifted EVERY path by the configured
-        // round-trip commissions, so win rate, expected P/L and p5 are one after-cost distribution.
-        // Expected P&L per dollar of realistic downside prevents a 100-share CSP from winning on size.
-        results.forEach(function (x) {
-          x.evNet = x.r.expectedPnlCents;
-          x.p5Net = x.r.p5Cents;
-          x.ror = x.p5Net < 0 ? x.evNet / Math.abs(x.p5Net) : (x.evNet > 0 ? 99 : 0);
-        });
-        results.sort(function (a, b) { return b.ror - a.ror; });
-        out.innerHTML = '';
-        out.appendChild(el('div', { class: 'muted small', style: 'margin:4px 0' },
-          (cmp.pathSource
-            ? 'EVIDENCE MODE: every structure ran on the SAME ' + results[0].r.paths
-              + ' historical analog windows (' + (cmp.observed ? 'real past occurrences' : 'demo/generated history — not real')
-              + '), entries at market quotes where a listed contract matched. '
-            : f.describe() + ' — every structure ran on the SAME ' + results[0].r.paths
-              + ' futures (one seed-matched set), entries at market quotes where a listed contract matched. ')
-          + 'Ranked by expected gain per dollar of realistic downside (1-in-20 bad run) so small and large positions compare fairly. '
-          + 'The baseline every structure must beat: CASH \u2014 doing nothing risks nothing and costs nothing.'));
-        function rowFor(x) {
-          return el('tr', {},
-            el('td', {}, el('b', {}, x.q.label), ' ', el('span', { class: 'muted small' }, x.q.group)),
-            el('td', {}, Math.round(x.r.winRatePct) + '%'),
-            el('td', {}, pnlSpan(x.evNet)),
-            el('td', {}, pnlSpan(x.p5Net)),
-            el('td', { title: 'expected P&L per $1 of 1-in-20 downside' },
-              x.ror >= 99 ? '∞' : x.ror.toFixed(2)),
-            el('td', {}, fmtMoney(x.fees)),
-            level === 'beginner' ? null : el('td', {}, UI.fmtMoneyCompact(x.r.entryCostCents)),
-            el('td', {}, el('button', { class: 'btn btn-sm', onclick: (function (key) { return function () {
-              picked.key = key; vf.quick = key;
-              posWrap.querySelectorAll('.sc-card').forEach(function (b2) { b2.classList.toggle('active', b2.getAttribute('data-pos') === key); });
-              run.click();
-            }; })(x.q.key) }, 'Details')));
-        }
-        var headers = level === 'beginner'
-          ? ['Strategy', 'Chance after costs', 'Expected after costs', 'Bad run after costs', 'Gain per $ risked', 'Fees', '']
-          : ['Structure', 'Win % after costs', 'E[P&L] after costs', 'p5 after costs', 'RoR', 'Fees', 'Entry', ''];
-        if (level === 'beginner' && results.length > 3) {
-          // Progressive disclosure: the best three expressions first; the full field one tap away.
-          out.appendChild(el('div', { class: 'field-label' }, 'Best three fits for this story'));
-          out.appendChild(UI.table(headers, results.slice(0, 3).map(rowFor)));
-          var restSlot = el('div', {});
-          restSlot.appendChild(el('button', { class: 'btn btn-secondary btn-sm', onclick: function () {
-            restSlot.innerHTML = '';
-            restSlot.appendChild(UI.table(headers, results.slice(3).map(rowFor)));
-          } }, 'Show all ' + results.length + ' structures'));
-          out.appendChild(restSlot);
-        } else {
-          out.appendChild(UI.table(headers, results.map(rowFor)));
-        }
-        if (cmp.refused && cmp.refused.length) {
-          out.appendChild(el('div', { class: 'muted small' },
-            'Could not be priced here: ' + cmp.refused.map(function (x) {
-              var q3 = Scenario.CATALOG.find(function (c3) { return c3.key === x.key; });
-              return (q3 ? q3.label : x.key) + ' (' + x.reason + ')';
-            }).join('; ') + '.'));
-        }
-        out.appendChild(el('div', { class: 'muted small' },
-          'Naked calls/puts and short straddles/strangles are not simulated — undefined risk is blocked by design across the app. '
-          + 'A different story re-ranks the whole table; the honest conclusion can be that nothing beats the baseline.'));
-        recordOutcomeReceipt(evOnC ? 'HISTORICAL_ANALOGS' : 'PARAMETRIC', symbol,
-          'Compared ' + results.length + ' structures');
-      } catch (e) {
-        if (seq === actionSeq) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Comparison failed', [String((e && e.message) || e)])); }
-      }
-      finally { if (seq === actionSeq) { compareBtn.disabled = false; run.disabled = false; } }
-    });
-
-    card.appendChild(el('div', { class: 'btn-row' }, run, compareBtn));
-    card.appendChild(out);
-    host.appendChild(card);
-  }
-
-  // ---------- 8. Backtest ----------
-
-  async function backtest(root) {
-    // A candidate's "Test outcomes" handoff lands here with the named rule pre-answered.
-    var prefill = App.state.backtestPrefill || {};
-    App.state.backtestPrefill = null;
-    // The WORKING IDEA prefills the whole form, not just the symbol: family from the candidate,
-    // target DTE from its legs' actual expiration — verify the trade you are about to place.
-    if (!prefill.strategy && App.state.ticket
-        && (App.state.ticket.candidate || App.state.ticket.customFamily)) {
-      var wt = App.state.ticket;
-      prefill.symbol = prefill.symbol || wt.symbol;
-      prefill.strategy = wt.candidate ? wt.candidate.strategy : wt.customFamily;
-      try {
-        var wexp = (wt.legs || wt.candidate && wt.candidate.legs || [])
-          .map(function (l) { return l.expiration; }).filter(Boolean).sort()[0];
-        if (wexp) prefill.dte = Math.max(1, Math.round((new Date(wexp + 'T16:00:00') - Date.now()) / 86400000));
-      } catch (e) { /* dte stays default */ }
-    }
-    // Persist the form per the state-ownership convention: symbol/strategy/window/dte survive nav
-    // and level switches instead of resetting to defaults. Prefill (an explicit ask) wins over it.
-    var bf = App.state.backtestForm = App.state.backtestForm || {};
-    root.appendChild(el('p', { class: 'page-sub' },
-      Learn.currentLevel() === 'beginner'
-        ? 'Before risking even paper money on a rule like “sell a monthly covered call”, see how it would actually have gone — trade by trade, with honest labels on what is modeled.'
-        : 'Replays a strategy rule day by day with no look-ahead — and labels exactly how much of its pricing is modeled.'));
-
-    // Two ways to verify, at BOTH levels: replay the PAST (historical backtest) or imagine a
-    // FUTURE (Monte-Carlo scenario). The scenario mode is often the friendlier one for beginners —
-    // "what if it drops then recovers?" needs no data plumbing to be a great lesson.
-    // ONE VERIFICATION-MODE SELECTOR (the admitted Phase-7 leftover): every way to test a
-    // strategy sits behind one explicit choice, each honestly describing its evidence basis.
-    // The five modes route to the EXISTING engines — no duplicate machinery.
-    var vf = App.state.verifyForm = App.state.verifyForm || {};
-    if (App.state.verifyMode) { vf.mode = App.state.verifyMode; App.state.verifyMode = null; } // explicit handoff wins
-    else if (App.state.ticket && App.state.ticket.outcomeBasisHint) {
-      vf.mode = App.state.ticket.outcomeBasisHint;
-      App.state.ticket.outcomeBasisHint = null;
-    }
-    vf.mode = vf.mode || 'history';
-    var exactCustom = !!(App.state.ticket && App.state.ticket.custom && !App.state.ticket.customFamily);
-    var inWorld = App.state.world && App.state.world !== App.baseWorldId();
-    var scenarioActive = App.config && App.config.scenarioMode;
-    var histWrap = el('div', { id: 'bt-history-mode' });
-    var scenWrap = el('div', { id: 'bt-scenario-mode' });
-    var worldWrap = el('div', { id: 'bt-world-mode' });
-    // The SIMULATED SESSION verification surface (review P1 #5: a labeled mode must never be a
-    // blank screen): the session's own trades ARE its verification — live P/L, the report, and
-    // one-tap paths to place more or open the console.
-    async function worldVerifyPanel(host) {
-      host.innerHTML = '';
-      host.appendChild(UI.spinner('Loading your session\u2019s record\u2026'));
-      try {
-        // GENUINE VERIFICATION (review P2): the session REPORT is the record — open AND
-        // closed decisions, each with the predicted odds it was entered at and what actually
-        // happened (result, worst/best while open, how it ended). Live Now P/L for open rows
-        // merges in from the enriched trades list.
-        var rep = await API.getFresh('/api/sim/market/' + encodeURIComponent(App.state.world) + '/report');
-        var nowBy = {};
-        try {
-          ((await API.getFresh('/api/trades?status=ACTIVE&size=50')).trades || []).forEach(function (t) {
-            var nowPnl = activeDecisionPnl(t);
-            if (nowPnl !== undefined && nowPnl !== null) nowBy[t.id] = nowPnl;
-          });
-        } catch (e2) { /* Now column degrades to em-dash */ }
-        var rows = rep.trades || [];
-        var pvo = rep.popVsOutcome;
-        host.innerHTML = '';
-        host.appendChild(el('div', { class: 'card', id: 'world-verify' },
-          UI.cardHeader('This simulated session judges your DECISIONS',
-            el('span', { class: 'badge badge-sim' }, 'SIMULATED')),
-          explain('Every entry was judged at the session\u2019s own clock and prices. Open decisions show live standing; closed ones show the predicted odds against what actually happened.'),
-          el('div', { class: 'chip-row' },
-            chip('Sim clock', String(rep.simTime || '').replace('T', ' ')),
-            chip('Decisions', String(rows.length)),
-            chip('Resolved', String(rep.resolved || 0)),
-            rep.winRate !== null && rep.winRate !== undefined ? chip('Win rate', rep.winRate + '%') : null,
-            rep.decisionPnlCents !== null && rep.decisionPnlCents !== undefined ? chip('Decision P/L', fmtMoney(rep.decisionPnlCents)) : null),
-          rows.length
-            ? table(['Decision', 'Entered (sim clock)', 'Predicted odds', 'Now / Result', 'Worst / best while open', 'How it ended'],
-                rows.map(function (t) {
-                  var open = t.status === 'ACTIVE';
-                  return pressable(el('tr', { class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); } },
-                    el('td', {}, el('b', {}, t.symbol), ' ', prettyStrategy(t.strategy) + ' x' + t.qty),
-                    el('td', { class: 'mono' }, t.laneEntryTime ? String(t.laneEntryTime).replace('T', ' ') : '\u2014'),
-                    el('td', {}, t.popEntry !== null && t.popEntry !== undefined ? Math.round(t.popEntry * 100) + '%' : '\u2014'),
-                    el('td', {}, open
-                      ? (nowBy[t.id] !== undefined ? pnlSpan(nowBy[t.id]) : el('span', { class: 'badge badge-dim' }, t.status))
-                      : pnlSpan(t.decisionPnlCents !== null && t.decisionPnlCents !== undefined
-                        ? t.decisionPnlCents : t.realizedPnlCents)),
-                    el('td', {}, t.maeCents !== undefined && t.maeCents !== null
-                      ? el('span', {}, pnlSpan(t.maeCents), ' / ', pnlSpan(t.mfeCents)) : el('span', { class: 'muted' }, '\u2014')),
-                    el('td', { class: 'muted' }, open ? 'still open' : (t.closeReason || '\u2014'))), 'Open ' + t.symbol);
-                }))
-            : UI.emptyState('No practice trades in this session yet',
-                'Start a Plan in this market, compare screened structures, and place one \u2014 the session report will judge the decision.',
-                'Start a Plan in this market', function () { App.navigate('#/research'); }),
-          pvo && (pvo.highPopTrades || pvo.lowPopTrades)
-            ? el('p', { class: 'muted', style: 'margin:8px 0 0' },
-                'Calibration so far: ' + (pvo.highPopTrades || 0) + ' high-confidence entries (\u226550% predicted) won '
-                + (pvo.highPopWinRate === null || pvo.highPopWinRate === undefined ? '\u2014' : pvo.highPopWinRate + '%') + ' of the time; '
-                + (pvo.lowPopTrades || 0) + ' low-confidence entries won '
-                + (pvo.lowPopWinRate === null || pvo.lowPopWinRate === undefined ? '\u2014' : pvo.lowPopWinRate + '%') + '. '
-                + (pvo.note || ''))
-            : null,
-          el('div', { class: 'btn-row' },
-            rows.length ? el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, 'Start another Plan') : null,
-            el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } }, 'Open the control room'),
-            el('button', { class: 'btn btn-sm btn-secondary', title: 'Your observed-market record \u2014 simulated sessions are scored here, in their own report, never mixed into it',
-              onclick: function () { App.navigate('#/portfolio/record'); } }, 'Your observed record \u2192'))));
-        if (rows.length) recordOutcomeReceipt('SIMULATED_SESSION', App.context.symbol(),
-          rows.length + ' session decision' + (rows.length === 1 ? '' : 's'));
-      } catch (e) {
-        host.innerHTML = '';
-        host.appendChild(alertBox('warn', 'Session record unavailable', [String((e && e.message) || e)]));
-      }
-    }
-    var historyNote = exactCustom
-      ? 'Historical replay needs a named strategy rule. The form below is a separate rule you choose; Monte Carlo futures tests your exact custom legs.'
-      : App.state.world === 'demo'
-      ? 'Replays fabricated Demo history with no look-ahead; every result stays labeled DEMO.'
-      : App.state.world && App.state.world !== 'observed'
-        ? 'Replays this simulated market\u2019s generated history with no look-ahead.'
-        : 'Replays observed daily history with no look-ahead.';
-    var outcomeWorkspace = Outcomes.workspace({
-      id: 'trade-outcomes', state: vf, label: 'How to test this strategy',
-      modes: [
-        { key: 'history', label: 'Historical replay', description: 'A rule across past daily prices',
-          note: historyNote, render: function (host) { host.appendChild(histWrap); } },
-        { key: 'dataset', label: 'Saved scenario', description: 'A generated path saved as candles',
-          available: !!scenarioActive,
-          note: scenarioActive
-            ? 'Your generated scenario dataset is active; the replay reads it and names it.'
-            : 'Activate a generated dataset first, then replay it as a disclosed synthetic history.',
-          unavailableReason: 'No generated dataset is active in this market.',
-          setupLabel: 'Open Datasets', setup: function () { App.navigate('#/data/datasets'); },
-          render: function (host) { host.appendChild(histWrap); } },
-        { key: 'scenario', label: 'Monte Carlo futures', description: 'Many paths from an explicit model',
-          note: 'Hundreds of generated paths from a model you pick: odds of that model, not a forecast.',
-          render: function (host) {
-            if (!scenWrap.hasChildNodes()) scenarioVerifyPanel(scenWrap);
-            host.appendChild(scenWrap);
-          } },
-        { key: 'analogs', label: 'Historical analogs', description: 'The Research study\u2019s signal episodes',
-          available: !!App.state.evidencePrefill,
-          note: 'Every strategy runs on the exact conditional-history sample Research found.',
-          unavailableReason: 'Run Past evidence on a Research symbol, then hand its occurrences to Trade.',
-          setupLabel: 'Find historical analogs',
-          setup: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(App.context.symbol('AAPL'))); },
-          render: function (host) {
-            if (!scenWrap.hasChildNodes()) scenarioVerifyPanel(scenWrap);
-            host.appendChild(scenWrap);
-          } },
-        { key: 'world', label: 'Simulated session', description: 'Decisions inside a moving practice market',
-          available: !!inWorld,
-          note: inWorld
-            ? 'Judge entries against the simulated market\u2019s own clock, fills and outcomes.'
-            : 'Create a live generated market with its own clock and practice account.',
-          unavailableReason: 'You are not currently inside a simulated market.',
-          setupLabel: 'Open Simulated market',
-          setup: function () { App.navigate('#/data/simulation'); },
-          render: function (host) {
-            host.appendChild(worldWrap);
-            return worldVerifyPanel(worldWrap);
-          } }
-      ]
-    });
-    root.appendChild(outcomeWorkspace.el);
-    root = histWrap; // everything below (the historical form + reports) lives in history mode
-    var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || App.context.symbol() || bf.symbol || 'AAPL', list: 'universe-symbols' });
-    // Typing a symbol here makes it the working symbol app-wide (Backtest → Builder carries it).
-    sym.addEventListener('input', function () {
-      bf.symbol = sym.value;
-      var s = sym.value.trim().toUpperCase(); if (s) App.context.selectSymbol(s);
-    });
-    // ONE menu for both levels, grouped by goal with the foundational structure leading each
-    // group (education ordering, never a gate — presentation-only levels, review P0).
-    var BT_GROUPS = [
-      { label: 'Trade a view', families: [] },
-      { label: 'Earn income', families: [] },
-      { label: 'Buy at a discount', families: [] },
-      { label: 'Protect shares', families: [] }
-    ];
-    ((App.strategyCatalog && App.strategyCatalog.catalog) || [])
-      .filter(function (m) { return m.backtestEnabled; })
-      .sort(function (a, b) { return a.foundationalRank - b.foundationalRank || a.display.localeCompare(b.display); })
-      .forEach(function (m) {
-        var label = m.name === 'CASH_SECURED_PUT' ? 'Buy at a discount'
-          : m.primaryIntent === 'HEDGE' ? 'Protect shares'
-          : m.primaryIntent === 'INCOME' ? 'Earn income' : 'Trade a view';
-        BT_GROUPS.find(function (g) { return g.label === label; }).families.push(m.name);
-      });
-    var btLevel = Learn.currentLevel();
-    // PRESENTATION-ONLY LEVELS (review P0): the FULL catalog is discoverable at both levels.
-    // Beginner sees the same menu with the foundational structures first in each goal group —
-    // progressive ordering, never a locked door.
-    var btDefaultStrat = prefill.strategy || bf.strategy || 'DEBIT_CALL_SPREAD';
-    var portfolioFamilies = ['CREDIT_PUT_SPREAD', 'DEBIT_CALL_SPREAD'];
-    function portfolioSupports(strategy) { return portfolioFamilies.indexOf(strategy) >= 0; }
-    var strat = el('select', { id: 'bt-strategy' },
-      BT_GROUPS.map(function (g) {
-        return el('optgroup', { label: g.label }, g.families.map(function (s) {
-          var meta = strategyMeta(s);
-          return el('option', { value: s, selected: s === btDefaultStrat ? '' : null }, meta ? meta.display : prettyStrategy(s));
-        }));
-      }));
-    strat.addEventListener('change', function () {
-      bf.strategy = strat.value;
-      if (engine) syncEngineEligibility(true);
-    });
-    var today = new Date();
-    var toDefault = today.toISOString().slice(0, 10);
-    var fromDefault = new Date(today.getTime() - 182 * 86400000).toISOString().slice(0, 10);
-    var from = el('input', { type: 'date', id: 'bt-from', value: bf.from || fromDefault });
-    var to = el('input', { type: 'date', id: 'bt-to', value: bf.to || toDefault });
-    var dte = el('input', { type: 'number', id: 'bt-dte', value: prefill.dte || bf.dte || '30', min: '1', max: '365' });
-    from.addEventListener('change', function () { bf.from = from.value; });
-    to.addEventListener('change', function () { bf.to = to.value; });
-    dte.addEventListener('change', function () { bf.dte = dte.value; });
-    var out = el('div', { id: 'bt-results' });
-
-    // Period pills: the same range language as every chart in the app. Dates stay
-    // editable for exact windows; the pills just fill them.
-    var PERIODS = [{ label: '3M', days: 91 }, { label: '6M', days: 182 }, { label: '1Y', days: 365 }, { label: '2Y', days: 730 }];
-    var periodRow = el('div', { class: 'range-pills', id: 'bt-periods', role: 'group', 'aria-label': 'Backtest window' },
-      PERIODS.map(function (p) {
-        return el('button', {
-          class: 'pill' + (p.days === 182 ? ' active' : ''), type: 'button', 'data-days': String(p.days),
-          onclick: function () {
-            from.value = new Date(Date.now() - p.days * 86400000).toISOString().slice(0, 10);
-            to.value = new Date().toISOString().slice(0, 10);
-            bf.from = from.value; bf.to = to.value; // persist what the pill changed
-            periodRow.querySelectorAll('.pill').forEach(function (b) {
-              b.classList.toggle('active', b.getAttribute('data-days') === String(p.days));
-            });
-          }
-        }, p.label);
-      }));
-    // Hand-edited dates mean "custom window" — no pill should claim it.
-    [from, to].forEach(function (n) {
-      n.addEventListener('change', function () {
-        periodRow.querySelectorAll('.pill').forEach(function (b) { b.classList.remove('active'); });
-      });
-    });
-    var DTE_PRESETS = [{ label: 'Weekly', v: 7 }, { label: 'Monthly', v: 30 }, { label: 'Quarterly', v: 90 }];
-    var dtePresets = el('div', { class: 'chip-row', id: 'bt-dte-presets', style: 'margin-top:4px' },
-      DTE_PRESETS.map(function (p) {
-        return el('button', { class: 'sym-chip', type: 'button', onclick: function () { dte.value = String(p.v); bf.dte = dte.value; } }, p.label);
-      }));
-
-    // BOTH levels get both engines (presentation-only levels): beginner default stays the
-    // simpler single-position engine, with plain words explaining the difference.
-    var portfolioOption = el('option', { value: 'portfolio' },
-      btLevel === 'beginner' ? 'A book of trades at once' : 'Portfolio (concurrent positions, mechanical exits)');
-    var engine = el('select', { id: 'bt-engine' },
-      el('option', { value: 'single' }, btLevel === 'beginner' ? 'One trade at a time (simplest)' : 'Single position (one trade at a time)'),
-      portfolioOption);
-    engine.value = bf.engine || 'single';
-    function syncEngineEligibility(notify) {
-      var eligible = portfolioSupports(strat.value);
-      portfolioOption.disabled = !eligible;
-      if (!eligible && engine.value === 'portfolio') {
-        engine.value = 'single';
-        bf.engine = 'single';
-        if (notify) UI.toast('The portfolio replay currently supports bull call and bull put spreads; using one-trade replay for this structure.');
-      }
-    }
-    engine.addEventListener('change', function () {
-      syncEngineEligibility(true);
-      bf.engine = engine.value;
-    });
-    syncEngineEligibility(false);
-    root.appendChild(el('div', { class: 'card' },
-      btLevel === 'beginner'
-        ? explain('Every strategy is here — the simpler ones lead each group. Target DTE is how far out each trade’s expiration is: Monthly (30 days) is the classic starting point.')
-        : null,
-      UI.symbolContext({
-        mode: 'editable', id: 'backtest-symbol-context', input: sym,
-        label: btLevel === 'beginner' ? 'Which stock?' : 'Backtest symbol'
-      }),
-      el('div', { class: 'form-grid' },
-        el('div', { class: 'field' }, el('label', {}, 'Strategy'), strat),
-        engine ? el('div', { class: 'field' }, el('label', {}, 'Engine'), engine) : null,
-        el('div', { class: 'field' }, el('label', {},
-          btLevel === 'beginner' ? 'Days to expiration' : 'Target DTE', UI.info('dte')), dte, dtePresets),
-        el('div', { class: 'field' }, el('label', {}, 'Window'), periodRow),
-        el('div', { class: 'field' }, el('label', {}, 'From'), from),
-        el('div', { class: 'field' }, el('label', {}, 'To'), to)),
-      engine ? explain('The portfolio engine currently supports bull put credit spreads and bull call debit spreads. It can overlap positions and apply profit-target, stop and time exits inside one capital pool.') : null,
-      el('div', { class: 'btn-row' },
-        el('button', {
-          class: 'btn', id: 'bt-run', onclick: async function () {
-            var btn = document.getElementById('bt-run');
-            btn.disabled = true;
-            out.innerHTML = '';
-            out.appendChild(UI.spinner('Running backtest…'));
-            try {
-              if (engine && engine.value === 'portfolio') {
-                var preport = await API.post('/api/backtest/portfolio', {
-                  symbol: sym.value.trim(), strategy: strat.value, from: from.value, to: to.value,
-                  targetDte: parseInt(dte.value, 10), entryEveryDays: 5, maxConcurrent: 4, qty: 1,
-                  shortDelta: 0.30, widthPct: 0.05, profitTargetPct: 0.5, stopFraction: 0.8,
-                  rollDte: 7, startingCashCents: 10000000
-                });
-                renderPortfolioReport(preport);
-              } else {
-                renderReport(await API.post('/api/backtest', {
-                  symbol: sym.value.trim(), strategy: strat.value,
-                  from: from.value, to: to.value, targetDte: parseInt(dte.value, 10)
-                }));
-              }
-            } catch (e) {
-              out.innerHTML = '';
-              out.appendChild(alertBox('danger', e.message));
-            } finally { btn.disabled = false; }
-          }
-        }, 'Run backtest'))));
-    root.appendChild(out);
-
-    try {
-      var past = await API.get('/api/backtests');
-      if (past.backtests && past.backtests.length) {
-        root.appendChild(el('div', { class: 'card' },
-          UI.cardHeader('Previous runs'),
-          past.backtests.slice(0, 10).map(function (b) {
-            return el('div', { class: 'status-item' },
-              el('a', {
-                href: '#', onclick: async function (e) {
-                  e.preventDefault();
-                  out.innerHTML = '';
-                  out.appendChild(UI.spinner('Loading saved report…'));
-                  try {
-                    renderReport(await API.get('/api/backtests/' + b.id));
-                  } catch (err) {
-                    out.innerHTML = '';
-                    out.appendChild(alertBox('danger', 'Could not load that saved report', [err.message]));
-                  }
-                  window.scrollTo(0, 0);
-                }
-              }, (b.request.symbol || '?') + ' · ' + prettyStrategy(b.request.strategy) + ' · ' + (b.request.from || '') + ' → ' + (b.request.to || '')),
-              el('span', { class: 'spacer' }),
-              el('span', { class: 'muted' }, (b.createdAt || '').slice(0, 10)));
-          })));
-      }
-    } catch (e) { /* optional */ }
-
-    function renderReport(r) {
-      out.innerHTML = '';
-      recordOutcomeReceipt(vf.mode === 'dataset' ? 'SAVED_SCENARIO' : 'HISTORICAL_REPLAY',
-        r.symbol || sym.value, prettyStrategy(r.strategy || strat.value));
-      // LOUD, FIRST: demo underlying. The strikes are anchored to a FAKE price series, so they can
-      // look absurd next to the real quote (a trader saw 210 strikes on AAPL-at-$315). Say so before
-      // anything reads as a real result.
-      if (r.demoUnderlying) {
-        out.appendChild(alertBox('danger',
-          'Demo price data — NOT the real market. ' + r.symbol + '’s price history here is built-in placeholder data, '
-          + 'so the strikes and every result below are anchored to fake prices and do not reflect the real market. '
-          + 'For a real backtest, add a free Polygon or Alpha Vantage key (see the Data screen) and re-run.'));
-      }
-      var modeKind = r.pricingMode === 'HISTORICAL_CHAIN' ? 'ok' : r.pricingMode === 'MODELED_FROM_UNDERLYING' ? 'warn' : 'danger';
-      out.appendChild(alertBox(modeKind, 'Pricing: ' + prettyPricingMode(r.pricingMode) + ' — confidence ' + r.confidence + '. ' +
-        (r.pricingMode !== 'HISTORICAL_CHAIN' ? 'These are modeled option prices, not observed ones.' : '')));
-      out.appendChild(el('div', { class: 'grid grid-4' },
-        stat('Sample size', String(r.sampleSize), 'Completed trades. Below ~20, treat every number as anecdote.'),
-        stat('Win rate', fmtPct(r.winRate)),
-        stat('Avg return on risk', fmtPct(r.avgReturnOnRisk), 'Average P/L divided by max loss per trade.'),
-        stat('Max drawdown', fmtPct(r.maxDrawdownPct)),
-        stat('Coverage', r.daysCovered + '/' + r.daysRequested + ' days'),
-        stat('Start → end', UI.fmtMoneyCompact(r.startingCents) + ' → ' + UI.fmtMoneyCompact(r.endingCents)),
-        r.assignments !== null && r.assignments !== undefined && r.sampleSize > 0
-          ? stat('Assigned at expiry', r.assignments + '/' + r.sampleSize,
-              'Expirations where the short strike finished in the money — shares change hands in the real world.') : null,
-        r.worstTrade ? stat('Worst trade', pnlSpan(r.worstTrade.pnlCents)) : null));
-      if (r.equityCurve && r.equityCurve.length > 1) {
-        // Same chart language as research/history: summary chips up top, crosshair below.
-        var eq = r.equityCurve.map(function (p) { return { date: p.date, value: p.equityCents }; });
-        var eqStart = eq[0].value, eqEnd = eq[eq.length - 1].value;
-        var eqHigh = eq.reduce(function (m, p) { return Math.max(m, p.value); }, -Infinity);
-        var eqLow = eq.reduce(function (m, p) { return Math.min(m, p.value); }, Infinity);
-        var eqPct = eqStart ? (eqEnd - eqStart) / Math.abs(eqStart) * 100 : 0;
-        out.appendChild(el('div', { class: 'card' },
-          UI.cardHeader('Equity curve'),
-          el('div', { class: 'chip-row chart-summary' },
-            el('span', { class: 'chip' }, el('b', {}, eq[0].date + ' → ' + eq[eq.length - 1].date)),
-            el('span', { class: 'chip' }, 'Change ',
-              el('b', { class: eqEnd - eqStart >= 0 ? 'gain' : 'loss' },
-                (eqEnd - eqStart >= 0 ? '+' : '') + UI.fmtMoneyCompact(eqEnd - eqStart) + ' (' + (eqPct >= 0 ? '+' : '') + eqPct.toFixed(1) + '%)')),
-            el('span', { class: 'chip' }, 'High ', el('b', {}, UI.fmtMoneyCompact(eqHigh)), ' · Low ', el('b', {}, UI.fmtMoneyCompact(eqLow))),
-            el('span', { class: 'chip' }, 'Max drawdown ', el('b', { class: 'loss' }, fmtPct(r.maxDrawdownPct)))),
-          UI.lineChart(eq, { money: true })));
-      }
-      if (r.trades && r.trades.length) {
-        // "Underlying @ entry" gives the strikes context — 210-strike legs make sense next to
-        // "underlying $212 that day", and it makes demo prices vs the real quote obvious.
-        out.appendChild(el('div', { class: 'card' },
-          UI.cardHeader('Trades'),
-          table(['Entry', 'Underlying @ entry', 'Exit', 'Position', 'Premium', 'Exit value', 'Fees', 'P/L', 'Why closed'],
-            r.trades.map(function (t) {
-              return el('tr', {},
-                el('td', { class: 'muted' }, t.entryDate),
-                el('td', { class: 'muted' }, t.entryUnderlyingCents ? fmtMoney(t.entryUnderlyingCents) : '—'),
-                el('td', { class: 'muted' }, t.exitDate),
-                el('td', { class: 'mono' }, t.label),
-                el('td', {}, fmtMoney(t.entryNetPremiumCents, { plus: true })),
-                el('td', {}, fmtMoney(t.exitValueCents, { plus: true })),
-                el('td', {}, fmtMoney(t.feesCents)),
-                el('td', {}, pnlSpan(t.pnlCents)),
-                el('td', { class: 'muted' }, t.exitReason));
-            }))));
-      }
-      if (r.skipped && r.skipped.length) {
-        out.appendChild(el('div', { class: 'card' },
-          UI.cardHeader('Skipped entries'),
-          r.skipped.slice(0, 20).map(function (s) {
-            return el('div', { class: 'status-item' }, el('span', { class: 'muted' }, s.date), el('span', {}, s.reason));
-          })));
-      }
-      var assume = el('div', { class: 'card' }, UI.cardHeader('Assumptions'));
-      Object.keys(r.assumptions || {}).forEach(function (k) {
-        assume.appendChild(el('div', { class: 'status-item' }, el('b', {}, k), el('span', { class: 'spacer' }), el('span', { class: 'muted' }, String(r.assumptions[k]))));
-      });
-      out.appendChild(assume);
-      (r.notes || []).forEach(function (n) { out.appendChild(alertBox('warn', n)); });
-      out.appendChild(el('p', { class: 'muted' }, r.disclaimer));
-    }
-
-    // D4: the Expert portfolio engine's report (concurrent positions + mechanical exits).
-    function renderPortfolioReport(r) {
-      out.innerHTML = '';
-      recordOutcomeReceipt(vf.mode === 'dataset' ? 'SAVED_SCENARIO' : 'HISTORICAL_PORTFOLIO',
-        r.symbol || sym.value, prettyStrategy(r.strategy || strat.value));
-      if (r.demoUnderlying) {
-        out.appendChild(alertBox('danger', 'Demo price data — NOT the real market. ' + r.symbol
-          + '’s price history here is placeholder data, so every result below is anchored to fake '
-          + 'prices. Add a Polygon or Alpha Vantage key for a real backtest.'));
-      }
-      var modeKind = r.pricingMode === 'OBSERVED_FROM_HISTORY' ? 'ok' : r.pricingMode === 'MODELED_FROM_UNDERLYING' ? 'warn' : 'danger';
-      out.appendChild(alertBox(modeKind, 'Portfolio engine · pricing mode ' + r.pricingMode + ' — confidence '
-        + r.confidence + '. Concurrent positions with mechanical profit-target / stop / time exits.'));
-      out.appendChild(el('div', { class: 'grid grid-4' },
-        stat('Sample size', String(r.sampleSize), 'Completed trades.'),
-        stat('Win rate', fmtPct(r.winRate)),
-        stat('Avg return on risk', fmtPct(r.avgReturnOnRisk)),
-        stat('Max drawdown', fmtPct(r.maxDrawdownPct)),
-        stat('Concurrent peak', String(r.concurrentPeak), 'Most positions open at once.'),
-        stat('Start → end', UI.fmtMoneyCompact(r.startingCents) + ' → ' + UI.fmtMoneyCompact(r.endingCents))));
-      if (r.equityCurve && r.equityCurve.length > 1) {
-        var eq = r.equityCurve.map(function (p) { return { date: p.date, value: p.equityCents }; });
-        out.appendChild(el('div', { class: 'card' }, UI.cardHeader('Equity curve'), UI.lineChart(eq, { money: true })));
-      }
-      if (r.trades && r.trades.length) {
-        out.appendChild(el('div', { class: 'card' },
-          UI.cardHeader('Trades (' + r.trades.length + ')'),
-          table(['Entry', 'Exit', 'Strategy', 'Credit/Debit', 'P/L', 'Theor. max loss', 'Why closed'],
-            r.trades.map(function (t) {
-              return el('tr', {},
-                el('td', { class: 'muted' }, t.entryDate), el('td', { class: 'muted' }, t.exitDate),
-                el('td', {}, prettyStrategy(t.strategy)),
-                el('td', {}, fmtMoney(t.creditCents, { plus: true })),
-                el('td', {}, pnlSpan(t.pnlCents)),
-                el('td', { class: 'loss' }, fmtMoney(t.maxLossCents)),
-                el('td', { class: 'muted' }, t.exitReason));
-            }))));
-      }
-      (r.notes || []).forEach(function (n) { out.appendChild(alertBox('warn', n)); });
-      out.appendChild(el('p', { class: 'muted' }, r.disclaimer));
-    }
-  }
 
   // ---------- 9. Data status ----------
 
@@ -6417,10 +5911,9 @@
               App.navigate('#/plan/new?symbol=' + encodeURIComponent(d.symbol));
             } }, 'Open Research') : null,
           isActive && d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm',
-            title: 'Compare strategies while this scenario remains active', onclick: function () {
-              App.context.selectSymbol(d.symbol);
-              App.navigate('#/trade/outcomes');
-            } }, 'Compare strategies') : null,
+            title: 'Start a Plan while this scenario remains the active analysis basis', onclick: function () {
+              App.navigate('#/plan/new?symbol=' + encodeURIComponent(d.symbol));
+            } }, 'Start a Plan') : null,
           d.id !== 'observed' ? el('button', { class: 'btn btn-sm btn-secondary', title: 'Delete this run',
             onclick: async function () {
               var button = this;
@@ -6465,10 +5958,9 @@
                   try {
                     await API.put('/api/datasets/active', { id: r.datasetId });
                     App.refreshScenarioBanner && App.refreshScenarioBanner();
-                    App.context.selectSymbol(sym.value);
-                    App.navigate('#/trade/outcomes');
+                    App.navigate('#/plan/new?symbol=' + encodeURIComponent((sym.value || '').toUpperCase()));
                   } catch (e2) { UI.toast(e2.message || 'Could not activate this scenario', 'error'); }
-                } }, 'Compare strategies under it'),
+                } }, 'Start a Plan under it'),
                 el('button', { class: 'btn btn-sm btn-secondary', onclick: async function () {
                   try { await API.del('/api/datasets/' + r.datasetId); note.innerHTML = 'Deleted.'; loadDatasets(); }
                   catch (e2) { UI.toast(e2.message || 'Could not delete this scenario', 'error'); }
@@ -8150,10 +7642,7 @@
             } catch (e) { UI.toast(e.message, 'error'); }
             return;
           }
-          App.state.evidencePrefill = selection;
-          App.context.selectSymbol(symbol);             // Outcomes anchors on the study's symbol
-          App.state.verifyMode = 'analogs';             // ...and names the empirical basis visibly
-          App.navigate('#/trade/outcomes');
+          startPlan({ symbol: symbol, horizon: contextHorizonForDays(r.forwardDays) }, 'STRATEGY');
         } }, (plan ? 'Use these ' : 'Test strategies on these ') + r.conditioned.sample + ' '
           + occurrenceWord(r) + (plan ? ' when testing a strategy \u2192' : ' \u2192'))));
     }

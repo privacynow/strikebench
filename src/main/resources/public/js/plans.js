@@ -186,6 +186,32 @@
     return out;
   }
 
+  function latestOutcomes(planId, force) {
+    var path = '/api/plans/' + planId + '/outcomes/latest';
+    return force ? API.getFresh(path) : API.get(path);
+  }
+
+  async function runEnsemble(plan, request) {
+    var out = await API.post('/api/plans/' + plan.id + '/outcomes/ensemble',
+      Object.assign({ expectedVersion: plan.version }, request || {}));
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
+  async function runOutcome(plan, request) {
+    var out = await API.post('/api/plans/' + plan.id + '/outcomes/run',
+      Object.assign({ expectedVersion: plan.version }, request || {}));
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
+  async function runBacktest(plan, request) {
+    var out = await API.post('/api/plans/' + plan.id + '/outcomes/backtest',
+      Object.assign({ expectedVersion: plan.version }, request || {}));
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
   async function closeChip(plan) {
     var wasActive = App.state.activePlanId === plan.id;
     var updated = await API.put('/api/plans/' + plan.id + '/open', {
@@ -251,6 +277,8 @@
     latestStrategy: latestStrategy, runStrategy: runStrategy,
     selectCandidate: selectCandidate, saveCustom: saveCustom,
     latestScout: latestScout, runScout: runScout, spawnScoutedPlan: spawnScoutedPlan,
+    latestOutcomes: latestOutcomes, runEnsemble: runEnsemble,
+    runOutcome: runOutcome, runBacktest: runBacktest,
     marketChanged: marketChanged, renderBar: renderBar, ui: ui,
     all: function () { return items.slice(); }
   };

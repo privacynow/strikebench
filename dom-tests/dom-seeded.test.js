@@ -111,9 +111,19 @@ before(async () => {
   const toClose = (await createTrade(spread(1))).trade.id;
   await api('POST', `/api/trades/${toClose}/unwind`, { confirm: true });
 
-  // A persisted backtest (previous-runs list data)
-  await api('POST', '/api/backtest', {
-    symbol: 'AAPL', strategy: 'COVERED_CALL',
+  // A persisted Plan replay. Outcomes own historical tests; there is no standalone backtest lane.
+  const replayPlan = await api('POST', '/api/plans', {
+    clientRequestId: 'seeded-replay-plan', symbol: 'AAPL', intent: 'EXIT',
+    thesis: 'neutral', horizonDays: 30, riskMode: 'balanced'
+  });
+  const replayCompetition = await api('POST', `/api/plans/${replayPlan.id}/strategy/run`, {});
+  const replayCandidate = replayCompetition.strategy.result.candidates.find(c => c.strategy === 'COVERED_CALL')
+    || replayCompetition.strategy.result.candidates[0];
+  const replaySelection = await api('PUT', `/api/plans/${replayPlan.id}/strategy/select`, {
+    candidateId: replayCandidate.id, expectedVersion: replayCompetition.plan.version
+  });
+  await api('POST', `/api/plans/${replayPlan.id}/outcomes/backtest`, {
+    expectedVersion: replaySelection.plan.version, engine: 'single',
     from: isoDaysFromNow(-120), to: isoDaysFromNow(-1), targetDte: 30
   });
 

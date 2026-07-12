@@ -100,6 +100,7 @@ public final class ApiServer {
     io.liftandshift.strikebench.plan.PlanService planSvc;
     io.liftandshift.strikebench.plan.PlanEvidenceService planEvidence;
     io.liftandshift.strikebench.plan.PlanStrategyService planStrategy;
+    io.liftandshift.strikebench.plan.PlanOutcomeService planOutcomes;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
@@ -247,6 +248,7 @@ public final class ApiServer {
         server.planEvidence = new io.liftandshift.strikebench.plan.PlanEvidenceService(db,
                 new io.liftandshift.strikebench.research.ResearchQuestionEngine(market, clock), clock);
         server.planStrategy = new io.liftandshift.strikebench.plan.PlanStrategyService(db, clock);
+        server.planOutcomes = new io.liftandshift.strikebench.plan.PlanOutcomeService(db, clock);
         server.dataJobs.setEvents(server.events);
         server.dataJobs.setDataChangedHook(server::invalidateHistoricalViews);
         datasetSvc.setEvents(server.events);
@@ -428,6 +430,10 @@ public final class ApiServer {
             c.routes.get("/api/plans/{id}/scout/latest", this::planScoutLatest);
             c.routes.post("/api/plans/{id}/scout/run", this::planScoutRun);
             c.routes.post("/api/plans/{id}/scout/spawn", this::planScoutSpawn);
+            c.routes.get("/api/plans/{id}/outcomes/latest", this::planOutcomesLatest);
+            c.routes.post("/api/plans/{id}/outcomes/ensemble", this::planEnsembleRun);
+            c.routes.post("/api/plans/{id}/outcomes/run", this::planOutcomeRun);
+            c.routes.post("/api/plans/{id}/outcomes/backtest", this::planBacktestRun);
 
             // ---- Data Center ----
             c.routes.get("/api/data/overview", this::dataOverview);
@@ -695,16 +701,8 @@ public final class ApiServer {
             c.routes.get("/api/portfolio/greeks", ctx ->
                     ctx.json(trades.portfolioGreeks(currentAccount(ctx).id())));
 
-            c.routes.post("/api/backtest", ctx -> {
-                requireObservedLane(ctx, "Backtesting replays the REAL market's history");
-                ctx.json(backtester.run(requireBody(bodyOrNull(ctx, Backtester.BacktestRequest.class)), analysisCtx(ctx)));
-            });
-            c.routes.post("/api/backtest/portfolio", ctx -> {
-                requireObservedLane(ctx, "Portfolio backtesting replays the REAL market's history");
-                ctx.json(backtester.runPortfolio(
-                        requireBody(bodyOrNull(ctx, Backtester.PortfolioRequest.class)), analysisCtx(ctx)));
-            });
-            c.routes.get("/api/backtests", ctx -> ctx.json(Map.of("backtests", backtester.list())));
+            // Historical replays are Plan-owned. The report id remains readable so a Plan can
+            // restore its full normalized summary plus the existing detailed replay artifact.
             c.routes.get("/api/backtests/{id}", ctx -> ctx.json(backtester.get(ctx.pathParam("id"))));
 
             c.routes.get("/api/broker/status", ctx -> ctx.json(broker.status()));
@@ -2046,6 +2044,18 @@ public final class ApiServer {
     public record PlanStrategyCustomRequest(Long expectedVersion, TradeOpenRequest position) {}
     public record PlanScoutRequest(String scope, Integer maxPicks, Boolean allow0dte) {}
     public record PlanScoutSpawnRequest(String clientRequestId, String candidateId, String role) {}
+    public record PlanEnsembleRequest(Long expectedVersion,
+                                      io.liftandshift.strikebench.sim.ScenarioSpec over,
+                                      io.liftandshift.strikebench.sim.IvSpec iv,
+                                      List<io.liftandshift.strikebench.sim.SimulationEngine.DecisionLevel> levels) {}
+    public record PlanOutcomeRunRequest(Long expectedVersion, String basis, String ensembleId,
+                                       io.liftandshift.strikebench.sim.ScenarioSpec over,
+                                       io.liftandshift.strikebench.sim.IvSpec iv) {}
+    public record PlanBacktestRequest(Long expectedVersion, String engine, String from, String to,
+                                      Integer targetDte, Integer entryEveryDays, Integer maxConcurrent,
+                                      Integer qty, Double slippagePct, Long startingCashCents,
+                                      Double shortDelta, Double widthPct, Double profitTargetPct,
+                                      Double stopFraction, Integer rollDte) {}
 
     private void planStrategyLatest(Context ctx) {
         var saved = planStrategy.latestCompetition(ownerId(ctx), ctx.pathParam("id"));
@@ -2272,6 +2282,196 @@ public final class ApiServer {
         }
         child = planSvc.get(ownerId(ctx), child.id());
         ctx.json(Map.of("origin", origin, "plan", child, "role", role));
+    }
+
+    private void planOutcomesLatest(Context ctx) {
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        ObjectNode out = planOutcomes.latest(ownerId(ctx), plan);
+        JsonNode selected = planStrategy.selectedCandidate(ownerId(ctx), plan.id());
+        if (selected != null) out.set("selected", selected);
+        ctx.json(out);
+    }
+
+    /** Evidence owns path generation; Outcomes later values the exact selected package on this artifact. */
+    private void planEnsembleRun(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanEnsembleRequest.class));
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        requirePlanVersion(plan, body.expectedVersion());
+        var spec = planScenarioSpec(plan, body.over());
+        var world = worldParam(activeWorld(ctx));
+        var marketVol = atmVolOf(plan.symbol(), world, spec.horizonDays());
+        var calibrated = spec.volAnnual() > 0 || marketVol == null ? spec : spec.withVol(marketVol.atmIv());
+        double rate = market.riskFreeRateQuote(Math.max(1, calibrated.horizonDays()), world).annualRate();
+        var run = simEngine.previewRun(plan.symbol(), calibrated, world, analysisCtx(ctx),
+                body.levels() == null ? List.of() : body.levels(), marketVol, rate);
+        var iv = body.iv() == null ? defaultPlanIv(run.ensemble().spec(), marketVol) : body.iv();
+        JsonNode input = Json.MAPPER.valueToTree(body);
+        var stored = planOutcomes.saveEnsemble(ownerId(ctx), plan, run.ensemble(), iv, rate, run.preview(), input);
+        ObjectNode preview = Json.MAPPER.valueToTree(run.preview());
+        preview.put("planEnsembleId", stored.id());
+        preview.put("planEnsembleFingerprint", stored.fingerprint());
+        if (preview.path("receipt") instanceof ObjectNode receipt) receipt.put("fingerprint", stored.fingerprint());
+        ctx.json(Map.of("plan", plan, "ensemble", Map.of("id", stored.id(), "fingerprint", stored.fingerprint(),
+                "basis", stored.basis()), "preview", preview));
+    }
+
+    private void planOutcomeRun(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanOutcomeRunRequest.class));
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        requirePlanVersion(plan, body.expectedVersion());
+        ObjectNode candidate = selectedPlanCandidate(ctx, plan);
+        var position = planOutcomePosition(candidate);
+        String basisName = body.basis() == null ? "PARAMETRIC" : body.basis().trim().toUpperCase(Locale.ROOT);
+        JsonNode input = Json.MAPPER.valueToTree(body);
+        if ("RISK_NEUTRAL".equals(basisName)) {
+            var request = new io.liftandshift.strikebench.outcomes.OutcomeContract.Request(
+                    io.liftandshift.strikebench.outcomes.OutcomeContract.Operation.POSITION,
+                    io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.RISK_NEUTRAL,
+                    planOutcomeContext(ctx, plan), position, null, null, null, null, null, null);
+            var evaluated = evaluateOutcomes(ctx, request);
+            JsonNode result = Json.MAPPER.valueToTree(evaluated.result());
+            var saved = planOutcomes.saveRiskNeutral(ownerId(ctx), plan, body.expectedVersion(),
+                    candidate.path("id").asText(), result, input, evaluated.interpretation());
+            ctx.json(Map.of("plan", plan, "outcome", saved));
+            return;
+        }
+        io.liftandshift.strikebench.sim.PathEnsembleService.Basis basis;
+        try { basis = io.liftandshift.strikebench.sim.PathEnsembleService.Basis.valueOf(basisName); }
+        catch (Exception e) { throw new IllegalArgumentException("basis must be RISK_NEUTRAL, PARAMETRIC, HISTORICAL_ANALOGS, or CONDITIONAL_BOOTSTRAP"); }
+        var stored = resolvePlanEnsemble(ctx, plan, body, basis);
+        var legs = toSimLegs(ctx, position.legs());
+        var simRequest = new StrategySimRequest(plan.symbol(), legs, position.qty(), stored.ensemble().spec(),
+                stored.iv(), basis, null, position.entryCostCents(), contractExpirations(position.legs()));
+        JsonNode result = Json.MAPPER.valueToTree(simStrategyResult(ctx, simRequest, stored.ensemble()));
+        String interpretation = switch (basis) {
+            case PARAMETRIC -> "The exact selected package is repriced on the same stored model ensemble shown in Evidence.";
+            case HISTORICAL_ANALOGS -> "The exact selected package is repriced over the Plan's stored matching historical occurrences.";
+            case CONDITIONAL_BOOTSTRAP -> "The exact selected package is repriced over whole-path resamples of the Plan's stored analog sample.";
+        };
+        var saved = planOutcomes.savePathOutcome(ownerId(ctx), plan, body.expectedVersion(),
+                candidate.path("id").asText(), stored, result, input, interpretation);
+        ctx.json(Map.of("plan", plan, "outcome", saved,
+                "ensemble", Map.of("id", stored.id(), "fingerprint", stored.fingerprint(), "basis", stored.basis())));
+    }
+
+    private void planBacktestRun(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanBacktestRequest.class));
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        requirePlanVersion(plan, body.expectedVersion());
+        ObjectNode candidate = selectedPlanCandidate(ctx, plan);
+        String family = candidate.path("strategy").asText();
+        if (family.isBlank() || "CUSTOM".equals(family)) {
+            throw new IllegalArgumentException("Historical replay needs a named strategy rule; model futures still test the exact custom package.");
+        }
+        String engineKind = body.engine() == null ? "single" : body.engine().trim().toLowerCase(Locale.ROOT);
+        Object report;
+        if ("portfolio".equals(engineKind)) {
+            report = backtester.runPortfolio(new Backtester.PortfolioRequest(plan.symbol(), family, body.from(), body.to(),
+                    body.targetDte() == null ? plan.context().horizonDays() : body.targetDte(), body.entryEveryDays(),
+                    body.maxConcurrent(), body.qty(), body.shortDelta(), body.widthPct(), body.profitTargetPct(),
+                    body.stopFraction(), body.rollDte(), body.startingCashCents()), analysisCtx(ctx));
+        } else if ("single".equals(engineKind)) {
+            report = backtester.run(new Backtester.BacktestRequest(plan.symbol(), family, body.from(), body.to(),
+                    body.targetDte() == null ? plan.context().horizonDays() : body.targetDte(), body.entryEveryDays(),
+                    body.qty(), body.slippagePct(), body.startingCashCents()), analysisCtx(ctx));
+        } else throw new IllegalArgumentException("engine must be single or portfolio");
+        JsonNode reportJson = Json.MAPPER.valueToTree(report);
+        var saved = planOutcomes.saveBacktest(ownerId(ctx), plan, body.expectedVersion(),
+                candidate.path("id").asText(), engineKind, reportJson, Json.MAPPER.valueToTree(body));
+        ctx.json(Map.of("plan", plan, "backtest", saved, "report", report));
+    }
+
+    private io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble resolvePlanEnsemble(
+            Context ctx, io.liftandshift.strikebench.plan.Plan.View plan, PlanOutcomeRunRequest body,
+            io.liftandshift.strikebench.sim.PathEnsembleService.Basis basis) {
+        if (body.ensembleId() != null && !body.ensembleId().isBlank()) {
+            var stored = planOutcomes.loadEnsemble(ownerId(ctx), plan.id(), body.ensembleId());
+            if (!basis.name().equals(stored.basis())) throw new IllegalArgumentException("Stored ensemble basis does not match the requested basis");
+            return stored;
+        }
+        var existing = planOutcomes.latestEnsemble(ownerId(ctx), plan, basis.name());
+        if (existing != null && basis == io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC
+                && body.over() == null && body.iv() == null) return existing;
+        var spec = planScenarioSpec(plan, body.over());
+        String world = worldParam(activeWorld(ctx));
+        double spot = pathEnsembles.anchorSpot(new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(
+                plan.symbol(), world, analysisCtx(ctx)));
+        io.liftandshift.strikebench.sim.PathEnsembleService.Ensemble ensemble;
+        if (basis == io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC) {
+            var marketVol = atmVolOf(plan.symbol(), world, spec.horizonDays());
+            if (spec.volAnnual() <= 0 && marketVol != null) spec = spec.withVol(marketVol.atmIv());
+            ensemble = pathEnsembles.build(new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(
+                    plan.symbol(), world, analysisCtx(ctx)), basis, spec, null, spot);
+        } else {
+            var evidence = planEvidence.latest(ownerId(ctx), plan.id());
+            if (evidence == null) throw new IllegalStateException("Run Past evidence in this Plan before using historical analog outcomes.");
+            ensemble = pathEnsembles.fromStudy(new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(
+                    plan.symbol(), world, analysisCtx(ctx)), basis, spec, evidence.result(), spot);
+        }
+        double rate = market.riskFreeRateQuote(Math.max(1, ensemble.spec().horizonDays()), world).annualRate();
+        var marketVol = atmVolOf(plan.symbol(), world, ensemble.spec().horizonDays());
+        var iv = body.iv() == null ? defaultPlanIv(ensemble.spec(), marketVol) : body.iv();
+        return planOutcomes.saveEnsemble(ownerId(ctx), plan, ensemble, iv, rate, null, Json.MAPPER.valueToTree(body));
+    }
+
+    private ObjectNode selectedPlanCandidate(Context ctx, io.liftandshift.strikebench.plan.Plan.View plan) {
+        JsonNode selected = planStrategy.selectedCandidate(ownerId(ctx), plan.id());
+        if (!(selected instanceof ObjectNode candidate)) {
+            throw new IllegalStateException("Select a structure in Strategy before running Outcomes.");
+        }
+        return candidate;
+    }
+
+    private static io.liftandshift.strikebench.outcomes.OutcomeContract.Position planOutcomePosition(JsonNode candidate) {
+        List<io.liftandshift.strikebench.outcomes.OutcomeContract.Leg> legs = new ArrayList<>();
+        for (JsonNode leg : candidate.path("legs")) {
+            String type = leg.path("type").asText();
+            legs.add(new io.liftandshift.strikebench.outcomes.OutcomeContract.Leg(
+                    leg.path("action").asText(), type,
+                    "STOCK".equalsIgnoreCase(type) ? BigDecimal.ZERO : new BigDecimal(leg.path("strike").asText()),
+                    leg.path("expiration").asText(null), null, Math.max(1, leg.path("ratio").asInt(1))));
+        }
+        Long entryNet = candidate.hasNonNull("entryNetPremiumCents") ? candidate.path("entryNetPremiumCents").longValue() : null;
+        return new io.liftandshift.strikebench.outcomes.OutcomeContract.Position(candidate.path("id").asText(), legs,
+                Math.max(1, candidate.path("qty").asInt(1)), entryNet == null ? null : -entryNet);
+    }
+
+    private io.liftandshift.strikebench.outcomes.OutcomeContract.MarketContext planOutcomeContext(
+            Context ctx, io.liftandshift.strikebench.plan.Plan.View plan) {
+        var analysis = analysisCtx(ctx);
+        return new io.liftandshift.strikebench.outcomes.OutcomeContract.MarketContext(plan.symbol(),
+                activePlanMarket(ctx).name(), activeWorld(ctx), analysis.datasetId(), null);
+    }
+
+    private static void requirePlanVersion(io.liftandshift.strikebench.plan.Plan.View plan, Long expected) {
+        if (expected == null) throw new IllegalArgumentException("expectedVersion is required");
+        if (plan.version() != expected) throw new IllegalStateException("This Plan changed in another tab. Reload it before running Outcomes.");
+    }
+
+    private static io.liftandshift.strikebench.sim.ScenarioSpec planScenarioSpec(
+            io.liftandshift.strikebench.plan.Plan.View plan,
+            io.liftandshift.strikebench.sim.ScenarioSpec raw) {
+        int days = plan.context().horizonDays() == null ? 30 : plan.context().horizonDays();
+        var base = raw == null
+                ? io.liftandshift.strikebench.sim.ScenarioSpec.preset(
+                    io.liftandshift.strikebench.sim.ScenarioSpec.Shape.CHOP, days, 0, 4242L, 500)
+                : raw;
+        return new io.liftandshift.strikebench.sim.ScenarioSpec(base.model(), base.shape(), days,
+                base.stepsPerDay(), base.driftAnnual(), base.volAnnual(), base.jumpsPerYear(),
+                base.jumpMean(), base.jumpVol(), base.tailNu(), base.heston(), base.seed(), base.paths()).sane();
+    }
+
+    private static io.liftandshift.strikebench.sim.IvSpec defaultPlanIv(
+            io.liftandshift.strikebench.sim.ScenarioSpec spec,
+            io.liftandshift.strikebench.sim.SimulationEngine.MarketVolInput marketVol) {
+        double anchor = marketVol != null && marketVol.atmIv() > 0 ? marketVol.atmIv() : spec.sane().volAnnual();
+        return spec.sane().shape() == io.liftandshift.strikebench.sim.ScenarioSpec.Shape.EVENT_JUMP
+                ? io.liftandshift.strikebench.sim.IvSpec.eventCrushAround(anchor,
+                    Math.max(1, Math.round(spec.sane().horizonDays() / 3.0f)))
+                : io.liftandshift.strikebench.sim.IvSpec.flat(anchor);
     }
 
     private static String planHorizon(Integer days) {
@@ -2825,9 +3025,8 @@ public final class ApiServer {
         io.liftandshift.strikebench.sim.ScenarioSimulator.EnsembleRun evaluated;
         var simulator = new io.liftandshift.strikebench.sim.ScenarioSimulator();
         if (fixedEnsemble != null) {
-            if (pathBasis != io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC
-                    || fixedEnsemble.basis() != pathBasis) {
-                throw new IllegalArgumentException("the supplied position must use the fan's path basis");
+            if (fixedEnsemble.basis() != pathBasis) {
+                throw new IllegalArgumentException("the supplied position must use the stored ensemble's path basis");
             }
             var result = simulator.runOnPaths(fixedEnsemble.paths(), fixedEnsemble.spot(), legsToRun, qty,
                     fixedEnsemble.spec(), iv, r, entryCost, entryNote,
