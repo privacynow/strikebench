@@ -2211,12 +2211,21 @@
     var horizon = el('select', { id: 'rec-horizon' },
       horizons.map(function (h) { return el('option', { value: h, selected: h === activeHorizon ? '' : null }, h); }));
     remember({ symbol: sym.value, goal: goal, horizon: activeHorizon, thesis: activeThesis });
-    horizon.addEventListener('change', function () { remember({ horizon: horizon.value }); });
+    horizon.addEventListener('change', function () {
+      remember({ horizon: horizon.value });
+      invalidateScanResults();
+    });
     var allow0 = el('input', { type: 'checkbox', id: 'rec-0dte', checked: saved.allow0 ? '' : null });
-    allow0.addEventListener('change', function () { remember({ allow0: allow0.checked }); });
+    allow0.addEventListener('change', function () {
+      remember({ allow0: allow0.checked });
+      invalidateScanResults();
+    });
     var target = el('input', { type: 'number', id: 'rec-target', min: '0', step: '0.5', placeholder: 'optional',
       value: prefill.symbol ? '' : (saved.target || '') });
-    target.addEventListener('change', function () { remember({ target: target.value }); });
+    target.addEventListener('change', function () {
+      remember({ target: target.value });
+      invalidateScanResults();
+    });
     // One-tap targets anchored to the live price: +5/+10/+20% for exits, -5/-10/-15% for buys/floors
     var targetPresets = el('div', { class: 'chip-row', id: 'target-presets', style: 'margin-top:4px' });
     var presetSeq = 0; // sequence token: a slow response for the PREVIOUS symbol must never win
@@ -2240,6 +2249,7 @@
             class: 'sym-chip', type: 'button', onclick: function () {
               target.value = px.toFixed(2);
               remember({ target: target.value });
+              invalidateScanResults();
             }
           }, (o > 0 ? '+' : '') + o + '% \u2192 $' + px.toFixed(2)));
         });
@@ -2249,7 +2259,10 @@
     }
     var wantShares = el('input', { type: 'number', id: 'rec-shares', min: '100', step: '100', placeholder: '100',
       value: saved.wantShares || '' });
-    wantShares.addEventListener('change', function () { remember({ wantShares: wantShares.value }); });
+    wantShares.addEventListener('change', function () {
+      remember({ wantShares: wantShares.value });
+      invalidateScanResults();
+    });
 
     // Scan-scope fields (shown when there is no symbol): universe, expirations, $ goal
     var universe = el('input', { type: 'text', id: 'auto-universe',
@@ -2297,7 +2310,10 @@
     });
     universe.addEventListener('input', function () { remember({ universe: universe.value }); invalidateScanResults(); });
     scanTarget.addEventListener('input', function () { remember({ scanTarget: scanTarget.value }); invalidateScanResults(); });
-    thesis.addEventListener('change', function () { remember({ thesis: thesis.value }); });
+    thesis.addEventListener('change', function () {
+      remember({ thesis: thesis.value });
+      invalidateScanResults();
+    });
 
     var filters = filterPanel('rec');
     var results = el('div', { id: 'rec-results' });
@@ -2448,8 +2464,9 @@
 
     function invalidateScanResults() {
       App.state.scoutResults = null;
+      App.state.recommendResults = null;
       if (typeof goSeq === 'number') goSeq++;
-      if (results && scanMode()) results.innerHTML = '';
+      if (results) results.innerHTML = '';
     }
 
     function sync() {
@@ -2536,6 +2553,7 @@
     sym.addEventListener('input', function () {
       var v = sym.value.trim().toUpperCase();
       remember({ symbol: v });
+      invalidateScanResults();
       // The working symbol follows you: Builder, Backtest and the ticket all seed from it.
       if (v) App.context.selectSymbol(v);
       sync();

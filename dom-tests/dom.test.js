@@ -1182,6 +1182,43 @@ test('recommendations render candidates and blocked examples', async () => {
   }
 });
 
+test('request-shaping controls invalidate every stale recommendation field', async () => {
+  await page.evaluate(() => {
+    Learn.setLevel('expert');
+    App.state.filterState = {};
+    App.state.discoverForm = { source: 'single', symbol: 'AAPL', goal: 'DIRECTIONAL',
+      thesis: 'bullish', horizon: 'month' };
+    App.state.recommendResults = null;
+    App.state.scoutResults = null;
+  });
+  await go('#/trade/context/manual');
+  await page.fill('#rec-symbol', 'AAPL');
+  await page.click('#rec-go');
+  await page.waitForFunction(() => !!App.state.recommendResults, { timeout: 15000 });
+  assert.ok(await page.locator('#rec-results .candidate, #rec-results #compare-table').count(),
+    'the first request rendered a recommendation field');
+
+  await page.fill('#rec-f-pop', '70');
+  const afterFilter = await page.evaluate(() => ({
+    single: App.state.recommendResults,
+    scout: App.state.scoutResults,
+    children: document.getElementById('rec-results').children.length
+  }));
+  assert.equal(afterFilter.single, null, 'filter changes invalidate single-symbol results');
+  assert.equal(afterFilter.scout, null, 'filter changes invalidate scout results');
+  assert.equal(afterFilter.children, 0, 'stale results leave the visible screen immediately');
+
+  await page.click('#rec-go');
+  await page.waitForFunction(() => !!App.state.recommendResults, { timeout: 15000 });
+  await page.selectOption('#rec-horizon', 'quarter');
+  const afterHorizon = await page.evaluate(() => ({
+    single: App.state.recommendResults,
+    children: document.getElementById('rec-results').children.length
+  }));
+  assert.equal(afterHorizon.single, null, 'horizon changes invalidate the completed field');
+  assert.equal(afterHorizon.children, 0, 'the prior horizon cannot remain visible');
+});
+
 test('beginner help adds information instead of echoing visible labels', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   const duplicates = [];
