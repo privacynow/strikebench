@@ -2732,7 +2732,9 @@ test('undefined-risk framing: synthetic short is BLOCKED, synthetic long is not'
   await page.evaluate(() => Learn.setLevel('beginner'));
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
   await go('#/trade/structure');
-  await page.waitForSelector('#bw-goals .choice, #builder-catalog', { timeout: 15000 });
+  // A carried workflow goal now opens on the shaping question; a direct visit with no
+  // goal opens on the goal chooser. Either path must still expose the full catalog.
+  await page.waitForSelector('#bw-goals .choice, #bw-shape .choice, #builder-catalog', { timeout: 15000 });
   // Open the full catalog (browse-all) and find the two synthetics.
   const browse = page.locator('#bw-browse, button:has-text("Browse all structures")').first();
   if (await browse.count()) { await browse.click(); }
