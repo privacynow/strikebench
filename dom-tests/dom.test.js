@@ -3165,6 +3165,15 @@ test('decision caching: a cosmetic level flip does NOT re-POST /api/evaluate (no
 
 test('portfolio sizing and research tools live in their natural workflows', async () => {
   await page.evaluate(() => Learn.setLevel('expert'));
+  const routeSources = await page.evaluate(async () => [
+    await (await fetch('/js/app.js')).text(),
+    await (await fetch('/js/views.js')).text(),
+    await (await fetch('/js/builder.js')).text(),
+    await (await fetch('/js/scenario.js')).text()
+  ].join('\n'));
+  assert.doesNotMatch(routeSources,
+    /#\/(?:lab|welcome|account|status|decision|trade\/(?:discover|shape|backtest|place))(?:['"/?#]|$)/,
+    'production UI source emits only canonical routes; retired paths stay deleted');
   // The retired Lab URL has no hidden pointer or alias. Unknown routes fall back to Home.
   await page.evaluate(() => { window.location.hash = '#/lab'; });
   await page.waitForSelector('#app[data-ready="true"]');

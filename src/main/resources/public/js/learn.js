@@ -128,7 +128,7 @@
       expert: 'Per-owner/source/symbol/domain/interval state with requested range, last successful date, failures, and cumulative rows; durable across restarts.' },
     seed: { short: 'Reuse it to reproduce a review; change it to test whether a conclusion survives another path.',
       beginner: 'Two people using the same seed see the identical market — useful for comparing decisions on the same tape.',
-      expert: 'Deterministic RNG seed for path generation; identical (seed, model, config) regenerates identical ticks.' },
+      expert: 'Deterministic random seed for path generation; the same seed, model and settings regenerate the same ticks.' },
     world: { short: 'Which market lane these numbers come from: Observed, Demo, Simulated, or Scenario.',
       beginner: 'Observed uses market-source data. Demo is fixed fabricated teaching data. Simulated is a moving generated market. Scenario is a saved generated path. The banner tells you which one is active, always.',
       expert: 'The lane identity keys every quote/chain/candle cache and stream. Provenance and age stay separate; only Observed inputs are eligible for observed-market analysis and trading.' },
