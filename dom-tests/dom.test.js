@@ -281,7 +281,7 @@ test('Research entry and destination cards are purposeful, readable, and collisi
 test('Ideas begins with market context and reuses the scenario engine for realistic outcomes', async () => {
   await page.evaluate(() => {
     App.state.discoverForm = null; App.state.ideasForm = null; App.state.scoutForm = null;
-    App.state.lastRecommendSymbol = 'AAPL'; App.state.recommendResults = null;
+    App.context.selectSymbol('AAPL'); App.state.recommendResults = null;
   });
   await go('#/trade/discover');
   await page.waitForSelector('#idea-market-card #ideas-symbol-context');
@@ -523,7 +523,7 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
   await go('#/recommend/manual');
   await page.waitForSelector('#rec-symbol');
   await page.fill('#rec-symbol', 'QQQ');
-  await page.evaluate(() => { App.state.discoverForm.symbol = 'QQQ'; App.state.lastRecommendSymbol = 'QQQ'; });
+  await page.evaluate(() => { App.state.discoverForm.symbol = 'QQQ'; App.context.selectSymbol('QQQ'); });
   await go('#/research/AAPL');
   await page.waitForSelector('.quote-hero');
   // Persist NOW (the 4s tick and pagehide would do this; tests don't wait).
@@ -541,10 +541,10 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
     'same-lane reload must recreate the global data-honesty band');
   assert.equal(await page.evaluate(() => App.Market.world), 'demo', 'same-lane reload reconciles MarketStore');
   const restored = await page.evaluate(() => ({
-    sym: App.state.lastRecommendSymbol,
+    sym: App.context.symbol(),
     form: App.state.discoverForm && App.state.discoverForm.symbol
   }));
-  assert.equal(restored.sym, 'QQQ', 'working symbol restored');
+  assert.equal(restored.sym, 'AAPL', 'the last selected Research symbol is the shared working context');
   assert.equal(restored.form, 'QQQ', 'draft form restored');
 
   // An explicit hash always beats the saved route (bookmarks/links stay honest).
@@ -556,10 +556,10 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
   await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1')); // dashboard, not the tour
   await go('#/home');
   await page.waitForSelector('#continue-row .sym-chip');
-  assert.match(await page.textContent('#continue-row'), /Resume: QQQ analysis/);
+  assert.match(await page.textContent('#continue-row'), /Resume: AAPL analysis/);
   await page.click('#continue-row .sym-chip[data-continue="research"]');
   await page.waitForSelector('.quote-hero');
-  assert.equal(await page.evaluate(() => window.location.hash), '#/research/QQQ');
+  assert.equal(await page.evaluate(() => window.location.hash), '#/research/AAPL');
 });
 
 test('world transition: authoritative PUT bootstrap recovers a failed SSE-hint hydration', async () => {
@@ -658,7 +658,7 @@ test('working view follows: idea bar carries the thesis; scenario studio opens o
     App.state.discoverForm.symbol = 'QQQ';
     App.state.discoverForm.thesis = 'bearish';
     App.state.discoverForm.horizon = 'month';
-    App.state.lastRecommendSymbol = 'QQQ';
+    App.context.selectSymbol('QQQ');
     App.state.ticket = null; App.state.builderForm = null; App.state.scenarioForm = null;
   });
   // The Trade idea bar shows the working VIEW even with no working idea yet.
@@ -681,7 +681,7 @@ test('every scenario story runs at both levels (the Big-news-shock crash class)'
   // The magVolFor crash escaped a green matrix because tests only clicked ONE story.
   // Run EVERY beginner story card end-to-end, then every expert shape via the select.
   await page.click('#level-switch button[data-level="beginner"]');
-  await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = { mode: 'scenario' }; App.state.lastRecommendSymbol = 'AAPL'; });
+  await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = { mode: 'scenario' }; App.context.selectSymbol('AAPL'); });
   await go('#/trade/verify');
   await page.waitForSelector('#bt-scenario-card #sc-shapes .sc-card');
   const shapes = await page.$$eval('#sc-shapes .sc-card', cs => cs.map(c => c.getAttribute('data-shape')));
@@ -713,7 +713,7 @@ test('fair comparison: one batch call, refusals named, ranked per dollar of down
   await page.evaluate(() => {
     App.state.scenarioForm = null;
     App.state.verifyForm = { mode: 'scenario' };
-    App.state.lastRecommendSymbol = 'AAPL';
+    App.context.selectSymbol('AAPL');
     App.navigate('#/trade/verify'); // same hash still means an explicit rerender
   });
   await page.waitForSelector('#app[data-route="trade"][data-ready="true"]');
@@ -2269,7 +2269,7 @@ test('builder recovers from a failing symbol and follows the working symbol', as
   // The reported trap: builder stuck on a symbol that fails to load, retrying forever
   await page.evaluate(() => Learn.setLevel('beginner'));
   await go('#/home'); // same-hash navigation renders nothing — leave the route first
-  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; App.state.lastRecommendSymbol = 'ZZZZQQ'; });
+  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; App.context.selectSymbol('ZZZZQQ'); });
   await go('#/ticket/builder');
   await page.waitForSelector('#builder-load-error');
   assert.match(await page.textContent('#builder-load-error'), /Could not load ZZZZQQ/);
@@ -2279,9 +2279,9 @@ test('builder recovers from a failing symbol and follows the working symbol', as
   await page.waitForSelector('#builder', { timeout: 20000 });
   assert.equal(await page.locator('#builder-load-error').count(), 0, 'error state cleared');
   // An EMPTY builder follows the working symbol picked elsewhere
-  await page.evaluate(() => { App.state.builderForm = null; App.state.lastRecommendSymbol = 'TSLA'; App.render(); });
+  await page.evaluate(() => { App.state.builderForm = null; App.context.selectSymbol('TSLA'); App.render(); });
   await page.waitForFunction(() => App.state.builderForm && App.state.builderForm.symbol === 'TSLA', { timeout: 20000 });
-  await page.evaluate(() => { App.state.builderForm = null; App.state.lastRecommendSymbol = 'AAPL'; });
+  await page.evaluate(() => { App.state.builderForm = null; App.context.selectSymbol('AAPL'); });
 });
 
 test('pipeline streamline: candidates open in the builder; Ideas links the full catalog', async () => {

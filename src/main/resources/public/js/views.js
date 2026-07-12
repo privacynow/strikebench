@@ -473,7 +473,7 @@
           'Working idea: ' + t.symbol + ' ' + (t.custom ? 'custom strategy'
             : (t.candidate && t.candidate.strategy ? prettyStrategy(t.candidate.strategy) : 'trade')) + ' →'));
       }
-      var sym = (App.state.lastRecommendSymbol || '').toUpperCase();
+      var sym = App.context.symbol();
       if (sym) {
         // Context, not command duplication (review P5): these chips RESUME where you were.
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'research',
@@ -587,6 +587,7 @@
 
   async function research(root, params) {
     var symbol = (params[0] || '').toUpperCase();
+    if (symbol) App.context.selectSymbol(symbol);
     var input = el('input', { type: 'text', id: 'symbol-input', placeholder: 'Ticker, e.g. AAPL', value: symbol });
     var go = function () { if (input.value.trim()) App.navigate('#/research/' + input.value.trim().toUpperCase()); };
 
@@ -858,7 +859,7 @@
         }, 'Buy shares'),
         r.optionable ? el('button', {
           class: 'btn btn-sm', onclick: function () {
-            App.state.lastRecommendSymbol = symbol;
+            App.context.selectSymbol(symbol);
             App.state.ideasPrefill = { symbol: symbol, autorun: true }; // asks for a goal, then runs
             App.navigate('#/recommend/manual');
           }
@@ -1815,7 +1816,7 @@
     // remains prominent above the facts, while its deeper scoring rationale follows the
     // plain-language win/loss mechanics instead of displacing them.
     if (gb) card.insertBefore(gb, econ || card.children[2] || null);
-    if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.state.lastRecommendSymbol, c));
+    if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.context.symbol(), c));
     card.appendChild(UI.expandable('The exact contracts \u2014 ' + c.qty + ' lot' + (c.qty > 1 ? 's' : '') + ' (each line \u00d7' + c.qty + ')', function () {
       return el('div', {},
         el('div', { class: 'mono', style: 'margin-bottom:6px' }, c.label),
@@ -1826,7 +1827,7 @@
     card.appendChild(el('div', { class: 'btn-row' },
       withUse ? el('button', {
         class: 'btn', onclick: function () {
-          App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbolForTicket || App.state.lastRecommendSymbol, step: 5 };
+          App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbolForTicket || App.context.symbol(), step: 5 };
           App.navigate('#/trade/place');
         }
       }, 'Practice this trade') : null));
@@ -1869,7 +1870,7 @@
         ? chip(el('span', {}, 'Model EV', UI.info('ev')), fmtMoney(c.expectedValueCents, { plus: true })) : null,
       chip('Liquidity', fmtNum(c.liquidityScore, 2)),
       chip(el('span', {}, 'Screen score', UI.info('screenscore')), fmtNum(c.score, 0))));
-    if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.state.lastRecommendSymbol, c));
+    if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.context.symbol(), c));
     if (c.warnings && c.warnings.length) card.appendChild(alertBox('warn', 'Heads up', c.warnings));
     card.appendChild(el('details', { class: 'qa' },
       el('summary', {}, 'Why this idea — and what would kill it'),
@@ -1882,14 +1883,14 @@
       card.appendChild(el('div', { class: 'btn-row' },
         el('button', {
           class: 'btn', onclick: function () {
-            App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbolForTicket || App.state.lastRecommendSymbol, step: 5 };
+            App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbolForTicket || App.context.symbol(), step: 5 };
             App.navigate('#/trade/place');
           }
         }, 'Use in trade ticket'),
         el('button', {
           class: 'btn btn-sm btn-secondary', onclick: function () {
             App.state.builderForm = {
-              symbol: symbolForTicket || App.state.lastRecommendSymbol,
+              symbol: symbolForTicket || App.context.symbol(),
               qty: c.qty || 1, goal: null, templateKey: null, step: 4, legIdx: 0, excluded: {},
               legs: (c.legs || []).map(function (l) {
                 return { action: l.action, type: l.stock ? 'STOCK' : l.type,
@@ -1902,7 +1903,7 @@
         }, 'Open in builder'),
         canBacktest(c.strategy) ? el('button', {
           class: 'btn btn-sm btn-secondary', onclick: function () {
-            App.state.backtestPrefill = { symbol: symbolForTicket || App.state.lastRecommendSymbol, strategy: c.strategy };
+            App.state.backtestPrefill = { symbol: symbolForTicket || App.context.symbol(), strategy: c.strategy };
             App.navigate('#/trade/verify');
           }
         }, 'Backtest this') : null));
@@ -2060,7 +2061,7 @@
           el('td', {}, el('button', {
             class: 'btn btn-sm', onclick: function (e) {
               e.stopPropagation();
-              App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: App.state.lastRecommendSymbol, step: 5 };
+              App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: App.context.symbol(), step: 5 };
               App.navigate('#/trade/place');
             }
           }, 'Use'))])), 'Show details for ' + c.displayName, 'button');
@@ -2121,7 +2122,7 @@
     var beginner = level === 'beginner';
     var sym = el('input', { type: 'text', id: 'rec-symbol', list: 'universe-symbols',
       placeholder: 'AAPL',
-      value: saved.symbol || App.state.lastRecommendSymbol || 'AAPL' });
+      value: prefill.symbol || App.context.symbol() || saved.symbol || 'AAPL' });
     var thesis = el('select', { id: 'rec-thesis' },
       ['bullish', 'bearish', 'neutral', 'volatile'].map(function (t) {
         return el('option', { value: t, selected: t === saved.thesis ? '' : null }, t);
@@ -2288,7 +2289,7 @@
           class: 'sym-chip' + (s2 === cur ? ' active' : ''), type: 'button',
           onclick: function () {
             sym.value = s2;
-            App.state.lastRecommendSymbol = s2;
+            App.context.selectSymbol(s2);
             remember({ symbol: s2 });
             sync();
           }
@@ -2372,7 +2373,7 @@
                 onclick: function () {
                   sym.value = p.symbol;
                   source = 'single';
-                  App.state.lastRecommendSymbol = p.symbol;
+                  App.context.selectSymbol(p.symbol);
                   remember({ symbol: p.symbol, source: 'single' });
                   sourceRow.querySelectorAll('.choice').forEach(function (b) {
                     b.classList.toggle('selected', b.getAttribute('data-source') === 'single');
@@ -2409,7 +2410,7 @@
       var v = sym.value.trim().toUpperCase();
       remember({ symbol: v });
       // The working symbol follows you: Builder, Backtest and the ticket all seed from it.
-      if (v) App.state.lastRecommendSymbol = v;
+      if (v) App.context.selectSymbol(v);
       sync();
     });
 
@@ -2448,7 +2449,7 @@
         el('a', {
           class: 'muted', id: 'all-strategies-link', href: '#/trade/shape', style: 'font-size:12.5px',
           onclick: function () {
-            App.state.builderForm = { symbol: App.state.lastRecommendSymbol || 'AAPL', qty: 1,
+            App.state.builderForm = { symbol: App.context.symbol('AAPL'), qty: 1,
               goal: 'BROWSE', templateKey: null, step: 2, legIdx: 0, legs: [], excluded: {} };
           }
         }, 'All strategies \u2192')),
@@ -2518,7 +2519,7 @@
       var seq = ++goSeq;
       results.appendChild(UI.spinner('Screening strategies\u2026'));
       try {
-        App.state.lastRecommendSymbol = sym.value.trim().toUpperCase();
+        App.context.selectSymbol(sym.value);
         // The 0DTE controls are VISIBLE at both levels (presentation-only levels, review P0):
         // what the user set is what the engine receives — no silent rewrites.
         var body = {
@@ -2712,7 +2713,7 @@
    */
   function workingViewLabel() {
     var f = App.state.discoverForm || {};
-    var sym = ((App.state.lastRecommendSymbol || f.symbol) || '').toUpperCase();
+    var sym = (App.context.symbol() || f.symbol || '').toUpperCase();
     if (!sym) return null;
     var parts = [sym];
     var goal = f.goal && f.goal !== 'ALL' ? f.goal : null;
@@ -2749,7 +2750,7 @@
       // genuinely optional detail (interaction contract #3).
       App.state.tradeReplicator = App.state.tradeReplicator || {};
       var rctx = { symbol: (App.state.builderForm && App.state.builderForm.symbol)
-        || App.state.lastRecommendSymbol || App.state.tradeReplicator.symbol || 'SPY' };
+        || App.context.symbol() || App.state.tradeReplicator.symbol || 'SPY' };
       root.appendChild(UI.expandable('Replicate an ETF exposure \u2014 synthetic sizing', function () {
         return replicateCard(Learn.currentLevel(), rctx);
       }));
@@ -3129,7 +3130,7 @@
 
   async function ticket(root) {
     var t = App.state.ticket = App.state.ticket || {};
-    t.symbol = t.symbol || App.state.lastRecommendSymbol || 'AAPL';
+    t.symbol = t.symbol || App.context.symbol('AAPL');
     // The engine sizes candidates (qty may be 3 for "cover all 300 shares") — never
     // silently reset that to 1; the user can still change it on the Strikes step.
     t.qty = t.qty || (t.candidate && t.candidate.qty) || 1;
@@ -3708,7 +3709,7 @@
       var holdCard = el('div', { class: 'card', id: 'holdings-card' },
         UI.cardHeader('Shares you hold', el('button', {
           class: 'btn btn-sm btn-secondary', id: 'buy-shares-btn',
-          onclick: function () { stockOrderModal('buy', App.state.lastRecommendSymbol || 'AAPL'); }
+          onclick: function () { stockOrderModal('buy', App.context.symbol('AAPL')); }
         }, 'Buy shares')));
       var holdLvl = Learn.currentLevel();
       if (!held.length) {
@@ -4178,7 +4179,7 @@
     });
     reroll.addEventListener('click', function () { f.reroll(); run.click(); });
     toVerify.addEventListener('click', function () {
-      App.state.lastRecommendSymbol = symbol;
+      App.context.selectSymbol(symbol);
       App.state.evidencePrefill = null; // generated futures must never inherit an earlier analog ensemble
       App.state.verifyMode = 'scenario'; // the handoff: Verify opens in "Imagine a future"
       App.navigate('#/trade/verify');
@@ -4193,7 +4194,7 @@
     host.innerHTML = '';
     var level = Learn.currentLevel();
     var vf = App.state.verifyForm = App.state.verifyForm || {};
-    var symbol = ((vf.simSymbol || App.state.lastRecommendSymbol || 'AAPL') + '').toUpperCase();
+    var symbol = ((App.context.symbol() || vf.simSymbol || 'AAPL') + '').toUpperCase();
     vf.simSymbol = symbol;
     var card = el('div', { class: 'card', id: 'bt-scenario-card' });
 
@@ -4205,7 +4206,7 @@
       var s2 = (raw || '').trim().toUpperCase();
       if (!s2 || s2 === vf.simSymbol) return;
       vf.simSymbol = s2;
-      App.state.lastRecommendSymbol = s2;
+      App.context.selectSymbol(s2);
       scenarioVerifyPanel(host); // self-rebuild: header, peers, working-idea eligibility all follow
     }
     symInput.addEventListener('change', function () { switchSymbol(symInput.value); });
@@ -4617,7 +4618,7 @@
         App.navigate('#/data/datasets');
       } }, 'Create or activate a dataset') : null,
       !App.state.evidencePrefill ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
-        App.navigate('#/research/' + ((App.state.lastRecommendSymbol || 'AAPL').toUpperCase()));
+        App.navigate('#/research/' + App.context.symbol('AAPL'));
       } }, 'Find historical analogs') : null,
       !inWorld ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
         App.navigate('#/data/simulation');
@@ -4634,11 +4635,11 @@
       : (vf.mode === 'world' && inWorld) ? 'world'
       : (vf.mode === 'dataset' && scenarioActive) ? 'dataset' : 'history');
     root = histWrap; // everything below (the historical form + reports) lives in history mode
-    var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || bf.symbol || App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols' });
+    var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || App.context.symbol() || bf.symbol || 'AAPL', list: 'universe-symbols' });
     // Typing a symbol here makes it the working symbol app-wide (Backtest → Builder carries it).
     sym.addEventListener('input', function () {
       bf.symbol = sym.value;
-      var s = sym.value.trim().toUpperCase(); if (s) App.state.lastRecommendSymbol = s;
+      var s = sym.value.trim().toUpperCase(); if (s) App.context.selectSymbol(s);
     });
     // ONE menu for both levels, grouped by goal with the foundational structure leading each
     // group (education ordering, never a gate — presentation-only levels, review P0).
@@ -5039,7 +5040,7 @@
       if (!simCard.isConnected) return; // inactive tab: none of this loads (addendum B)
       var activeUniverse = (App.state.universe && App.state.universe.active) || {};
       var activeSymbols = (activeUniverse.symbols || []).slice();
-      var wt = (App.state.lastRecommendSymbol || activeSymbols[0] || 'SPY').toUpperCase();
+      var wt = (App.context.symbol() || activeSymbols[0] || 'SPY').toUpperCase();
       var curSector = activeUniverse.sectorKey || '';
       var st = { scenario: 'CHOP', speed: 26, sectorKey: curSector !== 'world' ? curSector : '',
         includeActiveUniverse: curSector === 'world', symbolsText: wt, allowFictional: false,
@@ -5932,12 +5933,12 @@
               } }, 'Activate'),
           isActive && d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm',
             title: 'Open this active scenario on the stock analysis page', onclick: function () {
-              App.state.lastRecommendSymbol = d.symbol;
+              App.context.selectSymbol(d.symbol);
               App.navigate('#/research/' + d.symbol);
             } }, 'Open Research') : null,
           isActive && d.id !== 'observed' && d.symbol ? el('button', { class: 'btn btn-sm',
             title: 'Compare strategies while this scenario remains active', onclick: function () {
-              App.state.lastRecommendSymbol = d.symbol;
+              App.context.selectSymbol(d.symbol);
               App.navigate('#/trade/verify');
             } }, 'Compare strategies') : null,
           d.id !== 'observed' ? el('button', { class: 'btn btn-sm btn-secondary', title: 'Delete this run',
@@ -5955,7 +5956,7 @@
       var genOpen = el('button', { class: 'btn btn-sm', id: 'dc-generate-btn' }, 'Generate a scenario dataset…');
       genOpen.addEventListener('click', function () {
         genOpen.style.display = 'none';
-        var sym = el('input', { type: 'text', id: 'dc-gen-sym', value: App.state.lastRecommendSymbol || 'AAPL', list: 'universe-symbols', style: 'max-width:110px' });
+        var sym = el('input', { type: 'text', id: 'dc-gen-sym', value: App.context.symbol('AAPL'), list: 'universe-symbols', style: 'max-width:110px' });
         var f = Scenario.form(level, null);
         var go = el('button', { class: 'btn', id: 'dc-gen-run' }, 'Generate & save');
         var note = el('div', { class: 'muted small' });
@@ -5976,7 +5977,7 @@
                   try {
                     await API.put('/api/datasets/active', { id: r.datasetId });
                     App.refreshScenarioBanner && App.refreshScenarioBanner();
-                    App.state.lastRecommendSymbol = (sym.value || '').toUpperCase();
+                    App.context.selectSymbol(sym.value);
                     App.navigate('#/research/' + (sym.value || '').toUpperCase());
                   } catch (e2) { UI.toast(e2.message || 'Could not activate this scenario', 'error'); }
                 } }, 'Use it — explore in Research'),
@@ -5984,7 +5985,7 @@
                   try {
                     await API.put('/api/datasets/active', { id: r.datasetId });
                     App.refreshScenarioBanner && App.refreshScenarioBanner();
-                    App.state.lastRecommendSymbol = (sym.value || '').toUpperCase();
+                    App.context.selectSymbol(sym.value);
                     App.navigate('#/trade/verify');
                   } catch (e2) { UI.toast(e2.message || 'Could not activate this scenario', 'error'); }
                 } }, 'Compare strategies under it'),
@@ -6324,7 +6325,7 @@
       // User-owned CSV is a peer capability, not an inferior fallback. It is often the safest
       // route for broker/Yahoo exports because no automated collection occurs.
       var fileIn = el('input', { type: 'file', id: 'data-csv-file', accept: '.csv,text/csv' });
-      var csvSymbol = el('input', { type: 'text', id: 'data-csv-symbol', value: App.state.lastRecommendSymbol || '',
+      var csvSymbol = el('input', { type: 'text', id: 'data-csv-symbol', value: App.context.symbol(),
         placeholder: 'Only needed if file has no Symbol column', list: 'universe-symbols' });
       var csvBasis = el('select', { id: 'data-csv-basis' },
         el('option', { value: 'AUTO' }, 'Auto-detect adjusted close'),
@@ -6346,7 +6347,7 @@
               r.barBasis === 'CLOSE_ONLY' ? 'Observed closes are present; intraday high/low are not observed.' : 'Observed OHLC fields are present.'),
             r.quarantined ? chip('Quarantined', r.quarantined + ' rows') : null));
           if (r.rowsWritten && !(App.config && App.config.fixturesOnly)) csvResult.appendChild(
-            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/' + (csvSymbol.value || App.state.lastRecommendSymbol || 'SPY').toUpperCase()); } }, 'Open in Research'));
+            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research/' + (csvSymbol.value || App.context.symbol('SPY')).toUpperCase()); } }, 'Open in Research'));
           loadJobs();
         } catch (e) { csvResult.innerHTML = ''; csvResult.appendChild(alertBox('warn', e.message)); }
         uploadBtn.disabled = false;
@@ -6810,7 +6811,7 @@
   async function decision(root, params) {
     var level = Learn.currentLevel();
     var form = App.state.discoverForm || {};
-    var symbol = (params[0] || form.symbol || App.state.lastRecommendSymbol || '').toUpperCase();
+    var symbol = (params[0] || App.context.symbol() || form.symbol || '').toUpperCase();
 
     root.appendChild(el('h1', {}, 'Compare ideas'));
     if (level === 'beginner') {
@@ -6937,7 +6938,7 @@
       if (objective) { f.objective = objective.value; f.maxPos = +maxPos.value; f.maxSym = +maxSym.value; }
       if (diag) f.diagnostic = diag.checked;
       run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Scanning the universe and allocating…'));
-      var sym = (ctx && ctx.symbol) || (App.state.lastRecommendSymbol || '').toUpperCase();
+      var sym = (ctx && ctx.symbol) || App.context.symbol();
       var body = {
         totalCapitalCents: Math.round((+budget.value || 0) * 100),
         intent: goal.value || null,
@@ -7531,7 +7532,7 @@
             horizonDays: r.forwardDays,
             label: r.conditioned.sample + ' ' + occurrenceWord(r) + ' (' + r.from + ' to ' + r.to + ')'
           };
-          App.state.lastRecommendSymbol = symbol;       // Verify anchors on the study's symbol
+          App.context.selectSymbol(symbol);             // Verify anchors on the study's symbol
           App.state.verifyMode = 'scenario';            // ...and opens on "Imagine a future"
           App.navigate('#/trade/verify');
         } }, 'Test strategies on these ' + r.conditioned.sample + ' ' + occurrenceWord(r) + ' \u2192')));
@@ -7598,7 +7599,7 @@
     out.appendChild(el('div', { class: 'btn-row' },
       el('button', {
         class: 'btn btn-sm', id: 'replicate-build', onclick: function () {
-          App.state.lastRecommendSymbol = (r.symbol || '').toUpperCase();
+          App.context.selectSymbol(r.symbol);
           App.state.builderForm = {
             symbol: (r.symbol || '').toUpperCase(),
             qty: r.contracts || 1, goal: 'DIRECTIONAL',

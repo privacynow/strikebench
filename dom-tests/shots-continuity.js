@@ -20,7 +20,7 @@ const JAVA = process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', 'ja
   await page.goto(BASE + '/'); await page.waitForSelector('#app[data-ready="true"]');
   await page.evaluate(() => {
     localStorage.setItem('strikebench.welcomed', '1');
-    App.state.lastRecommendSymbol = 'QQQ';
+    App.context.selectSymbol('QQQ');
     App.state.ticket = { symbol: 'AAPL', candidate: { strategy: 'DEBIT_CALL_SPREAD' }, step: 5 };
   });
   await page.evaluate(() => { location.hash = '#/home'; return App.render(); });

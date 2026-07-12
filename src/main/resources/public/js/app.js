@@ -3,8 +3,25 @@
   'use strict';
 
   var App = {
-    state: { ticket: null, lastRecommendSymbol: null },
+    state: { ticket: null, marketContext: { symbol: null } },
     navToken: 0,
+
+    /** One lane-owned working symbol. Placed tickets remain locked snapshots of this context. */
+    context: {
+      symbol: function (fallback) {
+        var value = App.state.marketContext && App.state.marketContext.symbol;
+        return (value || fallback || '').toUpperCase();
+      },
+      selectSymbol: function (raw) {
+        var symbol = String(raw || '').trim().toUpperCase();
+        if (!symbol) return '';
+        App.state.marketContext = Object.assign({}, App.state.marketContext || {}, { symbol: symbol });
+        if (App.state.evidencePrefill && App.state.evidencePrefill.symbol !== symbol) {
+          App.state.evidencePrefill = null;
+        }
+        return symbol;
+      }
+    },
 
     /**
      * True while `token` is still the current route generation. Slow views paint their shell,
@@ -29,7 +46,7 @@
         : App.config && App.config.scenarioMode ? 'SCENARIO'
         : App.config && App.config.fixturesOnly ? 'DEMO' : 'OBSERVED';
       return {
-        symbol: String(symbol || '').trim().toUpperCase(), marketLane: lane, worldId: world,
+        symbol: String(symbol || App.context.symbol()).trim().toUpperCase(), marketLane: lane, worldId: world,
         datasetId: (App.config && App.config.activeDataset) || 'observed'
       };
     },
@@ -273,7 +290,7 @@
           var rBtn = document.getElementById('scenario-research');
           var tBtn = document.getElementById('scenario-test');
           if (rBtn) { rBtn.textContent = 'Research ' + sym; rBtn.onclick = function () { App.navigate('#/research/' + sym); }; }
-          if (tBtn) { tBtn.onclick = function () { App.state.lastRecommendSymbol = sym; App.navigate('#/trade/verify'); }; }
+          if (tBtn) { tBtn.onclick = function () { App.context.selectSymbol(sym); App.navigate('#/trade/verify'); }; }
         } catch (e) { /* generic buttons stay */ }
       })();
     } else {
@@ -497,7 +514,7 @@
   // Workflow state is OWNED by the market context (review P1 #4): the outgoing lane's
   // thinking is stashed, the incoming lane's restored — a simulated symbol, thesis, or study
   // must never leak into observed screens (or vice versa).
-  var LANE_KEYS = ['lastRecommendSymbol', 'marketThesis', 'researchStudy', 'evidencePrefill',
+  var LANE_KEYS = ['marketContext', 'marketThesis', 'researchStudy', 'evidencePrefill',
     'researchTabBySymbol',
     'ideasPrefill', 'backtestPrefill', 'discoverForm', 'builderForm', 'backtestForm',
     'verifyForm', 'scenarioForm', 'ideasForm', 'scoutResults', 'tradeReplicator',
@@ -658,9 +675,6 @@
         .catch(function () { /* visible in the banner */ });
     } catch (e) { UI.toast(e.message || 'Could not switch markets', 'error'); }
   };
-
-  /** Compat alias: every adoption is the SAME full transition. */
-  App.adoptWorld = function (worldId) { return App.transitionWorld(worldId); };
 
   window.App = App;
 
@@ -1197,7 +1211,7 @@
     if (!window.API || !API.prefetch) return;
     var sym = null;
     if (route === 'research' && params[0] && /^[A-Z.\-]{1,10}$/.test(params[0])) sym = params[0];
-    else if (route === 'trade') sym = (App.state.lastRecommendSymbol || '').toUpperCase() || null;
+    else if (route === 'trade') sym = App.context.symbol() || null;
     if (!sym) return;
     var run = function () {
       // Research → Trade: the ticket/builder need expirations + a quote first thing.

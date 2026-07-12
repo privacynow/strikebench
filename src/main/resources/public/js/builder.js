@@ -213,7 +213,7 @@
       // An in-progress build owns its symbol; an EMPTY builder follows the working
       // symbol from Ideas/Research ("I chose another stock" must not reload the old one)
       symbol: ((saved.legs && saved.legs.length ? saved.symbol : null)
-        || App.state.lastRecommendSymbol || saved.symbol || 'AAPL').toUpperCase(),
+        || App.context.symbol() || saved.symbol || 'AAPL').toUpperCase(),
       qty: saved.qty || 1,
       goal: saved.goal || null,
       templateKey: saved.templateKey || null,
@@ -472,7 +472,7 @@
       var failInput = el('input', { type: 'text', id: 'builder-symbol', list: 'universe-symbols', value: st.symbol });
       var retryWith = function (sym) {
         st.symbol = (sym || failInput.value.trim() || st.symbol).toUpperCase();
-        App.state.lastRecommendSymbol = st.symbol;
+        App.context.selectSymbol(st.symbol);
         st.legs = []; st.legIdx = 0; if (st.step > 2) st.step = st.goal ? 2 : 1;
         remember();
         App.render();
@@ -539,7 +539,7 @@
         input.addEventListener('change', async function () {
           var sym = input.value.trim().toUpperCase();
           if (!sym || sym === st.symbol) return;
-          st.symbol = sym; App.state.lastRecommendSymbol = sym;
+          st.symbol = sym; App.context.selectSymbol(sym);
           st.legs = []; st.step = st.goal ? 2 : 1; st.legIdx = 0;
           try { await loadSymbol(); } catch (e) { /* the next preview reports honestly */ }
           repaint();
@@ -1125,7 +1125,7 @@
       symInput.addEventListener('change', async function () {
         var sym = symInput.value.trim().toUpperCase();
         if (!sym || sym === st.symbol) return;
-        st.symbol = sym; App.state.lastRecommendSymbol = sym;
+        st.symbol = sym; App.context.selectSymbol(sym);
         st.legs = []; st.excluded = {};
         remember();
         try {
