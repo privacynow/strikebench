@@ -6744,12 +6744,16 @@
       var s;
       try { s = await API.get('/api/status'); } catch (e) { return; }
       if (!App.alive(token)) return;
+      function domainLabel(domain) {
+        var words = String(domain || '').toLowerCase().replace(/_/g, ' ');
+        return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Unknown';
+      }
       healthCard.innerHTML = '';
       var body = el('div', {});
       var grid = el('div', { class: 'grid grid-2' });
       Object.keys(s.domains || {}).forEach(function (domain) {
         var items = s.domains[domain];
-        var card = el('div', { class: 'card', style: 'margin-bottom:0' }, UI.cardHeader(domain));
+        var card = el('div', { class: 'card', style: 'margin-bottom:0' }, UI.cardHeader(domainLabel(domain)));
         if (!items.length) card.appendChild(el('p', { class: 'muted' }, 'No providers registered.'));
         items.forEach(function (p) {
           card.appendChild(el('div', { class: 'status-item' },
@@ -6777,7 +6781,7 @@
         var okCount = items.filter(function (p2) { return p2.state === 'OK'; }).length;
         sumRow.appendChild(el('span', { class: 'chip', title: okCount + ' of ' + items.length
             + ' sources OK \u2014 the badge shows the WORST source state in this domain' },
-          el('span', { class: 'chip-label' }, domain),
+          el('span', { class: 'chip-label' }, domainLabel(domain)),
           el('b', {}, el('span', { class: 'badge ' + worst }, items.length ? worstState : 'NONE'))));
       });
       healthCard.appendChild(sumRow);

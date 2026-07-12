@@ -1496,7 +1496,7 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   assert.match(await page.textContent('#dc-mode'), /OBSERVED MARKET|DEMO MARKET|SIMULATED|SCENARIO/);
   await page.waitForSelector('#dc-engine .chip-row');
   assert.match(await page.textContent('#dc-engine'), /Market engine/);
-  await page.waitForSelector('#dc-health:has-text("QUOTES")', { timeout: 15000 });
+  await page.waitForSelector('#dc-health:has-text("Quotes")', { timeout: 15000 });
   await page.click('#dc-refresh-now');
   // Inactive workspaces are NOT mounted from Overview (only-active-tab loading).
   assert.equal(await page.locator('#dc-sources').count(), 0, 'sources not mounted on overview');
@@ -3301,7 +3301,11 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
   await page.evaluate(() => API.flushCache());
   await go('#/data/overview');
   await page.waitForSelector('#dc-mode .badge');
-  await page.waitForSelector('#dc-health:has-text("QUOTES")', { timeout: 15000 });
+  await page.waitForSelector('#dc-health:has-text("Quotes")', { timeout: 15000 });
+  assert.doesNotMatch(await page.textContent('#dc-health'), /HISTORICAL_OPTIONS/,
+    'provider domain enum names are not leaked into the product UI');
+  assert.match(await page.textContent('#dc-health'), /Historical options/i,
+    'multi-word provider domains are rendered as readable labels');
   const ovBottom = await page.evaluate(() => {
     const g = document.querySelector('.dc-grid');
     return g ? Math.round(g.getBoundingClientRect().bottom) : 9999;
