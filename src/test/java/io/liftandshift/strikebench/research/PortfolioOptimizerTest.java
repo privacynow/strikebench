@@ -21,9 +21,15 @@ class PortfolioOptimizerTest {
     private StrategyEvaluation eval(String symbol, String family, double score, long capital,
                                     Long marketEv, Long historyEv, long tail, boolean gate,
                                     EconomicAssessment.Verdict verdict) {
+        return eval(symbol, family, score, capital, marketEv, historyEv, tail, gate, verdict, true);
+    }
+
+    private StrategyEvaluation eval(String symbol, String family, double score, long capital,
+                                    Long marketEv, Long historyEv, long tail, boolean gate,
+                                    EconomicAssessment.Verdict verdict, boolean observed) {
         var economics = new EconomicAssessment(verdict,
                 verdict == EconomicAssessment.Verdict.FAVORABLE ? "WORTH_INVESTIGATING" : "LEARN_FROM",
-                verdict.name(), "test economics", marketEv, historyEv, 0, null, true, List.of());
+                verdict.name(), "test economics", marketEv, historyEv, 0, null, observed, List.of());
         return new StrategyEvaluation("id-" + symbol + "-" + (int) score,
                 new StrategySpec(symbol, family, null, null, null, null, null),
                 null,
@@ -33,6 +39,18 @@ class PortfolioOptimizerTest {
                 null, null,
                 new ScoreBreakdown(gate, List.of(), score, score, List.of()),
                 economics, null);
+    }
+
+    @Test void generatedFavorableAllocationStaysAvailableButIsAutomaticallyDiagnostic() {
+        var teaching = eval("AAPL", "CREDIT_PUT_SPREAD", 80, 5_000,
+                200L, 300L, 500, true, EconomicAssessment.Verdict.FAVORABLE, false);
+        var res = optimizer.optimize(List.of(teaching),
+                new PortfolioOptimizer.Constraints(10_000, 5_000L, 2, 1.0, "DECISION", false));
+
+        assertThat(res.allocations()).hasSize(1);
+        assertThat(res.diagnostic()).isFalse();
+        assertThat(res.teachingOnly()).isTrue();
+        assertThat(res.notes()).anyMatch(n -> n.contains("TEACHING set"));
     }
 
     @Test void allocatesByDensityRespectingBudgetAndSymbolCap() {

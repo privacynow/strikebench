@@ -3022,7 +3022,7 @@ public final class ApiServer {
             com.fasterxml.jackson.databind.node.ObjectNode out =
                     (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(result);
             com.fasterxml.jackson.databind.node.ArrayNode cands = out.putArray("candidates");
-            int favorable = 0, mixed = 0, unfavorable = 0, unavailable = 0;
+            int favorable = 0, actionableFavorable = 0, mixed = 0, unfavorable = 0, unavailable = 0;
             for (var e : evals) { // evaluateAndRank order is exactly the monotonic Decision score
                 com.fasterxml.jackson.databind.node.ObjectNode m =
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(e.candidate());
@@ -3034,7 +3034,10 @@ public final class ApiServer {
                     m.put("economicVerdict", e.economics().verdict().name());
                     m.put("economicPlacement", e.economics().placement());
                     switch (e.economics().verdict()) {
-                        case FAVORABLE -> favorable++;
+                        case FAVORABLE -> {
+                            favorable++;
+                            if (e.economics().actionableFavorable()) actionableFavorable++;
+                        }
                         case MIXED -> mixed++;
                         case UNFAVORABLE -> unfavorable++;
                         case UNAVAILABLE -> unavailable++;
@@ -3048,16 +3051,16 @@ public final class ApiServer {
             out.put("ranking", "decision"); // disclosed: what ordered this list
             out.put("economicPolicy", "decision_score");
             out.put("favorableCount", favorable);
+            out.put("actionableFavorableCount", actionableFavorable);
             out.put("mixedCount", mixed);
             out.put("unfavorableCount", unfavorable);
             out.put("unavailableCount", unavailable);
-            boolean generatedMarket = !"observed".equals(world);
-            out.put("economicMessage", favorable > 0
-                    ? generatedMarket
+            out.put("economicMessage", actionableFavorable > 0
+                    ? actionableFavorable + " setup" + (actionableFavorable == 1 ? "" : "s")
+                            + " worth investigating on end-to-end observed evidence; compare costs and alternatives before acting."
+                    : favorable > 0
                         ? favorable + " setup" + (favorable == 1 ? "" : "s")
-                            + " favorable inside this generated teaching market. That is useful practice, not evidence of a live-market edge."
-                        : favorable + " setup" + (favorable == 1 ? "" : "s")
-                            + " worth investigating; compare costs and evidence before acting."
+                            + " favorable inside an explicit generated teaching market. That is useful practice, not evidence of a live-market edge."
                     : "No setup currently shows a robust after-cost edge. Mixed and unfavorable structures remain available for comparison and learning.");
             return out;
         } catch (RuntimeException e) {

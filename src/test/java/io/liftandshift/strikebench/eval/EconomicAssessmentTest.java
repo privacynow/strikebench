@@ -75,6 +75,21 @@ class EconomicAssessmentTest {
         assertThat(a.label()).containsIgnoringCase("teaching market");
         assertThat(a.summary()).contains("not evidence of a live-market edge");
         assertThat(a.observedEvidence()).isFalse();
+        assertThat(a.actionableFavorable()).isFalse();
+    }
+
+    @Test void observedPricesWithAModeledWeakLinkCannotBecomeAnObservedEndorsement() {
+        RiskProfile risk = new RiskProfile(20_000, 20_000L, 0.55, -100L,
+                20_000, 0.20, List.of(), 2_000L, "test");
+        EvidenceProfile incomplete = EvidenceProfile.of(Map.of(
+                "pricing", EvidenceLevel.OBSERVED_DELAYED,
+                "history", EvidenceLevel.OBSERVED_EOD,
+                "rates", EvidenceLevel.MODELED), "modeled rate");
+        EconomicAssessment a = EconomicAssessment.assess(candidate(0.55), risk, incomplete, pass(), ctx());
+
+        assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
+        assertThat(a.label()).containsIgnoringCase("incomplete evidence");
+        assertThat(a.actionableFavorable()).isFalse();
     }
 
     @Test void modelDependentTimeSpreadsStayEconomicallyUnavailable() {

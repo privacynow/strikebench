@@ -40,6 +40,7 @@ public final class PortfolioOptimizer {
             double avgScore,
             Map<String, Long> perSymbolCents,
             boolean diagnostic,         // true when this is a least-bad (possibly negative-EV) diagnostic set
+            boolean teachingOnly,       // generated/incomplete evidence: useful practice, not an observed allocation
             List<String> notes
     ) {}
 
@@ -106,6 +107,11 @@ public final class PortfolioOptimizer {
         } else if (diagnostic) {
             notes.add("DIAGNOSTIC set: this is a comparison allocation, not a recommendation; one or both after-cost EV lanes may be adverse or unavailable.");
         }
+        boolean teachingAllocation = allocations.stream().anyMatch(a ->
+                a.eval().economics() == null || !a.eval().economics().actionableFavorable());
+        if (!allocations.isEmpty() && teachingAllocation && !diagnostic) {
+            notes.add("TEACHING set: at least one funded case uses generated rather than end-to-end observed evidence. It is a practice allocation, not a live-market recommendation.");
+        }
         if (!allocations.isEmpty() && marketEvCoverage < allocations.size()) {
             notes.add("Market EV total covers " + marketEvCoverage + " of " + allocations.size()
                     + " allocated positions; unavailable rows are excluded from that partial total.");
@@ -118,7 +124,7 @@ public final class PortfolioOptimizer {
                 marketEvCoverage > 0 ? marketEv : null,
                 historyEvCoverage > 0 ? historyEv : null,
                 marketEvCoverage, historyEvCoverage,
-                avgScore, perSymbol, diagnostic, notes);
+                avgScore, perSymbol, diagnostic, teachingAllocation, notes);
     }
 
     private enum Objective {

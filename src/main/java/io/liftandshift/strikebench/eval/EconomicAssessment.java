@@ -37,6 +37,8 @@ public record EconomicAssessment(
     }
 
     public boolean favorable() { return verdict == Verdict.FAVORABLE; }
+    /** A favorable model result supported end-to-end by observed evidence, not a teaching case. */
+    public boolean actionableFavorable() { return favorable() && observedEvidence; }
     public boolean teachingCase() { return verdict == Verdict.UNFAVORABLE; }
 
     public static EconomicAssessment assess(Candidate c, RiskProfile risk, EvidenceProfile evidence,
@@ -65,6 +67,10 @@ public record EconomicAssessment(
         Double evPct = marketNet == null || maxLoss <= 0
                 ? null : 100.0 * marketNet / maxLoss;
         boolean observed = evidence != null && evidence.rollup() != null && evidence.rollup().isObserved();
+        EvidenceLevel pricingEvidence = evidence == null ? EvidenceLevel.UNKNOWN
+                : evidence.perDimension().getOrDefault("pricing", EvidenceLevel.UNKNOWN);
+        boolean explicitTeachingMarket = pricingEvidence == EvidenceLevel.DEMO_FIXTURE
+                || pricingEvidence == EvidenceLevel.SIMULATED || pricingEvidence == EvidenceLevel.MODELED;
         List<String> reasons = new ArrayList<>();
 
         if (!mechanicallyEligible) {
@@ -100,13 +106,27 @@ public record EconomicAssessment(
         // a favorable case inside an explicitly generated teaching market. The market-implied lane may
         // be mildly negative (the volatility risk premium thesis), but not so negative that execution
         // overwhelms the proposed edge.
-        if (realizedPositive && (marketNet == null || marketNet >= -material)) {
+        if (realizedPositive && (marketNet == null || marketNet >= -material)
+                && (observed || explicitTeachingMarket)) {
             return new EconomicAssessment(Verdict.FAVORABLE, "WORTH_INVESTIGATING",
                     observed ? "Worth investigating" : "Favorable in this teaching market",
                     observed
                             ? "The observed realized-volatility scenario remains positive after estimated costs, and the market-implied lane is not materially adverse."
                             : "In this explicitly generated market, the realized-volatility scenario remains positive after estimated costs. Use it to learn the setup; it is not evidence of a live-market edge.",
                     marketNet, realizedNet, fees, evPct, observed, reasons);
+        }
+
+        // Observed prices with a modeled/unknown weak link (for example no IV history or only a
+        // fallback rate) may describe a promising scenario, but they cannot support the same
+        // FAVORABLE enum downstream allocators/scouts treat as an endorsement. Keep the package
+        // visible as MIXED and name the missing evidence rather than deleting it.
+        if (realizedPositive && !observed && !explicitTeachingMarket
+                && (marketNet == null || marketNet >= -material)) {
+            reasons.add("The favorable scenario is not supported by end-to-end observed evidence yet.");
+            return new EconomicAssessment(Verdict.MIXED, "COMPARE_CAREFULLY",
+                    "Promising model, incomplete evidence",
+                    "The realized-volatility scenario is positive after costs, but a modeled or unknown input prevents an observed-edge claim. Keep it for comparison until the missing evidence is observed.",
+                    marketNet, realizedNet, fees, evPct, false, reasons);
         }
 
         // Materially negative after-cost economics stay visible, but in a teaching lane. A small

@@ -7223,10 +7223,13 @@
     if (o.diagnostic) {
       out.appendChild(alertBox('caution', 'Diagnostic set — NOT a recommendation. '
         + 'This set may include mixed, adverse, or economically unavailable ideas; it is shown for comparison only.'));
+    } else if (o.teachingOnly) {
+      out.appendChild(alertBox('caution', 'Practice allocation — generated or incomplete evidence. '
+        + 'The structures remain useful for learning and comparison, but this is not an observed-market recommendation.'));
     }
     // Conclusion first: what this portfolio IS, in one sentence. In diagnostic mode it is the
     // "least-bad set", never "Funded" (which reads as an endorsement).
-    var lead = o.diagnostic ? 'Least-bad set: ' : 'Funded ';
+    var lead = o.diagnostic ? 'Least-bad set: ' : o.teachingOnly ? 'Practice set: ' : 'Funded ';
     var marketEv = o.marketEvAfterCostsCents;
     var historyEv = o.realizedVolEvAfterCostsCents;
     var marketCoverage = Number(o.marketEvCoverage || 0);
