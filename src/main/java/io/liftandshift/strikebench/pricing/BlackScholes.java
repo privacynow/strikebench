@@ -47,9 +47,14 @@ public final class BlackScholes {
     }
 
     public static double delta(boolean call, double s, double k, double t, double r, double q, double sigma) {
-        if (t <= 0 || sigma <= 0) {
+        if (t <= 0) {
             boolean itm = call ? s > k : s < k;
             return itm ? (call ? 1.0 : -1.0) : 0.0;
+        }
+        if (sigma <= 0) {
+            double forward = s * Math.exp((r - q) * t);
+            boolean itm = call ? forward > k : forward < k;
+            return itm ? (call ? disc(q, t) : -disc(q, t)) : 0.0;
         }
         double d1 = d1(s, k, t, r, q, sigma);
         return call ? disc(q, t) * normCdf(d1) : disc(q, t) * (normCdf(d1) - 1.0);

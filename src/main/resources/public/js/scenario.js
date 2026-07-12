@@ -202,7 +202,7 @@
           el('p', {}, el('b', {}, 'Bootstrap: '), 'resamples blocks of the symbol’s own observed daily returns (mean-removed), preserving fat tails and autocorrelation; an empirical block-prefix compensator keeps the guide mean-honest.'),
           el('p', {}, el('b', {}, 'Shape guide: '), 'a deterministic log-drift curve (valley/mountain/linear) the noise rides on; the bridge pins the endpoint.'),
           el('p', {}, el('b', {}, 'IV path: '), 'deterministic: dIV = drift·dt + κ(long-run − IV)dt, with a one-off shock at the event day’s close. Option values are BSM on this path — always labeled MODELED.'),
-          el('p', { class: 'muted small' }, 'Same seed ⇒ byte-identical paths. Fills, commissions, and early assignment are not modeled.'));
+          el('p', { class: 'muted small' }, 'Same seed ⇒ byte-identical paths. Each result names whether entry is quoted or modeled and includes configured round-trip commissions; future exit spread and early assignment are not modeled.'));
       }));
     }
 

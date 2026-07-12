@@ -54,6 +54,16 @@ class BlackScholesTest {
     }
 
     @Test
+    void zeroVolDeltaUsesTheDiscountedForwardBoundary() {
+        double t = 1.0, r = 0.05, q = 0.02;
+        // Spot is below strike, but the deterministic forward is above it.
+        assertThat(100 * Math.exp((r - q) * t)).isGreaterThan(102);
+        assertThat(BlackScholes.delta(true, 100, 102, t, r, q, 0))
+                .isCloseTo(Math.exp(-q * t), within(1e-12));
+        assertThat(BlackScholes.delta(false, 100, 102, t, r, q, 0)).isZero();
+    }
+
+    @Test
     void greekSigns() {
         // Long options: positive gamma/vega; calls decay (negative theta) with q=0
         assertThat(BlackScholes.gamma(100, 105, 0.3, 0.03, 0, 0.25)).isPositive();
