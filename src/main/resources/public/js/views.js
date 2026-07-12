@@ -7735,9 +7735,11 @@
     }
     // Material-risk acknowledgments: the trade stays PLACEABLE, but never silently.
     var acks = [];
-    if (p.expectedValueCents !== null && p.expectedValueCents !== undefined && p.expectedValueCents < 0) {
+    var marketEvAfterCosts = p.expectedValueCents !== null && p.expectedValueCents !== undefined
+      ? p.expectedValueCents - 2 * (p.feesOpenCents || 0) : null;
+    if (marketEvAfterCosts !== null && marketEvAfterCosts < 0) {
       acks.push({ id: 'ack-ev', label: 'I understand the model expects this trade to LOSE '
-        + fmtMoney(-p.expectedValueCents) + ' on average at the market\u2019s own volatility.' });
+        + fmtMoney(-marketEvAfterCosts) + ' on average at the market\u2019s own volatility.' });
     }
     if (exec.concessionPctOfMid !== undefined && Math.abs(exec.concessionPctOfMid) > 0.10) {
       acks.push({ id: 'ack-exec', label: 'I understand entering surrenders '

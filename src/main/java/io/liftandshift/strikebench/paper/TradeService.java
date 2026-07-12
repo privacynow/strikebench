@@ -1395,7 +1395,11 @@ public final class TradeService {
         double pAny = map.pAnyProfit();
         Object concessionPct = exec.get("concessionPctOfMid");
         boolean expensive = concessionPct instanceof Double d && Math.abs(d) > 0.10;
-        long evAfterFees = (ev == null ? 0 : ev) - fees;
+        // EV is a terminal payoff expectation. Judge it against the same estimated round-trip
+        // commissions used by EconomicAssessment and the ticket acknowledgment, not merely the
+        // opening commission. Otherwise Builder, Ideas and Decide show three different numbers
+        // for the same package.
+        long evAfterFees = (ev == null ? 0 : ev) - Math.multiplyExact(fees, 2L);
         if (curve.maxLossUnbounded()) {
             verdict = "unfavorable"; reason = "Risk is UNDEFINED — the stress loss below is a scenario, not a cap.";
         } else if (ev != null && evAfterFees < 0 && pAny < 0.45) {

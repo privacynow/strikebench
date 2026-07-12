@@ -694,6 +694,16 @@ class ApiIntegrationTest {
         assertThat(p.get("underlyingCents").asLong()).isGreaterThan(0);
         assertThat(spreadResponse.get("economics").get("verdict").asText()).isNotBlank();
         assertThat(spreadResponse.get("economics").has("marketEvAfterCostsCents")).isTrue();
+        long afterCosts = spreadResponse.get("economics").get("marketEvAfterCostsCents").asLong();
+        if (afterCosts < 0) {
+            String evAck = "";
+            for (JsonNode ack : spreadResponse.path("requiredAcks")) {
+                if ("ack-ev".equals(ack.path("id").asText())) evAck = ack.path("label").asText();
+            }
+            assertThat(evAck).contains(io.liftandshift.strikebench.util.Money.fmt(-afterCosts));
+            assertThat(p.get("analytics").get("verdictReason").asText())
+                    .contains(io.liftandshift.strikebench.util.Money.fmt(afterCosts));
+        }
 
         // Per-leg marks aligned with the request: fills at executable sides, greeks present
         assertThat(p.get("legs").size()).isEqualTo(2);

@@ -1481,9 +1481,11 @@ public final class ApiServer {
                                                       io.liftandshift.strikebench.paper.AccountRiskContext rc) {
         List<Map<String, String>> out = new ArrayList<>();
         if (p == null || p.analytics() == null) return out;
-        if (p.expectedValueCents() != null && p.expectedValueCents() < 0) {
+        Long marketEvAfterCosts = p.expectedValueCents() == null ? null
+                : p.expectedValueCents() - Math.multiplyExact(p.feesOpenCents(), 2L);
+        if (marketEvAfterCosts != null && marketEvAfterCosts < 0) {
             out.add(Map.of("id", "ack-ev", "label", "The model expects this trade to LOSE "
-                    + io.liftandshift.strikebench.util.Money.fmt(-p.expectedValueCents())
+                    + io.liftandshift.strikebench.util.Money.fmt(-marketEvAfterCosts)
                     + " on average at the market's own volatility."));
         }
         Object execO = p.analytics().get("executionQuality");
