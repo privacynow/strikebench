@@ -1,5 +1,9 @@
 package io.liftandshift.strikebench.eval;
 
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.DataProvenance;
+
 /**
  * How trustworthy the data behind an evaluation dimension is — the honesty backbone of the whole
  * product. Ordered worst-last so a portfolio of dimensions rolls up to its LEAST-certain member
@@ -44,6 +48,26 @@ public enum EvidenceLevel {
             case "FIXTURE" -> DEMO_FIXTURE;
             case "STALE", "MISSING" -> UNKNOWN;
             default -> UNKNOWN;
+        };
+    }
+
+    /** Maps provenance and age without collapsing those independent facts back into Freshness. */
+    public static EvidenceLevel fromEvidence(DataEvidence evidence) {
+        if (evidence == null) return UNKNOWN;
+        DataProvenance provenance = evidence.provenance();
+        if (provenance == null || provenance == DataProvenance.MISSING
+                || provenance == DataProvenance.MIXED) return UNKNOWN;
+        return switch (provenance) {
+            case DEMO -> DEMO_FIXTURE;
+            case SIMULATED -> SIMULATED;
+            case MODELED -> MODELED;
+            case OBSERVED, BROKER -> switch (evidence.age() == null ? DataAge.MISSING : evidence.age()) {
+                case REALTIME -> OBSERVED_LIVE;
+                case DELAYED -> OBSERVED_DELAYED;
+                case EOD -> OBSERVED_EOD;
+                case STALE, NOT_APPLICABLE, MISSING -> UNKNOWN;
+            };
+            case MIXED, MISSING -> UNKNOWN;
         };
     }
 }

@@ -5,7 +5,7 @@ import java.util.Map;
 
 /**
  * Per-dimension evidence with a worst-of rollup. Dimensions: pricing (bid/ask), volatility,
- * greeks, liquidity, history. The {@link #rollup()} is the single badge the UI shows; the map is
+ * greeks, liquidity, history, and rates. The {@link #rollup()} is the single badge the UI shows; the map is
  * the detail behind it. Produced by {@code EvidenceAssembler}.
  */
 public record EvidenceProfile(EvidenceLevel rollup, Map<String, EvidenceLevel> perDimension, String note) {

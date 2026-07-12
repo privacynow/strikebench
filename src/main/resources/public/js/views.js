@@ -2221,6 +2221,7 @@
     var sectorSel = sectorRail({
       id: 'universe-sector', active: uniData && uniData.active ? uniData.active.sectorKey : null,
       onPick: async function (sec) {
+        invalidateScanResults();
         try {
           if (sec.key === 'world' || (App.state.world && App.state.world !== 'observed')) {
             if (UI.toast) UI.toast('You are in a simulated session \u2014 its symbols ARE the market here.');
@@ -2252,14 +2253,18 @@
     var hW = el('input', { type: 'checkbox', id: 'auto-h-week', checked: saved.hW === false ? null : '' });
     var hM = el('input', { type: 'checkbox', id: 'auto-h-month', checked: saved.hM === false ? null : '' });
     [h0, hW, hM].forEach(function (n) {
-      n.addEventListener('change', function () { remember({ h0: h0.checked, hW: hW.checked, hM: hM.checked }); });
+      n.addEventListener('change', function () {
+        remember({ h0: h0.checked, hW: hW.checked, hM: hM.checked });
+        invalidateScanResults();
+      });
     });
-    universe.addEventListener('change', function () { remember({ universe: universe.value }); });
-    scanTarget.addEventListener('change', function () { remember({ scanTarget: scanTarget.value }); });
+    universe.addEventListener('input', function () { remember({ universe: universe.value }); invalidateScanResults(); });
+    scanTarget.addEventListener('input', function () { remember({ scanTarget: scanTarget.value }); invalidateScanResults(); });
     thesis.addEventListener('change', function () { remember({ thesis: thesis.value }); });
 
     var filters = filterPanel('rec');
     var results = el('div', { id: 'rec-results' });
+    filters.node.addEventListener('input', invalidateScanResults);
     var holdingsHint = el('div', { id: 'rec-holdings-hint' });
 
     // 1. WHY are you here — the goal decides which questions even make sense.
@@ -2365,6 +2370,50 @@
 
     // scan = the scout pipeline; "Everything" on one named stock also scans (universe = [it])
     function scanMode() { return source === 'scan' || goal === 'ALL'; }
+
+    function buildScanBody() {
+      var horizonsSel = [];
+      if (h0.checked) horizonsSel.push('0DTE');
+      if (hW.checked) horizonsSel.push('week');
+      if (hM.checked) horizonsSel.push('month');
+      var body = { horizons: horizonsSel, riskMode: riskMode(), allow0dte: h0.checked };
+      body.intents = goal === 'ALL'
+        ? (Learn.INTENTS || []).map(function (i) { return i.key; })
+        : [goal];
+      var f = filters.value();
+      if (f) body.filters = f;
+      var flMax = filters.maxLossCents();
+      if (flMax) body.maxLossCents = flMax;
+      var symVal = sym.value.trim().toUpperCase();
+      if (source === 'single' && symVal) body.universe = [symVal];
+      else if (universe.value.trim()) {
+        body.universe = universe.value.split(',').map(function (x) {
+          return x.trim().toUpperCase();
+        }).filter(Boolean);
+      }
+      if (scanTarget.value) body.targetProfitCents = Math.round(parseFloat(scanTarget.value) * 100);
+      return body;
+    }
+
+    function scanRequestKey(body) {
+      var active = (App.state.universe && App.state.universe.active) || {};
+      var effectiveSymbols = (body.universe || active.symbols || []).map(function (s) {
+        return String(s).toUpperCase();
+      });
+      return JSON.stringify({
+        lane: App.state.world || 'observed', sector: active.sectorKey || null,
+        symbols: effectiveSymbols, intents: body.intents || [], horizons: body.horizons || [],
+        riskMode: body.riskMode, allow0dte: !!body.allow0dte,
+        filters: body.filters || null, maxLossCents: body.maxLossCents || null,
+        targetProfitCents: body.targetProfitCents || null
+      });
+    }
+
+    function invalidateScanResults() {
+      App.state.scoutResults = null;
+      if (typeof goSeq === 'number') goSeq++;
+      if (results && scanMode()) results.innerHTML = '';
+    }
 
     function sync() {
       var scan = scanMode();
@@ -2516,7 +2565,12 @@
     // matches the current symbol+goal; the render fns already take the level, so a level flip
     // re-renders the cached payload instead of re-fetching.
     if (scanMode() && App.state.scoutResults) {
-      renderScoutResults(results, App.state.scoutResults);
+      var restoreBody = buildScanBody();
+      if (App.state.scoutResults.key === scanRequestKey(restoreBody)) {
+        renderScoutResults(results, App.state.scoutResults.scan);
+      } else {
+        App.state.scoutResults = null;
+      }
     } else if (!scanMode() && App.state.recommendResults
         && App.state.recommendResults.symbol === (sym.value || '').trim().toUpperCase()
         && App.state.recommendResults.goal === goal) {
@@ -2530,25 +2584,12 @@
       results.appendChild(UI.spinner('Scanning and deriving views\u2026'));
       try {
         App.context.update({ goal: goal });
-        var horizonsSel = [];
-        if (h0.checked) horizonsSel.push('0DTE');
-        if (hW.checked) horizonsSel.push('week');
-        if (hM.checked) horizonsSel.push('month');
-        var body = { horizons: horizonsSel, riskMode: riskMode(), allow0dte: h0.checked };
-        body.intents = goal === 'ALL'
-          ? (Learn.INTENTS || []).map(function (i) { return i.key; })
-          : [goal];
-        var f = filters.value();
-        if (f) body.filters = f;
-        var flMax = filters.maxLossCents();
-        if (flMax) body.maxLossCents = flMax;
-        var symVal = sym.value.trim().toUpperCase();
-        if (source === 'single' && symVal) body.universe = [symVal]; // "Everything" for one named stock
-        else if (universe.value.trim()) body.universe = universe.value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
-        if (scanTarget.value) body.targetProfitCents = Math.round(parseFloat(scanTarget.value) * 100);
+        var body = buildScanBody();
+        var requestKey = scanRequestKey(body);
         var scan = await API.post('/api/recommend/auto', body);
         if (seq !== goSeq) return; // a newer run superseded this
-        App.state.scoutResults = scan;
+        if (requestKey !== scanRequestKey(buildScanBody())) return; // controls changed during the scan
+        App.state.scoutResults = { key: requestKey, scan: scan };
         renderScoutResults(results, scan);
       } catch (e) {
         if (seq !== goSeq) return;

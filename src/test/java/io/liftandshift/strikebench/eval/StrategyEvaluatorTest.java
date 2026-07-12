@@ -62,7 +62,7 @@ class StrategyEvaluatorTest {
 
         // Evidence: rolls up to the worst dimension (EOD history beats DELAYED pricing), still observed.
         assertThat(e.evidence().rollup().isObserved()).isTrue();
-        assertThat(e.evidence().perDimension()).containsKeys("pricing", "greeks", "volatility", "liquidity", "history");
+        assertThat(e.evidence().perDimension()).containsKeys("pricing", "greeks", "volatility", "liquidity", "history", "rates");
 
         // Score: gate passes; final score in range; six named components that never stand alone.
         assertThat(e.score().gatePassed()).isTrue();
@@ -85,9 +85,23 @@ class StrategyEvaluatorTest {
 
         assertThat(demo.evidenceLevel()).isEqualTo(EvidenceLevel.DEMO_FIXTURE);
         assertThat(demo.evidence().perDimension().get("history")).isEqualTo(EvidenceLevel.DEMO_FIXTURE);
+        assertThat(demo.evidence().perDimension().get("volatility")).isEqualTo(EvidenceLevel.DEMO_FIXTURE);
         // Same trade, demo data -> a strictly lower risk-adjusted score (honesty haircut).
         assertThat(demo.rankScore()).isLessThan(live.rankScore());
         assertThat(demo.explanation().failureModes()).anyMatch(f -> f.contains("DEMO"));
+    }
+
+    @Test void generatedPricingCannotBeSoftenedByModeledVolatilityOrRates() {
+        EvalContext generated = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25, List.of(),
+                10_000_000L, true, 65, 0.04,
+                io.liftandshift.strikebench.model.DataEvidence.of(
+                        "simulated rate", io.liftandshift.strikebench.model.Freshness.SIMULATED));
+        StrategyEvaluation simulated = evaluator.evaluate(debitCallSpread("SIMULATED", 0.6), null, generated);
+
+        assertThat(simulated.evidence().perDimension().get("pricing")).isEqualTo(EvidenceLevel.SIMULATED);
+        assertThat(simulated.evidence().perDimension().get("volatility")).isEqualTo(EvidenceLevel.SIMULATED);
+        assertThat(simulated.evidence().perDimension().get("rates")).isEqualTo(EvidenceLevel.SIMULATED);
+        assertThat(simulated.evidenceLevel()).isEqualTo(EvidenceLevel.SIMULATED);
     }
 
     @Test void gateBlocksInsufficientBuyingPower() {

@@ -987,6 +987,28 @@ test('discover scan: a blank symbol box auto-recommends with evidence and target
     'Scout uses the same economic classification as manual Ideas');
   // headline evidence is expandable
   assert.ok(await page.locator('.pick-card details').first().isVisible());
+
+  // Results belong to their exact market context. Reproduce a sector transition at the state
+  // boundary: even before a new scan runs, the prior sector's field must disappear.
+  await page.evaluate(async () => {
+    const u = App.state.universe;
+    App.state.universe = Object.assign({}, u, {
+      active: Object.assign({}, u.active, { sectorKey: '__TEST_OTHER_SECTOR__' })
+    });
+    document.getElementById('app').setAttribute('data-ready', 'false');
+    await App.render();
+  });
+  await page.waitForSelector('#app[data-ready="true"]');
+  assert.equal(await page.locator('#rec-results .pick-card').count(), 0,
+    'changing sectors removes recommendations from the prior universe');
+  assert.equal(await page.evaluate(() => App.state.scoutResults), null,
+    'the stale scan is removed from persisted workspace state');
+  await page.evaluate(async () => {
+    await App.refreshUniverse();
+    document.getElementById('app').setAttribute('data-ready', 'false');
+    await App.render();
+  });
+  await page.waitForSelector('#app[data-ready="true"]');
 });
 
 test('recommendations render candidates and blocked examples', async () => {
