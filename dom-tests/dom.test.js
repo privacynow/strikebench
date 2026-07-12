@@ -990,6 +990,10 @@ test('market stream (SSE): the browser receives live quote frames from the engin
 test('discover scan: a blank symbol box auto-recommends with evidence and targets', async () => {
   await go('#/trade/context/scout'); // canonical Context mode for a market scan
   await page.waitForSelector('#auto-target'); // scan-scope fields visible in scan mode
+  // This suite deliberately persists goal context in the preceding workspace tests. Own
+  // this journey's directional premise instead of assuming a fresh process: a retained
+  // HEDGE goal with no holdings correctly returns no picks.
+  await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
   assert.ok(await page.locator('#idea-source .choice[data-source="scan"].selected').count(),
     '"Scan the market for me" is an explicit, visible choice');
   assert.ok(!(await page.locator('#rec-symbol').isVisible()), 'no ticker box while scanning');
