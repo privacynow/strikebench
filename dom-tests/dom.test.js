@@ -1780,6 +1780,25 @@ test('data center reset tiers are reduced for Beginner', async () => {
   await page.click('#level-switch button[data-level="expert"]'); // restore for later tests
 });
 
+test('non-admin Data access stays informative without dead app-wide mutation controls', async () => {
+  await page.route('**/api/data/overview', async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.admin = false;
+    await route.fulfill({ response, json: body });
+  });
+  await go('#/data/sources');
+  await page.waitForSelector('#dc-history-sync:has-text("requires admin access")');
+  assert.equal(await page.locator('#data-tabs [data-tab="admin"]:visible').count(), 0,
+    'Administration is not advertised to a non-admin');
+  assert.equal(await page.locator('#data-sync-preview, #data-csv-upload, #data-sync-schedule-save').count(), 0,
+    'app-wide sync, import, and schedule controls are not rendered as dead actions');
+  await page.waitForSelector('#dc-sources .dc-source');
+  assert.match(await page.textContent('#dc-sources'), /Daily price-history connectors/,
+    'source eligibility remains readable');
+  await page.unroute('**/api/data/overview');
+});
+
 test('pro depth: comparison table, custom builder, position greeks', async () => {
   // Comparison table on Ideas at Pro
   await go('#/trade/context/manual');

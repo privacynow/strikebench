@@ -428,6 +428,13 @@ class ApiIntegrationTest {
     }
 
     @Test
+    void appWideObservedDataJobsShareOneAuthorizationClassification() {
+        assertThat(ApiServer.privilegedDataJobKind("sync_underlying")).isTrue();
+        assertThat(ApiServer.privilegedDataJobKind("import_options_csv")).isTrue();
+        assertThat(ApiServer.privilegedDataJobKind("refresh_now")).isFalse();
+    }
+
+    @Test
     @Order(12)
     void unknownApiPathIs404Json() throws Exception {
         HttpResponse<String> res = get("/api/nonexistent");

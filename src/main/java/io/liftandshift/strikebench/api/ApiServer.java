@@ -2105,14 +2105,14 @@ public final class ApiServer {
     private void dataJobStart(Context ctx) {
         JobRequest b = requireBody(bodyOrNull(ctx, JobRequest.class));
         // Both jobs mutate app-wide observed history. The server-path import also reads a local file.
-        if ("import_options_csv".equalsIgnoreCase(b.kind())
-                || "sync_underlying".equalsIgnoreCase(b.kind())) requireAdmin(ctx);
+        if (privilegedDataJobKind(b.kind())) requireAdmin(ctx);
         ctx.json(dataJobs.start(b.kind(), b.params(), ownerId(ctx)));
     }
 
     private void dataJobCancel(Context ctx) {
         String id = ctx.pathParam("id");
         requireJobAccess(ctx, id);
+        if (privilegedDataJobKind(dataJobs.kindOf(id))) requireAdmin(ctx);
         dataJobs.cancel(id);
         ctx.json(Map.of("ok", true));
     }
@@ -2121,9 +2121,13 @@ public final class ApiServer {
         String id = ctx.pathParam("id");
         requireJobAccess(ctx, id);
         // Re-running a privileged CSV import is itself privileged, even for the job's owner.
-        if ("import_options_csv".equalsIgnoreCase(dataJobs.kindOf(id))
-                || "sync_underlying".equalsIgnoreCase(dataJobs.kindOf(id))) requireAdmin(ctx);
+        if (privilegedDataJobKind(dataJobs.kindOf(id))) requireAdmin(ctx);
         ctx.json(dataJobs.retry(id, ownerId(ctx)));
+    }
+
+    static boolean privilegedDataJobKind(String kind) {
+        return "import_options_csv".equalsIgnoreCase(kind)
+                || "sync_underlying".equalsIgnoreCase(kind);
     }
 
     // ---- Datasets & scenario simulation ----

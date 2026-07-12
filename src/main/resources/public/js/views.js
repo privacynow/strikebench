@@ -5487,6 +5487,9 @@
   async function data(root, params) {
     var level = Learn.currentLevel();
     var token = App.navToken;
+    // One authorization read owns every app-wide data control on this route. Source descriptions,
+    // coverage, and job results remain readable; mutation affordances fail closed.
+    var dataAccessP = API.get('/api/data/overview').catch(function () { return null; });
     // ROUTE-BACKED SUBNAVIGATION (holistic review addendum A): Data is five workspaces, not one
     // scroll. Data owns its canonical route; back/forward, bookmarks and workspace restore keep the tab.
     var TABS = [
@@ -5551,7 +5554,7 @@
     // server enforces regardless; the tab must not advertise what the caller cannot do).
     (async function gateAdminTab() {
       try {
-        var ov = await API.get('/api/data/overview');
+        var ov = await dataAccessP;
         var btn = document.querySelector('#data-tabs [data-tab="admin"]');
         if (ov && ov.admin) { if (btn) btn.style.display = ''; }
         else if (tab === 'admin') App.navigate('#/data/overview');
@@ -6677,6 +6680,8 @@
       try { data = await API.getFresh('/api/data/jobs'); } catch (e) { return; }
       if (!App.alive(token)) { if (jobsTimer) clearTimeout(jobsTimer); return; }
       var jobs = data.jobs || [];
+      var access = await dataAccessP;
+      var canAdmin = !!(access && access.admin);
       jobsCard.innerHTML = '';
       jobsCard.appendChild(UI.cardHeader('Jobs', el('button', { class: 'btn btn-sm btn-secondary', onclick: loadJobs }, 'Refresh')));
       if (level === 'beginner') jobsCard.appendChild(explain('Background tasks that fetch or refresh data. Progress and results show here.'));
@@ -6695,9 +6700,9 @@
             el('b', {}, jobName(j.kind)),
             el('span', { class: 'muted' }, j.done + '/' + j.total + ' · ' + j.rowsWritten + ' rows'),
             el('span', { class: 'spacer' }),
-            (j.status === 'RUNNING' || j.status === 'QUEUED')
+            (j.status === 'RUNNING' || j.status === 'QUEUED') && (canAdmin || !['sync_underlying', 'import_options_csv'].includes(j.kind))
               ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { API.post('/api/data/jobs/' + j.id + '/cancel', {}).then(loadJobs); } }, 'Cancel')
-              : (j.status === 'FAILED' || j.status === 'CANCELLED')
+              : (j.status === 'FAILED' || j.status === 'CANCELLED') && (canAdmin || !['sync_underlying', 'import_options_csv'].includes(j.kind))
                 ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { API.post('/api/data/jobs/' + j.id + '/retry', {}).then(loadJobs); } }, 'Retry')
                 : null),
           dcProgress(j.done, j.total),
@@ -6878,6 +6883,16 @@
     // --- Daily-history acquisition: one guided workflow over every lawful connector. ---
     (async function fillHistorySync() {
       if (!syncCard.isConnected) return;
+      var access = await dataAccessP;
+      if (!access || !access.admin) {
+        if (!App.alive(token) || !syncCard.isConnected) return;
+        syncCard.innerHTML = '';
+        syncCard.appendChild(UI.cardHeader('Get & maintain daily price history'));
+        syncCard.appendChild(alertBox('caution', 'History management requires admin access', [
+          'This changes the shared observed-data inventory and provider allowance. You can still inspect source eligibility, stored coverage, and completed jobs on this screen.'
+        ]));
+        return;
+      }
       var doc;
       try { doc = await API.getFresh('/api/data/sync'); }
       catch (e) {
