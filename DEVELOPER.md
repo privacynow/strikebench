@@ -26,11 +26,14 @@ The consolidation program is complete on `feature/research-platform` and is not 
   every session symbol at once, one clearly named focus chart, the moving account/book, and explicit
   management controls. Research hands a scenario to the simulator only as a reviewable practice setup;
   it never treats one realized path as validation of the distribution.
+- Economic teaching-market labels are reserved for `DEMO_FIXTURE` and `SIMULATED` pricing evidence.
+  `MODELED` is an incomplete input inside another lane, not a generated market; otherwise-promising
+  modeled fallbacks remain `MIXED` until end-to-end evidence supports a stronger verdict.
 - The old Lab, standalone Decision, ETF-replicator, old Trade-stage, and
   `/api/sim/{scenario,strategy,compare}` surfaces are gone. Do not restore internal aliases or DTO
   overloads for hypothetical API consumers. Database and model-version migrations remain because
   they protect actual persisted user data and deterministic model identity.
-- Current release evidence is **487 JUnit + 76 fixture DOM + 8 responsive widths + 4 grown-state +
+- Current release evidence is **488 JUnit + 77 fixture DOM + 8 responsive widths + 4 grown-state +
   8 live-provider DOM, all green**. Representative screenshots are under
   `dom-tests/shots/final-*.png`.
 
@@ -181,7 +184,7 @@ temp database; each suite needs its own port. Page JS errors and 5xx responses a
 failures. Run all suites — fresh-DB suites miss grown-state bugs, fixture suites miss live
 ones. The responsive audit checks 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 pixels and
 fails on horizontal overflow, clipped controls, or inaccessible geometry. Current counts are
-487 JUnit, 76 fixture DOM, 8 responsive widths, 4 grown-state, and 8 live-provider cases.
+488 JUnit, 77 fixture DOM, 8 responsive widths, 4 grown-state, and 8 live-provider cases.
 
 Released Flyway migrations are byte-immutable. `MigrationImmutabilityTest` pins every V1-V19
 SHA-256 digest and requires each new migration to be added to the manifest. Never edit an applied
