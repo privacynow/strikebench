@@ -15,6 +15,7 @@ import io.liftandshift.strikebench.model.SymbolMatch;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -50,7 +51,7 @@ class ResearchQuestionEngineTest {
         MarketDataService market = new MarketDataService(
                 List.<MarketDataProvider>of(new SeriesProvider(candles, f)),
                 List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
-        return new ResearchQuestionEngine(market);
+        return new ResearchQuestionEngine(market, Clock.systemUTC());
     }
 
     /** A DETERMINISTIC mild-drift random walk (seeded): realistic pullbacks so breakouts/new-highs are

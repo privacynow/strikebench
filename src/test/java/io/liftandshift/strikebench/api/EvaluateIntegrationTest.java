@@ -189,4 +189,33 @@ class EvaluateIntegrationTest {
         assertThat(post("/api/sim/strategy", "{}").statusCode()).isEqualTo(404);
         assertThat(post("/api/sim/compare", "{}").statusCode()).isEqualTo(404);
     }
+
+    @Test void riskNeutralBasisEvaluatesExactListedPackagesThroughTheSameContract() throws Exception {
+        String body = """
+                {"contractVersion":1,"operation":"POSITION","basis":"RISK_NEUTRAL",
+                 "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+                 "position":{"key":"PUT_SPREAD","qty":1,"legs":[
+                   {"action":"SELL","type":"PUT","strike":255,"expiration":"2026-08-14","ratio":1},
+                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1}]}}
+                """;
+        HttpResponse<String> response = post("/api/evaluate", body);
+        assertThat(response.statusCode()).isEqualTo(200);
+        JsonNode envelope = Json.MAPPER.readTree(response.body());
+        assertThat(envelope.get("basis").asText()).isEqualTo("RISK_NEUTRAL");
+        assertThat(envelope.at("/result/probabilityMap/pAnyProfit").asDouble()).isBetween(0.0, 1.0);
+        assertThat(envelope.at("/result/marketIv").asDouble()).isPositive();
+        assertThat(envelope.at("/result/time/basis").asText()).contains("chain-IV convention");
+        assertThat(envelope.at("/result/source").asText()).containsIgnoringCase("fixture");
+        assertThat(envelope.at("/result/evSensitivity").size()).isEqualTo(3);
+
+        String compare = body.replace("\"operation\":\"POSITION\"", "\"operation\":\"COMPARE\"")
+                .replace("\"position\":{", "\"positions\":[{")
+                .replace("]}}\n", "]}]}\n");
+        HttpResponse<String> compared = post("/api/evaluate", compare);
+        assertThat(compared.statusCode()).isEqualTo(200);
+        JsonNode comparison = Json.MAPPER.readTree(compared.body()).get("result");
+        assertThat(comparison.get("results")).hasSize(1);
+        assertThat(comparison.get("refused")).isEmpty();
+        assertThat(comparison.get("fairness").asText()).contains("one captured");
+    }
 }

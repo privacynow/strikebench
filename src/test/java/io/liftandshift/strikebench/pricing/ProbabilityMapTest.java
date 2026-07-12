@@ -32,7 +32,7 @@ class ProbabilityMapTest {
     @Test
     void probabilitiesPartitionAndMatchTheMuIncident() {
         // Spot 991.83, IV 75.6%, one trading session (1/252) — the exact regime of the real trade.
-        var r = ProbabilityMap.of(condor(), 991.83, 0.756, 3.0 / 365.0,
+        var r = ProbabilityMap.of(condor(), 991.83, 0.756, 3.0 / 365.0, 0.0,
                 List.of(new BigDecimal("980"), new BigDecimal("1005")));
         // Partition: any-profit + max-loss + partial-loss ≈ 1 (each outcome is exactly one of these).
         assertThat(r.pAnyProfit() + r.pMaxLoss() + r.pPartial()).isCloseTo(1.0, org.assertj.core.data.Offset.offset(0.02));
@@ -65,7 +65,8 @@ class ProbabilityMapTest {
         // Naked short call: no max loss exists; the stress figure must be a real negative scenario.
         PayoffCurve naked = PayoffCurve.of(List.of(
                 leg(LegAction.SELL, OptionType.CALL, "100", "3.00")), 1);
-        var r = ProbabilityMap.of(naked, 100, 0.4, 30 / 365.0, List.of(new BigDecimal("100")));
+        var r = ProbabilityMap.of(naked, 100, 0.4, 30 / 365.0, 0.0,
+                List.of(new BigDecimal("100")));
         assertThat(naked.maxLossUnbounded()).isTrue();
         assertThat(r.pMaxLoss()).isZero();           // there IS no "max loss" to land on
         assertThat(r.stressLossCents()).isLessThan(0); // but the +20%/2σ stress is honest and large
@@ -76,7 +77,7 @@ class ProbabilityMapTest {
     void longCallMapIsCoherent() {
         PayoffCurve lc = PayoffCurve.of(List.of(
                 leg(LegAction.BUY, OptionType.CALL, "100", "2.50")), 1);
-        var r = ProbabilityMap.of(lc, 100, 0.3, 30 / 365.0, List.of());
+        var r = ProbabilityMap.of(lc, 100, 0.3, 30 / 365.0, 0.0, List.of());
         // Debit single: max loss = the debit, hit whenever S <= K; pMaxLoss is large and real.
         assertThat(r.pMaxLoss()).isGreaterThan(0.3);
         assertThat(r.pAnyProfit()).isBetween(0.05, 0.6);
@@ -87,7 +88,7 @@ class ProbabilityMapTest {
 
     @Test
     void degenerateInputsRefuseHonestly() {
-        var r = ProbabilityMap.of(condor(), 0, 0.5, 0.01, List.of());
+        var r = ProbabilityMap.of(condor(), 0, 0.5, 0.01, 0.0, List.of());
         assertThat(r.basis()).contains("undefined");
         assertThat(r.pAnyProfit()).isZero();
     }

@@ -32,12 +32,6 @@ public final class ProbabilityMap {
 
     private ProbabilityMap() {}
 
-    /** Back-compat overload: zero rate (labeled zero-drift lognormal scenario). */
-    public static Result of(PayoffCurve curve, double spot, double sigma, double tYears,
-                            List<BigDecimal> shortStrikes) {
-        return of(curve, spot, sigma, tYears, 0.0, shortStrikes);
-    }
-
     /**
      * @param curve        exact payoff (includes any package-level price adjustment)
      * @param spot         current underlying

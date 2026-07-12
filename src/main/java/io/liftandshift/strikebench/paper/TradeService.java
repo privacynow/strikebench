@@ -16,7 +16,6 @@ import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -752,8 +751,9 @@ public final class TradeService {
             }
             PayoffCurve curve = PayoffCurve.of(curveLegs, t.qty());
             double ivAvg = ivs.isEmpty() ? FALLBACK_IV : ivs.stream().mapToDouble(Double::doubleValue).average().orElse(FALLBACK_IV);
-            TimeToExpiry mtte = timeToNearestExpiry(t.legs(), todayFor(world));
-            popNow = curve.probProfit(underlyingCents / 100.0, ivAvg, mtte.tYears(),
+            io.liftandshift.strikebench.market.OptionTime.Measure mtte =
+                    io.liftandshift.strikebench.market.OptionTime.nearest(t.legs(), todayFor(world));
+            popNow = curve.probProfit(underlyingCents / 100.0, ivAvg, mtte.years(),
                     marks.riskFreeRate((int) Math.max(1, mtte.calendarDays()), world));
         }
         return new MarkView(t.id(), now, underlyingCents, closeCost, unrealized, popNow, worst.name(),
@@ -1114,9 +1114,10 @@ public final class TradeService {
         List<Map<String, Object>> payoff = chartPointMaps(riskCurve, underlying);
 
         double spot = underlying.doubleValue();
-        TimeToExpiry tte = timeToNearestExpiry(filled,
-                LocalDate.ofInstant(nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN));
-        double t = tte.tYears();
+        io.liftandshift.strikebench.market.OptionTime.Measure tte =
+                io.liftandshift.strikebench.market.OptionTime.nearest(filled,
+                        LocalDate.ofInstant(nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN));
+        double t = tte.years();
         int rateDays = (int) Math.max(1, tte.calendarDays());
         double rfr = marks.riskFreeRate(rateDays, world);
         io.liftandshift.strikebench.model.DataEvidence rateEvidence =
@@ -1248,14 +1249,17 @@ public final class TradeService {
      * management plan, and a server-computed verdict — so Beginner and Expert read the SAME truth.
      */
     private Map<String, Object> buildAnalytics(PayoffCurve curve, double spot, double ivAvg, double t,
-                                               TimeToExpiry tte, List<BigDecimal> shortStrikes,
+                                               io.liftandshift.strikebench.market.OptionTime.Measure tte,
+                                               List<BigDecimal> shortStrikes,
                                                List<Map<String, Object>> snaps, int qty,
                                                long entryNet, long executableNet, Long packageMid,
                                                Long proposedNet, long fees, Long maxLoss, Long maxProfit,
                                                Long ev, Freshness freshness, Long sourceAsOf, double rfr,
                                                io.liftandshift.strikebench.model.DataEvidence rateEvidence) {
         Map<String, Object> out = new LinkedHashMap<>();
-        var map = io.liftandshift.strikebench.pricing.ProbabilityMap.of(curve, spot, ivAvg, t, rfr, shortStrikes);
+        var riskNeutral = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer
+                .analyze(curve, spot, ivAvg, t, rfr, shortStrikes);
+        var map = riskNeutral.probabilityMap();
         Map<String, Object> prob = new LinkedHashMap<>();
         prob.put("pAnyProfit", map.pAnyProfit());
         prob.put("pMaxProfit", map.pMaxProfit());
@@ -1272,11 +1276,9 @@ public final class TradeService {
 
         // EV sensitivity: the same integral at ±20% of the vol input — one falsely precise number
         // never travels alone.
-        List<Map<String, Object>> sens = new ArrayList<>();
-        for (double scale : new double[]{0.8, 1.0, 1.2}) {
-            sens.add(Map.of("ivScale", scale,
-                    "evCents", curve.expectedValueCents(spot, ivAvg * scale, t, rfr)));
-        }
+        List<Map<String, Object>> sens = riskNeutral.sensitivity().stream()
+                .map(x -> Map.<String, Object>of("ivScale", x.ivScale(), "evCents", x.evCents()))
+                .toList();
         out.put("evSensitivity", sens);
 
         Map<String, Object> exec = new LinkedHashMap<>();
@@ -1351,7 +1353,8 @@ public final class TradeService {
     }
 
     /** DTE-aware management plan: a 3-day trade must never be told to 'roll at 21 DTE'. */
-    private static Map<String, Object> dtePlan(TimeToExpiry tte, boolean credit) {
+    private static Map<String, Object> dtePlan(
+            io.liftandshift.strikebench.market.OptionTime.Measure tte, boolean credit) {
         List<String> rules = new ArrayList<>();
         String regime;
         if (tte.sessions() <= 5) {
@@ -1443,32 +1446,8 @@ public final class TradeService {
         return LocalDate.ofInstant(nowFor(worldId), io.liftandshift.strikebench.market.MarketHours.EASTERN);
     }
 
-    /** Sessions + calendar days + the model time to the nearest expiry, with its basis disclosed. */
-    record TimeToExpiry(int sessions, long calendarDays, double tYears, String basis) {}
-
-    private TimeToExpiry timeToNearestExpiry(List<Leg> legs) {
-        return timeToNearestExpiry(legs, LocalDate.now(clock));
-    }
-
-    private TimeToExpiry timeToNearestExpiry(List<Leg> legs, LocalDate today) {
-        LocalDate nearest = legs.stream().filter(l -> !l.isStock())
-                .map(Leg::expiration).filter(java.util.Objects::nonNull)
-                .min(LocalDate::compareTo).orElse(null);
-        if (nearest == null) return new TimeToExpiry(0, 0, 0.5 / 365.0, "no option legs");
-        long calDays = Math.max(0, ChronoUnit.DAYS.between(today, nearest));
-        int sessions = io.liftandshift.strikebench.market.MarketHours.tradingDaysBetween(today, nearest);
-        // ONE convention, reconciled (R1): risk-neutral probabilities de-annualize the CHAIN'S OWN
-        // IV, and vendors annualize IV on the calendar — the MU straddle premium reproduced only
-        // at calendar T. So model time is calendar/365 everywhere; TRADING SESSIONS drive the
-        // near-expiry REGIME (gamma warnings, plans) where realized dynamics are what matters.
-        double t = Math.max(calDays, 0.5) / 365.0;
-        String basis = calDays + " calendar days / 365 (chain-IV convention) \u00b7 "
-                + sessions + " trading session" + (sessions == 1 ? "" : "s") + " remain";
-        return new TimeToExpiry(sessions, calDays, t, basis);
-    }
-
     private double yearsToNearestExpiry(List<Leg> legs) {
-        return timeToNearestExpiry(legs).tYears();
+        return io.liftandshift.strikebench.market.OptionTime.nearest(legs, LocalDate.now(clock)).years();
     }
 
     private TradeRecord requireStatus(Connection c, String tradeId, String expected) throws SQLException {

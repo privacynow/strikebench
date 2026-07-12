@@ -12,6 +12,9 @@ import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.OptionChain;
+import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.support.TestDb;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +25,8 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -113,9 +118,11 @@ class SimulationStackTest {
         DatasetService datasets = new DatasetService(db, clock);
         MarketDataService market = new MarketDataService(List.<MarketDataProvider>of(fixture),
                 List.<NewsFilingsProvider>of(), List.<RatesProvider>of(), new StoredCandleStore(db, datasets));
-        SimulationEngine engine = new SimulationEngine(market, datasets, db, clock);
+        var ensembles = new PathEnsembleService(market, clock);
+        SimulationEngine engine = new SimulationEngine(market, datasets, db, clock, ensembles);
 
-        var run = engine.runAndPersist("AAPL", spec(ScenarioSpec.Shape.SELLOFF_REBOUND, 0, 3), null);
+        var run = engine.runAndPersist("AAPL", spec(ScenarioSpec.Shape.SELLOFF_REBOUND, 0, 3), null,
+                "observed", io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         assertThat(run.bars()).isGreaterThan(10);
         assertThat(datasets.list(null)).anySatisfy(d -> assertThat(d.id()).isEqualTo(run.datasetId()));
         // Observed rows are untouched: the synthetic bars live ONLY under the new dataset_id.
@@ -183,12 +190,62 @@ class SimulationStackTest {
         DatasetService datasets = new DatasetService(db, clock);
         MarketDataService market = new MarketDataService(List.<MarketDataProvider>of(fixture),
                 List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
-        SimulationEngine engine = new SimulationEngine(market, datasets, db, clock);
-        var p = engine.preview("AAPL", spec(ScenarioSpec.Shape.CHOP, 0, 11));
+        var ensembles = new PathEnsembleService(market, clock);
+        SimulationEngine engine = new SimulationEngine(market, datasets, db, clock, ensembles);
+        var p = engine.preview("AAPL", spec(ScenarioSpec.Shape.CHOP, 0, 11), "observed",
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         assertThat(p.bands()).hasSize(21); // day 0..20
         assertThat(p.samples()).isNotEmpty();
         assertThat(p.endP10()).isLessThanOrEqualTo(p.endP50());
         assertThat(p.endP50()).isLessThanOrEqualTo(p.endP90());
+    }
+
+    @Test
+    void pathAnchorsAndBootstrapHistoryAreExplicitPerLaneWithNoSharedWorldState() {
+        FixtureProvider demo = new FixtureProvider(clock);
+        MarketDataProvider observed = new MarketDataProvider() {
+            public String name() { return "observed-lane-test"; }
+            public Set<io.liftandshift.strikebench.market.Domain> domains() {
+                return Set.of(io.liftandshift.strikebench.market.Domain.QUOTES,
+                        io.liftandshift.strikebench.market.Domain.CANDLES);
+            }
+            public List<SymbolMatch> lookup(String q) { return List.of(); }
+            public Optional<Quote> quote(String s) {
+                var px = new java.math.BigDecimal("100.00");
+                return Optional.of(new Quote(s, s, px, px, px, px, px, px, 1L, true,
+                        clock.millis(), name(), Freshness.DELAYED));
+            }
+            public List<LocalDate> expirations(String s) { return List.of(); }
+            public Optional<OptionChain> chain(String s, LocalDate e) { return Optional.empty(); }
+            public List<io.liftandshift.strikebench.model.Candle> candles(String s, LocalDate from, LocalDate to) {
+                List<io.liftandshift.strikebench.model.Candle> out = new java.util.ArrayList<>();
+                LocalDate d = from;
+                double px = 50;
+                while (!d.isAfter(to)) {
+                    px *= 1.001;
+                    var p = java.math.BigDecimal.valueOf(px);
+                    out.add(new io.liftandshift.strikebench.model.Candle(d, p, p, p, p, 1, false));
+                    d = d.plusDays(1);
+                }
+                return out;
+            }
+        };
+        MarketDataService market = new MarketDataService(List.of(observed), List.of(), List.of());
+        market.setDemoSources(demo, demo, demo);
+        var paths = new PathEnsembleService(market, clock);
+        var observedScope = new PathEnsembleService.Scope("AAPL", "observed",
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        var demoScope = new PathEnsembleService.Scope("AAPL", "demo",
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+
+        assertThat(paths.anchorSpot(observedScope)).isEqualTo(100.0);
+        assertThat(paths.anchorSpot(demoScope)).isEqualTo(255.30);
+        assertThat(paths.historicalLogReturns(observedScope)).isNotNull();
+        assertThat(paths.historicalLogReturns(demoScope)).isNotNull();
+        assertThat(paths.historicalLogReturns(observedScope)[0])
+                .isNotEqualTo(paths.historicalLogReturns(demoScope)[0]);
+        assertThat(java.util.Arrays.stream(SimulationEngine.class.getDeclaredFields())
+                .map(java.lang.reflect.Field::getName)).doesNotContain("anchorWorld");
     }
 
     @Test

@@ -29,33 +29,41 @@ public final class SimulationEngine {
     private final DatasetService datasets;
     private final Db db;
     private final Clock clock;
-    private final PathGenerator generator = new PathGenerator();
+    private final PathEnsembleService ensembles;
 
-    public SimulationEngine(MarketDataService market, DatasetService datasets, Db db, Clock clock) {
+    public SimulationEngine(MarketDataService market, DatasetService datasets, Db db, Clock clock,
+                            PathEnsembleService ensembles) {
         this.market = market;
         this.datasets = datasets;
         this.db = db;
         this.clock = clock;
+        this.ensembles = ensembles;
     }
 
     public record DatasetRun(String datasetId, String name, String symbol, int bars, long seed,
                              double startPrice, double endPrice, List<String> notes) {}
 
     /** Generate + persist one synthetic future for a symbol. Returns the auto-saved dataset. */
-    public DatasetRun runAndPersist(String symbolRaw, ScenarioSpec specRaw, String userId) {
+    public DatasetRun runAndPersist(String symbolRaw, ScenarioSpec specRaw, String userId,
+                                    String worldId,
+                                    io.liftandshift.strikebench.db.AnalysisContext analysis) {
         String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
-
-        // Anchor on reality: the latest real (or explicit demo) price. NO silent fallback — a
-        // simulation anchored on an invented $100 stock would be the fixture-masquerade failure
-        // all over again. Missing quote = loud refusal (404 via the NoSuchElementException mapper).
-        double spot = anchorSpot(symbol);
-        double[] hist = historicalLogReturns(symbol);
-
-        // A dataset is ONE concrete future (the seed's) — generate exactly one path, not the
-        // full Monte-Carlo fleet just to keep index [0].
-        double[] path = generator.generate(spec.withPaths(1).sane(), spot, hist)[0];
+        var scope = new PathEnsembleService.Scope(symbol, worldId, analysis);
+        PathEnsembleService.Ensemble generated;
+        try (AutoCloseable permit = SimBudget.acquire()) {
+            // A dataset is ONE concrete future (the seed's), anchored on the active market and
+            // calibrated from the active dataset. No shared call state, no observed-lane fallback.
+            generated = ensembles.build(scope, PathEnsembleService.Basis.PARAMETRIC,
+                    spec.withPaths(1).sane(), null);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+        double spot = generated.spot();
+        double[] path = generated.paths()[0];
         int spd = Math.max(1, spec.stepsPerDay());
         int days = spec.totalSteps() / spd;
 
@@ -66,7 +74,10 @@ public final class SimulationEngine {
         // happened". Future-dated bars satisfied nothing (Research asks for history ending today;
         // backtests use historical windows), so activating a saved run changed only the banner.
         // As the recent past, the active dataset genuinely drives charts, HV, and backtests.
-        List<Candle> bars = toDailyBars(path, spd, tradingDaysBack(LocalDate.now(clock), days - 1));
+        LocalDate laneToday = market.simInstant(scope.worldId())
+                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                .orElseGet(() -> LocalDate.now(clock));
+        List<Candle> bars = toDailyBars(path, spd, tradingDaysBack(laneToday, days - 1));
         db.tx(c -> {
             for (Candle b : bars) {
                 Db.execOn(c, "INSERT INTO underlying_bar (symbol, d, open, high, low, close, volume, source, observed, dataset_id) "
@@ -79,8 +90,9 @@ public final class SimulationEngine {
 
         List<String> notes = new ArrayList<>();
         notes.add("Synthetic future — one concrete path from seed " + spec.seed() + ". Saved as its own dataset; observed data is untouched.");
-        if (hist != null && spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP) {
-            notes.add("Anchored on " + symbol + "'s own observed daily returns (block bootstrap).");
+        if (spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP) {
+            notes.add("Block-bootstrap inputs, when available, come from " + symbol
+                    + " in the active market and dataset named by this request.");
         }
         return new DatasetRun(id, name, symbol, bars.size(), spec.seed(), round2(path[0]), round2(path[path.length - 1]), notes);
     }
@@ -95,34 +107,23 @@ public final class SimulationEngine {
      * The "show me N possible futures" fan — price bands per day + a few concrete sample paths for
      * the preview chart. Pure compute: nothing is persisted; the same seed reproduces it exactly.
      */
-    public Preview preview(String symbolRaw, ScenarioSpec specRaw) {
-        return preview(symbolRaw, specRaw, null);
-    }
-
-    /** World-aware: inside a simulated session the fan anchors on THAT world's price. */
-    public Preview preview(String symbolRaw, ScenarioSpec specRaw, String worldId) {
-        this.anchorWorld = worldId;
-        try { return previewInner(symbolRaw, specRaw); }
-        finally { this.anchorWorld = null; }
-    }
-
-    /** CALL-scoped anchor lane (set/cleared within one synchronous call on one thread). */
-    private volatile String anchorWorld;
-
-    private Preview previewInner(String symbolRaw, ScenarioSpec specRaw) {
+    /** The active world and dataset are explicit immutable inputs; concurrent calls cannot cross. */
+    public Preview preview(String symbolRaw, ScenarioSpec specRaw, String worldId,
+                           io.liftandshift.strikebench.db.AnalysisContext analysis) {
         String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
-        double spot = anchorSpot(symbol); // loud refusal on a missing quote — never a fake $100
-        double[] hist = historicalLogReturns(symbol);
-        double[][] paths;
+        PathEnsembleService.Ensemble generated;
         try (AutoCloseable permit = SimBudget.acquire()) {
-            paths = generator.generate(spec, spot, hist);
+            generated = ensembles.build(new PathEnsembleService.Scope(symbol, worldId, analysis),
+                    PathEnsembleService.Basis.PARAMETRIC, spec, null);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+        double spot = generated.spot();
+        double[][] paths = generated.paths();
         int spd = Math.max(1, spec.stepsPerDay());
         int days = spec.totalSteps() / spd;
 
@@ -146,45 +147,14 @@ public final class SimulationEngine {
         PreviewBand end = bands.getLast();
         List<String> notes = new ArrayList<>();
         notes.add("Synthetic futures from seed " + spec.seed() + " — a model of what COULD happen, never a forecast.");
-        if (hist == null && spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP) {
-            notes.add("No observed history for " + symbol + " to bootstrap from — using a normal model instead.");
-        }
+        if (spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP)
+            notes.add("Block-bootstrap history is resolved from this request's active market and dataset; if unavailable, the model falls back to Gaussian noise.");
         return new Preview(symbol, round2(spot), paths.length, days, bands, samples,
                 end.p10(), end.p50(), end.p90(), notes);
     }
 
     private static double q(double[] sorted, double p) {
         return sorted[Math.max(0, Math.min(sorted.length - 1, (int) Math.floor(p * (sorted.length - 1))))];
-    }
-
-    /** The real (or explicit demo) price a simulation anchors on. Missing quote = loud refusal. */
-    private double anchorSpot(String symbol) {
-        return market.quote(symbol, anchorWorld)
-                .map(q -> q.mark())
-                .filter(java.util.Objects::nonNull)
-                .map(BigDecimal::doubleValue)
-                .filter(v -> v > 0)
-                .orElseThrow(() -> new java.util.NoSuchElementException(
-                        "No price for " + symbol + " — a simulation needs a real (or demo) quote to anchor on. Check the ticker."));
-    }
-
-    /** Real mean-removed inputs for the bootstrap model, or null when no observed history exists. */
-    public double[] historicalLogReturns(String symbol) {
-        return historicalLogReturns(symbol, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
-    }
-
-    /** Context-aware variant: bootstrap inputs come from the caller's analysis dataset. */
-    public double[] historicalLogReturns(String symbol, io.liftandshift.strikebench.db.AnalysisContext actx) {
-        try {
-            LocalDate to = LocalDate.now(clock);
-            List<Candle> candles = market.candles(symbol, to.minusYears(2), to, actx);
-            if (candles.size() < 30) return null;
-            double[] rs = new double[candles.size() - 1];
-            for (int i = 1; i < candles.size(); i++) {
-                rs[i - 1] = Math.log(candles.get(i).close().doubleValue() / candles.get(i - 1).close().doubleValue());
-            }
-            return rs;
-        } catch (Exception e) { return null; }
     }
 
     private static List<Candle> toDailyBars(double[] path, int spd, LocalDate firstDay) {

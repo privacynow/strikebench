@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.Freshness;
 
 import java.time.LocalDate;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -27,8 +28,12 @@ public final class ResearchQuestionEngine {
     private static final int DEFAULT_BOOTSTRAP = 800;
 
     private final MarketDataService market;
+    private final Clock clock;
 
-    public ResearchQuestionEngine(MarketDataService market) { this.market = market; }
+    public ResearchQuestionEngine(MarketDataService market, Clock clock) {
+        this.market = market;
+        this.clock = clock;
+    }
 
     // ---- Catalog ----
 
@@ -126,7 +131,7 @@ public final class ResearchQuestionEngine {
 
         LocalDate laneToday = market.simInstant(worldId)
                 .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clockOrDefault()));
+                .orElseGet(() -> LocalDate.now(clock));
         LocalDate to = parseDate(req.to(), laneToday);
         LocalDate from = parseDate(req.from(), to.minusYears(3));
         int forward = clampParam(p, "forward", 10, 1, 120);
@@ -524,8 +529,6 @@ public final class ResearchQuestionEngine {
         if (s == null || s.isBlank()) return def;
         try { return LocalDate.parse(s.trim()); } catch (Exception e) { return def; }
     }
-
-    private static java.time.Clock clockOrDefault() { return java.time.Clock.systemUTC(); }
 
     private static double round(double v) { return Math.round(v * 100.0) / 100.0; }
     private static String pct(double v) { return Math.round(v) + "%"; }

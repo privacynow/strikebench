@@ -84,6 +84,29 @@ public final class ScenarioSimulator {
         }
     }
 
+    public record EnsembleRun(PathEnsembleService.Ensemble ensemble, SimResult result) {}
+
+    /** Generate/reconstruct and value under one process-wide permit. */
+    public EnsembleRun run(PathEnsembleService source, PathEnsembleService.Scope scope,
+                           PathEnsembleService.Basis basis, ScenarioSpec spec,
+                           io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest study,
+                           double spot, List<SimLeg> legs, int qty, IvSpec ivSpec,
+                           double riskFreeRate, Long entryOverrideCents, String entryNote) {
+        try (AutoCloseable permit = SimBudget.acquire()) {
+            PathEnsembleService.Ensemble ensemble = source.build(scope, basis, spec, study, spot);
+            ScenarioSpec sane = ensemble.spec().sane();
+            validatePaths(ensemble.paths(), sane);
+            requireWorkBudget((long) ensemble.paths().length * (sane.totalSteps() + 1)
+                    * Math.max(1, legs.size()));
+            return new EnsembleRun(ensemble, runInner(ensemble.paths(), ensemble.spot(), legs, qty,
+                    sane, ivSpec, riskFreeRate, entryOverrideCents, entryNote));
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     /** One structure to compare: resolved legs + an optional market-priced entry. */
     public record CompareItem(String key, List<SimLeg> legs, Long entryOverrideCents, String entryNote) {}
 
@@ -126,6 +149,39 @@ public final class ScenarioSimulator {
         }
     }
 
+    public record EnsembleComparison(PathEnsembleService.Ensemble ensemble, CompareReport report) {}
+
+    /** Build one ensemble and judge every structure under one permit and aggregate work budget. */
+    public EnsembleComparison compare(PathEnsembleService source, PathEnsembleService.Scope scope,
+                                      PathEnsembleService.Basis basis, ScenarioSpec spec,
+                                      io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest study,
+                                      double spot, List<CompareItem> items, int qty,
+                                      IvSpec ivSpec, double riskFreeRate) {
+        try (AutoCloseable permit = SimBudget.acquire()) {
+            PathEnsembleService.Ensemble ensemble = source.build(scope, basis, spec, study, spot);
+            ScenarioSpec s = ensemble.spec().sane();
+            validatePaths(ensemble.paths(), s);
+            long totalLegs = items.stream().mapToLong(it -> Math.max(1, it.legs().size())).sum();
+            requireWorkBudget((long) ensemble.paths().length * (s.totalSteps() + 1) * Math.max(1, totalLegs));
+            List<CompareOutcome> out = new ArrayList<>();
+            List<CompareRefusal> refused = new ArrayList<>();
+            for (CompareItem item : items) {
+                try {
+                    out.add(new CompareOutcome(item.key(), runInner(ensemble.paths(), ensemble.spot(),
+                            item.legs(), qty, s, ivSpec, riskFreeRate,
+                            item.entryOverrideCents(), item.entryNote())));
+                } catch (RuntimeException e) {
+                    refused.add(new CompareRefusal(item.key(), publicReason(e)));
+                }
+            }
+            return new EnsembleComparison(ensemble, new CompareReport(out, refused));
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     /**
      * Valuation work = paths x (steps+1) x option legs. The per-spec point cap bounds path
      * GENERATION; this bounds leg-by-leg VALUATION, which comparisons multiply.
@@ -144,6 +200,16 @@ public final class ScenarioSimulator {
         if (work > MAX_VALUATION_WORK) {
             throw new IllegalArgumentException("Simulation too large (" + work + " leg-steps > "
                     + MAX_VALUATION_WORK + ") — reduce paths, steps per day, or the number of structures.");
+        }
+    }
+
+    private static void validatePaths(double[][] paths, ScenarioSpec s) {
+        if (paths == null || paths.length == 0) throw new IllegalArgumentException("no paths in the ensemble");
+        for (double[] path : paths) {
+            if (path == null || path.length != s.totalSteps() + 1) {
+                throw new IllegalArgumentException("ensemble paths must have " + (s.totalSteps() + 1)
+                        + " points — the horizon and source window must match");
+            }
         }
     }
 

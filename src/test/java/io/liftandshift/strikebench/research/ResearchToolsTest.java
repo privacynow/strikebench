@@ -16,7 +16,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Research tools: hypothesis tester + ETF (delta-1) replicator. */
+/** Research tools: canonical event studies + ETF (delta-1) replicator. */
 class ResearchToolsTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("America/New_York"));
@@ -33,36 +33,27 @@ class ResearchToolsTest {
         return market;
     }
 
-    @Test void hypothesisTestReportsAnHonestVerdictAndIsDeterministic() {
-        var req = new HypothesisTester.HypothesisRequest("AAPL", "2026-01-02", "2026-06-01", 20, 0.0, 10);
-        var r = new HypothesisTester(market()).test(req);
-
-        assertThat(r.hypothesis()).contains("AAPL");
-        assertThat(r.winRate()).isBetween(0.0, 1.0);
-        assertThat(r.expectedByChance()).isBetween(0.0, 1.0);
-        assertThat(Double.isFinite(r.zScore())).isTrue();
-        assertThat(r.verdict()).isNotBlank();
-        assertThat(r.evidence().provenance()).isEqualTo(DataProvenance.DEMO);
-        assertThat(r.notes()).anyMatch(n -> n.toLowerCase().contains("not a forecast"));
-
-        var r2 = new HypothesisTester(market()).test(req);
-        assertThat(r2.sample()).isEqualTo(r.sample());
-        assertThat(r2.wins()).isEqualTo(r.wins());
-
-        var shared = new ResearchQuestionEngine(market()).run(new ResearchQuestionEngine.RunRequest(
+    @Test void eventStudyReportsAnHonestVerdictAndIsDeterministic() {
+        var engine = new ResearchQuestionEngine(market(), CLOCK);
+        var request = new ResearchQuestionEngine.RunRequest(
                 "momentum", "AAPL", "2026-01-02", "2026-06-01",
-                java.util.Map.of("lookback", 20, "thresholdPct", 0.0, "forward", 10)));
-        assertThat(r.sample()).isEqualTo(shared.conditioned().sample());
-        assertThat(r.zScore()).isEqualTo(shared.zScore());
-        assertThat(r.expectedByChance()).isCloseTo(shared.baseline().winRatePct() / 100.0,
-                org.assertj.core.api.Assertions.within(0.001));
-        assertThat(r.notes()).anyMatch(n -> n.contains("shared Research event-study engine"));
+                java.util.Map.of("lookback", 20, "thresholdPct", 0.0, "forward", 10));
+        var first = engine.run(request, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, "observed");
+        var second = engine.run(request, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, "observed");
+        assertThat(first.conditioned().sample()).isPositive();
+        assertThat(first.conditioned().sample()).isEqualTo(second.conditioned().sample());
+        assertThat(first.zScore()).isEqualTo(second.zScore());
+        assertThat(first.evidence()).isEqualTo("DEMO_FIXTURE");
+        assertThat(first.verdict()).isNotBlank();
+        assertThat(first.notes()).anyMatch(n -> n.toLowerCase().contains("not a forecast"));
     }
 
     @Test void tooFewSignalsIsCalledOutHonestly() {
         // A very high momentum threshold rarely triggers -> too few samples to conclude.
-        var r = new HypothesisTester(market()).test(
-                new HypothesisTester.HypothesisRequest("AAPL", "2026-05-01", "2026-06-01", 20, 500.0, 10));
+        var r = new ResearchQuestionEngine(market(), CLOCK).run(new ResearchQuestionEngine.RunRequest(
+                "momentum", "AAPL", "2026-05-01", "2026-06-01",
+                java.util.Map.of("lookback", 20, "thresholdPct", 500.0, "forward", 10)),
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, "observed");
         assertThat(r.significant()).isFalse();
         assertThat(r.verdict()).containsIgnoringCase("too few");
     }
@@ -89,14 +80,15 @@ class ResearchToolsTest {
 
     @Test void explicitUnknownWorldNeverFallsThroughToObservedResearchInputs() {
         var market = observedMarketWithNoWorlds();
-        var study = new HypothesisTester(market).test(
-                new HypothesisTester.HypothesisRequest("AAPL", "2026-01-02", "2026-06-01", 20, 0.0, 10),
+        var study = new ResearchQuestionEngine(market, CLOCK).run(new ResearchQuestionEngine.RunRequest(
+                "momentum", "AAPL", "2026-01-02", "2026-06-01",
+                java.util.Map.of("lookback", 20, "thresholdPct", 0.0, "forward", 10)),
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, "missing-world");
         var replication = new ETFReplicator(market).replicate(
                 new ETFReplicator.ReplicationRequest("AAPL", 10_000_000L, true), "missing-world");
 
-        assertThat(study.sample()).isZero();
-        assertThat(study.evidence().provenance()).isEqualTo(DataProvenance.MISSING);
+        assertThat(study.conditioned().sample()).isZero();
+        assertThat(study.evidence()).isEqualTo("MISSING");
         assertThat(study.verdict()).containsIgnoringCase("unavailable");
         assertThat(replication.contracts()).isZero();
         assertThat(replication.evidence().provenance()).isEqualTo(DataProvenance.MISSING);
