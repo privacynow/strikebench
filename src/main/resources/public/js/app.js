@@ -3,23 +3,63 @@
   'use strict';
 
   var App = {
-    state: { ticket: null, marketContext: { symbol: null } },
+    state: { ticket: null, marketContext: { symbol: null, goal: null, horizon: null, thesis: null } },
     navToken: 0,
 
-    /** One lane-owned working symbol. Placed tickets remain locked snapshots of this context. */
+    /** One lane-owned decision context. Placed tickets remain locked snapshots of it. */
     context: {
       symbol: function (fallback) {
         var value = App.state.marketContext && App.state.marketContext.symbol;
         return (value || fallback || '').toUpperCase();
       },
+      goal: function (fallback) {
+        return (App.state.marketContext && App.state.marketContext.goal) || fallback || null;
+      },
+      horizon: function (fallback) {
+        return (App.state.marketContext && App.state.marketContext.horizon) || fallback || null;
+      },
+      thesis: function (fallback) {
+        return (App.state.marketContext && App.state.marketContext.thesis) || fallback || null;
+      },
+      update: function (patch) {
+        patch = patch || {};
+        var next = Object.assign({}, App.state.marketContext || {});
+        if (patch.symbol !== undefined) {
+          var symbol = String(patch.symbol || '').trim().toUpperCase();
+          if (symbol) next.symbol = symbol;
+        }
+        if (patch.goal !== undefined && patch.goal !== null && String(patch.goal).trim()) {
+          var goal = String(patch.goal).trim().toUpperCase();
+          if (['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'].indexOf(goal) >= 0) next.goal = goal;
+        }
+        if (patch.horizon !== undefined && patch.horizon !== null && String(patch.horizon).trim()) {
+          next.horizon = String(patch.horizon).trim();
+        }
+        if (patch.thesis !== undefined && patch.thesis !== null && String(patch.thesis).trim()) {
+          next.thesis = String(patch.thesis).trim().toLowerCase();
+        }
+        var oldSymbol = App.state.marketContext && App.state.marketContext.symbol;
+        App.state.marketContext = next;
+        if (next.symbol && oldSymbol !== next.symbol
+            && App.state.evidencePrefill && App.state.evidencePrefill.symbol !== next.symbol) {
+          App.state.evidencePrefill = null;
+        }
+        return Object.assign({}, next);
+      },
       selectSymbol: function (raw) {
         var symbol = String(raw || '').trim().toUpperCase();
         if (!symbol) return '';
-        App.state.marketContext = Object.assign({}, App.state.marketContext || {}, { symbol: symbol });
-        if (App.state.evidencePrefill && App.state.evidencePrefill.symbol !== symbol) {
-          App.state.evidencePrefill = null;
-        }
+        App.context.update({ symbol: symbol });
         return symbol;
+      },
+      selectGoal: function (goal) {
+        App.context.update({ goal: goal }); return App.context.goal();
+      },
+      selectHorizon: function (horizon) {
+        App.context.update({ horizon: horizon }); return App.context.horizon();
+      },
+      selectThesis: function (thesis) {
+        App.context.update({ thesis: thesis }); return App.context.thesis();
       }
     },
 

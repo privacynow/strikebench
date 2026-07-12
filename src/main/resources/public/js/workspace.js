@@ -27,7 +27,8 @@
       v: 1,
       route: window.location.hash || '#/home',
       world: (window.App && App.state.world) || null,
-      symbol: (window.App && App.context.symbol()) || null,
+      context: (window.App && App.state.marketContext)
+        ? Object.assign({}, App.state.marketContext) : null,
       forms: {},
       ticket: (window.App && App.state.ticket) || null,
       // The THESIS WORKFLOW is part of the workspace (holistic review #11): the per-symbol
@@ -51,7 +52,10 @@
   function apply(s) {
     if (!s || s.v !== 1 || !window.App) return false;
     if (s.world) App.state.world = s.world;
-    if (s.symbol) App.context.selectSymbol(s.symbol);
+    // Persisted-user-state migration only: old workspace blobs carried `symbol` alone.
+    // New writes immediately replace it with the complete decision context.
+    if (s.context) App.context.update(s.context);
+    else if (s.symbol) App.context.selectSymbol(s.symbol);
     if (s.marketThesis) App.state.marketThesis = s.marketThesis;
     // Selection only (F6): results/questions rebuild fresh — never restore stale evidence.
     if (s.researchStudy) {

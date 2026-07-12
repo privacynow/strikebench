@@ -545,8 +545,12 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
   // Work: pick a goal + symbol in Ideas (one-stock mode), then wander off to Research.
   await go('#/trade/context/manual');
   await page.waitForSelector('#rec-symbol');
+  await page.click('#intent-choices .choice[data-intent="ACQUIRE"]');
+  await page.selectOption('#rec-horizon', 'quarter');
   await page.fill('#rec-symbol', 'QQQ');
-  await page.evaluate(() => { App.state.discoverForm.symbol = 'QQQ'; App.context.selectSymbol('QQQ'); });
+  await page.evaluate(() => { App.state.discoverForm.symbol = 'QQQ'; App.context.update({
+    symbol: 'QQQ', goal: 'ACQUIRE', horizon: 'quarter', thesis: 'neutral'
+  }); });
   await go('#/research/AAPL');
   await page.waitForSelector('.quote-hero');
   // Persist NOW (the 4s tick and pagehide would do this; tests don't wait).
@@ -565,9 +569,13 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
   assert.equal(await page.evaluate(() => App.Market.world), 'demo', 'same-lane reload reconciles MarketStore');
   const restored = await page.evaluate(() => ({
     sym: App.context.symbol(),
+    goal: App.context.goal(), horizon: App.context.horizon(), thesis: App.context.thesis(),
     form: App.state.discoverForm && App.state.discoverForm.symbol
   }));
   assert.equal(restored.sym, 'AAPL', 'the last selected Research symbol is the shared working context');
+  assert.equal(restored.goal, 'ACQUIRE', 'goal survives alongside the symbol');
+  assert.equal(restored.horizon, 'quarter', 'horizon survives alongside the symbol');
+  assert.equal(restored.thesis, 'neutral', 'thesis survives alongside the symbol');
   assert.equal(restored.form, 'QQQ', 'draft form restored');
 
   // An explicit hash always beats the saved route (bookmarks/links stay honest).
@@ -2348,7 +2356,10 @@ test('pipeline streamline: candidates open in the builder; Ideas links the full 
   await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#app[data-ready="true"]');
   // Filters persist by design now — clear them so a prior test's limits don't reject everything.
-  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; App.state.filterState = {}; App.state.discoverForm = null; });
+  await page.evaluate(() => {
+    App.state.builderForm = null; App.state.ticket = null; App.state.filterState = {}; App.state.discoverForm = null;
+    App.context.update({ symbol: 'AAPL', goal: 'DIRECTIONAL', horizon: 'month', thesis: 'bullish' });
+  });
   await go('#/trade/context/manual');
   await page.fill('#rec-symbol', 'AAPL');
   await page.click('#rec-go');
@@ -2358,6 +2369,17 @@ test('pipeline streamline: candidates open in the builder; Ideas links the full 
   await page.locator('.compare-detail .candidate button:has-text("Edit structure")').first().click();
   await page.waitForSelector('#builder-legs .leg-row', { timeout: 30000 }); // Shape-stage landmark
   assert.ok(await page.locator('#builder-legs .leg-row').count() >= 1, 'candidate legs loaded into the terminal');
+  const carried = await page.evaluate(() => ({
+    context: Object.assign({}, App.state.marketContext),
+    builderGoal: App.state.builderForm && App.state.builderForm.goal,
+    ticket: App.state.ticket && { intent: App.state.ticket.intent,
+      horizon: App.state.ticket.horizon, thesis: App.state.ticket.thesis }
+  }));
+  assert.equal(carried.context.goal, 'DIRECTIONAL');
+  assert.equal(carried.builderGoal, carried.context.goal, 'Builder inherits the same goal context');
+  assert.equal(carried.ticket.intent, carried.context.goal, 'ticket snapshots the same goal');
+  assert.equal(carried.ticket.horizon, carried.context.horizon, 'ticket snapshots the same horizon');
+  assert.equal(carried.ticket.thesis, carried.context.thesis, 'ticket snapshots the same thesis');
   await page.waitForFunction(() =>
     /ALLOW|WARN|BLOCKED/.test((document.getElementById('builder-panel') || {}).textContent || ''), { timeout: 20000 });
 

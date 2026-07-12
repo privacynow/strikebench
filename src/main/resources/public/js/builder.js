@@ -14,6 +14,11 @@
 
   var el = UI.el, fmtMoney = UI.fmtMoney, fmtPct = UI.fmtPct, explain = UI.explain,
       chip = UI.chip, stat = UI.stat, alertBox = UI.alertBox, icon = UI.icon;
+  var TRADE_GOALS = ['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'];
+  function tradeGoal(value, fallback) {
+    var goal = String(value || '').toUpperCase();
+    return TRADE_GOALS.indexOf(goal) >= 0 ? goal : (fallback || 'DIRECTIONAL');
+  }
 
   function leg(action, type, strike, expiration, ratio) {
     return { action: action, type: type, strike: strike, expiration: expiration, ratio: ratio || 1 };
@@ -75,10 +80,13 @@
     var legs = wireLegs(active);
     if (!legs.length) return null;
     var tpl = st.templateKey ? TEMPLATES.find(function (t) { return t.key === st.templateKey; }) : null;
+    var contextGoal = tradeGoal(st.goal, tradeGoal(App.context.goal(), 'DIRECTIONAL'));
+    App.context.update({ symbol: st.symbol, goal: contextGoal });
     App.state.ticket = {
       world: App.state.world || 'observed', symbol: st.symbol, custom: true, customFor: st.symbol,
       customFamily: tpl && tpl.family ? tpl.family : null,
-      legs: legs, qty: st.qty || 1, step: 6, thesis: 'neutral', horizon: 'month',
+      legs: legs, qty: st.qty || 1, step: 6, intent: contextGoal,
+      thesis: App.context.thesis('neutral'), horizon: App.context.horizon('month'),
       outcomeBasisHint: tpl ? 'history' : 'scenario'
     };
     return App.state.ticket;
@@ -91,9 +99,14 @@
     var tpl = family && TEMPLATES.find(function (t) { return t.family === family; });
     var sourceLegs = ticket.legs && ticket.legs.length ? ticket.legs
       : ticket.candidate && ticket.candidate.legs || [];
+    var adoptedGoal = tradeGoal(ticket.candidate && ticket.candidate.intent || ticket.intent,
+      tradeGoal(App.context.goal(), 'DIRECTIONAL'));
+    App.context.update({ symbol: ticket.symbol, goal: adoptedGoal,
+      horizon: ticket.horizon || App.context.horizon('month'),
+      thesis: ticket.thesis || App.context.thesis('neutral') });
     App.state.builderForm = {
       symbol: ticket.symbol, qty: ticket.qty || ticket.candidate && ticket.candidate.qty || 1,
-      goal: 'BROWSE', templateKey: tpl ? tpl.key : null, step: 4, legIdx: 0, excluded: {},
+      goal: adoptedGoal, templateKey: tpl ? tpl.key : null, step: 4, legIdx: 0, excluded: {},
       legs: sourceLegs.map(function (l) {
         return { action: l.action, type: l.stock ? 'STOCK' : l.type,
           strike: l.stock || l.type === 'STOCK' ? null : String(l.strike),
@@ -260,7 +273,8 @@
       symbol: ((saved.legs && saved.legs.length ? saved.symbol : null)
         || App.context.symbol() || saved.symbol || 'AAPL').toUpperCase(),
       qty: saved.qty || 1,
-      goal: saved.goal || null,
+      goal: saved.goal === 'BROWSE' ? 'BROWSE'
+        : ((saved.legs && saved.legs.length ? saved.goal : App.context.goal()) || saved.goal || null),
       templateKey: saved.templateKey || null,
       step: saved.step || 1,
       legIdx: saved.legIdx || 0,
@@ -276,6 +290,10 @@
     if (level === 'beginner' && st.legs.length && st.step < 3) { st.step = 4; }
     function remember() {
       App.state.builderForm = st;
+      var goal = TRADE_GOALS.indexOf(st.goal) >= 0 ? st.goal : null;
+      var patch = { symbol: st.symbol };
+      if (goal) patch.goal = goal;
+      App.context.update(patch);
       if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
     }
 

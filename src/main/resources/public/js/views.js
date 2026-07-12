@@ -1769,10 +1769,28 @@
     return block;
   }
 
+  function tradeIntent(value) {
+    var intent = String(value || '').toUpperCase();
+    return ['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'].indexOf(intent) >= 0
+      ? intent : 'DIRECTIONAL';
+  }
+
+  function ticketForCandidate(c, rawSymbol, extra) {
+    var symbol = String(rawSymbol || App.context.symbol('AAPL')).toUpperCase();
+    var intent = tradeIntent(c && c.intent || App.context.goal());
+    var horizon = App.context.horizon('month');
+    var thesis = App.context.thesis('neutral');
+    App.context.update({ symbol: symbol, goal: intent, horizon: horizon, thesis: thesis });
+    return Object.assign({
+      world: App.state.world || 'observed', candidate: c, symbol: symbol, step: 5,
+      intent: intent, horizon: horizon, thesis: thesis
+    }, extra || {});
+  }
+
   function candidateWorkflowActions(c, symbolForTicket, beginner) {
     var symbol = symbolForTicket || App.context.symbol();
     function select() {
-      App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbol, step: 5 };
+      App.state.ticket = ticketForCandidate(c, symbol);
       return App.state.ticket;
     }
     return el('div', { class: 'btn-row candidate-workflow-actions' },
@@ -2056,7 +2074,7 @@
           el('td', {}, el('button', {
             class: 'btn btn-sm', onclick: function (e) {
               e.stopPropagation();
-              App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: App.context.symbol(), step: 5 };
+              App.state.ticket = ticketForCandidate(c, App.context.symbol());
               App.navigate('#/trade/decide');
             }
           }, 'Use'))])), 'Show details for ' + c.displayName, 'button');
@@ -2083,10 +2101,11 @@
     var saved = App.state.discoverForm;
     if (!saved) {
       saved = App.state.discoverForm = {
-        goal: 'DIRECTIONAL',
+        goal: App.context.goal('DIRECTIONAL'),
         goalExplicit: false,
         source: 'single',
         symbol: '', target: '', universe: '', scanTarget: '',
+        horizon: App.context.horizon('month'), thesis: App.context.thesis('bullish'),
         h0: false, hW: true, hM: true
       };
     }
@@ -2094,6 +2113,8 @@
     App.state.ideasPrefill = null;
     if (prefill.symbol) { saved.symbol = prefill.symbol; saved.source = 'single'; }
     if (prefill.intent) { saved.goal = prefill.intent; saved.goalExplicit = true; }
+    if (prefill.horizon) saved.horizon = prefill.horizon;
+    if (prefill.thesis) saved.thesis = prefill.thesis;
     // COMPLETED INTENT IS NOT REQUESTED TWICE (interaction contract #4): a 'Find strategies'
     // click arrives with the symbol; when a goal is already known (handed over, or chosen
     // before and persisted) the search RUNS. Only a genuinely ambiguous goal asks.
@@ -2102,10 +2123,16 @@
     // Canonical Context routes may open directly in one-stock or scout mode.
     if (params && params[0] === 'manual') saved.source = 'single';
     if (params && params[0] === 'scout') saved.source = 'scan';
-    var goal = saved.goal || 'DIRECTIONAL';
+    var goal = prefill.intent || App.context.goal() || saved.goal || 'DIRECTIONAL';
     var source = saved.source || 'single';
     function remember(patch) {
       saved = App.state.discoverForm = Object.assign({}, App.state.discoverForm, patch || {});
+      var contextPatch = {};
+      if (patch && patch.symbol !== undefined && patch.symbol) contextPatch.symbol = patch.symbol;
+      if (patch && patch.goal !== undefined) contextPatch.goal = patch.goal;
+      if (patch && patch.horizon !== undefined) contextPatch.horizon = patch.horizon;
+      if (patch && patch.thesis !== undefined) contextPatch.thesis = patch.thesis;
+      if (Object.keys(contextPatch).length) App.context.update(contextPatch);
     }
     remember({ goal: goal });
 
@@ -2114,16 +2141,18 @@
     var sym = el('input', { type: 'text', id: 'rec-symbol', list: 'universe-symbols',
       placeholder: 'AAPL',
       value: prefill.symbol || App.context.symbol() || saved.symbol || 'AAPL' });
+    var activeThesis = prefill.thesis || App.context.thesis() || saved.thesis || 'bullish';
     var thesis = el('select', { id: 'rec-thesis' },
       ['bullish', 'bearish', 'neutral', 'volatile'].map(function (t) {
-        return el('option', { value: t, selected: t === saved.thesis ? '' : null }, t);
+        return el('option', { value: t, selected: t === activeThesis ? '' : null }, t);
       }));
     // PRESENTATION-ONLY LEVELS (review P0): 0DTE exists at BOTH levels — beginner defaults
     // steer away from it, the engine's same-day warnings still fire, but nothing is unreachable
     // and no persisted choice is silently rewritten.
     var horizons = ['week', 'month', 'quarter', '0DTE'];
+    var activeHorizon = prefill.horizon || App.context.horizon() || saved.horizon || 'month';
     var horizon = el('select', { id: 'rec-horizon' },
-      horizons.map(function (h) { return el('option', { value: h, selected: h === (saved.horizon || 'month') ? '' : null }, h); }));
+      horizons.map(function (h) { return el('option', { value: h, selected: h === activeHorizon ? '' : null }, h); }));
     horizon.addEventListener('change', function () { remember({ horizon: horizon.value }); });
     var allow0 = el('input', { type: 'checkbox', id: 'rec-0dte', checked: saved.allow0 ? '' : null });
     allow0.addEventListener('change', function () { remember({ allow0: allow0.checked }); });
@@ -2479,6 +2508,7 @@
       var seq = ++goSeq;
       results.appendChild(UI.spinner('Scanning and deriving views\u2026'));
       try {
+        App.context.update({ goal: goal });
         var horizonsSel = [];
         if (h0.checked) horizonsSel.push('0DTE');
         if (hW.checked) horizonsSel.push('week');
@@ -2510,7 +2540,8 @@
       var seq = ++goSeq;
       results.appendChild(UI.spinner('Screening strategies\u2026'));
       try {
-        App.context.selectSymbol(sym.value);
+        App.context.update({ symbol: sym.value, goal: goal, horizon: horizon.value,
+          thesis: goal === 'DIRECTIONAL' ? thesis.value : App.context.thesis('neutral') });
         // The 0DTE controls are VISIBLE at both levels (presentation-only levels, review P0):
         // what the user set is what the engine receives — no silent rewrites.
         var body = {
@@ -2694,7 +2725,8 @@
   function workflowStepReady(key) {
     if (key === 'context') {
       var f = App.state.discoverForm || {};
-      return !!(hasWorkingStructure() || f.goalExplicit && (App.context.symbol() || f.source === 'scan'));
+      return !!(hasWorkingStructure()
+        || (App.context.goal() || f.goalExplicit) && (App.context.symbol() || f.source === 'scan'));
     }
     if (key === 'structure') return hasWorkingStructure();
     if (key === 'outcomes') return hasEvaluatedOutcome();
@@ -2795,11 +2827,14 @@
     var sym = (App.context.symbol() || f.symbol || '').toUpperCase();
     if (!sym) return null;
     var parts = [sym];
-    var goal = f.goal && f.goal !== 'ALL' ? f.goal : null;
+    var goal = App.context.goal() || f.goal;
+    goal = goal && goal !== 'ALL' && goal !== 'BROWSE' ? goal : null;
     var meta = goal && (Learn.INTENTS || []).find(function (i) { return i.key === goal; });
-    if (meta) parts.push(meta.label + ((goal === 'DIRECTIONAL' && f.thesis) ? ': ' + f.thesis : ''));
+    var thesis = App.context.thesis() || f.thesis;
+    if (meta) parts.push(meta.label + ((goal === 'DIRECTIONAL' && thesis) ? ': ' + thesis : ''));
     var HZ = { '0DTE': 'today', week: '~1 week', month: '~1 month', quarter: '~3 months' };
-    if (f.horizon && HZ[f.horizon]) parts.push(HZ[f.horizon]);
+    var horizon = App.context.horizon() || f.horizon;
+    if (horizon && HZ[horizon]) parts.push(HZ[horizon]);
     return parts.join(' \u00b7 ');
   }
 
@@ -3110,7 +3145,7 @@
           sentence(c),
           el('button', {
             class: 'btn btn-sm', style: 'margin-left:auto', onclick: function () {
-              App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: ctx.symbol, step: 5 };
+              App.state.ticket = ticketForCandidate(c, ctx.symbol);
               App.navigate('#/trade/decide');
             }
           }, 'Practice this'));
@@ -3153,7 +3188,7 @@
         tds.push(el('td', {}, el('button', {
           class: 'btn btn-sm', onclick: function (e) {
             e.stopPropagation();
-            App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: ctx.symbol, step: 5 };
+            App.state.ticket = ticketForCandidate(c, ctx.symbol);
             App.navigate('#/trade/decide');
           }
         }, 'Use')));
@@ -3209,6 +3244,9 @@
   async function ticket(root) {
     var t = App.state.ticket = App.state.ticket || {};
     t.symbol = t.symbol || App.context.symbol('AAPL');
+    t.intent = tradeIntent(t.intent || t.candidate && t.candidate.intent || App.context.goal());
+    t.horizon = t.horizon || App.context.horizon('month');
+    t.thesis = t.thesis || App.context.thesis('neutral');
     // The engine sizes candidates (qty may be 3 for "cover all 300 shares") — never
     // silently reset that to 1; the user can still change it on the Strikes step.
     t.qty = t.qty || (t.candidate && t.candidate.qty) || 1;
@@ -3303,7 +3341,8 @@
           symbol: t.symbol, strategy: t.custom ? (t.customFamily || 'CUSTOM') : c6.strategy, qty: t.qty,
           legs: t.legs, thesis: t.thesis, horizon: t.horizon, riskMode: riskMode()
         };
-        if (c6 && c6.intent && c6.intent !== 'DIRECTIONAL') previewReq.intent = c6.intent;
+        var previewIntent = tradeIntent(c6 && c6.intent || t.intent || App.context.goal());
+        if (previewIntent !== 'DIRECTIONAL') previewReq.intent = previewIntent;
         if (c6 && c6.usesHeldShares) previewReq.useHeldShares = true;
         if (t.proposedNetCents !== undefined && t.proposedNetCents !== null) previewReq.proposedNetCents = t.proposedNetCents;
         if (t.feesOverrideCents !== undefined && t.feesOverrideCents !== null) previewReq.feesOverrideCents = t.feesOverrideCents;
@@ -6766,7 +6805,7 @@
   }
 
   function useEval(c, symbol, recId) {
-    App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: symbol, step: 5, recommendationId: recId || null };
+    App.state.ticket = ticketForCandidate(c, symbol, { recommendationId: recId || null });
     App.navigate('#/trade/decide');
   }
 
