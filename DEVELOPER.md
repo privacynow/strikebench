@@ -3,6 +3,28 @@
 User-facing overview lives in [README.md](README.md). This file is everything else: build,
 architecture, tests, configuration, and deployment.
 
+## Current product shape (2026-07-11)
+
+The consolidation program is complete on `feature/research-platform` and is not deployed.
+
+- The user workflow is **Research -> Context -> Structure -> Outcomes -> Decide -> Manage**.
+  Trade owns four canonical routes: `#/trade/context`, `#/trade/structure`,
+  `#/trade/outcomes`, and `#/trade/decide`.
+- `StrategyCatalog` is the only strategy-family/template registry. The frontend downloads its
+  metadata from `GET /api/strategies`; local JavaScript only constructs the selected legs.
+- `OutcomeContract` and `POST /api/evaluate` are the only forward-evaluation contract.
+  Basis is explicit (`DECISION_POLICY`, `PARAMETRIC`, `HISTORICAL_ANALOGS`,
+  `CONDITIONAL_BOOTSTRAP`, or `RISK_NEUTRAL`) so shared machinery never blends interpretations.
+- `PathEnsembleService` is the only path source. `ScenarioSimulator` prices supplied ensembles;
+  `HistoricalReplayKernel` owns historical entry/mark/exit pricing for both backtest modes.
+- The old Lab, standalone Decision, ETF-replicator, old Trade-stage, and
+  `/api/sim/{scenario,strategy,compare}` surfaces are gone. Do not restore internal aliases or DTO
+  overloads for hypothetical API consumers. Database and model-version migrations remain because
+  they protect actual persisted user data and deterministic model identity.
+- Current release evidence is **460 JUnit + 66 fixture DOM + 8 responsive widths + 4 grown-state +
+  8 live-provider DOM, all green**. Representative screenshots are under
+  `dom-tests/shots/final-*.png`.
+
 ## Build & run
 
 Requires **JDK 25**, Maven, and the bundled local data service.
@@ -30,8 +52,8 @@ vendored for candlesticks; everything else is hand-rolled SVG. Local dev DB: `do
   drops by exactly max loss + fees at entry.
 - **Fills are executable**: buys price at the ask, sells at the bid; one-sided or crossed
   books refuse to fill. Marks value closes at the executable side too.
-- **Levels change content, never geometry**: Beginner/Expert differ in explainers, columns,
-  and features — never in padding or font size (a DOM test enforces this).
+- **Levels change presentation, never capability**: Beginner/Expert differ in language, density,
+  and progressive disclosure, never catalog, controls, requests, math, or risk gates.
 
 ## Architecture
 
@@ -42,16 +64,34 @@ io.liftandshift.strikebench
 ├── model       Quote, Candle, OptionQuote, OptionChain, Leg, DataEvidence, provenance/age, ...
 ├── pricing     BlackScholes, ImpliedVol, PayoffCurve, VolSurface, HistoricalVol
 ├── market      MarketDataService (provider chain + caches + status), MarketDataEngine (in-memory
-│               feed: warm-on-boot + singleflight + stale-while-refresh + SSE), Universes, providers/*
-├── strategy    StrategyFamily, StrategyBuilder, Guardrails, StrategyIntent, CoverageCheck
+│               feed: warm-on-boot + singleflight + stale-while-refresh + SSE), Universes,
+│               explicit market lanes, providers/*, sim/*
+├── strategy    StrategyCatalog, StrategyFamily, StrategyBuilder, Guardrails, StrategyIntent
 ├── recommend   RecommendationEngine, AutoRecommender (scout), SignalEngine
-├── research    PortfolioOptimizer, ResearchQuestionEngine (workbench), ETFReplicator, NotebookService
+├── eval        StrategyEvaluator, EconomicAssessment, risk/vol/evidence profiles, scoring
+├── outcomes    OutcomeContract (the versioned cross-engine request/response contract)
+├── sim         PathEnsembleService, ScenarioSimulator, SimulationEngine, deterministic path models
+├── research    PortfolioOptimizer, ResearchQuestionEngine, BootstrapSampler, NotebookService
 ├── paper       AccountService, TradeService, PositionsService, AuditLog
-├── backtest    Backtester, PortfolioBacktester (no-look-ahead daily loops, tiered pricing)
+├── backtest    Backtester + HistoricalReplayKernel (single-position and portfolio modes)
 ├── db          + DataJobService (Data Center jobs), DataCoverage, DataResetService, UnderlyingBackfill
 ├── broker      OAuth1, ETradeProvider, BrokerService (live-order gates)
 └── api         ApiServer (Javalin routes incl. /api/market/{engine,stream} + /api/data/*), Main
 ```
+
+**Decision flow.** Research establishes the lane-owned symbol/thesis and can contribute a historical
+event-study ensemble. Context can scout or accept a stated view; Structure selects a server-catalog
+family/template or custom legs; Outcomes evaluates the exact position under one or more explicitly
+named bases; Decide assembles economics, probability map, execution quality, account sizing,
+guardrails, and management guidance. The same exact position then enters paper or broker preview.
+Beginner and Expert traverse this same state machine.
+
+**Canonical evaluation API.** `POST /api/evaluate` accepts a versioned `OutcomeContract.Request`
+containing operation, basis, market context, exact position(s), and optional scenario/study inputs.
+Pure outcome work must enter here. `POST /api/backtest` and `/api/backtest/portfolio` remain durable
+historical-job endpoints, but both delegate pricing and evidence accounting to
+`HistoricalReplayKernel`. Live simulated markets remain a market lane under `/api/sim/market/*`, not
+an alternate evaluation engine.
 
 **Market data flow.** `MarketDataEngine` sits above the provider chain as the single owned "current
 market state": it warms the active universe on boot, refreshes tracked symbols in the background
@@ -124,7 +164,9 @@ JAVA_BIN=$JAVA_HOME/bin/java PORT=7104 node --test dom-live.test.js   # REAL Cbo
 DOM suites use Playwright (`npm i` inside `dom-tests/` once) against the real jar on a fresh
 temp database; each suite needs its own port. Page JS errors and 5xx responses are hard
 failures. Run all suites — fresh-DB suites miss grown-state bugs, fixture suites miss live
-ones.
+ones. The responsive audit checks 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 pixels and
+fails on horizontal overflow, clipped controls, or inaccessible geometry. Current counts are
+460 JUnit, 66 fixture DOM, 8 responsive widths, 4 grown-state, and 8 live-provider cases.
 
 ## Configuration
 
