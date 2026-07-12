@@ -100,7 +100,8 @@
   function saveIfDirty() {
     if (!started || !window.App || !window.API) return;
     var s = snapshot();
-    var json = JSON.stringify({ route: s.route, world: s.world, symbol: s.symbol, forms: s.forms, ticket: s.ticket });
+    var json = JSON.stringify({ route: s.route, world: s.world, context: s.context,
+      forms: s.forms, ticket: s.ticket });
     if (json === lastSavedJson) return;
     lastSavedJson = json;
     persistLocal(s);
@@ -168,7 +169,8 @@
         // bump the rev and ping-pong forever between two hidden tabs. Only a genuine local
         // change after this may write again.
         var s = snapshot();
-        lastSavedJson = JSON.stringify({ route: s.route, world: s.world, symbol: s.symbol, forms: s.forms, ticket: s.ticket });
+        lastSavedJson = JSON.stringify({ route: s.route, world: s.world, context: s.context,
+          forms: s.forms, ticket: s.ticket });
         persistLocal(s);
         adoptedWhileHidden = true; // the DOM still shows pre-adoption state — refresh on return
       }

@@ -817,7 +817,7 @@
     var controls = document.querySelector('.topbar-controls');
     if (!controls || document.getElementById('sign-out')) return;
     controls.appendChild(UI.el('a',
-      { class: 'btn-link', id: 'sign-out', href: (App._me && App._me.logoutUrl) || '/auth/logout', title: 'Sign out' },
+      { class: 'btn-link', id: 'sign-out', href: (App._me && App._me.logoutUrl) || '/auth/logout' },
       'Sign out'));
   }
 

@@ -624,6 +624,28 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
   assert.equal(await page.evaluate(() => window.location.hash), '#/research/AAPL');
 });
 
+test('workspace autosave treats goal, horizon, and thesis as durable context', async () => {
+  await go('#/home');
+  await page.evaluate(() => {
+    App.state.ticket = null;
+    App.state.discoverForm = null;
+    App.context.update({ symbol: 'AAPL', goal: 'DIRECTIONAL', horizon: 'month', thesis: 'bullish' });
+    Workspace.save();
+  });
+  await page.waitForTimeout(1700);
+  const before = await page.evaluate(() => API.getFresh('/api/workspace').then(r => r.rev));
+  await page.evaluate(() => {
+    App.context.update({ goal: 'HEDGE', horizon: 'quarter', thesis: 'bearish' });
+    Workspace.save();
+  });
+  await page.waitForTimeout(1700);
+  const saved = await page.evaluate(() => API.getFresh('/api/workspace'));
+  assert.ok(saved.rev > before, 'a context-only edit increments the workspace revision');
+  assert.deepEqual(saved.state.context, {
+    symbol: 'AAPL', goal: 'HEDGE', horizon: 'quarter', thesis: 'bearish'
+  });
+});
+
 test('world transition: authoritative PUT bootstrap recovers a failed SSE-hint hydration', async () => {
   await go('#/home');
   const recovered = await page.evaluate(async () => {
@@ -1044,6 +1066,31 @@ test('recommendations render candidates and blocked examples', async () => {
     assert.ok(firstCandidateOrder.economic < firstCandidateOrder.facts,
       'economic verdict precedes the theoretical payoff facts even when optional story blocks are absent');
   }
+});
+
+test('beginner help adds information instead of echoing visible labels', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const duplicates = [];
+  for (const hash of ['#/home', '#/trade/context/manual', '#/trade/structure', '#/data/overview']) {
+    await go(hash);
+    const found = await page.$$eval('[title]', nodes => nodes.filter(node => {
+      if (!node.offsetParent) return false;
+      const norm = value => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const title = norm(node.getAttribute('title'));
+      const visible = norm(node.innerText || node.textContent);
+      return title.length > 1 && (visible === title || (title.length > 18 && visible.includes(title)));
+    }).map(node => ({ route: location.hash, tag: node.tagName, text: node.innerText, title: node.title })));
+    duplicates.push(...found);
+  }
+  assert.deepEqual(duplicates, [], 'native hover text repeats visible Beginner copy: ' + JSON.stringify(duplicates));
+
+  await go('#/trade/context/manual');
+  assert.equal(await page.locator('#intent-choices .choice .muted').count(),
+    await page.locator('#intent-choices .choice').count(), 'Beginner goal cards explain themselves visibly');
+  assert.equal(await page.locator('#intent-choices .choice[title]').count(), 0,
+    'Beginner goal cards do not repeat their visible explanation in a native tooltip');
+  assert.equal(await page.locator('#idea-source .choice[title]').count(), 0,
+    'Beginner source cards do not repeat their visible explanation in a native tooltip');
 });
 
 let tradeUrlHash = null;

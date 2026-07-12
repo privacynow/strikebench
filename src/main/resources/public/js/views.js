@@ -499,7 +499,7 @@
       el('div', { class: 'btn-row', style: 'flex-wrap:wrap' },
         [['Structure', '#/trade/structure', 'target'], ['Outcomes', '#/trade/outcomes', 'chart'],
          ['Simulated market', '#/data/simulation', 'flask']].map(function (a) {
-          return el('button', { class: 'btn btn-sm btn-secondary', title: a[0],
+          return el('button', { class: 'btn btn-sm btn-secondary',
             onclick: function () { App.navigate(a[1]); } }, icon(a[2], 14), ' ', a[0]);
         }))));
     colR.appendChild(pulseAnchor); // sector pulse LAST: on phones the next action leads
@@ -2280,7 +2280,7 @@
     }, GOAL_CHOICES.map(function (i) {
         return el('button', {
           class: 'choice' + (goal === i.key ? ' selected' : ''), 'data-intent': i.key,
-          title: i.blurb,
+          title: expertChooser ? i.blurb : null,
           onclick: function () {
             goal = i.key;
             remember({ goal: goal, goalExplicit: true });
@@ -2310,7 +2310,7 @@
     }, SOURCES.map(function (o) {
         return el('button', {
           class: 'choice' + (source === o.key ? ' selected' : ''), 'data-source': o.key,
-          title: o.blurb,
+          title: expertChooser ? o.blurb : null,
           onclick: function () {
             source = o.key;
             remember({ source: source });
@@ -6860,6 +6860,7 @@
     OBSERVED_DELAYED: ['badge-ok', 'Observed · delayed'],
     OBSERVED_EOD: ['badge-caution', 'Observed · EOD'],
     MODELED: ['badge-caution', 'Modeled'],
+    SIMULATED: ['badge-sim', 'Simulated market'],
     DEMO_FIXTURE: ['badge-dim', 'Demo data'],
     UNKNOWN: ['badge-danger', 'Unknown']
   };
