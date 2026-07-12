@@ -631,6 +631,15 @@ class ApiIntegrationTest {
             assertThat(r.get("annualizedYieldPct").isNumber()).isTrue();
         }
 
+        // The ladder is another view of the same request, not an escape hatch around its hard
+        // screens. An impossible income floor excludes every rung and explains why.
+        JsonNode screened = Json.parse(post("/api/recommend/ladder",
+                "{\"symbol\":\"AAPL\",\"intent\":\"acquire\",\"riskMode\":\"balanced\","
+                        + "\"filters\":{\"minAnnualizedYieldPct\":10000}}").body());
+        assertThat(screened.get("rungs")).isEmpty();
+        assertThat(screened.get("notes").toString()).contains("excluded by your selected limits")
+                .contains("No ladder rung passed every selected limit");
+
         // EXIT/HEDGE never inflate the selected per-idea budget merely to manufacture a rung.
         JsonNode exitWithoutShares = Json.parse(post("/api/recommend/ladder",
                 "{\"symbol\":\"AAPL\",\"intent\":\"exit\",\"maxLossCents\":100000}").body());

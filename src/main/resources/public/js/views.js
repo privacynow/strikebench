@@ -2625,10 +2625,12 @@
     function renderResults(r, intentKey, body, extras) {
       extras = extras || {};
       results.innerHTML = '';
+      var ladderRungs = extras.ladder && extras.ladder.rungs ? extras.ladder.rungs : [];
+      var hasLadder = ladderRungs.length > 0;
       // What's coming up for this symbol — the dates that can invalidate an idea
       if (body && body.symbol) results.appendChild(comingUp(body.symbol.toUpperCase(), true));
       // Intent-native lead view first: the ladder IS the product for these goals
-      if (extras.ladder && extras.ladder.rungs && extras.ladder.rungs.length) {
+      if (extras.ladder) {
         results.appendChild(ladderView(extras.ladder, intentKey, {
           symbol: (body && body.symbol ? body.symbol : r.symbol).toUpperCase(),
           spot: extras.spot,
@@ -2645,7 +2647,8 @@
             ? 'Cash-secured acquisition reserves the full share-purchase commitment; this is buying capacity, not a disguised small-risk options trade.'
             : 'The most this one trade may risk under your header risk mode.'),
         chip('Mode', r.riskMode.toLowerCase()),
-        chip('Candidates', String(r.candidates.length))));
+        hasLadder ? chip('Ladder rungs', String(ladderRungs.length)) : null,
+        !hasLadder || r.candidates.length ? chip(hasLadder ? 'Other structures' : 'Candidates', String(r.candidates.length)) : null));
       if (r.candidates.length) {
         results.appendChild(el('div', { class: 'economic-baseline', id: 'cash-baseline' },
           el('div', {}, el('b', {}, 'Cash / no trade'), el('span', { class: 'badge badge-dim' }, 'BASELINE')),
@@ -2661,12 +2664,19 @@
           }, 'Compare these side by side →')));
         results.appendChild(compareHost);
       }
-      (r.notes || []).forEach(function (n) { results.appendChild(alertBox('warn', n)); });
-      if (!r.candidates.length) {
+      (r.notes || []).forEach(function (n) {
+        if (hasLadder && /^No strategy passed the risk screens/i.test(n)) {
+          results.appendChild(alertBox('caution', 'The standard structure did not fit your limits', [
+            'The strike ladder above shows the alternate rungs that passed those same limits.'
+          ]));
+        } else {
+          results.appendChild(alertBox('warn', n));
+        }
+      });
+      if (!r.candidates.length && !hasLadder) {
         results.appendChild(UI.emptyState('Nothing passed the risk screens',
           'Try a different horizon, a wider risk budget, or another symbol.'));
       }
-      var hasLadder = extras.ladder && extras.ladder.rungs && extras.ladder.rungs.length;
       if (hasLadder && r.candidates.length) {
         results.appendChild(el('h3', {}, 'Other structures for this goal'));
       }
@@ -3077,7 +3087,7 @@
    *   ACQUIRE  -> a discount ladder ("name your price")
    *   EXIT     -> exit rungs vs your basis ("pick where you're happy to sell")
    *   HEDGE    -> insurance quotes ("pick your floor, see the premium")
-   * Shaped per level: Beginner reads as sentences with a recommended rung, Expert gets the
+   * Shaped per level: Beginner reads as sentences with a target/midpoint reference rung, Expert gets the
    * table with tap-to-expand cards, Pro gets every rung dense with all columns.
    */
   function ladderView(result, intent, ctx) {
@@ -3103,6 +3113,11 @@
       wrap.appendChild(UI.emptyState('No tradable rungs right now', (result.notes || []).join(' ')));
       return wrap;
     }
+    if (result.notes && result.notes.length) {
+      wrap.appendChild(el('ul', { class: 'rationale muted small ladder-notes' }, result.notes.map(function (n) {
+        return el('li', {}, n);
+      })));
+    }
 
     function optionLeg(c) { return UI.firstOptionLeg(c && c.legs); }
     function strikeOf(c) { return Number(optionLeg(c).strike); }
@@ -3119,16 +3134,17 @@
           || Number(ctx.basisCents) === 0) return null;
       return (Number(c.effectivePrice) * 100 - Number(ctx.basisCents)) / Number(ctx.basisCents) * 100;
     }
-    // Recommended rung: closest to the user's target if given, else the middle of the ladder
-    var recommended = 0;
+    // Reference rung: closest to the user's target if given, else the geometric middle. This is
+    // navigation help, not an economic endorsement; the separate verdict badge carries that job.
+    var referenceRung = 0;
     if (ctx.targetPrice) {
       var best = Infinity;
       rungs.forEach(function (c, i) {
         var d = Math.abs(strikeOf(c) - ctx.targetPrice);
-        if (d < best) { best = d; recommended = i; }
+        if (d < best) { best = d; referenceRung = i; }
       });
     } else {
-      recommended = Math.min(rungs.length - 1, Math.floor(rungs.length / 2));
+      referenceRung = Math.min(rungs.length - 1, Math.floor(rungs.length / 2));
     }
 
     function sentence(c) {
@@ -3151,12 +3167,22 @@
         ' \u2014 costs ', el('b', { class: 'loss' }, fmtMoney(c.maxLossCents)), ' until ' + expirationOf(c) + '.');
     }
 
+    function economicsBadge(c) {
+      var verdict = economicVerdict(c);
+      if (!verdict) return null;
+      var labels = { FAVORABLE: 'WORTH A LOOK', MIXED: 'COMPARE', UNFAVORABLE: 'LEARN FROM', UNAVAILABLE: 'MECHANICS ONLY' };
+      var classes = { FAVORABLE: 'badge-ok', MIXED: 'badge-caution', UNFAVORABLE: 'badge-danger', UNAVAILABLE: 'badge-dim' };
+      return el('span', { class: 'badge ' + classes[verdict] }, labels[verdict]);
+    }
+
     if (level === 'beginner') {
-      // Sentences, recommended rung first and marked; the exact contracts stay one tap away
+      // Sentences, middle/target rung marked without endorsing it; the shared economic policy
+      // supplies the separate placement badge. Exact contracts stay one tap away.
       var list = el('div', { class: 'ladder-sentences' });
       rungs.forEach(function (c, i) {
-        var row = el('div', { class: 'ladder-row' + (i === recommended ? ' recommended' : '') },
-          i === recommended ? el('span', { class: 'badge badge-ok' }, 'A SANE MIDDLE') : null,
+        var row = el('div', { class: 'ladder-row' + (i === referenceRung ? ' recommended' : '') },
+          i === referenceRung ? el('span', { class: 'badge badge-dim' }, ctx.targetPrice ? 'CLOSEST TO YOUR TARGET' : 'MIDDLE RUNG') : null,
+          economicsBadge(c),
           sentence(c),
           el('button', {
             class: 'btn btn-sm', style: 'margin-left:auto', onclick: function () {
@@ -3210,7 +3236,7 @@
         var detail = el('tr', { class: 'compare-detail', style: 'display:none' },
           el('td', { colspan: String(headers.length + 1) }));
         var row = pressable(el('tr', {
-          class: 'clickable' + (i === recommended ? ' ladder-recommended' : ''), 'aria-expanded': 'false', onclick: function () {
+          class: 'clickable' + (i === referenceRung ? ' ladder-recommended' : ''), 'aria-expanded': 'false', onclick: function () {
             var open = detail.style.display !== 'none';
             detail.style.display = open ? 'none' : '';
             this.setAttribute('aria-expanded', String(!open));

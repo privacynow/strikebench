@@ -2087,7 +2087,27 @@ test('intent-native UX: discount ladder, exit rungs, income board, symbol action
   assert.match(ladder, /Name your price/);
   assert.match(ladder, /paid/i);
   assert.ok(await page.locator('#ladder-view .ladder-row').count() >= 4, 'sentence rungs at Learning');
-  assert.ok(await page.locator('#ladder-view .ladder-row.recommended').count() === 1, 'one recommended rung');
+  assert.ok(await page.locator('#ladder-view .ladder-row.recommended').count() === 1, 'one target/midpoint reference rung');
+  assert.doesNotMatch(ladder, /SANE MIDDLE/, 'a geometric midpoint is not mislabeled as an endorsement');
+  assert.match(ladder, /WORTH A LOOK|COMPARE|LEARN FROM|MECHANICS ONLY/,
+    'each rung carries the shared economic placement separately from its strike position');
+
+  // A passing ladder must never sit beside a contradictory "nothing passed" message. Intercept
+  // only the standard recommendation response; the real ladder still comes from the backend.
+  const recommendOnly = /\/api\/recommend$/;
+  await page.route(recommendOnly, async route => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    payload.candidates = [];
+    payload.notes = ['No strategy passed the risk screens for this combination — try a wider risk budget or different horizon'];
+    await route.fulfill({ response, json: payload });
+  });
+  await page.click('#rec-go');
+  await page.waitForSelector('#ladder-view .ladder-row');
+  const reconciled = await page.textContent('#rec-results');
+  assert.doesNotMatch(reconciled, /Nothing passed the risk screens/);
+  assert.match(reconciled, /standard structure did not fit[\s\S]*alternate rungs that passed/i);
+  await page.unroute(recommendOnly);
 
   // Same intent at Pro: a dense rung table with a Cash-set-aside column
   await page.click('#level-switch button[data-level="expert"]');

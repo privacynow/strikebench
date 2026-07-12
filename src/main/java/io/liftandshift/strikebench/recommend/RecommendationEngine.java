@@ -358,6 +358,7 @@ public final class RecommendationEngine {
             notes.add("The market is closed — these rungs are measured off the PRIOR CLOSE and can shift at the open.");
         }
         Holdings holdings = req.holdings();
+        Filters filters = req.filters() == null ? new Filters(null, null, null, null) : req.filters();
         int freeShares = holdings != null && holdings.sharesOwned() != null ? Math.max(0, holdings.sharesOwned()) : 0;
         boolean sharesHeld = freeShares >= 100 && intent != StrategyIntent.ACQUIRE;
 
@@ -407,6 +408,8 @@ public final class RecommendationEngine {
             }
         }
         List<Candidate> rungs = new ArrayList<>();
+        List<String> filterExamples = new ArrayList<>();
+        int filteredRungs = 0;
         for (BigDecimal k : strikes) {
             StrategyBuilder.Built built = StrategyBuilder.build(family, chain, null, spot,
                     new StrategyBuilder.BuildHints(k, sharesHeld));
@@ -419,10 +422,25 @@ public final class RecommendationEngine {
                     buyingPowerCents, chain.freshness(), true, StrategyFamily.Thesis.NEUTRAL,
                     intent, holdings, sharesHeld ? coverLots : 0, sharesHeld ? freeShares : 0);
             if (c == null) continue;
+            String filterReason = failsFilter(c, filters);
+            if (filterReason != null) {
+                filteredRungs++;
+                if (filterExamples.size() < 3) {
+                    filterExamples.add("$" + k.stripTrailingZeros().toPlainString() + ": " + filterReason);
+                }
+                continue;
+            }
             if (rungs.stream().noneMatch(r -> r.label().equals(c.label()))) rungs.add(c);
         }
+        if (filteredRungs > 0) {
+            notes.add(filteredRungs + " ladder rung" + (filteredRungs == 1 ? " was" : "s were")
+                    + " excluded by your selected limits");
+            filterExamples.forEach(example -> notes.add("Excluded " + example));
+        }
         if (rungs.isEmpty()) {
-            if (!sharesHeld && (intent == StrategyIntent.HEDGE || intent == StrategyIntent.EXIT)) {
+            if (filteredRungs > 0) {
+                notes.add("No ladder rung passed every selected limit");
+            } else if (!sharesHeld && (intent == StrategyIntent.HEDGE || intent == StrategyIntent.EXIT)) {
                 notes.add("This goal starts from shares you own. No stock-plus-option package fits the selected "
                         + "per-idea risk limit; buy practice shares first or construct the full package in Structure.");
             } else {
