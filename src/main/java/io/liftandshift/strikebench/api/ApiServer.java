@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.api;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.http.staticfiles.Location;
@@ -96,6 +97,7 @@ public final class ApiServer {
     io.liftandshift.strikebench.db.WorkspaceService workspaceSvc;
     io.liftandshift.strikebench.plan.PlanService planSvc;
     io.liftandshift.strikebench.plan.PlanEvidenceService planEvidence;
+    io.liftandshift.strikebench.plan.PlanStrategyService planStrategy;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
@@ -242,6 +244,7 @@ public final class ApiServer {
         server.planSvc.setEvents(server.events);
         server.planEvidence = new io.liftandshift.strikebench.plan.PlanEvidenceService(db,
                 new io.liftandshift.strikebench.research.ResearchQuestionEngine(market, clock), clock);
+        server.planStrategy = new io.liftandshift.strikebench.plan.PlanStrategyService(db, clock);
         server.dataJobs.setEvents(server.events);
         server.dataJobs.setDataChangedHook(server::invalidateHistoricalViews);
         datasetSvc.setEvents(server.events);
@@ -416,6 +419,9 @@ public final class ApiServer {
             c.routes.post("/api/plans/{id}/archive", this::planArchive);
             c.routes.get("/api/plans/{id}/evidence/latest", this::planEvidenceLatest);
             c.routes.post("/api/plans/{id}/evidence/study", this::planEvidenceStudy);
+            c.routes.get("/api/plans/{id}/strategy/latest", this::planStrategyLatest);
+            c.routes.post("/api/plans/{id}/strategy/run", this::planStrategyRun);
+            c.routes.put("/api/plans/{id}/strategy/select", this::planStrategySelect);
 
             // ---- Data Center ----
             c.routes.get("/api/data/overview", this::dataOverview);
@@ -2026,6 +2032,60 @@ public final class ApiServer {
                 io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest.class));
         ctx.json(planEvidence.run(ownerId(ctx), plan, request, analysisCtx(ctx),
                 worldParam(activeWorld(ctx))));
+    }
+
+    public record PlanStrategyRunRequest(Boolean allow0dte, List<String> allowedStrategies,
+                                         RecommendationEngine.Filters filters) {}
+    public record PlanStrategySelectRequest(String candidateId, Long expectedVersion) {}
+
+    private void planStrategyLatest(Context ctx) {
+        var saved = planStrategy.latestCompetition(ownerId(ctx), ctx.pathParam("id"));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("strategy", saved);
+        ctx.json(out);
+    }
+
+    private void planStrategyRun(Context ctx) {
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        if (plan.intent() == null || plan.intent().isBlank()) {
+            throw new IllegalStateException("Choose what this plan should do before comparing strategies");
+        }
+        PlanStrategyRunRequest controls = bodyOrNull(ctx, PlanStrategyRunRequest.class);
+        var c = plan.context();
+        RecommendationEngine.Holdings holdings = c.holdingsShares() == null && c.costBasisCents() == null
+                && c.targetCents() == null ? null
+                : new RecommendationEngine.Holdings(c.holdingsShares() == null ? null
+                        : Math.toIntExact(Math.min(Integer.MAX_VALUE, c.holdingsShares())),
+                        c.costBasisCents(), c.targetCents());
+        RecommendationEngine.Request request = new RecommendationEngine.Request(plan.symbol(),
+                c.thesis(), planHorizon(c.horizonDays()), c.riskMode(), null, null, null,
+                controls == null ? null : controls.allowedStrategies(), true,
+                controls != null && Boolean.TRUE.equals(controls.allow0dte()), plan.intent(), holdings,
+                controls == null ? null : controls.filters());
+        RecommendationEngine.Result recommended = resolveAndRecommend(ctx, request);
+        JsonNode ranked = Json.MAPPER.valueToTree(decisionRanked(recommended, currentAccount(ctx), activeWorld(ctx)));
+        JsonNode input = Json.MAPPER.valueToTree(request);
+        var saved = planStrategy.saveCompetition(ownerId(ctx), plan, input, ranked);
+        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "strategy", saved));
+    }
+
+    private void planStrategySelect(Context ctx) {
+        var request = requireBody(bodyOrNull(ctx, PlanStrategySelectRequest.class));
+        if (request.candidateId() == null || request.candidateId().isBlank() || request.expectedVersion() == null) {
+            throw new IllegalArgumentException("candidateId and expectedVersion are required");
+        }
+        var selected = planStrategy.select(ownerId(ctx), ctx.pathParam("id"), request.candidateId(),
+                request.expectedVersion());
+        ctx.json(Map.of("selection", selected, "plan", planSvc.get(ownerId(ctx), ctx.pathParam("id"))));
+    }
+
+    private static String planHorizon(Integer days) {
+        if (days == null) return "month";
+        if (days <= 1) return "0DTE";
+        if (days <= 10) return "week";
+        if (days <= 45) return "month";
+        return "quarter";
     }
 
     // ---- Data Center ----

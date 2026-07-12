@@ -277,7 +277,7 @@ public final class PlanService {
     }
 
     private static void markDependentsStale(java.sql.Connection c, String planId) throws java.sql.SQLException {
-        for (String table : List.of("plan_evidence", "plan_ensemble", "plan_candidate", "plan_backtest")) {
+        for (String table : List.of("plan_evidence", "plan_ensemble", "plan_strategy_run", "plan_candidate", "plan_backtest")) {
             Db.execOn(c, "UPDATE " + table + " SET state='STALE' WHERE plan_id=? AND state='CURRENT'", planId);
         }
     }

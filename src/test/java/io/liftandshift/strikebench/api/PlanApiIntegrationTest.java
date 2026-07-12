@@ -111,6 +111,54 @@ class PlanApiIntegrationTest {
         assertThat(!afterRevision.has("evidence") || afterRevision.get("evidence").isNull()).isTrue();
     }
 
+    @Test void strategyCompetitionIsPlanOwnedNormalizedSelectableAndContextBound() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"strategy-plan-1","symbol":"AAPL","intent":"INCOME",
+                 "thesis":"neutral","horizonDays":30,"riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        JsonNode run = json(post("/api/plans/" + id + "/strategy/run", "{}"));
+        assertThat(run.at("/strategy/state").asText()).isEqualTo("CURRENT");
+        JsonNode result = run.at("/strategy/result");
+        assertThat(result.get("symbol").asText()).isEqualTo("AAPL");
+        assertThat(result.get("intent").asText()).isEqualTo("INCOME");
+        assertThat(result.get("candidates").size()).isGreaterThan(0);
+        JsonNode candidate = result.get("candidates").get(0);
+        assertThat(candidate.get("id").asText()).startsWith("pcand_");
+        assertThat(candidate.get("legs").size()).isGreaterThan(0);
+        assertThat(candidate.has("economics")).isTrue();
+
+        JsonNode latest = json(get("/api/plans/" + id + "/strategy/latest")).get("strategy");
+        assertThat(latest.at("/result/candidates/0/id").asText()).isEqualTo(candidate.get("id").asText());
+        JsonNode restoredLegs = latest.at("/result/candidates/0/legs");
+        assertThat(restoredLegs.size()).isEqualTo(candidate.get("legs").size());
+        for (int i = 0; i < restoredLegs.size(); i++) {
+            JsonNode before = candidate.get("legs").get(i), after = restoredLegs.get(i);
+            assertThat(after.get("action").asText()).isEqualTo(before.get("action").asText());
+            assertThat(after.get("type").asText()).isEqualTo(before.get("type").asText());
+            assertThat(after.get("expiration").asText()).isEqualTo(before.get("expiration").asText());
+            assertThat(after.get("ratio").asInt()).isEqualTo(before.get("ratio").asInt());
+            assertThat(new java.math.BigDecimal(after.get("strike").asText()))
+                    .isEqualByComparingTo(new java.math.BigDecimal(before.get("strike").asText()));
+            assertThat(new java.math.BigDecimal(after.get("entryPrice").asText()))
+                    .isEqualByComparingTo(new java.math.BigDecimal(before.get("entryPrice").asText()));
+        }
+        assertThat(latest.at("/result/candidates/0/economics/verdict").asText())
+                .isEqualTo(candidate.at("/economics/verdict").asText());
+
+        JsonNode selected = json(put("/api/plans/" + id + "/strategy/select",
+                "{\"candidateId\":\"" + candidate.get("id").asText() + "\",\"expectedVersion\":"
+                        + run.at("/plan/version").asLong() + "}"));
+        assertThat(selected.at("/selection/candidateId").asText()).isEqualTo(candidate.get("id").asText());
+        assertThat(json(get("/api/plans/" + id + "/strategy/latest"))
+                .at("/strategy/result/candidates/0/selected").asBoolean()).isTrue();
+
+        json(put("/api/plans/" + id + "/context",
+                "{\"expectedVersion\":" + selected.at("/plan/version").asLong() + ",\"horizonDays\":45}"));
+        JsonNode afterRevision = json(get("/api/plans/" + id + "/strategy/latest"));
+        assertThat(!afterRevision.has("strategy") || afterRevision.get("strategy").isNull()).isTrue();
+    }
+
     private static HttpResponse<String> get(String path) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(base + path)).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
@@ -127,7 +175,7 @@ class PlanApiIntegrationTest {
     }
 
     private static JsonNode json(HttpResponse<String> response) {
-        assertThat(response.statusCode()).isBetween(200, 299);
+        assertThat(response.statusCode()).withFailMessage(response.body()).isBetween(200, 299);
         return Json.parse(response.body());
     }
 }
