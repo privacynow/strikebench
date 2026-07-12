@@ -19,13 +19,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7171';
 const BASE = `http://localhost:${PORT}`;
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
-let server, browser, page, dbPath;
+let server, browser, page, pg;
 const pageErrors = [];
 const serverErrors = [];
 
@@ -48,18 +49,26 @@ async function api(method, p, body) {
   return text ? JSON.parse(text) : null;
 }
 
+/** Creates a trade the way a real client does: preview, acknowledge the server's
+ *  material-risk contract (R2), then create with the signed token attached. */
+async function createTrade(body) {
+  const prev = await api('POST', '/api/trades/preview', body);
+  if (prev.requiredAcks && prev.requiredAcks.length) {
+    body = { ...body, acknowledgedRisks: prev.requiredAcks.map(a => a.id), ackToken: prev.ackToken };
+  }
+  return api('POST', '/api/trades', body);
+}
+
 function isoDaysFromNow(days) {
   return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
 }
 
-function sqlite(sql) {
-  const out = spawnSync('sqlite3', [dbPath, sql], { encoding: 'utf8' });
-  if (out.status !== 0) throw new Error('sqlite3 failed: ' + out.stderr);
-  return out.stdout.trim();
-}
-
 async function go(hash) {
-  await page.evaluate(h => { window.location.hash = h; }, hash);
+  await page.evaluate(h => {
+    document.getElementById('app').setAttribute('data-ready', 'false');
+    if (window.location.hash === h) return App.render();
+    window.location.hash = h;
+  }, hash);
   await page.waitForSelector('#app[data-ready="true"]', { timeout: 30000 });
 }
 
@@ -69,10 +78,9 @@ function assertClean(label) {
 }
 
 before(async () => {
-  const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strikebench-seeded-'));
-  dbPath = path.join(dbDir, 'seeded.db');
+  pg = freshDb();
   server = spawn(JAVA, ['-jar', JAR], {
-    env: { ...process.env, PORT, DB_PATH: dbPath, FIXTURES_ONLY: 'true' },
+    env: { ...process.env, PORT, ...pg.env, FIXTURES_ONLY: 'true' },
     stdio: 'ignore'
   });
   await waitForServer();
@@ -84,7 +92,7 @@ before(async () => {
   const rec = await api('POST', '/api/recommend', { symbol: 'AAPL', intent: 'exit', riskMode: 'balanced' });
   const cc = rec.candidates.find(c => c.strategy === 'COVERED_CALL');
   assert.ok(cc, 'covered-call candidate for seeding');
-  await api('POST', '/api/trades', {
+  await createTrade({
     symbol: 'AAPL', strategy: 'COVERED_CALL', qty: 1, intent: 'exit', useHeldShares: true,
     legs: cc.legs.map(l => ({ action: l.action, type: l.type, strike: l.strike, expiration: l.expiration, ratio: 1 }))
   });
@@ -99,8 +107,8 @@ before(async () => {
     ],
     thesis: 'bullish', horizon: 'month', riskMode: 'balanced'
   });
-  await api('POST', '/api/trades', spread(1));
-  const toClose = (await api('POST', '/api/trades', spread(1))).trade.id;
+  await createTrade(spread(1));
+  const toClose = (await createTrade(spread(1))).trade.id;
   await api('POST', `/api/trades/${toClose}/unwind`, { confirm: true });
 
   // A persisted backtest (previous-runs list data)
@@ -119,7 +127,7 @@ before(async () => {
     { action: 'BUY', type: 'PUT', strike: 417.5, expiration: dead, ratio: 1, entryPrice: 0.005, stock: false },
     { action: 'SELL', type: 'CALL', strike: 420, expiration: dead, ratio: 1, entryPrice: 3.10, stock: false }
   ]).replaceAll("'", "''");
-  sqlite(`INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
+  pg.sql(`INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
       entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,pop_entry,
       fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,is_live,
       created_at,closed_at,updated_at,intent,shares_locked)
@@ -138,11 +146,12 @@ before(async () => {
 after(async () => {
   if (browser) await browser.close();
   if (server) server.kill();
+  if (pg) pg.drop();
 });
 
-const ROUTES = ['#/home', '#/research/AAPL', '#/trade/discover', '#/trade/discover/manual',
-  '#/trade/shape', '#/trade/place', '#/trade/verify', '#/portfolio', '#/portfolio/closed',
-  '#/portfolio/activity', '#/portfolio/account', '#/status'];
+const ROUTES = ['#/home', '#/research/AAPL', '#/trade/context', '#/trade/context/manual',
+  '#/trade/structure', '#/trade/decide', '#/trade/outcomes', '#/portfolio', '#/portfolio/closed',
+  '#/portfolio/activity', '#/portfolio/account', '#/data/overview'];
 
 for (const level of ['beginner', 'expert']) {
   test(`grown DB: every route renders clean at ${level}`, async () => {

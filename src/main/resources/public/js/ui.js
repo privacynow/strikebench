@@ -27,8 +27,13 @@
 
   // ---- formatting ----
 
+  function finiteNumber(value) {
+    return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+  }
+
   function fmtMoney(cents, opts) {
-    if (cents === null || cents === undefined) return '—';
+    if (!finiteNumber(cents)) return '—';
+    cents = Number(cents);
     var sign = cents < 0 ? '−' : (opts && opts.plus && cents > 0 ? '+' : '');
     var abs = Math.abs(Math.round(cents));
     var dollars = Math.floor(abs / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -37,7 +42,8 @@
 
   /** Compact for chart axes: $1.2k / $85k / $1.3M */
   function fmtMoneyCompact(cents) {
-    if (cents === null || cents === undefined) return '—';
+    if (!finiteNumber(cents)) return '—';
+    cents = Number(cents);
     var v = cents / 100;
     var sign = v < 0 ? '−' : '';
     var a = Math.abs(v);
@@ -48,18 +54,23 @@
   }
 
   function pnlSpan(cents, cls) {
-    if (cents === null || cents === undefined) return el('span', {}, '—');
+    if (!finiteNumber(cents)) return el('span', { class: 'muted' }, '—');
+    cents = Number(cents);
     return el('span', { class: (cents >= 0 ? 'gain' : 'loss') + (cls ? ' ' + cls : '') },
       fmtMoney(cents, { plus: true }));
   }
 
   function fmtPct(x, digits) {
-    if (x === null || x === undefined || isNaN(x)) return '—';
-    return (x * 100).toFixed(digits === undefined ? 0 : digits) + '%';
+    if (!finiteNumber(x)) return '—';
+    x = Number(x);
+    var out = (x * 100).toFixed(digits === undefined ? 0 : digits);
+    if (parseFloat(out) === 0) out = out.replace('-', ''); // '−0.0%' is a formatting artifact, not a loss
+    return out + '%';
   }
 
   function fmtNum(x, digits) {
-    if (x === null || x === undefined || isNaN(x)) return '—';
+    if (!finiteNumber(x)) return '—';
+    x = Number(x);
     return Number(x).toLocaleString('en-US', {
       minimumFractionDigits: digits === undefined ? 2 : digits,
       maximumFractionDigits: digits === undefined ? 2 : digits
@@ -76,16 +87,49 @@
       (up ? '▲ ' : '▼ ') + Math.abs(d).toFixed(2) + ' (' + (up ? '+' : '−') + Math.abs(pct).toFixed(2) + '%)');
   }
 
+  /** First listed option contract in a mixed stock/options package. */
+  function firstOptionLeg(legs) {
+    return (legs || []).find(function (leg) {
+      return leg && leg.type !== 'STOCK' && finiteNumber(leg.strike) && leg.expiration;
+    }) || null;
+  }
+
   // ---- small components ----
 
   var FRESH_CLASS = {
-    REALTIME: 'badge-ok', FIXTURE: 'badge-dim', DELAYED: 'badge-warn',
+    REALTIME: 'badge-ok', FIXTURE: 'badge-dim', DELAYED: 'badge-warn', SIMULATED: 'badge-sim',
     EOD: 'badge-caution', MODELED: 'badge-caution', STALE: 'badge-danger', MISSING: 'badge-danger'
   };
   function freshnessBadge(freshness) {
     if (!freshness) return null;
     var label = freshness === 'FIXTURE' ? 'DEMO DATA' : freshness;
-    return el('span', { class: 'badge ' + (FRESH_CLASS[freshness] || 'badge-dim'), title: 'Data freshness' }, label);
+    return el('span', { class: 'badge ' + (FRESH_CLASS[freshness] || 'badge-dim'),
+      'aria-label': 'Data freshness: ' + label }, label);
+  }
+
+  /** Provenance and age are separate facts. Accepts the API DataEvidence object. */
+  function evidenceBadge(evidence, opts) {
+    if (!evidence) return null;
+    if (typeof evidence === 'string') evidence = { provenance: evidence };
+    var p = String(evidence.provenance || 'MISSING').toUpperCase();
+    var age = String(evidence.age || '').toUpperCase();
+    var compact = !!(opts && opts.compact);
+    var label = p === 'DEMO' ? (compact ? 'DEMO' : 'DEMO · FABRICATED')
+      : p === 'SIMULATED' ? 'SIMULATED'
+      : p === 'MODELED' ? 'MODELED'
+      : p === 'MIXED' ? 'MIXED SOURCES'
+      : p === 'MISSING' ? ((opts && opts.missingLabel) || 'DATA UNAVAILABLE')
+      : p;
+    if ((p === 'OBSERVED' || p === 'BROKER') && age && age !== 'NOT_APPLICABLE') {
+      label += compact && age === 'REALTIME' ? '' : ' · ' + age;
+    }
+    var cls = p === 'OBSERVED' || p === 'BROKER'
+      ? (age === 'STALE' ? 'badge-danger' : age === 'DELAYED' ? 'badge-warn' : 'badge-ok')
+      : p === 'DEMO' ? 'badge-warn'
+      : p === 'SIMULATED' ? 'badge-sim'
+      : p === 'MODELED' || p === 'MIXED' ? 'badge-caution' : 'badge-dim';
+    return el('span', { class: 'badge evidence-badge ' + cls + (opts && opts.className ? ' ' + opts.className : ''),
+      title: evidence.source ? ('Source: ' + evidence.source) : null }, label);
   }
 
   function explain(text) {
@@ -102,6 +146,21 @@
       box.appendChild(el('ul', {}, items.map(function (r) { return el('li', {}, r); })));
     }
     return box;
+  }
+
+  /** Nonblocking status for actions that do not own a natural inline result region. */
+  function toast(message, kind) {
+    var region = document.getElementById('toast-region');
+    if (!region) {
+      region = el('div', { id: 'toast-region', class: 'toast-region', 'aria-live': 'polite', 'aria-atomic': 'true' });
+      document.body.appendChild(region);
+    }
+    region.innerHTML = '';
+    var item = el('div', { class: 'toast-message toast-' + (kind || 'info'), role: kind === 'error' ? 'alert' : 'status' },
+      String(message || 'Action could not be completed'));
+    region.appendChild(item);
+    window.setTimeout(function () { if (item.isConnected) item.remove(); }, kind === 'error' ? 7000 : 4000);
+    return item;
   }
 
   function stat(label, valueNode, explainText) {
@@ -132,8 +191,20 @@
     return svg;
   }
 
-  function chip(label, valueNode) {
-    return el('span', { class: 'chip' }, el('span', { class: 'chip-label' }, label), el('b', {}, valueNode));
+  /** ISO instant/date -> the USER'S local calendar date (UTC slicing showed evening-US users tomorrow). */
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso).slice(0, 10);
+    var m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+    return d.getFullYear() + '-' + m + '-' + day;
+  }
+
+  function chip(label, valueNode, title) {
+    var structuredHelp = label && label.nodeType === 1
+      && (label.matches('.info-trigger,.term') || label.querySelector('.info-trigger,.term'));
+    return el('span', { class: 'chip', title: structuredHelp ? null : title || null },
+      el('span', { class: 'chip-label' }, label), el('b', {}, valueNode));
   }
 
   function table(headers, rows) {
@@ -155,10 +226,10 @@
   }
 
   /** 0–100 score as a small colored meter. */
-  function scoreBar(score) {
+  function scoreBar(score, label) {
     var pct = Math.max(0, Math.min(100, score));
     var cls = pct >= 70 ? 'ok' : pct >= 45 ? 'caution' : 'danger';
-    return el('span', { class: 'score-wrap', title: 'Composite rank: risk validity, freshness, liquidity, risk:reward, POP, capital efficiency' },
+    return el('span', { class: 'score-wrap', 'aria-label': label || 'Score' },
       el('span', { class: 'score-num' }, Math.round(pct)),
       el('span', { class: 'score-bar' }, el('span', { class: 'score-fill score-' + cls, style: 'width:' + pct + '%' })));
   }
@@ -190,7 +261,19 @@
 
   /** A term of art with tap-to-define glossary popover (Beginner level). */
   function term(word, display) {
-    var def = window.Learn && Learn.GLOSSARY[word.toLowerCase()];
+    // ONE explanation system (review P1): a term backed by the INFO registry opens the SAME
+    // level-aware info bubble at BOTH levels — the expert plain-span fallback left the riskiest
+    // labels with literally nothing. Glossary-only terms keep the beginner popover.
+    var key = word.toLowerCase();
+    if (window.Learn && Learn.INFO && Learn.INFO[key]) {
+      if (infoUsed.indexOf(key) < 0) infoUsed.push(key);
+      var t2 = el('button', { class: 'term', type: 'button', 'data-term': key,
+        'aria-expanded': 'false' }, display || word);
+      t2.addEventListener('click', function (e) { e.stopPropagation(); openInfo(t2, key); });
+      t2.addEventListener('focus', function () { if (!infoSuppressFocusOpen) openInfo(t2, key); });
+      return t2;
+    }
+    var def = window.Learn && Learn.GLOSSARY[key];
     if (!def || (window.Learn && Learn.currentLevel() === 'expert')) {
       return el('span', {}, display || word);
     }
@@ -230,32 +313,69 @@
   /** Confirmation modal. body may be a node; onConfirm is async. */
   function confirmModal(title, bodyNode, confirmLabel, onConfirm, danger) {
     var root = document.getElementById('modal-root');
+    var returnFocus = document.activeElement;
+    var titleId = 'modal-title-' + Date.now().toString(36);
+    var closed = false;
     root.innerHTML = '';
-    var msg = el('div', { class: 'alert alert-danger', style: 'display:none' });
+    var msg = el('div', { class: 'alert alert-danger', style: 'display:none', role: 'alert', 'aria-live': 'assertive' });
     function showError(text) {
       msg.textContent = text;
       msg.style.display = '';
     }
     var confirmBtn = el('button', {
-      class: 'btn ' + (danger ? 'btn-danger' : ''), id: 'modal-confirm',
+      class: 'btn ' + (danger ? 'btn-danger' : ''), id: 'modal-confirm', type: 'button',
       onclick: function () {
         confirmBtn.disabled = true;
-        Promise.resolve(onConfirm()).then(close).catch(function (e) {
+        Promise.resolve(onConfirm()).then(function () { close(true); }).catch(function (e) {
           confirmBtn.disabled = false;
           showError(e.message || 'Failed');
         });
       }
     }, confirmLabel);
-    var backdrop = el('div', { class: 'modal-backdrop' },
-      el('div', { class: 'modal' },
-        el('h3', {}, title),
+    var cancelBtn = el('button', { class: 'btn btn-secondary', type: 'button', onclick: function () { close(); } }, 'Cancel');
+    var dialog = el('div', { class: 'modal', role: 'dialog', tabindex: '-1', 'aria-modal': 'true', 'aria-labelledby': titleId },
+        el('h3', { id: titleId }, title),
         bodyNode,
         msg,
         el('div', { class: 'btn-row' },
           confirmBtn,
-          el('button', { class: 'btn btn-secondary', onclick: close }, 'Cancel'))));
-    function close() { root.innerHTML = ''; }
+          cancelBtn));
+    var backdrop = el('div', { class: 'modal-backdrop', onclick: function (e) {
+      if (e.target === backdrop) close();
+    } }, dialog);
+    function focusable() {
+      return Array.prototype.slice.call(dialog.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'))
+        .filter(function (n) { return n.offsetParent !== null; });
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+      if (e.key !== 'Tab') return;
+      var items = focusable();
+      if (!items.length) { e.preventDefault(); dialog.focus(); return; }
+      var first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+    function close(force) {
+      if (closed) return;
+      // Escape/backdrop cannot cancel a request already sent. Keep the modal until the
+      // operation resolves so the screen never implies that a committed action was undone.
+      if (confirmBtn.disabled && !force) return;
+      closed = true;
+      document.removeEventListener('keydown', onKey);
+      root.innerHTML = '';
+      if (returnFocus && returnFocus.isConnected && returnFocus.focus) returnFocus.focus();
+    }
     root.appendChild(backdrop);
+    document.addEventListener('keydown', onKey);
+    // Establish containment before returning from the click handler. The first usable
+    // control takes focus on the next task, but an open modal never leaves focus behind it.
+    dialog.focus();
+    window.setTimeout(function () {
+      var items = focusable();
+      (items[0] || dialog).focus();
+    }, 0);
     return { close: close, showError: showError };
   }
 
@@ -285,10 +405,17 @@
    * (or null when out of range); the tooltip shows `lines` and a dot rides the curve.
    * Pointer events cover mouse AND touch — the finance-app "slide to read values" feel.
    */
-  function interactiveChart(svg, geom, probe) {
+  function interactiveChart(svg, geom, probe, accessibleLabel) {
     var wrap = el('div', { class: 'chart-wrap' });
+    interactiveChart._seq = (interactiveChart._seq || 0) + 1;
+    var tipId = 'chart-readout-' + interactiveChart._seq;
+    svg.setAttribute('tabindex', '0');
+    svg.setAttribute('role', 'group');
+    svg.setAttribute('aria-label', accessibleLabel || 'Interactive chart. Use left and right arrow keys to inspect values.');
+    svg.setAttribute('aria-describedby', tipId);
     wrap.appendChild(svg);
-    var tip = el('div', { class: 'chart-tip', style: 'display:none' });
+    var tip = el('div', { class: 'chart-tip', id: tipId, style: 'display:none',
+      'aria-live': 'polite', 'aria-atomic': 'true' });
     wrap.appendChild(tip);
     var vline = svgEl('line', { class: 'xhair', x1: 0, y1: geom.padT, x2: 0, y2: geom.H - geom.padB, style: 'display:none' });
     var dot = svgEl('circle', { class: 'xhair-dot', r: 4, style: 'display:none' });
@@ -300,16 +427,12 @@
       vline.style.display = 'none';
       dot.style.display = 'none';
     }
-    svg.addEventListener('pointerleave', hide);
-    svg.addEventListener('pointermove', function (ev) {
-      var box = svg.getBoundingClientRect();
-      if (!box.width) return;
-      var plotX0 = geom.padL / geom.W * box.width;
-      var plotX1 = (geom.W - geom.padR) / geom.W * box.width;
-      var frac = (ev.clientX - box.left - plotX0) / Math.max(1, plotX1 - plotX0);
-      if (frac < 0 || frac > 1) { hide(); return; }
+    function showAt(frac, box) {
+      frac = Math.max(0, Math.min(1, frac));
+      box = box || svg.getBoundingClientRect();
+      if (!box.width) return false;
       var hit = probe(frac);
-      if (!hit) { hide(); return; }
+      if (!hit) { hide(); return false; }
       vline.setAttribute('x1', hit.x); vline.setAttribute('x2', hit.x);
       dot.setAttribute('cx', hit.x); dot.setAttribute('cy', hit.y);
       vline.style.display = ''; dot.style.display = '';
@@ -319,12 +442,40 @@
           typeof l === 'string' ? l : l.text));
       });
       tip.style.display = '';
-      // Position in wrapper pixels; flip sides near the right edge
       var px = hit.x / geom.W * box.width;
       var flip = px > box.width * 0.62;
       tip.style.left = flip ? '' : (px + 12) + 'px';
       tip.style.right = flip ? (box.width - px + 12) + 'px' : '';
       tip.style.top = Math.max(0, hit.y / geom.H * box.height - 14) + 'px';
+      return true;
+    }
+    var keyboardFrac = 0.5;
+    svg.addEventListener('pointerleave', hide);
+    svg.addEventListener('pointermove', function (ev) {
+      var box = svg.getBoundingClientRect();
+      if (!box.width) return;
+      var plotX0 = geom.padL / geom.W * box.width;
+      var plotX1 = (geom.W - geom.padR) / geom.W * box.width;
+      var frac = (ev.clientX - box.left - plotX0) / Math.max(1, plotX1 - plotX0);
+      if (frac < 0 || frac > 1) { hide(); return; }
+      keyboardFrac = frac;
+      showAt(frac, box);
+    });
+    svg.addEventListener('focus', function (ev) {
+      if (ev.target === svg) showAt(keyboardFrac);
+    });
+    svg.addEventListener('blur', function (ev) {
+      if (!svg.contains(ev.relatedTarget)) hide();
+    });
+    svg.addEventListener('keydown', function (ev) {
+      if (ev.target !== svg) return; // strike sliders inside payoff charts own their keys
+      if (ev.key === 'Home') keyboardFrac = 0;
+      else if (ev.key === 'End') keyboardFrac = 1;
+      else if (ev.key === 'ArrowLeft') keyboardFrac = Math.max(0, keyboardFrac - 0.04);
+      else if (ev.key === 'ArrowRight') keyboardFrac = Math.min(1, keyboardFrac + 0.04);
+      else return;
+      ev.preventDefault();
+      showAt(keyboardFrac);
     });
     return wrap;
   }
@@ -358,12 +509,14 @@
 
     async function load() {
       renderPills();
+      var reqKey = selected; // supersede token: guards BOTH success and error paths (a rejected fetch
+                             // for an old window must not wipe the window the user is now looking at)
       host.innerHTML = '';
       summary.innerHTML = '';
       host.appendChild(spinner('Loading ' + selected.toUpperCase() + '…'));
       try {
         var data = await opts.fetch(selected);
-        if (selected !== (data.range || selected)) return; // superseded
+        if (reqKey !== selected) return; // a newer pill was picked while this loaded
         host.innerHTML = '';
         summary.innerHTML = '';
         var series = data.series || (data.candles || []).map(function (c) {
@@ -393,6 +546,7 @@
           : lineChart(series, { money: opts.money, baseline: first }));
         if (data.note) host.appendChild(data.note);
       } catch (e) {
+        if (reqKey !== selected) return; // don't let an old window's failure wipe the current chart
         host.innerHTML = '';
         host.appendChild(el('div', { class: 'alert alert-warn' }, 'Could not load this window: ' + e.message));
       }
@@ -447,11 +601,22 @@
         .attr('text-anchor', 'end').text(fmtNum(t, t >= 1000 ? 0 : 2));
     });
     var labelEvery = Math.max(1, Math.round(bars.length / 5));
-    bars.forEach(function (b, i) {
-      if (i % labelEvery !== 0 && i !== bars.length - 1) return;
+    var labelIndexes = [];
+    bars.forEach(function (b, i) { if (i % labelEvery === 0) labelIndexes.push(i); });
+    var lastIndex = bars.length - 1;
+    if (labelIndexes[labelIndexes.length - 1] !== lastIndex) {
+      var prior = labelIndexes[labelIndexes.length - 1];
+      var priorX = prior === undefined ? -Infinity : x(bars[prior].date) + x.bandwidth() / 2;
+      var lastX = x(bars[lastIndex].date) + x.bandwidth() / 2;
+      if (lastX - priorX < 86) labelIndexes.pop();
+      labelIndexes.push(lastIndex);
+    }
+    labelIndexes.forEach(function (i) {
+      var b = bars[i];
+      var anchor = i === 0 ? 'start' : i === bars.length - 1 ? 'end' : 'middle';
       svg.append('text').attr('class', 'tick')
         .attr('x', x(b.date) + x.bandwidth() / 2).attr('y', H - 10)
-        .attr('text-anchor', 'middle').text(b.date);
+        .attr('text-anchor', anchor).text(b.date);
     });
     bars.forEach(function (b) {
       var cx = x(b.date) + x.bandwidth() / 2;
@@ -482,7 +647,8 @@
         ].filter(Boolean)
       };
     }
-    return interactiveChart(svg.node(), { W: W, H: H, padL: padL, padR: padR, padT: padT, padB: padB }, probe);
+    return interactiveChart(svg.node(), { W: W, H: H, padL: padL, padR: padR, padT: padT, padB: padB }, probe,
+      'Price candlestick chart. Use left and right arrow keys to inspect trading sessions.');
   }
 
   function payoffChart(points, opts) {
@@ -494,6 +660,40 @@
     var xs = points.map(function (p) { return parseFloat(p.price); });
     var ys = points.map(function (p) { return p.profitCents; });
     var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
+
+    // KNOT-BASED X-DOMAIN: the server grid spans spot±30%, but a tight vertical's action lives in
+    // a few-dollar slice — untrimmed it renders as a sliver. Window = knots (slope changes) +
+    // breakevens + spot + current handle strikes, padded; pure-linear payoffs keep the full span.
+    (function trimDomain() {
+      var interesting = [];
+      for (var k = 1; k < xs.length - 1; k++) {
+        var dx0 = xs[k] - xs[k - 1] || 1, dx1 = xs[k + 1] - xs[k] || 1;
+        var s0 = (ys[k] - ys[k - 1]) / dx0, s1 = (ys[k + 1] - ys[k]) / dx1;
+        if (Math.abs(s1 - s0) > 1e-6 * Math.max(1, Math.abs(s0), Math.abs(s1))) interesting.push(xs[k]);
+      }
+      if (!interesting.length) return; // linear (stock) — nothing to focus on
+      (opts.breakevens || []).forEach(function (b) { var v = parseFloat(b); if (!isNaN(v)) interesting.push(v); });
+      if (opts.expectedMove) { interesting.push(opts.expectedMove.low); interesting.push(opts.expectedMove.high); }
+      if (opts.spot !== undefined && opts.spot !== null) interesting.push(opts.spot);
+      (opts.handles || []).forEach(function (h) { if (h && typeof h.strike === 'number') interesting.push(h.strike); });
+      var iLo = Math.min.apply(null, interesting), iHi = Math.max.apply(null, interesting);
+      var padX = Math.max((iHi - iLo) * 0.35, (opts.spot || iHi || 1) * 0.03);
+      var lo = Math.max(xMin, iLo - padX), hi = Math.min(xMax, iHi + padX);
+      if (hi - lo <= 1e-9 || hi - lo >= (xMax - xMin) * 0.98) return; // no meaningful trim
+      function yAt(px) {
+        var i = 1;
+        while (i < xs.length - 1 && xs[i] < px) i++;
+        var t = xs[i] === xs[i - 1] ? 0 : (px - xs[i - 1]) / (xs[i] - xs[i - 1]);
+        return ys[i - 1] + t * (ys[i] - ys[i - 1]);
+      }
+      var nxs = [lo], nys = [yAt(lo)];
+      for (var j = 0; j < xs.length; j++) {
+        if (xs[j] > lo && xs[j] < hi) { nxs.push(xs[j]); nys.push(ys[j]); }
+      }
+      nxs.push(hi); nys.push(yAt(hi));
+      xs = nxs; ys = nys; xMin = lo; xMax = hi;
+    })();
+
     var yMin = Math.min.apply(null, ys), yMax = Math.max.apply(null, ys);
     if (yMin === yMax) { yMin -= 100; yMax += 100; }
     var yPad = (yMax - yMin) * 0.12;
@@ -544,6 +744,18 @@
       svg.appendChild(t);
     });
 
+    // ±1σ expected-move band: the market's own likely range to expiry, drawn UNDER the curve so
+    // "your shorts sit inside the expected move" is visible geometry, not prose.
+    if (opts.expectedMove && opts.expectedMove.low < opts.expectedMove.high) {
+      var emL = Math.max(xMin, opts.expectedMove.low), emH = Math.min(xMax, opts.expectedMove.high);
+      if (emH > emL) {
+        svg.appendChild(svgEl('rect', { class: 'em-band', x: X(emL), y: padT,
+          width: Math.max(0, X(emH) - X(emL)), height: H - padT - padB }));
+        var emt = svgEl('text', { x: X(emL) + 4, y: padT + 12, class: 'em-label' });
+        emt.textContent = 'expected move';
+        svg.appendChild(emt);
+      }
+    }
     if (opts.spot !== undefined && opts.spot !== null) {
       var sx = X(opts.spot);
       if (sx >= padL && sx <= W - padR) {
@@ -567,7 +779,9 @@
       // mash the labels), and its label rides BESIDE the grip, flipping near the right edge.
       var gy = padT + 10 + (hi % 4) * 22;
       var lineEl = svgEl('line', { class: 'strike-line', x1: hx, y1: padT, x2: hx, y2: H - padB });
-      var grip = svgEl('circle', { class: 'strike-grip', cx: hx, cy: gy, r: 8, 'data-handle': h.id });
+      var grip = svgEl('circle', { class: 'strike-grip', cx: hx, cy: gy, r: 8, 'data-handle': h.id,
+        tabindex: '0', role: 'slider', 'aria-label': h.label,
+        'aria-valuenow': String(cur), 'aria-valuetext': h.label });
       var lbl = svgEl('text', { class: 'strike-grip-label', y: gy + 4 });
       function placeLabel(nx, text) {
         var flip = nx > W - 130;
@@ -597,8 +811,11 @@
         if (!box.width) return;
         var vx = (ev.clientX - box.left) / box.width * W;
         var price = xMin + (vx - padL) / (W - padL - padR) * (xMax - xMin);
-        var best = h.strikes[0], bd = Infinity;
-        h.strikes.forEach(function (k) { var d = Math.abs(k - price); if (d < bd) { bd = d; best = k; } });
+        var best = snapped, bd = Infinity;
+        h.strikes.forEach(function (k) {
+          if (k < xMin || k > xMax) return; // outside the focused window — the selects still reach it
+          var d = Math.abs(k - price); if (d < bd) { bd = d; best = k; }
+        });
         if (best !== snapped) { snapped = best; moveTo(best); }
       });
       grip.addEventListener('pointerup', function (ev) {
@@ -609,6 +826,24 @@
       grip.addEventListener('pointercancel', function () {
         grip.classList.remove('dragging');
         snapped = cur; moveTo(cur);
+      });
+      // Keyboard operation: arrow keys step to the neighboring listed strike (within the
+      // visible domain), Enter/Space commits — the drag interaction, without a pointer.
+      grip.addEventListener('keydown', function (ev) {
+        if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight' && ev.key !== 'Enter' && ev.key !== ' ') return;
+        ev.preventDefault();
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          if (snapped !== cur && h.onChange) h.onChange(snapped);
+          return;
+        }
+        var inDomain = h.strikes.filter(function (k) { return k >= xMin && k <= xMax; }).sort(function (a, b) { return a - b; });
+        var idx = inDomain.indexOf(snapped);
+        if (idx < 0) idx = inDomain.indexOf(cur);
+        var next = ev.key === 'ArrowLeft' ? inDomain[Math.max(0, idx - 1)] : inDomain[Math.min(inDomain.length - 1, idx + 1)];
+        if (next !== undefined && next !== snapped) {
+          snapped = next; moveTo(next);
+          grip.setAttribute('aria-valuenow', String(next));
+        }
       });
     });
 
@@ -629,7 +864,7 @@
           { text: 'P/L ' + fmtMoney(pl, { plus: true }), cls: pl >= 0 ? 'gain' : 'loss' }
         ]
       };
-    });
+    }, 'Expiration payoff chart. Use left and right arrow keys to inspect profit or loss by expiration price.');
   }
 
   /** Line/area chart for [{date, value}] series. opts: {money} */
@@ -693,7 +928,7 @@
           { text: (pct >= 0 ? '+' : '') + pct.toFixed(1) + '% in window', cls: pct >= 0 ? 'gain' : 'loss' }
         ]
       };
-    });
+    }, 'Price history chart. Use left and right arrow keys to inspect dates and values.');
   }
 
   // ---- SVG icon system: the ONLY pictographic language in the app (no emoji, ever). ----
@@ -716,7 +951,10 @@
     moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>',
     halftone: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17A8.5 8.5 0 0 0 12 3.5z" fill="currentColor" stroke="none"/>',
     warn: '<path d="M12 3.5L21.5 20h-19z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.2" r="0.6" fill="currentColor"/>',
-    info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/>'
+    check: '<path d="M5 12.5l4.2 4.2L19 7"/>',
+    info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/>',
+    magnifier: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4L21 21"/>',
+    'chevron-right': '<path d="M9 5l7 7-7 7"/>'
   };
   function icon(name, size) {
     var span = el('span', { class: 'icon' });
@@ -724,6 +962,27 @@
       + '" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
       + (ICON_PATHS[name] || '') + '</svg>';
     return span;
+  }
+
+  var TIME_SPREADS = ['CALENDAR_CALL', 'CALENDAR_PUT', 'DIAGONAL_CALL', 'DIAGONAL_PUT'];
+  function profitCeilingKind(strategy, structureGroup, value, legs) {
+    if (value !== null && value !== undefined) return 'finite';
+    var expirations = {};
+    (legs || []).forEach(function (leg) {
+      if (!leg || leg.stock || String(leg.type || '').toUpperCase() === 'STOCK' || !leg.expiration) return;
+      expirations[String(leg.expiration)] = true;
+    });
+    if (structureGroup === 'time' || Object.keys(expirations).length > 1
+        || TIME_SPREADS.indexOf(String(strategy || '').toUpperCase()) >= 0) {
+      return 'model-dependent';
+    }
+    return 'uncapped';
+  }
+  function maxProfitLabel(strategy, structureGroup, value, beginner, legs) {
+    var kind = profitCeilingKind(strategy, structureGroup, value, legs);
+    if (kind === 'finite') return fmtMoney(value);
+    if (kind === 'model-dependent') return 'model-dependent';
+    return beginner ? 'no fixed ceiling' : 'uncapped';
   }
 
   /**
@@ -742,9 +1001,352 @@
     return wrap;
   }
 
+
+  /**
+   * Block E: the ONE explanation primitive. A small, always-visible, quiet trigger beside a
+   * technical label; hover opens the bubble after ~550ms, focus/click/tap opens immediately.
+   * One-sentence summary first; a small [+] expands the level-appropriate detail in place.
+   * One bubble at a time; Escape/outside-click/blur closes; edge-aware; zero layout shift.
+   */
+  var infoPop = null;
+  var infoUsed = window.__usedInfoTerms = window.__usedInfoTerms || [];
+  var infoTrigger = null; // the trigger that owns the open bubble (focus returns to it on close)
+  var infoSuppressFocusOpen = false; // Escape's return-focus must not immediately reopen
+  function closeInfo(returnFocus) {
+    if (infoPop) {
+      if (infoPop._detachTriggerKey) infoPop._detachTriggerKey();
+      infoPop.remove(); infoPop = null;
+    }
+    if (infoTrigger) {
+      infoTrigger.setAttribute('aria-expanded', 'false');
+      infoTrigger.removeAttribute('aria-describedby');
+      if (returnFocus && document.contains(infoTrigger)) {
+        infoSuppressFocusOpen = true;
+        infoTrigger.focus();
+        setTimeout(function () { infoSuppressFocusOpen = false; }, 120);
+      }
+      infoTrigger = null;
+    }
+    document.removeEventListener('click', onDocClickInfo, true);
+    document.removeEventListener('keydown', onDocKeyInfo, true);
+    window.removeEventListener('resize', onInfoScroll, true);
+  }
+  function onDocClickInfo(ev) { if (infoPop && !infoPop.contains(ev.target) && ev.target !== infoTrigger) closeInfo(); }
+  function onDocKeyInfo(ev) { if (ev.key === 'Escape') closeInfo(true); }
+  // The bubble is positioned ABSOLUTELY in page coordinates, so it scrolls WITH its trigger —
+  // structural anchoring, no scroll listeners, no floating over unrelated numbers. Resize
+  // still closes (the layout genuinely changed).
+  function onInfoScroll() { closeInfo(); }
+  function openInfo(trigger, key) {
+    if (!trigger.isConnected) return; // a re-render replaced the trigger mid-hover
+    closeInfo();
+    var def = window.Learn && Learn.INFO && Learn.INFO[key];
+    if (!def) return;
+    infoTrigger = trigger;
+    var beginner = window.Learn && Learn.currentLevel && Learn.currentLevel() === 'beginner';
+    var detail = beginner ? def.beginner : def.expert;
+    // role=dialog, not tooltip: it CONTAINS an interactive control (the expand button), and the
+    // trigger references it via aria-describedby so screen readers announce the content.
+    infoPop = el('div', { class: 'info-pop', role: 'dialog', 'aria-label': def.short, id: 'info-pop' });
+    trigger.setAttribute('aria-expanded', 'true');
+    trigger.setAttribute('aria-describedby', 'info-pop');
+    var body = el('div', { class: 'info-short' }, def.short);
+    var more = el('div', { class: 'info-detail', style: 'display:none' }, detail);
+    var expand = el('button', { class: 'info-expand', type: 'button', 'aria-expanded': 'false',
+      'aria-label': 'More detail', onclick: function (ev) {
+        ev.stopPropagation();
+        var open = more.style.display !== 'none';
+        more.style.display = open ? 'none' : '';
+        expand.setAttribute('aria-expanded', String(!open));
+        expand.textContent = open ? '+' : '\u2212';
+        place();
+      } }, '+');
+    infoPop.appendChild(el('div', { class: 'info-row' }, body, expand));
+    infoPop.appendChild(more);
+    // Body-append (absolute page coordinates stay correct regardless of positioned ancestors);
+    // keyboard reachability comes from EXPLICIT focus management: Tab on the trigger moves into
+    // the bubble, Tab/Escape from the [+] returns to the trigger — the standard dialog pattern.
+    document.body.appendChild(infoPop);
+    function onTriggerKey(ev) {
+      if (ev.key === 'Tab' && !ev.shiftKey && infoPop) {
+        ev.preventDefault();
+        expand.focus();
+      }
+    }
+    trigger.addEventListener('keydown', onTriggerKey);
+    expand.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Tab') { ev.preventDefault(); closeInfo(true); }
+    });
+    infoPop._detachTriggerKey = function () { trigger.removeEventListener('keydown', onTriggerKey); };
+    function place() {
+      var r = trigger.getBoundingClientRect();
+      var w = infoPop.offsetWidth, h = infoPop.offsetHeight;
+      var left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8) + window.scrollX;
+      var top = r.bottom + 6 + window.scrollY;
+      if (r.bottom + 6 + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6) + window.scrollY;
+      infoPop.style.left = left + 'px';
+      infoPop.style.top = top + 'px';
+    }
+    place();
+    setTimeout(function () {
+      document.addEventListener('click', onDocClickInfo, true);
+      document.addEventListener('keydown', onDocKeyInfo, true);
+      window.addEventListener('resize', onInfoScroll, true);
+    }, 0);
+  }
+  /** A visible, quiet info trigger for a registry term. Never pairs with a native title. */
+  function info(termKey) {
+    if (infoUsed.indexOf(termKey) < 0) infoUsed.push(termKey);
+    var t = el('button', { class: 'info-trigger', type: 'button', 'data-term': termKey,
+      'aria-expanded': 'false', 'aria-label': 'What does this mean?' }, 'i');
+    var hoverTimer = null;
+    t.addEventListener('mouseenter', function () {
+      hoverTimer = setTimeout(function () { openInfo(t, termKey); }, 550);
+    });
+    t.addEventListener('mouseleave', function () {
+      if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+      // the bubble persists so the pointer can travel into it; outside-click/Escape closes
+    });
+    t.addEventListener('click', function (ev) {
+      // Info triggers sometimes live inside a destination card. Their one deliberate
+      // exception to card navigation must suppress both bubbling and the anchor default.
+      ev.preventDefault(); ev.stopPropagation(); openInfo(t, termKey);
+    });
+    t.addEventListener('focus', function () { if (!infoSuppressFocusOpen) openInfo(t, termKey); });
+    t.addEventListener('blur', function () { setTimeout(function () {
+      if (infoPop && !infoPop.contains(document.activeElement) && document.activeElement !== t) closeInfo();
+    }, 150); });
+    return t;
+  }
+
+  /**
+   * Compact price sparkline for selection cards: one polyline, gain/loss colored by the
+   * window's net move, with a pointer/keyboard readout (date · price) sized for reading
+   * glasses (>=14px). Data comes from ONE /api/sparklines batch — this component never
+   * fetches. Unavailable data renders an honest quiet line, never a fabricated squiggle.
+   */
+  function sparkline(spark, opts) {
+    opts = opts || {};
+    var h = opts.height || 40;
+    if (!spark || !spark.available || !spark.closes || spark.closes.length < 2) {
+      return el('div', { class: 'spark spark-empty', style: 'height:' + h + 'px' },
+        el('span', { class: 'muted' }, 'history unavailable'), info('historycoverage'));
+    }
+    var closes = spark.closes.map(Number);
+    var dates = spark.dates || [];
+    var W = 300, H = 60;
+    var min = Math.min.apply(null, closes), max = Math.max.apply(null, closes);
+    var span = (max - min) || 1;
+    var pts = closes.map(function (c, i) {
+      var x = closes.length === 1 ? 0 : (i / (closes.length - 1)) * W;
+      var y = H - 6 - ((c - min) / span) * (H - 12);
+      return [x, y];
+    });
+    var up = closes[closes.length - 1] >= closes[0];
+    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, preserveAspectRatio: 'none',
+      class: 'spark-svg ' + (up ? 'spark-up' : 'spark-down'), 'aria-hidden': 'true' });
+    svg.style.height = h + 'px';
+    var line = svgEl('polyline', { points: pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' '),
+      fill: 'none', 'stroke-width': '2.5', 'vector-effect': 'non-scaling-stroke' });
+    var dot = svgEl('circle', { r: '3.5', style: 'display:none', class: 'spark-dot' });
+    svg.appendChild(line); svg.appendChild(dot);
+    var readout = el('div', { class: 'spark-readout', 'aria-live': 'polite' });
+    function fmtDay(d) {
+      try { var dt = new Date(d + 'T12:00:00'); return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
+      catch (e) { return d; }
+    }
+    var base = fmtDay(dates[0] || '') + ' \u2192 ' + fmtDay(dates[dates.length - 1] || '') + ' \u00b7 '
+      + (up ? '+' : '') + (((closes[closes.length - 1] - closes[0]) / closes[0]) * 100).toFixed(1) + '%';
+    readout.textContent = base;
+    function showAt(idx) {
+      idx = Math.max(0, Math.min(closes.length - 1, idx));
+      dot.setAttribute('cx', pts[idx][0].toFixed(1));
+      dot.setAttribute('cy', pts[idx][1].toFixed(1));
+      dot.style.display = '';
+      readout.textContent = fmtDay(dates[idx] || '') + ' \u00b7 $' + closes[idx].toFixed(2);
+    }
+    function clearReadout() { dot.style.display = 'none'; readout.textContent = base; }
+    svg.addEventListener('pointermove', function (ev) {
+      var r = svg.getBoundingClientRect();
+      if (!r.width) return;
+      showAt(Math.round(((ev.clientX - r.left) / r.width) * (closes.length - 1)));
+    });
+    svg.addEventListener('pointerleave', clearReadout);
+    // The readout may wrap on narrow cards. A fixed h+20 wrapper let that second line spill into
+    // the evidence badge below; reserve a minimum but let the component grow to its real content.
+    var wrap = el('div', { class: 'spark', style: 'min-height:' + (h + 20) + 'px' }, svg, readout);
+    // Keyboard exploration when the OWNING card has focus: left/right walk the points.
+    wrap.exploreKey = function (key) {
+      if (key !== 'ArrowLeft' && key !== 'ArrowRight') return false;
+      var cur = wrap._ki === undefined ? closes.length - 1 : wrap._ki;
+      wrap._ki = key === 'ArrowLeft' ? Math.max(0, cur - 1) : Math.min(closes.length - 1, cur + 1);
+      showAt(wrap._ki);
+      return true;
+    };
+    return wrap;
+  }
+
+  /**
+   * One symbol-context primitive for every market-facing workflow.
+   *
+   * editable: one stock can change before work is priced;
+   * locked: a priced/placed package names its stock but cannot mutate in place;
+   * multi: a portfolio or simulated market exposes an explicit focus selector.
+   *
+   * Quote status is fetched once per settled edit and always carries the server's source
+   * evidence. Callers own the workflow consequence of a change through onCommit/onPick.
+   */
+  function symbolContext(opts) {
+    opts = opts || {};
+    var mode = opts.mode || 'editable';
+    var symbol = String(opts.symbol || '').toUpperCase();
+    var wrap = el('section', {
+      class: 'symbol-context-bar symbol-context-' + mode + (opts.compact ? ' symbol-context-compact' : '')
+        + (opts.showStatus === false ? ' symbol-context-no-status' : '')
+        + (opts.class ? ' ' + opts.class : ''),
+      id: opts.id || null,
+      'aria-label': opts.ariaLabel || (mode === 'multi' ? 'Market symbols' : 'Stock context')
+    });
+    var labelText = opts.label || (mode === 'editable' ? 'Symbol' : mode === 'locked' ? 'Position symbol' : 'Market focus');
+    var status = el('div', { class: 'symbol-context-status muted', 'aria-live': 'polite' });
+    var seq = 0, timer = null;
+
+    function evidenceFor(q) {
+      if (!q) return null;
+      if (q.evidence) return evidenceBadge(q.evidence);
+      if (q.provenance) return evidenceBadge(q.provenance);
+      if (q.freshness) return freshnessBadge(q.freshness);
+      return null;
+    }
+    async function loadStatus(next) {
+      next = String(next || '').trim().toUpperCase();
+      var mySeq = ++seq;
+      status.innerHTML = '';
+      if (!next || !window.API) return;
+      status.appendChild(el('span', { class: 'muted' }, 'Checking market…'));
+      try {
+        var data = await window.API.get('/api/quotes?symbols=' + encodeURIComponent(next));
+        if (mySeq !== seq || !status.isConnected) return;
+        status.innerHTML = '';
+        var q = (data.quotes || [])[0];
+        if (!q) {
+          status.appendChild(el('span', { class: 'symbol-context-unavailable' }, 'Market quote unavailable'));
+          return;
+        }
+        status.appendChild(el('b', { class: 'symbol-context-price' }, fmtNum(q.last)));
+        status.appendChild(delta(q.last, q.prevClose));
+        var ev = evidenceFor(q);
+        if (ev) status.appendChild(ev);
+        if (q.asOf || q.sourceTimestamp) {
+          status.appendChild(el('span', { class: 'muted symbol-context-asof' },
+            'as of ' + fmtDate(q.asOf || q.sourceTimestamp)));
+        }
+      } catch (e) {
+        if (mySeq !== seq || !status.isConnected) return;
+        status.innerHTML = '';
+        status.appendChild(el('span', { class: 'symbol-context-unavailable' }, 'Market quote unavailable'));
+      }
+    }
+
+    if (mode === 'multi') {
+      wrap.appendChild(el('div', { class: 'symbol-context-heading' },
+        el('span', { class: 'symbol-context-label' }, labelText),
+        opts.hint ? el('span', { class: 'muted symbol-context-hint' }, opts.hint) : null));
+      var rail = el('div', { class: 'symbol-context-symbols', role: 'listbox', 'aria-label': labelText });
+      (opts.symbols || []).forEach(function (s) {
+        s = String(s).toUpperCase();
+        var choice = el('button', {
+          type: 'button', class: 'sym-chip' + (s === symbol ? ' active' : ''),
+          'data-symbol': s,
+          role: 'option', 'aria-selected': s === symbol ? 'true' : 'false',
+          onclick: function () {
+            symbol = s;
+            rail.querySelectorAll('[role="option"]').forEach(function (b) {
+              var active = b.getAttribute('data-symbol') === s;
+              b.classList.toggle('active', active);
+              b.setAttribute('aria-selected', active ? 'true' : 'false');
+            });
+            loadStatus(s);
+            if (opts.onPick) opts.onPick(s);
+          }
+        }, s);
+        rail.appendChild(choice);
+      });
+      wrap.appendChild(rail);
+      if (symbol) { wrap.appendChild(status); loadStatus(symbol); }
+      return wrap;
+    }
+
+    var primary = el('div', { class: 'symbol-context-primary' });
+    if (mode === 'locked') {
+      primary.appendChild(el('div', { class: 'symbol-context-heading' },
+        el('span', { class: 'symbol-context-label' }, labelText),
+        el('span', { class: 'symbol-context-symbol' }, symbol),
+        el('span', { class: 'badge badge-dim' }, 'LOCKED')));
+      if (symbol) loadStatus(symbol);
+    } else {
+      var input = opts.input || el('input', {
+        type: 'text', value: symbol, list: opts.list || 'universe-symbols',
+        placeholder: opts.placeholder || 'AAPL'
+      });
+      if (!input.id) input.id = (opts.id || 'symbol-context') + '-input';
+      input.value = input.value || symbol;
+      if (opts.hideLabel) input.setAttribute('aria-label', labelText);
+      var field = el('div', { class: 'symbol-context-field' },
+        opts.hideLabel ? null : el('label', { for: input.id, class: 'symbol-context-label' }, labelText), input);
+      primary.appendChild(field);
+      function settle() {
+        var next = String(input.value || '').trim().toUpperCase();
+        input.value = next;
+        if (opts.showStatus !== false) loadStatus(next);
+        if (opts.onInput) opts.onInput(next, input);
+      }
+      input.addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(settle, opts.debounceMs || 350);
+      });
+      input.addEventListener('change', settle);
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault(); settle();
+          if (opts.onCommit) opts.onCommit(input.value.trim().toUpperCase(), input);
+        }
+      });
+      wrap.input = input;
+      if (opts.showStatus !== false) loadStatus(input.value);
+    }
+    wrap.appendChild(primary);
+    if (opts.showStatus !== false) wrap.appendChild(status);
+    var actions = el('div', { class: 'symbol-context-actions' });
+    if (mode === 'editable' && opts.onCommit) {
+      actions.appendChild(el('button', { type: 'button', class: 'btn btn-sm', id: opts.commitId || null, onclick: function () {
+        var next = String(wrap.input.value || '').trim().toUpperCase();
+        wrap.input.value = next;
+        opts.onCommit(next, wrap.input);
+      } }, opts.commitLabel || 'Apply'));
+    }
+    if (opts.onResearch && symbol) {
+      actions.appendChild(el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
+        onclick: function () { opts.onResearch(symbol); } }, 'Research'));
+    }
+    if (mode === 'locked' && opts.onChange) {
+      actions.appendChild(el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
+        onclick: opts.onChange }, 'Change symbol'));
+    }
+    if (actions.children.length) wrap.appendChild(actions);
+    wrap.refresh = function (next) { symbol = String(next || '').toUpperCase(); loadStatus(symbol); };
+    return wrap;
+  }
+
   window.UI = {
+    info: info,
+    sparkline: sparkline,
+    symbolContext: symbolContext,
+    fmtDate: fmtDate,
     el: el,
     icon: icon,
+    profitCeilingKind: profitCeilingKind,
+    maxProfitLabel: maxProfitLabel,
     skeleton: skeleton,
     rangeChart: rangeChart,
     brandMark: brandMark,
@@ -753,10 +1355,14 @@
     pnlSpan: pnlSpan,
     fmtPct: fmtPct,
     fmtNum: fmtNum,
+    finiteNumber: finiteNumber,
+    firstOptionLeg: firstOptionLeg,
     delta: delta,
     freshnessBadge: freshnessBadge,
+    evidenceBadge: evidenceBadge,
     explain: explain,
     alertBox: alertBox,
+    toast: toast,
     stat: stat,
     chip: chip,
     table: table,

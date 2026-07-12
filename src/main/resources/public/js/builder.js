@@ -7,13 +7,18 @@
  *   EXPERT: a naked terminal — structure quick-pick, editable leg grid with inline market
  *   data, per-leg include/exclude toggles for instant impact analysis, net greeks, and a
  *   sticky analytics panel.
- * Lives on the Trade screen (#/ticket/builder). Hands off to the standard ticket review.
+ * Lives in Trade → Structure. Hands off to the standard review-and-decide stage.
  */
 (function () {
   'use strict';
 
   var el = UI.el, fmtMoney = UI.fmtMoney, fmtPct = UI.fmtPct, explain = UI.explain,
       chip = UI.chip, stat = UI.stat, alertBox = UI.alertBox, icon = UI.icon;
+  var TRADE_GOALS = ['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'];
+  function tradeGoal(value, fallback) {
+    var goal = String(value || '').toUpperCase();
+    return TRADE_GOALS.indexOf(goal) >= 0 ? goal : (fallback || 'DIRECTIONAL');
+  }
 
   function leg(action, type, strike, expiration, ratio) {
     return { action: action, type: type, strike: strike, expiration: expiration, ratio: ratio || 1 };
@@ -22,134 +27,120 @@
     return { action: action, type: 'STOCK', strike: null, expiration: null, ratio: ratio || 1 };
   }
 
-  /**
-   * The catalog: every structure a broker menu carries, each with a payoff-shape sketch
-   * (an SVG polyline over a 64x28 box — the SHAPE of profit vs price, not live data),
-   * a one-line blurb, and a build(ctx) that snaps legs to live strikes.
-   * ctx.pick(exp, offset) = the strike `offset` steps from at-the-money.
-   * Undefined-risk structures are listed and labeled — selecting one previews honestly,
-   * then blocks with the payoff cliff. That is the lesson, not an error.
-   */
-  var TEMPLATES = [
-    { key: 'LONG_CALL', group: 'Bullish', name: 'Long call', family: 'LONG_CALL',
-      shape: '2,20 34,20 62,4',
-      blurb: 'Stock up big — pay a premium, uncapped upside, lose at most the premium.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near)]; } },
-    { key: 'DEBIT_CALL_SPREAD', group: 'Bullish', name: 'Bull call spread (vertical)', family: 'DEBIT_CALL_SPREAD',
-      shape: '2,20 22,20 44,8 62,8',
-      blurb: 'Stock up some — cheaper than a call because you sell away the far upside.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'CREDIT_PUT_SPREAD', group: 'Bullish', name: 'Bull put spread (vertical)', family: 'CREDIT_PUT_SPREAD',
-      shape: '2,22 20,22 42,8 62,8',
-      blurb: 'Stock NOT down — collect a credit, keep it while price stays above your short strike.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near), leg('BUY', 'PUT', c.pick(c.near, -4), c.near)]; } },
-    { key: 'CASH_SECURED_PUT', group: 'Bullish', name: 'Cash-secured put', family: 'CASH_SECURED_PUT',
-      shape: '2,26 30,8 62,8',
-      blurb: 'Get paid to wait for your price — assignment buys the shares at the strike.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; } },
-    { key: 'BUY_WRITE', group: 'Bullish', name: 'Covered call (buy-write)', family: 'COVERED_CALL',
-      shape: '2,26 34,8 62,8',
-      blurb: 'Buy 100 shares and rent them out immediately — premium now, capped upside.',
-      build: function (c) { return [stockLeg('BUY', 1), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'RISK_REVERSAL', group: 'Bullish', name: 'Risk reversal', family: 'CUSTOM',
-      shape: '2,26 22,14 42,14 62,4',
-      blurb: 'Sell a put to pay for a call — strongly bullish, big reserve if wrong.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -3), c.near), leg('BUY', 'CALL', c.pick(c.near, 3), c.near)]; } },
+  // The server owns identity, names, grouping, wording and payoff glyphs. This module owns
+  // only the mechanics that snap a named construction to the currently loaded chain.
+  var TEMPLATE_BUILDERS = {
+    LONG_CALL: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near)]; },
+    DEBIT_CALL_SPREAD: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    CREDIT_PUT_SPREAD: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near), leg('BUY', 'PUT', c.pick(c.near, -4), c.near)]; },
+    CASH_SECURED_PUT: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; },
+    BUY_WRITE: function (c) { return [stockLeg('BUY', 1), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    RISK_REVERSAL: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -3), c.near), leg('BUY', 'CALL', c.pick(c.near, 3), c.near)]; },
+    LONG_PUT: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near)]; },
+    DEBIT_PUT_SPREAD: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; },
+    CREDIT_CALL_SPREAD: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'CALL', c.pick(c.near, 4), c.near)]; },
+    IRON_CONDOR: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near), leg('BUY', 'PUT', c.pick(c.near, -4), c.near), leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'CALL', c.pick(c.near, 4), c.near)]; },
+    IRON_BUTTERFLY: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.near, -3), c.near), leg('BUY', 'CALL', c.pick(c.near, 3), c.near)]; },
+    CALENDAR_CALL: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'CALL', c.pick(c.far, 0), c.far)]; },
+    CALENDAR_PUT: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.far, 0), c.far)]; },
+    DIAGONAL_CALL: function (c) { return [leg('BUY', 'CALL', c.pick(c.far, 0), c.far), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    DIAGONAL_PUT: function (c) { return [leg('BUY', 'PUT', c.pick(c.far, 0), c.far), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; },
+    LONG_STRADDLE: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.near, 0), c.near)]; },
+    LONG_STRANGLE: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; },
+    CALL_BACKSPREAD: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'CALL', c.pick(c.near, 2), c.near, 2)]; },
+    PUT_BACKSPREAD: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.near, -2), c.near, 2)]; },
+    LONG_CALL_BUTTERFLY: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, -2), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near, 2), leg('BUY', 'CALL', c.pick(c.near, 2), c.near)]; },
+    LONG_PUT_BUTTERFLY: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 2), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near, 2), leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; },
+    MARRIED_PUT: function (c) { return [stockLeg('BUY', 1), leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; },
+    COLLAR: function (c) { return [stockLeg('BUY', 1), leg('BUY', 'PUT', c.pick(c.near, -2), c.near), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    PMCC: function (c) { return [leg('BUY', 'CALL', c.pick(c.far, -4), c.far), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    SYNTHETIC_LONG: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near)]; },
+    SYNTHETIC_SHORT: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near)]; },
+    SHORT_STRADDLE: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near)]; },
+    SHORT_STRANGLE: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; },
+    NAKED_CALL: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    NAKED_PUT: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; }
+  };
+  var TEMPLATES = [];
 
-    { key: 'LONG_PUT', group: 'Bearish', name: 'Long put', family: 'LONG_PUT',
-      shape: '2,4 30,20 62,20',
-      blurb: 'Stock down big — pay a premium, profit as it falls, lose at most the premium.',
-      build: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near)]; } },
-    { key: 'DEBIT_PUT_SPREAD', group: 'Bearish', name: 'Bear put spread (vertical)', family: 'DEBIT_PUT_SPREAD',
-      shape: '2,8 20,8 42,20 62,20',
-      blurb: 'Stock down some — cheaper than a put by selling away the far downside.',
-      build: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; } },
-    { key: 'CREDIT_CALL_SPREAD', group: 'Bearish', name: 'Bear call spread (vertical)', family: 'CREDIT_CALL_SPREAD',
-      shape: '2,8 22,8 44,22 62,22',
-      blurb: 'Stock NOT up — collect a credit, keep it while price stays below your short strike.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'CALL', c.pick(c.near, 4), c.near)]; } },
+  function wireLegs(legs) {
+    return (legs || [])
+      .filter(function (l) { return l.type === 'STOCK' || (l.strike && l.expiration); })
+      .map(function (l) {
+        return { action: l.action, type: l.type, strike: l.type === 'STOCK' ? null : String(l.strike),
+                 expiration: l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1 };
+      });
+  }
 
-    { key: 'IRON_CONDOR', group: 'Neutral & income', name: 'Iron condor', family: 'IRON_CONDOR',
-      shape: '2,22 14,22 24,8 40,8 50,22 62,22',
-      blurb: 'Price stays in a range — sell both sides, wings cap the damage either way.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near), leg('BUY', 'PUT', c.pick(c.near, -4), c.near),
-                                    leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'CALL', c.pick(c.near, 4), c.near)]; } },
-    { key: 'IRON_BUTTERFLY', group: 'Neutral & income', name: 'Iron butterfly', family: 'IRON_BUTTERFLY',
-      shape: '2,22 18,22 32,6 46,22 62,22',
-      blurb: 'Price pins near today — richer credit than a condor, narrower sweet spot.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near),
-                                    leg('BUY', 'PUT', c.pick(c.near, -3), c.near), leg('BUY', 'CALL', c.pick(c.near, 3), c.near)]; } },
-    { key: 'CALENDAR_CALL', group: 'Neutral & income', name: 'Calendar call', family: 'CALENDAR_CALL',
-      shape: '2,22 20,18 32,8 44,18 62,22',
-      blurb: 'Sell the near month, own the far month — time decays faster up close.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'CALL', c.pick(c.far, 0), c.far)]; } },
-    { key: 'CALENDAR_PUT', group: 'Neutral & income', name: 'Calendar put', family: 'CALENDAR_PUT',
-      shape: '2,22 20,18 32,8 44,18 62,22',
-      blurb: 'Same idea with puts — profits when price sits still and near IV bleeds.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.far, 0), c.far)]; } },
-    { key: 'DIAGONAL_CALL', group: 'Neutral & income', name: 'Diagonal call', family: 'DIAGONAL_CALL',
-      shape: '2,24 22,16 36,8 50,16 62,20',
-      blurb: 'A covered call built from options — own a far-dated call, rent out near ones.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.far, 0), c.far), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'DIAGONAL_PUT', group: 'Neutral & income', name: 'Diagonal put', family: 'DIAGONAL_PUT',
-      shape: '2,20 16,16 30,8 46,16 62,24',
-      blurb: 'The put-side twin — far-dated put anchors, near puts collect premium.',
-      build: function (c) { return [leg('BUY', 'PUT', c.pick(c.far, 0), c.far), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; } },
+  /** Normalize the live Builder state into the one position contract consumed by Outcomes/Decide. */
+  function prepareTicket() {
+    var st = App.state.builderForm;
+    if (!st || !st.symbol || !st.legs || !st.legs.length) return null;
+    var active = st.legs.filter(function (_, i) { return !(st.excluded || {})[i]; });
+    var legs = wireLegs(active);
+    if (!legs.length) return null;
+    var tpl = st.templateKey ? TEMPLATES.find(function (t) { return t.key === st.templateKey; }) : null;
+    var contextGoal = tradeGoal(st.goal,
+      tradeGoal(tpl && tpl.primaryIntent, tradeGoal(App.context.goal(), 'DIRECTIONAL')));
+    App.context.update({ symbol: st.symbol, goal: contextGoal });
+    App.state.ticket = {
+      world: App.state.world || 'observed', symbol: st.symbol, custom: true, customFor: st.symbol,
+      customFamily: tpl && tpl.family ? tpl.family : null,
+      legs: legs, qty: st.qty || 1, step: 6, intent: contextGoal,
+      thesis: App.context.thesis('neutral'), horizon: App.context.horizon('month'),
+      outcomeBasisHint: tpl ? 'history' : 'scenario'
+    };
+    return App.state.ticket;
+  }
 
-    { key: 'LONG_STRADDLE', group: 'Volatility', name: 'Long straddle', family: 'LONG_STRADDLE',
-      shape: '2,4 32,24 62,4',
-      blurb: 'Buy both at the money — direction unknown, the size of the move is the bet.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.near, 0), c.near)]; } },
-    { key: 'LONG_STRANGLE', group: 'Volatility', name: 'Long strangle', family: 'LONG_STRANGLE',
-      shape: '2,6 22,24 42,24 62,6',
-      blurb: 'Buy both sides out of the money — cheaper than a straddle, needs a bigger move.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; } },
-    { key: 'CALL_BACKSPREAD', group: 'Volatility', name: 'Call ratio backspread', family: 'CUSTOM',
-      shape: '2,16 20,16 34,24 62,2',
-      blurb: 'Sell one call, buy two further up — loves a violent rally, hates a slow drift.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'CALL', c.pick(c.near, 2), c.near, 2)]; } },
-    { key: 'PUT_BACKSPREAD', group: 'Volatility', name: 'Put ratio backspread', family: 'CUSTOM',
-      shape: '2,2 30,24 44,16 62,16',
-      blurb: 'Sell one put, buy two further down — pays off in a crash, bleeds in a drift.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.near, -2), c.near, 2)]; } },
+  /** Bring a screened/reviewed package back into Structure without changing its contracts. */
+  function adoptTicket(ticket) {
+    if (!ticket || !ticket.symbol) return null;
+    var family = ticket.candidate && ticket.candidate.strategy || ticket.customFamily || null;
+    var tpl = family && TEMPLATES.find(function (t) { return t.family === family; });
+    var sourceLegs = ticket.legs && ticket.legs.length ? ticket.legs
+      : ticket.candidate && ticket.candidate.legs || [];
+    var adoptedGoal = tradeGoal(ticket.candidate && ticket.candidate.intent || ticket.intent,
+      tradeGoal(App.context.goal(), 'DIRECTIONAL'));
+    App.context.update({ symbol: ticket.symbol, goal: adoptedGoal,
+      horizon: ticket.horizon || App.context.horizon('month'),
+      thesis: ticket.thesis || App.context.thesis('neutral') });
+    App.state.builderForm = {
+      symbol: ticket.symbol, qty: ticket.qty || ticket.candidate && ticket.candidate.qty || 1,
+      goal: adoptedGoal, templateKey: tpl ? tpl.key : null, step: 4, legIdx: 0, excluded: {},
+      legs: sourceLegs.map(function (l) {
+        return { action: l.action, type: l.stock ? 'STOCK' : l.type,
+          strike: l.stock || l.type === 'STOCK' ? null : String(l.strike),
+          expiration: l.stock || l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1 };
+      }), limits: {}, exposureResult: null
+    };
+    return App.state.builderForm;
+  }
 
-    { key: 'LONG_CALL_BUTTERFLY', group: 'Pinpoint targets', name: 'Call butterfly', family: 'LONG_CALL_BUTTERFLY',
-      shape: '2,22 18,22 32,4 46,22 62,22',
-      blurb: 'Bet on a specific landing spot — tiny cost, big payoff exactly there.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, -2), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near, 2),
-                                    leg('BUY', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'LONG_PUT_BUTTERFLY', group: 'Pinpoint targets', name: 'Put butterfly', family: 'LONG_PUT_BUTTERFLY',
-      shape: '2,22 18,22 32,4 46,22 62,22',
-      blurb: 'The same pinpoint bet built from puts — useful when puts price better.',
-      build: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 2), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near, 2),
-                                    leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; } },
-
-    { key: 'MARRIED_PUT', group: 'Shares & protection', name: 'Married put (protective put)', family: 'PROTECTIVE_PUT',
-      shape: '2,14 26,14 62,2',
-      blurb: 'Shares plus an insurance floor — pay a premium, cap the downside.',
-      build: function (c) { return [stockLeg('BUY', 1), leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; } },
-    { key: 'COLLAR', group: 'Shares & protection', name: 'Collar', family: 'PROTECTIVE_COLLAR',
-      shape: '2,18 20,18 44,8 62,8',
-      blurb: 'Floor below, ceiling above — the sold call pays for most of the insurance.',
-      build: function (c) { return [stockLeg('BUY', 1), leg('BUY', 'PUT', c.pick(c.near, -2), c.near), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
-
-    { key: 'SHORT_STRADDLE', group: 'Undefined risk (blocked)', name: 'Short straddle', family: 'SHORT_STRADDLE', risky: true,
-      shape: '2,24 32,4 62,24',
-      blurb: 'Sell both at the money — maximum premium, UNLIMITED risk. Shown so you can see why it is refused.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near)]; } },
-    { key: 'SHORT_STRANGLE', group: 'Undefined risk (blocked)', name: 'Short strangle', family: 'SHORT_STRANGLE', risky: true,
-      shape: '2,24 22,6 42,6 62,24',
-      blurb: 'Sell both sides wider — same unlimited-risk problem, slightly more room.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; } },
-    { key: 'NAKED_CALL', group: 'Undefined risk (blocked)', name: 'Naked call', family: 'NAKED_CALL', risky: true,
-      shape: '2,8 34,8 62,26',
-      blurb: 'A sold call with nothing behind it — losses grow without limit as the stock rallies.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'NAKED_PUT', group: 'Undefined risk (blocked)', name: 'Naked put (no cash set aside)', family: 'NAKED_PUT', risky: true,
-      shape: '2,26 30,8 62,8',
-      blurb: 'The cash-secured put without the cash — the same promise with nothing backing it.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; } }
-  ];
+  function applyCatalog(doc) {
+    var entries = doc && doc.templates || [];
+    var families = doc && doc.catalog || [];
+    var byKey = {};
+    var byFamily = {};
+    entries.forEach(function (m) { byKey[m.key] = m; });
+    families.forEach(function (m) { byFamily[m.name] = m; });
+    var missingServer = Object.keys(TEMPLATE_BUILDERS).filter(function (key) { return !byKey[key]; });
+    var missingMechanics = entries.filter(function (m) { return !TEMPLATE_BUILDERS[m.key]; }).map(function (m) { return m.key; });
+    if (missingServer.length || missingMechanics.length) {
+      throw new Error('Strategy catalog/build mechanics mismatch: server missing [' + missingServer.join(', ')
+        + ']; client missing [' + missingMechanics.join(', ') + ']');
+    }
+    TEMPLATES.splice(0, TEMPLATES.length);
+    entries.forEach(function (m) {
+      TEMPLATES.push({
+        key: m.key, family: m.family, group: m.category, name: m.display,
+        shape: m.payoffShape, blurb: m.summary, risky: !!m.blockedByDefault,
+        composite: !!m.composite,
+        primaryIntent: byFamily[m.family] && byFamily[m.family].primaryIntent,
+        build: TEMPLATE_BUILDERS[m.key]
+      });
+    });
+  }
 
   /** Payoff-shape sketch: the SHAPE of profit vs price (educational, not live data). */
   function shapeGlyph(t) {
@@ -286,19 +277,41 @@
       // An in-progress build owns its symbol; an EMPTY builder follows the working
       // symbol from Ideas/Research ("I chose another stock" must not reload the old one)
       symbol: ((saved.legs && saved.legs.length ? saved.symbol : null)
-        || App.state.lastRecommendSymbol || saved.symbol || 'AAPL').toUpperCase(),
+        || App.context.symbol() || saved.symbol || 'AAPL').toUpperCase(),
       qty: saved.qty || 1,
-      goal: saved.goal || null,
+      goal: saved.goal === 'BROWSE' ? 'BROWSE'
+        : ((saved.legs && saved.legs.length ? saved.goal : App.context.goal()) || saved.goal || null),
       templateKey: saved.templateKey || null,
       step: saved.step || 1,
       legIdx: saved.legIdx || 0,
+      wizNode: saved.wizNode || null,   // rehydrate the mid-question wizard node across re-renders/level flips
       legs: saved.legs ? saved.legs.map(function (l) { return Object.assign({}, l); }) : [],
       excluded: saved.excluded || {},
-      limits: saved.limits || {}
+      limits: saved.limits || {},
+      exposureTargetDollars: saved.exposureTargetDollars || 50000,
+      exposureResult: saved.exposureResult || null
     };
-    function remember() { App.state.builderForm = st; }
+    // Context is the first stage of the shared workflow. When it is already complete,
+    // Structure should begin with the shaping question instead of asking for the same
+    // goal a second time. A direct Builder visit with no goal still starts at step 1,
+    // and the Back control remains the explicit way to revise a carried goal.
+    if (!saved.step && !st.legs.length && TRADE_GOALS.indexOf(st.goal) >= 0) st.step = 2;
+    // Cross-level coherence: a position built in the Expert terminal (or handed off) must not vanish
+    // into Beginner's step-1 goal chooser and get overwritten — land it on Beginner's recap instead.
+    if (level === 'beginner' && st.legs.length && st.step < 3) { st.step = 4; }
+    function remember() {
+      App.state.builderForm = st;
+      var goal = TRADE_GOALS.indexOf(st.goal) >= 0 ? st.goal : null;
+      var patch = { symbol: st.symbol, goal: goal };
+      App.context.update(patch);
+      if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
+    }
 
     var research = null, chainCache = {}, expirations = [], spot = null;
+    // Monotonic supersede token: whenever the STRUCTURE changes (pick/seed/fit), bump this and drop any
+    // in-flight build that resolves late, so st.templateKey and st.legs can never end up disagreeing
+    // (legs from structure A paired with the strategy label of structure B).
+    var buildSeq = 0;
     async function loadSymbol() {
       research = await API.get('/api/research/' + st.symbol);
       expirations = research.expirations || [];
@@ -377,14 +390,6 @@
       return out;
     }
 
-    function wireLegs(legs) {
-      return legs
-        .filter(function (l) { return l.type === 'STOCK' || (l.strike && l.expiration); })
-        .map(function (l) {
-          return { action: l.action, type: l.type, strike: l.type === 'STOCK' ? null : String(l.strike),
-                   expiration: l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1 };
-        });
-    }
     function familyLabel() {
       var t = TEMPLATES.find(function (x) { return x.key === st.templateKey; });
       return t ? t.family : 'CUSTOM';
@@ -398,6 +403,75 @@
     }
     function activeLegs() {
       return st.legs.filter(function (_, i) { return !st.excluded[i]; });
+    }
+    function syntheticDirection() {
+      return st.templateKey === 'SYNTHETIC_LONG' ? 'long'
+        : st.templateKey === 'SYNTHETIC_SHORT' ? 'short' : null;
+    }
+    function renderExposureResult(host, result) {
+      host.innerHTML = '';
+      if (!result || !result.contracts) {
+        host.appendChild(alertBox('warn', result && result.notes && result.notes[0]
+          || 'This exposure could not be sized in the active market.'));
+        return;
+      }
+      host.appendChild(el('div', { class: 'chip-row' },
+        UI.evidenceBadge(result.evidence),
+        chip('Contracts', String(result.contracts)),
+        chip('Delta exposure', UI.pnlSpan(result.deltaExposureCents)),
+        chip('Equivalent shares would cost', fmtMoney(result.shareCostCents))));
+      (result.notes || []).forEach(function (note) {
+        host.appendChild(el('div', { class: 'muted small' }, note));
+      });
+    }
+    /** Synthetic exposure sizing belongs to the selected Builder structure, not a separate tool. */
+    function exposureSizer(onApplied) {
+      var direction = syntheticDirection();
+      if (!direction) return null;
+      var target = el('input', { type: 'number', id: 'builder-exposure-target', min: '1',
+        max: '100000000', step: '1000',
+        value: String(st.exposureTargetDollars) });
+      var output = el('div', { class: 'builder-exposure-output', id: 'builder-exposure-output' });
+      var run = el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-size-exposure' },
+        'Size contracts');
+      var savedResult = st.exposureResult && st.exposureResult.templateKey === st.templateKey
+        ? st.exposureResult.data : null;
+      if (savedResult) renderExposureResult(output, savedResult);
+      run.addEventListener('click', async function () {
+        st.exposureTargetDollars = Math.max(1, parseFloat(target.value) || 1);
+        target.value = String(st.exposureTargetDollars);
+        run.disabled = true;
+        output.innerHTML = '';
+        output.appendChild(UI.spinner('Sizing the selected synthetic…'));
+        try {
+          var result = await API.post('/api/builder/exposure', {
+            symbol: st.symbol,
+            targetExposureCents: Math.round(st.exposureTargetDollars * 100),
+            bullish: direction === 'long'
+          });
+          st.exposureResult = { templateKey: st.templateKey, data: result };
+          if (result.contracts) st.qty = result.contracts;
+          remember();
+          renderExposureResult(output, result);
+          if (result.contracts && typeof onApplied === 'function') onApplied(result);
+        } catch (error) {
+          output.innerHTML = '';
+          output.appendChild(alertBox('danger', 'Could not size this exposure',
+            [String(error && error.message || error)]));
+        } finally {
+          run.disabled = false;
+        }
+      });
+      return el('section', { class: 'builder-exposure-sizer', id: 'builder-exposure-sizer' },
+        el('div', { class: 'field-label' },
+          direction === 'long' ? 'Size this synthetic long by exposure' : 'Size this synthetic short by exposure'),
+        explain(direction === 'long'
+          ? 'Name the dollar exposure you would otherwise hold in shares. StrikeBench converts it to roughly 100-delta option lots; the exact position still goes through the same payoff and risk review.'
+          : 'Name the bearish dollar exposure. This structure includes an uncovered short call, so sizing is educational and placement remains blocked as undefined risk.'),
+        el('div', { class: 'builder-exposure-controls' },
+          el('div', { class: 'field' }, el('label', { for: 'builder-exposure-target' }, 'Target exposure ($)'), target),
+          run),
+        output);
     }
     // ---- Your limits: the same screens Ideas offers, wired into the builder ----
     // Set a number and the panel judges the live position against it; "Fit to my limits"
@@ -416,9 +490,13 @@
     function schedulePreviewIfAny() { if (schedulePreviewHook) schedulePreviewHook(); }
 
     function limitsFields(beginnerShape) {
+      // ALL FOUR limits exist at both levels (presentation-only levels, review P0) — beginner
+      // wording is plain, expert wording is compact; a value set anywhere judges everywhere.
       return beginnerShape
         ? [limitField('maxLoss', UI.term ? 'The most I am willing to lose ($)' : 'Max loss ($)', '50'),
-           limitField('minPop', 'Minimum chance of any profit (%)', '5')]
+           limitField('minPop', 'Minimum chance of any profit (%)', '5'),
+           limitField('target', 'Profit I am aiming for ($)', '50'),
+           limitField('maxAssign', 'Chance I end up with shares (max %)', '5')]
         : [limitField('maxLoss', 'Worst case \u2264 $', '50'),
            limitField('target', 'Profit target \u2265 $', '50'),
            limitField('minPop', 'Chance of profit \u2265 %', '5'),
@@ -433,24 +511,28 @@
           el('span', { class: 'chip-label' }, label), el('b', {}, actual)));
       }
       var v = st.limits;
+      // Every limit is VISIBLE (and clearable) at both levels now, so every set value judges —
+      // no invisible constraints, no silently-dropped persisted choices (review P0).
+      var expertLimits = true;
       if (v.maxLoss) {
         var cap = Math.round(parseFloat(v.maxLoss) * 100);
         var unbounded = !p.ok && (p.blockReasons || []).some(function (r) { return /undefined|unlimited/i.test(r); });
-        judge('Max loss ≤ ' + fmtMoney(cap), !unbounded && p.maxLossCents > 0 && p.maxLossCents <= cap,
+        judge('Theoretical max loss ≤ ' + fmtMoney(cap), !unbounded && p.maxLossCents > 0 && p.maxLossCents <= cap,
           unbounded ? 'UNLIMITED' : fmtMoney(p.maxLossCents));
       }
-      if (v.target) {
+      if (expertLimits && v.target) {
         var tgt = Math.round(parseFloat(v.target) * 100);
-        var uncapped = p.maxProfitCents === null || p.maxProfitCents === undefined;
-        judge('Profit target ≥ ' + fmtMoney(tgt), uncapped || p.maxProfitCents >= tgt,
-          uncapped ? 'Uncapped' : fmtMoney(p.maxProfitCents));
+        var profitKind = UI.profitCeilingKind(familyLabel(), null, p.maxProfitCents, p.legs);
+        judge('Profit target ≥ ' + fmtMoney(tgt),
+          profitKind === 'uncapped' || (profitKind === 'finite' && p.maxProfitCents >= tgt),
+          UI.maxProfitLabel(familyLabel(), null, p.maxProfitCents, false, p.legs));
       }
       if (v.minPop) {
         var pop = p.popEntry;
         judge('POP ≥ ' + v.minPop + '%', pop !== null && pop !== undefined && pop * 100 >= parseFloat(v.minPop),
           pop === null || pop === undefined ? '—' : fmtPct(pop));
       }
-      if (v.maxAssign) {
+      if (expertLimits && v.maxAssign) {
         var ap = p.assignmentProb;
         judge('Assign ≤ ' + v.maxAssign + '%', ap === null || ap === undefined || ap * 100 <= parseFloat(v.maxAssign),
           ap === null || ap === undefined ? 'n/a' : fmtPct(ap));
@@ -458,6 +540,12 @@
       if (!checks.length) return null;
       return el('div', { class: 'chip-row', id: 'builder-limit-chips' },
         el('span', { class: 'muted' }, 'Against your limits:'), checks);
+    }
+
+    function assignmentLabel(beginnerWording) {
+      if (st.goal === 'ACQUIRE') return beginnerWording ? 'Chance you buy' : 'Assignment: buy';
+      if (st.goal === 'EXIT') return beginnerWording ? 'Chance you sell' : 'Assignment: sell';
+      return beginnerWording ? 'Assignment odds' : 'Assign';
     }
 
     /** Asks the engine to size/strike the CURRENT structure so the limits hold. */
@@ -481,7 +569,9 @@
         if (st.limits.minPop) f.minPop = parseFloat(st.limits.minPop) / 100;
         if (st.limits.maxAssign) f.maxAssignmentProb = parseFloat(st.limits.maxAssign) / 100;
         if (Object.keys(f).length) body.filters = f;
+        var fitSeq = ++buildSeq;                 // the fitted legs replace the structure — same supersede rule
         var r = await API.post('/api/recommend', body);
+        if (fitSeq !== buildSeq) return;         // a newer pick/fit superseded this
         statusHost.innerHTML = '';
         var c = (r.candidates || [])[0];
         if (!c) {
@@ -507,12 +597,8 @@
     var onLegsReplaced = null; // each surface wires its own re-render
 
     function handoff() {
-      App.state.ticket = {
-        symbol: st.symbol, custom: true, customFor: st.symbol,
-        legs: wireLegs(activeLegs()), qty: st.qty, step: 6,
-        thesis: 'neutral', horizon: 'month'
-      };
-      App.navigate('#/trade/place');
+      prepareTicket();
+      App.navigate('#/trade/decide');
     }
 
     try {
@@ -522,19 +608,17 @@
       var failInput = el('input', { type: 'text', id: 'builder-symbol', list: 'universe-symbols', value: st.symbol });
       var retryWith = function (sym) {
         st.symbol = (sym || failInput.value.trim() || st.symbol).toUpperCase();
-        App.state.lastRecommendSymbol = st.symbol;
+        App.context.selectSymbol(st.symbol);
         st.legs = []; st.legIdx = 0; if (st.step > 2) st.step = st.goal ? 2 : 1;
         remember();
         App.render();
       };
-      failInput.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') retryWith(); });
       var uniSyms = (App.state.universe && App.state.universe.active.symbols) || [];
       root.appendChild(el('div', { class: 'card', id: 'builder-load-error' },
         alertBox('danger', 'Could not load ' + st.symbol, [e.message,
-          'The builder needs a live quote and an option chain. Pick another symbol or retry.']),
-        el('div', { class: 'btn-row' },
-          failInput,
-          el('button', { class: 'btn', id: 'builder-retry', onclick: function () { retryWith(); } }, 'Retry')),
+          'The builder needs an eligible quote and option chain in the active market. Pick another symbol or retry.']),
+        UI.symbolContext({ mode: 'editable', id: 'builder-error-symbol-context', input: failInput,
+          label: 'Try another symbol', commitLabel: 'Retry', commitId: 'builder-retry', onCommit: retryWith }),
         uniSyms.length ? el('div', { class: 'sym-chips', style: 'margin-top:8px' }, uniSyms.map(function (s2) {
           return el('button', { class: 'sym-chip', type: 'button', onclick: function () { retryWith(s2); } }, s2);
         })) : null));
@@ -543,6 +627,16 @@
 
     remember(); // the (possibly followed) symbol is now this builder's state
 
+    // A Trade exposure-replication handoff can seed a templateKey with no legs —
+    // build it from the live chain now so the user lands ON the structure, not an empty catalog.
+    if (st.templateKey && !st.legs.length) {
+      var seedSeq = ++buildSeq;
+      try {
+        var seeded = await buildFromTemplate(st.templateKey);
+        if (seedSeq === buildSeq && seeded.length) { st.legs = seeded; st.legIdx = 0; if (st.step < 3) st.step = 3; remember(); }
+      } catch (e) { /* fall through to the catalog */ }
+    }
+
     if (level === 'beginner') renderBeginner(root);
     else await renderExpert(root);
 
@@ -550,6 +644,7 @@
     function renderBeginner(root) {
       var host = el('div', { id: 'builder' });
       root.appendChild(host);
+      var walkSeq = 0; // supersede token for the async leg-walk / position preview (chart+stats)
       function repaint() { host.innerHTML = ''; paint(); remember(); }
 
       function stepHeader() {
@@ -558,7 +653,7 @@
         var names = ['Goal', 'Structure', 'Build it', 'Where you stand'];
         var reachable = [true, !!st.goal, st.legs.length > 0, st.legs.length > 0];
         var why = [null, 'Pick a goal first', 'Choose a structure first', 'Choose a structure first'];
-        return el('div', { class: 'wizard-steps' }, names.map(function (n, i) {
+        return el('div', { class: 'wizard-steps builder-wizard-steps' }, names.map(function (n, i) {
           var here = i + 1 === st.step;
           var cls = here ? ' active' : (i + 1 < st.step ? ' done' : '');
           var can = reachable[i] && !here;
@@ -567,8 +662,9 @@
             disabled: reachable[i] ? null : '',
             title: reachable[i] ? null : why[i],
             onclick: can ? function () {
+              // Jumping to 'Build it' RESUMES where you were (legIdx is clamped in paint) — it must
+              // NOT force the last leg, or the same step would show a different payoff than the walk.
               st.step = i + 1;
-              if (st.step === 3) st.legIdx = Math.max(0, st.legs.length - 1);
               repaint();
             } : null
           }, el('b', {}, String(i + 1)), ' ', n);
@@ -579,7 +675,7 @@
         input.addEventListener('change', async function () {
           var sym = input.value.trim().toUpperCase();
           if (!sym || sym === st.symbol) return;
-          st.symbol = sym; App.state.lastRecommendSymbol = sym;
+          st.symbol = sym; App.context.selectSymbol(sym);
           st.legs = []; st.step = st.goal ? 2 : 1; st.legIdx = 0;
           try { await loadSymbol(); } catch (e) { /* the next preview reports honestly */ }
           repaint();
@@ -615,21 +711,28 @@
         return wrap;
       }
       async function pickTemplate(t, offset) {
-        st.templateKey = t.key;
-        st.legs = await buildFromTemplate(t.key, offset);
+        var seq = ++buildSeq;
+        var built = await buildFromTemplate(t.key, offset);
+        if (seq !== buildSeq) return;           // a newer pick won — drop this stale build
+        st.templateKey = t.key; st.legs = built; // assign TOGETHER so label + legs always agree
+        st.exposureResult = null;
         st.legIdx = 0; st.step = 3;
         repaint();
       }
 
       function paint() {
+        var contextInput = symbolInput();
+        host.appendChild(UI.symbolContext({
+          mode: 'editable', id: 'builder-symbol-context', input: contextInput,
+          label: 'Which stock are you building around?', commitLabel: 'Load',
+          onCommit: function () { contextInput.dispatchEvent(new Event('change')); }
+        }));
         host.appendChild(stepHeader());
 
         if (st.step === 1) {
           host.appendChild(el('div', { class: 'card' },
             el('h3', { class: 'mt0' }, 'What are you trying to do?'),
             explain('The builder walks you from a goal to a full multi-leg position, one leg at a time, showing exactly what each leg adds — cost, worst case, and odds. Every structure a broker menu carries is here, each with its payoff shape and a guide.'),
-            el('div', { class: 'form-grid', style: 'margin-bottom:10px' },
-              el('div', { class: 'field' }, el('label', {}, 'Symbol'), symbolInput())),
             el('div', { class: 'choice-row', id: 'bw-goals' }, (Learn.INTENTS || []).map(function (i) {
               return el('button', {
                 class: 'choice' + (st.goal === i.key ? ' selected' : ''), 'data-goal': i.key,
@@ -711,11 +814,12 @@
               } }, i < n - 1 ? 'Add the next leg →' : 'See the whole position →'))));
 
           (async function measure() {
+            var seq = ++walkSeq;
             var impact = document.getElementById('bw-impact');
             try {
               var nowRes = await previewLegs(soFar);
               var beforeRes = i > 0 ? await previewLegs(st.legs.slice(0, i)) : null;
-              if (!impact || !impact.isConnected) return;
+              if (seq !== walkSeq || !impact || !impact.isConnected) return;
               impact.innerHTML = '';
               var p = nowRes.preview;
               var b = beforeRes ? beforeRes.preview : null;
@@ -731,22 +835,28 @@
               }
               impact.appendChild(el('div', { class: 'chip-row' },
                 chip(p.entryNetPremiumCents >= 0 ? 'Collected so far' : 'Paid so far', fmtMoney(Math.abs(p.entryNetPremiumCents))),
-                impactChip('Worst case', b, p, function (x) {
+                impactChip('Theoretical worst case', b, p, function (x) {
                   if (!x.ok && (x.blockReasons || []).some(function (r) { return /undefined|unlimited/i.test(r); })) return 'UNLIMITED';
                   return fmtMoney(x.maxLossCents);
                 }, true),
-                impactChip('Best case', b, p, function (x) {
-                  return x.maxProfitCents === null || x.maxProfitCents === undefined ? 'Uncapped' : fmtMoney(x.maxProfitCents);
+                impactChip('Theoretical best case', b, p, function (x) {
+                  return UI.maxProfitLabel(familyLabel(), null, x.maxProfitCents, level === 'beginner', x.legs);
                 }, false),
                 p.popEntry !== null && p.popEntry !== undefined
-                  ? impactChip('Odds of profit', b, p, function (x) {
+                  ? impactChip('Chance of any profit', b, p, function (x) {
                       return x.popEntry === null || x.popEntry === undefined ? '—' : fmtPct(x.popEntry);
+                    }, false) : null,
+                (st.goal === 'ACQUIRE' || st.goal === 'EXIT')
+                    && p.assignmentProb !== null && p.assignmentProb !== undefined
+                  ? impactChip(assignmentLabel(true), b, p, function (x) {
+                      return x.assignmentProb === null || x.assignmentProb === undefined
+                        ? '—' : fmtPct(x.assignmentProb);
                     }, false) : null));
               if (p.payoff && p.payoff.length > 1) {
                 var walkIdx = [];
                 for (var wi = 0; wi <= i; wi++) walkIdx.push(wi);
                 var walkHandles = await strikeHandles(walkIdx, function () { repaint(); });
-                if (!impact.isConnected) return;
+                if (seq !== walkSeq || !impact.isConnected) return;
                 if (walkHandles.length) {
                   impact.appendChild(el('p', { class: 'muted', style: 'margin:6px 0 2px; font-size:12.5px' },
                     'Try it: drag a strike marker and watch this leg\u2019s numbers move.'));
@@ -757,7 +867,7 @@
                 }));
               }
             } catch (e) {
-              if (!impact || !impact.isConnected) return;
+              if (seq !== walkSeq || !impact || !impact.isConnected) return;
               impact.innerHTML = '';
               impact.appendChild(alertBox('danger', 'Could not price this leg', [e.message]));
             }
@@ -825,6 +935,7 @@
           }),
           el('div', { class: 'form-grid', style: 'margin-top:8px' },
             [el('div', { class: 'field' }, el('label', {}, 'Contracts (qty)'), qtyInput())].concat(limitsFields(true))),
+          exposureSizer(function () { repaint(); }),
           el('div', { class: 'btn-row', style: 'margin-top:2px' },
             el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-fit', onclick: function () { fitToLimits(fitStatus); } },
               'Fit to my limits'),
@@ -832,16 +943,17 @@
           fitStatus,
           el('div', { id: 'bw-panel' }, UI.spinner('Pricing the whole position…')),
           el('div', { class: 'btn-row' },
-            el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.legIdx = st.legs.length - 1; st.step = 3; repaint(); } }, '← Walk the legs again'),
+            el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.legIdx = 0; st.step = 3; repaint(); } }, '← Walk the legs again'),
             el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.step = 1; st.legs = []; st.templateKey = null; st.goal = null; repaint(); } }, 'Start over'),
             el('button', { class: 'btn', id: 'builder-review', onclick: handoff }, 'Review & place (paper) →'))));
         (async function price() {
+          var seq = ++walkSeq;
           var panel = document.getElementById('bw-panel');
           try {
             var res = await previewLegs(st.legs);
             var allIdx = st.legs.map(function (_, k) { return k; });
             var handles = await strikeHandles(allIdx, function () { repaint(); });
-            if (!panel || !panel.isConnected) return;
+            if (seq !== walkSeq || !panel || !panel.isConnected) return;
             panel.innerHTML = '';
             renderVerdictAndStats(panel, res.preview, res.guardrails, true, handles);
             var lc = limitChips(res.preview);
@@ -849,7 +961,7 @@
             var btn = document.getElementById('builder-review');
             if (btn && !res.preview.ok) { btn.disabled = true; btn.title = 'Fix the blocking issues first'; }
           } catch (e) {
-            if (!panel || !panel.isConnected) return;
+            if (seq !== walkSeq || !panel || !panel.isConnected) return;
             panel.innerHTML = '';
             panel.appendChild(alertBox('danger', 'Could not price the position', [e.message]));
           }
@@ -895,14 +1007,20 @@
       var addBtn = el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-add-leg' }, '+ Leg');
       var clearBtn = el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-clear', onclick: function () {
         st.legs = []; st.excluded = {}; st.templateKey = null; tplSel.value = '';
-        remember(); renderLegs(); schedulePreview();
+        st.exposureResult = null;
+        remember(); renderLegs(); renderExposureSizer(); schedulePreview();
       } }, 'Clear');
       var panel = el('div', { class: 'card builder-panel', id: 'builder-panel' });
+      var exposureHost = el('div', { id: 'builder-exposure-host' });
 
       var fitStatus = el('div', { id: 'builder-fit-status' });
+      root.appendChild(UI.symbolContext({
+        mode: 'editable', id: 'builder-symbol-context', input: symInput,
+        label: 'Builder symbol', commitLabel: 'Load',
+        onCommit: function () { symInput.dispatchEvent(new Event('change')); }
+      }));
       root.appendChild(el('div', { class: 'card' },
         el('div', { class: 'builder-bar' },
-          el('div', { class: 'field' }, el('label', {}, 'Symbol'), symInput),
           el('div', { class: 'field' }, el('label', {}, 'Qty'), qtyIn),
           el('div', { class: 'field builder-bar-grow' }, el('label', {}, 'Structure'), tplSel),
           el('div', { class: 'field builder-bar-end' }, el('div', { class: 'btn-row', style: 'margin:0' }, addBtn, clearBtn))),
@@ -911,7 +1029,16 @@
           el('div', { class: 'field builder-bar-end' },
             el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-fit', title: 'Engine re-picks strikes/size so the limits hold',
               onclick: function () { fitToLimits(fitStatus); } }, 'Fit to my limits'))),
-        fitStatus));
+        fitStatus,
+        exposureHost));
+      function renderExposureSizer() {
+        exposureHost.innerHTML = '';
+        var sizer = exposureSizer(function () {
+          qtyIn.value = String(st.qty);
+          schedulePreview();
+        });
+        if (sizer) exposureHost.appendChild(sizer);
+      }
       // Depth on demand, even at Expert: what the structure does and what each leg is FOR —
       // collapsed by default so the terminal stays naked until asked.
       var eduHost = el('div', { id: 'builder-edu' });
@@ -1013,11 +1140,19 @@
           if (isStock) { l.strike = null; l.expiration = null; }
           else if (!l.expiration) { l.expiration = expirations[Math.min(2, expirations.length - 1)]; exp.value = l.expiration; }
         }
-        action.addEventListener('change', function () { l.action = action.value; remember(); schedulePreview(); });
+        function markCustom() {
+          st.templateKey = null;
+          st.exposureResult = null;
+          tplSel.value = '';
+          renderExposureSizer();
+        }
+        action.addEventListener('change', function () {
+          l.action = action.value; markCustom(); remember(); schedulePreview();
+        });
         type.addEventListener('change', async function () {
           l.type = type.value; syncStockMode();
           if (l.type !== 'STOCK') { l.strike = null; await fillStrikes(); } else { mkt.textContent = ''; }
-          remember(); schedulePreview();
+          markCustom(); remember(); schedulePreview();
         });
         exp.addEventListener('change', async function () {
           l.expiration = exp.value; l.strike = null;
@@ -1028,7 +1163,7 @@
         });
         ratio.addEventListener('change', function () {
           l.ratio = Math.max(1, Math.min(10, parseInt(ratio.value, 10) || 1));
-          ratio.value = String(l.ratio); remember(); schedulePreview();
+          ratio.value = String(l.ratio); markCustom(); remember(); schedulePreview();
         });
         var remove = el('button', {
           class: 'btn btn-sm btn-secondary leg-remove', type: 'button', title: 'Remove this leg',
@@ -1042,7 +1177,8 @@
             });
             st.excluded = ex;
             st.templateKey = null; tplSel.value = '';
-            remember(); renderLegs(); schedulePreview();
+            st.exposureResult = null;
+            remember(); renderLegs(); renderExposureSizer(); schedulePreview();
           }
         }, '✕');
         row.appendChild(el('div', { class: 'leg-controls' }, onToggle, action, type, exp, strike, ratio, mkt, remove));
@@ -1141,25 +1277,30 @@
         st.templateKey = tplSel.value;
         st.legs = await buildFromTemplate(tplSel.value);
         st.excluded = {};
+        st.exposureResult = null;
         remember();
         await renderLegs();
+        renderExposureSizer();
         schedulePreview();
       });
       addBtn.addEventListener('click', async function () {
         st.legs.push(leg('BUY', 'CALL', null, expirations[Math.min(2, expirations.length - 1)] || null));
         st.templateKey = null; tplSel.value = '';
+        st.exposureResult = null;
         remember(); await renderLegs(); schedulePreview();
       });
       symInput.addEventListener('change', async function () {
         var sym = symInput.value.trim().toUpperCase();
         if (!sym || sym === st.symbol) return;
-        st.symbol = sym; App.state.lastRecommendSymbol = sym;
+        st.symbol = sym; App.context.selectSymbol(sym);
         st.legs = []; st.excluded = {};
         remember();
         try {
           await loadSymbol();
           if (st.templateKey) st.legs = await buildFromTemplate(st.templateKey);
           await renderLegs();
+          st.exposureResult = null;
+          renderExposureSizer();
           schedulePreview();
         } catch (e) {
           legsHost.innerHTML = '';
@@ -1175,6 +1316,7 @@
 
       schedulePreviewHook = schedulePreview;
       onLegsReplaced = async function () { await renderLegs(); schedulePreview(); };
+      renderExposureSizer();
       if (!expirations.length) {
         legsHost.appendChild(UI.emptyState(st.symbol + ' has no listed options', 'Pick an optionable symbol (try AAPL or SPY).'));
         panelEmpty();
@@ -1187,6 +1329,11 @@
 
     // ---- Shared panel body ----
     function renderVerdictAndStats(hostEl, p, guard, beginnerWording, handles) {
+      var an = p.analytics || {};
+      if (an.verdict && an.verdictReason) {
+        hostEl.appendChild(el('div', { class: 'muted small verdict-line verdict-' + an.verdict },
+          (an.verdict === 'favorable' ? '\u2713 ' : an.verdict === 'unfavorable' ? '\u2715 ' : '! ') + an.verdictReason));
+      }
       if (!p.ok) {
         hostEl.appendChild(alertBox('danger', beginnerWording ? 'This position would be refused' : 'BLOCKED', p.blockReasons));
       } else if (guard && guard.level === 'WARN') {
@@ -1200,39 +1347,63 @@
       hostEl.appendChild(el('div', { class: 'grid grid-2 panel-stats' },
         stat(credit >= 0 ? 'You collect' : 'You pay', fmtMoney(Math.abs(credit)),
           beginnerWording ? (credit >= 0 ? 'Premium received now — yours to keep only if the position works out.' : 'Cash leaving your account now, before fees.') : null),
-        stat('Most you can lose',
+        stat(beginnerWording ? 'Theoretical worst case' : 'Theoretical max loss',
           unlimited ? el('span', { class: 'loss' }, 'UNLIMITED')
             : p.ok || p.maxLossCents > 0 ? el('span', { class: 'loss' }, fmtMoney(p.maxLossCents))
             : el('span', { class: 'muted' }, '—'),
           beginnerWording ? 'The worst case at expiration, including every leg.' : null),
-        stat('Most you can make', p.maxProfitCents === null || p.maxProfitCents === undefined
-          ? el('span', { class: 'gain' }, 'Uncapped') : el('span', { class: 'gain' }, fmtMoney(p.maxProfitCents)),
+        stat(beginnerWording ? 'Theoretical ceiling' : 'Theoretical max profit', el('span', {
+          class: UI.profitCeilingKind(familyLabel(), null, p.maxProfitCents, p.legs) === 'model-dependent' ? 'muted' : 'gain'
+        }, UI.maxProfitLabel(familyLabel(), null, p.maxProfitCents, beginnerWording, p.legs)),
           beginnerWording ? 'The best case at expiration.' : null),
-        stat(UI.term('pop', beginnerWording ? 'Chance of any profit' : 'POP'),
+        stat(beginnerWording ? 'Chance of any profit' : el('span', {}, 'POP', UI.info('pop')),
           p.popEntry !== null && p.popEntry !== undefined ? fmtPct(p.popEntry) : '—',
           beginnerWording ? 'Model estimate under current volatility. Not a promise.' : null),
         p.assignmentProb !== null && p.assignmentProb !== undefined
-          ? stat(UI.term('assignment', beginnerWording ? 'Assignment odds' : 'Assign'), fmtPct(p.assignmentProb),
+          ? stat(beginnerWording ? assignmentLabel(true)
+              : el('span', {}, assignmentLabel(false), UI.info('assignment')), fmtPct(p.assignmentProb),
               beginnerWording ? 'Chance any short strike finishes in the money and shares change hands.' : null) : null,
         stat('Fees', fmtMoney(p.feesOpenCents), null)));
       if (p.breakevens && p.breakevens.length) {
         hostEl.appendChild(el('div', { class: 'chip-row' },
-          chip(UI.term('breakeven', 'Breakevens'), p.breakevens.map(function (b) { return '$' + b; }).join(' / '))));
+          chip(UI.term('breakeven', 'Breakevens'), p.breakevens.map(function (b) { return '$' + parseFloat(b).toFixed(2); }).join(' / '))));
       }
       hostEl.appendChild(el('div', { class: 'chip-row' },
         chip('Buying power after', fmtMoney(p.buyingPowerAfterCents)),
         p.reserveCents ? chip(UI.term('reserve', 'Set aside'), fmtMoney(p.reserveCents)) : null));
+      // One line kills the "three different risk numbers" confusion: everything here is a TOTAL.
+      hostEl.appendChild(el('div', { class: 'muted small' },
+        'All figures are totals for this exact position and quantity. "Set aside" and "most you can lose" differ on credit trades because the set-aside is the gross width — the worst case lives inside it.'));
+      var prob = an.probabilityMap;
+      if (prob && prob.pAnyProfit !== undefined && p.ok) {
+        hostEl.appendChild(el('div', { class: 'chip-row', id: 'builder-prob-chips' },
+          chip(beginnerWording ? 'Any profit' : 'P(profit)', Math.round(prob.pAnyProfit * 100) + '%'),
+          chip(beginnerWording ? 'Full win' : 'P(max profit)', Math.round(prob.pMaxProfit * 100) + '%'),
+          chip(beginnerWording ? 'Chance of theoretical worst case' : 'P(theoretical max loss)', Math.round(prob.pMaxLoss * 100) + '%'),
+          prob.cvar95Cents !== undefined && prob.cvar95Cents !== null
+            ? chip('CVaR95', UI.fmtMoneyCompact(prob.cvar95Cents)) : null));
+      }
       if (p.payoff && p.payoff.length > 1) {
         if (handles && handles.length) {
           hostEl.appendChild(el('p', { class: 'muted', style: 'margin:6px 0 2px; font-size:12.5px' },
             'Drag a strike marker on the chart \u2014 watch the worst case, best case and odds move with it.'));
         }
+        var em = an.expectedMove;
         hostEl.appendChild(UI.payoffChart(p.payoff, {
           breakevens: p.breakevens, spot: p.underlyingCents ? p.underlyingCents / 100 : null,
+          expectedMove: em ? { low: em.lowCents / 100, high: em.highCents / 100 } : undefined,
           handles: handles || null
         }));
       } else if (p.legs && p.legs.length) {
-        hostEl.appendChild(explain('Mixed expirations: the at-expiry chart does not exist for this position — its value depends on volatility after the near leg dies.'));
+        hostEl.appendChild(explain('Mixed expirations have no single at-expiry payoff line: the position\u2019s value depends on volatility after the near leg expires. Use the shared scenario distributions below to inspect that model-dependent range.'));
+      }
+      // One lazy scenario component for every structure. It sits BESIDE the structural payoff
+      // truth and uses this preview's exact package price; no parallel pricing implementation.
+      if (p.ok && window.Scenario && p.legs && p.legs.length) {
+        hostEl.appendChild(Scenario.realisticOutcomes(st.symbol, {
+          strategy: familyLabel(), legs: p.legs, qty: st.qty || 1,
+          entryNetPremiumCents: p.entryNetPremiumCents
+        }));
       }
       if (p.ok && p.warnings && p.warnings.length) {
         hostEl.appendChild(alertBox('warn', 'Heads up', p.warnings));
@@ -1240,5 +1411,6 @@
     }
   }
 
-  window.Builder = { render: render, TEMPLATES: TEMPLATES, WIZARD: WIZARD };
+  window.Builder = { render: render, TEMPLATES: TEMPLATES, WIZARD: WIZARD,
+    applyCatalog: applyCatalog, prepareTicket: prepareTicket, adoptTicket: adoptTicket };
 })();
