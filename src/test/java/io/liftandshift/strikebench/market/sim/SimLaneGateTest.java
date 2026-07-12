@@ -233,6 +233,50 @@ class SimLaneGateTest {
     }
 
     @Test
+    void preparingWorldCannotMoveOrStartUntilItsUniverseIsFinal() {
+        String owner = "preparing-user";
+        var raw = config(null, "Preparing review", Map.of("ACME", 1.0), Map.of("ACME", 100.0),
+                "CHOP", 0.30, 313L, "2026-07-13T09:30:00", 26);
+        var created = sessions.createAtomic(raw, owner,
+                "{\"anchors\":[],\"pending\":[\"ACME\"],\"resolving\":true}",
+                "Preparing account", accounts, true);
+        String id = created.world().worldId();
+
+        assertThat(sessions.list(owner)).anySatisfy(row -> assertThat(row.get("status")).isEqualTo("PREPARING"));
+        assertThatThrownBy(() -> sessions.start(id, owner)).hasMessageContaining("still preparing");
+        assertThatThrownBy(() -> sessions.pause(id, owner)).hasMessageContaining("still preparing");
+        assertThatThrownBy(() -> sessions.step(id, owner)).hasMessageContaining("still preparing");
+        assertThatThrownBy(() -> sessions.injectMove(id, owner, "ACME", -0.05)).hasMessageContaining("still preparing");
+        assertThat(created.world().ticks()).isZero();
+
+        assertThat(sessions.replaceUnstarted(id, owner, created.world().config(),
+                "{\"anchors\":[{\"symbol\":\"ACME\"}],\"pending\":[],\"resolving\":false}"))
+                .isTrue();
+        sessions.start(id, owner);
+        assertThat(sessions.list(owner)).anySatisfy(row -> assertThat(row.get("status")).isEqualTo("RUNNING"));
+        sessions.pause(id, owner);
+    }
+
+    @Test
+    void interruptedPreparationBecomesAnHonestFailureAfterRestart() {
+        String owner = "preparing-restart-user";
+        var created = sessions.createAtomic(config(null, "Interrupted preparation",
+                        Map.of("ACME", 1.0), Map.of("ACME", 100.0), "CHOP", 0.30, 919L,
+                        "2026-07-13T09:30:00", 26), owner,
+                "{\"anchors\":[],\"pending\":[\"ACME\"],\"resolving\":true}",
+                "Preparing account", accounts, true);
+
+        SimulationSessions restarted = new SimulationSessions(db, new EventBus());
+        assertThat(restarted.list(owner)).anySatisfy(row -> {
+            assertThat(row.get("id")).isEqualTo(created.world().worldId());
+            assertThat(row.get("status")).isEqualTo("FAILED");
+        });
+        assertThatThrownBy(() -> restarted.ensureReady(created.world().worldId(), owner))
+                .hasMessageContaining("could not finish preparing");
+        sessions.finish(created.world().worldId(), owner);
+    }
+
+    @Test
     void finishedSessionsAreTerminal() {
         SimulatedWorld w = createWorld("finish-user");
         String id = w.worldId();

@@ -5637,6 +5637,23 @@
         }
       }
 
+      async function waitForPreparedWorld(worldId, button) {
+        var deadline = Date.now() + 120000;
+        while (Date.now() < deadline) {
+          var sessions = (await API.getFresh('/api/sim/market')).sessions || [];
+          var session = sessions.find(function (x) { return x.id === worldId; });
+          if (!session) throw new Error('The new simulated session could not be found.');
+          if (session.status === 'CREATED' || session.status === 'PAUSED' || session.status === 'RUNNING') return session;
+          if (session.status === 'FAILED') throw new Error('The simulated market could not finish preparing. Its session row keeps the anchor report.');
+          if (button) {
+            var pendingCount = (session.anchorSummary && session.anchorSummary.pending) || 0;
+            button.textContent = pendingCount ? 'Preparing ' + pendingCount + ' symbols…' : 'Calibrating market…';
+          }
+          await new Promise(function (resolve) { setTimeout(resolve, 500); });
+        }
+        throw new Error('The market is still preparing. It remains saved here; enter it when its status changes to READY.');
+      }
+
       /** The RUNNING world's console: clock, live symbols, P/L, and every action in one place. */
       function controlRoom(sx) {
         var cfg = sx.config || {};
@@ -5837,21 +5854,25 @@
       function sessionRow(sx, finished) {
         var cfg = sx.config || {};
         var active = App.state.world === sx.id;
-        var row = el('div', { class: 'card-slim btn-row sim-session-row clickable', 'data-sim-id': sx.id, style: 'margin:6px 0' },
+        var preparing = sx.status === 'PREPARING';
+        var failed = sx.status === 'FAILED';
+        var rowInteractive = finished || (!preparing && !failed);
+        var row = el('div', { class: 'card-slim btn-row sim-session-row' + (rowInteractive ? ' clickable' : ''),
+          'data-sim-id': sx.id, style: 'margin:6px 0' },
           el('b', {}, sx.name || sx.id),
-          el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : finished ? 'badge-dim' : 'badge-warn') },
-            finished ? 'FINISHED' : sx.running ? 'RUNNING' : 'PAUSED'),
+          el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : failed ? 'badge-danger' : preparing ? 'badge-caution' : finished ? 'badge-dim' : 'badge-warn') },
+            finished ? 'FINISHED' : failed ? 'FAILED' : preparing ? 'PREPARING' : sx.running ? 'RUNNING' : 'READY'),
           el('span', { class: 'muted small' }, App.scenarioLabel(cfg.scenario)
             + ' \u00b7 seed ' + cfg.seed
             + (sx.eventCount ? ' \u00b7 ' + sx.eventCount + ' injected event' + (sx.eventCount === 1 ? '' : 's') : '')
             + (sx.simTime ? ' \u00b7 ' + String(sx.simTime).replace('T', ' ') : '')));
         if (!finished) {
-          row.appendChild(el('button', { class: 'btn btn-sm', onclick: function () {
+          row.appendChild(el('button', { class: 'btn btn-sm', disabled: preparing || failed, onclick: function () {
             if (!active) App.state.focusSimControlRoom = sx.id;
             App.switchWorld(active ? App.baseWorldId() : sx.id, this); } }, active
               ? (App.config && App.config.fixturesOnly ? 'Back to demo' : 'Back to real')
               : 'Enter this market'));
-          row.appendChild(el('button', { class: 'btn btn-sm', onclick: async function () {
+          row.appendChild(el('button', { class: 'btn btn-sm', disabled: preparing || failed, onclick: async function () {
             try {
               var running = !sx.running;
               await API.post('/api/sim/market/' + sx.id + '/' + (sx.running ? 'pause' : 'start'), {});
@@ -5859,7 +5880,7 @@
               App.refreshWorldBand();
             }
             catch (e) { UI.toast(e.message || 'Could not change simulation playback', 'error'); } } }, sx.running ? 'Pause' : 'Start'));
-          row.appendChild(el('button', { class: 'btn btn-sm', id: 'sim-inject-' + sx.id, onclick: function () {
+          row.appendChild(el('button', { class: 'btn btn-sm', id: 'sim-inject-' + sx.id, disabled: preparing || failed, onclick: function () {
             injectModal(sx); } }, 'Inject event'));
         }
         row.appendChild(el('button', { class: 'btn btn-sm', onclick: function () { showReport(sx); } }, 'Report'));
@@ -5870,10 +5891,10 @@
         row.addEventListener('click', function (e) {
           if (e.target.closest('button,a,input,select,textarea')) return;
           if (finished) showReport(sx);
-          else { App.state.focusSimControlRoom = sx.id; App.switchWorld(sx.id, row); }
+          else if (!preparing && !failed) { App.state.focusSimControlRoom = sx.id; App.switchWorld(sx.id, row); }
         });
-        return pressable(row, finished ? 'Open report for ' + (sx.name || sx.id)
-          : 'Enter simulated market ' + (sx.name || sx.id), 'link');
+        return rowInteractive ? pressable(row, finished ? 'Open report for ' + (sx.name || sx.id)
+          : 'Enter simulated market ' + (sx.name || sx.id), 'link') : row;
       }
 
       /** Inject-event: an app modal with a SYMBOL PICKER — never window.prompt (review P2). */
@@ -6247,6 +6268,11 @@
               UI.toast(res.excluded.length + ' symbol(s) excluded \u2014 no price available: '
                 + res.excluded.map(function (x) { return x.symbol; }).join(', '));
             }
+            if (res.resolving) {
+              createBtn.textContent = 'Preparing market…';
+              await refreshSim();
+              await waitForPreparedWorld(res.worldId, createBtn);
+            }
             await API.post('/api/sim/market/' + res.worldId + '/start', {});
             App.state.focusSimControlRoom = res.worldId;
             var entered = await App.switchWorld(res.worldId, createBtn);
@@ -6254,6 +6280,7 @@
             await refreshSim();
           } catch (e) { UI.toast(e.message || 'Could not create the simulated session', 'error'); }
           createBtn.disabled = false;
+          createBtn.textContent = 'Create & enter';
         } }, 'Create & enter');
         creator.appendChild(createBtn);
       }
@@ -6283,6 +6310,9 @@
           var speed = activeRoom.querySelector('#cr-speed');
           if (speed) speed.textContent = data.speed + '\u00d7';
         }
+      }, token);
+      if (App.onEvent) App.onEvent('world.resolving', function () {
+        if (App.alive(token)) refreshSim();
       }, token);
       refreshSim();
     })();

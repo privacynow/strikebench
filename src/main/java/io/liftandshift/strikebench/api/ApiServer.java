@@ -493,6 +493,7 @@ public final class ApiServer {
                     throw new IllegalStateException("Observed market is unavailable in this explicit demo build");
                 }
                 if (!"observed".equals(w) && !"demo".equals(w)) {
+                    simSessions.ensureReady(w, owner);
                     simSessions.getOrRestore(w, owner)
                             .orElseThrow(() -> new java.util.NoSuchElementException("no such simulated session: " + w));
                 }
@@ -1050,19 +1051,21 @@ public final class ApiServer {
                 b.volAnnual() == null || b.volAnnual() <= 0 ? 0.3 : b.volAnnual(),
                 seed, start, b.speed() == null ? 1 : b.speed(),
                 symVols.isEmpty() ? null : symVols, symIvs.isEmpty() ? null : symIvs);
+        boolean needsResolution = !cheapData && (!pending.isEmpty() || !active.isEmpty());
         Map<String, Object> anchorDoc = new LinkedHashMap<>();
         anchorDoc.put("anchors", anchors);
         anchorDoc.put("excluded", excluded);
         anchorDoc.put("pending", pending);
+        anchorDoc.put("resolving", needsResolution);
         anchorDoc.put("trimmed", trimmed);
         anchorDoc.put("resolvedAt", clock.instant().toString());
         // F2: session + anchors + account in ONE transaction; memory admission after commit.
         var created = simSessions.createAtomic(worldCfg, owner, Json.write(anchorDoc),
-                (b.name() == null ? "Simulation" : b.name()) + " account", accounts);
+                (b.name() == null ? "Simulation" : b.name()) + " account", accounts, needsResolution);
         var w = created.world();
         // F1: the governed BACKGROUND resolver — cold actives + live calibration enrich the world
         // while it is still unstarted; a started world keeps its immutable config (disclosed).
-        if (!cheapData && (!pending.isEmpty() || !active.isEmpty())) {
+        if (needsResolution) {
             final var fActive = new java.util.LinkedHashMap<>(active);
             final var fAll = new java.util.LinkedHashMap<>(all);
             final var fSpots = new java.util.LinkedHashMap<>(spots);
@@ -1084,7 +1087,7 @@ public final class ApiServer {
         resp.put("anchors", anchors);
         resp.put("excluded", excluded);
         resp.put("pending", pending);
-        resp.put("resolving", !cheapData && (!pending.isEmpty() || !active.isEmpty()));
+        resp.put("resolving", needsResolution);
         resp.put("trimmed", trimmed);
         resp.put("modelVersion", w.modelVersion());
         ctx.status(201).json(resp);
@@ -1206,6 +1209,7 @@ public final class ApiServer {
             anchorDoc.put("anchors", anchors);
             anchorDoc.put("excluded", excluded);
             anchorDoc.put("pending", List.of());
+            anchorDoc.put("resolving", false);
             anchorDoc.put("trimmed", trimmed);
             anchorDoc.put("calibration", calibrationBasis);
             anchorDoc.put("resolvedAt", clock.instant().toString());
@@ -1221,6 +1225,14 @@ public final class ApiServer {
         } catch (RuntimeException e) {
             log.warn("Simulated market {} could not finish preparing", worldId);
             log.debug("Simulated-market preparation detail for " + worldId, e);
+            Map<String, Object> failed = new LinkedHashMap<>();
+            failed.put("anchors", anchors);
+            failed.put("excluded", excluded);
+            failed.put("pending", pending);
+            failed.put("trimmed", trimmed);
+            failed.put("resolving", false);
+            failed.put("note", "Preparation failed before this market could start. No unresolved symbol was admitted.");
+            simSessions.preparationFailed(worldId, owner, Json.write(failed));
         }
     }
 

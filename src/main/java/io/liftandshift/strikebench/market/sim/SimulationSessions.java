@@ -52,6 +52,7 @@ public final class SimulationSessions {
     private final ConcurrentHashMap<String, ScheduledFuture<?>> loops = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> lastHint = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> lastCheckpoint = new ConcurrentHashMap<>();
+    private final java.util.Set<String> preparingWorlds = ConcurrentHashMap.newKeySet();
 
     public SimulationSessions(Db db, EventBus events) {
         this.db = db;
@@ -67,7 +68,7 @@ public final class SimulationSessions {
     private record Checkpoint(long quantum, String simTime, double speed, boolean running) {}
 
     public synchronized SimulatedWorld create(SimulatedWorld.Config raw, String userId) {
-        return createAtomic(raw, userId, null, null, null).world();
+        return createAtomic(raw, userId, null, null, null, false).world();
     }
 
     public record Created(SimulatedWorld world, String accountId) {}
@@ -82,7 +83,8 @@ public final class SimulationSessions {
      */
     public synchronized Created createAtomic(SimulatedWorld.Config raw, String userId, String anchorsJson,
                                              String accountName,
-                                             io.liftandshift.strikebench.paper.AccountService accounts) {
+                                             io.liftandshift.strikebench.paper.AccountService accounts,
+                                             boolean preparing) {
         if (raw.symbolBetas().size() > MAX_SYMBOLS) {
             throw new IllegalArgumentException("at most " + MAX_SYMBOLS + " symbols per simulated session");
         }
@@ -97,15 +99,16 @@ public final class SimulationSessions {
         String[] acctId = new String[1];
         db.tx(c -> {
             Db.execOn(c, "INSERT INTO sim_session(id,name,user_id,config,status,model_version,events,anchors) "
-                            + "VALUES (?,?,?,?::jsonb,'CREATED',?,'[]'::jsonb,?::jsonb)",
+                            + "VALUES (?,?,?,?::jsonb,?,?,'[]'::jsonb,?::jsonb)",
                     id, cfg.name() == null ? id : cfg.name(), owner(userId), Json.write(cfg),
-                    SimulatedWorld.MODEL_VERSION, anchorsJson);
+                    preparing ? "PREPARING" : "CREATED", SimulatedWorld.MODEL_VERSION, anchorsJson);
             if (accounts != null) {
                 acctId[0] = accounts.createForWorldOn(c, id,
                         accountName == null ? "Simulation account" : accountName);
             }
             return null;
         });
+        if (preparing) preparingWorlds.add(id);
         admit(id, w, owner(userId));
         return new Created(w, acctId[0]);
     }
@@ -125,9 +128,10 @@ public final class SimulationSessions {
                 newCfg.volAnnual(), newCfg.seed(), newCfg.startSimTime(), newCfg.speed(),
                 newCfg.symbolVols(), newCfg.symbolIvs());
         SimulatedWorld w = new SimulatedWorld(cfg);
-        db.exec("UPDATE sim_session SET config=?::jsonb, anchors=?::jsonb WHERE id=?",
+        db.exec("UPDATE sim_session SET config=?::jsonb, anchors=?::jsonb, status='CREATED' WHERE id=?",
                 Json.write(cfg), anchorsJson, worldId);
         worlds.put(worldId, w);
+        preparingWorlds.remove(worldId);
         if (events != null) {
             events.publish("world.resolving", Map.of("world", worldId, "user", owner(userId),
                     "state", "complete"));
@@ -243,6 +247,7 @@ public final class SimulationSessions {
     }
 
     public synchronized void start(String worldId, String userId) {
+        ensureReady(worldId, userId);
         SimulatedWorld w = require(worldId, userId);
         if (!w.running()) {
             // The cap binds where running BEGINS, not just at create.
@@ -280,6 +285,7 @@ public final class SimulationSessions {
     }
 
     public void pause(String worldId, String userId) {
+        ensureReady(worldId, userId);
         SimulatedWorld w = require(worldId, userId);
         w.pause();
         persistOrThrow(worldId, w);
@@ -289,6 +295,7 @@ public final class SimulationSessions {
     /** Step = exactly ONE quantum (30 sim-seconds): the button must always move the world
      *  visibly — at real-time speed a plain tick advances less than a quantum. */
     public void step(String worldId, String userId) {
+        ensureReady(worldId, userId);
         SimulatedWorld w = require(worldId, userId);
         w.stepQuanta(1);
         persistOrThrow(worldId, w);
@@ -296,12 +303,14 @@ public final class SimulationSessions {
     }
 
     public void setSpeed(String worldId, String userId, double speed) {
+        ensureReady(worldId, userId);
         SimulatedWorld w = require(worldId, userId);
         w.setSpeed(speed);
         persistOrThrow(worldId, w);
     }
 
     public void injectMove(String worldId, String userId, String symbol, double pct) {
+        ensureReady(worldId, userId);
         SimulatedWorld w = require(worldId, userId);
         w.injectMove(symbol, pct);
         persistOrThrow(worldId, w);
@@ -309,6 +318,7 @@ public final class SimulationSessions {
     }
 
     public void injectVol(String worldId, String userId, double points) {
+        ensureReady(worldId, userId);
         SimulatedWorld w = require(worldId, userId);
         w.injectVolShift(points);
         persistOrThrow(worldId, w);
@@ -331,6 +341,7 @@ public final class SimulationSessions {
         db.exec("UPDATE sim_session SET state=?::jsonb, events=?::jsonb, status='FINISHED', "
                         + "finished_at=now() WHERE id=?",
                 Json.write(cp), Json.write(w.eventLog()), worldId); // one atomic statement; throws on failure
+        preparingWorlds.remove(worldId);
         evict(worldId);
     }
 
@@ -350,8 +361,41 @@ public final class SimulationSessions {
         catch (RuntimeException e) { /* the next periodic checkpoint retries */ }
     }
 
+    /** A world cannot be entered or mutated until its promised symbols and calibration are final. */
+    public void ensureReady(String worldId, String userId) {
+        var rows = db.query("SELECT status FROM sim_session WHERE id=? AND user_id=?",
+                r -> r.str("status"), worldId, owner(userId));
+        if (rows.isEmpty()) throw new java.util.NoSuchElementException("no such simulated session: " + worldId);
+        String status = rows.getFirst();
+        if ("PREPARING".equals(status)) {
+            throw new IllegalStateException("This simulated market is still preparing its symbols and volatility. Wait for READY before entering or starting it.");
+        }
+        if ("FAILED".equals(status)) {
+            throw new IllegalStateException("This simulated market could not finish preparing. Review its anchors, then finish it and create a new session.");
+        }
+        if ("FINISHED".equals(status)) {
+            throw new IllegalStateException("This simulated market is finished and cannot be entered or changed.");
+        }
+    }
+
+    public void preparationFailed(String worldId, String userId, String anchorsJson) {
+        db.exec("UPDATE sim_session SET status='FAILED', anchors=?::jsonb WHERE id=? AND user_id=? AND status='PREPARING'",
+                anchorsJson, worldId, owner(userId));
+        preparingWorlds.remove(worldId);
+        if (events != null) events.publish("world.resolving", Map.of(
+                "world", worldId, "user", owner(userId), "state", "failed"));
+    }
+
     /** All of this owner's sessions — FINISHED rows included (the report must stay reachable). */
-    public List<Map<String, Object>> list(String userId) {
+    public synchronized List<Map<String, Object>> list(String userId) {
+        // A PREPARING row without a resolver in this process means the process restarted during
+        // provider work. Its partial config must never masquerade as a world that may still finish.
+        for (String id : db.query("SELECT id FROM sim_session WHERE user_id=? AND status='PREPARING'",
+                r -> r.str("id"), owner(userId))) {
+            if (!preparingWorlds.contains(id)) {
+                db.exec("UPDATE sim_session SET status='FAILED' WHERE id=? AND status='PREPARING'", id);
+            }
+        }
         List<Map<String, Object>> out = new ArrayList<>();
         db.query("SELECT id, name, status, config::text c, model_version, created_at::text ca, "
                         + "state::text st, events::text ev, anchors::text an FROM sim_session "
