@@ -72,7 +72,7 @@ public final class TradeService {
     public record PositionGreeks(Double deltaShares, Double gammaShares, Double thetaPerDay, Double vegaPerPoint, boolean complete) {}
 
     public record MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
-                           Long unrealizedCents, Double popNow, String freshness,
+                           Long unrealizedCents, Long decisionUnrealizedCents, Double popNow, String freshness,
                            PositionGreeks greeks, List<Map<String, Object>> legGreeks) {}
 
     public record Page(List<TradeRecord> trades, long total, int page, int size) {}
@@ -355,7 +355,10 @@ public final class TradeService {
                 closeValue += closeSign(leg) * Money.centsFromPrice(px, (long) Leg.SHARES_PER_CONTRACT * leg.ratio() * t.qty());
             }
             long feesClose = feesFor(t.legs(), t.qty());
-            return closeOut(c, t, acct, "PREMIUM_CLOSE", closeValue, feesClose, TradeRecord.CLOSED, "UNWIND");
+            Long decisionUnderlying = marks.underlyingMark(t.symbol(), worldOf(t.accountId()))
+                    .map(Money::toCents).orElse(null);
+            return closeOut(c, t, acct, "PREMIUM_CLOSE", closeValue, feesClose,
+                    TradeRecord.CLOSED, "UNWIND", decisionUnderlying);
         });
         auditSafe(result.trade().accountId(), tradeId, "TRADE_UNWOUND", "INFO",
                 Map.of("realizedPnlCents", result.realizedPnlCents()));
@@ -464,8 +467,8 @@ public final class TradeService {
                 // Real-trade lane: cash-settle the OUTCOME onto the trade row only — the paper
                 // ledger never held this money, and physical assignment belongs to the broker.
                 long realizedX = t.entryNetPremiumCents() - t.feesOpenCents() + settleValue;
-                Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=0, realized_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
-                        TradeRecord.EXPIRED, "SETTLED (external)" + memoSuffix, realizedX, nowTs, nowTs, t.id());
+                Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=0, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
+                        TradeRecord.EXPIRED, "SETTLED (external)" + memoSuffix, realizedX, realizedX, nowTs, nowTs, t.id());
                 return new CloseResult(getOn(c, t.id()), realizedX);
             }
             long cash = acct.cashCents(), reserved = acct.reservedCents();
@@ -502,9 +505,10 @@ public final class TradeService {
                 ledgerRow(c, acct.id(), t.id(), nowTs, "RESERVE_RELEASE", -reserve, cash, reserved, "reserve released on settle");
             }
             long realized = t.entryNetPremiumCents() - t.feesOpenCents() + settleValue;
+            long decisionPnl = decisionPnlAtSettlement(t, closes.get(lastExpiry), realized);
             String closeReason = "SETTLED" + assignNote + memoSuffix;
-            Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=0, realized_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
-                    TradeRecord.EXPIRED, closeReason, realized, nowTs, nowTs, t.id());
+            Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=0, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
+                    TradeRecord.EXPIRED, closeReason, realized, decisionPnl, nowTs, nowTs, t.id());
             Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, updated_at=? WHERE id=?", cash, reserved, nowTs, acct.id());
             return new CloseResult(getOn(c, t.id()), realized);
         });
@@ -595,9 +599,9 @@ public final class TradeService {
         }
         MarkView view = computeMark(t);
         markMemo.put(tradeId, view);
-        db.exec("INSERT INTO trade_marks(trade_id,ts,underlying_px_cents,close_cost_cents,unrealized_cents,pop_now,freshness,detail_json) VALUES (?,?,?,?,?,?,?,?)",
+        db.exec("INSERT INTO trade_marks(trade_id,ts,underlying_px_cents,close_cost_cents,unrealized_cents,decision_unrealized_cents,pop_now,freshness,detail_json) VALUES (?,?,?,?,?,?,?,?,?)",
                 tradeId, view.ts(), view.underlyingCents(), view.closeCostCents(), view.unrealizedCents(),
-                view.popNow(), view.freshness(), null);
+                view.decisionUnrealizedCents(), view.popNow(), view.freshness(), null);
         return view;
     }
 
@@ -754,7 +758,15 @@ public final class TradeService {
                 ? new PositionGreeks(round2(dDelta), round4(dGamma), round2(dTheta), round2(dVega), greeksComplete)
                 : null;
         Long closeCost = complete ? closeValue : null;
-        Long unrealized = complete ? closeValue + t.entryNetPremiumCents() : null;
+        // Opening fees already left cash and belong in today's P/L. The only omitted cost is the
+        // FUTURE close fee, which the UI labels explicitly as not yet included.
+        Long unrealized = complete ? closeValue + t.entryNetPremiumCents() - t.feesOpenCents() : null;
+        Long decisionUnrealized = unrealized;
+        long heldContextShares = heldShareContextLots(t) * Leg.SHARES_PER_CONTRACT;
+        if (decisionUnrealized != null && underlyingCents != null && heldContextShares > 0
+                && t.entryUnderlyingCents() > 0) {
+            decisionUnrealized += (underlyingCents - t.entryUnderlyingCents()) * heldContextShares;
+        }
         boolean mixedExp = t.legs().stream().filter(l -> !l.isStock())
                 .map(Leg::expiration).distinct().count() > 1;
         Double popNow = null;
@@ -772,8 +784,8 @@ public final class TradeService {
             // executable leg marks stored in legs_json, and held-share stock context is not an
             // entry cash flow. Reapply the exact package adjustment so POP-now starts at the
             // same payoff curve the ticket showed.
-            PayoffCurve markedCurve = PayoffCurve.of(curveLegs, t.qty());
-            long entryAdjustment = t.entryNetPremiumCents() - markedCurve.entryNetPremiumCents();
+            long tradedLegEntry = PayoffCurve.of(t.legs(), t.qty()).entryNetPremiumCents();
+            long entryAdjustment = t.entryNetPremiumCents() - tradedLegEntry;
             PayoffCurve curve = PayoffCurve.of(curveLegs, t.qty(), entryAdjustment);
             double ivAvg = ivs.isEmpty() ? FALLBACK_IV : ivs.stream().mapToDouble(Double::doubleValue).average().orElse(FALLBACK_IV);
             io.liftandshift.strikebench.market.OptionTime.Measure mtte =
@@ -786,7 +798,7 @@ public final class TradeService {
                     marks.riskFreeRate((int) Math.max(1, mtte.calendarDays()), world), shortStrikes)
                     .probabilityMap().pAnyProfit();
         }
-        return new MarkView(t.id(), now, underlyingCents, closeCost, unrealized, popNow, worst.name(),
+        return new MarkView(t.id(), now, underlyingCents, closeCost, unrealized, decisionUnrealized, popNow, worst.name(),
                 greeks, complete ? legGreeks : List.of());
     }
 
@@ -909,7 +921,8 @@ public final class TradeService {
     public List<MarkView> marksHistory(String tradeId, int limit) {
         return db.query("SELECT * FROM trade_marks WHERE trade_id=? ORDER BY id DESC LIMIT ?", r ->
                 new MarkView(tradeId, r.str("ts"), r.lngOrNull("underlying_px_cents"), r.lngOrNull("close_cost_cents"),
-                        r.lngOrNull("unrealized_cents"), r.dblOrNull("pop_now"), r.str("freshness"), null, List.of()), tradeId, limit);
+                        r.lngOrNull("unrealized_cents"), r.lngOrNull("decision_unrealized_cents"),
+                        r.dblOrNull("pop_now"), r.str("freshness"), null, List.of()), tradeId, limit);
     }
 
     // ---- Plan computation ----
@@ -1447,14 +1460,15 @@ public final class TradeService {
     // ---- Shared helpers ----
 
     private CloseResult closeOut(Connection c, TradeRecord t, Account acct, String cashRowType,
-                                 long closeValue, long feesClose, String newStatus, String closeReason) throws SQLException {
+                                 long closeValue, long feesClose, String newStatus, String closeReason,
+                                 Long decisionUnderlyingCents) throws SQLException {
         String now = now();
         if (t.external()) {
             // A REAL trade recorded for the learning loop: the paper account never held its cash,
             // so closing writes the outcome to the trade row ONLY — no ledger, no reserve, no cash.
             long realizedX = t.entryNetPremiumCents() - t.feesOpenCents() + closeValue - feesClose;
-            Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=?, realized_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
-                    newStatus, closeReason, feesClose, realizedX, now, now, t.id());
+            Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=?, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
+                    newStatus, closeReason, feesClose, realizedX, realizedX, now, now, t.id());
             return new CloseResult(getOn(c, t.id()), realizedX);
         }
         long cash = acct.cashCents(), reserved = acct.reservedCents();
@@ -1472,10 +1486,43 @@ public final class TradeService {
             ledgerRow(c, acct.id(), t.id(), now, "RESERVE_RELEASE", -reserve, cash, reserved, "reserve released on close");
         }
         long realized = t.entryNetPremiumCents() - t.feesOpenCents() + closeValue - feesClose;
-        Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=?, realized_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
-                newStatus, closeReason, feesClose, realized, now, now, t.id());
+        long decisionPnl = decisionPnlAtMark(t, realized, decisionUnderlyingCents);
+        Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=?, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
+                newStatus, closeReason, feesClose, realized, decisionPnl, now, now, t.id());
         Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, updated_at=? WHERE id=?", cash, reserved, now, acct.id());
         return new CloseResult(getOn(c, t.id()), realized);
+    }
+
+    private static long decisionPnlAtMark(TradeRecord t, long incrementalPnl, Long underlyingCents) {
+        long shares = heldShareContextLots(t) * Leg.SHARES_PER_CONTRACT;
+        if (shares <= 0 || underlyingCents == null || t.entryUnderlyingCents() <= 0) return incrementalPnl;
+        return incrementalPnl + (underlyingCents - t.entryUnderlyingCents()) * shares;
+    }
+
+    private static long decisionPnlAtSettlement(TradeRecord t, BigDecimal underlyingClose, long incrementalPnl) {
+        long totalLots = heldShareContextLots(t);
+        if (totalLots <= 0 || underlyingClose == null || t.qty() <= 0 || totalLots % t.qty() != 0) {
+            return incrementalPnl;
+        }
+        List<Leg> combined = new ArrayList<>(t.legs());
+        combined.add(Leg.stock(LegAction.BUY, (int) (totalLots / t.qty()),
+                BigDecimal.valueOf(t.entryUnderlyingCents(), 2)));
+        long tradedLegEntry = PayoffCurve.of(t.legs(), t.qty()).entryNetPremiumCents();
+        long adjustment = t.entryNetPremiumCents() - tradedLegEntry;
+        return PayoffCurve.of(combined, t.qty(), adjustment).profitAtCents(underlyingClose)
+                - t.feesOpenCents();
+    }
+
+    private static long heldShareContextLots(TradeRecord t) {
+        if (t == null || t.entrySnapshotJson() == null || t.entrySnapshotJson().isBlank()) return 0;
+        try {
+            Map<String, Object> snapshot = Json.read(t.entrySnapshotJson(),
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            Object value = snapshot.get("heldShareContextLots");
+            return value instanceof Number n ? Math.max(0, n.longValue()) : 0;
+        } catch (RuntimeException ignored) {
+            return 0; // legacy snapshot: do not invent a share context
+        }
     }
 
     /** Commission: per-contract fee on option legs only, plus a flat per-order fee. */
@@ -1571,7 +1618,8 @@ public final class TradeService {
                 r.lng("entry_underlying_cents"), r.lng("entry_net_premium_cents"), r.lng("max_loss_cents"),
                 r.lngOrNull("max_profit_cents"), TradeRecord.breakevensFromJson(r.str("breakevens_json")),
                 r.dblOrNull("pop_entry"), r.lng("fees_open_cents"), r.lng("fees_close_cents"),
-                r.lngOrNull("realized_pnl_cents"), r.str("close_reason"), r.str("entry_snapshot_json"),
+                r.lngOrNull("realized_pnl_cents"), r.lngOrNull("decision_pnl_cents"),
+                r.str("close_reason"), r.str("entry_snapshot_json"),
                 r.bool("is_live"), r.str("created_at"), r.str("closed_at"), r.str("updated_at"),
                 r.str("intent"), r.lng("shares_locked"), r.str("origin"),
                 r.lngOrNull("proposed_net_cents"), r.str("executed_at"), r.str("broker"), r.str("order_ref"),

@@ -27,6 +27,7 @@ public record TradeRecord(
         long feesOpenCents,
         long feesCloseCents,
         Long realizedPnlCents,
+        Long decisionPnlCents,        // same payoff basis as entry POP; includes held-share context
         String closeReason,
         String entrySnapshotJson,
         boolean isLive,
@@ -55,7 +56,7 @@ public record TradeRecord(
                        long sharesLocked, String origin) {
         this(id, accountId, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
                 entryUnderlyingCents, entryNetPremiumCents, maxLossCents, maxProfitCents, breakevens,
-                popEntry, feesOpenCents, feesCloseCents, realizedPnlCents, closeReason,
+                popEntry, feesOpenCents, feesCloseCents, realizedPnlCents, null, closeReason,
                 entrySnapshotJson, isLive, createdAt, closedAt, updatedAt, intent, sharesLocked, origin,
                 null, null, null, null, null, null, null);
     }

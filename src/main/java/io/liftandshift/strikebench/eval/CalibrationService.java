@@ -103,7 +103,7 @@ public final class CalibrationService {
         out.put("reliability", reliability);
         out.put("note", n == 0
                 ? "No resolved recommendations yet — calibration appears once outcomes are recorded."
-                : "Well-calibrated means predicted ≈ realized in each bucket. Model outputs, not a forecast.");
+                : "Well-calibrated means predicted ≈ realized in each bucket. For share-backed strategies, the outcome includes the held-share move because that is the payoff POP evaluated. Model outputs, not a forecast.");
         return out;
     }
 

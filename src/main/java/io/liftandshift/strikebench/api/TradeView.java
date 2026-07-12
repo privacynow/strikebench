@@ -27,6 +27,7 @@ public record TradeView(
         long feesOpenCents,
         long feesCloseCents,
         Long realizedPnlCents,
+        Long decisionPnlCents,
         String closeReason,
         Map<String, Object> entrySnapshot,
         boolean isLive,
@@ -45,6 +46,7 @@ public record TradeView(
                 t.thesis(), t.horizon(), t.riskMode(),
                 t.entryUnderlyingCents(), t.entryNetPremiumCents(), t.maxLossCents(), t.maxProfitCents(),
                 t.breakevens(), t.popEntry(), t.feesOpenCents(), t.feesCloseCents(), t.realizedPnlCents(),
+                t.decisionPnlCents(),
                 t.closeReason(), snapshot, t.isLive(), t.createdAt(), t.closedAt(), t.updatedAt(),
                 t.intent(), t.sharesLocked());
     }

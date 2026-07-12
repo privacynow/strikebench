@@ -1256,6 +1256,8 @@ public final class ApiServer {
                 m.put("status", t.status()); m.put("qty", t.qty());
                 m.put("entryNetPremiumCents", t.entryNetPremiumCents());
                 m.put("realizedPnlCents", t.realizedPnlCents());
+                Long decisionPnl = t.decisionPnlCents() != null ? t.decisionPnlCents() : t.realizedPnlCents();
+                m.put("decisionPnlCents", decisionPnl);
                 m.put("maxLossCents", t.maxLossCents()); m.put("popEntry", t.popEntry());
                 m.put("closeReason", t.closeReason());
                 m.put("openedAt", t.createdAt()); m.put("closedAt", t.closedAt());
@@ -1269,16 +1271,18 @@ public final class ApiServer {
                 // MAE/MFE from the trade's own mark history: how far it went against/for the
                 // trader while open — the difference between a bad outcome and a bad decision.
                 var excursion = db.query(
-                        "SELECT MIN(unrealized_cents) mae, MAX(unrealized_cents) mfe FROM trade_marks WHERE trade_id=?",
-                        r -> new Long[]{r.lng("mae"), r.lng("mfe")}, t.id());
+                        "SELECT MIN(COALESCE(decision_unrealized_cents, unrealized_cents)) mae, "
+                                + "MAX(COALESCE(decision_unrealized_cents, unrealized_cents)) mfe "
+                                + "FROM trade_marks WHERE trade_id=?",
+                        r -> new Long[]{r.lngOrNull("mae"), r.lngOrNull("mfe")}, t.id());
                 if (!excursion.isEmpty() && excursion.getFirst()[0] != null) {
                     m.put("maeCents", excursion.getFirst()[0]);
                     m.put("mfeCents", excursion.getFirst()[1]);
                 }
                 tradeRows.add(m);
-                if (t.realizedPnlCents() != null) {
-                    resolved++; realized += t.realizedPnlCents();
-                    boolean win = t.realizedPnlCents() > 0;
+                if (decisionPnl != null) {
+                    resolved++; realized += decisionPnl;
+                    boolean win = decisionPnl > 0;
                     if (win) wins++;
                     if (t.popEntry() != null) {
                         if (t.popEntry() >= 0.5) { hiPop++; if (win) hiPopWins++; }
@@ -1295,7 +1299,7 @@ public final class ApiServer {
         out.put("trades", tradeRows);
         out.put("resolved", resolved);
         out.put("winRate", resolved > 0 ? Math.round(100.0 * wins / resolved) : null);
-        out.put("realizedPnlCents", realized);
+        out.put("decisionPnlCents", realized);
         // Decision-vs-outcome: predicted odds against realized frequency, per POP band.
         Map<String, Object> popVsOutcome = new LinkedHashMap<>();
         popVsOutcome.put("highPopTrades", hiPop);
@@ -4038,6 +4042,9 @@ public final class ApiServer {
                     var mark = trades.currentMark(t.id());
                     if (mark != null && mark.unrealizedCents() != null) {
                         row.put("unrealizedPnlCents", mark.unrealizedCents());
+                        row.put("decisionUnrealizedPnlCents",
+                                mark.decisionUnrealizedCents() != null
+                                        ? mark.decisionUnrealizedCents() : mark.unrealizedCents());
                     }
                 } catch (Exception e) { /* leave blank */ }
             }
@@ -4112,7 +4119,9 @@ public final class ApiServer {
             chartLegs = new ArrayList<>(t.legs());
             chartLegs.add(Leg.stock(io.liftandshift.strikebench.model.LegAction.BUY, lotsPerUnit, spot));
         }
-        PayoffCurve curve = PayoffCurve.of(chartLegs, t.qty());
+        long tradedLegEntry = PayoffCurve.of(t.legs(), t.qty()).entryNetPremiumCents();
+        long packageAdjustment = t.entryNetPremiumCents() - tradedLegEntry;
+        PayoffCurve curve = PayoffCurve.of(chartLegs, t.qty(), packageAdjustment);
         List<Map<String, Object>> out = new ArrayList<>();
         for (PayoffCurve.ChartPoint p : curve.chartPoints(spot)) {
             out.add(Map.of("price", p.price().toPlainString(), "profitCents", p.profitCents()));
@@ -4164,8 +4173,10 @@ public final class ApiServer {
         ConfirmRequest req = bodyOrNull(ctx, ConfirmRequest.class);
         TradeService.CloseResult result = trades.unwind(ctx.pathParam("id"),
                 req != null && Boolean.TRUE.equals(req.confirm()));
-        resolveRecommendationForTrade(ctx.pathParam("id"), "CLOSED", result.realizedPnlCents());
-        ctx.json(Map.of("trade", TradeView.of(result.trade()), "realizedPnlCents", result.realizedPnlCents()));
+        long decisionPnl = decisionPnl(result.trade(), result.realizedPnlCents());
+        resolveRecommendationForTrade(ctx.pathParam("id"), "CLOSED", decisionPnl);
+        ctx.json(Map.of("trade", TradeView.of(result.trade()),
+                "realizedPnlCents", result.realizedPnlCents(), "decisionPnlCents", decisionPnl));
     }
 
     private void tradeSettle(Context ctx) {
@@ -4173,8 +4184,14 @@ public final class ApiServer {
         ConfirmRequest req = bodyOrNull(ctx, ConfirmRequest.class);
         TradeService.CloseResult result = trades.settle(ctx.pathParam("id"),
                 req != null && Boolean.TRUE.equals(req.confirm()));
-        resolveRecommendationForTrade(ctx.pathParam("id"), "SETTLED", result.realizedPnlCents());
-        ctx.json(Map.of("trade", TradeView.of(result.trade()), "realizedPnlCents", result.realizedPnlCents()));
+        long decisionPnl = decisionPnl(result.trade(), result.realizedPnlCents());
+        resolveRecommendationForTrade(ctx.pathParam("id"), "SETTLED", decisionPnl);
+        ctx.json(Map.of("trade", TradeView.of(result.trade()),
+                "realizedPnlCents", result.realizedPnlCents(), "decisionPnlCents", decisionPnl));
+    }
+
+    private static long decisionPnl(TradeRecord trade, long packagePnlCents) {
+        return trade.decisionPnlCents() != null ? trade.decisionPnlCents() : packagePnlCents;
     }
 
     /** Best-effort: auto-resolve any recommendation tied to a trade that just closed. Sim-world

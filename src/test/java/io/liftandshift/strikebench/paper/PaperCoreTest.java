@@ -236,14 +236,23 @@ class PaperCoreTest {
 
         List<Leg> combined = new java.util.ArrayList<>(trade.legs());
         combined.add(Leg.stock(LegAction.BUY, 1, new BigDecimal("100.00")));
-        var raw = io.liftandshift.strikebench.pricing.PayoffCurve.of(combined, trade.qty());
-        long adjustment = trade.entryNetPremiumCents() - raw.entryNetPremiumCents();
+        long tradedLegEntry = io.liftandshift.strikebench.pricing.PayoffCurve
+                .of(trade.legs(), trade.qty()).entryNetPremiumCents();
+        long adjustment = trade.entryNetPremiumCents() - tradedLegEntry;
         var exact = io.liftandshift.strikebench.pricing.PayoffCurve.of(combined, trade.qty(), adjustment);
         double years = io.liftandshift.strikebench.market.OptionTime
                 .nearest(trade.legs(), LocalDate.of(2026, 7, 8)).years();
-        double expected = exact.probProfit(120.0, 0.25, years, 0.04);
+        double expected = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
+                exact, 120.0, 0.25, years, 0.04, List.of(new BigDecimal("105")))
+                .probabilityMap().pAnyProfit();
 
         assertThat(marked.popNow()).isCloseTo(expected, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(marked.unrealizedCents()).isEqualTo(-65L);
+        assertThat(marked.decisionUnrealizedCents())
+                .as("the decision outcome includes the held lot that entry POP evaluated")
+                .isEqualTo(199_935L);
+        TradeService.MarkView persisted = trades.marksHistory(trade.id(), 1).getFirst();
+        assertThat(persisted.decisionUnrealizedCents()).isEqualTo(199_935L);
     }
 
     @Test
@@ -625,7 +634,7 @@ class PaperCoreTest {
         long cashBefore = accounts.get(acct.id()).cashCents();
 
         TradeService.MarkView view = trades.refresh(t.id());
-        assertThat(view.unrealizedCents()).isZero();             // same marks as entry
+        assertThat(view.unrealizedCents()).isEqualTo(-130L);    // same book; opening fees are already spent
         assertThat(view.closeCostCents()).isEqualTo(-18000);
         assertThat(view.popNow()).isBetween(0.0, 1.0);
 
@@ -1095,6 +1104,9 @@ class PaperCoreTest {
 
         // Option side: keep the premium; stock side: shares sold at the strike, not at the close
         assertThat(res.realizedPnlCents()).isEqualTo(11_000 - 65);
+        assertThat(res.trade().decisionPnlCents())
+                .as("calibration follows the combined covered-call payoff, not option premium alone")
+                .isEqualTo(50_000 + 11_000 - 65);
         assertThat(res.trade().closeReason()).contains("called away");
         assertThat(db.query("SELECT COUNT(*) AS n FROM positions", r -> r.lng("n")).getFirst()).isZero();
         long stockSale = 1_050_000; // 100 sh x $105 strike
@@ -1120,6 +1132,9 @@ class PaperCoreTest {
         TradeService.CloseResult res = settleSvc.settle(t.id(), true);
 
         assertThat(res.realizedPnlCents()).isEqualTo(11_000 - 65); // premium kept, shares kept
+        assertThat(res.trade().decisionPnlCents())
+                .as("a $1 stock loss is part of the decision that POP evaluated")
+                .isEqualTo(-10_000 + 11_000 - 65);
         assertThat(positions.freeShares(acct.id(), "AAPL")).isEqualTo(100);
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START - 1_000_000 + 11_000 - 65);
         assertLedgerInvariants(acct.id());

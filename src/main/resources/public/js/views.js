@@ -8,6 +8,16 @@
 
   var CORE_SYMBOLS = ['AAPL', 'SPY', 'QQQ', 'TSLA'];
 
+  function activeDecisionPnl(t) {
+    return t && t.decisionUnrealizedPnlCents !== undefined && t.decisionUnrealizedPnlCents !== null
+      ? t.decisionUnrealizedPnlCents : (t ? t.unrealizedPnlCents : null);
+  }
+
+  function closedDecisionPnl(t) {
+    return t && t.decisionPnlCents !== undefined && t.decisionPnlCents !== null
+      ? t.decisionPnlCents : (t ? t.realizedPnlCents : null);
+  }
+
   function positiveInteger(value, label, max) {
     var n = Number(value);
     if (!Number.isInteger(n) || n < 1 || (max && n > max)) {
@@ -432,8 +442,9 @@
             return pressable(el('tr', { class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); } },
               el('td', {}, el('b', {}, t.symbol)),
               el('td', {}, prettyStrategy(t.strategy) + ' x' + t.qty),
-              el('td', {}, t.unrealizedPnlCents !== undefined && t.unrealizedPnlCents !== null
-                ? pnlSpan(t.unrealizedPnlCents) : el('span', { class: 'muted' }, '\u2014')),
+              el('td', { title: t.sharesLocked > 0 ? 'Decision P/L: held-share move plus the option package' : '' },
+                activeDecisionPnl(t) !== undefined && activeDecisionPnl(t) !== null
+                  ? pnlSpan(activeDecisionPnl(t)) : el('span', { class: 'muted' }, '\u2014')),
               el('td', { class: 'loss' }, fmtMoney(t.maxLossCents)),
               el('td', { class: 'muted' }, UI.fmtDate(t.createdAt))), 'Open ' + t.symbol + ' trade');
           })));
@@ -3753,7 +3764,8 @@
           recCard.appendChild(el('div', { class: 'grid grid-4' },
             stat('Resolved trades', String(resolved)),
             stat('Win rate', cal.overallWinRate !== null && cal.overallWinRate !== undefined ? fmtPct(cal.overallWinRate) : '—'),
-            stat('Total P/L', pnlSpan(cal.totalPnlCents))));
+            stat('Decision P/L', pnlSpan(cal.totalPnlCents),
+              'For covered strategies, this includes the held-share move because that is the payoff the prediction judged.')));
           if (cal.reliability && cal.reliability.length) {
             recCard.appendChild(el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Reliability — the model said vs what happened'));
             recCard.appendChild(table(['Predicted chance', 'Actual win rate', 'Trades'],
@@ -4112,17 +4124,18 @@
         el('td', {}, pnlSpan(t.entryNetPremiumCents)),
         el('td', { class: 'loss' }, fmtMoney(t.maxLossCents)),
         tab === 'active'
-          ? el('td', { 'data-now-for': t.id }, t.unrealizedPnlCents !== undefined && t.unrealizedPnlCents !== null
-              ? pnlSpan(t.unrealizedPnlCents) : el('span', { class: 'muted' }, '—'))
+          ? el('td', { 'data-now-for': t.id, title: t.sharesLocked > 0 ? 'Decision P/L: held-share move plus the option package' : '' },
+              activeDecisionPnl(t) !== undefined && activeDecisionPnl(t) !== null
+                ? pnlSpan(activeDecisionPnl(t)) : el('span', { class: 'muted' }, '—'))
           : null,
-        el('td', {}, tab === 'active' ? el('span', { class: 'muted' }, UI.fmtDate(t.createdAt)) : pnlSpan(t.realizedPnlCents)),
+        el('td', {}, tab === 'active' ? el('span', { class: 'muted' }, UI.fmtDate(t.createdAt)) : pnlSpan(closedDecisionPnl(t))),
         el('td', {}, el('span', { class: 'badge ' + (t.status === 'ACTIVE' ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, t.status))),
         'Open ' + t.symbol + ' ' + prettyStrategy(t.strategy), 'link');
     });
     tradesCard.appendChild(table(
       tab === 'active'
         ? ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Theor. max loss', 'Now', 'Opened', 'Status']
-        : ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Theor. max loss', 'Realized P/L', 'Status'], rows));
+        : ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Theor. max loss', 'Decision P/L', 'Status'], rows));
     // Inside a simulated session the book visibly MOVES: each world tick (already server-throttled)
     // refreshes the active rows' Now P/L in place — light trades-list fetch, no re-render.
     if (tab === 'active' && App.onEvent && App.state.world && App.state.world !== 'observed') {
@@ -4139,8 +4152,8 @@
             var cell = document.querySelector('[data-now-for="' + ft.id + '"]');
             if (!cell) return;
             while (cell.firstChild) cell.removeChild(cell.firstChild);
-            cell.appendChild(ft.unrealizedPnlCents !== undefined && ft.unrealizedPnlCents !== null
-              ? pnlSpan(ft.unrealizedPnlCents) : el('span', { class: 'muted' }, '—'));
+            cell.appendChild(activeDecisionPnl(ft) !== undefined && activeDecisionPnl(ft) !== null
+              ? pnlSpan(activeDecisionPnl(ft)) : el('span', { class: 'muted' }, '—'));
           });
         } catch (e) { /* next tick retries */ }
       }, _prt);
@@ -4159,9 +4172,14 @@
     var d = await API.get('/api/trades/' + id);
     var t = d.trade;
     var active = t.status === 'ACTIVE';
-    var pnl = active
+    var optionPnl = active
       ? (d.current ? d.current.unrealizedCents : null)
       : t.realizedPnlCents;
+    var pnl = active
+      ? (d.current && d.current.decisionUnrealizedCents !== null && d.current.decisionUnrealizedCents !== undefined
+          ? d.current.decisionUnrealizedCents : optionPnl)
+      : closedDecisionPnl(t);
+    var combinedOutcome = t.sharesLocked > 0 && pnl !== null && pnl !== undefined;
 
     root.appendChild(el('div', { class: 'card' },
       el('div', { class: 'quote-hero' },
@@ -4178,12 +4196,13 @@
           title: 'Full analysis for ' + t.symbol + ' \u2014 the trade itself stays exactly as placed',
           onclick: function () { App.navigate('#/research/' + t.symbol); } }, 'Research')),
       el('div', { class: 'muted' },
-        (active ? 'Unrealized (before close fees)' : 'Realized P/L') + ' · opened ' + UI.fmtDate(t.createdAt)
+        (combinedOutcome ? (active ? 'Decision P/L now (held shares + options, before close fees)' : 'Decision outcome (held shares + options)')
+          : (active ? 'Unrealized (before close fees)' : 'Realized P/L')) + ' · opened ' + UI.fmtDate(t.createdAt)
         + (t.closeReason ? ' · ' + t.closeReason : '')),
       // The first thing a novice sees after placing is a red number — the bid/ask cost of
       // entering. Say so, once, while the trade is young, instead of letting it read as a mistake.
       active && pnl !== null && pnl < 0 && isYoungTrade(t.createdAt)
-        ? explain('New positions start a little down — that\u2019s the bid/ask spread you paid to enter, not a mistake. It fades as the trade develops.')
+        ? explain('New positions start a little down — that is the bid/ask spread and opening fees already paid, not a calculation mistake. The trade still has to earn those costs back.')
         : null,
       el('div', { class: 'chip-row' }, t.legs.map(function (l, i) { return chip('Leg ' + (i + 1), legLabel(l)); })),
       el('div', { class: 'chip-row' },
@@ -4196,6 +4215,7 @@
         chip('Breakeven', (t.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
         chip('POP entry', fmtPct(t.popEntry)),
         d.current && d.current.popNow !== null && d.current.popNow !== undefined ? chip('POP now', fmtPct(d.current.popNow)) : null,
+        combinedOutcome ? chip('Option package P/L', optionPnl === null || optionPnl === undefined ? '—' : pnlSpan(optionPnl)) : null,
         t.sharesLocked > 0 ? chip('Covered by', t.sharesLocked + ' held sh (locked)') : null,
         chip('Fees', fmtMoney(t.feesOpenCents + t.feesCloseCents)))));
     if (t.sharesLocked > 0 && active) {
@@ -4743,7 +4763,8 @@
         var nowBy = {};
         try {
           ((await API.getFresh('/api/trades?status=ACTIVE&size=50')).trades || []).forEach(function (t) {
-            if (t.unrealizedPnlCents !== undefined && t.unrealizedPnlCents !== null) nowBy[t.id] = t.unrealizedPnlCents;
+            var nowPnl = activeDecisionPnl(t);
+            if (nowPnl !== undefined && nowPnl !== null) nowBy[t.id] = nowPnl;
           });
         } catch (e2) { /* Now column degrades to em-dash */ }
         var rows = rep.trades || [];
@@ -4758,18 +4779,19 @@
             chip('Decisions', String(rows.length)),
             chip('Resolved', String(rep.resolved || 0)),
             rep.winRate !== null && rep.winRate !== undefined ? chip('Win rate', rep.winRate + '%') : null,
-            rep.realizedPnlCents !== null && rep.realizedPnlCents !== undefined ? chip('Realized', fmtMoney(rep.realizedPnlCents)) : null),
+            rep.decisionPnlCents !== null && rep.decisionPnlCents !== undefined ? chip('Decision P/L', fmtMoney(rep.decisionPnlCents)) : null),
           rows.length
             ? table(['Decision', 'Entered (sim clock)', 'Predicted odds', 'Now / Result', 'Worst / best while open', 'How it ended'],
                 rows.map(function (t) {
-                  var open = t.realizedPnlCents === null || t.realizedPnlCents === undefined;
+                  var open = t.status === 'ACTIVE';
                   return pressable(el('tr', { class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); } },
                     el('td', {}, el('b', {}, t.symbol), ' ', prettyStrategy(t.strategy) + ' x' + t.qty),
                     el('td', { class: 'mono' }, t.laneEntryTime ? String(t.laneEntryTime).replace('T', ' ') : '\u2014'),
                     el('td', {}, t.popEntry !== null && t.popEntry !== undefined ? Math.round(t.popEntry * 100) + '%' : '\u2014'),
                     el('td', {}, open
                       ? (nowBy[t.id] !== undefined ? pnlSpan(nowBy[t.id]) : el('span', { class: 'badge badge-dim' }, t.status))
-                      : pnlSpan(t.realizedPnlCents)),
+                      : pnlSpan(t.decisionPnlCents !== null && t.decisionPnlCents !== undefined
+                        ? t.decisionPnlCents : t.realizedPnlCents)),
                     el('td', {}, t.maeCents !== undefined && t.maeCents !== null
                       ? el('span', {}, pnlSpan(t.maeCents), ' / ', pnlSpan(t.mfeCents)) : el('span', { class: 'muted' }, '\u2014')),
                     el('td', { class: 'muted' }, open ? 'still open' : (t.closeReason || '\u2014'))), 'Open ' + t.symbol);
@@ -5588,7 +5610,7 @@
             el('span', { class: 'chip' }, 'Trades: ' + (rep.trades || []).length),
             el('span', { class: 'chip' }, 'Resolved: ' + rep.resolved),
             el('span', { class: 'chip' }, 'Win rate: ' + (rep.winRate == null ? '\u2014' : rep.winRate + '%')),
-            el('span', { class: 'chip' }, 'Realized: ' + UI.fmtMoney(rep.realizedPnlCents)),
+            el('span', { class: 'chip' }, 'Decision P/L: ' + UI.fmtMoney(rep.decisionPnlCents)),
             el('span', { class: 'chip' }, 'Model ' + (rep.modelVersion || 'sim-1'))),
           el('div', { class: 'muted small', style: 'margin-top:6px' }, rep.note));
         // The trader's ledger of DECISIONS: what was entered (on the sim clock), what the odds
@@ -5613,9 +5635,9 @@
                   el('td', {}, t.popEntry == null ? '\u2014' : Math.round(t.popEntry * 100) + '%'),
                   el('td', {}, t.maeCents == null ? '\u2014'
                     : el('span', {}, pnlSpan(t.maeCents), ' / ', pnlSpan(t.mfeCents))),
-                  el('td', {}, t.realizedPnlCents == null
+                  el('td', {}, t.decisionPnlCents == null && t.realizedPnlCents == null
                     ? el('span', { class: 'badge badge-dim' }, t.status)
-                    : pnlSpan(t.realizedPnlCents)),
+                    : pnlSpan(t.decisionPnlCents != null ? t.decisionPnlCents : t.realizedPnlCents)),
                   el('td', { class: 'muted small' }, t.closeReason || '\u2014'));
               })))));
         }
