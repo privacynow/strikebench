@@ -116,6 +116,9 @@ public final class SimulationEngine {
     public record DecisionMap(TerminalDistribution terminal, List<LevelOdds> levels,
                               double maxProbabilityMargin95) {}
 
+    /** A separate risk-neutral lens from the options market, never blended with user-scenario odds. */
+    public record MarketImpliedRange(double atmIv, double p16, double p50, double p84, String basis) {}
+
     /** Immutable identity of the exact path matrix shown to the user. */
     public record EnsembleReceipt(String fingerprint, String symbol, String worldId, String datasetId,
                                   String asOf, double anchorSpot, String anchorSource,
@@ -124,7 +127,10 @@ public final class SimulationEngine {
     public record Preview(String symbol, double spot, int paths, int horizonDays, String pathModelVersion,
                           List<PreviewBand> bands, List<List<Double>> samples,
                           double endP10, double endP50, double endP90,
-                          DecisionMap decisionMap, EnsembleReceipt receipt, List<String> notes) {}
+                          DecisionMap decisionMap, MarketImpliedRange marketImplied,
+                          EnsembleReceipt receipt, List<String> notes) {}
+
+    public record PreviewRun(PathEnsembleService.Ensemble ensemble, Preview preview) {}
 
     /**
      * The "show me N possible futures" fan — price bands per day + a few concrete sample paths for
@@ -133,7 +139,14 @@ public final class SimulationEngine {
     /** The active world and dataset are explicit immutable inputs; concurrent calls cannot cross. */
     public Preview preview(String symbolRaw, ScenarioSpec specRaw, String worldId,
                            io.liftandshift.strikebench.db.AnalysisContext analysis,
-                           List<DecisionLevel> requestedLevels) {
+                           List<DecisionLevel> requestedLevels, Double marketIv, double riskFreeRate) {
+        return previewRun(symbolRaw, specRaw, worldId, analysis, requestedLevels, marketIv, riskFreeRate).preview();
+    }
+
+    /** Internal same-ensemble seam used when Research overlays a working position on its fan. */
+    public PreviewRun previewRun(String symbolRaw, ScenarioSpec specRaw, String worldId,
+                                 io.liftandshift.strikebench.db.AnalysisContext analysis,
+                                 List<DecisionLevel> requestedLevels, Double marketIv, double riskFreeRate) {
         String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
@@ -178,6 +191,8 @@ public final class SimulationEngine {
         }
         PreviewBand end = bands.getLast();
         DecisionMap decisionMap = decisionMap(paths, spot, spd, requestedLevels);
+        MarketImpliedRange marketRange = marketImpliedRange(spot, generated.spec().horizonDays(), marketIv,
+                riskFreeRate);
         String asOf = java.time.Instant.ofEpochMilli(quote.asOfEpochMs()).toString();
         String material = symbol + '|' + resolvedWorld + '|' + resolvedAnalysis.datasetId() + '|' + asOf
                 + '|' + Double.toHexString(spot) + '|' + generated.modelVersion() + '|' + generated.spec();
@@ -190,8 +205,20 @@ public final class SimulationEngine {
         notes.add("Synthetic futures from seed " + spec.seed() + " — a model of what COULD happen, never a forecast.");
         if (spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP)
             notes.add("Block-bootstrap history is resolved from this request's active market and dataset; if unavailable, the model falls back to Gaussian noise.");
-        return new Preview(symbol, round2(spot), paths.length, days, generated.modelVersion(), bands, samples,
-                end.p10(), end.p50(), end.p90(), decisionMap, receipt, notes);
+        return new PreviewRun(generated,
+                new Preview(symbol, round2(spot), paths.length, days, generated.modelVersion(), bands, samples,
+                        end.p10(), end.p50(), end.p90(), decisionMap, marketRange, receipt, notes));
+    }
+
+    private static MarketImpliedRange marketImpliedRange(double spot, int tradingDays, Double iv,
+                                                          double riskFreeRate) {
+        if (iv == null || !(iv > 0) || !Double.isFinite(iv)) return null;
+        double t = Math.max(1, tradingDays) / 252.0;
+        double drift = (riskFreeRate - 0.5 * iv * iv) * t;
+        double width = iv * Math.sqrt(t) * 0.994457883209753;
+        return new MarketImpliedRange(iv, round2(spot * Math.exp(drift - width)),
+                round2(spot * Math.exp(drift)), round2(spot * Math.exp(drift + width)),
+                "Risk-neutral lognormal range from the nearest-horizon ATM IV (q=0), over the same trading-session horizon; market pricing, not a forecast.");
     }
 
     private static DecisionMap decisionMap(double[][] paths, double spot, int stepsPerDay,

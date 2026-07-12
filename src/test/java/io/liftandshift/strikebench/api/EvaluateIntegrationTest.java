@@ -159,7 +159,10 @@ class EvaluateIntegrationTest {
                  "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":2,
                          "driftAnnual":0,"volAnnual":0.25,"jumpsPerYear":0,"jumpMean":0,
                          "jumpVol":0,"tailNu":6,"seed":77,"paths":40},
-                 "levels":[{"key":"target","price":270},{"key":"floor","price":240}]}
+                 "levels":[{"key":"target","price":270},{"key":"floor","price":240}],
+                 "position":{"key":"PUT_SPREAD","qty":1,"legs":[
+                   {"action":"SELL","type":"PUT","strike":255,"expiration":"2026-08-14","ratio":1},
+                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1}]}}
                 """;
         HttpResponse<String> r = post("/api/evaluate", paths);
         assertThat(r.statusCode()).isEqualTo(200);
@@ -183,6 +186,18 @@ class EvaluateIntegrationTest {
         assertThat(envelope.at("/result/receipt/datasetId").asText()).isEqualTo("observed");
         assertThat(envelope.at("/result/receipt/anchorSpot").asDouble())
                 .isEqualTo(envelope.at("/result/spot").asDouble());
+        assertThat(envelope.at("/result/marketImplied/p16").asDouble())
+                .isLessThan(envelope.at("/result/marketImplied/p50").asDouble());
+        assertThat(envelope.at("/result/marketImplied/p50").asDouble())
+                .isLessThan(envelope.at("/result/marketImplied/p84").asDouble());
+        assertThat(envelope.at("/result/marketImplied/basis").asText())
+                .contains("Risk-neutral").contains("not a forecast");
+        assertThat(envelope.at("/result/positionOutcome/paths").asInt())
+                .isEqualTo(envelope.at("/result/paths").asInt());
+        assertThat(envelope.at("/result/positionOutcome/horizonDays").asInt())
+                .isEqualTo(envelope.at("/result/horizonDays").asInt());
+        assertThat(envelope.at("/result/positionEnsembleFingerprint").asText())
+                .isEqualTo(envelope.at("/result/receipt/fingerprint").asText());
         JsonNode repeated = Json.MAPPER.readTree(post("/api/evaluate", paths).body());
         assertThat(repeated.at("/result/receipt/fingerprint").asText())
                 .isEqualTo(envelope.at("/result/receipt/fingerprint").asText());

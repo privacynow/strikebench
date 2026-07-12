@@ -2287,31 +2287,40 @@ public final class ApiServer {
         return contracts * cfg.feePerContractCents() * 2L + orderFees;
     }
 
-    private Object simScenarioResult(Context ctx, ScenarioRequest b) {
+    private io.liftandshift.strikebench.sim.SimulationEngine.PreviewRun simScenarioRun(Context ctx, ScenarioRequest b) {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
-        return simEngine.preview(b.symbol(), calibrateVol(b.symbol(), b.spec(), worldParam(activeWorld(ctx))),
-                worldParam(activeWorld(ctx)), analysisCtx(ctx), b.levels());
+        String world = worldParam(activeWorld(ctx));
+        int horizon = Math.max(1, b.spec().sane().horizonDays());
+        Double marketIv = atmIvOf(b.symbol(), world, horizon);
+        var calibrated = b.spec().volAnnual() > 0 || marketIv == null ? b.spec() : b.spec().withVol(marketIv);
+        double rate = market.riskFreeRateQuote(horizon, world).annualRate();
+        return simEngine.previewRun(b.symbol(), calibrated, world, analysisCtx(ctx), b.levels(), marketIv, rate);
     }
 
     /** volAnnual<=0 = "use market vol": the chain's ATM IV, so every symbol gets ITS OWN wildness. */
     private io.liftandshift.strikebench.sim.ScenarioSpec calibrateVol(String symbol,
             io.liftandshift.strikebench.sim.ScenarioSpec spec, String worldId) {
         if (spec.volAnnual() > 0) return spec;
-        Double atm = atmIvOf(symbol, worldId);
+        Double atm = atmIvOf(symbol, worldId, Math.max(1, spec.sane().horizonDays()));
         return atm != null ? spec.withVol(atm) : spec; // sane() falls back to its own default if truly nothing
     }
 
     private Double atmIvOf(String symbol) { return atmIvOf(symbol, null); }
 
     private Double atmIvOf(String symbol, String worldId) {
+        return atmIvOf(symbol, worldId, 30);
+    }
+
+    private Double atmIvOf(String symbol, String worldId, int horizonDays) {
         try {
             var exps = market.expirations(symbol, worldId);
             if (exps.isEmpty()) return null;
-            // ~30d expiry is the conventional IV anchor — on the LANE's clock.
+            // Match the decision horizon on the lane's clock instead of imposing a 30-day IV
+            // on a one-week or three-month scenario.
             java.time.LocalDate laneToday = market.simInstant(worldId)
                     .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
                     .orElseGet(() -> java.time.LocalDate.now(clock));
-            java.time.LocalDate target = laneToday.plusDays(30);
+            java.time.LocalDate target = laneToday.plusDays(Math.max(1, horizonDays));
             java.time.LocalDate exp = exps.stream()
                     .min(java.util.Comparator.comparingLong(e -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e, target))))
                     .orElse(null);
@@ -2334,6 +2343,11 @@ public final class ApiServer {
     }
 
     private Object simStrategyResult(Context ctx, StrategySimRequest b) {
+        return simStrategyResult(ctx, b, null);
+    }
+
+    private Object simStrategyResult(Context ctx, StrategySimRequest b,
+                                     io.liftandshift.strikebench.sim.PathEnsembleService.Ensemble fixedEnsemble) {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
         if (b.legs() == null || b.legs().isEmpty()) throw new IllegalArgumentException("legs are required");
         String sym = b.symbol() == null ? "" : b.symbol().trim().toUpperCase(Locale.ROOT);
@@ -2342,11 +2356,11 @@ public final class ApiServer {
         EntryBook entryBook = new EntryBook(sym, world);
         // Loud refusal on a missing quote — a strategy simulated against an invented $100 stock
         // would be fixture-masquerade all over again (404 via the NoSuchElementException mapper).
-        double spot = entryBook.quote()
-                .map(q -> q.mark()).filter(java.util.Objects::nonNull)
-                .map(java.math.BigDecimal::doubleValue).filter(v -> v > 0)
-                .orElseThrow(() -> new java.util.NoSuchElementException(
-                        "No price for " + sym + " — a simulation needs a real (or demo) quote to anchor on. Check the ticker."));
+        double spot = fixedEnsemble != null ? fixedEnsemble.spot() : entryBook.quote()
+                    .map(q -> q.mark()).filter(java.util.Objects::nonNull)
+                    .map(java.math.BigDecimal::doubleValue).filter(v -> v > 0)
+                    .orElseThrow(() -> new java.util.NoSuchElementException(
+                            "No price for " + sym + " — a simulation needs a real (or demo) quote to anchor on. Check the ticker."));
         double r = market.riskFreeRateQuote(Math.max(1, b.spec().sane().horizonDays()), world).annualRate();
         // ACTIONABILITY: price the ENTRY from live market quotes (executable sides) when a chain
         // is available, and default the IV path to the chain's ATM IV when the caller didn't set
@@ -2379,8 +2393,8 @@ public final class ApiServer {
         }
         // CALIBRATION: volAnnual<=0 is the "use market vol" sentinel — replace with the chain's
         // ATM IV so a caller with no view on wildness gets THIS symbol's, not a canned 25%.
-        io.liftandshift.strikebench.sim.ScenarioSpec spec = b.spec();
-        if (spec.volAnnual() <= 0 && me != null && me.atmIv() != null) spec = spec.withVol(me.atmIv());
+        io.liftandshift.strikebench.sim.ScenarioSpec spec = fixedEnsemble != null ? fixedEnsemble.spec() : b.spec();
+        if (fixedEnsemble == null && spec.volAnnual() <= 0 && me != null && me.atmIv() != null) spec = spec.withVol(me.atmIv());
         io.liftandshift.strikebench.sim.IvSpec iv = b.iv();
         if (iv == null) {
             double atm = me != null && me.atmIv() != null ? me.atmIv() : spec.sane().volAnnual();
@@ -2409,11 +2423,23 @@ public final class ApiServer {
         }
         var pathBasis = b.pathBasis() == null
                 ? io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC : b.pathBasis();
-        var evaluated = new io.liftandshift.strikebench.sim.ScenarioSimulator().run(
-                pathEnsembles,
-                new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(sym, world, analysisCtx(ctx)),
-                pathBasis, spec, b.study(), spot, legsToRun, qty, iv, r, entryCost, entryNote,
-                scenarioRoundTripFees(legsToRun, qty));
+        io.liftandshift.strikebench.sim.ScenarioSimulator.EnsembleRun evaluated;
+        var simulator = new io.liftandshift.strikebench.sim.ScenarioSimulator();
+        if (fixedEnsemble != null) {
+            if (pathBasis != io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC
+                    || fixedEnsemble.basis() != pathBasis) {
+                throw new IllegalArgumentException("the supplied position must use the fan's path basis");
+            }
+            var result = simulator.runOnPaths(fixedEnsemble.paths(), fixedEnsemble.spot(), legsToRun, qty,
+                    fixedEnsemble.spec(), iv, r, entryCost, entryNote,
+                    scenarioRoundTripFees(legsToRun, qty));
+            evaluated = new io.liftandshift.strikebench.sim.ScenarioSimulator.EnsembleRun(fixedEnsemble, result);
+        } else {
+            evaluated = simulator.run(pathEnsembles,
+                    new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(sym, world, analysisCtx(ctx)),
+                    pathBasis, spec, b.study(), spot, legsToRun, qty, iv, r, entryCost, entryNote,
+                    scenarioRoundTripFees(legsToRun, qty));
+        }
         var studyRes = evaluated.ensemble().study();
         String pathModelVersion = evaluated.ensemble().modelVersion();
         if (studyRes != null) {
@@ -3267,7 +3293,19 @@ public final class ApiServer {
                         ? List.of() : request.levels().stream().map(l ->
                             new io.liftandshift.strikebench.sim.SimulationEngine.DecisionLevel(
                                     l.key(), l.price() == null ? Double.NaN : l.price().doubleValue())).toList();
-                result = simScenarioResult(ctx, new ScenarioRequest(symbol, requireOutcomeSpec(request.over()), levels));
+                var run = simScenarioRun(ctx, new ScenarioRequest(symbol, requireOutcomeSpec(request.over()), levels));
+                var pathResult = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(run.preview());
+                if (request.position() != null) {
+                    var position = requireOutcomePosition(request.position());
+                    var legs = toSimLegs(ctx, position.legs());
+                    Object positionOutcome = simStrategyResult(ctx, new StrategySimRequest(symbol, legs,
+                            position.qty(), run.ensemble().spec(), request.iv(),
+                            io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC,
+                            null, position.entryCostCents(), contractExpirations(position.legs())), run.ensemble());
+                    pathResult.set("positionOutcome", Json.MAPPER.valueToTree(positionOutcome));
+                    pathResult.put("positionEnsembleFingerprint", run.preview().receipt().fingerprint());
+                }
+                result = pathResult;
                 interpretation = "Model-generated price paths: possible futures, never a forecast or historical frequency.";
             }
             case POSITION -> {
