@@ -241,8 +241,10 @@ public final class EvaluationService {
         List<Double> ivHistory = worldId != null ? List.of() : ivHistory(symbol); // no observed IV history in a world
         boolean open = worldId != null || MarketHours.isRegularSession(laneNow);
 
+        var rate = market.riskFreeRateQuote(Math.max(1, dte), worldId);
+
         return new EvalContext(symbol, underlyingCents, dte, atmIv, realizedVol, ivHistory, buyingPowerCents, open,
-                feePerContractCents);
+                feePerContractCents, rate.annualRate(), rate.evidence());
     }
 
     private static LocalDate frontExpiration(List<Candidate> candidates) {

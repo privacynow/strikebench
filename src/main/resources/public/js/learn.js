@@ -38,10 +38,10 @@
   var INFO = {
     pop: { short: 'This counts even a $1 gain; compare it with full-win, full-loss, costs and EV before judging quality.',
       beginner: 'Out of 100 futures the options market itself prices, roughly this many end with you making something — even $1. It is a model number, before commissions, not a promise.',
-      expert: 'Risk-neutral P(profit) under a lognormal terminal distribution at the chain\u2019s own IV, calendar-time de-annualization, pre-commission, zero drift. Not a physical-measure forecast.' },
+      expert: 'Risk-neutral P(profit) under a lognormal terminal distribution at the chain\u2019s own IV and the disclosed risk-free rate, with dividend yield q assumed zero. Calendar-time IV basis; not a physical forecast.' },
     ev: { short: 'Use this as the price-of-entry baseline: below zero after costs means the package starts behind.',
       beginner: 'Imagine running this exact trade in every future the market thinks is possible, and averaging the results. Negative means the market charges more than the position is worth by its own odds.',
-      expert: 'Risk-neutral expectation of the expiration payoff at chain IV, zero drift, integrated numerically over the terminal distribution. The Decision score judges it NET of round-trip commissions.' },
+      expert: 'Present-value risk-neutral expectation at chain IV and the disclosed rate, with q=0 assumed. Entry cash stays at time zero; terminal payoff is discounted. The Decision score judges it net of round-trip commissions.' },
     evhistvol: { short: 'Use this second lane to test whether the result changes when recent stock movement replaces option-implied movement.',
       beginner: 'If the stock keeps moving the way it recently has (rather than the bigger move options are pricing), this is the average outcome. The gap between the two numbers is what option sellers get paid for.',
       expert: 'Historical-vol SCENARIO EV: the identical integral at 30-day realized \u03c3, zero drift. NOT the physical measure (no drift estimate); the spread vs risk-neutral EV visualizes the volatility risk premium.' },

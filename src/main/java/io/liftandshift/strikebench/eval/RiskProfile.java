@@ -12,7 +12,7 @@ public record RiskProfile(
         long maxLossCents,
         Long maxProfitCents,          // null = uncapped/model-dependent
         Double pop,                   // probability of profit (lognormal), null when model-dependent
-        Long expectedValueCents,      // RISK-NEUTRAL (market IV, zero drift); null when model-dependent
+        Long expectedValueCents,      // present-value RISK-NEUTRAL approximation (market IV, r, q=0)
         long tailLossCents,           // loss under the stress move (>= 0)
         double tailMovePct,           // the stress move used for tailLoss, e.g. 0.20 for -20%/+20%
         List<Scenario> scenarios,     // ordered by underlyingMovePct ascending

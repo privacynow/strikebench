@@ -22,7 +22,8 @@ class EconomicAssessmentTest {
     }
 
     private EvalContext ctx() {
-        return new EvalContext("AAPL", 10_000, 30, 0.30, 0.25, List.of(), 1_000_000, true, 65);
+        return new EvalContext("AAPL", 10_000, 30, 0.30, 0.25, List.of(), 1_000_000, true, 65,
+                0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD));
     }
 
     private EvidenceProfile observed() {

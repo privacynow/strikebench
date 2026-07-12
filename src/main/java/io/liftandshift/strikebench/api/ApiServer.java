@@ -3162,18 +3162,22 @@ public final class ApiServer {
                 var stockLeg = io.liftandshift.strikebench.model.Leg.stock(
                         io.liftandshift.strikebench.model.LegAction.BUY, 1, q.mark());
                 var curve = io.liftandshift.strikebench.pricing.PayoffCurve.of(List.of(stockLeg), 1);
+                double rate = market.riskFreeRateQuote(horizonDays, worldParam(world)).annualRate();
                 var map = io.liftandshift.strikebench.pricing.ProbabilityMap.of(curve, spot,
-                        iv != null ? iv : 0.3, horizonDays / 365.0, 0.0, List.of());
+                        iv != null ? iv : 0.3, horizonDays / 365.0, rate, List.of());
                 Map<String, Object> bh = new LinkedHashMap<>();
                 bh.put("key", "BUY_AND_HOLD");
-                bh.put("evCents", 0L); // zero-drift risk-neutral
+                bh.put("evCents", curve.riskNeutralExpectedValueCents(spot,
+                        iv != null ? iv : 0.3, horizonDays / 365.0, rate));
                 bh.put("capitalCents", lot);
                 bh.put("cvar95Cents", map.cvar95Cents());
                 bh.put("stressLossCents", map.stressLossCents());
                 bh.put("pAnyProfit", map.pAnyProfit());
                 bh.put("viable", true);
                 bh.put("note", "Own 100 shares (" + io.liftandshift.strikebench.util.Money.fmt(lot)
-                        + "): EV \u2248 $0 at zero drift, no expiry, nothing to cross; the tail numbers above are its REAL "
+                        + "): present-value risk-neutral EV is approximately $0 before costs (r="
+                        + String.format(java.util.Locale.ROOT, "%.2f", rate * 100)
+                        + "%, q=0 assumed), with no expiry or option spread; the tail numbers are its modeled "
                         + horizonDays + "-day downside at the chain's own vol.");
                 baselines.add(bh);
             }

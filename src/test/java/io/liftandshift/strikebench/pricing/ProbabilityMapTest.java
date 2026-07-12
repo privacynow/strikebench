@@ -48,9 +48,9 @@ class ProbabilityMapTest {
         // Touch odds are at least the expire-beyond odds and within [0,1].
         assertThat(r.touches()).hasSize(2);
         r.touches().forEach(t -> assertThat(t.probability()).isBetween(0.0, 1.0));
-        // The zero-rate overload discloses itself HONESTLY as a zero-drift scenario (junior's
-        // correction: without r it is not the market's risk-neutral distribution)...
-        assertThat(r.basis()).containsIgnoringCase("zero-drift lognormal scenario");
+        // A zero-rate call is still explicit about its q=0 approximation.
+        assertThat(r.basis()).containsIgnoringCase("zero-rate risk-neutral")
+                .containsIgnoringCase("q=0");
         // ...and the r-variant IS risk-neutral, with the rate disclosed.
         var rr = ProbabilityMap.of(condor(), 991.83, 0.756, 3.0 / 365.0, 0.04,
                 List.of(new BigDecimal("980"), new BigDecimal("1005")));

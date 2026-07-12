@@ -41,7 +41,8 @@ public final class RecommendationEngine {
             "Educational tool only, not financial advice. These are risk-screened teaching examples based on "
             + "current (possibly delayed or simulated) data. Options involve substantial risk; you can lose the "
             + "entire amount at risk and, in undefined-risk strategies, more. Nothing here promises any profit. "
-            + "POP/EV/breakevens are model outputs computed before commissions with zero price drift.";
+            + "POP and market EV use a present-value risk-neutral lognormal approximation at the lane's "
+            + "risk-free rate (q=0 dividend-yield assumption); breakevens are payoff geometry. All are before commissions.";
 
     /** Structural shape group — delegates to the catalog's explicit metadata (presentation only). */
     static String structuralGroup(String family) {
@@ -218,6 +219,9 @@ public final class RecommendationEngine {
         OptionChain farChain = far == null ? null : market.chain(symbol, far, worldId).orElse(null);
         if (farChain != null && !farChain.evidence().executableIn(lane)) farChain = null;
 
+        var rateQuote = market.riskFreeRateQuote((int) Math.max(1, ChronoUnit.DAYS.between(today, near)), worldId);
+        double riskFreeRate = rateQuote.annualRate();
+
         BigDecimal spot = chain.underlyingPrice();
         boolean earningsSoon = market.news(symbol, worldId).stream().anyMatch(n -> {
             String h = n.headline() == null ? "" : n.headline().toLowerCase(Locale.ROOT);
@@ -286,7 +290,8 @@ public final class RecommendationEngine {
 
             Candidate candidate = toCandidate(family, built, verdict, spot, today, budget, buyingPowerCents,
                     chain.freshness(), avoidEarnings, thesis, intent, holdings,
-                    builtOnHeldShares ? coverLotsPerUnit : 0, builtOnHeldShares ? freeShares : 0);
+                    builtOnHeldShares ? coverLotsPerUnit : 0, builtOnHeldShares ? freeShares : 0,
+                    quote, riskFreeRate);
             if (candidate == null) {
                 rejected.add(new Rejection(family.name(), family.display(),
                         List.of("Minimum position size exceeds the risk budget of " + Money.fmt(budget))));
@@ -354,7 +359,8 @@ public final class RecommendationEngine {
         };
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         List<String> notes = new ArrayList<>();
-        if (!MarketHours.isRegularSession(clock.instant())) {
+        java.time.Instant ladderNow = market.simInstant(worldId).orElseGet(clock::instant);
+        if (worldId == null && !MarketHours.isRegularSession(ladderNow)) {
             notes.add("The market is closed — these rungs are measured off the PRIOR CLOSE and can shift at the open.");
         }
         Holdings holdings = req.holdings();
@@ -374,7 +380,6 @@ public final class RecommendationEngine {
             notes.add("No " + lane + "-lane quote is available for " + symbol);
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
-        java.time.Instant ladderNow = market.simInstant(worldId).orElseGet(clock::instant);
         LocalDate today = LocalDate.ofInstant(ladderNow, MarketHours.EASTERN);
         LocalDate near = pickExpiration(expirations, req.horizon(), today, false, ladderNow, notes);
         OptionChain chain = near == null ? null : market.chain(symbol, near, worldId).orElse(null);
@@ -386,6 +391,8 @@ public final class RecommendationEngine {
             notes.add("The " + lane + " market has no executable option chain for " + symbol);
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
+        double riskFreeRate = market.riskFreeRateQuote(
+                (int) Math.max(1, ChronoUnit.DAYS.between(today, near)), worldId).annualRate();
         BigDecimal spot = chain.underlyingPrice();
         // Use the same budget calculation as recommend(). ACQUIRE is the one explicit exception:
         // its cash-secured purchase commitment is the product and is disclosed as such. EXIT and
@@ -420,7 +427,8 @@ public final class RecommendationEngine {
             int coverLots = sharesHeld ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverLotsNeeded(built.legs())) : 0;
             Candidate c = toCandidate(family, built, Verdict.of(List.of(), List.of()), spot, today, budget,
                     buyingPowerCents, chain.freshness(), true, StrategyFamily.Thesis.NEUTRAL,
-                    intent, holdings, sharesHeld ? coverLots : 0, sharesHeld ? freeShares : 0);
+                    intent, holdings, sharesHeld ? coverLots : 0, sharesHeld ? freeShares : 0,
+                    quote, riskFreeRate);
             if (c == null) continue;
             String filterReason = failsFilter(c, filters);
             if (filterReason != null) {
@@ -465,14 +473,25 @@ public final class RecommendationEngine {
     private Candidate toCandidate(StrategyFamily family, StrategyBuilder.Built built, Verdict verdict, BigDecimal spot,
                                   LocalDate today, long budget, long buyingPowerCents, Freshness freshness, boolean avoidEarnings,
                                   StrategyFamily.Thesis thesis, StrategyIntent intent, Holdings holdings,
-                                  int coverLotsPerUnit, int freeShares) {
+                                  int coverLotsPerUnit, int freeShares, Quote underlyingQuote,
+                                  double riskFreeRate) {
         // Re-price legs at the EXECUTABLE side (buys pay the ask, sells receive the bid) so
         // the numbers a learner sees here match what a fill would actually cost. Structures
         // whose legs have no executable side are not real opportunities.
         List<io.liftandshift.strikebench.model.Leg> executableLegs = new ArrayList<>(built.legs().size());
         for (int i = 0; i < built.legs().size(); i++) {
             io.liftandshift.strikebench.model.Leg leg = built.legs().get(i);
-            if (leg.isStock()) { executableLegs.add(leg); continue; }
+            if (leg.isStock()) {
+                BigDecimal side = leg.action() == LegAction.BUY
+                        ? underlyingQuote.ask() : underlyingQuote.bid();
+                if (side == null || side.signum() <= 0
+                        || (underlyingQuote.bid() != null && underlyingQuote.ask() != null
+                        && underlyingQuote.bid().compareTo(underlyingQuote.ask()) > 0)) {
+                    return null;
+                }
+                executableLegs.add(Leg.stock(leg.action(), leg.ratio(), side));
+                continue;
+            }
             OptionQuote q = built.quotes().get(i);
             BigDecimal side = leg.action() == io.liftandshift.strikebench.model.LegAction.BUY ? q.ask() : q.bid();
             if (side == null || side.signum() <= 0
@@ -566,8 +585,13 @@ public final class RecommendationEngine {
             double t = built.legs().stream().filter(l -> !l.isStock())
                     .mapToLong(l -> ChronoUnit.DAYS.between(today, l.expiration())).min().stream()
                     .mapToDouble(d -> Math.max(d, 0.5) / 365.0).findFirst().orElse(7 / 365.0);
-            pop = curve.probProfit(spot.doubleValue(), ivAvg, t, 0);
-            ev = curve.expectedValueCents(spot.doubleValue(), ivAvg, t, 0);
+            List<BigDecimal> shorts = built.legs().stream()
+                    .filter(l -> !l.isStock() && l.action() == LegAction.SELL)
+                    .map(Leg::strike).filter(Objects::nonNull).distinct().toList();
+            var analyzed = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
+                    curve, spot.doubleValue(), ivAvg, t, riskFreeRate, shorts);
+            pop = analyzed.probabilityMap().pAnyProfit();
+            ev = analyzed.expectedValueCents();
         }
 
         double liquidity = liquidityScore(built.quotes());
@@ -576,7 +600,8 @@ public final class RecommendationEngine {
         // ---- Intent metrics (assignment, income yield, effective share price) ----
         double ivFallback = built.quotes().stream().filter(Objects::nonNull).map(OptionQuote::iv)
                 .filter(Objects::nonNull).mapToDouble(Double::doubleValue).average().orElse(0.30);
-        Double assignProb = assignmentProbability(built.legs(), built.quotes(), spot, today, ivFallback);
+        Double assignProb = assignmentProbability(built.legs(), built.quotes(), spot, today, ivFallback,
+                riskFreeRate);
         int minDte = (int) built.legs().stream().filter(l -> !l.isStock())
                 .mapToLong(l -> ChronoUnit.DAYS.between(today, l.expiration())).min().orElse(7);
         // Annualized yield is quoted ONLY for share-backed premium (covered calls, cash-secured
@@ -697,7 +722,7 @@ public final class RecommendationEngine {
                 round2(liquidity), freshness.name(), candidateWarnings,
                 round2(score), round2(confidence), why, upside, risk, invalidate, beginner,
                 intent.name(), family.intents().stream().map(Enum::name).sorted().toList(),
-                assignProb == null ? null : round2(assignProb),
+                assignProb,
                 annualYieldPct, effectivePrice, intentNote,
                 onHeldShares ? Boolean.TRUE : null,
                 onHeldShares ? coverLotsPerUnit * 100 * qty : null,
@@ -706,17 +731,19 @@ public final class RecommendationEngine {
 
     /**
      * Modeled chance that at least one short leg finishes in the money at ITS expiration —
-     * risk-neutral N(d2)/N(-d2) at each leg's own IV, zero drift, no early-assignment model.
+     * risk-neutral N(d2)/N(-d2) at each leg's own IV and the lane's rate (q=0 assumption),
+     * with no early-assignment model.
      * Distinct short strikes are summed (disjoint regions for condor-like shapes), capped at 1.
      */
     private static Double assignmentProbability(List<Leg> legs, List<OptionQuote> quotes,
-                                                BigDecimal spot, LocalDate today, double ivFallback) {
+                                                BigDecimal spot, LocalDate today, double ivFallback,
+                                                double riskFreeRate) {
         List<Double> ivs = new ArrayList<>();
         for (int i = 0; i < legs.size(); i++) {
             OptionQuote q = quotes != null && i < quotes.size() ? quotes.get(i) : null;
             ivs.add(q == null ? null : q.iv());
         }
-        return assignmentProbabilityFromIvs(legs, ivs, spot, today, ivFallback);
+        return assignmentProbabilityFromIvs(legs, ivs, spot, today, ivFallback, riskFreeRate);
     }
 
     /**
@@ -725,7 +752,8 @@ public final class RecommendationEngine {
      * {@code ivsAligned} is index-aligned with {@code legs} (null entries fall back).
      */
     public static Double assignmentProbabilityFromIvs(List<Leg> legs, List<Double> ivsAligned,
-                                                      BigDecimal spot, LocalDate today, double ivFallback) {
+                                                      BigDecimal spot, LocalDate today, double ivFallback,
+                                                      double riskFreeRate) {
         if (spot == null || spot.signum() <= 0) return null;
         java.util.Set<String> seen = new java.util.HashSet<>();
         double total = 0;
@@ -739,7 +767,8 @@ public final class RecommendationEngine {
             Double iv = ivsAligned != null && i < ivsAligned.size() ? ivsAligned.get(i) : null;
             double sigma = iv != null && iv > 0 ? iv : ivFallback;
             double t = Math.max(ChronoUnit.DAYS.between(today, l.expiration()), 0.5) / 365.0;
-            double d1 = BlackScholes.d1(spot.doubleValue(), l.strike().doubleValue(), t, 0, 0, sigma);
+            double d1 = BlackScholes.d1(spot.doubleValue(), l.strike().doubleValue(), t,
+                    riskFreeRate, 0, sigma);
             double d2 = d1 - sigma * Math.sqrt(t);
             total += l.type() == OptionType.CALL ? BlackScholes.normCdf(d2) : BlackScholes.normCdf(-d2);
         }

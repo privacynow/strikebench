@@ -6,9 +6,9 @@ import java.util.List;
 
 /**
  * The FULL probability picture of a position at expiration — not just "POP". Probabilities are
- * RISK-NEUTRAL: a lognormal terminal distribution at the chain's own IV with drift {@code r − σ²/2}
+ * RISK-NEUTRAL: a lognormal terminal distribution at the chain's own IV with drift {@code r − q − σ²/2}
  * (the same risk-free rate the options are priced with), so the numbers are the options market's
- * own odds, not a physical forecast — every consumer must label them that way.
+ * own q=0 approximation, not a physical forecast — every consumer must label them that way.
  *
  * <p>Regions are EXACT, not sampled (adversarial-review correction): the payoff is piecewise
  * linear, so profit / max-profit / max-loss regions are derived from the curve's own knots and
@@ -37,7 +37,7 @@ public final class ProbabilityMap {
      * @param spot         current underlying
      * @param sigma        annualized volatility (the chain's own IV — risk-neutral basis)
      * @param tYears       time to expiry in YEARS (trading-day time for short-dated positions)
-     * @param riskFreeRate annualized r used in the risk-neutral drift (r − σ²/2)
+     * @param riskFreeRate annualized r used in the risk-neutral drift (r − q − σ²/2), with q=0
      * @param shortStrikes strikes of SHORT legs (touch/assignment interest); may be empty
      */
     public static Result of(PayoffCurve curve, double spot, double sigma, double tYears,
@@ -118,8 +118,8 @@ public final class ProbabilityMap {
             touches.add(new Touch(k, Math.min(1.0, 2 * beyond)));
         }
         String basis = riskFreeRate != 0
-                ? String.format("risk-neutral lognormal (market IV, r=%.1f%%) — the options market's own odds, not a forecast; touch is a reflection estimate", riskFreeRate * 100)
-                : "zero-drift lognormal scenario (market IV) — model odds, not a forecast; touch is a reflection estimate";
+                ? String.format("risk-neutral lognormal approximation (market IV, r=%.1f%%, q=0 assumed) — market-implied odds, not a forecast; touch is a reflection estimate", riskFreeRate * 100)
+                : "zero-rate risk-neutral lognormal approximation (market IV, q=0 assumed) — model odds, not a forecast; touch is a reflection estimate";
         return new Result(round4(pAny), round4(pMaxP), round4(pMaxL), round4(pPartial),
                 cvar95, Math.min(0, stress), touches, basis);
     }

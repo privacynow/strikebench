@@ -48,7 +48,8 @@ public final class RiskProfiler {
         // this scenario EV is positive — that gap IS the volatility risk premium, and the two
         // numbers must never be blended into one.
         Long evHistVol = null;
-        String basisNote = null;
+        String basisNote = String.format("market EV = present-value risk-neutral approximation "
+                + "(market IV, r=%.2f%%, q=0 assumed); pre-commission", ctx.riskFreeRate() * 100);
         long distinctExpirations = c.legs() == null ? 0 : c.legs().stream()
                 .filter(l -> l.expiration() != null && !l.expiration().isBlank())
                 .map(LegView::expiration).distinct().count();
@@ -60,8 +61,8 @@ public final class RiskProfiler {
                 PayoffCurve ppc = PayoffCurve.of(input.legs(), Math.max(1, c.qty()), input.entryAdjustmentCents());
                 double t = ctx.daysToExpiry() / 365.0;
                 evHistVol = ppc.expectedValueCents(ctx.underlyingCents() / 100.0, ctx.realizedVol30(), t, 0);
-                basisNote = "expectedValueCents = market-implied (IV, risk-neutral); evHistVolCents = realized-vol "
-                        + Math.round(ctx.realizedVol30() * 100) + "% (physical lane, zero drift). Both pre-commission.";
+                basisNote += "; history EV = realized-vol " + Math.round(ctx.realizedVol30() * 100)
+                        + "% zero-drift scenario (not a physical-measure forecast). Both are pre-commission.";
             } catch (RuntimeException ignored) { /* lane stays honestly null */ }
         } else if (distinctExpirations > 1) {
             basisNote = "EV lanes are unavailable for multi-expiration structures in the single-terminal model; use the strategy simulator's two-expiry path valuation.";

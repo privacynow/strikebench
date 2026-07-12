@@ -204,4 +204,49 @@ class EvaluateIntegrationTest {
         assertThat(ApiServer.outcomeExpiryDay(java.time.LocalDate.parse("2026-07-08"),
                 java.time.LocalDate.parse("2026-07-13"))).isEqualTo(3); // Thu, Fri, Mon
     }
+
+    @Test void ideasDecisionAndTicketShareOneRiskNeutralCalculation() throws Exception {
+        JsonNode envelope = Json.MAPPER.readTree(post("/api/evaluate", decisionBody()).body());
+        JsonNode evaluation = null;
+        for (JsonNode item : envelope.at("/result/evaluations")) {
+            JsonNode candidate = item.get("candidate");
+            if (!candidate.path("usesHeldShares").asBoolean(false)
+                    && item.at("/risk/expectedValueCents").isNumber()
+                    && item.at("/risk/pop").isNumber()) {
+                evaluation = item;
+                break;
+            }
+        }
+        assertThat(evaluation).as("a single-expiration candidate is available").isNotNull();
+        JsonNode candidate = evaluation.get("candidate");
+
+        var ticket = Json.MAPPER.createObjectNode();
+        ticket.put("symbol", "AAPL");
+        ticket.put("strategy", candidate.get("strategy").asText());
+        ticket.put("qty", candidate.get("qty").asInt());
+        ticket.set("legs", candidate.get("legs"));
+        ticket.put("thesis", "bullish");
+        ticket.put("horizon", "month");
+        ticket.put("riskMode", "balanced");
+        ticket.put("intent", candidate.get("intent").asText());
+        ticket.put("source", "RECOMMENDATION");
+
+        HttpResponse<String> previewResponse = post("/api/trades/preview", ticket.toString());
+        assertThat(previewResponse.statusCode()).isEqualTo(200);
+        JsonNode preview = Json.MAPPER.readTree(previewResponse.body()).get("preview");
+
+        assertThat(preview.get("popEntry").asDouble())
+                .as("candidate=%s preview=%s", candidate, preview)
+                .isCloseTo(evaluation.at("/risk/pop").asDouble(), org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(preview.get("expectedValueCents").asLong())
+                .isEqualTo(evaluation.at("/risk/expectedValueCents").asLong());
+        if (candidate.path("assignmentProb").isNumber()) {
+            assertThat(preview.get("assignmentProb").asDouble())
+                    .isCloseTo(candidate.get("assignmentProb").asDouble(), org.assertj.core.data.Offset.offset(1e-9));
+        }
+        assertThat(preview.at("/analytics/probabilityMap/basis").asText())
+                .containsIgnoringCase("risk-neutral").containsIgnoringCase("q=0");
+        assertThat(evaluation.at("/explanation/assumptions/0").asText())
+                .containsIgnoringCase("present-valued").containsIgnoringCase("q=0");
+    }
 }

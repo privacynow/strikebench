@@ -33,7 +33,7 @@ public final class StrategyEvaluator {
         ManagementPlan plan = management.plan(c, spec);
         ScoreBreakdown sb = score.compose(c, cap, rsk, ev, ctx);
         EconomicAssessment economics = EconomicAssessment.assess(c, rsk, ev, sb, ctx);
-        Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev);
+        Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev, ctx);
         return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan, sb, economics, exp);
     }
 

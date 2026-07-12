@@ -9,13 +9,16 @@ import java.util.List;
 public final class Explainer {
 
     public Explanation explain(Candidate c, StrategySpec spec, CapitalProfile cap,
-                               VolatilityProfile vol, RiskProfile risk, EvidenceProfile evidence) {
+                               VolatilityProfile vol, RiskProfile risk, EvidenceProfile evidence,
+                               EvalContext ctx) {
         String headline = c.whyConsidered() != null && !c.whyConsidered().isBlank()
                 ? c.whyConsidered()
                 : c.displayName() + " for a " + safe(spec == null ? null : spec.intent()) + " goal";
 
         List<String> assumptions = new ArrayList<>();
-        assumptions.add("POP, EV, and breakevens are lognormal, zero-drift model outputs, before commissions.");
+        assumptions.add(String.format("POP and market EV use the shared risk-neutral lognormal approximation "
+                + "(r=%.2f%%, q=0 assumed); market EV is present-valued. Breakevens are payoff geometry; all are before commissions.",
+                ctx.riskFreeRate() * 100));
         assumptions.add(evidence.note());
         if (vol.ivRankPct() == null && vol.atmIv() != null) {
             assumptions.add("IV rank/percentile unavailable yet — needs more days of recorded snapshots.");

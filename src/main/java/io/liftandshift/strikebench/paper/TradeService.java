@@ -1038,11 +1038,18 @@ public final class TradeService {
             }
         }
 
-        // Same math the recommendation engine shows on candidates — the builder's live
-        // panel must not disagree with the Ideas screen about the same structure.
+        LocalDate laneToday = java.time.LocalDate.ofInstant(nowInstant,
+                io.liftandshift.strikebench.market.MarketHours.EASTERN);
+        io.liftandshift.strikebench.market.OptionTime.Measure tte =
+                io.liftandshift.strikebench.market.OptionTime.nearest(filled, laneToday);
+        int rateDays = (int) Math.max(1, tte.calendarDays());
+        double rfr = marks.riskFreeRate(rateDays, world);
+        io.liftandshift.strikebench.model.DataEvidence rateEvidence =
+                marks.riskFreeRateEvidence(rateDays, world);
+
+        // Same rate, IVs and finish-ITM convention the recommendation engine uses.
         Double assignProb = io.liftandshift.strikebench.recommend.RecommendationEngine.assignmentProbabilityFromIvs(
-                filled, legIvs, underlying, java.time.LocalDate.ofInstant(nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN),
-                FALLBACK_IV);
+                filled, legIvs, underlying, laneToday, FALLBACK_IV, rfr);
 
         // Calendars/diagonals: the expiration payoff curve is meaningless across mixed
         // expirations. Debit versions risk exactly the debit; credit versions can carry
@@ -1100,14 +1107,7 @@ public final class TradeService {
         List<Map<String, Object>> payoff = chartPointMaps(riskCurve, underlying);
 
         double spot = underlying.doubleValue();
-        io.liftandshift.strikebench.market.OptionTime.Measure tte =
-                io.liftandshift.strikebench.market.OptionTime.nearest(filled,
-                        LocalDate.ofInstant(nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN));
         double t = tte.years();
-        int rateDays = (int) Math.max(1, tte.calendarDays());
-        double rfr = marks.riskFreeRate(rateDays, world);
-        io.liftandshift.strikebench.model.DataEvidence rateEvidence =
-                marks.riskFreeRateEvidence(rateDays, world);
         if (ivs.isEmpty()) {
             warnings.add("No implied volatility available — POP/EV assume a 30% placeholder volatility");
         }
@@ -1159,8 +1159,10 @@ public final class TradeService {
         long fees = req.feesOverrideCents() != null ? Math.max(0, req.feesOverrideCents()) : feesFor(filled, req.qty());
         long reserve = shareContext ? 0 : Math.max(0, maxLoss + entryNet);
 
-        Double pop = riskCurve.probProfit(spot, ivAvg, t, rfr);
-        Long ev = riskCurve.expectedValueCents(spot, ivAvg, t, rfr);
+        var riskNeutral = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
+                riskCurve, spot, ivAvg, t, rfr, shortStrikes);
+        Double pop = riskNeutral.probabilityMap().pAnyProfit();
+        Long ev = riskNeutral.expectedValueCents();
 
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("underlying", underlying.toPlainString());

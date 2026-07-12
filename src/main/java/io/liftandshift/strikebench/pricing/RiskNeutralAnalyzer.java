@@ -20,9 +20,9 @@ public final class RiskNeutralAnalyzer {
         List<Sensitivity> sensitivity = new ArrayList<>();
         for (double scale : new double[]{0.8, 1.0, 1.2}) {
             sensitivity.add(new Sensitivity(scale,
-                    curve.expectedValueCents(spot, marketIv * scale, years, riskFreeRate)));
+                    curve.riskNeutralExpectedValueCents(spot, marketIv * scale, years, riskFreeRate)));
         }
-        return new Result(map, curve.expectedValueCents(spot, marketIv, years, riskFreeRate),
+        return new Result(map, curve.riskNeutralExpectedValueCents(spot, marketIv, years, riskFreeRate),
                 List.copyOf(sensitivity));
     }
 }

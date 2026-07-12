@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.eval;
 
+import io.liftandshift.strikebench.model.DataEvidence;
+
 import java.util.List;
 
 /**
@@ -15,10 +17,13 @@ public record EvalContext(
         List<Double> ivHistory,   // trailing ATM-IV observations for rank/percentile (may be empty)
         long buyingPowerCents,    // for the capital gate
         boolean marketOpen,
-        long feePerContractCents  // so EV can be judged NET of commissions
+        long feePerContractCents, // so EV can be judged NET of commissions
+        double riskFreeRate,      // annualized r used by the shared risk-neutral approximation
+        DataEvidence rateEvidence
 ) {
     public EvalContext {
         ivHistory = ivHistory == null ? List.of() : List.copyOf(ivHistory);
+        rateEvidence = rateEvidence == null ? DataEvidence.missing("rate input") : rateEvidence;
     }
 
 }

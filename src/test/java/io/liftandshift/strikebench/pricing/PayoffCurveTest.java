@@ -131,7 +131,7 @@ class PayoffCurveTest {
 
     @Test
     void expectedValueIsAntisymmetricAndNearFair() {
-        // Premium set at the model price -> EV under drift=r is ~the cost of carry, near zero
+        // Terminal-dollar expectation includes carry; long/short remain exact opposites.
         double prem = BlackScholes.price(true, 100, 100, 0.25, 0.03, 0, 0.25);
         Leg buy = opt(LegAction.BUY, OptionType.CALL, "100", 1, new BigDecimal(prem).setScale(4, java.math.RoundingMode.HALF_UP).toPlainString());
         Leg sell = opt(LegAction.SELL, OptionType.CALL, "100", 1, new BigDecimal(prem).setScale(4, java.math.RoundingMode.HALF_UP).toPlainString());
@@ -139,5 +139,24 @@ class PayoffCurveTest {
         long evShort = PayoffCurve.of(List.of(sell), 1).expectedValueCents(100, 0.25, 0.25, 0.03);
         assertThat(evLong + evShort).isBetween(-2L, 2L);        // antisymmetric up to rounding
         assertThat(Math.abs(evLong)).isLessThan(1500);          // fair-priced -> small EV
+    }
+
+    @Test
+    void riskNeutralExpectedValueDiscountsOnlyTheTerminalPayoff() {
+        double t = 0.25, r = 0.03, sigma = 0.25;
+        double fair = BlackScholes.price(true, 100, 100, t, r, 0, sigma);
+        Leg buy = opt(LegAction.BUY, OptionType.CALL, "100", 1,
+                new BigDecimal(fair).setScale(6, java.math.RoundingMode.HALF_UP).toPlainString());
+        Leg sell = opt(LegAction.SELL, OptionType.CALL, "100", 1,
+                new BigDecimal(fair).setScale(6, java.math.RoundingMode.HALF_UP).toPlainString());
+
+        long longPv = PayoffCurve.of(List.of(buy), 1)
+                .riskNeutralExpectedValueCents(100, sigma, t, r);
+        long shortPv = PayoffCurve.of(List.of(sell), 1)
+                .riskNeutralExpectedValueCents(100, sigma, t, r);
+
+        assertThat(longPv).isBetween(-5L, 5L);
+        assertThat(shortPv).isBetween(-5L, 5L);
+        assertThat(longPv + shortPv).isBetween(-2L, 2L);
     }
 }

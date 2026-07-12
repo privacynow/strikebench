@@ -241,6 +241,21 @@ public final class PayoffCurve {
         return Money.toCents(ev);
     }
 
+    /**
+     * Present-value expected profit under the risk-neutral distribution (q=0 approximation).
+     * Entry cash moves today; only the terminal payoff is discounted. Discounting the whole
+     * expiration P/L would incorrectly discount the premium paid or received at entry.
+     */
+    public long riskNeutralExpectedValueCents(double spot, double sigma, double tYears,
+                                              double riskFreeRate) {
+        if (spot <= 0) return 0;
+        if (tYears <= 0 || sigma <= 0) return profitAtCents(BigDecimal.valueOf(spot));
+        double entry = entryNetPremiumCents() / 100.0;
+        double terminalPnl = expectedValueCents(spot, sigma, tYears, riskFreeRate) / 100.0;
+        double expectedTerminalPayoff = terminalPnl - entry;
+        return Money.toCents(entry + Math.exp(-riskFreeRate * tYears) * expectedTerminalPayoff);
+    }
+
     /** Double-precision profit for the integration kernel only. */
     private double profitDollars(double s) {
         // The package-level price adjustment shifts EVERY statistic, including expected value —
