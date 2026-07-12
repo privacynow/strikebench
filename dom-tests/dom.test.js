@@ -689,7 +689,7 @@ test('working view follows: idea bar carries the thesis; scenario studio opens o
     App.state.discoverForm.symbol = 'QQQ';
     App.state.discoverForm.thesis = 'bearish';
     App.state.discoverForm.horizon = 'month';
-    App.context.selectSymbol('QQQ');
+    App.context.update({ symbol: 'QQQ', goal: 'DIRECTIONAL', thesis: 'bearish', horizon: 'month' });
     App.state.ticket = null; App.state.builderForm = null; App.state.scenarioForm = null;
   });
   // The Trade idea bar shows the working VIEW even with no working idea yet.
@@ -705,14 +705,19 @@ test('working view follows: idea bar carries the thesis; scenario studio opens o
   await page.waitForSelector('#whatif-card .sc-card.active');
   assert.equal(await page.getAttribute('#whatif-card .sc-card.active', 'data-shape'), 'RALLY_FADE');
   // Cleanup for downstream tests: a persisted bearish default must not surprise them.
-  await page.evaluate(() => { App.state.scenarioForm = null; App.state.discoverForm.thesis = 'bullish'; });
+  await page.evaluate(() => {
+    App.state.scenarioForm = null; App.state.discoverForm.thesis = 'bullish'; App.context.selectThesis('bullish');
+  });
 });
 
 test('every scenario story runs at both levels (the Big-news-shock crash class)', async () => {
   // The magVolFor crash escaped a green matrix because tests only clicked ONE story.
   // Run EVERY beginner story card end-to-end, then every expert shape via the select.
   await page.click('#level-switch button[data-level="beginner"]');
-  await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = { mode: 'scenario' }; App.context.selectSymbol('AAPL'); });
+  await page.evaluate(() => {
+    App.state.scenarioForm = null; App.state.verifyForm = {}; App.state.verifyMode = 'scenario';
+    App.state.ticket = null; App.context.selectSymbol('AAPL');
+  });
   await go('#/trade/outcomes');
   await page.waitForSelector('#bt-scenario-card #sc-shapes .sc-card');
   const shapes = await page.$$eval('#sc-shapes .sc-card', cs => cs.map(c => c.getAttribute('data-shape')));
@@ -957,6 +962,7 @@ test('recommendations render candidates and blocked examples', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   await go('#/trade/context/manual');
   await page.fill('#rec-symbol', 'AAPL');
+  await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
   await page.selectOption('#rec-thesis', 'bullish');
   await page.click('#rec-go');
   await page.waitForSelector('.candidate');

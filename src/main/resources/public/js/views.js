@@ -2144,7 +2144,10 @@
     // Canonical Context routes may open directly in one-stock or scout mode.
     if (params && params[0] === 'manual') saved.source = 'single';
     if (params && params[0] === 'scout') saved.source = 'scan';
-    var goal = prefill.intent || App.context.goal() || saved.goal || 'DIRECTIONAL';
+    // An explicit handoff wins; otherwise an in-progress draft owns its controls. A fresh
+    // draft was already seeded from App.context above. Reversing this precedence silently
+    // rewrote saved 0DTE/goal choices whenever an older shared context existed.
+    var goal = prefill.intent || saved.goal || App.context.goal() || 'DIRECTIONAL';
     var source = saved.source || 'single';
     function remember(patch) {
       saved = App.state.discoverForm = Object.assign({}, App.state.discoverForm, patch || {});
@@ -2155,14 +2158,12 @@
       if (patch && patch.thesis !== undefined) contextPatch.thesis = patch.thesis;
       if (Object.keys(contextPatch).length) App.context.update(contextPatch);
     }
-    remember({ goal: goal });
-
     var level = Learn.currentLevel();
     var beginner = level === 'beginner';
     var sym = el('input', { type: 'text', id: 'rec-symbol', list: 'universe-symbols',
       placeholder: 'AAPL',
-      value: prefill.symbol || App.context.symbol() || saved.symbol || 'AAPL' });
-    var activeThesis = prefill.thesis || App.context.thesis() || saved.thesis || 'bullish';
+      value: prefill.symbol || saved.symbol || App.context.symbol() || 'AAPL' });
+    var activeThesis = prefill.thesis || saved.thesis || App.context.thesis() || 'bullish';
     var thesis = el('select', { id: 'rec-thesis' },
       ['bullish', 'bearish', 'neutral', 'volatile'].map(function (t) {
         return el('option', { value: t, selected: t === activeThesis ? '' : null }, t);
@@ -2171,9 +2172,10 @@
     // steer away from it, the engine's same-day warnings still fire, but nothing is unreachable
     // and no persisted choice is silently rewritten.
     var horizons = ['week', 'month', 'quarter', '0DTE'];
-    var activeHorizon = prefill.horizon || App.context.horizon() || saved.horizon || 'month';
+    var activeHorizon = prefill.horizon || saved.horizon || App.context.horizon() || 'month';
     var horizon = el('select', { id: 'rec-horizon' },
       horizons.map(function (h) { return el('option', { value: h, selected: h === activeHorizon ? '' : null }, h); }));
+    remember({ symbol: sym.value, goal: goal, horizon: activeHorizon, thesis: activeThesis });
     horizon.addEventListener('change', function () { remember({ horizon: horizon.value }); });
     var allow0 = el('input', { type: 'checkbox', id: 'rec-0dte', checked: saved.allow0 ? '' : null });
     allow0.addEventListener('change', function () { remember({ allow0: allow0.checked }); });
