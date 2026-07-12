@@ -119,6 +119,17 @@ public final class AccountService {
     }
 
     /**
+     * Serializes every mutation of one account's cash, reserve, positions, and pledged shares.
+     * Services must take this lock before inspecting any of those dependent rows; otherwise two
+     * concurrent requests can both spend the same buying power or pledge the same share lot.
+     */
+    static Account getForUpdate(Connection c, String id) throws SQLException {
+        List<Account> rows = Db.queryOn(c, "SELECT * FROM accounts WHERE id=? FOR UPDATE", AccountService::map, id);
+        if (rows.isEmpty()) throw new IllegalArgumentException("no such account " + id);
+        return rows.getFirst();
+    }
+
+    /**
      * Sets cash to startingCash and clears the reserve. Requires confirm; blocked once the
      * account has traded unless force. Ledger stays append-only: open trades are voided with
      * reserve releases, then a single RESET row absorbs the cash difference.
@@ -133,7 +144,7 @@ public final class AccountService {
         if (!confirm) throw new IllegalArgumentException("reset requires confirm=true");
         if (startingCashCents <= 0) throw new IllegalArgumentException("startingCash must be positive");
         Account result = db.tx(c -> {
-            Account acct = get(c, accountId);
+            Account acct = getForUpdate(c, accountId);
             if (acct.hasTraded() && !force) {
                 throw new IllegalStateException("account has trades; pass force=true to reset anyway");
             }

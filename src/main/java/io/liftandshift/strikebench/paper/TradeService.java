@@ -83,7 +83,9 @@ public final class TradeService {
 
     public TradePreview preview(OpenRequest req) {
         Account acct = db.with(c -> AccountService.get(c, req.accountId()));
-        Plan p = computePlan(req);
+        // Import/broker previews describe an actual fill that already happened. Ordinary ticket
+        // previews describe a paper order and therefore cannot claim a favorable resting limit filled.
+        Plan p = computePlan(req, isRecordedFillSource(req.source()));
         long cashAfter = acct.cashCents() + p.entryNet - p.fees;
         long reservedAfter = acct.reservedCents() + p.reserve;
         List<String> blocks = new ArrayList<>(p.blocks);
@@ -132,7 +134,7 @@ public final class TradeService {
             if (req.proposedNetCents() == null) {
                 throw new IllegalArgumentException("recording a real trade requires proposedNetCents — the actual net fill");
             }
-            p = computePlan(req);
+            p = computePlan(req, true);
             // A real fill is a FACT to record, not an order to risk-screen (CP-9/R6): entry-quality
             // blocks (undefined risk, too-good-to-be-true quotes) become loud warnings here — the
             // riskiest real trades are the ones the learning loop most needs to see. Structural
@@ -250,7 +252,7 @@ public final class TradeService {
         String tradeId = Ids.trade();
         try {
             TradeRecord out = db.tx(c -> {
-                Account acct = AccountService.get(c, req.accountId());
+                Account acct = AccountService.getForUpdate(c, req.accountId());
                 long cashAfter = acct.cashCents() + p.entryNet - p.fees;
                 long reservedAfter = acct.reservedCents() + p.reserve;
                 if (cashAfter - reservedAfter < 0) {
@@ -329,8 +331,9 @@ public final class TradeService {
         markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
         accountSnapshot.invalidateAll(); // the book changed — no consumer may see the old snapshot
         CloseResult result = db.tx(c -> {
-            TradeRecord t = requireStatus(c, tradeId, TradeRecord.ACTIVE);
-            Account acct = AccountService.get(c, t.accountId());
+            LockedTrade locked = lockTradeAndAccount(c, tradeId, TradeRecord.ACTIVE);
+            TradeRecord t = locked.trade();
+            Account acct = locked.account();
             long closeValue = 0;
             Freshness worst = Freshness.REALTIME;
             var lane = laneFor(worldOf(t.accountId()));
@@ -365,7 +368,8 @@ public final class TradeService {
         markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
         accountSnapshot.invalidateAll(); // the book changed — no consumer may see the old snapshot
         CloseResult result = db.tx(c -> {
-            TradeRecord t = requireStatus(c, tradeId, TradeRecord.ACTIVE);
+            LockedTrade locked = lockTradeAndAccount(c, tradeId, TradeRecord.ACTIVE);
+            TradeRecord t = locked.trade();
             // ONE CLOCK PER LANE: a sim-world trade dies at the SIM bell and settles at the sim
             // closes the moment the SIM calendar passes expiry — never the JVM's calendar.
             String settleWorld = worldOf(t.accountId());
@@ -378,7 +382,7 @@ public final class TradeService {
             if (anyAlive) {
                 throw new TradeRejectedException(List.of("Legs are still alive (contracts die at 4:00pm ET on expiration day); unwind instead of settling"));
             }
-            Account acct = AccountService.get(c, t.accountId());
+            Account acct = locked.account();
             LocalDate lastExpiry = t.legs().stream().filter(l -> !l.isStock())
                     .map(Leg::expiration).max(LocalDate::compareTo).orElse(today);
             // Each leg settles at the underlying close ON ITS OWN expiration date — valuing a
@@ -527,8 +531,9 @@ public final class TradeService {
         markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
         accountSnapshot.invalidateAll(); // the book changed — no consumer may see the old snapshot
         TradeRecord out = db.tx(c -> {
-            TradeRecord t = requireStatus(c, tradeId, TradeRecord.ACTIVE);
-            Account acct = AccountService.get(c, t.accountId());
+            LockedTrade locked = lockTradeAndAccount(c, tradeId, TradeRecord.ACTIVE);
+            TradeRecord t = locked.trade();
+            Account acct = locked.account();
             String now = now();
             long cash = acct.cashCents(), reserved = acct.reservedCents();
 
@@ -902,6 +907,19 @@ public final class TradeService {
     }
 
     private Plan computePlan(OpenRequest req) {
+        return computePlan(req, false);
+    }
+
+    private static boolean isRecordedFillSource(String source) {
+        if (source == null) return false;
+        return switch (source.trim().toUpperCase(java.util.Locale.ROOT)) {
+            case "IMPORT", "BROKER", "EXTERNAL" -> true;
+            default -> false;
+        };
+    }
+
+    /** Recorded broker fills are facts; paper orders may not claim a favorable limit filled. */
+    private Plan computePlan(OpenRequest req, boolean recordedFill) {
         List<String> blocks = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         if (req.qty() < 1) blocks.add("Quantity must be at least 1");
@@ -1035,6 +1053,12 @@ public final class TradeService {
                     + (packageMid != null ? ", midpoint " + Money.fmt(packageMid) : ""));
             if (packageMid != null && req.proposedNetCents() > packageMid) {
                 warnings.add("Your price is MORE favorable than the midpoint — resting there may never fill");
+            }
+            if (!recordedFill && req.proposedNetCents() > executableNet) {
+                blocks.add("Your limit " + Money.fmt(req.proposedNetCents())
+                        + " is more favorable than the executable market " + Money.fmt(executableNet)
+                        + ". StrikeBench does not model resting limit orders, so it cannot claim this paper order filled. "
+                        + "Re-price at or below the executable net, or record the fill after it actually occurs.");
             }
         }
 
@@ -1438,12 +1462,27 @@ public final class TradeService {
         return io.liftandshift.strikebench.market.OptionTime.nearest(legs, LocalDate.now(clock)).years();
     }
 
-    private TradeRecord requireStatus(Connection c, String tradeId, String expected) throws SQLException {
-        TradeRecord t = getOn(c, tradeId);
+    private TradeRecord requireStatusForUpdate(Connection c, String tradeId, String expected) throws SQLException {
+        List<TradeRecord> rows = Db.queryOn(c, "SELECT * FROM trades WHERE id=? FOR UPDATE", TradeService::mapTrade, tradeId);
+        if (rows.isEmpty()) throw new java.util.NoSuchElementException("no such trade " + tradeId);
+        TradeRecord t = rows.getFirst();
         if (!expected.equals(t.status())) {
             throw new IllegalStateException("trade " + tradeId + " is " + t.status() + ", expected " + expected);
         }
         return t;
+    }
+
+    private record LockedTrade(TradeRecord trade, Account account) {}
+
+    /** Lock order is account, then trade, everywhere; reset and position mutations use the same order. */
+    private LockedTrade lockTradeAndAccount(Connection c, String tradeId, String expected) throws SQLException {
+        TradeRecord initial = getOn(c, tradeId);
+        Account account = AccountService.getForUpdate(c, initial.accountId());
+        TradeRecord locked = requireStatusForUpdate(c, tradeId, expected);
+        if (!account.id().equals(locked.accountId())) {
+            throw new IllegalStateException("trade account changed while locking " + tradeId);
+        }
+        return new LockedTrade(locked, account);
     }
 
     private static void requireConfirm(boolean confirm, String action) {

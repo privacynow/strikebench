@@ -121,7 +121,7 @@ public final class PositionsService {
         long cost = Money.centsFromPrice(ask, shares);
         long priceCents = Money.toCents(ask);
         Position updated = db.tx(c -> {
-            Account acct = AccountService.get(c, accountId);
+            Account acct = AccountService.getForUpdate(c, accountId);
             long cash = acct.cashCents() - cost;
             if (cash - acct.reservedCents() < 0) {
                 throw new TradeRejectedException(List.of("Insufficient buying power: " + shares + " sh of " + sym
@@ -172,7 +172,7 @@ public final class PositionsService {
         long priceCents = Money.toCents(bid);
         final long[] realized = new long[1];
         Position updated = db.tx(c -> {
-            Account acct = AccountService.get(c, accountId);
+            Account acct = AccountService.getForUpdate(c, accountId);
             Position p = find(c, accountId, sym);
             if (p == null) throw new TradeRejectedException(List.of("You do not hold any shares of " + sym));
             long locked = lockedShares(c, accountId, sym);

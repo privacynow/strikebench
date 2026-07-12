@@ -21,6 +21,10 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -214,6 +218,39 @@ class PaperCoreTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> plan = (Map<String, Object>) atMine.analytics().get("managementPlan");
         assertThat((java.util.List<String>) plan.get("rules")).isNotEmpty();
+    }
+
+    @Test
+    void paperOrderCannotClaimAFavorableUnfilledLimitButRealFillCanBeRecorded() {
+        Account acct = accounts.getOrCreateDefault();
+        // Natural executable credit is $180. Asking for $200 is a valid what-if, but it is not
+        // an immediate fill: a paper ledger must not mint the extra $20 as if the market paid it.
+        TradeService.OpenRequest resting = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+                List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
+                "bullish", "month", "balanced", null, null, 200_00L, null, "TICKET");
+
+        TradePreview preview = trades.preview(resting);
+        assertThat(preview.entryNetPremiumCents()).isEqualTo(200_00L); // analysis remains useful
+        assertThat(preview.ok()).isFalse();
+        assertThat(preview.blockReasons()).anySatisfy(r -> assertThat(r)
+                .contains("resting limit orders").contains("cannot claim this paper order filled"));
+        assertThatThrownBy(() -> trades.create(resting))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("cannot claim this paper order filled");
+        TradeService.OpenRequest spoofedImport = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+                resting.legs(), "bullish", "month", "balanced", null, null, 200_00L, null, "IMPORT");
+        assertThatThrownBy(() -> trades.create(spoofedImport))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("cannot claim this paper order filled");
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START);
+
+        TradeRecord actual = trades.createExternal(resting,
+                new TradeService.ExternalMeta("2026-07-08T15:30:00Z", "manual broker record", "order-1", false));
+        assertThat(actual.entryNetPremiumCents()).isEqualTo(200_00L);
+        assertThat(actual.external()).isTrue();
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START);
+        assertThat(db.query("SELECT COUNT(*) AS n FROM ledger WHERE trade_id=?", r -> r.lng("n"), actual.id()).getFirst())
+                .isZero();
     }
 
     @org.junit.jupiter.api.Test
@@ -968,6 +1005,41 @@ class PaperCoreTest {
         // Unwinding the call releases the lock
         trades.unwind(t.id(), true);
         assertThat(positions.freeShares(acct.id(), "AAPL")).isEqualTo(100);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void concurrentCoveredCallsCannotDoublePledgeOneShareLot() throws Exception {
+        Account acct = accounts.getOrCreateDefault();
+        positions.buy(acct.id(), "AAPL", 100);
+        int contenders = 8;
+        var start = new CountDownLatch(1);
+        var pool = Executors.newFixedThreadPool(contenders);
+        try {
+            List<Future<Boolean>> attempts = new java.util.ArrayList<>();
+            for (int i = 0; i < contenders; i++) {
+                attempts.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        trades.create(coveredCallOnHeldShares(acct.id()));
+                        return true;
+                    } catch (TradeRejectedException expected) {
+                        return false;
+                    }
+                }));
+            }
+            start.countDown();
+            long opened = 0;
+            for (Future<Boolean> attempt : attempts) {
+                if (attempt.get(10, TimeUnit.SECONDS)) opened++;
+            }
+            assertThat(opened).isEqualTo(1);
+            long locked = db.with(c -> PositionsService.lockedShares(c, acct.id(), "AAPL"));
+            assertThat(locked).isEqualTo(100);
+            assertThat(positions.freeShares(acct.id(), "AAPL")).isZero();
+        } finally {
+            pool.shutdownNow();
+        }
         assertLedgerInvariants(acct.id());
     }
 
