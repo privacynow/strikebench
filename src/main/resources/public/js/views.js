@@ -7580,7 +7580,7 @@
         el('div', { class: 'study-protocol-body' }, exactFields,
           el('p', { class: 'muted small' }, level === 'beginner'
             ? 'The default keeps examples independent, compares them with non-signal days, resamples the events, and protects against finding a pattern by luck.'
-            : 'Signal detection uses no future data. The baseline is the disjoint non-signal complement. Event overlap reduces effective sample size; moving-block bootstrap, a two-sided z-test, Cohen’s d, split-half consistency and catalog-wide multiplicity are reported separately.')));
+            : 'Signal detection uses no future data. The baseline is the disjoint non-signal complement. Event overlap reduces effective sample size; moving-block bootstrap, an overlap-adjusted two-sided z screen, pooled Cohen’s d, split-half consistency and catalog-wide multiplicity are reported separately.')));
       picker.appendChild(protocolDetails);
       picker.appendChild(el('p', { class: 'muted small study-description' }, q.description));
 
@@ -7761,16 +7761,16 @@
     out.appendChild(alertBox(kind, r.verdict));
     out.appendChild(el('p', { class: 'muted small' }, r.question));
     // EVIDENCE STRENGTH in one word (beginner-first), never z-score-first: sample size,
-    // significance, effect size and split-half consistency roll into weak/moderate/strong.
+    // overlap-adjusted z screen, effect size and split-half consistency roll into weak/moderate/strong.
     var strength = few ? 'weak'
       : (r.significant && Math.abs(r.effectSize || 0) >= 0.2 && r.holdout === 'held') ? 'strong'
       : r.significant ? 'moderate' : 'weak';
     out.appendChild(el('div', { class: 'chip-row', style: 'margin-top:2px' },
       evidenceBadge(r.evidence),
       chip('Evidence', strength,
-        'Rolls up sample size, statistical significance, effect size and split-half consistency. Even strong evidence describes the PAST — use it to raise or lower your confidence, never as a prediction.'),
+        'Rolls up sample size, the overlap-adjusted statistical screen, effect size and split-half consistency. Even strong evidence describes the PAST — use it to raise or lower your confidence, never as a prediction.'),
       chip('Signal episodes', String(r.conditioned.sample),
-        'Signals are separated by the protocol spacing. If outcome windows still overlap, the effective sample and bootstrap are dependence-adjusted.')));
+        'Signals are separated by the protocol spacing. If outcome windows still overlap, the effective sample and bootstrap use an explicit overlap approximation.')));
     out.appendChild(el('div', { class: 'muted small' },
       'Use this to raise or lower your confidence in the view \u2014 it does not predict the next occurrence.'));
     var regimeText = protocol.regime === 'ABOVE_200DMA' ? 'above the 200-day average'
@@ -7792,7 +7792,7 @@
         el('p', { class: 'muted small' }, level === 'beginner'
           ? 'Each signal uses only information known on that date. Similar dates are separated before counting; ordinary non-signal dates form the comparison group. Resampling estimates uncertainty.'
           : 'No-look-ahead signal; disjoint non-signal baseline; effective event block ' + protocol.effectiveEventBlock
-            + '; two-sided z threshold |z| ' + protocol.criticalZ + '; moving-block bootstrap; Cohen\u2019s d; optional split-half consistency.'))));
+            + '; overlap-adjusted two-sided z threshold |z| ' + protocol.criticalZ + '; moving-block bootstrap; pooled Cohen\u2019s d; optional split-half consistency.'))));
     // Conditioned win rate vs the baseline (the baseline bar marker) — the honest comparison.
     out.appendChild(gaugeChart(r.conditioned.winRatePct / 100, r.baseline.winRatePct / 100,
       'Positive ' + Math.round(r.conditioned.winRatePct) + '% of the time after the signal vs ' + Math.round(r.baseline.winRatePct) + '% normally — over ' + r.conditioned.sample + ' signals'));
@@ -7815,14 +7815,15 @@
     }
     if (level === 'expert') {
       out.appendChild(el('div', { class: 'chip-row' },
-        chip('z-score', String(r.zScore)),
+        chip('Overlap z screen', String(r.zScore),
+          'A conservative screening approximation: overlapping outcome windows reduce the effective sample. It is not an independent-observation test.'),
         chip(protocol.confidencePct + '% CI (avg)', r.ciLowPct + '% … ' + r.ciHighPct + '%'),
         r.effectSize !== null && r.effectSize !== undefined
-          ? chip('Effect size', String(r.effectSize), 'Cohen\u2019s d: the edge measured in units of the stock\u2019s normal noise. Under ~0.2 is negligible even when statistically significant.') : null,
+          ? chip('Effect size', String(r.effectSize), 'Pooled Cohen\u2019s d: the edge measured in units of the two samples\u2019 shared noise. Under ~0.2 is negligible even when the z screen clears.') : null,
         r.holdout ? chip('Consistency', r.holdout === 'held' ? 'held' : 'faded',
           'Split-half check on the SAME window \u2014 in-sample consistency, not genuine out-of-sample validation.') : null,
         chip('Baseline avg', (r.baseline.meanReturnPct >= 0 ? '+' : '') + r.baseline.meanReturnPct + '%'),
-        chip('Significant', r.significant ? 'yes' : 'no',
+        chip('Clears z screen', r.significant ? 'yes' : 'no',
           protocol.multiplicity === 'CATALOG_BONFERRONI'
             ? 'Uses the catalog-adjusted critical z shown in the protocol.'
             : 'Exploratory and unadjusted; repeated searching raises false-positive risk.')));

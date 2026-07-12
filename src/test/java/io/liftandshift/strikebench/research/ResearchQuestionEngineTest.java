@@ -221,6 +221,25 @@ class ResearchQuestionEngineTest {
     }
 
     @Test
+    void warmupBarsCannotMasqueradeAsRequestedWindowObservations() {
+        var r = run(engine(walk(), Freshness.EOD), new ResearchQuestionEngine.RunRequest(
+                "breakout_followthrough", "TEST", "2024-07-01", "2024-08-31",
+                Map.of("lookback", 20, "forward", 10)));
+        assertThat(r.conditioned().sample()).isZero();
+        assertThat(r.baseline().sample()).isZero();
+        assertThat(r.verdict()).contains("No complete observations");
+        assertThat(r.notes()).anyMatch(n -> n.contains("Warm-up history"));
+    }
+
+    @Test
+    void effectSizeIsPooledCohensDNotGlassDelta() {
+        var conditioned = List.of(0.0, 2.0, 4.0, 6.0, 8.0);
+        var baseline = List.of(0.0, 0.0, 0.0, 0.0, 0.0);
+        assertThat(ResearchQuestionEngine.cohenD(conditioned, baseline)).isCloseTo(1.789,
+                org.assertj.core.data.Offset.offset(0.001));
+    }
+
+    @Test
     void unknownQuestionRejected() {
         assertThatThrownBy(() -> run(engine(walk(), Freshness.EOD),
                 new ResearchQuestionEngine.RunRequest("make_me_rich", "TEST", null, null, Map.of())))

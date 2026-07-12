@@ -170,9 +170,15 @@ public final class ResearchQuestionEngine {
 
         // Align the analyzed window with the REQUESTED `from` (not just the array warm-up), so a
         // large look-back doesn't silently shrink or shift the window the user asked about.
-        int startIdx = warmup;
+        int startIdx = -1;
         for (int i = warmup; i < candles.size(); i++) {
-            if (!candles.get(i).date().isBefore(from)) { startIdx = Math.max(warmup, i); break; }
+            if (!candles.get(i).date().isBefore(from)) { startIdx = i; break; }
+        }
+        if (startIdx < 0 || startIdx + forward >= candles.size()) {
+            notes.add("Warm-up history exists, but the requested window has no complete forward observations.");
+            return empty(q, symbol, from, to, forward, observed, series.freshness(),
+                    "No complete observations are available inside the requested dates — widen the window or update daily history.",
+                    notes, protocol);
         }
 
         // Forward returns split into SIGNAL vs its COMPLEMENT (non-signal bars). The baseline is the
@@ -218,12 +224,12 @@ public final class ResearchQuestionEngine {
                 + "-day separation count as ONE episode (" + mergedFirings + " merged). The "
                 + conditioned.sample() + " events are separated by at least " + spacing + " trading days.");
         if (eventBlock > 1) notes.add("The chosen event spacing permits overlapping outcome windows, so the event sample "
-                + "and bootstrap use a dependence block of " + eventBlock + ".");
+                + "and bootstrap use a dependence block of " + eventBlock + ". The z statistic is an overlap-adjusted screening approximation, not an independent-observation test.");
         if (forward > 1) notes.add("The baseline's windows still overlap by the hold length, so its effective "
-                + "sample is deflated (÷" + forward + ") in the significance test — a conservative dependence correction.");
-        // EFFECT SIZE (Cohen's d vs the baseline spread): a "significant" edge that is a tiny fraction
+                + "sample is deflated (÷" + forward + ") in the z screen — a conservative overlap approximation.");
+        // EFFECT SIZE (pooled Cohen's d): a "significant" edge that is a tiny fraction
         // of normal day-to-day noise is not tradable — say so with a number.
-        Double effectSize = effectSize(condFwd, baseFwd);
+        Double effectSize = cohenD(condFwd, baseFwd);
         // SPLIT-HALF HOLDOUT: did the edge exist in BOTH halves of the window, or is it one regime's story?
         String holdout = splitHalf ? splitHalfHoldout(condFwd, baseline.winRatePct(), winEdge) : null;
         if ("CATALOG_BONFERRONI".equals(multiplicity)) {
@@ -240,13 +246,13 @@ public final class ResearchQuestionEngine {
         if (conditioned.sample() < minSample) {
             verdict = "Too few signals (" + conditioned.sample() + ") to conclude — widen the window or relax the condition.";
         } else if (significant && winEdge > 0) {
-            verdict = "Supported (" + confidence + "%, two-sided, dependence- and multiplicity-aware) — after this signal, " + symbol + " was positive " + pct(conditioned.winRatePct())
+            verdict = "Supported in this historical sample (" + confidence + "% two-sided, overlap- and multiplicity-adjusted z screen) — after this signal, " + symbol + " was positive " + pct(conditioned.winRatePct())
                     + " of the time over " + forward + " days, vs " + pct(baseline.winRatePct())
                     + " normally (mean " + signed(conditioned.meanReturnPct()) + " vs " + signed(baseline.meanReturnPct()) + ")."
                     + ("held".equals(holdout) ? " The edge was consistent across both halves of the window (an in-sample check, not out-of-sample validation)."
                        : "faded".equals(holdout) ? " CAUTION: the edge lived in only one half of the window \u2014 possibly one regime's story." : "");
         } else if (significant && winEdge < 0) {
-            verdict = "Rejected (" + confidence + "%, two-sided, dependence- and multiplicity-aware) — the signal preceded WORSE outcomes than normal (" + pct(conditioned.winRatePct())
+            verdict = "Rejected in this historical sample (" + confidence + "% two-sided, overlap- and multiplicity-adjusted z screen) — the signal preceded WORSE outcomes than normal (" + pct(conditioned.winRatePct())
                     + " positive vs " + pct(baseline.winRatePct()) + "). Fading it may make more sense than following it.";
         } else {
             verdict = "No clear edge — outcomes after the signal look like " + symbol + "'s normal behavior ("
@@ -335,16 +341,19 @@ public final class ResearchQuestionEngine {
     }
 
     /**
-     * Cohen's d of the conditioned mean vs the baseline distribution: edge \u00f7 normal noise.
-     * Null when either side is too thin to estimate a spread.
+     * Pooled-sample Cohen's d of the conditioned mean vs the baseline mean: edge ÷ shared noise.
+     * Null when either side is too thin to estimate a spread. Using only baseline variance would be
+     * Glass's delta and must not be labeled Cohen's d.
      */
-    private static Double effectSize(List<Double> cond, List<Double> base) {
+    static Double cohenD(List<Double> cond, List<Double> base) {
         if (cond.size() < 5 || base.size() < 5) return null;
         double mc = cond.stream().mapToDouble(Double::doubleValue).average().orElse(0);
         double mb = base.stream().mapToDouble(Double::doubleValue).average().orElse(0);
-        double var = 0;
-        for (double r : base) var += (r - mb) * (r - mb);
-        double sd = Math.sqrt(var / (base.size() - 1));
+        double condSquares = 0, baseSquares = 0;
+        for (double r : cond) condSquares += (r - mc) * (r - mc);
+        for (double r : base) baseSquares += (r - mb) * (r - mb);
+        double pooledVariance = (condSquares + baseSquares) / (cond.size() + base.size() - 2.0);
+        double sd = Math.sqrt(Math.max(0, pooledVariance));
         return sd == 0 ? null : round((mc - mb) / sd);
     }
 
