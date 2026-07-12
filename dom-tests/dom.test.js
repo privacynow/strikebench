@@ -382,8 +382,8 @@ test('progressive Home applies its route layout before slow market fills finish'
 /** The futures stage lives inside Test your view now — select its pill before using #whatif-card. */
 async function openFutures() {
   await openResearchTab('view');
-  await page.waitForSelector('#tv-stages .pill[data-mode="futures"]');
-  await page.click('#tv-stages .pill[data-mode="futures"]');
+  await page.waitForSelector('#research-outcomes-nav .outcome-basis[data-basis="futures"]');
+  await page.click('#research-outcomes-nav .outcome-basis[data-basis="futures"]');
   await page.waitForSelector('#tv-futures', { timeout: 15000 });
 }
 
@@ -408,7 +408,7 @@ test('scenario studio: beginner story cards → fan of futures → strategy verd
   await page.evaluate(() => { App.state.evidencePrefill = { studyKey: 'stale-analog-proof' }; });
   await page.click('#whatif-verify');
   await page.waitForSelector('#bt-scenario-card', { timeout: 15000 });
-  assert.ok(await page.locator('#bt-mode .pill.active[data-mode="scenario"]').count(), 'Verify opened in scenario mode');
+  assert.ok(await page.locator('#trade-outcomes-nav .outcome-basis.active[data-basis="scenario"]').count(), 'Verify opened in scenario mode');
   assert.equal(await page.evaluate(() => App.state.evidencePrefill), null,
     'generated-futures handoff cleared the prior historical-analog ensemble');
   // The FULL strategy catalog with payoff-shape sketches + a visible symbol picker.
@@ -745,7 +745,7 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   await openResearchTab('view');
   await page.waitForSelector('#test-your-view');
   // The stage selection PERSISTS by design — pick Past evidence explicitly for this walk.
-  await page.click('#tv-stages .pill[data-mode="past"]');
+  await page.click('#research-outcomes-nav .outcome-basis[data-basis="past"]');
   // The composed section sits after the chart; the two old floating cards are gone.
   const layout = await page.evaluate(() => ({
     chartTop: document.getElementById('history-card').getBoundingClientRect().top + window.scrollY,
@@ -756,7 +756,7 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   assert.ok(layout.chartTop < layout.tvTop, 'NOW (chart) precedes Test your view');
   assert.equal(layout.nestedSymbolInputs, 0, 'the evidence stage INHERITS the page symbol — no nested ticker input');
   // Both stages are visible as connected pills; Past evidence expands by default.
-  assert.equal(await page.locator('#tv-stages .pill').count(), 2, 'two connected stages');
+  assert.equal(await page.locator('#research-outcomes-nav .outcome-basis').count(), 2, 'two connected outcome bases');
   await page.waitForSelector('#what-has-happened');
   // The thesis question line names the CONDITION — "did this happen before" never leaves "this" undefined.
   await page.waitForSelector('#tv-question-line');
@@ -784,7 +784,7 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   // Expert sees the SAME engine and every protocol knob, not a reduced or separate tool.
   await page.click('#level-switch button[data-level="expert"]');
   await openResearchTab('view');
-  await page.click('#tv-stages .pill[data-mode="past"]');
+  await page.click('#research-outcomes-nav .outcome-basis[data-basis="past"]');
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
   assert.ok(await page.locator('.study-protocol[open] #study-bootstrap:visible').count(),
     'expert protocol opens with bootstrap, dates, dependence, confidence and multiplicity controls');
@@ -798,12 +798,12 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   await go('#/research/QQQ');
   await openResearchTab('view');
   await page.waitForSelector('#test-your-view');
-  await page.click('#tv-stages .pill[data-mode="past"]');
+  await page.click('#research-outcomes-nav .outcome-basis[data-basis="past"]');
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
   assert.equal(await page.locator('#study-results .alert').count(), 0,
     'an AAPL result may never appear on a QQQ page (result identity is keyed)');
   // Possible futures is the second stage of the SAME section.
-  await page.click('#tv-stages .pill[data-mode="futures"]');
+  await page.click('#research-outcomes-nav .outcome-basis[data-basis="futures"]');
   await page.waitForSelector('#tv-futures #whatif-card, #tv-futures #sc-shapes', { timeout: 15000 });
 });
 
@@ -1220,7 +1220,13 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
 
 test('backtest runs and reports mode, coverage, assumptions', async () => {
   await go('#/backtest');
-  await page.click('#bt-mode .pill[data-mode="history"]');
+  await page.click('#trade-outcomes-nav .outcome-basis[data-basis="history"]');
+  assert.match(await page.textContent('#trade-outcomes-nav .outcome-basis[data-basis="world"]'), /Setup needed/,
+    'the Demo baseline is not misrepresented as a running simulated session');
+  await page.click('#trade-outcomes-nav .outcome-basis[data-basis="world"]');
+  assert.match(await page.textContent('#trade-outcomes-panel'), /not currently inside a simulated market/i,
+    'an unavailable basis explains the missing setup instead of becoming a blank panel');
+  await page.click('#trade-outcomes-nav .outcome-basis[data-basis="history"]');
   // The portfolio engine + full family menu are Expert-only; pin this test there.
   await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#bt-engine');
@@ -1551,9 +1557,9 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   // The working symbol FOLLOWS across stages (the QQQ->AAPL amnesia bug)
   await go('#/trade/verify');
   assert.equal(await page.inputValue('#bt-symbol'), 'QQQ', 'Backtest picks up the ticker you just typed');
-  assert.equal(await page.textContent('#bt-mode .pill[data-mode="history"]'), 'Historical replay',
+  assert.match(await page.textContent('#trade-outcomes-nav .outcome-basis[data-basis="history"]'), /Historical replay/,
     'the reusable history engine does not overclaim Observed data in Demo/Scenario lanes');
-  assert.match(await page.textContent('#bt-mode-note'), /fabricated Demo history/);
+  assert.match(await page.textContent('#trade-outcomes-note'), /fabricated Demo history/);
   await go('#/recommend/scout');
   await page.waitForSelector('#intent-choices');
   await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
@@ -2464,8 +2470,8 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
   // The study itself (run on a SYMBOL page) is baseline-relative with resolved design tokens.
   await go('#/research/AAPL');
   await openResearchTab('view');
-  await page.waitForSelector('#tv-stages .pill[data-mode="past"]');
-  await page.click('#tv-stages .pill[data-mode="past"]');
+  await page.waitForSelector('#research-outcomes-nav .outcome-basis[data-basis="past"]');
+  await page.click('#research-outcomes-nav .outcome-basis[data-basis="past"]');
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
   await page.click('#study-run');
   await page.waitForSelector('#study-results .alert', { timeout: 20000 });

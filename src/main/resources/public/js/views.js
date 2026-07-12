@@ -4486,12 +4486,11 @@
     var vf = App.state.verifyForm = App.state.verifyForm || {};
     if (App.state.verifyMode) { vf.mode = App.state.verifyMode; App.state.verifyMode = null; } // handoff wins
     vf.mode = vf.mode || 'history';
-    var inWorld = App.state.world && App.state.world !== 'observed';
+    var inWorld = App.state.world && App.state.world !== App.baseWorldId();
     var scenarioActive = App.config && App.config.scenarioMode;
     var histWrap = el('div', { id: 'bt-history-mode' });
     var scenWrap = el('div', { id: 'bt-scenario-mode' });
     var worldWrap = el('div', { id: 'bt-world-mode' });
-    var modeNote = el('div', { class: 'muted small', id: 'bt-mode-note', style: 'margin:4px 0 8px' });
     // The SIMULATED SESSION verification surface (review P1 #5: a labeled mode must never be a
     // blank screen): the session's own trades ARE its verification — live P/L, the report, and
     // one-tap paths to place more or open the console.
@@ -4559,81 +4558,55 @@
         host.appendChild(alertBox('warn', 'Session record unavailable', [String((e && e.message) || e)]));
       }
     }
-    var MODES = [
-      { m: 'history', label: 'Historical replay',
-        note: App.state.world === 'demo'
-          ? 'Replays fabricated Demo history with no look-ahead; every result stays labeled DEMO.'
-          : App.state.world && App.state.world !== 'observed'
-            ? 'Replays this simulated market\'s generated history with no look-ahead.'
-            : 'Replays observed daily history with no look-ahead.' },
-      { m: 'dataset', label: 'Saved scenario',
-        note: scenarioActive
-          ? 'Your generated scenario dataset is ACTIVE — the backtest below reads it and says so.'
-          : 'Activate a generated dataset first (Data \u2192 Datasets) — then this backtest replays that story.' },
-      { m: 'scenario', label: 'Monte Carlo futures',
-        note: 'Hundreds of generated paths from a model you pick — odds of a MODEL, not history.' },
-      { m: 'analogs', label: 'Historical analogs',
-        note: 'The exact past occurrences a Research study found — conditional history, not a model.' },
-      { m: 'world', label: 'Simulated session',
-        note: inWorld ? 'You are IN a simulated market — place practice trades and let the session judge them.'
-                      : 'A live generated market with its own clock and account (Data \u2192 Simulated market).' }
-    ];
-    function applyMode(m2) {
-      vf.mode = m2;
-      modeRow.querySelectorAll('.pill').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-mode') === m2); });
-      var meta = MODES.filter(function (x) { return x.m === m2; })[0];
-      modeNote.textContent = meta ? meta.note : '';
-      // dataset mode IS the observed backtest reading the active dataset; analogs mode is the
-      // futures panel in evidence mode — both reuse the same two panels underneath.
-      var showHist = m2 === 'history' || m2 === 'dataset';
-      histWrap.style.display = showHist ? '' : 'none';
-      scenWrap.style.display = (m2 === 'scenario' || m2 === 'analogs') ? '' : 'none';
-      worldWrap.style.display = m2 === 'world' ? '' : 'none';
-      if ((m2 === 'scenario' || m2 === 'analogs') && !scenWrap.hasChildNodes()) scenarioVerifyPanel(scenWrap);
-      if (m2 === 'world' && inWorld) worldVerifyPanel(worldWrap);
-      if (m2 === 'analogs' && !App.state.evidencePrefill) {
-        modeNote.textContent = 'No study handed over yet — run Past evidence on a Research symbol page, then "Test strategies on these occurrences".';
-      }
-      if (m2 === 'dataset' && !scenarioActive) {
-        // an honest pointer, not a dead panel
-        histWrap.style.display = 'none';
-      }
-
-    }
-    function modeAvailable(m) {
-      if (m === 'dataset') return scenarioActive;
-      if (m === 'world') return inWorld;
-      if (m === 'analogs') return !!App.state.evidencePrefill;
-      return true;
-    }
-    var modeRow = el('div', { class: 'range-pills', id: 'bt-mode' },
-      MODES.map(function (o) {
-        var available = modeAvailable(o.m);
-        return el('button', { type: 'button', class: 'pill' + (vf.mode === o.m ? ' active' : ''), 'data-mode': o.m,
-          disabled: available ? null : '', title: available ? o.note : 'Set up this mode using the action below',
-          onclick: function () { applyMode(o.m); } }, o.label);
-      }));
-    var setupRow = el('div', { class: 'btn-row verify-setup', id: 'bt-mode-setup' },
-      !scenarioActive ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
-        App.navigate('#/data/datasets');
-      } }, 'Create or activate a dataset') : null,
-      !App.state.evidencePrefill ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
-        App.navigate('#/research/' + App.context.symbol('AAPL'));
-      } }, 'Find historical analogs') : null,
-      !inWorld ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
-        App.navigate('#/data/simulation');
-      } }, 'Start a simulated session') : null);
-    root.appendChild(modeRow);
-    root.appendChild(modeNote);
-    if (setupRow.children.length) root.appendChild(setupRow);
-    root.appendChild(scenWrap);
-    root.appendChild(histWrap);
-    root.appendChild(worldWrap);
-    // Init accepts every mode that is genuinely available (review P1 #5: 'world' used to be
-    // rejected here and silently fall back to History on re-render).
-    applyMode(vf.mode === 'scenario' || vf.mode === 'analogs' || vf.mode === 'history' ? vf.mode
-      : (vf.mode === 'world' && inWorld) ? 'world'
-      : (vf.mode === 'dataset' && scenarioActive) ? 'dataset' : 'history');
+    var historyNote = App.state.world === 'demo'
+      ? 'Replays fabricated Demo history with no look-ahead; every result stays labeled DEMO.'
+      : App.state.world && App.state.world !== 'observed'
+        ? 'Replays this simulated market\u2019s generated history with no look-ahead.'
+        : 'Replays observed daily history with no look-ahead.';
+    var outcomeWorkspace = Outcomes.workspace({
+      id: 'trade-outcomes', state: vf, label: 'How to test this strategy',
+      modes: [
+        { key: 'history', label: 'Historical replay', description: 'A rule across past daily prices',
+          note: historyNote, render: function (host) { host.appendChild(histWrap); } },
+        { key: 'dataset', label: 'Saved scenario', description: 'A generated path saved as candles',
+          available: !!scenarioActive,
+          note: scenarioActive
+            ? 'Your generated scenario dataset is active; the replay reads it and names it.'
+            : 'Activate a generated dataset first, then replay it as a disclosed synthetic history.',
+          unavailableReason: 'No generated dataset is active in this market.',
+          setupLabel: 'Open Datasets', setup: function () { App.navigate('#/data/datasets'); },
+          render: function (host) { host.appendChild(histWrap); } },
+        { key: 'scenario', label: 'Monte Carlo futures', description: 'Many paths from an explicit model',
+          note: 'Hundreds of generated paths from a model you pick: odds of that model, not a forecast.',
+          render: function (host) {
+            if (!scenWrap.hasChildNodes()) scenarioVerifyPanel(scenWrap);
+            host.appendChild(scenWrap);
+          } },
+        { key: 'analogs', label: 'Historical analogs', description: 'The Research study\u2019s signal episodes',
+          available: !!App.state.evidencePrefill,
+          note: 'Every strategy runs on the exact conditional-history sample Research found.',
+          unavailableReason: 'Run Past evidence on a Research symbol, then hand its occurrences to Trade.',
+          setupLabel: 'Find historical analogs',
+          setup: function () { App.navigate('#/research/' + App.context.symbol('AAPL')); },
+          render: function (host) {
+            if (!scenWrap.hasChildNodes()) scenarioVerifyPanel(scenWrap);
+            host.appendChild(scenWrap);
+          } },
+        { key: 'world', label: 'Simulated session', description: 'Decisions inside a moving practice market',
+          available: !!inWorld,
+          note: inWorld
+            ? 'Judge entries against the simulated market\u2019s own clock, fills and outcomes.'
+            : 'Create a live generated market with its own clock and practice account.',
+          unavailableReason: 'You are not currently inside a simulated market.',
+          setupLabel: 'Open Simulated market',
+          setup: function () { App.navigate('#/data/simulation'); },
+          render: function (host) {
+            host.appendChild(worldWrap);
+            return worldVerifyPanel(worldWrap);
+          } }
+      ]
+    });
+    root.appendChild(outcomeWorkspace.el);
     root = histWrap; // everything below (the historical form + reports) lives in history mode
     var sym = el('input', { type: 'text', id: 'bt-symbol', value: prefill.symbol || App.context.symbol() || bf.symbol || 'AAPL', list: 'universe-symbols' });
     // Typing a symbol here makes it the working symbol app-wide (Backtest → Builder carries it).
@@ -7073,34 +7046,28 @@
       el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Over how many trading days?'), horIn));
     wrap.appendChild(thesisRow);
 
-    // ---- Two connected stages: pills + one expanded panel ----
+    // ---- Two connected evidence bases through the shared Outcomes component ----
     var tvState = App.state.researchStudy = App.state.researchStudy || {};
     tvState.mode = tvState.mode || 'past';
-    var stagePills = el('div', { class: 'range-pills', id: 'tv-stages' },
-      el('button', { class: 'pill' + (tvState.mode === 'past' ? ' active' : ''), 'data-mode': 'past',
-        onclick: function () { tvState.mode = 'past'; renderStage(); } },
-        'Past evidence \u2014 what followed similar conditions?'),
-      el('button', { class: 'pill' + (tvState.mode === 'futures' ? ' active' : ''), 'data-mode': 'futures',
-        onclick: function () { tvState.mode = 'futures'; renderStage(); } },
-        'Possible futures \u2014 what could happen from here?'));
-    wrap.appendChild(stagePills);
-    var stageHost = el('div', { id: 'tv-stage' });
-    wrap.appendChild(stageHost);
-
-    dirSel.addEventListener('change', function () { th.direction = dirSel.value; renderStage(); });
-    horIn.addEventListener('change', function () {
-      th.horizonDays = Math.max(1, Math.min(60, parseInt(horIn.value, 10) || 10)); renderStage();
+    var outcomeWorkspace = Outcomes.workspace({
+      id: 'research-outcomes', state: tvState, label: symbol + ' evidence basis',
+      modes: [
+        { key: 'past', label: 'Past evidence',
+          description: 'What followed similar conditions?',
+          note: 'Conditional history: independent signal episodes compared with the stock\u2019s normal behavior.',
+          render: function (host) { host.appendChild(evidenceStage(symbol, th, level)); } },
+        { key: 'futures', label: 'Possible futures',
+          description: 'What could happen from here?',
+          note: 'Parametric scenarios: generated paths from an explicit model, never a forecast.',
+          render: function (host) { host.appendChild(futuresStage(symbol, th, level)); } }
+      ]
     });
+    wrap.appendChild(outcomeWorkspace.el);
 
-    function renderStage() {
-      stagePills.querySelectorAll('.pill').forEach(function (b) {
-        b.classList.toggle('active', b.dataset.mode === tvState.mode);
-      });
-      stageHost.innerHTML = '';
-      if (tvState.mode === 'past') stageHost.appendChild(evidenceStage(symbol, th, level));
-      else stageHost.appendChild(futuresStage(symbol, th, level));
-    }
-    renderStage();
+    dirSel.addEventListener('change', function () { th.direction = dirSel.value; outcomeWorkspace.refresh(); });
+    horIn.addEventListener('change', function () {
+      th.horizonDays = Math.max(1, Math.min(60, parseInt(horIn.value, 10) || 10)); outcomeWorkspace.refresh();
+    });
     return wrap;
   }
 
