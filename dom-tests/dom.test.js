@@ -2815,7 +2815,10 @@ test('completed context flows into Structure once, with an honest edit affordanc
   await page.waitForSelector('#bw-shape');
   assert.equal(await page.locator('#bw-goals').count(), 0,
     'Structure does not ask for the goal already completed in Context');
-  assert.match(await page.textContent('#idea-bar'), /AAPL.*Trade a view.*bullish.*1 month/i);
+  const contextBarText = await page.textContent('#idea-bar');
+  assert.match(contextBarText, /AAPL.*Trade a view.*bullish.*1 month/i);
+  assert.equal((contextBarText.match(/AAPL/g) || []).length, 1,
+    'the symbol link and summary do not repeat the same ticker');
   assert.ok(await page.locator('#idea-bar button:has-text("Edit context")').count(),
     'a complete context is offered for editing, never mislabeled as incomplete');
   await page.click('#bw-shape ~ .btn-row button:has-text("Back"), #bw-shape + .btn-row button:has-text("Back")');

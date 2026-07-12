@@ -2916,7 +2916,7 @@
         }
       }, 'Clear structure'));
     } else {
-      var wv = workingViewLabel();
+      var wv = workingViewLabel(!!symbol);
       if (wv) {
         bar.appendChild(el('span', { class: 'workflow-summary', id: 'working-view-chip' }, icon('compass', 14), wv));
         if (stage !== 'context') bar.appendChild(el('button', { class: 'btn btn-sm btn-secondary',
@@ -2978,11 +2978,11 @@
    * Research and Trade (persisted in the workspace): "QQQ \u00b7 Trade a view: bearish \u00b7 ~1 month".
    * Null when there's nothing meaningful yet.
    */
-  function workingViewLabel() {
+  function workingViewLabel(omitSymbol) {
     var f = App.state.discoverForm || {};
     var sym = (App.context.symbol() || f.symbol || '').toUpperCase();
     if (!sym) return null;
-    var parts = [sym];
+    var parts = omitSymbol ? [] : [sym];
     var goal = App.context.goal() || f.goal;
     goal = goal && goal !== 'ALL' && goal !== 'BROWSE' ? goal : null;
     var meta = goal && (Learn.INTENTS || []).find(function (i) { return i.key === goal; });
