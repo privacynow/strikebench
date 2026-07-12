@@ -413,24 +413,25 @@ test('scenario studio: beginner story cards → fan of futures → strategy verd
     'generated-futures handoff cleared the prior historical-analog ensemble');
   // The FULL strategy catalog with payoff-shape sketches + a visible symbol picker.
   assert.ok((await page.locator('#sc-pos .sc-card').count()) >= 16, 'full strategy catalog, not a subset');
-  // ANTI-DRIFT: the frontend catalog must name only real backend StrategyFamily values —
-  // a hand-maintained duplicate list is exactly how the six-strategy subset happened.
-  const familyCheck = await page.evaluate(async () => {
-    const fams = (await (await fetch('/api/strategies')).json()).families;
-    return Scenario.CATALOG.map(c => c.key).filter(k => !fams.includes(k));
-  });
-  assert.deepEqual(familyCheck, [], 'catalog keys unknown to the backend: ' + familyCheck.join(','));
-  // ...and the Builder's template catalog: every template maps to a REGISTRY family (or CUSTOM),
-  // and the named coverage the product promises (PMCC, synthetics, calendars) actually exists.
-  const builderCheck = await page.evaluate(async () => {
-    const fams = (await (await fetch('/api/strategies')).json()).families.concat(['CUSTOM']);
-    const tpls = Builder.TEMPLATES || [];
+  // ANTI-DRIFT: identity, names, grouping, payoff glyphs and surface eligibility are all
+  // hydrated from one server contract. Client modules retain only construction functions.
+  const catalogCheck = await page.evaluate(async () => {
+    const server = await (await fetch('/api/strategies')).json();
     return {
-      unknown: tpls.map(t => t.family).filter(f => !fams.includes(f)),
-      keys: tpls.map(t => t.key)
+      scenarioActual: Scenario.CATALOG.map(c => ({ key: c.key, label: c.label, group: c.group })),
+      scenarioExpected: server.catalog.filter(c => c.scenarioEnabled)
+        .map(c => ({ key: c.name, label: c.display, group: c.category })),
+      builderActual: Builder.TEMPLATES.map(t => ({ key: t.key, family: t.family, name: t.name, group: t.group,
+        shape: t.shape, blurb: t.blurb, risky: !!t.risky })),
+      builderExpected: server.templates.map(t => ({ key: t.key, family: t.family, name: t.display, group: t.category,
+        shape: t.payoffShape, blurb: t.summary, risky: !!t.blockedByDefault }))
     };
   });
-  assert.deepEqual(builderCheck.unknown, [], 'builder template families unknown to the backend: ' + builderCheck.unknown.join(','));
+  assert.deepEqual(catalogCheck.scenarioActual, catalogCheck.scenarioExpected,
+    'Scenario must be a server-owned eligibility view, not a second catalog');
+  assert.deepEqual(catalogCheck.builderActual, catalogCheck.builderExpected,
+    'Builder metadata must be byte-for-byte server owned');
+  const builderCheck = { keys: catalogCheck.builderActual.map(t => t.key) };
   for (const must of ['PMCC', 'SYNTHETIC_LONG', 'SYNTHETIC_SHORT', 'CALENDAR_CALL', 'DIAGONAL_CALL', 'IRON_CONDOR']) {
     assert.ok(builderCheck.keys.includes(must), 'builder catalog missing ' + must);
   }
@@ -1219,9 +1220,19 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
 
 test('backtest runs and reports mode, coverage, assumptions', async () => {
   await go('#/backtest');
+  await page.click('#bt-mode .pill[data-mode="history"]');
   // The portfolio engine + full family menu are Expert-only; pin this test there.
   await page.click('#level-switch button[data-level="expert"]');
   await page.waitForSelector('#bt-engine');
+  const backtestCatalog = await page.evaluate(async () => {
+    const server = await (await fetch('/api/strategies')).json();
+    return {
+      actual: Array.from(document.querySelectorAll('#bt-strategy option')).map(o => o.value).sort(),
+      expected: server.catalog.filter(c => c.backtestEnabled).map(c => c.name).sort()
+    };
+  });
+  assert.deepEqual(backtestCatalog.actual, backtestCatalog.expected,
+    'Backtest menu is the server-owned eligibility view of the same catalog');
   // Product form: period pills set the window; a hand-edited date clears the pill claim
   await page.click('#bt-periods .pill[data-days="365"]');
   assert.equal(await page.locator('#bt-periods .pill.active').count(), 1);

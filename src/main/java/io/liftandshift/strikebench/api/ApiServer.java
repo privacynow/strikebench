@@ -450,27 +450,15 @@ public final class ApiServer {
             c.routes.get("/api/research/{symbol}/news", this::news);
             c.routes.get("/api/lookup", this::lookup);
 
-            // The single source of truth for strategy families — frontend catalogs (builder,
-            // scenario) are checked against this in the DOM suite so they can never drift silently.
+            // The single source of truth for strategy families and concrete constructions.
+            // Frontend surfaces retain only the functions that build legs; identity, wording,
+            // ordering and surface eligibility all come from this registry.
             c.routes.get("/api/strategies", ctx -> ctx.json(Map.of(
                     "families",
                     java.util.Arrays.stream(io.liftandshift.strikebench.strategy.StrategyFamily.values())
                             .map(Enum::name).toList(),
-                    // Explicit per-family metadata: presentation grouping + foundational ordering.
-                    // The riskRank here is an EDUCATION-ORDERING hint (foundational first), never a gate.
-                    "catalog",
-                    java.util.Arrays.stream(io.liftandshift.strikebench.strategy.StrategyFamily.values())
-                            .map(f -> Map.of(
-                                    "name", f.name(),
-                                    "display", f.display(),
-                                    "structureGroup", f.structureGroup(),
-                                    "foundationalRank", f.riskRank(),
-                                    "definedRisk", f.definedRisk(),
-                                    "blockedByDefault", f.blockedByDefault(),
-                                    "multiExpiration", f.multiExpiration(),
-                                    "needsStock", f.needsStock(),
-                                    "primaryIntent", f.primaryIntent().name()))
-                            .toList())));
+                    "catalog", io.liftandshift.strikebench.strategy.StrategyCatalog.families(),
+                    "templates", io.liftandshift.strikebench.strategy.StrategyCatalog.templates())));
             c.routes.post("/api/recommend", this::recommend);
             c.routes.post("/api/recommend/auto", this::recommendAuto);
             c.routes.post("/api/recommend/ladder", this::recommendLadder);

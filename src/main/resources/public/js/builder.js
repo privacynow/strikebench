@@ -22,146 +22,61 @@
     return { action: action, type: 'STOCK', strike: null, expiration: null, ratio: ratio || 1 };
   }
 
-  /**
-   * The catalog: every structure a broker menu carries, each with a payoff-shape sketch
-   * (an SVG polyline over a 64x28 box — the SHAPE of profit vs price, not live data),
-   * a one-line blurb, and a build(ctx) that snaps legs to live strikes.
-   * ctx.pick(exp, offset) = the strike `offset` steps from at-the-money.
-   * Undefined-risk structures are listed and labeled — selecting one previews honestly,
-   * then blocks with the payoff cliff. That is the lesson, not an error.
-   */
-  var TEMPLATES = [
-    { key: 'LONG_CALL', group: 'Bullish', name: 'Long call', family: 'LONG_CALL',
-      shape: '2,20 34,20 62,4',
-      blurb: 'Stock up big — pay a premium, uncapped upside, lose at most the premium.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near)]; } },
-    { key: 'DEBIT_CALL_SPREAD', group: 'Bullish', name: 'Bull call spread (vertical)', family: 'DEBIT_CALL_SPREAD',
-      shape: '2,20 22,20 44,8 62,8',
-      blurb: 'Stock up some — cheaper than a call because you sell away the far upside.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'CREDIT_PUT_SPREAD', group: 'Bullish', name: 'Bull put spread (vertical)', family: 'CREDIT_PUT_SPREAD',
-      shape: '2,22 20,22 42,8 62,8',
-      blurb: 'Stock NOT down — collect a credit, keep it while price stays above your short strike.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near), leg('BUY', 'PUT', c.pick(c.near, -4), c.near)]; } },
-    { key: 'CASH_SECURED_PUT', group: 'Bullish', name: 'Cash-secured put', family: 'CASH_SECURED_PUT',
-      shape: '2,26 30,8 62,8',
-      blurb: 'Get paid to wait for your price — assignment buys the shares at the strike.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; } },
-    { key: 'BUY_WRITE', group: 'Bullish', name: 'Covered call (buy-write)', family: 'COVERED_CALL',
-      shape: '2,26 34,8 62,8',
-      blurb: 'Buy 100 shares and rent them out immediately — premium now, capped upside.',
-      build: function (c) { return [stockLeg('BUY', 1), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'RISK_REVERSAL', group: 'Bullish', name: 'Risk reversal', family: 'CUSTOM',
-      shape: '2,26 22,14 42,14 62,4',
-      blurb: 'Sell a put to pay for a call — strongly bullish, big reserve if wrong.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -3), c.near), leg('BUY', 'CALL', c.pick(c.near, 3), c.near)]; } },
+  // The server owns identity, names, grouping, wording and payoff glyphs. This module owns
+  // only the mechanics that snap a named construction to the currently loaded chain.
+  var TEMPLATE_BUILDERS = {
+    LONG_CALL: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near)]; },
+    DEBIT_CALL_SPREAD: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    CREDIT_PUT_SPREAD: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near), leg('BUY', 'PUT', c.pick(c.near, -4), c.near)]; },
+    CASH_SECURED_PUT: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; },
+    BUY_WRITE: function (c) { return [stockLeg('BUY', 1), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    RISK_REVERSAL: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -3), c.near), leg('BUY', 'CALL', c.pick(c.near, 3), c.near)]; },
+    LONG_PUT: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near)]; },
+    DEBIT_PUT_SPREAD: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; },
+    CREDIT_CALL_SPREAD: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'CALL', c.pick(c.near, 4), c.near)]; },
+    IRON_CONDOR: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near), leg('BUY', 'PUT', c.pick(c.near, -4), c.near), leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'CALL', c.pick(c.near, 4), c.near)]; },
+    IRON_BUTTERFLY: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.near, -3), c.near), leg('BUY', 'CALL', c.pick(c.near, 3), c.near)]; },
+    CALENDAR_CALL: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'CALL', c.pick(c.far, 0), c.far)]; },
+    CALENDAR_PUT: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.far, 0), c.far)]; },
+    DIAGONAL_CALL: function (c) { return [leg('BUY', 'CALL', c.pick(c.far, 0), c.far), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    DIAGONAL_PUT: function (c) { return [leg('BUY', 'PUT', c.pick(c.far, 0), c.far), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; },
+    LONG_STRADDLE: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.near, 0), c.near)]; },
+    LONG_STRANGLE: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; },
+    CALL_BACKSPREAD: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'CALL', c.pick(c.near, 2), c.near, 2)]; },
+    PUT_BACKSPREAD: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.near, -2), c.near, 2)]; },
+    LONG_CALL_BUTTERFLY: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, -2), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near, 2), leg('BUY', 'CALL', c.pick(c.near, 2), c.near)]; },
+    LONG_PUT_BUTTERFLY: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 2), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near, 2), leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; },
+    MARRIED_PUT: function (c) { return [stockLeg('BUY', 1), leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; },
+    COLLAR: function (c) { return [stockLeg('BUY', 1), leg('BUY', 'PUT', c.pick(c.near, -2), c.near), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    PMCC: function (c) { return [leg('BUY', 'CALL', c.pick(c.far, -4), c.far), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    SYNTHETIC_LONG: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near)]; },
+    SYNTHETIC_SHORT: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near)]; },
+    SHORT_STRADDLE: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near)]; },
+    SHORT_STRANGLE: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; },
+    NAKED_CALL: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    NAKED_PUT: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; }
+  };
+  var TEMPLATES = [];
 
-    { key: 'LONG_PUT', group: 'Bearish', name: 'Long put', family: 'LONG_PUT',
-      shape: '2,4 30,20 62,20',
-      blurb: 'Stock down big — pay a premium, profit as it falls, lose at most the premium.',
-      build: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near)]; } },
-    { key: 'DEBIT_PUT_SPREAD', group: 'Bearish', name: 'Bear put spread (vertical)', family: 'DEBIT_PUT_SPREAD',
-      shape: '2,8 20,8 42,20 62,20',
-      blurb: 'Stock down some — cheaper than a put by selling away the far downside.',
-      build: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; } },
-    { key: 'CREDIT_CALL_SPREAD', group: 'Bearish', name: 'Bear call spread (vertical)', family: 'CREDIT_CALL_SPREAD',
-      shape: '2,8 22,8 44,22 62,22',
-      blurb: 'Stock NOT up — collect a credit, keep it while price stays below your short strike.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'CALL', c.pick(c.near, 4), c.near)]; } },
-
-    { key: 'IRON_CONDOR', group: 'Neutral & income', name: 'Iron condor', family: 'IRON_CONDOR',
-      shape: '2,22 14,22 24,8 40,8 50,22 62,22',
-      blurb: 'Price stays in a range — sell both sides, wings cap the damage either way.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near), leg('BUY', 'PUT', c.pick(c.near, -4), c.near),
-                                    leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'CALL', c.pick(c.near, 4), c.near)]; } },
-    { key: 'IRON_BUTTERFLY', group: 'Neutral & income', name: 'Iron butterfly', family: 'IRON_BUTTERFLY',
-      shape: '2,22 18,22 32,6 46,22 62,22',
-      blurb: 'Price pins near today — richer credit than a condor, narrower sweet spot.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near),
-                                    leg('BUY', 'PUT', c.pick(c.near, -3), c.near), leg('BUY', 'CALL', c.pick(c.near, 3), c.near)]; } },
-    { key: 'CALENDAR_CALL', group: 'Neutral & income', name: 'Calendar call', family: 'CALENDAR_CALL',
-      shape: '2,22 20,18 32,8 44,18 62,22',
-      blurb: 'Sell the near month, own the far month — time decays faster up close.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'CALL', c.pick(c.far, 0), c.far)]; } },
-    { key: 'CALENDAR_PUT', group: 'Neutral & income', name: 'Calendar put', family: 'CALENDAR_PUT',
-      shape: '2,22 20,18 32,8 44,18 62,22',
-      blurb: 'Same idea with puts — profits when price sits still and near IV bleeds.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.far, 0), c.far)]; } },
-    { key: 'DIAGONAL_CALL', group: 'Neutral & income', name: 'Diagonal call', family: 'DIAGONAL_CALL',
-      shape: '2,24 22,16 36,8 50,16 62,20',
-      blurb: 'A covered call built from options — own a far-dated call, rent out near ones.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.far, 0), c.far), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'DIAGONAL_PUT', group: 'Neutral & income', name: 'Diagonal put', family: 'DIAGONAL_PUT',
-      shape: '2,20 16,16 30,8 46,16 62,24',
-      blurb: 'The put-side twin — far-dated put anchors, near puts collect premium.',
-      build: function (c) { return [leg('BUY', 'PUT', c.pick(c.far, 0), c.far), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; } },
-
-    { key: 'LONG_STRADDLE', group: 'Volatility', name: 'Long straddle', family: 'LONG_STRADDLE',
-      shape: '2,4 32,24 62,4',
-      blurb: 'Buy both at the money — direction unknown, the size of the move is the bet.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.near, 0), c.near)]; } },
-    { key: 'LONG_STRANGLE', group: 'Volatility', name: 'Long strangle', family: 'LONG_STRANGLE',
-      shape: '2,6 22,24 42,24 62,6',
-      blurb: 'Buy both sides out of the money — cheaper than a straddle, needs a bigger move.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; } },
-    { key: 'CALL_BACKSPREAD', group: 'Volatility', name: 'Call ratio backspread', family: 'CUSTOM',
-      shape: '2,16 20,16 34,24 62,2',
-      blurb: 'Sell one call, buy two further up — loves a violent rally, hates a slow drift.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('BUY', 'CALL', c.pick(c.near, 2), c.near, 2)]; } },
-    { key: 'PUT_BACKSPREAD', group: 'Volatility', name: 'Put ratio backspread', family: 'CUSTOM',
-      shape: '2,2 30,24 44,16 62,16',
-      blurb: 'Sell one put, buy two further down — pays off in a crash, bleeds in a drift.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, 0), c.near), leg('BUY', 'PUT', c.pick(c.near, -2), c.near, 2)]; } },
-
-    { key: 'LONG_CALL_BUTTERFLY', group: 'Pinpoint targets', name: 'Call butterfly', family: 'LONG_CALL_BUTTERFLY',
-      shape: '2,22 18,22 32,4 46,22 62,22',
-      blurb: 'Bet on a specific landing spot — tiny cost, big payoff exactly there.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, -2), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near, 2),
-                                    leg('BUY', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'LONG_PUT_BUTTERFLY', group: 'Pinpoint targets', name: 'Put butterfly', family: 'LONG_PUT_BUTTERFLY',
-      shape: '2,22 18,22 32,4 46,22 62,22',
-      blurb: 'The same pinpoint bet built from puts — useful when puts price better.',
-      build: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 2), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near, 2),
-                                    leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; } },
-
-    { key: 'MARRIED_PUT', group: 'Shares & protection', name: 'Married put (protective put)', family: 'PROTECTIVE_PUT',
-      shape: '2,14 26,14 62,2',
-      blurb: 'Shares plus an insurance floor — pay a premium, cap the downside.',
-      build: function (c) { return [stockLeg('BUY', 1), leg('BUY', 'PUT', c.pick(c.near, -2), c.near)]; } },
-    { key: 'COLLAR', group: 'Shares & protection', name: 'Collar', family: 'PROTECTIVE_COLLAR',
-      shape: '2,18 20,18 44,8 62,8',
-      blurb: 'Floor below, ceiling above — the sold call pays for most of the insurance.',
-      build: function (c) { return [stockLeg('BUY', 1), leg('BUY', 'PUT', c.pick(c.near, -2), c.near), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'PMCC', group: 'Neutral & income', name: "Poor man's covered call", family: 'DIAGONAL_CALL',
-      shape: '2,24 20,14 38,7 52,10 62,12',
-      blurb: 'A covered call without buying shares: own a deep, far-dated call (behaves like stock), rent out near-dated calls against it.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.far, -4), c.far), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'SYNTHETIC_LONG', group: 'Shares & protection', name: 'Synthetic long (stock replacement)', family: 'CUSTOM',
-      shape: '2,26 62,4',
-      blurb: 'Long call + short put at the same strike ≈ owning 100 shares, for a fraction of the cash. Same delta-1 exposure, margin instead of full share cost.',
-      build: function (c) { return [leg('BUY', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near)]; } },
-    { key: 'SYNTHETIC_SHORT', group: 'Undefined risk (blocked)', name: 'Synthetic short', family: 'CUSTOM', risky: true,
-      shape: '2,4 62,26',
-      blurb: 'Long put + short call at the same strike ≈ shorting 100 shares. The short call is UNCOVERED — losses grow without limit if the stock rallies, so it is blocked here (build it to see exactly why).',
-      build: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'CALL', c.pick(c.near, 0), c.near)]; } },
-
-    { key: 'SHORT_STRADDLE', group: 'Undefined risk (blocked)', name: 'Short straddle', family: 'SHORT_STRADDLE', risky: true,
-      shape: '2,24 32,4 62,24',
-      blurb: 'Sell both at the money — maximum premium, UNLIMITED risk. Shown so you can see why it is refused.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, 0), c.near)]; } },
-    { key: 'SHORT_STRANGLE', group: 'Undefined risk (blocked)', name: 'Short strangle', family: 'SHORT_STRANGLE', risky: true,
-      shape: '2,24 22,6 42,6 62,24',
-      blurb: 'Sell both sides wider — same unlimited-risk problem, slightly more room.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; } },
-    { key: 'NAKED_CALL', group: 'Undefined risk (blocked)', name: 'Naked call', family: 'NAKED_CALL', risky: true,
-      shape: '2,8 34,8 62,26',
-      blurb: 'A sold call with nothing behind it — losses grow without limit as the stock rallies.',
-      build: function (c) { return [leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; } },
-    { key: 'NAKED_PUT', group: 'Undefined risk (blocked)', name: 'Naked put (no cash set aside)', family: 'NAKED_PUT', risky: true,
-      shape: '2,26 30,8 62,8',
-      blurb: 'The cash-secured put without the cash — the same promise with nothing backing it.',
-      build: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; } }
-  ];
+  function applyCatalog(doc) {
+    var entries = doc && doc.templates || [];
+    var byKey = {};
+    entries.forEach(function (m) { byKey[m.key] = m; });
+    var missingServer = Object.keys(TEMPLATE_BUILDERS).filter(function (key) { return !byKey[key]; });
+    var missingMechanics = entries.filter(function (m) { return !TEMPLATE_BUILDERS[m.key]; }).map(function (m) { return m.key; });
+    if (missingServer.length || missingMechanics.length) {
+      throw new Error('Strategy catalog/build mechanics mismatch: server missing [' + missingServer.join(', ')
+        + ']; client missing [' + missingMechanics.join(', ') + ']');
+    }
+    TEMPLATES.splice(0, TEMPLATES.length);
+    entries.forEach(function (m) {
+      TEMPLATES.push({
+        key: m.key, family: m.family, group: m.category, name: m.display,
+        shape: m.payoffShape, blurb: m.summary, risky: !!m.blockedByDefault,
+        composite: !!m.composite, build: TEMPLATE_BUILDERS[m.key]
+      });
+    });
+  }
 
   /** Payoff-shape sketch: the SHAPE of profit vs price (educational, not live data). */
   function shapeGlyph(t) {
@@ -1326,5 +1241,5 @@
     }
   }
 
-  window.Builder = { render: render, TEMPLATES: TEMPLATES, WIZARD: WIZARD };
+  window.Builder = { render: render, TEMPLATES: TEMPLATES, WIZARD: WIZARD, applyCatalog: applyCatalog };
 })();

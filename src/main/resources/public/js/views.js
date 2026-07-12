@@ -1900,7 +1900,7 @@
             App.navigate('#/trade/shape');
           }
         }, 'Open in builder'),
-        BACKTESTABLE.indexOf(c.strategy) >= 0 ? el('button', {
+        canBacktest(c.strategy) ? el('button', {
           class: 'btn btn-sm btn-secondary', onclick: function () {
             App.state.backtestPrefill = { symbol: symbolForTicket || App.state.lastRecommendSymbol, strategy: c.strategy };
             App.navigate('#/trade/verify');
@@ -1910,11 +1910,14 @@
     return card;
   }
 
-  /** Families the day-by-day backtester can replay (single-expiration; no calendars/custom). */
-  var BACKTESTABLE = ['LONG_CALL', 'LONG_PUT', 'DEBIT_CALL_SPREAD', 'DEBIT_PUT_SPREAD',
-    'LONG_CALL_BUTTERFLY', 'LONG_PUT_BUTTERFLY', 'CREDIT_CALL_SPREAD', 'CREDIT_PUT_SPREAD',
-    'IRON_CONDOR', 'IRON_BUTTERFLY', 'COVERED_CALL', 'CASH_SECURED_PUT',
-    'PROTECTIVE_PUT', 'PROTECTIVE_COLLAR'];
+  function strategyMeta(name) {
+    return ((App.strategyCatalog && App.strategyCatalog.catalog) || []).find(function (m) { return m.name === name; }) || null;
+  }
+
+  function canBacktest(name) {
+    var meta = strategyMeta(name);
+    return !!(meta && meta.backtestEnabled);
+  }
 
   var THESIS_BADGE = { BULLISH: 'badge-ok', BEARISH: 'badge-danger', NEUTRAL: 'badge-dim', VOLATILE: 'badge-warn' };
 
@@ -4632,14 +4635,20 @@
     // ONE menu for both levels, grouped by goal with the foundational structure leading each
     // group (education ordering, never a gate — presentation-only levels, review P0).
     var BT_GROUPS = [
-      { label: 'Trade a view', families: ['LONG_CALL', 'LONG_PUT', 'DEBIT_CALL_SPREAD', 'DEBIT_PUT_SPREAD',
-                                          'LONG_STRADDLE', 'LONG_STRANGLE',
-                                          'LONG_CALL_BUTTERFLY', 'LONG_PUT_BUTTERFLY'] },
-      { label: 'Earn income', families: ['COVERED_CALL', 'CREDIT_CALL_SPREAD', 'CREDIT_PUT_SPREAD',
-                                         'IRON_CONDOR', 'IRON_BUTTERFLY'] },
-      { label: 'Buy at a discount', families: ['CASH_SECURED_PUT'] },
-      { label: 'Protect shares', families: ['PROTECTIVE_PUT', 'PROTECTIVE_COLLAR'] }
+      { label: 'Trade a view', families: [] },
+      { label: 'Earn income', families: [] },
+      { label: 'Buy at a discount', families: [] },
+      { label: 'Protect shares', families: [] }
     ];
+    ((App.strategyCatalog && App.strategyCatalog.catalog) || [])
+      .filter(function (m) { return m.backtestEnabled; })
+      .sort(function (a, b) { return a.foundationalRank - b.foundationalRank || a.display.localeCompare(b.display); })
+      .forEach(function (m) {
+        var label = m.name === 'CASH_SECURED_PUT' ? 'Buy at a discount'
+          : m.primaryIntent === 'HEDGE' ? 'Protect shares'
+          : m.primaryIntent === 'INCOME' ? 'Earn income' : 'Trade a view';
+        BT_GROUPS.find(function (g) { return g.label === label; }).families.push(m.name);
+      });
     var btLevel = Learn.currentLevel();
     // PRESENTATION-ONLY LEVELS (review P0): the FULL catalog is discoverable at both levels.
     // Beginner sees the same menu with the foundational structures first in each goal group —
@@ -4648,7 +4657,8 @@
     var strat = el('select', { id: 'bt-strategy' },
       BT_GROUPS.map(function (g) {
         return el('optgroup', { label: g.label }, g.families.map(function (s) {
-          return el('option', { value: s, selected: s === btDefaultStrat ? '' : null }, prettyStrategy(s));
+          var meta = strategyMeta(s);
+          return el('option', { value: s, selected: s === btDefaultStrat ? '' : null }, meta ? meta.display : prettyStrategy(s));
         }));
       }));
     strat.addEventListener('change', function () { bf.strategy = strat.value; });

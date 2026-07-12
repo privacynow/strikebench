@@ -725,15 +725,16 @@
     var app = document.getElementById('app');
     if (app && !app.firstChild) app.appendChild(UI.skeleton());
 
-    // ONE parallel round-trip for auth + config + the saved workspace — not three serial ones.
+    // ONE parallel round-trip for auth, config, workspace and the server-owned strategy catalog.
     // Route data is never fetched before auth state is known: App.render() runs only AFTER this
     // resolves, and an enabled-but-unauthenticated session swaps straight to the sign-in screen.
     var pair = await Promise.all([
       API.get('/api/auth/me').catch(function () { return null; }),
       API.get('/api/config').catch(function () { return null; }),
-      API.get('/api/workspace').catch(function () { return null; })
+      API.get('/api/workspace').catch(function () { return null; }),
+      API.get('/api/strategies').catch(function () { return null; })
     ]);
-    var me = pair[0], cfg = pair[1], wsRemote = pair[2];
+    var me = pair[0], cfg = pair[1], wsRemote = pair[2], strategyCatalog = pair[3];
     App._me = me;
     if (cfg && cfg.disclaimer) document.getElementById('disclaimer').textContent = cfg.disclaimer;
     if (cfg && cfg.brand && cfg.brand.name) applyBrand(cfg.brand);
@@ -746,6 +747,24 @@
     if (authOn && !(me && me.authenticated)) { renderSignIn(me); return; }
     App.authUser = (me && me.user) || null;
     addSignOut();
+
+    // The app has one strategy identity contract. Do not silently resurrect a client-side
+    // fallback catalog if the server contract is missing or a deployment mixed asset versions.
+    try {
+      if (!strategyCatalog || !Array.isArray(strategyCatalog.catalog) || !Array.isArray(strategyCatalog.templates)) {
+        throw new Error('The strategy catalog is unavailable.');
+      }
+      App.strategyCatalog = strategyCatalog;
+      Builder.applyCatalog(strategyCatalog);
+      Scenario.applyCatalog(strategyCatalog);
+    } catch (e) {
+      app.innerHTML = '';
+      app.setAttribute('data-ready', 'true');
+      app.appendChild(UI.alertBox('danger', (e.message || 'The strategy catalog could not be loaded.')
+        + ' Reload after restarting the app so the server and screen definitions match.'));
+      app.appendChild(UI.el('button', { class: 'btn', onclick: function () { window.location.reload(); } }, 'Reload'));
+      return;
+    }
 
     // Continuity: restore the saved workspace (forms, working idea, working symbol) and — on a
     // bare open only — the route the user was on. An explicit hash (bookmark/link) always wins.

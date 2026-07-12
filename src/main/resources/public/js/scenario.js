@@ -462,48 +462,53 @@
   function L(action, type, strike, expiryDay) { return { action: action, type: type, strike: strike, expiryDay: expiryDay, ratio: 1 }; }
   function step(s) { return s < 25 ? 0.5 : s < 100 ? 1 : s < 300 ? 2.5 : 5; }
   function grid(v, s) { var st = step(s); return Math.round(v / st) * st; }
-  var CATALOG = [
-    { key: 'LONG_CALL', group: 'Bullish', label: 'Long call', pay: '0,22 55,22 100,4',
-      legs: function (s, d) { return [L('BUY', 'CALL', grid(s, s), d)]; } },
-    { key: 'DEBIT_CALL_SPREAD', group: 'Bullish', label: 'Call spread (debit)', pay: '0,24 38,24 70,7 100,7',
-      legs: function (s, d) { return [L('BUY', 'CALL', grid(s, s), d), L('SELL', 'CALL', grid(s * 1.05, s), d)]; } },
-    { key: 'CREDIT_PUT_SPREAD', group: 'Bullish', label: 'Put spread (credit)', pay: '0,26 32,26 62,9 100,9',
-      legs: function (s, d) { return [L('SELL', 'PUT', grid(s * 0.97, s), d), L('BUY', 'PUT', grid(s * 0.92, s), d)]; } },
-    { key: 'CASH_SECURED_PUT', group: 'Bullish', label: 'Short put (CSP)', pay: '0,27 45,9 100,9',
-      legs: function (s, d) { return [L('SELL', 'PUT', grid(s * 0.95, s), d)]; } },
-    { key: 'LONG_PUT', group: 'Bearish', label: 'Long put', pay: '0,4 45,22 100,22',
-      legs: function (s, d) { return [L('BUY', 'PUT', grid(s, s), d)]; } },
-    { key: 'DEBIT_PUT_SPREAD', group: 'Bearish', label: 'Put spread (debit)', pay: '0,7 30,7 62,24 100,24',
-      legs: function (s, d) { return [L('BUY', 'PUT', grid(s, s), d), L('SELL', 'PUT', grid(s * 0.95, s), d)]; } },
-    { key: 'CREDIT_CALL_SPREAD', group: 'Bearish', label: 'Call spread (credit)', pay: '0,9 38,9 68,26 100,26',
-      legs: function (s, d) { return [L('SELL', 'CALL', grid(s * 1.03, s), d), L('BUY', 'CALL', grid(s * 1.08, s), d)]; } },
-    { key: 'IRON_CONDOR', group: 'Income', label: 'Iron condor', pay: '0,26 24,26 40,9 60,9 76,26 100,26',
-      legs: function (s, d) { return [L('SELL', 'PUT', grid(s * 0.95, s), d), L('BUY', 'PUT', grid(s * 0.90, s), d),
-                                       L('SELL', 'CALL', grid(s * 1.05, s), d), L('BUY', 'CALL', grid(s * 1.10, s), d)]; } },
-    { key: 'IRON_BUTTERFLY', group: 'Income', label: 'Iron butterfly', pay: '0,26 28,26 50,6 72,26 100,26',
-      legs: function (s, d) { return [L('SELL', 'PUT', grid(s, s), d), L('BUY', 'PUT', grid(s * 0.94, s), d),
-                                       L('SELL', 'CALL', grid(s, s), d), L('BUY', 'CALL', grid(s * 1.06, s), d)]; } },
-    { key: 'COVERED_CALL', group: 'Income', label: 'Covered call', pay: '0,29 55,9 100,9',
-      legs: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('SELL', 'CALL', grid(s * 1.05, s), d)]; } },
-    { key: 'CALENDAR_CALL', group: 'Volatility', label: 'Calendar (call)', pay: '0,25 34,15 50,7 66,15 100,25',
-      legs: function (s, d) { return [L('SELL', 'CALL', grid(s, s), Math.max(3, Math.round(d * 0.5))), L('BUY', 'CALL', grid(s, s), d + 21)]; } },
-    { key: 'DIAGONAL_CALL', group: 'Volatility', label: 'Diagonal (call)', pay: '0,26 36,16 58,7 78,13 100,17',
-      legs: function (s, d) { return [L('SELL', 'CALL', grid(s * 1.04, s), Math.max(3, Math.round(d * 0.5))), L('BUY', 'CALL', grid(s, s), d + 21)]; } },
-    { key: 'LONG_STRADDLE', group: 'Big move', label: 'Straddle', pay: '0,4 50,28 100,4',
-      legs: function (s, d) { return [L('BUY', 'CALL', grid(s, s), d), L('BUY', 'PUT', grid(s, s), d)]; } },
-    { key: 'LONG_STRANGLE', group: 'Big move', label: 'Strangle', pay: '0,6 32,26 68,26 100,6',
-      legs: function (s, d) { return [L('BUY', 'CALL', grid(s * 1.04, s), d), L('BUY', 'PUT', grid(s * 0.96, s), d)]; } },
-    { key: 'LONG_CALL_BUTTERFLY', group: 'Pinpoint', label: 'Call butterfly', pay: '0,24 34,24 50,5 66,24 100,24',
-      legs: function (s, d) { return [L('BUY', 'CALL', grid(s * 0.95, s), d), L('SELL', 'CALL', grid(s, s), d),
-                                       L('SELL', 'CALL', grid(s, s), d), L('BUY', 'CALL', grid(s * 1.05, s), d)]; } },
-    { key: 'LONG_PUT_BUTTERFLY', group: 'Pinpoint', label: 'Put butterfly', pay: '0,24 34,24 50,5 66,24 100,24',
-      legs: function (s, d) { return [L('BUY', 'PUT', grid(s * 1.05, s), d), L('SELL', 'PUT', grid(s, s), d),
-                                       L('SELL', 'PUT', grid(s, s), d), L('BUY', 'PUT', grid(s * 0.95, s), d)]; } },
-    { key: 'PROTECTIVE_PUT', group: 'Protection', label: 'Protective put', pay: '0,16 42,16 100,3',
-      legs: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('BUY', 'PUT', grid(s * 0.95, s), d)]; } },
-    { key: 'PROTECTIVE_COLLAR', group: 'Protection', label: 'Collar', pay: '0,19 30,19 66,7 100,7',
-      legs: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('BUY', 'PUT', grid(s * 0.95, s), d), L('SELL', 'CALL', grid(s * 1.05, s), d)]; } }
-  ];
+  // The server catalog owns every label, category, eligibility flag and payoff glyph.
+  // This module retains only the scenario-specific strike/expiry construction mechanics.
+  var SCENARIO_LEGS = {
+    LONG_CALL: function (s, d) { return [L('BUY', 'CALL', grid(s, s), d)]; },
+    DEBIT_CALL_SPREAD: function (s, d) { return [L('BUY', 'CALL', grid(s, s), d), L('SELL', 'CALL', grid(s * 1.05, s), d)]; },
+    CREDIT_PUT_SPREAD: function (s, d) { return [L('SELL', 'PUT', grid(s * 0.97, s), d), L('BUY', 'PUT', grid(s * 0.92, s), d)]; },
+    CASH_SECURED_PUT: function (s, d) { return [L('SELL', 'PUT', grid(s * 0.95, s), d)]; },
+    LONG_PUT: function (s, d) { return [L('BUY', 'PUT', grid(s, s), d)]; },
+    DEBIT_PUT_SPREAD: function (s, d) { return [L('BUY', 'PUT', grid(s, s), d), L('SELL', 'PUT', grid(s * 0.95, s), d)]; },
+    CREDIT_CALL_SPREAD: function (s, d) { return [L('SELL', 'CALL', grid(s * 1.03, s), d), L('BUY', 'CALL', grid(s * 1.08, s), d)]; },
+    IRON_CONDOR: function (s, d) { return [L('SELL', 'PUT', grid(s * 0.95, s), d), L('BUY', 'PUT', grid(s * 0.90, s), d), L('SELL', 'CALL', grid(s * 1.05, s), d), L('BUY', 'CALL', grid(s * 1.10, s), d)]; },
+    IRON_BUTTERFLY: function (s, d) { return [L('SELL', 'PUT', grid(s, s), d), L('BUY', 'PUT', grid(s * 0.94, s), d), L('SELL', 'CALL', grid(s, s), d), L('BUY', 'CALL', grid(s * 1.06, s), d)]; },
+    COVERED_CALL: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('SELL', 'CALL', grid(s * 1.05, s), d)]; },
+    CALENDAR_CALL: function (s, d) { return [L('SELL', 'CALL', grid(s, s), Math.max(3, Math.round(d * 0.5))), L('BUY', 'CALL', grid(s, s), d + 21)]; },
+    DIAGONAL_CALL: function (s, d) { return [L('SELL', 'CALL', grid(s * 1.04, s), Math.max(3, Math.round(d * 0.5))), L('BUY', 'CALL', grid(s, s), d + 21)]; },
+    LONG_STRADDLE: function (s, d) { return [L('BUY', 'CALL', grid(s, s), d), L('BUY', 'PUT', grid(s, s), d)]; },
+    LONG_STRANGLE: function (s, d) { return [L('BUY', 'CALL', grid(s * 1.04, s), d), L('BUY', 'PUT', grid(s * 0.96, s), d)]; },
+    LONG_CALL_BUTTERFLY: function (s, d) { return [L('BUY', 'CALL', grid(s * 0.95, s), d), L('SELL', 'CALL', grid(s, s), d), L('SELL', 'CALL', grid(s, s), d), L('BUY', 'CALL', grid(s * 1.05, s), d)]; },
+    LONG_PUT_BUTTERFLY: function (s, d) { return [L('BUY', 'PUT', grid(s * 1.05, s), d), L('SELL', 'PUT', grid(s, s), d), L('SELL', 'PUT', grid(s, s), d), L('BUY', 'PUT', grid(s * 0.95, s), d)]; },
+    PROTECTIVE_PUT: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('BUY', 'PUT', grid(s * 0.95, s), d)]; },
+    PROTECTIVE_COLLAR: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('BUY', 'PUT', grid(s * 0.95, s), d), L('SELL', 'CALL', grid(s * 1.05, s), d)]; }
+  };
+  var CATALOG = [];
+
+  function payoffPoints(shape) {
+    return String(shape || '').split(/\s+/).filter(Boolean).map(function (point) {
+      var xy = point.split(',');
+      return ((+xy[0]) * 100 / 64).toFixed(2) + ',' + xy[1];
+    }).join(' ');
+  }
+
+  function applyCatalog(doc) {
+    var entries = (doc && doc.catalog || []).filter(function (m) { return m.scenarioEnabled; });
+    var byName = {};
+    entries.forEach(function (m) { byName[m.name] = m; });
+    var missingServer = Object.keys(SCENARIO_LEGS).filter(function (key) { return !byName[key]; });
+    var missingMechanics = entries.filter(function (m) { return !SCENARIO_LEGS[m.name]; }).map(function (m) { return m.name; });
+    if (missingServer.length || missingMechanics.length) {
+      throw new Error('Strategy catalog/scenario mechanics mismatch: server missing [' + missingServer.join(', ')
+        + ']; client missing [' + missingMechanics.join(', ') + ']');
+    }
+    CATALOG.splice(0, CATALOG.length);
+    entries.forEach(function (m) {
+      CATALOG.push({ key: m.name, group: m.category, label: m.display,
+        pay: payoffPoints(m.payoffShape), summary: m.summary, legs: SCENARIO_LEGS[m.name] });
+    });
+  }
   // Back-compat alias: earlier callers/tests used QUICKS.
   var QUICKS = CATALOG;
 
@@ -630,6 +635,6 @@
   window.Scenario = {
     SHAPES: SHAPES, QUICKS: QUICKS, CATALOG: CATALOG,
     form: form, fanChart: fanChart, pnlView: pnlView, workingLegs: workingLegs,
-    realisticOutcomes: realisticOutcomes, sketch: sketch
+    realisticOutcomes: realisticOutcomes, sketch: sketch, applyCatalog: applyCatalog
   };
 })();
