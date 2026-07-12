@@ -785,6 +785,20 @@ test('world transition: authoritative PUT bootstrap recovers a failed SSE-hint h
   assert.ok(recovered.symbols > 0, 'the authoritative bootstrap hydrated the lane');
 });
 
+test('workspace hydration cannot select a market lane', async () => {
+  const result = await page.evaluate(() => {
+    const before = { app: App.state.world, market: App.Market.world };
+    const other = before.app === 'demo' ? 'observed' : 'demo';
+    Workspace.hydrate({ rev: 0, state: { v: 1, world: other, forms: {}, savedAt: Date.now() + 1000 } },
+      'lane-ownership-audit');
+    const after = { app: App.state.world, market: App.Market.world };
+    Workspace.hydrate(null, 'local');
+    return { before, after };
+  });
+  assert.deepEqual(result.after, result.before,
+    'saved work cannot bypass the server-owned world transition contract');
+});
+
 test('world transition ignores an out-of-order revision even when it names another lane', async () => {
   const state = await page.evaluate(async () => {
     const before = App.state.world;

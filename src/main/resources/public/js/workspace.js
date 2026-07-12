@@ -52,7 +52,9 @@
 
   function apply(s) {
     if (!s || s.v !== 1 || !window.App) return false;
-    if (s.world) App.state.world = s.world;
+    // The workspace remembers work, never the active market. Market lane is server-owned and
+    // may change only through App.transitionWorld so account, universe, stream and banners move
+    // atomically. Applying this field directly in a hidden tab split those owners apart.
     // Persisted-user-state migration only: old workspace blobs carried `symbol` alone.
     // New writes immediately replace it with the complete decision context.
     if (s.context) App.context.update(s.context);
@@ -147,6 +149,7 @@
     window.addEventListener('pagehide', function () {
       var s = snapshot();
       persistLocal(s);
+      if (window.App && App.state.serverStale) return;
       try {
         fetch('/api/workspace', {
           method: 'PUT', keepalive: true,

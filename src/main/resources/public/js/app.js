@@ -997,7 +997,11 @@
       if (document.visibilityState !== 'visible') return;
       API.getFresh('/api/world').then(function (w) {
         var srv = (w && w.world) || 'observed';
-        if (srv !== App.state.world) App.transitionWorld(srv, null, w && w.revision, w && w.epoch)
+        var ownersDisagree = srv !== App.state.world
+          || (App.Market && App.Market.world !== srv)
+          || !App.state.universe || !App.state.universe.active
+          || App.state.transitionStatus === 'failed';
+        if (ownersDisagree) App.transitionWorld(srv, null, w && w.revision, w && w.epoch)
           .catch(function () { /* banner shown */ });
       }).catch(function () { /* offline — next visit retries */ });
     });
