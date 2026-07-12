@@ -3221,6 +3221,11 @@ test('simulated market: product creator, loud live band, world-routed research, 
   // one focus chart is explicit, and Demo is not offered as a competing primary market.
   await go('#/data/simulation');
   await page.waitForSelector('#sim-control-room #cr-symbols .sim-symbol-tile', { timeout: 20000 });
+  await page.waitForFunction(() => {
+    const tiles = Array.from(document.querySelectorAll('#cr-symbols .sim-symbol-tile'));
+    return tiles.length > 0 && tiles.every(tile =>
+      tile.querySelector('.spark-slot .spark-svg, .spark-slot .spark-empty'));
+  }, { timeout: 20000 });
   const controlRoom = await page.evaluate(async () => {
     const sessions = (await API.getFresh('/api/sim/market')).sessions || [];
     const current = sessions.find(x => x.id === App.state.world);
@@ -3236,6 +3241,7 @@ test('simulated market: product creator, loud live band, world-routed research, 
       rendered: tiles.length,
       demoAction: !!document.getElementById('enter-demo-market'),
       focusCharts: document.querySelectorAll('#cr-chart svg.chart.candles').length,
+      queuedCharts: document.querySelectorAll('#cr-symbols .spark-loading').length,
       stickyHeight: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sticky-stack-h')) || 0,
       firstTop: rect.top,
       firstHit: !!(hit && hit.closest('.sim-symbol-tile') === first)
@@ -3244,6 +3250,7 @@ test('simulated market: product creator, loud live band, world-routed research, 
   assert.equal(controlRoom.rendered, controlRoom.expected, 'all session symbols have visible overview tiles');
   assert.equal(controlRoom.demoAction, false, 'an active simulation has no competing Enter demo action');
   assert.equal(controlRoom.focusCharts, 1, 'one explicit focus chart, with overview tiles for breadth');
+  assert.equal(controlRoom.queuedCharts, 0, 'every visible overview chart resolves beyond the queued state');
   assert.ok(controlRoom.firstTop >= controlRoom.stickyHeight - 2 && controlRoom.firstHit,
     'the measured sticky stack does not cover the symbol overview: ' + JSON.stringify(controlRoom));
   const focusTarget = await page.locator('#cr-symbols .sim-symbol-tile').nth(1).getAttribute('data-symbol');
