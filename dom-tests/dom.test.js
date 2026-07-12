@@ -461,6 +461,7 @@ test('scenario studio: beginner view → decision facts → same-receipt strateg
   assert.ok((await page.locator('#whatif-card .sc-card').count()) >= 6, 'story cards');
   assert.ok((await page.locator('#whatif-card .sc-sketch svg').count()) >= 6, 'shape sketches');
   assert.match(await page.textContent('#whatif-card'), /Drops, then recovers/);
+  await page.waitForFunction(() => /±\d+%/.test(document.querySelector('#sc-mag-note')?.textContent || ''));
   assert.match(await page.textContent('#sc-mag-note'), /±\d+%/); // live magnitude preview
   await page.click('#whatif-card .sc-card[data-shape="SELLOFF_REBOUND"]');
   await page.fill('#whatif-target', '260');
@@ -901,7 +902,7 @@ test('working view follows: idea bar carries the thesis; scenario studio opens o
   const wv = await page.textContent('#working-view-chip');
   assert.match(wv, /bearish/);
   assert.match(wv, /~1 month/);
-  assert.equal(await page.textContent('#workflow-symbol'), 'QQQ',
+  assert.equal(await page.textContent('#idea-bar .workflow-symbol'), 'QQQ',
     'the symbol has one dedicated owner instead of being repeated inside the view chip');
   // A fresh Scenario Studio opens on the bearish story (Rises, then fades) — not a random default.
   await go('#/research/QQQ');
@@ -1306,7 +1307,16 @@ let tradeUrlHash = null;
 
 test('Context-to-Decide: screening happens once; Decide is review and paper confirmation', async () => {
   // Decide without a structure = an honest setup state, never a duplicate wizard.
-  await page.evaluate(() => { Learn.setLevel('beginner'); App.state.ticket = null; });
+  await page.evaluate(() => {
+    Learn.setLevel('beginner');
+    App.state.ticket = null;
+    App.state.filterState = {};
+    App.state.recommendResults = null;
+    App.state.scoutResults = null;
+    App.state.discoverForm = { source: 'single', symbol: 'AAPL', goal: 'DIRECTIONAL',
+      goalExplicit: true, thesis: 'bullish', horizon: 'month' };
+    App.context.update({ symbol: 'AAPL', goal: 'DIRECTIONAL', thesis: 'bullish', horizon: 'month' });
+  });
   await go('#/trade/decide');
   assert.match(await page.textContent('#app'), /Nothing to place yet/);
   // One explicit decision loop; every step remains reachable and explains its job.
