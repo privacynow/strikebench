@@ -1598,6 +1598,38 @@ test('theme toggle, brand, health banner, route error boundary', async () => {
   await page.waitForSelector('#app[data-ready="true"]');
 });
 
+test('interaction contract: clickable surfaces are keyboard-operable, errors are nonblocking, modals own focus', async () => {
+  for (const hash of ['#/welcome', '#/home', '#/research', '#/portfolio']) {
+    await go(hash);
+    const violations = await page.$$eval('.clickable', nodes => nodes.filter(n => {
+      const native = n.matches('a[href],button');
+      const role = n.getAttribute('role');
+      return !native && (!['link', 'button'].includes(role) || n.getAttribute('tabindex') !== '0');
+    }).map(n => n.outerHTML.slice(0, 160)));
+    assert.deepEqual(violations, [], 'dead/mouse-only clickable surface on ' + hash + ': ' + violations.join('\n'));
+  }
+
+  const assets = await page.evaluate(async () => ({
+    app: await (await fetch('/js/app.js')).text(),
+    views: await (await fetch('/js/views.js')).text()
+  }));
+  assert.doesNotMatch(assets.app + assets.views, /\balert\s*\(/, 'async failures must use inline errors or the accessible toast');
+
+  await go('#/portfolio');
+  const modalTrigger = page.locator('#buy-shares-btn');
+  assert.equal(await modalTrigger.count(), 1, 'portfolio exposes one stable buy-shares command');
+  await modalTrigger.click();
+  const dialog = page.locator('#modal-root [role="dialog"]');
+  assert.equal(await dialog.count(), 1, 'modal has dialog semantics');
+  assert.equal(await dialog.getAttribute('aria-modal'), 'true');
+  assert.equal(await page.evaluate(() => document.querySelector('#modal-root [role="dialog"]').contains(document.activeElement)), true,
+    'focus moves inside the modal');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#modal-root [role="dialog"]'));
+  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'buy-shares-btn',
+    'Escape closes and restores focus to the trigger');
+});
+
 test('interactive charts, range pills, universe picker, and the tape', async () => {
   // Research chart: pills switch windows; crosshair reads values on hover
   await go('#/research/AAPL');
@@ -2646,6 +2678,13 @@ test('simulated market: product creator, loud live band, world-routed research, 
   assert.doesNotMatch(after.uniLabel, /simulated session/i, 'the universe label reconciled to the baseline market');
 
   // Finish via the app modal (never window.confirm): the REPORT shows before the finish.
+  await go('#/data/simulation');
+  await page.waitForSelector('.sim-session-row button:has-text("Finish")');
+  // The card surface itself enters the market; it is not a decorative shell around buttons.
+  await page.click('.sim-session-row', { position: { x: 5, y: 5 } });
+  await page.waitForFunction((baseline) => App.state.world !== baseline, baselineWorld, { timeout: 15000 });
+  await page.click('#world-exit');
+  await page.waitForFunction((baseline) => App.state.world === baseline, baselineWorld, { timeout: 15000 });
   await go('#/data/simulation');
   await page.waitForSelector('.sim-session-row button:has-text("Finish")');
   await page.click('.sim-session-row button:has-text("Finish")');

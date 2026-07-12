@@ -8,6 +8,14 @@
 
   var CORE_SYMBOLS = ['AAPL', 'SPY', 'QQQ', 'TSLA'];
 
+  function positiveInteger(value, label, max) {
+    var n = Number(value);
+    if (!Number.isInteger(n) || n < 1 || (max && n > max)) {
+      throw new Error((label || 'Value') + ' must be a whole number from 1' + (max ? ' to ' + max : '') + '.');
+    }
+    return n;
+  }
+
   var icon = UI.icon;
 
   /**
@@ -167,18 +175,20 @@
     ];
     root.appendChild(section('CHOOSE YOUR ALTITUDE', 'How do you want to start?',
       el('div', { class: 'welcome-grid', id: 'welcome-levels' }, LEVEL_CARDS.map(function (c) {
-        return el('div', { class: 'card welcome-card' },
+        function start() {
+          Learn.setLevel(c.level);
+          try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
+          if (c.toast && UI.toast) UI.toast(c.toast);
+          App.navigate(c.go);
+        }
+        var card = el('div', { class: 'card welcome-card clickable', onclick: start },
           el('div', { class: 'icon-tile' }, icon(c.ic)),
           el('h3', {}, c.title),
           el('p', {}, c.blurb),
           el('button', {
-            class: 'btn', 'data-welcome-level': c.level, onclick: function () {
-              Learn.setLevel(c.level);
-              try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
-              if (c.toast && UI.toast) UI.toast(c.toast);
-              App.navigate(c.go);
-            }
+            class: 'btn', 'data-welcome-level': c.level, onclick: function (e) { e.stopPropagation(); start(); }
           }, c.cta));
+        return pressable(card, c.title + ': ' + c.blurb, 'link');
       }))));
 
     // ---- How it works: the four-step promise, full width, original ghost numerals ----
@@ -554,22 +564,23 @@
   }
 
   /** Keyboard + AT semantics for clickable tiles/rows (review #12: no mouse-only navigation). */
-  function pressable(node, label) {
-    node.setAttribute('role', 'link');
+  function pressable(node, label, role) {
+    node.setAttribute('role', role || node.getAttribute('role') || 'link');
     node.setAttribute('tabindex', '0');
     if (label) node.setAttribute('aria-label', label);
     node.addEventListener('keydown', function (e) {
+      if (e.target !== node) return; // nested buttons own their own keyboard activation
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); node.click(); }
     });
     return node;
   }
 
   function quickAction(title, hint, hash, ic) {
-    return el('div', { class: 'tile qa-tile', onclick: function () { App.navigate(hash); } },
+    return pressable(el('div', { class: 'tile qa-tile clickable', onclick: function () { App.navigate(hash); } },
       el('div', { class: 'qa-head' },
         el('div', { class: 'icon-tile icon-tile-sm' }, icon(ic || 'compass', 18)),
         el('div', {}, el('div', { class: 't-sym' }, title),
-          el('div', { class: 'muted qa-hint' }, hint))));
+          el('div', { class: 'muted qa-hint' }, hint)))), title + ': ' + hint, 'link');
   }
 
   // ---------- 2. Research ----------
@@ -1557,7 +1568,7 @@
               await API.put('/api/universe', { sector: sector.key });
               await App.refreshUniverse();
               App.render();
-            } catch (e) { alert(e.message); }
+            } catch (e) { UI.toast(e.message || 'Could not change the active universe', 'error'); }
           }
         }, 'Make this my universe'));
       } else {
@@ -2021,22 +2032,23 @@
         return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir;
       });
       var head = el('tr', {}, COLS.map(function (col) {
-        return el('th', {
-          style: 'cursor:pointer; white-space:nowrap',
+        return el('th', {}, el('button', {
+          class: 'table-sort', type: 'button',
           onclick: function () {
             if (sortKey === col.key) sortDir = -sortDir; else { sortKey = col.key; sortDir = -1; }
             render();
           }
-        }, col.label + (sortKey === col.key ? (sortDir < 0 ? ' \u2193' : ' \u2191') : ''));
+        }, col.label + (sortKey === col.key ? (sortDir < 0 ? ' \u2193' : ' \u2191') : '')));
       }).concat([el('th', {}, '')]));
       var body = el('tbody', {});
       sorted.forEach(function (c) {
         var detailRow = el('tr', { class: 'compare-detail', style: 'display:none' },
           el('td', { colspan: String(COLS.length + 1) }));
-        var row = el('tr', {
-          class: 'clickable', onclick: function () {
+        var row = pressable(el('tr', {
+          class: 'clickable', 'aria-expanded': 'false', onclick: function () {
             var open = detailRow.style.display !== 'none';
             detailRow.style.display = open ? 'none' : '';
+            this.setAttribute('aria-expanded', String(!open));
             if (!open && !detailRow.firstChild.firstChild) {
               detailRow.firstChild.appendChild(candidateCard(c, true));
             }
@@ -2048,7 +2060,7 @@
               App.state.ticket = { world: App.state.world || 'observed', candidate: c, symbol: App.state.lastRecommendSymbol, step: 5 };
               App.navigate('#/trade/place');
             }
-          }, 'Use'))]));
+          }, 'Use'))])), 'Show details for ' + c.displayName, 'button');
         body.appendChild(row);
         body.appendChild(detailRow);
       });
@@ -2172,7 +2184,7 @@
           await API.put('/api/universe', { sector: sec.key });
           await App.refreshUniverse();
           App.render(); // header tape + labels update everywhere
-        } catch (e) { alert(e.message); }
+        } catch (e) { UI.toast(e.message || 'Could not change the active universe', 'error'); }
       }
     });
     // The rail must SHOW the persisted selection even when this screen is the first one rendered
@@ -3065,13 +3077,14 @@
         }, 'Use')));
         var detail = el('tr', { class: 'compare-detail', style: 'display:none' },
           el('td', { colspan: String(headers.length + 1) }));
-        var row = el('tr', {
-          class: 'clickable' + (i === recommended ? ' ladder-recommended' : ''), onclick: function () {
+        var row = pressable(el('tr', {
+          class: 'clickable' + (i === recommended ? ' ladder-recommended' : ''), 'aria-expanded': 'false', onclick: function () {
             var open = detail.style.display !== 'none';
             detail.style.display = open ? 'none' : '';
+            this.setAttribute('aria-expanded', String(!open));
             if (!open && !detail.firstChild.firstChild) detail.firstChild.appendChild(candidateCard(c, true, ctx.symbol));
           }
-        }, tds);
+        }, tds), 'Show details for ' + c.displayName, 'button');
         return [row, detail];
       });
       var tbody = el('tbody', {});
@@ -3190,7 +3203,8 @@
       body.appendChild(el('div', { class: 'field', style: 'margin-top:12px' }, el('label', {}, 'Quantity'), qtyInput));
       body.appendChild(backNext(4, el('button', {
         class: 'btn', id: 'to-review', onclick: function () {
-          t.qty = Math.max(1, parseInt(qtyInput.value || '1', 10));
+          try { t.qty = positiveInteger(qtyInput.value || '1', 'Quantity', 100); }
+          catch (e) { UI.toast(e.message, 'error'); return; }
           nav(6);
         }
       }, 'Review →')));
@@ -3439,8 +3453,12 @@
         el('div', { class: 'field', style: 'margin-top:8px' }, el('label', {}, 'Shares'), qty)),
       side === 'buy' ? 'Buy' : 'Sell',
       async function () {
+        var shares = positiveInteger(qty.value, 'Shares');
+        if (side === 'sell' && maxShares && shares > maxShares) {
+          throw new Error('Only ' + maxShares + ' shares are available to sell.');
+        }
         await API.post('/api/positions/' + side,
-          { symbol: symInput.value.trim(), shares: parseInt(qty.value, 10) });
+          { symbol: symInput.value.trim(), shares: shares });
         App.render();
       });
   }
@@ -3802,10 +3820,15 @@
           }
           if (!legs.length) throw new Error('Add at least one leg (strike + expiration).');
           if (net.value === '') throw new Error('The actual net fill is required.');
+          var orderQty = positiveInteger(qty.value || '1', 'Quantity', 100);
+          var netValue = Number(net.value);
+          var feeValue = fees.value === '' ? null : Number(fees.value);
+          if (!Number.isFinite(netValue)) throw new Error('Enter a valid net fill.');
+          if (feeValue !== null && (!Number.isFinite(feeValue) || feeValue < 0)) throw new Error('Fees must be zero or more.');
           var t = await API.post('/api/trades/external', {
-            symbol: (sym.value || '').toUpperCase(), strategy: 'CUSTOM', qty: Math.max(1, parseInt(qty.value || '1', 10)),
-            legs: legs, proposedNetCents: Math.round(parseFloat(net.value) * 100),
-            feesOverrideCents: fees.value === '' ? null : Math.round(parseFloat(fees.value) * 100),
+            symbol: (sym.value || '').toUpperCase(), strategy: 'CUSTOM', qty: orderQty,
+            legs: legs, proposedNetCents: Math.round(netValue * 100),
+            feesOverrideCents: feeValue === null ? null : Math.round(feeValue * 100),
             executedAt: execDate.value || null, broker: brokerIn.value || null, orderRef: refIn.value || null,
             historical: pastChk.checked, source: 'IMPORT' });
           msg.textContent = 'Recorded ' + t.id + ' — it now appears below with an EXTERNAL badge.';
@@ -3851,7 +3874,7 @@
       return;
     }
     var rows = data.trades.map(function (t) {
-      return el('tr', {
+      return pressable(el('tr', {
         class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); }
       },
         el('td', {}, el('b', {}, t.symbol)),
@@ -3866,7 +3889,8 @@
               ? pnlSpan(t.unrealizedPnlCents) : el('span', { class: 'muted' }, '—'))
           : null,
         el('td', {}, tab === 'active' ? el('span', { class: 'muted' }, UI.fmtDate(t.createdAt)) : pnlSpan(t.realizedPnlCents)),
-        el('td', {}, el('span', { class: 'badge ' + (t.status === 'ACTIVE' ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, t.status)));
+        el('td', {}, el('span', { class: 'badge ' + (t.status === 'ACTIVE' ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, t.status))),
+        'Open ' + t.symbol + ' ' + prettyStrategy(t.strategy), 'link');
     });
     tradesCard.appendChild(table(
       tab === 'active'
@@ -4131,18 +4155,23 @@
     var f = Scenario.form(level, symbol);
     card.appendChild(f.el);
     var out = el('div', { id: 'whatif-out' });
+    var previewSeq = 0;
     var toVerify = el('button', { class: 'btn btn-secondary', id: 'whatif-verify', style: 'display:none' }, 'Test a strategy under this »');
     var run = el('button', { class: 'btn', id: 'whatif-run' }, level === 'beginner' ? 'Show me 200 possible futures' : 'Preview the fan');
     var reroll = el('button', { class: 'btn btn-sm btn-secondary', id: 'whatif-reroll', title: 'New random seed — a different set of futures' }, 'Re-roll');
     run.addEventListener('click', async function () {
+      var seq = ++previewSeq;
       run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Drawing futures…'));
       try {
         var p = await API.post('/api/sim/scenario', { symbol: symbol, spec: f.getSpec() });
+        if (seq !== previewSeq) return;
         out.innerHTML = '';
         out.appendChild(Scenario.fanChart(p));
         toVerify.style.display = '';
-      } catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Could not simulate', [String((e && e.message) || e)])); }
-      finally { run.disabled = false; }
+      } catch (e) {
+        if (seq === previewSeq) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Could not simulate', [String((e && e.message) || e)])); }
+      }
+      finally { if (seq === previewSeq) run.disabled = false; }
     });
     reroll.addEventListener('click', function () { f.reroll(); run.click(); });
     toVerify.addEventListener('click', function () {
@@ -4245,6 +4274,7 @@
     card.appendChild(posWrap);
 
     var out = el('div', { id: 'sc-verify-out' });
+    var actionSeq = 0;
     async function spotFor() {
       var qd = await API.get('/api/quotes?symbols=' + symbol);
       var row = (qd.quotes || [])[0] || {};
@@ -4254,7 +4284,10 @@
     }
     var run = el('button', { class: 'btn', id: 'sc-verify-run' }, level === 'beginner' ? 'Run it through the futures' : 'Run Monte Carlo');
     run.addEventListener('click', async function () {
-      run.disabled = true; out.innerHTML = ''; out.appendChild(UI.spinner('Simulating…'));
+      var seq = ++actionSeq;
+      run.disabled = true;
+      if (compareBtn) compareBtn.disabled = true;
+      out.innerHTML = ''; out.appendChild(UI.spinner('Simulating…'));
       try {
         var spec = f.getSpec();
         var legs, spot = null;
@@ -4278,6 +4311,7 @@
           legs: [{ action: 'BUY', type: 'STOCK', strike: 0, expiryDay: 0, ratio: 1 }] }, extra))
           .catch(function () { return null; });
         var r = await rP, bas = await basP;
+        if (seq !== actionSeq) return;
         out.innerHTML = '';
         if (evActive && ev.studyKey && r.studyKey && r.studyKey !== ev.studyKey) {
           out.appendChild(alertBox('warn', 'The underlying data changed since the study was run',
@@ -4299,14 +4333,17 @@
               UI.fmtMoneyCompact(r.expectedPnlCents - bas.expectedPnlCents),
               'Expected P&L difference on IDENTICAL paths. Positive = the structure adds value under your scenario.')));
         }
-      } catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Simulation failed', [String((e && e.message) || e)])); }
-      finally { run.disabled = false; }
+      } catch (e) {
+        if (seq === actionSeq) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Simulation failed', [String((e && e.message) || e)])); }
+      }
+      finally { if (seq === actionSeq) { run.disabled = false; if (compareBtn) compareBtn.disabled = false; } }
     });
 
     // The junior's core ask: ONE market view, EVERY compatible structure, identical paths.
     var compareBtn = el('button', { class: 'btn btn-secondary', id: 'sc-compare-all' },
       level === 'beginner' ? 'Which strategy fits this story best?' : 'Compare all strategies');
     compareBtn.addEventListener('click', async function () {
+      var seq = ++actionSeq;
       compareBtn.disabled = true; run.disabled = true;
       out.innerHTML = '';
       out.appendChild(UI.spinner('Running every structure on one identical set of futures…'));
@@ -4323,6 +4360,7 @@
           }) };
         if (evOnC) { cmpBody.pathSource = evC.source; cmpBody.study = evC.study; }
         var cmp = await API.post('/api/sim/compare', cmpBody);
+        if (seq !== actionSeq) return;
         if (evOnC && evC.studyKey && cmp.studyKey && cmp.studyKey !== evC.studyKey) {
           out.appendChild(alertBox('warn', 'The underlying data changed since the study was run',
             ['The comparison re-derived the analogs against CURRENT data — re-run Past evidence in Research if this surprises you.']));
@@ -4351,7 +4389,7 @@
           + 'Ranked by expected gain per dollar of realistic downside (1-in-20 bad run) so small and large positions compare fairly. '
           + 'The baseline every structure must beat: CASH \u2014 doing nothing risks nothing and costs nothing.'));
         function rowFor(x) {
-          return el('tr', { class: 'clickable' },
+          return el('tr', {},
             el('td', {}, el('b', {}, x.q.label), ' ', el('span', { class: 'muted small' }, x.q.group)),
             el('td', {}, Math.round(x.r.winRatePct) + '%'),
             el('td', {}, pnlSpan(x.r.expectedPnlCents)),
@@ -4391,8 +4429,10 @@
         out.appendChild(el('div', { class: 'muted small' },
           'Naked calls/puts and short straddles/strangles are not simulated — undefined risk is blocked by design across the app. '
           + 'A different story re-ranks the whole table; the honest conclusion can be that nothing beats the baseline.'));
-      } catch (e) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Comparison failed', [String((e && e.message) || e)])); }
-      finally { compareBtn.disabled = false; run.disabled = false; }
+      } catch (e) {
+        if (seq === actionSeq) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Comparison failed', [String((e && e.message) || e)])); }
+      }
+      finally { if (seq === actionSeq) { compareBtn.disabled = false; run.disabled = false; } }
     });
 
     card.appendChild(el('div', { class: 'btn-row' }, run, compareBtn));
@@ -5072,9 +5112,9 @@
                 App.emitEvent('world.control', { world: sx.id, running: running });
                 App.refreshWorldBand();
               }
-              catch (e) { alert(e.message); } } }, sx.running ? 'Pause' : 'Play'),
+              catch (e) { UI.toast(e.message || 'Could not change simulation playback', 'error'); } } }, sx.running ? 'Pause' : 'Play'),
             el('button', { class: 'btn btn-sm', onclick: async function () {
-              try { await API.post('/api/sim/market/' + sx.id + '/step', {}); } catch (e) { alert(e.message); } } }, 'Step'),
+              try { await API.post('/api/sim/market/' + sx.id + '/step', {}); } catch (e) { UI.toast(e.message || 'Could not advance the simulated market', 'error'); } } }, 'Step'),
             el('button', { class: 'btn btn-sm', onclick: function () { injectModal(sx); } }, 'Inject event'),
             el('button', { class: 'btn btn-sm', onclick: function () { showReport(sx); } }, 'Report'),
             el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/trade/discover'); } }, 'Find strategies'),
@@ -5203,7 +5243,7 @@
       function sessionRow(sx, finished) {
         var cfg = sx.config || {};
         var active = App.state.world === sx.id;
-        var row = el('div', { class: 'btn-row sim-session-row', 'data-sim-id': sx.id, style: 'margin:6px 0' },
+        var row = el('div', { class: 'card-slim btn-row sim-session-row clickable', 'data-sim-id': sx.id, style: 'margin:6px 0' },
           el('b', {}, sx.name || sx.id),
           el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : finished ? 'badge-dim' : 'badge-warn') },
             finished ? 'FINISHED' : sx.running ? 'RUNNING' : 'PAUSED'),
@@ -5223,7 +5263,7 @@
               App.emitEvent('world.control', { world: sx.id, running: running });
               App.refreshWorldBand();
             }
-            catch (e) { alert(e.message); } } }, sx.running ? 'Pause' : 'Start'));
+            catch (e) { UI.toast(e.message || 'Could not change simulation playback', 'error'); } } }, sx.running ? 'Pause' : 'Start'));
           row.appendChild(el('button', { class: 'btn btn-sm', id: 'sim-inject-' + sx.id, onclick: function () {
             injectModal(sx); } }, 'Inject event'));
         }
@@ -5232,7 +5272,13 @@
           row.appendChild(el('button', { class: 'btn btn-sm btn-danger', onclick: function () {
             finishModal(sx); } }, 'Finish'));
         }
-        return row;
+        row.addEventListener('click', function (e) {
+          if (e.target.closest('button,a,input,select,textarea')) return;
+          if (finished) showReport(sx);
+          else App.switchWorld(sx.id);
+        });
+        return pressable(row, finished ? 'Open report for ' + (sx.name || sx.id)
+          : 'Enter simulated market ' + (sx.name || sx.id), 'link');
       }
 
       /** Inject-event: an app modal with a SYMBOL PICKER — never window.prompt (review P2). */
@@ -5599,7 +5645,7 @@
             await API.post('/api/sim/market/' + res.worldId + '/start', {});
             await App.switchWorld(res.worldId);
             refreshSim();
-          } catch (e) { alert(e.message); }
+          } catch (e) { UI.toast(e.message || 'Could not create the simulated session', 'error'); }
           createBtn.disabled = false;
         } }, 'Create & enter');
         creator.appendChild(createBtn);
@@ -5914,7 +5960,7 @@
                     App.refreshScenarioBanner && App.refreshScenarioBanner();
                     App.state.lastRecommendSymbol = (sym.value || '').toUpperCase();
                     App.navigate('#/research/' + (sym.value || '').toUpperCase());
-                  } catch (e2) { alert(e2.message); }
+                  } catch (e2) { UI.toast(e2.message || 'Could not activate this scenario', 'error'); }
                 } }, 'Use it — explore in Research'),
                 el('button', { class: 'btn btn-sm', onclick: async function () {
                   try {
@@ -5922,11 +5968,11 @@
                     App.refreshScenarioBanner && App.refreshScenarioBanner();
                     App.state.lastRecommendSymbol = (sym.value || '').toUpperCase();
                     App.navigate('#/trade/verify');
-                  } catch (e2) { alert(e2.message); }
+                  } catch (e2) { UI.toast(e2.message || 'Could not activate this scenario', 'error'); }
                 } }, 'Compare strategies under it'),
                 el('button', { class: 'btn btn-sm btn-secondary', onclick: async function () {
                   try { await API.del('/api/datasets/' + r.datasetId); note.innerHTML = 'Deleted.'; loadDatasets(); }
-                  catch (e2) { alert(e2.message); }
+                  catch (e2) { UI.toast(e2.message || 'Could not delete this scenario', 'error'); }
                 } }, 'Delete'))));
             loadDatasets();
           } catch (e) { note.textContent = 'Failed: ' + ((e && e.message) || e); }

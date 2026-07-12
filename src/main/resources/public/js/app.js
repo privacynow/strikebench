@@ -215,7 +215,7 @@
             await API.put('/api/datasets/active', { id: 'observed' });
             refreshScenarioBanner();
             App.render();
-          } catch (e) { alert(e.message); }
+          } catch (e) { UI.toast(e.message || 'Could not return to the market baseline', 'error'); }
         } }, 'Back to market baseline'));
       document.body.insertBefore(banner, document.getElementById('tape') || document.body.firstChild);
       // The scenario's own SYMBOL powers the Research/Test buttons (dataset rows carry it).
@@ -378,7 +378,7 @@
           await API.post('/api/sim/market/' + world + '/speed', { speed: speed });
           App.emitEvent('world.control', { world: world, speed: speed });
         }
-        catch (e) { UI.toast ? UI.toast(e.message) : alert(e.message); }
+        catch (e) { UI.toast(e.message || 'Could not change simulation speed', 'error'); }
       } },
       SPEED_CHOICES.map(function (x) { return UI.el('option', { value: String(x) }, SPEED_LABELS[x] || (x + '\u00d7')); }));
     if (sess && sess.speed && SPEED_CHOICES.indexOf(Math.round(sess.speed)) < 0) {
@@ -401,11 +401,11 @@
           var t = band.querySelector('#world-toggle');
           if (t) t.textContent = !isPlaying ? 'Pause' : 'Play';
           App.emitEvent('world.control', { world: world, running: !isPlaying });
-        } catch (e) { alert(e.message); }
+        } catch (e) { UI.toast(e.message || 'Could not change simulation playback', 'error'); }
       } }, playing ? 'Pause' : 'Play'),
       UI.el('button', { class: 'btn btn-sm', id: 'world-step', onclick: async function () {
         try { await API.post('/api/sim/market/' + world + '/step', {}); worldTicked(); }
-        catch (e) { alert(e.message); }
+        catch (e) { UI.toast(e.message || 'Could not advance the simulated market', 'error'); }
       } }, 'Step'),
       speedSel,
       UI.el('button', { class: 'btn btn-sm', id: 'world-report', onclick: function () { App.navigate('#/data/simulation'); } },
@@ -611,7 +611,7 @@
       // The PUT's response carries the target bootstrap: server and client commit together.
       await App.transitionWorld(worldId, res && res.universe, res && res.revision, res && res.epoch)
         .catch(function () { /* visible in the banner */ });
-    } catch (e) { alert(e.message); }
+    } catch (e) { UI.toast(e.message || 'Could not switch markets', 'error'); }
   };
 
   /** Compat alias: every adoption is the SAME full transition. */

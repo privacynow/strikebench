@@ -131,6 +131,21 @@
     return box;
   }
 
+  /** Nonblocking status for actions that do not own a natural inline result region. */
+  function toast(message, kind) {
+    var region = document.getElementById('toast-region');
+    if (!region) {
+      region = el('div', { id: 'toast-region', class: 'toast-region', 'aria-live': 'polite', 'aria-atomic': 'true' });
+      document.body.appendChild(region);
+    }
+    region.innerHTML = '';
+    var item = el('div', { class: 'toast-message toast-' + (kind || 'info'), role: kind === 'error' ? 'alert' : 'status' },
+      String(message || 'Action could not be completed'));
+    region.appendChild(item);
+    window.setTimeout(function () { if (item.isConnected) item.remove(); }, kind === 'error' ? 7000 : 4000);
+    return item;
+  }
+
   function stat(label, valueNode, explainText) {
     return el('div', { class: 'stat' },
       el('div', { class: 'label' }, label),
@@ -279,32 +294,69 @@
   /** Confirmation modal. body may be a node; onConfirm is async. */
   function confirmModal(title, bodyNode, confirmLabel, onConfirm, danger) {
     var root = document.getElementById('modal-root');
+    var returnFocus = document.activeElement;
+    var titleId = 'modal-title-' + Date.now().toString(36);
+    var closed = false;
     root.innerHTML = '';
-    var msg = el('div', { class: 'alert alert-danger', style: 'display:none' });
+    var msg = el('div', { class: 'alert alert-danger', style: 'display:none', role: 'alert', 'aria-live': 'assertive' });
     function showError(text) {
       msg.textContent = text;
       msg.style.display = '';
     }
     var confirmBtn = el('button', {
-      class: 'btn ' + (danger ? 'btn-danger' : ''), id: 'modal-confirm',
+      class: 'btn ' + (danger ? 'btn-danger' : ''), id: 'modal-confirm', type: 'button',
       onclick: function () {
         confirmBtn.disabled = true;
-        Promise.resolve(onConfirm()).then(close).catch(function (e) {
+        Promise.resolve(onConfirm()).then(function () { close(true); }).catch(function (e) {
           confirmBtn.disabled = false;
           showError(e.message || 'Failed');
         });
       }
     }, confirmLabel);
-    var backdrop = el('div', { class: 'modal-backdrop' },
-      el('div', { class: 'modal' },
-        el('h3', {}, title),
+    var cancelBtn = el('button', { class: 'btn btn-secondary', type: 'button', onclick: function () { close(); } }, 'Cancel');
+    var dialog = el('div', { class: 'modal', role: 'dialog', tabindex: '-1', 'aria-modal': 'true', 'aria-labelledby': titleId },
+        el('h3', { id: titleId }, title),
         bodyNode,
         msg,
         el('div', { class: 'btn-row' },
           confirmBtn,
-          el('button', { class: 'btn btn-secondary', onclick: close }, 'Cancel'))));
-    function close() { root.innerHTML = ''; }
+          cancelBtn));
+    var backdrop = el('div', { class: 'modal-backdrop', onclick: function (e) {
+      if (e.target === backdrop) close();
+    } }, dialog);
+    function focusable() {
+      return Array.prototype.slice.call(dialog.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'))
+        .filter(function (n) { return n.offsetParent !== null; });
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+      if (e.key !== 'Tab') return;
+      var items = focusable();
+      if (!items.length) { e.preventDefault(); dialog.focus(); return; }
+      var first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+    function close(force) {
+      if (closed) return;
+      // Escape/backdrop cannot cancel a request already sent. Keep the modal until the
+      // operation resolves so the screen never implies that a committed action was undone.
+      if (confirmBtn.disabled && !force) return;
+      closed = true;
+      document.removeEventListener('keydown', onKey);
+      root.innerHTML = '';
+      if (returnFocus && returnFocus.isConnected && returnFocus.focus) returnFocus.focus();
+    }
     root.appendChild(backdrop);
+    document.addEventListener('keydown', onKey);
+    // Establish containment before returning from the click handler. The first usable
+    // control takes focus on the next task, but an open modal never leaves focus behind it.
+    dialog.focus();
+    window.setTimeout(function () {
+      var items = focusable();
+      (items[0] || dialog).focus();
+    }, 0);
     return { close: close, showError: showError };
   }
 
@@ -1241,6 +1293,7 @@
     evidenceBadge: evidenceBadge,
     explain: explain,
     alertBox: alertBox,
+    toast: toast,
     stat: stat,
     chip: chip,
     table: table,
