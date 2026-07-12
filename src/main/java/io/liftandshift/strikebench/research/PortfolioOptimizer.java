@@ -35,6 +35,8 @@ public final class PortfolioOptimizer {
             long totalTailLossCents,
             Long marketEvAfterCostsCents,
             Long realizedVolEvAfterCostsCents,
+            int marketEvCoverage,
+            int realizedVolEvCoverage,
             double avgScore,
             Map<String, Long> perSymbolCents,
             boolean diagnostic,         // true when this is a least-bad (possibly negative-EV) diagnostic set
@@ -67,7 +69,7 @@ public final class PortfolioOptimizer {
         List<String> notes = new ArrayList<>();
         Map<String, Long> perSymbol = new LinkedHashMap<>();
         long used = 0, tail = 0, marketEv = 0, historyEv = 0;
-        boolean marketEvComplete = true, historyEvComplete = true;
+        int marketEvCoverage = 0, historyEvCoverage = 0;
         double scoreSum = 0;
 
         for (StrategyEvaluation e : fundable) {
@@ -86,10 +88,8 @@ public final class PortfolioOptimizer {
             used += capital;
             tail += (long) units * e.tailLossCents();
             Long oneMarketEv = marketEv(e), oneHistoryEv = historyEv(e);
-            if (oneMarketEv == null) marketEvComplete = false;
-            else marketEv += (long) units * oneMarketEv;
-            if (oneHistoryEv == null) historyEvComplete = false;
-            else historyEv += (long) units * oneHistoryEv;
+            if (oneMarketEv != null) { marketEv += (long) units * oneMarketEv; marketEvCoverage++; }
+            if (oneHistoryEv != null) { historyEv += (long) units * oneHistoryEv; historyEvCoverage++; }
             scoreSum += e.decisionScore();
             perSymbol.merge(sym, capital, Long::sum);
         }
@@ -106,9 +106,18 @@ public final class PortfolioOptimizer {
         } else if (diagnostic) {
             notes.add("DIAGNOSTIC set: this is a comparison allocation, not a recommendation; one or both after-cost EV lanes may be adverse or unavailable.");
         }
+        if (!allocations.isEmpty() && marketEvCoverage < allocations.size()) {
+            notes.add("Market EV total covers " + marketEvCoverage + " of " + allocations.size()
+                    + " allocated positions; unavailable rows are excluded from that partial total.");
+        }
+        if (!allocations.isEmpty() && historyEvCoverage < allocations.size()) {
+            notes.add("History EV total covers " + historyEvCoverage + " of " + allocations.size()
+                    + " allocated positions; unavailable rows are excluded from that partial total.");
+        }
         return new OptimizationResult(allocations, used, tail,
-                marketEvComplete ? marketEv : null,
-                historyEvComplete ? historyEv : null,
+                marketEvCoverage > 0 ? marketEv : null,
+                historyEvCoverage > 0 ? historyEv : null,
+                marketEvCoverage, historyEvCoverage,
                 avgScore, perSymbol, diagnostic, notes);
     }
 

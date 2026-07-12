@@ -7092,7 +7092,7 @@
       diag = el('input', { type: 'checkbox', id: 'portfolio-diagnostics' });
       if (f.diagnostic) diag.checked = true;
       card.appendChild(el('label', { class: 'tool-check' }, diag,
-        el('span', {}, ' Diagnostic mode — show the least-bad set even if no idea has positive expected value')));
+        el('span', {}, ' Diagnostic mode — compare viable ideas even when their economics are mixed, adverse, or unavailable')));
     }
 
     var out = el('div', { id: 'portfolio-output', class: 'tool-output' });
@@ -7142,18 +7142,25 @@
     var lead = o.diagnostic ? 'Least-bad set: ' : 'Funded ';
     var marketEv = o.marketEvAfterCostsCents;
     var historyEv = o.realizedVolEvAfterCostsCents;
+    var marketCoverage = Number(o.marketEvCoverage || 0);
+    var historyCoverage = Number(o.realizedVolEvCoverage || 0);
+    function coverageText(value, covered) {
+      if (value == null) return el('span', { class: 'muted' }, 'unavailable');
+      return el('span', {}, pnlSpan(value), covered < allocs.length
+        ? el('span', { class: 'muted' }, ' (' + covered + '/' + allocs.length + ' positions)') : null);
+    }
     out.appendChild(el('div', { class: 'tool-verdict' },
       el('b', {}, lead + allocs.length + ' position' + (allocs.length === 1 ? '' : 's')
         + ' across ' + nSym + ' symbol' + (nSym === 1 ? '' : 's') + ' for ' + fmtMoney(o.capitalUsedCents) + '.'),
-      ' Market EV after costs ', marketEv == null ? el('span', { class: 'muted' }, 'unavailable') : pnlSpan(marketEv),
-      '; history EV after costs ', historyEv == null ? el('span', { class: 'muted' }, 'unavailable') : pnlSpan(historyEv),
+      ' Market EV after costs ', coverageText(marketEv, marketCoverage),
+      '; history EV after costs ', coverageText(historyEv, historyCoverage),
       ', worst-case tail ', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0))), '.'));
 
     out.appendChild(el('div', { class: 'fact-grid', id: 'portfolio-summary' },
       metricFact('Capital used', fmtMoney(o.capitalUsedCents)),
       metricFact('Positions', String(allocs.length)),
-      metricFact('Market EV after costs', marketEv == null ? '—' : pnlSpan(marketEv), marketEv != null && marketEv >= 0 ? 'f-ok' : 'f-danger'),
-      metricFact('History EV after costs', historyEv == null ? '—' : pnlSpan(historyEv), historyEv != null && historyEv >= 0 ? 'f-ok' : 'f-danger'),
+      metricFact('Market EV after costs' + (marketCoverage < allocs.length ? ' (' + marketCoverage + '/' + allocs.length + ')' : ''), marketEv == null ? '—' : pnlSpan(marketEv), marketEv != null && marketEv >= 0 ? 'f-ok' : 'f-danger'),
+      metricFact('History EV after costs' + (historyCoverage < allocs.length ? ' (' + historyCoverage + '/' + allocs.length + ')' : ''), historyEv == null ? '—' : pnlSpan(historyEv), historyEv != null && historyEv >= 0 ? 'f-ok' : 'f-danger'),
       metricFact('Tail risk', el('span', { class: 'loss' }, fmtMoney(-Math.abs(o.totalTailLossCents || 0))), 'f-danger'),
       metricFact('Avg Decision score', String(Math.round(o.avgScore || 0)))));
 

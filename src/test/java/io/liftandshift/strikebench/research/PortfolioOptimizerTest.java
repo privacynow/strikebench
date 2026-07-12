@@ -57,6 +57,8 @@ class PortfolioOptimizerTest {
         // Portfolio aggregates.
         assertThat(res.marketEvAfterCostsCents()).isEqualTo(3 * 100 + 1 * 200);
         assertThat(res.realizedVolEvAfterCostsCents()).isEqualTo(3 * 150 + 1 * 250);
+        assertThat(res.marketEvCoverage()).isEqualTo(2);
+        assertThat(res.realizedVolEvCoverage()).isEqualTo(2);
         assertThat(res.totalTailLossCents()).isEqualTo(3 * 500 + 1 * 1_000);
 
         // The non-viable one never appears, and the blocked one is explained.
@@ -128,5 +130,19 @@ class PortfolioOptimizerTest {
                 new PortfolioOptimizer.Constraints(5_000, null, null, null, "score", false)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("DECISION");
+    }
+
+    @Test void partialEvTotalsKeepKnownValuesAndDiscloseCoverage() {
+        var known = eval("AAPL", "DEBIT_CALL_SPREAD", 60, 5_000, 250L, 350L, 500, true, EconomicAssessment.Verdict.FAVORABLE);
+        var unknown = eval("QQQ", "CALENDAR_CALL", 70, 5_000, null, null, 500, true, EconomicAssessment.Verdict.UNAVAILABLE);
+        var res = optimizer.optimize(List.of(known, unknown),
+                new PortfolioOptimizer.Constraints(10_000, 5_000L, 2, 1.0, "DECISION", true));
+
+        assertThat(res.allocations()).hasSize(2);
+        assertThat(res.marketEvAfterCostsCents()).isEqualTo(250L);
+        assertThat(res.realizedVolEvAfterCostsCents()).isEqualTo(350L);
+        assertThat(res.marketEvCoverage()).isEqualTo(1);
+        assertThat(res.realizedVolEvCoverage()).isEqualTo(1);
+        assertThat(res.notes()).anyMatch(n -> n.contains("1 of 2"));
     }
 }
