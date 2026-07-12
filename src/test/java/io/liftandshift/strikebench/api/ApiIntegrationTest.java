@@ -289,8 +289,6 @@ class ApiIntegrationTest {
 
         // Malformed dates are client errors, not 500s
         assertThat(get("/api/research/AAPL/chain?expiration=garbage").statusCode()).isEqualTo(400);
-        HttpResponse<String> badBt = post("/api/backtest", "{\"symbol\":\"AAPL\",\"strategy\":\"LONG_CALL\",\"from\":\"nope\",\"to\":\"2026-06-30\"}");
-        assertThat(badBt.statusCode()).isEqualTo(400);
     }
 
     @Test
@@ -334,33 +332,6 @@ class ApiIntegrationTest {
     }
 
     @Test
-    @Order(13)
-    void backtestRunsAndPersists() throws Exception {
-        HttpResponse<String> res = post("/api/backtest", """
-                {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","from":"2026-03-02","to":"2026-06-30"}""");
-        assertThat(res.statusCode()).isEqualTo(200);
-        JsonNode report = Json.parse(res.body());
-        assertThat(report.get("sampleSize").asInt()).isGreaterThan(0);
-        assertThat(report.get("daysCovered").asInt()).isGreaterThan(0);
-        assertThat(report.get("pricingMode").asText()).isEqualTo("MODELED_FROM_UNDERLYING");
-        assertThat(report.get("assumptions").has("slippagePctPerLeg")).isTrue();
-        assertThat(report.get("skipped").isArray()).isTrue();
-        assertThat(report.get("confidence").asText()).isNotBlank();
-        assertThat(report.get("disclaimer").asText()).containsIgnoringCase("educational");
-
-        JsonNode list = Json.parse(get("/api/backtests").body());
-        assertThat(list.get("backtests").size()).isGreaterThanOrEqualTo(1);
-        String id = report.get("id").asText();
-        JsonNode loaded = Json.parse(get("/api/backtests/" + id).body());
-        assertThat(loaded.get("id").asText()).isEqualTo(id);
-
-        // Undefined-risk strategy rejected with 400
-        HttpResponse<String> naked = post("/api/backtest", """
-                {"symbol":"AAPL","strategy":"NAKED_CALL","from":"2026-03-02","to":"2026-06-30"}""");
-        assertThat(naked.statusCode()).isEqualTo(400);
-    }
-
-    @Test
     @Order(14)
     void brokerStatusReportsUnconfigured() throws Exception {
         JsonNode json = Json.parse(get("/api/broker/status").body());
@@ -373,7 +344,7 @@ class ApiIntegrationTest {
     @Test
     @Order(15)
     void malformedBodiesAreClientErrorsNever500() throws Exception {
-        for (String path : java.util.List.of("/api/trades", "/api/trades/preview", "/api/recommend", "/api/backtest", "/api/recommend/auto")) {
+        for (String path : java.util.List.of("/api/trades", "/api/trades/preview", "/api/recommend", "/api/recommend/auto")) {
             assertThat(post(path, "{").statusCode()).as(path + " invalid json").isEqualTo(400);
             assertThat(post(path, "").statusCode()).as(path + " empty body").isIn(200, 400); // auto allows empty
         }

@@ -169,6 +169,9 @@ public final class Db implements AutoCloseable {
         public java.math.BigDecimal bd(String col) {
             try { return rs.getBigDecimal(col); } catch (SQLException e) { throw new DbException(e); }
         }
+        public byte[] bytes(String col) {
+            try { return rs.getBytes(col); } catch (SQLException e) { throw new DbException(e); }
+        }
     }
 
     public static final class DbException extends RuntimeException {

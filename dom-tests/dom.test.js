@@ -351,6 +351,85 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   await page.setViewportSize({ width: 1280, height: 720 });
 });
 
+test('Plan Outcomes reuses Evidence paths for one exact selected package', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const plan = await openPlan('AAPL', 'evidence');
+  await page.waitForSelector('#test-your-view', { timeout: 15000 });
+  await page.click('#research-outcomes-basis-futures');
+  await page.waitForSelector('#whatif-card');
+  await page.click('#whatif-run');
+  await page.waitForSelector('.scenario-decision', { timeout: 30000 });
+  const receipt = await page.evaluate(() => {
+    const ui = PlanStore.ui(App.state.activePlanId).evidence;
+    return { id: ui.planEnsembleId, fingerprint: ui.planEnsembleFingerprint };
+  });
+  assert.ok(receipt.id && receipt.fingerprint, 'Evidence saves the exact ensemble before Outcomes uses it');
+
+  await page.locator('.plan-rail button').filter({ hasText: 'Strategy' }).click();
+  await page.waitForSelector('#plan-run-strategy');
+  await page.click('#plan-run-strategy');
+  await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
+  await page.evaluate(async planId => {
+    const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
+    const candidate = latest.strategy.result.candidates.find(item => {
+      const expirations = new Set((item.legs || []).filter(leg => leg.type !== 'STOCK').map(leg => leg.expiration));
+      return expirations.size === 1;
+    });
+    if (!candidate) throw new Error('fixture field contains no same-expiry package for market-odds test');
+    const live = await PlanStore.get(planId, true);
+    await PlanStore.selectCandidate(live, candidate.id);
+    await App.render();
+  }, plan.id);
+  await page.waitForSelector('#plan-strategy-results button:has-text("Selected for this Plan")');
+
+  await page.locator('.plan-rail button').filter({ hasText: 'Outcomes' }).click();
+  await page.waitForSelector('#plan-outcomes');
+  assert.match(await page.textContent('.plan-outcome-position'), /Exact position being tested.*PLAN OWNED/s);
+  assert.equal(await page.locator('#plan-outcomes input[name="symbol"], #plan-outcomes select[name="strategy"]').count(), 0,
+    'Outcomes does not recapture the Plan symbol or structure');
+
+  await page.getByRole('button', { name: 'Calculate market odds' }).click();
+  await page.waitForSelector('.plan-market-outcome', { timeout: 30000 }).catch(async error => {
+    throw new Error('Market odds did not render. Page: ' + (await page.locator('#app').textContent())
+      + '\n' + error.message);
+  });
+  assert.match(await page.textContent('.plan-market-outcome'), /risk-neutral odds.*not a forecast/is);
+
+  await page.click('#plan-outcomes-basis-model');
+  await page.getByRole('button', { name: 'Test this position on the stored futures' }).click();
+  await page.waitForSelector('[data-basis-summary="PARAMETRIC"]', { timeout: 30000 });
+  const exactReuse = await page.evaluate(async ({ planId, ensembleId }) => {
+    const latest = await API.getFresh('/api/plans/' + planId + '/outcomes/latest');
+    const run = latest.outcomes.find(item => item.basis === 'PARAMETRIC');
+    return { ensembleId: run && run.ensembleId, selected: latest.selected && latest.selected.id };
+  }, { planId: plan.id, ensembleId: receipt.id });
+  assert.equal(exactReuse.ensembleId, receipt.id,
+    'the position is valued on the exact Evidence ensemble, not a regenerated lookalike');
+  assert.ok(exactReuse.selected, 'one exact Plan package owns every outcome lens');
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p4-outcomes-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(500);
+  const modeRects = await page.$$eval('#plan-outcomes-nav .outcome-basis', buttons => {
+    const host = document.getElementById('plan-outcomes-nav').getBoundingClientRect();
+    return buttons.map(button => { const r = button.getBoundingClientRect(); return { left:r.left,right:r.right,hostLeft:host.left,hostRight:host.right }; });
+  });
+  assert.equal(modeRects.length, 4);
+  for (const item of modeRects) assert.ok(item.left >= item.hostLeft - 1 && item.right <= item.hostRight + 1,
+    'all four Outcome bases stay visible on mobile');
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p4-outcomes-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.click('#plan-outcomes-basis-backtest');
+  await page.waitForSelector('#plan-backtest-result');
+  assert.match(await page.textContent('#plan-outcomes-panel'), /Replay.*AAPL|Historical replay/i);
+  assert.equal(await page.locator('#plan-outcomes-panel input[type="date"]').count(), 2,
+    'historical replay retains its useful controls at Beginner rather than hiding capability');
+});
+
 test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {
   const safety = await page.evaluate(() => ({
     money: UI.fmtMoney(Number.NaN), compact: UI.fmtMoneyCompact(Infinity),

@@ -199,6 +199,71 @@ class PlanApiIntegrationTest {
                 .at("/selected/legs")).isEqualTo(pick.get("legs"));
     }
 
+    @Test void outcomesReuseThePlanEvidenceEnsembleAndPersistSeparateInterpretations() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"outcome-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        JsonNode strategy = json(post("/api/plans/" + id + "/strategy/run", "{}"));
+        JsonNode candidate = null;
+        for (JsonNode item : strategy.at("/strategy/result/candidates")) {
+            if ("DEBIT_CALL_SPREAD".equals(item.path("strategy").asText())) { candidate = item; break; }
+        }
+        if (candidate == null) candidate = strategy.at("/strategy/result/candidates/0");
+        JsonNode selected = json(put("/api/plans/" + id + "/strategy/select",
+                "{\"candidateId\":\"" + candidate.get("id").asText() + "\",\"expectedVersion\":"
+                        + strategy.at("/plan/version").asLong() + "}"));
+        long version = selected.at("/plan/version").asLong();
+
+        JsonNode ensemble = json(post("/api/plans/" + id + "/outcomes/ensemble", """
+                {"expectedVersion":%d,"over":{"model":"GBM","shape":"GRIND_UP","horizonDays":99,
+                 "stepsPerDay":2,"driftAnnual":0.12,"volAnnual":0.28,"jumpsPerYear":0,
+                 "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":8080,"paths":120},
+                 "iv":{"startIv":0.32,"driftPerYear":-0.02,"meanRevertSpeed":1.0,"longRunIv":0.28,
+                 "eventDay":-1,"eventShockPct":0,"minIv":0.03,"maxIv":4.0}}
+                """.formatted(version)));
+        String ensembleId = ensemble.at("/ensemble/id").asText();
+        String fingerprint = ensemble.at("/ensemble/fingerprint").asText();
+        assertThat(ensemble.at("/preview/horizonDays").asInt()).isEqualTo(30);
+        assertThat(ensemble.at("/preview/receipt/fingerprint").asText()).isEqualTo(fingerprint);
+
+        JsonNode modeled = json(post("/api/plans/" + id + "/outcomes/run",
+                "{\"expectedVersion\":" + version + ",\"basis\":\"PARAMETRIC\",\"ensembleId\":\""
+                        + ensembleId + "\"}"));
+        assertThat(modeled.at("/outcome/ensembleId").asText()).isEqualTo(ensembleId);
+        assertThat(modeled.at("/outcome/result/paths").asInt()).isEqualTo(120);
+
+        JsonNode market = json(post("/api/plans/" + id + "/outcomes/run",
+                "{\"expectedVersion\":" + version + ",\"basis\":\"RISK_NEUTRAL\"}"));
+        assertThat(market.at("/outcome/result/probabilityMap/pAnyProfit").isNumber()).isTrue();
+
+        JsonNode latest = json(get("/api/plans/" + id + "/outcomes/latest"));
+        assertThat(latest.get("outcomes")).hasSize(2);
+        JsonNode restoredModel = null;
+        for (JsonNode run : latest.get("outcomes")) if ("PARAMETRIC".equals(run.path("basis").asText())) restoredModel = run;
+        assertThat(restoredModel).isNotNull();
+        assertThat(restoredModel.path("ensembleId").asText()).isEqualTo(ensembleId);
+        assertThat(restoredModel.path("bands").size()).isGreaterThan(1);
+        assertThat(latest.at("/selected/id").asText()).isEqualTo(candidate.get("id").asText());
+
+        HttpResponse<String> badReplay = post("/api/plans/" + id + "/outcomes/backtest",
+                "{\"expectedVersion\":" + version + ",\"engine\":\"single\",\"from\":\"nope\",\"to\":\"2026-06-30\"}");
+        assertThat(badReplay.statusCode()).isEqualTo(400);
+
+        JsonNode replay = json(post("/api/plans/" + id + "/outcomes/backtest", """
+                {"expectedVersion":%d,"engine":"single","from":"2026-03-02","to":"2026-06-30",
+                 "targetDte":30,"entryEveryDays":5,"qty":1,"slippagePct":0.0,"startingCashCents":10000000}
+                """.formatted(version)));
+        assertThat(replay.at("/report/sampleSize").asInt()).isGreaterThan(0);
+        assertThat(replay.at("/report/pricingMode").asText()).isEqualTo("MODELED_FROM_UNDERLYING");
+        String backtestId = replay.at("/report/id").asText();
+        assertThat(json(get("/api/backtests/" + backtestId)).get("id").asText()).isEqualTo(backtestId);
+        JsonNode latestAfterReplay = json(get("/api/plans/" + id + "/outcomes/latest"));
+        assertThat(latestAfterReplay.at("/backtests/0/backtestId").asText()).isEqualTo(backtestId);
+        assertThat(latestAfterReplay.at("/backtests/0/maxDrawdownPct").isNumber()).isTrue();
+    }
+
     private static HttpResponse<String> get(String path) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(base + path)).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
