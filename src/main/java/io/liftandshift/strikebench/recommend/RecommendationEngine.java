@@ -119,10 +119,19 @@ public final class RecommendationEngine {
 
     private final MarketDataService market;
     private final Clock clock;
+    private long feePerContractCents;
+    private long feePerOrderCents;
 
     public RecommendationEngine(MarketDataService market, Clock clock) {
         this.market = market;
         this.clock = clock;
+    }
+
+    /** Candidate income/effective-price metrics use the same opening commission as the ticket. */
+    public RecommendationEngine withFees(long perContractCents, long perOrderCents) {
+        this.feePerContractCents = Math.max(0, perContractCents);
+        this.feePerOrderCents = Math.max(0, perOrderCents);
+        return this;
     }
 
     public LocalDate marketDate(String worldId) {
@@ -604,6 +613,23 @@ public final class RecommendationEngine {
                 riskFreeRate);
         int minDte = (int) built.legs().stream().filter(l -> !l.isStock())
                 .mapToLong(l -> ChronoUnit.DAYS.between(today, l.expiration())).min().orElse(7);
+        BigDecimal shortCallStrike = built.legs().stream()
+                .filter(l -> !l.isStock() && l.action() == LegAction.SELL && l.type() == OptionType.CALL)
+                .map(Leg::strike).findFirst().orElse(null);
+        BigDecimal shortPutStrike = built.legs().stream()
+                .filter(l -> !l.isStock() && l.action() == LegAction.SELL && l.type() == OptionType.PUT)
+                .map(Leg::strike).findFirst().orElse(null);
+        BigDecimal longPutStrike = built.legs().stream()
+                .filter(l -> !l.isStock() && l.action() == LegAction.BUY && l.type() == OptionType.PUT)
+                .map(Leg::strike).findFirst().orElse(null);
+        List<Leg> optionLegs = built.legs().stream().filter(l -> !l.isStock()).toList();
+        long optionNetCents = PayoffCurve.of(optionLegs, qty).entryNetPremiumCents();
+        long optionContracts = 0;
+        for (Leg optionLeg : optionLegs) optionContracts += (long) optionLeg.ratio() * qty;
+        long openingFees = optionContracts * feePerContractCents
+                + (optionLegs.isEmpty() ? 0 : feePerOrderCents);
+        long netOptionIncomeCents = optionNetCents - openingFees;
+
         // Annualized yield is quoted ONLY for share-backed premium (covered calls, cash-secured
         // puts, collars) where "capital" is real: the shares or the strike cash. Annualizing a
         // narrow condor's max return-on-risk produces four-digit percentages that read as income
@@ -612,29 +638,22 @@ public final class RecommendationEngine {
                 || family == StrategyFamily.CASH_SECURED_PUT
                 || family == StrategyFamily.PROTECTIVE_COLLAR;
         Long yieldCollateral = null;
-        if (entryNet > 0 && shareBacked) {
-            yieldCollateral = onHeldShares
-                    ? Money.centsFromPrice(spot, 100L * displayLotsPerUnit * qty) // income on share capital
-                    : maxLoss;                                                    // income on capital at risk
+        if (netOptionIncomeCents > 0 && shareBacked) {
+            yieldCollateral = family == StrategyFamily.CASH_SECURED_PUT && shortPutStrike != null
+                    ? Money.centsFromPrice(shortPutStrike, 100L * qty)             // full strike cash obligation
+                    : Money.centsFromPrice(spot, 100L * displayLotsPerUnit * qty); // share capital, held or bought
         }
         Double annualYieldPct = null;
         if (yieldCollateral != null && yieldCollateral > 0) {
-            annualYieldPct = round2(100.0 * (entryNet / (double) yieldCollateral) * (365.0 / Math.max(minDte, 1)));
+            annualYieldPct = round2(100.0 * (netOptionIncomeCents / (double) yieldCollateral)
+                    * (365.0 / Math.max(minDte, 1)));
         }
-        // Effective share prices are strike +/- the OPTION premium per share — a buy-write's
-        // stock purchase must not leak into it (it made "effective sell $10/sh" nonsense once).
-        long optionNetCents = PayoffCurve.of(built.legs().stream().filter(l -> !l.isStock()).toList(), qty)
-                .entryNetPremiumCents();
-        BigDecimal perShareNet = BigDecimal.valueOf(optionNetCents)
+        // Effective share prices are strike +/- NET option premium per share after opening fees —
+        // a buy-write's stock purchase must not leak into it (it made "effective sell $10/sh" nonsense once).
+        BigDecimal perShareNet = BigDecimal.valueOf(netOptionIncomeCents)
                 .divide(BigDecimal.valueOf(100L * qty), 2, java.math.RoundingMode.HALF_UP)
                 .movePointLeft(2); // cents -> dollars per share
         String effectivePrice = null;
-        BigDecimal shortCallStrike = built.legs().stream()
-                .filter(l -> !l.isStock() && l.action() == LegAction.SELL && l.type() == OptionType.CALL)
-                .map(Leg::strike).findFirst().orElse(null);
-        BigDecimal shortPutStrike = built.legs().stream()
-                .filter(l -> !l.isStock() && l.action() == LegAction.SELL && l.type() == OptionType.PUT)
-                .map(Leg::strike).findFirst().orElse(null);
         if ((family == StrategyFamily.COVERED_CALL || family == StrategyFamily.PROTECTIVE_COLLAR)
                 && shortCallStrike != null) {
             effectivePrice = shortCallStrike.add(perShareNet).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
@@ -705,10 +724,7 @@ public final class RecommendationEngine {
                     + (pop != null ? String.format("Modeled probability of profit ~%.0f%%. ", pop * 100) : "")
                     + (maxLoss > 0 ? "Sized to keep new cash at risk within your " + Money.fmt(budget) + " budget." : "");
         String beginner = beginnerText(family, entryNet);
-        BigDecimal longPutStrike = built.legs().stream()
-                .filter(l -> !l.isStock() && l.action() == LegAction.BUY && l.type() == OptionType.PUT)
-                .map(Leg::strike).findFirst().orElse(null);
-        String intentNote = intentNote(intent, family, holdings, spot, qty, entryNet, minDte,
+        String intentNote = intentNote(intent, family, holdings, spot, qty, netOptionIncomeCents, minDte,
                 effectivePrice, assignProb, annualYieldPct, shortCallStrike, shortPutStrike, longPutStrike,
                 onHeldShares, displayLotsPerUnit);
 
@@ -807,7 +823,7 @@ public final class RecommendationEngine {
 
     /** Human framing of the candidate against the user's goal, holdings and target price. */
     private static String intentNote(StrategyIntent intent, StrategyFamily family, Holdings holdings,
-                                     BigDecimal spot, int qty, long entryNet, int minDte,
+                                     BigDecimal spot, int qty, long netOptionPremium, int minDte,
                                      String effectivePrice, Double assignProb, Double annualYieldPct,
                                      BigDecimal shortCallStrike, BigDecimal shortPutStrike, BigDecimal longPutStrike,
                                      boolean onHeldShares, int displayLotsPerUnit) {
@@ -829,7 +845,8 @@ public final class RecommendationEngine {
                 sb.append(". ").append(assignPct != null
                         ? "Chance that happens by expiration: " + assignPct + " (that's the goal — not a risk)."
                         : "");
-                if (entryNet > 0) sb.append(" Either way you keep the ").append(Money.fmt(entryNet)).append(" premium.");
+                if (netOptionPremium > 0) sb.append(" Either way the premium leaves ")
+                        .append(Money.fmt(netOptionPremium)).append(" after opening fees.");
                 return sb.toString().trim();
             }
             case ACQUIRE -> {
@@ -845,15 +862,15 @@ public final class RecommendationEngine {
                 sb.append(". ").append(assignPct != null
                         ? "Chance you get the shares: " + assignPct + " (that's the goal)."
                         : "");
-                if (entryNet > 0 && annualYieldPct != null) {
-                    sb.append(" If not, you keep ").append(Money.fmt(entryNet))
+                if (netOptionPremium > 0 && annualYieldPct != null) {
+                    sb.append(" If not, the premium leaves ").append(Money.fmt(netOptionPremium)).append(" after opening fees")
                             .append(String.format(" (~%.1f%%/yr while you wait).", annualYieldPct));
                 }
                 return sb.toString().trim();
             }
             case INCOME -> {
-                if (entryNet <= 0) return null;
-                StringBuilder sb = new StringBuilder("Collect " + Money.fmt(entryNet) + " now");
+                if (netOptionPremium <= 0) return null;
+                StringBuilder sb = new StringBuilder("Collect " + Money.fmt(netOptionPremium) + " net after opening fees");
                 if (annualYieldPct != null) sb.append(String.format(" — ~%.1f%%/yr on the capital at risk over %d days", annualYieldPct, Math.max(minDte, 1)));
                 sb.append(".");
                 if (assignPct != null) sb.append(" Chance the short side finishes in the money: ").append(assignPct).append(".");
@@ -866,8 +883,8 @@ public final class RecommendationEngine {
                 sb.append("Guarantees a sale price of at least $")
                         .append(longPutStrike.stripTrailingZeros().toPlainString())
                         .append(" for ").append(shares).append(" shares until expiration");
-                if (entryNet < 0) sb.append(" for a cost of ").append(Money.fmt(-entryNet));
-                else if (entryNet > 0) sb.append(" and even pays ").append(Money.fmt(entryNet)).append(" (the call cap funds the floor)");
+                if (netOptionPremium < 0) sb.append(" for a cost of ").append(Money.fmt(-netOptionPremium)).append(" after opening fees");
+                else if (netOptionPremium > 0) sb.append(" and even leaves ").append(Money.fmt(netOptionPremium)).append(" after opening fees (the call cap funds the floor)");
                 if (shortCallStrike != null) sb.append("; upside above $")
                         .append(shortCallStrike.stripTrailingZeros().toPlainString()).append(" is given up");
                 sb.append(".");

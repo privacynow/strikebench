@@ -40,8 +40,8 @@ public record Candidate(
         String intent,                // StrategyIntent this candidate was generated under
         List<String> intents,         // every intent the family serves (first = primary)
         Double assignmentProb,        // 0..1, null when the structure has no short legs
-        Double annualizedYieldPct,    // % per year on capital at risk, null for net debits
-        String effectivePrice,        // per-share effective buy/sell price (strike +/- premium), null when n/a
+        Double annualizedYieldPct,    // net opening premium / actual share-or-strike collateral / year
+        String effectivePrice,        // strike +/- option premium after opening fees, null when n/a
         String intentNote,            // human framing vs the holdings/target context
         Boolean usesHeldShares,
         Integer sharesNeeded,         // held shares this trade would lock, when usesHeldShares

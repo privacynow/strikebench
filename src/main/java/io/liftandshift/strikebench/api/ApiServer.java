@@ -192,7 +192,8 @@ public final class ApiServer {
         MarketDataMarks marksSource = new MarketDataMarks(market, cfg.fixturesOnly());
         TradeService trades = new TradeService(db, cfg, marksSource, audit, clock);
         PositionsService positions = new PositionsService(db, marksSource, audit, clock, cfg.fixturesOnly());
-        RecommendationEngine engine = new RecommendationEngine(market, clock);
+        RecommendationEngine engine = new RecommendationEngine(market, clock)
+                .withFees(cfg.feePerContractCents(), cfg.feePerOrderCents());
         AutoRecommender auto = new AutoRecommender(new SignalEngine(market, clock, cfg.fixturesOnly()), engine, cfg, clock);
         BrokerService broker = new BrokerService(etrade, db, audit, clock);
         // Historical option data for backtests: real chains (Polygon) in live mode,

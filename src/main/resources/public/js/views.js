@@ -1926,7 +1926,7 @@
         chip(el('span', {}, 'POP', UI.info('pop')), fmtPct(c.pop)),
         c.assignmentProb !== null && c.assignmentProb !== undefined
           ? chip(el('span', {}, 'Assignment', UI.info('assignment')), fmtPct(c.assignmentProb)) : null,
-        c.annualizedYieldPct !== null && c.annualizedYieldPct !== undefined ? chip('Yield/yr', fmtNum(c.annualizedYieldPct, 1) + '%') : null,
+        c.annualizedYieldPct !== null && c.annualizedYieldPct !== undefined ? chip('Net premium yield/yr', fmtNum(c.annualizedYieldPct, 1) + '%') : null,
         c.effectivePrice ? chip(c.intent === 'ACQUIRE' ? 'Effective buy' : 'Effective sell', '$' + c.effectivePrice) : null,
         chip('Breakeven', (c.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
         chip('Confidence', fmtPct(c.confidence))),
@@ -2066,7 +2066,7 @@
       { key: 'historyEv', label: 'History EV', get: function (c) { var v = historyEvAfterCosts(c); return v === null || v === undefined ? -Infinity : v; }, render: function (c) { var v = historyEvAfterCosts(c); return v === null || v === undefined ? '—' : pnlSpan(v); } },
       { key: 'breakevens', label: 'Breakevens', get: function (c) { return (c.breakevens || []).length ? parseFloat(c.breakevens[0]) : 0; }, render: function (c) { return el('span', { class: 'mono' }, (c.breakevens || []).map(fmtBreakeven).join(' / ') || '\u2014'); } },
       { key: 'assignmentProb', label: 'Assign%', get: function (c) { return c.assignmentProb === null || c.assignmentProb === undefined ? -1 : c.assignmentProb; }, render: function (c) { return el('span', {}, c.assignmentProb === null || c.assignmentProb === undefined ? '\u2014' : fmtPct(c.assignmentProb)); } },
-      { key: 'annualizedYieldPct', label: 'Yield/yr', get: function (c) { return c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? -1 : c.annualizedYieldPct; }, render: function (c) { return el('span', {}, c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? '\u2014' : fmtNum(c.annualizedYieldPct, 1) + '%'); } },
+      { key: 'annualizedYieldPct', label: 'Net premium yield/yr', get: function (c) { return c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? -1 : c.annualizedYieldPct; }, render: function (c) { return el('span', {}, c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? '\u2014' : fmtNum(c.annualizedYieldPct, 1) + '%'); } },
       { key: 'liquidityScore', label: 'Liq', get: function (c) { return c.liquidityScore; }, render: function (c) { return el('span', {}, fmtNum(c.liquidityScore, 2)); } },
       { key: 'decisionScore', label: 'Decision score', get: function (c) { return c.decisionScore; }, render: function (c) { return c.decisionScore === null || c.decisionScore === undefined ? '\u2014' : el('b', {}, fmtNum(c.decisionScore, 0)); } },
       { key: 'score', label: 'Screen score', get: function (c) { return c.score; }, render: function (c) { return fmtNum(c.score, 0); } }
@@ -3253,9 +3253,9 @@
     } else {
       var pro = level === 'expert';
       var headers = intent === 'ACQUIRE'
-        ? ['You\u2019d buy at', 'vs now', 'Paid to wait', 'Effective price', 'Chance', 'Yield/yr while waiting'].concat(pro ? ['Cash set aside'] : [])
+        ? ['You\u2019d buy at', 'vs now', 'Gross premium', 'Effective price', 'Chance', 'Net yield/yr'].concat(pro ? ['Cash set aside'] : [])
         : intent === 'EXIT'
-          ? ['You\u2019d sell at', 'vs now', 'Paid now', 'Effective sale', ctx.basisCents ? 'vs your basis' : 'Chance', 'Chance you sell'].concat(pro ? ['Yield/yr'] : [])
+          ? ['You\u2019d sell at', 'vs now', 'Gross premium', 'Effective sale', ctx.basisCents ? 'vs your basis' : 'Chance', 'Chance you sell'].concat(pro ? ['Net yield/yr'] : [])
           : ['Floor', 'vs now', 'Cost', 'Cost as % of shares', 'Until'].concat(pro ? ['POP w/ shares'] : []);
       var rows = rungs.map(function (c, i) {
         var k = strikeOf(c);
@@ -3328,7 +3328,7 @@
       best && best.annualizedYieldPct != null ? chip('At', fmtNum(best.annualizedYieldPct, 1) + '%/yr on its capital') : null));
     board.appendChild(explain(Learn.currentLevel() === 'beginner'
       ? 'Income means selling option premium against money or shares you already have. You keep the premium no matter what; the trade-off is assignment — being made to buy (puts) or sell (calls) at the strike.'
-      : 'Premium against your capital. Yield is quoted on the capital each structure actually ties up; assignment odds are the price of that yield.'));
+      : 'Premium against your capital. Yield uses premium after opening fees over the shares or full strike cash backing the obligation; assignment odds are the price of that yield.'));
     return board;
   }
 

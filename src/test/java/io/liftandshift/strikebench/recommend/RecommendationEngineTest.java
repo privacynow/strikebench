@@ -155,6 +155,27 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void cashSecuredPutYieldAndEffectivePriceUseNetPremiumOverFullStrikeCash() {
+        engine.withFees(100, 500); // $1/contract + $5/order at entry
+        RecommendationEngine.Result result = engine.recommend(intentReq("acquire",
+                new RecommendationEngine.Holdings(null, null, 24_000L), null), BP);
+        Candidate csp = result.candidates().stream()
+                .filter(c -> c.strategy().equals("CASH_SECURED_PUT")).findFirst().orElseThrow();
+        assertThat(csp.qty()).isEqualTo(1);
+        double strike = Double.parseDouble(csp.legs().getFirst().strike());
+        long openingFees = 600;
+        long netPremium = csp.entryNetPremiumCents() - openingFees;
+        int dte = (int) java.time.temporal.ChronoUnit.DAYS.between(TODAY,
+                LocalDate.parse(csp.legs().getFirst().expiration()));
+        double expectedYield = Math.round(100.0 * (netPremium / (strike * 100.0 * 100.0))
+                * (365.0 / Math.max(1, dte)) * 100.0) / 100.0;
+        assertThat(csp.annualizedYieldPct()).isEqualTo(expectedYield);
+        assertThat(Double.parseDouble(csp.effectivePrice()))
+                .isCloseTo(strike - netPremium / 10_000.0, org.assertj.core.data.Offset.offset(0.011));
+        assertThat(csp.intentNote()).contains("after opening fees");
+    }
+
+    @Test
     void hedgeIntentProtectsHeldSharesWithPutsAndCollars() {
         RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(200, 21_000L, null);
         RecommendationEngine.Result result = engine.recommend(intentReq("hedge", h, null), BP);
