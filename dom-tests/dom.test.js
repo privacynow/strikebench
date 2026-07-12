@@ -2184,6 +2184,18 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   // Real OHLC candles render (vendored D3, not the fallback close line)
   assert.ok(await page.locator('#history-card svg.candles rect.candle').count() >= 20, 'candlestick bars rendered');
   assert.ok(await page.locator('#history-card svg.candles .candle-up').count() >= 1, 'up candles colored');
+  const candleDatesFit = await page.evaluate(() => {
+    const svg = document.querySelector('#history-card svg.candles');
+    const box = svg.getBoundingClientRect();
+    const dates = Array.from(svg.querySelectorAll('text.tick')).filter(t => /^\d{4}-\d{2}-\d{2}$/.test(t.textContent || ''))
+      .map(t => t.getBoundingClientRect()).sort((a, b) => a.left - b.left);
+    return {
+      contained: dates.every(b => b.left >= box.left - 1 && b.right <= box.right + 1),
+      separated: dates.every((b, i) => i === dates.length - 1 || b.right <= dates[i + 1].left - 2)
+    };
+  });
+  assert.equal(candleDatesFit.contained, true, 'candlestick date labels stay inside the visible chart bounds');
+  assert.equal(candleDatesFit.separated, true, 'candlestick date labels never collide');
   // Crosshair: hover the middle of the chart -> OHLC + % readout
   await page.locator('#history-card svg.chart').scrollIntoViewIfNeeded();
   const box = await page.locator('#history-card svg.chart').boundingBox();
@@ -3445,6 +3457,8 @@ test('simulated market: product creator, loud live band, world-routed research, 
   assert.match(band, /SIMULATED MARKET/, 'band names the world loudly');
   assert.match(band, /Sell-off, then rebound/, 'band speaks human, not SELLOFF_REBOUND');
   assert.ok(await page.$('#world-speed'), 'live speed control on the band');
+  assert.ok(await page.locator('#world-speed').evaluate(el => el.getBoundingClientRect().width >= 170),
+    'desktop speed control shows the selected session-duration label instead of clipping it');
   assert.ok(await page.$('#world-exit'), 'one-command return to the real market');
   assert.ok(await page.evaluate(() => document.body.classList.contains('in-sim-world')));
   await page.waitForFunction(() => {

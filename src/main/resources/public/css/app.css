@@ -100,6 +100,7 @@ html, body { margin: 0; padding: 0; }
   border-radius: var(--radius-sm); transform: translateY(-140%); transition: transform .12s;
 }
 .skip-link:focus { transform: translateY(0); }
+#app h1[tabindex="-1"]:focus { outline: 2px solid transparent; outline-offset: 4px; }
 body {
   background: var(--bg);
   color: var(--text);
@@ -1584,7 +1585,7 @@ body.lvl-expert .showcase-frame { max-height: 375px; }
 #world-band .wb-label { color: var(--fg); }
 #world-band .wb-label-short { display: none; }
 #world-band .wb-seed { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
-#world-band #world-speed { height: 30px; max-width: 84px; }
+#world-band #world-speed { height: 30px; width: 190px; max-width: 190px; }
 #world-band #world-exit { margin-left: auto; }
 #world-band .wb-exit-short { display: none; }
 body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn) 18%, var(--bg));

@@ -601,11 +601,22 @@
         .attr('text-anchor', 'end').text(fmtNum(t, t >= 1000 ? 0 : 2));
     });
     var labelEvery = Math.max(1, Math.round(bars.length / 5));
-    bars.forEach(function (b, i) {
-      if (i % labelEvery !== 0 && i !== bars.length - 1) return;
+    var labelIndexes = [];
+    bars.forEach(function (b, i) { if (i % labelEvery === 0) labelIndexes.push(i); });
+    var lastIndex = bars.length - 1;
+    if (labelIndexes[labelIndexes.length - 1] !== lastIndex) {
+      var prior = labelIndexes[labelIndexes.length - 1];
+      var priorX = prior === undefined ? -Infinity : x(bars[prior].date) + x.bandwidth() / 2;
+      var lastX = x(bars[lastIndex].date) + x.bandwidth() / 2;
+      if (lastX - priorX < 86) labelIndexes.pop();
+      labelIndexes.push(lastIndex);
+    }
+    labelIndexes.forEach(function (i) {
+      var b = bars[i];
+      var anchor = i === 0 ? 'start' : i === bars.length - 1 ? 'end' : 'middle';
       svg.append('text').attr('class', 'tick')
         .attr('x', x(b.date) + x.bandwidth() / 2).attr('y', H - 10)
-        .attr('text-anchor', 'middle').text(b.date);
+        .attr('text-anchor', anchor).text(b.date);
     });
     bars.forEach(function (b) {
       var cx = x(b.date) + x.bandwidth() / 2;
