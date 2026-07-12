@@ -59,6 +59,17 @@ public final class PositionsService {
     public record StockTradeResult(PositionView position, long sharesTraded, long pricePerShareCents,
                                    long totalCents, Long realizedPnlCents, List<String> warnings) {}
 
+    public record StockTradePreview(boolean ok, List<String> blockReasons, String side, String symbol,
+                                    long shares, long pricePerShareCents, long totalCents,
+                                    long cashChangeCents, long buyingPowerBeforeCents,
+                                    long buyingPowerAfterCents, Long availableShares,
+                                    Long estimatedRealizedPnlCents, List<String> warnings,
+                                    io.liftandshift.strikebench.model.DataEvidence evidence) {}
+
+    private record PricedStockOrder(String symbol, long shares, BigDecimal price, long priceCents,
+                                    long totalCents, List<String> warnings,
+                                    io.liftandshift.strikebench.model.DataEvidence evidence) {}
+
     // ---- Reads ----
 
     public List<PositionView> list(String accountId) {
@@ -106,20 +117,57 @@ public final class PositionsService {
 
     // ---- Buy / sell ----
 
+    /** Read-only quote and account check. The actual mutation re-prices and re-checks atomically. */
+    public StockTradePreview preview(String accountId, String sideRaw, String symbol, long shares) {
+        LegAction side = "SELL".equalsIgnoreCase(sideRaw) ? LegAction.SELL
+                : "BUY".equalsIgnoreCase(sideRaw) ? LegAction.BUY
+                : throwBadSide(sideRaw);
+        String world = worldOf(accountId);
+        PricedStockOrder order = priceOrder(side, symbol, shares, world);
+        Account acct = db.with(c -> AccountService.get(c, accountId));
+        List<String> blocks = new ArrayList<>();
+        Long available = null, realized = null;
+        long cashChange;
+        if (side == LegAction.BUY) {
+            cashChange = -order.totalCents();
+            if (order.totalCents() > acct.buyingPowerCents()) {
+                blocks.add(shares + " sh of " + order.symbol() + " costs " + Money.fmt(order.totalCents())
+                        + " but only " + Money.fmt(acct.buyingPowerCents()) + " is available");
+            }
+        } else {
+            cashChange = order.totalCents();
+            Position p = db.with(c -> find(c, accountId, order.symbol()));
+            if (p == null) {
+                available = 0L;
+                blocks.add("You do not hold any shares of " + order.symbol());
+            } else {
+                long locked = db.with(c -> lockedShares(c, accountId, order.symbol()));
+                available = Math.max(0, p.shares() - locked);
+                if (shares > available) {
+                    blocks.add("Only " + available + " of your " + p.shares() + " " + order.symbol()
+                            + " shares are free; " + locked + " are locked as trade coverage");
+                }
+                realized = (order.priceCents() - p.avgCostCents()) * shares;
+            }
+        }
+        long after = acct.buyingPowerCents() + cashChange;
+        return new StockTradePreview(blocks.isEmpty(), blocks, side.name(), order.symbol(), shares,
+                order.priceCents(), order.totalCents(), cashChange, acct.buyingPowerCents(), after,
+                available, realized, order.warnings(), order.evidence());
+    }
+
+    private static LegAction throwBadSide(String side) {
+        throw new IllegalArgumentException("side must be BUY or SELL, not " + side);
+    }
+
     /** Buys shares at the executable ask. Blocks on missing/one-sided quotes or insufficient cash. */
     public StockTradeResult buy(String accountId, String symbol, long shares) {
-        String sym = norm(symbol);
         String world = worldOf(accountId);
-        List<String> warnings = validateOrder(shares, world);
-        MarksSource.LegMark mark = stockMark(sym, world);
-        requireExecutableEvidence(mark, world, sym);
-        BigDecimal ask = mark.executable(LegAction.BUY);
-        if (ask == null) {
-            throw new TradeRejectedException(List.of("No executable ask for " + sym
-                    + " — the quote is one-sided, crossed, or missing; cannot buy"));
-        }
-        long cost = Money.centsFromPrice(ask, shares);
-        long priceCents = Money.toCents(ask);
+        PricedStockOrder order = priceOrder(LegAction.BUY, symbol, shares, world);
+        String sym = order.symbol();
+        BigDecimal ask = order.price();
+        long cost = order.totalCents();
+        long priceCents = order.priceCents();
         Position updated = db.tx(c -> {
             Account acct = AccountService.getForUpdate(c, accountId);
             long cash = acct.cashCents() - cost;
@@ -153,23 +201,17 @@ public final class PositionsService {
             return p;
         });
         auditSafe(accountId, "POSITION_BUY", Map.of("symbol", sym, "shares", shares, "costCents", cost));
-        return new StockTradeResult(view(updated), shares, priceCents, cost, null, warnings);
+        return new StockTradeResult(view(updated), shares, priceCents, cost, null, order.warnings());
     }
 
     /** Sells FREE shares at the executable bid; realized P/L is reported against the average basis. */
     public StockTradeResult sell(String accountId, String symbol, long shares) {
-        String sym = norm(symbol);
         String world = worldOf(accountId);
-        List<String> warnings = validateOrder(shares, world);
-        MarksSource.LegMark mark = stockMark(sym, world);
-        requireExecutableEvidence(mark, world, sym);
-        BigDecimal bid = mark.executable(LegAction.SELL);
-        if (bid == null) {
-            throw new TradeRejectedException(List.of("No executable bid for " + sym
-                    + " — the quote is one-sided, crossed, or missing; cannot sell"));
-        }
-        long proceeds = Money.centsFromPrice(bid, shares);
-        long priceCents = Money.toCents(bid);
+        PricedStockOrder order = priceOrder(LegAction.SELL, symbol, shares, world);
+        String sym = order.symbol();
+        BigDecimal bid = order.price();
+        long proceeds = order.totalCents();
+        long priceCents = order.priceCents();
         final long[] realized = new long[1];
         Position updated = db.tx(c -> {
             Account acct = AccountService.getForUpdate(c, accountId);
@@ -199,7 +241,22 @@ public final class PositionsService {
         });
         auditSafe(accountId, "POSITION_SELL", Map.of("symbol", sym, "shares", shares,
                 "proceedsCents", proceeds, "realizedPnlCents", realized[0]));
-        return new StockTradeResult(view(updated), shares, priceCents, proceeds, realized[0], warnings);
+        return new StockTradeResult(view(updated), shares, priceCents, proceeds, realized[0], order.warnings());
+    }
+
+    private PricedStockOrder priceOrder(LegAction side, String symbol, long shares, String world) {
+        String sym = norm(symbol);
+        List<String> warnings = validateOrder(shares, world);
+        MarksSource.LegMark mark = stockMark(sym, world);
+        requireExecutableEvidence(mark, world, sym);
+        BigDecimal price = mark.executable(side);
+        if (price == null) {
+            throw new TradeRejectedException(List.of("No executable " + (side == LegAction.BUY ? "ask" : "bid")
+                    + " for " + sym + " — the quote is one-sided, crossed, or missing; cannot "
+                    + side.name().toLowerCase(java.util.Locale.ROOT)));
+        }
+        return new PricedStockOrder(sym, shares, price, Money.toCents(price),
+                Money.centsFromPrice(price, shares), warnings, mark.evidence());
     }
 
     private List<String> validateOrder(long shares, String world) {

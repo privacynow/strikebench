@@ -439,12 +439,20 @@ class ApiIntegrationTest {
     void positionsAndCoveredCallLifecycleViaApi() throws Exception {
         // Buy 100 AAPL at the fixture ask
         long cashBefore = Json.parse(get("/api/account").body()).at("/account/cashCents").asLong();
+        JsonNode buyPreview = Json.parse(post("/api/positions/preview",
+                "{\"side\":\"buy\",\"symbol\":\"AAPL\",\"shares\":100}").body());
+        assertThat(buyPreview.get("ok").asBoolean()).isTrue();
+        assertThat(buyPreview.get("cashChangeCents").asLong()).isNegative();
+        assertThat(buyPreview.at("/evidence/provenance").asText()).isEqualTo("DEMO");
+        assertThat(Json.parse(get("/api/account").body()).at("/account/cashCents").asLong())
+                .as("preview is read-only").isEqualTo(cashBefore);
         HttpResponse<String> buy = post("/api/positions/buy", "{\"symbol\":\"AAPL\",\"shares\":100}");
         assertThat(buy.statusCode()).as(buy.body()).isEqualTo(201);
         JsonNode bought = Json.parse(buy.body());
         assertThat(bought.at("/position/shares").asLong()).isEqualTo(100);
         assertThat(bought.at("/position/freeShares").asLong()).isEqualTo(100);
         long cost = bought.get("totalCents").asLong();
+        assertThat(buyPreview.get("totalCents").asLong()).isEqualTo(cost);
         assertThat(Json.parse(get("/api/account").body()).at("/account/cashCents").asLong())
                 .isEqualTo(cashBefore - cost);
 

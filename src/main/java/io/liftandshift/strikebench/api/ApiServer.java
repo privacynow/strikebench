@@ -648,6 +648,7 @@ public final class ApiServer {
 
             c.routes.get("/api/audit", this::auditPage);
             c.routes.get("/api/positions", this::positionsList);
+            c.routes.post("/api/positions/preview", this::positionsPreview);
             c.routes.post("/api/positions/buy", this::positionsBuy);
             c.routes.post("/api/positions/sell", this::positionsSell);
             c.routes.get("/api/portfolio/summary", this::portfolioSummary);
@@ -4180,6 +4181,7 @@ public final class ApiServer {
     // ---- Equity positions ----
 
     public record StockOrderRequest(String symbol, Long shares) {}
+    public record StockOrderPreviewRequest(String side, String symbol, Long shares) {}
 
     private void positionsList(Context ctx) {
         Account acct = currentAccount(ctx);
@@ -4192,6 +4194,15 @@ public final class ApiServer {
         validateStockOrder(req);
         Account acct = currentAccount(ctx);
         ctx.status(201).json(positions.buy(acct.id(), req.symbol(), req.shares()));
+    }
+
+    private void positionsPreview(Context ctx) {
+        StockOrderPreviewRequest req = bodyOrNull(ctx, StockOrderPreviewRequest.class);
+        if (req == null) throw new IllegalArgumentException("request body is required");
+        validateStockOrder(new StockOrderRequest(req.symbol(), req.shares()));
+        if (req.side() == null || req.side().isBlank()) throw new IllegalArgumentException("side is required");
+        Account acct = currentAccount(ctx);
+        ctx.json(positions.preview(acct.id(), req.side(), req.symbol(), req.shares()));
     }
 
     private void positionsSell(Context ctx) {

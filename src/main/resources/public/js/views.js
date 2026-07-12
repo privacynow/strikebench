@@ -3783,23 +3783,63 @@
     var symInput = el('input', { type: 'text', id: 'stock-symbol', value: symbol || '' });
     var qty = el('input', { type: 'number', id: 'stock-shares', min: '1',
       value: side === 'sell' && maxShares ? String(maxShares) : '100' });
+    var preview = el('div', { id: 'stock-order-preview', 'aria-live': 'polite' },
+      el('span', { class: 'muted small' }, 'Enter a symbol and share count to price this order.'));
+    var previewSeq = 0, previewTimer = null;
+    async function loadPreview() {
+      var seq = ++previewSeq;
+      var shares = Number(qty.value), sym = symInput.value.trim().toUpperCase();
+      if (!sym || !Number.isInteger(shares) || shares <= 0) return;
+      preview.innerHTML = '';
+      preview.appendChild(UI.spinner('Pricing at the current ' + (side === 'buy' ? 'ask' : 'bid') + '…'));
+      try {
+        var p = await API.post('/api/positions/preview', { side: side, symbol: sym, shares: shares });
+        if (seq !== previewSeq || !preview.isConnected) return;
+        preview.innerHTML = '';
+        if (!p.ok) preview.appendChild(alertBox('warn', 'This order cannot be placed', p.blockReasons));
+        if (p.warnings && p.warnings.length) preview.appendChild(alertBox('caution', 'Quote context', p.warnings));
+        preview.appendChild(el('div', { class: 'chip-row' },
+          chip(side === 'buy' ? 'Estimated cash outlay' : 'Estimated proceeds', fmtMoney(p.totalCents)),
+          chip('Executable ' + (side === 'buy' ? 'ask' : 'bid') + ' / share', fmtMoney(p.pricePerShareCents)),
+          side === 'sell' && p.estimatedRealizedPnlCents != null
+            ? chip('Estimated realized P/L', pnlSpan(p.estimatedRealizedPnlCents)) : null,
+          side === 'buy' ? chip('Buying power after', fmtMoney(p.buyingPowerAfterCents)) : null));
+        preview.appendChild(el('div', { class: 'muted small' },
+          'Estimate only. Confirm rechecks the current executable quote and account immediately before the practice fill.'));
+      } catch (e) {
+        if (seq !== previewSeq || !preview.isConnected) return;
+        preview.innerHTML = '';
+        preview.appendChild(alertBox('warn', 'Could not price this order', [e.message]));
+      }
+    }
+    function queuePreview() {
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(loadPreview, 250);
+    }
+    symInput.addEventListener('input', queuePreview);
+    qty.addEventListener('input', queuePreview);
     UI.confirmModal(side === 'buy' ? 'Buy shares' : 'Sell shares',
       el('div', {},
         explain(side === 'buy'
           ? 'Fills at the current ask. Owning 100+ shares unlocks covered calls (income, selling at a target) and protective puts.'
           : 'Fills at the current bid. Shares locked under an open covered call or collar cannot be sold until that trade closes.'),
         el('div', { class: 'field' }, el('label', {}, 'Symbol'), symInput),
-        el('div', { class: 'field', style: 'margin-top:8px' }, el('label', {}, 'Shares'), qty)),
+        el('div', { class: 'field', style: 'margin-top:8px' }, el('label', {}, 'Shares'), qty),
+        preview),
       side === 'buy' ? 'Buy' : 'Sell',
       async function () {
         var shares = positiveInteger(qty.value, 'Shares');
         if (side === 'sell' && maxShares && shares > maxShares) {
           throw new Error('Only ' + maxShares + ' shares are available to sell.');
         }
+        var check = await API.post('/api/positions/preview',
+          { side: side, symbol: symInput.value.trim(), shares: shares });
+        if (!check.ok) throw new Error((check.blockReasons || ['This order cannot be placed.']).join(' '));
         await API.post('/api/positions/' + side,
           { symbol: symInput.value.trim(), shares: shares });
         App.render();
       });
+    queuePreview();
   }
 
   async function portfolio(root, params) {

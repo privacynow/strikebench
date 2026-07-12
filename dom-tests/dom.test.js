@@ -1890,6 +1890,8 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   await page.waitForSelector('#modal-confirm');
   await page.fill('#stock-symbol', 'AAPL');
   await page.fill('#stock-shares', '100');
+  await page.waitForSelector('#stock-order-preview:has-text("Estimated cash outlay")');
+  assert.match(await page.textContent('#stock-order-preview'), /Executable ask \/ share[\s\S]*Buying power after/);
   await page.click('#modal-confirm');
   await page.waitForSelector('#holdings-card .tbl tbody tr');
   const holdingsRow = await page.textContent('#holdings-card .tbl tbody tr');
