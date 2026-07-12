@@ -3855,9 +3855,26 @@ public final class ApiServer {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("preview", preview);
         Candidate exact = exactPreviewCandidate(req, preview);
-        var economics = evaluations.assessExact(req.symbol(), exact, acct.buyingPowerCents(),
-                analysisCtx(ctx), worldParam(activeWorld(ctx)), preview.ok(), preview.blockReasons(),
-                Math.multiplyExact(preview.feesOpenCents(), 2L));
+        io.liftandshift.strikebench.eval.EconomicAssessment economics;
+        long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
+        try {
+            economics = evaluations.assessExact(req.symbol(), exact, acct.buyingPowerCents(),
+                    analysisCtx(ctx), worldParam(activeWorld(ctx)), preview.ok(), preview.blockReasons(),
+                    roundTripFees);
+        } catch (RuntimeException e) {
+            log.warn("Exact-ticket economics are unavailable for this preview");
+            log.debug("Exact-ticket economic-assessment failure", e);
+            var provenance = preview.evidence().provenance();
+            boolean observed = provenance == io.liftandshift.strikebench.model.DataProvenance.OBSERVED
+                    || provenance == io.liftandshift.strikebench.model.DataProvenance.BROKER;
+            economics = new io.liftandshift.strikebench.eval.EconomicAssessment(
+                    io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE,
+                    "MECHANICS_ONLY", "Economics unavailable",
+                    "The package was checked mechanically, but the available volatility/history inputs cannot support an economic verdict right now.",
+                    preview.expectedValueCents() == null ? null : preview.expectedValueCents() - roundTripFees,
+                    null, roundTripFees, null, observed,
+                    List.of("Exact economic comparison is unavailable; no favorable claim is made."));
+        }
         out.put("economics", economics);
         out.put("guardrails", Map.of(
                 "level", verdict.level().name(),

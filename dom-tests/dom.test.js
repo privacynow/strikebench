@@ -73,11 +73,6 @@ before(async () => {
   browser = await chromium.launch();
   page = await browser.newPage();
   page.on('pageerror', e => { throw new Error('page error: ' + e.message); });
-  page.on('response', async r => {
-    if (r.url().includes('/api/recommend')) {
-      console.log('REC-DEBUG:', r.status(), (await r.text().catch(() => '')).slice(0, 400));
-    }
-  });
 
   await page.goto(BASE + '/');
   await page.waitForSelector('#app[data-ready="true"]');

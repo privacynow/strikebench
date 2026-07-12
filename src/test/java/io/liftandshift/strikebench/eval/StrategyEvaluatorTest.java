@@ -83,6 +83,7 @@ class StrategyEvaluatorTest {
         StrategyEvaluation demo = evaluator.evaluate(debitCallSpread("FIXTURE", 0.6), null, ctx());
 
         assertThat(demo.evidenceLevel()).isEqualTo(EvidenceLevel.DEMO_FIXTURE);
+        assertThat(demo.evidence().perDimension().get("history")).isEqualTo(EvidenceLevel.DEMO_FIXTURE);
         // Same trade, demo data -> a strictly lower risk-adjusted score (honesty haircut).
         assertThat(demo.rankScore()).isLessThan(live.rankScore());
         assertThat(demo.explanation().failureModes()).anyMatch(f -> f.contains("DEMO"));

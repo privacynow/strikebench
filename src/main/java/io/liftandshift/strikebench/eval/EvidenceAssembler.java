@@ -14,7 +14,8 @@ public final class EvidenceAssembler {
         EvidenceLevel volatility = ctx.ivHistory().size() >= 10 && pricing.isObserved()
                 ? pricing : EvidenceLevel.MODELED;
         EvidenceLevel liquidity = c.liquidityScore() > 0 ? pricing : EvidenceLevel.UNKNOWN;
-        EvidenceLevel history = ctx.realizedVol30() != null ? EvidenceLevel.OBSERVED_EOD : EvidenceLevel.UNKNOWN;
+        EvidenceLevel history = ctx.realizedVol30() == null ? EvidenceLevel.UNKNOWN
+                : pricing.isObserved() ? EvidenceLevel.OBSERVED_EOD : pricing;
 
         Map<String, EvidenceLevel> dims = new LinkedHashMap<>();
         dims.put("pricing", pricing);
