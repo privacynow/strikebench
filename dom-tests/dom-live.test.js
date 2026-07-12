@@ -191,10 +191,10 @@ test('live: observed backtest never substitutes demo history', async () => {
 });
 
 test('live: status, account, portfolio render', async () => {
-  await go('#/status');
+  await go('#/data/overview');
   await page.waitForSelector('#dc-engine .chip-row', { timeout: 30000 }); // Data Center engine card
   assert.match(await page.textContent('#dc-engine'), /Market engine/);
-  await go('#/account'); // legacy URL -> Portfolio Account section
+  await go('#/portfolio/account');
   assert.match(await page.textContent('#app'), /Buying power/);
   await go('#/portfolio/closed');
   await page.waitForSelector('.tbl tbody tr, .empty', { timeout: 30000 });

@@ -47,6 +47,16 @@ async function openResearchTab(key) {
   await page.waitForSelector('[data-research-panel="' + key + '"]:not([hidden])');
 }
 
+/** Run the real Context workflow and open its inline side-by-side evaluation. */
+async function openInlineCompetition(symbol = 'AAPL') {
+  await go('#/trade/context/manual');
+  await page.fill('#rec-symbol', symbol);
+  await page.click('#rec-go');
+  await page.waitForSelector('#compare-ideas-btn', { timeout: 25000 });
+  await page.click('#compare-ideas-btn');
+  await page.waitForSelector('#decision-host .decision-pick', { timeout: 20000 });
+}
+
 before(async () => {
   pg = freshDb();
   server = spawn(JAVA, ['-jar', JAR], {
@@ -117,8 +127,8 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   assert.ok((await page.locator('.home-market-grid .tile').count()) >= 4, 'market watch tiles');
   const footer = await page.textContent('#disclaimer');
   assert.match(footer, /not financial advice/i);
-  // Legacy #/welcome redirects into the adaptive Home's tour view
-  await go('#/welcome');
+  // The tour is a canonical Home subview.
+  await go('#/home/tour');
   await page.waitForSelector('#welcome-hero');
   assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'home');
   // BRAND RETURNS TO THE OPERATIONAL DESK (review P5): from any screen the mark lands on
@@ -280,7 +290,7 @@ test('Research entry and destination cards are purposeful, readable, and collisi
 
 test('Ideas begins with market context and reuses the scenario engine for realistic outcomes', async () => {
   await page.evaluate(() => {
-    App.state.discoverForm = null; App.state.ideasForm = null; App.state.scoutForm = null;
+    App.state.discoverForm = null;
     App.context.selectSymbol('AAPL'); App.state.recommendResults = null;
   });
   await go('#/trade/context');
@@ -899,7 +909,7 @@ test('market stream (SSE): the browser receives live quote frames from the engin
 });
 
 test('discover scan: a blank symbol box auto-recommends with evidence and targets', async () => {
-  await go('#/trade/context/scout'); // legacy alias — forces scan mode
+  await go('#/trade/context/scout'); // canonical Context mode for a market scan
   await page.waitForSelector('#auto-target'); // scan-scope fields visible in scan mode
   assert.ok(await page.locator('#idea-source .choice[data-source="scan"].selected').count(),
     '"Scan the market for me" is an explicit, visible choice');
@@ -1052,7 +1062,7 @@ test('portfolio headline: total value + P/L at current marks', async () => {
 });
 
 test('portfolio absorbs account: sections, ledger under Activity, guarded reset', async () => {
-  await go('#/account'); // legacy URL -> Portfolio's Account section
+  await go('#/portfolio/account');
   const text = await page.textContent('#app');
   assert.match(text, /Buying power/);
   assert.match(text, /Reset account/);
@@ -1627,7 +1637,7 @@ test('theme toggle, brand, health banner, route error boundary', async () => {
 });
 
 test('interaction contract: clickable surfaces are keyboard-operable, errors are nonblocking, modals own focus', async () => {
-  for (const hash of ['#/welcome', '#/home', '#/research', '#/portfolio']) {
+  for (const hash of ['#/home/tour', '#/home', '#/research', '#/portfolio']) {
     await go(hash);
     const violations = await page.$$eval('.clickable', nodes => nodes.filter(n => {
       const native = n.matches('a[href],button');
@@ -2380,12 +2390,12 @@ test('smooth pipeline: GET cache, skeleton on slow loads, tape refresh keeps its
   assert.equal(stable, true, 'tape strip not rebuilt when symbols unchanged');
 });
 
-test('decision page: recommendations-as-a-competition — the pick, evidence, scenarios, plan, handoff', async () => {
+test('inline competition: the pick, evidence, scenarios, plan, and handoff', async () => {
   await page.evaluate(() => {
     Learn.setLevel('expert');
     App.state.discoverForm = { symbol: 'AAPL', thesis: 'bullish', horizon: 'month' };
   });
-  await go('#/decision/AAPL');
+  await openInlineCompetition('AAPL');
 
   // The pick, with its honesty badges and score.
   await page.waitForSelector('.decision-pick');
@@ -2430,12 +2440,13 @@ test('decision caching: a cosmetic level flip does NOT re-POST /api/evaluate (no
   const counter = (req) => { if (req.method() === 'POST' && req.url().indexOf('/api/evaluate') >= 0) evalPosts++; };
   page.on('request', counter);
   try {
-    await go('#/decision/AAPL');
-    await page.waitForSelector('.decision-pick');
+    await openInlineCompetition('AAPL');
     assert.equal(evalPosts, 1, 'first render evaluates once');
     // Flip the level: the page re-renders but the inputs are unchanged — must reuse the cache.
     await page.click('#level-switch button[data-level="beginner"]');
-    await page.waitForSelector('.decision-pick');
+    await page.waitForSelector('#compare-ideas-btn');
+    await page.click('#compare-ideas-btn');
+    await page.waitForSelector('#decision-host .decision-pick');
     await page.waitForTimeout(300);
     assert.equal(evalPosts, 1, 'level flip reuses the cached evaluation — no second POST');
     // Refresh is an explicit "re-evaluate" — it busts the cache.
@@ -2457,12 +2468,20 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
   await page.waitForSelector('#app[data-route="home"]', { timeout: 8000 });
   assert.ok(!(await page.locator('#nav a[data-route="lab"]').count()), 'no retired navigation item');
 
-  // Portfolio sizing lives at the bottom of the Decision competition.
+  // Retired internal routes do not remain as hidden aliases. They are unknown routes and
+  // therefore land at Home; current workflows use only the canonical product vocabulary.
+  for (const retired of ['#/welcome', '#/account', '#/status', '#/decision',
+    '#/trade/discover', '#/trade/shape', '#/trade/backtest', '#/trade/place']) {
+    await page.evaluate(h => { window.location.hash = h; }, retired);
+    await page.waitForFunction(() => document.getElementById('app').getAttribute('data-route') === 'home');
+  }
+
+  // Portfolio sizing lives at the bottom of the inline Context competition.
   await page.evaluate(() => {
     App.state.discoverForm = { symbol: 'AAPL', goal: 'DIRECTIONAL', thesis: 'neutral', horizon: 'month' };
     App.state.filterState = {};
   });
-  await go('#/decision');
+  await openInlineCompetition('AAPL');
   await page.waitForSelector('#portfolio-build', { timeout: 25000 });
   // Diagnostic mode guarantees a funded (least-bad) set on the fixture universe, LABELED not-a-recommendation.
   await page.check('#portfolio-diagnostics');

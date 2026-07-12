@@ -20,7 +20,7 @@
 
   /**
    * The opening page: what this is, who it's for, and three one-click ways in — shown to
-   * fresh accounts (and always at #/welcome). The competition leads with a landing page;
+   * fresh accounts (and always at #/home/tour). The competition leads with a landing page;
    * ours leads with a landing page wired to LIVE local data (the tape above it already ticks).
    */
   async function welcome(root) {
@@ -363,7 +363,7 @@
       if (!rows.length) {
         tiles.appendChild(UI.emptyState('Market data unavailable right now',
           'The quote providers did not answer. See the Data screen for per-source health.',
-          'Check data status', function () { App.navigate('#/status'); }));
+          'Check data status', function () { App.navigate('#/data/overview'); }));
         return;
       }
       tiles.setAttribute('data-count', String(Math.min(rows.length, 8)));
@@ -538,8 +538,7 @@
    */
   /**
    * ONE structural class system (`.product-hero` / `.ph-inner` / `.ph-text` / `.ph-ctas`) with
-   * variant modifiers — the legacy classes ride along for existing CSS, but shared styling
-   * targets the ph-* frame so the two pages cannot drift structurally (review P3 #10).
+   * variant modifiers. Welcome and Home share the frame without sharing their product job.
    */
   function heroBlock(variant, opts) {
     if (variant === 'welcome') {
@@ -753,7 +752,7 @@
           'No headline or filing source answered for ' + symbol + '. Price research remains available.'));
         newsCard.appendChild(UI.emptyState('No headlines right now',
           'No news source answered for ' + symbol + '. See the Data screen for per-source health.',
-          'Check data status', function () { App.navigate('#/status'); }));
+          'Check data status', function () { App.navigate('#/data/overview'); }));
         return;
       }
       var headlines = newsItems.filter(function (n) { return !isFiling(n); }).slice(0, 8);
@@ -2081,16 +2080,12 @@
     // goal keeps the ticker box, so "Buy at a discount" can name a stock.
     var saved = App.state.discoverForm;
     if (!saved) {
-      // one-time migration from the pre-merge two-tab state
-      var m0 = App.state.ideasForm || {};
-      var s0 = App.state.scoutForm || {};
       saved = App.state.discoverForm = {
-        goal: m0.intent || s0.goal || 'DIRECTIONAL',
-        goalExplicit: !!(m0.intent || s0.goal),
+        goal: 'DIRECTIONAL',
+        goalExplicit: false,
         source: 'single',
-        symbol: m0.symbol || '', target: m0.target || '',
-        universe: s0.universe || '', scanTarget: s0.target || '',
-        h0: !!s0.h0, hW: s0.hW !== false, hM: s0.hM !== false
+        symbol: '', target: '', universe: '', scanTarget: '',
+        h0: false, hW: true, hM: true
       };
     }
     var prefill = App.state.ideasPrefill || {};
@@ -2804,6 +2799,10 @@
   }
 
   async function workbench(root, params) {
+    if (params[0] && !WORKFLOW_STAGES.some(function (s) { return s.key === params[0]; })) {
+      App.navigate('#/home');
+      return;
+    }
     var stage = 'context';
     WORKFLOW_STAGES.forEach(function (s2) { if (params[0] === s2.key) stage = s2.key; });
     root.appendChild(el('h1', {}, 'Trade'));
@@ -3528,7 +3527,7 @@
 
   async function portfolio(root, params) {
     // One money home: Positions (holdings + trades) | Activity (the ledger) | Account
-    // (starting cash, reset). The old #/account URL lands on the Account section.
+    // (starting cash, reset).
     var section = params[0] === 'activity' ? 'activity' : params[0] === 'account' ? 'account' : params[0] === 'record' ? 'record' : 'positions';
     var tab = params[0] === 'closed' ? 'closed' : 'active';
     var page = parseInt(params[1] || '0', 10);
@@ -4995,11 +4994,11 @@
   // The Data Center: where data comes from, how fresh it is, what we hold, and the jobs + resets
   // that manage it. A real operational hub, ladder-tuned. Progressive paint; each section fills
   // its own captured card (token-guarded so leaving the route never paints stale data).
-  async function status(root, params) {
+  async function data(root, params) {
     var level = Learn.currentLevel();
     var token = App.navToken;
     // ROUTE-BACKED SUBNAVIGATION (holistic review addendum A): Data is five workspaces, not one
-    // scroll. #/data aliases to Overview; back/forward, bookmarks and workspace restore keep the tab.
+    // scroll. Data owns its canonical route; back/forward, bookmarks and workspace restore keep the tab.
     var TABS = [
       { key: 'overview', label: 'Overview' },
       { key: 'simulation', label: 'Simulated market' },
@@ -6810,10 +6809,7 @@
         'Theor. max profit', 'POP', 'Market EV', 'History EV', 'Tail loss', ''], rows));
   }
 
-  /**
-   * The recommendations-as-a-competition render, reusable both as the standalone #/decision page
-   * and INLINE inside the Ideas results (D3 — it is no longer an orphan surface). Fills `host`.
-   */
+  /** The recommendations-as-a-competition render inside Context, where the candidates originate. */
   async function renderCompetition(host, symbol) {
     var level = Learn.currentLevel();
     var form = App.state.discoverForm || {};
@@ -6858,6 +6854,11 @@
       App.state.decisionCache = { key: cacheKey, data: data };
     }
     host.innerHTML = '';
+    host.appendChild(el('div', { class: 'btn-row decision-actions' },
+      el('button', { class: 'btn btn-sm btn-secondary', id: 'decision-refresh', onclick: function () {
+        App.state.decisionCache = null;
+        renderCompetition(host, symbol);
+      } }, 'Re-evaluate')));
     var evals = (data && data.evaluations) || [];
     if (!evals.length) {
       host.appendChild(UI.emptyState('No comparable ideas',
@@ -6877,34 +6878,6 @@
     App.state.portfolioOptimizer = App.state.portfolioOptimizer || {};
     host.appendChild(el('h2', { class: 'section-h' }, 'Size the strongest ideas across a budget'));
     host.appendChild(optimizerCard(level, App.state.portfolioOptimizer));
-  }
-
-  async function decision(root, params) {
-    var level = Learn.currentLevel();
-    var form = App.state.discoverForm || {};
-    var symbol = (params[0] || App.context.symbol() || form.symbol || '').toUpperCase();
-
-    root.appendChild(el('h1', {}, 'Compare ideas'));
-    if (level === 'beginner') {
-      root.appendChild(explain('The same goal, a few different ways — judged side by side. The first is the strongest available comparison, not an automatic recommendation; its economic label tells you whether to investigate it, compare carefully, study only the mechanics, or learn from it as a counterexample.'));
-    }
-    if (!symbol) {
-      root.appendChild(UI.emptyState('No stock chosen yet', 'Pick a stock and a goal first, then compare the ideas.',
-        'Find ideas', function () { App.navigate('#/trade/context'); }));
-      return;
-    }
-    var decisionContext = lockedSymbolBar(symbol, { id: 'decision-symbol-context', label: 'Compared symbol' });
-    decisionContext.querySelector('.symbol-context-actions').appendChild(
-      el('button', { class: 'btn btn-sm btn-secondary', id: 'decision-refresh', onclick: function () {
-        App.state.decisionCache = null; App.render();
-      } }, 'Refresh'));
-    root.appendChild(decisionContext);
-
-    var host = el('div', { id: 'decision-host' });
-    root.appendChild(host);
-    // Detached: renderCompetition fills the captured host, so the route returns immediately and
-    // a new navigation is never trapped behind the evaluation call.
-    renderCompetition(host, symbol).catch(function () { /* handled inside */ });
   }
 
   // ---- Shared Research/Trade workbench components ----
@@ -7383,7 +7356,9 @@
         var _d = await API.post('/api/research/event-studies', body);
         var key = _d.studyKey || studyClientKey(symbol, q.key, params, protocol.from, protocol.to);
         f.results[key] = _d;
-        f.results[studyClientKey(symbol, q.key, params, protocol.from, protocol.to)] = _d; // client-key alias
+        // Keep a deterministic local lookup key alongside the server identity so changing a
+        // visible control can never restore a result from a different study configuration.
+        f.results[studyClientKey(symbol, q.key, params, protocol.from, protocol.to)] = _d;
         var keys = Object.keys(f.results);
         if (keys.length > 16) delete f.results[keys[0]]; // bounded memory
         renderQuestion(out, _d, level, symbol, thesis);
@@ -7682,7 +7657,6 @@
     research: research,
     trade: trade,
     portfolio: portfolio,
-    status: status,
-    decision: decision
+    data: data
   };
 })();

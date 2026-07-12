@@ -136,7 +136,6 @@
     post: mutate('POST'),
     put: mutate('PUT'),
     del: del,
-    'delete': del,          // alias so an API.delete(...) typo can't silently no-op
     invalidate: invalidate,
     flushCache: flushCache,
     upload: upload,

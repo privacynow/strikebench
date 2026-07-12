@@ -10,6 +10,6 @@ public record StrategySpec(
         String intent,      // StrategyIntent name
         String horizon,     // 0DTE / week / month / quarter
         String thesis,      // directional view, when applicable
-        String riskMode,    // learning / conservative / balanced / aggressive
+        String riskMode,    // conservative / balanced / aggressive
         String objective    // the ranking objective this evaluation optimizes (e.g. "risk_adjusted")
 ) {}

@@ -54,7 +54,6 @@ public final class RecommendationEngine {
     /**
      * Risk mode is a CAPITAL BUDGET, nothing else: a per-idea percent of buying power. It never
      * gates which strategies exist (the position's own math and the DecisionPolicy do that).
-     * The historical 'learning' wire value maps to CONSERVATIVE at this boundary only.
      */
     public enum RiskMode {
         CONSERVATIVE(0.01), BALANCED(0.02), AGGRESSIVE(0.05);
@@ -66,9 +65,10 @@ public final class RecommendationEngine {
         public static RiskMode parse(String s) {
             if (s == null) return CONSERVATIVE;
             String v = s.trim().toUpperCase(Locale.ROOT);
-            if (v.equals("LEARNING")) return CONSERVATIVE; // legacy wire value, API compat only
             try { return valueOf(v); }
-            catch (IllegalArgumentException e) { return CONSERVATIVE; }
+            catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("riskMode must be conservative, balanced, or aggressive");
+            }
         }
     }
 
@@ -76,7 +76,7 @@ public final class RecommendationEngine {
             String symbol,
             String thesis,               // bullish | bearish | neutral | volatile
             String horizon,              // 0DTE | week | month | quarter
-            String riskMode,             // learning | conservative | balanced | aggressive
+            String riskMode,             // conservative | balanced | aggressive
             Long maxLossCents,           // absolute per-trade budget, optional
             Double maxRiskPctOfAccount,  // optional, defaults by risk mode
             Double minConfidence,        // 0..1, optional

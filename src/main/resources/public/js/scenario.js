@@ -509,9 +509,6 @@
         pay: payoffPoints(m.payoffShape), summary: m.summary, legs: SCENARIO_LEGS[m.name] });
     });
   }
-  // Back-compat alias: earlier callers/tests used QUICKS.
-  var QUICKS = CATALOG;
-
   /** Legs from the working idea (ticket candidate/custom), mapped to sim legs. Null if none. */
   function workingLegs() {
     var t = App.state.ticket;
@@ -631,7 +628,7 @@
   }
 
   window.Scenario = {
-    SHAPES: SHAPES, QUICKS: QUICKS, CATALOG: CATALOG,
+    SHAPES: SHAPES, CATALOG: CATALOG,
     form: form, fanChart: fanChart, pnlView: pnlView, workingLegs: workingLegs,
     realisticOutcomes: realisticOutcomes, sketch: sketch, applyCatalog: applyCatalog
   };

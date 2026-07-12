@@ -178,14 +178,8 @@ class RecommendationEngineTest {
 
     @Test
     void bullishConservativeReturnsDefinedRiskCandidatesWithFullNarratives() {
-        // 'learning' is API-compat only: it maps to CONSERVATIVE at the boundary and produces
-        // the IDENTICAL result — risk mode is a capital budget, never a catalog gate (review P0).
-        RecommendationEngine.Result result = engine.recommend(req("AAPL", "bullish", "month", "learning"), BP);
-        RecommendationEngine.Result conservative = engine.recommend(req("AAPL", "bullish", "month", "conservative"), BP);
+        RecommendationEngine.Result result = engine.recommend(req("AAPL", "bullish", "month", "conservative"), BP);
         assertThat(result.riskMode()).isEqualTo("CONSERVATIVE");
-        assertThat(result.riskBudgetCents()).isEqualTo(conservative.riskBudgetCents());
-        assertThat(result.candidates()).extracting(Candidate::strategy)
-                .containsExactlyElementsOf(conservative.candidates().stream().map(Candidate::strategy).toList());
         assertThat(result.candidates()).isNotEmpty();
         for (Candidate c : result.candidates()) {
             StrategyFamily family = StrategyFamily.valueOf(c.strategy());
@@ -202,6 +196,14 @@ class RecommendationEngineTest {
             assertThat(result.riskBudgetCents()).isEqualTo(100_000L);
         }
         assertThat(result.disclaimer()).containsIgnoringCase("not financial advice");
+    }
+
+    @Test
+    void retiredRiskModesAreRejectedInsteadOfSilentlyChangingTheBudget() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                engine.recommend(req("AAPL", "bullish", "month", "learning"), BP))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("riskMode");
     }
 
     @Test

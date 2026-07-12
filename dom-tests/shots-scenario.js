@@ -58,7 +58,7 @@ const JAVA = process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', 'ja
   await shot('scen-research-expert');
 
   // Data center datasets card (expert), with generate form open
-  await go('#/status');
+  await go('#/data/overview');
   await page.waitForSelector('#dc-datasets .status-item');
   await page.click('#dc-generate-btn');
   await page.waitForSelector('#dc-gen-sym');

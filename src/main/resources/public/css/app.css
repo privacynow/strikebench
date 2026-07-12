@@ -1102,10 +1102,10 @@ body.lvl-expert .not-expert { display: none !important; }
   /* Data is an operational workspace, not a prose page. Keep its four-card overview inside
      a 720px desktop viewport by tightening only the page chrome; card text and controls retain
      the shared readable sizing. */
-  #app[data-route="status"] { padding-top: 12px; }
-  #app[data-route="status"] > h1 { margin-bottom: 8px; }
-  #app[data-route="status"] > .data-tabs-wrap .tabs { margin-bottom: 9px; }
-  #app[data-route="status"] > .dc-intro { margin-bottom: 6px; }
+  #app[data-route="data"] { padding-top: 12px; }
+  #app[data-route="data"] > h1 { margin-bottom: 8px; }
+  #app[data-route="data"] > .data-tabs-wrap .tabs { margin-bottom: 9px; }
+  #app[data-route="data"] > .dc-intro { margin-bottom: 6px; }
 }
 /* Data's local nav is the same underline-tab language; it just adds live badges + mobile scroll. */
 .data-tabs { overflow-x: auto; scrollbar-width: thin; white-space: nowrap; }

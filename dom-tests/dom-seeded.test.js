@@ -147,7 +147,7 @@ after(async () => {
 
 const ROUTES = ['#/home', '#/research/AAPL', '#/trade/context', '#/trade/context/manual',
   '#/trade/structure', '#/trade/decide', '#/trade/outcomes', '#/portfolio', '#/portfolio/closed',
-  '#/portfolio/activity', '#/portfolio/account', '#/status'];
+  '#/portfolio/activity', '#/portfolio/account', '#/data/overview'];
 
 for (const level of ['beginner', 'expert']) {
   test(`grown DB: every route renders clean at ${level}`, async () => {

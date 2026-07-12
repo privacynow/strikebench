@@ -40,7 +40,7 @@ public final class AutoRecommender {
             Long maxLossCents,              // optional absolute per-trade risk cap
             Double maxRiskPctOfAccount,     // optional, else risk-mode default
             Double minConfidence,           // optional floor on signal confidence 0..1
-            String riskMode,                // learning|conservative|balanced|aggressive
+            String riskMode,                // conservative|balanced|aggressive
             Boolean allow0dte,
             List<String> intents,           // StrategyIntent names; default DIRECTIONAL
             RecommendationEngine.Filters filters // optional hard screens per candidate

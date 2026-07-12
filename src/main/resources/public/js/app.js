@@ -123,11 +123,8 @@
       var parts = hash.replace(/^#\//, '').split('/').filter(function (p) { return p.length; });
       var route = parts[0] || 'home';
       var params = parts.slice(1);
-      // The tour and account are subviews of their owning screens. Trade has only its
-      // canonical Context/Structure/Outcomes/Decide routes; there are no internal aliases.
-      if (route === 'welcome') { route = 'home'; params = ['tour']; }
-      if (route === 'account') { route = 'portfolio'; params = ['account']; }
-      if (route === 'data') { route = 'status'; } // the nav says Data; params carry the Data tab
+      // Routes are canonical product nouns. Internal aliases only obscure ownership and make
+      // navigation tests prove redirects instead of the real screen contract.
       var view = window.Views[route];
       if (!view) {
         route = 'home';
@@ -191,7 +188,7 @@
       var tape = document.getElementById('tape');
       if (tape) {
         var showTape = route === 'home' || route === 'research' || route === 'trade' || route === 'portfolio'
-          || (route === 'status' && App.state.world && App.state.world !== 'observed');
+          || (route === 'data' && App.state.world && App.state.world !== 'observed');
         tape.classList.toggle('tape-offroute', !showTape);
         var strip = document.getElementById('tape-strip');
         if (showTape && strip && (!strip.children.length || strip.hasAttribute('data-stale'))) {
@@ -207,7 +204,7 @@
       UI.alertBox('danger', 'The ' + route + ' screen failed to load', [e.message || 'Something went wrong']),
       UI.el('div', { class: 'btn-row' },
         UI.el('button', { class: 'btn', id: 'route-retry', onclick: function () { App.render(); } }, 'Retry'),
-        UI.el('button', { class: 'btn btn-secondary', onclick: function () { App.navigate('#/status'); } }, 'Check data status')),
+        UI.el('button', { class: 'btn btn-secondary', onclick: function () { App.navigate('#/data/overview'); } }, 'Check data status')),
       UI.el('p', { class: 'muted' },
         'If this keeps happening after a retry, the server may need a restart (see the banner above if one appeared).'));
     return box;
@@ -515,11 +512,11 @@
   var LANE_KEYS = ['marketContext', 'marketThesis', 'researchStudy', 'evidencePrefill',
     'researchTabBySymbol',
     'ideasPrefill', 'backtestPrefill', 'discoverForm', 'builderForm', 'backtestForm',
-    'verifyForm', 'scenarioForm', 'ideasForm', 'scoutResults', 'outcomeReceipt',
+    'verifyForm', 'scenarioForm', 'scoutResults', 'outcomeReceipt',
     'portfolioOptimizer',
     // Result objects are market-DERIVED state (review P0 #1): an observed evaluation must
     // never render inside a simulated market. HTTP-cache flushes don't touch these.
-    'recommendResults', 'decisionCache', 'decisionInflight', 'filterState', 'scoutForm'];
+    'recommendResults', 'decisionCache', 'decisionInflight', 'filterState'];
   function stashLane(worldId) {
     App.state._laneStash = App.state._laneStash || {};
     var box = {};

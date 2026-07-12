@@ -1077,10 +1077,11 @@ class ApiIntegrationTest {
             assertThat(m.get("effectiveBudgetCents").asLong())
                     .isLessThanOrEqualTo(cap);
         }
-        // The legacy 'learning' wire value still parses (maps to conservative at the boundary).
+        // Internal wire aliases are not a product capability: an obsolete mode is rejected
+        // instead of silently changing the caller's capital budget.
         assertThat(post("/api/recommend",
                 "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"learning\"}")
-                .statusCode()).isEqualTo(200);
+                .statusCode()).isEqualTo(400);
         // Clean up so later-ordered tests keep the uncapped budget expectations.
         assertThat(put("/api/account/risk-context", "{}").statusCode()).isEqualTo(200);
     }

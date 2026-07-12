@@ -64,7 +64,7 @@ after(async () => {
 
 const ROUTES = ['#/home', '#/home/tour', '#/research', '#/research/AAPL', '#/trade/context',
   '#/trade/context/manual', '#/trade/structure', '#/trade/decide', '#/trade/outcomes',
-  '#/portfolio', '#/portfolio/activity', '#/portfolio/account', '#/status',
+  '#/portfolio', '#/portfolio/activity', '#/portfolio/account', '#/data/overview',
   '#/data/simulation', '#/data/datasets', '#/data/sources', '#/data/admin'];
 const WIDTHS = [2048, 1920, 1440, 1280, 1000, 390, 375, 320]; // include the wide desktop that exposed the trade-form spill
 
