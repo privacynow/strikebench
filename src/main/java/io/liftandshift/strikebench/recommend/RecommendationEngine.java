@@ -386,14 +386,15 @@ public final class RecommendationEngine {
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
         BigDecimal spot = chain.underlyingPrice();
-        // ACQUIRE budget follows the recommend() rule: strike cash is the design, not a breach
+        // Use the same budget calculation as recommend(). ACQUIRE is the one explicit exception:
+        // its cash-secured purchase commitment is the product and is disclosed as such. EXIT and
+        // HEDGE never inflate the selected per-idea budget merely to manufacture a rung.
         RiskMode mode = RiskMode.parse(req.riskMode());
         double riskPct = req.maxRiskPctOfAccount() != null ? Math.clamp(req.maxRiskPctOfAccount(), 0.001, 0.5) : mode.defaultRiskPct;
         long budget = intent == StrategyIntent.ACQUIRE && req.maxRiskPctOfAccount() == null && req.maxLossCents() == null
                 ? buyingPowerCents
                 : Math.min(Math.round(buyingPowerCents * riskPct) == 0 ? buyingPowerCents : Math.round(buyingPowerCents * riskPct),
                            req.maxLossCents() != null && req.maxLossCents() > 0 ? req.maxLossCents() : Long.MAX_VALUE);
-        if (intent == StrategyIntent.HEDGE || intent == StrategyIntent.EXIT) budget = Math.max(budget, buyingPowerCents / 10);
 
         // Rung strikes: EXIT climbs above spot, ACQUIRE/HEDGE step below it
         List<BigDecimal> strikes = new ArrayList<>();
@@ -420,7 +421,14 @@ public final class RecommendationEngine {
             if (c == null) continue;
             if (rungs.stream().noneMatch(r -> r.label().equals(c.label()))) rungs.add(c);
         }
-        if (rungs.isEmpty()) notes.add("No tradable strikes for this ladder right now");
+        if (rungs.isEmpty()) {
+            if (!sharesHeld && (intent == StrategyIntent.HEDGE || intent == StrategyIntent.EXIT)) {
+                notes.add("This goal starts from shares you own. No stock-plus-option package fits the selected "
+                        + "per-idea risk limit; buy practice shares first or construct the full package in Structure.");
+            } else {
+                notes.add("No tradable strikes fit this ladder and its stated budget right now");
+            }
+        }
         if (sharesHeld) notes.add("Sized against your " + freeShares + " free shares");
         return new LadderResult(symbol, intent.name(), rungs, notes, DISCLAIMER);
     }

@@ -891,7 +891,7 @@
           async function rung(intentKey) {
             try {
               var lad = await API.post('/api/recommend/ladder', { symbol: symbol, intent: intentKey });
-              var rungs = lad.rungs || [];
+              var rungs = (lad.rungs || []).filter(function (c) { return !!UI.firstOptionLeg(c && c.legs); });
               return rungs.length ? rungs[Math.min(1, rungs.length - 1)] : null;
             } catch (er) { return null; }
           }
@@ -918,23 +918,25 @@
           ]);
           var acq = ladders[0], ex = ladders[1], hg = ladders[2];
           if (acq && !held) {
-            var kA = parseFloat(acq.legs[0].strike);
+            var kA = UI.firstOptionLeg(acq.legs);
             cards.push(actionCard('tag', 'Own it cheaper',
               el('span', {}, 'Get paid ', el('b', { class: 'gain' }, fmtMoney(acq.entryNetPremiumCents)),
-                ' now to buy at $' + kA + ' \u2014 effectively $' + acq.effectivePrice + '/sh.'),
+                ' now to buy at $' + fmtNum(kA.strike, 2) + ' \u2014 effectively $' + fmtNum(acq.effectivePrice, 2) + '/sh.'),
               'ACQUIRE', 'Name your price'));
           }
           if (needExitHedge) {
             if (ex) {
+              var exLeg = UI.firstOptionLeg(ex.legs);
               cards.push(actionCard('flag', 'Sell your ' + held.shares + ' shares higher',
                 el('span', {}, 'Get paid ', el('b', { class: 'gain' }, fmtMoney(ex.entryNetPremiumCents)),
-                  ' now to sell at $' + parseFloat(ex.legs[0].strike) + ' (effectively $' + ex.effectivePrice + '/sh).'),
+                  ' now to sell at $' + fmtNum(exLeg.strike, 2) + ' (effectively $' + fmtNum(ex.effectivePrice, 2) + '/sh).'),
                 'EXIT', 'Pick your exit'));
             }
             if (hg) {
+              var hedgeLeg = UI.firstOptionLeg(hg.legs);
               cards.push(actionCard('shield', 'Protect what you hold',
-                el('span', {}, 'A floor at $' + parseFloat(hg.legs[0].strike) + ' costs ',
-                  el('b', { class: 'loss' }, fmtMoney(hg.maxLossCents)), ' until ' + (hg.legs[0].expiration || '') + '.'),
+                el('span', {}, 'A floor at $' + fmtNum(hedgeLeg.strike, 2) + ' costs ',
+                  el('b', { class: 'loss' }, fmtMoney(hg.maxLossCents)), ' until ' + hedgeLeg.expiration + '.'),
                 'HEDGE', 'Pick your floor'));
             }
           }
@@ -2586,7 +2588,10 @@
         results.appendChild(incomeBoard(r, extras.acct, extras.held));
       }
       results.appendChild(el('div', { class: 'chip-row' },
-        chip('Risk budget (this trade)', fmtMoney(r.riskBudgetCents), 'The most this one trade may risk under your header risk mode.'),
+        chip(intentKey === 'ACQUIRE' ? 'Purchase budget' : 'Risk budget (this trade)', fmtMoney(r.riskBudgetCents),
+          intentKey === 'ACQUIRE'
+            ? 'Cash-secured acquisition reserves the full share-purchase commitment; this is buying capacity, not a disguised small-risk options trade.'
+            : 'The most this one trade may risk under your header risk mode.'),
         chip('Mode', r.riskMode.toLowerCase()),
         chip('Candidates', String(r.candidates.length))));
       if (r.candidates.length) {
@@ -3026,7 +3031,8 @@
    * table with tap-to-expand cards, Pro gets every rung dense with all columns.
    */
   function ladderView(result, intent, ctx) {
-    var rungs = result.rungs || [];
+    var rawRungs = result.rungs || [];
+    var rungs = rawRungs.filter(function (c) { return !!UI.firstOptionLeg(c && c.legs); });
     var level = Learn.currentLevel();
     var wrap = el('div', { class: 'card', id: 'ladder-view' });
     var titles = {
@@ -3036,18 +3042,32 @@
     };
     wrap.appendChild(UI.cardHeader(titles[intent][0]));
     wrap.appendChild(explain(titles[intent][1]));
+    if (rungs.length !== rawRungs.length) {
+      var missing = rawRungs.length - rungs.length;
+      wrap.appendChild(alertBox('warn', 'Some rungs could not be shown', [
+        missing + ' package' + (missing === 1 ? ' is' : 's are')
+          + ' missing a listed option contract. No placeholder price was invented.'
+      ]));
+    }
     if (!rungs.length) {
       wrap.appendChild(UI.emptyState('No tradable rungs right now', (result.notes || []).join(' ')));
       return wrap;
     }
 
-    function strikeOf(c) { return parseFloat(c.legs[0].strike); }
+    function optionLeg(c) { return UI.firstOptionLeg(c && c.legs); }
+    function strikeOf(c) { return Number(optionLeg(c).strike); }
+    function expirationOf(c) { return optionLeg(c).expiration; }
+    function priceText(value) {
+      return UI.finiteNumber(value) ? '$' + fmtNum(Number(value), 2) : '—';
+    }
     function spotPct(c, strike) {
-      return ctx.spot ? ((strike - ctx.spot) / ctx.spot * 100) : null;
+      return UI.finiteNumber(ctx.spot) && Number(ctx.spot) !== 0
+        ? ((strike - Number(ctx.spot)) / Number(ctx.spot) * 100) : null;
     }
     function gainVsBasis(c) {
-      if (!ctx.basisCents || !c.effectivePrice) return null;
-      return (parseFloat(c.effectivePrice) * 100 - ctx.basisCents) / ctx.basisCents * 100;
+      if (!UI.finiteNumber(ctx.basisCents) || !UI.finiteNumber(c.effectivePrice)
+          || Number(ctx.basisCents) === 0) return null;
+      return (Number(c.effectivePrice) * 100 - Number(ctx.basisCents)) / Number(ctx.basisCents) * 100;
     }
     // Recommended rung: closest to the user's target if given, else the middle of the ladder
     var recommended = 0;
@@ -3065,20 +3085,20 @@
       var k = strikeOf(c);
       var pct = spotPct(c, k);
       if (intent === 'ACQUIRE') {
-        return el('span', {}, 'Buy at ', el('b', {}, '$' + k), pct !== null ? ' (' + pct.toFixed(1) + '% below now)' : '',
+        return el('span', {}, 'Buy at ', el('b', {}, priceText(k)), pct !== null ? ' (' + pct.toFixed(1) + '% below now)' : '',
           ' \u2014 you\u2019re paid ', el('b', { class: 'gain' }, fmtMoney(c.entryNetPremiumCents)), ' to wait; if it gets there you own it at ',
-          el('b', {}, '$' + c.effectivePrice), '. Chance: ' + fmtPct(c.assignmentProb) + '.');
+          el('b', {}, priceText(c.effectivePrice)), '. Chance: ' + fmtPct(c.assignmentProb) + '.');
       }
       if (intent === 'EXIT') {
         var g = gainVsBasis(c);
-        return el('span', {}, 'Sell at ', el('b', {}, '$' + k),
+        return el('span', {}, 'Sell at ', el('b', {}, priceText(k)),
           ' \u2014 paid ', el('b', { class: 'gain' }, fmtMoney(c.entryNetPremiumCents)), ' now; if called away you effectively sell at ',
-          el('b', {}, '$' + c.effectivePrice), g !== null ? ' (' + (g >= 0 ? '+' : '') + g.toFixed(1) + '% vs what you paid)' : '',
+          el('b', {}, priceText(c.effectivePrice)), g !== null ? ' (' + (g >= 0 ? '+' : '') + g.toFixed(1) + '% vs what you paid)' : '',
           '. Chance you sell: ' + fmtPct(c.assignmentProb) + '.');
       }
       var floorPct = pct !== null ? Math.abs(pct).toFixed(1) : null;
-      return el('span', {}, 'Floor at ', el('b', {}, '$' + k), floorPct ? ' (' + floorPct + '% below now)' : '',
-        ' \u2014 costs ', el('b', { class: 'loss' }, fmtMoney(c.maxLossCents)), ' until ' + (c.legs[0].expiration || '') + '.');
+      return el('span', {}, 'Floor at ', el('b', {}, priceText(k)), floorPct ? ' (' + floorPct + '% below now)' : '',
+        ' \u2014 costs ', el('b', { class: 'loss' }, fmtMoney(c.maxLossCents)), ' until ' + expirationOf(c) + '.');
     }
 
     if (level === 'beginner') {
@@ -3109,23 +3129,24 @@
         var pct = spotPct(c, k);
         var cells;
         if (intent === 'ACQUIRE') {
-          cells = [el('b', {}, '$' + k), pct === null ? '\u2014' : pct.toFixed(1) + '%',
-            el('span', { class: 'gain' }, fmtMoney(c.entryNetPremiumCents)), '$' + c.effectivePrice,
+          cells = [el('b', {}, priceText(k)), pct === null ? '\u2014' : pct.toFixed(1) + '%',
+            el('span', { class: 'gain' }, fmtMoney(c.entryNetPremiumCents)), priceText(c.effectivePrice),
             fmtPct(c.assignmentProb), c.annualizedYieldPct != null ? fmtNum(c.annualizedYieldPct, 1) + '%' : '\u2014'];
           if (pro) cells.push(fmtMoney(c.maxLossCents));
         } else if (intent === 'EXIT') {
           var g = gainVsBasis(c);
-          cells = [el('b', {}, '$' + k), pct === null ? '\u2014' : '+' + pct.toFixed(1) + '%',
-            el('span', { class: 'gain' }, fmtMoney(c.entryNetPremiumCents)), '$' + c.effectivePrice,
+          cells = [el('b', {}, priceText(k)), pct === null ? '\u2014' : '+' + pct.toFixed(1) + '%',
+            el('span', { class: 'gain' }, fmtMoney(c.entryNetPremiumCents)), priceText(c.effectivePrice),
             ctx.basisCents ? el('span', { class: g >= 0 ? 'gain' : 'loss' }, (g >= 0 ? '+' : '') + g.toFixed(1) + '%') : fmtPct(c.assignmentProb),
             fmtPct(c.assignmentProb)];
           if (pro) cells.push(c.annualizedYieldPct != null ? fmtNum(c.annualizedYieldPct, 1) + '%' : '\u2014');
         } else {
-          var costPct = ctx.spot ? (c.maxLossCents / (ctx.spot * 100 * (c.qty || 1))) : null;
-          cells = [el('b', {}, '$' + k), pct === null ? '\u2014' : pct.toFixed(1) + '%',
+          var costPct = UI.finiteNumber(ctx.spot) && Number(ctx.spot) !== 0
+            ? (c.maxLossCents / (Number(ctx.spot) * 100 * (c.qty || 1))) : null;
+          cells = [el('b', {}, priceText(k)), pct === null ? '\u2014' : pct.toFixed(1) + '%',
             el('span', { class: 'loss' }, fmtMoney(c.maxLossCents)),
             costPct === null ? '\u2014' : (costPct * 100).toFixed(2) + '%',
-            (c.legs[0].expiration || '')];
+            expirationOf(c)];
           if (pro) cells.push(fmtPct(c.pop));
         }
         var tds = cells.map(function (v) { return el('td', {}, v); });

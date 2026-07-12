@@ -6,6 +6,7 @@
  *   1. The page NEVER scrolls horizontally.
  *   2. No emoji anywhere in rendered text — pictograms are the shared SVG icon set.
  *   3. Form controls come in exactly the sanctioned sizes (--ctl-h / --ctl-h-sm / --ctl-h-xs).
+ *   4. Non-finite numeric sentinels never reach visible financial text.
  *
  * Run:  node --test dom-audit.test.js
  */
@@ -74,7 +75,7 @@ const ALLOWED_HEIGHTS = [38, 30, 42, 46]; // welcome hero uses a deliberate 42px
 const TOLERANCE = 1.5;
 
 function auditInPage() {
-  const out = { overflow: [], emoji: [], controls: [] };
+  const out = { overflow: [], emoji: [], controls: [], numbers: [] };
   const doc = document.documentElement;
   if (doc.scrollWidth > doc.clientWidth + 2) {
     // Animated/local-scroll children can be thousands of pixels wide without widening the
@@ -101,6 +102,8 @@ function auditInPage() {
       out.emoji.push((p.id || p.className || p.tagName).toString().slice(0, 40) + '::' + n.textContent.trim().slice(0, 20));
     }
   }
+  const badNumbers = (document.body.innerText || '').match(/\$?NaN(?:\.NaN)?|NaN%/g) || [];
+  if (badNumbers.length) out.numbers.push(...badNumbers.slice(0, 8));
   document.querySelectorAll(
     '#app input:not([type=checkbox]):not([type=radio]), #app select, #app .btn, #app .goal-chip'
   ).forEach(el => {
@@ -126,6 +129,7 @@ for (const width of WIDTHS) {
       for (const o of res.overflow) failures.push(`${route}@${width}: OVERFLOW ${o}`);
       for (const e of res.emoji) failures.push(`${route}@${width}: EMOJI ${e}`);
       for (const c of res.controls) failures.push(`${route}@${width}: CONTROL-HEIGHT ${c}`);
+      for (const n of res.numbers) failures.push(`${route}@${width}: NON-FINITE ${n}`);
     }
     assert.deepEqual(failures, [], failures.join('\n'));
   });

@@ -161,6 +161,19 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await go('#/home'); // leave the suite on the dashboard for the next test
 });
 
+test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {
+  const safety = await page.evaluate(() => ({
+    money: UI.fmtMoney(Number.NaN), compact: UI.fmtMoneyCompact(Infinity),
+    pct: UI.fmtPct(Number.NaN), num: UI.fmtNum(-Infinity),
+    option: UI.firstOptionLeg([
+      { action: 'BUY', type: 'STOCK', strike: null, expiration: null },
+      { action: 'SELL', type: 'CALL', strike: '260', expiration: '2026-08-21' }
+    ])
+  }));
+  assert.deepEqual([safety.money, safety.compact, safety.pct, safety.num], ['—', '—', '—', '—']);
+  assert.equal(safety.option.strike, '260', 'stock-first packages resolve their listed option contract');
+});
+
 test('welcome proof treats no qualifying idea as a complete result', async () => {
   await page.route('**/api/recommend', r => r.fulfill({
     contentType: 'application/json',
@@ -2290,6 +2303,25 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
+});
+
+test('Builder keeps POP truth and adds goal-native assignment language', async () => {
+  await go('#/home');
+  await page.evaluate(() => {
+    Learn.setLevel('beginner');
+    App.state.builderForm = null; App.state.ticket = null; App.context.selectSymbol('AAPL');
+  });
+  await go('#/trade/structure');
+  await page.waitForSelector('#bw-goals .choice[data-goal="ACQUIRE"]');
+  await page.click('#bw-goals .choice[data-goal="ACQUIRE"]');
+  await page.waitForSelector('#bw-shape .choice[data-tpl="CASH_SECURED_PUT"]');
+  await page.click('#bw-shape .choice[data-tpl="CASH_SECURED_PUT"]');
+  await page.waitForFunction(() => /Chance you buy/.test((document.getElementById('bw-impact') || {}).textContent || ''),
+    { timeout: 20000 });
+  const impact = await page.textContent('#bw-impact');
+  assert.match(impact, /Chance of any profit/, 'probability of profit remains visible as its own statistic');
+  assert.match(impact, /Chance you buy/, 'assignment is translated into the acquisition goal');
+  assert.doesNotMatch(impact, /Odds of profit/, 'the old generic wording is gone');
 });
 
 test('builder recovers from a failing symbol and follows the working symbol', async () => {

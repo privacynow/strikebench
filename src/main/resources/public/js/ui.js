@@ -27,8 +27,13 @@
 
   // ---- formatting ----
 
+  function finiteNumber(value) {
+    return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+  }
+
   function fmtMoney(cents, opts) {
-    if (cents === null || cents === undefined) return '—';
+    if (!finiteNumber(cents)) return '—';
+    cents = Number(cents);
     var sign = cents < 0 ? '−' : (opts && opts.plus && cents > 0 ? '+' : '');
     var abs = Math.abs(Math.round(cents));
     var dollars = Math.floor(abs / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -37,7 +42,8 @@
 
   /** Compact for chart axes: $1.2k / $85k / $1.3M */
   function fmtMoneyCompact(cents) {
-    if (cents === null || cents === undefined) return '—';
+    if (!finiteNumber(cents)) return '—';
+    cents = Number(cents);
     var v = cents / 100;
     var sign = v < 0 ? '−' : '';
     var a = Math.abs(v);
@@ -48,20 +54,23 @@
   }
 
   function pnlSpan(cents, cls) {
-    if (cents === null || cents === undefined) return el('span', {}, '—');
+    if (!finiteNumber(cents)) return el('span', { class: 'muted' }, '—');
+    cents = Number(cents);
     return el('span', { class: (cents >= 0 ? 'gain' : 'loss') + (cls ? ' ' + cls : '') },
       fmtMoney(cents, { plus: true }));
   }
 
   function fmtPct(x, digits) {
-    if (x === null || x === undefined || isNaN(x)) return '—';
+    if (!finiteNumber(x)) return '—';
+    x = Number(x);
     var out = (x * 100).toFixed(digits === undefined ? 0 : digits);
     if (parseFloat(out) === 0) out = out.replace('-', ''); // '−0.0%' is a formatting artifact, not a loss
     return out + '%';
   }
 
   function fmtNum(x, digits) {
-    if (x === null || x === undefined || isNaN(x)) return '—';
+    if (!finiteNumber(x)) return '—';
+    x = Number(x);
     return Number(x).toLocaleString('en-US', {
       minimumFractionDigits: digits === undefined ? 2 : digits,
       maximumFractionDigits: digits === undefined ? 2 : digits
@@ -76,6 +85,13 @@
     var up = d >= 0;
     return el('span', { class: 'delta ' + (up ? 'gain' : 'loss') },
       (up ? '▲ ' : '▼ ') + Math.abs(d).toFixed(2) + ' (' + (up ? '+' : '−') + Math.abs(pct).toFixed(2) + '%)');
+  }
+
+  /** First listed option contract in a mixed stock/options package. */
+  function firstOptionLeg(legs) {
+    return (legs || []).find(function (leg) {
+      return leg && leg.type !== 'STOCK' && finiteNumber(leg.strike) && leg.expiration;
+    }) || null;
   }
 
   // ---- small components ----
@@ -1289,6 +1305,8 @@
     pnlSpan: pnlSpan,
     fmtPct: fmtPct,
     fmtNum: fmtNum,
+    finiteNumber: finiteNumber,
+    firstOptionLeg: firstOptionLeg,
     delta: delta,
     freshnessBadge: freshnessBadge,
     evidenceBadge: evidenceBadge,

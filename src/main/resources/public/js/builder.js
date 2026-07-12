@@ -514,6 +514,12 @@
         el('span', { class: 'muted' }, 'Against your limits:'), checks);
     }
 
+    function assignmentLabel(beginnerWording) {
+      if (st.goal === 'ACQUIRE') return beginnerWording ? 'Chance you buy' : 'Assignment: buy';
+      if (st.goal === 'EXIT') return beginnerWording ? 'Chance you sell' : 'Assignment: sell';
+      return beginnerWording ? 'Assignment odds' : 'Assign';
+    }
+
     /** Asks the engine to size/strike the CURRENT structure so the limits hold. */
     async function fitToLimits(statusHost) {
       var t = TEMPLATES.find(function (x) { return x.key === st.templateKey; });
@@ -809,8 +815,14 @@
                   return UI.maxProfitLabel(familyLabel(), null, x.maxProfitCents, level === 'beginner', x.legs);
                 }, false),
                 p.popEntry !== null && p.popEntry !== undefined
-                  ? impactChip('Odds of profit', b, p, function (x) {
+                  ? impactChip('Chance of any profit', b, p, function (x) {
                       return x.popEntry === null || x.popEntry === undefined ? '—' : fmtPct(x.popEntry);
+                    }, false) : null,
+                (st.goal === 'ACQUIRE' || st.goal === 'EXIT')
+                    && p.assignmentProb !== null && p.assignmentProb !== undefined
+                  ? impactChip(assignmentLabel(true), b, p, function (x) {
+                      return x.assignmentProb === null || x.assignmentProb === undefined
+                        ? '—' : fmtPct(x.assignmentProb);
                     }, false) : null));
               if (p.payoff && p.payoff.length > 1) {
                 var walkIdx = [];
@@ -1320,7 +1332,7 @@
           p.popEntry !== null && p.popEntry !== undefined ? fmtPct(p.popEntry) : '—',
           beginnerWording ? 'Model estimate under current volatility. Not a promise.' : null),
         p.assignmentProb !== null && p.assignmentProb !== undefined
-          ? stat(UI.term('assignment', beginnerWording ? 'Assignment odds' : 'Assign'), fmtPct(p.assignmentProb),
+          ? stat(UI.term('assignment', assignmentLabel(beginnerWording)), fmtPct(p.assignmentProb),
               beginnerWording ? 'Chance any short strike finishes in the money and shares change hands.' : null) : null,
         stat('Fees', fmtMoney(p.feesOpenCents), null)));
       if (p.breakevens && p.breakevens.length) {

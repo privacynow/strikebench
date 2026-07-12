@@ -631,6 +631,12 @@ class ApiIntegrationTest {
             assertThat(r.get("annualizedYieldPct").isNumber()).isTrue();
         }
 
+        // EXIT/HEDGE never inflate the selected per-idea budget merely to manufacture a rung.
+        JsonNode exitWithoutShares = Json.parse(post("/api/recommend/ladder",
+                "{\"symbol\":\"AAPL\",\"intent\":\"exit\",\"maxLossCents\":100000}").body());
+        assertThat(exitWithoutShares.get("rungs")).isEmpty();
+        assertThat(exitWithoutShares.get("notes").toString()).contains("starts from shares you own");
+
         // EXIT with held shares: rungs climb ABOVE spot, sized to the shares, no new cash
         assertThat(post("/api/positions/buy", "{\"symbol\":\"AAPL\",\"shares\":100}").statusCode()).isEqualTo(201);
         JsonNode exit = Json.parse(post("/api/recommend/ladder",
@@ -653,6 +659,7 @@ class ApiIntegrationTest {
         assertThat(hedge.get("rungs").size()).isGreaterThanOrEqualTo(3);
         for (JsonNode r : hedge.get("rungs")) {
             assertThat(r.get("maxLossCents").asLong()).isPositive();
+            assertThat(r.get("maxLossCents").asLong()).isLessThanOrEqualTo(100_000L);
             assertThat(r.get("intentNote").asText()).contains("Guarantees");
         }
         assertThat(post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}").statusCode()).isEqualTo(200);
