@@ -28,9 +28,10 @@
           var symbol = String(patch.symbol || '').trim().toUpperCase();
           if (symbol) next.symbol = symbol;
         }
-        if (patch.goal !== undefined && patch.goal !== null && String(patch.goal).trim()) {
-          var goal = String(patch.goal).trim().toUpperCase();
-          if (['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'].indexOf(goal) >= 0) next.goal = goal;
+        if (patch.goal !== undefined) {
+          var goal = patch.goal === null ? '' : String(patch.goal).trim().toUpperCase();
+          if (!goal || goal === 'ALL' || goal === 'BROWSE') next.goal = null;
+          else if (['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'].indexOf(goal) >= 0) next.goal = goal;
         }
         if (patch.horizon !== undefined && patch.horizon !== null && String(patch.horizon).trim()) {
           next.horizon = String(patch.horizon).trim();
@@ -108,13 +109,11 @@
     },
 
     evaluateEnvelope: function (operation, basis, symbol, payload) {
-      var request = Object.assign({
-        contractVersion: 1, operation: operation, basis: basis,
-        context: App.outcomeContext(symbol)
-      }, payload || {});
+      var request = Object.assign({ operation: operation, basis: basis,
+        context: App.outcomeContext(symbol) }, payload || {});
       return API.post('/api/evaluate', request).then(function (response) {
-        if (!response || response.contractVersion !== 1 || response.operation !== operation) {
-          throw new Error('The outcome engine returned an incompatible contract. Restart and reload StrikeBench.');
+        if (!response || response.operation !== operation) {
+          throw new Error('The outcome engine returned the wrong operation. Refresh and try again.');
         }
         return response;
       });

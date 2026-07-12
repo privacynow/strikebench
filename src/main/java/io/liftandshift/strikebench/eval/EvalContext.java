@@ -21,9 +21,4 @@ public record EvalContext(
         ivHistory = ivHistory == null ? List.of() : List.copyOf(ivHistory);
     }
 
-    /** Pre-fee shape (tests, older call sites): default commission. */
-    public EvalContext(String symbol, long underlyingCents, int daysToExpiry, Double atmIv,
-                       Double realizedVol30, List<Double> ivHistory, long buyingPowerCents, boolean marketOpen) {
-        this(symbol, underlyingCents, daysToExpiry, atmIv, realizedVol30, ivHistory, buyingPowerCents, marketOpen, 65);
-    }
 }

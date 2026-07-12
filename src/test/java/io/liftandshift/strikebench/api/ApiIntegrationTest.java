@@ -939,7 +939,7 @@ class ApiIntegrationTest {
         if (sj.get("analogPaths").size() >= 5) {
             // The strategy sim runs on the SAME analogs and SAYS SO (labeled interpretation).
             String simBody = """
-                {"contractVersion":1,"operation":"POSITION","basis":"HISTORICAL_ANALOGS",
+                {"operation":"POSITION","basis":"HISTORICAL_ANALOGS",
                   "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
                   "position":{"key":"BUY_AND_HOLD","qty":1,"entryCostCents":12345,
                     "legs":[{"action":"BUY","type":"STOCK","strike":0,"expiryDay":0,"ratio":1}]},
@@ -969,7 +969,7 @@ class ApiIntegrationTest {
         // "Exact listed package" is a contract, not copy: an explicit expiration must be
         // used as-is, and a disappeared expiration is refused rather than snapped nearby.
         String exact = """
-            {"contractVersion":1,"operation":"POSITION","basis":"PARAMETRIC",
+            {"operation":"POSITION","basis":"PARAMETRIC",
               "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
               "position":{"key":"LONG_CALL","qty":1,"entryCostCents":1000,
                 "legs":[{"action":"BUY","type":"CALL","strike":255,"expiration":"2026-08-21","expiryDay":5,"ratio":1}]},

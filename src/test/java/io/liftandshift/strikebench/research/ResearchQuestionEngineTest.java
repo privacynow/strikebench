@@ -54,6 +54,11 @@ class ResearchQuestionEngineTest {
         return new ResearchQuestionEngine(market, Clock.systemUTC());
     }
 
+    private ResearchQuestionEngine.QuestionResult run(ResearchQuestionEngine engine,
+            ResearchQuestionEngine.RunRequest request) {
+        return engine.run(request, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null);
+    }
+
     /** A DETERMINISTIC mild-drift random walk (seeded): realistic pullbacks so breakouts/new-highs are
      *  a minority, and no exploitable structure so a signal shows no significant edge on it. */
     private List<Candle> walk() {
@@ -89,7 +94,7 @@ class ResearchQuestionEngineTest {
         // Now a 0% threshold on a rising series conditions on nearly ALL bars, so its COMPLEMENT
         // (the baseline) is tiny/empty and the test cannot manufacture a false edge — the verdict is
         // never a bogus "Supported". This is the anti-regression for the "≥ 0%" nonsense.
-        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+        var r = run(engine(walk(), Freshness.EOD), new ResearchQuestionEngine.RunRequest(
                 "momentum", "TEST", "2023-02-01", "2024-01-31",
                 Map.of("lookback", 20, "thresholdPct", 0, "forward", 10)));
         assertThat(r.conditioned().sample()).isGreaterThan(0);
@@ -101,7 +106,7 @@ class ResearchQuestionEngineTest {
     void baselineIsTheNonSignalComplementNotAllBars() {
         // Breakout fires on a minority of bars; the baseline (non-signal complement) is disjoint and
         // is the majority — the two groups don't overlap (finding: a superset baseline biases to null).
-        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+        var r = run(engine(walk(), Freshness.EOD), new ResearchQuestionEngine.RunRequest(
                 "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",
                 Map.of("lookback", 20, "forward", 10)));
         assertThat(r.conditioned().sample()).isGreaterThan(0);
@@ -115,7 +120,7 @@ class ResearchQuestionEngineTest {
         // A 10-day hold means events must start >= 10 bars apart: the up_streak signal on a rising
         // series fires on runs of consecutive days, and counting each firing as an independent
         // observation would multiply one episode into many. Pin: example dates are spaced >= forward.
-        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+        var r = run(engine(walk(), Freshness.EOD), new ResearchQuestionEngine.RunRequest(
                 "up_streak", "TEST", "2023-02-01", "2024-06-30",
                 Map.of("streak", 2, "forward", 10)));
         assertThat(r.conditioned().sample()).isGreaterThan(1);
@@ -129,7 +134,7 @@ class ResearchQuestionEngineTest {
 
     @Test
     void reportsEffectSizeAndSplitHalfHoldout() {
-        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+        var r = run(engine(walk(), Freshness.EOD), new ResearchQuestionEngine.RunRequest(
                 "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",
                 Map.of("lookback", 20, "forward", 5)));
         // With a healthy event count both rigor fields are populated and sane.
@@ -145,7 +150,7 @@ class ResearchQuestionEngineTest {
     @Test
     void statisticalProtocolIsExplicitConfigurableAndKeyed() {
         var eng = engine(walk(), Freshness.EOD);
-        var defaults = eng.run(new ResearchQuestionEngine.RunRequest(
+        var defaults = run(eng, new ResearchQuestionEngine.RunRequest(
                 "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",
                 Map.of("lookback", 20, "forward", 10)));
         assertThat(defaults.protocol().baseline()).isEqualTo("NON_SIGNAL_COMPLEMENT");
@@ -156,7 +161,7 @@ class ResearchQuestionEngineTest {
         assertThat(defaults.protocol().criticalZ()).isGreaterThan(1.96);
         assertThat(defaults.notes()).anyMatch(n -> n.contains("built-in questions"));
 
-        var exploratory = eng.run(new ResearchQuestionEngine.RunRequest(
+        var exploratory = run(eng, new ResearchQuestionEngine.RunRequest(
                 "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",
                 Map.of("lookback", 20, "forward", 10, "eventSpacing", 2,
                         "confidencePct", 99, "bootstrapSamples", 1200, "minSample", 20,
@@ -181,7 +186,7 @@ class ResearchQuestionEngineTest {
 
     @Test
     void reportsSampleEdgeDistributionAndExamples() {
-        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+        var r = run(engine(walk(), Freshness.EOD), new ResearchQuestionEngine.RunRequest(
                 "breakout_followthrough", "TEST", "2023-02-01", "2024-06-30",
                 Map.of("lookback", 20, "forward", 10)));
         assertThat(r.conditioned().sample()).isGreaterThanOrEqualTo(1);
@@ -196,7 +201,7 @@ class ResearchQuestionEngineTest {
 
     @Test
     void fixtureHistoryIsLabeledDemoNotObserved() {
-        var r = engine(walk(), Freshness.FIXTURE).run(new ResearchQuestionEngine.RunRequest(
+        var r = run(engine(walk(), Freshness.FIXTURE), new ResearchQuestionEngine.RunRequest(
                 "pullback_rebound", "TEST", "2023-02-01", "2024-01-31",
                 Map.of("lookback", 20, "dropPct", 3, "forward", 10)));
         assertThat(r.observed()).isFalse();
@@ -207,7 +212,7 @@ class ResearchQuestionEngineTest {
     @Test
     void tooFewSignalsIsHonest() {
         // A 35% one-day drop essentially never happens in the gentle series → too-few verdict.
-        var r = engine(walk(), Freshness.EOD).run(new ResearchQuestionEngine.RunRequest(
+        var r = run(engine(walk(), Freshness.EOD), new ResearchQuestionEngine.RunRequest(
                 "oversold_bounce", "TEST", "2023-02-01", "2024-01-31",
                 Map.of("dropPct", 20, "forward", 10)));
         assertThat(r.conditioned().sample()).isLessThan(15);
@@ -217,7 +222,7 @@ class ResearchQuestionEngineTest {
 
     @Test
     void unknownQuestionRejected() {
-        assertThatThrownBy(() -> engine(walk(), Freshness.EOD).run(
+        assertThatThrownBy(() -> run(engine(walk(), Freshness.EOD),
                 new ResearchQuestionEngine.RunRequest("make_me_rich", "TEST", null, null, Map.of())))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -231,8 +236,8 @@ class ResearchQuestionEngineTest {
         var eng = engine(candles, io.liftandshift.strikebench.model.Freshness.EOD);
         var req = new ResearchQuestionEngine.RunRequest("pullback_rebound", "AAPL", "", "",
                 java.util.Map.of("dropPct", 3, "lookback", 20, "forward", 10));
-        var a = eng.run(req);
-        var b = eng.run(req);
+        var a = run(eng, req);
+        var b = run(eng, req);
         org.assertj.core.api.Assertions.assertThat(a.analogPaths()).isNotNull();
         org.assertj.core.api.Assertions.assertThat(a.analogPaths()).hasSize(a.conditioned().sample());
         org.assertj.core.api.Assertions.assertThat(a.eventDates()).hasSize(a.conditioned().sample());

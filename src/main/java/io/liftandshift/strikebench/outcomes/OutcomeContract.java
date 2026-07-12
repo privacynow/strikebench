@@ -9,11 +9,9 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
-/** Versioned API contract shared by every forward-looking outcome surface. */
+/** Internal contract shared by every forward-looking outcome surface. */
 public final class OutcomeContract {
     private OutcomeContract() {}
-
-    public static final int VERSION = 1;
 
     public enum Operation { DECISION, PATHS, POSITION, COMPARE }
 
@@ -34,11 +32,11 @@ public final class OutcomeContract {
     /** Signed entryCostCents: debit paid is positive, credit received is negative. */
     public record Position(String key, List<Leg> legs, Integer qty, Long entryCostCents) {}
 
-    public record Request(Integer contractVersion, Operation operation, Basis basis,
+    public record Request(Operation operation, Basis basis,
                           MarketContext context, Position position, List<Position> positions,
                           ScenarioSpec over, IvSpec iv, ResearchQuestionEngine.RunRequest study,
                           RecommendationEngine.Request decision) {}
 
-    public record Response(int contractVersion, Operation operation, Basis basis,
+    public record Response(Operation operation, Basis basis,
                            Map<String, Object> context, String interpretation, Object result) {}
 }

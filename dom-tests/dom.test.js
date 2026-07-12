@@ -172,6 +172,25 @@ test('financial formatters and mixed packages fail closed instead of rendering N
   }));
   assert.deepEqual([safety.money, safety.compact, safety.pct, safety.num], ['—', '—', '—', '—']);
   assert.equal(safety.option.strike, '260', 'stock-first packages resolve their listed option contract');
+
+  const contextContract = await page.evaluate(() => {
+    App.context.update({ symbol: 'AAPL', goal: 'INCOME', horizon: 'month', thesis: 'neutral' });
+    App.context.update({ goal: 'ALL' });
+    const cleared = App.context.goal();
+    const covered = Builder.TEMPLATES.find(t => t.family === 'COVERED_CALL');
+    App.state.builderForm = {
+      symbol: 'AAPL', qty: 1, goal: 'BROWSE', templateKey: covered.key,
+      legs: [{ action: 'BUY', type: 'STOCK', strike: null, expiration: null, ratio: 1 },
+        { action: 'SELL', type: 'CALL', strike: '260', expiration: '2026-08-21', ratio: 1 }],
+      excluded: {}
+    };
+    const ticket = Builder.prepareTicket();
+    App.state.builderForm = null; App.state.ticket = null;
+    return { cleared, templateIntent: covered.primaryIntent, ticketIntent: ticket.intent };
+  });
+  assert.equal(contextContract.cleared, null, 'Everything clears a stale single-goal context');
+  assert.equal(contextContract.templateIntent, 'INCOME', 'server catalog supplies the structure intent');
+  assert.equal(contextContract.ticketIntent, 'INCOME', 'Browse all infers intent from the chosen structure');
 });
 
 test('welcome proof treats no qualifying idea as a complete result', async () => {
@@ -412,11 +431,22 @@ async function openFutures() {
 
 test('scenario studio: beginner story cards → fan of futures → strategy verdict in plain dollars', async () => {
   await page.click('#level-switch button[data-level="beginner"]');
-  await page.evaluate(() => { App.state.scenarioForm = null; App.state.verifyForm = null; });
+  await page.evaluate(() => {
+    App.state.scenarioForm = null; App.state.verifyForm = null; App.state.marketThesis = null;
+    App.context.update({ symbol: 'AAPL', thesis: 'bearish', horizon: 'quarter' });
+  });
   await go('#/research/AAPL');
+  await openResearchTab('view');
+  await page.waitForSelector('#tv-view');
+  assert.equal(await page.inputValue('#tv-view'), 'bearish', 'Research consumes the canonical market view');
+  assert.equal(await page.inputValue('#tv-horizon'), '63', 'Research consumes the canonical horizon');
   await openFutures();
   // The thesis workbench: story cards with shape sketches, plain horizon/wildness chips.
   await page.waitForSelector('#whatif-card #sc-shapes .sc-card');
+  assert.ok(await page.locator('#whatif-card .sc-card[data-shape="RALLY_FADE"].active').count(),
+    'the bearish view seeds the generated-futures story instead of retired form state');
+  assert.ok(await page.locator('#whatif-card #sc-horizon .sym-chip[data-days="63"].active').count(),
+    'the shared horizon seeds the generated-futures horizon');
   assert.ok((await page.locator('#whatif-card .sc-card').count()) >= 6, 'story cards');
   assert.ok((await page.locator('#whatif-card .sc-sketch svg').count()) >= 6, 'shape sketches');
   assert.match(await page.textContent('#whatif-card'), /Drops, then recovers/);

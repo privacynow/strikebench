@@ -4289,15 +4289,15 @@
   // ---------- 7b. Scenario surfaces (the thesis workbench + "imagine a future") ----------
 
   /** Research: "I think X happens next" → hundreds of simulated futures → hand off to Verify. */
-  function whatIfCard(symbol) {
+  function whatIfCard(symbol, seedContext) {
     var level = Learn.currentLevel();
     var historyBasis = activeHistoryBasis();
     var card = el('div', { class: 'card', id: 'whatif-card' });
     card.appendChild(UI.cardHeader('What COULD happen next?'));
     card.appendChild(explain(level === 'beginner'
-      ? 'Pick the story you believe and we draw hundreds of model-generated “possible futures” for ' + symbol + ' — so you can see the range of outcomes, then test a strategy against it. Historical evidence checks the same belief against ' + historyBasis.plain + '.'
-      : 'Parameterize a scenario (model, drift, vol, jumps, IV path) and preview the Monte-Carlo fan; hand it to Verify to run a structure against it. The paired evidence lens is a ' + historyBasis.expert + '.'));
-    var f = Scenario.form(level, symbol);
+      ? 'Your starting view sets the first story and horizon. Refine them here, then draw hundreds of model-generated possible futures for ' + symbol + ' and test a strategy against them. Past evidence remains a separate check of what followed a chosen historical setup in ' + historyBasis.plain + '.'
+      : 'The shared market view seeds this model terminal; its drift, volatility, jumps and IV path remain explicit scenario assumptions. The paired historical lens is a separate ' + historyBasis.expert + ', never a blended probability.'));
+    var f = Scenario.form(level, symbol, seedContext);
     card.appendChild(f.el);
     var out = el('div', { id: 'whatif-out' });
     var previewSeq = 0;
@@ -4391,7 +4391,10 @@
     card.appendChild(explain(level === 'beginner'
       ? 'Three choices: which stock, what story you believe (the price path), and which position (the payoff shape). We run the position through hundreds of simulated futures and report, in plain dollars, how it tends to end. The entry is priced from ' + entryBasis + '.'
       : 'Monte-Carlo the position across the scenario paths. Entry is priced from ' + entryBasis + '; exits are BSM along the IV path (default: the active chain\u2019s ATM IV). The verdict measures your scenario against that entry basis.'));
-    var f = Scenario.form(level, symbol);
+    var f = Scenario.form(level, symbol, {
+      thesis: App.context.thesis('neutral'),
+      horizonDays: contextHorizonDays(App.context.horizon('month'))
+    });
     card.appendChild(f.el);
 
     // The position: your working idea (same symbol only) or the FULL strategy catalog —
@@ -7195,6 +7198,15 @@
   }
 
   // ---- Hypothesis tester ----
+  function contextHorizonDays(horizon) {
+    return horizon === '0DTE' ? 1 : horizon === 'week' ? 5
+      : horizon === 'quarter' ? 63 : 21;
+  }
+
+  function contextHorizonForDays(days) {
+    return days <= 1 ? '0DTE' : days <= 7 ? 'week' : days <= 35 ? 'month' : 'quarter';
+  }
+
   // A distribution histogram of forward returns — green bars for gaining outcomes, red for losing.
   function distChart(buckets) {
     if (!buckets || !buckets.length) return null;
@@ -7218,37 +7230,44 @@
   // AFTER the signal against the stock's own normal behavior (baseline), with sample size, a win-rate
   // edge, a significance test, a bootstrap confidence interval, a distribution, and example dates.
   /**
-   * TEST YOUR VIEW — the thesis stage of Research on a symbol (adversarial-review refactor):
-   * one shared MarketThesis (direction + horizon) drives BOTH connected stages —
-   *   Past evidence  : what followed similar conditions in the active lane's disclosed history
-   *   Possible futures: what a stochastic model says could happen from here
-   * Both inherit the page symbol (no nested ticker), results are keyed by symbol+question+
-   * params+range and never restored across a mismatch, and the evidence hands its EXACT analog
-   * windows to Trade as a path source: the next answer after you state a view.
+   * TEST YOUR VIEW — one canonical market view, two explicitly different interpretations:
+   * Past evidence asks what followed a named historical condition; Possible futures applies the
+   * user's view as a model seed. They share symbol and horizon, but never blend probabilities.
    */
   function testYourViewSection(symbol) {
     var level = Learn.currentLevel();
     var historyBasis = activeHistoryBasis();
     App.state.marketThesis = App.state.marketThesis || {};
-    var th = App.state.marketThesis[symbol] = App.state.marketThesis[symbol]
-      || { direction: 'rebound', horizonDays: 10 };
+    var th = App.state.marketThesis[symbol] = App.state.marketThesis[symbol] || {};
+    // Persisted-workspace migration only: the old field called a historical condition a
+    // "direction", even though it was not the user's market direction.
+    th.setup = th.setup || THESIS_QUESTION[th.direction] || 'pullback_rebound';
+    delete th.direction;
+    th.horizonDays = th.horizonDays || contextHorizonDays(App.context.horizon('month'));
+    th.thesis = App.context.thesis(th.thesis || 'bullish');
     var wrap = el('div', { class: 'card', id: 'test-your-view' });
     wrap.appendChild(UI.cardHeader('Test your view \u2014 ' + symbol));
     wrap.appendChild(explain(level === 'beginner'
-      ? 'Say what you think ' + symbol + ' does next. StrikeBench checks ' + historyBasis.plain + ' for similar moments (and what followed), and draws model-generated possible futures — then you can test strategies against either.'
-      : 'One thesis drives both lenses: the ' + historyBasis.expert + ' (conditional history, bootstrap CI) and the parametric Monte Carlo fan. The analog windows behind the study are reusable as a strategy path source in Trade.'));
+      ? 'State your view and horizon once. Past evidence asks what followed a named setup in ' + historyBasis.plain + '; possible futures turns your view into explicit model scenarios. They inform each other but never become one blended probability.'
+      : 'One market context seeds two labeled interpretations: a ' + historyBasis.expert + ' (conditional history, bootstrap CI) and a parametric Monte Carlo fan. The analog windows remain reusable as a distinct strategy path source in Trade.'));
 
-    // ---- The shared thesis row ----
-    var dirSel = el('select', { id: 'tv-direction' },
-      el('option', { value: 'rebound' }, level === 'beginner' ? 'It fell — I expect a rebound' : 'Pullback \u2192 rebound'),
-      el('option', { value: 'bounce' }, level === 'beginner' ? 'Big down day — I expect a bounce' : 'Oversold \u2192 bounce'),
-      el('option', { value: 'breakout' }, level === 'beginner' ? 'New high — I expect follow-through' : 'Breakout \u2192 follow-through'),
-      el('option', { value: 'momentum' }, level === 'beginner' ? 'It has been strong — I expect more' : 'Momentum persists'),
-      el('option', { value: 'streak' }, level === 'beginner' ? 'Up-day streak — I expect it to continue' : 'Streak continues'));
-    dirSel.value = th.direction;
-    var horIn = el('input', { type: 'number', id: 'tv-horizon', value: String(th.horizonDays), min: '1', max: '60' });
+    var viewSel = el('select', { id: 'tv-view' },
+      el('option', { value: 'bullish' }, level === 'beginner' ? 'I expect it to rise' : 'Bullish'),
+      el('option', { value: 'bearish' }, level === 'beginner' ? 'I expect it to fall' : 'Bearish'),
+      el('option', { value: 'neutral' }, level === 'beginner' ? 'I expect it to stay in a range' : 'Neutral / range'),
+      el('option', { value: 'volatile' }, level === 'beginner' ? 'I expect a large move either way' : 'Volatile / direction unknown'));
+    viewSel.value = th.thesis;
+    var setupSel = el('select', { id: 'tv-setup' },
+      el('option', { value: 'pullback_rebound' }, level === 'beginner' ? 'After a pullback, what followed?' : 'Pullback: rebound or continue lower?'),
+      el('option', { value: 'oversold_bounce' }, level === 'beginner' ? 'After a sharp down day, what followed?' : 'Sharp down day: bounce or follow-through?'),
+      el('option', { value: 'breakout_followthrough' }, level === 'beginner' ? 'After a new high, what followed?' : 'Breakout: continue or fade?'),
+      el('option', { value: 'momentum' }, level === 'beginner' ? 'After strong momentum, what followed?' : 'Momentum: persist or reverse?'),
+      el('option', { value: 'up_streak' }, level === 'beginner' ? 'After an up streak, what followed?' : 'Up streak: continue or reverse?'));
+    setupSel.value = th.setup;
+    var horIn = el('input', { type: 'number', id: 'tv-horizon', value: String(th.horizonDays), min: '1', max: '63' });
     var thesisRow = el('div', { class: 'form-grid' },
-      el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'What do you think happens?'), dirSel),
+      el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Your market view'), viewSel),
+      el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Historical condition to examine'), setupSel),
       el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Over how many trading days?'), horIn));
     wrap.appendChild(thesisRow);
 
@@ -7270,14 +7289,23 @@
     });
     wrap.appendChild(outcomeWorkspace.el);
 
-    dirSel.addEventListener('change', function () { th.direction = dirSel.value; outcomeWorkspace.refresh(); });
+    viewSel.addEventListener('change', function () {
+      th.thesis = viewSel.value;
+      App.context.update({ thesis: th.thesis });
+      App.state.scenarioForm = null;
+      outcomeWorkspace.refresh();
+    });
+    setupSel.addEventListener('change', function () { th.setup = setupSel.value; outcomeWorkspace.refresh(); });
     horIn.addEventListener('change', function () {
-      th.horizonDays = Math.max(1, Math.min(60, parseInt(horIn.value, 10) || 10)); outcomeWorkspace.refresh();
+      th.horizonDays = Math.max(1, Math.min(63, parseInt(horIn.value, 10) || 10));
+      App.context.update({ horizon: contextHorizonForDays(th.horizonDays) });
+      App.state.scenarioForm = null;
+      outcomeWorkspace.refresh();
     });
     return wrap;
   }
 
-  /** thesis direction -> the event-study question that tests it. */
+  /** Persisted-workspace migration for the old condition labels. */
   var THESIS_QUESTION = { rebound: 'pullback_rebound', bounce: 'oversold_bounce',
     breakout: 'breakout_followthrough', momentum: 'momentum', streak: 'up_streak' };
 
@@ -7288,7 +7316,7 @@
     return symbol + '|' + qKey + '|' + (from || '') + '..' + (to || '') + '|' + JSON.stringify(ordered);
   }
 
-  /** PAST EVIDENCE: the event study, inheriting the page symbol + the shared thesis. */
+  /** PAST EVIDENCE: the event study, inheriting page symbol and shared horizon. */
   function evidenceStage(symbol, thesis, level) {
     var f = App.state.researchStudy;
     f.results = f.results || {};
@@ -7299,7 +7327,7 @@
       bootstrapSamples: 800, multiplicity: 'CATALOG_BONFERRONI', splitHalf: true
     }, f.protocolBySymbol[symbol] || {});
     var stage = el('div', { id: 'what-has-happened' });
-    var qKey = THESIS_QUESTION[thesis.direction] || 'pullback_rebound';
+    var qKey = thesis.setup || 'pullback_rebound';
     var picker = el('div', { id: 'study-question-picker' });
     stage.appendChild(picker);
     var out = el('div', { id: 'study-results', class: 'tool-output' });
@@ -7517,7 +7545,7 @@
   /** POSSIBLE FUTURES: the Monte-Carlo fan, inheriting symbol + thesis horizon. */
   function futuresStage(symbol, thesis, level) {
     var host = el('div', { id: 'tv-futures' });
-    var inner = whatIfCard(symbol);
+    var inner = whatIfCard(symbol, { thesis: thesis.thesis, horizonDays: thesis.horizonDays });
     // Composed stage: the card chrome is the section's — strip the duplicate card skin.
     inner.classList.remove('card');
     host.appendChild(inner);

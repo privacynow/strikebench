@@ -110,15 +110,6 @@ public final class ResearchQuestionEngine {
                                  List<List<Double>> analogPaths, List<String> eventDates, String studyKey,
                                  Protocol protocol) {}
 
-    public QuestionResult run(RunRequest req) {
-        return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null);
-    }
-
-    /** Context-aware variant: the study runs over the caller's analysis dataset. */
-    public QuestionResult run(RunRequest req, io.liftandshift.strikebench.db.AnalysisContext actx) {
-        return run(req, actx, null);
-    }
-
     /** Dataset and market are separate axes: Demo/Simulated studies read their own candles. */
     public QuestionResult run(RunRequest req, io.liftandshift.strikebench.db.AnalysisContext actx,
                               String worldId) {

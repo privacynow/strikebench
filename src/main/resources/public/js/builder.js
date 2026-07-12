@@ -80,7 +80,8 @@
     var legs = wireLegs(active);
     if (!legs.length) return null;
     var tpl = st.templateKey ? TEMPLATES.find(function (t) { return t.key === st.templateKey; }) : null;
-    var contextGoal = tradeGoal(st.goal, tradeGoal(App.context.goal(), 'DIRECTIONAL'));
+    var contextGoal = tradeGoal(st.goal,
+      tradeGoal(tpl && tpl.primaryIntent, tradeGoal(App.context.goal(), 'DIRECTIONAL')));
     App.context.update({ symbol: st.symbol, goal: contextGoal });
     App.state.ticket = {
       world: App.state.world || 'observed', symbol: st.symbol, custom: true, customFor: st.symbol,
@@ -118,8 +119,11 @@
 
   function applyCatalog(doc) {
     var entries = doc && doc.templates || [];
+    var families = doc && doc.catalog || [];
     var byKey = {};
+    var byFamily = {};
     entries.forEach(function (m) { byKey[m.key] = m; });
+    families.forEach(function (m) { byFamily[m.name] = m; });
     var missingServer = Object.keys(TEMPLATE_BUILDERS).filter(function (key) { return !byKey[key]; });
     var missingMechanics = entries.filter(function (m) { return !TEMPLATE_BUILDERS[m.key]; }).map(function (m) { return m.key; });
     if (missingServer.length || missingMechanics.length) {
@@ -131,7 +135,9 @@
       TEMPLATES.push({
         key: m.key, family: m.family, group: m.category, name: m.display,
         shape: m.payoffShape, blurb: m.summary, risky: !!m.blockedByDefault,
-        composite: !!m.composite, build: TEMPLATE_BUILDERS[m.key]
+        composite: !!m.composite,
+        primaryIntent: byFamily[m.family] && byFamily[m.family].primaryIntent,
+        build: TEMPLATE_BUILDERS[m.key]
       });
     });
   }
@@ -291,8 +297,7 @@
     function remember() {
       App.state.builderForm = st;
       var goal = TRADE_GOALS.indexOf(st.goal) >= 0 ? st.goal : null;
-      var patch = { symbol: st.symbol };
-      if (goal) patch.goal = goal;
+      var patch = { symbol: st.symbol, goal: goal };
       App.context.update(patch);
       if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
     }

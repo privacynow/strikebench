@@ -73,18 +73,19 @@
    * The scenario form. opts: {compact} → returns {el, getSpec(), getIv(), describe(), onchange}
    * State persists in App.state.scenarioForm so level flips / navigation never lose the setup.
    * ------------------------------------------------------------------------------------------- */
-  function form(level, symbol) {
+  function form(level, symbol, seedContext) {
+    seedContext = seedContext || {};
     var f = App.state.scenarioForm = App.state.scenarioForm || {};
     if (f.seed == null) f.seed = Math.floor(Math.random() * 1000000);
     // A fresh studio opens on the user's WORKING VIEW — the thesis they picked in Ideas seeds
     // the story (bullish → climbs, bearish → fades, volatile → news shock). Pure default: the
     // user can pick any other shape, and a persisted choice always wins.
     if (!f.shape) {
-      var thesis = (App.state.discoverForm && App.state.discoverForm.thesis) || '';
+      var thesis = seedContext.thesis || (App.context && App.context.thesis()) || '';
       f.shape = { bullish: 'GRIND_UP', bearish: 'RALLY_FADE', neutral: 'CHOP', volatile: 'EVENT_JUMP' }[thesis]
              || 'SELLOFF_REBOUND';
     }
-    f.horizon = f.horizon || 10;
+    f.horizon = f.horizon || seedContext.horizonDays || 10;
     f.mag = f.mag || 'typical';
     var box = el('div', { class: 'scenario-form' });
     var onchange = function () {};

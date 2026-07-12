@@ -3184,20 +3184,10 @@ public final class ApiServer {
         return out;
     }
 
-    /**
-     * Versioned cross-surface contract. It delegates to the already-validated kernels in this
-     * phase; the following phase moves their duplicated path assembly behind one service.
-     */
+    /** One private cross-surface contract over the shared outcome kernels. */
     private io.liftandshift.strikebench.outcomes.OutcomeContract.Response evaluateOutcomes(
             Context ctx, io.liftandshift.strikebench.outcomes.OutcomeContract.Request request) {
         if (request == null) throw new IllegalArgumentException("outcome request is required");
-        if (request.contractVersion() == null) {
-            throw new IllegalArgumentException("contractVersion is required");
-        }
-        int version = request.contractVersion();
-        if (version != io.liftandshift.strikebench.outcomes.OutcomeContract.VERSION) {
-            throw new IllegalArgumentException("Unsupported outcome contract version " + version);
-        }
         if (request.operation() == null) throw new IllegalArgumentException("operation is required");
         var basis = request.basis() == null
                 ? request.operation() == io.liftandshift.strikebench.outcomes.OutcomeContract.Operation.DECISION
@@ -3274,7 +3264,7 @@ public final class ApiServer {
             }
             default -> throw new IllegalArgumentException("Unknown outcome operation");
         }
-        return new io.liftandshift.strikebench.outcomes.OutcomeContract.Response(version,
+        return new io.liftandshift.strikebench.outcomes.OutcomeContract.Response(
                 request.operation(), basis, resolved, interpretation, result);
     }
 
@@ -3420,15 +3410,18 @@ public final class ApiServer {
             int expiryDay;
             if (leg.expiryDay() != null) expiryDay = leg.expiryDay();
             else if (leg.expiration() != null && !leg.expiration().isBlank()) {
-                long calendarDays = Math.max(1, java.time.temporal.ChronoUnit.DAYS.between(
-                        laneToday, java.time.LocalDate.parse(leg.expiration())));
-                expiryDay = Math.max(1, (int) Math.round(calendarDays * 5.0 / 7.0));
+                expiryDay = outcomeExpiryDay(laneToday, java.time.LocalDate.parse(leg.expiration()));
             } else throw new IllegalArgumentException("option legs need expiration or expiryDay");
             out.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg(
                     leg.action().trim().toUpperCase(Locale.ROOT), type,
                     leg.strike().doubleValue(), expiryDay, ratio));
         }
         return out;
+    }
+
+    static int outcomeExpiryDay(java.time.LocalDate today, java.time.LocalDate expiration) {
+        return Math.max(1, io.liftandshift.strikebench.market.MarketHours
+                .tradingDaysBetween(today, expiration));
     }
 
     private List<String> contractExpirations(

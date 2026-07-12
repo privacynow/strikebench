@@ -58,7 +58,7 @@ class EvaluateIntegrationTest {
 
     private static String decisionBody() {
         return """
-                {"contractVersion":1,"operation":"DECISION","basis":"DECISION_POLICY",
+                {"operation":"DECISION","basis":"DECISION_POLICY",
                  "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
                  "decision":{"symbol":"AAPL","thesis":"bullish","horizon":"month","riskMode":"balanced"}}
                 """;
@@ -68,7 +68,6 @@ class EvaluateIntegrationTest {
         HttpResponse<String> r = post("/api/evaluate", decisionBody());
         assertThat(r.statusCode()).isEqualTo(200);
         JsonNode body = Json.MAPPER.readTree(r.body());
-        assertThat(body.get("contractVersion").asInt()).isEqualTo(1);
         assertThat(body.get("operation").asText()).isEqualTo("DECISION");
         body = body.get("result");
         JsonNode evals = body.get("evaluations");
@@ -141,9 +140,9 @@ class EvaluateIntegrationTest {
         assertThat(listed).isEmpty();
     }
 
-    @Test void oneVersionedContractOwnsPureOutcomeWorkAndPinsItsLane() throws Exception {
+    @Test void onePrivateContractOwnsPureOutcomeWorkAndPinsItsLane() throws Exception {
         String paths = """
-                {"contractVersion":1,"operation":"PATHS","basis":"PARAMETRIC",
+                {"operation":"PATHS","basis":"PARAMETRIC",
                  "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
                  "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":2,
                          "driftAnnual":0,"volAnnual":0.25,"jumpsPerYear":0,"jumpMean":0,
@@ -172,7 +171,7 @@ class EvaluateIntegrationTest {
 
     @Test void riskNeutralBasisEvaluatesExactListedPackagesThroughTheSameContract() throws Exception {
         String body = """
-                {"contractVersion":1,"operation":"POSITION","basis":"RISK_NEUTRAL",
+                {"operation":"POSITION","basis":"RISK_NEUTRAL",
                  "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
                  "position":{"key":"PUT_SPREAD","qty":1,"legs":[
                    {"action":"SELL","type":"PUT","strike":255,"expiration":"2026-08-14","ratio":1},
@@ -197,5 +196,12 @@ class EvaluateIntegrationTest {
         assertThat(comparison.get("results")).hasSize(1);
         assertThat(comparison.get("refused")).isEmpty();
         assertThat(comparison.get("fairness").asText()).contains("one captured");
+    }
+
+    @Test void outcomeExpiryUsesTheSharedTradingCalendar() {
+        assertThat(ApiServer.outcomeExpiryDay(java.time.LocalDate.parse("2026-07-02"),
+                java.time.LocalDate.parse("2026-07-06"))).isEqualTo(1); // July 3 observed holiday + weekend
+        assertThat(ApiServer.outcomeExpiryDay(java.time.LocalDate.parse("2026-07-08"),
+                java.time.LocalDate.parse("2026-07-13"))).isEqualTo(3); // Thu, Fri, Mon
     }
 }

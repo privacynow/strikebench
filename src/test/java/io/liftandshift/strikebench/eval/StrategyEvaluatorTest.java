@@ -32,7 +32,7 @@ class StrategyEvaluatorTest {
     private EvalContext ctx() {
         return new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25,
                 List.of(0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.29),
-                10_000_000L, true);
+                10_000_000L, true, 65);
     }
 
     @Test void assemblesEveryDimensionCoherently() {
@@ -89,7 +89,7 @@ class StrategyEvaluatorTest {
     }
 
     @Test void gateBlocksInsufficientBuyingPower() {
-        EvalContext broke = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25, List.of(), 100L, true);
+        EvalContext broke = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25, List.of(), 100L, true, 65);
         StrategyEvaluation e = evaluator.evaluate(debitCallSpread("DELAYED", 0.6), null, broke);
         assertThat(e.viable()).isFalse();
         assertThat(e.score().gateFailures()).anyMatch(f -> f.contains("buying power"));
