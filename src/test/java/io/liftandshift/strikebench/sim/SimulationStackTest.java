@@ -110,6 +110,20 @@ class SimulationStackTest {
     }
 
     @Test
+    void zeroDteOptionKeepsTimeValueUntilTheFirstSimulatedClose() {
+        var sim = new ScenarioSimulator();
+        var sameDay = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 0, 1));
+        var oneSession = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                1, 4, 0, 0.25, 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.25), 88, 80);
+
+        var result = run(sim, 100, sameDay, 1, oneSession, IvSpec.flat(0.25), 0.04, null);
+
+        assertThat(result.entryCostCents()).isGreaterThan(0); // ATM intrinsic is zero; this is time value
+        assertThat(result.horizonDays()).isEqualTo(1);
+        assertThat(result.bands()).hasSize(2); // entry and first simulated closing bell
+    }
+
+    @Test
     void seedReproducesTheExactDistribution() {
         var sim = new ScenarioSimulator();
         var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
@@ -133,11 +147,11 @@ class SimulationStackTest {
         var run = engine.runAndPersist("AAPL", spec(ScenarioSpec.Shape.SELLOFF_REBOUND, 0, 3), null,
                 "observed", io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         assertThat(run.bars()).isGreaterThan(10);
-        assertThat(run.pathModelVersion()).isEqualTo("paths-2");
+        assertThat(run.pathModelVersion()).isEqualTo("paths-3");
         DatasetService.DatasetRow saved = datasets.list(null).stream()
                 .filter(d -> d.id().equals(run.datasetId())).findFirst().orElseThrow();
         assertThat(io.liftandshift.strikebench.util.Json.parse(saved.spec()).get("pathModelVersion").asText())
-                .isEqualTo("paths-2");
+                .isEqualTo("paths-3");
         // Observed rows are untouched: the synthetic bars live ONLY under the new dataset_id.
         long observedRows = db.query("SELECT count(*) c FROM underlying_bar WHERE dataset_id='observed'",
                 r -> r.lng("c")).getFirst();

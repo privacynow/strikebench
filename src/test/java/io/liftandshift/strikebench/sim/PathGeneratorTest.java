@@ -66,6 +66,22 @@ class PathGeneratorTest {
     }
 
     @Test
+    void nonIntegerStudentTDegreesOfFreedomStayUnitVariance() {
+        RandomStreams.Cursor rng = RandomStreams.cursor(177, 0x53545544454E5454L, 0);
+        int n = 200_000;
+        double sum = 0, sumSq = 0;
+        for (int i = 0; i < n; i++) {
+            double x = rng.studentT(4.5);
+            sum += x;
+            sumSq += x * x;
+        }
+        double mean = sum / n;
+        double variance = sumSq / n - mean * mean;
+        assertThat(mean).isBetween(-0.02, 0.02);
+        assertThat(variance).isBetween(0.97, 1.03);
+    }
+
+    @Test
     void jumpDiffusionWidensTheOutcomeSpread() {
         // SAME base diffusion vol (0.30) as the GBM baseline, so the jumps are the only difference.
         var jump = new ScenarioSpec(ScenarioSpec.PathModel.JUMP_DIFFUSION, ScenarioSpec.Shape.CHOP,
@@ -143,6 +159,30 @@ class PathGeneratorTest {
         mean /= paths.length;
         double target = 100 * Math.exp(0.10);
         assertThat(mean).isBetween(target * 0.98, target * 1.02); // within MC error, NOT +sigma^2/2 biased
+    }
+
+    @Test
+    void fatTailAndBootstrapMeansAlsoSitOnTheirGuides() {
+        var student = new ScenarioSpec(ScenarioSpec.PathModel.STUDENT_T, ScenarioSpec.Shape.CHOP,
+                252, 1, 0.08, 0.18, 0, 0, 0, 4.5,
+                ScenarioSpec.Heston.fromVol(0.18), 211, 5_000);
+        double studentMean = java.util.Arrays.stream(gen.generate(student, 100, null))
+                .mapToDouble(p -> p[p.length - 1]).average().orElseThrow();
+        assertThat(studentMean).isBetween(100 * Math.exp(0.08) * 0.98, 100 * Math.exp(0.08) * 1.02);
+
+        double[] hist = new double[240];
+        for (int i = 0; i < hist.length; i++) {
+            // Deliberately autocorrelated/skewed blocks: the empirical correction, not a Gaussian
+            // variance shortcut, must keep the resampled expected path on its guide.
+            hist[i] = 0.006 * Math.sin(i / 7.0) + (i % 37 == 0 ? -0.055 : 0.0015);
+        }
+        var bootstrap = new ScenarioSpec(ScenarioSpec.PathModel.BLOCK_BOOTSTRAP, ScenarioSpec.Shape.CHOP,
+                63, 1, 0.08, 0.22, 0, 0, 0, 6,
+                ScenarioSpec.Heston.fromVol(0.22), 223, 5_000);
+        double bootstrapMean = java.util.Arrays.stream(gen.generate(bootstrap, 100, hist))
+                .mapToDouble(p -> p[p.length - 1]).average().orElseThrow();
+        double target = 100 * Math.exp(0.08 * 63.0 / 252.0);
+        assertThat(bootstrapMean).isBetween(target * 0.98, target * 1.02);
     }
 
     @Test

@@ -15,7 +15,7 @@ import java.util.List;
  */
 public final class ScenarioSimulator {
 
-    /** action BUY/SELL; type CALL/PUT/STOCK; expiryDay = trading days from now (ignored for stock). */
+    /** action BUY/SELL; type CALL/PUT/STOCK; expiryDay=0 means the first simulated session close. */
     public record SimLeg(String action, String type, double strike, int expiryDay, int ratio) {}
 
     public record Band(int day, long p10Cents, long p50Cents, long p90Cents) {}
@@ -221,6 +221,12 @@ public final class ScenarioSimulator {
                 ? "Exit values along each path are MODELED (Black-Scholes on the IV path); the entry reflects the quotes named above."
                 : "Synthetic scenario — entry AND exits are MODELED (Black-Scholes on the IV path), never observed market quotes.");
         notes.add("Seed " + s.seed() + " reproduces this exact run. Fills, commissions, and early assignment are not modeled here.");
+        if (s.model() == ScenarioSpec.PathModel.STUDENT_T) {
+            notes.add("Student-t uses non-integer ν=" + s.tailNu()
+                    + ", bounded at ±8 standardized deviations and re-compensated so the scenario guide remains the expected price path.");
+        } else if (s.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP) {
+            notes.add("Block bootstrap preserves contiguous return patterns and uses an empirical block-prefix compensator; it does not apply a Gaussian volatility-drag shortcut.");
+        }
         if (iv.eventDay() >= 0) notes.add("IV " + (iv.eventShockPct() < 0 ? "crush" : "expansion") + " of "
                 + Math.round(Math.abs(iv.eventShockPct()) * 100) + "% applied at day " + iv.eventDay() + "'s close.");
 
@@ -251,7 +257,9 @@ public final class ScenarioSimulator {
                 continue;
             }
             boolean call = "CALL".equalsIgnoreCase(leg.type());
-            int expiryStep = Math.max(0, leg.expiryDay()) * spd;
+            // 0DTE is alive at t0 and expires at this session's close. Treating expiryDay=0 as
+            // step zero erased all entry time value and made every same-day option intrinsic-only.
+            int expiryStep = leg.expiryDay() <= 0 ? Math.min(spd, steps) : leg.expiryDay() * spd;
             double px;
             if (step >= expiryStep) {
                 double settle = path[Math.min(expiryStep, steps)]; // the price WHEN it expired

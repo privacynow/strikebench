@@ -155,7 +155,7 @@ class EvaluateIntegrationTest {
         assertThat(envelope.get("basis").asText()).isEqualTo("PARAMETRIC");
         assertThat(envelope.at("/context/marketLane").asText()).isEqualTo("DEMO");
         assertThat(envelope.at("/result/bands").isArray()).isTrue();
-        assertThat(envelope.at("/result/pathModelVersion").asText()).isEqualTo("paths-2");
+        assertThat(envelope.at("/result/pathModelVersion").asText()).isEqualTo("paths-3");
 
         assertThat(post("/api/evaluate", paths.replace("\"DEMO\"", "\"OBSERVED\"")).statusCode())
                 .isEqualTo(409);

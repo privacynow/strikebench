@@ -2112,6 +2112,8 @@ test('intent-native UX: discount ladder, exit rungs, income board, symbol action
   const ladder = await page.textContent('#ladder-view');
   assert.match(ladder, /Name your price/);
   assert.match(ladder, /paid/i);
+  assert.doesNotMatch(ladder, /\(-\d+(?:\.\d+)?% below now\)/,
+    'directional distance uses an absolute magnitude plus below/above, never a double negative');
   assert.ok(await page.locator('#ladder-view .ladder-row').count() >= 4, 'sentence rungs at Learning');
   assert.ok(await page.locator('#ladder-view .ladder-row.recommended').count() === 1, 'one target/midpoint reference rung');
   assert.doesNotMatch(ladder, /SANE MIDDLE/, 'a geometric midpoint is not mislabeled as an endorsement');

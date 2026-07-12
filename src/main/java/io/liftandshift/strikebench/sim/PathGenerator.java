@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.sim;
 /**
  * Generates synthetic underlying price paths for a {@link ScenarioSpec}. A path is a deterministic
  * <em>shape guide</em> (the trader's view: grind up, valley, mountain, chop, gap) plus a mean-zero
- * stochastic <em>noise</em> from the chosen model (GBM, Student-t, jump-diffusion, Heston stochastic
+ * stochastic <em>noise</em> from the chosen model (GBM, bounded Student-t, jump-diffusion, Heston stochastic
  * vol, block-bootstrap of real returns, or an endpoint-pinned Brownian bridge). Seeded ⇒ reproducible.
  *
  * <p>Honesty is built in: daily closes are anchors, not intraday truth. {@link #intradayBridge} fills
@@ -12,7 +12,7 @@ package io.liftandshift.strikebench.sim;
  */
 public final class PathGenerator {
 
-    public static final String MODEL_VERSION = "paths-2";
+    public static final String MODEL_VERSION = "paths-3";
     private static final long NOISE_STREAM = 0x504154484E4F4953L;
     private static final long EVENT_STREAM = 0x5041544845564E54L;
     private static final long OHLC_STREAM = 0x4F484C4342524944L;
@@ -51,7 +51,7 @@ public final class PathGenerator {
             for (int i = 0; i <= steps; i++) {
                 double shock = eventStep > 0 && i >= eventStep ? eventShock : 0;
                 out[p][i] = s0 * Math.exp(guide[i] + noise[i] + shock);
-                if (out[p][i] <= 0 || Double.isNaN(out[p][i])) out[p][i] = s0 * 1e-4;
+                if (out[p][i] <= 0 || !Double.isFinite(out[p][i])) out[p][i] = s0 * 1e-4;
             }
             out[p][0] = s0;
         }
@@ -92,6 +92,13 @@ public final class PathGenerator {
     // ---- honestly IS the expected price path — no hidden σ²/2 upward bias) ----
 
     private static final double GAUSSIAN = 1_000; // nu above the t/gaussian switch = normal innovations
+    private static final double STUDENT_T_CAP = 8.0;
+    private static final java.util.LinkedHashMap<StudentLawKey, StudentLaw> STUDENT_LAWS =
+            new java.util.LinkedHashMap<>(64, 0.75f, true);
+    private static final double[] LANCZOS = {0.99999999999980993, 676.5203681218851,
+            -1259.1392167224028, 771.32342877765313, -176.61502916214059,
+            12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6,
+            1.5056327351493116e-7};
 
     private double[] noisePath(ScenarioSpec s, double sigma, double dt, int steps,
                                RandomStreams.Cursor rng, double[] hist) {
@@ -108,12 +115,84 @@ public final class PathGenerator {
     private static double[] gbmNoise(double sigma, double dt, int steps, RandomStreams.Cursor rng, double nu) {
         double[] n = new double[steps + 1];
         double sd = sigma * Math.sqrt(dt);
-        double drag = 0.5 * sigma * sigma * dt; // Itô correction: keeps E[S] on the guide
+        boolean gaussian = nu >= 100;
+        StudentLaw law = gaussian ? null : studentLaw(nu, sd);
+        double compensator = gaussian ? 0.5 * sd * sd : law.logMgf();
         for (int i = 1; i <= steps; i++) {
-            double z = nu >= 100 ? rng.gaussian() : rng.studentT(nu);
-            n[i] = n[i - 1] - drag + sd * z;
+            double z = gaussian ? rng.gaussian() : law.normalize(rng.studentT(nu));
+            n[i] = n[i - 1] - compensator + sd * z;
         }
         return n;
+    }
+
+    /**
+     * A literal Student-t log shock has no finite exponential moment, so no martingale
+     * compensator exists. The product model is therefore explicit: winsorize at +/-8 standardized
+     * deviations, re-standardize to unit variance, and integrate that finite law's exact log-MGF.
+     */
+    private static StudentLaw studentLaw(double nu, double sd) {
+        StudentLawKey key = new StudentLawKey(Double.doubleToLongBits(nu), Double.doubleToLongBits(sd));
+        synchronized (STUDENT_LAWS) {
+            StudentLaw cached = STUDENT_LAWS.get(key);
+            if (cached != null) return cached;
+            StudentLaw built = buildStudentLaw(nu, sd);
+            STUDENT_LAWS.put(key, built);
+            if (STUDENT_LAWS.size() > 64) STUDENT_LAWS.remove(STUDENT_LAWS.keySet().iterator().next());
+            return built;
+        }
+    }
+
+    private static StudentLaw buildStudentLaw(double nu, double sd) {
+        final int slices = 4096; // even: Simpson integration on the standardized-t density
+        final double h = STUDENT_T_CAP / slices;
+        double insideProb = 0, second = 0;
+        for (int i = 0; i <= slices; i++) {
+            double z = i * h;
+            double weight = i == 0 || i == slices ? 1 : (i % 2 == 0 ? 2 : 4);
+            double pdf = standardizedStudentPdf(z, nu);
+            insideProb += weight * pdf;
+            second += weight * z * z * pdf;
+        }
+        insideProb *= 2.0 * h / 3.0;
+        second *= 2.0 * h / 3.0;
+        double tail = Math.max(0, 1.0 - insideProb);
+        double variance = second + tail * STUDENT_T_CAP * STUDENT_T_CAP;
+        double scale = 1.0 / Math.sqrt(Math.max(1e-12, variance));
+
+        double mgfInside = 0;
+        for (int i = 0; i <= slices; i++) {
+            double z = i * h;
+            double weight = i == 0 || i == slices ? 1 : (i % 2 == 0 ? 2 : 4);
+            mgfInside += weight * Math.cosh(sd * z * scale) * standardizedStudentPdf(z, nu);
+        }
+        mgfInside *= 2.0 * h / 3.0;
+        double mgf = mgfInside + tail * Math.cosh(sd * STUDENT_T_CAP * scale);
+        return new StudentLaw(scale, Math.log(Math.max(1e-300, mgf)));
+    }
+
+    private static double standardizedStudentPdf(double z, double nu) {
+        double a = Math.sqrt((nu - 2.0) / nu); // Z = a*T has unit variance
+        double t = z / a;
+        double logC = logGamma((nu + 1.0) / 2.0) - logGamma(nu / 2.0)
+                - 0.5 * Math.log(nu * Math.PI);
+        double raw = Math.exp(logC - ((nu + 1.0) / 2.0) * Math.log1p(t * t / nu));
+        return raw / a;
+    }
+
+    private static double logGamma(double z) {
+        if (z < 0.5) return Math.log(Math.PI) - Math.log(Math.sin(Math.PI * z)) - logGamma(1 - z);
+        double x = LANCZOS[0];
+        double zm1 = z - 1;
+        for (int i = 1; i < LANCZOS.length; i++) x += LANCZOS[i] / (zm1 + i);
+        double t = zm1 + 7.5;
+        return 0.5 * Math.log(2 * Math.PI) + (zm1 + 0.5) * Math.log(t) - t + Math.log(x);
+    }
+
+    private record StudentLawKey(long nuBits, long sdBits) {}
+    private record StudentLaw(double scale, double logMgf) {
+        double normalize(double z) {
+            return Math.max(-STUDENT_T_CAP, Math.min(STUDENT_T_CAP, z)) * scale;
+        }
     }
 
     private static double[] jumpNoise(ScenarioSpec s, double sigma, double dt, int steps, RandomStreams.Cursor rng) {
@@ -167,17 +246,37 @@ public final class PathGenerator {
         double histSd = Math.sqrt(Math.max(1e-12, var / Math.max(1, hist.length - 1)));
         double targetSd = sigma * Math.sqrt(dt);          // per-STEP target
         double scale = targetSd / histSd;
-        double drag = 0.5 * targetSd * targetSd;
         int block = Math.max(2, Math.min(20, hist.length / 4));
+        double[] innovations = new double[hist.length];
+        for (int j = 0; j < hist.length; j++) innovations[j] = (hist[j] - mean) * scale;
+        double[] prefixCompensator = empiricalPrefixCompensators(innovations, block);
         double[] n = new double[steps + 1];
         int i = 1;
         while (i <= steps) {
             int start = rng.nextInt(hist.length);
-            for (int k = 0; k < block && i <= steps; k++, i++) {
-                n[i] = n[i - 1] - drag + (hist[(start + k) % hist.length] - mean) * scale;
+            for (int k = 1; k <= block && i <= steps; k++, i++) {
+                double correction = prefixCompensator[k] - prefixCompensator[k - 1];
+                n[i] = n[i - 1] + innovations[(start + k - 1) % innovations.length] - correction;
             }
         }
         return n;
+    }
+
+    /** Exact empirical log-MGF of every circular block prefix; preserves block dependence and E[e^noise]=1. */
+    private static double[] empiricalPrefixCompensators(double[] innovations, int block) {
+        double[] out = new double[block + 1];
+        double[] sums = new double[innovations.length];
+        for (int len = 1; len <= block; len++) {
+            double max = -Double.MAX_VALUE;
+            for (int start = 0; start < innovations.length; start++) {
+                sums[start] += innovations[(start + len - 1) % innovations.length];
+                max = Math.max(max, sums[start]);
+            }
+            double expSum = 0;
+            for (double sum : sums) expSum += Math.exp(sum - max);
+            out[len] = max + Math.log(expSum / innovations.length);
+        }
+        return out;
     }
 
     /** Pin a noise path to 0 at both ends (Brownian bridge) so the path hits its guide endpoints. */

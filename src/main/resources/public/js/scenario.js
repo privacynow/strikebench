@@ -37,7 +37,7 @@
   var MAGS = [{ key: 'calm', label: 'Calm', mult: 0.6 }, { key: 'typical', label: 'Typical', mult: 1.0 }, { key: 'wild', label: 'Wild', mult: 2.0 }];
   var MODELS = [
     { v: 'GBM', label: 'GBM (lognormal)' }, { v: 'BROWNIAN_BRIDGE', label: 'Brownian bridge (pinned end)' },
-    { v: 'BLOCK_BOOTSTRAP', label: 'Block bootstrap (real returns)' }, { v: 'STUDENT_T', label: 'Student-t (fat tails)' },
+    { v: 'BLOCK_BOOTSTRAP', label: 'Block bootstrap (real returns)' }, { v: 'STUDENT_T', label: 'Student-t (bounded fat tails)' },
     { v: 'JUMP_DIFFUSION', label: 'Merton jump-diffusion' }, { v: 'HESTON', label: 'Heston (stochastic vol)' }
   ];
 
@@ -196,10 +196,10 @@
       updateRelevance();
       box.appendChild(UI.expandable('The math', function () {
         return el('div', { class: 'sc-math' },
-          el('p', {}, el('b', {}, 'GBM / Student-t: '), 'd ln S = (μ − σ²/2)dt + σ√dt·ε, ε ~ N(0,1) or standardized t(ν).'),
+          el('p', {}, el('b', {}, 'GBM / Student-t: '), 'Gaussian GBM uses the usual σ²/2 correction. Student-t shocks use the selected non-integer ν, are capped at ±8 standardized deviations, re-scaled, and use that bounded law’s exponential compensator so the guide remains the expected price path.'),
           el('p', {}, el('b', {}, 'Jump-diffusion (Merton): '), 'adds Σ Jᵢ per step, N ~ Poisson(λdt), J ~ N(m, s²).'),
           el('p', {}, el('b', {}, 'Heston: '), 'dv = κ(θ − v)dt + ξ√v·dWᵥ, corr(dWₛ, dWᵥ) = ρ; full-truncation Euler.'),
-          el('p', {}, el('b', {}, 'Bootstrap: '), 'resamples blocks of the symbol’s own observed daily returns (mean-removed) — preserves fat tails and autocorrelation.'),
+          el('p', {}, el('b', {}, 'Bootstrap: '), 'resamples blocks of the symbol’s own observed daily returns (mean-removed), preserving fat tails and autocorrelation; an empirical block-prefix compensator keeps the guide mean-honest.'),
           el('p', {}, el('b', {}, 'Shape guide: '), 'a deterministic log-drift curve (valley/mountain/linear) the noise rides on; the bridge pins the endpoint.'),
           el('p', {}, el('b', {}, 'IV path: '), 'deterministic: dIV = drift·dt + κ(long-run − IV)dt, with a one-off shock at the event day’s close. Option values are BSM on this path — always labeled MODELED.'),
           el('p', { class: 'muted small' }, 'Same seed ⇒ byte-identical paths. Fills, commissions, and early assignment are not modeled.'));

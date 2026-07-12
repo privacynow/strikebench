@@ -70,14 +70,32 @@ public final class RandomStreams {
         public double studentT(double nu) {
             if (nu <= 2.5) nu = 2.5;
             double z = gaussian();
-            int k = Math.max(1, (int) Math.round(nu));
-            double chi2 = 0;
-            for (int i = 0; i < k; i++) {
-                double g = gaussian();
-                chi2 += g * g;
-            }
-            double t = z / Math.sqrt(chi2 / k);
+            // Chi-square(nu) is Gamma(nu/2, scale=2). Rounding nu to an integer silently changed
+            // the selected distribution and made the variance normalization wrong for expert inputs.
+            double chi2 = 2.0 * gamma(nu / 2.0);
+            double t = z / Math.sqrt(chi2 / nu);
             return t / Math.sqrt(nu / (nu - 2.0));
+        }
+
+        /** Marsaglia-Tsang gamma(shape, scale=1), driven only by this deterministic cursor. */
+        private double gamma(double shape) {
+            if (!(shape > 0) || !Double.isFinite(shape)) throw new IllegalArgumentException("gamma shape must be positive");
+            if (shape < 1.0) {
+                return gamma(shape + 1.0) * Math.pow(Math.max(1e-15, uniform()), 1.0 / shape);
+            }
+            double d = shape - 1.0 / 3.0;
+            double c = 1.0 / Math.sqrt(9.0 * d);
+            while (true) {
+                double x = gaussian();
+                double v = 1.0 + c * x;
+                if (v <= 0) continue;
+                v = v * v * v;
+                double u = uniform();
+                if (u < 1.0 - 0.0331 * x * x * x * x
+                        || Math.log(Math.max(1e-15, u)) < 0.5 * x * x + d * (1.0 - v + Math.log(v))) {
+                    return d * v;
+                }
+            }
         }
 
         /** Knuth Poisson draw; scenario step intensities are deliberately small. */

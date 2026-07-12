@@ -3171,6 +3171,11 @@
       return UI.finiteNumber(ctx.spot) && Number(ctx.spot) !== 0
         ? ((strike - Number(ctx.spot)) / Number(ctx.spot) * 100) : null;
     }
+    function spotRelation(pct) {
+      if (pct === null || !UI.finiteNumber(pct)) return '';
+      if (Math.abs(pct) < 0.05) return ' (near today’s price)';
+      return ' (' + Math.abs(pct).toFixed(1) + '% ' + (pct < 0 ? 'below' : 'above') + ' now)';
+    }
     function gainVsBasis(c) {
       if (!UI.finiteNumber(ctx.basisCents) || !UI.finiteNumber(c.effectivePrice)
           || Number(ctx.basisCents) === 0) return null;
@@ -3193,7 +3198,7 @@
       var k = strikeOf(c);
       var pct = spotPct(c, k);
       if (intent === 'ACQUIRE') {
-        return el('span', {}, 'Buy at ', el('b', {}, priceText(k)), pct !== null ? ' (' + pct.toFixed(1) + '% below now)' : '',
+        return el('span', {}, 'Buy at ', el('b', {}, priceText(k)), spotRelation(pct),
           ' \u2014 you\u2019re paid ', el('b', { class: 'gain' }, fmtMoney(c.entryNetPremiumCents)), ' to wait; if it gets there you own it at ',
           el('b', {}, priceText(c.effectivePrice)), '. Chance: ' + fmtPct(c.assignmentProb) + '.');
       }
@@ -3204,8 +3209,7 @@
           el('b', {}, priceText(c.effectivePrice)), g !== null ? ' (' + (g >= 0 ? '+' : '') + g.toFixed(1) + '% vs what you paid)' : '',
           '. Chance you sell: ' + fmtPct(c.assignmentProb) + '.');
       }
-      var floorPct = pct !== null ? Math.abs(pct).toFixed(1) : null;
-      return el('span', {}, 'Floor at ', el('b', {}, priceText(k)), floorPct ? ' (' + floorPct + '% below now)' : '',
+      return el('span', {}, 'Floor at ', el('b', {}, priceText(k)), spotRelation(pct),
         ' \u2014 costs ', el('b', { class: 'loss' }, fmtMoney(c.maxLossCents)), ' until ' + expirationOf(c) + '.');
     }
 
