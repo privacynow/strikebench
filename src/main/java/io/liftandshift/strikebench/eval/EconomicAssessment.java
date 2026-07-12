@@ -95,9 +95,11 @@ public record EconomicAssessment(
         if (lowProbability) reasons.add("The modeled chance of any profit is below 30%; low probability is not a rejection by itself.");
         if (!observed) reasons.add("The evidence is generated or modeled, so it cannot establish a live-market edge.");
 
-        // A favorable label requires observed evidence and a positive realized-volatility scenario
-        // that survives fees. The market-implied lane may be mildly negative (the volatility risk
-        // premium thesis), but not so negative that execution overwhelms the proposed edge.
+        // A favorable classification requires a positive realized-volatility scenario that survives
+        // fees. Observed evidence determines whether the label can describe a live-market edge or only
+        // a favorable case inside an explicitly generated teaching market. The market-implied lane may
+        // be mildly negative (the volatility risk premium thesis), but not so negative that execution
+        // overwhelms the proposed edge.
         if (realizedPositive && (marketNet == null || marketNet >= -material)) {
             return new EconomicAssessment(Verdict.FAVORABLE, "WORTH_INVESTIGATING",
                     observed ? "Worth investigating" : "Favorable in this teaching market",

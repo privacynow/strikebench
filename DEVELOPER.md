@@ -166,7 +166,7 @@ temp database; each suite needs its own port. Page JS errors and 5xx responses a
 failures. Run all suites — fresh-DB suites miss grown-state bugs, fixture suites miss live
 ones. The responsive audit checks 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 pixels and
 fails on horizontal overflow, clipped controls, or inaccessible geometry. Current counts are
-460 JUnit, 66 fixture DOM, 8 responsive widths, 4 grown-state, and 8 live-provider cases.
+466 JUnit, 70 fixture DOM, 8 responsive widths, 4 grown-state, and 8 live-provider cases.
 
 ## Configuration
 
