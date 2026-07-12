@@ -166,7 +166,12 @@ temp database; each suite needs its own port. Page JS errors and 5xx responses a
 failures. Run all suites — fresh-DB suites miss grown-state bugs, fixture suites miss live
 ones. The responsive audit checks 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 pixels and
 fails on horizontal overflow, clipped controls, or inaccessible geometry. Current counts are
-466 JUnit, 70 fixture DOM, 8 responsive widths, 4 grown-state, and 8 live-provider cases.
+467 JUnit, 70 fixture DOM, 8 responsive widths, 4 grown-state, and 8 live-provider cases.
+
+Released Flyway migrations are byte-immutable. `MigrationImmutabilityTest` pins every V1-V19
+SHA-256 digest and requires each new migration to be added to the manifest. Never edit an applied
+migration, including comments or whitespace, and never use `repair` to legitimize a source edit;
+schema changes always receive a new versioned migration.
 
 ## Configuration
 

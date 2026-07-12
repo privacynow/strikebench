@@ -202,7 +202,7 @@ CREATE TABLE strategy_evaluation (
   strategy        TEXT NOT NULL,
   objective       TEXT,                    -- the ranking objective this score was computed for
   asof            TIMESTAMPTZ NOT NULL DEFAULT now(),
-  score           DOUBLE PRECISION,        -- monotonic 0-100 Decision score
+  score           DOUBLE PRECISION,        -- normalized 0-100, risk-adjusted
   ev_cents        BIGINT,
   roc             DOUBLE PRECISION,
   ann_roc         DOUBLE PRECISION,        -- carries a repeat-assumption; never the primary truth
