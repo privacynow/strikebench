@@ -3,7 +3,7 @@
 User-facing overview lives in [README.md](README.md). This file is everything else: build,
 architecture, tests, configuration, and deployment.
 
-## Current product shape (2026-07-11)
+## Current product shape (2026-07-12)
 
 The consolidation program is complete on `feature/research-platform` and is not deployed.
 
@@ -17,11 +17,20 @@ The consolidation program is complete on `feature/research-platform` and is not 
   `CONDITIONAL_BOOTSTRAP`, or `RISK_NEUTRAL`) so shared machinery never blends interpretations.
 - `PathEnsembleService` is the only path source. `ScenarioSimulator` prices supplied ensembles;
   `HistoricalReplayKernel` owns historical entry/mark/exit pricing for both backtest modes.
+- `PATHS` evaluation is decision-grade rather than a decorative fan: it returns named terminal
+  quantiles, mean/dispersion/standard error, direct end/touch probabilities, median first-touch time,
+  Wilson intervals, a sampling-margin disclosure, and an immutable ensemble fingerprint. `POSITION`
+  can price the exact working package on that same fingerprint, so Research and Trade cannot silently
+  answer with different futures.
+- A live simulated market remains a separate, single-realization practice lane. Its control room shows
+  every session symbol at once, one clearly named focus chart, the moving account/book, and explicit
+  management controls. Research hands a scenario to the simulator only as a reviewable practice setup;
+  it never treats one realized path as validation of the distribution.
 - The old Lab, standalone Decision, ETF-replicator, old Trade-stage, and
   `/api/sim/{scenario,strategy,compare}` surfaces are gone. Do not restore internal aliases or DTO
   overloads for hypothetical API consumers. Database and model-version migrations remain because
   they protect actual persisted user data and deterministic model identity.
-- Current release evidence is **460 JUnit + 66 fixture DOM + 8 responsive widths + 4 grown-state +
+- Current release evidence is **487 JUnit + 76 fixture DOM + 8 responsive widths + 4 grown-state +
   8 live-provider DOM, all green**. Representative screenshots are under
   `dom-tests/shots/final-*.png`.
 
@@ -92,6 +101,12 @@ Pure outcome work must enter here. `POST /api/backtest` and `/api/backtest/portf
 historical-job endpoints, but both delegate pricing and evidence accounting to
 `HistoricalReplayKernel`. Live simulated markets remain a market lane under `/api/sim/market/*`, not
 an alternate evaluation engine.
+
+For `operation=PATHS`, the response owns both the path receipt and the facts derived from it. The UI
+may visualize sample lines, but decisions use the quantiles/probabilities in the response. A price fan
+without a position must answer a concrete level or strike question; with a working position, the same
+ensemble is repriced immediately. Scenario-model ranges and market-implied ATM-IV ranges are displayed
+side by side and never blended into one probability.
 
 **Market data flow.** `MarketDataEngine` sits above the provider chain as the single owned "current
 market state": it warms the active universe on boot, refreshes tracked symbols in the background
@@ -166,7 +181,7 @@ temp database; each suite needs its own port. Page JS errors and 5xx responses a
 failures. Run all suites — fresh-DB suites miss grown-state bugs, fixture suites miss live
 ones. The responsive audit checks 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 pixels and
 fails on horizontal overflow, clipped controls, or inaccessible geometry. Current counts are
-467 JUnit, 70 fixture DOM, 8 responsive widths, 4 grown-state, and 8 live-provider cases.
+487 JUnit, 76 fixture DOM, 8 responsive widths, 4 grown-state, and 8 live-provider cases.
 
 Released Flyway migrations are byte-immutable. `MigrationImmutabilityTest` pins every V1-V19
 SHA-256 digest and requires each new migration to be added to the manifest. Never edit an applied
