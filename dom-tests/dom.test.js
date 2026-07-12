@@ -534,6 +534,21 @@ test('scenario studio expert: model menu incl. Heston, IV knobs, the math on dem
   assert.match(await page.textContent('#whatif-card'), /κ|kappa/i);
 });
 
+test('scenario decision prices are isolated by symbol', async () => {
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => { App.state.scenarioTargets = {}; App.state.scenarioForm = null; });
+  await go('#/research/AAPL');
+  await openFutures();
+  await page.fill('#whatif-target', '270');
+  await go('#/research/QQQ');
+  await openFutures();
+  assert.equal(await page.inputValue('#whatif-target'), '', 'AAPL decision level never leaks into QQQ');
+  await page.fill('#whatif-target', '500');
+  await go('#/research/AAPL');
+  await openFutures();
+  assert.equal(await page.inputValue('#whatif-target'), '270', 'AAPL decision level restores in its own symbol context');
+});
+
 test('Research prices a working package on the fan receipt and Outcomes reuses the result', async () => {
   await page.click('#level-switch button[data-level="beginner"]');
   await page.evaluate(() => {

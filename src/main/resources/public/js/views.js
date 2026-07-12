@@ -4411,10 +4411,10 @@
       : 'The shared market view seeds this model terminal; its drift, volatility, jumps and IV path remain explicit scenario assumptions. The paired historical lens is a separate ' + historyBasis.expert + ', never a blended probability.'));
     var f = Scenario.form(level, symbol, seedContext);
     card.appendChild(f.el);
-    var sf = App.state.scenarioForm = App.state.scenarioForm || {};
+    App.state.scenarioTargets = App.state.scenarioTargets || {};
     var target = el('input', { type: 'number', id: 'whatif-target', step: 'any', min: '0.01',
-      value: sf.targetPrice || '', placeholder: 'Optional' });
-    target.addEventListener('input', function () { sf.targetPrice = target.value; });
+      value: App.state.scenarioTargets[symbol] || '', placeholder: 'Optional' });
+    target.addEventListener('input', function () { App.state.scenarioTargets[symbol] = target.value; });
     card.appendChild(el('div', { class: 'scenario-question' },
       el('div', {}, el('label', { for: 'whatif-target' }, 'Price you care about'),
         el('p', { class: 'muted small' }, level === 'beginner'
@@ -4489,11 +4489,17 @@
       var shapeMap = { GRIND_UP: 'TREND_UP', GRIND_DOWN: 'TREND_DOWN',
         SELLOFF_REBOUND: 'SELLOFF_REBOUND', RALLY_FADE: 'RALLY_FADE',
         CHOP: 'CHOP', GAP_DOWN: 'VOL_EVENT', GAP_UP: 'VOL_EVENT', EVENT_JUMP: 'VOL_EVENT' };
+      function stressScenario() {
+        var goal = App.context.goal('DIRECTIONAL'), thesis = App.context.thesis('neutral');
+        if (goal === 'INCOME' || thesis === 'neutral' || thesis === 'volatile') return 'VOL_EVENT';
+        if (goal === 'EXIT' || goal === 'HEDGE' || goal === 'ACQUIRE' || thesis === 'bullish') return 'TREND_DOWN';
+        return thesis === 'bearish' ? 'TREND_UP' : 'VOL_EVENT';
+      }
       function openPractice(kind) {
         var stress = kind === 'stress';
         App.state.simulationPrefill = {
           source: 'scenario-analysis', symbol: symbol,
-          scenario: stress ? (spec.driftAnnual >= 0 ? 'TREND_DOWN' : 'VOL_EVENT')
+          scenario: stress ? stressScenario()
             : (shapeMap[spec.shape] || 'CHOP'),
           name: (stress ? 'Stress drill' : 'Scenario practice') + ' — ' + symbol,
           seed: Math.floor(Math.random() * 100000000), speed: 26,

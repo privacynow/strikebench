@@ -579,7 +579,7 @@
   var LANE_KEYS = ['marketContext', 'marketThesis', 'researchStudy', 'evidencePrefill',
     'researchTabBySymbol',
     'ideasPrefill', 'backtestPrefill', 'discoverForm', 'builderForm', 'backtestForm',
-    'verifyForm', 'scenarioForm', 'scenarioAnalysis', 'scenarioHandoff', 'simulationPrefill',
+    'verifyForm', 'scenarioForm', 'scenarioTargets', 'scenarioAnalysis', 'scenarioHandoff', 'simulationPrefill',
     'scoutResults', 'outcomeReceipt',
     'portfolioOptimizer',
     // Result objects are market-DERIVED state (review P0 #1): an observed evaluation must
