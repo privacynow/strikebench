@@ -845,11 +845,12 @@
             return chip(b.symbol, fmtNum(b.last));
           })) : null);
       });
+    var displayPrice = r.displayPrice !== undefined && r.displayPrice !== null ? r.displayPrice : q.last;
     var hero = el('div', { class: 'card research-hero-card' },
       el('div', { class: 'quote-hero' },
         el('span', { class: 'sym', id: 'research-symbol' }, symbol),
-        el('span', { class: 'px', id: 'research-px' }, fmtNum(q.last)),
-        UI.delta(q.last, q.prevClose),
+        el('span', { class: 'px', id: 'research-px' }, fmtNum(displayPrice)),
+        r.priceIsPreviousClose ? el('span', { class: 'muted small' }, 'previous close') : UI.delta(q.last, q.prevClose),
         evSummary && evSummary.provenance === 'DEMO' ? null : badge(r.freshness),
         el('span', { class: 'spacer' }),
         el('button', {
@@ -3896,9 +3897,15 @@
                   chip('Short-vol trades', String(heat.shortVolTrades)),
                   chip('Top-symbol share', heat.concentrationPct + '%',
                     'How much of the total worst case sits in ONE symbol.'),
-                  heat.assignmentCashCents > 0 ? chip('If every short put assigns', fmtMoney(heat.assignmentCashCents),
-                    'Cash needed to take delivery on ALL short puts at their strikes.') : null,
-                  heat.assignmentCashCents > 0 ? chip('BP after assignment', fmtMoney(heat.postAssignmentBuyingPowerCents)) : null)));
+                  heat.earlyAssignmentLiquidityCents > 0 ? chip('Early-assignment cash demand',
+                    fmtMoney(heat.earlyAssignmentLiquidityCents),
+                    'Temporary gross cash needed if every short put assigns before protective puts are exercised or sold. This is not max loss.') : null,
+                  heat.physicalAssignmentCashCents > 0 ? chip('Cash-secured shares delivered',
+                    fmtMoney(heat.physicalAssignmentCashCents),
+                    'Strike cash used when funded single short puts settle into shares.') : null,
+                  heat.physicalAssignmentCashCents > 0 ? chip('BP after funded assignment',
+                    fmtMoney(heat.postPhysicalAssignmentBuyingPowerCents),
+                    'Buying power after strike cash is paid and the matching cash-secured reserve is released.') : null)));
             }
           } catch (e) { /* heat is additive — the page never fails on it */ }
           root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-greeks' },

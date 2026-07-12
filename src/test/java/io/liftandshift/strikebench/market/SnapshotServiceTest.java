@@ -26,9 +26,11 @@ class SnapshotServiceTest {
 
     @AfterEach void closeDb() { if (db != null) db.close(); }
 
-    private SnapshotService service(Clock clock) { return service(clock, true); }
+    private SnapshotService service(Clock clock) { return service(clock, true, false); }
 
-    private SnapshotService service(Clock clock, boolean observed) {
+    private SnapshotService service(Clock clock, boolean observed) { return service(clock, observed, false); }
+
+    private SnapshotService service(Clock clock, boolean observed, boolean previousCloseOnly) {
         db = TestDb.fresh();
         AppConfig cfg = new AppConfig(Map.of());
         FixtureProvider fixture = new FixtureProvider(clock);
@@ -38,7 +40,9 @@ class SnapshotServiceTest {
             @Override public List<io.liftandshift.strikebench.model.SymbolMatch> lookup(String q) { return fixture.lookup(q); }
             @Override public Optional<io.liftandshift.strikebench.model.Quote> quote(String s) {
                 return fixture.quote(s).map(q -> new io.liftandshift.strikebench.model.Quote(
-                        q.symbol(), q.description(), q.last(), q.bid(), q.ask(), q.prevClose(), q.dayHigh(),
+                        q.symbol(), q.description(), previousCloseOnly ? null : q.last(),
+                        previousCloseOnly ? null : q.bid(), previousCloseOnly ? null : q.ask(),
+                        q.prevClose(), q.dayHigh(),
                         q.dayLow(), q.volume(), q.optionable(), q.asOfEpochMs(), name(),
                         io.liftandshift.strikebench.model.Freshness.DELAYED));
             }
@@ -109,6 +113,16 @@ class SnapshotServiceTest {
         assertThat(r.optionRows()).isZero();
         assertThat(count("SELECT count(*) c FROM underlying_bar")).isZero();
         assertThat(count("SELECT count(*) c FROM option_bar")).isZero();
+    }
+
+    @Test void previousCloseFallbackIsNeverWrittenAsTodaysObservedBar() {
+        SnapshotService snap = service(Clock.systemUTC(), true, true);
+
+        var r = snap.snapshot(List.of("AAPL"));
+
+        assertThat(r.underlyingRows()).isZero();
+        assertThat(count("SELECT count(*) c FROM underlying_bar")).isZero();
+        assertThat(r.optionRows()).isGreaterThan(0); // only the missing underlying observation is withheld
     }
 
     @Test void isIdempotentPerDay() {

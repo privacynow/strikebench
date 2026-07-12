@@ -924,7 +924,10 @@ class ApiIntegrationTest {
         assertThat(heat.statusCode()).isEqualTo(200);
         var h = io.liftandshift.strikebench.util.Json.parse(heat.body());
         assertThat(h.has("totalMaxLossCents")).isTrue();
-        assertThat(h.has("assignmentCashCents")).isTrue();
+        assertThat(h.has("earlyAssignmentLiquidityCents")).isTrue();
+        assertThat(h.has("physicalAssignmentCashCents")).isTrue();
+        assertThat(h.has("assignmentReserveReleasedCents")).isTrue();
+        assertThat(h.has("postPhysicalAssignmentBuyingPowerCents")).isTrue();
     }
 
     @Test

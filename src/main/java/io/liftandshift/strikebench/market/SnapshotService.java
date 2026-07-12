@@ -97,7 +97,10 @@ public final class SnapshotService {
 
     /** Writes one symbol's underlying + option rows in a single transaction; returns {underlying, option} counts. */
     private int[] writeSymbol(LocalDate asof, String sym, Quote quote, List<OptionChain> chains) {
-        final Quote observedQuote = quote != null && snapshotEligible(quote.evidence()) ? quote : null;
+        // A previous close is valid context, not today's observation. Never write it under today's
+        // date merely because Quote.mark() can display it as a fallback.
+        final Quote observedQuote = quote != null && quote.last() != null
+                && snapshotEligible(quote.evidence()) ? quote : null;
         return db.tx(c -> {
             int u = 0, o = 0;
             if (observedQuote != null) {

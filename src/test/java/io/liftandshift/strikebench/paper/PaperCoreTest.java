@@ -1127,6 +1127,22 @@ class PaperCoreTest {
     }
 
     @Test
+    void portfolioHeatSeparatesTemporaryPutLiquidityFromFundedPhysicalAssignment() {
+        Account acct = accounts.getOrCreateDefault();
+        trades.create(creditPutSpread(acct.id(), 1));
+        trades.create(openRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
+                List.of(put(LegAction.SELL, "100", "0")), "neutral", "month", "balanced", "ACQUIRE", null));
+        long buyingPowerBefore = accounts.get(acct.id()).buyingPowerCents();
+
+        Map<String, Object> heat = trades.portfolioHeat(acct.id());
+        assertThat((Long) heat.get("earlyAssignmentLiquidityCents")).isEqualTo(2_000_000L);
+        assertThat((Long) heat.get("physicalAssignmentCashCents")).isEqualTo(1_000_000L);
+        assertThat((Long) heat.get("assignmentReserveReleasedCents")).isEqualTo(1_000_000L);
+        assertThat((Long) heat.get("postPhysicalAssignmentBuyingPowerCents")).isEqualTo(buyingPowerBefore);
+        assertThat(heat).doesNotContainKeys("assignmentCashCents", "postAssignmentBuyingPowerCents");
+    }
+
+    @Test
     void accountResetClearsEquityPositions() {
         Account acct = accounts.getOrCreateDefault();
         positions.buy(acct.id(), "AAPL", 100);

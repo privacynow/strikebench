@@ -1689,7 +1689,7 @@ public final class ApiServer {
                     m.put("prevClose", q.prevClose());
                     m.put("optionable", q.optionable());
                     m.put("asOf", q.asOfEpochMs());
-                    m.put("freshness", q.freshness().name());
+                    m.put("freshness", q.markFreshness().name());
                     m.put("source", q.source());
                     m.put("evidence", q.evidence());
                     rows.add(m);
@@ -1766,7 +1766,7 @@ public final class ApiServer {
                             row.put("ask", q.ask() == null ? null : q.ask().toPlainString());
                             row.put("prevClose", q.prevClose() == null ? null : q.prevClose().toPlainString());
                             row.put("optionable", q.optionable());
-                            row.put("freshness", q.freshness().name());
+                            row.put("freshness", q.markFreshness().name());
                             row.put("evidence", q.evidence());
                             row.put("asOf", q.asOfEpochMs());
                             row.put("refreshing", false);
@@ -1787,7 +1787,8 @@ public final class ApiServer {
                                 row.put("ask", q.ask() == null ? null : q.ask().toPlainString());
                                 row.put("prevClose", q.prevClose() == null ? null : q.prevClose().toPlainString());
                                 row.put("optionable", q.optionable());
-                                row.put("freshness", q.freshness().name());
+                                row.put("freshness", q.markFreshness().name());
+                                row.put("evidence", q.evidence());
                                 row.put("asOf", q.asOfEpochMs());
                                 row.put("refreshing", false);
                                 rows.add(row);
@@ -2684,8 +2685,14 @@ public final class ApiServer {
                     // session there is no observed SPY, and mixing markets would be a quiet lie.
                     market.quote(bench, world).filter(x -> x.evidence().usableIn(
                             lane == io.liftandshift.strikebench.market.MarketLane.SCENARIO
-                                    ? io.liftandshift.strikebench.market.MarketLane.OBSERVED : lane)).ifPresent(x -> b.add(Map.of(
-                            "symbol", x.symbol(), "last", x.last(), "freshness", x.freshness().name())));
+                                    ? io.liftandshift.strikebench.market.MarketLane.OBSERVED : lane)).ifPresent(x -> {
+                        Map<String, Object> bm = new LinkedHashMap<>();
+                        bm.put("symbol", x.symbol());
+                        bm.put("last", x.mark());
+                        bm.put("freshness", x.markFreshness().name());
+                        bm.put("evidence", x.evidence());
+                        b.add(bm);
+                    });
                 }
                 return b;
             });
@@ -2699,6 +2706,8 @@ public final class ApiServer {
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("symbol", symbol);
             out.put("quote", q);
+            out.put("displayPrice", q.mark());
+            out.put("priceIsPreviousClose", q.usesPreviousCloseFallback());
             out.put("marketLane", lane.name());
             out.put("optionable", q.optionable());
             out.put("ivAtm", ie.ivAtm());
@@ -2737,7 +2746,7 @@ public final class ApiServer {
                     "inputs", evidenceInputs));
             out.put("expirations", ie.exps().stream().map(LocalDate::toString).toList());
             out.put("benchmarks", benchF.get());
-            out.put("freshness", q.freshness().name());
+            out.put("freshness", q.markFreshness().name());
             out.put("asOfDate", today.toString()); // the LANE's today — client DTE math uses this, never Date.now()
             ctx.json(out);
         } catch (InterruptedException e) {

@@ -378,7 +378,7 @@ public final class MarketDataEngine {
             }
             Quote v = q.get();
             commit(symbol, new MarketSnapshot(v.symbol(), v.description(), v.last(), v.bid(), v.ask(),
-                    v.prevClose(), v.optionable(), v.freshness(), v.source(), v.asOfEpochMs(), t1, false, null));
+                    v.prevClose(), v.optionable(), v.markFreshness(), v.source(), v.asOfEpochMs(), t1, false, null));
         } catch (Exception e) {
             putError(symbol, MarketDataService.publicProviderFailure(e));
             log.debug("Market refresh failure detail for " + symbol, e);

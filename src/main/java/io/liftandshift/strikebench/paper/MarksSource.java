@@ -20,6 +20,11 @@ public interface MarksSource {
         return underlyingMark(symbol);
     }
 
+    /** Provenance/age of the exact underlying value returned by underlyingMark. */
+    default java.util.Optional<DataEvidence> underlyingEvidence(String symbol, String worldId) {
+        return java.util.Optional.empty();
+    }
+
     default java.util.Optional<LegMark> legMark(String symbol, io.liftandshift.strikebench.model.Leg leg, String worldId) {
         return legMark(symbol, leg);
     }

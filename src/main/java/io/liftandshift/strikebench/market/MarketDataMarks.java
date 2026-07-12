@@ -37,19 +37,21 @@ public final class MarketDataMarks implements MarksSource {
     }
 
     @Override
+    public Optional<io.liftandshift.strikebench.model.DataEvidence> underlyingEvidence(String symbol, String worldId) {
+        return market.quote(symbol, worldId).map(io.liftandshift.strikebench.model.Quote::evidence);
+    }
+
+    @Override
     public Optional<LegMark> legMark(String symbol, io.liftandshift.strikebench.model.Leg leg, String worldId) {
         if (worldId == null) return legMark(symbol, leg);
         if (leg.isStock()) {
-            return market.quote(symbol, worldId).map(q ->
-                    new LegMark(q.bid(), q.ask(), q.mark(), null, q.freshness(), 1.0, 0.0, 0.0, 0.0,
-                            q.evidence()))
+            return market.quote(symbol, worldId).map(MarketDataMarks::stockMark)
                     .filter(m -> m.mid() != null);
         }
         return market.chain(symbol, leg.expiration(), worldId)
                 .flatMap(chain -> chain.find(leg.type(), leg.strike())
                         .filter(io.liftandshift.strikebench.model.OptionQuote::hasMark)
-                        .map(q -> new LegMark(q.bid(), q.ask(), q.mid(), q.iv(), q.freshness(),
-                                q.delta(), q.gamma(), q.theta(), q.vega(), q.evidence())));
+                        .map(MarketDataMarks::optionMark));
     }
 
     @Override
@@ -83,28 +85,23 @@ public final class MarketDataMarks implements MarksSource {
     public Optional<LegMark> legMark(String symbol, Leg leg) {
         if (leg.isStock()) {
             // A share behaves like a delta-1, greek-free contract
-            return market.quote(symbol).map(q ->
-                    new LegMark(q.bid(), q.ask(), q.mark(), null, q.freshness(), 1.0, 0.0, 0.0, 0.0,
-                            q.evidence()))
+            return market.quote(symbol).map(MarketDataMarks::stockMark)
                     .filter(m -> m.mid() != null);
         }
         return market.chain(symbol, leg.expiration())
                 .flatMap(chain -> chain.find(leg.type(), leg.strike())
                         .filter(OptionQuote::hasMark)
-                        // A mid standing in the LAST TRADE (no two-sided book) may be hours old:
-                        // the display mark is labeled STALE so it can never read as a live price.
-                        // Fills are unaffected — they use the executable sides, which don't exist here.
-                        .map(q -> new LegMark(q.bid(), q.ask(), q.mid(), q.iv(),
-                                q.midIsLastTradeFallback()
-                                        ? io.liftandshift.strikebench.model.Freshness.worse(q.freshness(),
-                                                io.liftandshift.strikebench.model.Freshness.STALE)
-                                        : q.freshness(),
-                                q.delta(), q.gamma(), q.theta(), q.vega(),
-                                io.liftandshift.strikebench.model.DataEvidence.of(q.source(),
-                                        q.midIsLastTradeFallback()
-                                                ? io.liftandshift.strikebench.model.Freshness.worse(q.freshness(),
-                                                        io.liftandshift.strikebench.model.Freshness.STALE)
-                                                : q.freshness()))));
+                        .map(MarketDataMarks::optionMark));
+    }
+
+    private static LegMark stockMark(Quote q) {
+        return new LegMark(q.bid(), q.ask(), q.mark(), null, q.markFreshness(),
+                1.0, 0.0, 0.0, 0.0, q.evidence());
+    }
+
+    private static LegMark optionMark(OptionQuote q) {
+        return new LegMark(q.bid(), q.ask(), q.mid(), q.iv(), q.markFreshness(),
+                q.delta(), q.gamma(), q.theta(), q.vega(), q.evidence());
     }
 
     @Override

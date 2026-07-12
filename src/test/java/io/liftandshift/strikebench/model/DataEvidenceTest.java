@@ -3,6 +3,8 @@ package io.liftandshift.strikebench.model;
 import io.liftandshift.strikebench.market.MarketLane;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -62,5 +64,39 @@ class DataEvidenceTest {
         assertThat(aggregate.provenance()).isEqualTo(DataProvenance.OBSERVED);
         assertThat(aggregate.age()).isEqualTo(DataAge.EOD);
         assertThat(aggregate.source()).isEqualTo("multiple inputs");
+    }
+
+    @Test
+    void previousCloseFallbackKeepsOriginButDowngradesTheDisplayedMark() {
+        Quote observed = new Quote("AAPL", "Apple", null, null, null, new BigDecimal("100"),
+                null, null, null, true, 1L, "cboe", Freshness.REALTIME);
+        assertThat(observed.mark()).isEqualByComparingTo("100");
+        assertThat(observed.markFreshness()).isEqualTo(Freshness.EOD);
+        assertThat(observed.evidence().provenance()).isEqualTo(DataProvenance.OBSERVED);
+        assertThat(observed.evidence().age()).isEqualTo(DataAge.EOD);
+        assertThat(observed.evidence().executableIn(MarketLane.OBSERVED)).isFalse();
+
+        Quote simulated = new Quote("AAPL", "Apple", null, null, null, new BigDecimal("100"),
+                null, null, null, true, 1L, "simulated", Freshness.SIMULATED);
+        assertThat(simulated.markFreshness()).isEqualTo(Freshness.STALE);
+        assertThat(simulated.evidence().provenance()).isEqualTo(DataProvenance.SIMULATED);
+        assertThat(simulated.evidence().age()).isEqualTo(DataAge.STALE);
+        assertThat(simulated.evidence().executableIn(MarketLane.SIMULATED)).isFalse();
+    }
+
+    @Test
+    void lastTradeOptionFallbackIsStaleInEveryLaneAndCrossedStockBookIsIgnored() {
+        OptionQuote option = new OptionQuote("AAPL", "AAPL260821C00100000", OptionType.CALL,
+                new BigDecimal("100"), LocalDate.of(2026, 8, 21), null, null, new BigDecimal("2.50"),
+                10L, 20L, 0.25, 0.5, 0.01, -0.03, 0.10, 1L, "simulated", Freshness.SIMULATED);
+        assertThat(option.mid()).isEqualByComparingTo("2.50");
+        assertThat(option.markFreshness()).isEqualTo(Freshness.STALE);
+        assertThat(option.evidence().provenance()).isEqualTo(DataProvenance.SIMULATED);
+        assertThat(option.evidence().age()).isEqualTo(DataAge.STALE);
+
+        Quote crossed = new Quote("AAPL", "Apple", new BigDecimal("99"), new BigDecimal("101"),
+                new BigDecimal("100"), new BigDecimal("98"), null, null, null, true, 1L,
+                "cboe", Freshness.DELAYED);
+        assertThat(crossed.mark()).isEqualByComparingTo("99");
     }
 }

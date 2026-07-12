@@ -18,14 +18,38 @@ public record Quote(
         String source,
         Freshness freshness
 ) {
-    public DataEvidence evidence() { return DataEvidence.of(source, freshness); }
+    public DataEvidence rawEvidence() { return DataEvidence.of(source, freshness); }
+
+    /** Evidence for the value mark() actually returns, including a previous-close fallback. */
+    public DataEvidence evidence() {
+        DataEvidence raw = rawEvidence();
+        if (!usesPreviousCloseFallback()) return raw;
+        DataAge age = raw.provenance() == DataProvenance.OBSERVED || raw.provenance() == DataProvenance.BROKER
+                ? DataAge.EOD : DataAge.STALE;
+        return new DataEvidence(raw.provenance(), age, source + " (previous-close fallback)");
+    }
+
+    public boolean usesPreviousCloseFallback() {
+        return !hasSaneTwoSidedBook() && (last == null || last.signum() <= 0)
+                && prevClose != null && prevClose.signum() > 0;
+    }
+
+    public Freshness markFreshness() {
+        if (!usesPreviousCloseFallback()) return freshness;
+        DataProvenance p = rawEvidence().provenance();
+        return p == DataProvenance.OBSERVED || p == DataProvenance.BROKER ? Freshness.EOD : Freshness.STALE;
+    }
 
     /** Best available mark: mid of bid/ask, else last, else prevClose. */
     public BigDecimal mark() {
-        if (bid != null && ask != null && bid.signum() > 0 && ask.signum() > 0) {
+        if (hasSaneTwoSidedBook()) {
             return bid.add(ask).divide(BigDecimal.valueOf(2), io.liftandshift.strikebench.util.Money.PRICE_SCALE, java.math.RoundingMode.HALF_UP);
         }
         if (last != null && last.signum() > 0) return last;
         return prevClose;
+    }
+
+    private boolean hasSaneTwoSidedBook() {
+        return bid != null && ask != null && bid.signum() > 0 && ask.signum() > 0 && ask.compareTo(bid) >= 0;
     }
 }

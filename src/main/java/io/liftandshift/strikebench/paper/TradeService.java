@@ -427,12 +427,7 @@ public final class TradeService {
             // spread must never spend strike money the reserve never backed. Everything else
             // cash-settles at intrinsic; total equity is identical either way.
             long tradeReserve = outstandingReserve(c, t.id());
-            boolean cspPhysical = "CASH_SECURED_PUT".equalsIgnoreCase(t.strategy())
-                    && t.legs().size() == 1
-                    && t.legs().getFirst().action() == LegAction.SELL
-                    && t.legs().getFirst().type() == io.liftandshift.strikebench.model.OptionType.PUT
-                    && tradeReserve >= Money.centsFromPrice(t.legs().getFirst().strike(),
-                            (long) Leg.SHARES_PER_CONTRACT * t.legs().getFirst().ratio() * t.qty());
+            boolean cspPhysical = cashSecuredPutAssignsPhysically(t, tradeReserve);
             long settleValue = 0;
             long lockRemaining = t.sharesLocked();
             List<Leg> physical = new ArrayList<>();
@@ -640,8 +635,10 @@ public final class TradeService {
 
     /**
      * Portfolio heat: what the whole book is exposed to, not just per-trade risk — total worst
-     * case, per-symbol concentration, short-volatility count, and the CASH assignment would
-     * demand if every short put were exercised (the post-assignment picture).
+     * case, per-symbol concentration, short-volatility count, temporary early-assignment
+     * liquidity, and the terminal cash-secured-put delivery picture. Those are deliberately
+     * separate: a put spread can demand gross strike cash briefly without having that terminal
+     * loss or becoming a stock position in StrikeBench's settlement model.
      */
     public Map<String, Object> portfolioHeat(String accountId) {
         List<TradeRecord> all = list(accountId, TradeRecord.ACTIVE, 0, 200).trades();
@@ -651,7 +648,16 @@ public final class TradeService {
         List<TradeRecord> active = all.stream().filter(t -> !t.external()).toList();
         long externalCount = all.size() - active.size();
         Account acct = db.with(c -> AccountService.get(c, accountId));
-        long totalMaxLoss = 0, assignmentCash = 0;
+        Map<String, Long> reserveByTrade = new java.util.HashMap<>();
+        for (Map.Entry<String, Long> e : db.query(
+                "SELECT trade_id, COALESCE(SUM(amount_cents),0) AS amount FROM ledger "
+                        + "WHERE account_id=? AND trade_id IS NOT NULL "
+                        + "AND type IN ('RESERVE_HOLD','RESERVE_RELEASE') GROUP BY trade_id",
+                r -> Map.entry(r.str("trade_id"), r.lng("amount")), accountId)) {
+            reserveByTrade.put(e.getKey(), e.getValue());
+        }
+        long totalMaxLoss = 0, earlyAssignmentLiquidity = 0;
+        long physicalAssignmentCash = 0, assignmentReserveReleased = 0;
         int shortVol = 0;
         Map<String, Long> bySymbol = new LinkedHashMap<>();
         for (TradeRecord t : active) {
@@ -661,8 +667,16 @@ public final class TradeService {
             if (hasShort && t.entryNetPremiumCents() > 0) shortVol++;
             for (Leg l : t.legs()) {
                 if (!l.isStock() && l.action() == LegAction.SELL && l.type() == io.liftandshift.strikebench.model.OptionType.PUT) {
-                    assignmentCash += Money.centsFromPrice(l.strike(), (long) Leg.SHARES_PER_CONTRACT * l.ratio() * t.qty());
+                    earlyAssignmentLiquidity += Money.centsFromPrice(l.strike(),
+                            (long) Leg.SHARES_PER_CONTRACT * l.ratio() * t.qty());
                 }
+            }
+            long tradeReserve = reserveByTrade.getOrDefault(t.id(), 0L);
+            if (cashSecuredPutAssignsPhysically(t, tradeReserve)) {
+                long strikeCash = Money.centsFromPrice(t.legs().getFirst().strike(),
+                        (long) Leg.SHARES_PER_CONTRACT * t.legs().getFirst().ratio() * t.qty());
+                physicalAssignmentCash += strikeCash;
+                assignmentReserveReleased += tradeReserve;
             }
         }
         long worstSymbol = bySymbol.values().stream().mapToLong(Long::longValue).max().orElse(0);
@@ -673,10 +687,23 @@ public final class TradeService {
         out.put("shortVolTrades", shortVol);
         out.put("bySymbolMaxLossCents", bySymbol);
         out.put("concentrationPct", totalMaxLoss > 0 ? Math.round(100.0 * worstSymbol / totalMaxLoss) : 0);
-        out.put("assignmentCashCents", assignmentCash);
-        out.put("postAssignmentBuyingPowerCents", acct.buyingPowerCents() - assignmentCash);
+        out.put("earlyAssignmentLiquidityCents", earlyAssignmentLiquidity);
+        out.put("physicalAssignmentCashCents", physicalAssignmentCash);
+        out.put("assignmentReserveReleasedCents", assignmentReserveReleased);
+        out.put("postPhysicalAssignmentBuyingPowerCents",
+                acct.buyingPowerCents() - physicalAssignmentCash + assignmentReserveReleased);
         out.put("externalTrades", externalCount); // marked/judged elsewhere; never in paper cash math
         return out;
+    }
+
+    private static boolean cashSecuredPutAssignsPhysically(TradeRecord t, long tradeReserve) {
+        if (!"CASH_SECURED_PUT".equalsIgnoreCase(t.strategy()) || t.legs().size() != 1) return false;
+        Leg leg = t.legs().getFirst();
+        if (leg.isStock() || leg.action() != LegAction.SELL
+                || leg.type() != io.liftandshift.strikebench.model.OptionType.PUT) return false;
+        long strikeCash = Money.centsFromPrice(leg.strike(),
+                (long) Leg.SHARES_PER_CONTRACT * leg.ratio() * t.qty());
+        return tradeReserve >= strikeCash;
     }
 
     private MarkView computeMark(TradeRecord t) {
@@ -928,8 +955,15 @@ public final class TradeService {
         if (!blocks.isEmpty()) return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0, Freshness.MISSING, blocks, warnings, "{}");
 
         String world = worldOf(req.accountId());
+        var lane = laneFor(world);
         BigDecimal underlying = marks.underlyingMark(req.symbol(), world).orElse(null);
+        var underlyingEvidence = marks.underlyingEvidence(req.symbol(), world).orElse(null);
         if (underlying == null) blocks.add("No current price for " + req.symbol());
+        if (underlyingEvidence != null && !underlyingEvidence.executableIn(lane)) {
+            blocks.add("Cannot price " + req.symbol() + " in the " + lane + " market using "
+                    + underlyingEvidence.provenance() + " underlying data (" + underlyingEvidence.source()
+                    + ", " + underlyingEvidence.age() + "). Refresh an executable quote before placing the trade.");
+        }
 
         // ONE CLOCK PER LANE: a world trade's expiry gates, session warnings and DTE all run on
         // the SIM clock (the clock that priced the chain) — never the JVM's (adversarial review P0).
@@ -948,7 +982,7 @@ public final class TradeService {
         List<Leg> filled = new ArrayList<>();
         List<Map<String, Object>> snapshotLegs = new ArrayList<>();
         Freshness worst = Freshness.REALTIME;
-        var lane = laneFor(world);
+        if (underlyingEvidence != null) worst = worse(worst, freshnessOf(underlyingEvidence));
         List<Double> ivs = new ArrayList<>();
         List<Double> legIvs = new ArrayList<>(); // index-aligned with filled (nulls kept)
         for (Leg leg : req.legs()) {
@@ -1452,6 +1486,24 @@ public final class TradeService {
      *  gate, warning, DTE and analytic for a world trade must run on the clock that priced it. */
     private java.time.Instant nowFor(String worldId) {
         return marks.simNow(worldId).orElseGet(clock::instant);
+    }
+
+    private static Freshness freshnessOf(io.liftandshift.strikebench.model.DataEvidence evidence) {
+        if (evidence == null || evidence.provenance() == null) return Freshness.MISSING;
+        return switch (evidence.provenance()) {
+            case DEMO -> Freshness.FIXTURE;
+            case SIMULATED -> Freshness.SIMULATED;
+            case MODELED -> Freshness.MODELED;
+            case MISSING, MIXED -> Freshness.MISSING;
+            case OBSERVED, BROKER -> switch (evidence.age() == null
+                    ? io.liftandshift.strikebench.model.DataAge.MISSING : evidence.age()) {
+                case REALTIME -> Freshness.REALTIME;
+                case DELAYED -> Freshness.DELAYED;
+                case EOD -> Freshness.EOD;
+                case STALE -> Freshness.STALE;
+                case NOT_APPLICABLE, MISSING -> Freshness.MISSING;
+            };
+        };
     }
 
     private LocalDate todayFor(String worldId) {

@@ -90,8 +90,8 @@ public final class Guardrails {
                         + " — the symbol may not have listed options");
                 continue;
             }
-            if (q.freshness() == Freshness.STALE || q.freshness() == Freshness.MISSING) {
-                blocks.add("Quote for " + q.occSymbol() + " is " + q.freshness() + "; refusing to size a trade against it");
+            if (q.markFreshness() == Freshness.STALE || q.markFreshness() == Freshness.MISSING) {
+                blocks.add("Quote for " + q.occSymbol() + " is " + q.markFreshness() + "; refusing to size a trade against it");
             }
             // Impossible price: an option marked below intrinsic vs the same feed's underlying
             if (p.spot() != null && q.mid() != null) {

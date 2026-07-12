@@ -30,7 +30,19 @@ public record OptionQuote(
         String source,
         Freshness freshness
 ) {
-    public DataEvidence evidence() { return DataEvidence.of(source, freshness); }
+    public DataEvidence rawEvidence() { return DataEvidence.of(source, freshness); }
+
+    /** The displayed last-trade fallback is stale even when the surrounding chain is current. */
+    public DataEvidence evidence() {
+        DataEvidence raw = rawEvidence();
+        return midIsLastTradeFallback()
+                ? new DataEvidence(raw.provenance(), DataAge.STALE, source + " (last-trade fallback)")
+                : raw;
+    }
+
+    public Freshness markFreshness() {
+        return midIsLastTradeFallback() ? Freshness.STALE : freshness;
+    }
 
     /** Mid price when both sides exist and are sane, else last. Null if unpriceable. */
     public BigDecimal mid() {
