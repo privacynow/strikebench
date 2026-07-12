@@ -2680,6 +2680,13 @@
       results.innerHTML = '';
       var ladderRungs = extras.ladder && extras.ladder.rungs ? extras.ladder.rungs : [];
       var hasLadder = ladderRungs.length > 0;
+      var ladderFamilies = new Set(ladderRungs.map(function (c) { return c.strategy; }).filter(Boolean));
+      // The ladder is the canonical expression of its family for ACQUIRE/EXIT/HEDGE. Keep the
+      // complete server ranking untouched, but do not repeat that exact family below as though
+      // it were another idea. Distinct structures and the full Structure catalog remain intact.
+      var visibleCandidates = hasLadder
+        ? (r.candidates || []).filter(function (c) { return !ladderFamilies.has(c.strategy); })
+        : (r.candidates || []);
       // What's coming up for this symbol — the dates that can invalidate an idea
       if (body && body.symbol) results.appendChild(comingUp(body.symbol.toUpperCase(), true));
       // Intent-native lead view first: the ladder IS the product for these goals
@@ -2701,14 +2708,14 @@
             : 'The most this one trade may risk under your header risk mode.'),
         chip('Mode', r.riskMode.toLowerCase()),
         hasLadder ? chip('Ladder rungs', String(ladderRungs.length)) : null,
-        !hasLadder || r.candidates.length ? chip(hasLadder ? 'Other structures' : 'Candidates', String(r.candidates.length)) : null));
-      if (r.candidates.length) {
+        !hasLadder || visibleCandidates.length ? chip(hasLadder ? 'Other structures' : 'Candidates', String(visibleCandidates.length)) : null));
+      if (visibleCandidates.length || hasLadder) {
         results.appendChild(el('div', { class: 'economic-baseline', id: 'cash-baseline' },
           el('div', {}, el('b', {}, 'Cash / no trade'), el('span', { class: 'badge badge-dim' }, 'BASELINE')),
           el('p', {}, 'Doing nothing has $0 market P/L and no option execution cost. A structure should earn its place by improving the outcome under your evidence and risk limits.')));
       }
       // Recommendations-as-a-competition: score these side by side INLINE (D3 — no orphan surface).
-      if (body && body.symbol && r.candidates.length > 1) {
+      if (!hasLadder && body && body.symbol && visibleCandidates.length > 1) {
         var compareHost = el('div', { id: 'decision-host', style: 'margin-top:8px' });
         results.appendChild(el('div', { class: 'btn-row', style: 'margin:8px 0' },
           el('button', {
@@ -2726,22 +2733,22 @@
           results.appendChild(alertBox('warn', n));
         }
       });
-      if (!r.candidates.length && !hasLadder) {
+      if (!visibleCandidates.length && !hasLadder) {
         results.appendChild(UI.emptyState('Nothing passed the risk screens',
           'Try a different horizon, a wider risk budget, or another symbol.'));
       }
-      if (hasLadder && r.candidates.length) {
+      if (hasLadder && visibleCandidates.length) {
         results.appendChild(el('h3', {}, 'Other structures for this goal'));
       }
-      if (r.economicMessage) {
+      if (r.economicMessage && !hasLadder) {
         results.appendChild(alertBox(r.favorableCount > 0 ? 'ok' : 'warn', r.economicMessage));
       }
-      if (Learn.currentLevel() === 'expert' && r.candidates.length > 1) {
+      if (Learn.currentLevel() === 'expert' && visibleCandidates.length > 1) {
         // Expert receives the COMPLETE ranking immediately (ranking truth, review P1).
-        results.appendChild(comparisonTable(r.candidates));
+        results.appendChild(comparisonTable(visibleCandidates));
       } else {
         // Beginner receives every capability, organized by economic meaning rather than hidden.
-        renderEconomicGroups(results, r.candidates);
+        renderEconomicGroups(results, visibleCandidates);
       }
       if (r.rejected && r.rejected.length) {
         var rej = el('div', { class: 'card' },
@@ -3237,12 +3244,14 @@
       // supplies the separate placement badge. Exact contracts stay one tap away.
       var list = el('div', { class: 'ladder-sentences' });
       rungs.forEach(function (c, i) {
-        var row = el('div', { class: 'ladder-row' + (i === referenceRung ? ' recommended' : '') },
-          i === referenceRung ? el('span', { class: 'badge badge-dim' }, ctx.targetPrice ? 'CLOSEST TO YOUR TARGET' : 'MIDDLE RUNG') : null,
-          economicsBadge(c),
-          sentence(c),
+        var row = el('div', { class: 'ladder-row' + (i === referenceRung ? ' recommended' : ''),
+          'data-strategy': c.strategy || null },
+          el('div', { class: 'ladder-row-badges' },
+            i === referenceRung ? el('span', { class: 'badge badge-dim' }, ctx.targetPrice ? 'CLOSEST TO YOUR TARGET' : 'MIDDLE RUNG') : null,
+            economicsBadge(c)),
+          el('div', { class: 'ladder-row-copy' }, sentence(c)),
           el('button', {
-            class: 'btn btn-sm', style: 'margin-left:auto', onclick: function () {
+            class: 'btn btn-sm ladder-row-action', onclick: function () {
               App.state.ticket = ticketForCandidate(c, ctx.symbol);
               App.navigate('#/trade/decide');
             }

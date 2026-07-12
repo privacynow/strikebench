@@ -2170,6 +2170,22 @@ test('intent-native UX: discount ladder, exit rungs, income board, symbol action
   assert.doesNotMatch(ladder, /SANE MIDDLE/, 'a geometric midpoint is not mislabeled as an endorsement');
   assert.match(ladder, /WORTH A LOOK|COMPARE|LEARN FROM|MECHANICS ONLY/,
     'each rung carries the shared economic placement separately from its strike position');
+  const ladderComposition = await page.evaluate(() => {
+    const rows = Array.from(document.querySelectorAll('#ladder-view .ladder-row'));
+    const rights = rows.map(r => r.querySelector('.ladder-row-action').getBoundingClientRect().right);
+    const centers = rows.map(r => {
+      const rr = r.getBoundingClientRect(), br = r.querySelector('.ladder-row-action').getBoundingClientRect();
+      return Math.abs((rr.top + rr.height / 2) - (br.top + br.height / 2));
+    });
+    const ladderFamilies = new Set(rows.map(r => r.dataset.strategy).filter(Boolean));
+    const duplicates = Array.from(document.querySelectorAll('#rec-results .candidate[data-strategy], #rec-results table tr[data-strategy]'))
+      .map(n => n.getAttribute('data-strategy')).filter(s => ladderFamilies.has(s));
+    return { rightSpread: Math.max(...rights) - Math.min(...rights), maxCenterDelta: Math.max(...centers), duplicates };
+  });
+  assert.ok(ladderComposition.rightSpread <= 2 && ladderComposition.maxCenterDelta <= 2,
+    'Practice actions occupy one stable, vertically centered column: ' + JSON.stringify(ladderComposition));
+  assert.deepEqual(ladderComposition.duplicates, [],
+    'a family already represented by the intent ladder is not repeated as another idea');
 
   // A passing ladder must never sit beside a contradictory "nothing passed" message. Intercept
   // only the standard recommendation response; the real ladder still comes from the backend.

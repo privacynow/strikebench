@@ -797,10 +797,18 @@ body.lvl-expert .not-expert { display: none !important; }
 
 /* ---- Intent-native ladders & action cards ---- */
 .ladder-sentences { display: flex; flex-direction: column; gap: 8px; }
-.ladder-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border);
-  border-radius: var(--radius-sm); background: var(--surface); flex-wrap: wrap; }
+.ladder-row { display: grid; grid-template-columns: 190px minmax(0, 1fr) auto;
+  align-items: center; gap: 10px 14px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); }
+.ladder-row-badges { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.ladder-row-copy { min-width: 0; line-height: 1.45; }
+.ladder-row-action { justify-self: end; white-space: nowrap; }
 .ladder-row.recommended { border-color: var(--accent); background: var(--accent-soft); }
 .ladder-tbl tr.ladder-recommended > td { background: var(--accent-soft); }
+@media (max-width: 720px) {
+  .ladder-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .ladder-row-action { width: 100%; justify-self: stretch; }
+}
 .action-grid .action-card { text-align: left; padding: 14px; }
 .action-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
 .action-line { min-height: 38px; }
