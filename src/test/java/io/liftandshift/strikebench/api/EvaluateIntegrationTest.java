@@ -56,6 +56,18 @@ class EvaluateIntegrationTest {
                 HttpResponse.BodyHandlers.ofString());
     }
 
+    private static HttpResponse<String> put(String path, String body) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(base + path))
+                        .header("Content-Type", "application/json")
+                        .PUT(HttpRequest.BodyPublishers.ofString(body)).build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> delete(String path) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(base + path)).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
     private static String decisionBody() {
         return """
                 {"operation":"DECISION","basis":"DECISION_POLICY",
@@ -248,5 +260,40 @@ class EvaluateIntegrationTest {
                 .containsIgnoringCase("risk-neutral").containsIgnoringCase("q=0");
         assertThat(evaluation.at("/explanation/assumptions/0").asText())
                 .containsIgnoringCase("present-valued").containsIgnoringCase("q=0");
+    }
+
+    @Test void simulatedDecisionBaselineUsesTheSameWorldClockVolatilityAndRate() throws Exception {
+        JsonNode created = Json.MAPPER.readTree(post("/api/sim/market", """
+                {"name":"Far clock","symbols":{"AAPL":1.0},"spots":{"AAPL":255.0},
+                 "scenario":"CHOP","volAnnual":0.31,"seed":77,
+                 "startSimTime":"2027-01-04T09:30:00","speed":26}
+                """).body());
+        String world = created.get("worldId").asText();
+        try {
+            assertThat(post("/api/sim/market/" + world + "/start", "{}").statusCode()).isEqualTo(200);
+            assertThat(put("/api/world", "{\"world\":\"" + world + "\"}").statusCode()).isEqualTo(200);
+            String body = """
+                    {"operation":"DECISION","basis":"DECISION_POLICY",
+                     "context":{"symbol":"AAPL","marketLane":"SIMULATED","worldId":"%s","datasetId":"observed"},
+                     "decision":{"symbol":"AAPL","thesis":"bullish","horizon":"month","riskMode":"balanced"}}
+                    """.formatted(world);
+            HttpResponse<String> response = post("/api/evaluate", body);
+            assertThat(response.statusCode()).isEqualTo(200);
+            JsonNode result = Json.MAPPER.readTree(response.body()).get("result");
+            JsonNode stock = null;
+            for (JsonNode baseline : result.get("baselines")) {
+                if ("BUY_AND_HOLD".equals(baseline.get("key").asText())) stock = baseline;
+            }
+            assertThat(stock).isNotNull();
+            assertThat(stock.get("marketLane").asText()).isEqualTo("SIMULATED");
+            assertThat(stock.get("asOfDate").asText()).isEqualTo("2027-01-04");
+            assertThat(stock.get("horizonDays").asInt()).isBetween(1, 60);
+            assertThat(stock.get("volatilityBasis").asText()).isEqualTo("same-market ATM IV");
+            assertThat(stock.at("/rateEvidence/provenance").asText()).isEqualTo("SIMULATED");
+            assertThat(result.at("/evaluations/0/evidence/rollup").asText()).isEqualTo("SIMULATED");
+        } finally {
+            put("/api/world", "{\"world\":\"demo\"}");
+            delete("/api/sim/market/" + world);
+        }
     }
 }

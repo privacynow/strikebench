@@ -2175,7 +2175,7 @@ public final class ApiServer {
                 .orElseThrow(() -> new java.util.NoSuchElementException(
                         "No price for " + sym + " — a simulation needs a real (or demo) quote to anchor on."));
         int qty = b.qty() == null ? 1 : Math.clamp(b.qty(), 1, 100);
-        double r = market.riskFreeRate(Math.max(1, b.spec().sane().horizonDays()));
+        double r = market.riskFreeRateQuote(Math.max(1, b.spec().sane().horizonDays()), world).annualRate();
         io.liftandshift.strikebench.sim.ScenarioSpec spec = calibrateVol(sym, b.spec(), world);
         io.liftandshift.strikebench.sim.IvSpec iv = b.iv();
         if (iv == null) {
@@ -2330,7 +2330,7 @@ public final class ApiServer {
                 .map(java.math.BigDecimal::doubleValue).filter(v -> v > 0)
                 .orElseThrow(() -> new java.util.NoSuchElementException(
                         "No price for " + sym + " — a simulation needs a real (or demo) quote to anchor on. Check the ticker."));
-        double r = market.riskFreeRate(Math.max(1, b.spec().sane().horizonDays()));
+        double r = market.riskFreeRateQuote(Math.max(1, b.spec().sane().horizonDays()), world).annualRate();
         // ACTIONABILITY: price the ENTRY from live market quotes (executable sides) when a chain
         // is available, and default the IV path to the chain's ATM IV when the caller didn't set
         // one. A model-priced entry simulated against the same model converges to a coin flip by
@@ -3162,16 +3162,22 @@ public final class ApiServer {
                                     catch (RuntimeException e) { return null; } })
                         .filter(java.util.Objects::nonNull)
                         .min(java.time.LocalDate::compareTo).orElse(null);
+                String baselineWorld = worldParam(world);
+                java.time.LocalDate laneToday = market.simInstant(baselineWorld)
+                        .map(i -> java.time.LocalDate.ofInstant(i,
+                                io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                        .orElseGet(() -> java.time.LocalDate.now(clock));
                 if (frontExp != null) {
                     horizonDays = (int) Math.max(1, java.time.temporal.ChronoUnit.DAYS.between(
-                            java.time.LocalDate.now(clock), frontExp));
+                            laneToday, frontExp));
                 }
                 Double iv = null;
-                try { iv = atmIvOf(result.symbol()); } catch (RuntimeException ignored) { }
+                try { iv = atmIvOf(result.symbol(), baselineWorld); } catch (RuntimeException ignored) { }
                 var stockLeg = io.liftandshift.strikebench.model.Leg.stock(
                         io.liftandshift.strikebench.model.LegAction.BUY, 1, q.mark());
                 var curve = io.liftandshift.strikebench.pricing.PayoffCurve.of(List.of(stockLeg), 1);
-                double rate = market.riskFreeRateQuote(horizonDays, worldParam(world)).annualRate();
+                var rateQuote = market.riskFreeRateQuote(horizonDays, baselineWorld);
+                double rate = rateQuote.annualRate();
                 var map = io.liftandshift.strikebench.pricing.ProbabilityMap.of(curve, spot,
                         iv != null ? iv : 0.3, horizonDays / 365.0, rate, List.of());
                 Map<String, Object> bh = new LinkedHashMap<>();
@@ -3183,6 +3189,12 @@ public final class ApiServer {
                 bh.put("stressLossCents", map.stressLossCents());
                 bh.put("pAnyProfit", map.pAnyProfit());
                 bh.put("viable", true);
+                bh.put("marketLane", market.lane(baselineWorld).name());
+                bh.put("asOfDate", laneToday.toString());
+                bh.put("horizonDays", horizonDays);
+                bh.put("volatility", iv != null ? iv : 0.3);
+                bh.put("volatilityBasis", iv != null ? "same-market ATM IV" : "30% modeled fallback");
+                bh.put("rateEvidence", rateQuote.evidence());
                 bh.put("note", "Own 100 shares (" + io.liftandshift.strikebench.util.Money.fmt(lot)
                         + "): present-value risk-neutral EV is approximately $0 before costs (r="
                         + String.format(java.util.Locale.ROOT, "%.2f", rate * 100)
@@ -3343,7 +3355,8 @@ public final class ApiServer {
                 .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
                 .orElseGet(() -> java.time.LocalDate.now(clock));
         var time = io.liftandshift.strikebench.market.OptionTime.nearest(entry.pricedLegs(), today);
-        double rate = market.riskFreeRate((int) Math.max(1, time.calendarDays()));
+        String outcomeWorld = worldParam(activeWorld(ctx));
+        double rate = market.riskFreeRateQuote((int) Math.max(1, time.calendarDays()), outcomeWorld).annualRate();
         var shorts = entry.pricedLegs().stream()
                 .filter(l -> !l.isStock() && l.action() == io.liftandshift.strikebench.model.LegAction.SELL)
                 .map(Leg::strike).toList();
