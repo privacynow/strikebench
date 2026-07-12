@@ -359,6 +359,10 @@ test('Ideas begins with market context and reuses the scenario engine for realis
   assert.match(realisticCopy, /theoretical payoff limits.*structural truth.*never replace/s,
     'modeled outcomes explicitly complement rather than replace theoretical limits');
   assert.match(realisticCopy, /Calm \/ narrow.*Steady rise.*Steady decline.*Wide \/ choppy/s);
+  assert.match(realisticCopy, /fabricated Demo history|server calibrated from the option market/,
+    'the reusable realistic-outcomes panel names its generated calibration honestly');
+  assert.doesNotMatch(realisticCopy, /own recent moves/,
+    'Demo history is never described with provenance-free real-market wording');
 });
 
 test('navigation is NEVER trapped behind a slow route (Research does not block moving away)', async () => {

@@ -703,7 +703,9 @@
         { key: 'down', label: 'Steady decline', shape: 'GRIND_DOWN', drift: -0.15, mult: 1.0, seed: 41103 },
         { key: 'chop', label: 'Wide / choppy', shape: 'CHOP', drift: 0, mult: 1.35, seed: 41104 }
       ];
-      historicalVol(symbol).then(async function (hv) {
+      historicalVol(symbol).then(async function (calibration) {
+        var hv = calibration && calibration.vol;
+        var evidence = calibration && calibration.evidence;
         var rows = [];
         for (var i = 0; i < cases.length; i++) {
           // Expandables are lazy, but their async work can outlive the card after navigation
@@ -730,9 +732,15 @@
         }
         if (!holder.isConnected) return;
         holder.innerHTML = '';
+        var provenance = String(evidence && evidence.provenance || '').toUpperCase();
+        var historyBasis = provenance === 'DEMO' ? 'fabricated Demo history'
+          : provenance === 'SIMULATED' ? 'the simulated session’s generated history'
+          : provenance === 'MODELED' ? 'modeled history'
+          : provenance === 'OBSERVED' || provenance === 'BROKER' ? 'observed recent history'
+          : 'eligible recent history from this lane';
         holder.appendChild(el('p', { class: 'muted small' },
           'The theoretical payoff limits above remain the structural truth. These distributions model the exact listed package and its displayed opening price. '
-          + (hv ? 'Volatility is scaled from ' + symbol + '\'s own recent moves.'
+          + (hv ? 'Volatility is scaled from ' + historyBasis + ' for ' + symbol + '.'
                 : 'No usable candle history was available, so the server calibrated from the option market.')
           + ' They complement those limits; they never replace them.'));
         var grid = el('div', { class: 'realistic-grid' });
