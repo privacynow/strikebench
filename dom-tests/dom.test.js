@@ -2250,6 +2250,17 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   });
   await go('#/trade/structure');
   await page.waitForSelector('#bw-goals .choice');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileSteps = await page.locator('.builder-wizard-steps .step').evaluateAll(nodes => nodes.map(n => {
+    const r = n.getBoundingClientRect();
+    return { text: n.textContent.trim(), left: r.left, right: r.right,
+      top: r.top, clipped: n.scrollWidth > n.clientWidth + 1 };
+  }));
+  assert.equal(mobileSteps.length, 4, 'all four Builder stages remain visible on a phone');
+  assert.equal(new Set(mobileSteps.map(x => Math.round(x.top))).size, 2, 'Builder stages form a stable 2x2 grid');
+  assert.ok(mobileSteps.every(x => x.left >= 0 && x.right <= 390 && !x.clipped),
+    'no Builder stage label clips on mobile: ' + JSON.stringify(mobileSteps));
+  await page.setViewportSize({ width: 1280, height: 720 });
   // Q&A, not text: goal cards -> one shaping question -> the structure
   await page.click('#bw-goals .choice[data-goal="DIRECTIONAL"]');
   await page.waitForSelector('#bw-shape .choice');

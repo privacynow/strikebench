@@ -936,6 +936,9 @@
       App._scrollOnRender = true;
       App.render();
     });
+    // A direct deep link is still a destination transition. Browser scroll restoration can
+    // otherwise open a fresh route partway down a completely different screen.
+    App._scrollOnRender = true;
     App.render();
   }
 

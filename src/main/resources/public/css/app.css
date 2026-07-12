@@ -636,6 +636,31 @@ body.lvl-expert .not-expert { display: none !important; }
 .wizard-steps .step-link:hover { color: var(--accent); }
 .wizard-steps .step[disabled] { cursor: not-allowed; opacity: .55; }
 
+/* Four descriptive Builder stages do not fit as a single phone-width sentence. Keep
+   the ordinary three-step ticket rail compact; only the Builder becomes a stable 2x2
+   progress grid, with full labels and familiar numbered cells. */
+@media (max-width: 640px) {
+  .builder-wizard-steps {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 8px;
+    overflow: visible; padding: 0; margin-bottom: 14px;
+  }
+  .builder-wizard-steps button.step {
+    display: flex; width: 100%; min-width: 0; min-height: 38px; padding: 6px 8px;
+    white-space: normal; text-align: left; line-height: 1.2;
+    border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
+  }
+  .builder-wizard-steps .step::after { display: none; }
+  .builder-wizard-steps .step > b:first-child {
+    flex: 0 0 22px; width: 22px; height: 22px; display: inline-flex;
+    align-items: center; justify-content: center; border-radius: 50%;
+    border: 1px solid var(--border-strong); background: var(--surface-2);
+  }
+  .builder-wizard-steps .step.active { border-color: var(--accent); color: var(--text); }
+  .builder-wizard-steps .step.active > b:first-child {
+    border-color: var(--accent); background: var(--accent-soft); color: var(--accent);
+  }
+}
+
 /* Fine-tune rows on the builder's Where-you-stand */
 .tune-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0;
   border-bottom: 1px solid var(--border); }

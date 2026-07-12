@@ -653,7 +653,7 @@
         var names = ['Goal', 'Structure', 'Build it', 'Where you stand'];
         var reachable = [true, !!st.goal, st.legs.length > 0, st.legs.length > 0];
         var why = [null, 'Pick a goal first', 'Choose a structure first', 'Choose a structure first'];
-        return el('div', { class: 'wizard-steps' }, names.map(function (n, i) {
+        return el('div', { class: 'wizard-steps builder-wizard-steps' }, names.map(function (n, i) {
           var here = i + 1 === st.step;
           var cls = here ? ' active' : (i + 1 < st.step ? ' done' : '');
           var can = reachable[i] && !here;
