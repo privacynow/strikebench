@@ -28,6 +28,7 @@
       v: 1,
       route: window.location.hash || '#/home',
       world: (window.App && App.state.world) || null,
+      activePlanId: (window.App && App.state.activePlanId) || null,
       context: (window.App && App.state.marketContext)
         ? Object.assign({}, App.state.marketContext) : null,
       forms: {},
@@ -66,6 +67,7 @@
         params: s.researchStudy.params || null };
     }
     if (s.evidencePrefill) App.state.evidencePrefill = s.evidencePrefill;
+    if (s.activePlanId) App.state.activePlanId = s.activePlanId;
     Object.keys(s.forms || {}).forEach(function (k) {
       if (FORM_KEYS.indexOf(k) >= 0 && s.forms[k]) App.state[k] = s.forms[k];
     });
@@ -103,7 +105,7 @@
   function saveIfDirty() {
     if (!started || !window.App || !window.API) return;
     var s = snapshot();
-    var json = JSON.stringify({ route: s.route, world: s.world, context: s.context,
+    var json = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId, context: s.context,
       forms: s.forms, ticket: s.ticket });
     if (json === lastSavedJson) return;
     lastSavedJson = json;
@@ -173,7 +175,7 @@
         // bump the rev and ping-pong forever between two hidden tabs. Only a genuine local
         // change after this may write again.
         var s = snapshot();
-        lastSavedJson = JSON.stringify({ route: s.route, world: s.world, context: s.context,
+        lastSavedJson = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId, context: s.context,
           forms: s.forms, ticket: s.ticket });
         persistLocal(s);
         adoptedWhileHidden = true; // the DOM still shows pre-adoption state — refresh on return

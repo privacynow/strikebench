@@ -1944,3 +1944,69 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .outcome-basis { transition: none; }
   .outcome-basis:hover { transform: none; }
 }
+
+/* Plan-centered journey --------------------------------------------------- */
+.plan-bar { width: 100%; border-bottom: 1px solid var(--border); background: var(--surface);
+  min-width: 0; }
+.plan-bar-inner { width: 100%; max-width: 1060px; margin: 0 auto; padding: 6px 16px;
+  display: flex; align-items: center; gap: 7px; overflow-x: auto; scrollbar-width: thin; }
+.plan-bar-label { flex: none; color: var(--muted); font-size: 13px; font-weight: 700; }
+.plan-chip { flex: 0 0 auto; display: inline-grid; grid-template-columns: minmax(0, auto) 30px;
+  align-items: stretch; min-height: 36px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-2); overflow: hidden; }
+.plan-chip.active { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.plan-chip-main, .plan-chip-close, .plan-new-btn { border: 0; background: transparent; color: var(--text); }
+.plan-chip-main { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 260px;
+  padding: 7px 9px 7px 11px; text-align: left; cursor: pointer; }
+.plan-chip-symbol { font-weight: 800; }
+.plan-chip-title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-chip-close { width: 30px; color: var(--muted); border-left: 1px solid var(--border); cursor: pointer; font-size: 18px; }
+.plan-chip-main:hover, .plan-chip-close:hover, .plan-new-btn:hover { background: var(--accent-soft); color: var(--text); }
+.plan-new-btn { flex: none; min-height: 36px; padding: 6px 10px; border: 1px dashed var(--border-strong);
+  border-radius: 6px; cursor: pointer; font-weight: 700; }
+
+.plan-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px;
+  align-items: end; margin-bottom: 12px; padding: 16px 18px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface); }
+.plan-header h1 { margin: 3px 0 8px; font-size: 24px; line-height: 1.2; }
+.plan-header-main { min-width: 0; }
+.plan-header-facts { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.plan-rail { margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); overflow: hidden; }
+.plan-rail ol { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; }
+.plan-rail li { min-width: 0; border-right: 1px solid var(--border); }
+.plan-rail li:last-child { border-right: 0; }
+.plan-rail button { width: 100%; min-height: 58px; padding: 8px 7px; border: 0; background: transparent;
+  color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 7px;
+  cursor: pointer; font-weight: 700; }
+.plan-rail li.active button { color: var(--text); background: var(--accent-soft); box-shadow: inset 0 -3px 0 var(--accent); }
+.plan-rail li.ready:not(.active) button:hover { color: var(--text); background: var(--surface-2); }
+.plan-rail li.locked button { cursor: not-allowed; opacity: .58; }
+.plan-stage-number { display: inline-grid; place-items: center; width: 23px; height: 23px; flex: none;
+  border: 1px solid currentColor; border-radius: 50%; font-size: 12px; }
+.plan-stage-label { min-width: 0; line-height: 1.2; }
+.plan-context-editor { margin: 0 0 12px; }
+.plan-context-fields { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.plan-stage-frame { display: grid; gap: 10px; }
+.plan-stage-heading h2 { margin: 3px 0 5px; }
+.plan-stage-transition { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.plan-stage-transition p { margin: 0; }
+.plan-intent-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.plan-start-card { margin-top: 0; }
+
+@media (max-width: 760px) {
+  .plan-bar-inner { padding: 5px 10px; }
+  .plan-bar-label { display: none; }
+  .plan-header { grid-template-columns: minmax(0, 1fr); align-items: start; padding: 14px; }
+  .plan-header > .btn { justify-self: start; }
+  .plan-rail { overflow-x: auto; scroll-snap-type: x proximity; }
+  .plan-rail ol { width: max-content; min-width: 100%; grid-template-columns: repeat(6, 132px); }
+  .plan-rail li { scroll-snap-align: start; }
+  .plan-context-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plan-intent-grid { grid-template-columns: minmax(0, 1fr); }
+  .plan-stage-transition { align-items: flex-start; flex-direction: column; }
+}
+@media (max-width: 420px) {
+  .plan-context-fields { grid-template-columns: minmax(0, 1fr); }
+  .plan-chip-main { max-width: 210px; }
+}

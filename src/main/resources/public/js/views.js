@@ -2864,6 +2864,202 @@
     }
   }
 
+  // ---------- Plan-centered journey ----------
+
+  var PLAN_STAGES = [
+    { key: 'UNDERSTAND', path: 'understand', n: '1', label: 'Understand', question: 'What is this market doing?' },
+    { key: 'EVIDENCE', path: 'evidence', n: '2', label: 'Evidence', question: 'What followed similar conditions, and what could happen?' },
+    { key: 'STRATEGY', path: 'strategy', n: '3', label: 'Strategy', question: 'How can I express this view?' },
+    { key: 'OUTCOMES', path: 'outcomes', n: '4', label: 'Outcomes', question: 'How does this exact position fare?' },
+    { key: 'DECIDE', path: 'decide', n: '5', label: 'Decide', question: 'Trade it, or stay in cash?' },
+    { key: 'MANAGE_REVIEW', path: 'manage-review', n: '6', label: 'Manage & Review', question: 'What happened versus what I expected?' }
+  ];
+
+  function planMarketLabel(plan) {
+    return plan.marketKind === 'SIMULATED' ? 'Simulated · ' + (plan.worldId || 'session')
+      : plan.marketKind === 'DEMO' ? 'Demo market' : 'Observed market';
+  }
+
+  function planStageByPath(path) {
+    return PLAN_STAGES.find(function (s) { return s.path === path; }) || PLAN_STAGES[0];
+  }
+
+  function horizonDaysFromContext() {
+    var raw = App.context.horizon('month');
+    return { '0DTE': 1, day: 1, week: 7, month: 30, quarter: 90 }[raw] || 30;
+  }
+
+  function replacePlanRoute(plan, stage) {
+    var hash = PlanStore.path(plan, stage || 'UNDERSTAND');
+    window.history.replaceState(null, '', hash);
+    App._scrollOnRender = true;
+    App.render();
+  }
+
+  function planHeader(plan, provisional) {
+    var context = plan.context || {};
+    var title = plan.title || (plan.symbol + ' · New plan');
+    return el('header', { class: 'plan-header', id: 'plan-header' },
+      el('div', { class: 'plan-header-main' },
+        el('div', { class: 'eyebrow' }, provisional ? 'NEW PLAN' : 'WORKING PLAN'),
+        el('h1', {}, title),
+        el('div', { class: 'plan-header-facts' },
+          el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)),
+          plan.intent ? intentBadge(plan.intent) : el('span', { class: 'badge badge-dim' }, 'Intent not chosen'),
+          context.horizonDays ? chip('Horizon', context.horizonDays + ' days') : null,
+          context.targetCents ? chip('Target', fmtMoney(context.targetCents)) : null)),
+      provisional ? null : el('button', { type: 'button', class: 'btn btn-sm btn-secondary', id: 'plan-edit-context',
+        onclick: function () {
+          var editor = document.getElementById('plan-context-editor');
+          if (editor) { editor.hidden = !editor.hidden; if (!editor.hidden) editor.querySelector('input,select').focus(); }
+        } }, 'Edit assumptions'));
+  }
+
+  function planRail(plan, active, provisional) {
+    var status = plan.status || 'DRAFT';
+    var manageReady = ['DECIDED_CASH', 'POSITION_OPEN', 'CLOSED'].indexOf(status) >= 0;
+    return el('nav', { class: 'plan-rail', 'aria-label': 'Plan journey' },
+      el('ol', {}, PLAN_STAGES.map(function (stage) {
+        var selected = stage.key === active.key;
+        var locked = provisional ? stage.key !== 'UNDERSTAND' : stage.key === 'MANAGE_REVIEW' && !manageReady;
+        return el('li', { class: (selected ? 'active ' : '') + (locked ? 'locked' : 'ready') },
+          el('button', { type: 'button', disabled: locked ? 'disabled' : null,
+            'aria-current': selected ? 'step' : null,
+            'aria-label': stage.label + '. ' + (locked ? 'Unlocks after a decision or rehearsal.' : stage.question),
+            onclick: async function () {
+              if (selected || provisional) return;
+              try {
+                var updated = await PlanStore.setStage(plan, stage.key);
+                App.navigate(PlanStore.path(updated, stage.key));
+              } catch (e) { UI.toast(e.message, 'error'); }
+            } },
+            el('span', { class: 'plan-stage-number' }, stage.n),
+            el('span', { class: 'plan-stage-label' }, stage.label)));
+      })));
+  }
+
+  function planContextEditor(plan) {
+    var c = plan.context || {};
+    var thesis = el('select', { id: 'plan-thesis' },
+      ['', 'bullish', 'bearish', 'neutral', 'volatile'].map(function (v) {
+        return el('option', { value: v, selected: (c.thesis || '') === v ? 'selected' : null }, v || 'Not set');
+      }));
+    var horizon = el('input', { id: 'plan-horizon-days', type: 'number', min: '1', max: '730', value: c.horizonDays || 30 });
+    var target = el('input', { id: 'plan-target-price', type: 'number', min: '0.01', step: '0.01',
+      value: c.targetCents ? (c.targetCents / 100).toFixed(2) : '' });
+    var risk = el('select', { id: 'plan-risk-mode' }, ['conservative', 'balanced', 'aggressive'].map(function (v) {
+      return el('option', { value: v, selected: (c.riskMode || 'conservative') === v ? 'selected' : null },
+        v === 'conservative' ? 'Cautious' : v === 'balanced' ? 'Standard' : 'High');
+    }));
+    var save = el('button', { type: 'button', class: 'btn', id: 'plan-save-context', onclick: async function () {
+      save.disabled = true;
+      try {
+        var clears = [];
+        if (!thesis.value) clears.push('thesis');
+        if (!target.value) clears.push('targetCents');
+        var updated = await PlanStore.updateContext(plan, {
+          thesis: thesis.value || null, horizonDays: Number(horizon.value),
+          targetCents: target.value ? Math.round(Number(target.value) * 100) : null,
+          riskMode: risk.value, clear: clears
+        });
+        App.context.update({ symbol: updated.symbol, goal: updated.intent,
+          thesis: updated.context.thesis, horizon: updated.context.horizonDays + 'd' });
+        App.render();
+      } catch (e) { UI.toast(e.message, 'error'); save.disabled = false; }
+    } }, 'Save assumptions');
+    function planField(label, input) {
+      return el('div', { class: 'field' }, el('label', {}, label), input);
+    }
+    return el('section', { class: 'plan-context-editor card', id: 'plan-context-editor', hidden: '' },
+      UI.cardHeader('Edit this plan’s assumptions'),
+      el('div', { class: 'form-grid plan-context-fields' },
+        planField('View', thesis), planField('Horizon (days)', horizon),
+        planField('Target price', target), planField('Risk budget', risk)),
+      el('div', { class: 'btn-row' }, save));
+  }
+
+  function provisionalPlanStage(root, symbol) {
+    App.context.selectSymbol(symbol);
+    var draft = PlanStore.provisional(symbol);
+    var market = App.state.world === 'demo' ? 'DEMO' : App.state.world === 'observed' ? 'OBSERVED' : 'SIMULATED';
+    var plan = { symbol: symbol, marketKind: market,
+      worldId: market === 'SIMULATED' ? App.state.world : null, status: 'DRAFT', context: {}, title: symbol + ' · New plan' };
+    var active = PLAN_STAGES[0];
+    root.appendChild(planHeader(plan, true));
+    root.appendChild(planRail(plan, active, true));
+    var card = el('section', { class: 'card plan-start-card', id: 'plan-start' },
+      UI.cardHeader('What are you trying to do with ' + symbol + '?'),
+      el('p', { class: 'muted' }, 'Choose a purpose now, or begin with evidence and decide after you understand the range.'));
+    var choices = el('div', { class: 'choice-grid plan-intent-grid' });
+    (Learn.INTENTS || []).forEach(function (meta) {
+      choices.appendChild(pressable(el('button', { type: 'button', class: 'choice-card', onclick: function () {
+        promote(meta.key);
+      } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb || 'Build a plan around this goal.')),
+      meta.label, 'button'));
+    });
+    card.appendChild(choices);
+    var evidenceFirst = el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-evidence-first',
+      onclick: function () { promote(null); } }, 'Start with evidence');
+    card.appendChild(el('div', { class: 'btn-row' }, evidenceFirst,
+      el('a', { href: '#/research', class: 'btn btn-ghost' }, 'Back to Research')));
+    root.appendChild(card);
+
+    async function promote(intent) {
+      card.setAttribute('aria-busy', 'true');
+      try {
+        var risk = document.getElementById('risk-mode');
+        var persisted = await PlanStore.promote({ symbol: symbol, intent: intent,
+          thesis: App.context.thesis(), horizonDays: horizonDaysFromContext(),
+          riskMode: risk ? risk.value : 'conservative' });
+        replacePlanRoute(persisted, 'UNDERSTAND');
+      } catch (e) { card.removeAttribute('aria-busy'); UI.toast(e.message, 'error'); }
+    }
+  }
+
+  function transitionalPlanStage(root, plan, stage) {
+    var routes = {
+      UNDERSTAND: { title: 'Understand ' + plan.symbol, body: 'Review the market picture before choosing a structure.', route: '#/research/' + plan.symbol, action: 'Open current analysis' },
+      EVIDENCE: { title: 'Test the view', body: 'Study past analogs and possible futures without requiring a structure.', route: '#/research/' + plan.symbol, action: 'Open current evidence tools' },
+      STRATEGY: { title: 'Choose an expression', body: 'Compare ranked structures or build the exact package you want.', route: '#/trade/structure', action: 'Open current strategy tools' },
+      OUTCOMES: { title: 'Evaluate the exact position', body: 'Use model futures, historical analogs and backtests as separately labeled lenses.', route: '#/trade/outcomes', action: 'Open current outcome tools' },
+      DECIDE: { title: 'Trade it, or stay in cash', body: 'Reprice the exact package, review economics and pass every acknowledgment gate.', route: '#/trade/decide', action: 'Open current decision tools' },
+      MANAGE_REVIEW: { title: 'Manage & Review', body: 'Compare what happened with the expectation frozen at the decision.', route: '#/portfolio', action: 'Open Portfolio' }
+    };
+    var copy = routes[stage.key];
+    root.appendChild(el('section', { class: 'plan-stage-frame', id: 'plan-stage-' + stage.path },
+      el('div', { class: 'plan-stage-heading' }, el('div', { class: 'eyebrow' }, stage.question), el('h2', {}, copy.title),
+        el('p', { class: 'muted' }, copy.body)),
+      el('div', { class: 'card plan-stage-transition' },
+        el('p', {}, 'Carried forward: ', el('b', {}, plan.title)),
+        el('button', { type: 'button', class: 'btn', onclick: function () { App.navigate(copy.route); } }, copy.action))));
+  }
+
+  async function planWorkspace(root, params) {
+    var id = params[0] || '';
+    var rawStage = (params[1] || 'understand').split('?')[0];
+    if (id === 'new' || id.indexOf('new?') === 0) {
+      var query = (window.location.hash.split('?')[1] || '');
+      var symbol = new URLSearchParams(query).get('symbol') || App.context.symbol();
+      if (!symbol) { App.navigate('#/research'); return; }
+      provisionalPlanStage(root, symbol.toUpperCase());
+      return;
+    }
+    var plan = await PlanStore.get(id);
+    var targetWorld = plan.marketKind === 'SIMULATED' ? plan.worldId : plan.marketKind === 'DEMO' ? 'demo' : 'observed';
+    if (App.state.world !== targetWorld) { await PlanStore.focus(plan, rawStage); return; }
+    App.state.activePlanId = plan.id;
+    PlanStore.renderBar();
+    var stage = planStageByPath(rawStage);
+    if (plan.activeStage !== stage.key) {
+      try { plan = await PlanStore.setStage(plan, stage.key); }
+      catch (e) { if (e.status === 409) { UI.toast(e.message, 'error'); stage = planStageByPath(plan.activeStage.toLowerCase().replace('_', '-')); } else throw e; }
+    }
+    root.appendChild(planHeader(plan, false));
+    root.appendChild(planRail(plan, stage, false));
+    root.appendChild(planContextEditor(plan));
+    transitionalPlanStage(root, plan, stage);
+  }
+
   /** One decision loop. Research can feed Context; every Trade capability lives in one stage. */
   var WORKFLOW_STAGES = [
     { key: 'context', label: 'Context', beginner: 'Pick a stock and goal', expert: 'Symbol · intent · horizon' },
@@ -8375,6 +8571,7 @@
   window.Views = {
     home: home,
     research: research,
+    plan: planWorkspace,
     trade: trade,
     portfolio: portfolio,
     data: data

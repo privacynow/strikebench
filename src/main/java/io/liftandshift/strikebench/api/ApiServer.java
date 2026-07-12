@@ -94,6 +94,7 @@ public final class ApiServer {
     /** In-process pub/sub feeding /api/events (jobs, datasets, provider cooldowns, workspace revs). */
     final io.liftandshift.strikebench.util.EventBus events = new io.liftandshift.strikebench.util.EventBus();
     io.liftandshift.strikebench.db.WorkspaceService workspaceSvc;
+    io.liftandshift.strikebench.plan.PlanService planSvc;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
@@ -236,6 +237,8 @@ public final class ApiServer {
         // Workspace continuity + the event bus: services announce, /api/events streams to the browser.
         server.workspaceSvc = new io.liftandshift.strikebench.db.WorkspaceService(db, clock);
         server.workspaceSvc.setEvents(server.events);
+        server.planSvc = new io.liftandshift.strikebench.plan.PlanService(db, clock);
+        server.planSvc.setEvents(server.events);
         server.dataJobs.setEvents(server.events);
         server.dataJobs.setDataChangedHook(server::invalidateHistoricalViews);
         datasetSvc.setEvents(server.events);
@@ -398,6 +401,16 @@ public final class ApiServer {
             // ---- Workspace continuity: the client-owned UX state blob, versioned per user ----
             c.routes.get("/api/workspace", this::workspaceGet);
             c.routes.put("/api/workspace", this::workspacePut);
+
+            // ---- Plans: server-owned journey facts; workspace JSON keeps presentation only ----
+            c.routes.get("/api/plans", this::plansList);
+            c.routes.post("/api/plans", this::planCreate);
+            c.routes.get("/api/plans/{id}", this::planGet);
+            c.routes.put("/api/plans/{id}/context", this::planContextPut);
+            c.routes.put("/api/plans/{id}/intent", this::planIntentPut);
+            c.routes.put("/api/plans/{id}/stage", this::planStagePut);
+            c.routes.put("/api/plans/{id}/open", this::planOpenPut);
+            c.routes.post("/api/plans/{id}/archive", this::planArchive);
 
             // ---- Data Center ----
             c.routes.get("/api/data/overview", this::dataOverview);
@@ -1922,6 +1935,67 @@ public final class ApiServer {
         if (!node.isObject()) throw new IllegalArgumentException("state must be a JSON object");
         long rev = workspaceSvc.put(ownerId(ctx), body);
         ctx.json(Map.of("ok", true, "rev", rev));
+    }
+
+    // ---- Plan-centered journey ----
+
+    private io.liftandshift.strikebench.plan.Plan.MarketKind activePlanMarket(Context ctx) {
+        String world = activeWorld(ctx);
+        if ("demo".equals(world)) return io.liftandshift.strikebench.plan.Plan.MarketKind.DEMO;
+        if ("observed".equals(world)) return io.liftandshift.strikebench.plan.Plan.MarketKind.OBSERVED;
+        return io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED;
+    }
+
+    private void plansList(Context ctx) {
+        if (planSvc == null) throw new IllegalStateException("plan store unavailable");
+        boolean allMarkets = "all".equalsIgnoreCase(ctx.queryParam("scope"));
+        boolean openOnly = !"false".equalsIgnoreCase(ctx.queryParam("openOnly"));
+        var market = allMarkets ? null : activePlanMarket(ctx);
+        String world = market == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
+                ? activeWorld(ctx) : null;
+        ctx.json(Map.of("plans", planSvc.list(ownerId(ctx), market, world, openOnly),
+                "market", activePlanMarket(ctx).name(), "world", activeWorld(ctx)));
+    }
+
+    private void planCreate(Context ctx) {
+        if (planSvc == null) throw new IllegalStateException("plan store unavailable");
+        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.CreateRequest.class));
+        var market = activePlanMarket(ctx);
+        String world = market == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
+                ? activeWorld(ctx) : null;
+        // Market and account are server-derived. A client cannot create an observed plan while
+        // looking at generated quotes or bind a plan to somebody else's simulation account.
+        ctx.status(201).json(planSvc.create(ownerId(ctx), market, world, currentAccount(ctx).id(), request));
+    }
+
+    private void planGet(Context ctx) {
+        if (planSvc == null) throw new IllegalStateException("plan store unavailable");
+        ctx.json(planSvc.get(ownerId(ctx), ctx.pathParam("id")));
+    }
+
+    private void planContextPut(Context ctx) {
+        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.ContextUpdateRequest.class));
+        ctx.json(planSvc.updateContext(ownerId(ctx), ctx.pathParam("id"), request));
+    }
+
+    private void planIntentPut(Context ctx) {
+        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.IntentRequest.class));
+        ctx.json(planSvc.claimIntent(ownerId(ctx), ctx.pathParam("id"), request));
+    }
+
+    private void planStagePut(Context ctx) {
+        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.StageRequest.class));
+        ctx.json(planSvc.setStage(ownerId(ctx), ctx.pathParam("id"), request));
+    }
+
+    private void planOpenPut(Context ctx) {
+        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.OpenRequest.class));
+        ctx.json(planSvc.setOpen(ownerId(ctx), ctx.pathParam("id"), request));
+    }
+
+    private void planArchive(Context ctx) {
+        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.ArchiveRequest.class));
+        ctx.json(planSvc.archive(ownerId(ctx), ctx.pathParam("id"), request));
     }
 
     // ---- Data Center ----
