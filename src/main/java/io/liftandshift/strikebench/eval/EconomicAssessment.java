@@ -70,7 +70,7 @@ public record EconomicAssessment(
         EvidenceLevel pricingEvidence = evidence == null ? EvidenceLevel.UNKNOWN
                 : evidence.perDimension().getOrDefault("pricing", EvidenceLevel.UNKNOWN);
         boolean explicitTeachingMarket = pricingEvidence == EvidenceLevel.DEMO_FIXTURE
-                || pricingEvidence == EvidenceLevel.SIMULATED || pricingEvidence == EvidenceLevel.MODELED;
+                || pricingEvidence == EvidenceLevel.SIMULATED;
         List<String> reasons = new ArrayList<>();
 
         if (!mechanicallyEligible) {

@@ -108,6 +108,23 @@ class EconomicAssessmentTest {
         assertThat(a.actionableFavorable()).isFalse();
     }
 
+    @Test void modeledPricingFallbackIsIncompleteEvidenceNotATeachingMarket() {
+        RiskProfile risk = new RiskProfile(20_000, 20_000L, 0.55, -100L,
+                20_000, 0.20, List.of(), 2_000L, "test");
+        EvidenceProfile modeledPricing = EvidenceProfile.of(Map.of(
+                "pricing", EvidenceLevel.MODELED,
+                "history", EvidenceLevel.OBSERVED_EOD), "modeled chain fallback");
+
+        EconomicAssessment a = EconomicAssessment.assess(
+                candidate(0.55), risk, modeledPricing, pass(), ctx());
+
+        assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
+        assertThat(a.label()).containsIgnoringCase("incomplete evidence");
+        assertThat(a.summary()).doesNotContainIgnoringCase("teaching market")
+                .doesNotContainIgnoringCase("generated market");
+        assertThat(a.actionableFavorable()).isFalse();
+    }
+
     @Test void modelDependentTimeSpreadsStayEconomicallyUnavailable() {
         Candidate base = candidate(0.50);
         Candidate calendar = new Candidate("CALENDAR_CALL", "Call calendar", "time", "calendar",
