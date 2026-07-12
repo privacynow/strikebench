@@ -193,6 +193,11 @@ class EvaluateIntegrationTest {
                 .isLessThan(envelope.at("/result/marketImplied/p84").asDouble());
         assertThat(envelope.at("/result/marketImplied/basis").asText())
                 .contains("Risk-neutral").contains("not a forecast");
+        // Five trading sessions from Wed Jul 8 reaches Wed Jul 15, so the nearest listed
+        // Friday is Jul 17. A calendar-day target incorrectly chose the Jul 10 expiry.
+        assertThat(envelope.at("/result/marketImplied/expiration").asText()).isEqualTo("2026-07-17");
+        assertThat(envelope.at("/result/marketImplied/horizonSessions").asInt()).isEqualTo(5);
+        assertThat(envelope.at("/result/marketImplied/expirationCalendarDays").asInt()).isEqualTo(9);
         assertThat(envelope.at("/result/positionOutcome/paths").asInt())
                 .isEqualTo(envelope.at("/result/paths").asInt());
         assertThat(envelope.at("/result/positionOutcome/horizonDays").asInt())

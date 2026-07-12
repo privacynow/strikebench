@@ -284,6 +284,25 @@ class SimWorldGateTest {
                 .isGreaterThan(2.0);
     }
 
+    @Test
+    void optionGreeksUseTheDisplayedPerDayAndPerVolPointUnits() {
+        SimulatedWorld w = world(83, 1);
+        LocalDate exp = w.expirations().get(1);
+        var chain = w.chain("ACME", exp).orElseThrow();
+        var quote = nearest(chain.calls(), chain.underlyingPrice().doubleValue());
+        double s = chain.underlyingPrice().doubleValue();
+        double k = quote.strike().doubleValue();
+        double t = w.timeToExpiryYears(exp);
+        double iv = quote.iv();
+
+        assertThat(quote.theta()).isCloseTo(
+                io.liftandshift.strikebench.pricing.BlackScholes.theta(true, s, k, t, 0.03, 0, iv) / 365.0,
+                org.assertj.core.data.Offset.offset(1e-12));
+        assertThat(quote.vega()).isCloseTo(
+                io.liftandshift.strikebench.pricing.BlackScholes.vega(s, k, t, 0.03, 0, iv) / 100.0,
+                org.assertj.core.data.Offset.offset(1e-12));
+    }
+
     private static double atmIv(SimulatedWorld w, String sym, LocalDate exp) {
         var chain = w.chain(sym, exp).orElseThrow();
         return nearest(chain.calls(), chain.underlyingPrice().doubleValue()).iv();

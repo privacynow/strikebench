@@ -2291,10 +2291,11 @@ public final class ApiServer {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
         String world = worldParam(activeWorld(ctx));
         int horizon = Math.max(1, b.spec().sane().horizonDays());
-        Double marketIv = atmIvOf(b.symbol(), world, horizon);
+        var marketVol = atmVolOf(b.symbol(), world, horizon);
+        Double marketIv = marketVol == null ? null : marketVol.atmIv();
         var calibrated = b.spec().volAnnual() > 0 || marketIv == null ? b.spec() : b.spec().withVol(marketIv);
         double rate = market.riskFreeRateQuote(horizon, world).annualRate();
-        return simEngine.previewRun(b.symbol(), calibrated, world, analysisCtx(ctx), b.levels(), marketIv, rate);
+        return simEngine.previewRun(b.symbol(), calibrated, world, analysisCtx(ctx), b.levels(), marketVol, rate);
     }
 
     /** volAnnual<=0 = "use market vol": the chain's ATM IV, so every symbol gets ITS OWN wildness. */
@@ -2312,25 +2313,38 @@ public final class ApiServer {
     }
 
     private Double atmIvOf(String symbol, String worldId, int horizonDays) {
+        var input = atmVolOf(symbol, worldId, horizonDays);
+        return input == null ? null : input.atmIv();
+    }
+
+    private io.liftandshift.strikebench.sim.SimulationEngine.MarketVolInput atmVolOf(
+            String symbol, String worldId, int horizonSessions) {
         try {
             var exps = market.expirations(symbol, worldId);
             if (exps.isEmpty()) return null;
-            // Match the decision horizon on the lane's clock instead of imposing a 30-day IV
-            // on a one-week or three-month scenario.
+            // Scenario horizons are trading sessions. Resolve that date through the same exchange
+            // calendar used by DTE and then choose the nearest listed expiry. Using plusDays here
+            // silently selected an earlier option week whenever a weekend sat inside the horizon.
             java.time.LocalDate laneToday = market.simInstant(worldId)
                     .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
                     .orElseGet(() -> java.time.LocalDate.now(clock));
-            java.time.LocalDate target = laneToday.plusDays(Math.max(1, horizonDays));
+            int sessions = Math.max(1, horizonSessions);
+            java.time.LocalDate target = io.liftandshift.strikebench.market.MarketHours
+                    .tradingDateAfter(laneToday, sessions);
             java.time.LocalDate exp = exps.stream()
                     .min(java.util.Comparator.comparingLong(e -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e, target))))
                     .orElse(null);
             var chain = exp == null ? null : market.chain(symbol, exp, worldId).orElse(null);
             if (chain == null || chain.isEmpty() || chain.underlyingPrice() == null) return null;
             final java.math.BigDecimal spot = chain.underlyingPrice();
-            return chain.calls().stream()
+            Double iv = chain.calls().stream()
                     .filter(o -> o.iv() != null && o.iv() > 0.01)
                     .min(java.util.Comparator.comparingDouble(o -> Math.abs(o.strike().subtract(spot).doubleValue())))
                     .map(io.liftandshift.strikebench.model.OptionQuote::iv).orElse(null);
+            if (iv == null) return null;
+            int calendarDays = Math.max(0, (int) java.time.temporal.ChronoUnit.DAYS.between(laneToday, exp));
+            return new io.liftandshift.strikebench.sim.SimulationEngine.MarketVolInput(
+                    iv, exp, calendarDays);
         } catch (Exception e) { return null; }
     }
 

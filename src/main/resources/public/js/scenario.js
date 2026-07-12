@@ -466,7 +466,8 @@
           el('small', {}, 'generated from your story, volatility and model settings')),
         el('div', { class: 'scenario-lens' }, el('span', { class: 'eyebrow' }, 'OPTIONS MARKET IMPLIED'),
           el('b', {}, price(m.p16) + ' – ' + price(m.p84)),
-          el('small', {}, 'nearest-horizon ATM IV · risk-neutral pricing, not a forecast')),
+          el('small', {}, (m.expiration ? 'ATM IV from ' + m.expiration + ' · ' : '')
+            + 'risk-neutral pricing, not a forecast')),
         el('p', { class: 'scenario-lens-takeaway' },
           rel === 0 ? 'Your scenario and the option market imply about the same central width.'
             : 'Your scenario is about ' + Math.abs(rel) + '% ' + (rel > 0 ? 'wider' : 'narrower')

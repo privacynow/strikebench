@@ -243,7 +243,8 @@ class SimulationStackTest {
         var p = engine.preview("AAPL", spec(ScenarioSpec.Shape.CHOP, 0, 11), "observed",
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED,
                 List.of(new SimulationEngine.DecisionLevel("target", 270),
-                        new SimulationEngine.DecisionLevel("floor", 240)), 0.30, 0.04);
+                        new SimulationEngine.DecisionLevel("floor", 240)),
+                new SimulationEngine.MarketVolInput(0.30, LocalDate.parse("2026-08-07"), 32), 0.04);
         assertThat(p.bands()).hasSize(21); // day 0..20
         assertThat(p.samples()).isNotEmpty();
         assertThat(p.endP10()).isLessThanOrEqualTo(p.endP50());
@@ -263,6 +264,8 @@ class SimulationStackTest {
         assertThat(p.marketImplied().p16()).isLessThan(p.marketImplied().p50());
         assertThat(p.marketImplied().p50()).isLessThan(p.marketImplied().p84());
         assertThat(p.marketImplied().basis()).contains("Risk-neutral").contains("not a forecast");
+        assertThat(p.marketImplied().expiration()).isEqualTo("2026-08-07");
+        assertThat(p.marketImplied().horizonSessions()).isEqualTo(20);
     }
 
     @Test

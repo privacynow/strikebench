@@ -116,8 +116,14 @@ public final class SimulationEngine {
     public record DecisionMap(TerminalDistribution terminal, List<LevelOdds> levels,
                               double maxProbabilityMargin95) {}
 
+    /** The exact listed expiry used to calibrate the separate options-market lens. */
+    public record MarketVolInput(double atmIv, java.time.LocalDate expiration,
+                                 int expirationCalendarDays) {}
+
     /** A separate risk-neutral lens from the options market, never blended with user-scenario odds. */
-    public record MarketImpliedRange(double atmIv, double p16, double p50, double p84, String basis) {}
+    public record MarketImpliedRange(double atmIv, String expiration, int horizonSessions,
+                                     int expirationCalendarDays, double p16, double p50, double p84,
+                                     String basis) {}
 
     /** Immutable identity of the exact path matrix shown to the user. */
     public record EnsembleReceipt(String fingerprint, String symbol, String worldId, String datasetId,
@@ -139,14 +145,16 @@ public final class SimulationEngine {
     /** The active world and dataset are explicit immutable inputs; concurrent calls cannot cross. */
     public Preview preview(String symbolRaw, ScenarioSpec specRaw, String worldId,
                            io.liftandshift.strikebench.db.AnalysisContext analysis,
-                           List<DecisionLevel> requestedLevels, Double marketIv, double riskFreeRate) {
-        return previewRun(symbolRaw, specRaw, worldId, analysis, requestedLevels, marketIv, riskFreeRate).preview();
+                           List<DecisionLevel> requestedLevels, MarketVolInput marketVol,
+                           double riskFreeRate) {
+        return previewRun(symbolRaw, specRaw, worldId, analysis, requestedLevels, marketVol, riskFreeRate).preview();
     }
 
     /** Internal same-ensemble seam used when Research overlays a working position on its fan. */
     public PreviewRun previewRun(String symbolRaw, ScenarioSpec specRaw, String worldId,
                                  io.liftandshift.strikebench.db.AnalysisContext analysis,
-                                 List<DecisionLevel> requestedLevels, Double marketIv, double riskFreeRate) {
+                                 List<DecisionLevel> requestedLevels, MarketVolInput marketVol,
+                                 double riskFreeRate) {
         String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
@@ -191,8 +199,8 @@ public final class SimulationEngine {
         }
         PreviewBand end = bands.getLast();
         DecisionMap decisionMap = decisionMap(paths, spot, spd, requestedLevels);
-        MarketImpliedRange marketRange = marketImpliedRange(spot, generated.spec().horizonDays(), marketIv,
-                riskFreeRate);
+        MarketImpliedRange marketRange = marketImpliedRange(
+                spot, generated.spec().horizonDays(), marketVol, riskFreeRate);
         String asOf = java.time.Instant.ofEpochMilli(quote.asOfEpochMs()).toString();
         String material = symbol + '|' + resolvedWorld + '|' + resolvedAnalysis.datasetId() + '|' + asOf
                 + '|' + Double.toHexString(spot) + '|' + generated.modelVersion() + '|' + generated.spec();
@@ -210,15 +218,21 @@ public final class SimulationEngine {
                         end.p10(), end.p50(), end.p90(), decisionMap, marketRange, receipt, notes));
     }
 
-    private static MarketImpliedRange marketImpliedRange(double spot, int tradingDays, Double iv,
+    private static MarketImpliedRange marketImpliedRange(double spot, int horizonSessions, MarketVolInput input,
                                                           double riskFreeRate) {
-        if (iv == null || !(iv > 0) || !Double.isFinite(iv)) return null;
-        double t = Math.max(1, tradingDays) / 252.0;
+        if (input == null || !(input.atmIv() > 0) || !Double.isFinite(input.atmIv())) return null;
+        double iv = input.atmIv();
+        int sessions = Math.max(1, horizonSessions);
+        double t = sessions / 252.0;
         double drift = (riskFreeRate - 0.5 * iv * iv) * t;
         double width = iv * Math.sqrt(t) * 0.994457883209753;
-        return new MarketImpliedRange(iv, round2(spot * Math.exp(drift - width)),
+        String expiry = input.expiration() == null ? null : input.expiration().toString();
+        return new MarketImpliedRange(iv, expiry, sessions, input.expirationCalendarDays(),
+                round2(spot * Math.exp(drift - width)),
                 round2(spot * Math.exp(drift)), round2(spot * Math.exp(drift + width)),
-                "Risk-neutral lognormal range from the nearest-horizon ATM IV (q=0), over the same trading-session horizon; market pricing, not a forecast.");
+                "Risk-neutral lognormal range from ATM IV at the listed " + expiry + " expiry ("
+                        + input.expirationCalendarDays() + " calendar days away), scaled over the requested "
+                        + sessions + " trading sessions; market pricing, not a forecast.");
     }
 
     private static DecisionMap decisionMap(double[][] paths, double spot, int stepsPerDay,
