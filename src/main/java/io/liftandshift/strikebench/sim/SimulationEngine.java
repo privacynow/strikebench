@@ -102,9 +102,29 @@ public final class SimulationEngine {
 
     public record PreviewBand(int day, double p10, double p50, double p90) {}
 
+    public record DecisionLevel(String key, double price) {}
+
+    public record TerminalDistribution(double p5, double p16, double p50, double p84, double p95,
+                                       double mean, double standardDeviation, double standardError) {}
+
+    /** Direct empirical counts on this scenario ensemble; no barrier approximation is mixed in. */
+    public record LevelOdds(String key, double price, String direction,
+                            double endAboveProbability, double endBelowProbability,
+                            double endBeyondProbability, double touchProbability,
+                            double touchCiLow, double touchCiHigh, Double medianFirstTouchDay) {}
+
+    public record DecisionMap(TerminalDistribution terminal, List<LevelOdds> levels,
+                              double maxProbabilityMargin95) {}
+
+    /** Immutable identity of the exact path matrix shown to the user. */
+    public record EnsembleReceipt(String fingerprint, String symbol, String worldId, String datasetId,
+                                  String asOf, double anchorSpot, String anchorSource,
+                                  String anchorFreshness, String modelVersion, ScenarioSpec spec) {}
+
     public record Preview(String symbol, double spot, int paths, int horizonDays, String pathModelVersion,
                           List<PreviewBand> bands, List<List<Double>> samples,
-                          double endP10, double endP50, double endP90, List<String> notes) {}
+                          double endP10, double endP50, double endP90,
+                          DecisionMap decisionMap, EnsembleReceipt receipt, List<String> notes) {}
 
     /**
      * The "show me N possible futures" fan — price bands per day + a few concrete sample paths for
@@ -112,14 +132,23 @@ public final class SimulationEngine {
      */
     /** The active world and dataset are explicit immutable inputs; concurrent calls cannot cross. */
     public Preview preview(String symbolRaw, ScenarioSpec specRaw, String worldId,
-                           io.liftandshift.strikebench.db.AnalysisContext analysis) {
+                           io.liftandshift.strikebench.db.AnalysisContext analysis,
+                           List<DecisionLevel> requestedLevels) {
         String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase(Locale.ROOT);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
+        String resolvedWorld = worldId == null || worldId.isBlank() ? "observed" : worldId;
+        io.liftandshift.strikebench.db.AnalysisContext resolvedAnalysis = analysis == null
+                ? io.liftandshift.strikebench.db.AnalysisContext.OBSERVED : analysis;
+        var quote = market.quote(symbol, resolvedWorld).orElseThrow(() -> new java.util.NoSuchElementException(
+                "No price for " + symbol + " — this analysis needs a price in the active market."));
+        double anchor = java.util.Optional.ofNullable(quote.mark()).map(java.math.BigDecimal::doubleValue)
+                .filter(v -> v > 0).orElseThrow(() -> new java.util.NoSuchElementException(
+                        "No price for " + symbol + " — this analysis needs a price in the active market."));
         PathEnsembleService.Ensemble generated;
         try (AutoCloseable permit = SimBudget.acquire()) {
-            generated = ensembles.build(new PathEnsembleService.Scope(symbol, worldId, analysis),
-                    PathEnsembleService.Basis.PARAMETRIC, spec, null);
+            generated = ensembles.build(new PathEnsembleService.Scope(symbol, resolvedWorld, resolvedAnalysis),
+                    PathEnsembleService.Basis.PARAMETRIC, spec, null, anchor);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -148,12 +177,122 @@ public final class SimulationEngine {
             samples.add(sp);
         }
         PreviewBand end = bands.getLast();
+        DecisionMap decisionMap = decisionMap(paths, spot, spd, requestedLevels);
+        String asOf = java.time.Instant.ofEpochMilli(quote.asOfEpochMs()).toString();
+        String material = symbol + '|' + resolvedWorld + '|' + resolvedAnalysis.datasetId() + '|' + asOf
+                + '|' + Double.toHexString(spot) + '|' + generated.modelVersion() + '|' + generated.spec();
+        String fingerprint = fingerprint(material, paths);
+        EnsembleReceipt receipt = new EnsembleReceipt(fingerprint, symbol, resolvedWorld,
+                resolvedAnalysis.datasetId(), asOf, round2(spot), quote.source(),
+                quote.markFreshness() == null ? "MISSING" : quote.markFreshness().name(),
+                generated.modelVersion(), generated.spec());
         List<String> notes = new ArrayList<>();
         notes.add("Synthetic futures from seed " + spec.seed() + " — a model of what COULD happen, never a forecast.");
         if (spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP)
             notes.add("Block-bootstrap history is resolved from this request's active market and dataset; if unavailable, the model falls back to Gaussian noise.");
         return new Preview(symbol, round2(spot), paths.length, days, generated.modelVersion(), bands, samples,
-                end.p10(), end.p50(), end.p90(), notes);
+                end.p10(), end.p50(), end.p90(), decisionMap, receipt, notes);
+    }
+
+    private static DecisionMap decisionMap(double[][] paths, double spot, int stepsPerDay,
+                                           List<DecisionLevel> rawLevels) {
+        int n = paths.length;
+        int last = paths[0].length - 1;
+        double[] terminal = new double[n];
+        double sum = 0;
+        for (int i = 0; i < n; i++) { terminal[i] = paths[i][last]; sum += terminal[i]; }
+        double mean = sum / n;
+        double var = 0;
+        for (double v : terminal) var += (v - mean) * (v - mean);
+        double sd = Math.sqrt(var / Math.max(1, n - 1));
+        double[] sorted = terminal.clone();
+        java.util.Arrays.sort(sorted);
+        TerminalDistribution dist = new TerminalDistribution(round2(quantile(sorted, 0.05)),
+                round2(quantile(sorted, 0.16)), round2(quantile(sorted, 0.50)),
+                round2(quantile(sorted, 0.84)), round2(quantile(sorted, 0.95)),
+                round2(mean), round2(sd), round2(sd / Math.sqrt(n)));
+
+        java.util.LinkedHashMap<String, DecisionLevel> levels = new java.util.LinkedHashMap<>();
+        if (rawLevels != null) {
+            if (rawLevels.size() > 20) throw new IllegalArgumentException("at most 20 decision levels");
+            for (DecisionLevel level : rawLevels) {
+                if (level == null || level.key() == null || level.key().isBlank()) {
+                    throw new IllegalArgumentException("every decision level needs a key");
+                }
+                if (level.key().length() > 64 || !(level.price() > 0) || !Double.isFinite(level.price())) {
+                    throw new IllegalArgumentException("decision level is outside the supported range");
+                }
+                levels.put(level.key(), level);
+            }
+        }
+        List<LevelOdds> odds = new ArrayList<>();
+        for (DecisionLevel level : levels.values()) {
+            int above = 0, touched = 0;
+            double[] touchDays = new double[n];
+            int touchCount = 0;
+            boolean upward = level.price() >= spot;
+            for (double[] path : paths) {
+                if (path[last] >= level.price()) above++;
+                int first = -1;
+                for (int step = 0; step <= last; step++) {
+                    if (upward ? path[step] >= level.price() : path[step] <= level.price()) { first = step; break; }
+                }
+                if (first >= 0) {
+                    touched++;
+                    touchDays[touchCount++] = (double) first / Math.max(1, stepsPerDay);
+                }
+            }
+            double touchP = (double) touched / n;
+            double[] ci = wilson(touched, n);
+            Double medianTouch = null;
+            if (touchCount > 0) {
+                double[] td = java.util.Arrays.copyOf(touchDays, touchCount);
+                java.util.Arrays.sort(td);
+                medianTouch = round2(quantile(td, 0.50));
+            }
+            double aboveP = (double) above / n;
+            odds.add(new LevelOdds(level.key(), round2(level.price()), upward ? "ABOVE" : "BELOW",
+                    aboveP, 1.0 - aboveP, upward ? aboveP : 1.0 - aboveP, touchP,
+                    ci[0], ci[1], medianTouch));
+        }
+        double maxMargin = 1.96 * Math.sqrt(0.25 / n);
+        return new DecisionMap(dist, odds, maxMargin);
+    }
+
+    private static double quantile(double[] sorted, double p) {
+        if (sorted.length == 1) return sorted[0];
+        double pos = Math.max(0, Math.min(1, p)) * (sorted.length - 1);
+        int lo = (int) Math.floor(pos), hi = (int) Math.ceil(pos);
+        if (lo == hi) return sorted[lo];
+        double w = pos - lo;
+        return sorted[lo] * (1 - w) + sorted[hi] * w;
+    }
+
+    private static double[] wilson(int successes, int total) {
+        double z = 1.96, n = total, p = successes / n;
+        double den = 1 + z * z / n;
+        double center = (p + z * z / (2 * n)) / den;
+        double half = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / den;
+        return new double[]{Math.max(0, center - half), Math.min(1, center + half)};
+    }
+
+    private static String fingerprint(String material, double[][] paths) {
+        try {
+            var md = java.security.MessageDigest.getInstance("SHA-256");
+            md.update(material.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            var bytes = java.nio.ByteBuffer.allocate(Long.BYTES);
+            for (double[] path : paths) {
+                for (double value : path) {
+                    bytes.clear();
+                    bytes.putLong(Double.doubleToLongBits(value));
+                    md.update(bytes.array());
+                }
+            }
+            byte[] digest = md.digest();
+            return java.util.HexFormat.of().formatHex(digest, 0, 12);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
 
     private static double q(double[] sorted, double p) {

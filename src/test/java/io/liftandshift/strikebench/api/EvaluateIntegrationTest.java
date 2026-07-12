@@ -158,7 +158,8 @@ class EvaluateIntegrationTest {
                  "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
                  "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":2,
                          "driftAnnual":0,"volAnnual":0.25,"jumpsPerYear":0,"jumpMean":0,
-                         "jumpVol":0,"tailNu":6,"seed":77,"paths":40}}
+                         "jumpVol":0,"tailNu":6,"seed":77,"paths":40},
+                 "levels":[{"key":"target","price":270},{"key":"floor","price":240}]}
                 """;
         HttpResponse<String> r = post("/api/evaluate", paths);
         assertThat(r.statusCode()).isEqualTo(200);
@@ -168,6 +169,26 @@ class EvaluateIntegrationTest {
         assertThat(envelope.at("/context/marketLane").asText()).isEqualTo("DEMO");
         assertThat(envelope.at("/result/bands").isArray()).isTrue();
         assertThat(envelope.at("/result/pathModelVersion").asText()).isEqualTo("paths-3");
+        assertThat(envelope.at("/result/decisionMap/terminal/p5").asDouble())
+                .isLessThanOrEqualTo(envelope.at("/result/decisionMap/terminal/p50").asDouble());
+        assertThat(envelope.at("/result/decisionMap/terminal/p50").asDouble())
+                .isLessThanOrEqualTo(envelope.at("/result/decisionMap/terminal/p95").asDouble());
+        assertThat(envelope.at("/result/decisionMap/levels")).hasSize(2);
+        assertThat(envelope.at("/result/decisionMap/levels/0/touchProbability").asDouble())
+                .isBetween(0.0, 1.0);
+        assertThat(envelope.at("/result/decisionMap/levels/0/touchProbability").asDouble())
+                .isGreaterThanOrEqualTo(envelope.at("/result/decisionMap/levels/0/endBeyondProbability").asDouble());
+        assertThat(envelope.at("/result/receipt/fingerprint").asText()).hasSize(24);
+        assertThat(envelope.at("/result/receipt/worldId").asText()).isEqualTo("demo");
+        assertThat(envelope.at("/result/receipt/datasetId").asText()).isEqualTo("observed");
+        assertThat(envelope.at("/result/receipt/anchorSpot").asDouble())
+                .isEqualTo(envelope.at("/result/spot").asDouble());
+        JsonNode repeated = Json.MAPPER.readTree(post("/api/evaluate", paths).body());
+        assertThat(repeated.at("/result/receipt/fingerprint").asText())
+                .isEqualTo(envelope.at("/result/receipt/fingerprint").asText());
+        JsonNode rerolled = Json.MAPPER.readTree(post("/api/evaluate", paths.replace("\"seed\":77", "\"seed\":78")).body());
+        assertThat(rerolled.at("/result/receipt/fingerprint").asText())
+                .isNotEqualTo(envelope.at("/result/receipt/fingerprint").asText());
 
         assertThat(post("/api/evaluate", paths.replace("\"DEMO\"", "\"OBSERVED\"")).statusCode())
                 .isEqualTo(409);

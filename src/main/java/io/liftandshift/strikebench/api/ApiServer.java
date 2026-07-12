@@ -2115,7 +2115,8 @@ public final class ApiServer {
 
     // ---- Datasets & scenario simulation ----
 
-    public record ScenarioRequest(String symbol, io.liftandshift.strikebench.sim.ScenarioSpec spec) {}
+    public record ScenarioRequest(String symbol, io.liftandshift.strikebench.sim.ScenarioSpec spec,
+                                  List<io.liftandshift.strikebench.sim.SimulationEngine.DecisionLevel> levels) {}
 
     public record StrategySimRequest(String symbol,
                                      java.util.List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
@@ -2289,7 +2290,7 @@ public final class ApiServer {
     private Object simScenarioResult(Context ctx, ScenarioRequest b) {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
         return simEngine.preview(b.symbol(), calibrateVol(b.symbol(), b.spec(), worldParam(activeWorld(ctx))),
-                worldParam(activeWorld(ctx)), analysisCtx(ctx));
+                worldParam(activeWorld(ctx)), analysisCtx(ctx), b.levels());
     }
 
     /** volAnnual<=0 = "use market vol": the chain's ATM IV, so every symbol gets ITS OWN wildness. */
@@ -3262,7 +3263,11 @@ public final class ApiServer {
                 if (basis != io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.PARAMETRIC) {
                     throw new IllegalArgumentException("PATHS currently uses PARAMETRIC basis; historical paths come from a Research study");
                 }
-                result = simScenarioResult(ctx, new ScenarioRequest(symbol, requireOutcomeSpec(request.over())));
+                List<io.liftandshift.strikebench.sim.SimulationEngine.DecisionLevel> levels = request.levels() == null
+                        ? List.of() : request.levels().stream().map(l ->
+                            new io.liftandshift.strikebench.sim.SimulationEngine.DecisionLevel(
+                                    l.key(), l.price() == null ? Double.NaN : l.price().doubleValue())).toList();
+                result = simScenarioResult(ctx, new ScenarioRequest(symbol, requireOutcomeSpec(request.over()), levels));
                 interpretation = "Model-generated price paths: possible futures, never a forecast or historical frequency.";
             }
             case POSITION -> {

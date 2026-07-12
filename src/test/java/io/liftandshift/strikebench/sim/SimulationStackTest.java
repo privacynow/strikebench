@@ -241,11 +241,25 @@ class SimulationStackTest {
         var ensembles = new PathEnsembleService(market, clock);
         SimulationEngine engine = new SimulationEngine(market, datasets, db, clock, ensembles);
         var p = engine.preview("AAPL", spec(ScenarioSpec.Shape.CHOP, 0, 11), "observed",
-                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED,
+                List.of(new SimulationEngine.DecisionLevel("target", 270),
+                        new SimulationEngine.DecisionLevel("floor", 240)));
         assertThat(p.bands()).hasSize(21); // day 0..20
         assertThat(p.samples()).isNotEmpty();
         assertThat(p.endP10()).isLessThanOrEqualTo(p.endP50());
         assertThat(p.endP50()).isLessThanOrEqualTo(p.endP90());
+        assertThat(p.decisionMap().terminal().p5()).isLessThanOrEqualTo(p.decisionMap().terminal().p50());
+        assertThat(p.decisionMap().terminal().p50()).isLessThanOrEqualTo(p.decisionMap().terminal().p95());
+        assertThat(p.decisionMap().levels()).hasSize(2);
+        assertThat(p.decisionMap().levels()).allSatisfy(level -> {
+            assertThat(level.touchProbability()).isBetween(0.0, 1.0);
+            assertThat(level.endBeyondProbability()).isBetween(0.0, 1.0);
+            assertThat(level.touchCiLow()).isLessThanOrEqualTo(level.touchProbability());
+            assertThat(level.touchCiHigh()).isGreaterThanOrEqualTo(level.touchProbability());
+        });
+        assertThat(p.receipt().fingerprint()).hasSize(24);
+        assertThat(p.receipt().anchorSpot()).isEqualTo(p.spot());
+        assertThat(p.receipt().worldId()).isEqualTo("observed");
     }
 
     @Test

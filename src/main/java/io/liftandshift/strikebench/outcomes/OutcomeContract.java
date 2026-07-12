@@ -32,10 +32,13 @@ public final class OutcomeContract {
     /** Signed entryCostCents: debit paid is positive, credit received is negative. */
     public record Position(String key, List<Leg> legs, Integer qty, Long entryCostCents) {}
 
+    /** A price threshold the path ensemble should answer directly (target, floor, strike, breakeven). */
+    public record DecisionLevel(String key, BigDecimal price) {}
+
     public record Request(Operation operation, Basis basis,
                           MarketContext context, Position position, List<Position> positions,
                           ScenarioSpec over, IvSpec iv, ResearchQuestionEngine.RunRequest study,
-                          RecommendationEngine.Request decision) {}
+                          RecommendationEngine.Request decision, List<DecisionLevel> levels) {}
 
     public record Response(Operation operation, Basis basis,
                            Map<String, Object> context, String interpretation, Object result) {}
