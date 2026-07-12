@@ -360,6 +360,8 @@ class PaperCoreTest {
         TradeService.CloseResult closed = trades.unwind(t.id(), true);
         assertThat(closed.trade().status()).isEqualTo(TradeRecord.CLOSED);
         assertThat(closed.trade().realizedPnlCents()).isNotNull();
+        assertThat(closed.trade().feesOpenCents()).isEqualTo(200L); // recorded entry fact
+        assertThat(closed.trade().feesCloseCents()).isEqualTo(130L); // current default, not an invented copy
         assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?", r -> r.lng("n"), t.id()).getFirst()).isZero();
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore);
     }
@@ -528,6 +530,23 @@ class PaperCoreTest {
         Account after = accounts.get(acct.id());
         assertThat(after.cashCents()).isEqualTo(START - 260);
         assertThat(after.reservedCents()).isZero();
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void paperFeeOverrideIsAppliedPerSideThroughUnwind() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeService.OpenRequest req = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+                List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
+                "bullish", "month", "balanced", null, null, null, 200L, "TICKET");
+
+        TradeRecord opened = trades.create(req);
+        assertThat(opened.feesOpenCents()).isEqualTo(200L);
+        assertThat(opened.entrySnapshotJson()).contains("\"feeOverridePerSideCents\":200");
+
+        TradeService.CloseResult result = trades.unwind(opened.id(), true);
+        assertThat(result.trade().feesCloseCents()).isEqualTo(200L);
+        assertThat(result.realizedPnlCents()).isEqualTo(-400L);
         assertLedgerInvariants(acct.id());
     }
 

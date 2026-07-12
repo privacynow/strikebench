@@ -3693,7 +3693,7 @@
             el('h3', { class: 'mt0' }, 'Evaluate at your price'),
             el('div', { class: 'form-grid' },
               el('div', { class: 'field' }, el('label', {}, 'Net price $ (+credit / \u2212debit)'), netIn),
-              el('div', { class: 'field' }, el('label', {}, 'Fees $ (blank = default)'), feesIn),
+              el('div', { class: 'field' }, el('label', {}, 'Fees per side $ (blank = default)'), feesIn),
               el('div', { class: 'field' }, el('label', {}, '\u00a0'), el('button', {
                 class: 'btn btn-sm', id: 'reprice-btn', onclick: function () {
                   t.proposedNetCents = netIn.value === '' ? null : Math.round(parseFloat(netIn.value) * 100);
@@ -3701,7 +3701,7 @@
                   nav(6);
                 }
               }, 'Re-price'))),
-            el('div', { class: 'muted small' }, 'Theoretical max loss, breakevens, POP and EV all follow the price YOU set \u2014 use it to judge a limit order or a real fill.')));
+            el('div', { class: 'muted small' }, 'Theoretical max loss, breakevens, POP and EV all follow the price YOU set. A fee override is applied once to enter and once to unwind.')));
         }
         // The SERVER's required-acknowledgment list is the contract (client wording is a fallback);
         // the signed token + checked ids travel with the create call, where they are ENFORCED.

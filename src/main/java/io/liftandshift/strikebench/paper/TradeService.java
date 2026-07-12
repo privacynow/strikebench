@@ -56,7 +56,9 @@ public final class TradeService {
      * broker integration, external-fill recording — produces exactly this typed package, and the
      * one evaluation pipeline consumes it. Package-level extras: {@code proposedNetCents} (signed:
      * + credit received / − debit paid; null = price at executable sides), {@code feesOverrideCents}
-     * (null = platform default), {@code source} (RECOMMENDATION | BUILDER | TICKET | IMPORT | BROKER).
+     * (null = platform default; a paper ticket treats this as the fee per side, while a recorded
+     * fill treats it as the actual entry fee), {@code source} (RECOMMENDATION | BUILDER | TICKET |
+     * IMPORT | BROKER).
      */
     public record OpenRequest(String accountId, String symbol, String strategy, int qty, List<Leg> legs,
                               String thesis, String horizon, String riskMode,
@@ -354,7 +356,7 @@ public final class TradeService {
                 }
                 closeValue += closeSign(leg) * Money.centsFromPrice(px, (long) Leg.SHARES_PER_CONTRACT * leg.ratio() * t.qty());
             }
-            long feesClose = feesFor(t.legs(), t.qty());
+            long feesClose = closeFeesFor(t);
             Long decisionUnderlying = marks.underlyingMark(t.symbol(), worldOf(t.accountId()))
                     .map(Money::toCents).orElse(null);
             return closeOut(c, t, acct, "PREMIUM_CLOSE", closeValue, feesClose,
@@ -1257,6 +1259,9 @@ public final class TradeService {
         if (world != null) snapshot.put("laneTime", java.time.LocalDateTime.ofInstant(
                 nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString());
         snapshot.put("legs", snapshotLegs);
+        if (req.feesOverrideCents() != null && !isRecordedFillSource(req.source())) {
+            snapshot.put("feeOverridePerSideCents", fees);
+        }
         if (shareCovered) snapshot.put("coveredByHeldShares", sharesToLock);
         if (shareContext) snapshot.put("heldShareContextLots", (long) contextLots * req.qty());
 
@@ -1520,14 +1525,28 @@ public final class TradeService {
     }
 
     private static long heldShareContextLots(TradeRecord t) {
-        if (t == null || t.entrySnapshotJson() == null || t.entrySnapshotJson().isBlank()) return 0;
+        Long value = entrySnapshotLong(t, "heldShareContextLots");
+        return value == null ? 0 : Math.max(0, value);
+    }
+
+    /** Paper what-if fees are explicitly per side; broker-import fees remain entry facts only. */
+    private long closeFeesFor(TradeRecord t) {
+        if (!t.external()) {
+            Long override = entrySnapshotLong(t, "feeOverridePerSideCents");
+            if (override != null) return Math.max(0, override);
+        }
+        return feesFor(t.legs(), t.qty());
+    }
+
+    private static Long entrySnapshotLong(TradeRecord t, String key) {
+        if (t == null || t.entrySnapshotJson() == null || t.entrySnapshotJson().isBlank()) return null;
         try {
             Map<String, Object> snapshot = Json.read(t.entrySnapshotJson(),
                     new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-            Object value = snapshot.get("heldShareContextLots");
-            return value instanceof Number n ? Math.max(0, n.longValue()) : 0;
+            Object value = snapshot.get(key);
+            return value instanceof Number n ? n.longValue() : null;
         } catch (RuntimeException ignored) {
-            return 0; // legacy snapshot: do not invent a share context
+            return null; // legacy or malformed snapshot: never invent an override
         }
     }
 
