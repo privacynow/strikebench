@@ -1944,11 +1944,22 @@ test('theme toggle, brand, health banner, route error boundary', async () => {
   assert.match(boundary, /portfolio screen failed to load/i);
   assert.ok(await page.locator('#route-retry').count(), 'retry button present');
   await page.waitForSelector('#stale-banner', { timeout: 15000 });
-  assert.match(await page.textContent('#stale-banner'), /rebuilt after this server started/i);
+  assert.match(await page.textContent('#stale-banner'), /restart required/i);
+  assert.equal(await page.evaluate(() => App.state.serverStale), true,
+    'the stale runtime is a state-changing safety boundary, not only a warning');
+  const staleMutation = await page.evaluate(async () => {
+    try { await API.put('/api/world', { world: 'demo' }); return 'unexpected success'; }
+    catch (e) { return e.message; }
+  });
+  assert.match(staleMutation, /restart the app/i,
+    'mutations are blocked before an old client can diverge from the server');
 
   // Un-break everything: retry renders the screen and the banner clears on healthy report
   await page.unroute('**/api/account');
   await page.unroute('**/api/health');
+  await page.evaluate(() => App.checkServerHealth());
+  await page.waitForSelector('#stale-banner', { state: 'detached' });
+  assert.equal(await page.evaluate(() => App.state.serverStale), false);
   await page.click('#route-retry');
   await page.waitForSelector('#app[data-ready="true"]');
   assert.match(await page.textContent('#app'), /Buying power|Portfolio value/); // portfolio recovered

@@ -2,7 +2,18 @@
 (function () {
   'use strict';
 
+  function assertMutableRuntime() {
+    var appStale = window.App && window.App.state && window.App.state.serverStale;
+    var blockingBanner = document.getElementById('stale-banner');
+    if (appStale || (blockingBanner && blockingBanner.dataset.blocking === 'true')) {
+      var error = new Error('StrikeBench was updated while this session was running. Restart the app and reload before making changes.');
+      error.code = 'STALE_RUNTIME';
+      throw error;
+    }
+  }
+
   async function request(method, path, body) {
+    if (method !== 'GET') assertMutableRuntime();
     var opts = { method: method, headers: { 'Accept': 'application/json' } };
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
@@ -92,6 +103,7 @@
   /** Multipart upload for user-owned local files. The browser sends the file to StrikeBench;
    *  it never calls a market-data provider directly or exposes a server filesystem path. */
   async function upload(path, formData) {
+    assertMutableRuntime();
     var res = await fetch(path, { method: 'POST', headers: { 'Accept': 'application/json' }, body: formData });
     var text = await res.text(), json = null;
     try { json = text ? JSON.parse(text) : null; } catch (e) { /* non-JSON */ }

@@ -3,7 +3,8 @@
   'use strict';
 
   var App = {
-    state: { ticket: null, marketContext: { symbol: null, goal: null, horizon: null, thesis: null } },
+    state: { ticket: null, serverStale: false,
+      marketContext: { symbol: null, goal: null, horizon: null, thesis: null } },
     navToken: 0,
 
     /** One lane-owned decision context. Placed tickets remain locked snapshots of it. */
@@ -271,22 +272,30 @@
       var h = await API.get('/api/health');
       var existing = document.getElementById('stale-banner');
       if (h && h.jarChangedSinceBoot) {
+        App.state.serverStale = true;
         if (!existing) {
-          var banner = UI.el('div', { id: 'stale-banner' },
+          var banner = UI.el('div', { id: 'stale-banner', role: 'alert', 'data-blocking': 'true' },
             UI.icon('warn', 15),
-            ' The app was rebuilt after this server started \u2014 screens will misbehave until you restart it: stop the process, run ',
-            UI.el('code', {}, 'java -jar target/strikebench.jar'),
-            ' and reload this page.');
+            UI.el('span', {}, UI.el('b', {}, 'Restart required. '),
+              'StrikeBench was updated while this session was running. Changes are blocked until the app is restarted.'),
+            UI.el('button', { class: 'btn btn-sm', id: 'stale-reload', onclick: function () {
+              window.location.reload();
+            } }, 'Reload after restart'));
           document.body.insertBefore(banner, document.body.firstChild);
           document.body.classList.add('has-stale-banner');
           document.documentElement.style.setProperty('--stale-banner-h', banner.offsetHeight + 'px');
         }
-      } else if (existing) {
-        existing.remove();
-        document.body.classList.remove('has-stale-banner');
+      } else {
+        App.state.serverStale = false;
+        if (existing) {
+          existing.remove();
+          document.body.classList.remove('has-stale-banner');
+          document.documentElement.style.removeProperty('--stale-banner-h');
+        }
       }
     } catch (e) { /* health is best-effort; the error boundary already told the user */ }
   }
+  App.checkServerHealth = checkServerHealth;
 
   /**
    * SCENARIO MODE banner: when a synthetic dataset is the active analysis dataset, every screen
