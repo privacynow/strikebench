@@ -32,7 +32,7 @@ public final class DataResetService {
                 "Simulation practice sessions"), true),
         EVERYTHING(List.of("option_bar", "underlying_bar", "market_snapshot", "dataset WHERE id NOT IN ('observed','demo-fixture')",
                 "data_quarantine", "data_sync_cursor", "data_sync_schedule", "data_job_item", "data_job",
-                "recommendation", "strategy_evaluation", "backtests", "research_note", "workspace",
+                "plans", "ensemble_artifact", "recommendation", "strategy_evaluation", "backtests", "research_note", "workspace",
                 "trade_marks", "ledger", "positions", "live_orders", "audit", "trades",
                 "secrets", "settings WHERE k <> 'cboe_cooldown_until'", "accounts", "sim_session"), List.of(
                         "Market data and datasets", "Research and backtests", "Paper portfolio and account",

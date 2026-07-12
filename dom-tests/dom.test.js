@@ -168,6 +168,46 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await go('#/home'); // leave the suite on the dashboard for the next test
 });
 
+test('plan foundation promotes once, survives reload, versions assumptions, and closes only the chip', async () => {
+  await go('#/plan/new?symbol=AAPL');
+  await page.waitForSelector('#plan-start');
+  assert.equal(await page.locator('.plan-rail li').count(), 6, 'the full six-stage journey is visible');
+  assert.equal(await page.locator('.plan-rail li').last().locator('button').isDisabled(), true,
+    'Manage & Review is gated before a decision');
+  await page.locator('#plan-start .choice-card').filter({ hasText: 'Earn income' }).click();
+  await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/understand$/.test(location.hash));
+  await page.waitForSelector('#plan-header, #route-error');
+  assert.equal(await page.locator('#route-error').count(), 0,
+    'persisted plan renders without a route error: ' + (await page.locator('#app').textContent()));
+  const planHash = await page.evaluate(() => location.hash);
+  assert.match(await page.textContent('#plan-header'), /AAPL.*Earn income.*Demo market/s);
+  assert.equal(await page.locator('#plan-bar-root .plan-chip').count(), 1, 'promoted plan appears once');
+
+  await page.click('#plan-edit-context');
+  await page.fill('#plan-horizon-days', '45');
+  await page.selectOption('#plan-thesis', 'bearish');
+  await page.click('#plan-save-context');
+  await page.waitForFunction(() => /45 days/.test(document.getElementById('plan-header')?.textContent || ''));
+  await page.reload();
+  await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
+  assert.equal(await page.evaluate(() => location.hash), planHash);
+  assert.match(await page.textContent('#plan-header'), /45 days/);
+  assert.match(await page.textContent('#plan-header'), /AAPL.*Earn income/s);
+
+  // Capture after the real entrance transition settles; production animations remain enabled.
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p1-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p1-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.click('#plan-bar-root .plan-chip-close');
+  await page.waitForSelector('#app[data-route="home"][data-ready="true"]');
+  assert.equal(await page.locator('#plan-bar-root .plan-chip').count(), 0,
+    'closing a chip removes it from the open collection without deleting the durable plan');
+});
+
 test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {
   const safety = await page.evaluate(() => ({
     money: UI.fmtMoney(Number.NaN), compact: UI.fmtMoneyCompact(Infinity),

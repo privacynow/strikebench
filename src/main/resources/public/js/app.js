@@ -3,7 +3,7 @@
   'use strict';
 
   var App = {
-    state: { ticket: null, serverStale: false,
+    state: { ticket: null, serverStale: false, plans: [], activePlanId: null, provisionalPlan: null,
       marketContext: { symbol: null, goal: null, horizon: null, thesis: null } },
     navToken: 0,
 
@@ -717,6 +717,7 @@
         syncTapeSector(u);
         refreshWorldBand();
         refreshScenarioBanner();      // dataset exclusivity is server-enforced; the banner must agree
+        if (window.PlanStore) await PlanStore.marketChanged();
         var oldBar = document.getElementById('transition-error');
         if (oldBar) oldBar.remove();  // a successful reconciliation clears the failure state
         App.state.transitionStatus = 'committed';
@@ -1038,6 +1039,7 @@
       }).catch(function () { /* offline — next visit retries */ });
     });
     await App.worldReady;             // never paint restored work under an unconfirmed market lane
+    if (window.PlanStore) await PlanStore.init();
     refreshUniverse();
     subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
     subscribeEvents();                // typed workspace events (jobs, datasets, provider cooldowns)
@@ -1328,7 +1330,7 @@
     var es;
     try { es = new EventSource('/api/events'); } catch (e) { return; }
     App._eventsES = es;
-    ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated',
+    ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated', 'plan.updated',
       'world.tick', 'world.selected', 'world.control']
       .forEach(function (type) {
         es.addEventListener(type, function (ev) {
@@ -1337,6 +1339,9 @@
           if (type === 'dataset.selected') refreshScenarioBanner();
           if (type === 'provider.cooldown' && data) showCooldownChip(data);
           if (type === 'workspace.updated' && data && window.Workspace) Workspace.onRemoteRev(data.rev);
+          if (type === 'plan.updated' && window.PlanStore) {
+            PlanStore.load(true).catch(function () { /* next route retries */ });
+          }
           dispatchAppEvent(type, data);
         });
       });
