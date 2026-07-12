@@ -674,9 +674,12 @@
           }
         }
         // COMMIT PHASE — synchronous, no awaits between these mutations:
-        var from = App.state.world || 'observed';
+        // On cold boot the shell has an observed placeholder before /api/world resolves.
+        // The hydrated ownership marker must win over that placeholder exactly once.
+        var from = App.state.hydratedWorkspaceWorld || App.state.world || target;
         var changed = from !== target;
         App.state.world = target;
+        delete App.state.hydratedWorkspaceWorld;
         if (rev) App.state.worldRevision = Math.max(Number(App.state.worldRevision || 0), rev);
         if (incomingEpoch) App.state.worldRevisionEpoch = incomingEpoch;
         App.state.worldGen++;         // discard SSE/stale fills from the world we just left
@@ -955,6 +958,11 @@
     if (window.Workspace) {
       var wsUser = (me && me.user && (me.user.id || me.user.email)) || 'local';
       var ws = Workspace.hydrate(wsRemote, wsUser);
+      // A restored context belongs to the lane it was saved in, but that saved lane is NOT
+      // authority to select the market. Keep it only as ownership metadata until /api/world
+      // confirms the server lane. If they match, transitionWorld preserves the restored work;
+      // if they differ, it stashes that work under its old lane instead of leaking it.
+      if (ws && ws.world) App.state.hydratedWorkspaceWorld = ws.world;
       if (ws && ws.route && (!window.location.hash || window.location.hash === '#')) {
         window.location.hash = ws.route;
       }

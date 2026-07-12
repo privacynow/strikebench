@@ -230,7 +230,7 @@ test('provider-governed sparkline deferral resolves to an honest unavailable sta
     assert.equal(await page.locator('.home-market-grid .spark-loading').count(), 0,
       'a declined optional request never leaves a permanent loading state');
     assert.equal(await page.locator('.home-market-grid .spark-ev').evaluateAll(nodes =>
-      nodes.every(n => /DATA UNAVAILABLE/.test(n.textContent))), true,
+      nodes.every(n => /HISTORY UNAVAILABLE/.test(n.textContent))), true,
       'every deferred chart states that its history evidence is missing');
   } finally {
     await page.unroute('**/api/sparklines?*');
@@ -695,10 +695,17 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
   await go('#/research/AAPL');
   await page.waitForSelector('.quote-hero');
   // Persist NOW (the 4s tick and pagehide would do this; tests don't wait).
+  const beforeSave = await page.evaluate(() => ({ context: Object.assign({}, App.state.marketContext),
+    snapshot: Workspace.snapshot().context }));
+  assert.equal(beforeSave.context.goal, 'ACQUIRE', 'Research navigation preserves the strategy goal in memory');
+  assert.equal(beforeSave.snapshot.goal, 'ACQUIRE', 'the durable workspace snapshot includes the strategy goal');
   await page.evaluate(() => Workspace.save());
   await page.waitForTimeout(1700); // let the debounced backend push land
-  const rev = await page.evaluate(() => API.getFresh('/api/workspace').then(r => r.rev));
+  const storedWorkspace = await page.evaluate(() => API.getFresh('/api/workspace'));
+  const rev = storedWorkspace.rev;
   assert.ok(rev >= 1, 'workspace persisted to the backend (rev ' + rev + ')');
+  assert.equal(storedWorkspace.state.context.goal, 'ACQUIRE',
+    'the backend stores the complete strategy context verbatim');
 
   // Cold open with NO hash: the app resumes exactly where the user left off.
   await page.goto(BASE + '/');
@@ -892,9 +899,10 @@ test('working view follows: idea bar carries the thesis; scenario studio opens o
   await go('#/trade/outcomes');
   await page.waitForSelector('#working-view-chip');
   const wv = await page.textContent('#working-view-chip');
-  assert.match(wv, /QQQ/);
   assert.match(wv, /bearish/);
   assert.match(wv, /~1 month/);
+  assert.equal(await page.textContent('#workflow-symbol'), 'QQQ',
+    'the symbol has one dedicated owner instead of being repeated inside the view chip');
   // A fresh Scenario Studio opens on the bearish story (Rises, then fades) — not a random default.
   await go('#/research/QQQ');
   await openFutures();
@@ -1057,6 +1065,7 @@ test('Research Coming up never relabels a past expiration as 0d', async () => {
   }));
   await page.evaluate(() => API.invalidate(['/api/research/AAPL/expirations']));
   await go('#/research/AAPL');
+  await openResearchTab('overview');
   await page.waitForSelector('#events-card:has-text("2026-07-13")');
   const events = await page.textContent('#events-card');
   assert.doesNotMatch(events, /2026-07-10/, 'past contracts are absent from Coming up');
