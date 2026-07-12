@@ -2788,7 +2788,8 @@
       if (wv) {
         bar.appendChild(el('span', { class: 'workflow-summary', id: 'working-view-chip' }, icon('compass', 14), wv));
         if (stage !== 'context') bar.appendChild(el('button', { class: 'btn btn-sm btn-secondary',
-          onclick: function () { App.navigate('#/trade/context'); } }, 'Complete context'));
+          onclick: function () { App.navigate('#/trade/context'); } },
+        workflowStepReady('context') ? 'Edit context' : 'Complete context'));
       } else {
         bar.appendChild(el('span', { class: 'muted' },
           'Choose a stock and goal, or ask the scout to find a starting point.'));
@@ -3377,7 +3378,10 @@
         // LOCKED CONTEXT (interaction contract #5): the reviewed package's symbol cannot
         // silently mutate — changing goes back through the workflow.
         body.appendChild(lockedSymbolBar(t.symbol));
-        var vp = verdictPanel(p, Learn.currentLevel() === 'beginner');
+        var exactEconomics = res.economics ? economicAssessmentBlock({ economics: res.economics,
+          economicVerdict: res.economics.verdict }) : null;
+        if (exactEconomics) body.appendChild(exactEconomics);
+        var vp = verdictPanel(p, Learn.currentLevel() === 'beginner', !!exactEconomics);
         body.appendChild(vp.node);
         if (res.accountFit) {
           var af = res.accountFit;
@@ -3441,9 +3445,16 @@
               el('span', {}, ck.text));
           }))));
 
+        var heldCombinedLoss = p.analytics && p.analytics.combinedMaxLossCents;
         body.appendChild(el('div', { class: 'grid grid-4' },
           stat('Cost / credit', fmtMoney(p.entryNetPremiumCents, { plus: true }), 'Negative = you pay this to open. Positive = you collect it.'),
-          stat('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(p.maxLossCents)), 'The structural worst case for this position, fees excluded.'),
+          stat(heldCombinedLoss != null ? 'New cash at risk' : 'Theoretical max loss',
+            el('span', { class: 'loss' }, fmtMoney(p.maxLossCents)),
+            heldCombinedLoss != null ? 'Incremental cash this option package can lose; your held shares keep their own downside.'
+              : 'The structural worst case for this position, fees excluded.'),
+          heldCombinedLoss != null ? stat('Theoretical max loss with shares',
+            el('span', { class: 'loss' }, fmtMoney(heldCombinedLoss)),
+            'The structural worst case of the option package plus the shares it protects or covers, measured from today.') : null,
           stat('Theoretical max profit', UI.maxProfitLabel(t.previewReq && t.previewReq.strategy,
             t.candidate && t.candidate.structureGroup, p.maxProfitCents, Learn.currentLevel() === 'beginner', p.legs)),
           stat('Fees', fmtMoney(p.feesOpenCents), '$0.65 per contract per leg by default.'),
@@ -5580,11 +5591,13 @@
       function scenarioCards() {
         var wrap = el('div', { class: 'grid grid-3', id: 'sim-scenarios' });
         SIM_SCENARIOS.forEach(function (sc) {
-          var card = el('button', { class: 'choice sim-scenario' + (st.scenario === sc.key ? ' active' : ''),
-            type: 'button', 'data-scenario': sc.key, onclick: function () {
+          var selected = st.scenario === sc.key;
+          var card = el('button', { class: 'choice sim-scenario' + (selected ? ' selected' : ''),
+            type: 'button', 'data-scenario': sc.key, 'aria-pressed': selected ? 'true' : 'false', onclick: function () {
               st.scenario = sc.key; renderCreator();
             } },
-            el('b', {}, App.scenarioLabel(sc.key)),
+            el('span', { class: 'choice-head' }, el('b', {}, App.scenarioLabel(sc.key)),
+              selected ? el('span', { class: 'badge badge-info' }, 'SELECTED') : null),
             el('div', { class: 'muted small' }, sc.blurb));
           wrap.appendChild(card);
         });
@@ -7557,14 +7570,14 @@
    * execution cost + the plan — same truth at both levels, beginner gets sentences, expert density.
    * Returns {node, requiredAcks: [{id, label}]} so the caller can gate the Continue button.
    */
-  function verdictPanel(p, beginner) {
+  function verdictPanel(p, beginner, hasEconomicClassification) {
     var a = p.analytics || {};
     var prob = a.probabilityMap || {};
     var exec = a.executionQuality || {};
     var plan = a.managementPlan || {};
     var wrap = el('div', { id: 'verdict-panel' });
     var kind = a.verdict === 'favorable' ? 'ok' : a.verdict === 'unfavorable' ? 'danger' : 'caution';
-    if (a.verdict) {
+    if (a.verdict && !hasEconomicClassification) {
       wrap.appendChild(alertBox(kind, (a.verdict === 'favorable' ? 'Looks reasonable'
         : a.verdict === 'unfavorable' ? 'The odds are against this trade' : 'Mixed picture'),
         [a.verdictReason || '']));

@@ -1179,6 +1179,7 @@ public final class TradeService {
                 snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
                 fees, maxLoss, maxProfit, ev, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                 rfr, rateEvidence);
+        if (shareContext) analytics.put("combinedMaxLossCents", combinedMaxLoss);
         return new Plan(filled, entryNet, fees, reserve, maxLoss, maxProfit,
                 riskCurve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
                 pop, ev, Money.toCents(underlying), worst, blocks, warnings, Json.write(snapshot), sharesToLock,

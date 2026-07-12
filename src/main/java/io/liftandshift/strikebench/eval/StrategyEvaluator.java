@@ -37,6 +37,16 @@ public final class StrategyEvaluator {
         return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan, sb, economics, exp);
     }
 
+    /** Economic truth for one exact ticket; ranking gates are replaced by the preview's own
+     * mechanical verdict, while risk/evidence still use the shared producers. */
+    public EconomicAssessment assessExact(Candidate c, EvalContext ctx, boolean mechanicallyEligible,
+                                          List<String> mechanicalFailures, long roundTripFeesCents) {
+        RiskProfile rsk = risk.profile(c, ctx);
+        EvidenceProfile ev = evidence.assemble(c, ctx);
+        return EconomicAssessment.assessExact(c, rsk, ev, ctx, mechanicallyEligible,
+                mechanicalFailures, roundTripFeesCents);
+    }
+
     /**
      * Evaluates a set of alternatives and ranks them for the competition: viable (gate-passing)
      * first, then by economic tier, then by risk/evidence quality inside that tier. The monotonic

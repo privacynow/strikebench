@@ -36,7 +36,13 @@ async function waitForServer(tries = 60) {
 
 /** Navigate to a hash route and wait for the view to finish rendering. */
 async function go(hash) {
-  await page.evaluate(h => { window.location.hash = h; }, hash);
+  await page.evaluate(h => {
+    // A same-hash visit is still a navigation in the test contract. Force readiness
+    // false before either path so waitForSelector can never observe the outgoing view.
+    document.getElementById('app').setAttribute('data-ready', 'false');
+    if (window.location.hash === h) return App.render();
+    window.location.hash = h;
+  }, hash);
   await page.waitForSelector('#app[data-ready="true"]');
 }
 
@@ -1062,6 +1068,10 @@ test('Context-to-Decide: screening happens once; Decide is review and paper conf
   assert.ok(await page.locator('#ticket-body .symbol-context-locked .badge:has-text("LOCKED")').count(),
     'the placed package cannot silently change symbol');
   const review = await page.textContent('#ticket-body');
+  assert.ok(await page.locator('#ticket-body .economic-assessment').count(),
+    'the exact ticket keeps the shared economic classification through final review');
+  assert.match(review, /Market-implied EV/);
+  assert.match(review, /Realized-vol scenario EV/);
   assert.match(review, /Theoretical max loss/);
   assert.match(review, /Theoretical max profit/);
   assert.equal(await page.locator('#ticket-body .xp-head:has-text("realistic markets"), #ticket-body .xp-head:has-text("Scenario distributions")').count(), 1,
@@ -1565,6 +1575,11 @@ test('holdings + intents: buy shares, covered call at a target, filters, assignm
   await page.waitForSelector('#to-confirm', { timeout: 30000 });
   const review = await page.textContent('#ticket-body');
   assert.match(review, /Covered by shares you already hold/);
+  assert.match(review, /New cash at risk/);
+  assert.match(review, /Theoretical max loss with shares/,
+    'held-share tickets keep incremental cash risk and combined structural risk separate');
+  assert.ok(await page.locator('#ticket-body .economic-assessment').count(),
+    'held-share economics use the same exact-ticket assessment as every other structure');
   await page.$$eval('.ack-gate input', els => els.forEach(e => { if (!e.checked) e.click(); })); // acknowledge material risks (CP-5 gate)
   await page.click('#to-confirm');
   await page.waitForSelector('#place-trade');
@@ -2212,7 +2227,10 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   // ---- BEGINNER: goal -> shape -> leg-by-leg walkthrough -> whole position ----
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#app[data-ready="true"]');
-  await page.evaluate(() => { App.state.builderForm = null; App.state.ticket = null; });
+  await page.evaluate(() => {
+    App.state.builderForm = null; App.state.ticket = null;
+    App.context.update({ goal: null, horizon: null, thesis: null });
+  });
   await go('#/trade/structure');
   await page.waitForSelector('#bw-goals .choice');
   // Q&A, not text: goal cards -> one shaping question -> the structure
@@ -2311,7 +2329,10 @@ test('strategy builder: beginner wizard walks legs with impact; expert terminal 
   await page.evaluate(() => { App.state.ticket = null; });
 
   // Browse-all catalog: every structure with its payoff shape, risky ones labeled
-  await page.evaluate(() => { App.state.builderForm = null; });
+  await page.evaluate(() => {
+    App.state.builderForm = null;
+    App.context.update({ goal: null, horizon: null, thesis: null });
+  });
   await go('#/trade/structure');
   await page.waitForSelector('#bw-goals .choice');
   await page.click('#bw-browse');
@@ -2363,7 +2384,8 @@ test('Builder keeps POP truth and adds goal-native assignment language', async (
   await go('#/home');
   await page.evaluate(() => {
     Learn.setLevel('beginner');
-    App.state.builderForm = null; App.state.ticket = null; App.context.selectSymbol('AAPL');
+    App.state.builderForm = null; App.state.ticket = null;
+    App.context.update({ symbol: 'AAPL', goal: null, horizon: null, thesis: null });
   });
   await go('#/trade/structure');
   await page.waitForSelector('#bw-goals .choice[data-goal="ACQUIRE"]');
@@ -2376,6 +2398,25 @@ test('Builder keeps POP truth and adds goal-native assignment language', async (
   assert.match(impact, /Chance of any profit/, 'probability of profit remains visible as its own statistic');
   assert.match(impact, /Chance you buy/, 'assignment is translated into the acquisition goal');
   assert.doesNotMatch(impact, /Odds of profit/, 'the old generic wording is gone');
+});
+
+test('completed context flows into Structure once, with an honest edit affordance', async () => {
+  await page.evaluate(() => {
+    Learn.setLevel('beginner');
+    App.state.builderForm = null; App.state.ticket = null;
+    App.context.update({ symbol: 'AAPL', goal: 'DIRECTIONAL', horizon: 'month', thesis: 'bullish' });
+  });
+  await go('#/trade/structure');
+  await page.waitForSelector('#bw-shape');
+  assert.equal(await page.locator('#bw-goals').count(), 0,
+    'Structure does not ask for the goal already completed in Context');
+  assert.match(await page.textContent('#idea-bar'), /AAPL.*Trade a view.*bullish.*1 month/i);
+  assert.ok(await page.locator('#idea-bar button:has-text("Edit context")').count(),
+    'a complete context is offered for editing, never mislabeled as incomplete');
+  await page.click('#bw-shape ~ .btn-row button:has-text("Back"), #bw-shape + .btn-row button:has-text("Back")');
+  await page.waitForSelector('#bw-goals');
+  assert.ok(await page.locator('#bw-goals .choice[data-goal="DIRECTIONAL"].selected').count(),
+    'the carried goal remains editable through the normal Builder flow');
 });
 
 test('builder recovers from a failing symbol and follows the working symbol', async () => {
@@ -2809,6 +2850,8 @@ test('simulated market: product creator, loud live band, world-routed research, 
   // The PRODUCT creator: scenario story cards, labeled fields, no micro-syntax, no prompt().
   await page.waitForSelector('#dc-sim-market #sim-scenarios .sim-scenario');
   assert.ok((await page.locator('#sim-scenarios .sim-scenario').count()) >= 6, 'scenario story cards');
+  assert.equal(await page.getAttribute('#sim-scenarios .sim-scenario[data-scenario="CHOP"]', 'aria-pressed'), 'true',
+    'the selected market story is visibly and accessibly selected');
   const creatorDefaults = await page.$$eval('#sim-symbol-chips [data-picked-sym]',
     els => els.map(e => e.getAttribute('data-picked-sym')));
   const creatorUniverse = await page.evaluate(() => (App.state.universe.active.symbols || []).slice());
@@ -2819,6 +2862,9 @@ test('simulated market: product creator, loud live band, world-routed research, 
   assert.equal(await page.isChecked('#sim-use-sector'), true,
     'the current market/universe rides along by default so the world is not a ghost town');
   await page.click('#sim-scenarios .sim-scenario[data-scenario="SELLOFF_REBOUND"]');
+  await page.waitForSelector('#sim-scenarios .sim-scenario[data-scenario="SELLOFF_REBOUND"][aria-pressed="true"]');
+  assert.ok(await page.locator('#sim-scenarios .sim-scenario[data-scenario="SELLOFF_REBOUND"] .badge:has-text("SELECTED")').count(),
+    'clicking a simulated-market card produces an unmistakable state change');
   await page.fill('#sim-name', 'DOM sim');
   await page.fill('#sim-symbols', 'ACME');
   await page.check('#sim-allow-fictional'); // EXPLICIT opt-in — fictional is never inferred (and never pre-checked)

@@ -21,19 +21,16 @@ public final class RiskProfiler {
     private static final double TAIL_MOVE = 0.20;
 
     public RiskProfile profile(Candidate c, EvalContext ctx) {
-        long maxLoss = Math.max(0, c.maxLossCents());
+        long maxLoss = Math.max(0, c.combinedMaxLossCents() != null
+                ? c.combinedMaxLossCents() : c.maxLossCents());
         Long maxProfit = c.maxProfitCents();
 
         List<RiskProfile.Scenario> scenarios = new ArrayList<>();
         long worstPnl = 0;
         boolean have = false;
         try {
-            List<Leg> legs = new ArrayList<>(c.legs().stream().map(LegView::toLeg).toList());
-            if (Boolean.TRUE.equals(c.usesHeldShares()) && c.sharesNeeded() != null && c.sharesNeeded() > 0) {
-                int lots = Math.max(1, c.sharesNeeded() / Leg.SHARES_PER_CONTRACT);
-                legs.add(Leg.stock(LegAction.BUY, lots, cents(ctx.underlyingCents())));
-            }
-            PayoffCurve pc = PayoffCurve.of(legs, Math.max(1, c.qty()));
+            CurveInput input = curveInput(c, ctx);
+            PayoffCurve pc = PayoffCurve.of(input.legs(), Math.max(1, c.qty()), input.entryAdjustmentCents());
             BigDecimal spot = cents(ctx.underlyingCents());
             for (double m : MOVES) {
                 BigDecimal s = spot.multiply(BigDecimal.valueOf(1.0 + m));
@@ -59,8 +56,8 @@ public final class RiskProfiler {
                 && ctx.realizedVol30() != null && ctx.realizedVol30() > 0 && ctx.underlyingCents() > 0
                 && ctx.daysToExpiry() > 0 && c.legs() != null && !c.legs().isEmpty()) {
             try {
-                List<Leg> plegs = new ArrayList<>(c.legs().stream().map(LegView::toLeg).toList());
-                PayoffCurve ppc = PayoffCurve.of(plegs, Math.max(1, c.qty()));
+                CurveInput input = curveInput(c, ctx);
+                PayoffCurve ppc = PayoffCurve.of(input.legs(), Math.max(1, c.qty()), input.entryAdjustmentCents());
                 double t = ctx.daysToExpiry() / 365.0;
                 evHistVol = ppc.expectedValueCents(ctx.underlyingCents() / 100.0, ctx.realizedVol30(), t, 0);
                 basisNote = "expectedValueCents = market-implied (IV, risk-neutral); evHistVolCents = realized-vol "
@@ -72,6 +69,27 @@ public final class RiskProfiler {
         return new RiskProfile(maxLoss, maxProfit, c.pop(), c.expectedValueCents(), tailLoss, TAIL_MOVE,
                 scenarios, evHistVol, basisNote);
     }
+
+    /**
+     * Builds the exact package curve once for every risk lane. The package-level entry is
+     * authoritative (a user's limit/fill need not equal the sum of executable leg marks), while
+     * held-share candidates add one stock lot PER package unit. {@code sharesNeeded} is the total
+     * across quantity, so using it directly as a leg ratio would multiply quantity twice.
+     */
+    private static CurveInput curveInput(Candidate c, EvalContext ctx) {
+        int qty = Math.max(1, c.qty());
+        List<Leg> optionPackage = new ArrayList<>(c.legs().stream().map(LegView::toLeg).toList());
+        long markedEntry = PayoffCurve.of(optionPackage, qty).entryNetPremiumCents();
+        long entryAdjustment = c.entryNetPremiumCents() - markedEntry;
+        List<Leg> combined = new ArrayList<>(optionPackage);
+        if (Boolean.TRUE.equals(c.usesHeldShares()) && c.sharesNeeded() != null && c.sharesNeeded() > 0) {
+            int lotsPerUnit = Math.max(1, c.sharesNeeded() / (Leg.SHARES_PER_CONTRACT * qty));
+            combined.add(Leg.stock(LegAction.BUY, lotsPerUnit, cents(ctx.underlyingCents())));
+        }
+        return new CurveInput(combined, entryAdjustment);
+    }
+
+    private record CurveInput(List<Leg> legs, long entryAdjustmentCents) {}
 
     private static BigDecimal cents(long c) { return BigDecimal.valueOf(c).movePointLeft(2); }
 }

@@ -26,18 +26,20 @@
         var next = Object.assign({}, App.state.marketContext || {});
         if (patch.symbol !== undefined) {
           var symbol = String(patch.symbol || '').trim().toUpperCase();
-          if (symbol) next.symbol = symbol;
+          next.symbol = symbol || null;
         }
         if (patch.goal !== undefined) {
           var goal = patch.goal === null ? '' : String(patch.goal).trim().toUpperCase();
           if (!goal || goal === 'ALL' || goal === 'BROWSE') next.goal = null;
           else if (['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'].indexOf(goal) >= 0) next.goal = goal;
         }
-        if (patch.horizon !== undefined && patch.horizon !== null && String(patch.horizon).trim()) {
-          next.horizon = String(patch.horizon).trim();
+        if (patch.horizon !== undefined) {
+          var horizon = String(patch.horizon || '').trim();
+          next.horizon = horizon || null;
         }
-        if (patch.thesis !== undefined && patch.thesis !== null && String(patch.thesis).trim()) {
-          next.thesis = String(patch.thesis).trim().toLowerCase();
+        if (patch.thesis !== undefined) {
+          var thesis = String(patch.thesis || '').trim().toLowerCase();
+          next.thesis = thesis || null;
         }
         var oldSymbol = App.state.marketContext && App.state.marketContext.symbol;
         App.state.marketContext = next;
@@ -179,9 +181,9 @@
       root.setAttribute('data-route', route);
 
       // Swap = clear + paint a skeleton so the screen is never blank while data loads.
-      // Wrapped in a View Transition when the browser has one (Chromium): the old screen
-      // crossfades out instead of vanishing. #app carries its own view-transition-name so
-      // the header/tape stay out of the animation (a frozen ticker snapshot reads as a jump).
+      // Route transitions deliberately stay in ordinary DOM flow: native View Transitions
+      // can hold stale snapshots across a superseding hash navigation. The skeleton and
+      // card-arrival motion provide continuity without owning navigation correctness.
       var skeleton = UI.skeleton();
       var swap = function () {
         root.setAttribute('data-ready', 'false');

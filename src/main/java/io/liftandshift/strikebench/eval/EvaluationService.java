@@ -130,6 +130,16 @@ public final class EvaluationService {
         return ranked;
     }
 
+    /** Reuses the same context/risk/evidence spine for the exact package on Ticket Review. */
+    public EconomicAssessment assessExact(String symbol, Candidate candidate, long buyingPowerCents,
+                                          io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
+                                          boolean mechanicallyEligible, List<String> mechanicalFailures,
+                                          long roundTripFeesCents) {
+        EvalContext ctx = buildContext(symbol, List.of(candidate), buyingPowerCents, actx, worldId);
+        return evaluator.assessExact(candidate, ctx, mechanicallyEligible, mechanicalFailures,
+                roundTripFeesCents);
+    }
+
     /**
      * Universe-scale competition: evaluates each symbol, keeps its single best VIABLE idea, then
      * ranks those cross-symbol so the strongest opportunities float to the top. Persists the

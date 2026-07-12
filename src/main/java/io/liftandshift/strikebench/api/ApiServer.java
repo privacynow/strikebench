@@ -41,6 +41,7 @@ import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.pricing.HistoricalVol;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
 import io.liftandshift.strikebench.recommend.AutoRecommender;
+import io.liftandshift.strikebench.recommend.Candidate;
 import io.liftandshift.strikebench.recommend.LegView;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
@@ -3853,6 +3854,11 @@ public final class ApiServer {
         var preview = trades.preview(req);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("preview", preview);
+        Candidate exact = exactPreviewCandidate(req, preview);
+        var economics = evaluations.assessExact(req.symbol(), exact, acct.buyingPowerCents(),
+                analysisCtx(ctx), worldParam(activeWorld(ctx)), preview.ok(), preview.blockReasons(),
+                Math.multiplyExact(preview.feesOpenCents(), 2L));
+        out.put("economics", economics);
         out.put("guardrails", Map.of(
                 "level", verdict.level().name(),
                 "blockReasons", verdict.blockReasons(),
@@ -3885,6 +3891,46 @@ public final class ApiServer {
             out.put("accountFit", fit);
         }
         ctx.json(out);
+    }
+
+    /** Builds the evaluator's position contract from the SERVER-priced preview. Package entry,
+     * fills, fees and combined held-share risk all come from that exact snapshot; the client does
+     * not get to assert an economic verdict. */
+    private static Candidate exactPreviewCandidate(TradeService.OpenRequest req,
+                                                   io.liftandshift.strikebench.paper.TradePreview preview) {
+        StrategyFamily family = null;
+        try { family = StrategyFamily.valueOf(req.strategy().trim().toUpperCase(Locale.ROOT)); }
+        catch (RuntimeException ignored) { /* explicit custom package */ }
+        String display = family == null ? "Custom position" : family.display();
+        String group = family == null ? "custom" : family.structureGroup();
+        String intent = req.intent() == null || req.intent().isBlank()
+                ? family == null ? StrategyIntent.DIRECTIONAL.name() : family.primaryIntent().name()
+                : StrategyIntent.parse(req.intent()).name();
+        List<String> intents = family == null ? List.of(intent)
+                : family.intents().stream().map(Enum::name).sorted().toList();
+        List<LegView> legs = preview.legs().stream().map(m -> new LegView(
+                java.util.Objects.toString(m.get("action"), null),
+                java.util.Objects.toString(m.get("type"), null),
+                java.util.Objects.toString(m.get("strike"), null),
+                java.util.Objects.toString(m.get("expiration"), null),
+                m.get("ratio") instanceof Number n ? n.intValue() : 1,
+                java.util.Objects.toString(m.get("fill"), null))).toList();
+        boolean liquid = preview.legs().stream().filter(m -> !"STOCK".equals(m.get("type")))
+                .allMatch(m -> m.get("bid") != null && m.get("ask") != null);
+        Long combinedMaxLoss = preview.analytics().get("combinedMaxLossCents") instanceof Number n
+                ? n.longValue() : null;
+        Integer sharesNeeded = null;
+        if (req.heldShares()) {
+            int lots = Math.max(1,
+                    io.liftandshift.strikebench.strategy.CoverageCheck.callCoverLotsNeeded(req.legs()));
+            sharesNeeded = Math.multiplyExact(Math.multiplyExact(lots, Leg.SHARES_PER_CONTRACT), req.qty());
+        }
+        return new Candidate(req.strategy(), display, group, display, legs, req.qty(),
+                preview.entryNetPremiumCents(), preview.maxProfitCents(), preview.maxLossCents(),
+                preview.breakevens(), preview.popEntry(), preview.expectedValueCents(), liquid ? 1.0 : 0.0,
+                preview.freshness(), preview.warnings(), 0, 1, "Exact ticket", "", "", "", "",
+                intent, intents, preview.assignmentProb(), null, null, null,
+                req.heldShares() ? Boolean.TRUE : null, sharesNeeded, combinedMaxLoss);
     }
 
     private void tradeCreate(Context ctx) {

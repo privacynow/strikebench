@@ -859,15 +859,6 @@ body.lvl-expert .not-expert { display: none !important; }
    SMOOTH RENDER PIPELINE — skeletons, route crossfade, progressive card arrival.
    ================================================================================== */
 
-/* Route crossfade: only #app participates; header/tape/footer swap instantly so the
-   marquee never appears frozen inside a transition snapshot. */
-#app { view-transition-name: app-main; }
-::view-transition-old(root), ::view-transition-new(root) { animation: none; }
-::view-transition-old(app-main) { animation: sb-fade-out .14s ease both; }
-::view-transition-new(app-main) { animation: sb-fade-in .16s ease both; }
-@keyframes sb-fade-out { from { opacity: 1; } to { opacity: 0; } }
-@keyframes sb-fade-in { from { opacity: 0; } to { opacity: 1; } }
-
 /* Skeleton: a quiet placeholder, never a blank void. */
 .skel-screen { padding-top: 4px; }
 .skel {
@@ -897,7 +888,6 @@ body.lvl-expert .not-expert { display: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .skel { animation: none; }
   #app .card, #app .candidate, #app .tile { animation: none; }
-  ::view-transition-old(app-main), ::view-transition-new(app-main) { animation: none; }
 }
 
 /* ==================================================================================

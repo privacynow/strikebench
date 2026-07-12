@@ -37,7 +37,11 @@ async function waitForServer(tries = 60) {
 }
 
 async function go(hash) {
-  await page.evaluate(h => { window.location.hash = h; }, hash);
+  await page.evaluate(h => {
+    document.getElementById('app').setAttribute('data-ready', 'false');
+    if (window.location.hash === h) return App.render();
+    window.location.hash = h;
+  }, hash);
   await page.waitForSelector('#app[data-ready="true"]', { timeout: 30000 });
   await page.waitForTimeout(400); // async cards (explorer tiles, ladders) settle
 }

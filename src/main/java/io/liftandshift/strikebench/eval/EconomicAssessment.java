@@ -41,7 +41,22 @@ public record EconomicAssessment(
 
     public static EconomicAssessment assess(Candidate c, RiskProfile risk, EvidenceProfile evidence,
                                             ScoreBreakdown score, EvalContext ctx) {
-        long fees = roundTripFees(c, ctx);
+        return assess(c, risk, evidence, ctx, score != null && score.gatePassed(),
+                score == null ? List.of() : score.gateFailures(), roundTripFees(c, ctx));
+    }
+
+    /** Exact-ticket assessment: mechanical eligibility comes from the trade preview and fees are
+     * the preview's actual override/default, not a reconstructed ranking assumption. */
+    public static EconomicAssessment assessExact(Candidate c, RiskProfile risk, EvidenceProfile evidence,
+                                                  EvalContext ctx, boolean mechanicallyEligible,
+                                                  List<String> mechanicalFailures, long roundTripFeesCents) {
+        return assess(c, risk, evidence, ctx, mechanicallyEligible, mechanicalFailures,
+                Math.max(0, roundTripFeesCents));
+    }
+
+    private static EconomicAssessment assess(Candidate c, RiskProfile risk, EvidenceProfile evidence,
+                                              EvalContext ctx, boolean mechanicallyEligible,
+                                              List<String> mechanicalFailures, long fees) {
         Long marketNet = risk == null || risk.expectedValueCents() == null
                 ? null : risk.expectedValueCents() - fees;
         Long realizedNet = risk == null || risk.evHistVolCents() == null
@@ -52,8 +67,8 @@ public record EconomicAssessment(
         boolean observed = evidence != null && evidence.rollup() != null && evidence.rollup().isObserved();
         List<String> reasons = new ArrayList<>();
 
-        if (score == null || !score.gatePassed()) {
-            if (score != null) reasons.addAll(score.gateFailures());
+        if (!mechanicallyEligible) {
+            if (mechanicalFailures != null) reasons.addAll(mechanicalFailures);
             return new EconomicAssessment(Verdict.UNAVAILABLE, "MECHANICALLY_INELIGIBLE",
                     "Cannot assess as a trade",
                     "The package does not pass the mechanical and account checks required for an economic comparison.",

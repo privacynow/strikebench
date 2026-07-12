@@ -679,9 +679,12 @@ class ApiIntegrationTest {
         String spread = "{\"symbol\":\"AAPL\",\"strategy\":\"CREDIT_PUT_SPREAD\",\"qty\":1,\"legs\":["
                 + "{\"action\":\"SELL\",\"type\":\"PUT\",\"strike\":\"250\",\"expiration\":\"" + exp + "\",\"ratio\":1},"
                 + "{\"action\":\"BUY\",\"type\":\"PUT\",\"strike\":\"245\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}";
-        JsonNode p = Json.parse(post("/api/trades/preview", spread).body()).get("preview");
+        JsonNode spreadResponse = Json.parse(post("/api/trades/preview", spread).body());
+        JsonNode p = spreadResponse.get("preview");
         assertThat(p.get("ok").asBoolean()).isTrue();
         assertThat(p.get("underlyingCents").asLong()).isGreaterThan(0);
+        assertThat(spreadResponse.get("economics").get("verdict").asText()).isNotBlank();
+        assertThat(spreadResponse.get("economics").has("marketEvAfterCostsCents")).isTrue();
 
         // Per-leg marks aligned with the request: fills at executable sides, greeks present
         assertThat(p.get("legs").size()).isEqualTo(2);
@@ -730,9 +733,13 @@ class ApiIntegrationTest {
         String calendar = "{\"symbol\":\"AAPL\",\"strategy\":\"CALENDAR_CALL\",\"qty\":1,\"legs\":["
                 + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp + "\",\"ratio\":1},"
                 + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp2 + "\",\"ratio\":1}]}";
-        JsonNode cal = Json.parse(post("/api/trades/preview", calendar).body()).get("preview");
+        JsonNode calendarResponse = Json.parse(post("/api/trades/preview", calendar).body());
+        JsonNode cal = calendarResponse.get("preview");
         assertThat(cal.get("payoff").size()).isZero();
         assertThat(cal.get("legs").size()).isEqualTo(2);
+        assertThat(calendarResponse.get("economics").get("verdict").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(calendarResponse.get("economics").get("summary").asText())
+                .contains("cannot support an economic verdict");
     }
 
     @Test
