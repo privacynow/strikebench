@@ -1847,6 +1847,40 @@ test('pro depth: comparison table, custom builder, position greeks', async () =>
   await page.waitForSelector('#app[data-ready="true"]');
 });
 
+test('guided ticket loads the correct strike grid for every leg expiration and option side', async () => {
+  const firstExpiry = '2026-08-14';
+  const secondExpiry = '2026-09-18';
+  await page.route('**/api/research/AAPL/chain?expiration=*', async route => {
+    const exp = new URL(route.request().url()).searchParams.get('expiration');
+    const doc = exp === firstExpiry
+      ? { calls: [{ strike: 110 }, { strike: 111 }], puts: [{ strike: 90 }, { strike: 91 }] }
+      : { calls: [{ strike: 310 }, { strike: 311 }], puts: [{ strike: 220 }, { strike: 222 }] };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) });
+  });
+  await page.evaluate(({ firstExpiry, secondExpiry }) => {
+    Learn.setLevel('expert');
+    App.context.update({ symbol: 'AAPL', goal: 'DIRECTIONAL', horizon: 'month', thesis: 'neutral' });
+    App.state.ticket = {
+      symbol: 'AAPL', step: 5, qty: 1,
+      candidate: {
+        label: 'Calendar grid contract', strategy: 'CUSTOM', qty: 1,
+        legs: [
+          { action: 'BUY', type: 'CALL', strike: 111, expiration: firstExpiry, ratio: 1 },
+          { action: 'SELL', type: 'PUT', strike: 222, expiration: secondExpiry, ratio: 1 }
+        ]
+      }
+    };
+  }, { firstExpiry, secondExpiry });
+  await go('#/trade/decide');
+  await page.waitForSelector('#leg-strike-1');
+  assert.deepEqual(await page.locator('#leg-strike-0 option').evaluateAll(os => os.map(o => o.value)), ['110', '111'],
+    'first call leg uses the call grid from its own expiry');
+  assert.deepEqual(await page.locator('#leg-strike-1 option').evaluateAll(os => os.map(o => o.value)), ['220', '222'],
+    'second put leg uses the put grid from its own expiry');
+  await page.unroute('**/api/research/AAPL/chain?expiration=*');
+  await page.evaluate(() => { App.state.ticket = null; });
+});
+
 test('holdings + intents: buy shares, covered call at a target, filters, assignment framing', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   // 1. Buy 100 AAPL from the portfolio holdings card

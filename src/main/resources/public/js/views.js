@@ -3489,24 +3489,32 @@
       t.legsFor = c.label;
       body.appendChild(el('h2', { class: 'mt0' }, 'Strikes & size'));
       body.appendChild(explain('These strikes came from the screen. Adjust them if you like — the preview re-checks everything against live data.'));
-      var exp = (t.legs.find(function (l) { return l.type !== 'STOCK'; }) || {}).expiration;
-      var chain = null;
-      var chainError = null;
-      if (exp) {
-        try { chain = await API.get('/api/research/' + t.symbol + '/chain?expiration=' + exp); }
-        catch (e) { chainError = e; }
-      }
-      if (chainError) {
+      var expirations = t.legs.filter(function (l) { return l.type !== 'STOCK' && l.expiration; })
+        .map(function (l) { return l.expiration; })
+        .filter(function (x, i, all) { return all.indexOf(x) === i; });
+      var chains = {}, chainErrors = [];
+      await Promise.all(expirations.map(async function (exp) {
+        try { chains[exp] = await API.get('/api/research/' + t.symbol + '/chain?expiration=' + exp); }
+        catch (e) { chainErrors.push(exp + ': ' + (e.message || 'unavailable')); }
+      }));
+      if (chainErrors.length) {
         body.appendChild(alertBox('warn', 'Could not load the option chain',
-          ['Strikes cannot be adjusted right now — the candidate\u2019s own strikes are kept. ' + (chainError.message || '')]));
+          ['Affected legs keep the candidate\u2019s original strikes. ' + chainErrors.join(' · ')]));
       }
-      var strikes = chain ? (chain.calls || []).map(function (q) { return q.strike; }) : [];
       t.legs.forEach(function (leg, i) {
         if (leg.type === 'STOCK') {
           body.appendChild(el('div', { class: 'chip-row' }, chip('Leg ' + (i + 1), legLabel(leg))));
           return;
         }
-        var legStrikes = strikes.length ? strikes : [leg.strike]; // chain failure: keep the candidate's strike visible
+        var legChain = chains[leg.expiration];
+        var quotes = legChain ? (leg.type === 'PUT' ? legChain.puts : legChain.calls) || [] : [];
+        var legStrikes = quotes.map(function (q) { return q.strike; });
+        // A feed can omit a thin or stale contract that the candidate was priced on. Preserve the
+        // exact selected contract instead of silently snapping the ticket to a nearby strike.
+        if (!legStrikes.some(function (k) { return parseFloat(k) === parseFloat(leg.strike); })) {
+          legStrikes.push(leg.strike);
+          legStrikes.sort(function (a, b) { return parseFloat(a) - parseFloat(b); });
+        }
         var select = el('select', { id: 'leg-strike-' + i, style: 'max-width:130px' }, legStrikes.map(function (k) {
           return el('option', { value: k, selected: parseFloat(k) === parseFloat(leg.strike) ? '' : null }, stripZeros(k));
         }));
