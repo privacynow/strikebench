@@ -759,20 +759,32 @@ public final class TradeService {
                 .map(Leg::expiration).distinct().count() > 1;
         Double popNow = null;
         if (complete && underlyingCents != null && !mixedExp) {
-            List<Leg> curveLegs = t.legs();
+            List<Leg> curveLegs = new ArrayList<>(t.legs());
             int lotsPerUnit = t.qty() > 0 ? (int) (t.sharesLocked() / ((long) Leg.SHARES_PER_CONTRACT * t.qty())) : 0;
             if (lotsPerUnit > 0) {
-                // Covered trades were risk-shaped WITH their locked shares at entry; marks keep
-                // the same combined framing (at today's price) so POP stays comparable.
-                curveLegs = new ArrayList<>(t.legs());
-                curveLegs.add(Leg.stock(LegAction.BUY, lotsPerUnit, BigDecimal.valueOf(underlyingCents, 2)));
+                // Held-share trades were risk-shaped from the ENTRY spot. Resetting the stock
+                // basis to today's mark erases the move already earned/lost and makes POP jump
+                // even when the package itself did not change.
+                long entrySpot = t.entryUnderlyingCents() > 0 ? t.entryUnderlyingCents() : underlyingCents;
+                curveLegs.add(Leg.stock(LegAction.BUY, lotsPerUnit, BigDecimal.valueOf(entrySpot, 2)));
             }
-            PayoffCurve curve = PayoffCurve.of(curveLegs, t.qty());
+            // The package fill is authoritative. A net limit/fill need not equal the sum of the
+            // executable leg marks stored in legs_json, and held-share stock context is not an
+            // entry cash flow. Reapply the exact package adjustment so POP-now starts at the
+            // same payoff curve the ticket showed.
+            PayoffCurve markedCurve = PayoffCurve.of(curveLegs, t.qty());
+            long entryAdjustment = t.entryNetPremiumCents() - markedCurve.entryNetPremiumCents();
+            PayoffCurve curve = PayoffCurve.of(curveLegs, t.qty(), entryAdjustment);
             double ivAvg = ivs.isEmpty() ? FALLBACK_IV : ivs.stream().mapToDouble(Double::doubleValue).average().orElse(FALLBACK_IV);
             io.liftandshift.strikebench.market.OptionTime.Measure mtte =
                     io.liftandshift.strikebench.market.OptionTime.nearest(t.legs(), todayFor(world));
-            popNow = curve.probProfit(underlyingCents / 100.0, ivAvg, mtte.years(),
-                    marks.riskFreeRate((int) Math.max(1, mtte.calendarDays()), world));
+            List<BigDecimal> shortStrikes = t.legs().stream()
+                    .filter(l -> !l.isStock() && l.action() == LegAction.SELL)
+                    .map(Leg::strike).filter(java.util.Objects::nonNull).distinct().toList();
+            popNow = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
+                    curve, underlyingCents / 100.0, ivAvg, mtte.years(),
+                    marks.riskFreeRate((int) Math.max(1, mtte.calendarDays()), world), shortStrikes)
+                    .probabilityMap().pAnyProfit();
         }
         return new MarkView(t.id(), now, underlyingCents, closeCost, unrealized, popNow, worst.name(),
                 greeks, complete ? legGreeks : List.of());

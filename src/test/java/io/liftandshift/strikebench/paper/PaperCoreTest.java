@@ -218,6 +218,32 @@ class PaperCoreTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> plan = (Map<String, Object>) atMine.analytics().get("managementPlan");
         assertThat((java.util.List<String>) plan.get("rules")).isNotEmpty();
+
+        TradeRecord opened = trades.create(mine);
+        assertThat(trades.currentMark(opened.id()).popNow())
+                .as("an unchanged market must not drop the package-level fill adjustment after entry")
+                .isCloseTo(atMine.popEntry(), org.assertj.core.data.Offset.offset(1e-9));
+    }
+
+    @Test
+    void heldSharePopNowKeepsTheEntrySpotAsItsShareBasis() {
+        Account acct = accounts.getOrCreateDefault();
+        positions.buy(acct.id(), "AAPL", 100);
+        TradeRecord trade = trades.create(coveredCallOnHeldShares(acct.id()));
+
+        marks.underlying = new BigDecimal("120.00");
+        TradeService.MarkView marked = trades.refresh(trade.id());
+
+        List<Leg> combined = new java.util.ArrayList<>(trade.legs());
+        combined.add(Leg.stock(LegAction.BUY, 1, new BigDecimal("100.00")));
+        var raw = io.liftandshift.strikebench.pricing.PayoffCurve.of(combined, trade.qty());
+        long adjustment = trade.entryNetPremiumCents() - raw.entryNetPremiumCents();
+        var exact = io.liftandshift.strikebench.pricing.PayoffCurve.of(combined, trade.qty(), adjustment);
+        double years = io.liftandshift.strikebench.market.OptionTime
+                .nearest(trade.legs(), LocalDate.of(2026, 7, 8)).years();
+        double expected = exact.probProfit(120.0, 0.25, years, 0.04);
+
+        assertThat(marked.popNow()).isCloseTo(expected, org.assertj.core.data.Offset.offset(1e-9));
     }
 
     @Test
