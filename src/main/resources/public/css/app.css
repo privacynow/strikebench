@@ -1817,6 +1817,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .spark { position: relative; margin-top: 6px; }
 .spark-slot { min-height: 82px; display: grid; grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: max-content; align-content: start; gap: 3px; } /* chart + readout + evidence never collide */
+.spark-slot.spark-slot-missing { min-height: 42px; }
 .spark-svg { width: 100%; display: block; touch-action: pan-y; }
 .spark-svg polyline { stroke: var(--text-dim); }
 .spark-up polyline { stroke: var(--risk-ok, #2f9e6e); }

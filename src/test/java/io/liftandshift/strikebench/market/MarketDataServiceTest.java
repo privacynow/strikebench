@@ -91,6 +91,28 @@ class MarketDataServiceTest {
     }
 
     @Test
+    void observedProviderGapUsesTheEnginesDurableLastKnownQuoteWithoutChangingItsLane() {
+        MarketDataService svc = new MarketDataService(List.of(new BrokenProvider()), List.of(), List.of());
+        var snapshot = new MarketDataEngine.MarketSnapshot("AAPL", "Apple", new java.math.BigDecimal("316.48"),
+                new java.math.BigDecimal("316.40"), new java.math.BigDecimal("316.50"),
+                new java.math.BigDecimal("315.32"), true, io.liftandshift.strikebench.model.Freshness.DELAYED,
+                "cboe", CLOCK.millis() - 60_000, CLOCK.millis() - 60_000, false, null);
+        svc.setQuoteSnapshotStore(new io.liftandshift.strikebench.market.ports.SnapshotStore() {
+            @Override public void save(MarketDataEngine.MarketSnapshot ignored) {}
+            @Override public List<MarketDataEngine.MarketSnapshot> loadAll() { return List.of(snapshot); }
+            @Override public Optional<MarketDataEngine.MarketSnapshot> load(String symbol) {
+                return "AAPL".equals(symbol) ? Optional.of(snapshot) : Optional.empty();
+            }
+        });
+
+        Quote q = svc.quote("AAPL").orElseThrow();
+        assertThat(q.last()).isEqualByComparingTo("316.48");
+        assertThat(q.freshness()).isEqualTo(io.liftandshift.strikebench.model.Freshness.STALE);
+        assertThat(q.evidence().provenance()).isEqualTo(io.liftandshift.strikebench.model.DataProvenance.OBSERVED);
+        assertThat(svc.quote("MSFT")).isEmpty();
+    }
+
+    @Test
     void fixtureProviderCanNeverBecomeAnObservedFallback() {
         FixtureProvider fixture = new FixtureProvider(CLOCK);
         MarketDataService svc = new MarketDataService(

@@ -238,7 +238,9 @@ public final class ApiServer {
         server.dataCoverage = new io.liftandshift.strikebench.db.DataCoverage(db);
         server.dataReset = new io.liftandshift.strikebench.db.DataResetService(db, accounts);
         server.cboe = cboeRef[0];
-        server.marketEngine.setSnapshotStore(new io.liftandshift.strikebench.db.MarketSnapshotStore(db));
+        var quoteSnapshots = new io.liftandshift.strikebench.db.MarketSnapshotStore(db);
+        market.setQuoteSnapshotStore(quoteSnapshots);
+        server.marketEngine.setSnapshotStore(quoteSnapshots);
         server.datasets = datasetSvc;
         server.pathEnsembles = new io.liftandshift.strikebench.sim.PathEnsembleService(market, clock);
         server.simEngine = new io.liftandshift.strikebench.sim.SimulationEngine(
