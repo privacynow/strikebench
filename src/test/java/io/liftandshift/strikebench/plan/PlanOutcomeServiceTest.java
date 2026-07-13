@@ -102,6 +102,25 @@ class PlanOutcomeServiceTest {
         assertThat(latest.at("/outcomes/0/bands/1/p90Cents").asLong()).isEqualTo(28000);
         assertThat(latest.at("/outcomes/0/notes/0").asText()).isEqualTo("Exact stored paths");
 
+        var baselineComparison = outcomes.saveComparison(null, plan, plan.version(), restored, List.of(
+                        new PlanOutcomeService.ComparisonItem(candidateId, candidateId, 1,
+                                "DEBIT_CALL_SPREAD", "Bull call spread", 1, 30000L,
+                                30000L, 66.6667, 2000L, -25000L, 5000L, 30000L, 0.08, 520,
+                                "MIXED", "LEARN_FROM", true, 70.0, true, null),
+                        new PlanOutcomeService.ComparisonItem("CASH", null, 2, "CASH", "Keep cash",
+                                0, 0L, 0L, null, 0L, 0L, 0L, 0L, 0.0, 0,
+                                null, "BASELINE", true, null, false, null)),
+                Json.parse("{\"basis\":\"PARAMETRIC\"}"),
+                "Every Plan proposal on the exact stored futures",
+                "Same entry snapshot and ensemble fingerprint");
+        assertThat(baselineComparison.ensembleFingerprint()).isEqualTo(stored.fingerprint());
+        ObjectNode withComparison = outcomes.latest(null, plan, AnalysisContext.OBSERVED);
+        assertThat(withComparison.at("/comparisons/0/ensembleFingerprint").asText())
+                .isEqualTo(stored.fingerprint());
+        assertThat(withComparison.at("/comparisons/0/items/0/displayName").asText())
+                .isEqualTo("Bull call spread");
+        assertThat(withComparison.at("/comparisons/0/items/1/key").asText()).isEqualTo("CASH");
+
         ObjectNode firstReport = (ObjectNode) Json.parse("""
                 {"id":"bt-old","symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","from":"2025-01-02","to":"2025-06-30",
                  "pricingMode":"MODELED_FROM_UNDERLYING","confidence":"modeled","sampleSize":12,"winRate":0.50,
@@ -143,6 +162,17 @@ class PlanOutcomeServiceTest {
         alternateResult.put("p50Cents", 9000);
         outcomes.savePathOutcome(null, plan, plan.version(), candidateId, alternateStored, alternateResult,
                 Json.parse("{\"basis\":\"PARAMETRIC\",\"dataset\":\"alternate\"}"), "alternate history");
+        outcomes.saveComparison(null, plan, plan.version(), alternateStored, List.of(
+                        new PlanOutcomeService.ComparisonItem(candidateId, candidateId, 1,
+                                "DEBIT_CALL_SPREAD", "Bull call spread", 1, 30000L,
+                                30000L, 75.0, 6000L, -18000L, 9000L, 34000L, 0.333, 520,
+                                "MIXED", "LEARN_FROM", true, 70.0, true, null),
+                        new PlanOutcomeService.ComparisonItem("CASH", null, 2, "CASH", "Keep cash",
+                                0, 0L, 0L, null, 0L, 0L, 0L, 0L, 0.0, 0,
+                                null, "BASELINE", true, null, false, null)),
+                Json.parse("{\"basis\":\"PARAMETRIC\",\"dataset\":\"alternate\"}"),
+                "Every Plan proposal on the alternate stored futures",
+                "Same entry snapshot and alternate ensemble fingerprint");
 
         assertThat(outcomes.latest(null, plan, AnalysisContext.OBSERVED).at("/outcomes/0/p50Cents").asLong())
                 .as("the observed/demo baseline result remains current in its own analysis lane")
@@ -150,6 +180,10 @@ class PlanOutcomeServiceTest {
         assertThat(outcomes.latest(null, plan, scenarioAnalysis).at("/outcomes/0/p50Cents").asLong())
                 .as("the generated dataset restores only its own result")
                 .isEqualTo(9000);
+        assertThat(outcomes.latest(null, plan, AnalysisContext.OBSERVED)
+                .at("/comparisons/0/items/0/p50Cents").asLong()).isEqualTo(5000);
+        assertThat(outcomes.latest(null, plan, scenarioAnalysis)
+                .at("/comparisons/0/items/0/p50Cents").asLong()).isEqualTo(9000);
         assertThat(outcomes.latestEnsemble(null, plan, "PARAMETRIC", AnalysisContext.OBSERVED).id())
                 .isEqualTo(stored.id());
         assertThat(outcomes.latestEnsemble(null, plan, "PARAMETRIC", scenarioAnalysis).id())

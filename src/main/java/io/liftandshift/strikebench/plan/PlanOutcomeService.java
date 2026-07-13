@@ -50,6 +50,18 @@ public final class PlanOutcomeService {
     public record SavedBacktest(String id, String state, String backtestId,
                                 String engineKind, JsonNode summary, String createdAt) {}
 
+    public record ComparisonItem(String key, String candidateId, int rank, String strategy,
+                                 String displayName, int qty, Long entryCostCents,
+                                 Long maxLossCents, Double winRatePct, Long expectedPnlCents, Long p5Cents,
+                                 Long p50Cents, Long p95Cents, Double tailReturnScore,
+                                 long roundTripFeesCents, String economicVerdict,
+                                 String economicPlacement, Boolean mechanicallyEligible,
+                                 Double decisionScore, boolean selected, String refusalReason) {}
+
+    public record SavedComparison(String id, String basis, String state, String ensembleId,
+                                  String ensembleFingerprint, String interpretation, String fairness,
+                                  List<ComparisonItem> items, String createdAt) {}
+
     private final Db db;
     private final Clock clock;
 
@@ -253,6 +265,52 @@ public final class PlanOutcomeService {
         return new SavedOutcome(id, "RISK_NEUTRAL", "CURRENT", candidateId, null, result, now.toString());
     }
 
+    /** Persist a cross-structure comparison whose every item used the exact stored ensemble. */
+    public SavedComparison saveComparison(String userId, Plan.View plan, long expectedVersion,
+                                          StoredEnsemble stored, List<ComparisonItem> items,
+                                          JsonNode input, String interpretation, String fairness) {
+        if (stored == null) throw new IllegalArgumentException("comparison ensemble is required");
+        if (items == null || items.isEmpty()) throw new IllegalArgumentException("comparison items are required");
+        String id = Ids.newId("poc");
+        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        String inputHash = sha256(input == null ? Json.MAPPER.createObjectNode() : input);
+        String datasetId = stored.ensemble().scope().analysis().synthetic()
+                ? stored.ensemble().scope().analysis().datasetId() : null;
+        db.tx(c -> {
+            CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
+            if (current.version() != expectedVersion || current.contextRev() != plan.context().rev()) {
+                throw new IllegalStateException("This Plan changed while proposals were being compared.");
+            }
+            for (ComparisonItem item : items) {
+                if (item.candidateId() != null) requireCurrentCandidate(c, plan.id(), plan.context().rev(), item.candidateId());
+            }
+            Db.execOn(c, "UPDATE plan_outcome_comparison SET state='STALE' WHERE plan_id=? AND context_rev=? " +
+                            "AND basis=? AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT'",
+                    plan.id(), plan.context().rev(), stored.basis(), datasetId);
+            Db.execOn(c, "INSERT INTO plan_outcome_comparison(id,plan_id,context_rev,ensemble_id," +
+                            "ensemble_fingerprint,dataset_id,basis,interpretation,fairness,input_hash," +
+                            "engine_version,state,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    id, plan.id(), plan.context().rev(), stored.id(), stored.fingerprint(), datasetId,
+                    stored.basis(), interpretation, fairness, inputHash, ENGINE_VERSION, "CURRENT", now);
+            for (ComparisonItem item : items) {
+                Db.execOn(c, "INSERT INTO plan_outcome_comparison_item(comparison_id,item_key,candidate_id," +
+                                "rank_number,strategy,display_name,qty,entry_cost_cents,win_rate_pct," +
+                                "max_loss_cents,expected_pnl_cents,p5_cents,p50_cents,p95_cents,tail_return_score," +
+                                "round_trip_fees_cents,economic_verdict,economic_placement,mechanically_eligible," +
+                                "decision_score,selected,refusal_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        id, item.key(), item.candidateId(), item.rank(), item.strategy(), item.displayName(),
+                        item.qty(), item.entryCostCents(), item.winRatePct(), item.maxLossCents(), item.expectedPnlCents(),
+                        item.p5Cents(), item.p50Cents(), item.p95Cents(), item.tailReturnScore(),
+                        item.roundTripFeesCents(), item.economicVerdict(), item.economicPlacement(),
+                        item.mechanicallyEligible() == null ? null : item.mechanicallyEligible() ? 1 : 0,
+                        item.decisionScore(), item.selected() ? 1 : 0, item.refusalReason());
+            }
+            return null;
+        });
+        return new SavedComparison(id, stored.basis(), "CURRENT", stored.id(), stored.fingerprint(),
+                interpretation, fairness, List.copyOf(items), now.toString());
+    }
+
     public SavedBacktest saveBacktest(String userId, Plan.View plan, long expectedVersion,
                                       String candidateId, String engineKind, JsonNode report,
                                       JsonNode input, io.liftandshift.strikebench.db.AnalysisContext analysis) {
@@ -316,6 +374,16 @@ public final class PlanOutcomeService {
                             "AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT' ORDER BY created_at",
                     PlanOutcomeService::outcomeRow, plan.id(), plan.context().rev(), datasetId);
             for (OutcomeRow row : rows) runs.add(loadOutcome(c, row));
+            ArrayNode comparisons = out.putArray("comparisons");
+            List<ComparisonRow> comparisonRows = Db.queryOn(c,
+                    "SELECT id,basis,ensemble_id,ensemble_fingerprint,interpretation,fairness,state," +
+                            "created_at::text created_at FROM plan_outcome_comparison WHERE plan_id=? " +
+                            "AND context_rev=? AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT' " +
+                            "ORDER BY created_at",
+                    r -> new ComparisonRow(r.str("id"), r.str("basis"), r.str("ensemble_id"),
+                            r.str("ensemble_fingerprint"), r.str("interpretation"), r.str("fairness"),
+                            r.str("state"), r.str("created_at")), plan.id(), plan.context().rev(), datasetId);
+            for (ComparisonRow row : comparisonRows) comparisons.add(loadComparison(c, row));
             ArrayNode backtests = out.putArray("backtests");
             Db.queryOn(c, "SELECT id,context_rev,dataset_id,state,backtest_id,candidate_id,evidence_provenance,engine_kind,pricing_mode,confidence,sample_size," +
                             "win_rate,total_pnl_cents,avg_return_on_risk,starting_cents,ending_cents,max_drawdown_pct,demo_underlying," +
@@ -378,6 +446,31 @@ public final class PlanOutcomeService {
             else if (m.text() != null) metrics.put(m.key(), m.text());
         });
         return n;
+    }
+
+    private static ObjectNode loadComparison(java.sql.Connection c, ComparisonRow row)
+            throws java.sql.SQLException {
+        ObjectNode out = Json.MAPPER.createObjectNode();
+        put(out, "id", row.id()); put(out, "basis", row.basis()); put(out, "state", row.state());
+        put(out, "ensembleId", row.ensembleId()); put(out, "ensembleFingerprint", row.fingerprint());
+        put(out, "interpretation", row.interpretation()); put(out, "fairness", row.fairness());
+        put(out, "createdAt", row.createdAt());
+        ArrayNode items = out.putArray("items");
+        Db.queryOn(c, "SELECT item_key,candidate_id,rank_number,strategy,display_name,qty,entry_cost_cents,max_loss_cents," +
+                        "win_rate_pct,expected_pnl_cents,p5_cents,p50_cents,p95_cents,tail_return_score," +
+                        "round_trip_fees_cents,economic_verdict,economic_placement,mechanically_eligible," +
+                        "decision_score,selected,refusal_reason FROM plan_outcome_comparison_item " +
+                        "WHERE comparison_id=? ORDER BY rank_number,item_key",
+                r -> new ComparisonItem(r.str("item_key"), r.str("candidate_id"), r.intv("rank_number"),
+                        r.str("strategy"), r.str("display_name"), r.intv("qty"), r.lngOrNull("entry_cost_cents"),
+                        r.lngOrNull("max_loss_cents"), r.dblOrNull("win_rate_pct"),
+                        r.lngOrNull("expected_pnl_cents"), r.lngOrNull("p5_cents"),
+                        r.lngOrNull("p50_cents"), r.lngOrNull("p95_cents"), r.dblOrNull("tail_return_score"),
+                        r.lng("round_trip_fees_cents"), r.str("economic_verdict"), r.str("economic_placement"),
+                        boolOrNull(r, "mechanically_eligible"), r.dblOrNull("decision_score"),
+                        r.bool("selected"), r.str("refusal_reason")), row.id())
+                .forEach(item -> items.add(Json.MAPPER.valueToTree(item)));
+        return out;
     }
 
     private static void persistPathDetails(java.sql.Connection c, String id, JsonNode result)
@@ -526,6 +619,14 @@ public final class PlanOutcomeService {
         }
     }
 
+    private static void requireCurrentCandidate(java.sql.Connection c, String planId, int contextRev,
+                                                String candidateId) throws java.sql.SQLException {
+        if (Db.queryOn(c, "SELECT id FROM plan_candidate WHERE id=? AND plan_id=? AND context_rev=? " +
+                        "AND state='CURRENT'", r -> r.str("id"), candidateId, planId, contextRev).isEmpty()) {
+            throw new IllegalStateException("Comparison contains a candidate outside the current Plan context.");
+        }
+    }
+
     private static CurrentPlan ownedPlanOn(java.sql.Connection c, String id, String userId, boolean lock)
             throws java.sql.SQLException {
         List<CurrentPlan> rows = Db.queryOn(c, "SELECT p.symbol,p.market_kind,p.world_id,p.active_context_rev,p.version," +
@@ -585,6 +686,8 @@ public final class PlanOutcomeService {
     private record OutcomeRow(String id,String basis,String candidateId,String ensembleId,String interpretation,Long entry,
                               Integer paths,Integer horizon,Long p5,Long p25,Long p50,Long p75,Long p95,Long expected,
                               Double winRate,Long best,Long worst,Double breach,String createdAt) {}
+    private record ComparisonRow(String id,String basis,String ensembleId,String fingerprint,
+                                 String interpretation,String fairness,String state,String createdAt) {}
     private record EnsembleRow(String id,String fingerprint,String basis,String modelVersion,String symbol,String worldId,
                                io.liftandshift.strikebench.db.AnalysisContext analysis,long anchorSpotCents,
                                String anchorSource,String anchorFreshness,String asOf,String model,String shape,int horizon,

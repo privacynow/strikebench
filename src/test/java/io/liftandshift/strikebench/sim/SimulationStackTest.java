@@ -155,6 +155,36 @@ class SimulationStackTest {
     }
 
     @Test
+    void exactEnsembleComparisonReusesTheStoredMatrixAndEachProposalQuantity() {
+        var simulator = new ScenarioSimulator();
+        ScenarioSpec sane = spec(ScenarioSpec.Shape.GRIND_UP, 0.15, 909).sane();
+        double[][] paths = new PathGenerator().generate(sane, 100, null);
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AAPL", "demo",
+                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED),
+                100, sane, paths, null, PathGenerator.MODEL_VERSION);
+        var call = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
+
+        var compared = simulator.compare(ensemble, List.of(
+                new ScenarioSimulator.CompareItem("one", call, null, "stored entry", 0, 1),
+                new ScenarioSimulator.CompareItem("three", call, null, "stored entry", 0, 3)),
+                9, IvSpec.flat(0.25), 0.04);
+
+        assertThat(compared.ensemble()).isSameAs(ensemble);
+        assertThat(compared.report().refused()).isEmpty();
+        assertThat(compared.report().results()).extracting(ScenarioSimulator.CompareOutcome::key)
+                .containsExactly("one", "three");
+        var one = compared.report().results().get(0).result();
+        var three = compared.report().results().get(1).result();
+        assertThat(three.entryCostCents()).isCloseTo(one.entryCostCents() * 3,
+                org.assertj.core.data.Offset.offset(1L));
+        assertThat(three.expectedPnlCents()).isCloseTo(one.expectedPnlCents() * 3,
+                org.assertj.core.data.Offset.offset(1L));
+        assertThat(three.p5Cents()).isCloseTo(one.p5Cents() * 3,
+                org.assertj.core.data.Offset.offset(1L));
+    }
+
+    @Test
     void datasetRunPersistsCoexistsAndDrivesTheReadPathWhenSelected() {
         db = TestDb.fresh();
         AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
