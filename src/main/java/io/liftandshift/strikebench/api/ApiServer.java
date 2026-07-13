@@ -4319,7 +4319,8 @@ public final class ApiServer {
             case "max" -> 7300; // providers return what they actually have
             default -> 365;
         };
-        var series = market.candleSeries(symbol, today.minusDays(days), today, activeWorld(ctx), analysisCtx(ctx));
+        LocalDate requestedFrom = today.minusDays(days);
+        var series = market.candleSeries(symbol, requestedFrom, today, activeWorld(ctx), analysisCtx(ctx));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("symbol", symbol);
         out.put("range", range);
@@ -4329,6 +4330,8 @@ public final class ApiServer {
         out.put("barBasis", series.barBasis());
         out.put("priceBasis", series.priceBasis());
         out.put("evidence", series.evidence());
+        out.put("coverage", io.liftandshift.strikebench.market.CandleCoverage.assess(
+                series.candles(), requestedFrom, today));
         ctx.json(out);
     }
 

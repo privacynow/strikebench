@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.market.CandleSeries;
+import io.liftandshift.strikebench.market.CandleCoverage;
 import io.liftandshift.strikebench.market.ports.CandleStore;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.Freshness;
@@ -15,7 +16,8 @@ import java.util.Optional;
  * the default 'observed' dataset this serves only attributable observed backfills/snapshots (one row
  * per date; Demo rows are physically quarantined and also excluded here). When the user selects a synthetic dataset in
  * the Data Center, its bars serve instead — labeled MODELED with source 'synthetic' so scenario mode
- * can never masquerade as market data. Empty result ⇒ the provider chain runs.
+ * can never masquerade as market data. Coverage accompanies the coherent source so the caller can
+ * enrich an incomplete observed range first, then retain the real partial history if no provider is available.
  */
 public final class StoredCandleStore implements CandleStore {
 
@@ -29,7 +31,7 @@ public final class StoredCandleStore implements CandleStore {
     }
 
     @Override
-    public Optional<CandleSeries> candles(String symbol, LocalDate from, LocalDate to, String datasetId) {
+    public Optional<Read> candles(String symbol, LocalDate from, LocalDate to, String datasetId) {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
         if (sym.isEmpty() || from == null || to == null || from.isAfter(to)) return Optional.empty();
         String dataset = datasetId == null || datasetId.isBlank() ? DatasetService.OBSERVED : datasetId;
@@ -59,42 +61,39 @@ public final class StoredCandleStore implements CandleStore {
             boolean coherentAdjustment = sourceRows.stream().map(r -> r.adjusted).distinct().count() <= 1;
             boolean allObserved = sourceRows.stream().allMatch(r -> r.observed);
             int quality = sourceRows.stream().mapToInt(r -> r.qualityRank).max().orElse(0);
-            // A scenario dataset intentionally owns only its generated window. Requiring it to
-            // cover an observed-style request range would reject valid scenario bars and tempt
-            // the caller to substitute another market lane. Observed sources still need broad
-            // range coverage before they can suppress a provider fetch.
-            if (candles.size() >= 2 && coherentAdjustment && (synthetic || allObserved)
-                    && (synthetic || coversRange(candles, from, to))) {
-                candidates.add(new Candidate(source, sourceRows, candles, quality));
+            if (candles.size() >= 2 && coherentAdjustment && (synthetic || allObserved)) {
+                candidates.add(new Candidate(source, sourceRows, candles, quality,
+                        CandleCoverage.assess(candles, from, to)));
             }
         });
         if (candidates.isEmpty()) return Optional.empty();
-        // Never stitch sources or adjustment bases into one curve. Among coherent sources that
-        // each cover the requested range, prefer declared quality then the denser series.
-        candidates.sort(java.util.Comparator.comparingInt(Candidate::quality).reversed()
-                .thenComparing(java.util.Comparator.comparingInt((Candidate c) -> c.candles.size()).reversed())
-                .thenComparing(Candidate::source));
+        // Never stitch sources or adjustment bases into one curve. Complete sources win. Among
+        // complete sources preserve the declared quality preference; among partial sources prefer
+        // the most useful coverage before quality. MarketDataService still asks providers to fill
+        // a partial observed range before it uses that partial series as a fallback.
+        candidates.sort((a, b) -> {
+            if (a.coverage.complete() != b.coverage.complete()) return a.coverage.complete() ? -1 : 1;
+            if (!a.coverage.complete()) {
+                int byCoverage = Integer.compare(b.coverage.availableSessions(), a.coverage.availableSessions());
+                if (byCoverage != 0) return byCoverage;
+            }
+            int byQuality = Integer.compare(b.quality, a.quality);
+            if (byQuality != 0) return byQuality;
+            int byDensity = Integer.compare(b.candles.size(), a.candles.size());
+            return byDensity != 0 ? byDensity : a.source.compareTo(b.source);
+        });
         Candidate chosen = candidates.getFirst();
         Freshness freshness = synthetic ? Freshness.MODELED : Freshness.EOD;
         String source = synthetic ? "synthetic" : "stored:" + chosen.source;
-        return Optional.of(new CandleSeries(chosen.candles, source, freshness, basis(chosen.rows)));
-    }
-
-    /** Head/tail near the requested boundaries and at least 90% of actual trading sessions. */
-    private static boolean coversRange(List<Candle> candles, LocalDate from, LocalDate to) {
-        LocalDate first = candles.getFirst().date(), last = candles.getLast().date();
-        if (first.isAfter(from.plusDays(7)) || last.isBefore(to.minusDays(7))) return false;
-        long sessions = 0;
-        for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
-            if (io.liftandshift.strikebench.market.MarketHours.isTradingDay(d)) sessions++;
-        }
-        return candles.size() >= Math.max(2, Math.round(sessions * 0.9));
+        return Optional.of(new Read(new CandleSeries(chosen.candles, source, freshness, basis(chosen.rows)),
+                chosen.coverage));
     }
 
     private record Row(LocalDate d, java.math.BigDecimal open, java.math.BigDecimal high,
                        java.math.BigDecimal low, java.math.BigDecimal close, long volume,
                        String source, boolean observed, boolean adjusted, String barKind, int qualityRank) {}
-    private record Candidate(String source, List<Row> rows, List<Candle> candles, int quality) {}
+    private record Candidate(String source, List<Row> rows, List<Candle> candles, int quality,
+                             CandleCoverage coverage) {}
 
     private static String basis(List<Row> rows) {
         java.util.Set<String> kinds = rows.stream().map(r -> r.barKind == null ? "OHLCV" : r.barKind).collect(java.util.stream.Collectors.toSet());

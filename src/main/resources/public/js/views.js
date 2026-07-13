@@ -1587,23 +1587,31 @@
       var hist = await API.get('/api/research/' + symbol + '/history?range=' + range);
       var candles = hist.candles || [];
       var closeOnly = hist.barBasis === 'CLOSE_ONLY' || hist.barBasis === 'MIXED';
+      var coverage = hist.coverage || {};
+      var partial = candles.length && coverage.complete === false;
+      var coverageText = partial
+        ? 'Partial coverage: ' + String(coverage.availableSessions || candles.length) + ' observed sessions from '
+          + UI.fmtDate(String(coverage.availableFrom) + 'T12:00:00') + ' through '
+          + UI.fmtDate(String(coverage.availableTo) + 'T12:00:00')
+          + ' for the requested ' + String(hist.range || range).toUpperCase() + ' range.'
+        : '';
+      var provenance = hist.evidence && hist.evidence.provenance;
+      var disclosure = provenance === 'DEMO'
+        ? 'Fabricated Demo history for teaching; not observed market history.'
+        : provenance === 'MODELED'
+          ? 'Generated Scenario history; not observed market history.'
+          : provenance === 'OBSERVED' && candles.length
+            ? [coverageText,
+              closeOnly ? 'Observed closes only; daily highs and lows were not provided.' : '',
+              hist.priceBasis === 'ADJUSTED' ? 'Prices are adjusted for corporate actions.' : '']
+              .filter(Boolean).join(' ')
+            : '';
       return {
         range: hist.range,
         candles: closeOnly ? null : candles,
         series: closeOnly ? candles.map(function (c) { return { date: String(c.date), value: parseFloat(c.close) }; }) : null,
         badge: UI.evidenceBadge(hist.evidence),
-      note: hist.evidence && hist.evidence.provenance === 'DEMO'
-          ? explain('This chart is fabricated teaching data from the explicit Demo market. It is not a substitute for observed history.')
-          : hist.evidence && hist.evidence.provenance === 'MODELED'
-            ? explain('This chart is a generated Scenario dataset. Its modeled path is separate from observed market history.')
-            : hist.evidence && hist.evidence.provenance === 'OBSERVED' && candles.length
-              ? explain((closeOnly
-                  ? 'These are observed closing prices through ' + candles[candles.length - 1].date
-                    + '. Daily highs and lows were not in the source and are not drawn as candles. '
-                  : 'These are stored historical OHLC observations through ' + candles[candles.length - 1].date + '. ')
-                  + (hist.priceBasis === 'ADJUSTED' ? 'Prices are adjusted for corporate actions. ' : '')
-                  + 'They remain available when the market is closed; closed means no new session updates, not that past observations disappear.')
-              : null,
+        note: disclosure ? el('p', { class: 'muted small history-evidence-note' }, disclosure) : null,
         emptyText: candles.length ? null
           : (App.config && App.config.fixturesOnly)
             ? 'Demo mode ships price history for AAPL, SPY, QQQ and TSLA only \u2014 try one of those.'

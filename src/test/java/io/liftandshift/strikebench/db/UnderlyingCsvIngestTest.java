@@ -62,7 +62,7 @@ class UnderlyingCsvIngestTest {
         assertThat(result.barBasis()).isEqualTo("CLOSE_ONLY");
         assertThat(state.quarantineSummary(null).total()).isEqualTo(1);
         var series = new StoredCandleStore(db).candles("QQQ", java.time.LocalDate.parse("2026-07-08"),
-                java.time.LocalDate.parse("2026-07-10"), DatasetService.OBSERVED).orElseThrow();
+                java.time.LocalDate.parse("2026-07-10"), DatasetService.OBSERVED).orElseThrow().series();
         assertThat(series.barBasis()).isEqualTo("CLOSE_ONLY");
         assertThat(series.candles()).hasSize(3);
     }
