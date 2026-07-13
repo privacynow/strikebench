@@ -8,6 +8,11 @@
 
   var CORE_SYMBOLS = ['AAPL', 'SPY', 'QQQ', 'TSLA'];
 
+  function reported(value, formatter) {
+    var n = Number(value);
+    return value === null || value === undefined || !Number.isFinite(n) ? 'not reported' : formatter(value);
+  }
+
   function activeDecisionPnl(t) {
     return t && t.decisionUnrealizedPnlCents !== undefined && t.decisionUnrealizedPnlCents !== null
       ? t.decisionUnrealizedPnlCents : (t ? t.unrealizedPnlCents : null);
@@ -561,11 +566,13 @@
     // Smaller viewports progressively show the first six/four; the full universe stays one tap away.
     var marketSymbols = uni && uni.symbols && uni.symbols.length ? uni.symbols.slice(0, 8) : CORE_SYMBOLS;
     var tiles = el('div', { class: 'home-market-grid' });
+    var homeHistoryNotice = el('div', { class: 'home-history-notice muted small', hidden: '' });
     colL.appendChild(el('div', { class: 'card home-market-card', id: 'home-market-watch' },
       UI.cardHeader('Market watch' + (uni && App.state.world !== 'demo' ? ' — ' + uni.label : ''),
         el('a', { href: '#/research', class: 'muted home-view-all' },
           'View all ' + ((uni && uni.symbols && uni.symbols.length) || marketSymbols.length) + ' symbols →')),
       tiles,
+      homeHistoryNotice,
       el('p', { class: 'muted small market-watch-caption' },
         'Select a stock for its chart, options, volatility, events and historical evidence.')));
     var marketsFill = (async function fillMarkets() {
@@ -601,17 +608,29 @@
       });
       // The SAME sparkline card as Research, ONE batch call; Home cards go straight to the
       // full analysis (no preview layer here — review P5.8).
+      var homeMissingHistory = new Set();
+      function updateHomeHistoryNotice() {
+        homeHistoryNotice.innerHTML = '';
+        if (!homeMissingHistory.size) { homeHistoryNotice.hidden = true; return; }
+        homeHistoryNotice.hidden = false;
+        homeHistoryNotice.appendChild(el('span', {}, 'Charts unavailable for ' + homeMissingHistory.size
+          + ' symbol' + (homeMissingHistory.size === 1 ? '' : 's') + '; current quotes remain usable.'));
+        homeHistoryNotice.appendChild(el('a', { href: '#/data/sources' }, 'Update history'));
+      }
       function paintHomeSpark(row) {
         var slot = tiles.querySelector('.sym-card[data-sym="' + row.symbol + '"] .spark-slot');
         if (!slot) return;
         slot.innerHTML = '';
-        slot.appendChild(UI.sparkline(row, { height: 30 }));
+        var missing = row.available === false || !row.closes || !row.closes.length;
+        if (missing) homeMissingHistory.add(row.symbol); else homeMissingHistory.delete(row.symbol);
+        slot.appendChild(UI.sparkline(row, { height: 30, quietMissing: true, missingText: 'No chart' }));
         // In Demo, the global band and each quote already say Demo; a second identical history
         // chip on every card adds noise, not honesty. Other lanes retain separate history evidence.
-        if (row.evidence && !(App.state.world === 'demo' && row.evidence.provenance === 'DEMO')) {
+        if (!missing && row.evidence && !(App.state.world === 'demo' && row.evidence.provenance === 'DEMO')) {
           slot.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev', compact: true,
             missingLabel: 'HISTORY UNAVAILABLE' }));
         }
+        updateHomeHistoryNotice();
       }
       try {
         var sp = await API.prefetch('/api/sparklines?symbols=' + marketSymbols.join(',') + '&range=3m');
@@ -916,7 +935,7 @@
         return 'Headline-based context only. Open the source before treating it as evidence or a catalyst.';
       }
       function newsTile(n, index) {
-        var when = n.publishedEpochMs ? new Date(n.publishedEpochMs).toISOString().slice(0, 10) : '';
+        var when = n.publishedEpochMs ? UI.fmtDate(n.publishedEpochMs) : '';
         var headline = demoNews ? demoPrompts[index % demoPrompts.length] : n.headline;
         return el('article', { class: 'news-tile' },
           el('div', { class: 'news-meta' },
@@ -1019,10 +1038,17 @@
         return el('span', { class: 'evidence-input' }, key + ' ', UI.evidenceBadge(evInputs[key], { compact: true }));
       }));
     }) : null;
+    var hasAvailableInput = inputKeys.some(function (key) {
+      return evInputs[key] && String(evInputs[key].provenance || '').toUpperCase() !== 'MISSING';
+    });
     var evidenceLine = el('div', { class: 'page-evidence', id: 'research-evidence' },
-      el('b', {}, 'Evidence for this analysis'), UI.evidenceBadge(evSummary),
+      el('b', {}, 'Evidence for this analysis'), UI.evidenceBadge(evSummary, {
+        missingLabel: hasAvailableInput ? 'PARTIAL EVIDENCE' : 'DATA UNAVAILABLE'
+      }),
       evSummary && evSummary.provenance === 'MISSING'
-        ? el('span', { class: 'muted' }, 'Some calculations are unavailable rather than filled with demo data.')
+        ? el('span', { class: 'muted' }, hasAvailableInput
+          ? 'Quote or options inputs are available; missing history-dependent calculations stay unavailable.'
+          : 'Calculations are unavailable rather than filled with demo data.')
         : evSummary && evSummary.provenance === 'MIXED'
           ? el('span', { class: 'muted' }, 'Inputs come from different evidence types; each is named below.') : null,
       allSame ? el('span', { class: 'muted small' }, 'All inputs use this same evidence basis.') : null,
@@ -1032,15 +1058,19 @@
     var secondaryMarketDetail = UI.expandable(
       Learn.currentLevel() === 'beginner' ? 'More market detail' : 'Quote, volatility & benchmark detail',
       function () {
+        var detailChips = [chip('Prev close', reported(q.prevClose, fmtNum))];
+        if (r.ivRankPct !== undefined && r.ivRankPct !== null) {
+          detailChips.push(chip(el('span', {}, 'IV rank', UI.info('ivrank')), fmtNum(r.ivRankPct, 0) + '%'));
+        }
+        detailChips.push(chip('Options', r.optionable ? 'yes' : 'no'));
         return el('div', {},
-          el('div', { class: 'chip-row' },
-            chip('Prev close', fmtNum(q.prevClose)),
-            chip(el('span', {}, 'IV rank', UI.info('ivrank')), 'building history'),
-            chip('Options', r.optionable ? 'yes' : 'no')),
+          el('div', { class: 'chip-row' }, detailChips),
           explain('IV is the move the options market is pricing in; HV is what the stock actually did lately. IV far above HV means options are relatively expensive to buy and richer to sell.'),
-          (r.benchmarks && r.benchmarks.length) ? el('div', { class: 'chip-row' }, r.benchmarks.map(function (b) {
-            return chip(b.symbol, fmtNum(b.last));
-          })) : null);
+          (r.benchmarks && r.benchmarks.length) ? el('div', { class: 'benchmark-strip' },
+            el('span', { class: 'muted small' }, 'Market context'),
+            el('div', { class: 'chip-row' }, r.benchmarks.map(function (b) {
+              return chip(b.symbol, fmtNum(b.last));
+            }))) : null);
       }, { open: !!(window.matchMedia && window.matchMedia('(min-width: 900px)').matches) });
     var displayPrice = r.displayPrice !== undefined && r.displayPrice !== null ? r.displayPrice : q.last;
     var hero = el('div', { class: 'card research-hero-card', id: 'research-hero' },
@@ -1062,9 +1092,13 @@
       evidenceLine,
       el('div', { class: 'chip-row market-facts' },
         chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Buy / sell quote' : 'Bid / ask', UI.info('bidask')), fmtNum(q.bid) + ' / ' + fmtNum(q.ask)),
-        chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Today\'s range' : 'Day range', UI.info('dayrange')), fmtNum(q.dayLow) + ' \u2013 ' + fmtNum(q.dayHigh)),
-        chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Options-implied move' : 'ATM IV', UI.info('atmiv')), fmtPct(r.ivAtm)),
-        chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Recent movement' : 'HV 30d', UI.info('hv30')), fmtPct(r.hv30))),
+        chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Today\'s range' : 'Day range', UI.info('dayrange')),
+          q.dayLow === null || q.dayLow === undefined || q.dayHigh === null || q.dayHigh === undefined
+            ? 'not reported' : fmtNum(q.dayLow) + ' \u2013 ' + fmtNum(q.dayHigh)),
+        chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Options-implied move' : 'ATM IV', UI.info('atmiv')),
+          reported(r.ivAtm, fmtPct)),
+        chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Recent movement' : 'HV 30d', UI.info('hv30')),
+          reported(r.hv30, fmtPct))),
       secondaryMarketDetail);
     if (section === 'understand') heroCard.replaceWith(hero);
 
@@ -1475,7 +1509,7 @@
             .sort(function (a, b) { return (b.publishedEpochMs || 0) - (a.publishedEpochMs || 0); });
           if (filings.length) {
             var f = filings[0];
-            var when = f.publishedEpochMs ? new Date(f.publishedEpochMs).toISOString().slice(0, 10) : '';
+            var when = f.publishedEpochMs ? UI.fmtDate(f.publishedEpochMs) : '';
             addEvent('LATEST FILING', f.headline.replace(/ filing$/i, ''), when || 'Date unavailable', 'filing', f.url);
             had = true;
           }
@@ -1932,6 +1966,7 @@
             href: '#/research/' + encodeURIComponent(s),
             'aria-label': 'Open full analysis for ' + s },
             el('div', { class: 't-sym' }, s,
+              q && App.state.world !== 'demo' ? badge(q.freshness) : null,
               q && !q.optionable ? el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO OPTIONS') : null,
               q ? null : el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'NO QUOTE')),
             el('div', { class: 't-px' }, q ? last.toFixed(2) : '\u2014'),
@@ -1961,8 +1996,9 @@
             var t2 = grid.querySelector('.sym-card[data-sym="' + row.symbol + '"] .spark-slot');
             if (!t2) return;
             t2.innerHTML = '';
-            t2.appendChild(UI.sparkline(row, { height: 36 }));
-            if (row.available === false || !row.closes || !row.closes.length) missingHistory.add(row.symbol);
+            var missing = row.available === false || !row.closes || !row.closes.length;
+            t2.appendChild(UI.sparkline(row, { height: 36, quietMissing: true, missingText: 'No chart' }));
+            if (missing) missingHistory.add(row.symbol);
             else missingHistory.delete(row.symbol);
             if (missingHistory.size) {
               historyNotice.hidden = false;
@@ -1973,7 +2009,7 @@
               historyNotice.appendChild(el('a', { class: 'btn btn-sm btn-secondary', href: '#/data/sources' }, 'Update history in Data'));
             } else historyNotice.hidden = true;
             // Evidence is server-computed and rendered verbatim; availability never implies Observed.
-            if (row.evidence && !(App.state.world === 'demo' && row.evidence.provenance === 'DEMO')) {
+            if (!missing && row.evidence && !(App.state.world === 'demo' && row.evidence.provenance === 'DEMO')) {
               t2.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev', compact: true,
                 missingLabel: 'HISTORY UNAVAILABLE' }));
             }

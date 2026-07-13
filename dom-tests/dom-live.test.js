@@ -149,10 +149,17 @@ test('live: dashboard renders observed cards or an explicit unavailable state', 
       .every(c => c.querySelector('.spark-svg, .spark-empty')), { timeout: 30000 });
     assert.doesNotMatch(await page.textContent('#home-market-watch'), /DEMO DATA/i,
       'Observed Home never substitutes Demo quotes');
-    const missingHistoryLabels = await page.$$eval('#home-market-watch .sym-card:has(.spark-empty) .spark-ev',
-      els => els.map(e => e.textContent.trim()));
-    missingHistoryLabels.forEach(label => assert.equal(label, 'HISTORY UNAVAILABLE',
-      'a usable quote with no candles names the missing dimension, not all data'));
+    const missingCards = page.locator('#home-market-watch .sym-card:has(.spark-empty)');
+    const missingCount = await missingCards.count();
+    if (missingCount) {
+      assert.ok(await page.locator('#home-market-watch .home-history-notice').isVisible(),
+        'one section-level recovery note explains missing history');
+      assert.equal(await page.locator('#home-market-watch .sym-card:has(.spark-empty) .spark-ev').count(), 0,
+        'cards do not repeat the same missing-history badge under the section-level notice');
+      const emptyLabels = await page.$$eval('#home-market-watch .sym-card:has(.spark-empty) .spark-empty',
+        els => els.map(e => e.textContent.trim()));
+      emptyLabels.forEach(label => assert.equal(label, 'No chart', 'each affected card keeps one quiet placeholder'));
+    }
   } else {
     assert.match(await page.textContent('#home-market-watch'), /market data unavailable/i,
       'provider outage is an explicit state');
@@ -216,6 +223,14 @@ test('live: visible market controls return Demo and simulated sessions to Observ
 });
 
 test('live: research a real symbol end to end', async () => {
+  await go('#/research');
+  await page.waitForSelector('#sector-grid .spark-svg, #sector-grid .spark-empty', { timeout: 30000 });
+  if (await page.locator('#sector-grid .spark-empty').count()) {
+    assert.ok(await page.locator('#sector-history-notice').isVisible(),
+      'Research owns one explicit history recovery action');
+    assert.equal(await page.locator('#sector-grid .spark-empty + .spark-ev').count(), 0,
+      'the explorer does not repeat HISTORY UNAVAILABLE on every affected card');
+  }
   await go('#/research/AAPL');
   await page.waitForSelector('#plan-start', { timeout: 30000 });
   await page.waitForSelector('#research-symbol', { timeout: 30000 });
@@ -225,6 +240,12 @@ test('live: research a real symbol end to end', async () => {
   await page.waitForSelector('#history-card');
   const hist = await page.textContent('#history-card');
   assert.doesNotMatch(hist, /DEMO DATA/i, 'Observed Research never substitutes Demo candles');
+  assert.doesNotMatch(await page.textContent('#research-hero'), /building history|—\s*[–-]\s*—/i,
+    'missing metrics use honest words instead of fake progress or punctuation placeholders');
+  if (/unavailable/i.test(hist)) {
+    assert.match(await page.textContent('#research-evidence'), /PARTIAL EVIDENCE/i,
+      'working quote and chain inputs are not mislabeled as total data failure when history is missing');
+  }
   await openPlan('AAPL', 'strategy');
   await page.locator('.plan-tool').filter({ hasText: /Chain|Option prices/ }).click();
   await page.waitForSelector('#expiration-select', { timeout: 30000 });
