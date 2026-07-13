@@ -766,7 +766,7 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
     'the Plan bar shows only the current execution market');
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"]').count(), 1,
     'the Home library retains a closed Plan from another market');
-  assert.match(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] button').textContent(),
+  assert.match(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] .home-plan-actions .btn:not(.btn-secondary)').textContent(),
     /Switch market & open/);
   assert.match(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"]').textContent(),
     /Switches market when opened/,
@@ -774,7 +774,7 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   await page.waitForTimeout(4200);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-library-desktop.png'), fullPage: true });
 
-  await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] button').click();
+  await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] .home-plan-actions .btn:not(.btn-secondary)').click();
   await page.waitForFunction(id => location.hash.includes('/plan/' + id + '/'), ids.first, { timeout: 20000 });
   await page.waitForFunction(base => App.state.world === base && App.Market.world === base, ids.base);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.first + '"]').count(), 1,
@@ -786,10 +786,10 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   await page.waitForFunction(id => !document.querySelector('.plan-chip[data-plan-id="' + id + '"]'), ids.first);
   await go('#/home');
   await page.waitForSelector('#home-plan-library [data-plan-id="' + ids.first + '"]');
-  assert.match(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] button').textContent(), /Open Plan/,
+  assert.match(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] .home-plan-actions .btn:not(.btn-secondary)').textContent(), /Open Plan/,
     'the chip × removes only the open-tab state; the durable Plan remains in the library');
 
-  await page.locator('#home-plan-library [data-plan-id="' + ids.simOne + '"] button').click();
+  await page.locator('#home-plan-library [data-plan-id="' + ids.simOne + '"] .home-plan-actions .btn:not(.btn-secondary)').click();
   await page.waitForFunction(world => App.state.world === world && App.Market.world === world, ids.worldId,
     { timeout: 20000 });
   await page.waitForFunction(id => location.hash.includes('/plan/' + id + '/'), ids.simOne);
