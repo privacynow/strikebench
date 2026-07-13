@@ -172,6 +172,19 @@ class PlanServiceTest {
     }
 
     @Test
+    void aFrozenPlanCannotRewriteItsActiveContext() {
+        Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                create("req-frozen-context", "QQQ", "ACQUIRE", 30));
+        db.exec("UPDATE plans SET status='DECIDED_CASH' WHERE id=?", plan.id());
+
+        assertThatThrownBy(() -> plans.updateContext(null, plan.id(), new Plan.ContextUpdateRequest(
+                plan.version(), "bearish", 45, null, null, null, null, null, null)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("frozen decision")
+                .hasMessageContaining("linked plan");
+    }
+
+    @Test
     void openAndArchiveAreVersionedAndAnnounced() {
         EventBus bus = new EventBus();
         plans.setEvents(bus);

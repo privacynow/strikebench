@@ -369,6 +369,12 @@ test('a pre-decision Plan can change goal and returns to Strategy without forkin
   const persisted = await page.evaluate(id => API.getFresh('/api/plans/' + id), created.id);
   assert.equal(persisted.intent, 'HEDGE');
   assert.equal(persisted.assumptionsEditable, true);
+
+  await page.click('#plan-edit-context');
+  await page.click('#plan-change-structure');
+  await page.waitForSelector('.plan-tool[aria-selected="true"]:has-text("All strategies")');
+  assert.match(await page.textContent('#plan-strategy-body'), /Every strategy, shown by payoff shape/i,
+    'changing structure opens the full visual catalog instead of reloading the same ranked view');
 });
 
 test('Plan stages orient both levels without hiding capabilities or stealing the journey', async () => {
@@ -1327,6 +1333,12 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   assert.equal(await page.locator('#plan-archive').count(), 0,
     'a Plan with an open position cannot be archived out from under management');
   assert.match(await page.textContent('#plan-stage-manage-review'), /Frozen at Decide/);
+  assert.equal((await page.textContent('#plan-edit-context')).trim(), 'Revise this Plan');
+  await page.click('#plan-edit-context');
+  assert.equal((await page.textContent('#plan-save-context')).trim(), 'Create revised Plan',
+    'editing a decided Plan creates a linked revision instead of rewriting the frozen decision');
+  assert.match(await page.textContent('#plan-context-editor'), /linked revision preserves that history/i);
+  await page.click('#plan-edit-context');
   assert.match(await page.textContent('#plan-stage-manage-review'), /Refresh marks/);
   assert.equal(await page.locator('#plan-stage-manage-review a[href^="#/trade"], #plan-stage-manage-review .plan-stage-transition').count(), 0,
     'Manage stays inside the Plan instead of linking to a standalone Trade detail');

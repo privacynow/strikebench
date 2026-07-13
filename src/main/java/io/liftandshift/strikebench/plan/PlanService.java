@@ -122,6 +122,9 @@ public final class PlanService {
         Plan.View changed = db.tx(c -> {
             Plan.View current = selectViewOn(c, planId, userId, true);
             requireVersion(current, raw.expectedVersion());
+            if (!current.assumptionsEditable()) {
+                throw new IllegalStateException("This plan has a frozen decision. Start a linked plan to revise its assumptions without rewriting history.");
+            }
             Set<String> clear = raw.clear() == null ? Set.of() : raw.clear();
             Plan.ContextRevision old = current.context();
             String thesis = merged("thesis", raw.thesis(), old.thesis(), clear);
