@@ -99,12 +99,8 @@ public final class UnderlyingBackfill {
                     if (last == null || cd.date().isAfter(last)) last = cd.date();
                 }
                 if (!accepted.isEmpty()) {
-                    String sourceForWrite = actualSource;
-                    db.tx(c -> {
-                        for (Candle cd : accepted) upsert(c, sym, sourceForWrite, cd);
-                        return null;
-                    });
-                    rows += accepted.size();
+                    ObservedCandleWriter.Result written = ObservedCandleWriter.write(db, sym, actualSource, accepted);
+                    rows += written.written();
                 }
             }
             MissingRangePlanner.Plan after = planner.plan(sym, from, to,
@@ -122,29 +118,6 @@ public final class UnderlyingBackfill {
             syncState.failed(ownerId, sourceRequest, sym, from, to, publicNote(e));
             throw e;
         }
-    }
-
-    private void upsert(java.sql.Connection connection, String symbol, String source, Candle cd) {
-        try {
-            Db.execOn(connection, "INSERT INTO underlying_bar (symbol,d,open,high,low,close,volume,source,observed,adjusted,quality_rank) "
-                        + "VALUES (?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(symbol,d,source,dataset_id) DO UPDATE SET "
-                        + "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,"
-                        + "volume=excluded.volume,observed=1,adjusted=excluded.adjusted,quality_rank=excluded.quality_rank,created_at=now()",
-                symbol, cd.date(), cd.open(), cd.high(), cd.low(), cd.close(), cd.volume(), source,
-                cd.adjusted(), quality(source));
-        } catch (java.sql.SQLException e) {
-            throw new Db.DbException(e);
-        }
-    }
-
-    private static int quality(String source) {
-        return switch (source == null ? "" : source.toLowerCase(Locale.ROOT)) {
-            case "polygon" -> 90;
-            case "alphavantage" -> 85;
-            case "yahoo" -> 60;
-            case "stooq" -> 50;
-            default -> 70;
-        };
     }
 
     static String invalidReason(Candle c) {

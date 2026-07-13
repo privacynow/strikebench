@@ -24,6 +24,11 @@ public final class StoredCandleStore implements CandleStore {
     public StoredCandleStore(Db db) { this.db = db; }
 
     @Override
+    public int persistObserved(String symbol, CandleSeries series) {
+        return ObservedCandleWriter.write(db, symbol, series).written();
+    }
+
+    @Override
     public Optional<CandleSeries> candles(String symbol, LocalDate from, LocalDate to, String datasetId) {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
         if (sym.isEmpty() || from == null || to == null || from.isAfter(to)) return Optional.empty();

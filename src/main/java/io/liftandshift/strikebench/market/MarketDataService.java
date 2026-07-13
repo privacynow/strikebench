@@ -302,6 +302,17 @@ public final class MarketDataService {
             // falling through here would splice observed or Demo prices into a scenario lane.
             if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)) return null;
             CandleSeries fromProviders = candleSeriesFromProviders(symbol, from, to);
+            if (!fromProviders.candles().isEmpty() && !fixtureOnlyChain
+                    && observedEvidence(fromProviders.evidence()) && candleStore != null) {
+                try {
+                    int persisted = candleStore.persistObserved(norm(symbol), fromProviders);
+                    if (persisted > 0) log.debug("Saved {} observed daily bars for local reuse", persisted);
+                } catch (RuntimeException e) {
+                    // The provider result remains usable for this request. Storage is an additive
+                    // optimization and must not turn a valid observed read into an outage.
+                    log.warn("Observed daily history could not be saved for local reuse");
+                }
+            }
             return fromProviders.candles().isEmpty() ? null : fromProviders;
         });
         return r == null ? CandleSeries.EMPTY : r;
