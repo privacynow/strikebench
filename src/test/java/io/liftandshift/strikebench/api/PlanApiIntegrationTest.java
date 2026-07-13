@@ -264,6 +264,52 @@ class PlanApiIntegrationTest {
         assertThat(latestAfterReplay.at("/backtests/0/maxDrawdownPct").isNumber()).isTrue();
     }
 
+    @Test void exactPlanEnsembleCreatesAReplayableLinkedRehearsalAndReview() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"rehearsal-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "thesis":"bullish","horizonDays":5,"riskMode":"conservative"}
+                """));
+        String planId = plan.get("id").asText();
+        long version = plan.get("version").asLong();
+        JsonNode ensemble = json(post("/api/plans/" + planId + "/outcomes/ensemble", """
+                {"expectedVersion":%d,"over":{"model":"GBM","shape":"GRIND_UP","horizonDays":5,
+                 "stepsPerDay":2,"driftAnnual":0.10,"volAnnual":0.25,"jumpsPerYear":0,
+                 "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":5150,"paths":20},
+                 "iv":{"startIv":0.30,"driftPerYear":0,"meanRevertSpeed":0,"longRunIv":0.30,
+                 "eventDay":-1,"eventShockPct":0,"minIv":0.03,"maxIv":4.0}}
+                """.formatted(version)));
+        String ensembleId = ensemble.at("/ensemble/id").asText();
+        String fingerprint = ensemble.at("/ensemble/fingerprint").asText();
+
+        JsonNode created = json(post("/api/plans/" + planId + "/rehearsals", """
+                {"expectedVersion":%d,"ensembleId":"%s","selection":"SAMPLE","pathIndex":0,"speed":26}
+                """.formatted(version, ensembleId)));
+        String worldId = created.at("/rehearsal/worldId").asText();
+        assertThat(created.at("/rehearsal/fingerprint").asText()).isEqualTo(fingerprint);
+        assertThat(created.at("/rehearsal/pathIndex").asInt()).isZero();
+        assertThat(created.at("/rehearsal/selection").asText()).isEqualTo("SAMPLE");
+        assertThat(created.at("/plan/version").asLong()).isEqualTo(version + 1);
+
+        JsonNode rehearsals = json(get("/api/plans/" + planId + "/rehearsals"));
+        assertThat(rehearsals.at("/rehearsals/0/worldId").asText()).isEqualTo(worldId);
+        assertThat(rehearsals.at("/rehearsals/0/fingerprint").asText()).isEqualTo(fingerprint);
+        JsonNode sessions = json(get("/api/sim/market"));
+        JsonNode session = null;
+        for (JsonNode item : sessions.withArray("sessions")) if (worldId.equals(item.path("id").asText())) session = item;
+        assertThat(session).isNotNull();
+        assertThat(session.at("/rehearsal/planId").asText()).isEqualTo(planId);
+
+        JsonNode report = json(get("/api/sim/market/" + worldId + "/report"));
+        assertThat(report.at("/rehearsal/fingerprint").asText()).isEqualTo(fingerprint);
+        assertThat(report.get("note").asText()).contains("exact path 1").contains(fingerprint);
+
+        assertThat(delete("/api/sim/market/" + worldId).statusCode()).isBetween(200, 299);
+        JsonNode managed = json(get("/api/plans/" + planId + "/manage"));
+        assertThat(managed.at("/plan/activeStage").asText()).isEqualTo("MANAGE_REVIEW");
+        assertThat(managed.at("/management/actions/0/kind").asText()).isEqualTo("REHEARSAL_RESULT");
+        assertThat(managed.at("/management/reviews/0/category").asText()).isEqualTo("SIM_REHEARSAL");
+    }
+
     @Test void decideFreezesTheServerSelectedPackageAndLinksTradeOrCash() throws Exception {
         JsonNode tradePlan = json(post("/api/plans", """
                 {"clientRequestId":"decision-trade-plan","symbol":"AAPL","intent":"DIRECTIONAL",
@@ -366,6 +412,11 @@ class PlanApiIntegrationTest {
     private static HttpResponse<String> put(String path, String body) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(base + path)).header("Content-Type", "application/json")
                 .PUT(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> delete(String path) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(base + path)).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
     }
 
     private static JsonNode json(HttpResponse<String> response) {

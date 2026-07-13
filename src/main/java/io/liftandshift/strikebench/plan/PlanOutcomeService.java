@@ -41,7 +41,7 @@ public final class PlanOutcomeService {
 
     public record StoredEnsemble(String id, String fingerprint, String basis,
                                  PathEnsembleService.Ensemble ensemble, IvSpec iv,
-                                 double rateAnnual, String anchorSource,
+                                 double rateAnnual, double stepSeconds, String anchorSource,
                                  String anchorFreshness, String asOf) {}
 
     public record SavedOutcome(String id, String basis, String state, String candidateId,
@@ -130,7 +130,7 @@ public final class PlanOutcomeService {
             return null;
         });
         return new StoredEnsemble(ensembleId, fingerprint, ensemble.basis().name(), ensemble, iv,
-                rateAnnual, source, freshness, asOf);
+                rateAnnual, 23_400.0 / Math.max(1, spec.stepsPerDay()), source, freshness, asOf);
     }
 
     /** Rehydrate the stored matrix, IV path recipe, rate, model identity, and exact context. */
@@ -145,7 +145,7 @@ public final class PlanOutcomeService {
                             "pe.spec_jump_vol,pe.spec_tail_nu,pe.spec_seed,pe.spec_paths,pe.heston_kappa," +
                             "pe.heston_theta,pe.heston_xi,pe.heston_rho,pe.heston_v0,pe.iv_start,pe.iv_longrun," +
                             "pe.iv_drift_per_year,pe.iv_mean_revert_speed,pe.iv_event_day,pe.iv_event_shock_pct," +
-                            "pe.iv_min,pe.iv_max,ea.rate_annual,ea.n_paths,ea.n_steps,ea.codec,ea.spot_matrix,ea.iv_path " +
+                            "pe.iv_min,pe.iv_max,ea.rate_annual,ea.step_seconds,ea.n_paths,ea.n_steps,ea.codec,ea.spot_matrix,ea.iv_path " +
                             "FROM plan_ensemble pe JOIN ensemble_artifact ea ON ea.fingerprint=pe.fingerprint " +
                             "JOIN plans p ON p.id=pe.plan_id " +
                             "WHERE pe.id=? AND pe.plan_id=?",
@@ -170,7 +170,7 @@ public final class PlanOutcomeService {
             var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.valueOf(r.basis()),
                     scope, r.anchorSpotCents() / 100.0, spec, paths, null, r.modelVersion());
             return new StoredEnsemble(r.id(), r.fingerprint(), r.basis(), ensemble, iv,
-                    r.rate(), r.anchorSource(), r.anchorFreshness(), r.asOf());
+                    r.rate(), r.stepSeconds(), r.anchorSource(), r.anchorFreshness(), r.asOf());
         });
     }
 
@@ -510,7 +510,7 @@ public final class PlanOutcomeService {
                 r.dblOrNull("heston_rho"), r.dblOrNull("heston_v0"), r.dbl("iv_start"),
                 r.dbl("iv_longrun"), r.dbl("iv_drift_per_year"), r.dbl("iv_mean_revert_speed"),
                 r.intv("iv_event_day"), r.dbl("iv_event_shock_pct"), r.dbl("iv_min"), r.dbl("iv_max"),
-                r.dbl("rate_annual"), r.intv("n_paths"), r.intv("n_steps"), r.str("codec"),
+                r.dbl("rate_annual"), r.dbl("step_seconds"), r.intv("n_paths"), r.intv("n_steps"), r.str("codec"),
                 r.bytes("spot_matrix"), r.bytes("iv_path"));
     }
 
@@ -550,6 +550,6 @@ public final class PlanOutcomeService {
                                int stepsPerDay,double drift,double vol,double jumps,double jumpMean,double jumpVol,double tailNu,
                                long seed,int paths,Double hestonKappa,Double hestonTheta,Double hestonXi,Double hestonRho,
                                Double hestonV0,double ivStart,double ivLongRun,double ivDrift,double ivMeanRevert,
-                               int ivEventDay,double ivEventShock,double ivMin,double ivMax,double rate,int nPaths,int nSteps,
+                               int ivEventDay,double ivEventShock,double ivMin,double ivMax,double rate,double stepSeconds,int nPaths,int nSteps,
                                String codec,byte[] spotMatrix,byte[] ivPath) {}
 }

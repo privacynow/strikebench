@@ -406,7 +406,10 @@
   };
 
   function bandLabelText(sess, cfg) {
-    return App.scenarioLabel(cfg.scenario)
+    var label = sess && sess.rehearsal
+      ? 'Plan rehearsal · ' + sess.rehearsal.symbol + ' · path ' + (Number(sess.rehearsal.pathIndex) + 1)
+      : App.scenarioLabel(cfg.scenario);
+    return label
       + (sess && sess.simTime ? ' \u00b7 ' + sess.simTime.replace('T', ' ') + ' ET' : '');
   }
 
@@ -566,6 +569,9 @@
       speedSel,
       UI.el('button', { class: 'btn btn-sm', id: 'world-report', onclick: function () { App.navigate('#/data/simulation'); } },
         'Report'),
+      sess && sess.rehearsal ? UI.el('button', { class: 'btn btn-sm', id: 'world-plan-return', onclick: function () {
+        PlanStore.focus(sess.rehearsal.planId, 'EVIDENCE').catch(function (e) { UI.toast(e.message, 'error'); });
+      } }, 'Return to Plan') : null,
       UI.el('button', { class: 'btn btn-sm', id: 'world-exit',
         'aria-label': App.config && App.config.fixturesOnly ? 'Return to demo market' : 'Return to observed market',
         onclick: function () { App.switchWorld(App.baseWorldId(), this); } },
@@ -1187,9 +1193,19 @@
       strip.style.animation = 'none';
       strip.appendChild(sequence(true));
       tape.hidden = false;
+      var singleSymbol = quotes.length === 1;
+      strip.classList.toggle('single', singleSymbol);
+      var tapeScroll = tape.querySelector('.tape-scroll');
+      if (tapeScroll) tapeScroll.classList.toggle('single', singleSymbol);
+      if (singleSymbol) {
+        strip.setAttribute('data-symbols', symbolsKey);
+        strip.removeAttribute('data-halfw');
+        wireTapeResize();
+        return;
+      }
       // Measure one sequence, then build two identical halves that each cover the viewport
       var seqW = strip.firstChild.getBoundingClientRect().width || 1;
-      var containerW = tape.querySelector('.tape-scroll').getBoundingClientRect().width || seqW;
+      var containerW = tapeScroll.getBoundingClientRect().width || seqW;
       var perHalf = Math.max(1, Math.ceil(containerW / seqW));
       for (var i = 1; i < perHalf * 2; i++) strip.appendChild(sequence(false));
       var halfW = seqW * perHalf;

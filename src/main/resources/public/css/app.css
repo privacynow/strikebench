@@ -550,6 +550,8 @@ body.lvl-expert .not-expert { display: none !important; }
   mask-image: linear-gradient(90deg, transparent 0, #000 56px, #000 calc(100% - 40px), transparent); }
 .tape-seq { display: inline-flex; }
 .tape-strip { display: inline-flex; gap: 0; animation: tape-scroll linear infinite; will-change: transform; }
+.tape-strip.single { animation: none; will-change: auto; }
+.tape-scroll.single { -webkit-mask-image: none; mask-image: none; }
 .tape:hover .tape-strip { animation-play-state: paused; }
 
 #global-search { background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
@@ -1544,6 +1546,8 @@ body.lvl-expert .showcase-frame { max-height: 375px; }
 .fan-chart g.fan-sample { cursor: pointer; }
 .fan-chart g.fan-sample.selected .fan-sample-line { stroke: var(--accent); stroke-width: 2; opacity: 1; }
 .fan-path-readout { margin-top: 4px; }
+.fan-sample-chooser { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+.fan-sample-chooser .btn { min-width: 34px; }
 
 /* CP-5: assembled verdict, acknowledgment gate, expected-move band */
 .ack-gate .ack-row { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; cursor: pointer; }
@@ -1623,6 +1627,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   body.in-sim-world #world-toggle { grid-column: 1; grid-row: 2; }
   body.in-sim-world #world-step { grid-column: 2; grid-row: 2; }
   body.in-sim-world #world-band #world-speed { grid-column: 3; grid-row: 2; width: 100%; max-width: none; }
+  body.in-sim-world #world-plan-return { grid-column: 1 / 5; grid-row: 3; width: 100%; }
   body.in-sim-world #world-exit { grid-column: 4; grid-row: 2; margin-left: 0; white-space: nowrap; }
   body.in-sim-world #world-exit .wb-exit-wide { display: none; }
   body.in-sim-world #world-exit .wb-exit-short { display: inline; }
@@ -1640,6 +1645,9 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 
 /* A simulated world is a multi-symbol market, not a single chart with hidden ticker pills. */
 #sim-control-room, #cr-symbols { scroll-margin-top: calc(var(--sticky-stack-h) + 12px); }
+#sim-control-room { min-width: 0; max-width: 100%; overflow: hidden; }
+#sim-control-room > *, #sim-control-room .btn-row, #sim-control-room .chip-row { min-width: 0; }
+#sim-control-room .alert { overflow-wrap: anywhere; }
 .sim-market-overview { margin: 12px 0 10px; padding: 10px; border: 1px solid var(--border);
   border-radius: var(--radius-sm); background: var(--surface); }
 .sim-active-note { margin: -2px 0 10px; }
@@ -1662,6 +1670,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .sim-focus-head > div { display: flex; align-items: baseline; gap: 8px; }
 .sim-focus-head b { font-size: 17px; }
 @media (max-width: 640px) {
+  body.in-sim-world #app[data-route="data"] { padding-top: 28px; }
   .sim-symbol-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sim-symbol-tile { min-height: 94px; }
 }

@@ -183,7 +183,9 @@ public final class PlanService {
             Plan.View current = selectViewOn(c, planId, userId, true);
             requireVersion(current, raw.expectedVersion());
             if (stage == Plan.Stage.MANAGE_REVIEW && current.status() != Plan.Status.DECIDED_CASH
-                    && current.status() != Plan.Status.POSITION_OPEN && current.status() != Plan.Status.CLOSED) {
+                    && current.status() != Plan.Status.POSITION_OPEN && current.status() != Plan.Status.CLOSED
+                    && Db.queryOn(c, "SELECT 1 ok FROM plan_link WHERE plan_id=? AND role='REHEARSAL' LIMIT 1",
+                            r -> r.intv("ok"), planId).isEmpty()) {
                 throw new IllegalStateException("Manage & Review unlocks after a trade, cash decision, or rehearsal exists");
             }
             if (stage == current.activeStage()) return current;
