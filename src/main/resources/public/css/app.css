@@ -2079,6 +2079,26 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-intent-ladder .ladder-row-badges, .plan-intent-ladder .ladder-row > .xp { grid-column: 1 / -1; }
 .plan-intent-ladder .ladder-row > .btn { white-space: nowrap; }
 .plan-income-board { border-left: 3px solid var(--accent); }
+.portfolio-construct-primary { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.portfolio-construct-advanced { margin-top: 10px; }
+.portfolio-construct-advanced > .form-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.portfolio-construct-output { display: grid; gap: 12px; margin-top: 12px; }
+.portfolio-construct-summary { margin: 0; }
+.allocation-composition { display: grid; gap: 8px; }
+.allocation-bar { display: flex; height: 22px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.allocation-segment { min-width: 2px; }
+.allocation-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--muted); }
+.allocation-legend > span { display: inline-flex; align-items: center; gap: 5px; }
+.allocation-swatch { width: 9px; height: 9px; border-radius: 2px; }
+.allocation-color-0 { background: var(--accent); }
+.allocation-color-1 { background: var(--risk-ok); }
+.allocation-color-2 { background: var(--risk-caution); }
+.allocation-color-3 { background: var(--loss); }
+.allocation-color-4 { background: #0e8b8f; }
+.allocation-color-5 { background: #8d6cab; }
+.portfolio-allocation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.portfolio-allocation-card { display: grid; align-content: start; gap: 8px; }
+.portfolio-allocation-card p { margin: 0; }
 .plan-next-action { display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 14px 16px; border: 1px solid var(--accent); border-radius: var(--radius-sm);
   background: var(--accent-soft); }
@@ -2168,6 +2188,8 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .plan-proposed-heading { align-items: flex-start; flex-direction: column; }
   .plan-intent-ladder .ladder-row { grid-template-columns: minmax(0, 1fr); }
   .plan-intent-ladder .ladder-row > .btn { width: 100%; }
+  .portfolio-construct-primary, .portfolio-construct-advanced > .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .portfolio-allocation-grid { grid-template-columns: minmax(0, 1fr); }
   .universe-scout-grid { grid-template-columns: minmax(0, 1fr); }
   .plan-stage-transition { align-items: flex-start; flex-direction: column; }
   .sector-history-notice, .plan-existing-match { align-items: flex-start; flex-direction: column; }
@@ -2175,4 +2197,5 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 @media (max-width: 420px) {
   .plan-context-fields { grid-template-columns: minmax(0, 1fr); }
   .plan-chip-main { max-width: 210px; }
+  .portfolio-construct-primary, .portfolio-construct-advanced > .form-grid { grid-template-columns: minmax(0, 1fr); }
 }
