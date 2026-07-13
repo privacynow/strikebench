@@ -716,6 +716,53 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   }, ids);
 });
 
+test('duplicate Plan identities stay distinct across Home, desktop, mobile, and reload', async () => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
+  const ids = await page.evaluate(async () => {
+    const base = App.baseWorldId();
+    if (App.state.world !== base) await App.switchWorld(base);
+    await PlanStore.load(true);
+    const one = await PlanStore.create({ symbol: 'NVDA', intent: 'DIRECTIONAL', thesis: 'bullish',
+      horizonDays: 30, riskMode: 'conservative', title: 'NVDA · Restart clarity' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const two = await PlanStore.create({ symbol: 'NVDA', intent: 'DIRECTIONAL', thesis: 'bullish',
+      horizonDays: 30, riskMode: 'conservative', title: 'NVDA · Restart clarity' });
+    return { one: one.id, two: two.id };
+  });
+
+  await go('#/home');
+  await page.waitForSelector('#home-plan-library [data-plan-id="' + ids.two + '"]');
+  const labels = await Promise.all([ids.one, ids.two].map(async id => ({
+    home: await page.locator('#home-plan-library [data-plan-id="' + id + '"]').textContent(),
+    bar: await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + id + '"]').textContent()
+  })));
+  assert.match(labels[0].home, /Plan 1 of 2/);
+  assert.match(labels[1].home, /Plan 2 of 2/);
+  assert.match(labels[0].home, /Updated /);
+  assert.match(labels[0].bar, /Plan 1 of 2/);
+  assert.match(labels[1].bar, /Plan 2 of 2/);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const options = await page.locator('#plan-picker option').allTextContents();
+  assert.ok(options.some(text => /NVDA.*Plan 1 of 2/.test(text)));
+  assert.ok(options.some(text => /NVDA.*Plan 2 of 2/.test(text)));
+  await page.reload();
+  await page.waitForSelector('#plan-picker');
+  const restored = await page.locator('#plan-picker option').allTextContents();
+  assert.ok(restored.some(text => /NVDA.*Plan 1 of 2/.test(text)), 'first identity survives restart');
+  assert.ok(restored.some(text => /NVDA.*Plan 2 of 2/.test(text)), 'second identity survives restart');
+
+  await page.evaluate(async values => {
+    for (const id of [values.one, values.two]) {
+      const plan = await PlanStore.get(id, true);
+      await API.post('/api/plans/' + id + '/archive', { expectedVersion: plan.version });
+    }
+    await PlanStore.refresh();
+  }, ids);
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
 test('Plan Decide freezes one server-owned package and opens the linked paper position atomically', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   const plan = await openPlan('AAPL', 'strategy');

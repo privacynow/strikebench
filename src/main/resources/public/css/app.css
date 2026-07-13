@@ -2004,7 +2004,9 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .home-plan-tile.active { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
 .home-plan-tile-head { grid-column: 1 / -1; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
 .home-plan-tile-head h3 { margin: 1px 0 0; font-size: 19px; }
+.home-plan-badges { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 5px; }
 .home-plan-meta { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.plan-updated-at { flex-basis: 100%; }
 .home-plan-live { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 700; }
 .home-plan-tile > .btn { align-self: end; white-space: nowrap; }
 .home-plan-archive { display: grid; gap: 0; }

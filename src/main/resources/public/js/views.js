@@ -326,13 +326,15 @@
       heroMode = el('span', { class: 'badge badge-sim', id: 'home-mode-chip' }, 'SIMULATED MARKET SESSION');
     }
     var activePlan = window.PlanStore && PlanStore.active();
+    var activeIdentity = activePlan && PlanStore.identity(activePlan, PlanStore.all());
     var heroSub = el('p', { class: 'home-hero-sub', id: 'home-context-line' },
       activePlan
-        ? activePlan.title + ' is at ' + String(activePlan.activeStage || 'UNDERSTAND').replace('_', ' ').toLowerCase() + '.'
+        ? activePlan.symbol + ' · ' + activeIdentity.full + ' is at '
+          + String(activePlan.activeStage || 'UNDERSTAND').replace('_', ' ').toLowerCase() + '.'
         : 'Screened ideas, honest odds, worst case always known before you commit.');
     var heroCta = activePlan
       ? el('button', { class: 'btn', onclick: function () { PlanStore.focus(activePlan); } },
-          'Continue ' + activePlan.symbol + ' Plan \u2192')
+          'Continue ' + activePlan.symbol + (activeIdentity.duplicate ? ' · ' + activeIdentity.duplicate : '') + ' \u2192')
       : el('button', { class: 'btn', onclick: function () { App.navigate('#/research'); } }, 'Start a Plan');
     // The hero owns THE single primary next action (review P5): the tour demoted to a
     // quiet entry at the bottom of the page — onboarding is not a permanent command.
@@ -417,19 +419,20 @@
           : quote ? el('span', { class: 'home-plan-live' }, fmtNum(quote.last), ' ', UI.delta(quote.last, quote.prevClose))
           : el('span', { class: 'muted small' }, terminalSession ? 'Session finished · review its report'
             : sameMarket ? 'Market mark unavailable' : 'Switches market when opened');
-        var prefix = plan.symbol + ' · ';
-        var displayTitle = String(plan.title || '').startsWith(prefix)
-          ? String(plan.title).slice(prefix.length) : (plan.title || planIntentLabel(plan.intent));
+        var planIdentity = PlanStore.identity(plan, working);
         return el('article', { class: 'home-plan-tile' + (plan.id === App.state.activePlanId ? ' active' : ''),
           'data-plan-id': plan.id },
           el('div', { class: 'home-plan-tile-head' },
             el('div', {}, el('div', { class: 'eyebrow' }, plan.symbol + ' · ' + planIntentLabel(plan.intent)),
-              el('h3', {}, displayTitle)),
-            el('span', { class: 'badge ' + (sameMarket ? 'badge-info' : 'badge-dim') }, planMarketLabel(plan))),
+              el('h3', {}, planIdentity.title)),
+            el('div', { class: 'home-plan-badges' },
+              planIdentity.duplicate ? el('span', { class: 'badge badge-info plan-duplicate-badge' }, planIdentity.duplicate) : null,
+              el('span', { class: 'badge ' + (sameMarket ? 'badge-info' : 'badge-dim') }, planMarketLabel(plan)))),
           el('div', { class: 'home-plan-meta' },
             chip('Stage', stageName(plan)),
             plan.context && plan.context.horizonDays ? chip('Horizon', plan.context.horizonDays + 'd') : null,
             plan.context && plan.context.thesis ? chip('View', plan.context.thesis) : null,
+            planIdentity.updated ? el('span', { class: 'muted small plan-updated-at' }, planIdentity.updated) : null,
             live),
           el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
             if (terminalSession) {
