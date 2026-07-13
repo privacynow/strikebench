@@ -1533,6 +1533,10 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   });
   assert.ok(geometry.shellWidth > geometry.appWidth * 0.85 && geometry.inputWidth <= 522,
     'the context card keeps page symmetry while only the editor is purpose-sized: ' + JSON.stringify(geometry));
+  assert.equal(await page.locator('#research-symbol-context .symbol-context-label').count(), 0,
+    'the full-width Research context keeps its accessible name without a redundant visible field label');
+  assert.equal(await page.getAttribute('#symbol-input', 'aria-label'), 'Which stock do you want to understand?',
+    'the visually unlabeled Research input remains explicit to assistive technology');
   assert.equal(geometry.collisions, 0, 'sparkline readout never overlaps its evidence badge');
   assert.equal(await page.locator('#sector-history-notice').isVisible(), false,
     'a hidden history notice cannot survive as an empty warning bar');
@@ -3400,6 +3404,12 @@ test('simulated market: product creator, loud live band, world-routed research, 
   // Finish via the app modal (never window.confirm): the REPORT shows before the finish.
   await go('#/data/simulation');
   await page.waitForSelector('.sim-session-row button:has-text("Finish")');
+  assert.equal(await page.locator('.sim-session-row[role="link"], .sim-session-row a button, .sim-session-row button button').count(), 0,
+    'a simulated-session card never nests controls inside a link-like wrapper');
+  assert.ok(await page.locator('.sim-session-row article').count() === 0,
+    'session rows are the semantic article rather than a nested decorative wrapper');
+  assert.ok(await page.locator('.sim-session-row .sim-session-summary').count() >= 1,
+    'each session exposes one explicit primary card action alongside separate controls');
   for (const label of ['Enter this market', 'Pause', 'Inject event']) {
     assert.equal(await page.locator('.sim-session-row button').filter({ hasText: label }).isEnabled(), true,
       label + ' stays actionable after returning from the running session');

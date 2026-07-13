@@ -788,7 +788,7 @@
       mode: 'editable', id: 'research-symbol-context', input: input,
       label: symbol ? 'Change stock' : Learn.currentLevel() === 'beginner'
         ? 'Which stock do you want to understand?' : 'Research symbol',
-      compact: !!symbol, showStatus: !symbol, hideLabel: !!symbol, class: 'symbol-context-purpose',
+      compact: !!symbol, showStatus: !symbol, hideLabel: true, class: 'symbol-context-purpose',
       commitLabel: symbol ? 'Go' : 'Open analysis', commitId: 'symbol-go', onCommit: go
     });
     var contextExtras = el('div', { class: 'symbol-context-extras' },
@@ -5896,25 +5896,39 @@
         var preparing = sx.status === 'PREPARING';
         var failed = sx.status === 'FAILED';
         var rowInteractive = finished || (!preparing && !failed);
-        var row = el('div', { class: 'card-slim btn-row sim-session-row' + (rowInteractive ? ' clickable' : ''),
-          'data-sim-id': sx.id, style: 'margin:6px 0' },
-          el('b', {}, sx.name || sx.id),
+        var titleId = 'sim-session-title-' + sx.id;
+        function openSession() {
+          if (finished) { showReport(sx); return; }
+          if (preparing || failed) return;
+          App.state.focusSimControlRoom = sx.id;
+          App.switchWorld(sx.id);
+        }
+        var summary = el('button', {
+          type: 'button', class: 'sim-session-summary', disabled: !rowInteractive,
+          'aria-label': finished ? 'Open report for ' + (sx.name || sx.id)
+            : 'Enter simulated market ' + (sx.name || sx.id),
+          onclick: openSession
+        },
+          el('b', { id: titleId }, sx.name || sx.id),
           rehearsal ? el('span', { class: 'badge badge-info' }, 'PLAN REHEARSAL') : null,
           el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : failed ? 'badge-danger' : preparing ? 'badge-caution' : finished ? 'badge-dim' : 'badge-warn') },
             finished ? 'FINISHED' : failed ? 'FAILED' : preparing ? 'PREPARING' : sx.running ? 'RUNNING' : 'READY'),
-          el('span', { class: 'muted small' }, (rehearsal
+          el('span', { class: 'muted small sim-session-meta' }, (rehearsal
             ? rehearsal.symbol + ' · path ' + (rehearsal.pathIndex + 1) + ' · ' + rehearsal.selection.toLowerCase()
               + ' · receipt ' + String(rehearsal.fingerprint).slice(0, 12) + '…'
             : App.scenarioLabel(cfg.scenario) + ' \u00b7 seed ' + cfg.seed)
             + (sx.eventCount ? ' \u00b7 ' + sx.eventCount + ' injected event' + (sx.eventCount === 1 ? '' : 's') : '')
             + (sx.simTime ? ' \u00b7 ' + String(sx.simTime).replace('T', ' ') : '')));
+        var actions = el('div', { class: 'sim-session-actions', 'aria-label': 'Session controls' });
+        var row = el('article', { class: 'card-slim sim-session-row' + (rowInteractive ? ' clickable' : ''),
+          'data-sim-id': sx.id, 'aria-labelledby': titleId, style: 'margin:6px 0' }, summary, actions);
         if (!finished) {
-          row.appendChild(el('button', { class: 'btn btn-sm', disabled: preparing || failed, onclick: function () {
+          actions.appendChild(el('button', { class: 'btn btn-sm', disabled: preparing || failed, onclick: function () {
             if (!active) App.state.focusSimControlRoom = sx.id;
             App.switchWorld(active ? App.baseWorldId() : sx.id, this); } }, active
               ? (App.config && App.config.fixturesOnly ? 'Back to demo' : 'Back to real')
               : 'Enter this market'));
-          row.appendChild(el('button', { class: 'btn btn-sm', disabled: preparing || failed, onclick: async function () {
+          actions.appendChild(el('button', { class: 'btn btn-sm', disabled: preparing || failed, onclick: async function () {
             try {
               var running = !sx.running;
               await API.post('/api/sim/market/' + sx.id + '/' + (sx.running ? 'pause' : 'start'), {});
@@ -5922,21 +5936,19 @@
               App.refreshWorldBand();
             }
             catch (e) { UI.toast(e.message || 'Could not change simulation playback', 'error'); } } }, sx.running ? 'Pause' : 'Start'));
-          if (!rehearsal) row.appendChild(el('button', { class: 'btn btn-sm', id: 'sim-inject-' + sx.id, disabled: preparing || failed, onclick: function () {
+          if (!rehearsal) actions.appendChild(el('button', { class: 'btn btn-sm', id: 'sim-inject-' + sx.id, disabled: preparing || failed, onclick: function () {
             injectModal(sx); } }, 'Inject event'));
         }
-        row.appendChild(el('button', { class: 'btn btn-sm', onclick: function () { showReport(sx); } }, 'Report'));
+        actions.appendChild(el('button', { class: 'btn btn-sm', onclick: function () { showReport(sx); } }, 'Report'));
         if (!finished) {
-          row.appendChild(el('button', { class: 'btn btn-sm btn-danger', onclick: function () {
+          actions.appendChild(el('button', { class: 'btn btn-sm btn-danger', onclick: function () {
             finishModal(sx); } }, 'Finish'));
         }
         row.addEventListener('click', function (e) {
           if (e.target.closest('button,a,input,select,textarea')) return;
-          if (finished) showReport(sx);
-          else if (!preparing && !failed) { App.state.focusSimControlRoom = sx.id; App.switchWorld(sx.id, row); }
+          openSession();
         });
-        return rowInteractive ? pressable(row, finished ? 'Open report for ' + (sx.name || sx.id)
-          : 'Enter simulated market ' + (sx.name || sx.id), 'link') : row;
+        return row;
       }
 
       /** Inject-event: an app modal with a SYMBOL PICKER — never window.prompt (review P2). */
