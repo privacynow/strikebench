@@ -46,4 +46,23 @@ class JourneySurfaceTest {
                 "routes.post(\"/api/plans/{id}/strategy/fit\"",
                 "routes.get(\"/api/plans/{id}/outcomes/backtests/{backtestId}\"");
     }
+
+    @Test void canonicalOwnersRetainTheFullDecisionAndLearningToolset() throws Exception {
+        String views = source("js/views.js");
+        String builder = source("js/builder.js");
+        String plans = source("js/plans.js");
+
+        assertThat(views).contains(
+                "Scout this sector", "Proposed trades", "All strategies", "Option prices", "Scout",
+                "Ranked field", "Name your buy price", "Name your sale price", "Choose a protection floor",
+                "Your income picture", "One position, separate lenses", "Market odds", "Model futures",
+                "Past analogs", "Rule replay", "Previous Plan replays", "Price the decision now",
+                "Construct across ideas", "Your record", "Possible futures", "Past evidence");
+        assertThat(builder).contains(
+                "Every structure, with its payoff shape", "Fit to my limits", "Size this synthetic long by exposure",
+                "id: 'builder-add-leg'", "Theoretical max loss", "Theoretical max profit");
+        assertThat(plans).contains(
+                "/strategy/run", "/strategy/fit", "/strategy/custom", "/scout/run", "/outcomes/run",
+                "/outcomes/backtest", "/decision/preview", "/rehearsals");
+    }
 }

@@ -27,6 +27,7 @@ const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.ja
 const JAVA = process.env.JAVA_BIN || 'java';
 
 let server, browser, page, pg;
+let planId;
 
 async function waitForServer(tries = 60) {
   for (let i = 0; i < tries; i++) {
@@ -59,6 +60,14 @@ before(async () => {
   await page.waitForSelector('#app[data-ready="true"]', { timeout: 30000 });
   const skip = await page.locator('#welcome-skip').count();
   if (skip) { await page.click('#welcome-skip'); await page.waitForSelector('#app[data-ready="true"]'); }
+  const created = await fetch(BASE + '/api/plans', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientRequestId: 'audit-plan', symbol: 'AAPL', intent: 'DIRECTIONAL',
+      thesis: 'bullish', horizonDays: 30, riskMode: 'conservative' }) });
+  const createdBody = await created.text();
+  assert.ok(created.ok, 'audit Plan creation failed: ' + createdBody);
+  planId = JSON.parse(createdBody).id;
+  ROUTES.push(...['understand', 'evidence', 'strategy', 'outcomes', 'decide', 'manage-review']
+    .map(stage => `#/plan/${planId}/${stage}`));
 });
 
 after(async () => {
@@ -67,11 +76,11 @@ after(async () => {
   if (pg) pg.drop();
 });
 
-const ROUTES = ['#/home', '#/home/tour', '#/research', '#/research/AAPL', '#/trade/context',
-  '#/trade/context/manual', '#/trade/structure', '#/trade/decide', '#/trade/outcomes',
-  '#/portfolio', '#/portfolio/activity', '#/portfolio/account', '#/data/overview',
+const ROUTES = ['#/home', '#/home/tour', '#/research', '#/research/AAPL',
+  '#/portfolio', '#/portfolio/construct', '#/portfolio/positions', '#/portfolio/activity',
+  '#/portfolio/record', '#/portfolio/account', '#/data/overview',
   '#/data/simulation', '#/data/datasets', '#/data/sources', '#/data/admin'];
-const WIDTHS = [2048, 1920, 1440, 1280, 1000, 390, 375, 320]; // include the wide desktop that exposed the trade-form spill
+const WIDTHS = [2048, 1920, 1440, 1280, 1000, 390, 375, 320];
 
 // Sanctioned control heights: --ctl-h (38), --ctl-h-sm / --ctl-h-xs (30), plus the
 // tape/level-switch micro scale (<=28) which is exempted by selector below.

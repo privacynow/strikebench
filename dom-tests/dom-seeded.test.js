@@ -27,6 +27,7 @@ const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.ja
 const JAVA = process.env.JAVA_BIN || 'java';
 
 let server, browser, page, pg;
+let seededPlanId;
 const pageErrors = [];
 const serverErrors = [];
 
@@ -89,8 +90,12 @@ before(async () => {
   await api('POST', '/api/positions/buy', { symbol: 'AAPL', shares: 200 });
 
   // A share-covered call via the EXIT intent (locks 100 of the 200)
-  const rec = await api('POST', '/api/recommend', { symbol: 'AAPL', intent: 'exit', riskMode: 'balanced' });
-  const cc = rec.candidates.find(c => c.strategy === 'COVERED_CALL');
+  const incomePlan = await api('POST', '/api/plans', {
+    clientRequestId: 'seeded-income-plan', symbol: 'AAPL', intent: 'EXIT',
+    thesis: 'neutral', horizonDays: 30, riskMode: 'balanced'
+  });
+  const rec = await api('POST', `/api/plans/${incomePlan.id}/strategy/run`, {});
+  const cc = rec.strategy.result.candidates.find(c => c.strategy === 'COVERED_CALL');
   assert.ok(cc, 'covered-call candidate for seeding');
   await createTrade({
     symbol: 'AAPL', strategy: 'COVERED_CALL', qty: 1, intent: 'exit', useHeldShares: true,
@@ -116,6 +121,7 @@ before(async () => {
     clientRequestId: 'seeded-replay-plan', symbol: 'AAPL', intent: 'EXIT',
     thesis: 'neutral', horizonDays: 30, riskMode: 'balanced'
   });
+  seededPlanId = replayPlan.id;
   const replayCompetition = await api('POST', `/api/plans/${replayPlan.id}/strategy/run`, {});
   const replayCandidate = replayCompetition.strategy.result.candidates.find(c => c.strategy === 'COVERED_CALL')
     || replayCompetition.strategy.result.candidates[0];
@@ -159,15 +165,19 @@ after(async () => {
   if (pg) pg.drop();
 });
 
-const ROUTES = ['#/home', '#/research/AAPL', '#/trade/context', '#/trade/context/manual',
-  '#/trade/structure', '#/trade/decide', '#/trade/outcomes', '#/portfolio', '#/portfolio/closed',
-  '#/portfolio/activity', '#/portfolio/account', '#/data/overview'];
+function routes() {
+  return ['#/home', '#/research', '#/research/AAPL', '#/portfolio', '#/portfolio/construct',
+    '#/portfolio/positions', '#/portfolio/closed', '#/portfolio/activity', '#/portfolio/record',
+    '#/portfolio/account', '#/data/overview',
+    ...['understand', 'evidence', 'strategy', 'outcomes', 'decide', 'manage-review']
+      .map(stage => `#/plan/${seededPlanId}/${stage}`)];
+}
 
 for (const level of ['beginner', 'expert']) {
   test(`grown DB: every route renders clean at ${level}`, async () => {
     await page.click(`#level-switch button[data-level="${level}"]`);
     await page.waitForSelector('#app[data-ready="true"]');
-    for (const route of ROUTES) {
+    for (const route of routes()) {
       await go(route);
       assert.equal(await page.locator('#route-error').count(), 0, `route error boundary on ${route} at ${level}`);
       assertClean(`${route} @ ${level}`);
@@ -184,17 +194,17 @@ test('grown DB: every trade detail renders, including the legacy dead collar', a
   assert.ok(trades.includes('tr_legacydeadcollar'), 'legacy trade is listed');
   assert.ok(trades.length >= 4, 'seeded trades all present');
   for (const id of trades) {
-    await go(`#/trade/${id}`);
+    await go(`#/portfolio/trade/${id}`);
     assert.equal(await page.locator('#route-error').count(), 0, `detail boundary for ${id}`);
     assertClean(`detail ${id}`);
   }
   // The dead legacy trade must still offer a way out (settle) rather than erroring
-  await go('#/trade/tr_legacydeadcollar');
+  await go('#/portfolio/trade/tr_legacydeadcollar');
   assert.ok(await page.locator('#settle-btn').count(), 'settle available for dead legacy trade');
 });
 
 test('grown DB: locked shares and filters behave with real mixed data', async () => {
-  await go('#/portfolio');
+  await go('#/portfolio/positions');
   assert.match(await page.textContent('#holdings-card'), /100 LOCKED/);
   await page.selectOption('#pf-intent', 'EXIT');
   await page.waitForSelector('#app[data-ready="true"]');
