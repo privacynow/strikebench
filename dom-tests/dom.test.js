@@ -433,6 +433,27 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'closing a chip removes only that durable plan from the open collection');
 });
 
+test('primary Plan navigation fails visibly and restores its command', async () => {
+  await openPlan('AAPL', 'understand', 'INCOME');
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
+  await go('#/home');
+  const continueButton = page.locator('button').filter({ hasText: /^Continue AAPL/ }).first();
+  await continueButton.waitFor();
+  await page.evaluate(() => {
+    window.__realPlanFocus = PlanStore.focus;
+    PlanStore.focus = function () { return Promise.reject(new Error('Plan focus integrity check')); };
+  });
+  try {
+    await continueButton.click();
+    await page.waitForSelector('#toast-region .toast-error');
+    assert.match(await page.textContent('#toast-region'), /Plan focus integrity check/);
+    assert.equal(await continueButton.isEnabled(), true, 'a refused Plan open restores the command');
+    assert.equal(await continueButton.getAttribute('aria-busy'), null, 'pending state clears after failure');
+  } finally {
+    await page.evaluate(() => { PlanStore.focus = window.__realPlanFocus; delete window.__realPlanFocus; });
+  }
+});
+
 test('a pre-decision Plan can change goal and returns to Strategy without forking', async () => {
   const created = await page.evaluate(async () => {
     const plan = await PlanStore.create({ symbol: 'SPY', intent: 'INCOME', thesis: 'neutral',
@@ -2074,6 +2095,49 @@ test('dataset actions fail visibly instead of looking like dead buttons', async 
   }
 });
 
+test('Data job cancel and retry commands fail visibly and restore pending state', async () => {
+  let status = 'RUNNING';
+  await page.route('**/api/data/jobs', async route => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        jobs: [{ id: 'job_contract', kind: 'refresh_now', status, done: 0, total: 1, rowsWritten: 0 }]
+      }) });
+    } else {
+      await route.continue();
+    }
+  });
+  await page.route('**/api/data/jobs/job_contract/*', async route => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === 'POST' && /\/(cancel|retry)$/.test(url.pathname)) {
+      await route.fulfill({ status: 409, contentType: 'application/json',
+        body: JSON.stringify({ error: (url.pathname.endsWith('/cancel') ? 'Cancel' : 'Retry')
+          + ' state changed before this command.' }) });
+    } else {
+      await route.continue();
+    }
+  });
+  try {
+    await go('#/data/sources');
+    const cancel = page.locator('#dc-jobs button').filter({ hasText: 'Cancel' });
+    await cancel.waitFor();
+    await cancel.click();
+    await page.waitForSelector('#toast-region .toast-error');
+    assert.match(await page.textContent('#toast-region'), /Cancel state changed/);
+    assert.equal(await cancel.isEnabled(), true, 'Cancel restores after a refused command');
+
+    status = 'FAILED';
+    await page.locator('#dc-jobs button').filter({ hasText: 'Refresh' }).click();
+    const retry = page.locator('#dc-jobs button').filter({ hasText: 'Retry' });
+    await retry.waitFor();
+    await retry.click();
+    await page.waitForFunction(() => /Retry state changed/.test(document.getElementById('toast-region')?.textContent || ''));
+    assert.equal(await retry.isEnabled(), true, 'Retry restores after a refused command');
+  } finally {
+    await page.unroute('**/api/data/jobs/job_contract/*');
+    await page.unroute('**/api/data/jobs');
+  }
+});
+
 test('workspace continuity: forms, symbol, and route survive a full reload', async () => {
   await page.evaluate(() => App.context.update({
     symbol: 'AAPL', goal: 'ACQUIRE', horizon: 'quarter', thesis: 'neutral'
@@ -2704,6 +2768,19 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   await page.waitForSelector('#dc-engine .chip-row');
   assert.match(await page.textContent('#dc-engine'), /Market engine/);
   await page.waitForSelector('#dc-health:has-text("Quotes")', { timeout: 15000 });
+  await page.route('**/api/data/jobs', async route => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 503, contentType: 'application/json',
+        body: JSON.stringify({ error: 'Quote refresh is temporarily unavailable.' }) });
+    } else await route.continue();
+  });
+  await page.click('#dc-refresh-now');
+  await page.waitForFunction(() => /Quote refresh is temporarily unavailable/.test(
+    document.getElementById('toast-region')?.textContent || ''));
+  assert.equal(await page.locator('#dc-refresh-now').isEnabled(), true,
+    'Refresh now restores after a visible failure');
+  assert.equal(await page.locator('#dc-refresh-now').getAttribute('aria-busy'), null);
+  await page.unroute('**/api/data/jobs');
   await page.click('#dc-refresh-now');
   // Inactive workspaces are NOT mounted from Overview (only-active-tab loading).
   assert.equal(await page.locator('#dc-sources').count(), 0, 'sources not mounted on overview');
@@ -2742,6 +2819,9 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   assert.ok(await page.locator('#dc-sources .xp-head:has-text("feed details")').count(),
     'secondary feed inventory is progressively disclosed instead of another card wall');
   assert.equal(await page.locator('#data-sync-preview').isDisabled(), true, 'Demo build cannot start an observed provider sync');
+  assert.equal(await page.locator('#data-sync-start').getAttribute('aria-describedby'), 'data-sync-start-reason');
+  assert.match(await page.textContent('#data-sync-start-reason'), /Preview the selected source/,
+    'disabled Start update names the action needed to enable it');
   assert.ok(await page.locator('#data-csv-file').count(), 'user-owned CSV import remains available');
   assert.ok(await page.locator('#data-sync-schedule').count(), 'maintenance capability is present at expert');
 
