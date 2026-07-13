@@ -410,6 +410,38 @@
     }
   }
 
+  function baseTitle(plan) {
+    var prefix = plan.symbol + ' · ';
+    return String(plan.title || '').startsWith(prefix)
+      ? String(plan.title).slice(prefix.length) : String(plan.title || plan.intent || 'Plan');
+  }
+
+  function identity(plan, pool) {
+    pool = pool || items;
+    var title = baseTitle(plan);
+    var key = [planMarketKey(plan), plan.symbol, String(plan.intent || ''), title,
+      plan.context && plan.context.horizonDays || ''].join('|');
+    var cohort = pool.filter(function (candidate) {
+      return [planMarketKey(candidate), candidate.symbol, String(candidate.intent || ''), baseTitle(candidate),
+        candidate.context && candidate.context.horizonDays || ''].join('|') === key;
+    }).sort(function (a, b) {
+      var byTime = String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+      return byTime || String(a.id).localeCompare(String(b.id));
+    });
+    var index = cohort.findIndex(function (candidate) { return candidate.id === plan.id; });
+    var duplicate = cohort.length > 1 && index >= 0 ? 'Plan ' + (index + 1) + ' of ' + cohort.length : null;
+    var stamp = plan.updatedAt || plan.createdAt;
+    var updated = null;
+    if (stamp) {
+      var when = new Date(stamp);
+      if (!isNaN(when.getTime())) updated = 'Updated ' + when.toLocaleString([], {
+        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+      });
+    }
+    return { title: title, duplicate: duplicate, updated: updated,
+      full: title + (duplicate ? ' · ' + duplicate : '') };
+  }
+
   function renderBar() {
     var host = document.getElementById('plan-bar-root');
     if (!host || !window.UI || !window.App) return;
@@ -422,8 +454,10 @@
     var desktop = UI.el('div', { class: 'plan-bar-desktop' },
       UI.el('span', { class: 'plan-bar-label' }, 'Plans'));
     items.forEach(function (plan) {
-      var planLabel = plan.title.replace(plan.symbol + ' · ', '')
+      var planIdentity = identity(plan, items);
+      var planLabel = planIdentity.title
         + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' days' : '');
+      if (planIdentity.duplicate) planLabel += ' · ' + planIdentity.duplicate;
       var chip = UI.el('div', { class: 'plan-chip' + (plan.id === App.state.activePlanId ? ' active' : ''),
         'data-plan-id': plan.id },
         UI.el('button', { type: 'button', class: 'plan-chip-main', 'aria-label': 'Open ' + plan.symbol + ' · ' + planLabel,
@@ -443,8 +477,9 @@
         var plan = items.find(function (p) { return p.id === picker.value; });
         if (plan) focus(plan).catch(function (e) { UI.toast(e.message, 'error'); });
       } }, items.map(function (plan) {
+        var label = identity(plan, items);
         return UI.el('option', { value: plan.id, selected: plan.id === App.state.activePlanId ? 'selected' : null },
-          plan.symbol + ' · ' + plan.title.replace(plan.symbol + ' · ', ''));
+          plan.symbol + ' · ' + label.full);
       }));
     var mobile = UI.el('div', { class: 'plan-bar-mobile' }, picker,
       UI.el('button', { type: 'button', class: 'plan-new-btn', 'aria-label': 'Start a new Plan',
@@ -468,7 +503,7 @@
     latestDecision: latestDecision, previewDecision: previewDecision,
     tradeDecision: tradeDecision, cashDecision: cashDecision,
     latestManagement: latestManagement, manage: manage, reviewCash: reviewCash,
-    marketChanged: marketChanged, renderBar: renderBar, ui: ui, matching: matching,
+    marketChanged: marketChanged, renderBar: renderBar, ui: ui, matching: matching, identity: identity,
     all: function () { return items.slice(); }, allMarkets: function () { return libraryItems.slice(); },
     currentMarketKey: currentMarketKey, marketKey: planMarketKey,
     libraryLoaded: function () { return libraryLoaded; }
