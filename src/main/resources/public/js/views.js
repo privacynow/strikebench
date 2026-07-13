@@ -132,6 +132,35 @@
         || ready.find(function (c) { return economicVerdict(c) === 'MIXED'; })
         || ready[0] || (candidates || [])[0];
     }
+    function welcomeProofCard(candidate) {
+      var story = candidate.beginnerExplanation || candidate.whyConsidered;
+      var card = el('div', { class: 'candidate welcome-proof-card',
+        'data-strategy': candidate.strategy,
+        'data-economic-verdict': economicVerdict(candidate) || 'UNKNOWN' },
+        el('div', { class: 'head' },
+          el('h3', {}, candidate.displayName),
+          intentBadge(candidate.intent),
+          badge(candidate.freshness)),
+        story ? el('p', { class: 'welcome-proof-story muted' }, story) : null);
+      var economics = economicAssessmentBlock(candidate);
+      if (economics) card.appendChild(economics);
+      card.appendChild(el('div', { class: 'fact-grid welcome-proof-facts' },
+        el('div', { class: 'fact' },
+          el('div', { class: 'f-label' }, 'Theoretical max loss'),
+          el('div', { class: 'f-value loss' }, fmtMoney(candidate.maxLossCents))),
+        el('div', { class: 'fact' },
+          el('div', { class: 'f-label' }, 'Chance of any profit'),
+          el('div', { class: 'f-value' }, fmtPct(candidate.pop))),
+        el('div', { class: 'fact' },
+          el('div', { class: 'f-label' }, 'Theoretical max profit'),
+          el('div', { class: 'f-value' }, UI.maxProfitLabel(
+            candidate.strategy, candidate.structureGroup, candidate.maxProfitCents, true, candidate.legs)))));
+      card.appendChild(el('div', { class: 'welcome-proof-action' },
+        el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
+          App.navigate('#/research/' + encodeURIComponent(candidate.symbol || 'AAPL'));
+        } }, 'Open full analysis')));
+      return card;
+    }
     function frameWelcomeProof(candidate) {
       var verdict = economicVerdict(candidate);
       var caption = welcomeProofCaption();
@@ -180,7 +209,7 @@
       } catch (e) { /* fresh */ }
       if (cached) {
         liveHost.innerHTML = '';
-        liveHost.appendChild(candidateCard(cached, false));
+        liveHost.appendChild(welcomeProofCard(cached));
         frameWelcomeProof(cached);
         liveHost.appendChild(el('p', { class: 'muted small', style: 'margin:4px 0 0' }, 'Refreshing with a live run\u2026'));
       }
@@ -192,7 +221,7 @@
         if (r.candidates && r.candidates.length) {
           var proofCandidate = welcomeProofChoice(r.candidates);
           liveHost.innerHTML = '';
-          liveHost.appendChild(candidateCard(proofCandidate, false));
+          liveHost.appendChild(welcomeProofCard(proofCandidate));
           frameWelcomeProof(proofCandidate);
           try {
             localStorage.setItem('strikebench.welcomeProof', JSON.stringify(

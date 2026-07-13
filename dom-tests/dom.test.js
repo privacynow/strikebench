@@ -154,6 +154,26 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   assert.match(await page.textContent('#welcome-hero'), /Uses bid\/ask, not midpoint/,
     'fill realism is described without claiming Demo books are real');
   const welcomeVerdict = await page.locator('#welcome-live .candidate').getAttribute('data-economic-verdict');
+  const welcomeProofGeometry = await page.evaluate(() => {
+    const frame = document.querySelector('#welcome-live');
+    const card = frame.querySelector('.welcome-proof-card');
+    const style = getComputedStyle(frame);
+    return {
+      overflow: style.overflow,
+      mask: style.maskImage || style.webkitMaskImage || 'none',
+      frameBottom: Math.round(frame.getBoundingClientRect().bottom),
+      cardBottom: Math.round(card.getBoundingClientRect().bottom),
+      captionTop: Math.round(document.querySelector('#welcome-proof-caption').getBoundingClientRect().top),
+      evLanes: card.querySelectorAll('.economic-ev-lanes .chip').length,
+      facts: card.querySelectorAll('.welcome-proof-facts .fact').length
+    };
+  });
+  assert.notEqual(welcomeProofGeometry.overflow, 'hidden', 'the live proof is never guillotined');
+  assert.equal(welcomeProofGeometry.mask, 'none', 'the live proof is never dimmed with a mask');
+  assert.ok(welcomeProofGeometry.cardBottom < welcomeProofGeometry.captionTop,
+    'the visible proof card does not overlap the caption: ' + JSON.stringify(welcomeProofGeometry));
+  assert.ok(welcomeProofGeometry.evLanes >= 3, 'both EV lanes and round-trip costs remain visible');
+  assert.equal(welcomeProofGeometry.facts, 3, 'the compact proof retains its three decision facts');
   if (welcomeVerdict === 'UNFAVORABLE' || welcomeVerdict === 'UNAVAILABLE') {
     assert.match(await page.textContent('#welcome-proof-role'), /HOW STRIKEBENCH SAYS NO/);
     assert.match(await page.textContent('#welcome-proof-caption'), /counterexample, not an endorsement/i,
