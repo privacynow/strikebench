@@ -341,7 +341,7 @@ body.lvl-expert .not-expert { display: none !important; }
 @media (min-width: 700px) { .form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .field label { display: block; font-size: 12px; font-weight: 700; color: var(--text-dim); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
 .field label.sim-sector-choice { display: flex; align-items: flex-start; gap: 9px; margin: 0; text-transform: none; letter-spacing: 0; cursor: pointer; }
-.sim-sector-choice input { flex: 0 0 auto; margin-top: 3px; }
+.sim-sector-choice input { flex: 0 0 16px; width: 16px; height: 16px; min-height: 16px; margin-top: 3px; }
 .sim-sector-choice > span { display: grid; gap: 2px; }
 .sim-sector-choice .muted { font-weight: 400; line-height: 1.35; }
 .field input, .field select { width: 100%; }
