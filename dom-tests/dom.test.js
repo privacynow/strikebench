@@ -806,6 +806,14 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
       + ' routeError=' + await page.locator('#route-error').count()
       + ' text=' + (await page.locator('#app').textContent()).slice(0, 3000) + '\n' + error.message);
   });
+  const initialTiles = await page.locator('#home-plan-library .home-plan-tile').count();
+  const groups = await page.locator('#home-plan-library .home-plan-group').count();
+  assert.ok(initialTiles <= groups * 4, 'Home bounds each Plan market group before explicit expansion');
+  const otherToggle = page.locator('#home-plan-library [data-plan-group="other-markets"] .home-plan-group-toggle');
+  if (await otherToggle.count()) {
+    assert.match(await otherToggle.textContent(), /Show all \d+/);
+    await otherToggle.click();
+  }
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simOne + '"]').count(), 1);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simTwo + '"]').count(), 1);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.second + '"]').count(), 0,
@@ -938,6 +946,55 @@ test('duplicate Plan identities stay distinct across Home, desktop, mobile, and 
     await PlanStore.refresh();
   }, ids);
   await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test('Home bounds a large same-market Plan collection without hiding reachability', async () => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
+  const ids = await page.evaluate(async () => {
+    const base = App.baseWorldId();
+    if (App.state.world !== base) await App.switchWorld(base);
+    await PlanStore.load(true);
+    const seeds = [
+      ['AAPL', 'DIRECTIONAL', 'bullish', 30, 'AAPL upside'],
+      ['QQQ', 'INCOME', 'neutral', 45, 'QQQ income'],
+      ['SPY', 'ACQUIRE', 'neutral', 20, 'SPY discount'],
+      ['NVDA', 'HEDGE', 'bearish', 30, 'NVDA protection'],
+      ['TSLA', 'EXIT', 'bullish', 45, 'TSLA target'],
+      ['MSFT', 'DIRECTIONAL', 'bearish', 20, 'MSFT downside']
+    ];
+    const created = [];
+    for (const seed of seeds) {
+      created.push(await PlanStore.create({ symbol: seed[0], intent: seed[1], thesis: seed[2],
+        horizonDays: seed[3], riskMode: 'conservative', title: seed[4] }));
+    }
+    return created.map(plan => plan.id);
+  });
+
+  await go('#/home');
+  const group = page.locator('#home-plan-library [data-plan-group="in-this-market"]');
+  await group.waitFor({ state: 'visible' });
+  assert.equal(await group.locator('.home-plan-tile').count(), 4,
+    'the desk starts with a scannable recent subset rather than an unbounded ledger');
+  assert.match(await group.locator('.home-plan-group-count').textContent(), /4 of \d+ Plans/);
+  const toggle = group.locator('.home-plan-group-toggle');
+  assert.match(await toggle.textContent(), /Show all \d+/);
+  await toggle.click();
+  for (const id of ids) assert.equal(await group.locator('[data-plan-id="' + id + '"]').count(), 1,
+    'every Plan becomes reachable after explicit expansion');
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-library-expanded-desktop.png'), fullPage: true });
+  await toggle.click();
+  assert.equal(await group.locator('.home-plan-tile').count(), 4);
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+
+  await page.evaluate(async planIds => {
+    for (const id of planIds) {
+      const plan = await PlanStore.get(id, true);
+      await API.post('/api/plans/' + id + '/archive', { expectedVersion: plan.version });
+    }
+    await PlanStore.refresh();
+  }, ids);
 });
 
 test('Home discards stale in-memory Plans after server-side lifecycle changes', async () => {
