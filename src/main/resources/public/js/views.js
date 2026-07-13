@@ -33,6 +33,29 @@
 
   var icon = UI.icon;
 
+  async function visibleCommand(button, action, fallbackMessage) {
+    if (button) {
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+    }
+    try {
+      return await action();
+    } catch (e) {
+      UI.toast((e && e.message) || fallbackMessage || 'This action could not be completed.', 'error');
+      return null;
+    } finally {
+      if (button && button.isConnected) {
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+      }
+    }
+  }
+
+  function focusPlanFrom(button, plan, stage) {
+    return visibleCommand(button, function () { return PlanStore.focus(plan, stage); },
+      'This Plan could not be opened.');
+  }
+
   function planIntentDestination(intent) {
     return intent == null ? 'EVIDENCE' : 'STRATEGY';
   }
@@ -391,7 +414,7 @@
           + String(activePlan.activeStage || 'UNDERSTAND').replace('_', ' ').toLowerCase() + '.'
         : 'Screened ideas, honest odds, worst case always known before you commit.');
     var heroCta = activePlan
-      ? el('button', { class: 'btn', onclick: function () { PlanStore.focus(activePlan); } },
+      ? el('button', { class: 'btn', onclick: function () { focusPlanFrom(this, activePlan); } },
           'Continue ' + activePlan.symbol + (activeIdentity.duplicate ? ' · ' + activeIdentity.duplicate : '') + ' \u2192')
       : el('button', { class: 'btn', onclick: function () { App.navigate('#/research'); } }, 'Start a Plan');
     // The hero owns THE single primary next action (review P5): the tour demoted to a
@@ -492,7 +515,7 @@
             App.navigate('#/data/simulation');
             return;
           }
-          PlanStore.focus(plan, plan.activeStage).catch(function (e) { UI.toast(e.message, 'error'); });
+          focusPlanFrom(this, plan, plan.activeStage);
         } }, terminalSession ? 'Review session' : sameMarket
           ? (plan.open === false ? 'Open Plan' : 'Resume Plan') : 'Switch market & open'));
         if (plan.status !== 'POSITION_OPEN') actions.appendChild(el('button', { type: 'button',
@@ -572,7 +595,7 @@
         return el('div', { class: 'home-plan-archive home-plan-closed-tabs' }, closedTabs.map(function (plan) {
           var actions = el('div', { class: 'btn-row' },
             el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
-              PlanStore.focus(plan, plan.activeStage).catch(function (e) { UI.toast(e.message, 'error'); });
+              focusPlanFrom(this, plan, plan.activeStage);
             } }, PlanStore.marketKey(plan) === currentKey ? 'Reopen' : 'Switch market & reopen'));
           if (plan.assumptionsEditable === true) actions.appendChild(el('button', { type: 'button',
             class: 'btn btn-sm btn-secondary', onclick: function () { confirmDeletePlan(plan, false); } },
@@ -756,7 +779,7 @@
         });
         card.appendChild(el('div', { class: 'journey', id: 'journey-card' }, steps.map(function (st2, i) {
           return el('button', { class: 'journey-step' + (st2.done ? ' done' : ''), type: 'button',
-            onclick: function () { if (activePlan) PlanStore.focus(activePlan, st2.stage); else App.navigate('#/research'); } },
+            onclick: function () { if (activePlan) focusPlanFrom(this, activePlan, st2.stage); else App.navigate('#/research'); } },
             el('span', { class: 'ck-mark' }, st2.done ? '' : String(i + 1)),
             el('span', {}, st2.label));
         })));
@@ -765,7 +788,7 @@
       var chips = [];
       if (activePlan) {
         chips.push(el('button', { class: 'sym-chip', 'data-continue': 'plan',
-          onclick: function () { PlanStore.focus(activePlan); } }, 'Resume: ' + activePlan.title + ' →'));
+          onclick: function () { focusPlanFrom(this, activePlan); } }, 'Resume: ' + activePlan.title + ' →'));
       }
       if (chips.length) {
         card.appendChild(el('div', { class: 'chip-row', id: 'continue-row' }, chips));
@@ -2742,7 +2765,7 @@
     var changeStructure = canRewriteGoal ? el('button', { type: 'button', class: 'btn btn-secondary',
       id: 'plan-change-structure', onclick: function () {
         PlanStore.ui(plan.id).strategyView = 'builder';
-        PlanStore.focus(plan, 'STRATEGY').catch(function (e) { UI.toast(e.message, 'error'); });
+        focusPlanFrom(this, plan, 'STRATEGY');
       } }, 'Choose structure or option type') : null;
     function planField(label, input) {
       return UI.field(label, input);
@@ -2783,7 +2806,7 @@
               + ' days. Resume it, or change an assumption first when you mean to investigate a different question.')),
           el('div', { class: 'btn-row' },
             el('button', { type: 'button', class: 'btn', onclick: function () {
-              PlanStore.focus(existing, destination).catch(function (e) { UI.toast(e.message, 'error'); });
+              focusPlanFrom(this, existing, destination);
             } }, intent == null ? 'Open Evidence' : 'Open this Plan'))));
         return;
       }
@@ -3822,7 +3845,7 @@
     if (!selected) {
       content.appendChild(UI.emptyState('Choose a structure first',
         'Outcomes evaluates one exact package. Return to Strategy, select it, then every lens here uses those same contracts.',
-        'Open Strategy', function () { PlanStore.focus(planRef.plan, 'STRATEGY'); }));
+        'Open Strategy', function () { focusPlanFrom(this, planRef.plan, 'STRATEGY'); }));
       return;
     }
     (latest.outcomes || []).forEach(function (run) { ui.outcomeRuns[run.basis] = run; });
@@ -3918,7 +3941,7 @@
             catch (e) { status.innerHTML = ''; status.appendChild(alertBox('danger', 'Could not test the position on these futures', [e.message])); }
           } }, saved ? 'Run again on stored futures' : 'Test this position on the stored futures'),
           el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () {
-            PlanStore.focus(planRef.plan, 'EVIDENCE');
+            focusPlanFrom(this, planRef.plan, 'EVIDENCE');
           } }, 'Review or change the scenario'),
           el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-compare-parametric', onclick: async function () {
             try {
@@ -3949,7 +3972,7 @@
             try { bootstrap = await runBasis('CONDITIONAL_BOOTSTRAP', this); workspace.refresh(); }
             catch (e) { status.innerHTML = ''; status.appendChild(alertBox('danger', 'Bootstrap outcomes are unavailable', [e.message])); }
           } }, bootstrap ? 'Refresh bootstrap' : 'Run conditional bootstrap'),
-          el('button', { type: 'button', class: 'btn btn-ghost', onclick: function () { PlanStore.focus(planRef.plan, 'EVIDENCE'); } }, 'Review Past evidence')), status));
+          el('button', { type: 'button', class: 'btn btn-ghost', onclick: function () { focusPlanFrom(this, planRef.plan, 'EVIDENCE'); } }, 'Review Past evidence')), status));
       if (direct) host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Direct occurrences'), Scenario.pnlView(direct.result || direct, Learn.currentLevel())));
       if (bootstrap) host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Whole-path bootstrap'), Scenario.pnlView(bootstrap.result || bootstrap, Learn.currentLevel())));
       host.appendChild(el('div', { class: 'card plan-analog-comparison-actions' },
@@ -4107,8 +4130,9 @@
       el('div', {}, el('b', {}, 'Decision frozen'), el('p', { class: 'muted' },
         'Manage & Review now compares what happens with what this decision expected.')),
       el('button', { type: 'button', class: 'btn', onclick: async function () {
-        try { await PlanStore.focus(await PlanStore.get(plan.id, true), 'MANAGE_REVIEW'); }
-        catch (e) { UI.toast(e.message, 'error'); }
+        var live = await visibleCommand(this, function () { return PlanStore.get(plan.id, true); },
+          'This Plan could not be refreshed.');
+        if (live) focusPlanFrom(this, live, 'MANAGE_REVIEW');
       } }, 'Open Manage & Review')));
   }
 
@@ -4127,7 +4151,7 @@
     if (!selected) {
       content.appendChild(UI.emptyState('Choose a structure before deciding',
         'Decide never invents or recaptures a package. Select exact contracts in Strategy first.',
-        'Open Strategy', function () { PlanStore.focus(planRef.plan, 'STRATEGY'); }));
+        'Open Strategy', function () { focusPlanFrom(this, planRef.plan, 'STRATEGY'); }));
       return;
     }
     var selectedPackageKey = selected.id || JSON.stringify({ strategy: selected.strategy,
@@ -4371,7 +4395,7 @@
       }
       content.appendChild(UI.emptyState('No decision has been frozen',
         'Manage & Review unlocks after this Plan records Trade, Cash, or an exact rehearsal.', 'Open Decide', function () {
-          PlanStore.focus(plan, 'DECIDE');
+          focusPlanFrom(this, plan, 'DECIDE');
         }));
       return;
     }
@@ -4790,7 +4814,7 @@
             decision.pop != null ? chip('POP at decision', fmtPct(decision.pop)) : null),
           el('div', { class: 'btn-row' },
             el('button', { type: 'button', class: 'btn', onclick: function () {
-              PlanStore.focus(plan, plan.activeStage).catch(function (e) { UI.toast(e.message, 'error'); });
+              focusPlanFrom(this, plan, plan.activeStage);
             } }, row.tradeId ? 'Manage Plan' : plan.status === 'DECIDED_CASH' || plan.status === 'CLOSED' ? 'Review Plan' : 'Resume Plan')));
         planGrid.appendChild(card);
       });
@@ -6018,7 +6042,7 @@
             rehearsal ? null : el('button', { class: 'btn btn-sm', onclick: function () { injectModal(sx); } }, 'Inject event'),
             el('button', { class: 'btn btn-sm', onclick: function () { showReport(sx); } }, 'Report'),
             rehearsal ? el('button', { class: 'btn btn-sm', onclick: function () {
-              PlanStore.focus(rehearsal.planId, 'EVIDENCE').catch(function (e) { UI.toast(e.message, 'error'); });
+              focusPlanFrom(this, rehearsal.planId, 'EVIDENCE');
             } }, 'Return to Plan') : el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, 'Start a Plan'),
             el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/portfolio'); } }, 'Simulated portfolio'),
             el('button', { class: 'btn btn-sm btn-danger', onclick: function () { finishModal(sx); } }, 'Finish')));
@@ -6046,7 +6070,7 @@
           chartHost.appendChild(el('div', { class: 'sim-focus-head' },
             el('div', {}, el('span', { class: 'muted small' }, 'FOCUS'), el('b', {}, focusSym)),
             rehearsal ? el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
-              PlanStore.focus(rehearsal.planId, 'EVIDENCE').catch(function (e) { UI.toast(e.message, 'error'); });
+              focusPlanFrom(this, rehearsal.planId, 'EVIDENCE');
             } }, 'Source Plan \u2192') : el('a', { href: '#/research/' + encodeURIComponent(focusSym) }, 'Full research \u2192')));
           chartHost.appendChild(UI.rangeChart({ initial: '3m', fetch: historyFetch(focusSym) }));
         }
@@ -6956,17 +6980,22 @@
 
     // --- Jobs (declared first: engine/coverage actions start jobs and refresh this panel) ---
     var jobsTimer = null;
-    async function loadJobs() {
+    async function loadJobs(reportFailure) {
       if (!jobsCard.isConnected) return;
       if (jobsTimer) { clearTimeout(jobsTimer); jobsTimer = null; } // one live poll chain, never stacked
       var data;
-      try { data = await API.getFresh('/api/data/jobs'); } catch (e) { return; }
+      try { data = await API.getFresh('/api/data/jobs'); } catch (e) {
+        if (reportFailure) throw e;
+        return;
+      }
       if (!App.alive(token)) { if (jobsTimer) clearTimeout(jobsTimer); return; }
       var jobs = data.jobs || [];
       var access = await dataAccessP;
       var canAdmin = !!(access && access.admin);
       jobsCard.innerHTML = '';
-      jobsCard.appendChild(UI.cardHeader('Jobs', el('button', { class: 'btn btn-sm btn-secondary', onclick: loadJobs }, 'Refresh')));
+      jobsCard.appendChild(UI.cardHeader('Jobs', el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
+        visibleCommand(this, function () { return loadJobs(true); }, 'Jobs could not be refreshed.');
+      } }, 'Refresh')));
       if (level === 'beginner') jobsCard.appendChild(explain('Background tasks that fetch or refresh data. Progress and results show here.'));
       if (!jobs.length) { jobsCard.appendChild(UI.emptyState('No jobs yet', 'Warm the engine or backfill history to create one.')); return; }
       var anyRunning = false;
@@ -6984,9 +7013,19 @@
             el('span', { class: 'muted' }, j.done + '/' + j.total + ' · ' + j.rowsWritten + ' rows'),
             el('span', { class: 'spacer' }),
             (j.status === 'RUNNING' || j.status === 'QUEUED') && (canAdmin || !['sync_underlying', 'import_options_csv'].includes(j.kind))
-              ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { API.post('/api/data/jobs/' + j.id + '/cancel', {}).then(loadJobs); } }, 'Cancel')
+              ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
+                visibleCommand(this, async function () {
+                  await API.post('/api/data/jobs/' + j.id + '/cancel', {});
+                  await loadJobs(true);
+                }, 'The job could not be cancelled.');
+              } }, 'Cancel')
               : (j.status === 'FAILED' || j.status === 'CANCELLED') && (canAdmin || !['sync_underlying', 'import_options_csv'].includes(j.kind))
-                ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { API.post('/api/data/jobs/' + j.id + '/retry', {}).then(loadJobs); } }, 'Retry')
+                ? el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
+                  visibleCommand(this, async function () {
+                    await API.post('/api/data/jobs/' + j.id + '/retry', {});
+                    await loadJobs(true);
+                  }, 'The job could not be retried.');
+                } }, 'Retry')
                 : null),
           dcProgress(j.done, j.total),
           j.message ? el('div', { class: 'muted small' }, j.message) : (j.error ? el('div', { class: 'loss small' }, j.error) : null),
@@ -7023,8 +7062,9 @@
       }, token);
     }
 
-    function startJob(kind, params) {
-      return API.post('/api/data/jobs', { kind: kind, params: params || {} }).then(function () { loadJobs(); });
+    async function startJob(kind, params) {
+      await API.post('/api/data/jobs', { kind: kind, params: params || {} });
+      await loadJobs();
     }
 
     // --- Engine status ---
@@ -7049,7 +7089,10 @@
         ? (App.state.universe.active.symbols || []).length : 0;
       engineCard.innerHTML = '';
       engineCard.appendChild(UI.cardHeader(el('span', {}, 'Market engine', UI.info('marketengine')),
-        el('button', { class: 'btn btn-sm', id: 'dc-refresh-now', onclick: function () { startJob('refresh_now', {}); } }, 'Refresh now')));
+        el('button', { class: 'btn btn-sm', id: 'dc-refresh-now', onclick: function () {
+          visibleCommand(this, function () { return startJob('refresh_now', {}); },
+            'Current quotes could not be refreshed.');
+        } }, 'Refresh now')));
       engineCard.appendChild(el('div', { class: 'chip-row' },
         isDemoEngine ? chip('Feed', 'Static Demo')
           : !isObservedEngine ? chip('Engine', 'Observed background')
@@ -7206,6 +7249,7 @@
       function invalidatePlan() {
         planDoc = null;
         if (startBtn) startBtn.disabled = true;
+        if (startReason) startReason.textContent = 'Inputs changed. Preview the updated request before starting.';
         if (planSlot) {
           planSlot.innerHTML = '';
           planSlot.appendChild(el('p', { class: 'muted small' }, 'Inputs changed. Preview the updated request before starting.'));
@@ -7319,7 +7363,10 @@
       }));
 
       var planSlot = el('div', { id: 'data-sync-plan', 'aria-live': 'polite' });
-      var startBtn = el('button', { class: 'btn', id: 'data-sync-start', disabled: true, onclick: async function () {
+      var startReason = el('div', { class: 'muted small', id: 'data-sync-start-reason' },
+        'Preview the selected source, symbols, and date range before starting an update.');
+      var startBtn = el('button', { class: 'btn', id: 'data-sync-start', disabled: true,
+        'aria-describedby': 'data-sync-start-reason', onclick: async function () {
         if (!planDoc) return;
         startBtn.disabled = true;
         try {
@@ -7328,7 +7375,12 @@
             from: String(planDoc.effectiveFrom), to: String(planDoc.to) });
           planSlot.innerHTML = '';
           planSlot.appendChild(alertBox('ok', 'History update started. Progress is shown in Jobs below; each completed symbol becomes available to Research immediately.'));
-        } catch (e) { planSlot.appendChild(alertBox('warn', e.message)); startBtn.disabled = false; }
+          startReason.textContent = 'Update running. Progress and any per-symbol failures appear in Jobs below.';
+        } catch (e) {
+          planSlot.appendChild(alertBox('warn', e.message));
+          startReason.textContent = 'The update did not start. Review the message, then preview again if inputs changed.';
+          startBtn.disabled = false;
+        }
       } }, 'Start update');
       var previewBtn = el('button', { class: 'btn', id: 'data-sync-preview', disabled: !st.source,
         onclick: async function () {
@@ -7349,13 +7401,28 @@
                 : el('p', { class: 'muted small' }, 'Existing rows are kept. A three-session overlap lets adjusted providers revise recent split/dividend history safely.')));
             var remaining = planDoc.source.dailyLimit > 0 ? planDoc.source.remainingToday : Number.MAX_SAFE_INTEGER;
             startBtn.disabled = planDoc.missingSessions === 0 || planDoc.estimatedRequests > remaining;
-            if (planDoc.estimatedRequests > remaining) planSlot.appendChild(alertBox('warn',
-              'This plan needs ' + planDoc.estimatedRequests + ' requests but only ' + remaining + ' remain today. Narrow the scope or resume after the allowance resets.'));
-          } catch (e) { planDoc = null; planSlot.innerHTML = ''; planSlot.appendChild(alertBox('warn', e.message)); }
+            if (planDoc.missingSessions === 0) {
+              startReason.textContent = 'Start update is unavailable because this history range is already covered.';
+            } else if (planDoc.estimatedRequests > remaining) {
+              startReason.textContent = 'Start update is unavailable until the request allowance resets or the scope is narrowed.';
+              planSlot.appendChild(alertBox('warn',
+                'This plan needs ' + planDoc.estimatedRequests + ' requests but only ' + remaining + ' remain today. Narrow the scope or resume after the allowance resets.'));
+            } else {
+              startReason.textContent = 'Ready to update ' + planDoc.symbols + ' symbol'
+                + (planDoc.symbols === 1 ? '' : 's') + ' across ' + planDoc.missingSessions + ' missing sessions.';
+            }
+          } catch (e) {
+            planDoc = null;
+            startBtn.disabled = true;
+            startReason.textContent = 'Start update is unavailable because the preview did not complete.';
+            planSlot.innerHTML = '';
+            planSlot.appendChild(alertBox('warn', e.message));
+          }
           previewBtn.disabled = !st.source;
         } }, 'Preview update');
       syncCard.appendChild(el('section', { class: 'data-acquire-section' },
-        el('h3', {}, '3. Preview, then run'), el('div', { class: 'btn-row' }, previewBtn, startBtn), planSlot));
+        el('h3', {}, '3. Preview, then run'), el('div', { class: 'btn-row' }, previewBtn, startBtn),
+        startReason, planSlot));
 
       // User-owned CSV is a peer capability, not an inferior fallback. It is often the safest
       // route for broker/Yahoo exports because no automated collection occurs.
