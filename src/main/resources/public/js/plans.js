@@ -390,6 +390,8 @@
 
   async function closeChip(plan) {
     var wasActive = App.state.activePlanId === plan.id;
+    var routeMatch = (window.location.hash || '').match(/^#\/plan\/([^/?]+)/);
+    var viewingThisPlan = !!(routeMatch && routeMatch[1] === plan.id);
     var updated = await API.put('/api/plans/' + plan.id + '/open', {
       expectedVersion: plan.version, open: false
     });
@@ -401,11 +403,34 @@
     }
     syncCurrent(currentMarketKey());
     if (window.Workspace) Workspace.save();
-    if (wasActive) {
+    if (wasActive && viewingThisPlan) {
       if (items.length) await focus(items[0]);
       else App.navigate('#/home');
+    } else if ((window.location.hash || '#/home').startsWith('#/home') && App.render) {
+      await App.render();
     }
     return updated;
+  }
+
+  function removeLocal(planId) {
+    Object.keys(collections).forEach(function (key) {
+      collections[key] = (collections[key] || []).filter(function (p) { return p.id !== planId; });
+    });
+    libraryItems = libraryItems.filter(function (p) { return p.id !== planId; });
+    Object.keys(App.state.activePlanByMarket || {}).forEach(function (key) {
+      if (App.state.activePlanByMarket[key] === planId) {
+        var next = (collections[key] || [])[0];
+        App.state.activePlanByMarket[key] = next ? next.id : null;
+      }
+    });
+    syncCurrent(currentMarketKey());
+  }
+
+  async function deleteDraft(plan) {
+    await API.del('/api/plans/' + encodeURIComponent(plan.id) + '?expectedVersion=' + encodeURIComponent(plan.version));
+    removeLocal(plan.id);
+    if (window.Workspace) Workspace.save();
+    return plan.id;
   }
 
   async function archive(plan) {
@@ -488,7 +513,7 @@
           onclick: function () { focus(plan).catch(function (e) { UI.toast(e.message, 'error'); }); } },
           UI.el('span', { class: 'plan-chip-symbol' }, plan.symbol),
           UI.el('span', { class: 'plan-chip-title' }, planLabel)),
-        UI.el('button', { type: 'button', class: 'plan-chip-close', 'aria-label': 'Remove ' + plan.title + ' from open plans',
+          UI.el('button', { type: 'button', class: 'plan-chip-close', 'aria-label': 'Close ' + plan.title + ' tab',
           onclick: function (event) {
             event.stopPropagation(); closeChip(plan).catch(function (e) { UI.toast(e.message, 'error'); });
           } }, '×'));
@@ -528,7 +553,7 @@
     tradeDecision: tradeDecision, cashDecision: cashDecision,
     latestManagement: latestManagement, manage: manage, reviewCash: reviewCash,
     marketChanged: marketChanged, renderBar: renderBar, ui: ui, matching: matching, identity: identity,
-    archive: archive,
+    archive: archive, deleteDraft: deleteDraft,
     all: function () { return items.slice(); }, allMarkets: function () { return libraryItems.slice(); },
     currentMarketKey: currentMarketKey, marketKey: planMarketKey,
     libraryLoaded: function () { return libraryLoaded; }
