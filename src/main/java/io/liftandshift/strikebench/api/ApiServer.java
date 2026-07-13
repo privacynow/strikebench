@@ -930,10 +930,30 @@ public final class ApiServer {
         var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), "active_world:" + owner);
         String fallback = cfg.fixturesOnly() ? "demo" : "observed";
         String w = rows.isEmpty() || rows.getFirst() == null || rows.getFirst().isBlank() ? fallback : rows.getFirst();
-        if (cfg.fixturesOnly() && "observed".equals(w)) return "demo";
+        if (cfg.fixturesOnly() && "observed".equals(w)) return repairActiveWorld(owner, w, fallback);
         if (!"observed".equals(w) && !"demo".equals(w)
-                && simSessions.getOrRestore(w, owner).isEmpty()) return fallback; // fail-safe
+                && simSessions.getOrRestore(w, owner).isEmpty()) return repairActiveWorld(owner, w, fallback);
         return w;
+    }
+
+    /** A missing saved session is a real market transition, not a per-request fallback. */
+    private String repairActiveWorld(String owner, String expected, String fallback) {
+        String key = "active_world:" + owner;
+        String now = clock.instant().toString();
+        int changed = db.tx(connection -> Db.execOn(connection,
+                "UPDATE settings SET v=?,updated_at=? WHERE k=? AND v=?",
+                fallback, now, key, expected));
+        if (changed == 0) return fallback;
+        market.invalidateAll();
+        long revision = worldRevision.incrementAndGet();
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("world", fallback);
+        event.put("user", owner == null ? "local" : owner);
+        event.put("revision", revision);
+        event.put("epoch", startedAt);
+        event.put("universe", universeViewFor(worldParam(fallback), owner));
+        events.publish("world.selected", event);
+        return fallback;
     }
 
     public record SimMarketCreate(String name, java.util.Map<String, Double> symbols,

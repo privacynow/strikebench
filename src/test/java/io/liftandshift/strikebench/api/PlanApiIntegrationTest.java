@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.javalin.Javalin;
 import io.liftandshift.strikebench.config.AppConfig;
+import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.support.TestDb;
 import io.liftandshift.strikebench.util.Json;
 import org.junit.jupiter.api.AfterAll;
@@ -24,18 +25,33 @@ class PlanApiIntegrationTest {
     private static ApiServer server;
     private static HttpClient http;
     private static String base;
+    private static Db inspectDb;
 
     @BeforeAll static void start() {
         var config = new HashMap<>(TestDb.freshConfig());
         config.put("FIXTURES_ONLY", "true");
         server = ApiServer.create(new AppConfig(config),
                 Clock.fixed(Instant.parse("2026-07-12T16:00:00Z"), ZoneOffset.UTC));
+        inspectDb = new Db(config.get("DB_URL"), config.get("DB_USER"), config.get("DB_PASSWORD"));
         Javalin app = server.start(0);
         base = "http://localhost:" + app.port();
         http = HttpClient.newHttpClient();
     }
 
-    @AfterAll static void stop() { if (server != null) server.stop(); }
+    @AfterAll static void stop() {
+        if (server != null) server.stop();
+        if (inspectDb != null) inspectDb.close();
+    }
+
+    @Test void invalidSavedWorldIsDurablyReconciledToTheAvailableBaseline() throws Exception {
+        inspectDb.exec("INSERT INTO settings(k,v,updated_at) VALUES(?,?,now()) " +
+                        "ON CONFLICT (k) DO UPDATE SET v=excluded.v,updated_at=excluded.updated_at",
+                "active_world:null", "observed");
+        JsonNode world = json(get("/api/world"));
+        assertThat(world.path("world").asText()).isEqualTo("demo");
+        assertThat(inspectDb.query("SELECT v FROM settings WHERE k=?", row -> row.str("v"),
+                "active_world:null")).containsExactly("demo");
+    }
 
     @Test void planCrudIsServerMarketOwnedVersionedAndIdempotent() throws Exception {
         JsonNode empty = json(get("/api/plans"));
