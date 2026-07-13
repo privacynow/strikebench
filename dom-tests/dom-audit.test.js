@@ -88,7 +88,7 @@ const ALLOWED_HEIGHTS = [38, 30, 42, 46]; // welcome hero uses a deliberate 42px
 const TOLERANCE = 1.5;
 
 function auditInPage() {
-  const out = { overflow: [], emoji: [], controls: [], numbers: [] };
+  const out = { overflow: [], emoji: [], controls: [], numbers: [], tooltips: [] };
   const doc = document.documentElement;
   if (doc.scrollWidth > doc.clientWidth + 2) {
     // Animated/local-scroll children can be thousands of pixels wide without widening the
@@ -117,6 +117,32 @@ function auditInPage() {
   }
   const badNumbers = (document.body.innerText || '').match(/\$?NaN(?:\.NaN)?|NaN%/g) || [];
   if (badNumbers.length) out.numbers.push(...badNumbers.slice(0, 8));
+  const norm = value => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  document.querySelectorAll('[title]').forEach(el => {
+    if (!el.offsetParent) return;
+    const title = norm(el.getAttribute('title'));
+    const visible = norm(el.innerText || el.textContent);
+    if (title.length > 1 && (visible === title || (title.length > 18 && visible.includes(title)))) {
+      out.tooltips.push('native:' + (el.id || el.className || el.tagName).toString().slice(0, 44)
+        + ' repeats "' + title.slice(0, 80) + '"');
+    }
+  });
+  document.querySelectorAll('.info-trigger[data-term]').forEach(trigger => {
+    if (!trigger.offsetParent || !window.Learn || !Learn.INFO) return;
+    const key = trigger.getAttribute('data-term');
+    const def = Learn.INFO[key];
+    if (!def || !def.short) return;
+    const context = trigger.closest('label,.chip,.stat,.market-fact,.field,.alert,.explain,.intent-note,.card-header')
+      || trigger.parentElement;
+    if (!context) return;
+    const clone = context.cloneNode(true);
+    clone.querySelectorAll('.info-trigger,.info-pop').forEach(node => node.remove());
+    const visible = norm(clone.textContent);
+    const short = norm(def.short);
+    if (short.length > 18 && (visible === short || visible.includes(short))) {
+      out.tooltips.push('info:' + key + ' repeats nearby visible copy "' + short.slice(0, 80) + '"');
+    }
+  });
   document.querySelectorAll(
     '#app input:not([type=checkbox]):not([type=radio]), #app select, #app .btn, #app .goal-chip'
   ).forEach(el => {
@@ -143,6 +169,7 @@ for (const width of WIDTHS) {
       for (const e of res.emoji) failures.push(`${route}@${width}: EMOJI ${e}`);
       for (const c of res.controls) failures.push(`${route}@${width}: CONTROL-HEIGHT ${c}`);
       for (const n of res.numbers) failures.push(`${route}@${width}: NON-FINITE ${n}`);
+      for (const t of res.tooltips) failures.push(`${route}@${width}: DUPLICATE-TOOLTIP ${t}`);
     }
     assert.deepEqual(failures, [], failures.join('\n'));
   });
