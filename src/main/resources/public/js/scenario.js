@@ -188,10 +188,8 @@
         fld('Jump frequency (/yr)', jumps), fld('Jump size (%)', jumpSize), fld('Tail ν', tailNu)));
       box.appendChild(el('div', { class: 'form-grid compact-filters' },
         fld('Heston κ', hKappa), fld('Heston ξ', hXi), fld('Heston ρ', hRho),
-        fld('IV start %', ivStart), fld('Event day', ivEvent), fld('IV change %', ivShock),
+        fld('IV start %', ivStart), fld('Event day', ivEvent, 'eventday'), fld('IV change %', ivShock, 'ivchange'),
         fld('Seed', seed), fld('Paths', paths)));
-      ivEvent.title = 'Trading day of the IV event (earnings-style shock). \u22121 = no event.';
-      ivShock.title = 'One-off IV change applied at the event day\u2019s close (e.g. \u221235 = a 35% crush).';
       // Only the selected model's knobs are live — a control that silently does nothing teaches
       // the wrong lesson. Irrelevant fields disable with an honest tooltip.
       function updateRelevance() {
@@ -229,7 +227,7 @@
       i.addEventListener('change', function () { on(+i.value); });
       return i;
     }
-    function fld(label, input) {
+    function fld(label, input, infoKey) {
       // Greek glyphs must survive the app-wide uppercase label transform (σ became Σ — the
       // summation sign — which a quant reads as a bug). Wrap them in a no-transform span.
       var labelEl = el('label', {});
@@ -237,6 +235,7 @@
         if (/^[σμκξρν]$/.test(part)) labelEl.appendChild(el('span', { class: 'glyph' }, part));
         else if (part) labelEl.appendChild(document.createTextNode(part));
       });
+      if (infoKey) labelEl.appendChild(UI.info(infoKey));
       return el('div', { class: 'field' }, labelEl, input);
     }
 

@@ -2499,6 +2499,24 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   const missing = await page.evaluate(() =>
     (window.__usedInfoTerms || []).filter(k => !(window.Learn && Learn.INFO && Learn.INFO[k])));
   assert.deepEqual(missing, [], 'info terms missing from the registry: ' + missing.join(','));
+  const additiveHelp = await page.evaluate(() => ({
+    nlv: Learn.INFO.nlv.short,
+    riskcapital: Learn.INFO.riskcapital.short,
+    marketengine: Learn.INFO.marketengine.short,
+    dayrange: Learn.INFO.dayrange.short,
+    hv30: Learn.INFO.hv30.short,
+    requestbudget: Learn.INFO.requestbudget.short,
+    synccursor: Learn.INFO.synccursor.short,
+    marketanchor: Learn.INFO.marketanchor.short
+  }));
+  assert.match(additiveHelp.nlv, /denominator|not the cash/i);
+  assert.match(additiveHelp.riskcapital, /tighter|acknowledgment/i);
+  assert.match(additiveHelp.marketengine, /refresh|stale/i);
+  assert.match(additiveHelp.dayrange, /not as a forecast/i);
+  assert.match(additiveHelp.hv30, /does not prove an edge/i);
+  assert.match(additiveHelp.requestbudget, /pauses provider work/i);
+  assert.match(additiveHelp.synccursor, /not downloaded again/i);
+  assert.match(additiveHelp.marketanchor, /never rewrites the observed/i);
   // AUDIT 2: triggers are VISIBLE (quiet but discoverable) and carry no competing native title.
   const trig = page.locator('#plan-decision-review .info-trigger[data-term="pop"]').first();
   assert.ok(await trig.isVisible(), 'info trigger must be visible without hovering');

@@ -126,6 +126,14 @@ function auditInPage() {
       out.tooltips.push('native:' + (el.id || el.className || el.tagName).toString().slice(0, 44)
         + ' repeats "' + title.slice(0, 80) + '"');
     }
+    const label = el.id
+      ? Array.from(document.querySelectorAll('label[for]')).find(item => item.htmlFor === el.id)
+      : null;
+    const labelText = norm(label && label.textContent);
+    if (title.length > 1 && labelText && (title === labelText || title.includes(labelText))) {
+      out.tooltips.push('native:' + (el.id || el.className || el.tagName).toString().slice(0, 44)
+        + ' paraphrases its label "' + labelText.slice(0, 80) + '"');
+    }
   });
   document.querySelectorAll('.info-trigger[data-term]').forEach(trigger => {
     if (!trigger.offsetParent || !window.Learn || !Learn.INFO) return;
