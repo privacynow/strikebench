@@ -66,7 +66,8 @@ public final class HistoricalReplayKernel {
     }
 
     public long valueCents(String symbol, List<Leg> legs, int qty, double spot, double iv,
-                           LocalDate asOf, PriceIntent intent, boolean payoffOnly, Evidence evidence) {
+                           LocalDate asOf, AnalysisContext analysis, PriceIntent intent,
+                           boolean payoffOnly, Evidence evidence) {
         double total = 0;
         for (Leg leg : legs) {
             double value;
@@ -74,9 +75,9 @@ public final class HistoricalReplayKernel {
                 value = spot;
             } else {
                 evidence.totalMarks++;
-                Double observed = observedPrice(symbol, asOf, leg, intent);
+                Double observed = storedPrice(symbol, asOf, leg, analysis, intent);
                 if (observed != null) {
-                    evidence.observedMarks++;
+                    if (!analysis.synthetic()) evidence.observedMarks++;
                     value = observed;
                 } else {
                     double t = ChronoUnit.DAYS.between(asOf, leg.expiration()) / 365.0;
@@ -106,13 +107,14 @@ public final class HistoricalReplayKernel {
         return total;
     }
 
-    private Double observedPrice(String symbol, LocalDate date, Leg leg, PriceIntent intent) {
+    private Double storedPrice(String symbol, LocalDate date, Leg leg, AnalysisContext analysis,
+                               PriceIntent intent) {
         if (db == null || leg.isStock()) return null;
         var rows = db.query(
                 "SELECT mark, bid, ask FROM option_bar WHERE symbol=? AND asof=? AND expiration=? AND strike=? "
-              + "AND opt_type=? AND dataset_id='observed' AND bid_ask_observed=1 LIMIT 1",
+              + "AND opt_type=? AND dataset_id=? AND bid_ask_observed=1 LIMIT 1",
                 r -> new Double[]{r.dblOrNull("mark"), r.dblOrNull("bid"), r.dblOrNull("ask")},
-                symbol, date, leg.expiration(), leg.strike(), leg.type().name());
+                symbol, date, leg.expiration(), leg.strike(), leg.type().name(), analysis.datasetId());
         if (rows.isEmpty()) return null;
         Double mark = rows.getFirst()[0], bid = rows.getFirst()[1], ask = rows.getFirst()[2];
         Double side = switch (intent) {
@@ -130,22 +132,22 @@ public final class HistoricalReplayKernel {
     }
 
     public List<Double> listedStrikes(String symbol, LocalDate date, LocalDate expiration,
-                                      OptionType type) {
+                                      OptionType type, AnalysisContext analysis) {
         if (db == null || expiration == null) return List.of();
         return db.query("SELECT DISTINCT strike FROM option_bar WHERE symbol=? AND asof=? AND expiration=? "
-                        + "AND opt_type=? AND dataset_id='observed' ORDER BY strike",
-                r -> r.bd("strike").doubleValue(), symbol, date, expiration, type.name());
+                        + "AND opt_type=? AND dataset_id=? ORDER BY strike",
+                r -> r.bd("strike").doubleValue(), symbol, date, expiration, type.name(), analysis.datasetId());
     }
 
     public LocalDate listedExpirationNear(String symbol, LocalDate date, int targetDte,
-                                          OptionType type) {
+                                          OptionType type, AnalysisContext analysis) {
         if (db == null) return null;
         LocalDate target = date.plusDays(targetDte);
         List<LocalDate> rows = db.query(
                 "SELECT DISTINCT expiration::text e FROM option_bar WHERE symbol=? AND asof=? "
-              + "AND opt_type=? AND dataset_id='observed' AND expiration > ? "
+              + "AND opt_type=? AND dataset_id=? AND expiration > ? "
               + "GROUP BY expiration HAVING COUNT(DISTINCT strike) >= 2",
-                r -> LocalDate.parse(r.str("e")), symbol, date, type.name(), date);
+                r -> LocalDate.parse(r.str("e")), symbol, date, type.name(), analysis.datasetId(), date);
         return rows.stream().min(java.util.Comparator.comparingLong(e ->
                 Math.abs(ChronoUnit.DAYS.between(e, target)))).orElse(null);
     }
