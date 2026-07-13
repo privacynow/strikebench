@@ -15,7 +15,6 @@ import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Clock;
@@ -96,15 +95,15 @@ public final class PlanDecisionService {
             ObjectNode out = rows.getFirst();
             String id = out.path("id").asText();
             ArrayNode legs = out.putArray("legs");
-            Db.queryOn(connection, "SELECT leg_index,action,instrument_type,strike_cents,expiration::text expiration," +
-                            "ratio,bid_cents,ask_cents,mid_cents,fill_cents,iv FROM plan_decision_leg " +
+            Db.queryOn(connection, "SELECT leg_index,action,instrument_type,strike_price,expiration::text expiration," +
+                            "ratio,bid_price,ask_price,mid_price,fill_price,iv FROM plan_decision_leg " +
                             "WHERE decision_id=? ORDER BY leg_index", row -> {
                         ObjectNode leg = Json.MAPPER.createObjectNode();
                         put(leg, "index", row.intv("leg_index")); put(leg, "action", row.str("action"));
-                        put(leg, "type", row.str("instrument_type")); put(leg, "strikeCents", row.lngOrNull("strike_cents"));
+                        put(leg, "type", row.str("instrument_type")); putDecimal(leg, "strikePrice", row.bd("strike_price"));
                         put(leg, "expiration", row.str("expiration")); put(leg, "ratio", row.intv("ratio"));
-                        put(leg, "bidCents", row.lngOrNull("bid_cents")); put(leg, "askCents", row.lngOrNull("ask_cents"));
-                        put(leg, "midCents", row.lngOrNull("mid_cents")); put(leg, "fillCents", row.lngOrNull("fill_cents"));
+                        putDecimal(leg, "bidPrice", row.bd("bid_price")); putDecimal(leg, "askPrice", row.bd("ask_price"));
+                        putDecimal(leg, "midPrice", row.bd("mid_price")); putDecimal(leg, "fillPrice", row.bd("fill_price"));
                         put(leg, "iv", row.dblOrNull("iv"));
                         return leg;
                     }, id).forEach(legs::add);
@@ -197,10 +196,10 @@ public final class PlanDecisionService {
         int index = 0;
         for (Map<String, Object> row : legs == null ? List.<Map<String, Object>>of() : legs) {
             Db.execOn(connection, "INSERT INTO plan_decision_leg(decision_id,leg_index,action,instrument_type," +
-                            "strike_cents,expiration,ratio,bid_cents,ask_cents,mid_cents,fill_cents,iv) " +
+                            "strike_price,expiration,ratio,bid_price,ask_price,mid_price,fill_price,iv) " +
                             "VALUES(?,?,?,?,?,CAST(? AS DATE),?,?,?,?,?,?)", decisionId, index++, text(row.get("action")),
-                    text(row.get("type")), cents(row.get("strike")), text(row.get("expiration")), integer(row.get("ratio"), 1),
-                    cents(row.get("bid")), cents(row.get("ask")), cents(row.get("mid")), cents(row.get("fill")), decimal(row.get("iv")));
+                    text(row.get("type")), price(row.get("strike")), text(row.get("expiration")), integer(row.get("ratio"), 1),
+                    price(row.get("bid")), price(row.get("ask")), price(row.get("mid")), price(row.get("fill")), decimal(row.get("iv")));
         }
     }
 
@@ -286,9 +285,9 @@ public final class PlanDecisionService {
         return nested instanceof Map<?, ?> map && map.get(child) instanceof Number number ? number : null;
     }
 
-    private static Long cents(Object value) {
+    private static BigDecimal price(Object value) {
         if (value == null || String.valueOf(value).isBlank() || "null".equals(String.valueOf(value))) return null;
-        try { return new BigDecimal(String.valueOf(value)).movePointRight(2).setScale(0, RoundingMode.HALF_UP).longValueExact(); }
+        try { return new BigDecimal(String.valueOf(value)); }
         catch (RuntimeException ignored) { return null; }
     }
     private static Double decimal(Object value) { try { return value == null ? null : Double.valueOf(String.valueOf(value)); } catch (RuntimeException e) { return null; } }
@@ -303,6 +302,9 @@ public final class PlanDecisionService {
         else if (value instanceof Double d) node.put(key, d);
         else if (value instanceof Boolean b) node.put(key, b);
         else node.set(key, Json.MAPPER.valueToTree(value));
+    }
+    private static void putDecimal(ObjectNode node, String key, BigDecimal value) {
+        if (value != null) node.put(key, value.stripTrailingZeros().toPlainString());
     }
 
     private record PlanRow(long version, int contextRev, String userId, String status) {}

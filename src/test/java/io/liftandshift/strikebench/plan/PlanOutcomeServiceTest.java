@@ -249,8 +249,8 @@ class PlanOutcomeServiceTest {
                 10_000_000L, 9_969_935L, 0L, 0L, 10_000_000L, 9_969_935L,
                 "FIXTURE", DataEvidence.of("fixture", Freshness.FIXTURE), 25_000L, null,
                 List.of(Map.of("action", "BUY", "type", "CALL", "strike", "250",
-                        "expiration", "2026-08-21", "ratio", 1, "bid", "6.9", "ask", "7",
-                        "mid", "6.95", "fill", "7", "iv", 0.3)), List.of(),
+                        "expiration", "2026-08-21", "ratio", 1, "bid", "6.9123", "ask", "7.0456",
+                        "mid", "6.97895", "fill", "7.0456", "iv", 0.3)), List.of(),
                 Map.of("probabilityMap", Map.of("pMaxProfit", 0.2, "pMaxLoss", 0.3,
                         "cvar95Cents", -28_000L)));
         EconomicAssessment economics = new EconomicAssessment(EconomicAssessment.Verdict.MIXED,
@@ -263,6 +263,10 @@ class PlanOutcomeServiceTest {
                 new AccountRiskContext(null, null, null, null, null), 1, List.of(), "Kept cash",
                 AnalysisContext.OBSERVED));
         assertThat(decision.path("ensembleId").asText()).isEqualTo(stored.id());
+        assertThat(decision.at("/legs/0/bidPrice").asText()).isEqualTo("6.9123");
+        assertThat(decision.at("/legs/0/askPrice").asText()).isEqualTo("7.0456");
+        assertThat(decision.at("/legs/0/midPrice").asText()).isEqualTo("6.97895");
+        assertThat(decision.at("/legs/0/fillPrice").asText()).isEqualTo("7.0456");
         assertThat(db.query("SELECT ea.pinned FROM ensemble_artifact ea JOIN plan_ensemble pe " +
                         "ON pe.fingerprint=ea.fingerprint WHERE pe.id=?", row -> row.bool("pinned"), stored.id()))
                 .containsExactly(true);

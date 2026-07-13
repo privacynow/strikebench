@@ -649,12 +649,13 @@
     var legs = candidate && candidate.legs;
     if (!legs || !legs.length) return null;
     var out = [];
+    var base = App.Market && App.Market.simTime ? new Date(App.Market.simTime) : new Date();
     for (var i = 0; i < legs.length; i++) {
       var lg = legs[i];
       if (lg.stock || lg.type === 'STOCK') { out.push({ action: lg.action, type: 'STOCK', strike: 0, expiryDay: 0, ratio: lg.ratio || 1 }); continue; }
       var days = 30;
       if (lg.expiration) {
-        var ms = new Date(lg.expiration) - new Date();
+        var ms = new Date(lg.expiration + 'T16:00:00-04:00') - base;
         days = Math.max(1, Math.round(ms / 86400000 * 5 / 7)); // calendar → ~trading days
       }
       out.push({ action: lg.action, type: lg.type, strike: parseFloat(lg.strike), expiryDay: days, ratio: lg.ratio || 1 });

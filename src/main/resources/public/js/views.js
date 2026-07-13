@@ -2010,8 +2010,7 @@
   }
 
   function daysUntil(iso) {
-    var d = Math.round((new Date(iso + 'T12:00:00') - Date.now()) / 86400000);
-    return d < 0 ? 0 : d;
+    return Math.max(0, calendarDayDistance(laneDateString(), iso));
   }
 
   // ---------- 3. Recommendations ----------
@@ -3871,12 +3870,12 @@
       stat('Evidence', label(decision.evidenceProvenance || 'UNKNOWN')),
       stat('Buying power at decision', decision.buyingPowerCents == null ? '—' : fmtMoney(decision.buyingPowerCents))));
     if (decision.legs && decision.legs.length) host.appendChild(UI.expandable('Frozen listed contracts', function () {
+      function exactPrice(value) { return value == null ? '—' : '$' + String(value); }
       return table(['Side', 'Contract', 'Bid', 'Ask', 'Fill'], decision.legs.map(function (leg) {
-        var strike = leg.strikeCents == null ? '' : ' ' + fmtMoney(leg.strikeCents);
+        var strike = leg.strikePrice == null ? '' : ' ' + exactPrice(leg.strikePrice);
         return el('tr', {}, el('td', {}, leg.action), el('td', {}, leg.type + strike + (leg.expiration ? ' · ' + leg.expiration : '')),
-          el('td', {}, leg.bidCents == null ? '—' : fmtMoney(leg.bidCents)),
-          el('td', {}, leg.askCents == null ? '—' : fmtMoney(leg.askCents)),
-          el('td', {}, leg.fillCents == null ? '—' : fmtMoney(leg.fillCents)));
+          el('td', {}, exactPrice(leg.bidPrice)), el('td', {}, exactPrice(leg.askPrice)),
+          el('td', {}, exactPrice(leg.fillPrice)));
       }));
     }));
     if (!insideManage) host.appendChild(el('div', { class: 'plan-next-action' },
