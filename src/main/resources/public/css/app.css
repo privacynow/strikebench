@@ -88,6 +88,7 @@ body.has-stale-banner .topbar { top: var(--stale-banner-h, 42px); }
 #stale-banner .btn:hover { background: #fff; border-color: #fff; }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; }
 .sr-only {
   position: absolute !important; width: 1px !important; height: 1px !important;
@@ -2050,6 +2051,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .home-plan-group-count { white-space: nowrap; padding-bottom: 1px; }
 .home-plan-group-toggle { flex: none; }
 .home-plan-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.home-plan-grid > .home-plan-tile:only-child { grid-column: 1 / -1; }
 .home-plan-tile { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 10px;
   align-items: start; padding: 11px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--surface-2); }

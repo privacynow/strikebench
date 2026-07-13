@@ -469,7 +469,7 @@
           var shown = expanded ? ordered : ordered.slice(0, limit);
           grid.replaceChildren.apply(grid, shown.map(planTile));
           count.textContent = expanded || ordered.length <= limit
-            ? ordered.length + ' Plans'
+            ? ordered.length + (ordered.length === 1 ? ' Plan' : ' Plans')
             : limit + ' of ' + ordered.length + ' Plans';
           if (toggle) {
             toggle.textContent = expanded ? 'Show fewer' : 'Show all ' + ordered.length;
@@ -486,8 +486,7 @@
 
       planLibrary.innerHTML = '';
       planLibrary.appendChild(UI.cardHeader('Plans',
-        el('span', { class: 'muted small' }, working.length + ' working'),
-        el('button', { type: 'button', class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, '+ New Plan')));
+        el('span', { class: 'muted small' }, working.length + ' working ' + (working.length === 1 ? 'Plan' : 'Plans'))));
       if (!working.length) {
         planLibrary.appendChild(UI.emptyState('No working Plans yet',
           'Choose a stock in Research, then carry one Plan through evidence, strategy, outcomes, and a decision.',
