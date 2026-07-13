@@ -2161,6 +2161,9 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-tool-intro h3 { margin: 0 0 3px; }
 .plan-strategy-controls .check-row { margin-top: 10px; }
 .plan-filter-expert .plan-filter-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.plan-budget-receipt { display: grid; gap: 3px; margin: 12px 0; padding: 10px 12px;
+  border-left: 3px solid var(--accent); background: var(--accent-soft); }
+.plan-budget-receipt p { margin: 0; }
 .plan-proposed-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
   margin: 4px 0 8px; padding: 0 2px; }
 .plan-proposed-heading h3, .plan-other-ranked-title { margin: 2px 0 0; }
@@ -2173,6 +2176,15 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 }
 .plan-intent-ladder .ladder-row.selected { box-shadow: inset 3px 0 0 var(--accent); }
 .plan-selection-actions { display: flex; justify-content: flex-end; margin-top: -4px; }
+.plan-selected-candidate { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.plan-rejected-teaching { display: grid; gap: 10px; }
+.plan-budget-teaching-list { display: grid; gap: 7px; }
+.plan-budget-teaching-row { display: grid; grid-template-columns: 72px minmax(180px, .7fr) minmax(240px, 1fr);
+  align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); }
+.plan-budget-teaching-row p { margin: 3px 0 0; }
+.plan-teaching-shape { display: inline-flex; align-items: center; justify-content: center; }
+.plan-budget-teaching-reason { display: flex; align-items: center; gap: 8px; color: var(--muted); }
 .plan-income-board { border-left: 3px solid var(--accent); }
 .portfolio-construct-primary { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .portfolio-construct-advanced { margin-top: 10px; }
@@ -2328,6 +2340,8 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .plan-scout-results { grid-template-columns: minmax(0, 1fr); }
   .plan-filter-expert .plan-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .plan-proposed-heading { align-items: flex-start; flex-direction: column; }
+  .plan-budget-teaching-row { grid-template-columns: 64px minmax(0, 1fr); }
+  .plan-budget-teaching-reason { grid-column: 1 / -1; align-items: flex-start; flex-direction: column; }
   .plan-intent-ladder .ladder-row { grid-template-columns: minmax(0, 1fr); }
   .plan-intent-ladder .ladder-row > .btn { width: 100%; }
   .portfolio-construct-primary, .portfolio-construct-advanced > .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
