@@ -2606,6 +2606,10 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   const sources = await page.textContent('#dc-sources');
   assert.match(sources, /Yahoo Finance automation/);
   assert.match(sources, /Automated collection requires permission|automated collection requires permission/i);
+  assert.match(await page.textContent('#dc-history-sync'), /charts, HV, realized-volatility EV, and favorable observed verdicts/i,
+    'the source bridge explains the product consequence of candle starvation');
+  assert.match(await page.textContent('#dc-history-sync'), /YAHOO_ENABLED=true.*YAHOO_AUTOMATION_PERMISSION_CONFIRMED=true/i,
+    'an authorized local user gets the exact opt-in path without enabling it silently');
   assert.match(sources, /Your price-history CSV/);
   assert.ok(await page.locator('#dc-history-sync .data-source-choice').count() >= 4, 'all automated connector choices remain visible');
   assert.equal(await page.locator('#data-sync-preview').isDisabled(), true, 'Demo build cannot start an observed provider sync');
@@ -2935,6 +2939,8 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.locator('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg').click();
   await page.waitForSelector('#plan-start', { timeout: 15000 });
   await page.waitForSelector('#research-hero .quote-hero', { timeout: 15000 });
+  assert.match(await page.textContent('#research-hero'), /IV rank.*not available in a generated market/is,
+    'IV rank stays visible and lane-honest when observed snapshot history cannot apply');
   assert.equal(await page.evaluate(() => window.location.hash), '#/research/AAPL',
     'the chart area does not create a dead middle inside the destination card');
   await page.goBack();

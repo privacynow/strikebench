@@ -652,7 +652,8 @@
         slot.innerHTML = '';
         var missing = row.available === false || !row.closes || !row.closes.length;
         if (missing) homeMissingHistory.add(row.symbol); else homeMissingHistory.delete(row.symbol);
-        slot.appendChild(UI.sparkline(row, { height: 30, quietMissing: true, missingText: 'No chart' }));
+        slot.appendChild(UI.sparkline(row, { height: 30, quietMissing: true,
+          missingText: missing ? missingSparkCopy(row) : 'No chart' }));
         // In Demo, the global band and each quote already say Demo; a second identical history
         // chip on every card adds noise, not honesty. Other lanes retain separate history evidence.
         if (!missing && row.evidence && !(App.state.world === 'demo' && row.evidence.provenance === 'DEMO')) {
@@ -1076,7 +1077,7 @@
       }),
       evSummary && evSummary.provenance === 'MISSING'
         ? el('span', { class: 'muted' }, hasAvailableInput
-          ? 'Quote or options inputs are available; missing history-dependent calculations stay unavailable.'
+          ? 'Available inputs remain usable; each unavailable calculation below names the evidence it still needs.'
           : 'Calculations are unavailable rather than filled with demo data.')
         : evSummary && evSummary.provenance === 'MIXED'
           ? el('span', { class: 'muted' }, 'Inputs come from different evidence types; each is named below.') : null,
@@ -1090,6 +1091,12 @@
         var detailChips = [chip('Prev close', reported(q.prevClose, fmtNum))];
         if (r.ivRankPct !== undefined && r.ivRankPct !== null) {
           detailChips.push(chip(el('span', {}, 'IV rank', UI.info('ivrank')), fmtNum(r.ivRankPct, 0) + '%'));
+        } else {
+          var ivNeed = r.marketLane === 'OBSERVED'
+            ? el('a', { href: '#/data/sources' }, String(r.ivHistoryDays || 0) + '/'
+              + String(r.ivRankRequiredDays || 10) + ' observed snapshot days')
+            : 'not available in a generated market';
+          detailChips.push(chip(el('span', {}, 'IV rank', UI.info('ivrank')), ivNeed));
         }
         detailChips.push(chip('Options', r.optionable ? 'yes' : 'no'));
         return el('div', {},
@@ -1127,7 +1134,11 @@
         chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Options-implied move' : 'ATM IV', UI.info('atmiv')),
           reported(r.ivAtm, fmtPct)),
         chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Recent movement' : 'HV 30d', UI.info('hv30')),
-          reported(r.hv30, fmtPct))),
+          r.hv30 !== undefined && r.hv30 !== null ? fmtPct(r.hv30)
+            : r.marketLane === 'OBSERVED'
+              ? el('a', { href: '#/data/sources' }, String(r.hvHistoryDays || 0) + '/'
+                + String(r.hvRequiredDays || 20) + ' daily closes · add history')
+              : 'needs 20 daily closes in this market')),
       secondaryMarketDetail);
     if (section === 'understand') heroCard.replaceWith(hero);
 
@@ -1418,6 +1429,7 @@
                 ? chip('IV / recent movement', fmtNum(pick.signals.ivHvRatio, 2) + '×') : null,
               candidate ? chip('Leading expression', candidate.displayName) : null),
             el('p', { class: 'muted' }, (pick.signals.rationale || []).slice(0, 2).join(' ')),
+            h && h.notes && h.notes.length ? alertBox('caution', h.notes[0], h.notes.slice(1)) : null,
             candidate && top.economics ? economicAssessmentBlock(Object.assign({}, candidate, { economics: top.economics })) : null,
             el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', onclick: async function () {
               this.disabled = true; this.setAttribute('aria-busy', 'true');
@@ -1598,6 +1610,14 @@
   function missingSparkRow(symbol, note) {
     return { symbol: symbol, available: false, closes: [], note: note,
       evidence: { provenance: 'MISSING', age: 'MISSING', source: 'daily history unavailable' } };
+  }
+
+  function missingSparkCopy(row) {
+    var note = String(row && row.note || '').toLowerCase();
+    if (/deferred|yielded/.test(note)) return 'Chart deferred · open analysis';
+    if (/not returned|daily history|no observed/.test(note)) return 'Needs daily history';
+    if (/unavailable right now|temporar/.test(note)) return 'Chart temporarily unavailable';
+    return 'No daily history';
   }
 
   /**
@@ -2026,7 +2046,8 @@
             if (!t2) return;
             t2.innerHTML = '';
             var missing = row.available === false || !row.closes || !row.closes.length;
-            t2.appendChild(UI.sparkline(row, { height: 36, quietMissing: true, missingText: 'No chart' }));
+            t2.appendChild(UI.sparkline(row, { height: 36, quietMissing: true,
+              missingText: missing ? missingSparkCopy(row) : 'No chart' }));
             if (missing) missingHistory.add(row.symbol);
             else missingHistory.delete(row.symbol);
             if (missingHistory.size) {
@@ -7210,15 +7231,27 @@
           el('span', { class: 'chip-row' },
             el('b', {}, c.name),
             el('span', { class: 'badge ' + (c.eligible ? 'badge-ok' : 'badge-dim') }, c.eligible ? 'READY' : 'SETUP NEEDED')),
-          el('span', { class: 'muted small' }, c.history),
+          el('span', { class: 'muted small' }, c.eligible ? c.history : c.setup),
           c.dailyLimit > 0 ? el('span', { class: 'small' }, c.remainingToday + ' of ' + c.dailyLimit + ' requests left today')
             : el('span', { class: 'small' }, 'Usage follows your provider plan')));
       });
       if (!automated.length) sourceGrid.appendChild(el('p', { class: 'muted' }, 'No automated candle connectors are present in this build.'));
       syncCard.appendChild(el('section', { class: 'data-acquire-section' },
         el('h3', {}, '1. Choose an automated source'), sourceGrid));
-      if (!eligible.length) syncCard.appendChild(alertBox('caution',
-        'No automated daily-price source is eligible yet. Use your own CSV below now, or connect an official keyed source. Yahoo automation remains blocked unless you have permission.'));
+      if (!eligible.length) {
+        var sourceBridge = alertBox('caution', 'No automated daily-price source is active. Quotes and option chains can still work, but charts, HV, realized-volatility EV, and favorable observed verdicts need daily history.', [
+          'Authorized personal/local use: set YAHOO_ENABLED=true and YAHOO_AUTOMATION_PERMISSION_CONFIRMED=true, then restart. Do not enable this on a hosted service without the required rights.',
+          'Official path: configure a Polygon or Alpha Vantage key under the terms of your plan.',
+          'No automation: import a price-history CSV you already have permission to use.'
+        ]);
+        sourceBridge.appendChild(el('div', { class: 'btn-row' }, el('button', {
+          type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+            var target = document.getElementById('data-csv-import');
+            if (target) { target.open = true; target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+          }
+        }, 'Use my CSV')));
+        syncCard.appendChild(sourceBridge);
+      }
 
       var sectorBtn = el('button', { type: 'button', class: st.scope === 'sector' ? 'active' : '',
         onclick: function () { st.scope = 'sector'; st.symbols = defaultSymbols; symbolsInput.value = st.symbols; syncScope(); invalidatePlan(); } },
@@ -7330,8 +7363,10 @@
         el('div', { class: 'field' }, el('label', {}, 'Symbol fallback'), csvSymbol),
         el('div', { class: 'field' }, el('label', {}, 'Price basis', UI.info('adjustedprices')), csvBasis),
         el('div', { class: 'field' }, el('label', {}, 'Source label'), csvLabel), uploadBtn, csvResult);
-      syncCard.appendChild(UI.expandable('Import a CSV you already own', function () { return importBody; },
-        { open: !eligible.length }));
+      var csvImport = UI.expandable('Import a CSV you already own', function () { return importBody; },
+        { open: !eligible.length });
+      csvImport.id = 'data-csv-import';
+      syncCard.appendChild(csvImport);
 
       var schedule = doc.schedule || {};
       var scheduleToggle = el('input', { type: 'checkbox', id: 'data-sync-schedule',

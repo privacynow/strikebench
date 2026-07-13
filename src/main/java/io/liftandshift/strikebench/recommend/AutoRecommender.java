@@ -246,7 +246,7 @@ public final class AutoRecommender {
             boolean anyFavorable = assessed.stream().anyMatch(x -> x.economics() != null
                     && x.economics().verdict() == EconomicAssessment.Verdict.FAVORABLE);
             if (!anyFavorable && !assessed.isEmpty()) {
-                hNotes.add("No favorable setup was found for this horizon. The structures below remain useful comparisons, not endorsements.");
+                hNotes.add(noFavorableNote(assessed, worldId == null));
             }
             // Scout is a curated surface rather than the full catalog. Preserve at least one
             // unfavorable counterexample when present so it teaches why the stronger ideas rank
@@ -268,6 +268,25 @@ public final class AutoRecommender {
             perHorizon.add(new HorizonIdeas(horizon, ranked, hNotes));
         }
         return perHorizon;
+    }
+
+    static String noFavorableNote(List<ScoredCandidate> assessed, boolean observedLane) {
+        boolean hasAssessment = assessed.stream().anyMatch(x -> x.economics() != null);
+        boolean hasComparableAssessment = assessed.stream().anyMatch(x -> x.economics() != null
+                && !"MECHANICALLY_INELIGIBLE".equals(x.economics().placement()));
+        if (hasAssessment && !hasComparableAssessment) {
+            return "No structure reached economic comparison because every candidate failed a mechanical or account check. Review each refusal reason; this is not an economic verdict on the market.";
+        }
+        boolean needsDailyHistory = assessed.stream().anyMatch(x -> x.economics() != null
+                && x.economics().needsDailyHistory());
+        if (hasAssessment && needsDailyHistory) {
+            return observedLane
+                    ? "A favorable observed verdict cannot be formed yet: this market has fewer than "
+                      + io.liftandshift.strikebench.pricing.HistoricalVol.MIN_OBSERVATIONS
+                      + " eligible daily closes, so realized-volatility EV is unavailable. These structures remain useful for mechanics and market-implied comparison; add observed daily history in Data → Sources & jobs."
+                    : "A favorable verdict cannot be formed yet because this generated market has too little daily path history for realized-volatility EV. These structures remain useful comparisons, not endorsements.";
+        }
+        return "No favorable setup was found after the available after-cost economic checks. The structures below remain useful comparisons, not endorsements.";
     }
 
     private static List<StrategyIntent> normalizeIntents(List<String> requested) {

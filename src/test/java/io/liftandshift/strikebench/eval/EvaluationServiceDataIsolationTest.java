@@ -31,11 +31,30 @@ class EvaluationServiceDataIsolationTest {
         assertThat(service.ivHistory("AAPL")).containsExactly(0.31, 0.22);
     }
 
+    @Test
+    void intradaySnapshotsCountAsOneIvHistoryDay() {
+        db = TestDb.fresh();
+        insertIvAt("2026-07-01T14:00:00Z", 0.20, "morning");
+        insertIvAt("2026-07-01T19:00:00Z", 0.30, "afternoon");
+        insertIvAt("2026-07-02T19:00:00Z", 0.40, "next-day");
+
+        EvaluationService service = new EvaluationService(null, null, db, Clock.systemUTC());
+        assertThat(service.ivHistory("AAPL")).containsExactly(0.40, 0.25);
+    }
+
     private void insertIv(String dataset, String asof, double iv, String source) {
         db.exec("""
                 INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,iv,underlying,
                   source,bid_ask_observed,iv_source,greeks_source,dataset_id)
                 VALUES (?,?::date,'2026-08-21'::date,250,'CALL',5.00,5.20,?,251,?,1,'vendor','vendor',?)
                 """, "AAPL", asof, iv, source, dataset);
+    }
+
+    private void insertIvAt(String asof, double iv, String source) {
+        db.exec("""
+                INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,iv,underlying,
+                  source,bid_ask_observed,iv_source,greeks_source,dataset_id)
+                VALUES (?,?::timestamptz,'2026-08-21'::date,250,'CALL',5.00,5.20,?,251,?,1,'vendor','vendor','observed')
+                """, "AAPL", asof, iv, source);
     }
 }

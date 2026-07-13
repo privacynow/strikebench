@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.javalin.Javalin;
 import io.liftandshift.strikebench.config.AppConfig;
+import io.liftandshift.strikebench.pricing.HistoricalVol;
 import io.liftandshift.strikebench.support.TestDb;
 import io.liftandshift.strikebench.util.Json;
 import org.junit.jupiter.api.AfterAll;
@@ -142,6 +143,13 @@ class ApiIntegrationTest {
         assertThat(aapl.get("optionable").asBoolean()).isTrue();
         assertThat(aapl.get("ivAtm").asDouble()).isBetween(0.05, 2.0);
         assertThat(aapl.get("hv30").asDouble()).isGreaterThan(0.01);
+        assertThat(aapl.get("hvHistoryDays").asInt()).isGreaterThanOrEqualTo(HistoricalVol.MIN_OBSERVATIONS);
+        assertThat(aapl.get("ivRankAvailable").asBoolean()).isFalse();
+        assertThat(aapl.path("ivRankPct").isMissingNode() || aapl.path("ivRankPct").isNull()).isTrue();
+        assertThat(aapl.get("ivHistoryDays").asInt()).isZero();
+        assertThat(aapl.get("ivRankRequiredDays").asInt()).isEqualTo(10);
+        assertThat(aapl.get("ivRankNote").asText()).contains("need 10");
+        assertThat(aapl.get("hvRequiredDays").asInt()).isEqualTo(HistoricalVol.MIN_OBSERVATIONS);
         assertThat(aapl.get("expirations").size()).isEqualTo(8);
         assertThat(aapl.get("benchmarks").size()).isEqualTo(2);
 

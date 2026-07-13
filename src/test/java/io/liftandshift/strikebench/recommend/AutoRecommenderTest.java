@@ -88,6 +88,50 @@ class AutoRecommenderTest {
     }
 
     @Test
+    void missingDailyHistoryIsNotReportedAsAnEconomicallyUnfavorableScan() {
+        var incomplete = new io.liftandshift.strikebench.eval.EconomicAssessment(
+                io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.MIXED,
+                "COMPARE_CAREFULLY", "Economics incomplete", "history missing",
+                -100L, null, 260L, -0.5, false,
+                List.of(io.liftandshift.strikebench.eval.EconomicAssessment.DAILY_HISTORY_REASON));
+        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, incomplete, 50.0));
+
+        assertThat(AutoRecommender.noFavorableNote(rows, true))
+                .contains("cannot be formed yet")
+                .contains("20 eligible daily closes")
+                .contains("Data → Sources & jobs")
+                .doesNotContain("No favorable setup was found");
+    }
+
+    @Test
+    void unsupportedPayoffModelIsNotMisreportedAsMissingCandles() {
+        var unsupported = new io.liftandshift.strikebench.eval.EconomicAssessment(
+                io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.MIXED,
+                "COMPARE_CAREFULLY", "Economics incomplete", "model unsupported",
+                -100L, null, 260L, -0.5, false,
+                List.of("The realized-volatility EV lane is unavailable for this multi-expiration structure."));
+        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, unsupported, 50.0));
+
+        assertThat(AutoRecommender.noFavorableNote(rows, true))
+                .contains("available after-cost economic checks")
+                .doesNotContain("daily closes");
+    }
+
+    @Test
+    void mechanicalRefusalsAreNotMisreportedAsEconomicOrHistoryVerdicts() {
+        var blocked = new io.liftandshift.strikebench.eval.EconomicAssessment(
+                io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE,
+                "MECHANICALLY_INELIGIBLE", "Cannot assess as a trade", "mechanical failure",
+                -100L, null, 260L, -0.5, true, List.of("book is not executable"));
+        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, blocked, 50.0));
+
+        assertThat(AutoRecommender.noFavorableNote(rows, true))
+                .contains("every candidate failed a mechanical or account check")
+                .contains("not an economic verdict")
+                .doesNotContain("daily closes");
+    }
+
+    @Test
     void explicitUniverseSkipsNonOptionableWithReason() {
         AutoRecommender.AutoRequest request = new AutoRecommender.AutoRequest(
                 List.of("AAPL", "VTSAX", "ZZZZ"), null, 3, null, null, null, null,

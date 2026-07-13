@@ -97,6 +97,14 @@ public final class EvaluationService {
         return calibration.report(userId);
     }
 
+    /** Research uses the same IV-rank history and thresholds as candidate evaluation. A generated
+     * world never borrows observed IV history; its missing rank is an honest lane property. */
+    public VolatilityProfile volatilitySnapshot(String symbol, Double atmIv, Double realizedVol30,
+                                                 int daysToExpiry, String worldId) {
+        List<Double> history = worldId == null ? ivHistory(symbol) : List.of();
+        return new VolatilityProfiler().profile(atmIv, realizedVol30, history, daysToExpiry);
+    }
+
     /** One symbol's competition, across the top opportunities of a universe scan. */
     public record ScanResult(List<StrategyEvaluation> ranked, List<String> notes, int scanned) {}
 
@@ -310,7 +318,7 @@ public final class EvaluationService {
                 WHERE symbol = ? AND dataset_id = 'observed'
                   AND iv IS NOT NULL AND iv_source = 'vendor'
                   AND underlying IS NOT NULL AND abs(strike - underlying) <= underlying * 0.05
-                GROUP BY asof ORDER BY asof DESC LIMIT 90
+                GROUP BY CAST(asof AS date) ORDER BY CAST(asof AS date) DESC LIMIT 90
                 """, r -> r.dbl("iv"), symbol);
     }
 
