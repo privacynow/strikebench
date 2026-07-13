@@ -1432,4 +1432,34 @@ class ApiIntegrationTest {
                 """).statusCode()).isEqualTo(409);
         assertThat(post("/api/portfolio/accounts/" + id + "/restore", "{}").statusCode()).isEqualTo(200);
     }
+
+    @Test
+    @Order(43)
+    void trackedPortfolioCsvImportIsAtomicAndIdempotencyProtected() throws Exception {
+        String id = Json.parse(post("/api/portfolio/accounts", """
+                {"name":"Imported IRA","accountType":"ROTH_IRA","lotMethod":"FIFO"}
+                """).body()).get("id").asText();
+        HttpResponse<String> template = get("/api/portfolio/import-template.csv");
+        assertThat(template.statusCode()).isEqualTo(200);
+        assertThat(template.body()).contains("transaction_ref", "position_effect", "Opening vertical");
+
+        String csv = "transaction_ref,occurred_at,event_type,cash_effect_cents,fees_cents,tax_category,notes,leg_no,instrument,action,position_effect,symbol,option_type,strike,expiration,quantity,multiplier,price\n"
+                + "deposit-1,2026-07-01,DEPOSIT,5000000,0,,Opening cash,,,,,,,,,,,\n"
+                + "stock-1,2026-07-02,TRADE,,0,,Broker fill,0,STOCK,BUY,OPEN,AAPL,,,,10,1,250\n";
+        String boundary = "PortfolioImportBoundary";
+        String multipart = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"portfolio.csv\"\r\n"
+                + "Content-Type: text/csv\r\n\r\n" + csv + "\r\n--" + boundary + "--\r\n";
+        HttpRequest request = HttpRequest.newBuilder(URI.create(base + "/api/portfolio/accounts/" + id + "/import.csv"))
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .POST(HttpRequest.BodyPublishers.ofString(multipart)).build();
+        HttpResponse<String> imported = http.send(request, HttpResponse.BodyHandlers.ofString());
+        assertThat(imported.statusCode()).isEqualTo(201);
+        assertThat(Json.parse(imported.body()).get("transactionsWritten").asInt()).isEqualTo(2);
+        assertThat(Json.parse(get("/api/portfolio/accounts/" + id + "/summary").body()).get("positions")).hasSize(1);
+
+        HttpResponse<String> duplicate = http.send(request, HttpResponse.BodyHandlers.ofString());
+        assertThat(duplicate.statusCode()).isEqualTo(409);
+        assertThat(Json.parse(get("/api/portfolio/accounts/" + id + "/transactions?size=20").body())
+                .get("transactions")).hasSize(2);
+    }
 }

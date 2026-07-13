@@ -764,6 +764,8 @@ public final class ApiServer {
                             intParam(ctx, "year", java.time.Year.now(clock).getValue()))));
             c.routes.get("/api/portfolio/accounts/{id}/export.csv", this::portfolioCsvExport);
             c.routes.get("/api/portfolio/accounts/{id}/export.xlsx", this::portfolioWorkbookExport);
+            c.routes.get("/api/portfolio/import-template.csv", this::portfolioImportTemplate);
+            c.routes.post("/api/portfolio/accounts/{id}/import.csv", this::portfolioCsvImport);
 
             // Historical replays are Plan-owned. The report id remains readable so a Plan can
             // restore its full normalized summary plus the existing detailed replay artifact.
@@ -5631,6 +5633,28 @@ public final class ApiServer {
         ctx.header("Cache-Control", "no-store");
         ctx.contentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         ctx.result(portfolioExports.workbook(ownerId(ctx), id, year));
+    }
+
+    private void portfolioImportTemplate(Context ctx) {
+        ctx.header("Content-Disposition", "attachment; filename=StrikeBench-portfolio-import-template.csv");
+        ctx.header("Cache-Control", "no-store");
+        ctx.contentType("text/csv; charset=utf-8");
+        String h = io.liftandshift.strikebench.paper.PortfolioCsvImport.TEMPLATE_HEADER;
+        String examples = "\r\ntrade-001,2026-07-01,TRADE,,130,,Opening vertical,0,OPTION,BUY,OPEN,AAPL,CALL,250,2026-08-21,1,100,8.25"
+                + "\r\ntrade-001,2026-07-01,TRADE,,130,,Opening vertical,1,OPTION,SELL,OPEN,AAPL,CALL,260,2026-08-21,1,100,3.10"
+                + "\r\ninterest-001,2026-07-31,INTEREST,425,0,ORDINARY_INTEREST,Monthly interest,,,,,,,,,,,\r\n";
+        ctx.result((h + examples).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private void portfolioCsvImport(Context ctx) throws java.io.IOException {
+        String id = ctx.pathParam("id");
+        portfolioBooks.account(ownerId(ctx), id); // owner fence before reading user content
+        ctx.multipartConfig().maxFileSize(25, io.javalin.config.SizeUnit.MB);
+        ctx.multipartConfig().maxTotalRequestSize(26, io.javalin.config.SizeUnit.MB);
+        io.javalin.http.UploadedFile file = ctx.uploadedFile("file");
+        if (file == null) throw new IllegalArgumentException("CSV file is required");
+        ctx.status(201).json(io.liftandshift.strikebench.paper.PortfolioCsvImport.run(
+                file.content(), ownerId(ctx), id, portfolioBooks));
     }
 
     /** One honest headline: cash + share value + what closing every open trade pays now.
