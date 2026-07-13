@@ -297,6 +297,42 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'closing a chip removes only that durable plan from the open collection');
 });
 
+test('Plan stages orient both levels without hiding capabilities or stealing the journey', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const plan = await openPlan('MSFT', 'understand');
+  await page.waitForSelector('#plan-stage-understand');
+  assert.equal(await page.locator('.plan-rail button').count(), 6, 'the whole Plan remains visible');
+  assert.match(await page.textContent('.plan-stage-carry'), /MSFT.*Demo market/s,
+    'the stage names the context carried into it');
+  assert.match(await page.textContent('.plan-stage-heading'), /What is this market doing.*Understand MSFT/s,
+    'the stage states the question it answers');
+  assert.equal(await page.locator('.plan-next-action[data-recommended-next="EVIDENCE"]').count(), 1,
+    'Beginner sees one highlighted forward action from Understand');
+
+  await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
+  await page.waitForSelector('#plan-stage-evidence');
+  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id),
+    'plan-stage-title-evidence', 'a stage change moves focus to the destination heading');
+  assert.equal(await page.locator('.plan-rail [aria-current="step"]').count(), 1);
+  assert.equal(await page.locator('.plan-next-action[data-recommended-next="STRATEGY"]').count(), 1);
+
+  await page.evaluate(() => Learn.setLevel('expert'));
+  await page.waitForSelector('#plan-stage-evidence');
+  assert.equal(await page.locator('.plan-header-receipt:visible').count(), 1,
+    'Expert sees the compact Plan and context receipt');
+  assert.match(await page.textContent('.plan-header-receipt'), /Plan v\d+.*Context r\d+/s);
+  assert.match(await page.textContent('.plan-stage-carry-receipt'), /context r\d+.*plan v\d+/s);
+  assert.equal(await page.locator('.plan-rail button').count(), 6,
+    'Expert and Beginner have the same stage reachability');
+
+  await page.locator('.plan-rail button').filter({ hasText: 'Strategy' }).click();
+  await page.waitForSelector('#plan-stage-strategy');
+  assert.equal(await page.locator('.plan-tool').count(), 4,
+    'Compare, Build, Chain, and Scout stay reachable from the Plan');
+  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id),
+    'plan-stage-title-strategy');
+});
+
 test('Plan Strategy owns the ranked field, exact Builder, and chain without route handoffs', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   const plan = await openPlan('AAPL', 'strategy');
