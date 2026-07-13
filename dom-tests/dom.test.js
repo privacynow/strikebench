@@ -597,8 +597,12 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   assert.match(await page.textContent('#plan-intent-ladder'), /Name your buy price.*Buy strike.*Discount after premium.*Chance you buy/s,
     'Buy-at-a-discount leads with a strike ladder rather than a generic strategy list');
   assert.ok(await page.locator('#plan-intent-ladder .ladder-row').count() >= 2, 'multiple price rungs remain selectable');
-  const discountLabels = await page.locator('#plan-intent-ladder .ladder-row').allTextContents();
-  assert.ok(discountLabels.every(text => /Discount after premium\s+\d+(?:\.\d+)?% (?:below|above|at) now/.test(text)),
+  const discountLabels = await page.locator('#plan-intent-ladder .ladder-row').evaluateAll(rows => rows.map(row => {
+    const chip = Array.from(row.querySelectorAll('.chip')).find(item =>
+      item.querySelector('.chip-label')?.textContent.trim() === 'Discount after premium');
+    return chip ? chip.querySelector('b')?.textContent.trim() : '';
+  }));
+  assert.ok(discountLabels.every(value => /^\d+(?:\.\d+)?% (?:below|above|at) now$/.test(value)),
     'every acquire rung discloses its effective discount or premium to the current price');
   await page.waitForTimeout(300); // observe the real card-arrival animation; never disable it for screenshots
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p11-ladder-beginner.png'), fullPage: true });
@@ -1218,9 +1222,9 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
       ['AAPL', 'DIRECTIONAL', 'bullish', 30, 'AAPL upside'],
       ['QQQ', 'INCOME', 'neutral', 45, 'QQQ income'],
       ['SPY', 'ACQUIRE', 'neutral', 20, 'SPY discount'],
-      ['NVDA', 'HEDGE', 'bearish', 30, 'NVDA protection'],
+      ['AAPL', 'HEDGE', 'bearish', 45, 'AAPL protection'],
       ['TSLA', 'EXIT', 'bullish', 45, 'TSLA target'],
-      ['MSFT', 'DIRECTIONAL', 'bearish', 20, 'MSFT downside']
+      ['QQQ', 'DIRECTIONAL', 'bearish', 20, 'QQQ downside']
     ];
     const created = [];
     for (const seed of seeds) {
@@ -1495,11 +1499,13 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   await page.waitForSelector('#news-overview-card .news-tile');
   assert.ok(await page.locator('#news-overview-card .news-tile').count() >= 1,
     'latest news remains part of the market overview');
-  assert.match(await page.textContent('#news-overview-card'), /not an article summary/i);
+  assert.match(await page.textContent('#news-overview-card'), /not news about AAPL.*never become observed evidence/is,
+    'fabricated teaching catalysts cannot read as article summaries or observed news');
   // News NEVER silently vanishes — card renders with items or an honest empty state
   await openResearchTab('news');
   await page.waitForSelector('#news-card');
-  assert.match(await page.textContent('#news-card'), /News & filings/);
+  assert.match(await page.textContent('#news-card'), /Teaching catalysts — fabricated|News & filings/,
+    'the full card names generated teaching prompts differently from observed news');
   assert.ok((await page.locator('#news-card .news-tile').count()) >= 1, 'fixture headlines render');
   await page.waitForSelector('#research-evidence .evidence-badge:has-text("DEMO")');
   assert.equal(await page.locator('.quote-hero .badge:has-text("DEMO DATA")').count(), 0,
@@ -2827,7 +2833,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
     'the chart area does not create a dead middle inside the destination card');
   await page.goBack();
   await page.waitForSelector('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg', { timeout: 15000 });
-  // Card click -> provisional Plan; promotion replaces that URL and Back restores the explorer.
+  // Card click -> full Research; explicit promotion then creates a Plan. Back restores the explorer.
   const savedExplorerY = await page.evaluate(() => {
     window.scrollTo(0, 200);
     return window.scrollY;
@@ -2904,8 +2910,8 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   assert.ok(tapeHit, 'the paused ticker exposes at least one unobstructed clickable quote');
   await page.mouse.click(tapeHit.x, tapeHit.y);
   await page.waitForSelector('#plan-start');
-  assert.match(await page.evaluate(() => location.hash), /^#\/plan\/new\?symbol=/,
-    'the tape and cards share one Plan-start destination contract');
+  assert.match(await page.evaluate(() => location.hash), /^#\/research\/[A-Z0-9._-]+$/,
+    'the tape and cards share one direct full-analysis destination contract');
   // Explicit Demo owns this universe already; no hidden sector mutation is needed.
 });
 
@@ -2928,7 +2934,7 @@ test('Home keeps a partial quote batch actionable instead of leaving an empty we
     cards: document.querySelectorAll('#home-market-watch .sym-card').length,
     noQuote: document.querySelectorAll('#home-market-watch .tile-nodata').length,
     linked: Array.from(document.querySelectorAll('#home-market-watch .sym-card'))
-      .every(c => /^#\/plan\/new\?symbol=/.test(c.getAttribute('href') || ''))
+      .every(c => /^#\/research\/[A-Z0-9._-]+$/.test(c.getAttribute('href') || ''))
   }));
   assert.equal(state.cards, 8, 'the selected market determines the card count, not a partial response');
   assert.ok(state.noQuote >= 3, 'missing quotes stay visible and honest');

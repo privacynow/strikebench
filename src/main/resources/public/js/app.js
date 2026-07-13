@@ -2,6 +2,13 @@
 (function () {
   'use strict';
 
+  // The SPA owns destination resets and the one deliberate Research explorer restore.
+  // Native browser restoration races those asynchronous paints on Back and can overwrite
+  // the saved explorer position after the cards finish loading.
+  if (window.history && 'scrollRestoration' in window.history) {
+    window.history.scrollRestoration = 'manual';
+  }
+
   var App = {
     state: { serverStale: false, plans: [], planCollections: {}, activePlanId: null,
       activePlanByMarket: {}, provisionalPlansByMarket: {}, planUi: {} },
