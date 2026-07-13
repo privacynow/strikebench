@@ -926,6 +926,26 @@ test('duplicate Plan identities stay distinct across Home, desktop, mobile, and 
   await page.setViewportSize({ width: 1280, height: 720 });
 });
 
+test('Home discards stale in-memory Plans after server-side lifecycle changes', async () => {
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
+  const stale = await openPlan('TSLA', 'understand', 'DIRECTIONAL');
+  await page.evaluate(async id => {
+    const plan = await API.getFresh('/api/plans/' + id);
+    await API.post('/api/plans/' + id + '/archive', { expectedVersion: plan.version });
+    if (!PlanStore.all().some(item => item.id === id)) throw new Error('test did not preserve stale client state');
+    window.location.hash = '#/home';
+  }, stale.id);
+  await page.waitForSelector('#app[data-route="home"][data-ready="true"]');
+  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + stale.id + '"]').count(), 0,
+    'the Plan bar reconciles to server truth instead of retaining a dead tab');
+  assert.equal(await page.locator('#home-plan-library [data-plan-id="' + stale.id + '"]').count(), 0,
+    'the Home library does not resurrect the stale Plan');
+  assert.doesNotMatch(await page.textContent('.home-hero'), /Continue TSLA/,
+    'the primary continuation action is derived from the reconciled collection');
+  assert.equal(await page.evaluate(id => PlanStore.all().some(item => item.id === id), stale.id), false,
+    'the stale Plan is removed from the in-memory collection as well as the DOM');
+});
+
 test('Plan Decide freezes one server-owned package and opens the linked paper position atomically', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   const plan = await openPlan('AAPL', 'strategy');

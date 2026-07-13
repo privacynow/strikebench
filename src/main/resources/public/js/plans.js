@@ -101,7 +101,9 @@
         grouped[key] = grouped[key] || [];
         grouped[key].push(plan);
       });
-      Object.keys(grouped).forEach(function (key) { collections[key] = grouped[key]; });
+      // The all-market response is authoritative. Replacing the map also removes Plans
+      // archived or deleted while this tab was disconnected or the server restarted.
+      collections = grouped;
       syncCurrent(currentMarketKey());
       return libraryItems.slice();
     }).finally(function () { libraryLoading = null; });
