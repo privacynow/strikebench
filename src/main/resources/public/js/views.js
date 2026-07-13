@@ -1258,20 +1258,23 @@
           function buildBtn(type) {
             return el('button', { class: 'btn btn-sm btn-secondary chain-build', title: 'Start a build with this ' + type.toLowerCase() + ' leg in the strategy builder',
               onclick: function () {
+                var button = this;
                 var seed = { symbol: symbol, qty: 1,
                   goal: embedded.plan && embedded.plan.intent || 'BROWSE', templateKey: null,
                   step: 4, legIdx: 0,
                   legs: [{ action: 'BUY', type: type, strike: String(k), expiration: select.value, ratio: 1 }], excluded: {} };
                 if (typeof embedded.onBuildLeg === 'function') embedded.onBuildLeg(seed);
                 else {
-                  startPlan({ symbol: symbol, intent: seed.goal }, 'STRATEGY').then(function (plan) {
-                    if (!plan) return;
-                    var planUi = PlanStore.ui(plan.id);
-                    planUi.strategyView = 'builder';
-                    planUi.buildState = planUi.buildState || {};
-                    planUi.buildState.builderForm = seed;
-                    App.render();
-                  });
+                  visibleCommand(button, function () {
+                    return startPlan({ symbol: symbol, intent: seed.goal }, 'STRATEGY').then(function (plan) {
+                      if (!plan) return;
+                      var planUi = PlanStore.ui(plan.id);
+                      planUi.strategyView = 'builder';
+                      planUi.buildState = planUi.buildState || {};
+                      planUi.buildState.builderForm = seed;
+                      App.render();
+                    });
+                  }, 'This contract could not be added to a Plan.');
                 }
               }, 'aria-label': 'Start a custom package with this ' + type.toLowerCase() }, 'Add');
           }
@@ -2290,7 +2293,8 @@
     var symbol = symbolForTicket || App.context.symbol();
     return el('div', { class: 'btn-row candidate-workflow-actions' },
       el('button', { class: 'btn', onclick: function () {
-        openCandidateAsPlan(c, symbol).catch(function (e) { UI.toast(e.message, 'error'); });
+        visibleCommand(this, function () { return openCandidateAsPlan(c, symbol); },
+          'This package could not be saved to a Plan.');
       } }, beginner ? 'Use this in a Plan' : 'Continue with this package'));
   }
 
@@ -2555,7 +2559,7 @@
             detailRow.style.display = open ? 'none' : '';
             this.setAttribute('aria-expanded', String(!open));
             if (!open && !detailRow.firstChild.firstChild) {
-              detailRow.firstChild.appendChild(candidateCard(c, true));
+              detailRow.firstChild.appendChild(candidateCard(c, options.withUse !== false));
             }
           }
         }, COLS.map(function (col) { return el('td', {}, col.render(c)); }).concat([
@@ -3207,7 +3211,7 @@
             i === reference ? el('span', { class: 'badge badge-dim' }, target ? 'CLOSEST TO YOUR TARGET' : 'MIDDLE RUNG') : null,
             ladderEconomicsBadge(c)),
           el('div', { class: 'chip-row' }, facts(c)), button,
-          UI.expandable('See exact contracts and risk', function () { return candidateCard(c, true, planRef.plan.symbol); })));
+          UI.expandable('See exact contracts and risk', function () { return candidateCard(c, false, planRef.plan.symbol); })));
       });
       wrap.appendChild(list);
     } else {
@@ -3261,6 +3265,7 @@
     }
     if (Learn.currentLevel() === 'expert') {
       var tableCard = comparisonTable(candidates, {
+        withUse: false,
         actionLabel: function (c) { return c.selected ? 'Selected' : 'Select'; },
         actionDisabled: function (c) { return !!c.selected; },
         onAction: function (c, button) {
@@ -4619,7 +4624,10 @@
         var symbol = evaluation.symbol || (evaluation.spec && evaluation.spec.symbol) || candidate.symbol || '\u2014';
         var economics = evaluation.economics || {};
         var button = el('button', { type: 'button', class: 'btn btn-sm' }, 'Review in Plan');
-        button.onclick = function () { button.disabled = true; openOptimizationPlan(allocation, form).catch(function (e) { button.disabled = false; UI.toast(e.message, 'error'); }); };
+        button.onclick = function () {
+          visibleCommand(button, function () { return openOptimizationPlan(allocation, form); },
+            'This allocation could not be opened in a Plan.');
+        };
         return el('tr', {}, el('td', {}, symbol),
           el('td', {}, candidate.displayName || evaluation.family || '\u2014'),
           el('td', {}, economics.label || economics.verdict || 'Unavailable'), el('td', {}, String(allocation.units)),
@@ -4634,7 +4642,10 @@
         var symbol = evaluation.symbol || (evaluation.spec && evaluation.spec.symbol) || candidate.symbol || '\u2014';
         var economics = evaluation.economics || {};
         var button = el('button', { type: 'button', class: 'btn btn-sm' }, 'Review in a new Plan');
-        button.onclick = function () { button.disabled = true; openOptimizationPlan(allocation, form).catch(function (e) { button.disabled = false; UI.toast(e.message, 'error'); }); };
+        button.onclick = function () {
+          visibleCommand(button, function () { return openOptimizationPlan(allocation, form); },
+            'This allocation could not be opened in a Plan.');
+        };
         return el('article', { class: 'card portfolio-allocation-card' },
           el('div', { class: 'plan-book-head' }, el('div', {}, el('div', { class: 'eyebrow' }, 'ALLOCATION DRAFT'),
             el('h3', {}, symbol)),
@@ -5057,7 +5068,9 @@
                 pv.gainPct !== null && pv.gainPct !== undefined && pv.gainPct >= 5 && pv.freeShares >= 100
                   ? el('button', {
                       class: 'btn btn-sm', onclick: function () {
-                        startPlan({ intent: 'EXIT', symbol: pv.symbol }, 'STRATEGY');
+                        visibleCommand(this, function () {
+                          return startPlan({ intent: 'EXIT', symbol: pv.symbol }, 'STRATEGY');
+                        }, 'A sell-at-a-target Plan could not be opened.');
                       }
                     }, 'Sell at a target\u2026') : null,
                 el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { stockOrderModal('buy', pv.symbol); } }, 'Buy'),

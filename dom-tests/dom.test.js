@@ -744,6 +744,10 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
     'every acquire rung discloses its effective discount or premium to the current price');
   await page.waitForTimeout(300); // observe the real card-arrival animation; never disable it for screenshots
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p11-ladder-beginner.png'), fullPage: true });
+  const firstLadderDetail = page.locator('#plan-intent-ladder .ladder-row').first();
+  await firstLadderDetail.locator('.xp-head').click();
+  assert.equal(await firstLadderDetail.locator('.candidate-workflow-actions').count(), 0,
+    'a package already inside a Plan never offers a second Use-this-in-a-Plan path');
   await page.locator('#plan-intent-ladder .ladder-row .btn:has-text("Select this rung")').first().click();
   await page.waitForSelector('#plan-intent-ladder .ladder-row.selected');
   assert.equal(await page.locator('#plan-intent-ladder .ladder-row.selected').count(), 1,
@@ -3595,8 +3599,24 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(__dirname, 'shots/portfolio-construct-beginner.png'), fullPage: true });
-  await page.locator('.portfolio-allocation-card button:has-text("Review in a new Plan")').first().click();
+  let pendingPlanPosts = 0;
+  const delayPlanCreate = async route => {
+    if (route.request().method() === 'POST') {
+      pendingPlanPosts++;
+      await new Promise(resolve => setTimeout(resolve, 400));
+    }
+    await route.continue();
+  };
+  await page.route('**/api/plans', delayPlanCreate);
+  const reviewPlan = page.locator('.portfolio-allocation-card button:has-text("Review in a new Plan")').first();
+  await reviewPlan.click();
+  assert.equal(await reviewPlan.isDisabled(), true, 'Plan creation disables its initiating command immediately');
+  assert.equal(await reviewPlan.getAttribute('aria-busy'), 'true', 'Plan creation exposes a pending state');
+  await reviewPlan.evaluate(button => button.click());
   await page.waitForSelector('.plan-selected-structure', { timeout: 15000 });
+  await page.unroute('**/api/plans', delayPlanCreate);
+  assert.equal(pendingPlanPosts, 1,
+    'a second click during the pending state cannot double-submit Plan creation or custom strategy save');
   assert.equal(await page.locator('#app[data-route="plan"]').count(), 1, 'allocation opens in the canonical Plan journey');
   assert.match(await page.textContent('.plan-selected-structure'), /Selected structure|PLAN OWNED/,
     'the exact optimizer package survives the handoff');
