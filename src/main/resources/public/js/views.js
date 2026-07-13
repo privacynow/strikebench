@@ -1251,7 +1251,8 @@
       var chainCard = el('div', { class: 'card' },
         UI.cardHeader('Option chain', toggle),
         explain('Each row is one strike: calls on the left, puts on the right. Green-tinted cells are in the money; the highlighted row is closest to the current price.'),
-        el('div', { class: 'btn-row', style: 'margin-top:0' }, el('label', { class: 'muted' }, 'Expiration '), select),
+        el('div', { class: 'btn-row', style: 'margin-top:0' },
+          el('label', { class: 'muted', for: 'expiration-select' }, 'Expiration '), select),
         chainBody);
       chainAnchor.replaceWith(chainCard);
 
@@ -2799,7 +2800,7 @@
         PlanStore.focus(plan, 'STRATEGY').catch(function (e) { UI.toast(e.message, 'error'); });
       } }, 'Choose structure or option type') : null;
     function planField(label, input) {
-      return el('div', { class: 'field' }, el('label', {}, label), input);
+      return UI.field(label, input);
     }
     return el('section', { class: 'plan-context-editor card', id: 'plan-context-editor', hidden: '' },
       UI.cardHeader('Edit this Plan'),
@@ -3399,9 +3400,14 @@
     modes.forEach(function (mode) {
       selector.appendChild(el('button', { type: 'button', role: 'tab',
         class: 'plan-tool' + (ui.strategyView === mode.key ? ' active' : ''),
+        'data-strategy-tool': mode.key,
         'aria-selected': ui.strategyView === mode.key ? 'true' : 'false',
         onclick: function () { ui.strategyView = mode.key; paint().catch(function (e) { UI.toast(e.message, 'error'); }); }
       }, icon(mode.icon), el('span', {}, el('b', {}, mode.label), el('small', {}, mode.note))));
+    });
+    UI.bindTabList(selector, function (button) {
+      ui.strategyView = button.getAttribute('data-strategy-tool');
+      paint().then(function () { button.focus(); }).catch(function (e) { UI.toast(e.message, 'error'); });
     });
 
     async function paint() {
@@ -3410,6 +3416,7 @@
         button.classList.toggle('active', active);
         button.setAttribute('aria-selected', String(active));
       });
+      selector.syncTabs();
       body.innerHTML = '';
       if (ui.strategyView === 'builder') {
         body.appendChild(el('div', { class: 'plan-tool-intro' },
@@ -3474,10 +3481,18 @@
         var scopeRow = el('div', { class: 'segmented plan-scout-scopes', role: 'tablist', 'aria-label': 'Scout job' });
         scoutScopes.forEach(function (scope) {
           scopeRow.appendChild(el('button', { type: 'button', role: 'tab',
+            'data-scout-scope': scope.key,
             class: ui.scoutScope === scope.key ? 'active' : '',
             'aria-selected': String(ui.scoutScope === scope.key), onclick: function () {
               ui.scoutScope = scope.key; paint().catch(function (e) { UI.toast(e.message, 'error'); });
             } }, scope.label));
+        });
+        UI.bindTabList(scopeRow, function (button) {
+          ui.scoutScope = button.getAttribute('data-scout-scope');
+          paint().then(function () {
+            var selectedScope = body.querySelector('[data-scout-scope="' + ui.scoutScope + '"]');
+            if (selectedScope) selectedScope.focus();
+          }).catch(function (e) { UI.toast(e.message, 'error'); });
         });
         var scopeMeta = scoutScopes.find(function (scope) { return scope.key === ui.scoutScope; });
         var scoutHead = el('div', { class: 'card plan-scout-head' },
@@ -4006,16 +4021,16 @@
       var today = new Date();
       var toDefault = today.toISOString().slice(0, 10);
       var fromDefault = new Date(today.getTime() - 365 * 86400000).toISOString().slice(0, 10);
-      var from = el('input', { type: 'date', value: form.from || fromDefault });
-      var to = el('input', { type: 'date', value: form.to || toDefault });
-      var engine = el('select', {}, el('option', { value: 'single' }, 'One trade at a time'),
+      var from = el('input', { id: 'plan-replay-from', type: 'date', value: form.from || fromDefault });
+      var to = el('input', { id: 'plan-replay-to', type: 'date', value: form.to || toDefault });
+      var engine = el('select', { id: 'plan-replay-engine' }, el('option', { value: 'single' }, 'One trade at a time'),
         el('option', { value: 'portfolio' }, 'A book of overlapping trades'));
       engine.value = form.engine || 'single';
-      var dte = el('input', { type: 'number', min: '1', max: '365', value: form.targetDte || planRef.plan.context.horizonDays || 30 });
-      var qty = el('input', { type: 'number', min: '1', max: '100', value: form.qty || 1 });
-      var every = el('input', { type: 'number', min: '1', max: '60', value: form.entryEveryDays || 5 });
-      var cash = el('input', { type: 'number', min: '1', step: '1000', value: form.startingCash || 100000 });
-      var slip = el('input', { type: 'number', min: '0', max: '10', step: '0.1', value: form.slippagePct == null ? 0.5 : form.slippagePct });
+      var dte = el('input', { id: 'plan-replay-dte', type: 'number', min: '1', max: '365', value: form.targetDte || planRef.plan.context.horizonDays || 30 });
+      var qty = el('input', { id: 'plan-replay-qty', type: 'number', min: '1', max: '100', value: form.qty || 1 });
+      var every = el('input', { id: 'plan-replay-spacing', type: 'number', min: '1', max: '60', value: form.entryEveryDays || 5 });
+      var cash = el('input', { id: 'plan-replay-cash', type: 'number', min: '1', step: '1000', value: form.startingCash || 100000 });
+      var slip = el('input', { id: 'plan-replay-slippage', type: 'number', min: '0', max: '10', step: '0.1', value: form.slippagePct == null ? 0.5 : form.slippagePct });
       function rememberForm() {
         form.from=from.value; form.to=to.value; form.engine=engine.value; form.targetDte=dte.value;
         form.qty=qty.value; form.entryEveryDays=every.value; form.startingCash=cash.value; form.slippagePct=slip.value;
@@ -4076,15 +4091,15 @@
           el('div', {}, el('span', { class: 'muted small' }, 'Quick range'), rangePresets),
           el('div', {}, el('span', { class: 'muted small' }, 'Common expiry window'), dtePresets)),
         el('div', { class: 'form-grid' },
-          el('div', { class: 'field' }, el('label', {}, 'From'), from),
-          el('div', { class: 'field' }, el('label', {}, 'To'), to),
-          el('div', { class: 'field' }, el('label', {}, 'Target DTE', UI.info('dte')), dte),
-          el('div', { class: 'field' }, el('label', {}, 'Replay engine'), engine)),
+          UI.field('From', from),
+          UI.field('To', to),
+          UI.field(['Target DTE', UI.info('dte')], dte),
+          UI.field('Replay engine', engine)),
         UI.expandable('Replay controls', function () { return el('div', { class: 'form-grid' },
-          el('div', { class: 'field' }, el('label', {}, 'Contracts per entry'), qty),
-          el('div', { class: 'field' }, el('label', {}, 'Enter every N sessions'), every),
-          el('div', { class: 'field' }, el('label', {}, 'Starting capital $'), cash),
-          el('div', { class: 'field' }, el('label', {}, 'Extra slippage per leg %'), slip)); }),
+          UI.field('Contracts per entry', qty),
+          UI.field('Enter every N sessions', every),
+          UI.field('Starting capital $', cash),
+          UI.field('Extra slippage per leg %', slip)); }),
         el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', onclick: async function () {
           this.disabled=true; this.setAttribute('aria-busy','true'); results.innerHTML=''; results.appendChild(UI.spinner('Replaying without look-ahead…'));
           try {
@@ -4528,8 +4543,8 @@
         explain(side === 'buy'
           ? 'Fills at the current ask. Owning 100+ shares unlocks covered calls (income, selling at a target) and protective puts.'
           : 'Fills at the current bid. Shares locked under an open covered call or collar cannot be sold until that trade closes.'),
-        el('div', { class: 'field' }, el('label', {}, 'Symbol'), symInput),
-        el('div', { class: 'field', style: 'margin-top:8px' }, el('label', {}, 'Shares'), qty),
+        UI.field('Symbol', symInput),
+        UI.field('Shares', qty, { className: 'stock-order-shares' }),
         preview),
       side === 'buy' ? 'Buy' : 'Sell',
       async function () {
@@ -4672,7 +4687,7 @@
     var maxSymbol = el('input', { id: 'portfolio-max-symbol-pct', type: 'number', min: '5', max: '100', step: '5', value: form.maxSymbolPct });
     var maxPer = el('input', { id: 'portfolio-max-position', type: 'number', min: '0', step: '100', value: form.maxPerPosition, placeholder: '25% default' });
     var diagnostic = el('input', { id: 'portfolio-diagnostics', type: 'checkbox', checked: form.diagnostic ? '' : null });
-    function field(label, node) { return el('div', { class: 'field' }, el('label', {}, label), node); }
+    function field(label, node) { return UI.field(label, node); }
     var primary = el('div', { class: 'form-grid portfolio-construct-primary' }, field('Capital to allocate ($)', budget), field('Ideas from', scope), field('Goal', goal), field('Market view', thesis), field('Horizon', horizon));
     var advancedBody = el('div', { class: 'portfolio-construct-advanced' },
       el('div', { class: 'form-grid' }, field('Rank by', objective), field('Maximum positions', maxPositions),
@@ -4907,13 +4922,11 @@
         var rc = {};
         try { rc = await API.get('/api/account/risk-context'); } catch (e) { /* form still renders */ }
         function fld(id, label, val) {
-          return el('div', { class: 'field' }, el('label', {}, label),
+          return UI.field(label,
             el('input', { type: 'number', id: id, step: '100', value: val != null ? Math.round(val / 100) : '' }));
         }
         function fldInfo(id, label, val, termKey) {
-          var lbl = el('label', {}, label);
-          lbl.appendChild(UI.info(termKey));
-          return el('div', { class: 'field' }, lbl,
+          return UI.field([label, UI.info(termKey)],
             el('input', { type: 'number', id: id, step: '100', value: val != null ? Math.round(val / 100) : '' }));
         }
         var grid = el('div', { class: 'form-grid' },
@@ -4944,7 +4957,7 @@
         UI.cardHeader('Reset account'),
         explain('Resetting voids open practice trades, removes ALL share holdings, and sets cash to the amount below. History stays in the ledger and audit log.'),
         el('div', { class: 'btn-row' },
-          el('label', { class: 'muted' }, 'Starting cash ($) '), cashInput,
+          el('label', { class: 'muted', for: 'reset-cash' }, 'Starting cash ($) '), cashInput,
           el('button', {
             class: 'btn btn-danger', id: 'reset-btn', onclick: function () {
               var cents = Math.round(parseFloat(cashInput.value || '0') * 100);
@@ -5083,8 +5096,9 @@
         onclick: function () { App.navigate('#/portfolio/active'); } }, 'Active'),
       el('button', { class: tab === 'closed' ? 'active' : '', id: 'tab-closed', type: 'button',
         onclick: function () { App.navigate('#/portfolio/closed'); } }, 'Closed'));
-    var fSym = el('input', { type: 'text', id: 'pf-symbol', placeholder: 'symbol', style: 'max-width:110px' });
-    var fIntent = el('select', { id: 'pf-intent', style: 'max-width:170px' },
+    var fSym = el('input', { type: 'text', id: 'pf-symbol', placeholder: 'symbol',
+      'aria-label': 'Filter positions by symbol', style: 'max-width:110px' });
+    var fIntent = el('select', { id: 'pf-intent', 'aria-label': 'Filter positions by goal', style: 'max-width:170px' },
       [el('option', { value: '' }, 'any goal')].concat((Learn.INTENTS || []).map(function (i) {
         return el('option', { value: i.key }, i.label);
       })));
@@ -5105,8 +5119,7 @@
       var box = el('div', {});
       box.appendChild(explain('Enter the exact contracts and your ACTUAL net fill. The trade is tracked, marked and judged like any other — but your practice cash is never touched, and its outcome feeds Your record.'));
       function externalField(label, input, hint) {
-        return el('div', { class: 'field' }, el('label', {}, label), input,
-          hint ? el('span', { class: 'muted small' }, hint) : null);
+        return UI.field(label, input, { hint: hint });
       }
       var sym = el('input', { type: 'text', id: 'ext-symbol', list: 'universe-symbols', placeholder: 'AAPL' });
       var qty = el('input', { type: 'number', id: 'ext-qty', min: '1', max: '100', value: '1' });
@@ -5785,7 +5798,8 @@
     var tab = params && params[0] ? String(params[0]).toLowerCase() : 'overview';
     if (!TABS.some(function (t) { return t.key === tab; })) tab = 'overview';
     root.appendChild(el('h1', {}, 'Data center'));
-    var dataTabs = el('div', { class: 'tabs data-tabs', id: 'data-tabs', role: 'tablist' },
+    var dataTabs = el('div', { class: 'tabs data-tabs', id: 'data-tabs', role: 'tablist',
+      'aria-label': 'Data center sections' },
       TABS.map(function (t) {
         return el('button', {
           class: t.key === tab ? 'active' : '', 'data-tab': t.key, role: 'tab',
@@ -5797,6 +5811,7 @@
         }, t.label, el('span', { class: 'badge badge-ok', id: 'data-tab-badge-' + t.key,
           style: 'display:none; margin-left:6px' }));
       }));
+    UI.bindTabList(dataTabs, function (button) { App.navigate('#/data/' + button.getAttribute('data-tab')); });
     var dataTabsWrap = el('div', { class: 'data-tabs-wrap' }, dataTabs);
     function syncDataTabsEdge() {
       dataTabsWrap.classList.toggle('at-end', dataTabs.scrollLeft + dataTabs.clientWidth >= dataTabs.scrollWidth - 2);
@@ -6271,9 +6286,9 @@
         var moveIn = el('input', { type: 'number', id: 'inject-move', value: '-5', min: '-50', max: '50', step: '0.5' });
         var volIn = el('input', { type: 'number', id: 'inject-vol', value: '0', min: '-50', max: '100', step: '1' });
         var body = el('div', { class: 'form-grid' },
-          el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Symbol'), symSel),
-          el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Price shock %'), moveIn),
-          el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Volatility shift (IV points)'), volIn),
+          UI.field('Symbol', symSel, { labelClass: 'field-label' }),
+          UI.field('Price shock %', moveIn, { labelClass: 'field-label' }),
+          UI.field('Volatility shift (IV points)', volIn, { labelClass: 'field-label' }),
           el('div', { class: 'muted small', style: 'grid-column:1/-1' },
             'The shock lands immediately and is recorded in the session\u2019s event log \u2014 replays include it.'));
         UI.confirmModal('Inject a market event', body, 'Inject', async function () {
@@ -6408,9 +6423,7 @@
       }
 
       function labeled(text, node, infoKey) {
-        var lbl = el('label', { class: 'field-label' }, text);
-        if (infoKey) lbl.appendChild(UI.info(infoKey));
-        return el('div', { class: 'field' }, lbl, node);
+        return UI.field(infoKey ? [text, UI.info(infoKey)] : text, node, { labelClass: 'field-label' });
       }
 
       function renderCreator() {
@@ -6419,7 +6432,7 @@
         creator.appendChild(el('div', { class: 'muted small', style: 'margin-bottom:6px' },
           'Create a session'));
         // Scenario: story cards at both levels (the story IS the configuration).
-        var scLbl = el('label', { class: 'field-label' }, 'What kind of market?');
+        var scLbl = el('div', { class: 'field-label' }, 'What kind of market?');
         scLbl.appendChild(UI.info('scenario'));
         creator.appendChild(scLbl);
         creator.appendChild(scenarioCards());
@@ -7306,15 +7319,19 @@
       }
 
       var sectorBtn = el('button', { type: 'button', class: st.scope === 'sector' ? 'active' : '',
+        'aria-pressed': String(st.scope === 'sector'),
         onclick: function () { st.scope = 'sector'; st.symbols = defaultSymbols; symbolsInput.value = st.symbols; syncScope(); invalidatePlan(); } },
         'Current sector · ' + ((active.symbols || []).length || 0));
       var customBtn = el('button', { type: 'button', class: st.scope === 'custom' ? 'active' : '',
+        'aria-pressed': String(st.scope === 'custom'),
         onclick: function () { st.scope = 'custom'; syncScope(); invalidatePlan(); symbolsInput.focus(); } }, 'Choose symbols');
       var symbolsInput = el('input', { type: 'text', id: 'data-sync-symbols', value: st.symbols,
         placeholder: 'AAPL, MSFT, SPY', list: 'universe-symbols', oninput: function () { st.symbols = this.value; st.scope = 'custom'; syncScope(); invalidatePlan(); } });
       function syncScope() {
         sectorBtn.classList.toggle('active', st.scope === 'sector');
         customBtn.classList.toggle('active', st.scope === 'custom');
+        sectorBtn.setAttribute('aria-pressed', String(st.scope === 'sector'));
+        customBtn.setAttribute('aria-pressed', String(st.scope === 'custom'));
         symbolsInput.disabled = st.scope === 'sector';
         App.state.dataSyncForm = st;
       }
@@ -7327,16 +7344,17 @@
       var toInput = el('input', { type: 'date', id: 'data-sync-to', value: st.to || doc.latestCompletedSession || '',
         onchange: function () { st.to = this.value; App.state.dataSyncForm = st; invalidatePlan(); } });
       var scopeGrid = el('div', { class: 'form-grid data-acquire-grid' },
-        el('div', { class: 'field data-symbol-scope' }, el('label', {}, 'Stocks'),
-          el('div', { class: 'level-switch data-scope-switch' }, sectorBtn, customBtn), symbolsInput),
-        el('div', { class: 'field' }, el('label', {}, 'History window'), years),
-        level === 'expert' ? el('div', { class: 'field' }, el('label', {}, 'Exact start (optional)'), fromInput) : null,
-        level === 'expert' ? el('div', { class: 'field' }, el('label', {}, 'Through completed session'), toInput) : null);
+        el('div', { class: 'field data-symbol-scope' }, el('label', { for: 'data-sync-symbols' }, 'Stocks'),
+          el('div', { class: 'level-switch data-scope-switch', role: 'group', 'aria-label': 'Symbol scope' },
+            sectorBtn, customBtn), symbolsInput),
+        UI.field('History window', years),
+        level === 'expert' ? UI.field('Exact start (optional)', fromInput) : null,
+        level === 'expert' ? UI.field('Through completed session', toInput) : null);
       syncCard.appendChild(el('section', { class: 'data-acquire-section' }, el('h3', {}, '2. Choose coverage'), scopeGrid));
       if (level === 'beginner') syncCard.appendChild(UI.expandable('Choose exact dates (optional)', function () {
         return el('div', { class: 'form-grid grid-2' },
-          el('div', { class: 'field' }, el('label', {}, 'Start date'), fromInput),
-          el('div', { class: 'field' }, el('label', {}, 'Through completed session'), toInput));
+          UI.field('Start date', fromInput),
+          UI.field('Through completed session', toInput));
       }));
 
       var planSlot = el('div', { id: 'data-sync-plan', 'aria-live': 'polite' });
@@ -7411,10 +7429,10 @@
         uploadBtn.disabled = false;
       } }, 'Validate & import');
       var importBody = el('div', { class: 'data-import-grid' },
-        el('div', { class: 'field' }, el('label', {}, 'CSV file'), fileIn),
-        el('div', { class: 'field' }, el('label', {}, 'Symbol fallback'), csvSymbol),
-        el('div', { class: 'field' }, el('label', {}, 'Price basis', UI.info('adjustedprices')), csvBasis),
-        el('div', { class: 'field' }, el('label', {}, 'Source label'), csvLabel), uploadBtn, csvResult);
+        UI.field('CSV file', fileIn),
+        UI.field('Symbol fallback', csvSymbol),
+        UI.field(['Price basis', UI.info('adjustedprices')], csvBasis),
+        UI.field('Source label', csvLabel), uploadBtn, csvResult);
       var csvImport = UI.expandable('Import a CSV you already own', function () { return importBody; },
         { open: !eligible.length });
       csvImport.id = 'data-csv-import';
@@ -7608,7 +7626,7 @@
       function syncBlurb() { var t = choices.find(function (x) { return x.key === sel.value; }); blurb.textContent = t ? t.blurb : ''; }
       sel.addEventListener('change', syncBlurb); syncBlurb();
       resetCard.appendChild(el('div', { class: 'btn-row' },
-        el('label', { class: 'muted' }, 'What to clear '), sel,
+        el('label', { class: 'muted', for: 'dc-reset-tier' }, 'What to clear '), sel,
         el('button', { class: 'btn btn-danger', id: 'dc-reset-btn', onclick: function () {
           var tier = sel.value;
           var conf = el('input', { type: 'text', id: 'dc-reset-confirm', placeholder: 'type RESET', style: 'max-width:140px' });
@@ -7631,7 +7649,7 @@
   // ---- Shared Plan research workbench components ----
 
   function toolField(label, input) {
-    return el('div', { class: 'field' }, el('label', {}, label), input);
+    return UI.field(label, input);
   }
 
   /** A stat/fact tile (label over value), matching the tiles the recommendation pages use. */

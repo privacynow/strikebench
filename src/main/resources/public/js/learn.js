@@ -460,7 +460,9 @@
   function applyLevel(level) {
     LEVELS.forEach(function (l) { document.body.classList.toggle('lvl-' + l, l === level); });
     document.querySelectorAll('#level-switch button').forEach(function (b) {
-      b.classList.toggle('active', b.getAttribute('data-level') === level);
+      var active = b.getAttribute('data-level') === level;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-pressed', String(active));
     });
   }
 

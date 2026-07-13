@@ -491,7 +491,7 @@
         remember();
         schedulePreviewIfAny();
       });
-      return el('div', { class: 'field' }, el('label', {}, label), input);
+      return UI.field(label, input);
     }
     var schedulePreviewHook = null; // set by whichever surface renders (repaint or debounce)
     function schedulePreviewIfAny() { if (schedulePreviewHook) schedulePreviewHook(); }
@@ -924,10 +924,10 @@
                   el('span', { class: 'muted' }, 'stock legs have no strike or expiry')));
                 return;
               }
-              var expSel = el('select', { class: 'tune-exp' }, expirations.map(function (d) {
+              var expSel = el('select', { class: 'tune-exp', id: 'builder-tune-exp-' + idx }, expirations.map(function (d) {
                 return el('option', { value: d, selected: d === l.expiration ? '' : null }, d);
               }));
-              var strikeSel = el('select', { class: 'tune-strike' });
+              var strikeSel = el('select', { class: 'tune-strike', id: 'builder-tune-strike-' + idx });
               async function fillStrikes(keep) {
                 var chain = await ensureChain(st.legs[idx].expiration);
                 var ks = ((st.legs[idx].type === 'CALL' ? chain.calls : chain.puts) || [])
@@ -957,13 +957,13 @@
               box.appendChild(el('div', { class: 'tune-row' },
                 el('span', { class: 'badge ' + (l.action === 'SELL' ? 'badge-warn' : 'badge-ok') }, l.action),
                 el('b', {}, l.type),
-                el('label', { class: 'muted' }, 'strike'), strikeSel,
-                el('label', { class: 'muted' }, 'expires'), expSel));
+                el('label', { class: 'muted', for: strikeSel.id }, 'strike'), strikeSel,
+                el('label', { class: 'muted', for: expSel.id }, 'expires'), expSel));
             });
             return box;
           }),
           el('div', { class: 'form-grid', style: 'margin-top:8px' },
-            [el('div', { class: 'field' }, el('label', {}, 'Contracts (qty)'), qtyInput())].concat(limitsFields(true))),
+            [UI.field('Contracts (qty)', qtyInput())].concat(limitsFields(true))),
           exposureSizer(function () { repaint(); }),
           el('div', { class: 'btn-row', style: 'margin-top:2px' },
             el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-fit', onclick: function () { fitToLimits(fitStatus); } },
@@ -1056,8 +1056,8 @@
       }
       root.appendChild(el('div', { class: 'card' },
         el('div', { class: 'builder-bar' },
-          el('div', { class: 'field' }, el('label', {}, 'Qty'), qtyIn),
-          el('div', { class: 'field builder-bar-grow' }, el('label', {}, 'Structure'), tplSel),
+          UI.field('Qty', qtyIn),
+          UI.field('Structure', tplSel, { className: 'builder-bar-grow' }),
           el('div', { class: 'field builder-bar-end' }, el('div', { class: 'btn-row', style: 'margin:0' }, addBtn, clearBtn))),
         el('div', { class: 'builder-bar', style: 'margin-top:8px' },
           limitsFields(false),
@@ -1130,7 +1130,7 @@
 
       async function legRow(l, idx) {
         var row = el('div', { class: 'leg-row' + (st.excluded[idx] ? ' leg-off' : ''), 'data-leg': String(idx) });
-        var onToggle = el('input', { type: 'checkbox', class: 'leg-on',
+        var onToggle = el('input', { type: 'checkbox', class: 'leg-on', 'aria-label': 'Include leg ' + (idx + 1),
           title: 'Include this leg — untick to see the position without it',
           checked: st.excluded[idx] ? null : '' });
         onToggle.addEventListener('change', function () {
@@ -1138,17 +1138,18 @@
           row.classList.toggle('leg-off', !onToggle.checked);
           remember(); schedulePreview();
         });
-        var action = el('select', { class: 'leg-action' },
+        var action = el('select', { class: 'leg-action', 'aria-label': 'Leg ' + (idx + 1) + ' action' },
           el('option', { value: 'BUY', selected: l.action === 'BUY' ? '' : null }, 'Buy'),
           el('option', { value: 'SELL', selected: l.action === 'SELL' ? '' : null }, 'Sell'));
-        var type = el('select', { class: 'leg-type' },
+        var type = el('select', { class: 'leg-type', 'aria-label': 'Leg ' + (idx + 1) + ' instrument type' },
           ['CALL', 'PUT', 'STOCK'].map(function (t) {
             return el('option', { value: t, selected: l.type === t ? '' : null }, t === 'STOCK' ? '100 sh' : t.toLowerCase());
           }));
-        var exp = el('select', { class: 'leg-exp' },
+        var exp = el('select', { class: 'leg-exp', 'aria-label': 'Leg ' + (idx + 1) + ' expiration' },
           expirations.map(function (d) { return el('option', { value: d, selected: l.expiration === d ? '' : null }, d); }));
-        var strike = el('select', { class: 'leg-strike' });
-        var ratio = el('input', { class: 'leg-ratio', type: 'number', min: '1', max: '10', value: String(l.ratio || 1) });
+        var strike = el('select', { class: 'leg-strike', 'aria-label': 'Leg ' + (idx + 1) + ' strike' });
+        var ratio = el('input', { class: 'leg-ratio', type: 'number', min: '1', max: '10',
+          'aria-label': 'Leg ' + (idx + 1) + ' ratio', value: String(l.ratio || 1) });
         var mkt = el('span', { class: 'leg-mkt muted mono' }, '…');
 
         async function refreshMkt() {
