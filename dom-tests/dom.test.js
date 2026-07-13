@@ -662,6 +662,49 @@ test('Plan Builder preserves the Beginner walkthrough and Expert exact-contract 
   await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
 });
 
+test('Plan Builder loads every option leg from its own expiration and option-side book', async () => {
+  const firstExpiry = '2026-08-14';
+  const secondExpiry = '2026-09-18';
+  await page.route('**/api/research/AAPL/chain?expiration=*', async route => {
+    const expiration = new URL(route.request().url()).searchParams.get('expiration');
+    const book = expiration === firstExpiry
+      ? { calls: [{ strike: 110 }, { strike: 111 }], puts: [{ strike: 90 }, { strike: 91 }] }
+      : { calls: [{ strike: 310 }, { strike: 311 }], puts: [{ strike: 220 }, { strike: 222 }] };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(book) });
+  });
+
+  await page.evaluate(() => Learn.setLevel('expert'));
+  const plan = await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'neutral');
+  await page.evaluate(({ id, firstExpiry, secondExpiry }) => {
+    API.flushCache();
+    const ui = PlanStore.ui(id);
+    ui.strategyView = 'builder';
+    ui.buildState = { builderForm: {
+      symbol: 'AAPL', goal: 'DIRECTIONAL', qty: 1, step: 4,
+      legs: [
+        { action: 'BUY', type: 'CALL', strike: '111', expiration: firstExpiry, ratio: 1 },
+        { action: 'SELL', type: 'PUT', strike: '222', expiration: secondExpiry, ratio: 1 }
+      ]
+    } };
+    return App.render();
+  }, { id: plan.id, firstExpiry, secondExpiry });
+  await page.waitForFunction(() => document.querySelectorAll('#builder-legs .leg-row').length === 2);
+  assert.deepEqual(await page.locator('#builder-legs .leg-row[data-leg="0"] .leg-strike option')
+    .evaluateAll(options => options.map(option => option.value)), ['110', '111'],
+  'the call leg uses the call grid from its own expiration');
+  assert.deepEqual(await page.locator('#builder-legs .leg-row[data-leg="1"] .leg-strike option')
+    .evaluateAll(options => options.map(option => option.value)), ['220', '222'],
+  'the put leg uses the put grid from its own expiration');
+
+  await page.unroute('**/api/research/AAPL/chain?expiration=*');
+  await page.evaluate(async id => {
+    const live = await PlanStore.get(id, true);
+    await API.post('/api/plans/' + id + '/archive', { expectedVersion: live.version });
+    await PlanStore.refresh();
+    Learn.setLevel('beginner');
+  }, plan.id);
+});
+
 test('Plan Builder retains synthetic exposure sizing at both experience levels', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   const plan = await openPlan('SPY', 'strategy', 'DIRECTIONAL', 'bullish');
@@ -2182,6 +2225,46 @@ test('portfolio headline: total value + P/L at current marks', async () => {
       && s.totalPnlCents === s.totalValueCents - s.startingCashCents;
   });
   assert.ok(ok, 'summary adds up');
+});
+
+test('share holdings remain a priced Plan input instead of an orphan portfolio action', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  await go('#/portfolio/positions');
+  await page.waitForSelector('#holdings-card');
+  await page.click('#buy-shares-btn');
+  await page.fill('#stock-symbol', 'AAPL');
+  await page.fill('#stock-shares', '100');
+  await page.waitForSelector('#stock-order-preview:has-text("Estimated cash outlay")', { timeout: 15000 });
+  assert.match(await page.textContent('#stock-order-preview'),
+    /Estimated cash outlay[\s\S]*Executable ask \/ share[\s\S]*Buying power after/,
+    'the money-moving share action previews executable price and account consequence');
+  await page.click('#modal-confirm');
+  await page.waitForSelector('#modal-root [role="dialog"]', { state: 'detached' });
+  await page.waitForSelector('#holdings-card tbody tr:has-text("AAPL")', { timeout: 15000 });
+  assert.match(await page.textContent('#holdings-card tbody tr:has-text("AAPL")'), /AAPL[\s\S]*100/);
+
+  const plan = await openPlan('AAPL', 'strategy', 'EXIT', 'neutral');
+  await page.waitForSelector('#plan-intent-ladder', { timeout: 30000 });
+  assert.match(await page.textContent('#plan-intent-ladder'), /Name your sale price[\s\S]*Chance you sell/,
+    'held shares feed the goal-native covered-call ladder inside the Plan');
+  const firstRung = page.locator('#plan-intent-ladder .ladder-row').first();
+  await firstRung.locator('.xp-head').click();
+  assert.match(await firstRung.textContent(), /USES 100 HELD SHARES/i,
+    'the proposed package names the collateral it consumes');
+
+  await page.evaluate(async id => {
+    const live = await PlanStore.get(id, true);
+    await API.post('/api/plans/' + id + '/archive', { expectedVersion: live.version });
+    await PlanStore.refresh();
+  }, plan.id);
+  await go('#/portfolio/positions');
+  const row = page.locator('#holdings-card tbody tr:has-text("AAPL")');
+  await row.getByRole('button', { name: 'Sell', exact: true }).click();
+  await page.waitForSelector('#stock-order-preview:has-text("Estimated proceeds")', { timeout: 15000 });
+  await page.click('#modal-confirm');
+  await page.waitForSelector('#modal-root [role="dialog"]', { state: 'detached' });
+  await page.waitForFunction(() => !Array.from(document.querySelectorAll('#holdings-card tbody tr'))
+    .some(row => /AAPL/.test(row.textContent || '')), null, { timeout: 15000 });
 });
 
 test('portfolio absorbs account: sections, ledger under Activity, guarded reset', async () => {
