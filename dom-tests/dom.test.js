@@ -496,7 +496,7 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   await page.locator('#plan-intent-ladder .ladder-row .btn:has-text("Select this rung")').first().click();
   await page.waitForSelector('.plan-selected-structure, #plan-strategy-results button:has-text("Selected for this Plan")');
 
-  await openPlan('SPY', 'strategy', 'INCOME');
+  const incomePlan = await openPlan('SPY', 'strategy', 'INCOME');
   await page.waitForSelector('#plan-income-board');
   assert.match(await page.textContent('#plan-income-board'), /Free buying power.*Shares available/s,
     'income keeps its capital-and-collateral picture');
@@ -522,6 +522,20 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   await page.locator('#plan-candidate-detail').scrollIntoViewIfNeeded();
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p14-strategy-audit-expert.png'), fullPage: false });
+  const plansBeforeExpertSelect = await page.evaluate(async () => {
+    const payload = await API.getFresh('/api/plans');
+    return Array.isArray(payload) ? payload.length : (payload.plans || []).length;
+  });
+  await expertRows.first().locator('button').filter({ hasText: /^Select$/ }).click();
+  await page.waitForSelector('#plan-strategy-results button:has-text("Selected")');
+  const plansAfterExpertSelect = await page.evaluate(async () => {
+    const payload = await API.getFresh('/api/plans');
+    return Array.isArray(payload) ? payload.length : (payload.plans || []).length;
+  });
+  assert.equal(plansAfterExpertSelect, plansBeforeExpertSelect,
+    'selecting an Expert ranked row updates this Plan and never creates a duplicate Plan');
+  assert.match(await page.evaluate(() => location.hash), new RegExp('/plan/' + incomePlan.id + '/strategy$'),
+    'the ranked-row action remains inside the current Plan');
 });
 
 test('Plan Builder preserves the Beginner walkthrough and Expert exact-contract terminal', async () => {
