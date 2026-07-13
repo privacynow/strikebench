@@ -512,9 +512,21 @@ body.lvl-expert .not-expert { display: none !important; }
   border-bottom: 1px solid var(--border); font-size: 13.5px;
 }
 .status-item:last-child { border-bottom: none; }
-.sim-session-row { padding: 10px 12px; border: 1px solid var(--border); align-items: center; }
+.sim-session-row {
+  display: grid; grid-template-columns: minmax(260px, 1fr) auto; align-items: center; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--border);
+}
+.sim-session-summary {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-width: 0; width: 100%;
+  padding: 4px; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit;
+  font: inherit; text-align: left; cursor: pointer;
+}
+.sim-session-summary:disabled { cursor: default; opacity: 1; }
+.sim-session-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sim-session-meta { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+.sim-session-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
 .sim-session-row.clickable:hover,
-.sim-session-row.clickable:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
+.sim-session-row:has(.sim-session-summary:focus-visible) { border-color: var(--accent); background: var(--accent-soft); }
 
 .empty { text-align: center; padding: 40px 16px; }
 #trades-card.is-empty .empty { padding: 24px 16px 20px; }
@@ -565,6 +577,8 @@ body.lvl-expert .not-expert { display: none !important; }
 .bottom-nav { display: none; }
 
 @media (max-width: 640px) {
+  .sim-session-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .sim-session-actions { justify-content: flex-start; }
   .nav { display: none; }
   .topbar { gap: 6px 10px; }
   .topbar-controls { gap: 6px 8px; }
