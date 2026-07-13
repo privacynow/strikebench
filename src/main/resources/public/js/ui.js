@@ -954,6 +954,7 @@
     check: '<path d="M5 12.5l4.2 4.2L19 7"/>',
     info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/>',
     magnifier: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4L21 21"/>',
+    archive: '<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><path d="M10 13h4"/>',
     'chevron-right': '<path d="M9 5l7 7-7 7"/>'
   };
   function icon(name, size) {

@@ -399,6 +399,21 @@
     return updated;
   }
 
+  async function archive(plan) {
+    var wasActive = App.state.activePlanId === plan.id;
+    var updated = replace(await API.post('/api/plans/' + plan.id + '/archive', {
+      expectedVersion: plan.version
+    }));
+    await library(true);
+    if (wasActive) {
+      App.state.activePlanId = items.length ? items[0].id : null;
+      App.state.activePlanByMarket[currentMarketKey()] = App.state.activePlanId;
+      syncCurrent(currentMarketKey());
+    }
+    if (window.Workspace) Workspace.save();
+    return updated;
+  }
+
   async function marketChanged() {
     if (!initialized) return;
     await load(true);
@@ -504,6 +519,7 @@
     tradeDecision: tradeDecision, cashDecision: cashDecision,
     latestManagement: latestManagement, manage: manage, reviewCash: reviewCash,
     marketChanged: marketChanged, renderBar: renderBar, ui: ui, matching: matching, identity: identity,
+    archive: archive,
     all: function () { return items.slice(); }, allMarkets: function () { return libraryItems.slice(); },
     currentMarketKey: currentMarketKey, marketKey: planMarketKey,
     libraryLoaded: function () { return libraryLoaded; }

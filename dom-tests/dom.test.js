@@ -244,6 +244,8 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   assert.equal(await page.locator('.plan-rail li').count(), 6, 'the full six-stage journey appears after Plan creation');
   assert.equal(await page.locator('.plan-rail li').last().locator('button').isDisabled(), true,
     'Manage & Review is gated before a decision');
+  assert.equal(await page.locator('#plan-archive').count(), 1,
+    'a working Plan can be archived without deleting its evidence or history');
   await page.waitForSelector('#history-card');
   assert.equal(await page.locator('#research-workspace-tabs').count(), 0,
     'the old Research-local workspace is gone; the Plan rail owns navigation');
@@ -870,6 +872,15 @@ test('duplicate Plan identities stay distinct across Home, desktop, mobile, and 
   assert.ok(restored.some(text => /NVDA.*Plan 1 of 2/.test(text)), 'first identity survives restart');
   assert.ok(restored.some(text => /NVDA.*Plan 2 of 2/.test(text)), 'second identity survives restart');
 
+  await go('#/home');
+  await page.locator('#home-plan-library [data-plan-id="' + ids.one + '"] button[aria-label^="Archive"]').click();
+  await page.waitForSelector('[role="dialog"]');
+  await page.getByRole('button', { name: 'Archive Plan' }).click();
+  await page.waitForFunction(id => !document.querySelector('#home-plan-library [data-plan-id="' + id + '"]'), ids.one);
+  await page.waitForSelector('#home-plan-library .xp-head:has-text("Archived Plans")', { timeout: 15000 });
+  assert.match(await page.textContent('#home-plan-library'), /Archived Plans \(1\)/,
+    'archiving removes clutter while retaining a read-only record');
+
   await page.evaluate(async values => {
     for (const id of [values.one, values.two]) {
       const plan = await PlanStore.get(id, true);
@@ -931,6 +942,8 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   assert.ok(frozen.decision.tradeId, 'the paper trade is linked inside the frozen decision');
 
   await page.waitForSelector('#plan-stage-manage-review .quote-hero');
+  assert.equal(await page.locator('#plan-archive').count(), 0,
+    'a Plan with an open position cannot be archived out from under management');
   assert.match(await page.textContent('#plan-stage-manage-review'), /Frozen at Decide/);
   assert.match(await page.textContent('#plan-stage-manage-review'), /Refresh marks/);
   assert.equal(await page.locator('#plan-stage-manage-review a[href^="#/trade"], #plan-stage-manage-review .plan-stage-transition').count(), 0,
