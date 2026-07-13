@@ -3,7 +3,8 @@
   'use strict';
 
   var App = {
-    state: { ticket: null, serverStale: false, plans: [], activePlanId: null, provisionalPlan: null, planUi: {},
+    state: { ticket: null, serverStale: false, plans: [], planCollections: {}, activePlanId: null,
+      activePlanByMarket: {}, provisionalPlan: null, planUi: {},
       marketContext: { symbol: null, goal: null, horizon: null, thesis: null } },
     navToken: 0,
 
@@ -1351,7 +1352,7 @@
           if (type === 'provider.cooldown' && data) showCooldownChip(data);
           if (type === 'workspace.updated' && data && window.Workspace) Workspace.onRemoteRev(data.rev);
           if (type === 'plan.updated' && window.PlanStore) {
-            PlanStore.load(true).catch(function () { /* next route retries */ });
+            PlanStore.refresh().catch(function () { /* next route retries */ });
           }
           dispatchAppEvent(type, data);
         });

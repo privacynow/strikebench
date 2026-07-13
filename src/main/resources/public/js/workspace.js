@@ -29,6 +29,8 @@
       route: window.location.hash || '#/home',
       world: (window.App && App.state.world) || null,
       activePlanId: (window.App && App.state.activePlanId) || null,
+      activePlanByMarket: (window.App && App.state.activePlanByMarket)
+        ? Object.assign({}, App.state.activePlanByMarket) : null,
       planPresentation: window.App && App.state.planUi
         ? Object.keys(App.state.planUi).reduce(function (out, id) {
             var e = App.state.planUi[id] && App.state.planUi[id].evidence;
@@ -74,6 +76,7 @@
     }
     if (s.evidencePrefill) App.state.evidencePrefill = s.evidencePrefill;
     if (s.activePlanId) App.state.activePlanId = s.activePlanId;
+    if (s.activePlanByMarket) App.state.activePlanByMarket = Object.assign({}, s.activePlanByMarket);
     Object.keys(s.planPresentation || {}).forEach(function (id) {
       App.state.planUi = App.state.planUi || {};
       var ui = App.state.planUi[id] = App.state.planUi[id] || {};
@@ -109,7 +112,8 @@
   function saveIfDirty() {
     if (!started || !window.App || !window.API) return;
     var s = snapshot();
-    var json = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId, context: s.context,
+    var json = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId,
+      activePlanByMarket: s.activePlanByMarket, context: s.context,
       planPresentation: s.planPresentation, forms: s.forms, ticket: s.ticket });
     if (json === lastSavedJson) return;
     lastSavedJson = json;
@@ -179,7 +183,8 @@
         // bump the rev and ping-pong forever between two hidden tabs. Only a genuine local
         // change after this may write again.
         var s = snapshot();
-        lastSavedJson = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId, context: s.context,
+        lastSavedJson = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId,
+          activePlanByMarket: s.activePlanByMarket, context: s.context,
           planPresentation: s.planPresentation, forms: s.forms, ticket: s.ticket });
         persistLocal(s);
         adoptedWhileHidden = true; // the DOM still shows pre-adoption state — refresh on return

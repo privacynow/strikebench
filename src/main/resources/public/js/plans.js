@@ -3,8 +3,12 @@
   'use strict';
 
   var items = [];
+  var collections = {};
+  var libraryItems = [];
+  var libraryLoaded = false;
   var initialized = false;
-  var loading = null;
+  var loadingByMarket = {};
+  var libraryLoading = null;
   var pendingFocusId = null;
 
   var STAGE_PATH = {
@@ -18,40 +22,119 @@
       world: world };
   }
 
+  function marketKey(kind, world) {
+    return String(kind || '').toUpperCase() === 'SIMULATED' ? String(world || '')
+      : String(kind || '').toUpperCase() === 'DEMO' ? 'demo' : 'observed';
+  }
+
+  function currentMarketKey() { return currentMarket().world; }
+  function planMarketKey(plan) { return marketKey(plan && plan.marketKind, plan && plan.worldId); }
+
+  function upsert(list, plan, include) {
+    var next = (list || []).filter(function (p) { return p.id !== plan.id; });
+    if (include) next.unshift(plan);
+    return next;
+  }
+
+  function syncCurrent(key) {
+    if (key !== currentMarketKey()) return;
+    items = (collections[key] || []).slice();
+    App.state.plans = items.slice();
+    App.state.planCollections = Object.assign({}, collections);
+    App.state.activePlanByMarket = App.state.activePlanByMarket || {};
+    var remembered = App.state.activePlanByMarket[key];
+    var active = items.some(function (p) { return p.id === remembered; }) ? remembered
+      : items.some(function (p) { return p.id === App.state.activePlanId; }) ? App.state.activePlanId
+      : items.length ? items[0].id : null;
+    App.state.activePlanId = active;
+    App.state.activePlanByMarket[key] = active;
+    renderBar();
+  }
+
+  function rememberActive(plan) {
+    var key = planMarketKey(plan);
+    App.state.activePlanByMarket = App.state.activePlanByMarket || {};
+    App.state.activePlanByMarket[key] = plan.id;
+    if (key === currentMarketKey()) App.state.activePlanId = plan.id;
+  }
+
   function requestId() {
     if (window.crypto && window.crypto.randomUUID) return 'plan-' + window.crypto.randomUUID();
     return 'plan-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   }
 
   function replace(plan) {
-    var i = items.findIndex(function (p) { return p.id === plan.id; });
-    if (i >= 0) items[i] = plan; else items.unshift(plan);
-    if (window.App) {
-      App.state.plans = items.slice();
-      if (!App.state.activePlanId && plan.open !== false) App.state.activePlanId = plan.id;
-    }
-    renderBar();
+    var key = planMarketKey(plan);
+    var open = plan.open !== false && plan.status !== 'ARCHIVED';
+    collections[key] = upsert(collections[key], plan, open);
+    libraryItems = upsert(libraryItems, plan, true);
+    if (open && !(App.state.activePlanByMarket || {})[key]) rememberActive(plan);
+    syncCurrent(key);
     return plan;
   }
 
   async function load(force) {
-    if (loading) return loading;
-    loading = (force ? API.getFresh('/api/plans') : API.get('/api/plans')).then(function (r) {
-      items = (r && r.plans) || [];
+    var requestedKey = currentMarketKey();
+    if (loadingByMarket[requestedKey]) return loadingByMarket[requestedKey];
+    loadingByMarket[requestedKey] = (force ? API.getFresh('/api/plans') : API.get('/api/plans')).then(function (r) {
+      var key = r && r.world ? String(r.world) : requestedKey;
+      collections[key] = ((r && r.plans) || []).filter(function (p) {
+        return p.open !== false && p.status !== 'ARCHIVED';
+      });
       initialized = true;
-      App.state.plans = items.slice();
-      if (App.state.activePlanId && !items.some(function (p) { return p.id === App.state.activePlanId; })) {
-        App.state.activePlanId = null;
-      }
-      if (!App.state.activePlanId && items.length) App.state.activePlanId = items[0].id;
-      renderBar();
-      return items;
-    }).finally(function () { loading = null; });
-    return loading;
+      syncCurrent(key);
+      return collections[key].slice();
+    }).finally(function () { delete loadingByMarket[requestedKey]; });
+    return loadingByMarket[requestedKey];
+  }
+
+  async function library(force) {
+    if (libraryLoading) return libraryLoading;
+    var path = '/api/plans?scope=all&openOnly=false';
+    libraryLoading = (force ? API.getFresh(path) : API.get(path)).then(function (r) {
+      libraryItems = (r && r.plans) || [];
+      libraryLoaded = true;
+      var grouped = {};
+      libraryItems.forEach(function (plan) {
+        if (plan.open === false || plan.status === 'ARCHIVED') return;
+        var key = planMarketKey(plan);
+        grouped[key] = grouped[key] || [];
+        grouped[key].push(plan);
+      });
+      Object.keys(grouped).forEach(function (key) { collections[key] = grouped[key]; });
+      syncCurrent(currentMarketKey());
+      return libraryItems.slice();
+    }).finally(function () { libraryLoading = null; });
+    return libraryLoading;
+  }
+
+  async function refresh() {
+    await Promise.all([load(true), library(true)]);
+    if ((window.location.hash || '#/home').startsWith('#/home') && App.render) await App.render();
+    return items.slice();
+  }
+
+  function findKnown(id) {
+    // The same Plan can appear in the current collection, a stashed collection, and the
+    // all-market library. SSE/library refreshes complete independently; an older library row
+    // must never shadow a lifecycle update just loaded for the active market.
+    var candidates = [];
+    var current = (collections[currentMarketKey()] || []).find(function (p) { return p.id === id; });
+    if (current) candidates.push(current);
+    Object.keys(collections).forEach(function (key) {
+      if (key === currentMarketKey()) return;
+      var found = (collections[key] || []).find(function (p) { return p.id === id; });
+      if (found) candidates.push(found);
+    });
+    var library = libraryItems.find(function (p) { return p.id === id; });
+    if (library) candidates.push(library);
+    return candidates.reduce(function (best, plan) {
+      return !best || Number(plan.version || 0) > Number(best.version || 0) ? plan : best;
+    }, null);
   }
 
   async function get(id, force) {
-    var found = items.find(function (p) { return p.id === id; });
+    var found = findKnown(id);
     if (found && !force) return found;
     return replace(await (force ? API.getFresh('/api/plans/' + id) : API.get('/api/plans/' + id)));
   }
@@ -59,7 +142,7 @@
   async function create(fields) {
     var body = Object.assign({ clientRequestId: requestId() }, fields || {});
     var plan = replace(await API.post('/api/plans', body));
-    App.state.activePlanId = plan.id;
+    rememberActive(plan);
     App.state.provisionalPlan = null;
     if (window.Workspace) Workspace.save();
     return plan;
@@ -87,7 +170,7 @@
   }
 
   function active() {
-    return items.find(function (p) { return p.id === App.state.activePlanId; }) || null;
+    return findKnown(App.state.activePlanId) || null;
   }
 
   function ui(planId) {
@@ -114,7 +197,12 @@
         plan = await get(plan.id, true);
       } finally { pendingFocusId = null; }
     }
-    App.state.activePlanId = plan.id;
+    if (plan.open === false && plan.status !== 'ARCHIVED') {
+      plan = replace(await API.put('/api/plans/' + plan.id + '/open', {
+        expectedVersion: plan.version, open: true
+      }));
+    } else replace(plan);
+    rememberActive(plan);
     renderBar();
     App.navigate(path(plan, stage));
     if (window.Workspace) Workspace.save();
@@ -125,7 +213,7 @@
     var updated = replace(await API.put('/api/plans/' + plan.id + '/stage', {
       expectedVersion: plan.version, stage: stage
     }));
-    App.state.activePlanId = updated.id;
+    rememberActive(updated);
     return updated;
   }
 
@@ -181,7 +269,7 @@
       clientRequestId: requestId(), candidateId: candidateId, role: role
     });
     if (out.plan) {
-      replace(out.plan); App.state.activePlanId = out.plan.id;
+      replace(out.plan); rememberActive(out.plan);
     }
     return out;
   }
@@ -271,10 +359,13 @@
     var updated = await API.put('/api/plans/' + plan.id + '/open', {
       expectedVersion: plan.version, open: false
     });
-    items = items.filter(function (p) { return p.id !== updated.id; });
-    App.state.plans = items.slice();
-    if (wasActive) App.state.activePlanId = items.length ? items[0].id : null;
-    renderBar();
+    replace(updated);
+    items = (collections[currentMarketKey()] || []).slice();
+    if (wasActive) {
+      App.state.activePlanId = items.length ? items[0].id : null;
+      App.state.activePlanByMarket[currentMarketKey()] = App.state.activePlanId;
+    }
+    syncCurrent(currentMarketKey());
     if (window.Workspace) Workspace.save();
     if (wasActive) {
       if (items.length) await focus(items[0]);
@@ -303,7 +394,8 @@
     }
     host.hidden = false;
     var inner = UI.el('div', { class: 'plan-bar-inner' });
-    inner.appendChild(UI.el('span', { class: 'plan-bar-label' }, 'Plans'));
+    var desktop = UI.el('div', { class: 'plan-bar-desktop' },
+      UI.el('span', { class: 'plan-bar-label' }, 'Plans'));
     items.forEach(function (plan) {
       var planLabel = plan.title.replace(plan.symbol + ' · ', '')
         + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' days' : '');
@@ -317,15 +409,29 @@
           onclick: function (event) {
             event.stopPropagation(); closeChip(plan).catch(function (e) { UI.toast(e.message, 'error'); });
           } }, '×'));
-      inner.appendChild(chip);
+      desktop.appendChild(chip);
     });
-    inner.appendChild(UI.el('button', { type: 'button', class: 'plan-new-btn',
+    desktop.appendChild(UI.el('button', { type: 'button', class: 'plan-new-btn',
       onclick: function () { App.navigate('#/research'); } }, '+ New plan'));
+    var picker = UI.el('select', { class: 'plan-picker', id: 'plan-picker', 'aria-label': 'Open Plan',
+      onchange: function () {
+        var plan = items.find(function (p) { return p.id === picker.value; });
+        if (plan) focus(plan).catch(function (e) { UI.toast(e.message, 'error'); });
+      } }, items.map(function (plan) {
+        return UI.el('option', { value: plan.id, selected: plan.id === App.state.activePlanId ? 'selected' : null },
+          plan.symbol + ' · ' + plan.title.replace(plan.symbol + ' · ', ''));
+      }));
+    var mobile = UI.el('div', { class: 'plan-bar-mobile' }, picker,
+      UI.el('button', { type: 'button', class: 'plan-new-btn', 'aria-label': 'Start a new Plan',
+        onclick: function () { App.navigate('#/research'); } }, '+ New'));
+    inner.appendChild(desktop);
+    inner.appendChild(mobile);
     host.appendChild(inner);
   }
 
   window.PlanStore = {
-    init: function () { return load(true); }, load: load, get: get, create: create, promote: promote,
+    init: function () { return load(true); }, load: load, refresh: refresh, library: library,
+    get: get, create: create, promote: promote,
     provisional: provisional, active: active, focus: focus, path: path, setStage: setStage,
     updateContext: updateContext, claimIntent: claimIntent, closeChip: closeChip,
     latestStrategy: latestStrategy, runStrategy: runStrategy,
@@ -338,6 +444,8 @@
     tradeDecision: tradeDecision, cashDecision: cashDecision,
     latestManagement: latestManagement, manage: manage, reviewCash: reviewCash,
     marketChanged: marketChanged, renderBar: renderBar, ui: ui,
-    all: function () { return items.slice(); }
+    all: function () { return items.slice(); }, allMarkets: function () { return libraryItems.slice(); },
+    currentMarketKey: currentMarketKey, marketKey: planMarketKey,
+    libraryLoaded: function () { return libraryLoaded; }
   };
 })();

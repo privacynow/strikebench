@@ -363,6 +363,115 @@
       statsAnchor.appendChild(alertBox('warn', 'Account unavailable right now', ['Retry from the Account screen.']));
     }
 
+    // The desk owns the complete Plan library. This is deliberately a LIGHTWEIGHT lens:
+    // Plan metadata plus one batched quote request and already-composed portfolio marks for
+    // the active market. It never runs evidence, strategy ranking, outcomes, or backtests for
+    // background Plans.
+    var planLibrary = el('section', { class: 'card home-plan-library', id: 'home-plan-library' },
+      UI.cardHeader('Plans', el('button', { type: 'button', class: 'btn btn-sm',
+        onclick: function () { App.navigate('#/research'); } }, '+ New Plan')),
+      UI.spinner('Loading your Plans…'));
+    root.appendChild(planLibrary);
+    var planLibraryFill = (async function fillPlanLibrary() {
+      var plans;
+      try { plans = await PlanStore.library(true); }
+      catch (e) {
+        planLibrary.innerHTML = '';
+        planLibrary.appendChild(UI.cardHeader('Plans'));
+        planLibrary.appendChild(alertBox('warn', 'Plan library unavailable', [e.message]));
+        return;
+      }
+      var currentKey = PlanStore.currentMarketKey();
+      var working = plans.filter(function (p) { return p.status !== 'ARCHIVED'; });
+      var archived = plans.filter(function (p) { return p.status === 'ARCHIVED'; });
+      var current = working.filter(function (p) { return PlanStore.marketKey(p) === currentKey; });
+      var elsewhere = working.filter(function (p) { return PlanStore.marketKey(p) !== currentKey; });
+      var quoteBySymbol = {};
+      var portfolioByPlan = {};
+      var sessionById = {};
+      try {
+        var symbols = Array.from(new Set(current.map(function (p) { return p.symbol; })));
+        var fills = await Promise.all([
+          symbols.length ? API.get('/api/quotes?symbols=' + symbols.join(',')) : Promise.resolve({ quotes: [] }),
+          API.getFresh('/api/plans/portfolio'),
+          plans.some(function (p) { return p.marketKind === 'SIMULATED'; })
+            ? API.get('/api/sim/market') : Promise.resolve({ sessions: [] })
+        ]);
+        (fills[0].quotes || []).forEach(function (q) { quoteBySymbol[q.symbol] = q; });
+        (fills[1].plans || []).forEach(function (row) { portfolioByPlan[row.plan.id] = row; });
+        (fills[2].sessions || []).forEach(function (session) { sessionById[session.id] = session; });
+      } catch (e2) { /* Plan navigation remains useful without decorative marks */ }
+
+      function stageName(plan) {
+        return String(plan.activeStage || 'UNDERSTAND').replaceAll('_', ' ').toLowerCase();
+      }
+      function planTile(plan) {
+        var sameMarket = PlanStore.marketKey(plan) === currentKey;
+        var terminalSession = plan.marketKind === 'SIMULATED' && sessionById[plan.worldId]
+          && sessionById[plan.worldId].status === 'FINISHED';
+        var row = portfolioByPlan[plan.id] || {};
+        var mark = row.mark;
+        var quote = sameMarket ? quoteBySymbol[plan.symbol] : null;
+        var live = mark && mark.decisionUnrealizedCents != null
+          ? el('span', { class: 'home-plan-live' }, 'Now ', pnlSpan(mark.decisionUnrealizedCents))
+          : quote ? el('span', { class: 'home-plan-live' }, fmtNum(quote.last), ' ', UI.delta(quote.last, quote.prevClose))
+          : el('span', { class: 'muted small' }, terminalSession ? 'Session finished · review its report'
+            : sameMarket ? 'Market mark unavailable' : 'Switches market when opened');
+        var prefix = plan.symbol + ' · ';
+        var displayTitle = String(plan.title || '').startsWith(prefix)
+          ? String(plan.title).slice(prefix.length) : (plan.title || planIntentLabel(plan.intent));
+        return el('article', { class: 'home-plan-tile' + (plan.id === App.state.activePlanId ? ' active' : ''),
+          'data-plan-id': plan.id },
+          el('div', { class: 'home-plan-tile-head' },
+            el('div', {}, el('div', { class: 'eyebrow' }, plan.symbol + ' · ' + planIntentLabel(plan.intent)),
+              el('h3', {}, displayTitle)),
+            el('span', { class: 'badge ' + (sameMarket ? 'badge-info' : 'badge-dim') }, planMarketLabel(plan))),
+          el('div', { class: 'home-plan-meta' },
+            chip('Stage', stageName(plan)),
+            plan.context && plan.context.horizonDays ? chip('Horizon', plan.context.horizonDays + 'd') : null,
+            plan.context && plan.context.thesis ? chip('View', plan.context.thesis) : null,
+            live),
+          el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
+            if (terminalSession) {
+              App.state.focusSimControlRoom = plan.worldId;
+              App.navigate('#/data/simulation');
+              return;
+            }
+            PlanStore.focus(plan, plan.activeStage).catch(function (e) { UI.toast(e.message, 'error'); });
+          } }, terminalSession ? 'Review session' : sameMarket
+            ? (plan.open === false ? 'Open Plan' : 'Resume Plan') : 'Switch market & open'));
+      }
+      function group(title, rows, note) {
+        if (!rows.length) return null;
+        return el('section', { class: 'home-plan-group' },
+          el('div', { class: 'home-plan-group-head' }, el('h3', {}, title),
+            note ? el('span', { class: 'muted small' }, note) : null),
+          el('div', { class: 'home-plan-grid' }, rows.map(planTile)));
+      }
+
+      planLibrary.innerHTML = '';
+      planLibrary.appendChild(UI.cardHeader('Plans',
+        el('span', { class: 'muted small' }, working.length + ' working'),
+        el('button', { type: 'button', class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, '+ New Plan')));
+      if (!working.length) {
+        planLibrary.appendChild(UI.emptyState('No working Plans yet',
+          'Choose a stock in Research, then carry one Plan through evidence, strategy, outcomes, and a decision.',
+          'Open Research', function () { App.navigate('#/research'); }));
+      } else {
+        var here = group('In this market', current, 'These Plans use the prices and account on screen now.');
+        var there = group('Other markets', elsewhere, 'Opening one switches the full market first.');
+        if (here) planLibrary.appendChild(here);
+        if (there) planLibrary.appendChild(there);
+      }
+      if (archived.length) planLibrary.appendChild(UI.expandable('Archived Plans (' + archived.length + ')', function () {
+        return el('div', { class: 'home-plan-archive' }, archived.map(function (plan) {
+          return el('div', { class: 'status-item' }, el('b', {}, plan.symbol),
+            el('span', {}, plan.title), el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)),
+            el('span', { class: 'muted small' }, 'Retained as a read-only record'));
+        }));
+      }));
+    })();
+
     var colL = el('section', { class: 'home-col home-market-slot', 'aria-label': 'Market watch' });
     var colR = el('div', { class: 'home-col home-col-side' });
     var posAnchor = el('div', { id: 'open-trades-anchor', class: 'home-wide' });
@@ -554,7 +663,7 @@
         'About StrikeBench \u00b7 take the tour')));
 
     // Wait for the fills so data-ready means READY (tests and users agree on that).
-    await Promise.all([marketsFill, tradesFill]);
+    await Promise.all([planLibraryFill, marketsFill, tradesFill]);
   }
 
   /** Under ~a day old — the window where the spread-cost note earns its keep. */
