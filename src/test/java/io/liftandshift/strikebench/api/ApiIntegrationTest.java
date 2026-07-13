@@ -1348,4 +1348,30 @@ class ApiIntegrationTest {
         JsonNode sold = Json.parse(post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}").body());
         assertThat(sold.get("sharesTraded").asLong()).isEqualTo(100);
     }
+
+    @Test
+    @Order(41)
+    void selectedRiskBudgetRequiresTheSameServerEnforcedCapitalAcknowledgment() throws Exception {
+        JsonNode research = Json.parse(get("/api/research/AAPL").body());
+        String exp = research.get("expirations").get(3).asText();
+        String cashSecuredPut = """
+                {"symbol":"AAPL","strategy":"CASH_SECURED_PUT","qty":1,"riskMode":"conservative","legs":[
+                  {"action":"SELL","type":"PUT","strike":"250","expiration":"%s","ratio":1}]}
+                """.formatted(exp);
+
+        JsonNode preview = Json.parse(post("/api/trades/preview", cashSecuredPut).body());
+        assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
+        JsonNode capitalAck = java.util.stream.StreamSupport.stream(
+                        preview.withArray("requiredAcks").spliterator(), false)
+                .filter(ack -> "ack-capital".equals(ack.path("id").asText()))
+                .findFirst().orElseThrow();
+        assertThat(capitalAck.path("label").asText())
+                .contains("theoretical worst case")
+                .contains("selected per-trade risk budget");
+        assertThat(preview.path("ackToken").asText()).isNotBlank();
+
+        HttpResponse<String> unacknowledged = post("/api/trades", cashSecuredPut);
+        assertThat(unacknowledged.statusCode()).isEqualTo(422);
+        assertThat(unacknowledged.body()).contains("ack-capital");
+    }
 }
