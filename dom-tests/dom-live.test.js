@@ -214,7 +214,7 @@ test('live: visible market controls return Demo and simulated sessions to Observ
 });
 
 test('live: research a real symbol end to end', async () => {
-  await go('#/plan/new?symbol=AAPL');
+  await go('#/research/AAPL');
   await page.waitForSelector('#plan-start', { timeout: 30000 });
   await page.waitForSelector('#research-symbol', { timeout: 30000 });
   const quoteBadge = await page.textContent('.quote-hero .badge');
@@ -231,13 +231,13 @@ test('live: research a real symbol end to end', async () => {
 });
 
 test('live: research handles unknown and non-optionable symbols gracefully', async () => {
-  await go('#/plan/new?symbol=ZZZZQQ');
+  await go('#/research/ZZZZQQ');
   await page.waitForSelector('text=/No data for ZZZZQQ/i', { timeout: 30000 }); // hero fills detached
-  await go('#/plan/new?symbol=VTSAX');
+  await go('#/research/VTSAX');
   await page.waitForSelector('text=/No data for VTSAX|no listed options/i', { timeout: 30000 });
   // A real, established stock with NO candle source (keyless: Stooq blocks bots, no
   // Polygon/AV key) must say WHY the chart is empty — never blame the window
-  await go('#/plan/new?symbol=PG');
+  await go('#/research/PG');
   await page.waitForSelector('#history-card');
   await page.waitForFunction(() => {
     const t = (document.getElementById('history-card') || {}).textContent || '';

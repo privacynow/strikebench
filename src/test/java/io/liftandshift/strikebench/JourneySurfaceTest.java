@@ -19,11 +19,14 @@ class JourneySurfaceTest {
         String app = source("js/app.js");
         String workspace = source("js/workspace.js");
 
-        for (String route : List.of("home", "research", "portfolio", "data")) {
+        for (String route : List.of("home", "research", "plans", "portfolio", "data")) {
             assertThat(html).contains("data-route=\"" + route + "\"");
         }
         assertThat(html).doesNotContain("data-route=\"trade\"");
         assertThat(views).doesNotContain("async function trade(", "trade: trade", "#/trade/");
+        assertThat(views).doesNotContain("#/plan/new", "id === 'new'");
+        assertThat(app).doesNotContain("#/plan/new");
+        assertThat(views).contains("#/research/", "researchRoute");
         assertThat(views.split("Outcomes\\.workspace\\(", -1)).hasSize(2);
         assertThat(views).contains("function planOutcomeWorkspace(config)");
         assertThat(app).doesNotContain("route === 'trade'", "marketContext", "LANE_KEYS", "_laneStash");

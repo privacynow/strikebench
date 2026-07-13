@@ -94,6 +94,28 @@ class PlanApiIntegrationTest {
         assertThat(reopenArchived.statusCode()).isEqualTo(409);
     }
 
+    @Test void researchReportsPlanEligibilityAndCreationFailsClosedForUnavailableSymbols() throws Exception {
+        JsonNode optionable = json(get("/api/research/AAPL"));
+        assertThat(optionable.get("planEligible").asBoolean()).isTrue();
+        assertThat(optionable.get("planEligibility").asText()).contains("Ready");
+
+        JsonNode stockOnly = json(get("/api/research/VTSAX"));
+        assertThat(stockOnly.get("planEligible").asBoolean()).isFalse();
+        assertThat(stockOnly.get("planEligibility").asText()).contains("no listed options");
+
+        HttpResponse<String> noOptions = post("/api/plans", """
+                {"clientRequestId":"unavailable-vtsax","symbol":"VTSAX","intent":"DIRECTIONAL"}
+                """);
+        assertThat(noOptions.statusCode()).isEqualTo(422);
+        assertThat(Json.parse(noOptions.body()).get("error").asText()).isEqualTo("plan_symbol_unavailable");
+
+        HttpResponse<String> outsideMarket = post("/api/plans", """
+                {"clientRequestId":"unavailable-unknown","symbol":"ZZZZQQ","intent":"DIRECTIONAL"}
+                """);
+        assertThat(outsideMarket.statusCode()).isEqualTo(422);
+        assertThat(Json.parse(outsideMarket.body()).get("detail").asText()).contains("not available");
+    }
+
     @Test void historicalEvidenceIsPlanOwnedExactAndInvalidatedByAContextRevision() throws Exception {
         JsonNode plan = json(post("/api/plans", """
                 {"clientRequestId":"evidence-plan-1","symbol":"AAPL","intent":"DIRECTIONAL",
@@ -490,6 +512,7 @@ class PlanApiIntegrationTest {
         JsonNode opened = json(post("/api/plans/" + tradePlanId + "/decision/trade", tradeRequest.toString()));
         assertThat(opened.at("/plan/status").asText()).isEqualTo("POSITION_OPEN");
         assertThat(opened.at("/plan/activeStage").asText()).isEqualTo("MANAGE_REVIEW");
+        assertThat(opened.at("/plan/assumptionsEditable").asBoolean()).isFalse();
         assertThat(opened.at("/decision/action").asText()).isEqualTo("TRADE");
         assertThat(opened.at("/decision/tradeId").asText()).isEqualTo(opened.at("/trade/id").asText());
         assertThat(opened.at("/decision/legs")).hasSize(candidate.withArray("legs").size());

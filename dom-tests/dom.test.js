@@ -230,7 +230,7 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
 });
 
 test('plan foundation promotes once, survives reload, versions assumptions, and closes only the chip', async () => {
-  await go('#/plan/new?symbol=AAPL');
+  await go('#/research/AAPL');
   await page.waitForSelector('#plan-start');
   await page.waitForSelector('#research-hero .quote-hero');
   assert.equal(await page.locator('.plan-rail').count(), 0,
@@ -249,6 +249,10 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   assert.match(await page.textContent('#plan-header'), /AAPL.*Earn income.*Demo market/s);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + planHash.split('/')[2] + '"]').count(), 1,
     'the promoted durable plan appears exactly once even when other plans are open');
+  assert.equal((await page.locator('#nav a.active').textContent()).trim(), 'Plans',
+    'the primary navigation names the Plan workspace while its journey is open');
+  assert.match(await page.textContent('#lane-chip'), /DEMO/,
+    'the active execution market remains visible inside every Plan stage');
   await page.waitForSelector('#research-symbol');
   assert.equal(await page.locator('.plan-rail li').count(), 6, 'the full six-stage journey appears after Plan creation');
   assert.equal(await page.locator('.plan-rail li').last().locator('button').isDisabled(), true,
@@ -260,10 +264,17 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'the old Research-local workspace is gone; the Plan rail owns navigation');
   assert.ok(await page.locator('#events-card').count(), 'Understand owns dated events');
   assert.ok(await page.locator('#news-overview-card').count(), 'Understand owns source-backed news');
+  await page.waitForFunction(() => /fabricated|No headline/i.test(document.getElementById('news-overview-card')?.textContent || ''));
+  assert.match(await page.textContent('#news-overview-card'), /Teaching catalysts.*fabricated/i,
+    'Demo headlines are explicitly teaching prompts rather than apparent company news');
+  assert.equal(await page.locator('#news-overview-card a.news-headline').count(), 0,
+    'fabricated Demo catalysts never link to an apparent external article');
 
   await page.click('#plan-edit-context');
-  assert.match(await page.textContent('#plan-context-editor'), /Goal:.*Earn income.*linked Plan/s,
-    'goal identity is visible and has an explicit fork path');
+  assert.match(await page.textContent('#plan-context-editor'), /Goal:.*Earn income.*change the goal and structure/s,
+    'a pre-decision Plan exposes editable goal, structure and assumptions');
+  assert.ok(await page.locator('#plan-change-goal').count(), 'goal edit is available before a decision');
+  assert.ok(await page.locator('#plan-change-structure').count(), 'structure and option type return through Strategy');
   await page.fill('#plan-horizon-days', '45');
   await page.selectOption('#plan-thesis', 'bearish');
   await page.click('#plan-save-context');
@@ -337,14 +348,37 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'closing a chip removes only that durable plan from the open collection');
 });
 
+test('a pre-decision Plan can change goal and returns to Strategy without forking', async () => {
+  const created = await page.evaluate(async () => {
+    const plan = await PlanStore.create({ symbol: 'SPY', intent: 'INCOME', thesis: 'neutral',
+      horizonDays: 30, riskMode: 'conservative', title: 'Editable goal check' });
+    await PlanStore.focus(plan, 'UNDERSTAND');
+    return { id: plan.id };
+  });
+  await page.waitForSelector('#plan-header');
+  await page.click('#plan-edit-context');
+  await page.click('#plan-change-goal');
+  await page.locator('.plan-fork-intents .choice-card').filter({ hasText: 'Protect my shares' }).click();
+  await page.waitForSelector('#modal-confirm');
+  assert.match(await page.textContent('#modal-root'), /marks.*stale|become stale/i,
+    'changing a goal explains the dependent-result invalidation');
+  await page.click('#modal-confirm');
+  await page.waitForFunction(id => location.hash === '#/plan/' + id + '/strategy', created.id);
+  await page.waitForSelector('#plan-strategy-body');
+  assert.match(await page.textContent('#plan-header'), /Protect my shares/i);
+  const persisted = await page.evaluate(id => API.getFresh('/api/plans/' + id), created.id);
+  assert.equal(persisted.intent, 'HEDGE');
+  assert.equal(persisted.assumptionsEditable, true);
+});
+
 test('Plan stages orient both levels without hiding capabilities or stealing the journey', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
-  const plan = await openPlan('MSFT', 'understand');
+  const plan = await openPlan('TSLA', 'understand');
   await page.waitForSelector('#plan-stage-understand');
   assert.equal(await page.locator('.plan-rail button').count(), 6, 'the whole Plan remains visible');
-  assert.match(await page.textContent('.plan-stage-carry'), /MSFT.*Demo market/s,
+  assert.match(await page.textContent('.plan-stage-carry'), /TSLA.*Demo market/s,
     'the stage names the context carried into it');
-  assert.match(await page.textContent('.plan-stage-heading'), /What is this market doing.*Understand MSFT/s,
+  assert.match(await page.textContent('.plan-stage-heading'), /What is this market doing.*Understand TSLA/s,
     'the stage states the question it answers');
   assert.equal(await page.locator('.plan-next-action[data-recommended-next="EVIDENCE"]').count(), 1,
     'Beginner sees one highlighted forward action from Understand');
@@ -524,7 +558,7 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   assert.notEqual(scoutSelectorStyle.activeBg, scoutSelectorStyle.idleBg,
     'active and idle Scout modes cannot collapse into raw browser buttons');
   assert.ok(scoutSelectorStyle.activeHeight >= 34, 'Scout mode targets remain usable');
-  await page.locator('.plan-scout-scopes button').filter({ hasText: 'Alternatives' }).click();
+  await page.locator('.plan-scout-scopes button').filter({ hasText: 'Better fits' }).click();
   await page.click('#plan-run-scout');
   await page.waitForSelector('#plan-scout-results .candidate', { timeout: 30000 });
   const scoutedSymbol = (await page.locator('#plan-scout-results .plan-scout-symbol b').first().textContent()).trim();
@@ -554,9 +588,12 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   await page.waitForSelector('#plan-intent-ladder', { timeout: 30000 }).catch(async error => {
     throw new Error('Intent ladder did not render: ' + (await page.locator('#app').textContent()) + '\n' + error.message);
   });
-  assert.match(await page.textContent('#plan-intent-ladder'), /Name your buy price.*Buy strike.*Chance you buy/s,
+  assert.match(await page.textContent('#plan-intent-ladder'), /Name your buy price.*Buy strike.*Discount after premium.*Chance you buy/s,
     'Buy-at-a-discount leads with a strike ladder rather than a generic strategy list');
   assert.ok(await page.locator('#plan-intent-ladder .ladder-row').count() >= 2, 'multiple price rungs remain selectable');
+  const discountLabels = await page.locator('#plan-intent-ladder .ladder-row').allTextContents();
+  assert.ok(discountLabels.every(text => /Discount after premium\s+\d+(?:\.\d+)?% (?:below|above|at) now/.test(text)),
+    'every acquire rung discloses its effective discount or premium to the current price');
   await page.waitForTimeout(300); // observe the real card-arrival animation; never disable it for screenshots
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p11-ladder-beginner.png'), fullPage: true });
   await page.locator('#plan-intent-ladder .ladder-row .btn:has-text("Select this rung")').first().click();
@@ -1461,10 +1498,18 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   await page.waitForSelector('.tbl tbody tr');
 });
 
-test('research VTSAX warns about missing options', async () => {
-  await openPlan('VTSAX');
-  await openResearchTab('options');
-  await page.waitForSelector('text=/no listed options/i'); // hero/actions now fill detached
+test('research keeps non-optionable funds useful without inventing an options Plan or company catalyst', async () => {
+  await go('#/research/VTSAX');
+  await page.waitForSelector('#plan-start');
+  assert.match(await page.textContent('#plan-start'), /no listed options/i);
+  assert.ok(await page.locator('#history-card').count(), 'stock history remains available without an options Plan');
+  assert.equal(await page.locator('#plan-start .choice-card:not([disabled])').count(), 0,
+    'no goal can create an unpriceable options Plan');
+  await page.waitForSelector('#news-overview-card .news-tile');
+  const prompts = await page.textContent('#news-overview-card');
+  assert.match(prompts, /scenario prompts, not news about VTSAX/i);
+  assert.doesNotMatch(prompts, /earnings call|options activity/i,
+    'fund teaching prompts cannot claim company earnings or listed-options activity');
 });
 
 test('Research entry and destination cards are purposeful, readable, and collision-free', async () => {
@@ -2747,13 +2792,13 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
     return { tag: c.tagName, href: c.getAttribute('href'), tab: c.tabIndex,
       exp: c.getAttribute('aria-expanded') };
   });
-  assert.deepEqual(cardA11y, { tag: 'A', href: '#/plan/new?symbol=AAPL', tab: 0, exp: null },
-    'card is a native link into the provisional Plan without disclosure semantics');
+  assert.deepEqual(cardA11y, { tag: 'A', href: '#/research/AAPL', tab: 0, exp: null },
+    'card is a native link into full Research without disclosure semantics');
   // Pointer movement/arrow keys explore; clicking anywhere opens full analysis before a Plan exists.
   await page.locator('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg').click();
   await page.waitForSelector('#plan-start', { timeout: 15000 });
   await page.waitForSelector('#research-hero .quote-hero', { timeout: 15000 });
-  assert.equal(await page.evaluate(() => window.location.hash), '#/plan/new?symbol=AAPL',
+  assert.equal(await page.evaluate(() => window.location.hash), '#/research/AAPL',
     'the chart area does not create a dead middle inside the destination card');
   await page.goBack();
   await page.waitForSelector('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg', { timeout: 15000 });
@@ -2798,8 +2843,8 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   if (await page.locator('#sector-grid .tile-nodata').count()) {
     await page.locator('#sector-grid .tile-nodata').first().click();
     await page.waitForSelector('#plan-start', { timeout: 15000 });
-    assert.match(await page.evaluate(() => window.location.hash), /^#\/plan\/new\?symbol=/,
-      'quote-less cards still start an honest Plan rather than becoming dead controls');
+    assert.match(await page.evaluate(() => window.location.hash), /^#\/research\//,
+      'quote-less cards still open an honest analysis rather than becoming dead controls');
     await page.goBack();
     await page.waitForSelector('#sector-grid .sector-tile', { timeout: 15000 });
   }
@@ -2814,7 +2859,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.keyboard.type('AAPL');
   await page.keyboard.press('Enter');
   await page.waitForSelector('#plan-start');
-  assert.equal(await page.evaluate(() => location.hash), '#/plan/new?symbol=AAPL');
+  assert.equal(await page.evaluate(() => location.hash), '#/research/AAPL');
 
   // Tape click-through navigates to research (hovering pauses the marquee — same as a user)
   await go('#/research');

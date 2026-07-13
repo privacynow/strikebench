@@ -114,21 +114,24 @@ class PlanServiceTest {
     }
 
     @Test
-    void optimisticVersionAndImmutableIdentityFailClosed() {
+    void intentIsEditableBeforeDecisionAndOptimisticVersionsFailClosed() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 create("req-lock", "AAPL", null, 30));
         Plan.View claimed = plans.claimIntent(null, plan.id(), new Plan.IntentRequest(plan.version(), "INCOME"));
         assertThat(claimed.intent()).isEqualTo("INCOME");
         assertThat(claimed.context().rev()).isEqualTo(2);
 
-        assertThatThrownBy(() -> plans.claimIntent(null, plan.id(),
-                new Plan.IntentRequest(claimed.version(), "HEDGE")))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("fixed");
+        Plan.View changedGoal = plans.claimIntent(null, plan.id(),
+                new Plan.IntentRequest(claimed.version(), "HEDGE"));
+        assertThat(changedGoal.intent()).isEqualTo("HEDGE");
+        assertThat(changedGoal.context().rev()).isEqualTo(3);
+        assertThat(changedGoal.activeStage()).isEqualTo(Plan.Stage.STRATEGY);
+        assertThat(changedGoal.assumptionsEditable()).isTrue();
         assertThatThrownBy(() -> plans.updateContext(null, plan.id(), new Plan.ContextUpdateRequest(
                 plan.version(), "neutral", null, null, null, null, null, null, null)))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("another tab");
         assertThatThrownBy(() -> plans.setStage(null, plan.id(),
-                new Plan.StageRequest(claimed.version(), "MANAGE_REVIEW")))
+                new Plan.StageRequest(changedGoal.version(), "MANAGE_REVIEW")))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("unlocks");
     }
 
