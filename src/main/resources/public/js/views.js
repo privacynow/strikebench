@@ -2557,7 +2557,7 @@
           onclick: function () {
             var editor = document.getElementById('plan-context-editor');
             if (editor) { editor.hidden = !editor.hidden; if (!editor.hidden) editor.querySelector('input,select').focus(); }
-          } }, 'Edit view & limits'),
+          } }, plan.assumptionsEditable === true ? 'Edit view & limits' : 'Revise this Plan'),
         plan.status === 'POSITION_OPEN' ? null : el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
           id: 'plan-archive', onclick: function () { confirmArchivePlan(plan, true); } }, icon('archive', 15), ' Archive')));
   }
@@ -2590,6 +2590,7 @@
 
   function planContextEditor(plan) {
     var c = plan.context || {};
+    var canRewriteGoal = plan.assumptionsEditable === true;
     var thesis = el('select', { id: 'plan-thesis' },
       ['', 'bullish', 'bearish', 'neutral', 'volatile'].map(function (v) {
         return el('option', { value: v, selected: (c.thesis || '') === v ? 'selected' : null }, v || 'Not set');
@@ -2601,9 +2602,28 @@
       return el('option', { value: v, selected: (c.riskMode || 'conservative') === v ? 'selected' : null },
         v === 'conservative' ? 'Cautious' : v === 'balanced' ? 'Standard' : 'High');
     }));
+    function editorValues(nextIntent) {
+      return {
+        originPlanId: plan.id, symbol: plan.symbol, intent: nextIntent,
+        thesis: thesis.value || null, horizonDays: Number(horizon.value),
+        targetCents: target.value ? Math.round(Number(target.value) * 100) : null,
+        riskMode: risk.value, holdingsShares: c.holdingsShares, costBasisCents: c.costBasisCents,
+        priceAssumptionCents: c.priceAssumptionCents
+      };
+    }
+    async function createLinkedGoal(nextIntent) {
+      var created = await PlanStore.create(editorValues(nextIntent));
+      UI.toast('Revised Plan created; the frozen decision remains unchanged.');
+      await PlanStore.focus(created, 'STRATEGY');
+      return created;
+    }
     var save = el('button', { type: 'button', class: 'btn', id: 'plan-save-context', onclick: async function () {
       save.disabled = true;
       try {
+        if (!canRewriteGoal) {
+          await createLinkedGoal(plan.intent);
+          return;
+        }
         var clears = [];
         if (!thesis.value) clears.push('thesis');
         if (!target.value) clears.push('targetCents');
@@ -2616,16 +2636,8 @@
           thesis: updated.context.thesis, horizon: updated.context.horizonDays + 'd' });
         App.render();
       } catch (e) { UI.toast(e.message, 'error'); save.disabled = false; }
-    } }, 'Save view & limits');
-    var canRewriteGoal = plan.assumptionsEditable === true;
+    } }, canRewriteGoal ? 'Save view & limits' : 'Create revised Plan');
     var goalChoices = el('div', { class: 'choice-grid plan-intent-grid plan-fork-intents', hidden: '' });
-    async function createLinkedGoal(nextIntent) {
-      var created = await PlanStore.create({ originPlanId: plan.id, symbol: plan.symbol, intent: nextIntent,
-        thesis: c.thesis, horizonDays: c.horizonDays, targetCents: c.targetCents,
-        riskMode: c.riskMode, holdingsShares: c.holdingsShares, costBasisCents: c.costBasisCents,
-        priceAssumptionCents: c.priceAssumptionCents });
-      await PlanStore.focus(created, 'STRATEGY');
-    }
     (Learn.INTENTS || []).filter(function (meta) { return meta.key !== plan.intent; }).forEach(function (meta) {
       goalChoices.appendChild(el('button', { type: 'button', class: 'choice-card', onclick: function () {
         var nextIntent = meta.key;
@@ -2657,8 +2669,9 @@
     }, 'aria-expanded': 'false' }, canRewriteGoal ? 'Change goal' : 'Start a linked revision');
     var changeStructure = canRewriteGoal ? el('button', { type: 'button', class: 'btn btn-secondary',
       id: 'plan-change-structure', onclick: function () {
+        PlanStore.ui(plan.id).strategyView = 'builder';
         PlanStore.focus(plan, 'STRATEGY').catch(function (e) { UI.toast(e.message, 'error'); });
-      } }, 'Change structure or option type') : null;
+      } }, 'Choose structure or option type') : null;
     function planField(label, input) {
       return el('div', { class: 'field' }, el('label', {}, label), input);
     }
