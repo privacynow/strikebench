@@ -289,6 +289,13 @@
     return out;
   }
 
+  async function clearCandidate(plan) {
+    var out = await API.del('/api/plans/' + encodeURIComponent(plan.id)
+      + '/strategy/selection?expectedVersion=' + encodeURIComponent(plan.version));
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
   async function saveCustom(plan, position) {
     var out = await API.post('/api/plans/' + plan.id + '/strategy/custom', {
       expectedVersion: plan.version, position: position
@@ -559,7 +566,7 @@
     provisional: provisional, currentDraft: currentDraft, active: active, focus: focus, path: path, setStage: setStage,
     updateContext: updateContext, claimIntent: claimIntent, closeChip: closeChip,
     latestStrategy: latestStrategy, runStrategy: runStrategy, fitStrategy: fitStrategy,
-    selectCandidate: selectCandidate, saveCustom: saveCustom,
+    selectCandidate: selectCandidate, clearCandidate: clearCandidate, saveCustom: saveCustom,
     latestScout: latestScout, runScout: runScout, spawnScoutedPlan: spawnScoutedPlan,
     latestOutcomes: latestOutcomes, runEnsemble: runEnsemble,
     runOutcome: runOutcome, compareOutcomes: compareOutcomes, runBacktest: runBacktest,

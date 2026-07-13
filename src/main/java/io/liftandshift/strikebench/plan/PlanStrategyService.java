@@ -214,6 +214,26 @@ public final class PlanStrategyService {
         });
     }
 
+    /** Clear the current structure while retaining the ranked field as Plan evidence. */
+    public Selection clearSelection(String userId, String planId, long expectedVersion) {
+        return db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, planId, userId);
+            CurrentPlan plan = ownedPlanOn(c, planId, userId, true);
+            if (plan.version() != expectedVersion) {
+                throw new IllegalStateException("This plan changed in another tab. Reload it before clearing the structure.");
+            }
+            boolean selected = !Db.queryOn(c, "SELECT id FROM plan_candidate WHERE plan_id=? AND context_rev=? " +
+                            "AND state='CURRENT' AND selected=1 LIMIT 1",
+                    r -> r.str("id"), planId, plan.contextRev()).isEmpty();
+            if (!selected) return new Selection(null, plan.version());
+            markSelectedPositionDependentsStale(c, planId, plan.contextRev());
+            Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?",
+                    planId, plan.contextRev());
+            Db.execOn(c, "UPDATE plans SET version=version+1,updated_at=now() WHERE id=?", planId);
+            return new Selection(null, plan.version() + 1);
+        });
+    }
+
     /** Persist one exact, server-priced Builder package and make it the Plan's selected structure. */
     public SavedRun saveCustom(String userId, Plan.View plan, JsonNode request, ObjectNode candidate,
                                long expectedVersion) {
