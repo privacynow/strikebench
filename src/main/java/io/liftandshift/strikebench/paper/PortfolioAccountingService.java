@@ -78,7 +78,7 @@ public final class PortfolioAccountingService {
 
     public record LotView(String id, String instrumentType, String side, String symbol,
                           String optionType, BigDecimal strike, LocalDate expiration,
-                          String openedAt, long originalQuantity, long remainingQuantity,
+                          int multiplier, String openedAt, long originalQuantity, long remainingQuantity,
                           long originalOpenAmountCents, long remainingOpenAmountCents,
                           String status) {}
 
@@ -118,7 +118,7 @@ public final class PortfolioAccountingService {
 
     private record LotRow(String id, String accountId, String instrumentType, String side,
                           String symbol, String optionType, BigDecimal strike, LocalDate expiration,
-                          String openedAt, long originalQuantity, long remainingQuantity,
+                          int multiplier, String openedAt, long originalQuantity, long remainingQuantity,
                           long originalOpenAmount, long remainingOpenAmount, String status) {}
 
     // ---- Accounts ----
@@ -454,9 +454,9 @@ public final class PortfolioAccountingService {
         };
         return Db.queryOn(c, "SELECT * FROM portfolio_lot WHERE portfolio_account_id=? AND status='OPEN' "
                         + "AND instrument_type=? AND side=? AND symbol=? AND option_type IS NOT DISTINCT FROM ? "
-                        + "AND strike IS NOT DISTINCT FROM ? AND expiration IS NOT DISTINCT FROM ? ORDER BY " + order + " FOR UPDATE",
+                        + "AND strike IS NOT DISTINCT FROM ? AND expiration IS NOT DISTINCT FROM ? AND multiplier=? ORDER BY " + order + " FOR UPDATE",
                 PortfolioAccountingService::mapLot, account.id(), leg.instrumentType(), side, leg.symbol(),
-                leg.optionType(), leg.strike(), leg.expiration());
+                leg.optionType(), leg.strike(), leg.expiration(), leg.multiplier());
     }
 
     private static String holdingTerm(LotRow lot, OffsetDateTime closed) {
@@ -482,11 +482,11 @@ public final class PortfolioAccountingService {
         String side = "BUY".equals(leg.action()) ? "LONG" : "SHORT";
         Db.execOn(c, "INSERT INTO portfolio_lot(id,portfolio_account_id,opening_transaction_id,opening_leg_no,"
                         + "instrument_type,side,symbol,option_type,strike,expiration,opened_at,original_quantity,"
-                        + "remaining_quantity,original_open_amount_cents,remaining_open_amount_cents,status) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN')",
+                        + "remaining_quantity,original_open_amount_cents,remaining_open_amount_cents,multiplier,status) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN')",
                 Ids.newId("plot"), accountId, txId, leg.legNo(), leg.instrumentType(), side,
                 leg.symbol(), leg.optionType(), leg.strike(), leg.expiration(), occurred,
-                leg.quantity(), leg.quantity(), amount, amount);
+                leg.quantity(), leg.quantity(), amount, amount, leg.multiplier());
     }
 
     // ---- Mapping and validation ----
@@ -596,14 +596,14 @@ public final class PortfolioAccountingService {
     private static LotRow mapLot(Db.Row r) {
         return new LotRow(r.str("id"), r.str("portfolio_account_id"), r.str("instrument_type"), r.str("side"),
                 r.str("symbol"), r.str("option_type"), r.bd("strike"), r.date("expiration"),
-                iso(r.odt("opened_at")), r.lng("original_quantity"), r.lng("remaining_quantity"),
+                r.intv("multiplier"), iso(r.odt("opened_at")), r.lng("original_quantity"), r.lng("remaining_quantity"),
                 r.lng("original_open_amount_cents"), r.lng("remaining_open_amount_cents"), r.str("status"));
     }
 
     private static LotView mapLotView(Db.Row r) {
         LotRow x = mapLot(r);
         return new LotView(x.id(), x.instrumentType(), x.side(), x.symbol(), x.optionType(), x.strike(),
-                x.expiration(), x.openedAt(), x.originalQuantity(), x.remainingQuantity(),
+                x.expiration(), x.multiplier(), x.openedAt(), x.originalQuantity(), x.remainingQuantity(),
                 x.originalOpenAmount(), x.remainingOpenAmount(), x.status());
     }
 
