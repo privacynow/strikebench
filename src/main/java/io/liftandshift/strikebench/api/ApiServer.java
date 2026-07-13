@@ -2914,10 +2914,10 @@ public final class ApiServer {
             if ("STOCK".equals(leg.path("type").asText())) {
                 price = spot.doubleValue();
             } else {
-                if (!leg.hasNonNull("strikeCents") || !leg.hasNonNull("expiration") || !leg.hasNonNull("iv")) {
+                if (!leg.hasNonNull("strikePrice") || !leg.hasNonNull("expiration") || !leg.hasNonNull("iv")) {
                     throw new IllegalStateException("The rejected package lacks a frozen strike, expiration, or IV.");
                 }
-                double strike = leg.get("strikeCents").asLong() / 100.0;
+                double strike = leg.get("strikePrice").asDouble();
                 java.time.LocalDate expiry = java.time.LocalDate.parse(leg.get("expiration").asText());
                 double years = Math.max(0, java.time.temporal.ChronoUnit.DAYS.between(horizon, expiry) / 365.0);
                 price = io.liftandshift.strikebench.pricing.BlackScholes.price(
