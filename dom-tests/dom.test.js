@@ -105,9 +105,9 @@ async function promoteEvidencePlan() {
   const state = await outcome.jsonValue();
   assert.doesNotMatch(state, /^error:/, 'promoting Research into a Plan failed visibly: ' + state);
   if (state === 'match') {
-    const createSeparate = page.locator('.plan-existing-match button').filter({ hasText: 'Create separate Plan' });
-    assert.equal(await createSeparate.count(), 1, 'a matching Plan offers one explicit separate-Plan choice');
-    await createSeparate.click();
+    assert.equal(await page.locator('.plan-existing-match button').filter({ hasText: 'Create separate Plan' }).count(), 0,
+      'an equivalent inquiry cannot manufacture a duplicate Plan from the client');
+    await page.locator('.plan-existing-match button').filter({ hasText: 'Resume this Plan' }).click();
   }
   await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/evidence$/.test(location.hash), null,
     { timeout: 15000 });
@@ -1632,6 +1632,12 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   assert.ok(intentChoices.cards.every(card => card.tag === 'BUTTON' && card.textAlign === 'left'
     && card.minHeight >= 80 && card.inside && card.visible),
   'intent choices are full pressable cards with stable geometry: ' + JSON.stringify(intentChoices));
+  await page.locator('#plan-strategy-body .plan-intent-grid .choice-card').filter({ hasText: 'Buy at a discount' }).click();
+  await page.waitForFunction(() => document.querySelector('#plan-header')?.textContent.includes('Buy at a discount')
+    && location.hash.endsWith('/strategy'));
+  assert.equal(await page.locator('.modal-overlay').count(), 0,
+    'choosing the first goal commits directly; change confirmation is reserved for a previously chosen goal');
+  assert.match(await page.textContent('#plan-header'), /Buy at a discount/);
 });
 
 test('navigation is NEVER trapped behind a slow route (Research does not block moving away)', async () => {
