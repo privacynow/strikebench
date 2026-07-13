@@ -2758,9 +2758,16 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.goBack();
   await page.waitForSelector('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg', { timeout: 15000 });
   // Card click -> provisional Plan; promotion replaces that URL and Back restores the explorer.
-  await page.evaluate(() => window.scrollTo(0, 200));
+  const savedExplorerY = await page.evaluate(() => {
+    window.scrollTo(0, 200);
+    return window.scrollY;
+  });
+  assert.ok(savedExplorerY >= 100, 'the explorer has enough real content to save a meaningful position');
   await page.locator('#sector-grid .sym-card[data-sym="AAPL"]').click();
   await page.waitForSelector('#plan-start', { timeout: 15000 });
+  const storedExplorerY = await page.evaluate(() => App.state.explorerScroll);
+  assert.ok(storedExplorerY >= 50,
+    'the destination card records the explorer position before navigation; got ' + storedExplorerY);
   await promoteEvidencePlan();
   await page.waitForSelector('#test-your-view', { timeout: 15000 });
   assert.match(await page.evaluate(() => window.location.hash), /^#\/plan\/plan_[^/]+\/evidence$/);
@@ -2779,9 +2786,10 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.waitForFunction(() => location.hash === '#/research'
     && document.getElementById('app').getAttribute('data-ready') === 'true');
   await page.waitForSelector('#sector-grid .sector-tile', { timeout: 15000 });
-  await page.waitForFunction(() => window.scrollY >= 100, { timeout: 5000 });
-  assert.ok(await page.evaluate(() => window.scrollY >= 100),
-    'Back restores the explorer\'s saved vertical position after the route-level top reset');
+  await page.waitForFunction(expected => Math.abs(window.scrollY - expected) <= 2,
+    storedExplorerY, { timeout: 5000 });
+  assert.ok(Math.abs(await page.evaluate(() => window.scrollY) - storedExplorerY) <= 2,
+    'Back restores the explorer\'s exact saved vertical position after the route-level top reset');
   const restoredSector = sectorCount >= 10 ? 'TECH' : 'world';
   assert.ok(await page.locator('#sector-chips .sector-chip[data-sector="' + restoredSector + '"].active').count(),
     'Back restores the SAME market selection');

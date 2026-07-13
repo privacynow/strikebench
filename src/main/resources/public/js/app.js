@@ -100,6 +100,18 @@
       }
     },
 
+    restoreScroll: function (value) {
+      var requested = Math.max(0, Number(value) || 0);
+      App._restoreScrollOnRender = requested;
+      function apply() {
+        if (App._restoreScrollOnRender !== requested) return;
+        if (App._scrollOnRender) { requestAnimationFrame(apply); return; }
+        App._restoreScrollOnRender = null;
+        window.scrollTo(0, requested);
+      }
+      requestAnimationFrame(apply);
+    },
+
     /** One explicit market context for every outcome engine. It asserts the active lane. */
     outcomeContext: function (symbol) {
       var world = App.state.world || (App.config && App.config.world) || 'observed';
