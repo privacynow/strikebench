@@ -366,7 +366,7 @@
     var existing = Array.prototype.slice.call(document.querySelectorAll('#scenario-banner'));
     if (cfg && cfg.scenarioMode) {
       var label = 'SCENARIO MODE — “' + (cfg.activeDatasetName || cfg.activeDataset || '')
-        + '” replaces the current market history for ITS symbol; other symbols stay on their existing lane. ';
+        + '” replaces analysis history for its symbol. Symbols outside this saved dataset have no scenario history; execution prices and accounts are unchanged. ';
       if (existing.length) {
         existing.forEach(function (b, i) { if (i === 0) b.childNodes[1].textContent = label; else b.remove(); });
         return;
@@ -377,10 +377,8 @@
       var banner = UI.el('div', { id: 'scenario-banner' },
         UI.icon('warn', 15),
         document.createTextNode(label),
-        UI.el('button', { class: 'btn btn-sm', id: 'scenario-research', onclick: function () {
-          App.navigate('#/research'); } }, 'Research'),
-        UI.el('button', { class: 'btn btn-sm', id: 'scenario-test', onclick: function () {
-          App.navigate('#/research'); } }, 'Start a Plan'),
+        UI.el('button', { class: 'btn btn-sm', id: 'scenario-plan', onclick: function () {
+          App.navigate('#/research'); } }, 'Plan this symbol'),
         UI.el('a', { href: '#/data/datasets', onclick: function () { App.navigate('#/data/datasets'); } }, 'Manage'),
         UI.el('button', { class: 'btn btn-sm btn-secondary', id: 'scenario-exit', onclick: async function () {
           try {
@@ -397,12 +395,14 @@
           var act = (ds.datasets || []).filter(function (d) { return d.id === ds.active; })[0];
           var sym = act && (act.symbol || (act.symbols && act.symbols[0]));
           if (!sym) return;
-          var rBtn = document.getElementById('scenario-research');
-          var tBtn = document.getElementById('scenario-test');
-          if (rBtn) { rBtn.textContent = 'Plan ' + sym; rBtn.onclick = function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(sym)); }; }
-          if (tBtn) { tBtn.textContent = 'Plan ' + sym; tBtn.onclick = function () {
-            App.navigate('#/plan/new?symbol=' + encodeURIComponent(sym));
-          }; }
+          var planBtn = document.getElementById('scenario-plan');
+          var currentPlan = window.PlanStore && PlanStore.active && PlanStore.active();
+          if (planBtn && currentPlan && currentPlan.symbol === sym && /^#\/plan\//.test(location.hash)) {
+            planBtn.remove();
+          } else if (planBtn) {
+            planBtn.textContent = 'Open ' + sym + ' Plan';
+            planBtn.onclick = function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(sym)); };
+          }
         } catch (e) { /* generic buttons stay */ }
       })();
     } else {

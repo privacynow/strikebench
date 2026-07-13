@@ -364,6 +364,63 @@ test('Plan stages orient both levels without hiding capabilities or stealing the
     'plan-stage-title-strategy');
 });
 
+test('Plan Evidence changes analysis history in place without changing its execution market', async () => {
+  await page.evaluate(async () => {
+    Learn.setLevel('beginner');
+    await API.put('/api/datasets/active', { id: 'observed' });
+    await App.refreshScenarioBanner();
+  });
+  const generated = await page.evaluate(async () => API.post('/api/datasets/generate', {
+    symbol: 'AAPL', spec: { model: 'GBM', shape: 'CHOP', horizonDays: 63, stepsPerDay: 4,
+      driftAnnual: 0, volAnnual: 0.25, jumpsPerYear: 0, jumpMean: 0, jumpVol: 0,
+      tailNu: 6, seed: 818181, paths: 20 }
+  }));
+  const plan = await openPlan('AAPL', 'evidence', 'DIRECTIONAL', 'bullish');
+  await page.waitForSelector('#plan-analysis-dataset');
+  const original = await page.evaluate(() => ({ hash: location.hash, world: App.state.world,
+    marketWorld: App.Market.world }));
+  assert.equal(await page.inputValue('#plan-analysis-dataset'), 'observed');
+  const beginnerOptions = await page.locator('#plan-analysis-dataset option').count();
+  assert.ok(beginnerOptions >= 2, 'Beginner can choose the same generated analysis histories');
+  assert.match(await page.textContent('#plan-analysis-source'), /never the market or account used to price this Plan/i);
+
+  await page.selectOption('#plan-analysis-dataset', generated.datasetId);
+  await page.waitForFunction(id => App.config.activeDataset === id, generated.datasetId);
+  await page.waitForSelector('#plan-analysis-dataset');
+  assert.equal(await page.inputValue('#plan-analysis-dataset'), generated.datasetId);
+  assert.equal(await page.evaluate(() => location.hash), original.hash, 'dataset selection stays inside Plan Evidence');
+  assert.deepEqual(await page.evaluate(() => ({ world: App.state.world, marketWorld: App.Market.world })),
+    { world: original.world, marketWorld: original.marketWorld },
+    'analysis history does not mutate the execution market or market store');
+  assert.equal(await page.locator('#scenario-banner').count(), 1, 'generated history is globally disclosed');
+  assert.match(await page.textContent('#scenario-banner'), /outside this saved dataset have no scenario history.*execution prices and accounts are unchanged/is,
+    'the banner describes the closed analysis dataset rather than implying a silent observed fallback');
+  await page.waitForFunction(() => !document.getElementById('scenario-plan'));
+  assert.equal(await page.locator('#scenario-banner .btn').filter({ hasText: /Plan AAPL|Open AAPL Plan/ }).count(), 0,
+    'the scenario banner does not offer a redundant Plan handoff while already inside that Plan');
+  assert.match(await page.textContent('#plan-analysis-source'), /generated daily bars.*execution market do not change/is);
+
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#plan-analysis-dataset');
+  assert.equal(await page.locator('#plan-analysis-dataset option').count(), beginnerOptions,
+    'Expert changes density and provenance detail, not capability');
+  assert.match(await page.textContent('#plan-analysis-source'), new RegExp('dataset ' + generated.datasetId));
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p2-analysis-dataset-expert.png'), fullPage: true });
+
+  await page.selectOption('#plan-analysis-dataset', 'observed');
+  await page.waitForFunction(() => App.config.activeDataset === 'observed');
+  await page.waitForSelector('#plan-analysis-dataset');
+  assert.equal(await page.locator('#scenario-banner').count(), 0);
+  assert.equal(await page.evaluate(() => location.hash), original.hash);
+  await page.evaluate(async values => {
+    await API.del('/api/datasets/' + values.datasetId);
+    const live = await PlanStore.get(values.planId, true);
+    await API.post('/api/plans/' + values.planId + '/archive', { expectedVersion: live.version });
+    await PlanStore.refresh();
+  }, { datasetId: generated.datasetId, planId: plan.id });
+});
+
 test('Plan Strategy owns the ranked field, exact Builder, and chain without route handoffs', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   const plan = await openPlan('AAPL', 'strategy');
