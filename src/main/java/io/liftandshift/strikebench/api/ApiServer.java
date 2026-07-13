@@ -2017,7 +2017,32 @@ public final class ApiServer {
                 ? activeWorld(ctx) : null;
         // Market and account are server-derived. A client cannot create an observed plan while
         // looking at generated quotes or bind a plan to somebody else's simulation account.
-        ctx.status(201).json(planSvc.create(ownerId(ctx), market, world, currentAccount(ctx).id(), request));
+        Account account = currentAccount(ctx);
+        request = snapshotPlanHoldings(account, request);
+        ctx.status(201).json(planSvc.create(ownerId(ctx), market, world, account.id(), request));
+    }
+
+    /**
+     * Held-share goals start from the account that owns the Plan. When the caller did not supply
+     * a hypothetical holding, capture the currently free shares and basis as durable Plan context.
+     * ACQUIRE deliberately does not use this path: its shares field means shares the user wants.
+     */
+    private io.liftandshift.strikebench.plan.Plan.CreateRequest snapshotPlanHoldings(
+            Account account, io.liftandshift.strikebench.plan.Plan.CreateRequest request) {
+        String intent = request.intent() == null ? "" : request.intent().trim().toUpperCase(Locale.ROOT);
+        if (request.holdingsShares() != null || !java.util.Set.of("EXIT", "HEDGE", "INCOME").contains(intent)) {
+            return request;
+        }
+        var holding = positions.list(account.id()).stream()
+                .filter(row -> row.symbol().equalsIgnoreCase(request.symbol()))
+                .filter(row -> row.freeShares() > 0)
+                .findFirst().orElse(null);
+        if (holding == null) return request;
+        return new io.liftandshift.strikebench.plan.Plan.CreateRequest(
+                request.clientRequestId(), request.symbol(), request.intent(), request.originPlanId(), request.title(),
+                request.thesis(), request.horizonDays(), request.targetCents(), request.riskMode(),
+                holding.freeShares(), request.costBasisCents() == null ? holding.avgCostCents() : request.costBasisCents(),
+                request.priceAssumptionCents());
     }
 
     private void planGet(Context ctx) {

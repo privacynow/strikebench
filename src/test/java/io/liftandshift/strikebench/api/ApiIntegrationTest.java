@@ -1324,4 +1324,28 @@ class ApiIntegrationTest {
         assertThat(delete("/api/trades/" + recorded.get("id").asText() + "?confirm=true").statusCode())
                 .isEqualTo(200);
     }
+
+    @Test
+    @Order(40)
+    void heldSharePlanSnapshotsTheOwningAccountsFreeShares() throws Exception {
+        JsonNode bought = Json.parse(post("/api/positions/buy", "{\"symbol\":\"AAPL\",\"shares\":100}").body());
+        assertThat(bought.get("sharesTraded").asLong()).isEqualTo(100);
+
+        JsonNode plan = Json.parse(post("/api/plans", """
+                {"clientRequestId":"held-plan-context","symbol":"AAPL","intent":"EXIT",
+                 "thesis":"neutral","horizonDays":30,"riskMode":"conservative"}
+                """).body());
+        assertThat(plan.at("/context/holdingsShares").asLong()).isEqualTo(100);
+        assertThat(plan.at("/context/costBasisCents").asLong()).isPositive();
+
+        JsonNode strategy = Json.parse(post("/api/plans/" + plan.get("id").asText() + "/strategy/run", "{}").body());
+        assertThat(strategy.at("/strategy/result/candidates")).isNotEmpty();
+        assertThat(java.util.stream.StreamSupport.stream(
+                        strategy.at("/strategy/result/candidates").spliterator(), false)
+                .anyMatch(candidate -> candidate.path("usesHeldShares").asBoolean(false)))
+                .as("the Plan ranking should retain a held-share expression").isTrue();
+
+        JsonNode sold = Json.parse(post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}").body());
+        assertThat(sold.get("sharesTraded").asLong()).isEqualTo(100);
+    }
 }
