@@ -2965,7 +2965,18 @@
         }
       });
       host.appendChild(tableCard);
-      host.appendChild(el('div', { id: 'plan-candidate-detail' }));
+      var expertDetail = el('div', { id: 'plan-candidate-detail' });
+      host.appendChild(expertDetail);
+      if (ui.strategyFocusCandidate) {
+        var focusedExpert = candidates.find(function (c) { return c.id === ui.strategyFocusCandidate; });
+        if (focusedExpert) {
+          expertDetail.appendChild(candidateCard(focusedExpert, false, planRef.plan.symbol));
+          expertDetail.appendChild(planCandidateActions(planRef, focusedExpert, ui, repaint));
+          expertDetail.classList.add('plan-return-focus');
+          setTimeout(function () { if (expertDetail.isConnected) expertDetail.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 80);
+        }
+        delete ui.strategyFocusCandidate;
+      }
       return;
     }
     host.appendChild(el('div', { class: 'plan-proposed-heading' },
@@ -2975,11 +2986,20 @@
       if (index === 1) host.appendChild(el('h3', { class: 'plan-other-ranked-title' }, 'Other ranked structures'));
       c._servedRank = index + 1;
       var card = candidateCard(c, false, planRef.plan.symbol);
+      card.dataset.candidateId = c.id;
       var heading = card.querySelector('h3') || card.firstChild;
       if (heading) heading.insertBefore(el('span', { class: 'badge badge-dim rank-badge' }, '#' + (index + 1)), heading.firstChild);
       card.appendChild(planCandidateActions(planRef, c, ui, repaint));
       host.appendChild(card);
     });
+    if (ui.strategyFocusCandidate) {
+      var focused = host.querySelector('[data-candidate-id="' + CSS.escape(ui.strategyFocusCandidate) + '"]');
+      if (focused) {
+        focused.classList.add('plan-return-focus');
+        setTimeout(function () { if (focused.isConnected) focused.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 80);
+      }
+      delete ui.strategyFocusCandidate;
+    }
   }
 
   async function planStrategyStage(root, initialPlan, stage) {
@@ -3378,11 +3398,106 @@
     if (report.disclaimer) host.appendChild(el('p', { class: 'muted small' }, report.disclaimer));
   }
 
+  function planProposalComparisonView(comparison, planRef, ui) {
+    if (!comparison) return null;
+    var items = comparison.items || [];
+    var fingerprint = comparison.ensembleFingerprint || '';
+    function economicsBadge(item) {
+      if (item.key === 'CASH') return el('span', { class: 'badge badge-dim' }, 'CASH BASELINE');
+      var verdict = item.economicVerdict || 'UNAVAILABLE';
+      var labels = { FAVORABLE: 'FAVORABLE', MIXED: 'MIXED', UNFAVORABLE: 'UNFAVORABLE', UNAVAILABLE: 'INCOMPLETE' };
+      var classes = { FAVORABLE: 'badge-ok', MIXED: 'badge-caution', UNFAVORABLE: 'badge-danger', UNAVAILABLE: 'badge-dim' };
+      return el('span', { class: 'badge ' + classes[verdict] }, 'BOOK: ' + labels[verdict]);
+    }
+    function reviewAction(item) {
+      if (!item.candidateId) return null;
+      if (item.selected) return el('span', { class: 'badge badge-ok' }, 'CURRENT STRUCTURE');
+      var button = el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: async function () {
+        button.disabled = true;
+        try {
+          ui.strategyView = 'compare'; ui.strategyFocusCandidate = item.candidateId;
+          var live = await PlanStore.get(planRef.plan.id, true);
+          var moved = await PlanStore.setStage(live, 'STRATEGY');
+          App.navigate(PlanStore.path(moved, 'STRATEGY'));
+        } catch (e) { button.disabled = false; UI.toast(e.message, 'error'); }
+      } }, Learn.currentLevel() === 'beginner' ? 'Review this trade' : 'Review in Strategy');
+      return button;
+    }
+    function itemCard(item) {
+      var refused = item.refusalReason;
+      return el('article', { class: 'plan-proposal-result' + (item.selected ? ' selected' : '') + (refused ? ' refused' : ''),
+        'data-comparison-candidate': item.candidateId || item.key },
+        el('div', { class: 'plan-proposal-result-head' },
+          el('div', {}, el('span', { class: 'eyebrow' }, '#' + item.rank + ' ON THIS LENS'),
+            el('h4', {}, item.displayName || item.strategy)),
+          el('div', { class: 'chip-row' }, economicsBadge(item), reviewAction(item))),
+        refused ? alertBox('caution', 'Could not value this package on the shared paths', [refused])
+          : el('div', { class: 'plan-proposal-facts' },
+              stat('Chance this package profits', item.winRatePct == null ? '—' : Math.round(item.winRatePct) + '%'),
+              stat('Expected P/L after costs', item.expectedPnlCents == null ? '—' : pnlSpan(item.expectedPnlCents)),
+              stat('Typical outcome', item.p50Cents == null ? '—' : pnlSpan(item.p50Cents)),
+              stat('Bad 1-in-20 outcome', item.p5Cents == null ? '—' : pnlSpan(item.p5Cents)),
+              stat('Theoretical max loss', item.maxLossCents == null ? '—' : fmtMoney(item.maxLossCents))),
+        item.key === 'CASH'
+          ? el('p', { class: 'muted small' }, 'Doing nothing stays at $0 with no modeled tail loss or transaction cost.')
+          : el('p', { class: 'muted small' }, 'Quantity x' + item.qty + ' · captured entry '
+              + (item.entryCostCents == null ? 'unavailable' : UI.fmtMoneyCompact(item.entryCostCents))
+              + ' · estimated round-trip costs ' + UI.fmtMoneyCompact(item.roundTripFeesCents || 0)
+              + ' · EV per $ of modeled p5 downside ' + (item.tailReturnScore == null ? '—' : fmtNum(item.tailReturnScore, 2))));
+    }
+    var body;
+    if (Learn.currentLevel() === 'beginner') {
+      var first = items.slice(0, 3);
+      var cash = items.find(function (item) { return item.key === 'CASH'; });
+      if (cash && !first.includes(cash)) first.push(cash);
+      var shown = new Set(first.map(function (item) { return item.key; }));
+      var remaining = items.filter(function (item) { return !shown.has(item.key); });
+      body = el('div', { class: 'plan-proposal-beginner' },
+        el('div', { class: 'plan-proposal-card-grid' }, first.map(itemCard)),
+        remaining.length ? UI.expandable('Show all ' + items.length + ' compared choices', function () {
+          return el('div', { class: 'plan-proposal-card-grid' }, remaining.map(itemCard));
+        }) : null);
+    } else {
+      body = el('div', { class: 'tbl-wrap plan-proposal-table-wrap' },
+        el('table', { class: 'tbl plan-proposal-table' },
+          el('thead', {}, el('tr', {}, ['#', 'Proposal', 'Economic view', 'Win %', 'EV after costs',
+            'Typical', 'p5 outcome', 'Theor. max loss'].map(function (label) { return el('th', {}, label); }))),
+          el('tbody', {}, items.map(function (item) {
+            return el('tr', { class: item.selected ? 'selected' : '', 'data-comparison-candidate': item.candidateId || item.key },
+              el('td', {}, '#' + item.rank), el('td', { class: 'plan-proposal-name-cell' },
+                el('b', {}, item.displayName || item.strategy),
+                item.refusalReason ? el('div', { class: 'loss small' }, item.refusalReason) : null,
+                reviewAction(item)),
+              el('td', {}, economicsBadge(item)),
+              el('td', {}, item.winRatePct == null ? '—' : Math.round(item.winRatePct) + '%'),
+              el('td', {}, item.expectedPnlCents == null ? '—' : pnlSpan(item.expectedPnlCents)),
+              el('td', {}, item.p50Cents == null ? '—' : pnlSpan(item.p50Cents)),
+              el('td', {}, item.p5Cents == null ? '—' : pnlSpan(item.p5Cents)),
+              el('td', {}, item.maxLossCents == null ? '—' : fmtMoney(item.maxLossCents)));
+          }))));
+    }
+    var leader = items[0];
+    return el('section', { class: 'plan-proposal-comparison-result', 'data-comparison-basis': comparison.basis },
+      el('div', { class: 'plan-section-head' }, el('div', {}, el('span', { class: 'eyebrow' }, 'SAME PATHS · DIFFERENT STRUCTURES'),
+        el('h3', {}, 'Which proposal handles this evidence best?'),
+        el('p', { class: 'muted' }, comparison.interpretation || 'Every proposal used one exact path ensemble.')),
+        fingerprint ? el('span', { class: 'badge badge-dim mono' }, 'RECEIPT ' + fingerprint.slice(0, 12) + '…') : null),
+      el('p', { class: 'muted small' }, 'The BOOK badge preserves the option-market economic assessment. The figures below answer a separate question: how each package behaved on this one shared evidence set.'),
+      leader && leader.key === 'CASH' ? alertBox('caution', 'Cash leads on this outcome lens', [
+        'Every valued proposal ranked below the zero-risk, zero-cost baseline after estimated costs. The trades remain available to study; this lens does not endorse them.'
+      ]) : null,
+      body,
+      el('p', { class: 'muted small' }, Learn.currentLevel() === 'beginner'
+        ? 'All rows used the same saved receipt, captured proposal entry, quantity and estimated costs. Higher ranks balance the expected result against the bad outcomes; cash stayed at $0.'
+        : comparison.fairness + ' Outcome rank is after-cost EV per dollar of modeled p5 downside; refusals sort last.'));
+  }
+
   async function planOutcomesStage(root, initialPlan, stage) {
     var planRef = { plan: initialPlan };
     var ui = PlanStore.ui(initialPlan.id);
     ui.outcomes = ui.outcomes || { mode: 'market' };
     ui.outcomeRuns = ui.outcomeRuns || {};
+    ui.outcomeComparisons = ui.outcomeComparisons || {};
     ui.backtest = ui.backtest || {};
     var content = planOwnedStage(root, initialPlan, stage);
     var latest = await PlanStore.latestOutcomes(initialPlan.id, true);
@@ -3394,6 +3509,7 @@
       return;
     }
     (latest.outcomes || []).forEach(function (run) { ui.outcomeRuns[run.basis] = run; });
+    (latest.comparisons || []).forEach(function (run) { ui.outcomeComparisons[run.basis] = run; });
     var allBacktests = latest.backtests || [];
     var latestBacktest = allBacktests.find(function (run) {
       return run.currentContext && run.state === 'CURRENT';
@@ -3447,6 +3563,16 @@
       } finally { button.disabled = false; button.removeAttribute('aria-busy'); }
     }
 
+    async function compareBasis(basis, button, extra) {
+      button.disabled = true; button.setAttribute('aria-busy', 'true');
+      try {
+        var live = await PlanStore.get(planRef.plan.id, true); planRef.plan = live;
+        var out = await PlanStore.compareOutcomes(live, Object.assign({ basis: basis }, extra || {}));
+        ui.outcomeComparisons[basis] = out.comparison;
+        return out.comparison;
+      } finally { button.disabled = false; button.removeAttribute('aria-busy'); }
+    }
+
     function renderMarket(host) {
       var saved = ui.outcomeRuns.RISK_NEUTRAL;
       var status = el('div', { class: 'plan-outcome-action-status', 'aria-live': 'polite' });
@@ -3461,6 +3587,7 @@
 
     function renderModel(host) {
       var saved = ui.outcomeRuns.PARAMETRIC;
+      var compared = ui.outcomeComparisons.PARAMETRIC;
       var evidenceUi = PlanStore.ui(planRef.plan.id);
       var status = el('div', { class: 'plan-outcome-action-status', 'aria-live': 'polite' });
       host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Use the Evidence ensemble'),
@@ -3475,13 +3602,24 @@
           } }, saved ? 'Run again on stored futures' : 'Test this position on the stored futures'),
           el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () {
             PlanStore.focus(planRef.plan, 'EVIDENCE');
-          } }, 'Review or change the scenario')), status));
+          } }, 'Review or change the scenario'),
+          el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-compare-parametric', onclick: async function () {
+            try {
+              compared = await compareBasis('PARAMETRIC', this, evidenceUi.planEnsembleId
+                ? { ensembleId: evidenceUi.planEnsembleId } : {});
+              workspace.refresh();
+            } catch (e) { status.innerHTML = ''; status.appendChild(alertBox('danger', 'Could not compare the Plan proposals', [e.message])); }
+          } }, compared ? 'Refresh proposal comparison' : (Learn.currentLevel() === 'beginner'
+            ? 'Compare all proposed trades here' : 'Compare Plan proposals on this ensemble'))), status));
       if (saved) host.appendChild(Scenario.pnlView(saved.result || saved, Learn.currentLevel()));
+      if (compared) host.appendChild(planProposalComparisonView(compared, planRef, ui));
     }
 
     function renderAnalogs(host) {
       var direct = ui.outcomeRuns.HISTORICAL_ANALOGS;
       var bootstrap = ui.outcomeRuns.CONDITIONAL_BOOTSTRAP;
+      var directComparison = ui.outcomeComparisons.HISTORICAL_ANALOGS;
+      var bootstrapComparison = ui.outcomeComparisons.CONDITIONAL_BOOTSTRAP;
       var status = el('div', { class: 'plan-outcome-action-status', 'aria-live': 'polite' });
       host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Price the package on the Plan’s stored analog sample'),
         el('p', { class: 'muted' }, 'Direct occurrences answer “what happened in these matches?” Bootstrap resamples the whole paths to show sampling uncertainty. Neither becomes a forecast.'),
@@ -3497,6 +3635,20 @@
           el('button', { type: 'button', class: 'btn btn-ghost', onclick: function () { PlanStore.focus(planRef.plan, 'EVIDENCE'); } }, 'Review Past evidence')), status));
       if (direct) host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Direct occurrences'), Scenario.pnlView(direct.result || direct, Learn.currentLevel())));
       if (bootstrap) host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Whole-path bootstrap'), Scenario.pnlView(bootstrap.result || bootstrap, Learn.currentLevel())));
+      host.appendChild(el('div', { class: 'card plan-analog-comparison-actions' },
+        UI.cardHeader('Compare the Plan proposals on one historical sample'),
+        el('p', { class: 'muted' }, 'This changes the structure being judged, not the evidence. Every row uses the same stored occurrences and its own captured entry and quantity.'),
+        el('div', { class: 'btn-row' },
+          el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-compare-analogs', onclick: async function () {
+            try { directComparison = await compareBasis('HISTORICAL_ANALOGS', this); workspace.refresh(); }
+            catch (e) { status.innerHTML = ''; status.appendChild(alertBox('danger', 'Could not compare proposals on direct analogs', [e.message])); }
+          } }, directComparison ? 'Refresh direct comparison' : 'Compare on direct analogs'),
+          el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-compare-bootstrap', onclick: async function () {
+            try { bootstrapComparison = await compareBasis('CONDITIONAL_BOOTSTRAP', this); workspace.refresh(); }
+            catch (e) { status.innerHTML = ''; status.appendChild(alertBox('danger', 'Could not compare proposals on resampled analogs', [e.message])); }
+          } }, bootstrapComparison ? 'Refresh bootstrap comparison' : 'Compare on analog resamples'))));
+      if (directComparison) host.appendChild(planProposalComparisonView(directComparison, planRef, ui));
+      if (bootstrapComparison) host.appendChild(planProposalComparisonView(bootstrapComparison, planRef, ui));
     }
 
     function renderBacktest(host) {

@@ -386,6 +386,20 @@ class PlanApiIntegrationTest {
         assertThat(latestAfterReplay.at("/backtests/0/maxDrawdownPct").isNumber()).isTrue();
         assertThat(latestAfterReplay.at("/backtests/0/state").asText()).isEqualTo("CURRENT");
         assertThat(latestAfterReplay.at("/backtests/0/currentContext").asBoolean()).isTrue();
+
+        JsonNode replacement = null;
+        for (JsonNode item : strategy.at("/strategy/result/candidates")) {
+            if (!item.path("id").asText().equals(candidate.path("id").asText())) { replacement = item; break; }
+        }
+        assertThat(replacement).as("fixture field provides another proposal").isNotNull();
+        JsonNode reselected = json(put("/api/plans/" + id + "/strategy/select",
+                "{\"candidateId\":\"" + replacement.path("id").asText() + "\",\"expectedVersion\":" + version + "}"));
+        JsonNode afterSelectionChange = json(get("/api/plans/" + id + "/outcomes/latest"));
+        assertThat(afterSelectionChange.get("outcomes")).hasSize(0);
+        assertThat(afterSelectionChange.get("comparisons")).hasSize(1);
+        assertThat(afterSelectionChange.at("/backtests/0/state").asText()).isEqualTo("STALE");
+        assertThat(afterSelectionChange.at("/selected/id").asText())
+                .isEqualTo(reselected.at("/selection/candidateId").asText());
     }
 
     @Test void exactPlanEnsembleCreatesAReplayableLinkedRehearsalAndReview() throws Exception {

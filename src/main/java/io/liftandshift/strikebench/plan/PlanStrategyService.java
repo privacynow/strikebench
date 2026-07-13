@@ -47,6 +47,7 @@ public final class PlanStrategyService {
             boolean stillCurrent = current.contextRev() == plan.context().rev();
             String runState = stillCurrent ? "CURRENT" : "STALE";
             if (stillCurrent) {
+                markStrategyFieldDependentsStale(c, plan.id(), plan.context().rev());
                 Db.execOn(c, "UPDATE plan_strategy_run SET state='STALE' WHERE plan_id=? AND run_kind='COMPETITION' AND state='CURRENT'",
                         plan.id());
                 Db.execOn(c, "UPDATE plan_candidate SET state='STALE' WHERE plan_id=? AND state='CURRENT'", plan.id());
@@ -198,6 +199,11 @@ public final class PlanStrategyService {
                             "AND context_rev=? AND underlying_symbol=? AND state='CURRENT'",
                     r -> r.str("id"), candidateId, planId, plan.contextRev(), plan.symbol());
             if (candidate.isEmpty()) throw new NoSuchElementException("no current candidate " + candidateId);
+            String prior = Db.queryOn(c, "SELECT id FROM plan_candidate WHERE plan_id=? AND context_rev=? " +
+                            "AND state='CURRENT' AND selected=1 ORDER BY created_at DESC LIMIT 1",
+                    r -> r.str("id"), planId, plan.contextRev()).stream().findFirst().orElse(null);
+            if (candidateId.equals(prior)) return new Selection(candidateId, plan.version());
+            markSelectedPositionDependentsStale(c, planId, plan.contextRev());
             Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?", planId, plan.contextRev());
             Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", candidateId);
             Db.execOn(c, "UPDATE plans SET version=version+1,updated_at=now() WHERE id=?", planId);
@@ -220,6 +226,7 @@ public final class PlanStrategyService {
             if (current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This plan's assumptions changed. Reprice the structure before saving it.");
             }
+            markStrategyFieldDependentsStale(c, plan.id(), plan.context().rev());
             Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
                             "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
                             "unfavorable_count,unavailable_count,disclaimer,input_hash,engine_version,state,created_at) " +
@@ -572,6 +579,21 @@ public final class PlanStrategyService {
                 id, userId, userId);
         if (rows.isEmpty()) throw new NoSuchElementException("no such plan: " + id);
         return rows.getFirst();
+    }
+
+    private static void markSelectedPositionDependentsStale(java.sql.Connection c, String planId, int contextRev)
+            throws java.sql.SQLException {
+        Db.execOn(c, "UPDATE plan_outcome_run SET state='STALE' WHERE plan_id=? AND context_rev=? AND state='CURRENT'",
+                planId, contextRev);
+        Db.execOn(c, "UPDATE plan_backtest SET state='STALE' WHERE plan_id=? AND context_rev=? AND state='CURRENT'",
+                planId, contextRev);
+    }
+
+    private static void markStrategyFieldDependentsStale(java.sql.Connection c, String planId, int contextRev)
+            throws java.sql.SQLException {
+        markSelectedPositionDependentsStale(c, planId, contextRev);
+        Db.execOn(c, "UPDATE plan_outcome_comparison SET state='STALE' WHERE plan_id=? AND context_rev=? AND state='CURRENT'",
+                planId, contextRev);
     }
 
     private static String sha256(JsonNode node) {

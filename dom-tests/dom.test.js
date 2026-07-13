@@ -765,6 +765,68 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
     'the position is valued on the exact Evidence ensemble, not a regenerated lookalike');
   assert.ok(exactReuse.selected, 'one exact Plan package owns every outcome lens');
 
+  await page.click('#plan-compare-parametric');
+  await page.waitForSelector('.plan-proposal-comparison-result', { timeout: 30000 });
+  const compared = await page.evaluate(async ({ planId, fingerprint }) => {
+    const latest = await API.getFresh('/api/plans/' + planId + '/outcomes/latest');
+    const comparison = latest.comparisons.find(item => item.basis === 'PARAMETRIC');
+    const field = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
+    return { fingerprint: comparison && comparison.ensembleFingerprint,
+      items: comparison && comparison.items.length,
+      candidates: field.strategy.result.candidates.length,
+      cash: comparison && comparison.items.some(item => item.key === 'CASH') };
+  }, { planId: plan.id, fingerprint: receipt.fingerprint });
+  assert.equal(compared.fingerprint, receipt.fingerprint,
+    'every proposal is judged on the exact Evidence receipt rather than regenerated futures');
+  assert.equal(compared.items, compared.candidates + 1,
+    'the complete current proposal field plus cash is preserved in the comparison');
+  assert.equal(compared.cash, true, 'cash is a first-class zero-risk baseline');
+  assert.match(await page.textContent('.plan-proposal-comparison-result'),
+    /Same paths.*different structures.*Which proposal handles this evidence best/is);
+  const initialBeginnerRows = await page.locator('.plan-proposal-result').count();
+  assert.ok(initialBeginnerRows >= 3 && initialBeginnerRows <= 4,
+    'Beginner leads with a readable subset plus cash instead of a dense wall');
+  const showAll = page.getByText(new RegExp('Show all ' + compared.items + ' compared choices'));
+  if (await showAll.count()) {
+    await showAll.click();
+    assert.equal(await page.locator('.plan-proposal-result').count(), compared.items,
+      'every compared proposal remains reachable at Beginner');
+  }
+  await page.reload();
+  await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
+  await page.click('#plan-outcomes-basis-model');
+  await page.waitForSelector('.plan-proposal-comparison-result', { timeout: 20000 });
+  assert.match(await page.textContent('.plan-proposal-comparison-result'), new RegExp(receipt.fingerprint.slice(0, 12)),
+    'the normalized comparison restores after reload with the same receipt');
+
+  const reviewTrade = page.locator('.plan-proposal-comparison-result button').filter({ hasText: 'Review this trade' }).first();
+  assert.equal(await reviewTrade.count(), 1, 'an alternative has an explicit return path to the owning Strategy step');
+  await reviewTrade.click();
+  await page.waitForSelector('#plan-stage-strategy .plan-return-focus', { timeout: 15000 });
+  assert.match(await page.evaluate(() => location.hash), new RegExp('/plan/' + plan.id + '/strategy$'));
+  await page.locator('.plan-rail button').filter({ hasText: 'Outcomes' }).click();
+  await page.click('#plan-outcomes-basis-model');
+  await page.waitForSelector('.plan-proposal-comparison-result');
+
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.click('#plan-outcomes-basis-model');
+  await page.waitForSelector('.plan-proposal-table');
+  assert.equal(await page.locator('.plan-proposal-table tbody tr').count(), compared.items,
+    'Expert sees the complete comparison as one dense table');
+  const visibleAction = await page.locator('.plan-proposal-table .plan-proposal-name-cell button').first().evaluate(button => {
+    const cellRect = button.getBoundingClientRect();
+    const wrapRect = button.closest('.tbl-wrap').getBoundingClientRect();
+    return { left: cellRect.left, right: cellRect.right, wrapLeft: wrapRect.left, wrapRight: wrapRect.right };
+  });
+  assert.ok(visibleAction.left >= visibleAction.wrapLeft - 1 && visibleAction.right <= visibleAction.wrapRight + 1,
+    'the Expert action fits in the initial table viewport without hidden horizontal navigation');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p4-comparison-expert.png'), fullPage: true });
+  await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
+  await page.click('#plan-outcomes-basis-model');
+  await page.waitForSelector('.plan-proposal-comparison-result');
+
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p4-outcomes-desktop.png'), fullPage: true });
