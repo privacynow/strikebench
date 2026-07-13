@@ -738,6 +738,7 @@
 
   async function research(root, params, embedded) {
     var inPlan = !!(embedded && embedded.plan);
+    var provisionalResearch = !!(embedded && embedded.provisional);
     var symbol = inPlan ? embedded.plan.symbol : '';
     if (symbol) App.context.selectSymbol(symbol);
     var input = el('input', { type: 'text', id: 'symbol-input', placeholder: 'Ticker, e.g. AAPL', value: symbol });
@@ -745,7 +746,7 @@
       if (input.value.trim()) App.navigate('#/plan/new?symbol=' + encodeURIComponent(input.value.trim().toUpperCase()));
     };
 
-    if (!inPlan) root.appendChild(el('h1', {}, 'Research'));
+    if (!inPlan || provisionalResearch) root.appendChild(el('h1', {}, 'Research'));
     var recentBox = el('div', { class: 'research-recents', id: 'recent-symbols' });
     var researchContext = UI.symbolContext({
       mode: 'editable', id: 'research-symbol-context', input: input,
@@ -757,7 +758,7 @@
     var contextExtras = el('div', { class: 'symbol-context-extras' },
       symbol ? el('a', { href: '#/research', class: 'context-extras-action', id: 'back-to-sectors' }, 'All sectors') : null,
       recentBox);
-    if (!inPlan) root.appendChild(el('div', { class: 'research-symbol-shell' }, researchContext, contextExtras));
+    if (!inPlan || provisionalResearch) root.appendChild(el('div', { class: 'research-symbol-shell' }, researchContext, contextExtras));
     function renderRecents() {
       recentBox.innerHTML = '';
       var list = recentSymbols();
@@ -959,9 +960,9 @@
           (r.benchmarks && r.benchmarks.length) ? el('div', { class: 'chip-row' }, r.benchmarks.map(function (b) {
             return chip(b.symbol, fmtNum(b.last));
           })) : null);
-      });
+      }, { open: !!(window.matchMedia && window.matchMedia('(min-width: 900px)').matches) });
     var displayPrice = r.displayPrice !== undefined && r.displayPrice !== null ? r.displayPrice : q.last;
-    var hero = el('div', { class: 'card research-hero-card' },
+    var hero = el('div', { class: 'card research-hero-card', id: 'research-hero' },
       el('div', { class: 'quote-hero' },
         el('span', { class: 'sym', id: 'research-symbol' }, symbol),
         el('span', { class: 'px', id: 'research-px' }, fmtNum(displayPrice)),
@@ -970,17 +971,19 @@
         el('span', { class: 'spacer' }),
         el('button', { class: 'btn btn-sm', id: 'plan-understand-next', onclick: async function () {
           try {
+            if (embedded && embedded.onBeginEvidence) { await embedded.onBeginEvidence(); return; }
             var moved = await PlanStore.setStage(embedded.plan, 'EVIDENCE');
             App.navigate(PlanStore.path(moved, 'EVIDENCE'));
           } catch (e) { UI.toast(e.message, 'error'); }
-        } }, 'Test this view')),
+        } }, embedded && embedded.plan && embedded.plan.context && embedded.plan.context.thesis
+          ? 'Test ' + embedded.plan.context.thesis + ' view' : 'Set and test a market view')),
       el('div', { class: 'nm', style: 'margin-top:2px' }, q.description || ''),
       evidenceLine,
-      el('div', { class: 'chip-row' },
-        chip('Bid/Ask', fmtNum(q.bid) + ' / ' + fmtNum(q.ask)),
-        chip('Day', fmtNum(q.dayLow) + ' – ' + fmtNum(q.dayHigh)),
-        chip('IV (ATM)', fmtPct(r.ivAtm)),
-        chip('HV 30d', fmtPct(r.hv30))),
+      el('div', { class: 'chip-row market-facts' },
+        chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Buy / sell quote' : 'Bid / ask', UI.info('bidask')), fmtNum(q.bid) + ' / ' + fmtNum(q.ask)),
+        chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Today\'s range' : 'Day range', UI.info('dayrange')), fmtNum(q.dayLow) + ' \u2013 ' + fmtNum(q.dayHigh)),
+        chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Options-implied move' : 'ATM IV', UI.info('atmiv')), fmtPct(r.ivAtm)),
+        chip(el('span', {}, Learn.currentLevel() === 'beginner' ? 'Recent movement' : 'HV 30d', UI.info('hv30')), fmtPct(r.hv30))),
       secondaryMarketDetail);
     if (section === 'understand') heroCard.replaceWith(hero);
 
@@ -1326,7 +1329,7 @@
    * the card form shows an honest note when nothing dated is known.
    */
   function comingUp(symbol, asStrip, preExpirations) {
-    var body = el('div', { class: 'chip-row' });
+    var body = el('div', { class: asStrip ? 'chip-row' : 'event-timeline' });
     var host = asStrip
       ? el('div', { class: 'events-strip', id: 'events-strip' }, body)
       : el('div', { class: 'card', id: 'events-card' }, UI.cardHeader('Coming up for ' + symbol), body,
@@ -1335,6 +1338,21 @@
             : null);
     (async function fill() {
       var had = false;
+      function addEvent(kind, title, detail, accent, href, tooltip) {
+        if (asStrip) {
+          var item = chip(kind, detail, tooltip);
+          body.appendChild(href ? el('a', { href: href, target: '_blank', rel: 'noopener', class: 'chip event-chip' },
+            el('span', { class: 'chip-label' }, kind), el('b', {}, detail)) : item);
+          return;
+        }
+        body.appendChild(el('article', { class: 'event-timeline-item event-' + (accent || 'dated') },
+          el('span', { class: 'event-marker', 'aria-hidden': 'true' }),
+          el('div', { class: 'event-copy' },
+            el('span', { class: 'eyebrow' }, kind),
+            href ? el('a', { href: href, target: '_blank', rel: 'noopener' }, title) : el('b', {}, title),
+            el('span', { class: 'muted' }, detail),
+            tooltip ? el('span', { class: 'muted small' }, tooltip) : null)));
+      }
       // Expirations + news are independent \u2014 fetch them together. If the caller already
       // has the expirations (the research page loads them with the quote), skip that call.
       var exP = (preExpirations && preExpirations.length)
@@ -1347,7 +1365,8 @@
         var ex = (exDoc.expirations || []).filter(function (d) { return calendarDayDistance(today, d) >= 0; });
         ex.slice(0, 3).forEach(function (d) {
           var dte = calendarDayDistance(today, d);
-          body.appendChild(chip('Expiry', d + ' \u00B7 ' + dte + 'd'));
+          addEvent('OPTION EXPIRY', d, dte === 0 ? 'Today at the closing bell' : dte + ' calendar days away',
+            dte <= 5 ? 'near' : 'dated');
           had = true;
         });
       } catch (e) { /* chips below may still land */ }
@@ -1356,8 +1375,9 @@
         var rsch = await API.get('/api/research/' + symbol).catch(function () { return null; });
         var ee = rsch && rsch.earningsEstimate;
         if (ee && ee.date) {
-          body.appendChild(chip(ee.confirmed ? 'Earnings' : 'Earnings (est.)', '~' + ee.date + ' \u00b1' + ee.windowDays + 'd',
-            (ee.confirmed ? 'Confirmed date.' : 'ESTIMATED from ' + ee.basis + ' \u2014 not a confirmed calendar date.')));
+          addEvent(ee.confirmed ? 'EARNINGS' : 'EARNINGS ESTIMATE', ee.date,
+            ee.confirmed ? 'Confirmed event date' : '\u00b1' + ee.windowDays + ' days', 'event', null,
+            ee.confirmed ? null : 'Estimated from ' + ee.basis + '; not a confirmed calendar date.');
           had = true;
         }
       } catch (e) { /* estimate is additive */ }
@@ -1365,8 +1385,7 @@
         var items = (await newsP).items || [];
         var earn = items.find(function (n) { return EARNINGS_RE.test(n.headline || ''); });
         if (earn) {
-          body.appendChild(el('a', { href: earn.url, target: '_blank', rel: 'noopener', class: 'chip', title: earn.headline },
-            el('span', { class: 'chip-label' }, 'Earnings'), el('b', {}, 'in the news')));
+          addEvent('EARNINGS NEWS', earn.headline, 'Headline signal; verify the source', 'event', earn.url);
           had = true;
         }
         var filings = items.filter(function (n) { return /edgar|sec/i.test(n.source || '') || /filing$/i.test(n.headline || ''); })
@@ -1374,14 +1393,18 @@
         if (filings.length) {
           var f = filings[0];
           var when = f.publishedEpochMs ? new Date(f.publishedEpochMs).toISOString().slice(0, 10) : '';
-          body.appendChild(el('a', { href: f.url, target: '_blank', rel: 'noopener', class: 'chip', title: f.headline },
-            el('span', { class: 'chip-label' }, 'Last filing'), el('b', {}, f.headline.replace(/ filing$/i, '') + (when ? ' \u00B7 ' + when : ''))));
+          addEvent('LATEST FILING', f.headline.replace(/ filing$/i, ''), when || 'Date unavailable', 'filing', f.url);
           had = true;
         }
       } catch (e) { /* fine */ }
+      if (!asStrip && App.state.world && App.state.world !== 'observed' && App.state.world !== 'demo') {
+        body.appendChild(el('div', { class: 'event-simulation-note' },
+          el('b', {}, 'No invented headlines'),
+          el('span', { class: 'muted' }, 'This simulated market generates prices and volatility, not fake news. Use the session event controls to inject a disclosed shock.')));
+      }
       if (!had) {
         if (asStrip) { host.remove(); return; } // decoration in Trade — vanish quietly
-        body.appendChild(el('span', { class: 'muted' }, 'No dated events known right now \u2014 demo mode carries limited news.'));
+        body.appendChild(el('span', { class: 'muted' }, 'No dated events are known from the active market sources.'));
       }
     })();
     return host;
@@ -1753,8 +1776,9 @@
       : App.state.world && App.state.world !== 'observed'
         ? 'Generated quotes from the active simulated market.'
         : 'Observed-source quotes for the selected sector.';
+    var historyNotice = el('div', { class: 'alert alert-warn sector-history-notice', id: 'sector-history-notice', hidden: '' });
     var card = el('div', { class: 'card', id: 'sector-explorer' },
-      UI.cardHeader('Explore by sector'), rail, head, instruction, rangeRow, grid,
+      UI.cardHeader('Explore by sector'), rail, head, instruction, rangeRow, historyNotice, grid,
       explain(quoteBasis + ' Tap a card to begin a plan, or point the scout at a whole sector. '
         + (u.note ? u.note : '')));
     root.appendChild(card);
@@ -1768,6 +1792,8 @@
       if (sparkLoader) { sparkLoader.disconnect(); sparkLoader = null; }
       head.innerHTML = '';
       grid.innerHTML = '';
+      historyNotice.hidden = true;
+      historyNotice.innerHTML = '';
       grid.appendChild(UI.spinner('Loading sector quotes…'));
       var sector = u.sectors.find(function (s) { return s.key === selectedKey; }) || u.sectors[0];
       currentSector = sector;
@@ -1845,6 +1871,7 @@
           App.state.explorerScroll = null;
           requestAnimationFrame(function () { window.scrollTo(0, y); });
         }
+        var missingHistory = new Set();
         sparkLoader = lazySparklines(grid, sector.symbols, {
           range: function () { return App.state.explorerRange; },
           valid: function () { return seq === loadSeq && grid.isConnected; },
@@ -1853,6 +1880,16 @@
             if (!t2) return;
             t2.innerHTML = '';
             t2.appendChild(UI.sparkline(row, { height: 36 }));
+            if (row.available === false || !row.closes || !row.closes.length) missingHistory.add(row.symbol);
+            else missingHistory.delete(row.symbol);
+            if (missingHistory.size) {
+              historyNotice.hidden = false;
+              historyNotice.innerHTML = '';
+              historyNotice.appendChild(el('div', {},
+                el('b', {}, 'Price charts are unavailable for ' + missingHistory.size + ' symbol' + (missingHistory.size === 1 ? '' : 's')),
+                el('p', { class: 'muted small' }, 'Current quotes can still be valid because quotes and daily history use separate sources. StrikeBench does not draw a made-up chart.')));
+              historyNotice.appendChild(el('a', { class: 'btn btn-sm btn-secondary', href: '#/data/sources' }, 'Update history in Data'));
+            } else historyNotice.hidden = true;
             // Evidence is server-computed and rendered verbatim; availability never implies Observed.
             if (row.evidence && !(App.state.world === 'demo' && row.evidence.provenance === 'DEMO')) {
               t2.appendChild(UI.evidenceBadge(row.evidence, { className: 'spark-ev', compact: true,
@@ -2365,7 +2402,7 @@
         onclick: function () {
           var editor = document.getElementById('plan-context-editor');
           if (editor) { editor.hidden = !editor.hidden; if (!editor.hidden) editor.querySelector('input,select').focus(); }
-        } }, 'Edit assumptions'));
+        } }, 'Edit view & limits'));
   }
 
   function planRail(plan, active, provisional) {
@@ -2422,54 +2459,95 @@
           thesis: updated.context.thesis, horizon: updated.context.horizonDays + 'd' });
         App.render();
       } catch (e) { UI.toast(e.message, 'error'); save.disabled = false; }
-    } }, 'Save assumptions');
+    } }, 'Save view & limits');
+    var forkChoices = el('div', { class: 'choice-grid plan-intent-grid plan-fork-intents', hidden: '' });
+    (Learn.INTENTS || []).filter(function (meta) { return meta.key !== plan.intent; }).forEach(function (meta) {
+      forkChoices.appendChild(el('button', { type: 'button', class: 'choice-card', onclick: function () {
+        var nextIntent = meta.key;
+        UI.confirmModal('Create a linked ' + meta.label + ' Plan?',
+          el('div', {},
+            el('p', {}, 'The current Plan stays unchanged so its evidence, selected structure and decisions remain trustworthy.'),
+            el('p', { class: 'muted' }, 'The new Plan carries forward ' + plan.symbol + ', the view, horizon and limits. Strategy selection starts fresh.')),
+          'Create linked Plan', async function () {
+            var created = await PlanStore.create({ originPlanId: plan.id, symbol: plan.symbol, intent: nextIntent,
+              thesis: c.thesis, horizonDays: c.horizonDays, targetCents: c.targetCents,
+              riskMode: c.riskMode, holdingsShares: c.holdingsShares, costBasisCents: c.costBasisCents,
+              priceAssumptionCents: c.priceAssumptionCents });
+            await PlanStore.focus(created, 'STRATEGY');
+          });
+      } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb)));
+    });
+    var changeGoal = el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-change-goal', onclick: function () {
+      forkChoices.hidden = !forkChoices.hidden;
+      changeGoal.setAttribute('aria-expanded', String(!forkChoices.hidden));
+    }, 'aria-expanded': 'false' }, 'Change goal in a linked Plan');
     function planField(label, input) {
       return el('div', { class: 'field' }, el('label', {}, label), input);
     }
     return el('section', { class: 'plan-context-editor card', id: 'plan-context-editor', hidden: '' },
-      UI.cardHeader('Edit this plan’s assumptions'),
+      UI.cardHeader('Edit this Plan’s view & limits'),
+      el('p', { class: 'muted' }, 'Goal: ', el('b', {}, planIntentLabel(plan.intent)),
+        '. The goal identifies this Plan; changing it creates a linked Plan instead of rewriting this history.'),
       el('div', { class: 'form-grid plan-context-fields' },
         planField('View', thesis), planField('Horizon (days)', horizon),
         planField('Target price', target), planField('Risk budget', risk)),
-      el('div', { class: 'btn-row' }, save));
+      el('div', { class: 'btn-row' }, save, changeGoal), forkChoices);
   }
 
-  function provisionalPlanStage(root, symbol) {
+  async function provisionalPlanStage(root, symbol) {
     App.context.selectSymbol(symbol);
     var draft = PlanStore.provisional(symbol);
     var market = App.state.world === 'demo' ? 'DEMO' : App.state.world === 'observed' ? 'OBSERVED' : 'SIMULATED';
     var plan = { symbol: symbol, marketKind: market,
       worldId: market === 'SIMULATED' ? App.state.world : null, status: 'DRAFT', context: {}, title: symbol + ' · New plan' };
-    var active = PLAN_STAGES[0];
-    root.appendChild(planHeader(plan, true));
-    root.appendChild(planRail(plan, active, true));
-    var card = el('section', { class: 'card plan-start-card', id: 'plan-start' },
-      UI.cardHeader('What are you trying to do with ' + symbol + '?'),
-      el('p', { class: 'muted' }, 'Choose a purpose now, or begin with evidence and decide after you understand the range.'));
-    var choices = el('div', { class: 'choice-grid plan-intent-grid' });
-    (Learn.INTENTS || []).forEach(function (meta) {
-      choices.appendChild(pressable(el('button', { type: 'button', class: 'choice-card', onclick: function () {
-        promote(meta.key);
-      } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb || 'Build a plan around this goal.')),
-      meta.label, 'button'));
-    });
-    card.appendChild(choices);
-    var evidenceFirst = el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-evidence-first',
-      onclick: function () { promote(null); } }, 'Start with evidence');
-    card.appendChild(el('div', { class: 'btn-row' }, evidenceFirst,
-      el('a', { href: '#/research', class: 'btn btn-ghost' }, 'Back to Research')));
-    root.appendChild(card);
-
-    async function promote(intent) {
-      card.setAttribute('aria-busy', 'true');
+    var decisionHost = el('div', { class: 'plan-start-decision', id: 'plan-start-decision' });
+    async function promote(intent, forceNew) {
+      decisionHost.innerHTML = '';
+      if (!forceNew) {
+        var matches = await PlanStore.matching(symbol, intent);
+        if (matches.length) {
+          var existing = matches[0];
+          decisionHost.appendChild(el('div', { class: 'alert alert-info plan-existing-match' },
+            el('div', {}, el('b', {}, 'You already have this Plan in the current market'),
+              el('p', { class: 'muted small' }, existing.title + ' · ' + (existing.context && existing.context.horizonDays || 30)
+                + ' days. Resume it to avoid accidental duplicates, or deliberately create a separate Plan.')),
+            el('div', { class: 'btn-row' },
+              el('button', { type: 'button', class: 'btn', onclick: function () {
+                PlanStore.focus(existing).catch(function (e) { UI.toast(e.message, 'error'); });
+              } }, 'Resume existing Plan'),
+              el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () { promote(intent, true); } }, 'Create separate Plan'))));
+          return;
+        }
+      }
+      decisionHost.setAttribute('aria-busy', 'true');
       try {
         var risk = document.getElementById('risk-mode');
         var persisted = await PlanStore.promote({ symbol: symbol, intent: intent,
           thesis: App.context.thesis(), horizonDays: horizonDaysFromContext(),
           riskMode: risk ? risk.value : 'conservative' });
-        replacePlanRoute(persisted, 'UNDERSTAND');
-      } catch (e) { card.removeAttribute('aria-busy'); UI.toast(e.message, 'error'); }
+        replacePlanRoute(persisted, intent == null ? 'EVIDENCE' : 'UNDERSTAND');
+      } catch (e) { decisionHost.removeAttribute('aria-busy'); UI.toast(e.message, 'error'); }
     }
+    await research(root, ['__research', symbol, 'understand'], {
+      plan: plan, stage: 'understand', provisional: true,
+      onBeginEvidence: function () { return promote(null, false); }
+    });
+    var card = el('section', { class: 'card plan-start-card research-plan-start', id: 'plan-start' },
+      UI.cardHeader('Turn this research into a Plan'),
+      el('p', { class: 'muted' }, 'Choose what you want the position to accomplish. This creates a durable workspace only after you choose.'));
+    var choices = el('div', { class: 'choice-grid plan-intent-grid' });
+    (Learn.INTENTS || []).forEach(function (meta) {
+      choices.appendChild(pressable(el('button', { type: 'button', class: 'choice-card', onclick: function () {
+        promote(meta.key, false);
+      } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb || 'Build a plan around this goal.')),
+      meta.label, 'button'));
+    });
+    card.appendChild(choices);
+    var evidenceFirst = el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-evidence-first',
+      onclick: function () { promote(null, false); } }, 'Set a view and test evidence first');
+    card.appendChild(el('div', { class: 'btn-row' }, evidenceFirst));
+    card.appendChild(decisionHost);
+    root.appendChild(card);
   }
 
   function transitionalPlanStage(root, plan, stage) {
@@ -3470,7 +3548,7 @@
       var query = (window.location.hash.split('?')[1] || '');
       var symbol = new URLSearchParams(query).get('symbol') || App.context.symbol();
       if (!symbol) { App.navigate('#/research'); return; }
-      provisionalPlanStage(root, symbol.toUpperCase());
+      await provisionalPlanStage(root, symbol.toUpperCase());
       return;
     }
     var plan = await PlanStore.get(id);
