@@ -1377,8 +1377,13 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
 
   await go('#/portfolio');
   await page.waitForSelector('#portfolio-plan-book .plan-book-card');
+  assert.equal((await page.locator('#app > h1').textContent()).trim(), 'Plans',
+    'the primary Plans destination names itself as Plans, not Portfolio');
   assert.match(await page.textContent('#portfolio-plan-book'), /AAPL/);
   assert.match(await page.textContent('#portfolio-plan-book'), /Review Plan/);
+  const libraryCardText = await page.locator('#portfolio-plan-book .plan-book-card').first().innerText();
+  assert.equal((libraryCardText.match(/AAPL/g) || []).length, 1,
+    'a Plan card names its symbol once instead of repeating the derived title');
 });
 
 test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {

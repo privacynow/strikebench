@@ -2237,6 +2237,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-book-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .plan-book-head h3 { margin: 2px 0 0; font-size: 22px; }
 .plan-book-head p { margin: 2px 0 0; }
+.plan-book-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .portfolio-inline-trade { display: grid; gap: 12px; margin-top: 14px; scroll-margin-top: 110px; }
 .plan-outcome-action-status .alert { margin-top: 10px; }
 @media (max-width: 900px) {
