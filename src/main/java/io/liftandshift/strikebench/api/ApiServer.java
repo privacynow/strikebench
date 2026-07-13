@@ -429,6 +429,7 @@ public final class ApiServer {
             c.routes.put("/api/plans/{id}/stage", this::planStagePut);
             c.routes.put("/api/plans/{id}/open", this::planOpenPut);
             c.routes.post("/api/plans/{id}/archive", this::planArchive);
+            c.routes.delete("/api/plans/{id}", this::planDelete);
             c.routes.get("/api/plans/{id}/evidence/latest", this::planEvidenceLatest);
             c.routes.post("/api/plans/{id}/evidence/study", this::planEvidenceStudy);
             c.routes.get("/api/plans/{id}/strategy/latest", this::planStrategyLatest);
@@ -2136,6 +2137,19 @@ public final class ApiServer {
     private void planArchive(Context ctx) {
         var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.ArchiveRequest.class));
         ctx.json(planSvc.archive(ownerId(ctx), ctx.pathParam("id"), request));
+    }
+
+    private void planDelete(Context ctx) {
+        String rawVersion = ctx.queryParam("expectedVersion");
+        if (rawVersion == null || rawVersion.isBlank()) {
+            throw new IllegalArgumentException("expectedVersion is required");
+        }
+        long expectedVersion;
+        try { expectedVersion = Long.parseLong(rawVersion); }
+        catch (NumberFormatException e) { throw new IllegalArgumentException("expectedVersion must be an integer"); }
+        String id = ctx.pathParam("id");
+        planSvc.deleteDraft(ownerId(ctx), id, expectedVersion);
+        ctx.json(Map.of("deleted", id));
     }
 
     private void requireActivePlanMarket(Context ctx, io.liftandshift.strikebench.plan.Plan.View plan) {
