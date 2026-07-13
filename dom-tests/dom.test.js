@@ -951,7 +951,7 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   const plan = await openPlan('AAPL', 'strategy');
   await page.click('#plan-run-strategy');
   await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
-  await page.evaluate(async planId => {
+  const selectedQty = await page.evaluate(async planId => {
     const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
     const candidate = latest.strategy.result.candidates.find(item => {
       const expirations = new Set((item.legs || []).filter(leg => leg.type !== 'STOCK').map(leg => leg.expiration));
@@ -960,9 +960,12 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
     const live = await PlanStore.get(planId, true);
     await PlanStore.selectCandidate(live, candidate.id);
     await App.render();
+    return candidate.qty || 1;
   }, plan.id);
   await page.locator('.plan-rail button').filter({ hasText: 'Decide' }).click();
   await page.waitForSelector('#plan-review-order');
+  assert.equal(Number(await page.inputValue('#plan-decision-qty')), selectedQty,
+    'Decide inherits the engine-sized quantity of the exact selected package');
   assert.equal(await page.locator('#plan-stage-decide input[name="symbol"], #plan-stage-decide select[name="strategy"]').count(), 0,
     'Decide derives symbol, intent, structure and legs from the Plan');
   await page.click('#plan-review-order');
