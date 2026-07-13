@@ -2105,7 +2105,10 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-tool:hover { background: var(--surface-2); }
 .plan-tool.active { color: var(--accent); background: var(--accent-soft);
   box-shadow: inset 0 -3px 0 var(--accent); }
-.plan-strategy-body { min-width: 0; display: grid; gap: 12px; }
+.plan-strategy-body {
+  min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px;
+}
+.plan-strategy-body > * { min-width: 0; max-width: 100%; }
 .plan-tool-intro { padding: 2px 2px 0; }
 .plan-tool-intro h3 { margin: 0 0 3px; }
 .plan-strategy-controls .check-row { margin-top: 10px; }
