@@ -345,6 +345,7 @@ public final class PlanStrategyService {
         values.put("estimated_roundtrip_fees_cents", longOrNull(economics, "estimatedRoundTripFeesCents"));
         values.put("market_ev_pct_of_risk", doubleOrNull(economics, "marketEvPctOfRisk"));
         values.put("observed_evidence", boolInt(economics, "observedEvidence"));
+        values.put("evaluation_snapshot", n.hasNonNull("evaluation") ? Json.write(n.get("evaluation")) : null);
         values.put("created_at", now);
         String columns = String.join(",", values.keySet());
         String placeholders = String.join(",", java.util.Collections.nCopies(values.size(), "?"));
@@ -374,6 +375,9 @@ public final class PlanStrategyService {
         put(n, "combinedMaxLossCents", r.combinedMaxLoss()); put(n, "decisionScore", r.decisionScore());
         put(n, "decisionViable", r.decisionViable()); put(n, "structurallyEligible", r.structurallyEligible());
         put(n, "economicVerdict", r.economicVerdict()); put(n, "economicPlacement", r.economicPlacement());
+        if (r.evaluationSnapshot() != null && !r.evaluationSnapshot().isBlank()) {
+            n.set("evaluation", Json.parse(r.evaluationSnapshot()));
+        }
         n.put("selected", r.selected());
         n.set("legs", loadLegs(c, r.id()));
         n.set("breakevens", loadNumbers(c, "plan_candidate_breakeven", "breakeven_index", "price", r.id()));
@@ -401,7 +405,7 @@ public final class PlanStrategyService {
                 "pc.combined_max_loss_cents,pc.decision_score,pc.decision_viable,pc.structurally_eligible," +
                 "pc.economic_verdict,pc.economic_placement,pc.economic_label,pc.economic_summary," +
                 "pc.ev_market_cents,pc.ev_histvol_cents,pc.estimated_roundtrip_fees_cents,pc.market_ev_pct_of_risk," +
-                "pc.observed_evidence,pc.selected,psr.intent FROM plan_candidate pc " +
+                "pc.observed_evidence,pc.evaluation_snapshot,pc.selected,psr.intent FROM plan_candidate pc " +
                 "JOIN plan_strategy_run psr ON psr.id=pc.run_id";
     }
 
@@ -421,7 +425,7 @@ public final class PlanStrategyService {
                 r.str("economic_verdict"), r.str("economic_placement"), r.str("economic_label"),
                 r.str("economic_summary"), r.lngOrNull("ev_market_cents"), r.lngOrNull("ev_histvol_cents"),
                 r.lngOrNull("estimated_roundtrip_fees_cents"), r.dblOrNull("market_ev_pct_of_risk"),
-                boolOrNull(r, "observed_evidence"), r.bool("selected"));
+                boolOrNull(r, "observed_evidence"), r.str("evaluation_snapshot"), r.bool("selected"));
     }
 
     private static void persistLegs(java.sql.Connection c, String id, JsonNode legs) throws java.sql.SQLException {
@@ -646,7 +650,8 @@ public final class PlanStrategyService {
                                 Long combinedMaxLoss, Double decisionScore, Boolean decisionViable,
                                 Boolean structurallyEligible, String economicVerdict, String economicPlacement,
                                 String economicLabel, String economicSummary, Long evMarket, Long evHist,
-                                Long roundTripFees, Double marketEvPct, Boolean observed, boolean selected) {}
+                                Long roundTripFees, Double marketEvPct, Boolean observed,
+                                String evaluationSnapshot, boolean selected) {}
 
     private static final class SqlRuntimeException extends RuntimeException {
         SqlRuntimeException(java.sql.SQLException cause) { super(cause); }

@@ -4097,6 +4097,7 @@ public final class ApiServer {
                 if (e.evCents() != null && e.evCents() < 0) {
                     m.put("negativeEv", true); // never an unlabeled recommendation
                 }
+                attachEvaluationReceipt(m, e);
                 cands.add(m);
             }
             out.put("ranking", "decision"); // disclosed: what ordered this list
@@ -4119,6 +4120,17 @@ public final class ApiServer {
             log.debug("Decision-ranking failure detail", e);
             return result;
         }
+    }
+
+    private static void attachEvaluationReceipt(ObjectNode candidate,
+                                                 io.liftandshift.strikebench.eval.StrategyEvaluation evaluation) {
+        ObjectNode receipt = candidate.putObject("evaluation");
+        if (evaluation.capital() != null) receipt.set("capital", Json.MAPPER.valueToTree(evaluation.capital()));
+        if (evaluation.risk() != null) receipt.set("risk", Json.MAPPER.valueToTree(evaluation.risk()));
+        if (evaluation.evidence() != null) receipt.set("evidence", Json.MAPPER.valueToTree(evaluation.evidence()));
+        if (evaluation.management() != null) receipt.set("management", Json.MAPPER.valueToTree(evaluation.management()));
+        if (evaluation.score() != null) receipt.set("score", Json.MAPPER.valueToTree(evaluation.score()));
+        if (evaluation.explanation() != null) receipt.set("explanation", Json.MAPPER.valueToTree(evaluation.explanation()));
     }
 
     /** Parses the recommend request (injecting real holdings for hold-based intents) and runs the engine. */
@@ -4706,6 +4718,7 @@ public final class ApiServer {
                             m.put("economicVerdict", e.economics().verdict().name());
                             m.put("economicPlacement", e.economics().placement());
                         }
+                        attachEvaluationReceipt(m, e);
                     }
                     arr.add(m);
                 }

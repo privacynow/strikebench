@@ -2033,6 +2033,80 @@
     return block;
   }
 
+  function evaluationLevelBadge(level) {
+    level = String(level || 'UNKNOWN').toUpperCase();
+    var label = level.replace('OBSERVED_', '').replace('DEMO_FIXTURE', 'DEMO').replaceAll('_', ' ');
+    var cls = level === 'OBSERVED_LIVE' ? 'badge-ok'
+      : level === 'OBSERVED_DELAYED' ? 'badge-warn'
+      : level === 'MODELED' ? 'badge-caution'
+      : level === 'DEMO_FIXTURE' ? 'badge-warn'
+      : level === 'SIMULATED' ? 'badge-sim' : 'badge-dim';
+    return el('span', { class: 'badge ' + cls }, label);
+  }
+
+  function managementReceipt(management, beginner, open) {
+    if (!management || !(management.rules || []).length) return null;
+    return UI.expandable(beginner ? 'How you would manage this trade' : 'Mechanical management plan', function () {
+      return el('div', { class: 'candidate-management-receipt' },
+        management.summary ? el('p', {}, management.summary) : null,
+        el('ul', { class: 'plan-rules' }, management.rules.map(function (rule) {
+          return el('li', {}, el('b', {}, String(rule.kind || 'Rule').replaceAll('_', ' ').toLowerCase() + ': '),
+            rule.trigger, ' → ', el('span', { class: 'plan-action' }, rule.action));
+        })));
+    }, { open: !!open });
+  }
+
+  function candidateEvaluationReceipt(c, beginner) {
+    var analysis = c && c.evaluation;
+    if (!analysis) return null;
+    var wrap = el('div', { class: 'candidate-evaluation-receipt' });
+    var management = managementReceipt(analysis.management, beginner, beginner && !!c.selected);
+    if (management) wrap.appendChild(management);
+    if (beginner) {
+      var beginnerFailures = analysis.explanation && analysis.explanation.failureModes || [];
+      if (beginnerFailures.length) wrap.appendChild(UI.expandable('What could make this lose', function () {
+        return el('ul', {}, beginnerFailures.map(function (failure) { return el('li', {}, failure); }));
+      }));
+      return wrap.hasChildNodes() ? wrap : null;
+    }
+    var evidence = analysis.evidence || {};
+    var dimensions = evidence.perDimension || {};
+    if (Object.keys(dimensions).length) wrap.appendChild(UI.expandable('Evidence by input', function () {
+      var rows = Object.keys(dimensions).map(function (name) {
+        return el('div', { class: 'evidence-row' }, el('span', { class: 'ev-dim' }, name), evaluationLevelBadge(dimensions[name]));
+      });
+      if (evidence.note) rows.push(el('p', { class: 'muted small' }, evidence.note));
+      return el('div', { class: 'evidence-grid' }, rows);
+    }));
+    var score = analysis.score || {};
+    if ((score.components || []).length) wrap.appendChild(UI.expandable('How the Decision score was built', function () {
+      var body = el('div', {});
+      if (score.gatePassed === false && (score.gateFailures || []).length) {
+        body.appendChild(alertBox('warn', 'Failed a hard check', score.gateFailures));
+      }
+      body.appendChild(table(['Factor', 'Score', 'Weight', 'Why'], score.components.map(function (component) {
+        return el('tr', {}, el('td', {}, component.name), el('td', {}, Math.round(Number(component.value || 0) * 100) + '%'),
+          el('td', {}, Math.round(Number(component.weight || 0) * 100) + '%'), el('td', { class: 'muted' }, component.note || '—'));
+      })));
+      body.appendChild(el('p', { class: 'muted small' },
+        'Normalized ' + Math.round(Number(score.normalizedScore || 0)) + ' → risk-adjusted '
+        + Math.round(Number(score.riskAdjustedScore || 0)) + ' inside the economic tier → Decision score '
+        + Math.round(Number(c.decisionScore || 0)) + '.'));
+      return body;
+    }));
+    var explanation = analysis.explanation || {};
+    if ((explanation.assumptions || []).length || (explanation.failureModes || []).length) {
+      wrap.appendChild(UI.expandable('Assumptions and failure modes', function () {
+        return el('div', {},
+          (explanation.assumptions || []).length ? el('div', {}, el('b', {}, 'Assumptions'),
+            el('ul', {}, explanation.assumptions.map(function (item) { return el('li', {}, item); }))) : null,
+          (explanation.failureModes || []).length ? el('div', {}, el('b', {}, 'Failure modes'),
+            el('ul', {}, explanation.failureModes.map(function (item) { return el('li', {}, item); }))) : null);
+      }));
+    }
+    return wrap.hasChildNodes() ? wrap : null;
+  }
+
   function tradeIntent(value) {
     var intent = String(value || '').toUpperCase();
     return ['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'].indexOf(intent) >= 0
@@ -2121,6 +2195,8 @@
     // plain-language win/loss mechanics instead of displacing them.
     if (gb) card.insertBefore(gb, econ || card.children[2] || null);
     if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.context.symbol(), c));
+    var beginnerReceipt = candidateEvaluationReceipt(c, true);
+    if (beginnerReceipt) card.appendChild(beginnerReceipt);
     card.appendChild(UI.expandable('The exact contracts \u2014 ' + c.qty + ' lot' + (c.qty > 1 ? 's' : '') + ' (each line \u00d7' + c.qty + ')', function () {
       return el('div', {},
         el('div', { class: 'mono', style: 'margin-bottom:6px' }, c.label),
@@ -2170,6 +2246,8 @@
       chip('Liquidity', fmtNum(c.liquidityScore, 2)),
       chip(el('span', {}, 'Screen score', UI.info('screenscore')), fmtNum(c.score, 0))));
     if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.context.symbol(), c));
+    var expertReceipt = candidateEvaluationReceipt(c, false);
+    if (expertReceipt) card.appendChild(expertReceipt);
     if (c.warnings && c.warnings.length) card.appendChild(alertBox('warn', 'Heads up', c.warnings));
     card.appendChild(el('details', { class: 'qa' },
       el('summary', {}, 'Why this idea — and what would kill it'),

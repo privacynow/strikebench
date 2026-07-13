@@ -2099,6 +2099,8 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .portfolio-allocation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .portfolio-allocation-card { display: grid; align-content: start; gap: 8px; }
 .portfolio-allocation-card p { margin: 0; }
+.candidate-evaluation-receipt { display: grid; gap: 6px; margin-top: 10px; }
+.candidate-management-receipt > p { margin: 0 0 8px; }
 .plan-next-action { display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 14px 16px; border: 1px solid var(--accent); border-radius: var(--radius-sm);
   background: var(--accent-soft); }

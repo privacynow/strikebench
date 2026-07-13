@@ -56,6 +56,11 @@ class PlanStrategyServiceTest {
                      "marketEvAfterCostsCents":-1200,"realizedVolEvAfterCostsCents":2400,
                      "estimatedRoundTripFeesCents":520,"marketEvPctOfRisk":-3.2,
                      "observedEvidence":false,"reasons":["Scenario positive"]},
+                   "evaluation":{"evidence":{"rollup":"DEMO_FIXTURE","perDimension":{"pricing":"DEMO_FIXTURE"},"note":"Teaching data"},
+                     "score":{"gatePassed":true,"gateFailures":[],"normalizedScore":74,"riskAdjustedScore":68,
+                       "components":[{"name":"expected value","weight":0.35,"value":0.55,"contribution":0.1925,"note":"after costs"}]},
+                     "management":{"summary":"Take profits mechanically","rules":[{"kind":"profit","trigger":"50% captured","action":"close"}]},
+                     "explanation":{"assumptions":["No dividend yield"],"failureModes":["Move beyond a short strike"]}},
                    "legs":[
                      {"action":"SELL","type":"PUT","strike":"245","expiration":"2026-08-14","ratio":1,"entryPrice":"2.4"},
                      {"action":"BUY","type":"PUT","strike":"240","expiration":"2026-08-14","ratio":1,"entryPrice":"1.1"},
@@ -74,6 +79,10 @@ class PlanStrategyServiceTest {
         assertThat(restored.result().at("/candidates/0/legs")).isEqualTo(saved.result().at("/candidates/0/legs"));
         assertThat(restored.result().at("/candidates/0/breakevens")).isEqualTo(saved.result().at("/candidates/0/breakevens"));
         assertThat(restored.result().at("/candidates/0/economics/reasons/0").asText()).isEqualTo("Scenario positive");
+        assertThat(restored.result().at("/candidates/0/evaluation/score/components/0/name").asText())
+                .isEqualTo("expected value");
+        assertThat(restored.result().at("/candidates/0/evaluation/management/rules/0/action").asText())
+                .isEqualTo("close");
         assertThat(db.query("SELECT COUNT(*) n FROM plan_candidate_leg", r -> r.lng("n"))).containsExactly(4L);
 
         PlanStrategyService.Selection selection = strategies.select(null, plan.id(), candidateId, plan.version());
