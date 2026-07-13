@@ -4740,25 +4740,42 @@
     extCard.appendChild(UI.expandable('Record a real trade (from your broker)', (function () {
       var box = el('div', {});
       box.appendChild(explain('Enter the exact contracts and your ACTUAL net fill. The trade is tracked, marked and judged like any other — but your practice cash is never touched, and its outcome feeds Your record.'));
-      var sym = el('input', { type: 'text', id: 'ext-symbol', list: 'universe-symbols', placeholder: 'AAPL', style: 'max-width:110px' });
-      var qty = el('input', { type: 'number', id: 'ext-qty', min: '1', max: '100', value: '1', style: 'max-width:80px' });
-      var net = el('input', { type: 'number', id: 'ext-net', step: '0.01', placeholder: '+credit / \u2212debit $' });
-      var fees = el('input', { type: 'number', id: 'ext-fees', step: '0.01', placeholder: 'fees $' });
+      function externalField(label, input, hint) {
+        return el('div', { class: 'field' }, el('label', {}, label), input,
+          hint ? el('span', { class: 'muted small' }, hint) : null);
+      }
+      var sym = el('input', { type: 'text', id: 'ext-symbol', list: 'universe-symbols', placeholder: 'AAPL' });
+      var qty = el('input', { type: 'number', id: 'ext-qty', min: '1', max: '100', value: '1' });
+      var net = el('input', { type: 'number', id: 'ext-net', step: '0.01', placeholder: '175.00' });
+      var fees = el('input', { type: 'number', id: 'ext-fees', step: '0.01', min: '0', placeholder: '2.00' });
+      box.appendChild(el('div', { class: 'form-grid external-trade-summary' },
+        externalField('Symbol', sym), externalField('Contracts', qty),
+        externalField('Actual package net $', net, 'Total dollars: + credit / \u2212 debit'),
+        externalField('Total fees $', fees, 'All opening commissions and fees')));
       var legsBox = el('div', { id: 'ext-legs' });
       function legRow() {
-        return el('div', { class: 'btn-row ext-leg', style: 'margin:4px 0' },
-          el('select', { class: 'x-act' }, el('option', {}, 'SELL'), el('option', {}, 'BUY')),
-          el('select', { class: 'x-type' }, el('option', {}, 'PUT'), el('option', {}, 'CALL')),
-          el('input', { class: 'x-strike', type: 'number', step: '0.5', placeholder: 'strike', style: 'max-width:100px' }),
-          el('input', { class: 'x-exp', type: 'date', style: 'max-width:150px' }),
-          el('input', { class: 'x-fill', type: 'number', step: '0.01', placeholder: 'fill $/sh', style: 'max-width:100px',
-            title: 'Your per-leg fill — required for past trades whose contracts have expired' }),
-          el('button', { class: 'btn btn-sm', onclick: function (ev) { ev.target.closest('.ext-leg').remove(); } }, '\u00d7'));
+        var action = el('select', { class: 'x-act' }, el('option', {}, 'SELL'), el('option', {}, 'BUY'));
+        var type = el('select', { class: 'x-type' }, el('option', {}, 'PUT'), el('option', {}, 'CALL'));
+        var strike = el('input', { class: 'x-strike', type: 'number', step: '0.5', placeholder: '250' });
+        var expiration = el('input', { class: 'x-exp', type: 'date' });
+        var fill = el('input', { class: 'x-fill', type: 'number', step: '0.01', placeholder: '3.10' });
+        return el('div', { class: 'ext-leg' },
+          externalField('Action', action), externalField('Type', type), externalField('Strike', strike),
+          externalField('Expiration', expiration), externalField('Your fill $/share', fill,
+            'Required when the contract has expired'),
+          el('button', { type: 'button', class: 'btn btn-sm btn-secondary ext-leg-remove',
+            'aria-label': 'Remove this leg', onclick: function (ev) { ev.target.closest('.ext-leg').remove(); } }, '\u00d7'));
       }
       legsBox.appendChild(legRow());
-      var execDate = el('input', { type: 'date', id: 'ext-date', title: 'When the trade actually executed' });
-      var brokerIn = el('input', { type: 'text', id: 'ext-broker', placeholder: 'broker (optional)', style: 'max-width:130px' });
-      var refIn = el('input', { type: 'text', id: 'ext-ref', placeholder: 'order # (optional)', style: 'max-width:130px' });
+      box.appendChild(el('div', { class: 'plan-section-head external-legs-head' },
+        el('div', {}, el('h4', {}, 'Exact option legs'),
+          el('p', { class: 'muted small' }, 'Leg fills are per share; package net above is total dollars.')),
+        el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
+          onclick: function () { legsBox.appendChild(legRow()); } }, '+ Leg')));
+      box.appendChild(legsBox);
+      var execDate = el('input', { type: 'date', id: 'ext-date' });
+      var brokerIn = el('input', { type: 'text', id: 'ext-broker', placeholder: 'E*TRADE' });
+      var refIn = el('input', { type: 'text', id: 'ext-ref', placeholder: 'Order number' });
       var pastChk = el('input', { type: 'checkbox', id: 'ext-past' });
       var msg = el('div', { class: 'muted small', id: 'ext-msg' });
       var saveBtn = el('button', { class: 'btn btn-sm', id: 'ext-save', onclick: async function () {
@@ -4788,19 +4805,16 @@
             executedAt: execDate.value || null, broker: brokerIn.value || null, orderRef: refIn.value || null,
             historical: pastChk.checked, source: 'IMPORT' });
           msg.textContent = 'Recorded ' + t.id + ' — it now appears below with an EXTERNAL badge.';
-          App.render();
+          API.flushCache();
+          await App.render();
         } catch (e) { msg.textContent = 'Refused: ' + (e.message || e); }
         saveBtn.disabled = false;
       } }, 'Record trade');
-      box.appendChild(el('div', { class: 'btn-row' },
-        el('span', { class: 'muted small' }, 'Symbol'), sym,
-        el('span', { class: 'muted small' }, 'Qty'), qty, net, fees,
-        el('button', { class: 'btn btn-sm', onclick: function () { legsBox.appendChild(legRow()); } }, '+ Leg')));
-      box.appendChild(legsBox);
-      box.appendChild(el('div', { class: 'btn-row' },
-        el('span', { class: 'muted small' }, 'Executed'), execDate, brokerIn, refIn,
-        el('label', { class: 'muted small', style: 'display:flex;gap:4px;align-items:center' }, pastChk,
-          el('span', {}, 'Past trade (contracts may have expired \u2014 uses your fills, no live check)'))));
+      box.appendChild(el('div', { class: 'form-grid external-trade-meta' },
+        externalField('Executed on', execDate), externalField('Broker (optional)', brokerIn),
+        externalField('Order number (optional)', refIn)));
+      box.appendChild(el('label', { class: 'check-row external-past-check' }, pastChk,
+        el('span', {}, 'Past trade — contracts may have expired; use my recorded fills instead of a live-book check.')));
       box.appendChild(el('div', { class: 'btn-row' }, saveBtn));
       box.appendChild(msg);
       return box;

@@ -2808,6 +2808,81 @@ test('large Research markets progressively load every sparkline in governed batc
   await page.setViewportSize({ width: 1280, height: 900 });
 });
 
+test('external broker fills remain a structured, cash-isolated learning-loop capability', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  await go('#/portfolio/active');
+  await page.waitForSelector('#record-real-card');
+  await page.locator('#record-real-card .xp-head').click();
+  await page.fill('#ext-symbol', 'AAPL');
+  await page.fill('#ext-qty', '1');
+  await page.fill('#ext-net', '175.00');
+  await page.fill('#ext-fees', '2.00');
+  const first = page.locator('#ext-legs .ext-leg').first();
+  await first.locator('.x-strike').fill('100');
+  await first.locator('.x-exp').fill('2026-07-02');
+  await first.locator('.x-fill').fill('3.10');
+  await page.locator('#record-real-card button').filter({ hasText: '+ Leg' }).click();
+  const second = page.locator('#ext-legs .ext-leg').nth(1);
+  await second.locator('.x-act').selectOption({ label: 'BUY' });
+  await second.locator('.x-strike').fill('95');
+  await second.locator('.x-exp').fill('2026-07-02');
+  await second.locator('.x-fill').fill('1.35');
+  await page.fill('#ext-date', '2026-07-01');
+  await page.fill('#ext-broker', 'Weekend review broker');
+  await page.fill('#ext-ref', 'REVIEW-001');
+  await page.check('#ext-past');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/portfolio-external-desktop.png'), fullPage: true });
+  const before = await page.evaluate(async () => (await API.getFresh('/api/account')).account);
+  const createResponse = page.waitForResponse(response => response.url().endsWith('/api/trades/external')
+    && response.request().method() === 'POST');
+  await page.click('#ext-save');
+  const response = await createResponse;
+  const responseText = await response.text();
+  assert.equal(response.status(), 201, 'external fill was refused: ' + responseText);
+  const recorded = JSON.parse(responseText);
+  assert.equal(recorded.origin, 'EXTERNAL');
+  assert.equal(recorded.entryNetPremiumCents, 17500);
+  await page.evaluate(() => API.flushCache());
+  await go('#/portfolio/active');
+  const visible = await page.evaluate(async () => ({
+    text: document.getElementById('trades-card')?.textContent || '',
+    route: location.hash,
+    filter: App.state.portfolioFilter || null,
+    listed: await API.getFresh('/api/trades?status=ACTIVE&page=0&size=50')
+  }));
+  assert.match(visible.text, /EXTERNAL/, 'recorded trade did not appear: ' + JSON.stringify(visible));
+  const after = await page.evaluate(async () => (await API.getFresh('/api/account')).account);
+  assert.equal(after.cashCents, before.cashCents, 'recording a broker fill never changes practice cash');
+  assert.equal(after.reservedCents, before.reservedCents, 'recording a broker fill never changes practice reserve');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#record-real-card .xp-head').click();
+  await page.waitForSelector('#ext-symbol');
+  await page.waitForTimeout(300);
+  const containment = await page.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    document: document.documentElement.scrollWidth,
+    card: document.getElementById('record-real-card').scrollWidth,
+    cardClient: document.getElementById('record-real-card').clientWidth
+  }));
+  assert.ok(containment.document <= containment.viewport + 1 && containment.card <= containment.cardClient + 1,
+    'the structured external-fill editor remains contained on mobile: ' + JSON.stringify(containment));
+  await page.locator('#record-real-card').evaluate(node => {
+    node.scrollIntoView({ block: 'start' });
+    window.scrollBy(0, -150);
+  });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(__dirname, 'shots/portfolio-external-mobile.png') });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#record-real-card');
+  assert.equal(await page.locator('#record-real-card .xp-head').count(), 1,
+    'Expert retains the same structured import capability');
+  await page.evaluate(async id => { await API.del('/api/trades/' + id + '?confirm=true'); }, recorded.id);
+});
+
 test('levels share ONE geometry: toggling Beginner/Expert never reflows spacing', async () => {
   // Levels differ by CONTENT (explainers, columns, features) — never by padding or font
   // size alone. A screen showing the same data must not shift when the level toggles.

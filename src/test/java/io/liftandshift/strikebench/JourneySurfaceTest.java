@@ -58,7 +58,8 @@ class JourneySurfaceTest {
                 "Your income picture", "One position, separate lenses", "Market odds", "Model futures",
                 "Past analogs", "Which proposal handles this evidence best?", "Rule replay",
                 "Previous Plan replays", "Price the decision now",
-                "Construct across ideas", "Your record", "Possible futures", "Past evidence");
+                "Construct across ideas", "Record a real trade (from your broker)", "Your record",
+                "Possible futures", "Past evidence");
         assertThat(builder).contains(
                 "Every structure, with its payoff shape", "Fit to my limits", "Size this synthetic long by exposure",
                 "id: 'builder-add-leg'", "Theoretical max loss", "Theoretical max profit");
