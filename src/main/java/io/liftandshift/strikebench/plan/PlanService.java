@@ -21,7 +21,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
 
-/** Server-owned Plan lifecycle with owner isolation, immutable identity and optimistic revisions. */
+/** Server-owned Plan lifecycle with owner isolation, versioned assumptions and optimistic revisions. */
 public final class PlanService {
     public static final String CONTEXT_ENGINE_VERSION = "plan-context-1";
 
@@ -153,7 +153,11 @@ public final class PlanService {
             requireVersion(current, raw.expectedVersion());
             if (current.intent() != null) {
                 if (current.intent().equals(intent)) return current;
-                throw new IllegalStateException("A plan's intent is fixed. Create a new plan from this one instead.");
+                boolean hasDecision = !Db.queryOn(c,
+                        "SELECT 1 ok FROM plan_decision WHERE plan_id=? LIMIT 1", r -> r.intv("ok"), planId).isEmpty();
+                if (hasDecision || current.status() != Plan.Status.ACTIVE) {
+                    throw new IllegalStateException("This plan has a frozen decision. Start a linked plan to change its goal without rewriting history.");
+                }
             }
             Plan.ContextRevision old = current.context();
             String hash = contextHash(current.symbol(), intent, current.marketKind(), current.worldId(),
@@ -168,7 +172,8 @@ public final class PlanService {
                     old.riskMode(), old.holdingsShares(), old.costBasisCents(), old.priceAssumptionCents(),
                     hash, CONTEXT_ENGINE_VERSION, now);
             markDependentsStale(c, planId);
-            Db.execOn(c, "UPDATE plans SET intent=?, active_context_rev=?, version=version+1, updated_at=? WHERE id=?",
+            Db.execOn(c, "UPDATE plans SET intent=?, active_stage='STRATEGY', active_context_rev=?, "
+                            + "version=version+1, updated_at=? WHERE id=?",
                     intent, nextRev, now, planId);
             return selectViewOn(c, planId, userId, false);
         });
@@ -267,7 +272,9 @@ public final class PlanService {
     private static String viewSelect() {
         return "SELECT p.id,p.origin_plan_id,p.symbol,p.intent,p.market_kind,p.world_id,p.account_id," +
                 "p.custom_title,p.status,p.active_stage,p.version,p.is_open,p.created_at::text p_created," +
-                "p.updated_at::text p_updated,c.id context_id,c.rev context_rev,c.thesis,c.horizon_days," +
+                "p.updated_at::text p_updated,CASE WHEN p.status='ACTIVE' AND NOT EXISTS " +
+                "(SELECT 1 FROM plan_decision pd WHERE pd.plan_id=p.id) THEN 1 ELSE 0 END assumptions_editable," +
+                "c.id context_id,c.rev context_rev,c.thesis,c.horizon_days," +
                 "c.target_cents,c.risk_mode,c.holdings_shares,c.cost_basis_cents,c.price_assumption_cents," +
                 "c.input_hash,c.engine_version,c.created_at::text c_created FROM plans p " +
                 "JOIN plan_context_revision c ON c.plan_id=p.id AND c.rev=p.active_context_rev";
@@ -301,7 +308,8 @@ public final class PlanService {
                 Plan.MarketKind.valueOf(r.str("market_kind")), r.str("world_id"), r.str("account_id"),
                 custom == null ? derivedTitle(r.str("symbol"), r.str("intent"), context) : custom,
                 Plan.Status.valueOf(r.str("status")), Plan.Stage.valueOf(r.str("active_stage")),
-                r.lng("version"), r.bool("is_open"), context, r.str("p_created"), r.str("p_updated"));
+                r.lng("version"), r.bool("is_open"), r.bool("assumptions_editable"), context,
+                r.str("p_created"), r.str("p_updated"));
     }
 
     private static Integer integerOrNull(Db.Row r, String column) {

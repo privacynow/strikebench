@@ -1998,6 +1998,39 @@ public final class ApiServer {
         return io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED;
     }
 
+    private record PlanSymbolEligibility(boolean eligible, String detail) {}
+
+    /** A Plan may start only when its active market can supply a lane-owned option surface. */
+    private PlanSymbolEligibility planSymbolEligibility(String rawSymbol, String world) {
+        String symbol = rawSymbol == null ? "" : rawSymbol.trim().toUpperCase(Locale.ROOT);
+        if (symbol.isBlank()) return new PlanSymbolEligibility(false, "Choose a ticker symbol first.");
+        var lane = io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly());
+        var quote = market.quote(symbol, world).orElse(null);
+        if (quote == null) return new PlanSymbolEligibility(false,
+                symbol + " is not available in the active " + lane.name().toLowerCase(Locale.ROOT) + " market.");
+        var expirations = activeExpirations(symbol, world);
+        var chain = expirations.isEmpty() ? null : market.chain(symbol, expirations.getFirst(), world).orElse(null);
+        return planSymbolEligibility(symbol, lane, quote, expirations,
+                chain == null || chain.isEmpty() ? io.liftandshift.strikebench.model.DataEvidence.missing("option chain")
+                        : chain.evidence());
+    }
+
+    private PlanSymbolEligibility planSymbolEligibility(String symbol,
+            io.liftandshift.strikebench.market.MarketLane lane, Quote quote, List<LocalDate> expirations,
+            io.liftandshift.strikebench.model.DataEvidence optionEvidence) {
+        if (!quote.evidence().usableIn(lane)) return new PlanSymbolEligibility(false,
+                symbol + " does not have " + lane.name().toLowerCase(Locale.ROOT) + " market evidence.");
+        if (!quote.optionable()) return new PlanSymbolEligibility(false,
+                symbol + " has no listed options in this market. Its stock research remains available.");
+        if (expirations.isEmpty()) return new PlanSymbolEligibility(false,
+                symbol + " has no active option expirations in this market.");
+        if (optionEvidence == null || !optionEvidence.usableIn(lane)) {
+            return new PlanSymbolEligibility(false,
+                    "An option surface for " + symbol + " is unavailable in this market right now.");
+        }
+        return new PlanSymbolEligibility(true, "Ready to build an options Plan in the active market.");
+    }
+
     private void plansList(Context ctx) {
         if (planSvc == null) throw new IllegalStateException("plan store unavailable");
         boolean allMarkets = "all".equalsIgnoreCase(ctx.queryParam("scope"));
@@ -2015,6 +2048,16 @@ public final class ApiServer {
         var market = activePlanMarket(ctx);
         String world = market == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
                 ? activeWorld(ctx) : null;
+        String marketWorld = market == io.liftandshift.strikebench.plan.Plan.MarketKind.DEMO ? "demo" : world;
+        if (request.symbol() != null && !request.symbol().isBlank()) {
+            var eligibility = planSymbolEligibility(request.symbol(), marketWorld);
+            if (!eligibility.eligible()) {
+                ctx.attribute("apiErrorWritten", true);
+                ctx.status(422).json(Map.of("error", "plan_symbol_unavailable",
+                        "detail", eligibility.detail(), "market", market.name()));
+                return;
+            }
+        }
         // Market and account are server-derived. A client cannot create an observed plan while
         // looking at generated quotes or bind a plan to somebody else's simulation account.
         Account account = currentAccount(ctx);
@@ -3932,6 +3975,10 @@ public final class ApiServer {
                     "summary", io.liftandshift.strikebench.model.DataEvidence.aggregate(evidenceInputs.values()),
                     "inputs", evidenceInputs));
             out.put("expirations", ie.exps().stream().map(LocalDate::toString).toList());
+            var planLane = io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly());
+            var planEligibility = planSymbolEligibility(symbol, planLane, q, ie.exps(), ie.evidence());
+            out.put("planEligible", planEligibility.eligible());
+            out.put("planEligibility", planEligibility.detail());
             out.put("benchmarks", benchF.get());
             out.put("freshness", q.markFreshness().name());
             out.put("asOfDate", today.toString()); // the LANE's today — client DTE math uses this, never Date.now()

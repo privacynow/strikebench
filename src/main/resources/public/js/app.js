@@ -194,10 +194,10 @@
       var params = parts.slice(1);
       function validRouteShape(name, args) {
         if (name === 'home') return !args.length || (args.length === 1 && args[0] === 'tour');
-        if (name === 'research') return !args.length;
+        if (name === 'research') return !args.length
+          || (args.length === 1 && /^[A-Z0-9._-]+$/i.test(args[0]));
         if (name === 'plan') {
           if (!args.length) return false;
-          if (/^new(?:\?symbol=[A-Z0-9._-]+)?$/i.test(args[0])) return args.length === 1;
           return args.length === 2 && ['understand', 'evidence', 'strategy', 'outcomes', 'decide', 'manage-review']
             .indexOf((args[1] || '').split('?')[0]) >= 0;
         }
@@ -224,8 +224,9 @@
       }
       App._lastRenderedRoute = renderRouteKey;
 
+      var navRoute = route === 'plan' || (route === 'portfolio' && !params.length) ? 'plans' : route;
       document.querySelectorAll('#nav a, #bottom-nav a').forEach(function (a) {
-        a.classList.toggle('active', a.getAttribute('data-route') === route);
+        a.classList.toggle('active', a.getAttribute('data-route') === navRoute);
       });
       // Route identity is part of the synchronous navigation commit. Progressive views paint
       // before their async fills finish, and their layout CSS must apply to that first frame.
@@ -413,7 +414,7 @@
             planBtn.remove();
           } else if (planBtn) {
             planBtn.textContent = 'Open ' + sym + ' Plan';
-            planBtn.onclick = function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(sym)); };
+            planBtn.onclick = function () { App.navigate('#/research/' + encodeURIComponent(sym)); };
           }
         } catch (e) { /* generic buttons stay */ }
       })();
@@ -514,6 +515,18 @@
     var seq = ++worldBandSeq;
     var world = App.state.world;
     var isDemo = world === 'demo';
+    var laneChip = document.getElementById('lane-chip');
+    if (laneChip) {
+      var laneName = !world || world === 'observed' ? 'OBSERVED' : isDemo ? 'DEMO' : 'SIMULATED';
+      laneChip.textContent = laneName;
+      laneChip.className = 'badge ' + (laneName === 'SIMULATED' ? 'badge-sim'
+        : laneName === 'DEMO' ? 'badge-warn' : 'badge-dim');
+      laneChip.setAttribute('aria-label', 'Active market: ' + laneName.toLowerCase());
+      laneChip.title = laneName === 'OBSERVED'
+        ? 'Observed market inputs only. Delayed and unavailable values remain labeled.'
+        : laneName === 'DEMO' ? 'Fabricated teaching market. No prices or history are real.'
+          : 'Generated prices, option books and fills inside the active simulated session.';
+    }
     document.body.classList.toggle('in-sim-world', !!world && world !== 'observed' && !isDemo);
     document.body.classList.toggle('in-demo-world', isDemo);
     if (!world || world === 'observed') {
@@ -752,7 +765,7 @@
         var syms = (u.active && u.active.symbols) || [];
         if (m && syms.length && syms.indexOf(m[1].toUpperCase()) < 0) {
           if (UI.toast) UI.toast(m[1].toUpperCase() + ' is not in this market \u2014 showing ' + syms[0]);
-          App.navigate('#/plan/new?symbol=' + encodeURIComponent(syms[0]));
+          App.navigate('#/research/' + encodeURIComponent(syms[0]));
           return;
         }
         try {
@@ -1188,7 +1201,7 @@
           var pct = prev ? (last - prev) / prev * 100 : 0;
           seq.appendChild(UI.el('button', {
             class: 'tape-item', type: 'button', tabindex: interactive ? '0' : '-1', 'data-sym': q.symbol,
-            onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(q.symbol)); }
+            onclick: function () { App.navigate('#/research/' + encodeURIComponent(q.symbol)); }
           },
             UI.el('b', {}, q.symbol),
             UI.el('span', {}, last.toFixed(2)),
@@ -1404,12 +1417,13 @@
   function prefetchForRoute(route, params) {
     if (!window.API || !API.prefetch) return;
     var sym = null;
+    if (route === 'research' && params && params[0]) sym = decodeURIComponent(params[0]).toUpperCase();
     if (route === 'plan') sym = App.context.symbol() || null;
     if (!sym) return;
     var run = function () {
       // A Plan's next stages need expirations, while Evidence calibrates from recent history.
       API.prefetch('/api/research/' + sym + '/expirations');
-      if (route === 'plan') API.prefetch('/api/research/' + sym + '/history?range=6m');
+      if (route === 'plan' || route === 'research') API.prefetch('/api/research/' + sym + '/history?range=6m');
     };
     if (window.requestIdleCallback) requestIdleCallback(run, { timeout: 2500 });
     else setTimeout(run, 700);
@@ -1446,7 +1460,7 @@
     if (!box) return;
     box.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && box.value.trim()) {
-        App.navigate('#/plan/new?symbol=' + encodeURIComponent(box.value.trim().toUpperCase()));
+        App.navigate('#/research/' + encodeURIComponent(box.value.trim().toUpperCase()));
         box.value = '';
         box.blur();
       }

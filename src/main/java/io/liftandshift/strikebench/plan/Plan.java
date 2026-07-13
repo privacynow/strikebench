@@ -36,6 +36,7 @@ public final class Plan {
             Stage activeStage,
             long version,
             boolean open,
+            boolean assumptionsEditable,
             ContextRevision context,
             String createdAt,
             String updatedAt
@@ -70,7 +71,7 @@ public final class Plan {
             java.util.Set<String> clear
     ) {}
 
-    /** An intent may be claimed once when Evidence promoted a plan before an intent existed. */
+    /** Intent is editable until a decision freezes the Plan's historical meaning. */
     public record IntentRequest(Long expectedVersion, String intent) {}
     public record StageRequest(Long expectedVersion, String stage) {}
     public record OpenRequest(Long expectedVersion, Boolean open) {}

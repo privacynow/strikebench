@@ -140,6 +140,7 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
 .nav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
 .nav a.active { background: var(--accent-soft); color: var(--accent); }
 .topbar-controls { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 12px; min-width: 0; }
+#lane-chip { white-space: nowrap; letter-spacing: .04em; }
 .risk-select { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-dim); }
 .risk-select select { padding: 4px 8px; font-size: 12.5px; border-radius: 7px; }
 /* Experience ladder: segmented control */
@@ -579,7 +580,8 @@ body.lvl-expert .not-expert { display: none !important; }
   }
   .bottom-nav a {
     display: flex; flex-direction: column; align-items: center; gap: 1px;
-    font-size: 10.5px; font-weight: 700; color: var(--text-faint); padding: 3px 10px; border-radius: 8px;
+    flex: 1 1 0; min-width: 0; font-size: 10px; font-weight: 700; color: var(--text-faint);
+    padding: 3px 2px; border-radius: 8px; white-space: nowrap;
   }
   .bottom-nav a.active { color: var(--accent); }
   .bottom-nav .bn-ico { line-height: 1; }
