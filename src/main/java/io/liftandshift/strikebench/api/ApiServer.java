@@ -3191,26 +3191,12 @@ public final class ApiServer {
                 + "sources until it clears. " + cboeHint;
         sources.add(source(cboeThrottled ? "Cboe (delayed chains) — THROTTLED" : "Cboe (delayed chains)",
                 "Option chains + greeks", !fx && !cboeThrottled, "keyless · delayed · display-only", cboeHint));
-        boolean yahooEligible = cfg.yahooEnabled() && cfg.yahooAutomationPermissionConfirmed();
-        sources.add(source("Yahoo Finance automation", "Equity/ETF/index candles", yahooEligible,
-                "permission-required · PERSONAL / local-clone only",
-                yahooEligible
-                        ? "Authorized local automation is enabled and governed by a durable request budget."
-                        : "Off by default. Enabling the endpoint alone is insufficient; automated collection requires permission confirmation. Prefer a user-exported CSV or official keyed API."));
-        sources.add(source("Alpha Vantage", "Daily equity/ETF candles", !cfg.alphaVantageApiKey().isBlank(),
-                "official keyed API · plan terms apply", "Set ALPHAVANTAGE_API_KEY. Compact access supplies recent daily rows; full history requires an entitled plan."));
-        sources.add(source("Polygon", "Historical option chains", !cfg.polygonApiKey().isBlank(),
-                "keyed · internal-use", "Set POLYGON_API_KEY for real historical chains used by the backtester's observed tier."));
-        sources.add(source("Stooq", "Equity EOD candles", !fx, "keyless (bot-blocked for us)",
-                "Keyless CSV, but Stooq serves an anti-bot wall to non-browser clients — usually falls through."));
         sources.add(source("SEC EDGAR", "Filings (10-K/10-Q/8-K)", !fx, "keyless · public", "Keyless with a contact User-Agent. Corporate filings for the news feed."));
         sources.add(source("Google News RSS", "Headlines", !fx && !cfg.newsRssBaseUrl().isBlank(), "keyless · public", "Keyless per-symbol headlines."));
         sources.add(source("Treasury / FRED", "Risk-free rates", !fx, "keyless / keyed", "Treasury is keyless; FRED needs FRED_API_KEY."));
         sources.add(source("Historical options CSV", "Owned options history", true, "licensed · internal-use (no redistribution)",
                 "Import a licensed vendor CSV (ORATS / Cboe DataShop / Databento) via a backfill job — the 'own the past' path."));
-        sources.add(source("Built-in demo market", "Deterministic fabricated teaching data", fx, "demo",
-                "Available only when you explicitly enter Demo market; never used as an Observed fallback."));
-        ctx.json(Map.of("sources", sources, "connectors", dataConnectors.all(),
+        ctx.json(Map.of("feeds", sources, "connectors", dataConnectors.all(),
                 "recommendedCandleSource", dataConnectors.recommendedSource(), "fixturesOnly", fx));
     }
 

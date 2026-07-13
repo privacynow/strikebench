@@ -796,11 +796,12 @@ class ApiIntegrationTest {
         JsonNode j = Json.parse(ov.body());
         assertThat(j.has("engine")).isTrue();
         assertThat(j.get("jobKinds").toString()).contains("backfill_underlying");
-        // Source cards disclose license/use mode (Yahoo = personal-only).
-        JsonNode sources = Json.parse(get("/api/data/sources").body()).get("sources");
-        assertThat(sources.toString()).contains("Yahoo Finance").contains("PERSONAL");
+        // Daily-history connectors have one authoritative catalog; supporting feeds are distinct.
         JsonNode sourceDoc = Json.parse(get("/api/data/sources").body());
-        assertThat(sourceDoc.get("connectors").toString()).contains("Your price-history CSV");
+        assertThat(sourceDoc.get("connectors").toString())
+                .contains("Yahoo Finance").contains("personal use").contains("Your price-history CSV");
+        assertThat(sourceDoc.get("feeds").toString()).contains("Cboe").contains("SEC EDGAR");
+        assertThat(sourceDoc.get("feeds").toString()).doesNotContain("Yahoo Finance");
         JsonNode sync = Json.parse(get("/api/data/sync").body());
         assertThat(sync.get("note").asText()).contains("once after a completed market session");
         assertThat(sync.has("cursors")).isTrue();
