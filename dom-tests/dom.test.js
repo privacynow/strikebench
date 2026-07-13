@@ -1206,6 +1206,17 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   assert.equal(await page.locator('#research-symbol-context').count(), 0,
     'symbol identity is immutable in the Plan header rather than recaptured in the stage');
   assert.match(await page.textContent('#plan-header'), /AAPL.*Intent not chosen/s);
+  await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
+  await page.waitForSelector('#tv-view');
+  assert.equal(await page.inputValue('#tv-view'), '',
+    'a Plan without a thesis never displays an implicit bullish default');
+  assert.match(await page.textContent('#test-your-view'), /Choose the view you want to test/);
+  assert.equal(await page.locator('#research-outcomes').count(), 0,
+    'statistical lenses do not run under an assumption the Plan has not recorded');
+  await page.selectOption('#tv-view', 'bullish');
+  await page.waitForSelector('#research-outcomes');
+  assert.match(await page.textContent('.plan-stage-carry'), /bullish view/,
+    'the visible Evidence controls and durable carried context agree');
   await page.locator('.plan-rail button').filter({ hasText: 'Strategy' }).click();
   await page.waitForSelector('#plan-strategy-body .plan-intent-grid .choice-card');
   const intentChoices = await page.evaluate(() => {
