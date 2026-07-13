@@ -203,6 +203,12 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   assert.match(app, /Buying power/);
   assert.ok(await page.locator('#home-tour-link').isVisible(), 'the full tour is one visible click away');
   assert.ok((await page.locator('.home-market-grid .tile').count()) >= 4, 'market watch tiles');
+  assert.equal(await page.locator('#home-plan-library').count(), 0,
+    'a fresh desk does not spend a full-width card repeating the hero and Continue start action');
+  assert.equal(await page.locator('#next-up').count(), 0,
+    'Continue is absent until there is a real Plan to resume');
+  assert.equal(await page.getByRole('button', { name: 'Start a Plan' }).count(), 1,
+    'the hero owns the one empty-desk Plan action');
   const footer = await page.textContent('#disclaimer');
   assert.match(footer, /not financial advice/i);
   // The tour is a canonical Home subview.
@@ -1660,6 +1666,12 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   assert.match(await page.textContent('#plan-header'), /AAPL.*Intent not chosen/s);
   await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
   await page.waitForSelector('#tv-view');
+  assert.equal(await page.getByLabel('Your market view').count(), 1,
+    'the Plan view control is associated with its visible label');
+  assert.equal(await page.getByLabel('Historical condition to examine').count(), 1,
+    'the historical-condition control is associated with its visible label');
+  assert.equal(await page.getByLabel('Over how many trading days?').count(), 1,
+    'the Plan horizon control is associated with its visible label');
   assert.equal(await page.inputValue('#tv-view'), '',
     'a Plan without a thesis never displays an implicit bullish default');
   assert.match(await page.textContent('#test-your-view'), /Choose the view you want to test/);

@@ -43,6 +43,7 @@ public final class MarketDataService {
     private final List<NewsFilingsProvider> newsProviders;
     private final List<RatesProvider> ratesProviders;
     private final io.liftandshift.strikebench.market.ports.CandleStore candleStore; // stored bars first (nullable)
+    private volatile io.liftandshift.strikebench.market.ports.SnapshotStore quoteSnapshotStore;
     private final boolean fixtureOnlyChain;
     private volatile MarketDataProvider demoProvider;
     private volatile NewsFilingsProvider demoNewsProvider;
@@ -97,6 +98,11 @@ public final class MarketDataService {
         this.demoProvider = market;
         this.demoNewsProvider = news;
         this.demoRatesProvider = rates;
+    }
+
+    /** Shares the engine's durable observed quote mirror; never mounted in Demo-only builds. */
+    public void setQuoteSnapshotStore(io.liftandshift.strikebench.market.ports.SnapshotStore store) {
+        this.quoteSnapshotStore = store;
     }
 
     public MarketLane lane(String worldId) { return MarketLane.of(worldId, fixtureOnlyChain); }
@@ -240,8 +246,21 @@ public final class MarketDataService {
         String sym = norm(symbol);
         Quote q = quoteCache.get(sym, s ->
                 firstNonEmpty(Domain.QUOTES, p -> p.quote(s).orElse(null)));
+        if (q == null && !fixtureOnlyChain && quoteSnapshotStore != null) {
+            try {
+                q = quoteSnapshotStore.load(sym).map(MarketDataService::snapshotQuote).orElse(null);
+                if (q != null) quoteCache.put(sym, q);
+            } catch (RuntimeException e) {
+                log.debug("Last-known quote lookup failed for {}", sym, e);
+            }
+        }
         return Optional.ofNullable(q).map(this::gateQuote)
                 .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
+    }
+
+    private static Quote snapshotQuote(io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot s) {
+        return new Quote(s.symbol(), s.description(), s.last(), s.bid(), s.ask(), s.prevClose(),
+                null, null, null, s.optionable(), s.asOfEpochMs(), s.source(), Freshness.STALE);
     }
 
     public List<LocalDate> expirations(String symbol) {

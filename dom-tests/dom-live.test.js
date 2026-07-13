@@ -231,6 +231,9 @@ test('live: research a real symbol end to end', async () => {
       'Research owns one explicit history recovery action');
     assert.equal(await page.locator('#sector-grid .spark-empty + .spark-ev').count(), 0,
       'the explorer does not repeat HISTORY UNAVAILABLE on every affected card');
+    assert.equal(await page.locator('#sector-grid .spark-empty').count(),
+      await page.locator('#sector-grid .spark-slot-missing').count(),
+      'missing charts release unused chart height without hiding the unavailable state');
   }
   await go('#/research/AAPL');
   await page.waitForSelector('#plan-start', { timeout: 30000 });

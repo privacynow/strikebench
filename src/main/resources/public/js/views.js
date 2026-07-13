@@ -427,6 +427,12 @@
       var archived = plans.filter(function (p) { return p.status === 'ARCHIVED'; });
       var current = working.filter(function (p) { return PlanStore.marketKey(p) === currentKey; });
       var elsewhere = working.filter(function (p) { return PlanStore.marketKey(p) !== currentKey; });
+      if (!working.length && !archived.length && !closedTabs.length) {
+        // The hero and Continue card already own the first-Plan action. A second, full-width
+        // empty library made the opening desk look unfinished and repeated the same command.
+        planLibrary.remove();
+        return;
+      }
       var quoteBySymbol = {};
       var portfolioByPlan = {};
       var sessionById = {};
@@ -651,6 +657,7 @@
         if (!slot) return;
         slot.innerHTML = '';
         var missing = row.available === false || !row.closes || !row.closes.length;
+        slot.classList.toggle('spark-slot-missing', missing);
         if (missing) homeMissingHistory.add(row.symbol); else homeMissingHistory.delete(row.symbol);
         slot.appendChild(UI.sparkline(row, { height: 30, quietMissing: true,
           missingText: missing ? missingSparkCopy(row) : 'No chart' }));
@@ -714,6 +721,10 @@
     // NEXT UP (review #9): ONE contextual card replaces the journey card + continuity row +
     // empty-trades CTA — the single most useful next action first, everything else quiet.
     (function nextUp() {
+      // With no Plan there is nothing to continue. The hero already owns the one start
+      // command; rendering five stage buttons that all opened Research was duplicate
+      // navigation disguised as progress.
+      if (!activePlan) return;
       var card = el('div', { class: 'card card-slim', id: 'next-up' }, UI.cardHeader('Continue'));
       var any = false;
       // The beginner first-week path, folded in (retires itself after the first trade).
@@ -738,12 +749,6 @@
       if (chips.length) {
         card.appendChild(el('div', { class: 'chip-row', id: 'continue-row' }, chips));
         any = true;
-      }
-      if (!any) {
-        card.appendChild(el('button', { class: 'home-start-research', type: 'button',
-          onclick: function () { App.navigate('#/research'); } },
-          el('b', {}, 'Start with a stock you know'),
-          el('span', { class: 'muted small' }, 'Open Research, choose a ticker, then carry that view into a strategy.')));
       }
       colR.appendChild(card);
     })();
@@ -2046,6 +2051,7 @@
             if (!t2) return;
             t2.innerHTML = '';
             var missing = row.available === false || !row.closes || !row.closes.length;
+            t2.classList.toggle('spark-slot-missing', missing);
             t2.appendChild(UI.sparkline(row, { height: 36, quietMissing: true,
               missingText: missing ? missingSparkCopy(row) : 'No chart' }));
             if (missing) missingHistory.add(row.symbol);
@@ -7816,9 +7822,9 @@
       horIn.disabled = true;
     }
     var thesisRow = el('div', { class: 'form-grid' },
-      el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Your market view'), viewSel),
-      el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Historical condition to examine'), setupSel),
-      el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Over how many trading days?'), horIn));
+      el('div', { class: 'field' }, el('label', { class: 'field-label', for: 'tv-view' }, 'Your market view'), viewSel),
+      el('div', { class: 'field' }, el('label', { class: 'field-label', for: 'tv-setup' }, 'Historical condition to examine'), setupSel),
+      el('div', { class: 'field' }, el('label', { class: 'field-label', for: 'tv-horizon' }, 'Over how many trading days?'), horIn));
     wrap.appendChild(thesisRow);
 
     if (!assumptionsEditable) {
