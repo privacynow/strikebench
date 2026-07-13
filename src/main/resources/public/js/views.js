@@ -2733,23 +2733,20 @@
     var plan = { symbol: symbol, marketKind: market,
       worldId: market === 'SIMULATED' ? App.state.world : null, status: 'DRAFT', context: {}, title: symbol + ' · New plan' };
     var decisionHost = el('div', { class: 'plan-start-decision', id: 'plan-start-decision' });
-    async function promote(intent, forceNew) {
+    async function promote(intent) {
       decisionHost.innerHTML = '';
-      if (!forceNew) {
-        var matches = await PlanStore.matching(symbol, intent);
-        if (matches.length) {
-          var existing = matches[0];
-          decisionHost.appendChild(el('div', { class: 'alert alert-info plan-existing-match' },
-            el('div', {}, el('b', {}, 'You already have this Plan in the current market'),
-              el('p', { class: 'muted small' }, existing.title + ' · ' + (existing.context && existing.context.horizonDays || 30)
-                + ' days. Resume it to avoid accidental duplicates, or deliberately create a separate Plan.')),
-            el('div', { class: 'btn-row' },
-              el('button', { type: 'button', class: 'btn', onclick: function () {
-                PlanStore.focus(existing).catch(function (e) { UI.toast(e.message, 'error'); });
-              } }, 'Resume existing Plan'),
-              el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () { promote(intent, true); } }, 'Create separate Plan'))));
-          return;
-        }
+      var matches = await PlanStore.matching(symbol, intent);
+      if (matches.length) {
+        var existing = matches[0];
+        decisionHost.appendChild(el('div', { class: 'alert alert-info plan-existing-match' },
+          el('div', {}, el('b', {}, 'This inquiry already has a Plan'),
+            el('p', { class: 'muted small' }, existing.title + ' · ' + (existing.context && existing.context.horizonDays || 30)
+              + ' days. Resume it, or change an assumption first when you mean to investigate a different question.')),
+          el('div', { class: 'btn-row' },
+            el('button', { type: 'button', class: 'btn', onclick: function () {
+              PlanStore.focus(existing).catch(function (e) { UI.toast(e.message, 'error'); });
+            } }, 'Resume this Plan'))));
+        return;
       }
       decisionHost.setAttribute('aria-busy', 'true');
       try {
@@ -2770,7 +2767,7 @@
     }
     await research(root, ['__research', symbol, 'understand'], {
       plan: plan, stage: 'understand', provisional: true,
-      onBeginEvidence: function () { return promote(null, false); }
+      onBeginEvidence: function () { return promote(null); }
     });
     var eligibility = await eligibilityP;
     var card = el('section', { class: 'card plan-start-card research-plan-start', id: 'plan-start' },
@@ -2783,14 +2780,21 @@
     (Learn.INTENTS || []).forEach(function (meta) {
       var intentButton = el('button', { type: 'button', class: 'choice-card',
         disabled: eligibility.eligible ? null : 'disabled', onclick: function () {
-        promote(meta.key, false);
+        var button = this;
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        promote(meta.key).catch(function (e) {
+          button.disabled = false;
+          button.removeAttribute('aria-busy');
+          UI.toast((e && e.message) || 'This goal could not be set.', 'error');
+        });
       } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb || 'Build a plan around this goal.'));
       choices.appendChild(eligibility.eligible ? pressable(intentButton, meta.label, 'button') : intentButton);
     });
     card.appendChild(choices);
     var evidenceFirst = el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-evidence-first',
       disabled: eligibility.eligible ? null : 'disabled',
-      onclick: function () { promote(null, false); } }, 'Set a view and test evidence first');
+      onclick: function () { promote(null); } }, 'Set a view and test evidence first');
     card.appendChild(el('div', { class: 'btn-row' }, evidenceFirst));
     if (!eligibility.eligible) card.appendChild(el('div', { class: 'btn-row' },
       el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () { App.navigate('#/research'); } },
@@ -3146,9 +3150,17 @@
         el('p', { class: 'muted' }, 'This choice becomes part of the Plan. It does not hide any strategy or change the math.'),
         el('div', { class: 'choice-grid plan-intent-grid' }, (Learn.INTENTS || []).map(function (meta) {
           return el('button', { type: 'button', class: 'choice-card', onclick: function () {
+            var button = this;
+            button.disabled = true;
+            button.setAttribute('aria-busy', 'true');
             PlanStore.claimIntent(planRef.plan, meta.key).then(function (updated) {
-              planRef.plan = updated; App.render();
-            }).catch(function (e) { UI.toast(e.message, 'error'); });
+              planRef.plan = updated;
+              return PlanStore.focus(updated, 'STRATEGY');
+            }).catch(function (e) {
+              button.disabled = false;
+              button.removeAttribute('aria-busy');
+              UI.toast((e && e.message) || 'This goal could not be set.', 'error');
+            });
           } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb));
         }))));
       return;
