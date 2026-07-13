@@ -76,6 +76,8 @@ public final class StoredCandleStore implements CandleStore {
             if (!a.coverage.complete()) {
                 int byCoverage = Integer.compare(b.coverage.availableSessions(), a.coverage.availableSessions());
                 if (byCoverage != 0) return byCoverage;
+                int byRecency = b.coverage.availableTo().compareTo(a.coverage.availableTo());
+                if (byRecency != 0) return byRecency;
             }
             int byQuality = Integer.compare(b.quality, a.quality);
             if (byQuality != 0) return byQuality;

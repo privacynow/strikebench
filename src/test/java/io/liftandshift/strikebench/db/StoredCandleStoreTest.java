@@ -127,6 +127,26 @@ class StoredCandleStoreTest {
     }
 
     @Test
+    void equallyDensePartialSourcesPreferTheMoreRecentSeriesBeforeQuality() {
+        db = TestDb.fresh();
+        for (String d : List.of("2026-04-01", "2026-04-02")) {
+            db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,quality_rank) "
+                    + "VALUES ('AAPL',?,100,'older-premium',1,99)", LocalDate.parse(d));
+        }
+        for (String d : List.of("2026-04-29", "2026-04-30")) {
+            db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,quality_rank) "
+                    + "VALUES ('AAPL',?,200,'newer-standard',1,50)", LocalDate.parse(d));
+        }
+
+        var read = new StoredCandleStore(db).candles("AAPL", LocalDate.parse("2026-03-01"),
+                LocalDate.parse("2026-05-31"), DatasetService.OBSERVED).orElseThrow();
+
+        assertThat(read.coverage().complete()).isFalse();
+        assertThat(read.series().source()).isEqualTo("stored:newer-standard");
+        assertThat(read.series().candles()).allSatisfy(c -> assertThat(c.close()).isEqualByComparingTo("200"));
+    }
+
+    @Test
     void observedStoreExcludesDemoRowsRatherThanMixingThem() {
         db = TestDb.fresh();
         // One real bar must never launder a fabricated neighbor into an EOD series.

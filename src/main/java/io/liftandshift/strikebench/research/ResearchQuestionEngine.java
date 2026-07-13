@@ -494,9 +494,10 @@ public final class ResearchQuestionEngine {
         };
     }
 
-    private static String evidenceLabel(Freshness f) {
+    static String evidenceLabel(Freshness f) {
         if (f == Freshness.MISSING) return "MISSING";
         if (f == Freshness.FIXTURE) return "DEMO_FIXTURE";
+        if (f == Freshness.SIMULATED) return "SIMULATED";
         if (f == Freshness.EOD || f == Freshness.STALE) return "OBSERVED_EOD";
         if (f == Freshness.DELAYED) return "OBSERVED_DELAYED";
         if (f == Freshness.REALTIME) return "OBSERVED_LIVE";
