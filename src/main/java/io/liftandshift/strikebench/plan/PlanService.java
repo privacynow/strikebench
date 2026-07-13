@@ -56,10 +56,18 @@ public final class PlanService {
                 raw.targetCents(), raw.riskMode(), raw.holdingsShares(), raw.costBasisCents(),
                 raw.priceAssumptionCents());
         String createHash = createInputHash(hash, origin, title, accountId);
+        String ownerKey = userId == null ? "__local__" : userId;
 
         String createdId = db.tx(c -> {
+            lockCreateOn(c, ownerKey, "request:" + requestId);
             List<ExistingRequest> existing = existingRequestOn(c, requestId, userId);
             if (!existing.isEmpty()) return requireSameRequest(existing.getFirst(), createHash);
+            lockCreateOn(c, ownerKey, "content:" + createHash);
+            List<String> equivalent = activeEquivalentOn(c, userId, hash, origin, title, accountId);
+            if (!equivalent.isEmpty()) {
+                recordRequestOn(c, ownerKey, requestId, createHash, equivalent.getFirst(), now);
+                return equivalent.getFirst();
+            }
             if (origin != null) requireOwnedOn(c, origin, userId, false);
             int inserted = Db.execOn(c, "INSERT INTO plans(id,user_id,client_request_id,create_input_hash,origin_plan_id,symbol,intent,market_kind," +
                             "world_id,account_id,custom_title,status,active_stage,active_context_rev,version,is_open," +
@@ -78,6 +86,7 @@ public final class PlanService {
                     normalizeRisk(raw.riskMode()), raw.holdingsShares(), raw.costBasisCents(),
                     raw.priceAssumptionCents(), hash, CONTEXT_ENGINE_VERSION, now);
             Db.execOn(c, "UPDATE plans SET active_context_rev=1 WHERE id=?", id);
+            recordRequestOn(c, ownerKey, requestId, createHash, id, now);
             return id;
         });
         Plan.View out = get(userId, createdId);
@@ -377,9 +386,33 @@ public final class PlanService {
 
     private static List<ExistingRequest> existingRequestOn(java.sql.Connection c, String requestId,
                                                             String userId) throws java.sql.SQLException {
-        return Db.queryOn(c, "SELECT id,create_input_hash FROM plans WHERE client_request_id=? AND "
-                        + ownerClause("user_id"),
-                r -> new ExistingRequest(r.str("id"), r.str("create_input_hash")), requestId, userId, userId);
+        String ownerKey = userId == null ? "__local__" : userId;
+        return Db.queryOn(c, "SELECT plan_id,input_hash FROM plan_create_request " +
+                        "WHERE owner_key=? AND client_request_id=?",
+                r -> new ExistingRequest(r.str("plan_id"), r.str("input_hash")), ownerKey, requestId);
+    }
+
+    private static void lockCreateOn(java.sql.Connection c, String ownerKey, String key)
+            throws java.sql.SQLException {
+        Db.queryOn(c, "SELECT pg_advisory_xact_lock(hashtext(?),hashtext(?)),1 ok",
+                r -> r.intv("ok"), ownerKey, key);
+    }
+
+    private static List<String> activeEquivalentOn(java.sql.Connection c, String userId, String contextHash,
+            String origin, String title, String accountId) throws java.sql.SQLException {
+        return Db.queryOn(c, "SELECT p.id FROM plans p JOIN plan_context_revision c " +
+                        "ON c.plan_id=p.id AND c.rev=p.active_context_rev WHERE " + ownerClause("p.user_id") +
+                        " AND p.status IN ('DRAFT','ACTIVE','POSITION_OPEN') AND c.input_hash=? " +
+                        "AND p.origin_plan_id IS NOT DISTINCT FROM ? AND p.custom_title IS NOT DISTINCT FROM ? " +
+                        "AND p.account_id IS NOT DISTINCT FROM ? ORDER BY p.updated_at DESC,p.created_at DESC LIMIT 1",
+                r -> r.str("id"), userId, userId, contextHash, origin, title, accountId);
+    }
+
+    private static void recordRequestOn(java.sql.Connection c, String ownerKey, String requestId,
+            String inputHash, String planId, OffsetDateTime now) throws java.sql.SQLException {
+        Db.execOn(c, "INSERT INTO plan_create_request(owner_key,client_request_id,input_hash,plan_id,created_at) " +
+                        "VALUES(?,?,?,?,?)",
+                ownerKey, requestId, inputHash, planId, now);
     }
 
     private static String requireSameRequest(ExistingRequest existing, String expectedHash) {
