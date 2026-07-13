@@ -3621,7 +3621,7 @@
   async function planDecideStage(root, initialPlan, stage) {
     var planRef = { plan: initialPlan };
     var ui = PlanStore.ui(initialPlan.id);
-    ui.decision = ui.decision || { qty: 1, proposedNetCents: null, feesOverrideCents: null, note: '' };
+    ui.decision = ui.decision || { qty: null, proposedNetCents: null, feesOverrideCents: null, note: '' };
     var state = ui.decision;
     var content = planOwnedStage(root, initialPlan, stage);
     var latest = await PlanStore.latestDecision(initialPlan.id, true);
@@ -3636,7 +3636,15 @@
         'Open Strategy', function () { PlanStore.focus(planRef.plan, 'STRATEGY'); }));
       return;
     }
-    if (!state.qty) state.qty = selected.qty || 1;
+    var selectedPackageKey = selected.id || JSON.stringify({ strategy: selected.strategy,
+      qty: selected.qty, legs: selected.legs || [] });
+    if (state.selectedPackageKey !== selectedPackageKey) {
+      state.selectedPackageKey = selectedPackageKey;
+      state.qty = selected.qty || 1;
+      state.proposedNetCents = null;
+      state.preview = null;
+      state.acks = {};
+    }
     content.appendChild(el('div', { class: 'card plan-decision-position' },
       UI.cardHeader('Exact package under decision', el('span', { class: 'badge badge-ok' }, 'LOCKED TO PLAN')),
       el('div', { class: 'chip-row' }, chip('Structure', selected.displayName || prettyStrategy(selected.strategy)),
