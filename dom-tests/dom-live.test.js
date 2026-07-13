@@ -68,6 +68,8 @@ async function openPlan(symbol, stage = 'understand', intent = 'DIRECTIONAL', th
 }
 
 async function runPlanField() {
+  const compare = page.locator('.plan-tool').filter({ hasText: /Proposed trades|Ranked field/ });
+  if (await compare.count()) await compare.click();
   await page.waitForSelector('#plan-run-strategy:not([disabled])', { timeout: 60000 });
   const responseP = page.waitForResponse(response => response.request().method() === 'POST'
     && /\/api\/plans\/[^/]+\/strategy\/run$/.test(new URL(response.url()).pathname), { timeout: 60000 });
