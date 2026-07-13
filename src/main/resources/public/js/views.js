@@ -388,7 +388,8 @@
         return;
       }
       var currentKey = PlanStore.currentMarketKey();
-      var working = plans.filter(function (p) { return p.status !== 'ARCHIVED'; });
+      var working = plans.filter(function (p) { return p.status !== 'ARCHIVED' && p.open !== false; });
+      var closedTabs = plans.filter(function (p) { return p.status !== 'ARCHIVED' && p.open === false; });
       var archived = plans.filter(function (p) { return p.status === 'ARCHIVED'; });
       var current = working.filter(function (p) { return PlanStore.marketKey(p) === currentKey; });
       var elsewhere = working.filter(function (p) { return PlanStore.marketKey(p) !== currentKey; });
@@ -437,6 +438,9 @@
         if (plan.status !== 'POSITION_OPEN') actions.appendChild(el('button', { type: 'button',
           class: 'btn btn-sm btn-secondary', 'aria-label': 'Archive ' + plan.title,
           onclick: function () { confirmArchivePlan(plan, false); } }, icon('archive', 15), ' Archive'));
+        if (plan.assumptionsEditable === true) actions.appendChild(el('button', { type: 'button',
+          class: 'btn btn-sm btn-secondary', 'aria-label': 'Delete draft ' + plan.title,
+          onclick: function () { confirmDeletePlan(plan, false); } }, icon('trash', 15), ' Delete'));
         return el('article', { class: 'home-plan-tile' + (plan.id === App.state.activePlanId ? ' active' : ''),
           'data-plan-id': plan.id },
           el('div', { class: 'home-plan-tile-head' },
@@ -502,6 +506,22 @@
           return el('div', { class: 'status-item' }, el('b', {}, plan.symbol),
             el('span', {}, plan.title), el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)),
             el('span', { class: 'muted small' }, 'Retained as a read-only record'));
+        }));
+      }));
+      if (closedTabs.length) planLibrary.appendChild(UI.expandable('Closed Plan tabs (' + closedTabs.length + ')', function () {
+        return el('div', { class: 'home-plan-archive home-plan-closed-tabs' }, closedTabs.map(function (plan) {
+          var actions = el('div', { class: 'btn-row' },
+            el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
+              PlanStore.focus(plan, plan.activeStage).catch(function (e) { UI.toast(e.message, 'error'); });
+            } }, 'Reopen'));
+          if (plan.assumptionsEditable === true) actions.appendChild(el('button', { type: 'button',
+            class: 'btn btn-sm btn-secondary', onclick: function () { confirmDeletePlan(plan, false); } },
+          icon('trash', 14), ' Delete draft'));
+          else if (plan.status !== 'POSITION_OPEN') actions.appendChild(el('button', { type: 'button',
+            class: 'btn btn-sm btn-secondary', onclick: function () { confirmArchivePlan(plan, false); } },
+          icon('archive', 14), ' Archive'));
+          return el('div', { class: 'status-item' }, el('b', {}, plan.symbol),
+            el('span', {}, plan.title), el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)), actions);
         }));
       }));
     })();
@@ -2535,6 +2555,19 @@
     });
   }
 
+  function confirmDeletePlan(plan, leavePlan) {
+    UI.confirmModal('Delete this draft Plan?', el('div', {},
+      el('p', {}, el('b', {}, plan.title), ' and its unfinished studies, proposed trades, and scenario runs will be permanently removed.'),
+      el('p', { class: 'muted' }, 'A Plan with a decision, rehearsal, trade, or review record cannot be deleted; it must be archived.')),
+    'Delete draft', async function () {
+      try {
+        await PlanStore.deleteDraft(await PlanStore.get(plan.id, true));
+        if (leavePlan) App.navigate('#/home');
+        else await App.render();
+      } catch (e) { UI.toast(e.message, 'error'); }
+    });
+  }
+
   function planHeader(plan, provisional) {
     var context = plan.context || {};
     var title = plan.title || (plan.symbol + ' · New plan');
@@ -2557,6 +2590,8 @@
             var editor = document.getElementById('plan-context-editor');
             if (editor) { editor.hidden = !editor.hidden; if (!editor.hidden) editor.querySelector('input,select').focus(); }
           } }, plan.assumptionsEditable === true ? 'Edit view & limits' : 'Revise this Plan'),
+        plan.assumptionsEditable === true ? el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
+          id: 'plan-delete', onclick: function () { confirmDeletePlan(plan, true); } }, icon('trash', 15), ' Delete draft') : null,
         plan.status === 'POSITION_OPEN' ? null : el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
           id: 'plan-archive', onclick: function () { confirmArchivePlan(plan, true); } }, icon('archive', 15), ' Archive')));
   }

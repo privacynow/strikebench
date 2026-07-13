@@ -2081,6 +2081,8 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .home-plan-actions { align-self: end; display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
 .home-plan-actions .btn { white-space: nowrap; }
 .home-plan-archive { display: grid; gap: 0; }
+.home-plan-closed-tabs .status-item > span:nth-child(2) { flex: 1 1 auto; min-width: 0; }
+.home-plan-closed-tabs .btn-row { margin-left: auto; flex: none; }
 @media (max-width: 1000px) and (min-width: 641px) {
   .home-plan-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

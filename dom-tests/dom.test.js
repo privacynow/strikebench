@@ -1167,7 +1167,9 @@ test('equivalent Plan retries collapse while materially different Plans survive 
       horizonDays: 30, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
     const variant = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
       horizonDays: 45, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
-    return { one: one.id, retry: retry.id, variant: variant.id };
+    const disposable = await PlanStore.create({ symbol: 'SPY', intent: 'INCOME', thesis: 'neutral',
+      horizonDays: 19, riskMode: 'conservative', title: 'SPY · Disposable tab' });
+    return { one: one.id, retry: retry.id, variant: variant.id, disposable: disposable.id };
   });
   assert.equal(ids.retry, ids.one, 'a new request id cannot mint an identical active Plan');
   assert.notEqual(ids.variant, ids.one, 'a materially different horizon remains a separate Plan');
@@ -1178,6 +1180,19 @@ test('equivalent Plan retries collapse while materially different Plans survive 
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.variant + '"]').count(), 1);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.one + '"]').count(), 1);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.variant + '"]').count(), 1);
+
+  await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.disposable + '"] .plan-chip-close').click();
+  assert.equal(await page.evaluate(() => location.hash), '#/home',
+    'closing a Plan tab from Home does not navigate into another Plan');
+  await page.waitForSelector('#home-plan-library .xp-head:has-text("Closed Plan tabs")');
+  assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.disposable + '"]').count(), 0,
+    'a closed tab is not counted or rendered as a working Plan');
+  await page.locator('#home-plan-library .xp-head:has-text("Closed Plan tabs")').click();
+  await page.locator('.home-plan-closed-tabs').getByRole('button', { name: 'Delete draft' }).click();
+  await page.getByRole('button', { name: 'Delete draft' }).last().click();
+  await page.waitForFunction(id => !PlanStore.allMarkets().some(p => p.id === id), ids.disposable);
+  assert.equal(await page.locator('#home-plan-library').getByText('SPY · Disposable tab').count(), 0,
+    'permanent draft deletion removes the Plan from the all-market library');
 
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.locator('#plan-picker option[value="' + ids.one + '"]').count(), 1);
