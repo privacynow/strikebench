@@ -104,6 +104,8 @@ public final class ApiServer {
     io.liftandshift.strikebench.plan.PlanRehearsalService planRehearsals;
     io.liftandshift.strikebench.plan.PlanDecisionService planDecisions;
     io.liftandshift.strikebench.plan.PlanManagementService planManagement;
+    private io.liftandshift.strikebench.paper.PortfolioAccountingService portfolioBooks;
+    private io.liftandshift.strikebench.paper.PortfolioExportService portfolioExports;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
@@ -226,6 +228,8 @@ public final class ApiServer {
         auto.withEvaluationService(evaluations);
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
         server.db = db;
+        server.portfolioBooks = new io.liftandshift.strikebench.paper.PortfolioAccountingService(db, clock, marksSource);
+        server.portfolioExports = new io.liftandshift.strikebench.paper.PortfolioExportService(server.portfolioBooks);
         server.simSessions.attachDb(db);
         // Data Center services (need db, which is set above; reuse the constructor-built engine).
         var backfill = new io.liftandshift.strikebench.db.UnderlyingBackfill(market, db, clock);
@@ -732,6 +736,34 @@ public final class ApiServer {
             c.routes.get("/api/risk-budget", this::riskBudget);
             c.routes.get("/api/portfolio/greeks", ctx ->
                     ctx.json(trades.portfolioGreeks(currentAccount(ctx).id())));
+            c.routes.get("/api/portfolio/accounts", ctx ->
+                    ctx.json(Map.of("accounts", portfolioBooks.accounts(ownerId(ctx)))));
+            c.routes.post("/api/portfolio/accounts", this::portfolioAccountCreate);
+            c.routes.get("/api/portfolio/accounts/{id}", ctx ->
+                    ctx.json(portfolioBooks.account(ownerId(ctx), ctx.pathParam("id"))));
+            c.routes.put("/api/portfolio/accounts/{id}", this::portfolioAccountUpdate);
+            c.routes.delete("/api/portfolio/accounts/{id}", ctx ->
+                    ctx.json(portfolioBooks.setArchived(ownerId(ctx), ctx.pathParam("id"), true)));
+            c.routes.post("/api/portfolio/accounts/{id}/restore", ctx ->
+                    ctx.json(portfolioBooks.setArchived(ownerId(ctx), ctx.pathParam("id"), false)));
+            c.routes.get("/api/portfolio/accounts/{id}/summary", ctx ->
+                    ctx.json(portfolioBooks.summary(ownerId(ctx), ctx.pathParam("id"))));
+            c.routes.get("/api/portfolio/accounts/{id}/transactions", this::portfolioTransactions);
+            c.routes.post("/api/portfolio/accounts/{id}/transactions", this::portfolioTransactionCreate);
+            c.routes.get("/api/portfolio/accounts/{id}/lots", ctx ->
+                    ctx.json(Map.of("lots", portfolioBooks.lots(ownerId(ctx), ctx.pathParam("id"),
+                            Boolean.parseBoolean(ctx.queryParam("includeClosed"))))));
+            c.routes.get("/api/portfolio/accounts/{id}/realized", ctx ->
+                    ctx.json(Map.of("realized", portfolioBooks.realizedLots(ownerId(ctx), ctx.pathParam("id"),
+                            intParam(ctx, "year", java.time.Year.now(clock).getValue())))));
+            c.routes.post("/api/portfolio/accounts/{id}/valuations", this::portfolioValuationCreate);
+            c.routes.get("/api/portfolio/accounts/{id}/performance", ctx ->
+                    ctx.json(portfolioBooks.performance(ownerId(ctx), ctx.pathParam("id"))));
+            c.routes.get("/api/portfolio/accounts/{id}/tax", ctx ->
+                    ctx.json(portfolioBooks.taxReport(ownerId(ctx), ctx.pathParam("id"),
+                            intParam(ctx, "year", java.time.Year.now(clock).getValue()))));
+            c.routes.get("/api/portfolio/accounts/{id}/export.csv", this::portfolioCsvExport);
+            c.routes.get("/api/portfolio/accounts/{id}/export.xlsx", this::portfolioWorkbookExport);
 
             // Historical replays are Plan-owned. The report id remains readable so a Plan can
             // restore its full normalized summary plus the existing detailed replay artifact.
@@ -5551,6 +5583,54 @@ public final class ApiServer {
             out.add(Map.of("price", p.price().toPlainString(), "profitCents", p.profitCents()));
         }
         return out;
+    }
+
+    private void portfolioAccountCreate(Context ctx) {
+        var input = requireBody(bodyOrNull(ctx,
+                io.liftandshift.strikebench.paper.PortfolioAccountingService.AccountInput.class));
+        ctx.status(201).json(portfolioBooks.createAccount(ownerId(ctx), input));
+    }
+
+    private void portfolioAccountUpdate(Context ctx) {
+        var input = requireBody(bodyOrNull(ctx,
+                io.liftandshift.strikebench.paper.PortfolioAccountingService.AccountInput.class));
+        ctx.json(portfolioBooks.updateAccount(ownerId(ctx), ctx.pathParam("id"), input));
+    }
+
+    private void portfolioTransactions(Context ctx) {
+        ctx.json(Map.of("transactions", portfolioBooks.transactions(ownerId(ctx), ctx.pathParam("id"),
+                intParam(ctx, "page", 0), Math.clamp(intParam(ctx, "size", 50), 1, 500))));
+    }
+
+    private void portfolioTransactionCreate(Context ctx) {
+        var input = requireBody(bodyOrNull(ctx,
+                io.liftandshift.strikebench.paper.PortfolioAccountingService.TransactionInput.class));
+        ctx.status(201).json(portfolioBooks.record(ownerId(ctx), ctx.pathParam("id"), input));
+    }
+
+    private void portfolioValuationCreate(Context ctx) {
+        var input = requireBody(bodyOrNull(ctx,
+                io.liftandshift.strikebench.paper.PortfolioAccountingService.ValuationInput.class));
+        ctx.status(201).json(portfolioBooks.addValuation(ownerId(ctx), ctx.pathParam("id"), input));
+    }
+
+    private void portfolioCsvExport(Context ctx) {
+        String id = ctx.pathParam("id");
+        portfolioBooks.account(ownerId(ctx), id); // owner fence before response headers
+        ctx.header("Content-Disposition", "attachment; filename=StrikeBench-transactions-" + id + ".csv");
+        ctx.header("Cache-Control", "no-store");
+        ctx.contentType("text/csv; charset=utf-8");
+        ctx.result(portfolioExports.transactionsCsv(ownerId(ctx), id));
+    }
+
+    private void portfolioWorkbookExport(Context ctx) {
+        String id = ctx.pathParam("id");
+        int year = intParam(ctx, "year", java.time.Year.now(clock).getValue());
+        portfolioBooks.account(ownerId(ctx), id); // owner fence before response headers
+        ctx.header("Content-Disposition", "attachment; filename=StrikeBench-portfolio-" + id + "-" + year + ".xlsx");
+        ctx.header("Cache-Control", "no-store");
+        ctx.contentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        ctx.result(portfolioExports.workbook(ownerId(ctx), id, year));
     }
 
     /** One honest headline: cash + share value + what closing every open trade pays now.
