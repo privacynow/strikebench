@@ -255,12 +255,18 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p2-mobile-rail.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
 
+  // The 45-day edit above proves context persistence. Use a short evidence window for the
+  // event-study assertion so the fixture has enough independent signal episodes to evaluate.
+  await page.click('#plan-edit-context');
+  await page.fill('#plan-horizon-days', '10');
+  await page.click('#plan-save-context');
+  await page.waitForFunction(() => /10 days/.test(document.getElementById('plan-header')?.textContent || ''));
+
   await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
   await page.waitForSelector('#test-your-view');
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
   await page.click('#study-run');
   await page.waitForSelector('#study-results .alert', { timeout: 20000 });
-  await page.waitForSelector('#tv-test-analogs');
   const studyText = await page.textContent('#study-results');
   assert.match(studyText, /Signal episodes/);
 
@@ -279,7 +285,8 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   assert.match(await page.evaluate(() => location.hash), /\/evidence$/,
     'reload returns to the durable Evidence stage');
   await page.click('#research-outcomes-basis-past');
-  await page.waitForSelector('#tv-test-analogs', { timeout: 20000 });
+  await page.waitForFunction(() => /Signal episodes/.test(document.getElementById('study-results')?.textContent || ''),
+    { timeout: 20000 });
   assert.match(await page.textContent('#study-results'), /Signal episodes/,
     'the exact normalized study result restores after reload');
 

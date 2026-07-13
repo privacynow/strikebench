@@ -1,7 +1,7 @@
-/* StrikeBench workspace continuity: the desk remembers what you were doing.
+/* StrikeBench workspace continuity: the desk remembers Plan focus and presentation.
  *
- * CLIENT-AUTHORITATIVE: App.state owns the shape (draft forms, working idea, working symbol,
- * route). This module persists a durable subset — never result payloads — to localStorage
+ * Durable Plan facts stay server-owned. This module persists a small presentation subset
+ * and per-market provisional Plan drafts — never results or priced artifacts — to localStorage
  * (instant, survives reload) and to the backend (debounced PUT /api/workspace, survives
  * devices/restarts when signed in). Boot hydrates whichever copy is newest; the /api/events
  * stream announces revisions so a second tab can adopt them while hidden.
@@ -15,9 +15,13 @@
   function setUserKey(userKey) {
     LS_KEY = 'strikebench.workspace.' + (userKey && String(userKey).trim() ? String(userKey).trim() : 'local');
   }
-  // Draft forms carry the user's thinking; results are refetched (fresh data beats stale payloads).
-  var FORM_KEYS = ['discoverForm', 'builderForm', 'backtestForm', 'verifyForm', 'scenarioForm',
-    'scenarioTargets', 'dataSyncForm'];
+  var FORM_KEYS = ['dataScenarioForm', 'dataSyncForm'];
+
+  function canonicalRoute(hash) {
+    hash = hash || '#/home';
+    return /^#\/(home(?:\/tour)?|research|plan\/(?:new\?symbol=[A-Z0-9._-]+|[^/?]+\/(?:understand|evidence|strategy|outcomes|decide|manage-review))|portfolio(?:\/.*)?|data\/(?:overview|datasets|simulation|sources|admin))(?:\?.*)?$/i.test(hash)
+      ? hash : '#/home';
+  }
 
   var rev = 0;             // last backend revision seen (multi-tab adopt guard)
   var started = false;
@@ -25,8 +29,8 @@
 
   function snapshot() {
     var s = {
-      v: 1,
-      route: window.location.hash || '#/home',
+      v: 2,
+      route: canonicalRoute(window.location.hash),
       world: (window.App && App.state.world) || null,
       activePlanId: (window.App && App.state.activePlanId) || null,
       activePlanByMarket: (window.App && App.state.activePlanByMarket)
@@ -38,21 +42,9 @@
               contextRev: App.state.planUi[id].contextRev || null };
             return out;
           }, {}) : null,
-      context: (window.App && App.state.marketContext)
-        ? Object.assign({}, App.state.marketContext) : null,
+      provisionalPlansByMarket: (window.App && App.state.provisionalPlansByMarket)
+        ? Object.assign({}, App.state.provisionalPlansByMarket) : null,
       forms: {},
-      // The THESIS WORKFLOW is part of the workspace (holistic review #11): the per-symbol
-      // market thesis, the keyed research study selection, and an active evidence handoff all
-      // survive a reload — losing them mid-investigation reset the user's thinking.
-      marketThesis: (window.App && App.state.marketThesis) || null,
-      // F6: SELECTION ONLY — the results cache holds full study payloads (analog paths and all);
-      // persisting it restored stale evidence and could blow the 128KB workspace cap. Results
-      // are keyed server-side and refetched fresh.
-      researchStudy: (window.App && App.state.researchStudy)
-        ? { mode: App.state.researchStudy.mode || 'past',
-            params: App.state.researchStudy.params || null }
-        : null,
-      evidencePrefill: (window.App && App.state.evidencePrefill) || null,
       savedAt: Date.now()
     };
     FORM_KEYS.forEach(function (k) { if (App.state[k]) s.forms[k] = App.state[k]; });
@@ -60,21 +52,13 @@
   }
 
   function apply(s) {
-    if (!s || s.v !== 1 || !window.App) return false;
+    if (!s || s.v !== 2 || !window.App) return false;
     // The workspace remembers work, never the active market. Market lane is server-owned and
     // may change only through App.transitionWorld so account, universe, stream and banners move
     // atomically. Applying this field directly in a hidden tab split those owners apart.
-    // Persisted-user-state migration only: old workspace blobs carried `symbol` alone.
-    // New writes immediately replace it with the complete decision context.
-    if (s.context) App.context.update(s.context);
-    else if (s.symbol) App.context.selectSymbol(s.symbol);
-    if (s.marketThesis) App.state.marketThesis = s.marketThesis;
-    // Selection only (F6): results/questions rebuild fresh — never restore stale evidence.
-    if (s.researchStudy) {
-      App.state.researchStudy = { mode: s.researchStudy.mode || 'past',
-        params: s.researchStudy.params || null };
+    if (s.provisionalPlansByMarket) {
+      App.state.provisionalPlansByMarket = Object.assign({}, s.provisionalPlansByMarket);
     }
-    if (s.evidencePrefill) App.state.evidencePrefill = s.evidencePrefill;
     if (s.activePlanId) App.state.activePlanId = s.activePlanId;
     if (s.activePlanByMarket) App.state.activePlanByMarket = Object.assign({}, s.activePlanByMarket);
     Object.keys(s.planPresentation || {}).forEach(function (id) {
@@ -113,8 +97,8 @@
     if (!started || !window.App || !window.API) return;
     var s = snapshot();
     var json = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId,
-      activePlanByMarket: s.activePlanByMarket, context: s.context,
-      planPresentation: s.planPresentation, forms: s.forms, ticket: s.ticket });
+      activePlanByMarket: s.activePlanByMarket, provisionalPlansByMarket: s.provisionalPlansByMarket,
+      planPresentation: s.planPresentation, forms: s.forms });
     if (json === lastSavedJson) return;
     lastSavedJson = json;
     persistLocal(s);
@@ -129,8 +113,8 @@
   function hydrate(remote, userKey) {
     if (userKey !== undefined) setUserKey(userKey);
     var local = readLocal();
-    var localState = local && local.state && local.state.v === 1 ? local.state : null;
-    var remoteState = remote && remote.state && remote.state.v === 1 ? remote.state : null;
+    var localState = local && local.state && local.state.v === 2 ? local.state : null;
+    var remoteState = remote && remote.state && remote.state.v === 2 ? remote.state : null;
     if (remote && remote.rev) rev = remote.rev;
     var chosen = null;
     if (localState && remoteState) chosen = (localState.savedAt || 0) >= (remoteState.savedAt || 0) ? localState : remoteState;
@@ -177,15 +161,15 @@
     rev = newRev;
     if (!document.hidden) return; // visible tab keeps its own state; it will overwrite on next save
     API.getFresh('/api/workspace').then(function (r) {
-      if (r && r.state && r.state.v === 1) {
+      if (r && r.state && r.state.v === 2) {
         apply(r.state);
         // Rebase the dirty-check on the ADOPTED state: re-pushing what we just pulled would
         // bump the rev and ping-pong forever between two hidden tabs. Only a genuine local
         // change after this may write again.
         var s = snapshot();
         lastSavedJson = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId,
-          activePlanByMarket: s.activePlanByMarket, context: s.context,
-          planPresentation: s.planPresentation, forms: s.forms, ticket: s.ticket });
+          activePlanByMarket: s.activePlanByMarket, provisionalPlansByMarket: s.provisionalPlansByMarket,
+          planPresentation: s.planPresentation, forms: s.forms });
         persistLocal(s);
         adoptedWhileHidden = true; // the DOM still shows pre-adoption state — refresh on return
       }

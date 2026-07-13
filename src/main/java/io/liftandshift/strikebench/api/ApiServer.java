@@ -443,6 +443,7 @@ public final class ApiServer {
             c.routes.post("/api/plans/{id}/outcomes/ensemble", this::planEnsembleRun);
             c.routes.post("/api/plans/{id}/outcomes/run", this::planOutcomeRun);
             c.routes.post("/api/plans/{id}/outcomes/backtest", this::planBacktestRun);
+            c.routes.get("/api/plans/{id}/outcomes/backtests/{backtestId}", this::planBacktestGet);
             c.routes.get("/api/plans/{id}/rehearsals", this::planRehearsalsList);
             c.routes.post("/api/plans/{id}/rehearsals", this::planRehearsalCreate);
             c.routes.get("/api/plans/{id}/decision/latest", this::planDecisionLatest);
@@ -729,7 +730,6 @@ public final class ApiServer {
 
             // Historical replays are Plan-owned. The report id remains readable so a Plan can
             // restore its full normalized summary plus the existing detailed replay artifact.
-            c.routes.get("/api/backtests/{id}", ctx -> ctx.json(backtester.get(ctx.pathParam("id"))));
 
             c.routes.get("/api/broker/status", ctx -> ctx.json(broker.status()));
             c.routes.post("/api/broker/connect/start", ctx -> ctx.json(Map.of("authorizeUrl", broker.startConnect())));
@@ -2454,6 +2454,13 @@ public final class ApiServer {
         var saved = planOutcomes.saveBacktest(ownerId(ctx), plan, body.expectedVersion(),
                 candidate.path("id").asText(), engineKind, reportJson, Json.MAPPER.valueToTree(body));
         ctx.json(Map.of("plan", plan, "backtest", saved, "report", report));
+    }
+
+    private void planBacktestGet(Context ctx) {
+        String planId = ctx.pathParam("id");
+        String backtestId = ctx.pathParam("backtestId");
+        planOutcomes.requireBacktest(ownerId(ctx), planId, backtestId);
+        ctx.json(backtester.get(backtestId));
     }
 
     private void planRehearsalsList(Context ctx) {

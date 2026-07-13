@@ -277,6 +277,17 @@ public final class PlanOutcomeService {
         return new SavedBacktest(id, "CURRENT", text(report, "id"), engineKind, summary, now.toString());
     }
 
+    /** Authorize a historical replay read through its owning Plan. */
+    public void requireBacktest(String userId, String planId, String backtestId) {
+        db.with(c -> {
+            ownedPlanOn(c, planId, userId, false);
+            boolean linked = !Db.queryOn(c, "SELECT id FROM plan_backtest WHERE plan_id=? AND backtest_id=? LIMIT 1",
+                    r -> r.str("id"), planId, backtestId).isEmpty();
+            if (!linked) throw new NoSuchElementException("no such Plan backtest: " + backtestId);
+            return null;
+        });
+    }
+
     /** Latest current results for the Plan's current context, reconstructed from normalized rows. */
     public ObjectNode latest(String userId, Plan.View plan) {
         return db.with(c -> {
