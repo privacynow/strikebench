@@ -306,6 +306,10 @@
 
   async function home(root, params) {
     if (params && params[0] === 'tour') return welcome(root);
+    // Reconcile durable Plan truth before deriving the hero/Continue state. A browser tab
+    // can survive a server restart; its in-memory collection must not outlive server state.
+    try { if (window.PlanStore) await PlanStore.load(true); }
+    catch (e) { /* the independent Plan-library card reports the unavailable service below */ }
     // Paint the frame FIRST, fill every card as its data arrives: the screen must never
     // be a blank void while accounts and quotes load. Each section fills independently
     // and fails visibly (empty state), never silently.
