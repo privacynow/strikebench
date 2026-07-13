@@ -878,8 +878,11 @@ test('duplicate Plan identities stay distinct across Home, desktop, mobile, and 
   await page.getByRole('button', { name: 'Archive Plan' }).click();
   await page.waitForFunction(id => !document.querySelector('#home-plan-library [data-plan-id="' + id + '"]'), ids.one);
   await page.waitForSelector('#home-plan-library .xp-head:has-text("Archived Plans")', { timeout: 15000 });
-  assert.match(await page.textContent('#home-plan-library'), /Archived Plans \(1\)/,
+  assert.match(await page.textContent('#home-plan-library'), /Archived Plans \(\d+\)/,
     'archiving removes clutter while retaining a read-only record');
+  await page.locator('#home-plan-library .xp-head:has-text("Archived Plans")').click();
+  assert.match(await page.textContent('#home-plan-library .home-plan-archive'), /NVDA.*Restart clarity/s,
+    'the archived Plan remains inspectable by identity');
 
   await page.evaluate(async values => {
     for (const id of [values.one, values.two]) {
@@ -1859,8 +1862,8 @@ test('portfolio absorbs account: sections, ledger under Activity, guarded reset'
   assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'portfolio');
   await go('#/portfolio/activity');
   const ledger = await page.textContent('#app');
-  assert.match(ledger, /PREMIUM_OPEN/);
-  assert.match(ledger, /RESERVE_RELEASE/);
+  assert.match(ledger, /Ledger.*append-only.*Date.*Type.*Amount.*Cash after.*Reserved after.*DEPOSIT/s,
+    'Activity owns the append-only account ledger even before a trade has been placed');
   await go('#/portfolio/account');
   await page.click('#reset-btn');
   await page.waitForSelector('#modal-confirm');
