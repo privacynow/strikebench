@@ -199,6 +199,15 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
     { timeout: 15000 });
   assert.equal(await page.evaluate(() => window.location.hash), '#/home', 'brand goes to the desk');
   assert.ok(await page.locator('.brand .brand-mark').count(), 'the SVG mark renders in the header');
+  await page.waitForSelector('#home-plan-library .home-plan-tile');
+  const singlePlanGeometry = await page.evaluate(() => {
+    const grid = document.querySelector('#home-plan-library .home-plan-grid').getBoundingClientRect();
+    const tile = document.querySelector('#home-plan-library .home-plan-tile').getBoundingClientRect();
+    return { grid: grid.width, tile: tile.width };
+  });
+  assert.ok(singlePlanGeometry.tile >= singlePlanGeometry.grid - 2,
+    'one Plan uses the complete panel instead of leaving a blank second column: ' + JSON.stringify(singlePlanGeometry));
+  assert.match(await page.textContent('#home-plan-library'), /1 working Plan[\s\S]*1 Plan/);
   await page.reload();
   await page.waitForSelector('#app[data-route="home"][data-ready="true"]');
   await page.waitForFunction(() => document.querySelectorAll('.home-market-grid .spark-svg').length >= 4,
@@ -1477,6 +1486,8 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   assert.ok(geometry.shellWidth > geometry.appWidth * 0.85 && geometry.inputWidth <= 522,
     'the context card keeps page symmetry while only the editor is purpose-sized: ' + JSON.stringify(geometry));
   assert.equal(geometry.collisions, 0, 'sparkline readout never overlaps its evidence badge');
+  assert.equal(await page.locator('#sector-history-notice').isVisible(), false,
+    'a hidden history notice cannot survive as an empty warning bar');
   assert.ok(await page.locator('#sector-chips .sector-chip').first().isVisible(),
     'market scope stays visible even when the explicit Demo lane has only one sector');
   assert.ok(await page.locator('#sector-grid .destination-cue').count() >= 4,
