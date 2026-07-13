@@ -60,7 +60,8 @@ public final class PlanDecisionService {
     public ObjectNode latest(String userId, String planId) {
         return db.with(connection -> {
             requireOwned(connection, planId, userId, false);
-            List<ObjectNode> rows = Db.queryOn(connection, "SELECT d.id,d.context_rev,d.candidate_id,d.account_id,d.action," +
+            List<ObjectNode> rows = Db.queryOn(connection, "SELECT d.id,d.context_rev,d.candidate_id,d.recommendation_id," +
+                            "d.ensemble_id,d.account_id,d.action," +
                             "d.qty,d.proposed_net_cents,d.quote_as_of::text quote_as_of,d.account_nlv_cents," +
                             "d.buying_power_cents,d.risk_capital_cents,d.max_loss_cents,d.max_profit_cents,d.pop," +
                             "d.p_max_profit,d.p_max_loss,d.ev_market_cents,d.ev_histvol_cents,d.cvar_cents," +
@@ -72,7 +73,9 @@ public final class PlanDecisionService {
                     row -> {
                         ObjectNode node = Json.MAPPER.createObjectNode();
                         put(node, "id", row.str("id")); put(node, "contextRev", row.intv("context_rev"));
-                        put(node, "candidateId", row.str("candidate_id")); put(node, "accountId", row.str("account_id"));
+                        put(node, "candidateId", row.str("candidate_id"));
+                        put(node, "recommendationId", row.str("recommendation_id"));
+                        put(node, "ensembleId", row.str("ensemble_id")); put(node, "accountId", row.str("account_id"));
                         put(node, "action", row.str("action")); put(node, "qty", intOrNull(row, "qty"));
                         put(node, "proposedNetCents", row.lngOrNull("proposed_net_cents"));
                         put(node, "quoteAsOf", row.str("quote_as_of")); put(node, "accountNlvCents", row.lngOrNull("account_nlv_cents"));
@@ -134,6 +137,7 @@ public final class PlanDecisionService {
         Account account = input.account();
         AccountRiskContext risk = input.riskContext();
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        DecisionReferences references = decisionReferences(connection, input.plan(), input.candidateId());
         long decisionSeq = Db.queryOn(connection,
                 "SELECT COALESCE(MAX(decision_seq),0)+1 seq FROM plan_decision WHERE plan_id=?",
                 row -> row.lng("seq"), input.plan().id()).getFirst();
@@ -142,20 +146,27 @@ public final class PlanDecisionService {
         Number cvar = nestedNumber(preview.analytics(), "probabilityMap", "cvar95Cents");
         Long actualEntry = trade == null ? preview.entryNetPremiumCents() : trade.entryNetPremiumCents();
         Integer qty = "TRADE".equals(action) ? (trade == null ? null : trade.qty()) : null;
-        Db.execOn(connection, "INSERT INTO plan_decision(id,plan_id,decision_seq,context_rev,candidate_id,account_id,action,qty," +
+        Db.execOn(connection, "INSERT INTO plan_decision(id,plan_id,decision_seq,context_rev,candidate_id,recommendation_id," +
+                        "ensemble_id,account_id,action,qty," +
                         "proposed_net_cents,quote_as_of,account_nlv_cents,buying_power_cents,risk_capital_cents," +
                         "max_loss_cents,max_profit_cents,pop,p_max_profit,p_max_loss,ev_market_cents,ev_histvol_cents," +
                         "cvar_cents,economic_verdict,evidence_provenance,model_version,study_key,review_horizon_days,created_at) " +
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                id, input.plan().id(), decisionSeq, input.plan().context().rev(), input.candidateId(), account.id(), action, qty,
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                id, input.plan().id(), decisionSeq, input.plan().context().rev(), input.candidateId(),
+                references.recommendationId(), references.ensembleId(), account.id(), action, qty,
                 actualEntry, now, risk == null ? null : risk.nlvCents(), account.buyingPowerCents(),
                 risk == null ? null : risk.riskCapitalCents(),
                 trade == null ? preview.maxLossCents() : trade.maxLossCents(),
                 trade == null ? preview.maxProfitCents() : trade.maxProfitCents(),
                 trade == null ? preview.popEntry() : trade.popEntry(), pMaxProfit, pMaxLoss,
                 economics.marketEvAfterCostsCents(), economics.realizedVolEvAfterCostsCents(), cvar,
-                economics.verdict().name(), preview.evidence().provenance().name(), MODEL_VERSION, null,
+                economics.verdict().name(), preview.evidence().provenance().name(), MODEL_VERSION, references.studyKey(),
                 input.plan().context().horizonDays() == null ? 30 : input.plan().context().horizonDays(), now);
+        if (references.ensembleId() != null) {
+            Db.execOn(connection, "UPDATE ensemble_artifact ea SET pinned=1 FROM plan_ensemble pe " +
+                            "WHERE pe.id=? AND pe.fingerprint=ea.fingerprint",
+                    references.ensembleId());
+        }
         persistLegs(connection, id, preview.legs());
         if (input.acknowledgedRisks() != null) for (String key : input.acknowledgedRisks()) {
             if (key != null && !key.isBlank()) Db.execOn(connection,
@@ -226,6 +237,38 @@ public final class PlanDecisionService {
         return "ROLL".equals(action) ? "ROLL" : "ADJUST";
     }
 
+    /** Resolve receipt identities from server-owned rows. Client state can choose neither a
+     * foreign candidate nor a convenient ensemble after the fact. Prefer the parametric ensemble
+     * actually used for this position; fall back to the current structure-less Plan ensemble. */
+    private static DecisionReferences decisionReferences(Connection c, Plan.View plan, String candidateId)
+            throws SQLException {
+        List<String> recommendations = Db.queryOn(c, "SELECT recommendation_id FROM plan_candidate " +
+                        "WHERE id=? AND plan_id=? AND context_rev=? AND underlying_symbol=? " +
+                        "AND selected=1 AND state='CURRENT'",
+                row -> row.str("recommendation_id"), candidateId, plan.id(), plan.context().rev(), plan.symbol());
+        if (recommendations.isEmpty()) {
+            throw new IllegalStateException("The selected structure is no longer current for this Plan.");
+        }
+        String ensembleId = Db.queryOn(c, "SELECT ensemble_id FROM plan_outcome_run WHERE plan_id=? " +
+                        "AND context_rev=? AND candidate_id=? AND state='CURRENT' AND ensemble_id IS NOT NULL " +
+                        "ORDER BY CASE WHEN basis='PARAMETRIC' THEN 0 ELSE 1 END,created_at DESC LIMIT 1",
+                row -> row.str("ensemble_id"), plan.id(), plan.context().rev(), candidateId)
+                .stream().findFirst().orElse(null);
+        if (ensembleId == null) {
+            ensembleId = Db.queryOn(c, "SELECT pe.id FROM plan_ensemble pe JOIN ensemble_artifact ea " +
+                            "ON ea.fingerprint=pe.fingerprint WHERE pe.plan_id=? AND pe.context_rev=? " +
+                            "AND pe.state='CURRENT' ORDER BY CASE WHEN ea.basis='PARAMETRIC' THEN 0 ELSE 1 END," +
+                            "pe.created_at DESC LIMIT 1",
+                    row -> row.str("id"), plan.id(), plan.context().rev())
+                    .stream().findFirst().orElse(null);
+        }
+        String studyKey = Db.queryOn(c, "SELECT study_key FROM plan_evidence WHERE plan_id=? AND context_rev=? " +
+                        "AND state='CURRENT' ORDER BY created_at DESC LIMIT 1",
+                row -> row.str("study_key"), plan.id(), plan.context().rev())
+                .stream().findFirst().orElse(null);
+        return new DecisionReferences(recommendations.getFirst(), ensembleId, studyKey);
+    }
+
     private static Number nestedNumber(Map<String, Object> root, String parent, String child) {
         Object nested = root == null ? null : root.get(parent);
         return nested instanceof Map<?, ?> map && map.get(child) instanceof Number number ? number : null;
@@ -252,4 +295,5 @@ public final class PlanDecisionService {
 
     private record PlanRow(long version, int contextRev, String userId, String status) {}
     private record Metric(String key, Double number, Long cents, String text) {}
+    private record DecisionReferences(String recommendationId, String ensembleId, String studyKey) {}
 }

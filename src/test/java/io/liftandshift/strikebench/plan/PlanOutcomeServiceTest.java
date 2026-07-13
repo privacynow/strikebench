@@ -3,6 +3,12 @@ package io.liftandshift.strikebench.plan;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.eval.EconomicAssessment;
+import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.paper.Account;
+import io.liftandshift.strikebench.paper.AccountRiskContext;
+import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.sim.IvSpec;
 import io.liftandshift.strikebench.sim.PathEnsembleService;
 import io.liftandshift.strikebench.sim.ScenarioSpec;
@@ -15,6 +21,8 @@ import org.junit.jupiter.api.Test;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -119,5 +127,33 @@ class PlanOutcomeServiceTest {
         assertThat(withHistory.at("/backtests/0/state").asText()).isEqualTo("CURRENT");
         assertThat(withHistory.at("/backtests/0/currentContext").asBoolean()).isTrue();
         assertThat(withHistory.at("/backtests/1/state").asText()).isEqualTo("STALE");
+
+        db.exec("INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded," +
+                        "created_at,updated_at) VALUES(?,?,?,?,?,?,0,?,?)",
+                "acct-decision", "Decision account", "DEMO", 10_000_000L, 10_000_000L, 0L,
+                "2026-07-12T16:00:00Z", "2026-07-12T16:00:00Z");
+        Account account = new Account("acct-decision", "Decision account", "DEMO", 10_000_000L,
+                10_000_000L, 0L, false, "2026-07-12T16:00:00Z", "2026-07-12T16:00:00Z");
+        TradePreview preview = new TradePreview(true, List.of(), List.of(), -30_000L, 65L,
+                30_000L, 70_000L, List.of("253"), 0.45, -900L, 0L,
+                10_000_000L, 9_969_935L, 0L, 0L, 10_000_000L, 9_969_935L,
+                "FIXTURE", DataEvidence.of("fixture", Freshness.FIXTURE), 25_000L, null,
+                List.of(Map.of("action", "BUY", "type", "CALL", "strike", "250",
+                        "expiration", "2026-08-21", "ratio", 1, "bid", "6.9", "ask", "7",
+                        "mid", "6.95", "fill", "7", "iv", 0.3)), List.of(),
+                Map.of("probabilityMap", Map.of("pMaxProfit", 0.2, "pMaxLoss", 0.3,
+                        "cvar95Cents", -28_000L)));
+        EconomicAssessment economics = new EconomicAssessment(EconomicAssessment.Verdict.MIXED,
+                "LEARN_FROM", "Mixed", "Costs matter", -1_420L, 480L, 520L,
+                -4.7, false, List.of("Generated evidence"));
+        PlanDecisionService decisions = new PlanDecisionService(db,
+                Clock.fixed(Instant.parse("2026-07-12T16:00:00Z"), ZoneOffset.UTC));
+        ObjectNode decision = decisions.chooseCash(new PlanDecisionService.Input(null, plan, plan.version(),
+                candidateId, account, preview, economics,
+                new AccountRiskContext(null, null, null, null, null), 1, List.of(), "Kept cash"));
+        assertThat(decision.path("ensembleId").asText()).isEqualTo(stored.id());
+        assertThat(db.query("SELECT ea.pinned FROM ensemble_artifact ea JOIN plan_ensemble pe " +
+                        "ON pe.fingerprint=ea.fingerprint WHERE pe.id=?", row -> row.bool("pinned"), stored.id()))
+                .containsExactly(true);
     }
 }
