@@ -236,6 +236,24 @@ class PlanServiceTest {
         await(() -> seen.stream().filter(e -> e.type().equals("plan.updated")).count() >= 3);
     }
 
+    @Test
+    void undecidedDraftCanBeDeletedButDecisionHistoryCannot() {
+        Plan.View disposable = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                create("req-delete", "AAPL", "DIRECTIONAL", 21));
+        plans.deleteDraft(null, disposable.id(), disposable.version());
+        assertThatThrownBy(() -> plans.get(null, disposable.id()))
+                .isInstanceOf(java.util.NoSuchElementException.class);
+        assertThat(db.query("SELECT COUNT(*) n FROM plan_create_request WHERE plan_id=?", r -> r.lng("n"),
+                disposable.id())).containsExactly(0L);
+
+        Plan.View decided = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                create("req-keep", "QQQ", "INCOME", 22));
+        db.exec("UPDATE plans SET status='DECIDED_CASH' WHERE id=?", decided.id());
+        assertThatThrownBy(() -> plans.deleteDraft(null, decided.id(), decided.version()))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("Archive");
+        assertThat(plans.get(null, decided.id()).id()).isEqualTo(decided.id());
+    }
+
     private static Plan.CreateRequest create(String requestId, String symbol, String intent, int horizon) {
         return new Plan.CreateRequest(requestId, symbol, intent, null, null, "bullish", horizon,
                 25000L, "conservative", 0L, null, null);

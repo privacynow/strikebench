@@ -271,6 +271,23 @@ public final class PlanService {
         return changed;
     }
 
+    /** Permanently removes only an undecided hypothetical Plan. Anything decision-bearing is archived. */
+    public void deleteDraft(String userId, String planId, long expectedVersion) {
+        DeletedPlan deleted = db.tx(c -> {
+            Plan.View current = selectViewOn(c, planId, userId, true);
+            requireVersion(current, expectedVersion);
+            if (current.status() != Plan.Status.DRAFT && current.status() != Plan.Status.ACTIVE) {
+                throw new IllegalStateException("This Plan has decision history. Archive it instead of deleting it.");
+            }
+            if (hasDurableHistoryOn(c, planId)) {
+                throw new IllegalStateException("This Plan has linked decisions, rehearsals, or review history. Archive it instead of deleting it.");
+            }
+            Db.execOn(c, "DELETE FROM plans WHERE id=?", planId);
+            return new DeletedPlan(current.id(), current.marketKind(), current.worldId());
+        });
+        announceDeleted(userId, deleted);
+    }
+
     /** Typed relationship between two owner-matched Plans; idempotent for retry-safe Scout spawning. */
     public void linkRelated(String userId, String planId, String relatedPlanId, String rawRole) {
         String role = required(rawRole, "role").toUpperCase(Locale.ROOT);
@@ -358,6 +375,26 @@ public final class PlanService {
         events.publish("plan.updated", Map.of("id", view.id(), "version", view.version(),
                 "market", view.marketKind().name(), "world", view.worldId() == null ? "" : view.worldId(),
                 "user", owner));
+    }
+
+    private void announceDeleted(String userId, DeletedPlan plan) {
+        if (events == null || plan == null) return;
+        events.publish("plan.updated", Map.of("id", plan.id(), "version", 0,
+                "market", plan.market().name(), "world", plan.world() == null ? "" : plan.world(),
+                "user", userId == null ? "local" : userId, "deleted", true));
+    }
+
+    private static boolean hasDurableHistoryOn(java.sql.Connection c, String planId)
+            throws java.sql.SQLException {
+        String sql = "SELECT 1 ok WHERE EXISTS (SELECT 1 FROM plan_decision WHERE plan_id=?) " +
+                "OR EXISTS (SELECT 1 FROM plan_management_action WHERE plan_id=?) " +
+                "OR EXISTS (SELECT 1 FROM plan_review WHERE plan_id=?) " +
+                "OR EXISTS (SELECT 1 FROM sim_replay_source WHERE plan_id=?) " +
+                "OR EXISTS (SELECT 1 FROM plan_link WHERE (plan_id=? OR related_plan_id=?) " +
+                "AND role IN ('ENTRY','ADJUST','ROLL','PARTIAL_CLOSE','CLOSE','REHEARSAL','EXTERNAL')) " +
+                "OR EXISTS (SELECT 1 FROM plans WHERE origin_plan_id=?)";
+        return !Db.queryOn(c, sql, r -> r.intv("ok"), planId, planId, planId, planId,
+                planId, planId, planId).isEmpty();
     }
 
     private static String contextHash(String symbol, String intent, Plan.MarketKind market, String world,
@@ -459,6 +496,7 @@ public final class PlanService {
     }
 
     private record ExistingRequest(String id, String inputHash) {}
+    private record DeletedPlan(String id, Plan.MarketKind market, String world) {}
 
     private static void validateContext(Integer horizon, Long target, String risk, Long shares,
                                         Long costBasis, Long assumption) {

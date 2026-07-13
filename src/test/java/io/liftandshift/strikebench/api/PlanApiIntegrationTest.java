@@ -116,6 +116,15 @@ class PlanApiIntegrationTest {
         HttpResponse<String> reopenArchived = put("/api/plans/" + id + "/open",
                 "{\"expectedVersion\":" + archived.get("version").asLong() + ",\"open\":true}");
         assertThat(reopenArchived.statusCode()).isEqualTo(409);
+
+        JsonNode disposable = json(post("/api/plans", """
+                {"clientRequestId":"delete-draft-api","symbol":"QQQ","intent":"ACQUIRE",
+                 "title":"Disposable draft","thesis":"neutral","horizonDays":23}
+                """));
+        assertThat(json(delete("/api/plans/" + disposable.get("id").asText() + "?expectedVersion="
+                + disposable.get("version").asLong())).get("deleted").asText())
+                .isEqualTo(disposable.get("id").asText());
+        assertThat(get("/api/plans/" + disposable.get("id").asText()).statusCode()).isEqualTo(404);
     }
 
     @Test void researchReportsPlanEligibilityAndCreationFailsClosedForUnavailableSymbols() throws Exception {
