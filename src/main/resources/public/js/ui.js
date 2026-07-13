@@ -1132,6 +1132,11 @@
     opts = opts || {};
     var h = opts.height || 40;
     if (!spark || !spark.available || !spark.closes || spark.closes.length < 2) {
+      if (opts.quietMissing) {
+        return el('div', { class: 'spark spark-empty spark-empty-quiet', style: 'height:' + h + 'px',
+          'aria-label': opts.missingText || 'Price history unavailable' },
+          el('span', { class: 'muted' }, opts.missingText || 'No chart'));
+      }
       return el('div', { class: 'spark spark-empty', style: 'height:' + h + 'px' },
         el('span', { class: 'muted' }, 'history unavailable'), info('historycoverage'));
     }

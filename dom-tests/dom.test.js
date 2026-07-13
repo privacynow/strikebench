@@ -1619,6 +1619,8 @@ test('Research entry and destination cards are purposeful, readable, and collisi
     'destination cards use one explicit open affordance instead of hover underlines');
   await page.click('#sector-grid .sym-card[data-sym="AAPL"]');
   await page.waitForSelector('#plan-start');
+  assert.doesNotMatch(await page.textContent('#research-hero'), /building history/i,
+    'Research never presents an inert IV-rank progress placeholder');
   assert.match(await page.textContent('#plan-start'), /Turn this research into a Plan/);
   await promoteEvidencePlan();
   await page.waitForSelector('#plan-header');
