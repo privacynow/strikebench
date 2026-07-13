@@ -169,6 +169,14 @@ public final class Db implements AutoCloseable {
         public java.math.BigDecimal bd(String col) {
             try { return rs.getBigDecimal(col); } catch (SQLException e) { throw new DbException(e); }
         }
+        public java.time.OffsetDateTime odt(String col) {
+            try { return rs.getObject(col, java.time.OffsetDateTime.class); }
+            catch (SQLException e) { throw new DbException(e); }
+        }
+        public java.time.LocalDate date(String col) {
+            try { return rs.getObject(col, java.time.LocalDate.class); }
+            catch (SQLException e) { throw new DbException(e); }
+        }
         public byte[] bytes(String col) {
             try { return rs.getBytes(col); } catch (SQLException e) { throw new DbException(e); }
         }
