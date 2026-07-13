@@ -1083,17 +1083,19 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simTwo + '"]').count(), 1);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.second + '"]').count(), 0,
     'the Plan bar shows only the current execution market');
-  assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"]').count(), 1,
-    'the Home library retains a closed Plan from another market');
-  assert.match(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] .home-plan-actions .btn:not(.btn-secondary)').textContent(),
-    /Switch market & open/);
-  assert.match(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"]').textContent(),
-    /Switches market when opened/,
-    'an inactive-market Plan never borrows a same-symbol quote from the active market');
+  await page.waitForSelector('#home-plan-library .xp-head:has-text("Closed Plan tabs")');
+  await page.locator('#home-plan-library .xp-head:has-text("Closed Plan tabs")').click();
+  const closedFirst = page.locator('.home-plan-closed-tabs .status-item').filter({ hasText: 'QQQ · Earn income' });
+  assert.equal(await closedFirst.count(), 1, 'the Home library retains a closed Plan outside the working count');
+  assert.match(await closedFirst.getByRole('button').first().textContent(), /Switch market & reopen/);
   await page.waitForTimeout(4200);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-library-desktop.png'), fullPage: true });
 
-  await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] .home-plan-actions .btn:not(.btn-secondary)').click();
+  await closedFirst.getByRole('button', { name: 'Switch market & reopen' }).click();
+  await page.waitForSelector('[role="dialog"]');
+  assert.match(await page.textContent('[role="dialog"]'), /current simulated session keeps running.*workspace.*switch/is,
+    'leaving a running simulation requires an explicit whole-workspace transition');
+  await page.getByRole('button', { name: 'Switch & open Plan' }).click();
   await page.waitForFunction(id => location.hash.includes('/plan/' + id + '/'), ids.first, { timeout: 20000 });
   await page.waitForFunction(base => App.state.world === base && App.Market.world === base, ids.base);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.first + '"]').count(), 1,
@@ -1104,9 +1106,10 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.first + '"] .plan-chip-close').click();
   await page.waitForFunction(id => !document.querySelector('.plan-chip[data-plan-id="' + id + '"]'), ids.first);
   await go('#/home');
-  await page.waitForSelector('#home-plan-library [data-plan-id="' + ids.first + '"]');
-  assert.match(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] .home-plan-actions .btn:not(.btn-secondary)').textContent(), /Open Plan/,
-    'the chip × removes only the open-tab state; the durable Plan remains in the library');
+  await page.waitForSelector('#home-plan-library .xp-head:has-text("Closed Plan tabs")');
+  await page.locator('#home-plan-library .xp-head:has-text("Closed Plan tabs")').click();
+  assert.equal(await page.locator('.home-plan-closed-tabs .status-item').filter({ hasText: 'QQQ · Earn income' }).count(), 1,
+    'the chip × removes only the open-tab state; the durable Plan remains under closed tabs');
 
   await page.locator('#home-plan-library [data-plan-id="' + ids.simOne + '"] .home-plan-actions .btn:not(.btn-secondary)').click();
   await page.waitForFunction(world => App.state.world === world && App.Market.world === world, ids.worldId,

@@ -513,7 +513,7 @@
           var actions = el('div', { class: 'btn-row' },
             el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
               PlanStore.focus(plan, plan.activeStage).catch(function (e) { UI.toast(e.message, 'error'); });
-            } }, 'Reopen'));
+            } }, PlanStore.marketKey(plan) === currentKey ? 'Reopen' : 'Switch market & reopen'));
           if (plan.assumptionsEditable === true) actions.appendChild(el('button', { type: 'button',
             class: 'btn btn-sm btn-secondary', onclick: function () { confirmDeletePlan(plan, false); } },
           icon('trash', 14), ' Delete draft'));

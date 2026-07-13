@@ -203,12 +203,27 @@
     return '#/plan/' + plan.id + '/' + (STAGE_PATH[key] || 'understand');
   }
 
+  function confirmLeavingSimulation(plan) {
+    return new Promise(function (resolve) {
+      var settled = false;
+      function finish(value) { if (!settled) { settled = true; resolve(value); } }
+      var target = plan.marketKind === 'DEMO' ? 'the Demo market'
+        : plan.marketKind === 'OBSERVED' ? 'the Observed market' : 'another simulated market';
+      UI.confirmModal('Switch markets to open this Plan?', UI.el('div', {},
+        UI.el('p', {}, UI.el('b', {}, plan.title), ' belongs to ', target, '.'),
+        UI.el('p', { class: 'muted' }, 'Your current simulated session keeps running in the background. The entire workspace, prices, account, and Plan bar will switch together.')),
+      'Switch & open Plan', function () { finish(true); }, false, function () { finish(false); });
+    });
+  }
+
   async function focus(plan, stage) {
     if (typeof plan === 'string') plan = await get(plan);
     var market = currentMarket();
     var target = plan.marketKind === 'SIMULATED' ? plan.worldId
       : plan.marketKind === 'DEMO' ? 'demo' : 'observed';
     if (market.world !== target) {
+      var leavingSimulation = market.world !== 'observed' && market.world !== 'demo';
+      if (leavingSimulation && !(await confirmLeavingSimulation(plan))) return null;
       pendingFocusId = plan.id;
       try {
         var switched = await App.switchWorld(target);
