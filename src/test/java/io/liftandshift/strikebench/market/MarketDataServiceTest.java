@@ -145,7 +145,9 @@ class MarketDataServiceTest {
                 new java.math.BigDecimal("101"), new java.math.BigDecimal("99"),
                 new java.math.BigDecimal("100.50"), 1_000, true);
         io.liftandshift.strikebench.market.ports.CandleStore badStore =
-                (symbol, f, t, dataset) -> Optional.of(new CandleSeries(List.of(candle), "fixture", io.liftandshift.strikebench.model.Freshness.FIXTURE));
+                (symbol, f, t, dataset) -> Optional.of(new io.liftandshift.strikebench.market.ports.CandleStore.Read(
+                        new CandleSeries(List.of(candle), "fixture", io.liftandshift.strikebench.model.Freshness.FIXTURE),
+                        CandleCoverage.assess(List.of(candle), f, t)));
         MarketDataService svc = new MarketDataService(List.of(), List.of(), List.of(), badStore);
         assertThat(svc.candleSeries("AAPL", from, to).isEmpty()).isTrue();
     }

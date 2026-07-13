@@ -650,16 +650,13 @@
       svg.append('text').attr('class', 'tick').attr('x', padL - 8).attr('y', y(t) + 4)
         .attr('text-anchor', 'end').text(fmtNum(t, t >= 1000 ? 0 : 2));
     });
-    var labelEvery = Math.max(1, Math.round(bars.length / 5));
+    // Five evenly-spaced labels include both endpoints. The old modulo+append approach could
+    // create a sixth label only a few sessions before the final date, making those two collide.
+    var labelCount = Math.min(5, bars.length);
     var labelIndexes = [];
-    bars.forEach(function (b, i) { if (i % labelEvery === 0) labelIndexes.push(i); });
-    var lastIndex = bars.length - 1;
-    if (labelIndexes[labelIndexes.length - 1] !== lastIndex) {
-      var prior = labelIndexes[labelIndexes.length - 1];
-      var priorX = prior === undefined ? -Infinity : x(bars[prior].date) + x.bandwidth() / 2;
-      var lastX = x(bars[lastIndex].date) + x.bandwidth() / 2;
-      if (lastX - priorX < 86) labelIndexes.pop();
-      labelIndexes.push(lastIndex);
+    for (var li = 0; li < labelCount; li++) {
+      var labelIndex = labelCount === 1 ? 0 : Math.round(li * (bars.length - 1) / (labelCount - 1));
+      if (labelIndexes.indexOf(labelIndex) < 0) labelIndexes.push(labelIndex);
     }
     labelIndexes.forEach(function (i) {
       var b = bars[i];

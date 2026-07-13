@@ -3151,6 +3151,58 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   // Explicit Demo owns this universe already; no hidden sector mutation is needed.
 });
 
+test('partial observed history remains chartable and names its exact coverage', async () => {
+  const pattern = '**/api/research/AAPL/history?range=1y';
+  await page.route(pattern, async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.candles = (body.candles || []).slice(-30);
+    body.source = 'stored:yahoo';
+    body.freshness = 'EOD';
+    body.evidence = { provenance: 'OBSERVED', age: 'EOD', source: 'stored:yahoo' };
+    body.coverage = {
+      requestedFrom: '2025-07-13', requestedTo: '2026-07-13',
+      availableFrom: body.candles[0].date, availableTo: body.candles[body.candles.length - 1].date,
+      availableSessions: body.candles.length, requestedSessions: 260,
+      coveragePct: 12, complete: false
+    };
+    await route.fulfill({ response, json: body });
+  });
+  try {
+    await page.evaluate(() => API.flushCache());
+    await openPlan('AAPL');
+    await openResearchTab('overview');
+    await page.waitForSelector('#history-card svg.chart');
+    const text = await page.textContent('#history-card');
+    assert.match(text, /Partial coverage: 30 observed sessions/,
+      'real partial rows render with coverage disclosure rather than an unavailable state');
+    assert.doesNotMatch(text, /history is unavailable|No observed daily history/i);
+    const datesFit = await page.evaluate(() => {
+      const svg = document.querySelector('#history-card svg.candles');
+      const box = svg.getBoundingClientRect();
+      const dates = Array.from(svg.querySelectorAll('text.tick'))
+        .filter(t => /^\d{4}-\d{2}-\d{2}$/.test(t.textContent || ''))
+        .map(t => t.getBoundingClientRect()).sort((a, b) => a.left - b.left);
+      return {
+        contained: dates.every(b => b.left >= box.left - 1 && b.right <= box.right + 1),
+        separated: dates.every((b, i) => i === dates.length - 1 || b.right <= dates[i + 1].left - 2)
+      };
+    });
+    assert.deepEqual(datesFit, { contained: true, separated: true },
+      'partial-history date labels stay inside the chart without colliding');
+    await page.click('#level-switch button[data-level="expert"]');
+    await page.waitForSelector('#level-switch button[data-level="expert"][aria-pressed="true"]');
+    await page.waitForSelector('#history-card svg.chart');
+    assert.match(await page.textContent('#history-card'), /Partial coverage: 30 observed sessions/,
+      'Expert sees the same mandatory coverage truth');
+    await page.click('#level-switch button[data-level="beginner"]');
+    await page.waitForSelector('#level-switch button[data-level="beginner"][aria-pressed="true"]');
+  } finally {
+    await page.unroute(pattern);
+    await page.evaluate(() => API.flushCache());
+  }
+});
+
 test('Home keeps a partial quote batch actionable instead of leaving an empty well', async () => {
   await page.evaluate(() => {
     localStorage.setItem('strikebench.welcomed', '1');

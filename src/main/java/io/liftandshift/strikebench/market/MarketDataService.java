@@ -5,6 +5,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
+import io.liftandshift.strikebench.market.ports.CandleStore;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.NewsItem;
@@ -305,15 +306,18 @@ public final class MarketDataService {
         // dataset's cached candles.
         String k = dataset + "|" + norm(symbol) + "|" + from + "|" + to;
         CandleSeries r = candlesCache.get(k, key -> {
-            // Persisted bars (Data Center backfills / snapshots / CSV ingest) win over live provider
-            // calls — the whole point of storing history is that the read path uses it.
+            CandleStore.Read storedFallback = null;
+            // Complete persisted bars win. Partial observed history remains a fallback, but first
+            // gives an eligible provider the chance to enrich the requested range.
             if (candleStore != null) {
                 try {
-                    Optional<CandleSeries> stored = candleStore.candles(norm(symbol), from, to, dataset);
-                    if (stored.isPresent() && !stored.get().candles().isEmpty()
+                    Optional<CandleStore.Read> stored = candleStore.candles(norm(symbol), from, to, dataset);
+                    if (stored.isPresent() && !stored.get().series().candles().isEmpty()
                             && (fixtureOnlyChain || !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
-                                || observedEvidence(stored.get().evidence()))) {
-                        return stored.get();
+                                || observedEvidence(stored.get().series().evidence()))) {
+                        if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
+                                || stored.get().coverage().complete()) return stored.get().series();
+                        storedFallback = stored.get();
                     }
                 } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol, e.toString()); }
             }
@@ -324,15 +328,25 @@ public final class MarketDataService {
             if (!fromProviders.candles().isEmpty() && !fixtureOnlyChain
                     && observedEvidence(fromProviders.evidence()) && candleStore != null) {
                 try {
+                    var providerCoverage = CandleCoverage.assess(fromProviders.candles(), from, to);
                     int persisted = candleStore.persistObserved(norm(symbol), fromProviders);
                     if (persisted > 0) log.debug("Saved {} observed daily bars for local reuse", persisted);
+                    if (!providerCoverage.complete()) {
+                        Optional<CandleStore.Read> refreshed = candleStore.candles(norm(symbol), from, to, dataset);
+                        if (refreshed.isPresent()
+                                && (refreshed.get().coverage().complete()
+                                || refreshed.get().coverage().availableSessions() >= providerCoverage.availableSessions())) {
+                            return refreshed.get().series();
+                        }
+                    }
                 } catch (RuntimeException e) {
                     // The provider result remains usable for this request. Storage is an additive
                     // optimization and must not turn a valid observed read into an outage.
                     log.warn("Observed daily history could not be saved for local reuse");
                 }
             }
-            return fromProviders.candles().isEmpty() ? null : fromProviders;
+            if (!fromProviders.candles().isEmpty()) return fromProviders;
+            return storedFallback == null ? null : storedFallback.series();
         });
         return r == null ? CandleSeries.EMPTY : r;
     }

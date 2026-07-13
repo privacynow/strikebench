@@ -611,6 +611,8 @@ class ApiIntegrationTest {
             JsonNode h = Json.parse(get("/api/research/AAPL/history?range=" + range).body());
             assertThat(h.get("range").asText()).isEqualTo(range);
             assertThat(h.get("candles").size()).isGreaterThan(50);
+            assertThat(h.at("/coverage/availableSessions").asInt()).isEqualTo(h.get("candles").size());
+            assertThat(h.at("/coverage/requestedSessions").asInt()).isPositive();
         }
         assertThat(Json.parse(get("/api/research/AAPL/history?range=bogus").body()).get("range").asText()).isEqualTo("1y");
 
