@@ -1554,7 +1554,7 @@ public final class ApiServer {
     /** The server's list of risks the user MUST acknowledge for this package (id + label). */
     @SuppressWarnings("unchecked")
     private List<Map<String, String>> requiredAcksFor(io.liftandshift.strikebench.paper.TradePreview p,
-                                                      io.liftandshift.strikebench.paper.AccountRiskContext rc) {
+                                                      long effectiveRiskBudgetCents) {
         List<Map<String, String>> out = new ArrayList<>();
         if (p == null || p.analytics() == null) return out;
         Long marketEvAfterCosts = p.expectedValueCents() == null ? null
@@ -1577,11 +1577,11 @@ public final class ApiServer {
             out.add(Map.of("id", "ack-dte", "label", "Only " + plan.get("sessions")
                     + " trading session(s) remain — gamma, weekend gaps and pin risk dominate."));
         }
-        if (rc != null && rc.riskCapitalCents() != null && rc.riskCapitalCents() > 0
-                && p.maxLossCents() > rc.riskCapitalCents()) {
-            out.add(Map.of("id", "ack-capital", "label", "The worst case exceeds the per-trade risk capital "
-                    + "you set for your REAL account ("
-                    + io.liftandshift.strikebench.util.Money.fmt(rc.riskCapitalCents()) + ")."));
+        if (effectiveRiskBudgetCents > 0 && p.maxLossCents() > effectiveRiskBudgetCents) {
+            out.add(Map.of("id", "ack-capital", "label", "The theoretical worst case "
+                    + io.liftandshift.strikebench.util.Money.fmt(p.maxLossCents())
+                    + " exceeds your selected per-trade risk budget ("
+                    + io.liftandshift.strikebench.util.Money.fmt(effectiveRiskBudgetCents) + ")."));
         }
         return out;
     }
@@ -5216,7 +5216,10 @@ public final class ApiServer {
         // R2: material-risk acknowledgments are a SERVER contract, not a UI courtesy — the same
         // list is recomputed at create and enforced with a signed token proving the user saw
         // a preview of THIS exact package.
-        List<Map<String, String>> requiredAcks = requiredAcksFor(preview, rc);
+        long effectiveRiskBudget = RiskBudgetPolicy.compute(
+                RecommendationEngine.RiskMode.parse(req.riskMode()), acct.buyingPowerCents(), riskCapCents(ctx))
+                .effectiveBudgetCents();
+        List<Map<String, String>> requiredAcks = requiredAcksFor(preview, effectiveRiskBudget);
         if (!requiredAcks.isEmpty()) {
             out.put("requiredAcks", requiredAcks);
             out.put("ackToken", ackToken(req));
@@ -5301,8 +5304,10 @@ public final class ApiServer {
         }
         // R2: recompute the material risks for THIS package and enforce acknowledgment + the
         // signed token — a raw API call can no longer skip what the Review made explicit.
-        var rcAck = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
-        List<Map<String, String>> required = requiredAcksFor(trades.preview(req), rcAck);
+        long effectiveRiskBudget = RiskBudgetPolicy.compute(
+                RecommendationEngine.RiskMode.parse(req.riskMode()), acct.buyingPowerCents(), riskCapCents(ctx))
+                .effectiveBudgetCents();
+        List<Map<String, String>> required = requiredAcksFor(trades.preview(req), effectiveRiskBudget);
         if (!required.isEmpty()) {
             java.util.Set<String> acked = body.acknowledgedRisks() == null
                     ? java.util.Set.of() : new java.util.HashSet<>(body.acknowledgedRisks());
