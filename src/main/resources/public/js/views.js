@@ -4229,7 +4229,20 @@
       review.appendChild(verdictPanel(p, Learn.currentLevel() === 'beginner', true).node);
       var blocks = (p.blockReasons || []).concat(result.guardrails && result.guardrails.blockReasons || []);
       var warnings = (p.warnings || []).concat(result.guardrails && result.guardrails.warnings || []);
-      if (blocks.length) review.appendChild(alertBox('danger', 'This package cannot be opened', blocks));
+      if (blocks.length) {
+        review.appendChild(alertBox('danger', 'This package cannot be opened', blocks));
+        var execution = p.analytics && p.analytics.executionQuality;
+        var executableNet = execution && execution.executableNetCents;
+        if (executableNet != null && blocks.some(function (reason) { return /more favorable than the executable market/i.test(reason); })) {
+          review.appendChild(el('div', { class: 'btn-row plan-stale-limit-recovery' },
+            el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-use-executable', onclick: function () {
+              state.proposedNetCents = executableNet;
+              limit.value = (executableNet / 100).toFixed(2);
+              var reviewButton = document.getElementById('plan-review-order');
+              if (reviewButton) reviewButton.click();
+            } }, 'Use current executable ' + fmtMoney(executableNet, { plus: true }) + ' & review')));
+        }
+      }
       if (warnings.length) review.appendChild(alertBox('caution', 'Review these conditions', warnings));
       review.appendChild(el('div', { class: 'grid grid-4 plan-decision-math' },
         stat('Cost / credit', fmtMoney(p.entryNetPremiumCents, { plus: true })),
