@@ -7470,6 +7470,7 @@
   function testYourViewSection(symbol, plan) {
     if (!plan) throw new Error('Evidence must be owned by a Plan.');
     var level = Learn.currentLevel();
+    var assumptionsEditable = plan.assumptionsEditable === true;
     var historyBasis = activeHistoryBasis();
     var planUi = PlanStore.ui(plan.id);
     var th = planUi.thesis = planUi.thesis || {};
@@ -7502,25 +7503,40 @@
       el('option', { value: 'up_streak' }, level === 'beginner' ? 'After an up streak, what followed?' : 'Up streak: continue or reverse?'));
     setupSel.value = th.setup;
     var horIn = el('input', { type: 'number', id: 'tv-horizon', value: String(th.horizonDays), min: '1', max: '63' });
+    if (!assumptionsEditable) {
+      viewSel.disabled = true;
+      setupSel.disabled = true;
+      horIn.disabled = true;
+    }
     var thesisRow = el('div', { class: 'form-grid' },
       el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Your market view'), viewSel),
       el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Historical condition to examine'), setupSel),
       el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Over how many trading days?'), horIn));
     wrap.appendChild(thesisRow);
 
+    if (!assumptionsEditable) {
+      wrap.appendChild(el('div', { class: 'alert alert-info plan-frozen-context' },
+        el('div', {}, el('b', {}, 'Decision inputs are frozen'),
+          el('p', {}, 'This view, historical condition and horizon belong to the recorded decision. Create a linked revision to test different assumptions without rewriting what happened.')),
+        el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+          var edit = document.getElementById('plan-edit-context');
+          if (edit) edit.click();
+        } }, 'Revise this Plan')));
+    }
+
     var outcomeWorkspace = null;
-    viewSel.addEventListener('change', async function () {
+    if (assumptionsEditable) viewSel.addEventListener('change', async function () {
       th.thesis = viewSel.value;
       try {
         plan = await PlanStore.updateContext(plan, { thesis: th.thesis });
         App.render();
       } catch (e) { UI.toast(e.message, 'error'); App.render(); }
     });
-    setupSel.addEventListener('change', function () {
+    if (assumptionsEditable) setupSel.addEventListener('change', function () {
       th.setup = setupSel.value;
       if (outcomeWorkspace) outcomeWorkspace.refresh();
     });
-    horIn.addEventListener('change', async function () {
+    if (assumptionsEditable) horIn.addEventListener('change', async function () {
       th.horizonDays = Math.max(1, Math.min(63, parseInt(horIn.value, 10) || 10));
       try {
         plan = await PlanStore.updateContext(plan, { horizonDays: th.horizonDays });

@@ -1378,6 +1378,12 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   assert.match(await page.textContent('#plan-stage-decide'), /Decision frozen/);
   assert.match(await page.textContent('#plan-stage-decide'), /Market EV after costs/);
 
+  await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
+  await page.waitForSelector('#test-your-view');
+  assert.equal(await page.locator('#tv-view:disabled, #tv-setup:disabled, #tv-horizon:disabled').count(), 3,
+    'a frozen decision never presents mutable evidence assumptions');
+  assert.match(await page.textContent('.plan-frozen-context'), /linked revision.*without rewriting/i);
+
   await page.locator('.plan-rail button').filter({ hasText: 'Manage' }).click();
   await page.click('#unwind-btn');
   await page.waitForSelector('[role="dialog"]');
