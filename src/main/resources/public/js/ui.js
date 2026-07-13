@@ -311,7 +311,7 @@
   }
 
   /** Confirmation modal. body may be a node; onConfirm is async. */
-  function confirmModal(title, bodyNode, confirmLabel, onConfirm, danger) {
+  function confirmModal(title, bodyNode, confirmLabel, onConfirm, danger, onCancel) {
     var root = document.getElementById('modal-root');
     var returnFocus = document.activeElement;
     var titleId = 'modal-title-' + Date.now().toString(36);
@@ -365,6 +365,7 @@
       closed = true;
       document.removeEventListener('keydown', onKey);
       root.innerHTML = '';
+      if (!force && typeof onCancel === 'function') onCancel();
       if (returnFocus && returnFocus.isConnected && returnFocus.focus) returnFocus.focus();
     }
     root.appendChild(backdrop);
