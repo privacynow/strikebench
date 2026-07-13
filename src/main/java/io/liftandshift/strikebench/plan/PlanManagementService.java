@@ -142,7 +142,11 @@ public final class PlanManagementService {
         requireLinked(c, planId, trade.id());
         OffsetDateTime now = now();
         String decisionId = latestDecisionId(c, planId);
-        String actionKind = prepareRoll ? "ROLL" : "SETTLE".equals(kind) ? "SETTLE" : "CLOSE";
+        String actionKind = prepareRoll ? "ROLL" : switch (kind) {
+            case "SETTLE" -> "SETTLE";
+            case "VOID" -> "VOID";
+            default -> "CLOSE";
+        };
         Db.execOn(c, "INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,kind,action_at," +
                         "realized_cents,note,created_at) VALUES(?,?,?,?,?,?,?,?,?)", Ids.newId("pmgt"), planId,
                 decisionId, trade.id(), actionKind, now, realized,

@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PlanOutcomeServiceTest {
     private Db db;
@@ -41,6 +42,38 @@ class PlanOutcomeServiceTest {
     }
 
     @AfterEach void close() { if (db != null) db.close(); }
+
+    @Test void currentOutcomeArtifactsCannotCrossPlanRevisionsOrAnalysisDatasets() {
+        Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                new Plan.CreateRequest("outcome-scope-guard", "AAPL", "DIRECTIONAL", null, null,
+                        "bullish", 30, null, "conservative", null, null, null));
+        ScenarioSpec spec = ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 1, 0.25, 4242L, 3);
+        var baseline = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AAPL", "demo", AnalysisContext.OBSERVED), 250, spec,
+                new double[][]{{250, 251}, {250, 249}, {250, 252}}, null, "paths-test");
+        var stored = outcomes.saveEnsemble(null, plan, baseline, IvSpec.flat(0.25), 0.04, null,
+                Json.parse("{\"basis\":\"baseline\"}"));
+        assertThat(outcomes.loadCurrentEnsemble(null, plan, stored.id(), AnalysisContext.OBSERVED).id())
+                .isEqualTo(stored.id());
+
+        db.exec("INSERT INTO dataset(id,name,kind,symbol,seed,spec) VALUES(?,?,?,?,?,?::jsonb)",
+                "ds-outcome-guard", "AAPL alternate", "SYNTHETIC_PURE", "AAPL", 77L, "{}");
+        AnalysisContext alternate = new AnalysisContext(null, "ds-outcome-guard");
+        var alternateEnsemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AAPL", "demo", alternate), 250, spec,
+                new double[][]{{250, 248}, {250, 253}, {250, 250}}, null, "paths-test");
+        var alternateStored = outcomes.saveEnsemble(null, plan, alternateEnsemble, IvSpec.flat(0.25), 0.04,
+                null, Json.parse("{\"basis\":\"alternate\"}"));
+        assertThatThrownBy(() -> outcomes.loadCurrentEnsemble(null, plan, alternateStored.id(), AnalysisContext.OBSERVED))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("different analysis dataset");
+
+        Plan.View revised = plans.updateContext(null, plan.id(), new Plan.ContextUpdateRequest(plan.version(),
+                null, 45, null, null, null, null, null, java.util.Set.of()));
+        assertThat(revised.context().rev()).isEqualTo(plan.context().rev() + 1);
+        assertThat(outcomes.loadEnsemble(null, plan.id(), stored.id()).state()).isEqualTo("STALE");
+        assertThatThrownBy(() -> outcomes.loadCurrentEnsemble(null, revised, stored.id(), AnalysisContext.OBSERVED))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("earlier Plan assumptions");
+    }
 
     @Test void exactMatrixIvPathAndPositionOutcomeRoundTripWithoutRegeneration() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
