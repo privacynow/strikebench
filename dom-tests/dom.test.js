@@ -1390,6 +1390,15 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
     'Decide derives symbol, intent, structure and legs from the Plan');
   await page.click('#plan-review-order');
   await page.waitForSelector('#plan-decision-review .plan-decision-math', { timeout: 30000 });
+  const executablePrice = Number(await page.inputValue('#plan-decision-price'));
+  await page.fill('#plan-decision-price', (executablePrice + 0.01).toFixed(2));
+  await page.click('#plan-review-order');
+  await page.waitForSelector('#plan-use-executable', { timeout: 30000 });
+  assert.match(await page.textContent('#plan-use-executable'), /Use current executable/,
+    'a moved or deliberately unfillable limit has an explicit, server-priced recovery');
+  await page.click('#plan-use-executable');
+  await page.waitForSelector('#plan-decision-review .plan-decision-math', { timeout: 30000 });
+  await page.waitForFunction(() => !document.querySelector('#plan-use-executable'));
   const reviewText = await page.textContent('#plan-decision-review');
   assert.match(reviewText, /Theoretical max loss/);
   assert.match(reviewText, /Theoretical max profit/);
