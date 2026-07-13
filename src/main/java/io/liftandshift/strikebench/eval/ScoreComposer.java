@@ -6,8 +6,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * THE DecisionPolicy: the one scorer behind every ranked surface (manual ideas, /api/recommend
- * decision ordering, intent ladders, opportunity scans, the Decision page). A hard GATE, a
+ * THE DecisionPolicy: the one scorer behind every ranked surface (Plan Strategy, Research Scout,
+ * decision ordering, intent ladders, and opportunity scans). A hard GATE, a
  * weighted NORMALIZE over named 0..1 components — EXPECTED VALUE included as primary economics —
  * then a RISK-ADJUST haircut by evidence uncertainty, tail risk and gamma/DTE concentration. The
  * single number never travels without this breakdown, and negative-EV packages are never ranked

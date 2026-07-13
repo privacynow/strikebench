@@ -7,9 +7,8 @@
  *   EXPERT: a naked terminal — structure quick-pick, editable leg grid with inline market
  *   data, per-leg include/exclude toggles for instant impact analysis, net greeks, and a
  *   sticky analytics panel.
- * Mounted by a Plan's Strategy stage. The optional owner contract keeps in-progress
- * state inside that Plan; the temporary standalone mount uses App.state until its
- * route is deleted at the end of the Strategy migration.
+ * Mounted by a Plan's Strategy stage. The owner contract keeps in-progress state
+ * inside that Plan; pricing and fit requests are supplied by the Plan workspace.
  */
 (function () {
   'use strict';
@@ -574,22 +573,23 @@
       statusHost.innerHTML = '';
       statusHost.appendChild(UI.spinner('Asking the engine to fit your limits…'));
       try {
-        var body = {
-          symbol: st.symbol, riskMode: document.getElementById('risk-mode').value,
-          horizon: 'month', allowedStrategies: [t.family]
-        };
+        if (typeof options.fitToLimits !== 'function') {
+          throw new Error('This Builder is not attached to a Plan.');
+        }
+        var body = { strategy: t.family, allow0dte: false };
         if (st.limits.maxLoss) body.maxLossCents = Math.round(parseFloat(st.limits.maxLoss) * 100);
         var f = {};
         if (st.limits.minPop) f.minPop = parseFloat(st.limits.minPop) / 100;
         if (st.limits.maxAssign) f.maxAssignmentProb = parseFloat(st.limits.maxAssign) / 100;
         if (Object.keys(f).length) body.filters = f;
         var fitSeq = ++buildSeq;                 // the fitted legs replace the structure — same supersede rule
-        var r = await API.post('/api/recommend', body);
+        var r = await options.fitToLimits(body);
         if (fitSeq !== buildSeq) return;         // a newer pick/fit superseded this
         statusHost.innerHTML = '';
-        var c = (r.candidates || [])[0];
+        var c = r && r.candidate;
         if (!c) {
-          var reasons = (r.rejected || []).slice(0, 3).map(function (x) { return x.reason || x.blockReasons && x.blockReasons[0]; }).filter(Boolean);
+          var reasons = (r && r.result && r.result.rejected || []).slice(0, 3)
+            .map(function (x) { return x.reason || x.blockReasons && x.blockReasons[0]; }).filter(Boolean);
           statusHost.appendChild(alertBox('warn', 'No ' + t.name + ' fits those limits right now',
             reasons.length ? reasons : ['Loosen a limit or pick a different structure.']));
           return;
