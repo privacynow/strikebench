@@ -291,6 +291,8 @@ class SimulationStackTest {
         assertThat(p.receipt().fingerprint()).hasSize(24);
         assertThat(p.receipt().anchorSpot()).isEqualTo(p.spot());
         assertThat(p.receipt().worldId()).isEqualTo("observed");
+        assertThat(p.receipt().anchorExecutable()).isFalse();
+        assertThat(p.receipt().anchorLimitation()).contains("analysis only").contains("executable quote");
         assertThat(p.marketImplied().p16()).isLessThan(p.marketImplied().p50());
         assertThat(p.marketImplied().p50()).isLessThan(p.marketImplied().p84());
         assertThat(p.marketImplied().basis()).contains("Risk-neutral").contains("not a forecast");

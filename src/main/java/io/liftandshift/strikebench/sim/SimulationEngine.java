@@ -128,7 +128,8 @@ public final class SimulationEngine {
     /** Immutable identity of the exact path matrix shown to the user. */
     public record EnsembleReceipt(String fingerprint, String symbol, String worldId, String datasetId,
                                   String asOf, double anchorSpot, String anchorSource,
-                                  String anchorFreshness, String modelVersion, ScenarioSpec spec) {}
+                                  String anchorFreshness, boolean anchorExecutable,
+                                  String anchorLimitation, String modelVersion, ScenarioSpec spec) {}
 
     public record Preview(String symbol, double spot, int paths, int horizonDays, String pathModelVersion,
                           List<PreviewBand> bands, List<List<Double>> samples,
@@ -205,10 +206,17 @@ public final class SimulationEngine {
         String material = symbol + '|' + resolvedWorld + '|' + resolvedAnalysis.datasetId() + '|' + asOf
                 + '|' + Double.toHexString(spot) + '|' + generated.modelVersion() + '|' + generated.spec();
         String fingerprint = fingerprint(material, paths);
+        io.liftandshift.strikebench.market.MarketLane lane = "observed".equals(resolvedWorld)
+                ? io.liftandshift.strikebench.market.MarketLane.OBSERVED
+                : "demo".equals(resolvedWorld) ? io.liftandshift.strikebench.market.MarketLane.DEMO
+                : io.liftandshift.strikebench.market.MarketLane.SIMULATED;
+        boolean executable = quote.evidence().executableIn(lane);
+        String limitation = executable ? null : "The anchor is " + quote.markFreshness()
+                + " and supports scenario analysis only; refresh an executable quote before trading.";
         EnsembleReceipt receipt = new EnsembleReceipt(fingerprint, symbol, resolvedWorld,
                 resolvedAnalysis.datasetId(), asOf, round2(spot), quote.source(),
                 quote.markFreshness() == null ? "MISSING" : quote.markFreshness().name(),
-                generated.modelVersion(), generated.spec());
+                executable, limitation, generated.modelVersion(), generated.spec());
         List<String> notes = new ArrayList<>();
         notes.add("Synthetic futures from seed " + spec.seed() + " — a model of what COULD happen, never a forecast.");
         if (spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP)

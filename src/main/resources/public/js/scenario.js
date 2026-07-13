@@ -443,6 +443,11 @@
           ? 'A range and direct odds you can use for a target, strike, or trade — not a prediction.'
           : 'Empirical counts on this exact seeded ensemble; terminal and first-touch questions stay distinct.')),
       el('span', { class: 'badge badge-modeled' }, 'SCENARIO MODEL')));
+    if (p.receipt && p.receipt.anchorExecutable === false) {
+      root.appendChild(UI.alertBox('caution', 'Analysis only — the anchor is not executable', [
+        p.receipt.anchorLimitation || 'Refresh an executable quote before treating these modeled odds as a trade input.'
+      ]));
+    }
     root.appendChild(el('div', { class: 'scenario-facts' },
       el('div', { class: 'scenario-fact' }, el('span', {}, 'Likely ending range'),
         el('b', {}, price(t.p16) + ' – ' + price(t.p84)),
