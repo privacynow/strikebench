@@ -201,14 +201,33 @@ class PlanApiIntegrationTest {
                 """));
         String worldId = world.get("worldId").asText();
         assertThat(put("/api/world", "{\"world\":\"" + worldId + "\"}").statusCode()).isEqualTo(200);
-        JsonNode plan = json(post("/api/plans", """
-                {"clientRequestId":"terminal-world-plan","symbol":"AAPL","intent":"DIRECTIONAL","title":"Terminal world plan",
-                 "thesis":"bullish","horizonDays":20,"riskMode":"conservative"}
-                """));
-        assertThat(plan.get("marketKind").asText()).isEqualTo("SIMULATED");
-        assertThat(plan.get("open").asBoolean()).isTrue();
+        JsonNode plan;
+        try {
+            plan = json(post("/api/plans", """
+                    {"clientRequestId":"terminal-world-plan","symbol":"AAPL","intent":"DIRECTIONAL","title":"Terminal world plan",
+                     "thesis":"bullish","horizonDays":20,"riskMode":"conservative"}
+                    """));
+            assertThat(plan.get("marketKind").asText()).isEqualTo("SIMULATED");
+            assertThat(plan.get("open").asBoolean()).isTrue();
 
-        assertThat(delete("/api/sim/market/" + worldId).statusCode()).isEqualTo(200);
+            JsonNode strategy = json(post("/api/plans/" + plan.get("id").asText() + "/strategy/run", "{}"));
+            JsonNode candidate = strategy.at("/strategy/result/candidates/0");
+            JsonNode restored = json(get("/api/plans/" + plan.get("id").asText() + "/strategy/latest"))
+                    .at("/strategy/result/candidates/0");
+            assertThat(candidate.at("/legs")).isNotEmpty();
+            assertThat(restored.at("/legs").size()).isEqualTo(candidate.at("/legs").size());
+            for (int i = 0; i < candidate.at("/legs").size(); i++) {
+                JsonNode before = candidate.at("/legs").get(i), after = restored.at("/legs").get(i);
+                assertThat(after.get("action").asText()).isEqualTo(before.get("action").asText());
+                assertThat(after.get("type").asText()).isEqualTo(before.get("type").asText());
+                assertThat(new java.math.BigDecimal(after.get("strike").asText()))
+                        .isEqualByComparingTo(new java.math.BigDecimal(before.get("strike").asText()));
+                assertThat(new java.math.BigDecimal(after.get("entryPrice").asText()))
+                        .isEqualByComparingTo(new java.math.BigDecimal(before.get("entryPrice").asText()));
+            }
+        } finally {
+            assertThat(delete("/api/sim/market/" + worldId).statusCode()).isEqualTo(200);
+        }
         JsonNode retained = json(get("/api/plans/" + plan.get("id").asText()));
         assertThat(retained.get("open").asBoolean()).isFalse();
         assertThat(json(get("/api/world")).get("world").asText()).isEqualTo("demo");

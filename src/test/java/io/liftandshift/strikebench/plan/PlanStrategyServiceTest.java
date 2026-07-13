@@ -63,7 +63,7 @@ class PlanStrategyServiceTest {
                      "management":{"summary":"Take profits mechanically","rules":[{"kind":"profit","trigger":"50% captured","action":"close"}]},
                      "explanation":{"assumptions":["No dividend yield"],"failureModes":["Move beyond a short strike"]}},
                    "legs":[
-                     {"action":"SELL","type":"PUT","strike":"245","expiration":"2026-08-14","ratio":1,"entryPrice":"2.4"},
+                     {"action":"SELL","type":"PUT","strike":"245","expiration":"2026-08-14","ratio":1,"entryPrice":"2.4007"},
                      {"action":"BUY","type":"PUT","strike":"240","expiration":"2026-08-14","ratio":1,"entryPrice":"1.1"},
                      {"action":"SELL","type":"CALL","strike":"265","expiration":"2026-08-14","ratio":1,"entryPrice":"2.3"},
                      {"action":"BUY","type":"CALL","strike":"270","expiration":"2026-08-14","ratio":1,"entryPrice":"1.05"}
@@ -84,6 +84,7 @@ class PlanStrategyServiceTest {
                 .isEqualTo("expected value");
         assertThat(restored.result().at("/candidates/0/evaluation/management/rules/0/action").asText())
                 .isEqualTo("close");
+        assertThat(restored.result().at("/candidates/0/legs/0/entryPrice").asText()).isEqualTo("2.4007");
         assertThat(db.query("SELECT evidence_provenance FROM plan_candidate WHERE id=?",
                 r -> r.str("evidence_provenance"), candidateId)).containsExactly("DEMO_FIXTURE");
         assertThat(restored.result().at("/candidates/0/sourceKind").asText()).isEqualTo("RANKED");

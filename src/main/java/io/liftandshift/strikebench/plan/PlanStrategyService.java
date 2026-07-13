@@ -442,25 +442,25 @@ public final class PlanStrategyService {
         int index = 0;
         for (JsonNode leg : legs) {
             String type = leg.path("stock").asBoolean(false) ? "STOCK" : requiredText(leg, "type").toUpperCase();
-            Db.execOn(c, "INSERT INTO plan_candidate_leg(candidate_id,leg_index,action,instrument_type,strike_cents," +
-                            "expiration,ratio,entry_price_cents) VALUES(?,?,?,?,?,?,?,?)", id, index++, requiredText(leg, "action").toUpperCase(),
-                    type, "STOCK".equals(type) ? null : priceCents(leg.get("strike")),
+            Db.execOn(c, "INSERT INTO plan_candidate_leg(candidate_id,leg_index,action,instrument_type,strike_price," +
+                            "expiration,ratio,entry_price) VALUES(?,?,?,?,?,?,?,?)", id, index++, requiredText(leg, "action").toUpperCase(),
+                    type, "STOCK".equals(type) ? null : priceDecimal(leg.get("strike")),
                     "STOCK".equals(type) || text(leg, "expiration") == null ? null : java.time.LocalDate.parse(text(leg, "expiration")),
-                    Math.max(1, leg.path("ratio").asInt(1)), priceCents(leg.get("entryPrice")));
+                    Math.max(1, leg.path("ratio").asInt(1)), priceDecimal(leg.get("entryPrice")));
         }
     }
 
     private static ArrayNode loadLegs(java.sql.Connection c, String id) throws java.sql.SQLException {
         ArrayNode out = Json.MAPPER.createArrayNode();
-        Db.queryOn(c, "SELECT action,instrument_type,strike_cents,expiration::text expiration,ratio,entry_price_cents FROM " +
+        Db.queryOn(c, "SELECT action,instrument_type,strike_price,expiration::text expiration,ratio,entry_price FROM " +
                         "plan_candidate_leg WHERE candidate_id=? ORDER BY leg_index",
-                r -> new LegRow(r.str("action"), r.str("instrument_type"), r.lngOrNull("strike_cents"),
-                        r.str("expiration"), r.intv("ratio"), r.lngOrNull("entry_price_cents")), id).forEach(leg -> {
+                r -> new LegRow(r.str("action"), r.str("instrument_type"), r.bd("strike_price"),
+                        r.str("expiration"), r.intv("ratio"), r.bd("entry_price")), id).forEach(leg -> {
             ObjectNode n = out.addObject(); n.put("action", leg.action()); n.put("type", leg.type());
-            if (leg.strikeCents() != null) n.put("strike", decimalString(leg.strikeCents()));
+            if (leg.strikePrice() != null) n.put("strike", decimalString(leg.strikePrice()));
             if (leg.expiration() != null) n.put("expiration", leg.expiration());
             n.put("ratio", leg.ratio());
-            if (leg.entryPriceCents() != null) n.put("entryPrice", decimalString(leg.entryPriceCents()));
+            if (leg.entryPrice() != null) n.put("entryPrice", decimalString(leg.entryPrice()));
         });
         return out;
     }
@@ -635,11 +635,11 @@ public final class PlanStrategyService {
     private static Integer boolInt(JsonNode n, String key) {
         JsonNode value = n == null ? null : n.get(key); return value == null || value.isNull() ? null : value.asBoolean() ? 1 : 0;
     }
-    private static Long priceCents(JsonNode n) {
-        return n == null || n.isNull() ? null : new BigDecimal(n.asText()).movePointRight(2).longValueExact();
+    private static BigDecimal priceDecimal(JsonNode n) {
+        return n == null || n.isNull() ? null : new BigDecimal(n.asText());
     }
-    private static String decimalString(long cents) {
-        return BigDecimal.valueOf(cents, 2).stripTrailingZeros().toPlainString();
+    private static String decimalString(BigDecimal value) {
+        return value.stripTrailingZeros().toPlainString();
     }
     private static String horizonName(Integer days) {
         if (days == null) return "month";
@@ -668,8 +668,8 @@ public final class PlanStrategyService {
                           Long riskBudgetCents, String ranking, String economicMessage, int favorable,
                           int mixed, int unfavorable, int unavailable, String disclaimer, String state,
                           String createdAt) {}
-    private record LegRow(String action, String type, Long strikeCents, String expiration, int ratio,
-                          Long entryPriceCents) {}
+    private record LegRow(String action, String type, BigDecimal strikePrice, String expiration, int ratio,
+                          BigDecimal entryPrice) {}
     private record CandidateRow(String id, String symbol, String scoutThesis, String sourceKind,
                                 String family, String displayName, String structureGroup, String label,
                                 Integer qty, Long entryNet, Long maxProfit, Long maxLoss, Double pop,
