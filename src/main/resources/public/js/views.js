@@ -2356,7 +2356,11 @@
           el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)),
           plan.intent ? intentBadge(plan.intent) : el('span', { class: 'badge badge-dim' }, 'Intent not chosen'),
           context.horizonDays ? chip('Horizon', context.horizonDays + ' days') : null,
-          context.targetCents ? chip('Target', fmtMoney(context.targetCents)) : null)),
+          context.targetCents ? chip('Target', fmtMoney(context.targetCents)) : null),
+        provisional ? null : el('div', { class: 'plan-header-receipt expert-only', 'aria-label': 'Plan identity receipt' },
+          el('span', {}, 'Plan v' + plan.version),
+          el('span', {}, 'Context r' + ((context && context.rev) || 1)),
+          el('span', {}, String(plan.status || 'ACTIVE').replaceAll('_', ' ').toLowerCase()))),
       provisional ? null : el('button', { type: 'button', class: 'btn btn-sm btn-secondary', id: 'plan-edit-context',
         onclick: function () {
           var editor = document.getElementById('plan-context-editor');
@@ -2499,13 +2503,38 @@
         body: 'Act on the linked position without leaving this Plan, then compare the result with the expectation frozen at Decide.' }
     }[stage.key];
     var content = el('div', { class: 'plan-stage-content', id: 'plan-stage-content' });
-    root.appendChild(el('section', { class: 'plan-stage-frame', id: 'plan-stage-' + stage.path },
+    var headingId = 'plan-stage-title-' + stage.path;
+    var context = plan.context || {};
+    var carried = [plan.symbol, plan.intent ? planIntentLabel(plan.intent) : 'goal not chosen',
+      context.thesis ? context.thesis + ' view' : 'view not set',
+      context.horizonDays ? context.horizonDays + ' days' : null, planMarketLabel(plan)].filter(Boolean).join(' · ');
+    root.appendChild(el('section', { class: 'plan-stage-frame', id: 'plan-stage-' + stage.path,
+      'aria-labelledby': headingId },
       el('div', { class: 'plan-stage-heading' },
         el('div', { class: 'eyebrow' }, stage.question),
-        el('h2', {}, copy.title),
-        el('p', { class: 'muted' }, copy.body)),
+        el('h2', { id: headingId, tabindex: '-1' }, copy.title),
+        el('p', { class: 'muted' }, copy.body),
+        el('div', { class: 'plan-stage-carry', 'aria-label': 'Context carried into this stage' },
+          el('span', { class: 'plan-stage-carry-label' }, 'Carried into this step'),
+          el('span', { class: 'plan-stage-carry-value' }, carried),
+          el('span', { class: 'plan-stage-carry-receipt expert-only' },
+            'context r' + (context.rev || 1) + ' · plan v' + plan.version))),
       content));
     return content;
+  }
+
+  function appendPlanStageNext(host, plan, title, detail, stage, label) {
+    host.appendChild(el('div', { class: 'plan-next-action', 'data-recommended-next': stage },
+      el('div', {}, el('div', { class: 'eyebrow' }, 'RECOMMENDED NEXT'), el('b', {}, title),
+        el('p', { class: 'muted' }, detail)),
+      el('button', { type: 'button', class: 'btn', onclick: async function () {
+        this.disabled = true;
+        try {
+          var live = await PlanStore.get(plan.id, true);
+          var moved = await PlanStore.setStage(live, stage);
+          App.navigate(PlanStore.path(moved, stage));
+        } catch (e) { this.disabled = false; UI.toast(e.message, 'error'); }
+      } }, label)));
   }
 
   function planHorizonName(plan) {
@@ -2867,16 +2896,8 @@
   }
 
   function appendPlanStrategyNext(host, planRef) {
-    host.appendChild(el('div', { class: 'plan-next-action' },
-      el('div', {}, el('b', {}, 'Structure chosen'),
-        el('p', { class: 'muted' }, 'Next, test this exact package across separate outcome bases.')),
-      el('button', { type: 'button', class: 'btn', onclick: async function () {
-        try {
-          var live = await PlanStore.get(planRef.plan.id, true);
-          var moved = await PlanStore.setStage(live, 'OUTCOMES');
-          App.navigate(PlanStore.path(moved, 'OUTCOMES'));
-        } catch (e) { UI.toast(e.message, 'error'); }
-      } }, 'Continue to Outcomes')));
+    appendPlanStageNext(host, planRef.plan, 'Structure chosen',
+      'Test this exact package across separate outcome bases.', 'OUTCOMES', 'Continue to Outcomes');
   }
 
   function planOutcomeBasisCard(run) {
@@ -3017,6 +3038,9 @@
           note: 'A named strategy rule replayed without look-ahead. This is not the exact listed contract package.', render: renderBacktest }
       ] });
     content.appendChild(workspace.el);
+    appendPlanStageNext(content, planRef.plan, 'Compare the position with cash',
+      'Decide reprices these exact contracts and preserves either Trade or Cash for later review.',
+      'DECIDE', 'Continue to Decide');
 
     async function runBasis(basis, button, extra) {
       button.disabled = true; button.setAttribute('aria-busy', 'true');
@@ -3465,6 +3489,12 @@
     if (stage.key === 'UNDERSTAND' || stage.key === 'EVIDENCE') {
       var owned = planOwnedStage(root, plan, stage);
       await research(owned, ['__plan', plan.symbol, stage.path], { plan: plan, stage: stage.path });
+      if (stage.key === 'UNDERSTAND') appendPlanStageNext(owned, plan, 'Test the view',
+        'Use conditional history and possible futures before choosing a structure.',
+        'EVIDENCE', 'Continue to Evidence');
+      else appendPlanStageNext(owned, plan, 'Choose how to express the view',
+        'Compare structures, shape exact contracts, inspect the chain, or Scout related Plans.',
+        'STRATEGY', 'Continue to Strategy');
     } else if (stage.key === 'STRATEGY') {
       await planStrategyStage(root, plan, stage);
     } else if (stage.key === 'OUTCOMES') {

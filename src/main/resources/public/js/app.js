@@ -267,7 +267,7 @@
       var routeKey = '#/' + [route].concat(params).join('/');
       if (App._lastAnnouncedRoute !== routeKey) {
         App._lastAnnouncedRoute = routeKey;
-        var heading = root.querySelector('h1');
+        var heading = root.querySelector('.plan-stage-heading h2') || root.querySelector('h1');
         var focusTarget = heading || root;
         if (heading) heading.setAttribute('tabindex', '-1');
         try { focusTarget.focus({ preventScroll: true }); } catch (focusErr) { focusTarget.focus(); }
