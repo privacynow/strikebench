@@ -753,6 +753,14 @@ public final class ApiServer {
                     ctx.status(401).json(Map.of("error", "auth_required", "detail", String.valueOf(e.getMessage()), "loginUrl", "/auth/login")));
             c.routes.exception(TradeRejectedException.class, (e, ctx) ->
                     ctx.status(422).json(Map.of("error", "trade_rejected", "detail", e.getMessage(), "reasons", e.reasons())));
+            c.routes.exception(PlanMarketMismatchException.class, (e, ctx) -> {
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("error", "plan_market_mismatch");
+                body.put("detail", e.getMessage());
+                body.put("market", e.marketKind);
+                body.put("targetWorld", e.targetWorld);
+                ctx.status(409).json(body);
+            });
             c.routes.exception(IllegalArgumentException.class, (e, ctx) ->
                     ctx.status(400).json(Map.of("error", "bad_request", "detail", String.valueOf(e.getMessage()))));
             c.routes.exception(java.time.format.DateTimeParseException.class, (e, ctx) ->
@@ -2022,6 +2030,17 @@ public final class ApiServer {
 
     private record PlanSymbolEligibility(boolean eligible, String detail) {}
 
+    private static final class PlanMarketMismatchException extends IllegalStateException {
+        private final String marketKind;
+        private final String targetWorld;
+
+        private PlanMarketMismatchException(String marketKind, String targetWorld, String detail) {
+            super(detail);
+            this.marketKind = marketKind;
+            this.targetWorld = targetWorld;
+        }
+    }
+
     /** A Plan may start only when its active market can supply a lane-owned option surface. */
     private PlanSymbolEligibility planSymbolEligibility(String rawSymbol, String world) {
         String symbol = rawSymbol == null ? "" : rawSymbol.trim().toUpperCase(Locale.ROOT);
@@ -2158,7 +2177,15 @@ public final class ApiServer {
         String activeWorld = active == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
                 ? activeWorld(ctx) : null;
         if (plan.marketKind() != active || !java.util.Objects.equals(plan.worldId(), activeWorld)) {
-            throw new IllegalStateException("Open this plan's market before running its evidence");
+            String label = switch (plan.marketKind()) {
+                case DEMO -> "Demo market";
+                case OBSERVED -> "Observed market";
+                case SIMULATED -> "simulated market session";
+            };
+            String targetWorld = plan.marketKind() == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
+                    ? plan.worldId() : plan.marketKind().name().toLowerCase(Locale.ROOT);
+            throw new PlanMarketMismatchException(plan.marketKind().name(), targetWorld,
+                    "This Plan belongs to the " + label + ". Open that market before running this analysis.");
         }
     }
 

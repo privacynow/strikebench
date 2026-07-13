@@ -343,6 +343,17 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
 
   await page.click('#research-outcomes-basis-futures');
   await page.waitForSelector('#whatif-card');
+  const ensemblePattern = '**/api/plans/*/outcomes/ensemble';
+  await page.route(ensemblePattern, route => route.fulfill({ status: 409, contentType: 'application/json',
+    body: JSON.stringify({ error: 'plan_market_mismatch', market: 'DEMO', targetWorld: 'demo',
+      detail: 'This Plan belongs to the Demo market. Open that market before running this analysis.' }) }));
+  await page.click('#whatif-run');
+  await page.waitForSelector('#plan-ensemble-market-mismatch');
+  assert.match(await page.textContent('#plan-ensemble-market-mismatch'), /refused to mix prices/i,
+    'a lane mismatch becomes an actionable Plan-market recovery, not raw server text');
+  assert.ok(await page.locator('#plan-ensemble-market-mismatch button').count(),
+    'the mismatch names the action that restores the Plan market');
+  await page.unroute(ensemblePattern);
   await page.click('#whatif-run');
   await page.waitForSelector('.scenario-decision', { timeout: 25000 });
   await page.evaluate(() => window.scrollTo(0, 0));
