@@ -3830,13 +3830,178 @@
     queuePreview();
   }
 
+  function portfolioComposition(perSymbol) {
+    var rows = Object.keys(perSymbol || {}).map(function (symbol) { return { symbol: symbol, value: Number(perSymbol[symbol] || 0) }; });
+    var total = rows.reduce(function (sum, row) { return sum + row.value; }, 0) || 1;
+    return el('div', { class: 'allocation-composition', role: 'img', 'aria-label': 'Capital allocation by symbol' },
+      el('div', { class: 'allocation-bar' }, rows.map(function (row, index) {
+        var pct = row.value / total * 100;
+        return el('span', { class: 'allocation-segment allocation-color-' + (index % 6), style: 'width:' + pct.toFixed(2) + '%',
+          'aria-label': row.symbol + ' ' + pct.toFixed(1) + '%' });
+      })),
+      el('div', { class: 'allocation-legend' }, rows.map(function (row, index) {
+        return el('span', {}, el('i', { class: 'allocation-swatch allocation-color-' + (index % 6) }),
+          row.symbol + ' ' + (row.value / total * 100).toFixed(0) + '%');
+      })));
+  }
+
+  async function openOptimizationPlan(allocation, form) {
+    var evaluation = allocation.eval || {};
+    var candidate = evaluation.candidate || {};
+    var symbol = String(evaluation.symbol || (evaluation.spec && evaluation.spec.symbol) || candidate.symbol || '').toUpperCase();
+    var intent = candidate.intent || form.goal || 'DIRECTIONAL';
+    var existing = await PlanStore.matching(symbol, intent);
+    var horizonDays = form.horizon === 'week' ? 7 : form.horizon === 'quarter' ? 90 : 30;
+    var plan = await PlanStore.create({ originPlanId: existing.length ? existing[0].id : null,
+      symbol: symbol, intent: intent, thesis: form.thesis,
+      horizonDays: horizonDays, riskMode: form.riskMode });
+    if (candidate.legs && candidate.legs.length) {
+      var saved = await PlanStore.saveCustom(plan, { symbol: symbol,
+        strategy: candidate.strategy || evaluation.family || 'CUSTOM',
+        qty: Math.max(1, Number(candidate.qty || 1) * Number(allocation.units || 1)), legs: candidate.legs,
+        thesis: form.thesis, horizon: form.horizon, riskMode: form.riskMode,
+        intent: intent, source: 'PORTFOLIO_CONSTRUCT' });
+      plan = saved.plan;
+    }
+    return PlanStore.focus(plan, 'STRATEGY');
+  }
+
+  function renderPortfolioConstructionResult(host, data, form) {
+    host.innerHTML = '';
+    var result = data && data.optimization || {};
+    var allocations = result.allocations || [];
+    if (!allocations.length) {
+      host.appendChild(UI.emptyState('Nothing belongs in the draft', (result.notes && result.notes[0])
+        || 'No candidate passed the economic and capital constraints. Cash remains the answer.'));
+      return;
+    }
+    host.appendChild(alertBox(result.diagnostic || result.teachingOnly ? 'caution' : 'ok',
+      result.diagnostic ? 'Diagnostic comparison set — not a recommendation'
+        : result.teachingOnly ? 'Practice construction — generated or incomplete evidence'
+          : 'Construction draft — every allocation still needs its own Plan review',
+      result.diagnostic ? ['Mixed, adverse, or unavailable ideas may appear so you can inspect the least-bad set.']
+        : ['This allocates research capital only. It does not place trades or reserve buying power.']));
+    host.appendChild(el('div', { class: 'fact-grid portfolio-construct-summary', id: 'portfolio-summary' },
+      metricFact('Capital in draft', fmtMoney(result.capitalUsedCents)),
+      metricFact('Positions', String(allocations.length)),
+      metricFact('Market EV after costs', result.marketEvAfterCostsCents == null ? '\u2014' : pnlSpan(result.marketEvAfterCostsCents),
+        result.marketEvAfterCostsCents == null ? '' : result.marketEvAfterCostsCents >= 0 ? 'f-ok' : 'f-danger'),
+      metricFact('History EV after costs', result.realizedVolEvAfterCostsCents == null ? '\u2014' : pnlSpan(result.realizedVolEvAfterCostsCents),
+        result.realizedVolEvAfterCostsCents == null ? '' : result.realizedVolEvAfterCostsCents >= 0 ? 'f-ok' : 'f-danger'),
+      metricFact('Worst modeled tail', el('span', { class: 'loss' }, fmtMoney(-Math.abs(result.totalTailLossCents || 0))), 'f-danger'),
+      metricFact('Average Decision score', String(Math.round(result.avgScore || 0)))));
+    host.appendChild(el('h3', {}, 'Capital by symbol'));
+    host.appendChild(portfolioComposition(result.perSymbolCents));
+    if (Learn.currentLevel() === 'expert') {
+      host.appendChild(table(['Symbol', 'Structure', 'Verdict', 'Units', 'Capital', 'Score', 'Market EV', 'History EV', ''], allocations.map(function (allocation) {
+        var evaluation = allocation.eval || {}, candidate = evaluation.candidate || {};
+        var symbol = evaluation.symbol || (evaluation.spec && evaluation.spec.symbol) || candidate.symbol || '\u2014';
+        var economics = evaluation.economics || {};
+        var button = el('button', { type: 'button', class: 'btn btn-sm' }, 'Review in Plan');
+        button.onclick = function () { button.disabled = true; openOptimizationPlan(allocation, form).catch(function (e) { button.disabled = false; UI.toast(e.message, 'error'); }); };
+        return el('tr', {}, el('td', {}, symbol),
+          el('td', {}, candidate.displayName || evaluation.family || '\u2014'),
+          el('td', {}, economics.label || economics.verdict || 'Unavailable'), el('td', {}, String(allocation.units)),
+          el('td', {}, fmtMoney(allocation.capitalCents)), el('td', {}, UI.scoreBar(evaluation.decisionScore || 0, 'Decision score')),
+          el('td', {}, evaluation.economics && evaluation.economics.marketEvAfterCostsCents != null ? pnlSpan(evaluation.economics.marketEvAfterCostsCents) : '\u2014'),
+          el('td', {}, evaluation.economics && evaluation.economics.realizedVolEvAfterCostsCents != null ? pnlSpan(evaluation.economics.realizedVolEvAfterCostsCents) : '\u2014'),
+          el('td', {}, button));
+      })));
+    } else {
+      host.appendChild(el('div', { class: 'portfolio-allocation-grid' }, allocations.map(function (allocation) {
+        var evaluation = allocation.eval || {}, candidate = evaluation.candidate || {};
+        var symbol = evaluation.symbol || (evaluation.spec && evaluation.spec.symbol) || candidate.symbol || '\u2014';
+        var economics = evaluation.economics || {};
+        var button = el('button', { type: 'button', class: 'btn btn-sm' }, 'Review in a new Plan');
+        button.onclick = function () { button.disabled = true; openOptimizationPlan(allocation, form).catch(function (e) { button.disabled = false; UI.toast(e.message, 'error'); }); };
+        return el('article', { class: 'card portfolio-allocation-card' },
+          el('div', { class: 'plan-book-head' }, el('div', {}, el('div', { class: 'eyebrow' }, 'ALLOCATION DRAFT'),
+            el('h3', {}, symbol)),
+            el('span', { class: 'badge badge-dim' }, economics.label || economics.verdict || 'Unavailable')),
+          el('p', {}, candidate.displayName || evaluation.family || 'Structure'),
+          el('div', { class: 'chip-row' }, chip('Capital', fmtMoney(allocation.capitalCents)),
+            chip('Units', String(allocation.units)),
+            chip('Decision score', String(Math.round(evaluation.decisionScore || 0))),
+            chip('Market EV', evaluation.economics && evaluation.economics.marketEvAfterCostsCents != null
+              ? pnlSpan(evaluation.economics.marketEvAfterCostsCents) : '\u2014'),
+            chip('History EV', evaluation.economics && evaluation.economics.realizedVolEvAfterCostsCents != null
+              ? pnlSpan(evaluation.economics.realizedVolEvAfterCostsCents) : '\u2014')), button);
+      })));
+    }
+    (result.notes || []).forEach(function (note) { host.appendChild(el('p', { class: 'muted small' }, note)); });
+  }
+
+  function portfolioConstruct(acct) {
+    var state = App.state.portfolioConstruct = App.state.portfolioConstruct || {};
+    var form = {
+      budget: state.budget || Math.round(acct.buyingPowerCents / 100), scope: state.scope || 'universe',
+      goal: state.goal || '', thesis: state.thesis || 'neutral', horizon: state.horizon || 'month',
+      objective: state.objective || 'DECISION', maxPositions: state.maxPositions || 8,
+      maxSymbolPct: state.maxSymbolPct || 40, maxPerPosition: state.maxPerPosition || '', diagnostic: !!state.diagnostic,
+      riskMode: (document.getElementById('risk-mode') || {}).value || 'conservative'
+    };
+    function select(id, values, current) {
+      var node = el('select', { id: id }, values.map(function (value) {
+        return el('option', { value: value[0], selected: value[0] === current ? 'selected' : null }, value[1]);
+      })); return node;
+    }
+    var budget = el('input', { id: 'portfolio-budget', type: 'number', min: '0', step: '1000', value: form.budget });
+    var scope = select('portfolio-scope', [['universe', 'Current universe'], ['symbol', 'Working stock only']], form.scope);
+    var goal = select('portfolio-goal', [['', 'Any goal']].concat((Learn.INTENTS || []).map(function (meta) { return [meta.key, meta.label]; })), form.goal);
+    var thesis = select('portfolio-thesis', [['neutral', 'Neutral'], ['bullish', 'Bullish'], ['bearish', 'Bearish'], ['volatile', 'Big move']], form.thesis);
+    var horizon = select('portfolio-horizon', [['week', 'About 1 week'], ['month', 'About 1 month'], ['quarter', 'About 3 months']], form.horizon);
+    var objective = select('portfolio-objective', [['DECISION', 'Best Decision score'], ['MARKET_EV', 'Best market EV after costs'], ['HISTORY_EV', 'Best history EV after costs']], form.objective);
+    var maxPositions = el('input', { id: 'portfolio-max-positions', type: 'number', min: '1', max: '20', value: form.maxPositions });
+    var maxSymbol = el('input', { id: 'portfolio-max-symbol-pct', type: 'number', min: '5', max: '100', step: '5', value: form.maxSymbolPct });
+    var maxPer = el('input', { id: 'portfolio-max-position', type: 'number', min: '0', step: '100', value: form.maxPerPosition, placeholder: '25% default' });
+    var diagnostic = el('input', { id: 'portfolio-diagnostics', type: 'checkbox', checked: form.diagnostic ? '' : null });
+    function field(label, node) { return el('div', { class: 'field' }, el('label', {}, label), node); }
+    var primary = el('div', { class: 'form-grid portfolio-construct-primary' }, field('Capital to allocate ($)', budget), field('Ideas from', scope), field('Goal', goal), field('Market view', thesis), field('Horizon', horizon));
+    var advancedBody = el('div', { class: 'portfolio-construct-advanced' },
+      el('div', { class: 'form-grid' }, field('Rank by', objective), field('Maximum positions', maxPositions),
+        field('Maximum per symbol (%)', maxSymbol), field('Maximum per position ($)', maxPer)),
+      el('label', { class: 'check-row' }, diagnostic,
+        Learn.currentLevel() === 'beginner' ? ' Show a diagnostic comparison when nothing earns a favorable verdict' : ' Diagnostic mode: include viable non-favorable ideas'));
+    var output = el('div', { class: 'portfolio-construct-output', id: 'portfolio-output' });
+    var run = el('button', { type: 'button', class: 'btn', id: 'portfolio-build', onclick: async function () {
+      form = { budget: Number(budget.value), scope: scope.value, goal: goal.value, thesis: thesis.value, horizon: horizon.value,
+        objective: objective.value, maxPositions: Number(maxPositions.value), maxSymbolPct: Number(maxSymbol.value),
+        maxPerPosition: maxPer.value, diagnostic: diagnostic.checked,
+        riskMode: (document.getElementById('risk-mode') || {}).value || 'conservative' };
+      Object.assign(state, form); run.disabled = true; output.innerHTML = ''; output.appendChild(UI.spinner('Scanning and constructing one coherent draft\u2026'));
+      var working = App.context.symbol();
+      var request = { totalCapitalCents: Math.round(form.budget * 100), intent: form.goal || null,
+        thesis: form.thesis, horizon: form.horizon, riskMode: form.riskMode, objective: form.objective,
+        maxPositions: form.maxPositions, maxSymbolPct: form.maxSymbolPct / 100,
+        maxPerPositionCents: form.maxPerPosition ? Math.round(Number(form.maxPerPosition) * 100) : null,
+        diagnostic: form.diagnostic };
+      if (form.scope === 'symbol') {
+        if (!working) { output.innerHTML = ''; output.appendChild(alertBox('warn', 'Choose a working stock in Research first.')); run.disabled = false; return; }
+        request.universe = [working];
+      }
+      try { state.result = await API.post('/api/optimize', request); renderPortfolioConstructionResult(output, state.result, form); }
+      catch (e) { output.innerHTML = ''; output.appendChild(alertBox('danger', 'Construction failed', [e.message])); }
+      finally { run.disabled = false; }
+    } }, 'Build construction draft');
+    var card = el('section', { class: 'card portfolio-construct', id: 'portfolio-construct' },
+      UI.cardHeader('Construct across ideas', el('span', { class: 'badge badge-dim' }, 'DRAFT ONLY')),
+      el('p', { class: 'muted' }, Learn.currentLevel() === 'beginner'
+        ? 'Ask how several ideas could fit together without placing anything. StrikeBench keeps cash as the baseline and opens each allocation through its own Plan.'
+        : 'Allocate a research budget across economically eligible evaluations with explicit concentration, objective and evidence constraints. No trade or reserve is created.'),
+      primary,
+      Learn.currentLevel() === 'beginner' ? UI.expandable('More construction controls', function () { return advancedBody; }) : advancedBody,
+      el('div', { class: 'btn-row' }, run), output);
+    if (state.result) renderPortfolioConstructionResult(output, state.result, form);
+    return card;
+  }
+
   async function portfolio(root, params) {
     // One money home: Positions (holdings + trades) | Activity (the ledger) | Account
     // (starting cash, reset).
     var directTradeId = params[0] === 'trade' ? params[1] : null;
     var section = directTradeId || params[0] === 'positions' || params[0] === 'active' || params[0] === 'closed' ? 'positions'
       : params[0] === 'activity' ? 'activity' : params[0] === 'account' ? 'account'
-        : params[0] === 'record' ? 'record' : 'plans';
+        : params[0] === 'record' ? 'record' : params[0] === 'construct' ? 'construct' : 'plans';
     var tab = params[0] === 'closed' ? 'closed' : 'active';
     var page = parseInt(params[1] || '0', 10);
     root.appendChild(el('h1', {}, 'Portfolio'));
@@ -3874,6 +4039,8 @@
     root.appendChild(el('div', { class: 'tabs' },
       el('button', { class: section === 'plans' ? 'active' : '', id: 'pf-sec-plans',
         onclick: function () { App.navigate('#/portfolio'); } }, 'Plans'),
+      el('button', { class: section === 'construct' ? 'active' : '', id: 'pf-sec-construct',
+        onclick: function () { App.navigate('#/portfolio/construct'); } }, 'Construct'),
       el('button', { class: section === 'positions' ? 'active' : '', id: 'pf-sec-positions',
         onclick: function () { App.navigate('#/portfolio/positions'); } }, 'Positions'),
       el('button', { class: section === 'activity' ? 'active' : '', id: 'pf-sec-activity',
@@ -3887,6 +4054,11 @@
       root.appendChild(el('div', { class: 'btn-row' },
         el('a', { class: 'btn btn-secondary btn-sm', href: '#/portfolio/positions' }, '← All positions')));
       await tradeDetail(root, [directTradeId], { inline: false });
+      return;
+    }
+
+    if (section === 'construct') {
+      root.appendChild(portfolioConstruct(acct));
       return;
     }
 

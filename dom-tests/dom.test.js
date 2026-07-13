@@ -3810,20 +3810,46 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
     await page.waitForFunction(() => document.getElementById('app').getAttribute('data-route') === 'home');
   }
 
-  // Portfolio sizing lives at the bottom of the inline Context competition.
-  await page.evaluate(() => {
-    App.state.discoverForm = { symbol: 'AAPL', goal: 'DIRECTIONAL', thesis: 'neutral', horizon: 'month' };
-    App.state.filterState = {};
-  });
-  await openInlineCompetition('AAPL');
+  // Portfolio construction is a Portfolio job. It allocates across evaluated ideas but
+  // cannot place anything; each chosen package must enter the canonical Plan workflow.
+  await go('#/portfolio/construct');
+  await page.waitForSelector('#portfolio-construct');
+  assert.equal(await page.locator('#pf-sec-construct.active').count(), 1, 'Construct is a first-class Portfolio section');
   await page.waitForSelector('#portfolio-build', { timeout: 25000 });
+  assert.equal(await page.locator('#portfolio-objective').count(), 1, 'Expert sees the full objective controls inline');
   // Diagnostic mode guarantees a funded (least-bad) set on the fixture universe, LABELED not-a-recommendation.
   await page.check('#portfolio-diagnostics');
   await page.click('#portfolio-build');
   await page.waitForSelector('#portfolio-summary', { timeout: 20000 });
-  assert.ok((await page.locator('.portfolio-optimizer .tool-chart svg rect').count()) >= 1, 'composition chart bars');
-  assert.ok((await page.locator('.portfolio-optimizer table tbody tr').count()) >= 1, 'allocations table rows');
+  assert.ok((await page.locator('.allocation-bar .allocation-segment').count()) >= 1, 'composition bar segments');
+  assert.ok((await page.locator('.portfolio-construct table tbody tr').count()) >= 1, 'allocations table rows');
+  const allocationSymbols = await page.locator('.portfolio-construct table tbody tr td:first-child').allTextContents();
+  assert.ok(allocationSymbols.every(s => /^[A-Z][A-Z0-9._-]*$/.test(s.trim())), 'every allocation names its real symbol');
+  assert.ok(new Set(allocationSymbols).size > 1, 'fixture construction proves a multi-symbol draft, not duplicated cards');
   assert.ok((await page.locator('#portfolio-output .alert-caution').count()) >= 1, 'diagnostic set labeled not-a-recommendation');
+  assert.match(await page.textContent('.portfolio-construct table thead'), /Verdict|Market EV|History EV/,
+    'expert construction keeps both EV lanes and economic placement visible');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(300); // capture after the real card-in transition, never by disabling motion
+  await page.screenshot({ path: path.join(__dirname, 'shots/portfolio-construct-expert.png'), fullPage: true });
+
+  // Beginner keeps the same levers and result, but progressive disclosure and visual
+  // allocation cards replace the expert table.
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.waitForSelector('#portfolio-construct');
+  assert.equal(await page.locator('#portfolio-objective').count(), 0, 'advanced controls begin collapsed at Beginner');
+  await page.locator('#portfolio-construct .xp > .xp-head').first().click();
+  assert.equal(await page.locator('#portfolio-objective').count(), 1, 'Beginner can reach the same objective control');
+  assert.ok((await page.locator('.portfolio-allocation-card').count()) >= 1, 'Beginner receives visual allocation cards');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(__dirname, 'shots/portfolio-construct-beginner.png'), fullPage: true });
+  await page.locator('.portfolio-allocation-card button:has-text("Review in a new Plan")').first().click();
+  await page.waitForSelector('.plan-selected-structure', { timeout: 15000 });
+  assert.equal(await page.locator('#app[data-route="plan"]').count(), 1, 'allocation opens in the canonical Plan journey');
+  assert.match(await page.textContent('.plan-selected-structure'), /Selected structure|PLAN OWNED/,
+    'the exact optimizer package survives the handoff');
+  await page.evaluate(() => Learn.setLevel('expert'));
 
   // The Research LANDING is a market-entry surface: notes stay; the event-study workbench does
   // The event study lives on symbol pages inside Test your view, not as an orphan index card.

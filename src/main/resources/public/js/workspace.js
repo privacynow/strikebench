@@ -19,7 +19,7 @@
 
   function canonicalRoute(hash) {
     hash = hash || '#/home';
-    return /^#\/(home(?:\/tour)?|research|plan\/(?:new\?symbol=[A-Z0-9._-]+|[^/?]+\/(?:understand|evidence|strategy|outcomes|decide|manage-review))|portfolio(?:\/.*)?|data\/(?:overview|datasets|simulation|sources|admin))(?:\?.*)?$/i.test(hash)
+    return /^#\/(home(?:\/tour)?|research|plan\/(?:new\?symbol=[A-Z0-9._-]+|[^/?]+\/(?:understand|evidence|strategy|outcomes|decide|manage-review))|portfolio(?:\/(?:construct|positions|active|closed|activity|record|account|trade\/tr_[A-Za-z0-9_-]+))?|data\/(?:overview|datasets|simulation|sources|admin))(?:\?.*)?$/i.test(hash)
       ? hash : '#/home';
   }
 
