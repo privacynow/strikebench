@@ -43,7 +43,8 @@ public final class AutoRecommender {
             String riskMode,                // conservative|balanced|aggressive
             Boolean allow0dte,
             List<String> intents,           // StrategyIntent names; default DIRECTIONAL
-            RecommendationEngine.Filters filters // optional hard screens per candidate
+            RecommendationEngine.Filters filters, // optional hard screens per candidate
+            String thesisOverride           // optional Plan-owned thesis for focused single-view scans
     ) {}
 
     /** A held equity position, injected by the API layer for EXIT/HEDGE/INCOME scans. */
@@ -199,7 +200,10 @@ public final class AutoRecommender {
             if ("0DTE".equals(horizon) && !allow0dte) continue;
             // Directional scans ride the derived thesis; intent scans pick families by purpose
             // (an explicit thesis would narrow them, so none is passed).
-            String thesis = intent == StrategyIntent.DIRECTIONAL ? s.thesis() : null;
+            String thesis = intent == StrategyIntent.DIRECTIONAL
+                    ? (req.thesisOverride() == null || req.thesisOverride().isBlank()
+                        ? s.thesis() : req.thesisOverride())
+                    : null;
             RecommendationEngine.Result result = engine.recommend(new RecommendationEngine.Request(
                     s.symbol(), thesis, horizon, req.riskMode(),
                     req.maxLossCents(), req.maxRiskPctOfAccount(), null, null,

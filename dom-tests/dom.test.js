@@ -579,6 +579,11 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   await page.locator('.plan-scout-scopes button').filter({ hasText: 'Better fits' }).click();
   await page.click('#plan-run-scout');
   await page.waitForSelector('#plan-scout-results .candidate', { timeout: 30000 });
+  const scoutTheses = await page.locator('#plan-scout-results .plan-scout-symbol .badge').allTextContents();
+  assert.ok(scoutTheses.length > 0 && scoutTheses.every(text => text.trim().toLowerCase() === plan.context.thesis.toLowerCase()),
+    'focused Scout prices every candidate under the Plan-owned thesis instead of silently substituting a symbol signal');
+  assert.equal(await page.locator('#plan-run-scout').textContent(), 'Refresh this scan',
+    'a repeat Scout action is named as a refresh rather than an unexplained second run');
   const scoutedSymbol = (await page.locator('#plan-scout-results .plan-scout-symbol b').first().textContent()).trim();
   assert.notEqual(scoutedSymbol, 'AAPL', 'in-Plan Scout returns a separate underlying');
   await page.locator('#plan-scout-results button').filter({ hasText: 'Open as linked Plan' }).first().click();
