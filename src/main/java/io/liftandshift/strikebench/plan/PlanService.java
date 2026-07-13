@@ -56,17 +56,25 @@ public final class PlanService {
                 raw.targetCents(), raw.riskMode(), raw.holdingsShares(), raw.costBasisCents(),
                 raw.priceAssumptionCents());
         String createHash = createInputHash(hash, origin, title, accountId);
+        String identityHash = activeIdentityHash(symbol, intent, market, resolvedWorld, origin, accountId,
+                raw.thesis(), raw.horizonDays(), raw.targetCents(), raw.holdingsShares(),
+                raw.costBasisCents(), raw.priceAssumptionCents());
         String ownerKey = userId == null ? "__local__" : userId;
 
         String createdId = db.tx(c -> {
             lockCreateOn(c, ownerKey, "request:" + requestId);
             List<ExistingRequest> existing = existingRequestOn(c, requestId, userId);
             if (!existing.isEmpty()) return requireSameRequest(existing.getFirst(), createHash);
-            lockCreateOn(c, ownerKey, "content:" + createHash);
-            List<String> equivalent = activeEquivalentOn(c, userId, hash, origin, title, accountId);
+            lockCreateOn(c, ownerKey, "content:" + identityHash);
+            List<String> equivalent = activeEquivalentOn(c, userId, symbol, intent, market, resolvedWorld,
+                    origin, accountId, raw.thesis(), raw.horizonDays(), raw.targetCents(),
+                    raw.holdingsShares(), raw.costBasisCents(), raw.priceAssumptionCents());
             if (!equivalent.isEmpty()) {
-                recordRequestOn(c, ownerKey, requestId, createHash, equivalent.getFirst(), now);
-                return equivalent.getFirst();
+                String equivalentId = equivalent.getFirst();
+                Db.execOn(c, "UPDATE plans SET is_open=1,version=version+1,updated_at=? " +
+                        "WHERE id=? AND is_open=0", now, equivalentId);
+                recordRequestOn(c, ownerKey, requestId, createHash, equivalentId, now);
+                return equivalentId;
             }
             if (origin != null) requireOwnedOn(c, origin, userId, false);
             int inserted = Db.execOn(c, "INSERT INTO plans(id,user_id,client_request_id,create_input_hash,origin_plan_id,symbol,intent,market_kind," +
@@ -378,6 +386,23 @@ public final class PlanService {
         return sha256(values);
     }
 
+    /**
+     * Identifies one active line of inquiry. Risk mode is deliberately absent: it controls sizing at
+     * evaluation time and changing the header default must not manufacture another Plan. A custom title
+     * is presentation, not identity. Exact request replay still uses {@link #createInputHash}.
+     */
+    private static String activeIdentityHash(String symbol, String intent, Plan.MarketKind market, String world,
+            String origin, String accountId, String thesis, Integer horizon, Long target, Long shares,
+            Long costBasis, Long assumption) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("symbol", symbol); values.put("intent", intent); values.put("market", market.name());
+        values.put("world", world); values.put("originPlanId", origin); values.put("accountId", accountId);
+        values.put("thesis", cleanThesis(thesis)); values.put("horizonDays", horizon);
+        values.put("targetCents", target); values.put("holdingsShares", shares);
+        values.put("costBasisCents", costBasis); values.put("priceAssumptionCents", assumption);
+        return sha256(values);
+    }
+
     private static String sha256(Map<String, Object> values) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -401,14 +426,22 @@ public final class PlanService {
                 r -> r.intv("ok"), ownerKey, key);
     }
 
-    private static List<String> activeEquivalentOn(java.sql.Connection c, String userId, String contextHash,
-            String origin, String title, String accountId) throws java.sql.SQLException {
+    private static List<String> activeEquivalentOn(java.sql.Connection c, String userId, String symbol,
+            String intent, Plan.MarketKind market, String world, String origin, String accountId,
+            String thesis, Integer horizon, Long target, Long shares, Long costBasis, Long assumption)
+            throws java.sql.SQLException {
         return Db.queryOn(c, "SELECT p.id FROM plans p JOIN plan_context_revision c " +
                         "ON c.plan_id=p.id AND c.rev=p.active_context_rev WHERE " + ownerClause("p.user_id") +
-                        " AND p.status IN ('DRAFT','ACTIVE','POSITION_OPEN') AND c.input_hash=? " +
-                        "AND p.origin_plan_id IS NOT DISTINCT FROM ? AND p.custom_title IS NOT DISTINCT FROM ? " +
-                        "AND p.account_id IS NOT DISTINCT FROM ? ORDER BY p.updated_at DESC,p.created_at DESC LIMIT 1",
-                r -> r.str("id"), userId, userId, contextHash, origin, title, accountId);
+                        " AND p.status='ACTIVE' AND p.symbol=? AND p.intent IS NOT DISTINCT FROM ? " +
+                        "AND p.market_kind=? AND p.world_id IS NOT DISTINCT FROM ? " +
+                        "AND p.origin_plan_id IS NOT DISTINCT FROM ? AND p.account_id IS NOT DISTINCT FROM ? " +
+                        "AND c.thesis IS NOT DISTINCT FROM ? AND c.horizon_days IS NOT DISTINCT FROM ? " +
+                        "AND c.target_cents IS NOT DISTINCT FROM ? AND c.holdings_shares IS NOT DISTINCT FROM ? " +
+                        "AND c.cost_basis_cents IS NOT DISTINCT FROM ? " +
+                        "AND c.price_assumption_cents IS NOT DISTINCT FROM ? " +
+                        "ORDER BY p.updated_at DESC,p.created_at DESC LIMIT 1",
+                r -> r.str("id"), userId, userId, symbol, intent, market.name(), world, origin, accountId,
+                cleanThesis(thesis), horizon, target, shares, costBasis, assumption);
     }
 
     private static void recordRequestOn(java.sql.Connection c, String ownerKey, String requestId,
