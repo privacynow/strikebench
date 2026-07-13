@@ -2674,7 +2674,7 @@ public final class ApiServer {
                 io.liftandshift.strikebench.plan.PlanRehearsalService.Request.class));
         var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
         requireActivePlanMarket(ctx, plan);
-        var created = planRehearsals.create(ownerId(ctx), plan, body);
+        var created = planRehearsals.create(ownerId(ctx), plan, body, analysisCtx(ctx));
         ctx.status(201).json(Map.of("rehearsal", created,
                 "plan", planSvc.get(ownerId(ctx), plan.id())));
     }
@@ -2970,7 +2970,7 @@ public final class ApiServer {
             Context ctx, io.liftandshift.strikebench.plan.Plan.View plan, PlanOutcomeRunRequest body,
             io.liftandshift.strikebench.sim.PathEnsembleService.Basis basis) {
         if (body.ensembleId() != null && !body.ensembleId().isBlank()) {
-            var stored = planOutcomes.loadEnsemble(ownerId(ctx), plan.id(), body.ensembleId());
+            var stored = planOutcomes.loadCurrentEnsemble(ownerId(ctx), plan, body.ensembleId(), analysisCtx(ctx));
             if (!basis.name().equals(stored.basis())) throw new IllegalArgumentException("Stored ensemble basis does not match the requested basis");
             return stored;
         }

@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.plan;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.market.sim.SimulatedWorld;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
@@ -52,7 +53,7 @@ public final class PlanRehearsalService {
         this.accounts = accounts;
     }
 
-    public Created create(String userId, Plan.View plan, Request raw) {
+    public Created create(String userId, Plan.View plan, Request raw, AnalysisContext analysis) {
         if (raw == null || raw.expectedVersion() == null || raw.ensembleId() == null || raw.ensembleId().isBlank()) {
             throw new IllegalArgumentException("expectedVersion and ensembleId are required");
         }
@@ -62,7 +63,7 @@ public final class PlanRehearsalService {
         if (plan.marketKind() == Plan.MarketKind.SIMULATED) {
             throw new IllegalStateException("This Plan already lives inside one simulated path. Return to its source market before creating a separate rehearsal.");
         }
-        PlanOutcomeService.StoredEnsemble stored = outcomes.loadEnsemble(userId, plan.id(), raw.ensembleId());
+        PlanOutcomeService.StoredEnsemble stored = outcomes.loadCurrentEnsemble(userId, plan, raw.ensembleId(), analysis);
         if (!plan.symbol().equals(stored.ensemble().scope().symbol())) {
             throw new IllegalStateException("The stored ensemble belongs to a different symbol.");
         }
@@ -94,6 +95,12 @@ public final class PlanRehearsalService {
             PlanRow current = requireOwned(c, plan.id(), userId, true);
             if (current.version() != raw.expectedVersion() || current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This Plan changed while the rehearsal was being created.");
+            }
+            String datasetId = analysis != null && analysis.synthetic() ? analysis.datasetId() : null;
+            if (Db.queryOn(c, "SELECT id FROM plan_ensemble WHERE id=? AND plan_id=? AND context_rev=? " +
+                            "AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT'",
+                    r -> r.str("id"), stored.id(), plan.id(), plan.context().rev(), datasetId).isEmpty()) {
+                throw new IllegalStateException("This path set changed before the rehearsal was created.");
             }
             OffsetDateTime now = now();
             Db.execOn(c, "INSERT INTO plan_link(id,plan_id,role,sim_session_id,created_at) VALUES(?,?,?,?,?)",

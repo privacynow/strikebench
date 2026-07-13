@@ -40,6 +40,7 @@ public final class PlanOutcomeService {
     private static final String CODEC = "DEFLATE_DOUBLE_BE_V1";
 
     public record StoredEnsemble(String id, String fingerprint, String basis,
+                                 int contextRev, String datasetId, String state,
                                  PathEnsembleService.Ensemble ensemble, IvSpec iv,
                                  double rateAnnual, double stepSeconds, String anchorSource,
                                  String anchorFreshness, String asOf) {}
@@ -143,7 +144,8 @@ public final class PlanOutcomeService {
             }
             return null;
         });
-        return new StoredEnsemble(ensembleId, fingerprint, ensemble.basis().name(), ensemble, iv,
+        return new StoredEnsemble(ensembleId, fingerprint, ensemble.basis().name(),
+                plan.context().rev(), datasetId, "CURRENT", ensemble, iv,
                 rateAnnual, 23_400.0 / Math.max(1, spec.stepsPerDay()), source, freshness, asOf);
     }
 
@@ -151,7 +153,7 @@ public final class PlanOutcomeService {
     public StoredEnsemble loadEnsemble(String userId, String planId, String ensembleId) {
         return db.with(c -> {
             ownedPlanOn(c, planId, userId, false);
-            List<EnsembleRow> rows = Db.queryOn(c, "SELECT pe.id,pe.fingerprint,ea.basis,pe.model_version," +
+            List<EnsembleRow> rows = Db.queryOn(c, "SELECT pe.id,pe.fingerprint,ea.basis,pe.context_rev,pe.dataset_id,pe.state,pe.model_version," +
                             "p.symbol,p.market_kind,p.world_id,p.user_id,pe.dataset_id," +
                             "pe.anchor_spot_cents,pe.anchor_source,pe.anchor_freshness,pe.as_of::text as_of," +
                             "pe.spec_model,pe.spec_shape,pe.spec_horizon_days,pe.spec_steps_per_day," +
@@ -183,9 +185,24 @@ public final class PlanOutcomeService {
             var scope = new PathEnsembleService.Scope(r.symbol(), r.worldId(), r.analysis());
             var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.valueOf(r.basis()),
                     scope, r.anchorSpotCents() / 100.0, spec, paths, null, r.modelVersion());
-            return new StoredEnsemble(r.id(), r.fingerprint(), r.basis(), ensemble, iv,
+            return new StoredEnsemble(r.id(), r.fingerprint(), r.basis(), r.contextRev(),
+                    r.datasetId(), r.state(), ensemble, iv,
                     r.rate(), r.stepSeconds(), r.anchorSource(), r.anchorFreshness(), r.asOf());
         });
+    }
+
+    /** Load an artifact only when it still belongs to the Plan assumptions and analysis lane on screen. */
+    public StoredEnsemble loadCurrentEnsemble(String userId, Plan.View plan, String ensembleId,
+                                              io.liftandshift.strikebench.db.AnalysisContext analysis) {
+        StoredEnsemble stored = loadEnsemble(userId, plan.id(), ensembleId);
+        String datasetId = analysis != null && analysis.synthetic() ? analysis.datasetId() : null;
+        if (stored.contextRev() != plan.context().rev() || !"CURRENT".equals(stored.state())) {
+            throw new IllegalStateException("This path set belongs to earlier Plan assumptions. Run Outcomes again.");
+        }
+        if (!java.util.Objects.equals(stored.datasetId(), datasetId)) {
+            throw new IllegalStateException("This path set belongs to a different analysis dataset. Run Outcomes in the data lane on screen.");
+        }
+        return stored;
     }
 
     public StoredEnsemble latestEnsemble(String userId, Plan.View plan, String basis,
@@ -214,6 +231,7 @@ public final class PlanOutcomeService {
             if (current.version() != expectedVersion || current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This Plan changed while Outcomes was running. Reload it before saving the result.");
             }
+            requireCurrentEnsembleOn(c, plan.id(), current.contextRev(), stored.id(), datasetId);
             requireSelectedCandidate(c, plan.id(), plan.context().rev(), candidateId);
             Db.execOn(c, "UPDATE plan_outcome_run SET state='STALE' WHERE plan_id=? AND context_rev=? " +
                     "AND basis=? AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT'",
@@ -281,6 +299,7 @@ public final class PlanOutcomeService {
             if (current.version() != expectedVersion || current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This Plan changed while proposals were being compared.");
             }
+            requireCurrentEnsembleOn(c, plan.id(), current.contextRev(), stored.id(), datasetId);
             for (ComparisonItem item : items) {
                 if (item.candidateId() != null) requireCurrentCandidate(c, plan.id(), plan.context().rev(), item.candidateId());
             }
@@ -627,6 +646,15 @@ public final class PlanOutcomeService {
         }
     }
 
+    private static void requireCurrentEnsembleOn(java.sql.Connection c, String planId, int contextRev,
+                                                 String ensembleId, String datasetId) throws java.sql.SQLException {
+        if (Db.queryOn(c, "SELECT id FROM plan_ensemble WHERE id=? AND plan_id=? AND context_rev=? " +
+                        "AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT'",
+                r -> r.str("id"), ensembleId, planId, contextRev, datasetId).isEmpty()) {
+            throw new IllegalStateException("This path set is no longer current for the Plan and data lane on screen.");
+        }
+    }
+
     private static CurrentPlan ownedPlanOn(java.sql.Connection c, String id, String userId, boolean lock)
             throws java.sql.SQLException {
         List<CurrentPlan> rows = Db.queryOn(c, "SELECT p.symbol,p.market_kind,p.world_id,p.active_context_rev,p.version," +
@@ -642,7 +670,8 @@ public final class PlanOutcomeService {
         String market = r.str("market_kind");
         String world = "SIMULATED".equals(market) ? r.str("world_id") : "DEMO".equals(market) ? "demo" : "observed";
         var analysis = new io.liftandshift.strikebench.db.AnalysisContext(r.str("user_id"), r.str("dataset_id"));
-        return new EnsembleRow(r.str("id"), r.str("fingerprint"), r.str("basis"), r.str("model_version"),
+        return new EnsembleRow(r.str("id"), r.str("fingerprint"), r.str("basis"), r.intv("context_rev"),
+                r.str("dataset_id"), r.str("state"), r.str("model_version"),
                 r.str("symbol"), world, analysis, r.lng("anchor_spot_cents"), r.str("anchor_source"),
                 r.str("anchor_freshness"), r.str("as_of"), r.str("spec_model"), r.str("spec_shape"),
                 r.intv("spec_horizon_days"), r.intv("spec_steps_per_day"), r.dbl("spec_drift_annual"),
@@ -688,7 +717,8 @@ public final class PlanOutcomeService {
                               Double winRate,Long best,Long worst,Double breach,String createdAt) {}
     private record ComparisonRow(String id,String basis,String ensembleId,String fingerprint,
                                  String interpretation,String fairness,String state,String createdAt) {}
-    private record EnsembleRow(String id,String fingerprint,String basis,String modelVersion,String symbol,String worldId,
+    private record EnsembleRow(String id,String fingerprint,String basis,int contextRev,String datasetId,String state,
+                               String modelVersion,String symbol,String worldId,
                                io.liftandshift.strikebench.db.AnalysisContext analysis,long anchorSpotCents,
                                String anchorSource,String anchorFreshness,String asOf,String model,String shape,int horizon,
                                int stepsPerDay,double drift,double vol,double jumps,double jumpMean,double jumpVol,double tailNu,

@@ -587,6 +587,46 @@ class PlanApiIntegrationTest {
         assertThat(cash.at("/decision/metrics/riskFreeRateAnnual").isNumber()).isTrue();
     }
 
+    @Test void voidingAPlanTradeIsRecordedAsVoidRatherThanAnOrdinaryClose() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"decision-void-plan","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Void semantics plan","thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                """));
+        String planId = plan.get("id").asText();
+        JsonNode field = json(post("/api/plans/" + planId + "/strategy/run", "{}"));
+        JsonNode candidate = null;
+        for (JsonNode item : field.at("/strategy/result/candidates")) {
+            java.util.Set<String> expirations = new java.util.HashSet<>();
+            for (JsonNode leg : item.withArray("legs")) if (!"STOCK".equals(leg.path("type").asText())) {
+                expirations.add(leg.path("expiration").asText());
+            }
+            if (expirations.size() == 1) { candidate = item; break; }
+        }
+        assertThat(candidate).isNotNull();
+        JsonNode selected = json(put("/api/plans/" + planId + "/strategy/select",
+                "{\"candidateId\":\"" + candidate.get("id").asText() + "\",\"expectedVersion\":"
+                        + field.at("/plan/version").asLong() + "}"));
+        long version = selected.at("/plan/version").asLong();
+        JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
+                "{\"expectedVersion\":" + version + ",\"qty\":1}"));
+        var order = Json.MAPPER.createObjectNode();
+        order.put("expectedVersion", version);
+        order.put("qty", 1);
+        order.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+        if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
+        var acks = order.putArray("acknowledgedRisks");
+        for (JsonNode ack : preview.withArray("requiredAcks")) acks.add(ack.get("id").asText());
+        JsonNode opened = json(post("/api/plans/" + planId + "/decision/trade", order.toString()));
+
+        JsonNode voided = json(post("/api/plans/" + planId + "/manage/void",
+                "{\"expectedVersion\":" + opened.at("/plan/version").asLong() + ",\"confirm\":true}"));
+        assertThat(voided.at("/plan/status").asText()).isEqualTo("CLOSED");
+        assertThat(voided.at("/trade/status").asText()).isEqualTo("DELETED");
+        assertThat(voided.at("/management/actions/0/kind").asText()).isEqualTo("VOID");
+        assertThat(voided.at("/management/actions/0/note").asText()).contains("voided");
+        assertThat(voided.at("/management/reviews")).isEmpty();
+    }
+
     private static HttpResponse<String> get(String path) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(base + path)).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
