@@ -69,6 +69,17 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void fabricatedDemoHeadlinesNeverBecomeCandidateEventWarnings() {
+        RecommendationEngine.Result result = engine.recommend(
+                req("QQQ", "bullish", "month", "balanced"), BP);
+
+        assertThat(result.candidates()).isNotEmpty();
+        assertThat(result.candidates()).allSatisfy(candidate ->
+                assertThat(candidate.warnings()).noneSatisfy(warning -> assertThat(warning)
+                        .containsIgnoringCase("event-like news")));
+    }
+
+    @Test
     void incomeIntentSelectsIncomeFamiliesWithYieldAndAssignmentMetrics() {
         RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(100, 20_000L, null);
         RecommendationEngine.Result result = engine.recommend(intentReq("income", h, null), BP);

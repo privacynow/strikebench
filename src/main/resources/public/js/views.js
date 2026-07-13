@@ -1837,7 +1837,7 @@
         }, r.l);
       }));
     var instruction = el('p', { class: 'muted explorer-hint', id: 'explorer-hint' },
-      'Choose a stock to start a plan \u2014 understand it, test the view, compare strategies, then decide.');
+      'Choose a stock to open its full analysis. From there, set a goal when you are ready to make a Plan.');
     var quoteBasis = App.state.world === 'demo'
       ? 'Fabricated Demo quotes for this teaching universe.'
       : App.state.world && App.state.world !== 'observed'
@@ -1846,7 +1846,7 @@
     var historyNotice = el('div', { class: 'alert alert-warn sector-history-notice', id: 'sector-history-notice', hidden: '' });
     var card = el('div', { class: 'card', id: 'sector-explorer' },
       UI.cardHeader('Explore by sector'), rail, head, instruction, rangeRow, historyNotice, grid,
-      explain(quoteBasis + ' Tap a card to begin a plan, or point the scout at a whole sector. '
+      explain(quoteBasis + ' Open a stock for its full analysis, or point the Scout at a whole sector. '
         + (u.note ? u.note : '')));
     root.appendChild(card);
 
@@ -1899,8 +1899,8 @@
         // clickable. Symbols without a live quote say so honestly but still link onward.
         var bySym = {};
         (data.quotes || []).forEach(function (q) { bySym[q.symbol] = q; });
-        // Destination cards create the provisional Plan in one action. Sector, range and scroll
-        // stay here so returning to Research restores the market-entry context.
+        // Destination cards open full analysis. Sector, range and scroll stay here so returning
+        // to Research restores the market-entry context before a user chooses to create a Plan.
         sector.symbols.forEach(function (s) {
           var q = bySym[s];
           var last = q ? parseFloat(q.last) : null;

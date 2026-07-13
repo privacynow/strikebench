@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.recommend;
 
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.NewsItem;
 import io.liftandshift.strikebench.model.OptionChain;
@@ -119,7 +120,10 @@ public final class SignalEngine {
         Double ivHv = ivAtm != null && hv30 != null && hv30 > 0 ? ivAtm / hv30 : null;
         String volSignal = ivHv == null ? "UNKNOWN" : ivHv > 1.25 ? "RICH" : ivHv < 0.85 ? "CHEAP" : "FAIR";
 
-        List<NewsItem> news = market.news(sym, worldId);
+        // Demo headlines are explicitly fabricated practice prompts and simulated worlds have
+        // no real-company news. They may be displayed as teaching catalysts, but must never
+        // become sentiment, thesis, confidence, or event-risk evidence.
+        List<NewsItem> news = lane == MarketLane.OBSERVED ? market.news(sym, worldId) : List.of();
         List<String> posHits = new ArrayList<>();
         List<String> negHits = new ArrayList<>();
         boolean eventRisk = false;
