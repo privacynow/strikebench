@@ -601,7 +601,8 @@
     // Smaller viewports progressively show the first six/four; the full universe stays one tap away.
     var marketSymbols = uni && uni.symbols && uni.symbols.length ? uni.symbols.slice(0, 8) : CORE_SYMBOLS;
     var tiles = el('div', { class: 'home-market-grid' });
-    var homeHistoryNotice = el('div', { class: 'home-history-notice muted small', hidden: '' });
+    var homeHistoryNotice = el('div', { class: 'home-history-notice muted small',
+      id: 'home-history-notice', hidden: '' });
     colL.appendChild(el('div', { class: 'card home-market-card', id: 'home-market-watch' },
       UI.cardHeader('Market watch' + (uni && App.state.world !== 'demo' ? ' — ' + uni.label : ''),
         el('a', { href: '#/research', class: 'muted home-view-all' },
@@ -2831,14 +2832,15 @@
       var matches = await PlanStore.matching(symbol, intent);
       if (matches.length) {
         var existing = matches[0];
+        var destination = intent == null ? 'EVIDENCE' : 'UNDERSTAND';
         decisionHost.appendChild(el('div', { class: 'alert alert-info plan-existing-match' },
           el('div', {}, el('b', {}, 'This inquiry already has a Plan'),
             el('p', { class: 'muted small' }, existing.title + ' · ' + (existing.context && existing.context.horizonDays || 30)
               + ' days. Resume it, or change an assumption first when you mean to investigate a different question.')),
           el('div', { class: 'btn-row' },
             el('button', { type: 'button', class: 'btn', onclick: function () {
-              PlanStore.focus(existing).catch(function (e) { UI.toast(e.message, 'error'); });
-            } }, 'Resume this Plan'))));
+              PlanStore.focus(existing, destination).catch(function (e) { UI.toast(e.message, 'error'); });
+            } }, intent == null ? 'Open Evidence' : 'Open this Plan'))));
         return;
       }
       decisionHost.setAttribute('aria-busy', 'true');
@@ -6525,11 +6527,14 @@
           if (!st.sectorKey && !st.includeActiveUniverse && sectorChk.checked === false && curSector !== 'world') {
             st.sectorKey = curSector || 'CORE'; sectorChk.checked = true; // default ON
           }
-          grid.appendChild(labeled(curSector === 'world' ? 'Bring my current market along' : 'Bring my current sector along',
-            el('div', { class: 'btn-row', style: 'align-items:center' }, sectorChk,
-              el('span', { class: 'muted small' },
-                (curSector === 'world' ? (activeUniverse.label || 'Current market') + ' \u00b7 ' + activeSymbols.length + ' symbols'
-                  : (st.sectorKey || 'CORE')) + ' \u2014 so the tape and explorer stay alive'))));
+          grid.appendChild(el('div', { class: 'field' },
+            el('label', { class: 'sim-sector-choice', for: sectorChk.id }, sectorChk,
+              el('span', {},
+                el('span', { class: 'field-label' },
+                  curSector === 'world' ? 'Bring my current market along' : 'Bring my current sector along'),
+                el('span', { class: 'muted small' },
+                  (curSector === 'world' ? (activeUniverse.label || 'Current market') + ' \u00b7 ' + activeSymbols.length + ' symbols'
+                    : (st.sectorKey || 'CORE')) + ' \u2014 so the tape and explorer stay alive')))));
           // Honest units: speed multiplies TIME, so the label states what one 6.5h session
           // becomes. (The old '10x = a day in ~40 min' claim was mathematically false.)
           var speedSel = el('select', { id: 'sim-speed' },

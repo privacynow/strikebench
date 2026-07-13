@@ -1316,6 +1316,8 @@ test('equivalent Plan retries collapse while materially different Plans survive 
   await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.disposable + '"] .plan-chip-close').click();
   assert.equal(await page.evaluate(() => location.hash), '#/home',
     'closing a Plan tab from Home does not navigate into another Plan');
+  await page.waitForFunction(id => !document.querySelector('#home-plan-library [data-plan-id="' + id + '"]'),
+    ids.disposable);
   await page.waitForSelector('#home-plan-library .xp-head:has-text("Closed Plan tabs")');
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.disposable + '"]').count(), 0,
     'a closed tab is not counted or rendered as a working Plan');
@@ -1624,13 +1626,16 @@ test('provider-governed sparkline deferral resolves to an honest unavailable sta
     await page.waitForSelector('#app[data-route="home"][data-ready="true"]');
     await page.waitForFunction(() => {
       const cards = document.querySelectorAll('.home-market-grid .sym-card');
-      return cards.length > 0 && document.querySelectorAll('.home-market-grid .spark-ev').length === cards.length;
+      const settled = document.querySelectorAll('.home-market-grid .spark-slot-missing .spark-empty');
+      return cards.length > 0 && settled.length === cards.length;
     });
     assert.equal(await page.locator('.home-market-grid .spark-loading').count(), 0,
       'a declined optional request never leaves a permanent loading state');
-    assert.equal(await page.locator('.home-market-grid .spark-ev').evaluateAll(nodes =>
-      nodes.every(n => /HISTORY UNAVAILABLE/.test(n.textContent))), true,
-      'every deferred chart states that its history evidence is missing');
+    assert.equal(await page.locator('.home-market-grid .spark-empty').evaluateAll(nodes =>
+      nodes.every(n => /history|chart|interactive market work/i.test(n.getAttribute('aria-label') || n.textContent))), true,
+      'every deferred chart carries a specific accessible reason without repeating a badge on every card');
+    assert.match(await page.textContent('#home-history-notice'), /Charts unavailable.*current quotes remain usable/i,
+      'one visible aggregate notice explains the missing charts and preserves the usable quote state');
   } finally {
     await page.unroute('**/api/sparklines?*');
   }
