@@ -300,6 +300,7 @@ public final class PlanService {
         }
         if (planId.equals(relatedPlanId)) throw new IllegalArgumentException("a Plan cannot link to itself");
         db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, planId, userId);
             requireOwnedOn(c, planId, userId, true);
             requireOwnedOn(c, relatedPlanId, userId, false);
             Db.execOn(c, "INSERT INTO plan_link(id,plan_id,role,related_plan_id,created_at) VALUES(?,?,?,?,?) " +

@@ -247,7 +247,7 @@ class PlanServiceTest {
 
         assertThatThrownBy(() -> plans.claimIntent(null, plan.id(),
                 new Plan.IntentRequest(archived.version(), "ACQUIRE")))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("decision is frozen");
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("read-only");
         assertThatThrownBy(() -> plans.setStage(null, plan.id(),
                 new Plan.StageRequest(archived.version(), "EVIDENCE")))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("read-only");
@@ -258,6 +258,20 @@ class PlanServiceTest {
         assertThat(unchanged.version()).isEqualTo(archived.version());
         assertThat(db.query("SELECT state FROM plan_evidence WHERE id='pe_archived'", r -> r.str("state")))
                 .containsExactly("CURRENT");
+    }
+
+    @Test
+    void archivedPlanCannotGainNewScoutRelationships() {
+        Plan.View origin = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                create("req-archived-link-origin", "QQQ", "ACQUIRE", 30));
+        Plan.View child = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                create("req-archived-link-child", "SPY", "DIRECTIONAL", 30));
+        plans.archive(null, origin.id(), new Plan.ArchiveRequest(origin.version()));
+
+        assertThatThrownBy(() -> plans.linkRelated(null, origin.id(), child.id(), "PEER"))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("read-only");
+        assertThat(db.query("SELECT COUNT(*) n FROM plan_link WHERE plan_id=?", r -> r.lng("n"), origin.id()))
+                .containsExactly(0L);
     }
 
     @Test
