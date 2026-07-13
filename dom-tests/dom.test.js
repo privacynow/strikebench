@@ -1154,6 +1154,33 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   assert.equal(await page.locator('#research-symbol-context').count(), 0,
     'symbol identity is immutable in the Plan header rather than recaptured in the stage');
   assert.match(await page.textContent('#plan-header'), /AAPL.*Intent not chosen/s);
+  await page.locator('.plan-rail button').filter({ hasText: 'Strategy' }).click();
+  await page.waitForSelector('#plan-strategy-body .plan-intent-grid .choice-card');
+  const intentChoices = await page.evaluate(() => {
+    const grid = document.querySelector('#plan-strategy-body .plan-intent-grid');
+    const cards = Array.from(grid.querySelectorAll('.choice-card'));
+    const gridBox = grid.getBoundingClientRect();
+    return {
+      count: cards.length,
+      display: getComputedStyle(grid).display,
+      cards: cards.map(card => {
+        const css = getComputedStyle(card);
+        const box = card.getBoundingClientRect();
+        return {
+          tag: card.tagName,
+          textAlign: css.textAlign,
+          minHeight: parseFloat(css.minHeight),
+          inside: box.left >= gridBox.left - 1 && box.right <= gridBox.right + 1,
+          visible: box.width > 120 && box.height >= 80
+        };
+      })
+    };
+  });
+  assert.equal(intentChoices.display, 'grid', 'the intent chooser uses the shared choice grid');
+  assert.equal(intentChoices.count, 5, 'every Plan intent remains available before commitment');
+  assert.ok(intentChoices.cards.every(card => card.tag === 'BUTTON' && card.textAlign === 'left'
+    && card.minHeight >= 80 && card.inside && card.visible),
+  'intent choices are full pressable cards with stable geometry: ' + JSON.stringify(intentChoices));
 });
 
 test('navigation is NEVER trapped behind a slow route (Research does not block moving away)', async () => {
