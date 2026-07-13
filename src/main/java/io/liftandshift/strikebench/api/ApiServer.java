@@ -2441,9 +2441,13 @@ public final class ApiServer {
         result.put("disclaimer", raw.disclaimer());
         ArrayNode candidates = result.putArray("candidates");
         int favorable = 0, mixed = 0, unfavorable = 0, unavailable = 0;
+        boolean anyEconomicAssessment = false, anyComparableAssessment = false;
+        boolean anyRealizedVolLane = false, needsDailyHistory = false;
+        List<String> collectedNotes = new ArrayList<>();
         String wantedThesis = plan.context().thesis() == null ? null : plan.context().thesis().toUpperCase(Locale.ROOT);
         for (AutoRecommender.Pick pick : raw.picks()) {
             for (AutoRecommender.HorizonIdeas horizon : pick.horizons()) {
+                for (String note : horizon.notes()) if (!collectedNotes.contains(note)) collectedNotes.add(note);
                 for (AutoRecommender.ScoredCandidate scored : horizon.candidates()) {
                     ObjectNode candidate = Json.MAPPER.valueToTree(scored.candidate());
                     candidate.put("symbol", pick.symbol());
@@ -2455,6 +2459,12 @@ public final class ApiServer {
                     if (scored.targetFit() != null) candidate.put("targetFit", scored.targetFit());
                     if (scored.decisionScore() != null) candidate.put("decisionScore", scored.decisionScore());
                     if (scored.economics() != null) {
+                        anyEconomicAssessment = true;
+                        if (!"MECHANICALLY_INELIGIBLE".equals(scored.economics().placement())) {
+                            anyComparableAssessment = true;
+                        }
+                        if (scored.economics().realizedVolEvAfterCostsCents() != null) anyRealizedVolLane = true;
+                        if (scored.economics().needsDailyHistory()) needsDailyHistory = true;
                         candidate.set("economics", Json.MAPPER.valueToTree(scored.economics()));
                         candidate.put("economicVerdict", scored.economics().verdict().name());
                         candidate.put("economicPlacement", scored.economics().placement());
@@ -2471,10 +2481,19 @@ public final class ApiServer {
         }
         result.put("favorableCount", favorable); result.put("mixedCount", mixed);
         result.put("unfavorableCount", unfavorable); result.put("unavailableCount", unavailable);
+        result.put("economicReadiness", anyEconomicAssessment && !anyComparableAssessment
+                ? "MECHANICALLY_BLOCKED"
+                : anyEconomicAssessment && !anyRealizedVolLane && needsDailyHistory
+                    ? "NEEDS_DAILY_HISTORY" : "READY");
         result.put("economicMessage", candidates.isEmpty()
                 ? "No related symbol matched this Plan's evidence and mechanical screens."
+                : anyEconomicAssessment && !anyComparableAssessment
+                    ? "The related symbols produced structures, but none passed the mechanical and account checks required for an economic comparison."
+                : anyEconomicAssessment && !anyRealizedVolLane && needsDailyHistory
+                    ? "These symbols can be compared mechanically and under market-implied pricing, but daily history is insufficient for a realized-volatility edge verdict."
                 : "Related symbols remain separate Plans; compare their evidence, tail risk, and capital use before treating one as an alternative.");
         ArrayNode notes = result.putArray("notes");
+        collectedNotes.forEach(notes::add);
         raw.notes().forEach(notes::add);
         raw.skipped().stream().limit(8).forEach(skip -> notes.add("Skipped: " + skip));
         return result;
@@ -4006,6 +4025,11 @@ public final class ApiServer {
             IvExp ie = ivExpF.get();
             var candleSeries = candlesF.get();
             double hv30 = HistoricalVol.annualized(candleSeries.candles(), 30);
+            Double realizedVol30 = Double.isNaN(hv30) ? null : hv30;
+            int volatilityHorizonDays = ie.exps().isEmpty() ? 30
+                    : Math.max(1, (int) java.time.temporal.ChronoUnit.DAYS.between(today, ie.exps().getFirst()));
+            var volatility = evaluations.volatilitySnapshot(symbol, ie.ivAtm(), realizedVol30,
+                    volatilityHorizonDays, worldParam(world));
             boolean demoHistory = candleSeries.evidence().provenance()
                     == io.liftandshift.strikebench.model.DataProvenance.DEMO;
 
@@ -4017,6 +4041,12 @@ public final class ApiServer {
             out.put("marketLane", lane.name());
             out.put("optionable", q.optionable());
             out.put("ivAtm", ie.ivAtm());
+            out.put("ivRankAvailable", volatility.ivRankPct() != null);
+            out.put("ivRankPct", volatility.ivRankPct());
+            out.put("ivPercentilePct", volatility.ivPercentilePct());
+            out.put("ivHistoryDays", volatility.historyDays());
+            out.put("ivRankRequiredDays", io.liftandshift.strikebench.eval.VolatilityProfiler.MIN_HISTORY);
+            out.put("ivRankNote", volatility.source());
             // The event model: an ESTIMATED earnings window from the issuer's SEC filing cadence
             // (never keywords), and an HONESTLY-ABSENT ex-div (no keyless source exists).
             // A simulated world has NO earnings — a real company's calendar attached to a
@@ -4037,7 +4067,9 @@ public final class ApiServer {
             }
             out.put("exDividend", Map.of("available", false,
                     "note", "no keyless ex-dividend source \u2014 connect a licensed calendar for confirmed dates"));
-            out.put("hv30", Double.isNaN(hv30) ? null : hv30);
+            out.put("hv30", realizedVol30);
+            out.put("hvHistoryDays", candleSeries.candles().size());
+            out.put("hvRequiredDays", HistoricalVol.MIN_OBSERVATIONS);
             out.put("historyDemo", demoHistory);
             out.put("historyBarBasis", candleSeries.barBasis());
             out.put("historyPriceBasis", candleSeries.priceBasis());

@@ -158,7 +158,8 @@ test('live: dashboard renders observed cards or an explicit unavailable state', 
         'cards do not repeat the same missing-history badge under the section-level notice');
       const emptyLabels = await page.$$eval('#home-market-watch .sym-card:has(.spark-empty) .spark-empty',
         els => els.map(e => e.textContent.trim()));
-      emptyLabels.forEach(label => assert.equal(label, 'No chart', 'each affected card keeps one quiet placeholder'));
+      emptyLabels.forEach(label => assert.match(label, /Needs daily history|Chart (?:deferred|temporarily unavailable)|No daily history/,
+        'each affected card names its actual chart state without repeating the section banner'));
     }
   } else {
     assert.match(await page.textContent('#home-market-watch'), /market data unavailable/i,
@@ -246,6 +247,13 @@ test('live: research a real symbol end to end', async () => {
     assert.match(await page.textContent('#research-evidence'), /PARTIAL EVIDENCE/i,
       'working quote and chain inputs are not mislabeled as total data failure when history is missing');
   }
+  const heroText = await page.textContent('#research-hero');
+  if (/add history/i.test(heroText)) {
+    assert.match(heroText, /\d+\/20 daily closes · add history/i,
+      'HV names the shared twenty-close requirement and recovery action');
+    assert.match(heroText, /\d+\/10 observed snapshot days/i,
+      'IV rank remains visible and names its independent option-snapshot requirement');
+  }
   await openPlan('AAPL', 'strategy');
   await page.locator('.plan-tool').filter({ hasText: /Chain|Option prices/ }).click();
   await page.waitForSelector('#expiration-select', { timeout: 30000 });
@@ -283,6 +291,7 @@ test('live: a single-symbol Plan returns ranked structures for a real chain', as
 });
 
 test('live: universe Scout scans and reports with evidence within budget', async () => {
+  const researchReadiness = await page.evaluate(async () => API.getFresh('/api/research/AAPL'));
   await go('#/research');
   await page.waitForSelector('#universe-scout-run');
   const t0 = Date.now();
@@ -293,6 +302,11 @@ test('live: universe Scout scans and reports with evidence within budget', async
   assert.ok(elapsed < 20000, `scout under 20s, took ${elapsed}ms`);
   if (await page.locator('#universe-scout-results .universe-scout-pick').count()) {
     assert.match(await page.textContent('#universe-scout-results'), /Confidence|Evidence|Favorable|Mixed/i);
+    if (researchReadiness.hv30 === null || researchReadiness.hv30 === undefined) {
+      assert.match(await page.textContent('#universe-scout-results'),
+        /favorable observed verdict cannot be formed|daily history is insufficient|every candidate failed a mechanical or account check/i,
+        'Scout distinguishes missing realized history or an earlier mechanical block from an unfavorable economic scan');
+    }
   }
   assertClean('scout');
 });

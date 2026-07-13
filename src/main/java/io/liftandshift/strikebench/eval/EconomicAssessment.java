@@ -24,6 +24,9 @@ public record EconomicAssessment(
         boolean observedEvidence,
         List<String> reasons
 ) {
+    public static final String DAILY_HISTORY_REASON =
+            "The realized-volatility EV lane is unavailable because this market lacks enough eligible daily history.";
+
     public enum Verdict {
         FAVORABLE(3), MIXED(2), UNAVAILABLE(1), UNFAVORABLE(0);
 
@@ -96,8 +99,17 @@ public record EconomicAssessment(
         boolean lowProbability = risk != null && risk.pop() != null && risk.pop() < 0.30;
 
         if (marketNet != null) reasons.add("Market-implied EV after estimated round-trip fees: " + Money.fmt(marketNet) + ".");
-        if (realizedNet != null) reasons.add("Realized-volatility scenario EV after estimated round-trip fees: "
-                + Money.fmt(realizedNet) + ".");
+        if (realizedNet != null) {
+            reasons.add("Realized-volatility scenario EV after estimated round-trip fees: "
+                    + Money.fmt(realizedNet) + ".");
+        } else if (ctx.realizedVol30() == null) {
+            reasons.add(DAILY_HISTORY_REASON);
+        } else if (risk != null && risk.evBasisNote() != null
+                && risk.evBasisNote().contains("multi-expiration")) {
+            reasons.add("The realized-volatility EV lane is unavailable for this multi-expiration structure in the single-terminal model.");
+        } else {
+            reasons.add("The realized-volatility EV lane could not be computed for this payoff shape.");
+        }
         if (lowProbability) reasons.add("The modeled chance of any profit is below 30%; low probability is not a rejection by itself.");
         if (!observed) reasons.add("The evidence is generated or modeled, so it cannot establish a live-market edge.");
 
@@ -146,6 +158,11 @@ public record EconomicAssessment(
                         ? "The structure is plausible, but the available models do not show a robust after-cost advantage. Compare it with cash, stock, and alternatives."
                         : "This is useful for learning and comparison, but generated or incomplete evidence cannot support a real-market edge claim.",
                 marketNet, realizedNet, fees, evPct, observed, reasons);
+    }
+
+    /** True only when the evaluation context lacked eligible realized-volatility history. */
+    public boolean needsDailyHistory() {
+        return reasons.contains(DAILY_HISTORY_REASON);
     }
 
     private static long roundTripFees(Candidate c, EvalContext ctx) {
