@@ -1016,6 +1016,9 @@ body.lvl-expert .not-expert { display: none !important; }
 .home-market-slot { display: flex; min-width: 0; }
 .home-market-card { width: 100%; margin-bottom: 0; display: flex; flex-direction: column; }
 .home-market-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; flex: 1; }
+.home-market-grid[data-count="1"] { grid-template-columns: minmax(0, 1fr); }
+.home-market-grid[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.home-market-grid[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 /* Sparse universes (the five-symbol Demo market, a small custom watchlist) should still use
    the desktop canvas deliberately. Three columns turn five/six cards into a balanced 3+2/3+3
    composition instead of one orphan beneath a four-card row and a large blank field. */
@@ -1958,7 +1961,9 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-bar { width: 100%; border-bottom: 1px solid var(--border); background: var(--surface);
   min-width: 0; }
 .plan-bar-inner { width: 100%; max-width: 1060px; margin: 0 auto; padding: 6px 16px;
-  display: flex; align-items: center; gap: 7px; overflow-x: auto; scrollbar-width: thin; }
+  min-width: 0; }
+.plan-bar-desktop { display: flex; align-items: center; gap: 7px; overflow-x: auto; scrollbar-width: thin; }
+.plan-bar-mobile { display: none; }
 .plan-bar-label { flex: none; color: var(--muted); font-size: 13px; font-weight: 700; }
 .plan-chip { flex: 0 0 auto; display: inline-grid; grid-template-columns: minmax(0, auto) 30px;
   align-items: stretch; min-height: 36px; border: 1px solid var(--border); border-radius: 6px;
@@ -1973,6 +1978,27 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-chip-main:hover, .plan-chip-close:hover, .plan-new-btn:hover { background: var(--accent-soft); color: var(--text); }
 .plan-new-btn { flex: none; min-height: 36px; padding: 6px 10px; border: 1px dashed var(--border-strong);
   border-radius: 6px; cursor: pointer; font-weight: 700; }
+.plan-picker { min-width: 0; width: 100%; height: 38px; font-weight: 700; }
+
+.home-plan-library { margin-bottom: 12px; }
+.home-plan-library > .card-head { margin-bottom: 10px; }
+.home-plan-group + .home-plan-group { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.home-plan-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
+.home-plan-group-head h3 { margin: 0; font-size: 15px; }
+.home-plan-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.home-plan-tile { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 10px;
+  align-items: start; padding: 11px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-2); }
+.home-plan-tile.active { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.home-plan-tile-head { grid-column: 1 / -1; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
+.home-plan-tile-head h3 { margin: 1px 0 0; font-size: 19px; }
+.home-plan-meta { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.home-plan-live { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 700; }
+.home-plan-tile > .btn { align-self: end; white-space: nowrap; }
+.home-plan-archive { display: grid; gap: 0; }
+@media (max-width: 1000px) and (min-width: 641px) {
+  .home-plan-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 .plan-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px;
   align-items: end; margin-bottom: 12px; padding: 16px 18px; border: 1px solid var(--border);
@@ -2060,11 +2086,15 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .portfolio-inline-trade { display: grid; gap: 12px; margin-top: 14px; scroll-margin-top: 110px; }
 .plan-outcome-action-status .alert { margin-top: 10px; }
 @media (max-width: 640px) {
+  .plan-bar-desktop { display: none; }
+  .plan-bar-mobile { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; align-items: center; }
   .plan-decision-form { grid-template-columns: minmax(0, 1fr); }
   .plan-decision-actions { align-items: stretch; flex-direction: column; }
   .plan-decision-actions .btn-row { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; }
   .plan-frozen-expectation { align-items: stretch; flex-direction: column; }
   .plan-book-grid { grid-template-columns: minmax(0, 1fr); }
+  .home-plan-grid { grid-template-columns: minmax(0, 1fr); }
+  .home-plan-group-head { align-items: flex-start; flex-direction: column; gap: 2px; }
 }
 .plan-market-outcome { display: grid; gap: 10px; }
 .research-plan-scout { margin-top: 18px; }

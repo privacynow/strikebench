@@ -61,6 +61,8 @@ class PlanApiIntegrationTest {
         JsonNode duplicate = json(post("/api/plans", body.replace("browser-create-1", "browser-create-2")));
         assertThat(duplicate.get("id").asText()).isNotEqualTo(id);
         assertThat(json(get("/api/plans")).get("plans")).hasSize(baselinePlans + 2);
+        assertThat(duplicate.get("symbol").asText()).isEqualTo(created.get("symbol").asText());
+        assertThat(duplicate.get("intent").asText()).isEqualTo(created.get("intent").asText());
 
         JsonNode updated = json(put("/api/plans/" + id + "/context",
                 "{\"expectedVersion\":" + version + ",\"thesis\":\"bearish\",\"horizonDays\":45}"));
@@ -75,6 +77,21 @@ class PlanApiIntegrationTest {
         HttpResponse<String> locked = put("/api/plans/" + id + "/stage",
                 "{\"expectedVersion\":" + updated.get("version").asLong() + ",\"stage\":\"manage_review\"}");
         assertThat(locked.statusCode()).isEqualTo(409);
+
+        JsonNode closedChip = json(put("/api/plans/" + duplicate.get("id").asText() + "/open",
+                "{\"expectedVersion\":" + duplicate.get("version").asLong() + ",\"open\":false}"));
+        assertThat(closedChip.get("open").asBoolean()).isFalse();
+        assertThat(json(get("/api/plans")).get("plans")).hasSize(baselinePlans + 1);
+        JsonNode fullLibrary = json(get("/api/plans?scope=all&openOnly=false"));
+        JsonNode retained = java.util.stream.StreamSupport.stream(fullLibrary.get("plans").spliterator(), false)
+                .filter(p -> duplicate.get("id").asText().equals(p.get("id").asText())).findFirst().orElseThrow();
+        assertThat(retained.get("open").asBoolean()).isFalse();
+
+        JsonNode archived = json(post("/api/plans/" + duplicate.get("id").asText() + "/archive",
+                "{\"expectedVersion\":" + closedChip.get("version").asLong() + "}"));
+        HttpResponse<String> reopenArchived = put("/api/plans/" + duplicate.get("id").asText() + "/open",
+                "{\"expectedVersion\":" + archived.get("version").asLong() + ",\"open\":true}");
+        assertThat(reopenArchived.statusCode()).isEqualTo(409);
     }
 
     @Test void historicalEvidenceIsPlanOwnedExactAndInvalidatedByAContextRevision() throws Exception {
@@ -109,6 +126,25 @@ class PlanApiIntegrationTest {
                 "{\"expectedVersion\":" + plan.get("version").asLong() + ",\"horizonDays\":21}"));
         JsonNode afterRevision = json(get("/api/plans/" + id + "/evidence/latest"));
         assertThat(!afterRevision.has("evidence") || afterRevision.get("evidence").isNull()).isTrue();
+    }
+
+    @Test void finishingASimulatedMarketClosesItsPlanCollectionAtomically() throws Exception {
+        JsonNode world = json(post("/api/sim/market", """
+                {"name":"Plan collection terminal","symbols":{"AAPL":1.0},"scenario":"CHOP","speed":26}
+                """));
+        String worldId = world.get("worldId").asText();
+        assertThat(put("/api/world", "{\"world\":\"" + worldId + "\"}").statusCode()).isEqualTo(200);
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"terminal-world-plan","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "thesis":"bullish","horizonDays":20,"riskMode":"conservative"}
+                """));
+        assertThat(plan.get("marketKind").asText()).isEqualTo("SIMULATED");
+        assertThat(plan.get("open").asBoolean()).isTrue();
+
+        assertThat(delete("/api/sim/market/" + worldId).statusCode()).isEqualTo(200);
+        JsonNode retained = json(get("/api/plans/" + plan.get("id").asText()));
+        assertThat(retained.get("open").asBoolean()).isFalse();
+        assertThat(json(get("/api/world")).get("world").asText()).isEqualTo("demo");
     }
 
     @Test void strategyCompetitionIsPlanOwnedNormalizedSelectableAndContextBound() throws Exception {

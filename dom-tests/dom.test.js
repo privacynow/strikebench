@@ -193,6 +193,7 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await page.click('#home-tour-link');
   await page.waitForSelector('#welcome-hero');
   // Home: sector pulse chips dig into the explorer
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
   await go('#/home');
   await page.waitForSelector('#sector-pulse .sector-chip', { timeout: 20000 });
   await page.click('#sector-pulse .sector-chip');
@@ -425,7 +426,7 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   await page.setViewportSize({ width: 1280, height: 720 });
 
   await page.click('#plan-outcomes-basis-backtest');
-  await page.waitForSelector('#plan-backtest-result');
+  await page.waitForSelector('#plan-backtest-result', { state: 'attached' });
   assert.match(await page.textContent('#plan-outcomes-panel'), /Replay.*AAPL|Historical replay/i);
   assert.equal(await page.locator('#plan-outcomes-panel input[type="date"]').count(), 2,
     'historical replay retains its useful controls at Beginner rather than hiding capability');
@@ -483,12 +484,126 @@ test('a selected Plan future becomes one exact managed rehearsal with a durable 
   await page.waitForSelector('#sim-report');
   assert.match(await page.textContent('#sim-report'), /exact path 1.*receipt/is);
   await page.click('#modal-confirm');
-  await page.waitForSelector('#plan-stage-manage-review', { timeout: 20000 });
+  await page.waitForSelector('#plan-stage-manage-review', { timeout: 20000 }).catch(async error => {
+    throw new Error('Finished rehearsal did not return to its Plan: hash=' + await page.evaluate(() => location.hash)
+      + ' world=' + await page.evaluate(() => App.state.world)
+      + ' routeError=' + await page.locator('#route-error').count()
+      + ' text=' + (await page.locator('#app').textContent()).slice(0, 2500) + '\n' + error.message);
+  });
   await page.waitForSelector('#plan-stage-manage-review .plan-rehearsal-review, #plan-stage-manage-review .plan-management-timeline',
     { timeout: 20000 });
   assert.match(await page.textContent('#plan-stage-manage-review'), /Management rehearsals|exact path/i);
   assert.match(await page.textContent('#plan-stage-manage-review'), /sim rehearsal|rehearsal result/i,
     'finish writes the rehearsal review into the owning Plan');
+});
+
+test('parallel Plans stay market-scoped, survive chip close, and open through one market transition', async () => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ids = await page.evaluate(async () => {
+    const base = App.baseWorldId();
+    if (App.state.world !== base) await App.switchWorld(base);
+    await PlanStore.load(true);
+    const first = await PlanStore.create({ symbol: 'QQQ', intent: 'INCOME', thesis: 'neutral',
+      horizonDays: 30, riskMode: 'conservative', title: 'QQQ · Earn income' });
+    const second = await PlanStore.create({ symbol: 'AAPL', intent: 'HEDGE', thesis: 'bearish',
+      horizonDays: 45, riskMode: 'conservative', title: 'AAPL · Protect shares' });
+    const closedFirst = await API.put('/api/plans/' + first.id + '/open', {
+      expectedVersion: first.version, open: false
+    });
+    await PlanStore.load(true);
+
+    const made = await API.post('/api/sim/market', { name: 'Plan collection world',
+      symbols: { AAPL: 1.0 }, scenario: 'CHOP', speed: 26 });
+    await API.post('/api/sim/market/' + made.worldId + '/start', {});
+    await App.switchWorld(made.worldId);
+    const simOne = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
+      horizonDays: 20, riskMode: 'conservative', title: 'AAPL · Bullish view' });
+    const simTwo = await PlanStore.create({ symbol: 'SPY', intent: 'ACQUIRE', thesis: 'neutral',
+      horizonDays: 20, riskMode: 'conservative', title: 'SPY · Buy at a discount' });
+    return { base, worldId: made.worldId, first: closedFirst.id, second: second.id,
+      simOne: simOne.id, simTwo: simTwo.id };
+  });
+
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
+  await go('#/home');
+  await page.waitForSelector('#home-plan-library .home-plan-grid', { timeout: 20000 }).catch(async error => {
+    throw new Error('Home Plan library did not settle: hash=' + await page.evaluate(() => location.hash)
+      + ' routeError=' + await page.locator('#route-error').count()
+      + ' text=' + (await page.locator('#app').textContent()).slice(0, 3000) + '\n' + error.message);
+  });
+  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simOne + '"]').count(), 1);
+  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simTwo + '"]').count(), 1);
+  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.second + '"]').count(), 0,
+    'the Plan bar shows only the current execution market');
+  assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"]').count(), 1,
+    'the Home library retains a closed Plan from another market');
+  assert.match(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] button').textContent(),
+    /Switch market & open/);
+  assert.match(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"]').textContent(),
+    /Switches market when opened/,
+    'an inactive-market Plan never borrows a same-symbol quote from the active market');
+  await page.waitForTimeout(4200);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-library-desktop.png'), fullPage: true });
+
+  await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] button').click();
+  await page.waitForFunction(id => location.hash.includes('/plan/' + id + '/'), ids.first, { timeout: 20000 });
+  await page.waitForFunction(base => App.state.world === base && App.Market.world === base, ids.base);
+  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.first + '"]').count(), 1,
+    'opening a closed library Plan reopens its chip after the market commits');
+  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simOne + '"]').count(), 0,
+    'the old market collection is stashed rather than blended into the bar');
+
+  await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.first + '"] .plan-chip-close').click();
+  await page.waitForFunction(id => !document.querySelector('.plan-chip[data-plan-id="' + id + '"]'), ids.first);
+  await go('#/home');
+  await page.waitForSelector('#home-plan-library [data-plan-id="' + ids.first + '"]');
+  assert.match(await page.locator('#home-plan-library [data-plan-id="' + ids.first + '"] button').textContent(), /Open Plan/,
+    'the chip × removes only the open-tab state; the durable Plan remains in the library');
+
+  await page.locator('#home-plan-library [data-plan-id="' + ids.simOne + '"] button').click();
+  await page.waitForFunction(world => App.state.world === world && App.Market.world === world, ids.worldId,
+    { timeout: 20000 });
+  await page.waitForFunction(id => location.hash.includes('/plan/' + id + '/'), ids.simOne);
+  await page.waitForSelector('.plan-rail');
+  assert.equal(await page.locator('#plan-bar-root .plan-chip').count(), 2,
+    'returning to the simulated market restores its two-Plan open collection');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.locator('#plan-picker').isVisible(), true, 'mobile uses a dedicated Plan picker');
+  assert.equal(await page.locator('#plan-picker option').count(), 2, 'every current-market Plan is reachable');
+  const mobile = await page.evaluate(() => {
+    const rail = document.querySelector('.plan-rail').getBoundingClientRect();
+    return { overflow: document.documentElement.scrollWidth - innerWidth,
+      stages: Array.from(document.querySelectorAll('.plan-rail button')).map(button => {
+        const r = button.getBoundingClientRect(); return { left: r.left, right: r.right,
+          top: r.top, bottom: r.bottom, railLeft: rail.left, railRight: rail.right };
+      }) };
+  });
+  assert.ok(mobile.overflow <= 0, 'parallel-Plan chrome does not widen the mobile viewport');
+  assert.equal(mobile.stages.length, 6);
+  mobile.stages.forEach(stage => assert.ok(stage.left >= stage.railLeft - 1 && stage.right <= stage.railRight + 1,
+    'all six stages remain fully visible in the 2-column mobile grid: ' + JSON.stringify(stage)));
+  await page.waitForTimeout(4200);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-picker-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.reload();
+  await page.waitForSelector('#plan-bar-root .plan-chip.active');
+  assert.equal(await page.locator('#plan-bar-root .plan-chip.active').getAttribute('data-plan-id'), ids.simOne,
+    'reload restores the active Plan for this market instead of a Plan from another lane');
+  assert.equal(await page.locator('#plan-bar-root .plan-chip').count(), 2,
+    'the current market collection restores from the server after reload');
+
+  // Leave no active-world capacity behind for later journeys. The plans are retained as
+  // archived records before their terminal world is finished.
+  await page.evaluate(async values => {
+    for (const id of [values.simOne, values.simTwo]) {
+      const plan = await PlanStore.get(id, true);
+      await API.post('/api/plans/' + id + '/archive', { expectedVersion: plan.version });
+    }
+    await App.switchWorld(values.base);
+    await API.del('/api/sim/market/' + values.worldId);
+    await PlanStore.refresh();
+  }, ids);
 });
 
 test('Plan Decide freezes one server-owned package and opens the linked paper position atomically', async () => {

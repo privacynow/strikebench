@@ -639,7 +639,11 @@ public final class ApiServer {
                 String id = ctx.pathParam("id");
                 String owner = ownerId(ctx);
                 boolean wasActive = id.equals(activeWorld(ctx));
-                simSessions.finish(id, owner, planRehearsals.finishHook(owner, id));
+                var rehearsalFinish = planRehearsals.finishHook(owner, id);
+                simSessions.finish(id, owner, (conn, worldId, world) -> {
+                    if (rehearsalFinish != null) rehearsalFinish.beforeFinish(conn, worldId, world);
+                    planSvc.closeFinishedWorldPlansOn(conn, owner, worldId);
+                });
                 // Finishing the ACTIVE world IS a world transition: flip the setting, drop any
                 // synthetic dataset, and PUBLISH it — every tab (including the caller's own SSE)
                 // reconciles through the same event as an explicit return-to-real (review P0 #2).

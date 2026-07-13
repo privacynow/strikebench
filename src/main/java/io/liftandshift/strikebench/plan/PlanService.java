@@ -205,6 +205,9 @@ public final class PlanService {
         Plan.View changed = db.tx(c -> {
             Plan.View current = selectViewOn(c, planId, userId, true);
             requireVersion(current, raw.expectedVersion());
+            if (Boolean.TRUE.equals(raw.open()) && current.status() == Plan.Status.ARCHIVED) {
+                throw new IllegalStateException("Archived plans stay read-only. Review it from the Plan library.");
+            }
             if (current.open() == raw.open()) return current;
             OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
             Db.execOn(c, "UPDATE plans SET is_open=?, version=version+1, updated_at=? WHERE id=?",
@@ -213,6 +216,16 @@ public final class PlanService {
         });
         announce(changed);
         return changed;
+    }
+
+    /** A finished simulated exchange cannot be entered again. Remove its Plans from the open
+     * collection atomically with the terminal session state; their artifacts remain in the
+     * all-market library and the session report remains the review surface. */
+    public void closeFinishedWorldPlansOn(java.sql.Connection c, String userId, String worldId)
+            throws java.sql.SQLException {
+        Db.execOn(c, "UPDATE plans SET is_open=0,version=version+1,updated_at=now() "
+                        + "WHERE market_kind='SIMULATED' AND world_id=? AND is_open=1 AND "
+                        + ownerClause("user_id"), worldId, userId, userId);
     }
 
     public Plan.View archive(String userId, String planId, Plan.ArchiveRequest raw) {
