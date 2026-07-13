@@ -7219,8 +7219,8 @@
       syncCard.appendChild(UI.cardHeader('Get & maintain daily price history',
         el('span', { class: 'badge badge-ok' }, 'ADDITIVE · RESUMABLE')));
       syncCard.appendChild(explain(level === 'beginner'
-        ? 'Choose stocks and a permitted source. StrikeBench checks what dates are already stored, shows the request cost, and fetches only missing daily history. Nothing generated can enter Observed data.'
-        : 'Missing-range planning is per symbol over observed trading sessions, with a short revision overlap. Source identity, adjusted/raw basis, request allowance, cursor, and rejected-row quarantine survive restarts.'));
+        ? 'Choose stocks and a permitted source. StrikeBench checks what dates are already stored, shows the request cost, and fetches only missing daily history. Successful observed history is saved locally and reused after restart; nothing generated can enter Observed data.'
+        : 'Missing-range planning is per symbol over observed trading sessions, with a short revision overlap. Successful on-demand observed reads write through to the same local store. Source identity, adjusted/raw basis, request allowance, cursor, and rejected-row quarantine survive restarts.'));
 
       var sourceGrid = el('div', { class: 'data-source-picker', role: 'group', 'aria-label': 'Automated daily price source' });
       automated.forEach(function (c) {

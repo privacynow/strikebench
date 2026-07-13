@@ -20,4 +20,10 @@ public interface CandleStore {
 
     /** Stored daily candles for the symbol/range in the given dataset, or empty to fall through. */
     Optional<CandleSeries> candles(String symbol, LocalDate from, LocalDate to, String datasetId);
+
+    /**
+     * Persist an observed provider response for reuse after restart. Read-only test stores keep the
+     * default no-op; the production store rejects any non-observed evidence before writing.
+     */
+    default int persistObserved(String symbol, CandleSeries series) { return 0; }
 }

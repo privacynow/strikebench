@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** The P1 fix: persisted underlying_bar (backfills/snapshots/CSV) is on the candle READ path. */
 class StoredCandleStoreTest {
@@ -139,5 +140,62 @@ class StoredCandleStoreTest {
         MarketDataService reader = fixtureService(); // no store
         CandleSeries s = reader.candleSeries("AAPL", from, to);
         assertThat(s.source()).isEqualTo("fixture"); // provider chain, not stored
+    }
+
+    @Test
+    void observedReadThroughSurvivesAServiceRestartWithoutAnotherProvider() {
+        db = TestDb.fresh();
+        var store = new StoredCandleStore(db);
+        var observed = new io.liftandshift.strikebench.support.ObservedFixtureProvider(clock);
+        MarketDataService first = new MarketDataService(List.<MarketDataProvider>of(observed),
+                List.<NewsFilingsProvider>of(), List.<RatesProvider>of(), store);
+
+        CandleSeries fetched = first.candleSeries("AAPL", from, to);
+        assertThat(fetched.source()).isEqualTo("observed-test-feed");
+        assertThat(fetched.candles()).hasSizeGreaterThan(20);
+
+        MarketDataService restarted = new MarketDataService(List.<MarketDataProvider>of(),
+                List.<NewsFilingsProvider>of(), List.<RatesProvider>of(), store);
+        CandleSeries restored = restarted.candleSeries("AAPL", from, to);
+        assertThat(restored.source()).isEqualTo("stored:observed-test-feed");
+        assertThat(restored.candles()).hasSameSizeAs(fetched.candles());
+        for (int i = 0; i < fetched.candles().size(); i++) {
+            var expected = fetched.candles().get(i);
+            var actual = restored.candles().get(i);
+            assertThat(actual.date()).isEqualTo(expected.date());
+            assertThat(actual.open()).isEqualByComparingTo(expected.open());
+            assertThat(actual.high()).isEqualByComparingTo(expected.high());
+            assertThat(actual.low()).isEqualByComparingTo(expected.low());
+            assertThat(actual.close()).isEqualByComparingTo(expected.close());
+            assertThat(actual.volume()).isEqualTo(expected.volume());
+            assertThat(actual.adjusted()).isEqualTo(expected.adjusted());
+        }
+    }
+
+    @Test
+    void generatedReadThroughCanNeverEnterObservedStorage() {
+        db = TestDb.fresh();
+        var store = new StoredCandleStore(db);
+        var fixture = new FixtureProvider(clock);
+        MarketDataService demoBacked = new MarketDataService(List.<MarketDataProvider>of(fixture),
+                List.<NewsFilingsProvider>of(), List.<RatesProvider>of(), store);
+
+        assertThat(demoBacked.candleSeries("AAPL", from, to).source()).isEqualTo("fixture");
+        assertThat(db.query("SELECT count(*) n FROM underlying_bar", r -> r.lng("n"))).containsExactly(0L);
+    }
+
+    @Test
+    void productionStoreRejectsGeneratedEvidenceEvenWhenCalledDirectly() {
+        db = TestDb.fresh();
+        var store = new StoredCandleStore(db);
+        var fixture = new FixtureProvider(clock);
+        MarketDataService generatedMarket = new MarketDataService(List.<MarketDataProvider>of(fixture),
+                List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
+        CandleSeries generated = generatedMarket.candleSeries("AAPL", from, to);
+
+        assertThatThrownBy(() -> store.persistObserved("AAPL", generated))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Only observed daily history");
+        assertThat(db.query("SELECT count(*) n FROM underlying_bar", r -> r.lng("n"))).containsExactly(0L);
     }
 }
