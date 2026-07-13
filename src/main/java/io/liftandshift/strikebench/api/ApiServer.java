@@ -2393,9 +2393,10 @@ public final class ApiServer {
             requestedIntent = "DIRECTIONAL";
         }
         boolean allow0 = controls != null && Boolean.TRUE.equals(controls.allow0dte());
+        String focusedThesis = "HEDGES".equals(scope) ? null : plan.context().thesis();
         var request = new AutoRecommender.AutoRequest(scanUniverse, List.of(planHorizon(plan.context().horizonDays())),
                 controls == null ? 4 : controls.maxPicks(), null, null, null, null,
-                plan.context().riskMode(), allow0, List.of(requestedIntent), null);
+                plan.context().riskMode(), allow0, List.of(requestedIntent), null, focusedThesis);
         AutoRecommender.AutoResult raw = auto.run(request, account.buyingPowerCents(), held, world);
         ObjectNode result = flattenPlanScout(plan, scope, raw);
         var saved = planStrategy.saveScout(ownerId(ctx), plan, scope, Json.MAPPER.valueToTree(request), result);
@@ -2415,12 +2416,12 @@ public final class ApiServer {
         int favorable = 0, mixed = 0, unfavorable = 0, unavailable = 0;
         String wantedThesis = plan.context().thesis() == null ? null : plan.context().thesis().toUpperCase(Locale.ROOT);
         for (AutoRecommender.Pick pick : raw.picks()) {
-            if ("PEERS".equals(scope) && wantedThesis != null
-                    && !wantedThesis.equalsIgnoreCase(pick.signals().thesis())) continue;
             for (AutoRecommender.HorizonIdeas horizon : pick.horizons()) {
                 for (AutoRecommender.ScoredCandidate scored : horizon.candidates()) {
                     ObjectNode candidate = Json.MAPPER.valueToTree(scored.candidate());
-                    candidate.put("symbol", pick.symbol()); candidate.put("scoutThesis", pick.signals().thesis());
+                    candidate.put("symbol", pick.symbol());
+                    candidate.put("scoutThesis", !"HEDGES".equals(scope) && wantedThesis != null
+                            ? wantedThesis : pick.signals().thesis());
                     candidate.put("scoutScope", scope); candidate.put("scoutHorizon", horizon.horizon());
                     candidate.put("opportunityScore", pick.opportunityScore());
                     candidate.put("rankingScore", scored.rankingScore());
@@ -4989,7 +4990,7 @@ public final class ApiServer {
     private void researchScout(Context ctx) {
         AutoRecommender.AutoRequest req = bodyOrNull(ctx, AutoRecommender.AutoRequest.class);
         if (req == null) { // absent body (or the literal document "null") means defaults
-            req = new AutoRecommender.AutoRequest(null, null, null, null, null, null, null, null, null, null, null);
+            req = new AutoRecommender.AutoRequest(null, null, null, null, null, null, null, null, null, null, null, null);
         }
         String world = activeWorld(ctx);
         if (req.universe() == null || req.universe().isEmpty()) {
@@ -5001,7 +5002,7 @@ public final class ApiServer {
                             .orElseGet(() -> universe.active().symbols());
             req = new AutoRecommender.AutoRequest(scan, req.horizons(), req.maxPicks(),
                     req.targetProfitCents(), req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(),
-                    req.riskMode(), req.allow0dte(), req.intents(), req.filters());
+                    req.riskMode(), req.allow0dte(), req.intents(), req.filters(), req.thesisOverride());
         }
         Account acct = currentAccount(ctx);
         // THE policy applies to the scout too (review IC-1): auto and manual recommendations
@@ -5010,7 +5011,7 @@ public final class ApiServer {
         if (!java.util.Objects.equals(capAuto, req.maxLossCents())) {
             req = new AutoRecommender.AutoRequest(req.universe(), req.horizons(), req.maxPicks(),
                     req.targetProfitCents(), capAuto, req.maxRiskPctOfAccount(), req.minConfidence(),
-                    req.riskMode(), req.allow0dte(), req.intents(), req.filters());
+                    req.riskMode(), req.allow0dte(), req.intents(), req.filters(), req.thesisOverride());
         }
         // Real holdings feed the EXIT/HEDGE scans and let INCOME write against held shares
         List<AutoRecommender.HoldingInfo> held = positions.list(acct.id()).stream()

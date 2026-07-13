@@ -3401,7 +3401,7 @@
                 ui.scoutResults[ui.scoutScope] = out.scout && out.scout.result;
                 await paint();
               } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
-            } }, ui.scoutResults[ui.scoutScope] ? 'Scan again' : 'Scan ' + scopeMeta.label.toLowerCase())));
+            } }, ui.scoutResults[ui.scoutScope] ? 'Refresh this scan' : 'Scan ' + scopeMeta.label.toLowerCase())));
         body.appendChild(scoutHead);
         if (!ui.scoutResults[ui.scoutScope]) {
           try {
@@ -3417,7 +3417,9 @@
           return;
         }
         if (!scoutResult.candidates || !scoutResult.candidates.length) {
-          body.appendChild(UI.emptyState('Nothing matched this Scout job', scoutResult.economicMessage || 'No related symbol passed.'));
+          body.appendChild(UI.emptyState('Nothing matched this Scout job',
+            (scoutResult.economicMessage || 'No related symbol passed.')
+              + ' Refreshing rechecks current prices and evidence; it does not change this Plan.'));
         } else {
           body.appendChild(el('p', { class: 'muted' }, scoutResult.economicMessage));
           var scoutGrid = el('div', { class: 'plan-scout-results', id: 'plan-scout-results' });

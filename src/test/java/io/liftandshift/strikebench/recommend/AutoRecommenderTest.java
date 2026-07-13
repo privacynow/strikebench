@@ -33,7 +33,7 @@ class AutoRecommenderTest {
 
     private static AutoRecommender.AutoRequest req(List<String> horizons, Long targetProfit, Boolean allow0dte) {
         return new AutoRecommender.AutoRequest(null, horizons, 3, targetProfit, null, null, null,
-                "balanced", allow0dte, null, null);
+                "balanced", allow0dte, null, null, null);
     }
 
     @Test
@@ -65,10 +65,33 @@ class AutoRecommenderTest {
     }
 
     @Test
+    void focusedScoutPricesEveryPeerUnderThePlanOwnedThesis() {
+        AutoRecommender.AutoResult baseline = auto.run(new AutoRecommender.AutoRequest(
+                List.of("AAPL"), List.of("month"), 1, null, null, null, null,
+                "balanced", false, List.of("DIRECTIONAL"), null, null), BP);
+        String derived = baseline.picks().getFirst().signals().thesis();
+        String override = "BULLISH".equals(derived) ? "bearish" : "bullish";
+
+        AutoRecommender.AutoResult focused = auto.run(new AutoRecommender.AutoRequest(
+                List.of("AAPL"), List.of("month"), 1, null, null, null, null,
+                "balanced", false, List.of("DIRECTIONAL"), null, override), BP);
+
+        assertThat(focused.picks().stream().flatMap(pick -> pick.horizons().stream())
+                .flatMap(horizon -> horizon.candidates().stream())).isNotEmpty();
+        assertThat(focused.picks()).singleElement().satisfies(pick ->
+                assertThat(pick.horizons()).allSatisfy(horizon ->
+                        assertThat(horizon.candidates()).allSatisfy(scored ->
+                                assertThat(io.liftandshift.strikebench.strategy.StrategyFamily
+                                        .valueOf(scored.candidate().strategy())
+                                        .fits(io.liftandshift.strikebench.strategy.StrategyFamily.Thesis
+                                                .valueOf(override.toUpperCase()))).isTrue())));
+    }
+
+    @Test
     void explicitUniverseSkipsNonOptionableWithReason() {
         AutoRecommender.AutoRequest request = new AutoRecommender.AutoRequest(
                 List.of("AAPL", "VTSAX", "ZZZZ"), null, 3, null, null, null, null,
-                "balanced", false, null, null);
+                "balanced", false, null, null, null);
         AutoRecommender.AutoResult result = auto.run(request, BP);
         assertThat(result.picks()).extracting(AutoRecommender.Pick::symbol).containsExactly("AAPL");
         assertThat(result.skipped()).anySatisfy(s -> assertThat(s).contains("VTSAX").contains("no listed options"));
@@ -85,7 +108,7 @@ class AutoRecommenderTest {
 
         AutoRecommender.AutoRequest spyOnly = new AutoRecommender.AutoRequest(
                 List.of("SPY"), List.of("0DTE"), 1, null, null, null, null,
-                "aggressive", true, null, null);
+                "aggressive", true, null, null, null);
         AutoRecommender.AutoResult with = auto.run(spyOnly, BP);
         assertThat(with.picks()).hasSize(1);
         AutoRecommender.HorizonIdeas zeroDte = with.picks().getFirst().horizons().getFirst();
@@ -137,7 +160,7 @@ class AutoRecommenderTest {
     void respectsMaxLossBudget() {
         AutoRecommender.AutoRequest request = new AutoRecommender.AutoRequest(
                 null, List.of("month"), 3, null, 50_000L, null, null, "balanced", false,
-                null, null);
+                null, null, null);
         AutoRecommender.AutoResult result = auto.run(request, BP);
         for (AutoRecommender.Pick p : result.picks()) {
             for (AutoRecommender.HorizonIdeas h : p.horizons()) {
@@ -152,7 +175,7 @@ class AutoRecommenderTest {
         var holdings = java.util.List.of(new AutoRecommender.HoldingInfo("AAPL", 200, 20_000L));
         AutoRecommender.AutoRequest r = new AutoRecommender.AutoRequest(java.util.List.of("SPY", "QQQ"),
                 java.util.List.of("month"), 3, null, null, null, null, "balanced", false,
-                java.util.List.of("exit"), null);
+                java.util.List.of("exit"), null, null);
         AutoRecommender.AutoResult res = auto.run(r, BP, holdings);
         assertThat(res.picks()).isNotEmpty();
         for (AutoRecommender.Pick p : res.picks()) {
@@ -169,7 +192,7 @@ class AutoRecommenderTest {
     @Test
     void exitIntentWithoutHoldingsExplainsInsteadOfInventing() {
         AutoRecommender.AutoRequest r = new AutoRecommender.AutoRequest(null, java.util.List.of("month"), 3,
-                null, null, null, null, "balanced", false, java.util.List.of("exit", "hedge"), null);
+                null, null, null, null, "balanced", false, java.util.List.of("exit", "hedge"), null, null);
         AutoRecommender.AutoResult res = auto.run(r, BP);
         assertThat(res.picks()).isEmpty();
         assertThat(String.join(" ", res.notes())).contains("buy shares first");
@@ -178,7 +201,7 @@ class AutoRecommenderTest {
     @Test
     void incomeIntentScanReturnsIncomeCandidatesAcrossTheUniverse() {
         AutoRecommender.AutoRequest r = new AutoRecommender.AutoRequest(null, java.util.List.of("month"), 3,
-                null, null, null, null, "balanced", false, java.util.List.of("income"), null);
+                null, null, null, null, "balanced", false, java.util.List.of("income"), null, null);
         AutoRecommender.AutoResult res = auto.run(r, BP);
         assertThat(res.picks()).isNotEmpty();
         for (AutoRecommender.Pick p : res.picks()) {
