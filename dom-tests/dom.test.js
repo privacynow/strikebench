@@ -2938,6 +2938,10 @@ test('simulated market: product creator, loud live band, world-routed research, 
   // Finish via the app modal (never window.confirm): the REPORT shows before the finish.
   await go('#/data/simulation');
   await page.waitForSelector('.sim-session-row button:has-text("Finish")');
+  for (const label of ['Enter this market', 'Pause', 'Inject event']) {
+    assert.equal(await page.locator('.sim-session-row button').filter({ hasText: label }).isEnabled(), true,
+      label + ' stays actionable after returning from the running session');
+  }
   // The card surface itself enters the market; it is not a decorative shell around buttons.
   await page.click('.sim-session-row', { position: { x: 5, y: 5 } });
   await page.waitForFunction((baseline) => App.state.world !== baseline, baselineWorld, { timeout: 15000 });

@@ -8,11 +8,11 @@
     attrs = attrs || {};
     Object.keys(attrs).forEach(function (k) {
       var v = attrs[k];
-      if (v === null || v === undefined) return;
+      if (v === null || v === undefined || v === false) return;
       if (k === 'class') node.className = v;
       else if (k === 'html') node.innerHTML = v;
       else if (k.indexOf('on') === 0 && typeof v === 'function') node.addEventListener(k.slice(2), v);
-      else node.setAttribute(k, v);
+      else node.setAttribute(k, v === true ? '' : v);
     });
     for (var i = 2; i < arguments.length; i++) append(node, arguments[i]);
     return node;
