@@ -114,29 +114,45 @@
     if (level === 'beginner') {
       // 1) The story — what do you think happens?
       box.appendChild(el('div', { class: 'field-label' }, 'What do you think ' + (symbol || 'it') + ' does?'));
-      var grid = el('div', { class: 'q-grid sc-grid', id: 'sc-shapes' });
+      var grid = el('div', { class: 'q-grid sc-grid', id: 'sc-shapes', role: 'group',
+        'aria-label': 'Possible market story' });
       SHAPES.forEach(function (s) {
         grid.appendChild(el('button', { type: 'button', 'data-shape': s.key,
           class: 'q-card sc-card' + (f.shape === s.key ? ' active' : ''),
-          onclick: function () { f.shape = s.key; grid.querySelectorAll('.sc-card').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-shape') === s.key); }); sync(); } },
+          'aria-pressed': String(f.shape === s.key), onclick: function () {
+            f.shape = s.key; grid.querySelectorAll('.sc-card').forEach(function (b) {
+              var active = b.getAttribute('data-shape') === s.key;
+              b.classList.toggle('active', active); b.setAttribute('aria-pressed', String(active));
+            }); sync();
+          } },
           sketch(s.pts), el('b', {}, s.label), el('div', { class: 'muted small' }, s.blurb)));
       });
       box.appendChild(grid);
       // 2) Over how long, and how wild?
       var row = el('div', { class: 'form-grid' });
-      var hzWrap = el('div', { class: 'chip-row', id: 'sc-horizon' });
+      var hzWrap = el('div', { class: 'chip-row', id: 'sc-horizon', role: 'group', 'aria-label': 'Scenario horizon' });
       HORIZONS.forEach(function (h) {
         hzWrap.appendChild(el('button', { type: 'button', class: 'sym-chip' + (f.horizon === h.d ? ' active' : ''), 'data-days': h.d,
-          onclick: function () { f.horizon = h.d; hzWrap.querySelectorAll('.sym-chip').forEach(function (b) { b.classList.toggle('active', +b.getAttribute('data-days') === h.d); }); sync(); } }, h.label));
+          'aria-pressed': String(f.horizon === h.d), onclick: function () {
+            f.horizon = h.d; hzWrap.querySelectorAll('.sym-chip').forEach(function (b) {
+              var active = +b.getAttribute('data-days') === h.d;
+              b.classList.toggle('active', active); b.setAttribute('aria-pressed', String(active));
+            }); sync();
+          } }, h.label));
       });
-      var magWrap = el('div', { class: 'chip-row', id: 'sc-mag' });
+      var magWrap = el('div', { class: 'chip-row', id: 'sc-mag', role: 'group', 'aria-label': 'Scenario volatility' });
       var magNote = el('div', { class: 'muted small', id: 'sc-mag-note' });
       MAGS.forEach(function (m) {
         magWrap.appendChild(el('button', { type: 'button', class: 'sym-chip' + (f.mag === m.key ? ' active' : ''), 'data-mag': m.key,
-          onclick: function () { f.mag = m.key; magWrap.querySelectorAll('.sym-chip').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-mag') === m.key); }); sync(); } }, m.label));
+          'aria-pressed': String(f.mag === m.key), onclick: function () {
+            f.mag = m.key; magWrap.querySelectorAll('.sym-chip').forEach(function (b) {
+              var active = b.getAttribute('data-mag') === m.key;
+              b.classList.toggle('active', active); b.setAttribute('aria-pressed', String(active));
+            }); sync();
+          } }, m.label));
       });
-      row.appendChild(el('div', { class: 'field' }, el('label', {}, 'Over the next'), hzWrap));
-      row.appendChild(el('div', { class: 'field' }, el('label', {}, 'How wild could it get?'), magWrap, magNote));
+      row.appendChild(el('div', { class: 'field' }, el('div', { class: 'field-label' }, 'Over the next'), hzWrap));
+      row.appendChild(el('div', { class: 'field' }, el('div', { class: 'field-label' }, 'How wild could it get?'), magWrap, magNote));
       box.appendChild(row);
       box.appendChild(UI.expandable('How this works', function () {
         return el('div', {},
@@ -230,7 +246,7 @@
     function fld(label, input, infoKey) {
       // Greek glyphs must survive the app-wide uppercase label transform (σ became Σ — the
       // summation sign — which a quant reads as a bug). Wrap them in a no-transform span.
-      var labelEl = el('label', {});
+      var labelEl = el('label', { for: input.id });
       label.split(/([σμκξρν])/).forEach(function (part) {
         if (/^[σμκξρν]$/.test(part)) labelEl.appendChild(el('span', { class: 'glyph' }, part));
         else if (part) labelEl.appendChild(document.createTextNode(part));

@@ -25,6 +25,55 @@
       ? document.createTextNode(String(child)) : child);
   }
 
+  var fieldSequence = 0;
+
+  /** Keep every visible form label programmatically tied to its control. */
+  function field(labelContent, control, opts) {
+    opts = opts || {};
+    if (!control.id) control.id = 'ui-field-' + (++fieldSequence);
+    var labelAttrs = { for: control.id };
+    if (opts.labelClass) labelAttrs.class = opts.labelClass;
+    var wrap = el('div', { class: 'field' + (opts.className ? ' ' + opts.className : '') },
+      el('label', labelAttrs, labelContent), control);
+    if (opts.hint) wrap.appendChild(el('span', { class: 'muted small' }, opts.hint));
+    return wrap;
+  }
+
+  /** Apply one roving-tabstop keyboard contract to locally composed tab lists. */
+  function bindTabList(list, onActivate) {
+    list._activateTab = onActivate;
+    if (!list._tabKeysBound) {
+      list._tabKeysBound = true;
+      list.addEventListener('keydown', function (event) {
+        var current = event.target.closest('[role="tab"]');
+        if (!current || !list.contains(current)) return;
+        var tabs = Array.from(list.querySelectorAll('[role="tab"]')).filter(function (tab) {
+          return !tab.disabled && getComputedStyle(tab).display !== 'none';
+        });
+        var index = tabs.indexOf(current), next = null;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = tabs[(index + 1) % tabs.length];
+        else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = tabs[(index - 1 + tabs.length) % tabs.length];
+        else if (event.key === 'Home') next = tabs[0];
+        else if (event.key === 'End') next = tabs[tabs.length - 1];
+        if (!next) return;
+        event.preventDefault();
+        tabs.forEach(function (tab) {
+          tab.setAttribute('aria-selected', tab === next ? 'true' : 'false');
+          tab.tabIndex = tab === next ? 0 : -1;
+        });
+        next.focus();
+        if (typeof list._activateTab === 'function') list._activateTab(next, tabs.indexOf(next));
+      });
+    }
+    list.syncTabs = function () {
+      var tabs = Array.from(list.querySelectorAll('[role="tab"]'));
+      var selected = tabs.find(function (tab) { return tab.getAttribute('aria-selected') === 'true'; }) || tabs[0];
+      tabs.forEach(function (tab) { tab.tabIndex = tab === selected ? 0 : -1; });
+    };
+    list.syncTabs();
+    return list;
+  }
+
   // ---- formatting ----
 
   function finiteNumber(value) {
@@ -1352,6 +1401,8 @@
     symbolContext: symbolContext,
     fmtDate: fmtDate,
     el: el,
+    field: field,
+    bindTabList: bindTabList,
     icon: icon,
     profitCeilingKind: profitCeilingKind,
     maxProfitLabel: maxProfitLabel,

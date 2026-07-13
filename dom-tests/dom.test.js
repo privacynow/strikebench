@@ -47,6 +47,45 @@ async function go(hash) {
   await page.waitForSelector('#app[data-ready="true"]');
 }
 
+async function assertNamedControls(scope = 'body') {
+  const unnamed = await page.locator(scope).evaluate(root => {
+    function visible(node) {
+      const style = getComputedStyle(node), box = node.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0;
+    }
+    return Array.from(root.querySelectorAll('input,select,textarea')).filter(visible).filter(control => {
+      if (control.type === 'hidden') return false;
+      if (control.getAttribute('aria-label') || control.getAttribute('aria-labelledby')) return false;
+      if (control.id && document.querySelector('label[for="' + CSS.escape(control.id) + '"]')) return false;
+      return !control.closest('label');
+    }).map(control => control.outerHTML.slice(0, 240));
+  });
+  assert.deepEqual(unnamed, [], 'visible form controls need real names in ' + scope + ':\n' + unnamed.join('\n'));
+}
+
+async function assertTabContracts(scope = 'body') {
+  const violations = await page.locator(scope).evaluate(root => {
+    function visible(node) {
+      const style = getComputedStyle(node), box = node.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0;
+    }
+    return Array.from(root.querySelectorAll('[role="tablist"]')).filter(visible).flatMap(list => {
+      const tabs = Array.from(list.querySelectorAll('[role="tab"]')).filter(visible);
+      const selected = tabs.filter(tab => tab.getAttribute('aria-selected') === 'true');
+      const named = list.getAttribute('aria-label') || list.getAttribute('aria-labelledby');
+      if (!named || selected.length !== 1 || selected[0].getAttribute('tabindex') !== '0'
+          || tabs.some(tab => tab !== selected[0] && tab.getAttribute('tabindex') !== '-1')) {
+        return [{ list: list.id || list.className, named, selected: selected.length,
+          tabs: tabs.map(tab => ({ text: tab.textContent.trim(), selected: tab.getAttribute('aria-selected'),
+            tabindex: tab.getAttribute('tabindex') })) }];
+      }
+      return [];
+    });
+  });
+  assert.deepEqual(violations, [], 'tab lists need one named roving selection in ' + scope + ': '
+    + JSON.stringify(violations));
+}
+
 async function openPlan(symbol, stage = 'understand', intentOverride, thesisOverride) {
   const context = await page.evaluate(() => ({
     goal: App.context.goal('DIRECTIONAL'),
@@ -515,6 +554,15 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
       + '\n' + error.message);
   });
   assert.equal(await page.locator('.plan-tool').count(), 4, 'one in-stage selector owns all Strategy tools');
+  await assertNamedControls('#plan-stage-strategy');
+  await assertTabContracts('#plan-stage-strategy');
+  await page.locator('.plan-tool[aria-selected="true"]').focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForSelector('.plan-tool[data-strategy-tool="builder"][aria-selected="true"]');
+  assert.equal(await page.locator('.plan-tool[data-strategy-tool="builder"]').getAttribute('tabindex'), '0',
+    'arrow keys activate and focus the next Strategy tool');
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForSelector('.plan-tool[data-strategy-tool="compare"][aria-selected="true"]');
   assert.match(await page.textContent('.plan-tool-selector'), /Proposed trades.*All strategies.*Option prices.*Scout/s,
     'Beginner gets plain, capability-oriented Strategy labels');
   assert.ok(await page.locator('#plan-strategy-filters .xp-head:has-text("Only show proposed trades")').count(),
@@ -578,6 +626,8 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   await page.locator('.plan-tool').filter({ hasText: 'All strategies' }).click();
   await page.waitForSelector('#builder');
   await page.waitForSelector('#builder-catalog .tpl');
+  await assertNamedControls('#plan-stage-strategy');
+  await assertTabContracts('#plan-stage-strategy');
   assert.ok(await page.locator('#builder-catalog .tpl-shape').count() >= 20,
     'the visual all-strategies catalog remains a first-class Beginner capability');
   assert.equal(await page.locator('#builder-symbol-context').count(), 0,
@@ -588,6 +638,8 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
 
   await page.locator('.plan-tool').filter({ hasText: 'Option prices' }).click();
   await page.waitForSelector('#chain-anchor .card, #chain-anchor + .card, #expiration-select', { timeout: 20000 });
+  await assertNamedControls('#plan-stage-strategy');
+  await assertTabContracts('#plan-stage-strategy');
   assert.equal(await page.locator('#symbol-actions').count(), 0,
     'the Chain tool does not duplicate the old strategy-action surface');
   assert.equal(await page.locator('a[href="#/trade/structure"]').count(), 0,
@@ -595,6 +647,8 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
 
   await page.locator('.plan-tool').filter({ hasText: 'Scout' }).click();
   await page.waitForSelector('#plan-run-scout');
+  await assertNamedControls('#plan-stage-strategy');
+  await assertTabContracts('#plan-stage-strategy');
   const scoutSelectorStyle = await page.evaluate(() => {
     const control = document.querySelector('.plan-scout-scopes');
     const active = control.querySelector('[aria-selected="true"]');
@@ -877,8 +931,11 @@ test('Plan Builder retains synthetic exposure sizing at both experience levels',
 });
 
 test('Plan Outcomes reuses Evidence paths for one exact selected package', async () => {
-  await page.evaluate(() => Learn.setLevel('beginner'));
-  const plan = await openPlan('AAPL', 'evidence');
+  await page.evaluate(() => {
+    Learn.setLevel('beginner');
+    App.context.update({ symbol: 'QQQ', goal: 'DIRECTIONAL', thesis: 'bullish', horizon: '45d' });
+  });
+  const plan = await openPlan('QQQ', 'evidence', 'DIRECTIONAL', 'bullish');
   await page.waitForSelector('#test-your-view', { timeout: 15000 });
   await page.click('#research-outcomes-basis-futures');
   await page.waitForSelector('#whatif-card');
@@ -909,6 +966,8 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
 
   await page.locator('.plan-rail button').filter({ hasText: 'Outcomes' }).click();
   await page.waitForSelector('#plan-outcomes');
+  await assertNamedControls('#plan-outcomes');
+  await assertTabContracts('#plan-outcomes');
   assert.match(await page.textContent('.plan-outcome-position'), /Exact position being tested.*PLAN OWNED/s);
   assert.equal(await page.locator('#plan-outcomes input[name="symbol"], #plan-outcomes select[name="strategy"]').count(), 0,
     'Outcomes does not recapture the Plan symbol or structure');
@@ -1012,7 +1071,9 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
 
   await page.click('#plan-outcomes-basis-backtest');
   await page.waitForSelector('#plan-backtest-result', { state: 'attached' });
-  assert.match(await page.textContent('#plan-outcomes-panel'), /Replay.*AAPL|Historical replay/i);
+  await assertNamedControls('#plan-outcomes');
+  await assertTabContracts('#plan-outcomes');
+  assert.match(await page.textContent('#plan-outcomes-panel'), /Replay.*QQQ|Historical replay/i);
   assert.equal(await page.locator('#plan-outcomes-panel input[type="date"]').count(), 2,
     'historical replay retains its useful controls at Beginner rather than hiding capability');
   assert.equal(await page.locator('#plan-outcomes-panel [aria-label="Replay date range"] button').count(), 4,
@@ -2182,6 +2243,7 @@ test('every scenario story runs at both levels (the Big-news-shock crash class)'
   await openPlan('AAPL');
   await openFutures();
   await page.waitForSelector('#whatif-card #sc-shapes .sc-card');
+  await assertNamedControls('#whatif-card');
   const shapes = await page.$$eval('#whatif-card #sc-shapes .sc-card', cs => cs.map(c => c.getAttribute('data-shape')));
   assert.ok(shapes.length >= 7, 'all story cards render');
   for (const shape of shapes) {
@@ -2194,6 +2256,7 @@ test('every scenario story runs at both levels (the Big-news-shock crash class)'
   await page.click('#level-switch button[data-level="expert"]');
   await openFutures();
   await page.waitForSelector('#whatif-card #sc-model');
+  await assertNamedControls('#whatif-card');
   for (const model of ['GBM', 'STUDENT_T', 'JUMP_DIFFUSION', 'HESTON', 'BLOCK_BOOTSTRAP', 'BROWNIAN_BRIDGE']) {
     await page.selectOption('#whatif-card #sc-model', model);
     await page.click('#whatif-run');
@@ -2221,6 +2284,8 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   // Both stages are visible as connected pills; Past evidence expands by default.
   assert.equal(await page.locator('#research-outcomes-nav .outcome-basis').count(), 2, 'two connected outcome bases');
   await page.waitForSelector('#what-has-happened');
+  await assertNamedControls('#test-your-view');
+  await assertTabContracts('#test-your-view');
   // The thesis question line names the CONDITION — "did this happen before" never leaves "this" undefined.
   await page.waitForSelector('#tv-question-line');
   assert.ok(await page.locator('#study-window:visible').count(), 'beginner controls the history window');
@@ -2280,6 +2345,8 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   // Possible futures is the second stage of the SAME section.
   await page.click('#research-outcomes-nav .outcome-basis[data-basis="futures"]');
   await page.waitForSelector('#tv-futures #whatif-card, #tv-futures #sc-shapes', { timeout: 15000 });
+  await assertNamedControls('#test-your-view');
+  await assertTabContracts('#test-your-view');
 });
 
 test('Research Coming up never relabels a past expiration as 0d', async () => {
@@ -2610,6 +2677,7 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   await page.click('#level-switch button[data-level="expert"]');
   await go('#/data/overview');
   await page.waitForSelector('#data-tabs button.active[data-tab="overview"]');
+  await assertTabContracts('#app');
   await page.waitForSelector('#dc-mode .badge'); // where-you-are card leads
   assert.match(await page.textContent('#dc-mode'), /OBSERVED MARKET|DEMO MARKET|SIMULATED|SCENARIO/);
   await page.waitForSelector('#dc-engine .chip-row');
@@ -2623,6 +2691,8 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   // Sources & jobs tab
   await page.click('#data-tabs [data-tab="sources"]');
   await page.waitForSelector('#dc-history-sync #data-csv-upload');
+  await assertNamedControls('#app');
+  await assertTabContracts('#app');
   assert.equal(await page.locator('#data-source-detail').count(), 0,
     'source setup stays compact until the user asks for one source detail');
   await page.waitForSelector('#dc-sources .xp-head:has-text("feed details")');
@@ -2666,6 +2736,8 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   // Administration: reset lives here and only here, typed confirmation enforced.
   await page.click('#data-tabs [data-tab="admin"]');
   await page.waitForSelector('#dc-reset-tier');
+  await assertNamedControls('#app');
+  await assertTabContracts('#app');
   const tiers = await page.$$eval('#dc-reset-tier option', os => os.map(o => o.value));
   assert.ok(tiers.includes('MARKET_DATA') && tiers.includes('EVERYTHING'), 'expert reset tiers');
   await page.click('#dc-reset-btn');
@@ -2786,6 +2858,9 @@ test('theme toggle, brand, health banner, route error boundary', async () => {
 });
 
 test('interaction contract: clickable surfaces are keyboard-operable, errors are nonblocking, modals own focus', async () => {
+  await page.click('#level-switch button[data-level="beginner"]');
+  assert.equal(await page.getAttribute('#level-switch button[data-level="beginner"]', 'aria-pressed'), 'true');
+  assert.equal(await page.getAttribute('#level-switch button[data-level="expert"]', 'aria-pressed'), 'false');
   for (const hash of ['#/home/tour', '#/home', '#/research', '#/portfolio']) {
     await go(hash);
     assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('#app h1')), true,
@@ -2822,6 +2897,7 @@ test('interaction contract: clickable surfaces are keyboard-operable, errors are
   const dialog = page.locator('#modal-root [role="dialog"]');
   assert.equal(await dialog.count(), 1, 'modal has dialog semantics');
   assert.equal(await dialog.getAttribute('aria-modal'), 'true');
+  await assertNamedControls('#modal-root');
   assert.equal(await page.evaluate(() => document.querySelector('#modal-root [role="dialog"]').contains(document.activeElement)), true,
     'focus moves inside the modal');
   await page.keyboard.press('Escape');
@@ -3328,6 +3404,7 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
   // cannot place anything; each chosen package must enter the canonical Plan workflow.
   await go('#/portfolio/construct');
   await page.waitForSelector('#portfolio-construct');
+  await assertNamedControls('#app');
   assert.equal(await page.locator('#pf-sec-construct.active').count(), 1, 'Construct is a first-class Portfolio section');
   await page.waitForSelector('#portfolio-build', { timeout: 25000 });
   assert.equal(await page.locator('#portfolio-objective').count(), 1, 'Expert sees the full objective controls inline');
@@ -3423,6 +3500,8 @@ test('simulated market: product creator, loud live band, world-routed research, 
   await go('#/data/simulation');
   // The PRODUCT creator: scenario story cards, labeled fields, no micro-syntax, no prompt().
   await page.waitForSelector('#dc-sim-market #sim-scenarios .sim-scenario');
+  await assertNamedControls('#app');
+  await assertTabContracts('#app');
   assert.ok((await page.locator('#sim-scenarios .sim-scenario').count()) >= 6, 'scenario story cards');
   assert.equal(await page.getAttribute('#sim-scenarios .sim-scenario[data-scenario="CHOP"]', 'aria-pressed'), 'true',
     'the selected market story is visibly and accessibly selected');
@@ -3592,6 +3671,11 @@ test('simulated market: product creator, loud live band, world-routed research, 
     assert.equal(await page.locator('.sim-session-row button').filter({ hasText: label }).isEnabled(), true,
       label + ' stays actionable after returning from the running session');
   }
+  await page.locator('.sim-session-row button').filter({ hasText: 'Inject event' }).click();
+  await page.waitForSelector('#inject-symbol');
+  await assertNamedControls('#modal-root');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#modal-root [role="dialog"]', { state: 'detached' });
   // The card surface itself enters the market; it is not a decorative shell around buttons.
   await page.click('.sim-session-row', { position: { x: 5, y: 5 } });
   await page.waitForFunction((baseline) => App.state.world !== baseline, baselineWorld, { timeout: 15000 });
