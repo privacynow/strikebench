@@ -7089,7 +7089,7 @@
     th.setup = th.setup || THESIS_QUESTION[th.direction] || 'pullback_rebound';
     delete th.direction;
     th.horizonDays = plan.context.horizonDays || th.horizonDays || 30;
-    th.thesis = plan.context.thesis || th.thesis || 'bullish';
+    th.thesis = plan.context.thesis || th.thesis || '';
     var wrap = el('div', { class: 'card', id: 'test-your-view' });
     wrap.appendChild(UI.cardHeader('Test your view \u2014 ' + symbol));
     wrap.appendChild(explain(level === 'beginner'
@@ -7097,6 +7097,7 @@
       : 'One Plan context seeds two labeled interpretations: a ' + historyBasis.expert + ' (conditional history, bootstrap CI) and a parametric Monte Carlo fan. The analog windows remain reusable as a distinct path source in this Plan’s Outcomes stage.'));
 
     var viewSel = el('select', { id: 'tv-view' },
+      el('option', { value: '', disabled: 'disabled' }, level === 'beginner' ? 'Choose your market view' : 'Select thesis'),
       el('option', { value: 'bullish' }, level === 'beginner' ? 'I expect it to rise' : 'Bullish'),
       el('option', { value: 'bearish' }, level === 'beginner' ? 'I expect it to fall' : 'Bearish'),
       el('option', { value: 'neutral' }, level === 'beginner' ? 'I expect it to stay in a range' : 'Neutral / range'),
@@ -7116,6 +7117,31 @@
       el('div', { class: 'field' }, el('label', { class: 'field-label' }, 'Over how many trading days?'), horIn));
     wrap.appendChild(thesisRow);
 
+    var outcomeWorkspace = null;
+    viewSel.addEventListener('change', async function () {
+      th.thesis = viewSel.value;
+      try {
+        plan = await PlanStore.updateContext(plan, { thesis: th.thesis });
+        App.render();
+      } catch (e) { UI.toast(e.message, 'error'); App.render(); }
+    });
+    setupSel.addEventListener('change', function () {
+      th.setup = setupSel.value;
+      if (outcomeWorkspace) outcomeWorkspace.refresh();
+    });
+    horIn.addEventListener('change', async function () {
+      th.horizonDays = Math.max(1, Math.min(63, parseInt(horIn.value, 10) || 10));
+      try {
+        plan = await PlanStore.updateContext(plan, { horizonDays: th.horizonDays });
+        App.render();
+      } catch (e) { UI.toast(e.message, 'error'); App.render(); }
+    });
+    if (!th.thesis) {
+      wrap.appendChild(UI.emptyState('Choose the view you want to test',
+        'Past evidence and possible futures stay unavailable until this Plan records a direction or range view.'));
+      return wrap;
+    }
+
     // ---- Two connected evidence bases through the shared Outcomes component ----
     if (planUi && planUi.contextRev !== plan.context.rev) {
       var carriedMode = planUi.evidence && planUi.evidence.mode;
@@ -7124,7 +7150,7 @@
     }
     var tvState = planUi.evidence = planUi.evidence || {};
     tvState.mode = tvState.mode || 'past';
-    var outcomeWorkspace = planOutcomeWorkspace({
+    outcomeWorkspace = planOutcomeWorkspace({
       id: 'research-outcomes', state: tvState, label: symbol + ' evidence basis',
       onChange: function () { if (window.Workspace) Workspace.save(); },
       modes: [
@@ -7140,21 +7166,6 @@
     });
     wrap.appendChild(outcomeWorkspace.el);
 
-    viewSel.addEventListener('change', async function () {
-      th.thesis = viewSel.value;
-      try {
-        plan = await PlanStore.updateContext(plan, { thesis: th.thesis });
-        App.render();
-      } catch (e) { UI.toast(e.message, 'error'); App.render(); }
-    });
-    setupSel.addEventListener('change', function () { th.setup = setupSel.value; outcomeWorkspace.refresh(); });
-    horIn.addEventListener('change', async function () {
-      th.horizonDays = Math.max(1, Math.min(63, parseInt(horIn.value, 10) || 10));
-      try {
-        plan = await PlanStore.updateContext(plan, { horizonDays: th.horizonDays });
-        App.render();
-      } catch (e) { UI.toast(e.message, 'error'); App.render(); }
-    });
     return wrap;
   }
 
