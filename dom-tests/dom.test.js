@@ -662,6 +662,53 @@ test('Plan Builder preserves the Beginner walkthrough and Expert exact-contract 
   await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
 });
 
+test('Plan Builder retains synthetic exposure sizing at both experience levels', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const plan = await openPlan('SPY', 'strategy', 'DIRECTIONAL', 'bullish');
+  await page.locator('.plan-tool').filter({ hasText: 'All strategies' }).click();
+  await page.waitForSelector('#builder-catalog .tpl[data-tpl="SYNTHETIC_LONG"]', { timeout: 20000 });
+  await page.click('#builder-catalog .tpl[data-tpl="SYNTHETIC_LONG"]');
+  await page.waitForSelector('#bw-walk');
+  await page.click('#bw-next');
+  await page.waitForFunction(() => /leg 2 of 2/i.test(document.querySelector('#bw-walk .field-label')?.textContent || ''));
+  await page.click('#bw-next');
+  await page.waitForSelector('#bw-final #builder-exposure-sizer');
+  await page.fill('#builder-exposure-target', '50000');
+  await page.click('#builder-size-exposure');
+  await page.waitForFunction(() => /Contracts.*Delta exposure.*Equivalent shares would cost/s.test(
+    document.getElementById('builder-exposure-output')?.textContent || ''), { timeout: 20000 });
+  assert.match(await page.textContent('#builder-exposure-output'), /Contracts.*Equivalent shares would cost/s);
+  assert.match(await page.evaluate(() => location.hash), new RegExp('/plan/' + plan.id + '/strategy$'),
+    'exposure sizing stays inside the canonical Plan Builder');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p3-synthetic-exposure-beginner.png'), fullPage: true });
+
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#plan-stage-strategy');
+  await page.locator('.plan-tool').filter({ hasText: 'Builder' }).click();
+  await page.waitForSelector('#builder-template');
+  if (await page.inputValue('#builder-template') !== 'SYNTHETIC_LONG') {
+    await page.selectOption('#builder-template', 'SYNTHETIC_LONG');
+  }
+  await page.waitForSelector('#builder-exposure-sizer');
+  assert.equal(await page.inputValue('#builder-exposure-target'), '50000',
+    'the same Builder-owned sizing state survives the presentation-level change');
+  if (!/Contracts.*Delta exposure/s.test(await page.textContent('#builder-exposure-output'))) {
+    await page.click('#builder-size-exposure');
+    await page.waitForFunction(() => /Contracts.*Delta exposure/s.test(
+      document.getElementById('builder-exposure-output')?.textContent || ''), { timeout: 20000 });
+  }
+  assert.match(await page.textContent('#builder-exposure-output'), /Contracts.*Delta exposure/s,
+    'Expert receives the same sized exposure result in the dense terminal');
+
+  await page.evaluate(async id => {
+    const live = await PlanStore.get(id, true);
+    await API.post('/api/plans/' + id + '/archive', { expectedVersion: live.version });
+    await PlanStore.refresh();
+  }, plan.id);
+});
+
 test('Plan Outcomes reuses Evidence paths for one exact selected package', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   const plan = await openPlan('AAPL', 'evidence');
