@@ -817,6 +817,11 @@
         if (!App.alive(_it)) return;
         idxBody.appendChild(universePlanScout());
         idxBody.appendChild(await studyToolsSection());
+        if (App.state.explorerScroll != null) {
+          var restoreY = App.state.explorerScroll;
+          App.state.explorerScroll = null;
+          App.restoreScroll(restoreY);
+        }
       })();
       return;
     }
@@ -1903,11 +1908,6 @@
           grid.appendChild(tile);
         });
         // Return continuity: coming Back from a symbol page lands on the same scroll spot.
-        if (App.state.explorerScroll != null) {
-          var y = App.state.explorerScroll;
-          App.state.explorerScroll = null;
-          requestAnimationFrame(function () { window.scrollTo(0, y); });
-        }
         var missingHistory = new Set();
         sparkLoader = lazySparklines(grid, sector.symbols, {
           range: function () { return App.state.explorerRange; },
