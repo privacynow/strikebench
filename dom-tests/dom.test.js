@@ -504,6 +504,59 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p14-strategy-audit-expert.png'), fullPage: false });
 });
 
+test('Plan Builder preserves the Beginner walkthrough and Expert exact-contract terminal', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const plan = await openPlan('TSLA', 'strategy', 'DIRECTIONAL', 'neutral');
+  await page.locator('.plan-tool').filter({ hasText: 'All strategies' }).click();
+  await page.waitForSelector('#builder-catalog .tpl[data-tpl="IRON_CONDOR"]', { timeout: 20000 });
+  assert.ok(await page.locator('#builder-catalog .tpl-shape svg').count() >= 24,
+    'Beginner retains the complete visual payoff catalog');
+  assert.ok(await page.locator('#builder-catalog .tpl .badge:has-text("BLOCKED")').count() >= 3,
+    'undefined-risk structures remain visible as labeled lessons');
+  await page.click('#builder-catalog .tpl[data-tpl="IRON_CONDOR"]');
+  await page.waitForSelector('#bw-walk');
+  await page.waitForFunction(() => /Theoretical worst case/.test(
+    document.getElementById('bw-impact')?.textContent || ''), { timeout: 20000 });
+  assert.match(await page.textContent('#bw-leg-story'), /Sell the \$\d+/,
+    'the walkthrough explains what the current contract contributes');
+  assert.match(await page.textContent('#bw-impact'), /Theoretical worst case/);
+  for (let leg = 2; leg <= 4; leg++) {
+    await page.click('#bw-next');
+    await page.waitForFunction(n => new RegExp('leg ' + n + ' of 4').test(
+      document.querySelector('#bw-walk .field-label')?.textContent || ''), leg, { timeout: 20000 });
+  }
+  await page.click('#bw-next');
+  await page.waitForSelector('#bw-final');
+  await page.waitForFunction(() => /Passes the safety screens|Allowed/.test(
+    document.getElementById('bw-panel')?.textContent || ''), { timeout: 20000 });
+  assert.ok(await page.locator('#bw-panel .chart-wrap').count(), 'the exact package retains its payoff chart');
+  assert.match(await page.textContent('#bw-final'), /Assignment odds/);
+  await page.click('#builder-review');
+  await page.waitForSelector('.plan-selected-structure', { timeout: 30000 });
+  const selected = await page.evaluate(async id => API.getFresh('/api/plans/' + id + '/strategy/latest'), plan.id);
+  assert.equal(selected.selected.sourceKind, 'CUSTOM', 'the exact Builder package is durable Plan state');
+  assert.equal(selected.selected.legs.length, 4, 'all four reviewed contracts survive the save');
+
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#plan-stage-strategy');
+  await page.locator('.plan-tool').filter({ hasText: 'Builder' }).click();
+  await page.waitForSelector('#builder-template');
+  await page.selectOption('#builder-template', 'IRON_CONDOR');
+  await page.waitForFunction(() => document.querySelectorAll('#builder-legs .leg-row').length === 4,
+    { timeout: 20000 });
+  await page.waitForFunction(() => /ALLOW|WARN/.test(document.getElementById('builder-panel')?.textContent || ''),
+    { timeout: 20000 });
+  assert.match(await page.textContent('#builder-panel'), /Net Δ sh/,
+    'Expert retains live net Greeks for the exact editable package');
+  assert.ok(await page.locator('#builder-add-leg').count(), 'Expert can add a custom contract leg');
+  const before = await page.locator('#builder-legs .leg-row').count();
+  await page.click('#builder-add-leg');
+  await page.waitForFunction(n => document.querySelectorAll('#builder-legs .leg-row').length === n + 1, before);
+  assert.equal(await page.locator('#builder-legs .leg-row').count(), before + 1,
+    'custom multi-leg construction remains available inside the Plan');
+  await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
+});
+
 test('Plan Outcomes reuses Evidence paths for one exact selected package', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   const plan = await openPlan('AAPL', 'evidence');
@@ -905,6 +958,13 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
     'active-position Manage must fit the mobile viewport: ' + JSON.stringify(manageMobile));
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p6-manage-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#greeks-card');
+  assert.match(await page.textContent('#greeks-card'), /Net Δ.*Θ\/day/s,
+    'Expert retains aggregate and per-leg position Greeks in Plan management');
+  assert.ok(await page.locator('#greeks-card tbody tr').count() >= 1, 'per-leg Greek rows remain auditable');
+  await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
 
   await page.locator('.plan-rail button').filter({ hasText: 'Decide' }).click();
   await page.waitForSelector('.plan-decision-facts');

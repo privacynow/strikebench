@@ -362,6 +362,7 @@ public final class PlanStrategyService {
     private static ObjectNode loadCandidate(java.sql.Connection c, CandidateRow r) throws java.sql.SQLException {
         ObjectNode n = Json.MAPPER.createObjectNode();
         put(n, "id", r.id()); put(n, "symbol", r.symbol()); put(n, "scoutThesis", r.scoutThesis());
+        put(n, "sourceKind", r.sourceKind());
         put(n, "strategy", r.family()); put(n, "displayName", r.displayName());
         put(n, "structureGroup", r.structureGroup()); put(n, "label", r.label()); put(n, "qty", r.qty());
         put(n, "entryNetPremiumCents", r.entryNet()); put(n, "maxProfitCents", r.maxProfit());

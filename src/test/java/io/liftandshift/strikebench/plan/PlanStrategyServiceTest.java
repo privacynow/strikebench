@@ -85,6 +85,7 @@ class PlanStrategyServiceTest {
                 .isEqualTo("close");
         assertThat(db.query("SELECT evidence_provenance FROM plan_candidate WHERE id=?",
                 r -> r.str("evidence_provenance"), candidateId)).containsExactly("DEMO_FIXTURE");
+        assertThat(restored.result().at("/candidates/0/sourceKind").asText()).isEqualTo("RANKED");
         assertThat(db.query("SELECT COUNT(*) n FROM plan_candidate_leg", r -> r.lng("n"))).containsExactly(4L);
 
         PlanStrategyService.Selection selection = strategies.select(null, plan.id(), candidateId, plan.version());
