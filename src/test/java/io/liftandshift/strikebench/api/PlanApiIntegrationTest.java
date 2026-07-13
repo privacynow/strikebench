@@ -585,6 +585,22 @@ class PlanApiIntegrationTest {
                 .isEqualTo("Costs outweighed the modeled edge");
         assertThat(cash.at("/decision/metrics/decisionQty").asDouble()).isEqualTo(1.0);
         assertThat(cash.at("/decision/metrics/riskFreeRateAnnual").isNumber()).isTrue();
+
+        String frozenStudy = """
+                {"key":"pullback_rebound","symbol":"QQQ","from":"2023-01-01","to":"2026-07-10",
+                 "params":{"lookback":20,"dropPct":5,"forward":30,"eventSpacing":10,
+                 "minSample":5,"confidencePct":95,"bootstrapSamples":200,
+                 "regime":"ALL","multiplicity":"CATALOG_BONFERRONI","splitHalf":true}}
+                """;
+        for (HttpResponse<String> rejected : java.util.List.of(
+                post("/api/plans/" + cashPlanId + "/evidence/study", frozenStudy),
+                post("/api/plans/" + cashPlanId + "/strategy/run", "{}"),
+                post("/api/plans/" + cashPlanId + "/outcomes/ensemble",
+                        "{\"expectedVersion\":" + cash.at("/plan/version").asLong() + "}"))) {
+            assertThat(rejected.statusCode()).isEqualTo(409);
+            assertThat(Json.parse(rejected.body()).path("detail").asText())
+                    .contains("decision is frozen").contains("linked Plan");
+        }
     }
 
     @Test void voidingAPlanTradeIsRecordedAsVoidRatherThanAnOrdinaryClose() throws Exception {
