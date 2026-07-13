@@ -537,6 +537,20 @@ body.lvl-expert .not-expert { display: none !important; }
 #intent-choices .choice { text-align: left; }
 #intent-choices .choice b { display: block; margin-bottom: 2px; }
 #holdings-card td .btn-row { flex-wrap: nowrap; }
+.external-trade-summary { grid-template-columns: minmax(120px, .75fr) minmax(90px, .55fr)
+  minmax(190px, 1.25fr) minmax(150px, 1fr); margin: 10px 0 14px; }
+.external-legs-head { align-items: center; margin-top: 10px; }
+.external-legs-head h4, .external-legs-head p { margin: 0; }
+#ext-legs { display: grid; gap: 8px; }
+.ext-leg { display: grid; grid-template-columns: minmax(90px, .65fr) minmax(90px, .65fr)
+  minmax(100px, .7fr) minmax(145px, 1fr) minmax(150px, 1fr) auto;
+  gap: 8px; align-items: end; padding: 10px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface-2); }
+.ext-leg .field { min-width: 0; margin: 0; }
+.ext-leg .field label { font-size: 12.5px; }
+.ext-leg-remove { align-self: end; width: 36px; height: 36px; padding: 0; }
+.external-trade-meta { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 14px; }
+.external-past-check { margin: 10px 0; align-items: flex-start; }
 
 .compare-detail > td { background: var(--surface-2); padding: 10px 12px; }
 .compare-detail .candidate { margin: 0; box-shadow: none; }
@@ -2221,6 +2235,11 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-book-head p { margin: 2px 0 0; }
 .portfolio-inline-trade { display: grid; gap: 12px; margin-top: 14px; scroll-margin-top: 110px; }
 .plan-outcome-action-status .alert { margin-top: 10px; }
+@media (max-width: 900px) {
+  .external-trade-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ext-leg { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ext-leg-remove { justify-self: end; }
+}
 @media (max-width: 640px) {
   .plan-analysis-source-controls { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .plan-analysis-source-state { align-items: flex-start; }
@@ -2240,6 +2259,10 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .plan-proposal-card-grid { grid-template-columns: minmax(0, 1fr); }
   .plan-proposal-result-head { flex-direction: column; }
   .plan-proposal-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .external-trade-summary, .external-trade-meta { grid-template-columns: minmax(0, 1fr); }
+  .ext-leg { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ext-leg-remove { grid-column: 1 / -1; justify-self: end; }
+  .external-legs-head { align-items: flex-start; flex-direction: column; }
 }
 .plan-market-outcome { display: grid; gap: 10px; }
 .research-plan-scout { margin-top: 18px; }

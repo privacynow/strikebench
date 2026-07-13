@@ -1295,4 +1295,33 @@ class ApiIntegrationTest {
             assertThat(post(path, "{}").statusCode()).as(path).isEqualTo(404);
         }
     }
+
+    @Test
+    @Order(39)
+    void externalTradeOriginAndBrokerReceiptSurviveThePublicTradeView() throws Exception {
+        JsonNode before = Json.parse(get("/api/account").body()).get("account");
+        JsonNode recorded = Json.parse(post("/api/trades/external", """
+                {"symbol":"AAPL","strategy":"CUSTOM","qty":1,"proposedNetCents":17500,
+                 "feesOverrideCents":200,"historical":true,"executedAt":"2026-07-01",
+                 "broker":"Review broker","orderRef":"API-EXT-001","source":"IMPORT","legs":[
+                   {"action":"SELL","type":"PUT","strike":100,"expiration":"2026-07-02","ratio":1,"entryPrice":3.10},
+                   {"action":"BUY","type":"PUT","strike":95,"expiration":"2026-07-02","ratio":1,"entryPrice":1.35}]}
+                """).body());
+        assertThat(recorded.get("origin").asText()).isEqualTo("EXTERNAL");
+        assertThat(recorded.get("broker").asText()).isEqualTo("Review broker");
+        assertThat(recorded.get("orderRef").asText()).isEqualTo("API-EXT-001");
+        assertThat(recorded.get("dataProvenance").asText()).isEqualTo("BROKER");
+
+        JsonNode listed = Json.parse(get("/api/trades?status=ACTIVE&page=0&size=50").body()).get("trades");
+        JsonNode row = java.util.stream.StreamSupport.stream(listed.spliterator(), false)
+                .filter(item -> "API-EXT-001".equals(item.path("orderRef").asText()))
+                .findFirst().orElseThrow();
+        assertThat(row.get("origin").asText()).isEqualTo("EXTERNAL");
+        assertThat(row.get("executedAt").asText()).startsWith("2026-07-01");
+        JsonNode after = Json.parse(get("/api/account").body()).get("account");
+        assertThat(after.get("cashCents")).isEqualTo(before.get("cashCents"));
+        assertThat(after.get("reservedCents")).isEqualTo(before.get("reservedCents"));
+        assertThat(delete("/api/trades/" + recorded.get("id").asText() + "?confirm=true").statusCode())
+                .isEqualTo(200);
+    }
 }
