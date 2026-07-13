@@ -440,6 +440,24 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
 
   await page.locator('.plan-tool').filter({ hasText: 'Scout' }).click();
   await page.waitForSelector('#plan-run-scout');
+  const scoutSelectorStyle = await page.evaluate(() => {
+    const control = document.querySelector('.plan-scout-scopes');
+    const active = control.querySelector('[aria-selected="true"]');
+    const idle = control.querySelector('[aria-selected="false"]');
+    return {
+      display: getComputedStyle(control).display,
+      controlBg: getComputedStyle(control).backgroundColor,
+      activeBg: getComputedStyle(active).backgroundColor,
+      idleBg: getComputedStyle(idle).backgroundColor,
+      activeHeight: active.getBoundingClientRect().height
+    };
+  });
+  assert.equal(scoutSelectorStyle.display, 'inline-flex', 'the Scout modes form one local segmented control');
+  assert.notEqual(scoutSelectorStyle.controlBg, scoutSelectorStyle.activeBg,
+    'the selected Scout mode has a visible active treatment');
+  assert.notEqual(scoutSelectorStyle.activeBg, scoutSelectorStyle.idleBg,
+    'active and idle Scout modes cannot collapse into raw browser buttons');
+  assert.ok(scoutSelectorStyle.activeHeight >= 34, 'Scout mode targets remain usable');
   await page.locator('.plan-scout-scopes button').filter({ hasText: 'Alternatives' }).click();
   await page.click('#plan-run-scout');
   await page.waitForSelector('#plan-scout-results .candidate', { timeout: 30000 });
