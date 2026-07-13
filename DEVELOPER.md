@@ -3,15 +3,17 @@
 User-facing overview lives in [README.md](README.md). This file is everything else: build,
 architecture, tests, configuration, and deployment.
 
-## Current product shape (2026-07-12)
+## Current product shape (2026-07-13)
 
-The consolidation program is complete on `feature/research-platform` and is not deployed.
+The Plan-centered journey is complete on `feature/journey_refactor` and is not deployed.
 
-- The user workflow is **Research -> Context -> Structure -> Outcomes -> Decide -> Manage**.
-  Trade owns four canonical routes: `#/trade/context`, `#/trade/structure`,
-  `#/trade/outcomes`, and `#/trade/decide`.
+- The visible workflow is **Understand -> Evidence -> Strategy -> Outcomes -> Decide ->
+  Manage & Review** at `#/plan/{id}/{stage}`. Research starts ticker- and universe-led work,
+  Home is the bounded multi-Plan desk, Portfolio owns positions and construction, and Data owns
+  sources, datasets, and simulated markets.
 - `StrategyCatalog` is the only strategy-family/template registry. The frontend downloads its
-  metadata from `GET /api/strategies`; local JavaScript only constructs the selected legs.
+  metadata from `GET /api/strategies`; Plan Strategy composes ranked proposals, goal-native
+  ladders, the visual catalog, exact-contract Builder, option book, and Scout without route hops.
 - `OutcomeContract` and `POST /api/evaluate` are the only forward-evaluation contract.
   Basis is explicit (`DECISION_POLICY`, `PARAMETRIC`, `HISTORICAL_ANALOGS`,
   `CONDITIONAL_BOOTSTRAP`, or `RISK_NEUTRAL`) so shared machinery never blends interpretations.
@@ -24,7 +26,7 @@ The consolidation program is complete on `feature/research-platform` and is not 
   answer with different futures.
 - A live simulated market remains a separate, single-realization practice lane. Its control room shows
   every session symbol at once, one clearly named focus chart, the moving account/book, and explicit
-  management controls. Research hands a scenario to the simulator only as a reviewable practice setup;
+  management controls. A Plan hands one stored path to the simulator only as a fingerprinted rehearsal;
   it never treats one realized path as validation of the distribution.
 - Economic teaching-market labels are reserved for `DEMO_FIXTURE` and `SIMULATED` pricing evidence.
   `MODELED` is an incomplete input inside another lane, not a generated market; otherwise-promising
@@ -33,8 +35,8 @@ The consolidation program is complete on `feature/research-platform` and is not 
   `/api/sim/{scenario,strategy,compare}` surfaces are gone. Do not restore internal aliases or DTO
   overloads for hypothetical API consumers. Database and model-version migrations remain because
   they protect actual persisted user data and deterministic model identity.
-- Current release evidence is **488 JUnit + 77 fixture DOM + 8 responsive widths + 4 grown-state +
-  8 live-provider DOM, all green**. Representative screenshots are under
+- Current release evidence is **557 JUnit + 70 fixture DOM + 8 responsive widths + 4 grown-state +
+  9 live-provider DOM, all green**. Representative screenshots are under
   `dom-tests/shots/final-*.png`.
 
 ## Build & run
