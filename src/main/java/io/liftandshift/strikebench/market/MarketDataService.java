@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.market;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Expiry;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
@@ -53,7 +54,23 @@ public final class MarketDataService {
     private final Cache<String, Quote> quoteCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(15)).maximumSize(500).build();
     private final Cache<String, OptionChain> chainCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(60)).maximumSize(200).build();
     private final Cache<String, List<LocalDate>> expirationsCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(60)).maximumSize(200).build();
-    private final Cache<String, CandleSeries> candlesCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(1)).maximumSize(100).build();
+    private record CachedCandleSeries(CandleSeries series, boolean partialObserved) {}
+    private static final Duration COMPLETE_CANDLE_CACHE_TTL = Duration.ofHours(1);
+    private static final Duration PARTIAL_CANDLE_CACHE_TTL = Duration.ofMinutes(5);
+    private final Cache<String, CachedCandleSeries> candlesCache = Caffeine.newBuilder()
+            .expireAfter(new Expiry<String, CachedCandleSeries>() {
+                @Override public long expireAfterCreate(String key, CachedCandleSeries value, long currentTime) {
+                    return candleCacheTtl(value.partialObserved()).toNanos();
+                }
+                @Override public long expireAfterUpdate(String key, CachedCandleSeries value, long currentTime,
+                                                        long currentDuration) {
+                    return candleCacheTtl(value.partialObserved()).toNanos();
+                }
+                @Override public long expireAfterRead(String key, CachedCandleSeries value, long currentTime,
+                                                      long currentDuration) {
+                    return currentDuration;
+                }
+            }).maximumSize(100).build();
     private final Cache<String, List<NewsItem>> newsCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofMinutes(5)).maximumSize(200).build();
     private final Cache<Integer, RateQuote> rateCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(1)).maximumSize(20).build();
 
@@ -305,7 +322,7 @@ public final class MarketDataService {
         // The dataset id is part of the cache key: switching datasets must never serve another
         // dataset's cached candles.
         String k = dataset + "|" + norm(symbol) + "|" + from + "|" + to;
-        CandleSeries r = candlesCache.get(k, key -> {
+        CachedCandleSeries r = candlesCache.get(k, key -> {
             CandleStore.Read storedFallback = null;
             // Complete persisted bars win. Partial observed history remains a fallback, but first
             // gives an eligible provider the chance to enrich the requested range.
@@ -316,7 +333,9 @@ public final class MarketDataService {
                             && (fixtureOnlyChain || !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
                                 || observedEvidence(stored.get().series().evidence()))) {
                         if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
-                                || stored.get().coverage().complete()) return stored.get().series();
+                                || stored.get().coverage().complete()) {
+                            return cachedCandles(stored.get().series(), dataset, from, to);
+                        }
                         storedFallback = stored.get();
                     }
                 } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol, e.toString()); }
@@ -336,7 +355,7 @@ public final class MarketDataService {
                         if (refreshed.isPresent()
                                 && (refreshed.get().coverage().complete()
                                 || refreshed.get().coverage().availableSessions() >= providerCoverage.availableSessions())) {
-                            return refreshed.get().series();
+                            return cachedCandles(refreshed.get().series(), dataset, from, to);
                         }
                     }
                 } catch (RuntimeException e) {
@@ -345,10 +364,22 @@ public final class MarketDataService {
                     log.warn("Observed daily history could not be saved for local reuse");
                 }
             }
-            if (!fromProviders.candles().isEmpty()) return fromProviders;
-            return storedFallback == null ? null : storedFallback.series();
+            if (!fromProviders.candles().isEmpty()) return cachedCandles(fromProviders, dataset, from, to);
+            return storedFallback == null ? null : cachedCandles(storedFallback.series(), dataset, from, to);
         });
-        return r == null ? CandleSeries.EMPTY : r;
+        return r == null ? CandleSeries.EMPTY : r.series();
+    }
+
+    private static CachedCandleSeries cachedCandles(CandleSeries series, String dataset,
+                                                     LocalDate from, LocalDate to) {
+        boolean partialObserved = io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
+                && series != null && !series.candles().isEmpty()
+                && !CandleCoverage.assess(series.candles(), from, to).complete();
+        return new CachedCandleSeries(series, partialObserved);
+    }
+
+    static Duration candleCacheTtl(boolean partialObserved) {
+        return partialObserved ? PARTIAL_CANDLE_CACHE_TTL : COMPLETE_CANDLE_CACHE_TTL;
     }
 
     /**

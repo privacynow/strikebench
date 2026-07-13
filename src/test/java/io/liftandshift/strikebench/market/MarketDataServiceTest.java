@@ -26,6 +26,12 @@ class MarketDataServiceTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("America/New_York"));
 
+    @Test
+    void partialObservedHistoryRechecksSoonerThanCompleteHistory() {
+        assertThat(MarketDataService.candleCacheTtl(true)).isEqualTo(java.time.Duration.ofMinutes(5));
+        assertThat(MarketDataService.candleCacheTtl(false)).isEqualTo(java.time.Duration.ofHours(1));
+    }
+
     /** Wraps the fixture and counts calls, to observe caching and chain traversal. */
     static final class CountingProvider implements MarketDataProvider {
         final ObservedFixtureProvider inner = new ObservedFixtureProvider(CLOCK);

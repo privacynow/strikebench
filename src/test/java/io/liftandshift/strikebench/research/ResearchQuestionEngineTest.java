@@ -210,6 +210,11 @@ class ResearchQuestionEngineTest {
     }
 
     @Test
+    void simulatedHistoryKeepsItsDistinctEvidenceLabel() {
+        assertThat(ResearchQuestionEngine.evidenceLabel(Freshness.SIMULATED)).isEqualTo("SIMULATED");
+    }
+
+    @Test
     void tooFewSignalsIsHonest() {
         // A 35% one-day drop essentially never happens in the gentle series → too-few verdict.
         var r = run(engine(walk(), Freshness.EOD), new ResearchQuestionEngine.RunRequest(

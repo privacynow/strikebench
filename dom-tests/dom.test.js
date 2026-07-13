@@ -3248,18 +3248,19 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
 
 test('partial observed history remains chartable and names its exact coverage', async () => {
   const pattern = '**/api/research/AAPL/history?range=1y';
+  let partialHistory = true;
   await page.route(pattern, async route => {
     const response = await route.fetch();
     const body = await response.json();
-    body.candles = (body.candles || []).slice(-30);
+    if (partialHistory) body.candles = (body.candles || []).slice(-30);
     body.source = 'stored:yahoo';
     body.freshness = 'EOD';
     body.evidence = { provenance: 'OBSERVED', age: 'EOD', source: 'stored:yahoo' };
     body.coverage = {
       requestedFrom: '2025-07-13', requestedTo: '2026-07-13',
       availableFrom: body.candles[0].date, availableTo: body.candles[body.candles.length - 1].date,
-      availableSessions: body.candles.length, requestedSessions: 260,
-      coveragePct: 12, complete: false
+      availableSessions: body.candles.length, requestedSessions: partialHistory ? 260 : body.candles.length,
+      coveragePct: partialHistory ? 12 : 100, complete: !partialHistory
     };
     await route.fulfill({ response, json: body });
   });
@@ -3292,6 +3293,12 @@ test('partial observed history remains chartable and names its exact coverage', 
       'Expert sees the same mandatory coverage truth');
     await page.click('#level-switch button[data-level="beginner"]');
     await page.waitForSelector('#level-switch button[data-level="beginner"][aria-pressed="true"]');
+    partialHistory = false;
+    await page.evaluate(async () => { API.flushCache(); await App.render(); });
+    await page.waitForSelector('#history-card svg.chart');
+    assert.match(await page.textContent('#history-card'),
+      /Stored observed history through .* remains available when the market is closed/,
+      'complete observed history retains its baseline source-and-availability disclosure');
   } finally {
     await page.unroute(pattern);
     await page.evaluate(() => API.flushCache());

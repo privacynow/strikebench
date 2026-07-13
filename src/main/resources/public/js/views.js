@@ -1554,13 +1554,20 @@
           + UI.fmtDate(String(coverage.availableTo) + 'T12:00:00')
           + ' for the requested ' + String(hist.range || range).toUpperCase() + ' range.'
         : '';
+      var storedAvailability = candles.length
+        ? partial
+          ? 'These stored observations remain available when the market is closed; closed means no new session updates, not that past observations disappear.'
+          : 'Stored observed history through '
+            + UI.fmtDate(String(candles[candles.length - 1].date) + 'T12:00:00')
+            + ' remains available when the market is closed; closed means no new session updates, not that past observations disappear.'
+        : '';
       var provenance = hist.evidence && hist.evidence.provenance;
       var disclosure = provenance === 'DEMO'
         ? 'Fabricated Demo history for teaching; not observed market history.'
         : provenance === 'MODELED'
           ? 'Generated Scenario history; not observed market history.'
           : provenance === 'OBSERVED' && candles.length
-            ? [coverageText,
+            ? [coverageText, storedAvailability,
               closeOnly ? 'Observed closes only; daily highs and lows were not provided.' : '',
               hist.priceBasis === 'ADJUSTED' ? 'Prices are adjusted for corporate actions.' : '']
               .filter(Boolean).join(' ')
