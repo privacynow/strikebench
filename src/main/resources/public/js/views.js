@@ -4438,7 +4438,9 @@
         : params[0] === 'record' ? 'record' : params[0] === 'construct' ? 'construct' : 'plans';
     var tab = params[0] === 'closed' ? 'closed' : 'active';
     var page = parseInt(params[1] || '0', 10);
-    root.appendChild(el('h1', {}, 'Portfolio'));
+    root.appendChild(el('h1', {}, section === 'plans' ? 'Plans' : 'Portfolio'));
+    if (section === 'plans') root.appendChild(el('p', { class: 'muted page-intro' },
+      'Each Plan keeps one stock, goal, market, evidence, structure and decision together. Resume it here without reconstructing the journey.'));
 
     // Account + summary are both needed on every section — fetch them together, not in series.
     var summaryP = API.get('/api/portfolio/summary').catch(function () { return null; });
@@ -4510,15 +4512,21 @@
         return;
       }
       var planGrid = el('div', { class: 'plan-book-grid', id: 'portfolio-plan-book' });
+      var planPool = planRows.map(function (row) { return row.plan; });
       planRows.forEach(function (row) {
         var plan = row.plan, decision = row.decision || {}, mark = row.mark;
+        var identity = PlanStore.identity(plan, planPool);
         var action = decision.action === 'CASH' ? 'Cash decision'
           : row.tradeId ? 'Position open' : plan.status === 'CLOSED' ? 'Reviewed' : 'Working plan';
         var card = el('article', { class: 'card plan-book-card' },
           el('div', { class: 'plan-book-head' },
-            el('div', {}, el('div', { class: 'eyebrow' }, planIntentLabel(plan.intent)),
-              el('h3', {}, plan.symbol), el('p', { class: 'muted' }, plan.title)),
-            el('span', { class: 'badge ' + (row.tradeId ? 'badge-ok' : decision.action === 'CASH' ? 'badge-caution' : 'badge-dim') }, action)),
+            el('div', {}, el('h3', {}, plan.symbol + ' · ' + identity.title),
+              el('p', { class: 'muted' }, planMarketLabel(plan)
+                + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' days' : '')
+                + (identity.updated ? ' · ' + identity.updated : ''))),
+            el('div', { class: 'plan-book-badges' },
+              identity.duplicate ? el('span', { class: 'badge badge-info' }, identity.duplicate) : null,
+              el('span', { class: 'badge ' + (row.tradeId ? 'badge-ok' : decision.action === 'CASH' ? 'badge-caution' : 'badge-dim') }, action))),
           el('div', { class: 'chip-row' },
             chip('Stage', String(plan.activeStage).replaceAll('_', ' ').toLowerCase()),
             decision.economicVerdict ? chip('Decision', String(decision.economicVerdict).toLowerCase()) : null,
