@@ -115,6 +115,34 @@ class StrategyEvaluatorTest {
         assertThat(e.decisionScore()).isZero();
     }
 
+    @Test void missingDailyHistoryIsAnEvidenceLimitationNotAMechanicalFailure() {
+        EvalContext candleStarved = new EvalContext("AAPL", 25_200L, 30, 0.30, null,
+                List.of(0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.29),
+                10_000_000L, true, 65, 0, 0.04,
+                io.liftandshift.strikebench.model.DataEvidence.of(
+                        "treasury", io.liftandshift.strikebench.model.Freshness.EOD));
+
+        StrategyEvaluation e = evaluator.evaluate(debitCallSpread("DELAYED", 0.6),
+                new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL", "month",
+                        "bullish", "balanced", "decision"), candleStarved);
+
+        assertThat(e.evidence().perDimension().get("history")).isEqualTo(EvidenceLevel.UNKNOWN);
+        assertThat(e.evidenceLevel()).isEqualTo(EvidenceLevel.UNKNOWN);
+        assertThat(e.score().gatePassed()).isTrue();
+        assertThat(e.score().gateFailures()).isEmpty();
+        assertThat(e.score().components()).filteredOn(c -> c.name().equals("Evidence quality"))
+                .singleElement().satisfies(c -> assertThat(c.value()).isZero());
+        assertThat(e.viable()).isTrue();
+        assertThat(e.decisionScore()).isPositive();
+        assertThat(e.economics().placement()).isNotEqualTo("MECHANICALLY_INELIGIBLE");
+        assertThat(e.economics().verdict())
+                .isIn(EconomicAssessment.Verdict.MIXED, EconomicAssessment.Verdict.UNFAVORABLE);
+        assertThat(e.economics().marketEvAfterCostsCents()).isNotNull();
+        assertThat(e.economics().realizedVolEvAfterCostsCents()).isNull();
+        assertThat(e.economics().needsDailyHistory()).isTrue();
+        assertThat(e.economics().actionableFavorable()).isFalse();
+    }
+
     @Test void ranksViableFirstThenByScore() {
         var strong = debitCallSpread("DELAYED", 0.9);
         var weak = debitCallSpread("FIXTURE", 0.2);

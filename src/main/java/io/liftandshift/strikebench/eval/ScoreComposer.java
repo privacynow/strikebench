@@ -20,7 +20,6 @@ public final class ScoreComposer {
         // ---- GATE: hard validity ----
         List<String> gateFailures = new ArrayList<>();
         if (risk.maxLossCents() <= 0) gateFailures.add("no finite, positive max loss (cannot be risk-screened)");
-        if (evidence.rollup() == EvidenceLevel.UNKNOWN) gateFailures.add("evidence unknown for a required dimension");
         if (cap.incrementalCents() > ctx.buyingPowerCents())
             gateFailures.add("insufficient buying power ($" + dollars(cap.incrementalCents())
                     + " needed vs $" + dollars(ctx.buyingPowerCents()) + ")");
@@ -80,7 +79,10 @@ public final class ScoreComposer {
         } else { capComp = 0.4; capNote = "return on capital not defined"; }
         comps.add(comp("Capital efficiency", 0.05, capComp, capNote));
 
-        double evidComp = 1.0 - evidence.rollup().uncertainty() / 5.0;
+        // Missing evidence is a data limitation, not a payoff or account failure. Keep the
+        // package visible for comparison, but give UNKNOWN no evidence-quality credit and let
+        // EconomicAssessment name the unavailable lane instead of calling it mechanical.
+        double evidComp = clamp01(1.0 - evidence.rollup().uncertainty() / 5.0);
         comps.add(comp("Evidence quality", 0.15, evidComp, evidence.rollup().label()));
 
         comps.add(comp("Thesis confidence", 0.15, clamp01(c.confidence()), "engine confidence in the fit"));
@@ -103,7 +105,8 @@ public final class ScoreComposer {
     }
 
     private static ScoreBreakdown.Component comp(String name, double weight, double value, String note) {
-        return new ScoreBreakdown.Component(name, weight, round(value), round(weight * value), note);
+        double normalized = clamp01(value);
+        return new ScoreBreakdown.Component(name, weight, round(normalized), round(weight * normalized), note);
     }
 
     private static double clamp01(double v) { return Math.max(0.0, Math.min(1.0, v)); }
