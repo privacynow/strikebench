@@ -43,7 +43,7 @@ class PlanApiIntegrationTest {
         int baselinePlans = empty.get("plans").size();
 
         String body = """
-                {"clientRequestId":"browser-create-1","symbol":"AAPL","intent":"INCOME",
+                {"clientRequestId":"browser-create-1","symbol":"AAPL","intent":"INCOME","title":"API CRUD plan",
                  "thesis":"neutral","horizonDays":30,"riskMode":"conservative",
                  "marketKind":"OBSERVED","worldId":"foreign"}
                 """;
@@ -59,7 +59,10 @@ class PlanApiIntegrationTest {
         JsonNode replay = json(post("/api/plans", body));
         assertThat(replay.get("id").asText()).isEqualTo(id);
         JsonNode duplicate = json(post("/api/plans", body.replace("browser-create-1", "browser-create-2")));
-        assertThat(duplicate.get("id").asText()).isNotEqualTo(id);
+        assertThat(duplicate.get("id").asText()).isEqualTo(id);
+        JsonNode differentHorizon = json(post("/api/plans", body
+                .replace("browser-create-1", "browser-create-3").replace("\"horizonDays\":30", "\"horizonDays\":60")));
+        assertThat(differentHorizon.get("id").asText()).isNotEqualTo(id);
         assertThat(json(get("/api/plans")).get("plans")).hasSize(baselinePlans + 2);
         assertThat(duplicate.get("symbol").asText()).isEqualTo(created.get("symbol").asText());
         assertThat(duplicate.get("intent").asText()).isEqualTo(created.get("intent").asText());
@@ -78,18 +81,18 @@ class PlanApiIntegrationTest {
                 "{\"expectedVersion\":" + updated.get("version").asLong() + ",\"stage\":\"manage_review\"}");
         assertThat(locked.statusCode()).isEqualTo(409);
 
-        JsonNode closedChip = json(put("/api/plans/" + duplicate.get("id").asText() + "/open",
-                "{\"expectedVersion\":" + duplicate.get("version").asLong() + ",\"open\":false}"));
+        JsonNode closedChip = json(put("/api/plans/" + id + "/open",
+                "{\"expectedVersion\":" + updated.get("version").asLong() + ",\"open\":false}"));
         assertThat(closedChip.get("open").asBoolean()).isFalse();
         assertThat(json(get("/api/plans")).get("plans")).hasSize(baselinePlans + 1);
         JsonNode fullLibrary = json(get("/api/plans?scope=all&openOnly=false"));
         JsonNode retained = java.util.stream.StreamSupport.stream(fullLibrary.get("plans").spliterator(), false)
-                .filter(p -> duplicate.get("id").asText().equals(p.get("id").asText())).findFirst().orElseThrow();
+                .filter(p -> id.equals(p.get("id").asText())).findFirst().orElseThrow();
         assertThat(retained.get("open").asBoolean()).isFalse();
 
-        JsonNode archived = json(post("/api/plans/" + duplicate.get("id").asText() + "/archive",
+        JsonNode archived = json(post("/api/plans/" + id + "/archive",
                 "{\"expectedVersion\":" + closedChip.get("version").asLong() + "}"));
-        HttpResponse<String> reopenArchived = put("/api/plans/" + duplicate.get("id").asText() + "/open",
+        HttpResponse<String> reopenArchived = put("/api/plans/" + id + "/open",
                 "{\"expectedVersion\":" + archived.get("version").asLong() + ",\"open\":true}");
         assertThat(reopenArchived.statusCode()).isEqualTo(409);
     }
@@ -118,7 +121,7 @@ class PlanApiIntegrationTest {
 
     @Test void historicalEvidenceIsPlanOwnedExactAndInvalidatedByAContextRevision() throws Exception {
         JsonNode plan = json(post("/api/plans", """
-                {"clientRequestId":"evidence-plan-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                {"clientRequestId":"evidence-plan-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Evidence ownership plan",
                  "thesis":"bullish","horizonDays":10,"riskMode":"conservative"}
                 """));
         String id = plan.get("id").asText();
@@ -153,7 +156,7 @@ class PlanApiIntegrationTest {
     @Test void planEvidenceRestoresOnlyTheActiveAnalysisDataset() throws Exception {
         json(put("/api/datasets/active", "{\"id\":\"observed\"}"));
         JsonNode plan = json(post("/api/plans", """
-                {"clientRequestId":"evidence-dataset-plan-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                {"clientRequestId":"evidence-dataset-plan-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Evidence dataset plan",
                  "thesis":"bullish","horizonDays":10,"riskMode":"conservative"}
                 """));
         String id = plan.get("id").asText();
@@ -199,7 +202,7 @@ class PlanApiIntegrationTest {
         String worldId = world.get("worldId").asText();
         assertThat(put("/api/world", "{\"world\":\"" + worldId + "\"}").statusCode()).isEqualTo(200);
         JsonNode plan = json(post("/api/plans", """
-                {"clientRequestId":"terminal-world-plan","symbol":"AAPL","intent":"DIRECTIONAL",
+                {"clientRequestId":"terminal-world-plan","symbol":"AAPL","intent":"DIRECTIONAL","title":"Terminal world plan",
                  "thesis":"bullish","horizonDays":20,"riskMode":"conservative"}
                 """));
         assertThat(plan.get("marketKind").asText()).isEqualTo("SIMULATED");
@@ -213,7 +216,7 @@ class PlanApiIntegrationTest {
 
     @Test void strategyCompetitionIsPlanOwnedNormalizedSelectableAndContextBound() throws Exception {
         JsonNode plan = json(post("/api/plans", """
-                {"clientRequestId":"strategy-plan-1","symbol":"AAPL","intent":"INCOME",
+                {"clientRequestId":"strategy-plan-1","symbol":"AAPL","intent":"INCOME","title":"Strategy competition plan",
                  "thesis":"neutral","horizonDays":30,"riskMode":"conservative"}
                 """));
         String id = plan.get("id").asText();
@@ -266,7 +269,7 @@ class PlanApiIntegrationTest {
 
     @Test void builderFitUsesThePlanContextWithoutMutatingOrPersistingASecondWorkflow() throws Exception {
         JsonNode plan = json(post("/api/plans", """
-                {"clientRequestId":"strategy-fit-plan-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                {"clientRequestId":"strategy-fit-plan-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Builder fit plan",
                  "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
                 """));
         String id = plan.get("id").asText();
@@ -287,7 +290,7 @@ class PlanApiIntegrationTest {
 
     @Test void customBuilderAndScoutPicksRemainExactPlanOwnedStructures() throws Exception {
         JsonNode customPlan = json(post("/api/plans", """
-                {"clientRequestId":"custom-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                {"clientRequestId":"custom-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Custom builder plan",
                  "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
                 """));
         String customId = customPlan.get("id").asText();
@@ -305,7 +308,7 @@ class PlanApiIntegrationTest {
                 .isEqualTo(custom.at("/strategy/result/candidate/id").asText());
 
         JsonNode scoutPlan = json(post("/api/plans", """
-                {"clientRequestId":"scout-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                {"clientRequestId":"scout-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Plan scout origin",
                  "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
                 """));
         String scoutId = scoutPlan.get("id").asText();
@@ -327,7 +330,7 @@ class PlanApiIntegrationTest {
 
     @Test void outcomesReuseThePlanEvidenceEnsembleAndPersistSeparateInterpretations() throws Exception {
         JsonNode plan = json(post("/api/plans", """
-                {"clientRequestId":"outcome-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                {"clientRequestId":"outcome-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Outcome comparison plan",
                  "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
                 """));
         String id = plan.get("id").asText();
@@ -398,7 +401,7 @@ class PlanApiIntegrationTest {
         assertThat(json(get("/api/plans/" + id + "/outcomes/backtests/" + backtestId)).get("id").asText())
                 .isEqualTo(backtestId);
         JsonNode other = json(post("/api/plans", """
-                {"clientRequestId":"backtest-owner-check","symbol":"SPY","intent":"DIRECTIONAL",
+                {"clientRequestId":"backtest-owner-check","symbol":"SPY","intent":"DIRECTIONAL","title":"Backtest ownership plan",
                  "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
                 """));
         assertThat(get("/api/plans/" + other.get("id").asText() + "/outcomes/backtests/" + backtestId).statusCode())
@@ -426,7 +429,7 @@ class PlanApiIntegrationTest {
 
     @Test void exactPlanEnsembleCreatesAReplayableLinkedRehearsalAndReview() throws Exception {
         JsonNode plan = json(post("/api/plans", """
-                {"clientRequestId":"rehearsal-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                {"clientRequestId":"rehearsal-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Rehearsal plan",
                  "thesis":"bullish","horizonDays":5,"riskMode":"conservative"}
                 """));
         String planId = plan.get("id").asText();
@@ -475,7 +478,7 @@ class PlanApiIntegrationTest {
                 {"nlvCents":1930000,"cashBpCents":1930000,"riskCapitalCents":193000}
                 """).statusCode()).isBetween(200, 299);
         JsonNode tradePlan = json(post("/api/plans", """
-                {"clientRequestId":"decision-trade-plan","symbol":"AAPL","intent":"DIRECTIONAL",
+                {"clientRequestId":"decision-trade-plan","symbol":"AAPL","intent":"DIRECTIONAL","title":"Trade decision plan",
                  "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
                 """));
         String tradePlanId = tradePlan.get("id").asText();
@@ -544,7 +547,7 @@ class PlanApiIntegrationTest {
         assertThat(secondDecision.at("/decision/action").asText()).isEqualTo("CASH");
 
         JsonNode cashPlan = json(post("/api/plans", """
-                {"clientRequestId":"decision-cash-plan","symbol":"QQQ","intent":"INCOME",
+                {"clientRequestId":"decision-cash-plan","symbol":"QQQ","intent":"INCOME","title":"Cash decision plan",
                  "thesis":"neutral","horizonDays":30,"riskMode":"conservative"}
                 """));
         String cashPlanId = cashPlan.get("id").asText();

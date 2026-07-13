@@ -26,6 +26,7 @@ class JourneySurfaceTest {
         assertThat(views).doesNotContain("async function trade(", "trade: trade", "#/trade/");
         assertThat(views).doesNotContain("#/plan/new", "id === 'new'");
         assertThat(app).doesNotContain("#/plan/new");
+        assertThat(workspace).doesNotContain("new\\?symbol");
         assertThat(views).contains("#/research/", "researchRoute");
         assertThat(views.split("Outcomes\\.workspace\\(", -1)).hasSize(2);
         assertThat(views).contains("function planOutcomeWorkspace(config)");

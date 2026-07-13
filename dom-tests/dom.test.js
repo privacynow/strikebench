@@ -1144,42 +1144,40 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   }, ids);
 });
 
-test('duplicate Plan identities stay distinct across Home, desktop, mobile, and reload', async () => {
+test('equivalent Plan retries collapse while materially different Plans survive Home, mobile, and reload', async () => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
   const ids = await page.evaluate(async () => {
     const base = App.baseWorldId();
     if (App.state.world !== base) await App.switchWorld(base);
     await PlanStore.load(true);
-    const one = await PlanStore.create({ symbol: 'NVDA', intent: 'DIRECTIONAL', thesis: 'bullish',
-      horizonDays: 30, riskMode: 'conservative', title: 'NVDA · Restart clarity' });
-    await new Promise(resolve => setTimeout(resolve, 10));
-    const two = await PlanStore.create({ symbol: 'NVDA', intent: 'DIRECTIONAL', thesis: 'bullish',
-      horizonDays: 30, riskMode: 'conservative', title: 'NVDA · Restart clarity' });
-    return { one: one.id, two: two.id };
+    const one = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
+      horizonDays: 30, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
+    const retry = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
+      horizonDays: 30, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
+    const variant = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
+      horizonDays: 45, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
+    return { one: one.id, retry: retry.id, variant: variant.id };
   });
+  assert.equal(ids.retry, ids.one, 'a new request id cannot mint an identical active Plan');
+  assert.notEqual(ids.variant, ids.one, 'a materially different horizon remains a separate Plan');
 
   await go('#/home');
-  await page.waitForSelector('#home-plan-library [data-plan-id="' + ids.two + '"]');
-  const labels = await Promise.all([ids.one, ids.two].map(async id => ({
-    home: await page.locator('#home-plan-library [data-plan-id="' + id + '"]').textContent(),
-    bar: await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + id + '"]').textContent()
-  })));
-  assert.match(labels[0].home, /Plan 1 of 2/);
-  assert.match(labels[1].home, /Plan 2 of 2/);
-  assert.match(labels[0].home, /Updated /);
-  assert.match(labels[0].bar, /Plan 1 of 2/);
-  assert.match(labels[1].bar, /Plan 2 of 2/);
+  await page.waitForSelector('#home-plan-library [data-plan-id="' + ids.variant + '"]');
+  assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.one + '"]').count(), 1);
+  assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.variant + '"]').count(), 1);
+  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.one + '"]').count(), 1);
+  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.variant + '"]').count(), 1);
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const options = await page.locator('#plan-picker option').allTextContents();
-  assert.ok(options.some(text => /NVDA.*Plan 1 of 2/.test(text)));
-  assert.ok(options.some(text => /NVDA.*Plan 2 of 2/.test(text)));
+  assert.equal(await page.locator('#plan-picker option[value="' + ids.one + '"]').count(), 1);
+  assert.equal(await page.locator('#plan-picker option[value="' + ids.variant + '"]').count(), 1);
   await page.reload();
   await page.waitForSelector('#plan-picker');
-  const restored = await page.locator('#plan-picker option').allTextContents();
-  assert.ok(restored.some(text => /NVDA.*Plan 1 of 2/.test(text)), 'first identity survives restart');
-  assert.ok(restored.some(text => /NVDA.*Plan 2 of 2/.test(text)), 'second identity survives restart');
+  assert.equal(await page.locator('#plan-picker option[value="' + ids.one + '"]').count(), 1,
+    'the single retry-safe identity survives restart');
+  assert.equal(await page.locator('#plan-picker option[value="' + ids.variant + '"]').count(), 1,
+    'the materially different Plan survives restart');
 
   await go('#/home');
   await page.locator('#home-plan-library [data-plan-id="' + ids.one + '"] button[aria-label^="Archive"]').click();
@@ -1190,11 +1188,11 @@ test('duplicate Plan identities stay distinct across Home, desktop, mobile, and 
   assert.match(await page.textContent('#home-plan-library'), /Archived Plans \(\d+\)/,
     'archiving removes clutter while retaining a read-only record');
   await page.locator('#home-plan-library .xp-head:has-text("Archived Plans")').click();
-  assert.match(await page.textContent('#home-plan-library .home-plan-archive'), /NVDA.*Restart clarity/s,
+  assert.match(await page.textContent('#home-plan-library .home-plan-archive'), /AAPL.*Retry-safe audit/s,
     'the archived Plan remains inspectable by identity');
 
   await page.evaluate(async values => {
-    for (const id of [values.one, values.two]) {
+    for (const id of [values.variant]) {
       const plan = await PlanStore.get(id, true);
       await API.post('/api/plans/' + id + '/archive', { expectedVersion: plan.version });
     }

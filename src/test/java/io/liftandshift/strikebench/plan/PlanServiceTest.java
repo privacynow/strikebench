@@ -30,22 +30,58 @@ class PlanServiceTest {
     @AfterEach void close() { if (db != null) db.close(); }
 
     @Test
-    void duplicateDescriptorsCoexistAndCreateIsIdempotent() {
+    void equivalentActiveContentIsIdempotentAcrossRequestIds() {
         Plan.View first = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 create("req-1", "AAPL", "INCOME", 30));
         Plan.View replay = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 create("req-1", "AAPL", "INCOME", 30));
-        Plan.View second = plans.create(null, Plan.MarketKind.DEMO, null, null,
-                create("req-2", "AAPL", "INCOME", 60));
+        Plan.View equivalent = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                create("req-2", "AAPL", "INCOME", 30));
+        Plan.View differentHorizon = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                create("req-3", "AAPL", "INCOME", 60));
 
         assertThat(replay.id()).isEqualTo(first.id());
-        assertThat(second.id()).isNotEqualTo(first.id());
+        assertThat(equivalent.id()).isEqualTo(first.id());
+        assertThat(differentHorizon.id()).isNotEqualTo(first.id());
         assertThat(plans.list(null, Plan.MarketKind.DEMO, null, true)).hasSize(2);
+        assertThat(db.query("SELECT client_request_id,plan_id FROM plan_create_request ORDER BY client_request_id",
+                r -> r.str("client_request_id") + ":" + r.str("plan_id")))
+                .containsExactly("req-1:" + first.id(), "req-2:" + first.id(), "req-3:" + differentHorizon.id());
         assertThat(first.context().inputHash()).hasSize(64);
         assertThatThrownBy(() -> plans.create(null, Plan.MarketKind.DEMO, null, null,
                 create("req-1", "AAPL", "HEDGE", 30)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("different plan request");
+
+        Plan.View archived = plans.archive(null, first.id(), new Plan.ArchiveRequest(first.version()));
+        Plan.View freshCycle = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                create("req-4", "AAPL", "INCOME", 30));
+        assertThat(archived.status()).isEqualTo(Plan.Status.ARCHIVED);
+        assertThat(freshCycle.id()).isNotEqualTo(first.id());
+    }
+
+    @Test
+    void concurrentEquivalentContentWithDifferentRequestIdsCreatesExactlyOnePlan() throws Exception {
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch go = new CountDownLatch(1);
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            var a = pool.submit(() -> {
+                ready.countDown(); go.await();
+                return plans.create(null, Plan.MarketKind.DEMO, null, null,
+                        create("req-content-a", "QQQ", "ACQUIRE", 30));
+            });
+            var b = pool.submit(() -> {
+                ready.countDown(); go.await();
+                return plans.create(null, Plan.MarketKind.DEMO, null, null,
+                        create("req-content-b", "QQQ", "ACQUIRE", 30));
+            });
+            ready.await();
+            go.countDown();
+            assertThat(a.get().id()).isEqualTo(b.get().id());
+        }
+        assertThat(plans.list(null, Plan.MarketKind.DEMO, null, false)).hasSize(1);
+        assertThat(db.query("SELECT COUNT(*) n FROM plan_create_request", r -> r.lng("n")))
+                .containsExactly(2L);
     }
 
     @Test
