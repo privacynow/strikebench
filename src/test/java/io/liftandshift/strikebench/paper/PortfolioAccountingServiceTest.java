@@ -2,6 +2,9 @@ package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.support.TestDb;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,6 +17,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -198,6 +202,90 @@ class PortfolioAccountingServiceTest {
         assertThat(books.transactions("local", account.id(), 0, 20)).hasSize(1);
         assertThat(books.lots("local", account.id(), false)).singleElement()
                 .satisfies(lot -> assertThat(lot.remainingQuantity()).isEqualTo(5));
+    }
+
+    @Test
+    void summaryUsesExecutableLiquidationSidesAndKeepsTrackedCashExact() {
+        MarksSource marks = new MarksSource() {
+            @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.empty(); }
+            @Override public Optional<LegMark> legMark(String symbol, Leg leg) {
+                if (leg.isStock() && "AAPL".equals(symbol)) return Optional.of(mark("109.90", "110.00"));
+                if (!leg.isStock() && "QQQ".equals(symbol)) return Optional.of(mark("1.40", "1.50"));
+                return Optional.empty();
+            }
+        };
+        books = new PortfolioAccountingService(db, CLOCK, marks);
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", 10_000_000L));
+        books.record("local", account.id(), trade("2026-01-02", 0L,
+                leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 10, 1, "100")));
+        books.record("local", account.id(), trade("2026-01-03", 0L,
+                leg("OPTION", "SELL", "OPEN", "QQQ", "PUT", "450", "2026-08-21", 1, 100, "2")));
+
+        var summary = books.summary("local", account.id());
+        assertThat(summary.bookCashCents()).isEqualTo(9_920_000L);
+        assertThat(summary.securitiesLiquidationValueCents()).isEqualTo(94_900L); // stock bid less short-put ask
+        assertThat(summary.totalValueCents()).isEqualTo(10_014_900L);
+        assertThat(summary.unrealizedPnlCents()).isEqualTo(14_900L);
+        assertThat(summary.collateral().knownBlockedCashCents()).isEqualTo(4_500_000L);
+        assertThat(summary.collateral().availableCashCents()).isEqualTo(5_420_000L);
+        assertThat(summary.collateral().cashSecuredPutContracts()).isEqualTo(1);
+        assertThat(summary.positions()).allMatch(PortfolioAccountingService.PositionView::complete);
+        assertThat(summary.valuationBasis()).contains("executable closing sides");
+    }
+
+    @Test
+    void missingMarkNeverBecomesZeroPortfolioValue() {
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", 1_000_000L));
+        books.record("local", account.id(), trade("2026-01-02", 0L,
+                leg("STOCK", "BUY", "OPEN", "NVDA", null, null, null, 2, 1, "200")));
+
+        var summary = books.summary("local", account.id());
+        assertThat(summary.complete()).isFalse();
+        assertThat(summary.totalValueCents()).isNull();
+        assertThat(summary.unrealizedPnlCents()).isNull();
+        assertThat(summary.missingMarks()).containsExactly("NVDA shares");
+        assertThat(summary.positions()).singleElement().satisfies(p -> {
+            assertThat(p.liquidationValueCents()).isNull();
+            assertThat(p.provenance()).isEqualTo("MISSING");
+        });
+    }
+
+    @Test
+    void protectivePutWingReducesCashBlockedToSpreadWidth() {
+        books = new PortfolioAccountingService(db, CLOCK, new EmptyMarks());
+        var account = books.createAccount("local", account("IRA", "TRADITIONAL_IRA", 5_000_000L));
+        books.record("local", account.id(), tx("2026-01-02", "TRADE", null, 0L, null, "MANUAL", "spread",
+                List.of(
+                        leg("OPTION", "SELL", "OPEN", "QQQ", "PUT", "450", "2026-08-21", 1, 100, "2"),
+                        leg("OPTION", "BUY", "OPEN", "QQQ", "PUT", "440", "2026-08-21", 1, 100, "1"))));
+
+        var collateral = books.summary("local", account.id()).collateral();
+        assertThat(collateral.knownBlockedCashCents()).isEqualTo(100_000L);
+        assertThat(collateral.definedRiskPutContracts()).isEqualTo(1);
+        assertThat(collateral.cashSecuredPutContracts()).isZero();
+        assertThat(collateral.complete()).isTrue();
+    }
+
+    @Test
+    void adjustedContractMultiplierIsPartOfLotIdentity() {
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", null));
+        books.record("local", account.id(), trade("2026-01-02", 0L,
+                leg("OPTION", "BUY", "OPEN", "XYZ", "CALL", "10", "2026-08-21", 1, 50, "1")));
+        assertThatThrownBy(() -> books.record("local", account.id(), trade("2026-01-03", 0L,
+                leg("OPTION", "SELL", "CLOSE", "XYZ", "CALL", "10", "2026-08-21", 1, 100, "2"))))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("only 0 matching long units");
+    }
+
+    private static MarksSource.LegMark mark(String bid, String ask) {
+        return new MarksSource.LegMark(new BigDecimal(bid), new BigDecimal(ask),
+                new BigDecimal(bid).add(new BigDecimal(ask)).divide(BigDecimal.TWO), null,
+                Freshness.DELAYED, null, null, null, null,
+                DataEvidence.of("observed-test", Freshness.DELAYED));
+    }
+
+    private static final class EmptyMarks implements MarksSource {
+        @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.empty(); }
+        @Override public Optional<LegMark> legMark(String symbol, Leg leg) { return Optional.empty(); }
     }
 
     private static PortfolioAccountingService.AccountInput account(String name, String type, Long cash) {

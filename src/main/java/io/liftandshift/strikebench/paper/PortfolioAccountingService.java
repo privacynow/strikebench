@@ -1,6 +1,10 @@
 package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.Leg;
+import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Money;
 
@@ -21,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Owner-scoped accounting for brokerage activity that a user records or imports. This book is
@@ -38,10 +43,16 @@ public final class PortfolioAccountingService {
 
     private final Db db;
     private final Clock clock;
+    private final MarksSource marks;
 
     public PortfolioAccountingService(Db db, Clock clock) {
+        this(db, clock, null);
+    }
+
+    public PortfolioAccountingService(Db db, Clock clock, MarksSource marks) {
         this.db = db;
         this.clock = clock;
+        this.marks = marks;
     }
 
     public record AccountInput(String name, String accountType, String broker, String lotMethod,
@@ -109,6 +120,31 @@ public final class PortfolioAccountingService {
                             Long estimatedFederalTaxCents, Long estimatedStateTaxCents,
                             Long estimatedTotalTaxCents, List<RealizedLotView> realizedLots,
                             String note) {}
+
+    public record PositionView(String key, String instrumentType, String side, String symbol,
+                               String optionType, BigDecimal strike, LocalDate expiration,
+                               int multiplier, long quantity, long openAmountCents,
+                               BigDecimal liquidationPrice, Long liquidationValueCents,
+                               Long unrealizedPnlCents, String provenance, String age,
+                               String source, boolean complete) {}
+
+    public record AllocationView(String symbol, long knownMarketValueCents,
+                                 long grossExposureCents, Double percentOfKnownGross) {}
+
+    public record CollateralView(long knownBlockedCashCents, Long availableCashCents,
+                                 long cashSecuredPutContracts, long definedRiskPutContracts,
+                                 long coveredCallContracts, long definedRiskCallContracts,
+                                 long uncoveredShortCallShares, boolean complete,
+                                 List<String> notes) {}
+
+    public record PortfolioSummary(AccountProfile account, long bookCashCents,
+                                   Long securitiesLiquidationValueCents, Long totalValueCents,
+                                   long realizedPnlCents, Long unrealizedPnlCents,
+                                   long interestIncomeCents, long dividendIncomeCents,
+                                   long feesCents, long netExternalFlowsCents,
+                                   CollateralView collateral, List<PositionView> positions,
+                                   List<AllocationView> allocation, List<String> missingMarks,
+                                   boolean complete, String valuationBasis) {}
 
     private record PreparedLeg(int legNo, String instrumentType, String action,
                                String positionEffect, String symbol, String optionType,
@@ -357,6 +393,212 @@ public final class PortfolioAccountingService {
         }
         return new TaxReport(year, account.accountType(), st, lt, interest, ordinaryDiv, qualifiedDiv,
                 capDist, wash, federal, state, total, realized, note);
+    }
+
+    /**
+     * Current tracked-book view. Values use executable closing sides (long at bid, short at ask),
+     * never a midpoint. A missing mark makes aggregate value/P&L unavailable instead of becoming $0.
+     */
+    public PortfolioSummary summary(String ownerId, String accountId) {
+        AccountProfile account = account(ownerId, accountId);
+        List<LotView> open = lots(ownerId, accountId, false);
+        Map<String, List<LotView>> groups = new LinkedHashMap<>();
+        for (LotView lot : open) groups.computeIfAbsent(lotKey(lot), ignored -> new ArrayList<>()).add(lot);
+
+        List<PositionView> positions = new ArrayList<>();
+        List<String> missing = new ArrayList<>();
+        long knownSecurities = 0;
+        long knownUnrealized = 0;
+        boolean complete = true;
+        for (var entry : groups.entrySet()) {
+            List<LotView> lots = entry.getValue();
+            LotView first = lots.getFirst();
+            long quantity = lots.stream().mapToLong(LotView::remainingQuantity).sum();
+            long openAmount = lots.stream().mapToLong(LotView::remainingOpenAmountCents).sum();
+            Optional<MarksSource.LegMark> mark = mark(first);
+            BigDecimal closePrice = null;
+            Long value = null;
+            Long unrealized = null;
+            DataEvidence evidence = DataEvidence.missing("no current executable mark");
+            if (mark.isPresent()) {
+                LegAction close = "LONG".equals(first.side()) ? LegAction.SELL : LegAction.BUY;
+                closePrice = mark.get().executable(close);
+                evidence = mark.get().evidence() == null
+                        ? DataEvidence.of(null, mark.get().freshness()) : mark.get().evidence();
+                if (closePrice != null) {
+                    long absolute = Money.centsFromPrice(closePrice,
+                            Math.multiplyExact(quantity, (long) first.multiplier()));
+                    value = "LONG".equals(first.side()) ? absolute : Math.negateExact(absolute);
+                    unrealized = "LONG".equals(first.side())
+                            ? Math.subtractExact(value, openAmount)
+                            : Math.addExact(openAmount, value);
+                    knownSecurities = Math.addExact(knownSecurities, value);
+                    knownUnrealized = Math.addExact(knownUnrealized, unrealized);
+                }
+            }
+            boolean rowComplete = value != null;
+            if (!rowComplete) {
+                complete = false;
+                missing.add(positionLabel(first));
+            }
+            positions.add(new PositionView(entry.getKey(), first.instrumentType(), first.side(), first.symbol(),
+                    first.optionType(), first.strike(), first.expiration(), first.multiplier(), quantity,
+                    openAmount, closePrice, value, unrealized,
+                    evidence.provenance().name(), evidence.age().name(), evidence.source(), rowComplete));
+        }
+
+        long cash = scalar("SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?",
+                account.id());
+        long realized = scalar("SELECT COALESCE(SUM(realized_gain_cents),0) n FROM portfolio_lot_match WHERE portfolio_account_id=?",
+                account.id());
+        long fees = scalar("SELECT COALESCE(SUM(fees_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?",
+                account.id());
+        long flows = scalar("SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=? "
+                        + "AND event_type IN ('DEPOSIT','WITHDRAWAL','TRANSFER_IN','TRANSFER_OUT')", account.id());
+        CollateralView collateral = collateral(open, cash);
+        List<AllocationView> allocation = allocation(positions, cash);
+        Long securities = complete ? knownSecurities : null;
+        Long total = complete ? Math.addExact(cash, knownSecurities) : null;
+        Long unrealized = complete ? knownUnrealized : null;
+        return new PortfolioSummary(account, cash, securities, total, realized, unrealized,
+                income(account.id(), "INTEREST", null), income(account.id(), "DIVIDEND", null), fees, flows,
+                collateral, positions, allocation, List.copyOf(missing), complete,
+                "Current liquidation at executable closing sides; fees to close and broker-specific margin rules are not modeled. Missing marks never become zero.");
+    }
+
+    private Optional<MarksSource.LegMark> mark(LotView lot) {
+        if (marks == null) return Optional.empty();
+        Leg leg;
+        if ("STOCK".equals(lot.instrumentType())) {
+            leg = Leg.stock(LegAction.BUY, 1, BigDecimal.ZERO);
+        } else {
+            leg = Leg.option(LegAction.BUY, OptionType.valueOf(lot.optionType()), lot.strike(),
+                    lot.expiration(), 1, BigDecimal.ZERO);
+        }
+        return marks.legMark(lot.symbol(), leg);
+    }
+
+    private CollateralView collateral(List<LotView> lots, long cash) {
+        long blocked = 0;
+        long cashSecuredPuts = 0, spreadPuts = 0, coveredCalls = 0, spreadCalls = 0;
+        long uncoveredCallShares = 0;
+        List<String> notes = new ArrayList<>();
+
+        Map<String, Long> freeShares = new LinkedHashMap<>();
+        for (LotView lot : lots) if ("STOCK".equals(lot.instrumentType())) {
+            long signed = "LONG".equals(lot.side()) ? lot.remainingQuantity() : -lot.remainingQuantity();
+            freeShares.merge(lot.symbol(), signed, Math::addExact);
+            if ("SHORT".equals(lot.side())) notes.add(lot.symbol() + " includes short shares; broker margin is not modeled.");
+        }
+
+        List<CollateralLot> longPuts = collateralLots(lots, "PUT", "LONG");
+        List<CollateralLot> longCalls = collateralLots(lots, "CALL", "LONG");
+        for (CollateralLot shortPut : collateralLots(lots, "PUT", "SHORT")) {
+            long remaining = shortPut.quantity;
+            for (CollateralLot protective : longPuts) {
+                if (remaining == 0 || !shortPut.sameContractGroup(protective) || protective.quantity == 0) continue;
+                long paired = Math.min(remaining, protective.quantity);
+                BigDecimal width = shortPut.strike.subtract(protective.strike).max(BigDecimal.ZERO);
+                blocked = Math.addExact(blocked, Money.centsFromPrice(width,
+                        Math.multiplyExact(paired, (long) shortPut.multiplier)));
+                spreadPuts += paired;
+                remaining -= paired;
+                protective.quantity -= paired;
+            }
+            if (remaining > 0) {
+                blocked = Math.addExact(blocked, Money.centsFromPrice(shortPut.strike,
+                        Math.multiplyExact(remaining, (long) shortPut.multiplier)));
+                cashSecuredPuts += remaining;
+            }
+        }
+
+        for (CollateralLot shortCall : collateralLots(lots, "CALL", "SHORT")) {
+            long remaining = shortCall.quantity;
+            long sharesPerContract = shortCall.multiplier;
+            long availableShares = Math.max(0, freeShares.getOrDefault(shortCall.symbol, 0L));
+            long byShares = Math.min(remaining, availableShares / sharesPerContract);
+            if (byShares > 0) {
+                coveredCalls += byShares;
+                remaining -= byShares;
+                freeShares.put(shortCall.symbol, availableShares - byShares * sharesPerContract);
+            }
+            for (CollateralLot protective : longCalls) {
+                if (remaining == 0 || !shortCall.sameContractGroup(protective) || protective.quantity == 0) continue;
+                long paired = Math.min(remaining, protective.quantity);
+                BigDecimal width = protective.strike.subtract(shortCall.strike).max(BigDecimal.ZERO);
+                blocked = Math.addExact(blocked, Money.centsFromPrice(width,
+                        Math.multiplyExact(paired, (long) shortCall.multiplier)));
+                spreadCalls += paired;
+                remaining -= paired;
+                protective.quantity -= paired;
+            }
+            uncoveredCallShares += Math.multiplyExact(remaining, sharesPerContract);
+        }
+        boolean complete = uncoveredCallShares == 0 && notes.isEmpty();
+        if (uncoveredCallShares > 0) notes.add(uncoveredCallShares
+                + " short-call shares are not covered by recorded shares or same-expiration long calls; their broker margin is not estimated.");
+        notes.add("Cash blocked is a cash-secured/defined-risk estimate from recorded lots, not a broker margin quote.");
+        return new CollateralView(blocked, complete ? Math.subtractExact(cash, blocked) : null,
+                cashSecuredPuts, spreadPuts, coveredCalls, spreadCalls, uncoveredCallShares,
+                complete, List.copyOf(notes));
+    }
+
+    private static List<CollateralLot> collateralLots(List<LotView> lots, String type, String side) {
+        return lots.stream().filter(l -> "OPTION".equals(l.instrumentType()) && type.equals(l.optionType())
+                        && side.equals(l.side()))
+                .sorted(Comparator.comparing(LotView::symbol).thenComparing(LotView::expiration)
+                        .thenComparing(LotView::strike).reversed())
+                .map(l -> new CollateralLot(l.symbol(), l.expiration(), l.multiplier(), l.strike(), l.remainingQuantity()))
+                .toList();
+    }
+
+    private static List<AllocationView> allocation(List<PositionView> positions, long cash) {
+        Map<String, long[]> values = new LinkedHashMap<>();
+        if (cash != 0) values.put("CASH", new long[]{cash, Math.abs(cash)});
+        for (PositionView p : positions) if (p.liquidationValueCents() != null) {
+            long[] row = values.computeIfAbsent(p.symbol(), ignored -> new long[2]);
+            row[0] = Math.addExact(row[0], p.liquidationValueCents());
+            row[1] = Math.addExact(row[1], Math.abs(p.liquidationValueCents()));
+        }
+        long gross = values.values().stream().mapToLong(v -> v[1]).sum();
+        return values.entrySet().stream().map(e -> new AllocationView(e.getKey(), e.getValue()[0], e.getValue()[1],
+                gross == 0 ? null : e.getValue()[1] / (double) gross)).toList();
+    }
+
+    private long scalar(String sql, Object... args) {
+        return db.query(sql, r -> r.lng("n"), args).getFirst();
+    }
+
+    private static String lotKey(LotView lot) {
+        return String.join("|", lot.instrumentType(), lot.side(), lot.symbol(),
+                String.valueOf(lot.optionType()), String.valueOf(lot.strike()),
+                String.valueOf(lot.expiration()), String.valueOf(lot.multiplier()));
+    }
+
+    private static String positionLabel(LotView lot) {
+        if ("STOCK".equals(lot.instrumentType())) return lot.symbol() + " shares";
+        return lot.symbol() + " " + lot.expiration() + " " + lot.strike().stripTrailingZeros().toPlainString()
+                + " " + lot.optionType().toLowerCase(Locale.ROOT);
+    }
+
+    private static final class CollateralLot {
+        private final String symbol;
+        private final LocalDate expiration;
+        private final int multiplier;
+        private final BigDecimal strike;
+        private long quantity;
+
+        private CollateralLot(String symbol, LocalDate expiration, int multiplier, BigDecimal strike, long quantity) {
+            this.symbol = symbol;
+            this.expiration = expiration;
+            this.multiplier = multiplier;
+            this.strike = strike;
+            this.quantity = quantity;
+        }
+
+        private boolean sameContractGroup(CollateralLot other) {
+            return symbol.equals(other.symbol) && expiration.equals(other.expiration) && multiplier == other.multiplier;
+        }
     }
 
     // ---- Lot application ----
