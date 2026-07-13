@@ -547,6 +547,29 @@ class PlanApiIntegrationTest {
         assertThat(managed.at("/management/reviews/0/category").asText()).isEqualTo("SIM_REHEARSAL");
     }
 
+    @Test void archivedPlanCannotCreateARehearsal() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"archived-rehearsal-plan","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Archived rehearsal plan","thesis":"bullish","horizonDays":5,"riskMode":"conservative"}
+                """));
+        String planId = plan.get("id").asText();
+        JsonNode ensemble = json(post("/api/plans/" + planId + "/outcomes/ensemble", """
+                {"expectedVersion":%d,"over":{"model":"GBM","shape":"GRIND_UP","horizonDays":5,
+                 "stepsPerDay":2,"driftAnnual":0.10,"volAnnual":0.25,"jumpsPerYear":0,
+                 "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":5151,"paths":20}}
+                """.formatted(plan.get("version").asLong())));
+        JsonNode archived = json(post("/api/plans/" + planId + "/archive",
+                "{\"expectedVersion\":" + plan.get("version").asLong() + "}"));
+
+        HttpResponse<String> rejected = post("/api/plans/" + planId + "/rehearsals",
+                "{\"expectedVersion\":" + archived.get("version").asLong()
+                        + ",\"ensembleId\":\"" + ensemble.at("/ensemble/id").asText()
+                        + "\",\"selection\":\"TYPICAL\"}");
+        assertThat(rejected.statusCode()).isEqualTo(409);
+        assertThat(Json.parse(rejected.body()).path("detail").asText()).contains("decision is frozen");
+        assertThat(json(get("/api/plans/" + planId + "/rehearsals")).path("rehearsals").size()).isZero();
+    }
+
     @Test void decideFreezesTheServerSelectedPackageAndLinksTradeOrCash() throws Exception {
         assertThat(put("/api/account/risk-context", """
                 {"nlvCents":1930000,"cashBpCents":1930000,"riskCapitalCents":193000}

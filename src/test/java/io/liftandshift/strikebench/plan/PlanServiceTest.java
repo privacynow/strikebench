@@ -237,6 +237,30 @@ class PlanServiceTest {
     }
 
     @Test
+    void archivedBlankGoalCannotBeClaimedOrMoveItsSavedStage() {
+        Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                create("req-archived-blank-goal", "QQQ", null, 30));
+        db.exec("INSERT INTO plan_evidence(id,plan_id,context_rev,basis,as_of,engine_version,input_hash," +
+                        "evidence_provenance,state) VALUES('pe_archived',?,1,'DEMO_HISTORY',now()," +
+                        "'study-1','frozen','DEMO','CURRENT')", plan.id());
+        Plan.View archived = plans.archive(null, plan.id(), new Plan.ArchiveRequest(plan.version()));
+
+        assertThatThrownBy(() -> plans.claimIntent(null, plan.id(),
+                new Plan.IntentRequest(archived.version(), "ACQUIRE")))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("decision is frozen");
+        assertThatThrownBy(() -> plans.setStage(null, plan.id(),
+                new Plan.StageRequest(archived.version(), "EVIDENCE")))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("read-only");
+
+        Plan.View unchanged = plans.get(null, plan.id());
+        assertThat(unchanged.intent()).isNull();
+        assertThat(unchanged.context().rev()).isEqualTo(1);
+        assertThat(unchanged.version()).isEqualTo(archived.version());
+        assertThat(db.query("SELECT state FROM plan_evidence WHERE id='pe_archived'", r -> r.str("state")))
+                .containsExactly("CURRENT");
+    }
+
+    @Test
     void undecidedDraftCanBeDeletedButDecisionHistoryCannot() {
         Plan.View disposable = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 create("req-delete", "AAPL", "DIRECTIONAL", 21));

@@ -60,6 +60,9 @@ public final class PlanRehearsalService {
         if (plan.version() != raw.expectedVersion()) {
             throw new IllegalStateException("This Plan changed before the rehearsal was created. Reload it first.");
         }
+        if (plan.status() != Plan.Status.ACTIVE) {
+            throw new IllegalStateException("This Plan's decision is frozen. Start a linked Plan before creating another rehearsal.");
+        }
         if (plan.marketKind() == Plan.MarketKind.SIMULATED) {
             throw new IllegalStateException("This Plan already lives inside one simulated path. Return to its source market before creating a separate rehearsal.");
         }
@@ -92,6 +95,7 @@ public final class PlanRehearsalService {
         anchorDoc.put("note", "Exact Plan rehearsal · path " + index + " · receipt " + stored.fingerprint());
 
         SimulationSessions.SessionHook hook = (c, worldId, accountId) -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
             PlanRow current = requireOwned(c, plan.id(), userId, true);
             if (current.version() != raw.expectedVersion() || current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This Plan changed while the rehearsal was being created.");
