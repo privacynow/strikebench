@@ -264,7 +264,7 @@ public final class PlanOutcomeService {
                     id, plan.id(), plan.context().rev(), text(report, "id"), candidateId, "HISTORICAL_REPLAY", now,
                     integerOrNull(report, "sampleSize"), doubleOrNull(report, "winRate"),
                     endingDelta(report), maxDrawdownCents(report), doubleOrNull(report, "avgReturnOnRisk"),
-                    text(report, "pricingMode"), inputHash, ENGINE_VERSION, "CURRENT", engineKind,
+                    backtestEvidence(report), inputHash, ENGINE_VERSION, "CURRENT", engineKind,
                     text(report, "pricingMode"), text(report, "confidence"), longOrNull(report, "startingCents"),
                     longOrNull(report, "endingCents"), doubleOrNull(report, "maxDrawdownPct"),
                     report.path("demoUnderlying").asBoolean(false) ? 1 : 0, now);
@@ -302,7 +302,7 @@ public final class PlanOutcomeService {
                     PlanOutcomeService::outcomeRow, plan.id(), plan.context().rev());
             for (OutcomeRow row : rows) runs.add(loadOutcome(c, row));
             ArrayNode backtests = out.putArray("backtests");
-            Db.queryOn(c, "SELECT id,context_rev,state,backtest_id,candidate_id,engine_kind,pricing_mode,confidence,sample_size," +
+            Db.queryOn(c, "SELECT id,context_rev,state,backtest_id,candidate_id,evidence_provenance,engine_kind,pricing_mode,confidence,sample_size," +
                             "win_rate,total_pnl_cents,avg_return_on_risk,starting_cents,ending_cents,max_drawdown_pct,demo_underlying," +
                             "created_at::text created_at FROM plan_backtest WHERE plan_id=? " +
                             "ORDER BY (context_rev=?) DESC,(state='CURRENT') DESC,created_at DESC,id DESC LIMIT 20",
@@ -312,6 +312,7 @@ public final class PlanOutcomeService {
                         put(n, "contextRev", intOrNull(r, "context_rev")); put(n, "state", r.str("state"));
                         n.put("currentContext", r.intv("context_rev") == plan.context().rev());
                         put(n, "candidateId", r.str("candidate_id")); put(n, "engineKind", r.str("engine_kind"));
+                        put(n, "evidenceProvenance", r.str("evidence_provenance"));
                         put(n, "pricingMode", r.str("pricing_mode")); put(n, "confidence", r.str("confidence"));
                         put(n, "sampleSize", intOrNull(r, "sample_size")); put(n, "winRate", r.dblOrNull("win_rate"));
                         put(n, "totalPnlCents", r.lngOrNull("total_pnl_cents"));
@@ -375,6 +376,15 @@ public final class PlanOutcomeService {
         i = 0;
         for (JsonNode note : result.path("notes")) Db.execOn(c,
                 "INSERT INTO plan_outcome_note(outcome_id,note_index,note) VALUES(?,?,?)", id, i++, note.asText());
+    }
+
+    private static String backtestEvidence(JsonNode report) {
+        if (report.path("demoUnderlying").asBoolean(false)) return "DEMO_FIXTURE";
+        return switch (String.valueOf(text(report, "pricingMode"))) {
+            case "HISTORICAL_CHAIN" -> "OBSERVED_EOD";
+            case "MODELED_FROM_UNDERLYING", "PAYOFF_ONLY" -> "MODELED";
+            default -> "UNKNOWN";
+        };
     }
 
     private static void flattenMetrics(java.sql.Connection c, String id, String prefix, JsonNode node)

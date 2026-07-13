@@ -653,7 +653,8 @@
     colR.appendChild(el('div', { class: 'card card-slim', id: 'command-bar' },
       UI.cardHeader('Tools'),
       el('div', { class: 'btn-row', style: 'flex-wrap:wrap' },
-        [['New Plan', '#/research', 'target'], ['Simulated market', '#/data/simulation', 'flask']].map(function (a) {
+        [['New Plan', '#/research', 'target'], ['Construct portfolio', '#/portfolio/construct', 'grid'],
+          ['Simulated market', '#/data/simulation', 'flask']].map(function (a) {
           return el('button', { class: 'btn btn-sm btn-secondary',
             onclick: function () { App.navigate(a[1]); } }, icon(a[2], 14), ' ', a[0]);
         }))));
@@ -1368,7 +1369,8 @@
         var ex = (exDoc.expirations || []).filter(function (d) { return calendarDayDistance(today, d) >= 0; });
         ex.slice(0, 3).forEach(function (d) {
           var dte = calendarDayDistance(today, d);
-          addEvent('OPTION EXPIRY', d, dte === 0 ? 'Today at the closing bell' : dte + ' calendar days away',
+          addEvent('OPTION EXPIRY', d, dte === 0 ? 'Today at the closing bell'
+            : dte + ' calendar day' + (dte === 1 ? '' : 's') + ' away',
             dte <= 5 ? 'near' : 'dated');
           had = true;
         });
@@ -2745,11 +2747,12 @@
         'Adjust exact contracts'));
   }
 
-  function planStrategyFilterPanel(ui) {
+  function planStrategyFilterPanel(ui, onShapeChange) {
     var filters = ui.strategyFilters = ui.strategyFilters || {};
     function numField(key, id, beginnerLabel, expertLabel, infoKey, attrs) {
       var input = el('input', Object.assign({ type: 'number', id: id, placeholder: 'any', value: filters[key] || '' }, attrs || {}));
       input.addEventListener('input', function () { filters[key] = input.value; });
+      input.addEventListener('change', function () { if (onShapeChange) onShapeChange(); });
       return el('div', { class: 'field' },
         el('label', { for: id }, Learn.currentLevel() === 'beginner' ? beginnerLabel : expertLabel, UI.info(infoKey)), input);
     }
@@ -2966,6 +2969,7 @@
       planRef.result = latest && latest.strategy && latest.strategy.result || null;
       planRef.selected = latest && latest.selected || null;
       ui.selectedCandidate = planRef.selected;
+      if (ui.strategyDraftDirty) planRef.result = null;
     } catch (e) {
       body.appendChild(alertBox('warn', 'Could not restore the last strategy comparison', [e.message]));
     }
@@ -3125,7 +3129,12 @@
 
       var filters = ui.strategyFilters;
       var allow0 = el('input', { type: 'checkbox', id: 'plan-strategy-0dte', checked: filters.allow0dte ? '' : null });
-      allow0.addEventListener('change', function () { filters.allow0dte = allow0.checked; });
+      allow0.addEventListener('change', function () {
+        filters.allow0dte = allow0.checked;
+        planRef.result = null;
+        ui.strategyDraftDirty = true;
+        paint().catch(function (e) { UI.toast(e.message, 'error'); });
+      });
       function requestValues() {
         var f = {};
         if (filters.minPop) f.minPop = parseFloat(filters.minPop) / 100;
@@ -3172,7 +3181,11 @@
         el('p', { class: 'muted' }, beginner
           ? 'StrikeBench compares the complete strategy catalog using this Plan’s goal, view, time, holdings, account and risk budget. Poor fits stay visible as refused or teaching cases.'
           : 'The server uses the Plan’s thesis, horizon, holdings, target, account and risk budget. Optional limits narrow the same complete catalog.'),
-        planStrategyFilterPanel(ui),
+        planStrategyFilterPanel(ui, function () {
+          planRef.result = null;
+          ui.strategyDraftDirty = true;
+          paint().catch(function (e) { UI.toast(e.message, 'error'); });
+        }),
         el('label', { class: 'check-row', for: 'plan-strategy-0dte' }, allow0, ' Include same-day expirations (0DTE)'),
         el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', id: 'plan-run-strategy',
           onclick: async function () {
@@ -3181,6 +3194,7 @@
               var out = await PlanStore.runStrategy(planRef.plan, requestValues());
               planRef.plan = out.plan;
               planRef.result = out.strategy && out.strategy.result;
+              ui.strategyDraftDirty = false;
               await paint();
             } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
           } }, planRef.result ? 'Refresh proposed trades' : beginner ? 'Find proposed trades' : 'Run ranked field')));
@@ -3196,8 +3210,10 @@
         body.appendChild(selectedCard);
       }
       if (!planRef.result) {
-        body.appendChild(UI.emptyState('No comparison has run yet',
-          'Run the complete field once. The Plan saves the exact ranked result so a reload cannot change what you saw.'));
+        body.appendChild(UI.emptyState(ui.strategyDraftDirty ? 'Limits changed — rerun the field' : 'No comparison has run yet',
+          ui.strategyDraftDirty
+            ? 'The prior result is still in Plan history, but it is hidden here because it did not use the limits now on screen.'
+            : 'Run the complete field once. The Plan saves the exact ranked result so a reload cannot change what you saw.'));
         if (planRef.selected) appendPlanStrategyNext(body, planRef, paint);
         return;
       }
@@ -3205,6 +3221,7 @@
         UI.cardHeader(beginner ? 'Proposed trades, in rank order' : 'Ranked field', el('span', { class: 'badge badge-dim' }, planRef.result.candidates.length + ' candidates')),
         el('p', {}, planRef.result.economicMessage || 'Compare mechanics, evidence, costs and economic placement together.'),
         el('div', { class: 'chip-row' },
+          chip('Cash / no trade', '$0 modeled P/L'),
           chip('Favorable', planRef.result.favorableCount || 0), chip('Mixed', planRef.result.mixedCount || 0),
           chip('Unfavorable', planRef.result.unfavorableCount || 0), chip('Unavailable', planRef.result.unavailableCount || 0))));
       var field = el('div', { id: 'plan-strategy-results' });
@@ -3715,6 +3732,7 @@
         el('div', { class: 'btn-row' }, trade, cash)));
       refresh();
     }
+    if (state.preview) paintPreview();
   }
 
   function planManagementTimeline(host, management, includeReviews) {

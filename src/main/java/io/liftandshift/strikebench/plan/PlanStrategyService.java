@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.eval.EvidenceLevel;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 
@@ -325,7 +326,7 @@ public final class PlanStrategyService {
         values.put("entry_net_cents", longOrNull(n, "entryNetPremiumCents"));
         values.put("max_loss_cents", longOrNull(n, "maxLossCents")); values.put("max_profit_cents", longOrNull(n, "maxProfitCents"));
         values.put("cvar_cents", longOrNull(n, "cvarCents")); values.put("economic_verdict", text(n, "economicVerdict"));
-        values.put("evidence_provenance", text(n, "freshness")); values.put("input_hash", sha256(n));
+        values.put("evidence_provenance", candidateEvidence(n)); values.put("input_hash", sha256(n));
         values.put("state", state); values.put("selected", 0); values.put("run_id", runId); values.put("source_kind", sourceKind);
         values.put("display_name", text(n, "displayName")); values.put("position_label", text(n, "label"));
         values.put("qty", integerOrNull(n, "qty")); values.put("expected_value_cents", longOrNull(n, "expectedValueCents"));
@@ -597,6 +598,11 @@ public final class PlanStrategyService {
     }
     private static Double doubleOrNull(JsonNode n, String key) {
         JsonNode value = n == null ? null : n.get(key); return value == null || value.isNull() ? null : value.doubleValue();
+    }
+
+    private static String candidateEvidence(JsonNode candidate) {
+        String receipt = text(candidate.path("evaluation").path("evidence"), "rollup");
+        return receipt == null ? EvidenceLevel.fromFreshness(text(candidate, "freshness")).name() : receipt;
     }
     private static Integer integerOrNull(JsonNode n, String key) {
         JsonNode value = n == null ? null : n.get(key); return value == null || value.isNull() ? null : value.intValue();

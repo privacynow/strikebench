@@ -148,7 +148,8 @@ public final class PlanDecisionService {
                         "cvar_cents,economic_verdict,evidence_provenance,model_version,study_key,review_horizon_days,created_at) " +
                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 id, input.plan().id(), decisionSeq, input.plan().context().rev(), input.candidateId(), account.id(), action, qty,
-                actualEntry, now, null, account.buyingPowerCents(), risk == null ? null : risk.riskCapitalCents(),
+                actualEntry, now, risk == null ? null : risk.nlvCents(), account.buyingPowerCents(),
+                risk == null ? null : risk.riskCapitalCents(),
                 trade == null ? preview.maxLossCents() : trade.maxLossCents(),
                 trade == null ? preview.maxProfitCents() : trade.maxProfitCents(),
                 trade == null ? preview.popEntry() : trade.popEntry(), pMaxProfit, pMaxLoss,
