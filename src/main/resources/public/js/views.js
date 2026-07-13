@@ -2356,7 +2356,8 @@
     }
   }
 
-  function comparisonTable(candidates) {
+  function comparisonTable(candidates, options) {
+    options = options || {};
     var sortKey = 'rank', sortDir = 1;
     // The served order IS the ranking (decision-ranked; screen order on fallback) — stamp it
     // once so re-sorting by any column keeps the true rank visible on every row (review P1).
@@ -2409,6 +2410,7 @@
           el('td', { colspan: String(COLS.length + 1) }));
         var row = pressable(el('tr', {
           class: 'clickable', 'aria-expanded': 'false', onclick: function () {
+            if (options.onRow) { options.onRow(c); return; }
             var open = detailRow.style.display !== 'none';
             detailRow.style.display = open ? 'none' : '';
             this.setAttribute('aria-expanded', String(!open));
@@ -2418,12 +2420,13 @@
           }
         }, COLS.map(function (col) { return el('td', {}, col.render(c)); }).concat([
           el('td', {}, el('button', {
-            class: 'btn btn-sm', onclick: function (e) {
+            class: 'btn btn-sm', disabled: options.actionDisabled && options.actionDisabled(c) ? '' : null,
+            onclick: function (e) {
               e.stopPropagation();
-              startPlan({ symbol: App.context.symbol(), intent: tradeIntent(c && c.intent),
-                horizon: App.context.horizon(), thesis: App.context.thesis() }, 'STRATEGY');
+              if (options.onAction) options.onAction(c, this);
             }
-          }, 'Open Plan'))])), 'Show details for ' + c.displayName, 'button');
+          }, options.actionLabel ? options.actionLabel(c) : 'Select'))])),
+          'Show details for ' + c.displayName, 'button');
         body.appendChild(row);
         body.appendChild(detailRow);
       });
@@ -2908,16 +2911,11 @@
       return;
     }
     if (Learn.currentLevel() === 'expert') {
-      var tableCard = comparisonTable(candidates);
-      tableCard.querySelectorAll('.compare-detail').forEach(function (row) { row.remove(); });
-      tableCard.querySelectorAll('tbody tr').forEach(function (row, index) {
-        var old = row.lastElementChild && row.lastElementChild.querySelector('button');
-        if (!old) return;
-        var c = candidates[index];
-        old.textContent = c.selected ? 'Selected' : 'Select';
-        old.disabled = c.selected;
-        old.onclick = function (event) {
-          event.stopPropagation();
+      var tableCard = comparisonTable(candidates, {
+        actionLabel: function (c) { return c.selected ? 'Selected' : 'Select'; },
+        actionDisabled: function (c) { return !!c.selected; },
+        onAction: function (c, button) {
+          button.disabled = true;
           PlanStore.get(planRef.plan.id, true).then(function (live) {
             return PlanStore.selectCandidate(live, c.id);
           }).then(function (out) {
@@ -2926,16 +2924,16 @@
             planRef.selected = c;
             ui.selectedCandidate = c;
             return repaint();
-          }).catch(function (e) { UI.toast(e.message, 'error'); });
-        };
-        row.onclick = function () {
+          }).catch(function (e) { button.disabled = false; UI.toast(e.message, 'error'); });
+        },
+        onRow: function (c) {
           var detail = document.getElementById('plan-candidate-detail');
           if (!detail) return;
           detail.innerHTML = '';
           detail.appendChild(candidateCard(c, false, planRef.plan.symbol));
           detail.appendChild(planCandidateActions(planRef, c, ui, repaint));
           detail.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        };
+        }
       });
       host.appendChild(tableCard);
       host.appendChild(el('div', { id: 'plan-candidate-detail' }));
