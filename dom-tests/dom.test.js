@@ -306,7 +306,7 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   assert.equal(await page.locator('#research-hero .xp.open').count(), 1,
     'desktop Research opens useful market detail instead of hiding it');
   await page.locator('#plan-start .choice-card').filter({ hasText: 'Earn income' }).click();
-  await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/understand$/.test(location.hash));
+  await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/strategy$/.test(location.hash));
   await page.waitForSelector('#plan-header, #route-error');
   assert.equal(await page.locator('#route-error').count(), 0,
     'persisted plan renders without a route error: ' + (await page.locator('#app').textContent()));
@@ -318,6 +318,15 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'the primary navigation names the Plan workspace while its journey is open');
   assert.match(await page.textContent('#lane-chip'), /DEMO/,
     'the active execution market remains visible inside every Plan stage');
+  assert.match(await page.textContent('#toast-region'), /Plan created — AAPL · Earn income/,
+    'creating a Plan is announced before the journey continues');
+  assert.match(planHash, /\/strategy$/,
+    'an explicit goal has one canonical destination: Strategy');
+  await page.locator('.plan-rail button').filter({ hasText: 'Understand' }).click();
+  await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/understand$/.test(location.hash));
+  await page.waitForSelector('#plan-understand-scope');
+  assert.match(await page.textContent('#plan-understand-scope'), /SAVED PLAN FOCUS.*AAPL.*Earn income.*30 days.*Demo market/s,
+    'Understand leads with the saved Plan focus rather than an unframed copy of Research');
   await page.waitForSelector('#research-symbol');
   assert.equal(await page.locator('.plan-rail li').count(), 6, 'the full six-stage journey appears after Plan creation');
   assert.equal(await page.locator('.plan-rail li').last().locator('button').isDisabled(), true,
@@ -346,7 +355,7 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   await page.waitForFunction(() => /45 days/.test(document.getElementById('plan-header')?.textContent || ''));
   await page.reload();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
-  assert.equal(await page.evaluate(() => location.hash), planHash);
+  assert.equal(await page.evaluate(() => location.hash), planHash.replace('/strategy', '/understand'));
   assert.match(await page.textContent('#plan-header'), /45 days/);
   assert.match(await page.textContent('#plan-header'), /AAPL.*Earn income/s);
 
@@ -1694,6 +1703,12 @@ test('research keeps non-optionable funds useful without inventing an options Pl
   assert.ok(await page.locator('#history-card').count(), 'stock history remains available without an options Plan');
   assert.equal(await page.locator('#plan-start .choice-card:not([disabled])').count(), 0,
     'no goal can create an unpriceable options Plan');
+  assert.equal(await page.locator('#plan-start .choice-card .choice-unavailable').count(), 5,
+    'every unavailable goal carries its reason on the disabled control');
+  assert.ok((await page.locator('#plan-start .choice-card').evaluateAll(cards => cards.every(card => {
+    const id = card.getAttribute('aria-describedby');
+    return id && card.querySelector('#' + id) && /Unavailable:/.test(card.textContent || '');
+  }))), 'disabled goals expose the visible reason to assistive technology');
   await page.waitForSelector('#news-overview-card .news-tile');
   const prompts = await page.textContent('#news-overview-card');
   assert.match(prompts, /scenario prompts, not news about VTSAX/i);
