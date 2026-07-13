@@ -239,6 +239,13 @@
     return out;
   }
 
+  async function fitStrategy(plan, controls) {
+    var out = await API.post('/api/plans/' + plan.id + '/strategy/fit',
+      Object.assign({ expectedVersion: plan.version }, controls || {}));
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
   async function selectCandidate(plan, candidateId) {
     var out = await API.put('/api/plans/' + plan.id + '/strategy/select', {
       expectedVersion: plan.version, candidateId: candidateId
@@ -434,7 +441,7 @@
     get: get, create: create, promote: promote,
     provisional: provisional, active: active, focus: focus, path: path, setStage: setStage,
     updateContext: updateContext, claimIntent: claimIntent, closeChip: closeChip,
-    latestStrategy: latestStrategy, runStrategy: runStrategy,
+    latestStrategy: latestStrategy, runStrategy: runStrategy, fitStrategy: fitStrategy,
     selectCandidate: selectCandidate, saveCustom: saveCustom,
     latestScout: latestScout, runScout: runScout, spawnScoutedPlan: spawnScoutedPlan,
     latestOutcomes: latestOutcomes, runEnsemble: runEnsemble,

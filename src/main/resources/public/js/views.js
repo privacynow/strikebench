@@ -180,7 +180,7 @@
         liveHost.appendChild(el('p', { class: 'muted small', style: 'margin:4px 0 0' }, 'Refreshing with a live run\u2026'));
       }
       try {
-        var refresh = API.post('/api/recommend', { symbol: 'AAPL', thesis: 'bullish', horizon: 'month', riskMode: 'conservative' });
+        var refresh = API.getFresh('/api/welcome/teaching-example');
         var r = await Promise.race([refresh, new Promise(function (_, reject) {
           setTimeout(function () { reject(new Error('The current market check is still running.')); }, 6000);
         })]);
@@ -1008,7 +1008,8 @@
           } catch (eh) { /* fine */ }
           async function rung(intentKey) {
             try {
-              var lad = await API.post('/api/recommend/ladder', { symbol: symbol, intent: intentKey });
+              var lad = await API.post('/api/research/' + encodeURIComponent(symbol) + '/intent-ladder',
+                { intent: intentKey });
               var rungs = (lad.rungs || []).filter(function (c) { return !!UI.firstOptionLeg(c && c.legs); });
               return rungs.length ? rungs[Math.min(1, rungs.length - 1)] : null;
             } catch (er) { return null; }
@@ -1251,7 +1252,7 @@
       try {
         var universe = App.state.universe && App.state.universe.active && App.state.universe.active.symbols || [];
         var risk = document.getElementById('risk-mode');
-        var response = await API.post('/api/recommend/auto', {
+        var response = await API.post('/api/research/scout', {
           universe: universe, horizons: [horizon.value], maxPicks: 5,
           riskMode: risk ? risk.value : 'conservative', allow0dte: horizon.value === '0DTE',
           intents: [intent.value]
@@ -2681,6 +2682,13 @@
           thesis: planRef.plan.context && planRef.plan.context.thesis,
           horizon: planHorizonName(planRef.plan),
           completeLabel: 'Save exact package to Plan',
+          fitToLimits: async function (controls) {
+            var live = await PlanStore.get(planRef.plan.id, true);
+            planRef.plan = live;
+            var out = await PlanStore.fitStrategy(live, controls);
+            if (out.plan) planRef.plan = out.plan;
+            return out;
+          },
           onComplete: function (ticket) {
             if (!ticket) return;
             var position = {

@@ -195,6 +195,27 @@ class PlanApiIntegrationTest {
         assertThat(!afterRevision.has("strategy") || afterRevision.get("strategy").isNull()).isTrue();
     }
 
+    @Test void builderFitUsesThePlanContextWithoutMutatingOrPersistingASecondWorkflow() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"strategy-fit-plan-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        long version = plan.get("version").asLong();
+        JsonNode fit = json(post("/api/plans/" + id + "/strategy/fit", """
+                {"expectedVersion":%d,"strategy":"DEBIT_CALL_SPREAD","maxLossCents":100000,
+                 "filters":{"minPop":0.05}}
+                """.formatted(version)));
+        assertThat(fit.at("/candidate/strategy").asText()).isEqualTo("DEBIT_CALL_SPREAD");
+        assertThat(fit.at("/candidate/legs")).isNotEmpty();
+        assertThat(fit.at("/plan/version").asLong()).isEqualTo(version);
+        JsonNode latest = json(get("/api/plans/" + id + "/strategy/latest"));
+        assertThat(!latest.has("strategy") || latest.get("strategy").isNull()).isTrue();
+
+        assertThat(post("/api/plans/" + id + "/strategy/fit",
+                "{\"expectedVersion\":999,\"strategy\":\"DEBIT_CALL_SPREAD\"}").statusCode()).isEqualTo(409);
+    }
+
     @Test void customBuilderAndScoutPicksRemainExactPlanOwnedStructures() throws Exception {
         JsonNode customPlan = json(post("/api/plans", """
                 {"clientRequestId":"custom-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL",

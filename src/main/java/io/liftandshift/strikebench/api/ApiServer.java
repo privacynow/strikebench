@@ -433,6 +433,7 @@ public final class ApiServer {
             c.routes.post("/api/plans/{id}/evidence/study", this::planEvidenceStudy);
             c.routes.get("/api/plans/{id}/strategy/latest", this::planStrategyLatest);
             c.routes.post("/api/plans/{id}/strategy/run", this::planStrategyRun);
+            c.routes.post("/api/plans/{id}/strategy/fit", this::planStrategyFit);
             c.routes.post("/api/plans/{id}/strategy/custom", this::planStrategyCustom);
             c.routes.put("/api/plans/{id}/strategy/select", this::planStrategySelect);
             c.routes.get("/api/plans/{id}/scout/latest", this::planScoutLatest);
@@ -516,9 +517,9 @@ public final class ApiServer {
                             .map(Enum::name).toList(),
                     "catalog", io.liftandshift.strikebench.strategy.StrategyCatalog.families(),
                     "templates", io.liftandshift.strikebench.strategy.StrategyCatalog.templates())));
-            c.routes.post("/api/recommend", this::recommend);
-            c.routes.post("/api/recommend/auto", this::recommendAuto);
-            c.routes.post("/api/recommend/ladder", this::recommendLadder);
+            c.routes.get("/api/welcome/teaching-example", this::welcomeTeachingExample);
+            c.routes.post("/api/research/scout", this::researchScout);
+            c.routes.post("/api/research/{symbol}/intent-ladder", this::researchIntentLadder);
             c.routes.post("/api/evaluate", this::evaluate);
             c.routes.post("/api/opportunities", this::opportunities);
             c.routes.post("/api/optimize", this::optimize);
@@ -1649,11 +1650,13 @@ public final class ApiServer {
         if (path.startsWith("/api/datasets") || path.startsWith("/api/data")) return "data-ops";
         if (path.startsWith("/api/broker")) return "broker";
         if (path.startsWith("/api/sparklines")) return "quotes";
+        if (path.startsWith("/api/research/scout") || path.contains("/intent-ladder")
+                || path.contains("/strategy/run") || path.contains("/strategy/fit")
+                || path.startsWith("/api/evaluate") || path.startsWith("/api/opportunities")
+                || path.startsWith("/api/optimize")) return "compute";
         if (path.startsWith("/api/research")) return "research";
         if (path.startsWith("/api/quotes") || path.startsWith("/api/market")) return "quotes";
-        if (path.startsWith("/api/recommend") || path.startsWith("/api/evaluate")
-                || path.startsWith("/api/opportunities") || path.startsWith("/api/sim")
-                || path.startsWith("/api/optimize")) return "compute";
+        if (path.startsWith("/api/sim")) return "compute";
         if (path.startsWith("/api/trades") || path.startsWith("/api/portfolio")
                 || path.startsWith("/api/positions")) return "trading";
         return "other";
@@ -2073,6 +2076,8 @@ public final class ApiServer {
 
     public record PlanStrategyRunRequest(Boolean allow0dte, Long maxLossCents, List<String> allowedStrategies,
                                          RecommendationEngine.Filters filters) {}
+    public record PlanStrategyFitRequest(Long expectedVersion, String strategy, Boolean allow0dte,
+                                         Long maxLossCents, RecommendationEngine.Filters filters) {}
     public record PlanStrategySelectRequest(String candidateId, Long expectedVersion) {}
     public record PlanStrategyCustomRequest(Long expectedVersion, TradeOpenRequest position) {}
     public record PlanScoutRequest(String scope, Integer maxPicks, Boolean allow0dte) {}
@@ -2109,22 +2114,52 @@ public final class ApiServer {
             throw new IllegalStateException("Choose what this plan should do before comparing strategies");
         }
         PlanStrategyRunRequest controls = bodyOrNull(ctx, PlanStrategyRunRequest.class);
+        RecommendationEngine.Request request = planStrategyRequest(plan, controls);
+        RecommendationEngine.Result recommended = resolveAndRecommend(ctx, request);
+        JsonNode ranked = Json.MAPPER.valueToTree(decisionRanked(recommended, currentAccount(ctx), activeWorld(ctx)));
+        JsonNode input = Json.MAPPER.valueToTree(request);
+        var saved = planStrategy.saveCompetition(ownerId(ctx), plan, input, ranked);
+        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "strategy", saved));
+    }
+
+    /** Price one named Builder structure against this Plan without creating a second strategy workflow. */
+    private void planStrategyFit(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanStrategyFitRequest.class));
+        if (body.expectedVersion() == null || body.strategy() == null || body.strategy().isBlank()) {
+            throw new IllegalArgumentException("expectedVersion and strategy are required");
+        }
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        requirePlanVersion(plan, body.expectedVersion());
+        if (plan.intent() == null || plan.intent().isBlank()) {
+            throw new IllegalStateException("Choose what this plan should do before fitting a structure");
+        }
+        var controls = new PlanStrategyRunRequest(body.allow0dte(), body.maxLossCents(),
+                List.of(body.strategy().trim().toUpperCase(Locale.ROOT)), body.filters());
+        var request = planStrategyRequest(plan, controls);
+        var ranked = Json.MAPPER.valueToTree(decisionRanked(resolveAndRecommend(ctx, request),
+                currentAccount(ctx), activeWorld(ctx)));
+        ObjectNode out = Json.MAPPER.createObjectNode();
+        out.set("plan", Json.MAPPER.valueToTree(plan));
+        out.set("result", ranked);
+        JsonNode candidates = ranked.path("candidates");
+        if (candidates.isArray() && !candidates.isEmpty()) out.set("candidate", candidates.get(0));
+        ctx.json(out);
+    }
+
+    private static RecommendationEngine.Request planStrategyRequest(
+            io.liftandshift.strikebench.plan.Plan.View plan, PlanStrategyRunRequest controls) {
         var c = plan.context();
         RecommendationEngine.Holdings holdings = c.holdingsShares() == null && c.costBasisCents() == null
                 && c.targetCents() == null ? null
                 : new RecommendationEngine.Holdings(c.holdingsShares() == null ? null
                         : Math.toIntExact(Math.min(Integer.MAX_VALUE, c.holdingsShares())),
                         c.costBasisCents(), c.targetCents());
-        RecommendationEngine.Request request = new RecommendationEngine.Request(plan.symbol(),
-                c.thesis(), planHorizon(c.horizonDays()), c.riskMode(), controls == null ? null : controls.maxLossCents(), null, null,
+        return new RecommendationEngine.Request(plan.symbol(), c.thesis(), planHorizon(c.horizonDays()),
+                c.riskMode(), controls == null ? null : controls.maxLossCents(), null, null,
                 controls == null ? null : controls.allowedStrategies(), true,
                 controls != null && Boolean.TRUE.equals(controls.allow0dte()), plan.intent(), holdings,
                 controls == null ? null : controls.filters());
-        RecommendationEngine.Result recommended = resolveAndRecommend(ctx, request);
-        JsonNode ranked = Json.MAPPER.valueToTree(decisionRanked(recommended, currentAccount(ctx), activeWorld(ctx)));
-        JsonNode input = Json.MAPPER.valueToTree(request);
-        var saved = planStrategy.saveCompetition(ownerId(ctx), plan, input, ranked);
-        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "strategy", saved));
     }
 
     private void planStrategySelect(Context ctx) {
@@ -4004,10 +4039,12 @@ public final class ApiServer {
         ctx.json(Map.of("matches", q == null ? List.of() : market.lookup(q, activeWorld(ctx))));
     }
 
-    // ---- Recommendations ----
+    // ---- Product-owned strategy discovery ----
 
-    private void recommend(Context ctx) {
-        RecommendationEngine.Result result = resolveAndRecommend(ctx);
+    private void welcomeTeachingExample(Context ctx) {
+        var request = new RecommendationEngine.Request("AAPL", "bullish", "month", "conservative",
+                null, null, null, null, true, false, "DIRECTIONAL", null, null);
+        RecommendationEngine.Result result = resolveAndRecommend(ctx, request);
         ctx.json(decisionRanked(result, currentAccount(ctx), activeWorld(ctx)));
     }
 
@@ -4601,10 +4638,20 @@ public final class ApiServer {
         ctx.json(Map.of("ok", true));
     }
 
-    private void recommendLadder(Context ctx) {
+    private void researchIntentLadder(Context ctx) {
+        String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
         RecommendationEngine.Request req = bodyOrNull(ctx, RecommendationEngine.Request.class);
-        if (req == null || req.symbol() == null || req.symbol().isBlank()) {
-            throw new IllegalArgumentException("symbol is required");
+        if (req == null) {
+            req = new RecommendationEngine.Request(symbol, null, "month", null, null, null, null,
+                    null, true, false, null, null, null);
+        } else {
+            if (req.symbol() != null && !req.symbol().isBlank()
+                    && !symbol.equalsIgnoreCase(req.symbol())) {
+                throw new IllegalArgumentException("The ladder symbol must match the Research workspace");
+            }
+            req = new RecommendationEngine.Request(symbol, req.thesis(), req.horizon(), req.riskMode(),
+                    req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
+                    req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
         }
         Account acct = currentAccount(ctx);
         StrategyIntent intent = StrategyIntent.parse(req.intent());
@@ -4665,7 +4712,7 @@ public final class ApiServer {
         ctx.json(ladder);
     }
 
-    private void recommendAuto(Context ctx) {
+    private void researchScout(Context ctx) {
         AutoRecommender.AutoRequest req = bodyOrNull(ctx, AutoRecommender.AutoRequest.class);
         if (req == null) { // absent body (or the literal document "null") means defaults
             req = new AutoRecommender.AutoRequest(null, null, null, null, null, null, null, null, null, null, null);
