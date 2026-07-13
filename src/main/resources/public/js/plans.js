@@ -143,28 +143,35 @@
     var body = Object.assign({ clientRequestId: requestId() }, fields || {});
     var plan = replace(await API.post('/api/plans', body));
     rememberActive(plan);
-    App.state.provisionalPlan = null;
+    App.state.provisionalPlansByMarket = App.state.provisionalPlansByMarket || {};
+    delete App.state.provisionalPlansByMarket[currentMarketKey()];
     if (window.Workspace) Workspace.save();
     return plan;
   }
 
   async function promote(fields) {
-    var provisional = App.state.provisionalPlan || {};
+    var provisional = currentDraft() || {};
     return create(Object.assign({}, provisional, fields || {}, {
       symbol: (fields && fields.symbol) || provisional.symbol,
       clientRequestId: provisional.clientRequestId || requestId()
     }));
   }
 
+  function currentDraft() {
+    return (App.state.provisionalPlansByMarket || {})[currentMarketKey()] || null;
+  }
+
   function provisional(symbol) {
     symbol = String(symbol || '').trim().toUpperCase();
     var market = currentMarket();
-    var existing = App.state.provisionalPlan;
+    App.state.provisionalPlansByMarket = App.state.provisionalPlansByMarket || {};
+    var key = currentMarketKey();
+    var existing = App.state.provisionalPlansByMarket[key];
     if (!existing || existing.symbol !== symbol || existing.marketKind !== market.kind
         || existing.worldId !== (market.kind === 'SIMULATED' ? market.world : null)) {
-      existing = { clientRequestId: requestId(), symbol: symbol, marketKind: market.kind,
-        worldId: market.kind === 'SIMULATED' ? market.world : null };
-      App.state.provisionalPlan = existing;
+      existing = Object.assign({}, existing || {}, { clientRequestId: requestId(), symbol: symbol,
+        marketKind: market.kind, worldId: market.kind === 'SIMULATED' ? market.world : null });
+      App.state.provisionalPlansByMarket[key] = existing;
     }
     return existing;
   }
@@ -439,7 +446,7 @@
   window.PlanStore = {
     init: function () { return load(true); }, load: load, refresh: refresh, library: library,
     get: get, create: create, promote: promote,
-    provisional: provisional, active: active, focus: focus, path: path, setStage: setStage,
+    provisional: provisional, currentDraft: currentDraft, active: active, focus: focus, path: path, setStage: setStage,
     updateContext: updateContext, claimIntent: claimIntent, closeChip: closeChip,
     latestStrategy: latestStrategy, runStrategy: runStrategy, fitStrategy: fitStrategy,
     selectCandidate: selectCandidate, saveCustom: saveCustom,

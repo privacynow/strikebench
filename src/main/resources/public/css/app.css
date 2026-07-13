@@ -1346,7 +1346,7 @@ body.lvl-expert .not-expert { display: none !important; }
 .alt-row .alt-facts { display: flex; gap: 8px; flex-shrink: 0; }
 .section-h { font-size: 16px; margin: 20px 0 10px; }
 
-/* Shared analytical tools, owned by their Research/Trade/Portfolio surfaces. */
+/* Shared analytical tools used inside Plan, Research, and Portfolio surfaces. */
 .tool-grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
 @media (min-width: 900px) {
   .tool-grid { grid-template-columns: 1fr 1fr; align-items: start; }

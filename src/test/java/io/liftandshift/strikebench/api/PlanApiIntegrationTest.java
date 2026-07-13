@@ -315,7 +315,14 @@ class PlanApiIntegrationTest {
         assertThat(replay.at("/report/sampleSize").asInt()).isGreaterThan(0);
         assertThat(replay.at("/report/pricingMode").asText()).isEqualTo("MODELED_FROM_UNDERLYING");
         String backtestId = replay.at("/report/id").asText();
-        assertThat(json(get("/api/backtests/" + backtestId)).get("id").asText()).isEqualTo(backtestId);
+        assertThat(json(get("/api/plans/" + id + "/outcomes/backtests/" + backtestId)).get("id").asText())
+                .isEqualTo(backtestId);
+        JsonNode other = json(post("/api/plans", """
+                {"clientRequestId":"backtest-owner-check","symbol":"SPY","intent":"DIRECTIONAL",
+                 "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                """));
+        assertThat(get("/api/plans/" + other.get("id").asText() + "/outcomes/backtests/" + backtestId).statusCode())
+                .isEqualTo(404);
         JsonNode latestAfterReplay = json(get("/api/plans/" + id + "/outcomes/latest"));
         assertThat(latestAfterReplay.at("/backtests/0/backtestId").asText()).isEqualTo(backtestId);
         assertThat(latestAfterReplay.at("/backtests/0/maxDrawdownPct").isNumber()).isTrue();

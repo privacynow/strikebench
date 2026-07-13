@@ -3,52 +3,64 @@
   'use strict';
 
   var App = {
-    state: { ticket: null, serverStale: false, plans: [], planCollections: {}, activePlanId: null,
-      activePlanByMarket: {}, provisionalPlan: null, planUi: {},
-      marketContext: { symbol: null, goal: null, horizon: null, thesis: null } },
+    state: { serverStale: false, plans: [], planCollections: {}, activePlanId: null,
+      activePlanByMarket: {}, provisionalPlansByMarket: {}, planUi: {} },
     navToken: 0,
 
-    /** One lane-owned decision context. Placed tickets remain locked snapshots of it. */
+    /** Read active Plan facts, or the current market's provisional Plan before promotion. */
     context: {
+      source: function () {
+        var onPlan = /^#\/plan\//.test(window.location.hash || '');
+        var active = window.PlanStore && PlanStore.active ? PlanStore.active() : null;
+        if (onPlan && active) return active;
+        var key = (App.state.world || (App.config && App.config.world) || 'observed');
+        var draft = (App.state.provisionalPlansByMarket || {})[key];
+        return draft || active || {};
+      },
       symbol: function (fallback) {
-        var value = App.state.marketContext && App.state.marketContext.symbol;
+        var value = App.context.source().symbol;
         return (value || fallback || '').toUpperCase();
       },
       goal: function (fallback) {
-        return (App.state.marketContext && App.state.marketContext.goal) || fallback || null;
+        var source = App.context.source();
+        return source.intent || source.goal || fallback || null;
       },
       horizon: function (fallback) {
-        return (App.state.marketContext && App.state.marketContext.horizon) || fallback || null;
+        var source = App.context.source();
+        var days = source.context && source.context.horizonDays !== undefined
+          ? source.context.horizonDays : source.horizonDays;
+        return source.horizon || (days ? days + 'd' : null) || fallback || null;
       },
       thesis: function (fallback) {
-        return (App.state.marketContext && App.state.marketContext.thesis) || fallback || null;
+        var source = App.context.source();
+        return (source.context && source.context.thesis) || source.thesis || fallback || null;
       },
       update: function (patch) {
         patch = patch || {};
-        var next = Object.assign({}, App.state.marketContext || {});
+        var key = (App.state.world || (App.config && App.config.world) || 'observed');
+        App.state.provisionalPlansByMarket = App.state.provisionalPlansByMarket || {};
+        var next = Object.assign({}, App.state.provisionalPlansByMarket[key] || {});
         if (patch.symbol !== undefined) {
           var symbol = String(patch.symbol || '').trim().toUpperCase();
           next.symbol = symbol || null;
         }
         if (patch.goal !== undefined) {
           var goal = patch.goal === null ? '' : String(patch.goal).trim().toUpperCase();
-          if (!goal || goal === 'ALL' || goal === 'BROWSE') next.goal = null;
-          else if (['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'].indexOf(goal) >= 0) next.goal = goal;
+          if (!goal || goal === 'ALL' || goal === 'BROWSE') next.intent = null;
+          else if (['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'].indexOf(goal) >= 0) next.intent = goal;
         }
         if (patch.horizon !== undefined) {
           var horizon = String(patch.horizon || '').trim();
           next.horizon = horizon || null;
+          next.horizonDays = /^\d+d$/.test(horizon) ? parseInt(horizon, 10)
+            : horizon === '0DTE' ? 1 : horizon === 'week' ? 7 : horizon === 'quarter' ? 63
+              : horizon === 'month' ? 30 : next.horizonDays;
         }
         if (patch.thesis !== undefined) {
           var thesis = String(patch.thesis || '').trim().toLowerCase();
           next.thesis = thesis || null;
         }
-        var oldSymbol = App.state.marketContext && App.state.marketContext.symbol;
-        App.state.marketContext = next;
-        if (next.symbol && oldSymbol !== next.symbol
-            && App.state.evidencePrefill && App.state.evidencePrefill.symbol !== next.symbol) {
-          App.state.evidencePrefill = null;
-        }
+        App.state.provisionalPlansByMarket[key] = next;
         return Object.assign({}, next);
       },
       selectSymbol: function (raw) {
@@ -154,9 +166,7 @@
       // and fills the rest from a detached block guarded by App.alive(token); a later
       // navigation bumps the token so that stale fill bails instead of painting the wrong screen.
       var token = ++App.navToken;
-      // Route-owned live refresh hooks must never survive into the next screen. The Trade
-      // workflow installs this while mounted so Builder/ticket edits can refresh its context
-      // strip without rerendering the whole route.
+      // Route-owned live refresh hooks must never survive into the next screen.
       App.refreshWorkflowContext = null;
       // The readiness flag drops SYNCHRONOUSLY on render start — the crossfade below is
       // async, and anything watching data-ready (tests, tooling) must never catch the
@@ -170,10 +180,27 @@
       var parts = hash.replace(/^#\//, '').split('/').filter(function (p) { return p.length; });
       var route = parts[0] || 'home';
       var params = parts.slice(1);
+      function validRouteShape(name, args) {
+        if (name === 'home') return !args.length || (args.length === 1 && args[0] === 'tour');
+        if (name === 'research') return !args.length;
+        if (name === 'plan') {
+          if (!args.length) return false;
+          if (/^new(?:\?symbol=[A-Z0-9._-]+)?$/i.test(args[0])) return args.length === 1;
+          return args.length === 2 && ['understand', 'evidence', 'strategy', 'outcomes', 'decide', 'manage-review']
+            .indexOf((args[1] || '').split('?')[0]) >= 0;
+        }
+        if (name === 'portfolio') return !args.length
+          || ['positions', 'active', 'closed', 'activity', 'record', 'account'].indexOf(args[0]) >= 0
+          || (args[0] === 'trade' && args.length === 2 && /^tr_[A-Za-z0-9_-]+$/.test(args[1]));
+        if (name === 'data') return !args.length || (args.length === 1
+          && ['overview', 'datasets', 'simulation', 'sources', 'admin'].indexOf(args[0]) >= 0);
+        return false;
+      }
       // Routes are canonical product nouns. Internal aliases only obscure ownership and make
       // navigation tests prove redirects instead of the real screen contract.
-      var view = window.Views[route];
+      var view = validRouteShape(route, params) && window.Views[route];
       if (!view) {
+        window.history.replaceState(null, '', '#/home');
         route = 'home';
         params = [];
         view = window.Views.home;
@@ -252,12 +279,11 @@
       }
       prefetchForRoute(route, params); // idle-time warm-up of the likely next step (server-governed)
       if (window.Workspace) Workspace.save(); // navigation is a save point (dirty-checked, debounced push)
-      // The ticker is MARKET CONTEXT, not decoration. Research, trading, and portfolio work
-      // all depend on the current universe; hiding the only global sector selector on Trade
-      // inverted the workflow and made sector state appear to vanish between tabs.
+      // The ticker is market context, not decoration. Home, Research, Plans, and Portfolio
+      // all depend on the current universe.
       var tape = document.getElementById('tape');
       if (tape) {
-        var showTape = route === 'home' || route === 'research' || route === 'trade' || route === 'portfolio'
+        var showTape = route === 'home' || route === 'research' || route === 'plan' || route === 'portfolio'
           || (route === 'data' && App.state.world && App.state.world !== 'observed');
         tape.classList.toggle('tape-offroute', !showTape);
         var strip = document.getElementById('tape-strip');
@@ -612,28 +638,6 @@
   // update, and the real caller then skipped the universe/render reconciliation entirely —
   // the "still says Dom sim (simulated)" defect.
 
-  // Workflow state is OWNED by the market context (review P1 #4): the outgoing lane's
-  // thinking is stashed, the incoming lane's restored — a simulated symbol, thesis, or study
-  // must never leak into observed screens (or vice versa).
-  var LANE_KEYS = ['marketContext', 'marketThesis', 'researchStudy', 'evidencePrefill',
-    'ideasPrefill', 'backtestPrefill', 'discoverForm', 'builderForm', 'backtestForm',
-    'verifyForm', 'scenarioForm', 'scenarioTargets', 'scenarioAnalysis', 'scenarioHandoff', 'simulationPrefill',
-    'scoutResults', 'outcomeReceipt',
-    'portfolioOptimizer',
-    // Result objects are market-DERIVED state (review P0 #1): an observed evaluation must
-    // never render inside a simulated market. HTTP-cache flushes don't touch these.
-    'recommendResults', 'decisionCache', 'decisionInflight', 'filterState'];
-  function stashLane(worldId) {
-    App.state._laneStash = App.state._laneStash || {};
-    var box = {};
-    LANE_KEYS.forEach(function (k) { box[k] = App.state[k]; delete App.state[k]; });
-    App.state._laneStash[worldId || 'observed'] = box;
-  }
-  function restoreLane(worldId) {
-    var box = (App.state._laneStash || {})[worldId || 'observed'] || {};
-    LANE_KEYS.forEach(function (k) { if (box[k] !== undefined) App.state[k] = box[k]; });
-  }
-
   App.transitionWorld = function (worldId, bootstrap, revision, epoch) {
     var target = worldId || 'observed';
     var rev = Number(revision || 0);
@@ -700,14 +704,11 @@
         // COMMIT PHASE — synchronous, no awaits between these mutations:
         // On cold boot the shell has an observed placeholder before /api/world resolves.
         // The hydrated ownership marker must win over that placeholder exactly once.
-        var from = App.state.hydratedWorkspaceWorld || App.state.world || target;
-        var changed = from !== target;
         App.state.world = target;
         delete App.state.hydratedWorkspaceWorld;
         if (rev) App.state.worldRevision = Math.max(Number(App.state.worldRevision || 0), rev);
         if (incomingEpoch) App.state.worldRevisionEpoch = incomingEpoch;
         App.state.worldGen++;         // discard SSE/stale fills from the world we just left
-        if (changed) { stashLane(from); restoreLane(target); }
         API.flushCache();             // every cached GET belonged to the old world
         if (App.Market) { App.Market.quotes = {}; App.Market.seq = 0; App.Market.world = target; App.Market.simTime = null; }
         App.state.universe = u;
@@ -874,19 +875,8 @@
     App.refreshRiskBudget();
     risk.addEventListener('change', function () {
       try { window.localStorage.setItem('strikebench.riskMode', risk.value); } catch (e) { /* ignore */ }
-      // A budget change INVALIDATES budget-derived results (review #6): the header must never
-      // say Standard while the page still shows Cautious sizing. That includes results parked
-      // in OTHER lanes' stashes (review IC-1) — a lane switch must not resurrect old sizing.
-      App.state.recommendResults = null;
-      App.state.decisionCache = null;
-      App.state.decisionInflight = null;
-      App.state.scoutResults = null;
-      var stash = App.state._laneStash || {};
-      Object.keys(stash).forEach(function (lane) {
-        ['recommendResults', 'decisionCache', 'decisionInflight', 'scoutResults'].forEach(function (k) {
-          delete stash[lane][k];
-        });
-      });
+      // This is the default for NEW Plans. Existing Plans retain their normalized risk mode
+      // until the user edits that Plan's assumptions, which then invalidates dependent stages.
       App.render();
     });
   }
@@ -1396,12 +1386,12 @@
   function prefetchForRoute(route, params) {
     if (!window.API || !API.prefetch) return;
     var sym = null;
-    if (route === 'plan' || route === 'trade') sym = App.context.symbol() || null;
+    if (route === 'plan') sym = App.context.symbol() || null;
     if (!sym) return;
     var run = function () {
       // A Plan's next stages need expirations, while Evidence calibrates from recent history.
       API.prefetch('/api/research/' + sym + '/expirations');
-      if (route === 'plan' || route === 'trade') API.prefetch('/api/research/' + sym + '/history?range=6m');
+      if (route === 'plan') API.prefetch('/api/research/' + sym + '/history?range=6m');
     };
     if (window.requestIdleCallback) requestIdleCallback(run, { timeout: 2500 });
     else setTimeout(run, 700);

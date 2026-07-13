@@ -75,7 +75,7 @@
 
   /** Normalize the live Builder state into the one position contract consumed by Outcomes/Decide. */
   function prepareTicket(owner, context) {
-    owner = owner || App.state;
+    if (!owner) throw new Error('Builder state must be owned by a Plan.');
     context = context || {};
     var st = owner.builderForm;
     if (!st || !st.symbol || !st.legs || !st.legs.length) return null;
@@ -85,7 +85,6 @@
     var tpl = st.templateKey ? TEMPLATES.find(function (t) { return t.key === st.templateKey; }) : null;
     var contextGoal = tradeGoal(context.goal || st.goal,
       tradeGoal(tpl && tpl.primaryIntent, tradeGoal(App.context.goal(), 'DIRECTIONAL')));
-    if (owner === App.state) App.context.update({ symbol: st.symbol, goal: contextGoal });
     owner.ticket = {
       world: App.state.world || 'observed', symbol: st.symbol, custom: true, customFor: st.symbol,
       customFamily: tpl && tpl.family ? tpl.family : null,
@@ -100,7 +99,7 @@
   /** Bring a screened/reviewed package back into Structure without changing its contracts. */
   function adoptTicket(ticket, owner, context) {
     if (!ticket || !ticket.symbol) return null;
-    owner = owner || App.state;
+    if (!owner) throw new Error('Builder state must be owned by a Plan.');
     context = context || {};
     var family = ticket.candidate && ticket.candidate.strategy || ticket.customFamily || null;
     var tpl = family && TEMPLATES.find(function (t) { return t.family === family; });
@@ -108,9 +107,6 @@
       : ticket.candidate && ticket.candidate.legs || [];
     var adoptedGoal = tradeGoal(context.goal || ticket.candidate && ticket.candidate.intent || ticket.intent,
       tradeGoal(App.context.goal(), 'DIRECTIONAL'));
-    if (owner === App.state) App.context.update({ symbol: ticket.symbol, goal: adoptedGoal,
-      horizon: context.horizon || ticket.horizon || App.context.horizon('month'),
-      thesis: context.thesis || ticket.thesis || App.context.thesis('neutral') });
     owner.builderForm = {
       symbol: ticket.symbol, qty: ticket.qty || ticket.candidate && ticket.candidate.qty || 1,
       goal: adoptedGoal, templateKey: tpl ? tpl.key : null, step: 4, legIdx: 0, excluded: {},
@@ -278,7 +274,8 @@
 
   async function render(root, options) {
     options = options || {};
-    var owner = options.state || App.state;
+    if (!options.state) throw new Error('Builder must be mounted by a Plan.');
+    var owner = options.state;
     var lockedSymbol = options.lockedSymbol ? String(options.lockedSymbol).toUpperCase() : null;
     var lockedGoal = options.lockedGoal ? tradeGoal(options.lockedGoal) : null;
     var level = Learn.currentLevel();
@@ -311,12 +308,6 @@
     if (level === 'beginner' && st.legs.length && st.step < 3) { st.step = 4; }
     function remember() {
       owner.builderForm = st;
-      var goal = TRADE_GOALS.indexOf(st.goal) >= 0 ? st.goal : null;
-      if (owner === App.state) {
-        var patch = { symbol: st.symbol, goal: goal };
-        App.context.update(patch);
-        if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
-      }
       if (typeof options.onStateChange === 'function') options.onStateChange(st);
     }
 
