@@ -5820,7 +5820,10 @@
       try {
         var ov = await dataAccessP;
         var btn = document.querySelector('#data-tabs [data-tab="admin"]');
-        if (ov && ov.admin) { if (btn) btn.style.display = ''; }
+        if (ov && ov.admin) {
+          if (btn) btn.style.display = '';
+          dataTabsWrap.classList.add('has-admin');
+        }
         else if (tab === 'admin') App.navigate('#/data/overview');
       } catch (e) { /* stays hidden — fail closed both visually and on the server */ }
     })();
@@ -7223,21 +7226,51 @@
         : 'Missing-range planning is per symbol over observed trading sessions, with a short revision overlap. Successful on-demand observed reads write through to the same local store. Source identity, adjusted/raw basis, request allowance, cursor, and rejected-row quarantine survive restarts.'));
 
       var sourceGrid = el('div', { class: 'data-source-picker', role: 'group', 'aria-label': 'Automated daily price source' });
+      var sourceDetailKey = App.state.dataSourceDetails || '';
+      var sourceDetail = el('div', { class: 'data-source-detail', id: 'data-source-detail', 'aria-live': 'polite' });
       automated.forEach(function (c) {
         var chosen = c.key === st.source;
+        var showing = c.key === sourceDetailKey;
         sourceGrid.appendChild(el('button', { type: 'button', class: 'data-source-choice' + (chosen ? ' active' : ''),
-          disabled: !c.eligible, 'aria-pressed': chosen ? 'true' : 'false', 'data-source-key': c.key,
-          onclick: function () { st.source = c.key; App.state.dataSyncForm = st; fillHistorySync(); } },
+          'aria-pressed': chosen ? 'true' : 'false', 'aria-expanded': showing ? 'true' : 'false',
+          'data-source-key': c.key,
+          onclick: function () {
+            App.state.dataSourceDetails = showing ? '' : c.key;
+            if (c.eligible) st.source = c.key;
+            App.state.dataSyncForm = st;
+            fillHistorySync();
+          } },
           el('span', { class: 'chip-row' },
             el('b', {}, c.name),
             el('span', { class: 'badge ' + (c.eligible ? 'badge-ok' : 'badge-dim') }, c.eligible ? 'READY' : 'SETUP NEEDED')),
-          el('span', { class: 'muted small' }, c.eligible ? c.history : c.setup),
-          c.dailyLimit > 0 ? el('span', { class: 'small' }, c.remainingToday + ' of ' + c.dailyLimit + ' requests left today')
-            : el('span', { class: 'small' }, 'Usage follows your provider plan')));
+          el('span', { class: 'small data-source-covers' }, c.covers),
+          el('span', { class: 'muted small' }, c.access + ' · ' + c.cadence),
+          el('span', { class: 'data-source-affordance small' }, showing ? 'Hide details ↑'
+            : (c.eligible ? 'Select & review →' : 'Review setup →'))));
       });
       if (!automated.length) sourceGrid.appendChild(el('p', { class: 'muted' }, 'No automated candle connectors are present in this build.'));
+      var detailConnector = automated.find(function (c) { return c.key === sourceDetailKey; });
+      if (detailConnector) {
+        sourceDetail.appendChild(el('div', { class: 'data-source-detail-head' },
+          el('b', {}, detailConnector.name),
+          el('span', { class: 'badge ' + (detailConnector.eligible ? 'badge-ok' : 'badge-dim') },
+            detailConnector.eligible ? 'READY' : 'SETUP NEEDED')));
+        sourceDetail.appendChild(el('div', { class: 'data-source-detail-grid' },
+          el('div', {}, el('span', { class: 'muted small' }, 'Permission & use'),
+            el('p', {}, detailConnector.rights)),
+          el('div', {}, el('span', { class: 'muted small' }, 'History & price basis'),
+            el('p', {}, detailConnector.history + ' · ' + detailConnector.adjustment)),
+          el('div', {}, el('span', { class: 'muted small' }, 'Setup'),
+            el('p', {}, detailConnector.setup)),
+          el('div', {}, el('span', { class: 'muted small' }, 'Request allowance'),
+            el('p', {}, detailConnector.dailyLimit > 0
+              ? detailConnector.remainingToday + ' of ' + detailConnector.dailyLimit + ' requests left today'
+              : 'Usage follows your provider plan'))));
+        if (detailConnector.note) sourceDetail.appendChild(el('p', { class: 'muted small data-source-note' }, detailConnector.note));
+      }
       syncCard.appendChild(el('section', { class: 'data-acquire-section' },
-        el('h3', {}, '1. Choose an automated source'), sourceGrid));
+        el('h3', {}, '1. Choose an automated source'), sourceGrid,
+        detailConnector ? sourceDetail : null));
       if (!eligible.length) {
         var sourceBridge = alertBox('caution', 'No automated daily-price source is active. Quotes and option chains can still work, but charts, HV, realized-volatility EV, and favorable observed verdicts need daily history.', [
           'Authorized personal/local use: set YAHOO_ENABLED=true and YAHOO_AUTOMATION_PERMISSION_CONFIRMED=true, then restart. Do not enable this on a hosted service without the required rights.',
@@ -7418,39 +7451,21 @@
       }
       if (!App.alive(token)) return;
       sourcesCard.innerHTML = '';
-      sourcesCard.appendChild(UI.cardHeader('Data sources'));
-      if (level === 'beginner') sourcesCard.appendChild(explain('Every source says what it supplies, whether it is ready, and what permission or plan governs it. No source is called merely because it is free or keyless.'));
-      sourcesCard.appendChild(el('h3', {}, 'Daily price-history connectors'));
-      var grid = el('div', { class: 'grid grid-2' });
-      (data.connectors || []).forEach(function (s) {
-        grid.appendChild(el('div', { class: 'dc-source' + (s.eligible ? ' on' : '') },
-          el('div', { class: 'chip-row', style: 'align-items:center;margin:0' },
-            el('span', { class: 'badge ' + (s.eligible ? 'badge-ok' : 'badge-dim') }, s.eligible ? 'READY' : (s.configured ? 'BLOCKED' : 'SETUP')),
+      sourcesCard.appendChild(UI.cardHeader('Other market-data feeds'));
+      sourcesCard.appendChild(el('p', { class: 'muted small' },
+        'Daily-price setup lives in the history workflow above. These distinct feeds supply current options, filings, headlines, rates, or licensed option history.'));
+      var support = el('div', { class: 'data-feed-list' });
+      (data.feeds || []).forEach(function (s) {
+        support.appendChild(el('div', { class: 'data-feed-row' + (s.enabled ? ' on' : '') },
+          el('div', { class: 'data-feed-heading' },
+            el('span', { class: 'badge ' + (s.enabled ? 'badge-ok' : 'badge-dim') }, s.enabled ? 'ON' : 'OFF'),
             el('b', {}, s.name),
-            el('span', { class: 'spacer' }),
-            el('span', { class: 'muted small' }, s.covers)),
-          el('div', { class: 'muted small', style: 'margin-top:4px' }, s.access + ' · ' + s.cadence),
-          el('div', { class: 'small', style: 'margin-top:4px' }, s.rights),
-          el('div', { class: 'muted small', style: 'margin-top:4px' }, s.adjustment + ' · ' + s.history),
-          s.dailyLimit > 0 ? el('div', { class: 'small', style: 'margin-top:4px' },
-            s.remainingToday + '/' + s.dailyLimit + ' requests remain today ', UI.info('requestbudget')) : null,
-          (!s.eligible || level === 'expert') ? el('div', { class: 'small', style: 'margin-top:5px' }, s.setup) : null,
-          level === 'expert' ? el('div', { class: 'muted small', style: 'margin-top:4px' }, s.note) : null));
+            el('span', { class: 'muted small data-feed-covers' }, s.covers)),
+          el('div', { class: 'muted small' }, s.license),
+          el('div', { class: 'small' }, s.hint)));
       });
-      sourcesCard.appendChild(grid);
-      sourcesCard.appendChild(el('h3', { style: 'margin-top:14px' }, 'Live market, filings, rates & option history'));
-      var support = el('div', { class: 'grid grid-2' });
-      (data.sources || []).filter(function (s) {
-        return !/^(Yahoo|Alpha Vantage|Polygon|Stooq|Historical options CSV)/.test(s.name);
-      }).forEach(function (s) {
-        support.appendChild(el('div', { class: 'dc-source' + (s.enabled ? ' on' : '') },
-          el('div', { class: 'chip-row', style: 'align-items:center;margin:0' },
-            el('span', { class: 'badge ' + (s.enabled ? 'badge-ok' : 'badge-dim') }, s.enabled ? 'ON' : 'off'),
-            el('b', {}, s.name), el('span', { class: 'spacer' }), el('span', { class: 'muted small' }, s.covers)),
-          el('div', { class: 'muted small', style: 'margin-top:4px' }, s.license),
-          el('div', { class: 'small', style: 'margin-top:4px' }, s.hint)));
-      });
-      sourcesCard.appendChild(support);
+      if (!support.childElementCount) support.appendChild(el('p', { class: 'muted' }, 'No supporting feeds are registered.'));
+      sourcesCard.appendChild(UI.expandable('Review ' + (data.feeds || []).length + ' feed details', function () { return support; }));
     })();
 
     // --- Provider health (the old status view, kept as detail) ---

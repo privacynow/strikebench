@@ -2602,16 +2602,33 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   // Sources & jobs tab
   await page.click('#data-tabs [data-tab="sources"]');
   await page.waitForSelector('#dc-history-sync #data-csv-upload');
-  await page.waitForSelector('#dc-sources .dc-source');
+  assert.equal(await page.locator('#data-source-detail').count(), 0,
+    'source setup stays compact until the user asks for one source detail');
+  await page.waitForSelector('#dc-sources .xp-head:has-text("feed details")');
+  await page.click('#dc-sources .xp-head:has-text("feed details")');
+  await page.waitForSelector('#dc-sources .data-feed-row');
   const sources = await page.textContent('#dc-sources');
-  assert.match(sources, /Yahoo Finance automation/);
-  assert.match(sources, /Automated collection requires permission|automated collection requires permission/i);
+  const historySetup = await page.textContent('#dc-history-sync');
+  assert.match(historySetup, /Yahoo Finance automation/);
   assert.match(await page.textContent('#dc-history-sync'), /charts, HV, realized-volatility EV, and favorable observed verdicts/i,
     'the source bridge explains the product consequence of candle starvation');
   assert.match(await page.textContent('#dc-history-sync'), /YAHOO_ENABLED=true.*YAHOO_AUTOMATION_PERMISSION_CONFIRMED=true/i,
     'an authorized local user gets the exact opt-in path without enabling it silently');
-  assert.match(sources, /Your price-history CSV/);
+  assert.doesNotMatch(sources, /Yahoo Finance automation|Alpha Vantage|Stooq/,
+    'daily-history connectors are not repeated in a second inventory');
+  assert.match(sources, /Cboe|SEC EDGAR/);
+  assert.equal((historySetup.match(/Yahoo Finance automation/g) || []).length, 1,
+    'the daily source appears once in its operational workflow');
   assert.ok(await page.locator('#dc-history-sync .data-source-choice').count() >= 4, 'all automated connector choices remain visible');
+  const yahooChoice = page.locator('#dc-history-sync .data-source-choice[data-source-key="yahoo"]');
+  assert.equal(await yahooChoice.count(), 1);
+  assert.equal(await yahooChoice.isEnabled(), true, 'setup guidance remains interactive even when a source is not eligible');
+  await yahooChoice.click();
+  await page.waitForSelector('#data-source-detail:has-text("Permission & use")');
+  assert.match(await page.textContent('#data-source-detail'), /Automated collection requires permission|authorized personal use/i,
+    'full rights and setup guidance is reachable from the compact source choice');
+  assert.ok(await page.locator('#dc-sources .xp-head:has-text("feed details")').count(),
+    'secondary feed inventory is progressively disclosed instead of another card wall');
   assert.equal(await page.locator('#data-sync-preview').isDisabled(), true, 'Demo build cannot start an observed provider sync');
   assert.ok(await page.locator('#data-csv-file').count(), 'user-owned CSV import remains available');
   assert.ok(await page.locator('#data-sync-schedule').count(), 'maintenance capability is present at expert');
@@ -2676,9 +2693,13 @@ test('non-admin Data access stays informative without dead app-wide mutation con
     'Administration is not advertised to a non-admin');
   assert.equal(await page.locator('#data-sync-preview, #data-csv-upload, #data-sync-schedule-save').count(), 0,
     'app-wide sync, import, and schedule controls are not rendered as dead actions');
-  await page.waitForSelector('#dc-sources .dc-source');
-  assert.match(await page.textContent('#dc-sources'), /Daily price-history connectors/,
-    'source eligibility remains readable');
+  await page.waitForSelector('#dc-sources .xp-head:has-text("feed details")');
+  await page.click('#dc-sources .xp-head:has-text("feed details")');
+  await page.waitForSelector('#dc-sources .data-feed-row');
+  assert.match(await page.textContent('#dc-sources'), /Other market-data feeds/,
+    'distinct supporting feeds remain readable');
+  assert.match(await page.textContent('#dc-history-sync'), /History management requires admin access/,
+    'the shared-history mutation boundary remains explicit');
   await page.unroute('**/api/data/overview');
 });
 

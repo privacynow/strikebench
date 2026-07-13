@@ -7,6 +7,7 @@
  *   2. No emoji anywhere in rendered text — pictograms are the shared SVG icon set.
  *   3. Form controls come in exactly the sanctioned sizes (--ctl-h / --ctl-h-sm / --ctl-h-xs).
  *   4. Non-finite numeric sentinels never reach visible financial text.
+ *   5. Every visible tab remains fully inside the viewport at every audited width.
  *
  * Run:  node --test dom-audit.test.js
  */
@@ -88,7 +89,7 @@ const ALLOWED_HEIGHTS = [38, 30, 42, 46]; // welcome hero uses a deliberate 42px
 const TOLERANCE = 1.5;
 
 function auditInPage() {
-  const out = { overflow: [], emoji: [], controls: [], numbers: [], tooltips: [] };
+  const out = { overflow: [], emoji: [], controls: [], numbers: [], tooltips: [], navigation: [] };
   const doc = document.documentElement;
   if (doc.scrollWidth > doc.clientWidth + 2) {
     // Animated/local-scroll children can be thousands of pixels wide without widening the
@@ -117,6 +118,14 @@ function auditInPage() {
   }
   const badNumbers = (document.body.innerText || '').match(/\$?NaN(?:\.NaN)?|NaN%/g) || [];
   if (badNumbers.length) out.numbers.push(...badNumbers.slice(0, 8));
+  document.querySelectorAll('[role="tab"]').forEach(tab => {
+    if (!tab.offsetParent) return;
+    const r = tab.getBoundingClientRect();
+    if (r.left < -0.5 || r.right > doc.clientWidth + 0.5) {
+      out.navigation.push((tab.textContent || tab.id || 'tab').trim().slice(0, 50)
+        + '@' + r.left.toFixed(1) + '..' + r.right.toFixed(1));
+    }
+  });
   const norm = value => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
   document.querySelectorAll('[title]').forEach(el => {
     if (!el.offsetParent) return;
@@ -178,6 +187,7 @@ for (const width of WIDTHS) {
       for (const c of res.controls) failures.push(`${route}@${width}: CONTROL-HEIGHT ${c}`);
       for (const n of res.numbers) failures.push(`${route}@${width}: NON-FINITE ${n}`);
       for (const t of res.tooltips) failures.push(`${route}@${width}: DUPLICATE-TOOLTIP ${t}`);
+      for (const n of res.navigation) failures.push(`${route}@${width}: CLIPPED-TAB ${n}`);
     }
     assert.deepEqual(failures, [], failures.join('\n'));
   });
