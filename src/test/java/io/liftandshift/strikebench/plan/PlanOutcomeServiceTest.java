@@ -113,6 +113,9 @@ class PlanOutcomeServiceTest {
         ObjectNode withHistory = outcomes.latest(null, plan);
         assertThat(withHistory.at("/backtests")).hasSize(2);
         assertThat(withHistory.at("/backtests/0/backtestId").asText()).isEqualTo("bt-current");
+        assertThat(withHistory.at("/backtests/0/evidenceProvenance").asText()).isEqualTo("DEMO_FIXTURE");
+        assertThat(db.query("SELECT DISTINCT evidence_provenance FROM plan_backtest",
+                r -> r.str("evidence_provenance"))).containsExactly("DEMO_FIXTURE");
         assertThat(withHistory.at("/backtests/0/state").asText()).isEqualTo("CURRENT");
         assertThat(withHistory.at("/backtests/0/currentContext").asBoolean()).isTrue();
         assertThat(withHistory.at("/backtests/1/state").asText()).isEqualTo("STALE");

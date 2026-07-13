@@ -382,6 +382,9 @@ class PlanApiIntegrationTest {
     }
 
     @Test void decideFreezesTheServerSelectedPackageAndLinksTradeOrCash() throws Exception {
+        assertThat(put("/api/account/risk-context", """
+                {"nlvCents":1930000,"cashBpCents":1930000,"riskCapitalCents":193000}
+                """).statusCode()).isBetween(200, 299);
         JsonNode tradePlan = json(post("/api/plans", """
                 {"clientRequestId":"decision-trade-plan","symbol":"AAPL","intent":"DIRECTIONAL",
                  "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
@@ -425,6 +428,8 @@ class PlanApiIntegrationTest {
         assertThat(opened.at("/decision/legs")).hasSize(candidate.withArray("legs").size());
         assertThat(opened.at("/decision/proposedNetCents").asLong())
                 .isEqualTo(opened.at("/trade/entryNetPremiumCents").asLong());
+        assertThat(opened.at("/decision/accountNlvCents").asLong()).isEqualTo(1_930_000L);
+        assertThat(opened.at("/decision/riskCapitalCents").asLong()).isEqualTo(193_000L);
 
         long openVersion = opened.at("/plan/version").asLong();
         JsonNode marked = json(post("/api/plans/" + tradePlanId + "/manage/refresh",
