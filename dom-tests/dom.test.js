@@ -146,7 +146,7 @@ async function promoteEvidencePlan() {
   if (state === 'match') {
     assert.equal(await page.locator('.plan-existing-match button').filter({ hasText: 'Create separate Plan' }).count(), 0,
       'an equivalent inquiry cannot manufacture a duplicate Plan from the client');
-    await page.locator('.plan-existing-match button').filter({ hasText: 'Resume this Plan' }).click();
+    await page.locator('.plan-existing-match button').filter({ hasText: 'Open Evidence' }).click();
   }
   await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/evidence$/.test(location.hash), null,
     { timeout: 15000 });
@@ -1294,11 +1294,11 @@ test('equivalent Plan retries collapse while materially different Plans survive 
     if (App.state.world !== base) await App.switchWorld(base);
     await PlanStore.load(true);
     const one = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
-      horizonDays: 30, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
+      horizonDays: 30, targetCents: 27123, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
     const retry = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
-      horizonDays: 30, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
+      horizonDays: 30, targetCents: 27123, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
     const variant = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
-      horizonDays: 45, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
+      horizonDays: 45, targetCents: 27123, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
     const disposable = await PlanStore.create({ symbol: 'SPY', intent: 'INCOME', thesis: 'neutral',
       horizonDays: 19, riskMode: 'conservative', title: 'SPY · Disposable tab' });
     return { one: one.id, retry: retry.id, variant: variant.id, disposable: disposable.id };
@@ -1322,7 +1322,8 @@ test('equivalent Plan retries collapse while materially different Plans survive 
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.disposable + '"]').count(), 0,
     'a closed tab is not counted or rendered as a working Plan');
   await page.locator('#home-plan-library .xp-head:has-text("Closed Plan tabs")').click();
-  await page.locator('.home-plan-closed-tabs').getByRole('button', { name: 'Delete draft' }).click();
+  await page.locator('.home-plan-closed-tabs .status-item').filter({ hasText: 'SPY · Disposable tab' })
+    .getByRole('button', { name: 'Delete draft' }).click();
   await page.getByRole('button', { name: 'Delete draft' }).last().click();
   await page.waitForFunction(id => !PlanStore.allMarkets().some(p => p.id === id), ids.disposable);
   assert.equal(await page.locator('#home-plan-library').getByText('SPY · Disposable tab').count(), 0,
