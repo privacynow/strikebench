@@ -33,7 +33,11 @@
 
   var icon = UI.icon;
 
-  function startPlan(prefill, stage) {
+  function planIntentDestination(intent) {
+    return intent == null ? 'EVIDENCE' : 'STRATEGY';
+  }
+
+  async function startPlan(prefill, stage) {
     prefill = Object.assign({}, prefill || {});
     var symbol = String(prefill.symbol || App.context.symbol() || '').trim().toUpperCase();
     if (!symbol) { App.navigate('#/research'); return Promise.resolve(null); }
@@ -41,13 +45,29 @@
     var days = horizon === '0DTE' ? 1 : horizon === 'week' ? 7 : horizon === 'quarter' ? 63
       : /^\d+d$/.test(horizon || '') ? parseInt(horizon, 10) : 30;
     var risk = document.getElementById('risk-mode');
-    return PlanStore.create({
-      symbol: symbol, intent: prefill.intent || App.context.goal('DIRECTIONAL'),
-      thesis: prefill.thesis || App.context.thesis('neutral'), horizonDays: days,
-      targetCents: prefill.target ? Math.round(parseFloat(prefill.target) * 100) : null,
-      riskMode: risk ? risk.value : 'conservative'
-    }).then(function (plan) { return PlanStore.focus(plan, stage || 'UNDERSTAND'); })
-      .catch(function (e) { UI.toast(e.message, 'error'); return null; });
+    var intent = prefill.intent || App.context.goal('DIRECTIONAL');
+    var destination = stage || planIntentDestination(intent);
+    try {
+      var matches = await PlanStore.matching(symbol, intent);
+      if (matches.length) {
+        var existing = matches[0];
+        await PlanStore.focus(existing, destination);
+        UI.toast('Plan opened — ' + symbol + ' · ' + planIntentLabel(intent));
+        return existing;
+      }
+      var plan = await PlanStore.create({
+        symbol: symbol, intent: intent,
+        thesis: prefill.thesis || App.context.thesis('neutral'), horizonDays: days,
+        targetCents: prefill.target ? Math.round(parseFloat(prefill.target) * 100) : null,
+        riskMode: risk ? risk.value : 'conservative'
+      });
+      await PlanStore.focus(plan, destination);
+      UI.toast('Plan created — ' + symbol + ' · ' + planIntentLabel(intent));
+      return plan;
+    } catch (e) {
+      UI.toast(e.message, 'error');
+      return null;
+    }
   }
 
   /**
@@ -1150,90 +1170,6 @@
 
     if (section === 'strategy' && !r.optionable) {
       actionsAnchor.replaceWith(alertBox('warn', symbol + ' has no listed options (mutual funds and some securities cannot be option-traded). You can still study its price history below.'));
-    }
-
-    // What you can do with this symbol — each GOAL gets its own live one-liner, computed
-    // from real ladder rungs (not marketing copy), with one-tap handoff into that flow.
-    if (section === 'strategy' && r.optionable && !embedded.chainOnly) {
-      (async function symbolActions() {
-        try {
-          var level = Learn.currentLevel();
-          var held = null;
-          try {
-            var ps = (await API.get('/api/positions')).positions || [];
-            held = ps.find(function (x) { return x.symbol === symbol; }) || null;
-          } catch (eh) { /* fine */ }
-          async function rung(intentKey) {
-            try {
-              var lad = await API.post('/api/research/' + encodeURIComponent(symbol) + '/intent-ladder',
-                { intent: intentKey });
-              var rungs = (lad.rungs || []).filter(function (c) { return !!UI.firstOptionLeg(c && c.legs); });
-              return rungs.length ? rungs[Math.min(1, rungs.length - 1)] : null;
-            } catch (er) { return null; }
-          }
-          var cards = [];
-          function actionCard(iconName, title, lineNode, intentKey, cta) {
-            return el('div', { class: 'card action-card' },
-              el('div', { class: 'action-head' }, el('span', { class: 'icon-tile icon-tile-sm' }, icon(iconName)), el('b', {}, title)),
-              el('p', { class: 'muted action-line' }, lineNode),
-              el('button', {
-                class: 'btn btn-sm', onclick: function () {
-                  startPlan({ intent: intentKey, symbol: symbol }, 'STRATEGY');
-                }
-              }, cta));
-          }
-          // Fetch only the ladders this holding-state actually renders, in parallel \u2014
-          // a holder never pays for the acquire ladder it would discard, and exit+hedge
-          // stop stacking into a serial chain.
-          var needExitHedge = held && held.freeShares >= 100;
-          var ladders = await Promise.all([
-            !held ? rung('acquire') : null,
-            needExitHedge ? rung('exit') : null,
-            needExitHedge ? rung('hedge') : null
-          ]);
-          var acq = ladders[0], ex = ladders[1], hg = ladders[2];
-          if (acq && !held) {
-            var kA = UI.firstOptionLeg(acq.legs);
-            cards.push(actionCard('tag', 'Own it cheaper',
-              el('span', {}, 'Get paid ', el('b', { class: 'gain' }, fmtMoney(acq.entryNetPremiumCents)),
-                ' now to buy at $' + fmtNum(kA.strike, 2) + ' \u2014 effectively $' + fmtNum(acq.effectivePrice, 2) + '/sh.'),
-              'ACQUIRE', 'Name your price'));
-          }
-          if (needExitHedge) {
-            if (ex) {
-              var exLeg = UI.firstOptionLeg(ex.legs);
-              cards.push(actionCard('flag', 'Sell your ' + held.shares + ' shares higher',
-                el('span', {}, 'Get paid ', el('b', { class: 'gain' }, fmtMoney(ex.entryNetPremiumCents)),
-                  ' now to sell at $' + fmtNum(exLeg.strike, 2) + ' (effectively $' + fmtNum(ex.effectivePrice, 2) + '/sh).'),
-                'EXIT', 'Pick your exit'));
-            }
-            if (hg) {
-              var hedgeLeg = UI.firstOptionLeg(hg.legs);
-              cards.push(actionCard('shield', 'Protect what you hold',
-                el('span', {}, 'A floor at $' + fmtNum(hedgeLeg.strike, 2) + ' costs ',
-                  el('b', { class: 'loss' }, fmtMoney(hg.maxLossCents)), ' until ' + hedgeLeg.expiration + '.'),
-                'HEDGE', 'Pick your floor'));
-            }
-          }
-          cards.push(actionCard('compass', 'Trade a view',
-            el('span', {}, 'Bullish, bearish, calm, or wild \u2014 screen defined-risk structures for it.'),
-            'DIRECTIONAL', 'Screen ideas'));
-          if (level !== 'expert' && cards.length > 3) cards = cards.slice(0, 3);
-          var section = el('div', { class: 'card', id: 'symbol-actions' },
-            UI.cardHeader('What you can do with ' + symbol,
-              held ? el('span', { class: 'muted' }, 'You hold ' + held.shares + ' sh @ ' + fmtMoney(held.avgCostCents) + '/sh') : null),
-            el('div', { class: 'welcome-grid action-grid' }, cards));
-          actionsAnchor.replaceWith(section);
-        } catch (e) {
-          // Additive, but a silent disappearance reads as inconsistent — leave a quiet retry.
-          if (actionsAnchor.isConnected) {
-            actionsAnchor.replaceWith(el('div', { class: 'card', id: 'symbol-actions' },
-              alertBox('warn', 'Couldn’t load actions for ' + symbol + ' right now.'),
-              el('div', { class: 'btn-row' },
-                el('button', { class: 'btn btn-sm btn-secondary', onclick: function () { App.render(); } }, 'Retry'))));
-          }
-        }
-      })();
     }
 
     // Option chain (fills the anchor placed above the news card, so page order is preserved).
@@ -2643,7 +2579,7 @@
     var hash = PlanStore.path(plan, stage || 'UNDERSTAND');
     window.history.replaceState(null, '', hash);
     App._scrollOnRender = true;
-    App.render();
+    return App.render();
   }
 
   function confirmArchivePlan(plan, leavePlan) {
@@ -2840,7 +2776,7 @@
       var matches = await PlanStore.matching(symbol, intent);
       if (matches.length) {
         var existing = matches[0];
-        var destination = intent == null ? 'EVIDENCE' : 'UNDERSTAND';
+        var destination = planIntentDestination(intent);
         decisionHost.appendChild(el('div', { class: 'alert alert-info plan-existing-match' },
           el('div', {}, el('b', {}, 'This inquiry already has a Plan'),
             el('p', { class: 'muted small' }, existing.title + ' · ' + (existing.context && existing.context.horizonDays || 30)
@@ -2858,7 +2794,8 @@
           thesis: plan.context && plan.context.thesis ? plan.context.thesis : null,
           horizonDays: plan.context && plan.context.horizonDays ? plan.context.horizonDays : 30,
           riskMode: risk ? risk.value : 'conservative' });
-        replacePlanRoute(persisted, intent == null ? 'EVIDENCE' : 'UNDERSTAND');
+        await replacePlanRoute(persisted, planIntentDestination(intent));
+        UI.toast('Plan created — ' + symbol + (intent == null ? '' : ' · ' + planIntentLabel(intent)));
       } catch (e) {
         decisionHost.removeAttribute('aria-busy');
         decisionHost.innerHTML = '';
@@ -2876,12 +2813,15 @@
     var card = el('section', { class: 'card plan-start-card research-plan-start', id: 'plan-start' },
       UI.cardHeader('Turn this research into a Plan'),
       el('p', { class: 'muted' }, 'Choose what you want the position to accomplish. This creates a durable workspace only after you choose.'));
+    var unavailableReason = eligibility.detail || 'Required market inputs are unavailable.';
     if (!eligibility.eligible) card.appendChild(alertBox('caution',
       'An options Plan cannot start for ' + symbol + ' in the ' + market.toLowerCase() + ' market',
-      [eligibility.detail || 'Required market inputs are unavailable. Research above remains available.']));
+      ['Research above remains available. Each unavailable goal below names the missing input.']));
     var choices = el('div', { class: 'choice-grid plan-intent-grid' });
     (Learn.INTENTS || []).forEach(function (meta) {
+      var reasonId = 'plan-goal-unavailable-' + String(meta.key || '').toLowerCase();
       var intentButton = el('button', { type: 'button', class: 'choice-card',
+        'aria-describedby': eligibility.eligible ? null : reasonId,
         disabled: eligibility.eligible ? null : 'disabled', onclick: function () {
         var button = this;
         button.disabled = true;
@@ -2891,7 +2831,9 @@
           button.removeAttribute('aria-busy');
           UI.toast((e && e.message) || 'This goal could not be set.', 'error');
         });
-      } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb || 'Build a plan around this goal.'));
+      } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb || 'Build a plan around this goal.'),
+      eligibility.eligible ? null : el('span', { class: 'choice-unavailable', id: reasonId },
+        'Unavailable: ' + unavailableReason));
       choices.appendChild(eligibility.eligible ? pressable(intentButton, meta.label, 'button') : intentButton);
     });
     card.appendChild(choices);
@@ -4478,6 +4420,12 @@
     root.appendChild(planContextEditor(plan));
     if (stage.key === 'UNDERSTAND' || stage.key === 'EVIDENCE') {
       var owned = planOwnedStage(root, plan, stage);
+      if (stage.key === 'UNDERSTAND') owned.appendChild(el('div', {
+        class: 'plan-scope-strip', id: 'plan-understand-scope', 'aria-label': 'Saved Plan focus'
+      }, el('span', { class: 'eyebrow' }, 'SAVED PLAN FOCUS'),
+      el('b', {}, plan.symbol + ' · ' + (plan.intent ? planIntentLabel(plan.intent) : 'Goal not chosen')),
+      el('span', { class: 'muted' }, (plan.context && plan.context.horizonDays ? plan.context.horizonDays : 30)
+        + ' days · ' + planMarketLabel(plan))));
       await research(owned, ['__plan', plan.symbol, stage.path], { plan: plan, stage: stage.path });
       if (stage.key === 'UNDERSTAND') appendPlanStageNext(owned, plan, 'Test the view',
         'Use conditional history and possible futures before choosing a structure.',

@@ -421,6 +421,9 @@ body.lvl-expert .not-expert { display: none !important; }
 .choice-card.selected, .choice-card[aria-pressed="true"] {
   border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent);
 }
+.choice-card:disabled { cursor: not-allowed; transform: none; opacity: 1; border-color: var(--border); }
+.choice-card:disabled:hover { background: var(--surface-2); border-color: var(--border); transform: none; }
+.choice-card .choice-unavailable { color: var(--risk-danger); font-weight: 650; }
 
 /* ---------- Candidate cards ---------- */
 .candidate {
@@ -2163,6 +2166,10 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-stage-carry-receipt { margin-left: auto; color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
 .plan-stage-content { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .plan-stage-content > * { min-width: 0; max-width: 100%; }
+.plan-scope-strip { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+  padding: 10px 12px; border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm); background: var(--surface-2); }
+.plan-scope-strip .eyebrow { margin-right: 2px; }
 .plan-analysis-source { margin-bottom: 12px; }
 .plan-analysis-source > .card-head { margin-bottom: 8px; }
 .plan-analysis-source-controls { display: grid; grid-template-columns: minmax(260px, .8fr) minmax(0, 1.2fr);
