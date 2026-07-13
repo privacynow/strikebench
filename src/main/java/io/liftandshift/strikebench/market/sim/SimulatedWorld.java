@@ -60,6 +60,35 @@ public final class SimulatedWorld {
     private static final LocalTime OPEN = LocalTime.of(9, 30), CLOSE = LocalTime.of(16, 0);
     private static final int HISTORY_DAYS = 250;
 
+    /** One exact Plan-owned realization. Spot and IV knots come from the persisted ensemble;
+     *  the exchange interpolates only between knots at its fixed 30-second quantum. */
+    public record ReplaySource(String planId, String ensembleId, String fingerprint, int pathIndex,
+                               String selection, String symbol, String modelVersion,
+                               double[] spotPath, double[] ivPath, double stepSeconds, double rateAnnual) {
+        public ReplaySource {
+            symbol = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+            selection = selection == null ? "RANDOM" : selection.trim().toUpperCase(Locale.ROOT);
+            if (symbol.isBlank() || spotPath == null || ivPath == null || spotPath.length < 2
+                    || spotPath.length != ivPath.length) throw new IllegalArgumentException("replay spot/IV paths must have the same non-trivial length");
+            if (!(stepSeconds > 0) || !Double.isFinite(stepSeconds)) throw new IllegalArgumentException("replay stepSeconds must be positive");
+            if (!Double.isFinite(rateAnnual)) throw new IllegalArgumentException("replay rate must be finite");
+            spotPath = spotPath.clone(); ivPath = ivPath.clone();
+            for (double value : spotPath) if (!(value > 0) || !Double.isFinite(value)) throw new IllegalArgumentException("replay spots must be positive");
+            for (double value : ivPath) if (!(value > 0) || !Double.isFinite(value)) throw new IllegalArgumentException("replay IVs must be positive");
+        }
+        @Override public double[] spotPath() { return spotPath.clone(); }
+        @Override public double[] ivPath() { return ivPath.clone(); }
+        public double durationSeconds() { return (spotPath.length - 1) * stepSeconds; }
+        public double spotAt(double seconds) { return interpolate(spotPath, seconds); }
+        public double ivAt(double seconds) { return interpolate(ivPath, seconds); }
+        private double interpolate(double[] values, double seconds) {
+            double position = Math.clamp(seconds / stepSeconds, 0, values.length - 1);
+            int lo = (int) Math.floor(position), hi = Math.min(values.length - 1, lo + 1);
+            double fraction = position - lo;
+            return values[lo] + (values[hi] - values[lo]) * fraction;
+        }
+    }
+
     /** Reproducible session configuration. betas: symbol -> market beta (index proxy uses 1.0).
      *  symbolVols / symbolIvs: OPTIONAL per-symbol calibration (realized vol, base IV) — resolved
      *  from observed data at creation when available, else modeled defaults; the creator labels
@@ -104,6 +133,7 @@ public final class SimulatedWorld {
     private static final long S_IDIO = 0xC2B2AE3D27D4EB4FL;
 
     private final Config cfg;
+    private final ReplaySource replay;
     private final double sigmaMarket;   // market-factor annual vol
     private final double sigmaIdio;     // idiosyncratic annual vol (modeled default)
     private final Map<String, Sym> syms = new ConcurrentHashMap<>();
@@ -116,6 +146,7 @@ public final class SimulatedWorld {
     private volatile double ivInjected = 0; // cumulative injected IV shifts (logged + replayed)
 
     private static final class Sym {
+        final String name;
         final double beta;
         final double anchorSpot;              // fixes the strike grid so a big move can't delist a strike
         final double sigmaTotal;              // realized total vol (per-symbol calibrated when available)
@@ -126,7 +157,7 @@ public final class SimulatedWorld {
         volatile double open, high, low;
         final List<Candle> daily = new ArrayList<>();
         Sym(String name, double beta, double spot, double sigmaTotal, double sigmaIdio, double baseIv) {
-            this.beta = beta; this.anchorSpot = spot; this.sigmaTotal = sigmaTotal;
+            this.name = name; this.beta = beta; this.anchorSpot = spot; this.sigmaTotal = sigmaTotal;
             this.sigmaIdio = sigmaIdio; this.baseIv = baseIv; this.spot = spot;
             this.key = mix(name.hashCode() * 0x9E3779B97F4A7C15L + name.length());
             resetDay();
@@ -134,8 +165,14 @@ public final class SimulatedWorld {
         void resetDay() { open = spot; high = spot; low = spot; }
     }
 
-    public SimulatedWorld(Config cfg) {
+    public SimulatedWorld(Config cfg) { this(cfg, null); }
+
+    public SimulatedWorld(Config cfg, ReplaySource replay) {
         this.cfg = cfg;
+        this.replay = replay;
+        if (replay != null && !cfg.symbolBetas().keySet().stream().anyMatch(replay.symbol()::equalsIgnoreCase)) {
+            throw new IllegalArgumentException("replay symbol must belong to the simulated world");
+        }
         this.sigmaMarket = cfg.volAnnual();
         this.sigmaIdio = cfg.volAnnual() * 0.6; // modeled residual vol; labeled as such in the report
         this.speed = cfg.speed();
@@ -144,6 +181,7 @@ public final class SimulatedWorld {
         for (var e : cfg.symbolBetas().entrySet()) {
             String sym = e.getKey().toUpperCase(Locale.ROOT);
             double s0 = cfg.startSpots() == null ? 100.0 : cfg.startSpots().getOrDefault(e.getKey(), 100.0);
+            if (replay != null && replay.symbol().equals(sym)) s0 = replay.spotAt(0);
             double beta = e.getValue();
             // PER-SYMBOL calibration (adversarial review M8): a calibrated total vol constrains the
             // idiosyncratic term (sigmaIdio^2 = sigmaTotal^2 - beta^2 sigmaM^2, floored so the factor
@@ -215,6 +253,10 @@ public final class SimulatedWorld {
     public long simMillis() { return simTime.atZone(ET).toInstant().toEpochMilli(); }
     public long ticks() { return quantum; }
     public String modelVersion() { return MODEL_VERSION; }
+    public ReplaySource replaySource() { return replay; }
+    public boolean replayComplete() { return replay != null && quantum * QUANTUM_SECONDS >= replay.durationSeconds(); }
+    public double rateAnnual() { return replay == null ? 0.03 : replay.rateAnnual(); }
+    public String rateSource() { return replay == null ? "simulated rate assumption" : "Plan rehearsal stored rate"; }
     public synchronized List<WorldEvent> eventLog() { return List.copyOf(events); }
 
     /** speed = the SIM-TIME MULTIPLIER: 1x means one simulated second per real second (a full
@@ -249,17 +291,22 @@ public final class SimulatedWorld {
 
     /** The atomic path step: one fixed quantum of sim time and one diffusion step of that size. */
     private void stepOneQuantum() {
+        if (replayComplete()) return;
         long q = quantum; // draws for THIS quantum
         double dtYears = QUANTUM_SECONDS / YEAR_SECONDS;
         double drift = scenarioDrift();
         double zM = gaussian(S_MARKET, 0, q); // one market-factor draw per quantum
         for (String name : sortedSymbols()) {
             Sym st = syms.get(name);
-            double zI = gaussian(S_IDIO, st.key, q);
-            // r_i = (drift - 0.5 sigmaTotal^2) dt + beta*sigmaM*sqrt(dt)*zM + sigmaIdio_i*sqrt(dt)*zI
-            double factor = st.beta * sigmaMarket * Math.sqrt(dtYears) * zM
-                    + st.sigmaIdio * Math.sqrt(dtYears) * zI;
-            st.spot = st.spot * Math.exp((drift - 0.5 * st.sigmaTotal * st.sigmaTotal) * dtYears + factor);
+            if (replay != null && replay.symbol().equals(name)) {
+                st.spot = replay.spotAt((q + 1) * QUANTUM_SECONDS);
+            } else {
+                double zI = gaussian(S_IDIO, st.key, q);
+                // r_i = (drift - 0.5 sigmaTotal^2) dt + beta*sigmaM*sqrt(dt)*zM + sigmaIdio_i*sqrt(dt)*zI
+                double factor = st.beta * sigmaMarket * Math.sqrt(dtYears) * zM
+                        + st.sigmaIdio * Math.sqrt(dtYears) * zI;
+                st.spot = st.spot * Math.exp((drift - 0.5 * st.sigmaTotal * st.sigmaTotal) * dtYears + factor);
+            }
             st.high = Math.max(st.high, st.spot);
             st.low = Math.min(st.low, st.spot);
         }
@@ -319,6 +366,7 @@ public final class SimulatedWorld {
 
     // ---- event injection (recorded on the path log so restore is exact) ----
     public synchronized void injectMove(String symbol, double pct) {
+        if (replay != null) throw new IllegalStateException("This is an exact Plan rehearsal; market shocks would break the selected path identity.");
         if (!Double.isFinite(pct) || pct <= -0.95 || pct > 5.0)
             throw new IllegalArgumentException("move must be a finite fraction in (-95%, +500%]");
         Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
@@ -330,6 +378,7 @@ public final class SimulatedWorld {
     }
 
     public synchronized void injectVolShift(double points) {
+        if (replay != null) throw new IllegalStateException("This is an exact Plan rehearsal; IV shocks would break the stored volatility path.");
         if (!Double.isFinite(points) || Math.abs(points) > 2.0)
             throw new IllegalArgumentException("vol shift must be finite and within \u00b1200 IV points");
         ivInjected = Math.clamp(ivInjected + points, -2.0, 2.0);
@@ -354,6 +403,9 @@ public final class SimulatedWorld {
 
     /** Effective base IV for a symbol right now: its own calibrated level x the scenario arc + shifts. */
     private double effectiveIv(Sym st) {
+        if (replay != null && replay.symbol().equals(st.name)) {
+            return Math.clamp(replay.ivAt(quantum * QUANTUM_SECONDS), 0.03, 5.0);
+        }
         return Math.clamp(st.baseIv * scenarioIvFactor() + ivInjected, 0.05, 5.0);
     }
 
@@ -453,7 +505,7 @@ public final class SimulatedWorld {
             long expKey = mix(cfg.seed() ^ exp.toEpochDay() ^ mix((long) (k * 1000)) ^ st.key);
             for (OptionType type : OptionType.values()) {
                 boolean call = type == OptionType.CALL;
-                double px = BlackScholes.price(call, spot, k, tte, 0.03, 0, iv);
+                double px = BlackScholes.price(call, spot, k, tte, rateAnnual(), 0, iv);
                 double intrinsic = Math.max(0, call ? spot - k : k - spot);
                 px = Math.max(px, intrinsic + 0.01);
                 double half = Math.max(0.01, px * (0.01 + 0.03 * Math.abs(money) + (tte < 4.0 / 252 ? 0.01 : 0)));
@@ -462,10 +514,10 @@ public final class SimulatedWorld {
                         occ(symbol, exp, call, k), type, bd(k), exp,
                         bd(Math.max(0.0, px - half)), bd(px + half), bd(px),
                         oi / 10, oi, iv,
-                        BlackScholes.delta(call, spot, k, tte, 0.03, 0, iv),
-                        BlackScholes.gamma(spot, k, tte, 0.03, 0, iv),
-                        BlackScholes.theta(call, spot, k, tte, 0.03, 0, iv) / 365.0,
-                        BlackScholes.vega(spot, k, tte, 0.03, 0, iv) / 100.0,
+                        BlackScholes.delta(call, spot, k, tte, rateAnnual(), 0, iv),
+                        BlackScholes.gamma(spot, k, tte, rateAnnual(), 0, iv),
+                        BlackScholes.theta(call, spot, k, tte, rateAnnual(), 0, iv) / 365.0,
+                        BlackScholes.vega(spot, k, tte, rateAnnual(), 0, iv) / 100.0,
                         simMillis(), "simulated", Freshness.SIMULATED);
                 (call ? calls : puts).add(q);
             }

@@ -101,6 +101,7 @@ public final class ApiServer {
     io.liftandshift.strikebench.plan.PlanEvidenceService planEvidence;
     io.liftandshift.strikebench.plan.PlanStrategyService planStrategy;
     io.liftandshift.strikebench.plan.PlanOutcomeService planOutcomes;
+    io.liftandshift.strikebench.plan.PlanRehearsalService planRehearsals;
     io.liftandshift.strikebench.plan.PlanDecisionService planDecisions;
     io.liftandshift.strikebench.plan.PlanManagementService planManagement;
     private Javalin app;
@@ -251,6 +252,8 @@ public final class ApiServer {
                 new io.liftandshift.strikebench.research.ResearchQuestionEngine(market, clock), clock);
         server.planStrategy = new io.liftandshift.strikebench.plan.PlanStrategyService(db, clock);
         server.planOutcomes = new io.liftandshift.strikebench.plan.PlanOutcomeService(db, clock);
+        server.planRehearsals = new io.liftandshift.strikebench.plan.PlanRehearsalService(db, clock,
+                server.planOutcomes, server.simSessions, accounts);
         server.planDecisions = new io.liftandshift.strikebench.plan.PlanDecisionService(db, clock);
         server.planManagement = new io.liftandshift.strikebench.plan.PlanManagementService(db, clock);
         server.dataJobs.setEvents(server.events);
@@ -439,6 +442,8 @@ public final class ApiServer {
             c.routes.post("/api/plans/{id}/outcomes/ensemble", this::planEnsembleRun);
             c.routes.post("/api/plans/{id}/outcomes/run", this::planOutcomeRun);
             c.routes.post("/api/plans/{id}/outcomes/backtest", this::planBacktestRun);
+            c.routes.get("/api/plans/{id}/rehearsals", this::planRehearsalsList);
+            c.routes.post("/api/plans/{id}/rehearsals", this::planRehearsalCreate);
             c.routes.get("/api/plans/{id}/decision/latest", this::planDecisionLatest);
             c.routes.post("/api/plans/{id}/decision/preview", this::planDecisionPreview);
             c.routes.post("/api/plans/{id}/decision/trade", this::planDecisionTrade);
@@ -634,7 +639,7 @@ public final class ApiServer {
                 String id = ctx.pathParam("id");
                 String owner = ownerId(ctx);
                 boolean wasActive = id.equals(activeWorld(ctx));
-                simSessions.finish(id, owner);
+                simSessions.finish(id, owner, planRehearsals.finishHook(owner, id));
                 // Finishing the ACTIVE world IS a world transition: flip the setting, drop any
                 // synthetic dataset, and PUBLISH it — every tab (including the caller's own SSE)
                 // reconciles through the same event as an explicit return-to-real (review P0 #2).
@@ -1371,12 +1376,20 @@ public final class ApiServer {
         var replay = simSessions.replayRecord(worldId, ownerId(ctx));
         out.put("modelVersion", replay.getOrDefault("modelVersion", "sim-1"));
         out.put("events", replay.getOrDefault("events", List.of()));
+        if (replay.get("rehearsal") != null) out.put("rehearsal", replay.get("rehearsal"));
         int eventCount = replay.get("events") instanceof List<?> l ? l.size() : 0;
-        out.put("note", "Every price in this world was generated (model " + replay.getOrDefault("modelVersion", "sim-1")
-                + ", seed " + w.config().seed() + ", scenario " + w.config().scenario() + ")"
-                + (eventCount > 0 ? " plus " + eventCount + " manually injected event" + (eventCount == 1 ? "" : "s")
-                        + " listed below — replay needs the seed AND the event log" : "")
-                + " — outcomes measure DECISIONS, not the market.");
+        if (replay.get("rehearsal") instanceof Map<?, ?> source) {
+            out.put("note", "This session replayed exact path " + (((Number) source.get("pathIndex")).intValue() + 1) + " ("
+                    + String.valueOf(source.get("selection")).toLowerCase(Locale.ROOT) + ") from Plan ensemble "
+                    + source.get("ensembleId") + " · receipt " + source.get("fingerprint")
+                    + ". Prices and IV follow that stored realization; outcomes measure management decisions, not a forecast.");
+        } else {
+            out.put("note", "Every price in this world was generated (model " + replay.getOrDefault("modelVersion", "sim-1")
+                    + ", seed " + w.config().seed() + ", scenario " + w.config().scenario() + ")"
+                    + (eventCount > 0 ? " plus " + eventCount + " manually injected event" + (eventCount == 1 ? "" : "s")
+                            + " listed below — replay needs the seed AND the event log" : "")
+                    + " — outcomes measure DECISIONS, not the market.");
+        }
         ctx.json(out);
     }
 
@@ -2402,6 +2415,20 @@ public final class ApiServer {
         var saved = planOutcomes.saveBacktest(ownerId(ctx), plan, body.expectedVersion(),
                 candidate.path("id").asText(), engineKind, reportJson, Json.MAPPER.valueToTree(body));
         ctx.json(Map.of("plan", plan, "backtest", saved, "report", report));
+    }
+
+    private void planRehearsalsList(Context ctx) {
+        ctx.json(planRehearsals.list(ownerId(ctx), ctx.pathParam("id")));
+    }
+
+    private void planRehearsalCreate(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx,
+                io.liftandshift.strikebench.plan.PlanRehearsalService.Request.class));
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        var created = planRehearsals.create(ownerId(ctx), plan, body);
+        ctx.status(201).json(Map.of("rehearsal", created,
+                "plan", planSvc.get(ownerId(ctx), plan.id())));
     }
 
     private void planDecisionLatest(Context ctx) {

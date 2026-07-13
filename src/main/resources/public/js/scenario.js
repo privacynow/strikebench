@@ -376,17 +376,23 @@
       host.addEventListener('pointerleave', function () { tip.style.display = 'none'; });
     })();
     // Click a sample squiggle to inspect that single future: highlight + where it ended/travelled.
+    var sampleChooser = null;
     (function wireSampleInspect() {
       var readout = null;
       wrap.firstChild.addEventListener('click', function (ev) {
         var g = ev.target && ev.target.closest ? ev.target.closest('g.fan-sample') : null;
         wrap.firstChild.querySelectorAll('g.fan-sample.selected').forEach(function (x) { x.classList.remove('selected'); });
         if (readout) { readout.remove(); readout = null; }
-        if (!g) return;
+        if (!g) { if (opts.onSelectSample) opts.onSelectSample(null, null); return; }
         g.classList.add('selected');
         var si = parseInt(g.getAttribute('data-sample'), 10);
+        if (sampleChooser) sampleChooser.querySelectorAll('button').forEach(function (button, index) {
+          button.classList.toggle('active', index === si);
+          button.setAttribute('aria-pressed', String(index === si));
+        });
         var s = (p.samples || [])[si];
         if (!s || !s.length) return;
+        if (opts.onSelectSample) opts.onSelectSample(si, s.slice());
         var end = s[s.length - 1], mn = Math.min.apply(null, s), mx = Math.max.apply(null, s);
         var pctNum = (end / p.spot - 1) * 100;
         readout = el('div', { class: 'muted small fan-path-readout' },
@@ -395,6 +401,18 @@
         wrap.appendChild(readout);
       });
     })();
+    if ((p.samples || []).length) {
+      sampleChooser = el('div', { class: 'fan-sample-chooser', role: 'group', 'aria-label': 'Inspect one sample future' },
+        el('span', { class: 'muted small' }, 'Inspect a sample:'),
+        (p.samples || []).map(function (_sample, index) {
+          return el('button', { type: 'button', class: 'btn btn-sm btn-secondary', 'aria-pressed': 'false',
+            onclick: function () {
+              var path = wrap.querySelector('g.fan-sample[data-sample="' + index + '"] path');
+              if (path) path.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            } }, String(index + 1));
+        }));
+      wrap.appendChild(sampleChooser);
+    }
     var terminal = p.decisionMap && p.decisionMap.terminal;
     var likelyLo = terminal ? terminal.p16 : p.endP10;
     var likelyHi = terminal ? terminal.p84 : p.endP90;

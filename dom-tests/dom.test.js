@@ -268,7 +268,8 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   await page.click('#whatif-run');
   await page.waitForSelector('.scenario-decision', { timeout: 25000 });
   await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForTimeout(500);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(4200);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p2-evidence.png'), fullPage: true });
 
   await page.reload();
@@ -428,6 +429,66 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   assert.match(await page.textContent('#plan-outcomes-panel'), /Replay.*AAPL|Historical replay/i);
   assert.equal(await page.locator('#plan-outcomes-panel input[type="date"]').count(), 2,
     'historical replay retains its useful controls at Beginner rather than hiding capability');
+});
+
+test('a selected Plan future becomes one exact managed rehearsal with a durable receipt', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const plan = await openPlan('AAPL', 'evidence');
+  await page.waitForSelector('#test-your-view', { timeout: 15000 });
+  await page.click('#research-outcomes-basis-futures');
+  await page.waitForSelector('#whatif-card');
+  await page.click('#whatif-run');
+  await page.waitForSelector('#whatif-rehearse-selected', { timeout: 30000 });
+  const receipt = await page.evaluate(() => PlanStore.ui(App.state.activePlanId).evidence.planEnsembleFingerprint);
+  assert.ok(receipt, 'the Plan owns the full ensemble before one path is rehearsed');
+
+  await page.locator('#whatif-out .fan-sample-chooser button').first().click();
+  assert.equal(await page.locator('#whatif-rehearse-selected').isDisabled(), false,
+    'selecting a visible sample makes that exact path actionable');
+  await page.click('#whatif-rehearse-selected');
+  await page.waitForSelector('#sim-control-room', { timeout: 20000 });
+  assert.match(await page.textContent('#sim-control-room'), /Exact Plan rehearsal.*path 1.*receipt/is);
+  assert.equal(await page.locator('#sim-control-room button:has-text("Inject event")').count(), 0,
+    'event injection is absent because it would break the stored path identity');
+  const live = await page.evaluate(async () => {
+    const sessions = (await API.getFresh('/api/sim/market')).sessions;
+    const current = sessions.find(item => item.id === App.state.world);
+    return { world: App.state.world, rehearsal: current.rehearsal };
+  });
+  assert.equal(live.rehearsal.planId, plan.id);
+  assert.equal(live.rehearsal.fingerprint, receipt);
+  assert.equal(live.rehearsal.pathIndex, 0);
+  assert.equal(live.rehearsal.selection, 'SAMPLE');
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(4200); // let the real transition toast leave; animations stay enabled
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p7-rehearsal-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(500);
+  const rehearsalOverflow = await page.locator('#sim-control-room').evaluate(node => ({
+    contained: node.scrollWidth <= node.clientWidth + 1,
+    width: node.clientWidth, scrollWidth: node.scrollWidth,
+    offenders: Array.from(node.querySelectorAll('*')).map(el => {
+      const r = el.getBoundingClientRect(); return { tag: el.tagName, cls: el.className || '', left:r.left, right:r.right };
+    }).filter(x => x.right > innerWidth + 1 || x.left < -1).slice(0, 8)
+  }));
+  assert.equal(rehearsalOverflow.contained, true,
+    'the rehearsal console stays contained on mobile: ' + JSON.stringify(rehearsalOverflow));
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p7-rehearsal-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.click('#sim-control-room button:has-text("Step")');
+  await page.click('#sim-control-room button:has-text("Finish")');
+  await page.waitForSelector('#sim-report');
+  assert.match(await page.textContent('#sim-report'), /exact path 1.*receipt/is);
+  await page.click('#modal-confirm');
+  await page.waitForSelector('#plan-stage-manage-review', { timeout: 20000 });
+  await page.waitForSelector('#plan-stage-manage-review .plan-rehearsal-review, #plan-stage-manage-review .plan-management-timeline',
+    { timeout: 20000 });
+  assert.match(await page.textContent('#plan-stage-manage-review'), /Management rehearsals|exact path/i);
+  assert.match(await page.textContent('#plan-stage-manage-review'), /sim rehearsal|rehearsal result/i,
+    'finish writes the rehearsal review into the owning Plan');
 });
 
 test('Plan Decide freezes one server-owned package and opens the linked paper position atomically', async () => {

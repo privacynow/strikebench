@@ -212,6 +212,18 @@
     return out;
   }
 
+  function rehearsals(planId, force) {
+    var path = '/api/plans/' + planId + '/rehearsals';
+    return force ? API.getFresh(path) : API.get(path);
+  }
+
+  async function createRehearsal(plan, request) {
+    var out = await API.post('/api/plans/' + plan.id + '/rehearsals',
+      Object.assign({ expectedVersion: plan.version }, request || {}));
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
   function latestDecision(planId, force) {
     var path = '/api/plans/' + planId + '/decision/latest';
     return force ? API.getFresh(path) : API.get(path);
@@ -321,6 +333,7 @@
     latestScout: latestScout, runScout: runScout, spawnScoutedPlan: spawnScoutedPlan,
     latestOutcomes: latestOutcomes, runEnsemble: runEnsemble,
     runOutcome: runOutcome, runBacktest: runBacktest,
+    rehearsals: rehearsals, createRehearsal: createRehearsal,
     latestDecision: latestDecision, previewDecision: previewDecision,
     tradeDecision: tradeDecision, cashDecision: cashDecision,
     latestManagement: latestManagement, manage: manage, reviewCash: reviewCash,

@@ -3269,8 +3269,31 @@
     }
     var decision = data.decision;
     if (!decision) {
+      var rehearsalDoc = null;
+      try { rehearsalDoc = await PlanStore.rehearsals(plan.id, true); } catch (e2) { /* management remains usable */ }
+      var rehearsals = rehearsalDoc && rehearsalDoc.rehearsals || [];
+      if (rehearsals.length) {
+        content.appendChild(el('section', { class: 'card plan-rehearsal-review' },
+          UI.cardHeader('Management rehearsals'),
+          el('p', { class: 'muted' },
+            'These are exact paths selected from this Plan’s stored ensemble. They practice decisions; they do not add probability evidence.'),
+          rehearsals.map(function (item) {
+            return el('div', { class: 'status-item' },
+              el('span', { class: 'badge ' + (item.status === 'FINISHED' ? 'badge-dim' : 'badge-info') }, item.status),
+              el('span', {}, el('b', {}, item.selection.toLowerCase() + ' path ' + (item.pathIndex + 1)),
+                el('span', { class: 'muted small' }, ' · receipt ' + item.fingerprint.slice(0, 12) + '…')),
+              el('span', { class: 'spacer' }),
+              item.status !== 'FINISHED' ? el('button', { type: 'button', class: 'btn btn-sm', onclick: async function () {
+                App.state.focusSimControlRoom = item.worldId;
+                try { await App.switchWorld(item.worldId, this); App.navigate('#/data/simulation'); }
+                catch (e) { UI.toast(e.message, 'error'); }
+              } }, 'Open rehearsal') : null);
+          })));
+        planManagementTimeline(content, data.management);
+        return;
+      }
       content.appendChild(UI.emptyState('No decision has been frozen',
-        'Manage & Review unlocks after this Plan records Trade or Cash.', 'Open Decide', function () {
+        'Manage & Review unlocks after this Plan records Trade, Cash, or an exact rehearsal.', 'Open Decide', function () {
           PlanStore.focus(plan, 'DECIDE');
         }));
       return;
@@ -4627,6 +4650,7 @@
     var out = el('div', { id: 'whatif-out' });
     var previewSeq = 0;
     var latest = null;
+    var selectedSampleIndex = null;
     var run = el('button', { class: 'btn', id: 'whatif-run' }, 'Analyze this scenario');
     var reroll = el('button', { class: 'btn btn-sm btn-secondary', id: 'whatif-reroll', style: 'display:none' }, 'Run a sampling check');
     function scenarioPrice(value) {
@@ -4690,6 +4714,63 @@
     }
 
     function practiceAction(p, spec) {
+      if (plan) {
+        if (plan.marketKind === 'SIMULATED') return el('div', { class: 'scenario-practice' },
+          el('div', {}, el('b', {}, 'This Plan is already inside one simulated path'),
+            el('p', { class: 'muted small' },
+              'Use this session’s control room to practice management. Creating a rehearsal of a rehearsal would add no independent evidence.')),
+          el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () { App.navigate('#/data/simulation'); } },
+            'Open control room'));
+        var ensembleId = ownedState && ownedState.planEnsembleId;
+        var note = el('div', { class: 'muted small rehearsal-selection-note' },
+          selectedSampleIndex == null
+            ? 'Choose a representative path below, or click one sample line in the chart.'
+            : 'Selected chart sample ' + (selectedSampleIndex + 1) + ' will replay exactly.');
+        var selectedButton;
+        async function createExact(selection, pathIndex, button) {
+          if (!ensembleId) { UI.toast('Run the scenario before creating a rehearsal.', 'error'); return; }
+          button.disabled = true;
+          try {
+            var live = await PlanStore.get(plan.id, true);
+            var created = await PlanStore.createRehearsal(live, {
+              ensembleId: ensembleId, selection: selection,
+              pathIndex: pathIndex == null ? null : pathIndex, speed: 26
+            });
+            var rehearsal = created.rehearsal;
+            App.state.planReturn = { planId: plan.id, stage: 'EVIDENCE',
+              label: plan.title + ' · Evidence', rehearsalWorld: rehearsal.worldId };
+            App.state.focusSimControlRoom = rehearsal.worldId;
+            var switched = await App.switchWorld(rehearsal.worldId, button);
+            if (!switched) throw new Error('The exact rehearsal was created but its market could not be entered.');
+            App.navigate('#/data/simulation');
+          } catch (e) { button.disabled = false; UI.toast(e.message || 'Could not create the rehearsal', 'error'); }
+        }
+        function choice(label, selection, hint) {
+          var button = el('button', { type: 'button', class: 'btn btn-secondary btn-sm',
+            title: hint, onclick: function () { createExact(selection, null, button); } }, label);
+          return button;
+        }
+        selectedButton = el('button', { type: 'button', class: 'btn btn-sm', id: 'whatif-rehearse-selected',
+          disabled: selectedSampleIndex == null ? 'disabled' : null, onclick: function () {
+            createExact('SAMPLE', selectedSampleIndex, selectedButton);
+          } }, 'Rehearse selected sample');
+        selectedButton.refreshSelection = function () {
+          selectedButton.disabled = selectedSampleIndex == null;
+          note.textContent = selectedSampleIndex == null
+            ? 'Choose a representative path below, or click one sample line in the chart.'
+            : 'Selected chart sample ' + (selectedSampleIndex + 1) + ' will replay exactly.';
+        };
+        return el('div', { class: 'scenario-practice plan-rehearsal-actions' },
+          el('div', {}, el('b', {}, 'Rehearse one exact path'),
+            el('p', { class: 'muted small' },
+              'The simulated exchange will replay the selected spot and IV trajectory from this receipt. It is one management drill, not additional probability evidence.'), note),
+          el('div', { class: 'btn-row' },
+            choice('Typical path', 'TYPICAL', 'Terminal result nearest this ensemble’s median'),
+            choice('Favorable to view', 'FAVORABLE', 'Best path for the Plan thesis'),
+            choice('Adverse to view', 'ADVERSE', 'Worst path for the Plan thesis'),
+            choice('Drawdown stress', 'STRESS', 'Path with the deepest peak-to-trough fall'),
+            selectedButton));
+      }
       var shapeMap = { GRIND_UP: 'TREND_UP', GRIND_DOWN: 'TREND_DOWN',
         SELLOFF_REBOUND: 'SELLOFF_REBOUND', RALLY_FADE: 'RALLY_FADE',
         CHOP: 'CHOP', GAP_DOWN: 'VOL_EVENT', GAP_UP: 'VOL_EVENT', EVENT_JUMP: 'VOL_EVENT' };
@@ -4728,6 +4809,7 @@
 
     async function analyze(isSamplingCheck) {
       var seq = ++previewSeq;
+      selectedSampleIndex = null;
       run.disabled = true; reroll.disabled = true; out.innerHTML = '';
       out.appendChild(UI.spinner(isSamplingCheck ? 'Checking sampling stability…' : 'Analyzing the scenario…'));
       try {
@@ -4768,9 +4850,20 @@
         out.appendChild(el('div', { class: 'scenario-chart-head' },
           el('div', {}, el('h3', {}, 'How the range unfolds'),
             el('p', { class: 'muted small' }, 'Shaded range and median by day; sample lines are illustrative paths, not forecasts to choose from.'))));
-        out.appendChild(Scenario.fanChart(p));
+        var chart = Scenario.fanChart(p, { onSelectSample: function (index) {
+          selectedSampleIndex = index;
+          var button = out.querySelector('#whatif-rehearse-selected');
+          if (button && button.refreshSelection) button.refreshSelection();
+          var note = out.querySelector('.rehearsal-selection-note');
+          if (button) button.disabled = index == null;
+          if (note) note.textContent = index == null
+            ? 'Choose a representative path below, or click one sample line in the chart.'
+            : 'Selected chart sample ' + (index + 1) + ' will replay exactly.';
+        } });
+        out.appendChild(chart);
         out.appendChild(goalAction(p, spec));
-        out.appendChild(practiceAction(p, spec));
+        var rehearsalActions = practiceAction(p, spec);
+        out.appendChild(rehearsalActions);
         reroll.style.display = '';
         if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
       } catch (e) {
@@ -5015,6 +5108,7 @@
       /** The RUNNING world's console: clock, live symbols, P/L, and every action in one place. */
       function controlRoom(sx) {
         var cfg = sx.config || {};
+        var rehearsal = sx.rehearsal || null;
         var syms = Object.keys(cfg.symbolBetas || {});
         App.state.simFocus = App.state.simFocus || {};
         var focusSym = syms.indexOf(App.state.simFocus[sx.id]) >= 0 ? App.state.simFocus[sx.id] : syms[0];
@@ -5046,14 +5140,15 @@
         }
         var room = el('div', { class: 'card-slim', id: 'sim-control-room', 'data-sim-id': sx.id,
           style: 'margin:6px 0; padding:12px' },
-          UI.cardHeader('Control room \u2014 ' + (sx.name || sx.id),
+          UI.cardHeader((rehearsal ? 'Plan rehearsal \u2014 ' : 'Control room \u2014 ') + (sx.name || sx.id),
             el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : 'badge-warn'), id: 'cr-status' },
               sx.running ? 'RUNNING' : 'PAUSED')),
           el('div', { class: 'chip-row' },
             chip('Sim clock', el('span', { id: 'cr-clock' }, String(sx.simTime || '').replace('T', ' '))),
-            chip('Scenario', App.scenarioLabel(cfg.scenario)),
+            rehearsal ? chip('Exact path', String(rehearsal.pathIndex + 1) + ' · ' + rehearsal.selection.toLowerCase())
+              : chip('Scenario', App.scenarioLabel(cfg.scenario)),
             chip('Speed', el('span', { id: 'cr-speed' }, (sx.speed || cfg.speed || 1) + '\u00d7')),
-            chip('Seed', String(cfg.seed)),
+            rehearsal ? chip('Receipt', String(rehearsal.fingerprint).slice(0, 12) + '…') : chip('Seed', String(cfg.seed)),
             sx.modelVersion ? chip('Model', sx.modelVersion) : null),
           el('div', { class: 'sim-market-overview' },
             el('div', { class: 'sim-overview-head' },
@@ -5072,11 +5167,17 @@
               catch (e) { UI.toast(e.message || 'Could not change simulation playback', 'error'); } } }, sx.running ? 'Pause' : 'Play'),
             el('button', { class: 'btn btn-sm', onclick: async function () {
               try { await API.post('/api/sim/market/' + sx.id + '/step', {}); } catch (e) { UI.toast(e.message || 'Could not advance the simulated market', 'error'); } } }, 'Step'),
-            el('button', { class: 'btn btn-sm', onclick: function () { injectModal(sx); } }, 'Inject event'),
+            rehearsal ? null : el('button', { class: 'btn btn-sm', onclick: function () { injectModal(sx); } }, 'Inject event'),
             el('button', { class: 'btn btn-sm', onclick: function () { showReport(sx); } }, 'Report'),
-            el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, 'Start a Plan'),
+            rehearsal ? el('button', { class: 'btn btn-sm', onclick: function () {
+              PlanStore.focus(rehearsal.planId, 'EVIDENCE').catch(function (e) { UI.toast(e.message, 'error'); });
+            } }, 'Return to Plan') : el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/research'); } }, 'Start a Plan'),
             el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/portfolio'); } }, 'Simulated portfolio'),
             el('button', { class: 'btn btn-sm btn-danger', onclick: function () { finishModal(sx); } }, 'Finish')));
+        if (rehearsal) room.insertBefore(alertBox('caution', 'Exact Plan rehearsal', [
+          'Spot and implied volatility replay stored path ' + (rehearsal.pathIndex + 1) + ' from ensemble ' + rehearsal.ensembleId + '.',
+          'The receipt is ' + rehearsal.fingerprint + '. Shocks are disabled because they would break that identity.'
+        ]), room.children[2]);
         // ---- The CONSOLE parts (F9): breadth, anchor coverage, focus chart, live P/L, heat,
         // event timeline. Everything below reuses existing primitives — no duplicate engines.
         var breadthChip = el('span', { class: 'chip', id: 'cr-breadth' },
@@ -5096,8 +5197,10 @@
           chartHost.innerHTML = '';
           chartHost.appendChild(el('div', { class: 'sim-focus-head' },
             el('div', {}, el('span', { class: 'muted small' }, 'FOCUS'), el('b', {}, focusSym)),
-            el('a', { href: '#/plan/new?symbol=' + encodeURIComponent(focusSym), onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(focusSym)); } },
-              'Full research \u2192')));
+            rehearsal ? el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+              PlanStore.focus(rehearsal.planId, 'EVIDENCE').catch(function (e) { UI.toast(e.message, 'error'); });
+            } }, 'Source Plan \u2192') : el('a', { href: '#/plan/new?symbol=' + encodeURIComponent(focusSym),
+              onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(focusSym)); } }, 'Full research \u2192')));
           chartHost.appendChild(UI.rangeChart({ initial: '3m', fetch: historyFetch(focusSym) }));
         }
         drawFocus();
@@ -5197,10 +5300,19 @@
           }).catch(function (e) { slot.innerHTML = ''; slot.appendChild(alertBox('warn', 'Provenance unavailable: ' + e.message)); });
           return slot;
         }));
-        room.appendChild(UI.expandable('Event timeline \u2014 every injected shock, replayable', function () {
+        room.appendChild(UI.expandable(rehearsal ? 'Replay identity \u2014 exact source and receipt'
+          : 'Event timeline \u2014 every injected shock, replayable', function () {
           var slot = el('div', {}, UI.spinner('Loading events\u2026'));
           API.getFresh('/api/sim/market/' + sx.id + '/report').then(function (rep) {
             slot.innerHTML = '';
+            if (rep.rehearsal) {
+              slot.appendChild(el('div', { class: 'chip-row' },
+                chip('Plan', rep.rehearsal.planId), chip('Ensemble', rep.rehearsal.ensembleId),
+                chip('Path', String(Number(rep.rehearsal.pathIndex) + 1) + ' · ' + rep.rehearsal.selection.toLowerCase()),
+                chip('Source model', rep.rehearsal.modelVersion), chip('Stored rate', fmtPct(rep.rehearsal.rateAnnual))));
+              slot.appendChild(el('p', { class: 'muted small rehearsal-receipt' }, 'Receipt ' + rep.rehearsal.fingerprint));
+              return;
+            }
             var evs = rep.events || [];
             if (!evs.length) { slot.appendChild(el('div', { class: 'muted small' }, 'No injected events yet.')); return; }
             slot.appendChild(table(['Quantum', 'Kind', 'Symbol', 'Value'], evs.map(function (e2) {
@@ -5218,6 +5330,7 @@
 
       function sessionRow(sx, finished) {
         var cfg = sx.config || {};
+        var rehearsal = sx.rehearsal || null;
         var active = App.state.world === sx.id;
         var preparing = sx.status === 'PREPARING';
         var failed = sx.status === 'FAILED';
@@ -5225,10 +5338,13 @@
         var row = el('div', { class: 'card-slim btn-row sim-session-row' + (rowInteractive ? ' clickable' : ''),
           'data-sim-id': sx.id, style: 'margin:6px 0' },
           el('b', {}, sx.name || sx.id),
+          rehearsal ? el('span', { class: 'badge badge-info' }, 'PLAN REHEARSAL') : null,
           el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : failed ? 'badge-danger' : preparing ? 'badge-caution' : finished ? 'badge-dim' : 'badge-warn') },
             finished ? 'FINISHED' : failed ? 'FAILED' : preparing ? 'PREPARING' : sx.running ? 'RUNNING' : 'READY'),
-          el('span', { class: 'muted small' }, App.scenarioLabel(cfg.scenario)
-            + ' \u00b7 seed ' + cfg.seed
+          el('span', { class: 'muted small' }, (rehearsal
+            ? rehearsal.symbol + ' · path ' + (rehearsal.pathIndex + 1) + ' · ' + rehearsal.selection.toLowerCase()
+              + ' · receipt ' + String(rehearsal.fingerprint).slice(0, 12) + '…'
+            : App.scenarioLabel(cfg.scenario) + ' \u00b7 seed ' + cfg.seed)
             + (sx.eventCount ? ' \u00b7 ' + sx.eventCount + ' injected event' + (sx.eventCount === 1 ? '' : 's') : '')
             + (sx.simTime ? ' \u00b7 ' + String(sx.simTime).replace('T', ' ') : '')));
         if (!finished) {
@@ -5245,7 +5361,7 @@
               App.refreshWorldBand();
             }
             catch (e) { UI.toast(e.message || 'Could not change simulation playback', 'error'); } } }, sx.running ? 'Pause' : 'Start'));
-          row.appendChild(el('button', { class: 'btn btn-sm', id: 'sim-inject-' + sx.id, disabled: preparing || failed, onclick: function () {
+          if (!rehearsal) row.appendChild(el('button', { class: 'btn btn-sm', id: 'sim-inject-' + sx.id, disabled: preparing || failed, onclick: function () {
             injectModal(sx); } }, 'Inject event'));
         }
         row.appendChild(el('button', { class: 'btn btn-sm', onclick: function () { showReport(sx); } }, 'Report'));
@@ -5298,6 +5414,10 @@
           if (wasActive) await App.transitionWorld(result.world || App.baseWorldId(), result.universe,
             result.revision, result.epoch);
           refreshSim(); App.refreshWorldBand();
+          if (sx.rehearsal && sx.rehearsal.planId) {
+            await PlanStore.load(true);
+            await PlanStore.focus(sx.rehearsal.planId, 'MANAGE_REVIEW');
+          }
         }, true);
         API.getFresh('/api/sim/market/' + sx.id + '/report').then(function (rep) {
           body.innerHTML = '';
@@ -5310,6 +5430,7 @@
       function reportNode(rep) {
         var n = el('div', { id: 'sim-report' },
           el('div', { class: 'chips' },
+            rep.rehearsal ? el('span', { class: 'chip' }, 'Plan path ' + (Number(rep.rehearsal.pathIndex) + 1)) : null,
             el('span', { class: 'chip' }, 'Trades: ' + (rep.trades || []).length),
             el('span', { class: 'chip' }, 'Resolved: ' + rep.resolved),
             el('span', { class: 'chip' }, 'Win rate: ' + (rep.winRate == null ? '\u2014' : rep.winRate + '%')),

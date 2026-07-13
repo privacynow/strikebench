@@ -441,9 +441,10 @@ public final class MarketDataService {
                     io.liftandshift.strikebench.model.DataEvidence.of("fixture", Freshness.FIXTURE));
         }
         if (!observedWorld(worldId)) {
-            if (world(worldId).isPresent()) {
-                return new RateQuote(0.04,
-                        io.liftandshift.strikebench.model.DataEvidence.of("simulated rate assumption", Freshness.SIMULATED));
+            var simulated = world(worldId);
+            if (simulated.isPresent()) {
+                return new RateQuote(simulated.get().rateAnnual(),
+                        io.liftandshift.strikebench.model.DataEvidence.of(simulated.get().rateSource(), Freshness.SIMULATED));
             }
             return new RateQuote(0.04,
                     io.liftandshift.strikebench.model.DataEvidence.missing("unknown simulated market"));
