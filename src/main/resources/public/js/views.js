@@ -5629,6 +5629,33 @@
             selectedButton));
     }
 
+    function scenarioFailure(error) {
+      var payload = error && error.payload || {};
+      if (payload.error === 'plan_market_mismatch') {
+        var market = planMarketLabel(plan);
+        var empty = UI.emptyState('Open this Plan’s ' + market.toLowerCase(),
+          'This scenario is bound to the Plan’s ' + market.toLowerCase()
+            + '. StrikeBench refused to mix prices from the market currently on screen.',
+          'Open ' + market, async function () {
+            this.disabled = true;
+            try { await PlanStore.focus(plan, 'EVIDENCE'); }
+            catch (e) { this.disabled = false; UI.toast(e.message || 'The Plan market could not open.', 'error'); }
+          });
+        empty.id = 'plan-ensemble-market-mismatch';
+        return empty;
+      }
+      if (error && (error.status === 404 || error.status === 422)) {
+        var unavailable = UI.emptyState('Scenario inputs are unavailable',
+          error.message || ('The active market cannot price ' + plan.symbol + ' right now.'),
+          'Check market data', function () { App.navigate('#/data/overview'); });
+        unavailable.id = 'plan-ensemble-input-unavailable';
+        return unavailable;
+      }
+      return alertBox('danger', 'Could not analyze this scenario', [
+        error && error.message ? error.message : 'Retry the run, then check Data if the market inputs remain unavailable.'
+      ]);
+    }
+
     async function analyze(isSamplingCheck) {
       var seq = ++previewSeq;
       selectedSampleIndex = null;
@@ -5675,7 +5702,7 @@
         reroll.style.display = '';
         if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
       } catch (e) {
-        if (seq === previewSeq) { out.innerHTML = ''; out.appendChild(alertBox('danger', 'Could not simulate', [String((e && e.message) || e)])); }
+        if (seq === previewSeq) { out.innerHTML = ''; out.appendChild(scenarioFailure(e)); }
       }
       finally { if (seq === previewSeq) { run.disabled = false; reroll.disabled = false; } }
     }

@@ -127,6 +127,31 @@ class PlanApiIntegrationTest {
         assertThat(get("/api/plans/" + disposable.get("id").asText()).statusCode()).isEqualTo(404);
     }
 
+    @Test void planAnalysisMarketMismatchReturnsARecoverableTypedConflict() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"market-mismatch-plan","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Demo-owned analysis","thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                """));
+        JsonNode world = json(post("/api/sim/market", """
+                {"name":"Different active market","symbols":{"AAPL":1.0},"scenario":"CHOP","speed":26}
+                """));
+        String worldId = world.get("worldId").asText();
+        try {
+            assertThat(put("/api/world", "{\"world\":\"" + worldId + "\"}").statusCode()).isEqualTo(200);
+            HttpResponse<String> mismatch = post("/api/plans/" + plan.get("id").asText() + "/outcomes/ensemble",
+                    "{\"expectedVersion\":" + plan.get("version").asLong() + "}");
+            assertThat(mismatch.statusCode()).isEqualTo(409);
+            JsonNode body = Json.parse(mismatch.body());
+            assertThat(body.get("error").asText()).isEqualTo("plan_market_mismatch");
+            assertThat(body.get("market").asText()).isEqualTo("DEMO");
+            assertThat(body.get("targetWorld").asText()).isEqualTo("demo");
+            assertThat(body.get("detail").asText()).contains("belongs to the Demo market");
+        } finally {
+            put("/api/world", "{\"world\":\"demo\"}");
+            delete("/api/sim/market/" + worldId);
+        }
+    }
+
     @Test void researchReportsPlanEligibilityAndCreationFailsClosedForUnavailableSymbols() throws Exception {
         JsonNode optionable = json(get("/api/research/AAPL"));
         assertThat(optionable.get("planEligible").asBoolean()).isTrue();
