@@ -93,5 +93,28 @@ class PlanOutcomeServiceTest {
         assertThat(latest.at("/outcomes/0/p50Cents").asLong()).isEqualTo(5000);
         assertThat(latest.at("/outcomes/0/bands/1/p90Cents").asLong()).isEqualTo(28000);
         assertThat(latest.at("/outcomes/0/notes/0").asText()).isEqualTo("Exact stored paths");
+
+        ObjectNode firstReport = (ObjectNode) Json.parse("""
+                {"id":"bt-old","symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","from":"2025-01-02","to":"2025-06-30",
+                 "pricingMode":"MODELED_FROM_UNDERLYING","confidence":"modeled","sampleSize":12,"winRate":0.50,
+                 "avgReturnOnRisk":0.08,"startingCents":10000000,"endingCents":10096000,"maxDrawdownPct":0.06,"demoUnderlying":true}
+                """);
+        db.exec("INSERT INTO backtests(id,created_at,request_json,report_json) VALUES (?,?,?,?)",
+                "bt-old", "2026-07-12T15:00:00Z", "{}", firstReport.toString());
+        outcomes.saveBacktest(null, plan, plan.version(), candidateId, "single", firstReport,
+                Json.parse("{\"targetDte\":30}"));
+        ObjectNode secondReport = firstReport.deepCopy();
+        secondReport.put("id", "bt-current"); secondReport.put("sampleSize", 18); secondReport.put("winRate", 0.61);
+        db.exec("INSERT INTO backtests(id,created_at,request_json,report_json) VALUES (?,?,?,?)",
+                "bt-current", "2026-07-12T16:00:00Z", "{}", secondReport.toString());
+        outcomes.saveBacktest(null, plan, plan.version(), candidateId, "portfolio", secondReport,
+                Json.parse("{\"targetDte\":45}"));
+
+        ObjectNode withHistory = outcomes.latest(null, plan);
+        assertThat(withHistory.at("/backtests")).hasSize(2);
+        assertThat(withHistory.at("/backtests/0/backtestId").asText()).isEqualTo("bt-current");
+        assertThat(withHistory.at("/backtests/0/state").asText()).isEqualTo("CURRENT");
+        assertThat(withHistory.at("/backtests/0/currentContext").asBoolean()).isTrue();
+        assertThat(withHistory.at("/backtests/1/state").asText()).isEqualTo("STALE");
     }
 }

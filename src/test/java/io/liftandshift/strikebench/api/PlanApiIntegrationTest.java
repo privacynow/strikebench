@@ -331,6 +331,8 @@ class PlanApiIntegrationTest {
         JsonNode latestAfterReplay = json(get("/api/plans/" + id + "/outcomes/latest"));
         assertThat(latestAfterReplay.at("/backtests/0/backtestId").asText()).isEqualTo(backtestId);
         assertThat(latestAfterReplay.at("/backtests/0/maxDrawdownPct").isNumber()).isTrue();
+        assertThat(latestAfterReplay.at("/backtests/0/state").asText()).isEqualTo("CURRENT");
+        assertThat(latestAfterReplay.at("/backtests/0/currentContext").asBoolean()).isTrue();
     }
 
     @Test void exactPlanEnsembleCreatesAReplayableLinkedRehearsalAndReview() throws Exception {

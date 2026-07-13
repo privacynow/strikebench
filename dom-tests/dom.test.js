@@ -540,6 +540,13 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   assert.match(await page.textContent('#plan-outcomes-panel'), /Replay.*AAPL|Historical replay/i);
   assert.equal(await page.locator('#plan-outcomes-panel input[type="date"]').count(), 2,
     'historical replay retains its useful controls at Beginner rather than hiding capability');
+  assert.equal(await page.locator('#plan-outcomes-panel [aria-label="Replay date range"] button').count(), 4,
+    'Beginner keeps fast date-window controls alongside exact dates');
+  assert.equal(await page.locator('#plan-outcomes-panel [aria-label="Target days to expiry"] button').count(), 3,
+    'Beginner keeps the familiar weekly, monthly, and quarterly expiry presets');
+  await page.getByRole('button', { name: 'Quarterly' }).click();
+  assert.equal(await page.locator('#plan-outcomes-panel input[type="number"]').first().inputValue(), '90',
+    'the visual expiry preset drives the same exact DTE input');
 });
 
 test('a selected Plan future becomes one exact managed rehearsal with a durable receipt', async () => {
