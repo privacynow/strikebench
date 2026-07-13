@@ -302,13 +302,15 @@ public final class PlanOutcomeService {
                     PlanOutcomeService::outcomeRow, plan.id(), plan.context().rev());
             for (OutcomeRow row : rows) runs.add(loadOutcome(c, row));
             ArrayNode backtests = out.putArray("backtests");
-            Db.queryOn(c, "SELECT id,backtest_id,candidate_id,engine_kind,pricing_mode,confidence,sample_size," +
+            Db.queryOn(c, "SELECT id,context_rev,state,backtest_id,candidate_id,engine_kind,pricing_mode,confidence,sample_size," +
                             "win_rate,total_pnl_cents,avg_return_on_risk,starting_cents,ending_cents,max_drawdown_pct,demo_underlying," +
-                            "created_at::text created_at FROM plan_backtest WHERE plan_id=? AND context_rev=? " +
-                            "AND state='CURRENT' ORDER BY created_at DESC",
+                            "created_at::text created_at FROM plan_backtest WHERE plan_id=? " +
+                            "ORDER BY (context_rev=?) DESC,(state='CURRENT') DESC,created_at DESC,id DESC LIMIT 20",
                     r -> {
                         ObjectNode n = Json.MAPPER.createObjectNode();
                         put(n, "id", r.str("id")); put(n, "backtestId", r.str("backtest_id"));
+                        put(n, "contextRev", intOrNull(r, "context_rev")); put(n, "state", r.str("state"));
+                        n.put("currentContext", r.intv("context_rev") == plan.context().rev());
                         put(n, "candidateId", r.str("candidate_id")); put(n, "engineKind", r.str("engine_kind"));
                         put(n, "pricingMode", r.str("pricing_mode")); put(n, "confidence", r.str("confidence"));
                         put(n, "sampleSize", intOrNull(r, "sample_size")); put(n, "winRate", r.dblOrNull("win_rate"));

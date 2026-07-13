@@ -3332,7 +3332,10 @@
       return;
     }
     (latest.outcomes || []).forEach(function (run) { ui.outcomeRuns[run.basis] = run; });
-    var latestBacktest = latest.backtests && latest.backtests[0];
+    var allBacktests = latest.backtests || [];
+    var latestBacktest = allBacktests.find(function (run) {
+      return run.currentContext && run.state === 'CURRENT';
+    }) || null;
     content.appendChild(el('div', { class: 'card plan-outcome-position' },
       UI.cardHeader('Exact position being tested', el('span', { class: 'badge badge-ok' }, 'PLAN OWNED')),
       el('div', { class: 'chip-row' }, chip('Structure', selected.displayName || prettyStrategy(selected.strategy)),
@@ -3449,13 +3452,65 @@
       var every = el('input', { type: 'number', min: '1', max: '60', value: form.entryEveryDays || 5 });
       var cash = el('input', { type: 'number', min: '1', step: '1000', value: form.startingCash || 100000 });
       var slip = el('input', { type: 'number', min: '0', max: '10', step: '0.1', value: form.slippagePct == null ? 0.5 : form.slippagePct });
-      [from,to,engine,dte,qty,every,cash,slip].forEach(function (input) { input.addEventListener('change', function () {
+      function rememberForm() {
         form.from=from.value; form.to=to.value; form.engine=engine.value; form.targetDte=dte.value;
         form.qty=qty.value; form.entryEveryDays=every.value; form.startingCash=cash.value; form.slippagePct=slip.value;
+      }
+      [from,to,engine,dte,qty,every,cash,slip].forEach(function (input) { input.addEventListener('change', function () {
+        rememberForm();
       }); });
       var results = el('div', { id: 'plan-backtest-result' });
+      var history = el('div', { id: 'plan-backtest-history' });
+      function setRange(months, button) {
+        var end = new Date();
+        var start = new Date(end);
+        if (months === 'max') start = new Date('2000-01-01T00:00:00Z');
+        else start.setUTCMonth(start.getUTCMonth() - months);
+        to.value = end.toISOString().slice(0, 10);
+        from.value = start.toISOString().slice(0, 10);
+        rememberForm();
+        button.parentNode.querySelectorAll('button').forEach(function (node) { node.classList.toggle('active', node === button); });
+      }
+      function setDte(days, button) {
+        dte.value = String(days); rememberForm();
+        button.parentNode.querySelectorAll('button').forEach(function (node) { node.classList.toggle('active', node === button); });
+      }
+      function paintHistory() {
+        history.innerHTML = '';
+        if (!allBacktests.length) return;
+        history.appendChild(UI.expandable('Previous Plan replays (' + allBacktests.length + ')', function () {
+          return el('div', { class: 'plan-backtest-history-list' }, allBacktests.map(function (run) {
+            var load = el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: async function () {
+              this.disabled = true;
+              try {
+                var report = await API.get('/api/plans/' + planRef.plan.id + '/outcomes/backtests/' + run.backtestId);
+                renderPlanBacktestReport(results, report); results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              } catch (e) { UI.toast(e.message, 'error'); }
+              finally { this.disabled = false; }
+            } }, 'Open result');
+            return el('div', { class: 'status-item plan-backtest-history-row' },
+              el('div', {}, el('b', {}, UI.fmtDate(run.createdAt)),
+                el('div', { class: 'muted small' }, (run.engineKind === 'portfolio' ? 'Overlapping book' : 'One trade at a time')
+                  + ' · ' + String(run.sampleSize || 0) + ' completed · ' + fmtPct(run.winRate))),
+              el('div', { class: 'chip-row' }, run.currentContext && run.state === 'CURRENT'
+                ? el('span', { class: 'badge badge-ok' }, 'CURRENT ASSUMPTIONS')
+                : el('span', { class: 'badge badge-dim' }, 'OLDER ASSUMPTIONS'), load));
+          }));
+        }));
+      }
+      var rangePresets = el('div', { class: 'segmented plan-backtest-presets', 'aria-label': 'Replay date range' },
+        [['6M',6],['1Y',12],['3Y',36],['MAX','max']].map(function (preset) {
+          return el('button', { type: 'button', onclick: function () { setRange(preset[1], this); } }, preset[0]);
+        }));
+      var dtePresets = el('div', { class: 'segmented plan-backtest-presets', 'aria-label': 'Target days to expiry' },
+        [['Weekly',7],['Monthly',30],['Quarterly',90]].map(function (preset) {
+          return el('button', { type: 'button', onclick: function () { setDte(preset[1], this); } }, preset[0]);
+        }));
       host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Replay ' + (selected.displayName || prettyStrategy(selected.strategy))),
         el('p', { class: 'muted' }, 'Symbol and strategy come from this Plan. The replay builds the named rule repeatedly; it does not pretend today’s exact strikes existed in the past.'),
+        el('div', { class: 'plan-backtest-preset-row' },
+          el('div', {}, el('span', { class: 'muted small' }, 'Quick range'), rangePresets),
+          el('div', {}, el('span', { class: 'muted small' }, 'Common expiry window'), dtePresets)),
         el('div', { class: 'form-grid' },
           el('div', { class: 'field' }, el('label', {}, 'From'), from),
           el('div', { class: 'field' }, el('label', {}, 'To'), to),
@@ -3476,10 +3531,12 @@
               startingCashCents:Math.round(Number(cash.value)*100),maxConcurrent:4,shortDelta:0.30,widthPct:0.05,
               profitTargetPct:0.5,stopFraction:0.8,rollDte:7});
             latestBacktest=out.backtest; renderPlanBacktestReport(results,out.report);
+            latest=await PlanStore.latestOutcomes(planRef.plan.id,true); allBacktests=latest.backtests||[]; paintHistory();
           } catch(e){results.innerHTML='';results.appendChild(alertBox('danger','Replay failed',[e.message]));}
           finally{this.disabled=false;this.removeAttribute('aria-busy');}
         } }, latestBacktest ? 'Run another replay' : 'Run historical replay'))));
       host.appendChild(results);
+      host.appendChild(history); paintHistory();
       if (latestBacktest && latestBacktest.backtestId) {
         API.get('/api/plans/' + plan.id + '/outcomes/backtests/' + latestBacktest.backtestId).then(function (report) {
           if (results.isConnected && !results.hasChildNodes()) renderPlanBacktestReport(results, report);

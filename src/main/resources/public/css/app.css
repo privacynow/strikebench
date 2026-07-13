@@ -2103,6 +2103,11 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .portfolio-allocation-card p { margin: 0; }
 .candidate-evaluation-receipt { display: grid; gap: 6px; margin-top: 10px; }
 .candidate-management-receipt > p { margin: 0 0 8px; }
+.plan-backtest-preset-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.plan-backtest-preset-row > div { display: grid; gap: 5px; }
+.plan-backtest-presets { width: fit-content; max-width: 100%; }
+.plan-backtest-history-list { display: grid; gap: 7px; }
+.plan-backtest-history-row { align-items: center; }
 .plan-next-action { display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 14px 16px; border: 1px solid var(--accent); border-radius: var(--radius-sm);
   background: var(--accent-soft); }
@@ -2142,6 +2147,9 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .portfolio-inline-trade { display: grid; gap: 12px; margin-top: 14px; scroll-margin-top: 110px; }
 .plan-outcome-action-status .alert { margin-top: 10px; }
 @media (max-width: 640px) {
+  .plan-backtest-preset-row { grid-template-columns: 1fr; }
+  .plan-backtest-presets { width: 100%; }
+  .plan-backtest-presets > button { flex: 1 1 auto; }
   .plan-bar-desktop { display: none; }
   .plan-bar-mobile { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; align-items: center; }
   .plan-decision-form { grid-template-columns: minmax(0, 1fr); }
