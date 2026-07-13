@@ -420,6 +420,19 @@
           : el('span', { class: 'muted small' }, terminalSession ? 'Session finished · review its report'
             : sameMarket ? 'Market mark unavailable' : 'Switches market when opened');
         var planIdentity = PlanStore.identity(plan, working);
+        var actions = el('div', { class: 'home-plan-actions' });
+        actions.appendChild(el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
+          if (terminalSession) {
+            App.state.focusSimControlRoom = plan.worldId;
+            App.navigate('#/data/simulation');
+            return;
+          }
+          PlanStore.focus(plan, plan.activeStage).catch(function (e) { UI.toast(e.message, 'error'); });
+        } }, terminalSession ? 'Review session' : sameMarket
+          ? (plan.open === false ? 'Open Plan' : 'Resume Plan') : 'Switch market & open'));
+        if (plan.status !== 'POSITION_OPEN') actions.appendChild(el('button', { type: 'button',
+          class: 'btn btn-sm btn-secondary', 'aria-label': 'Archive ' + plan.title,
+          onclick: function () { confirmArchivePlan(plan, false); } }, icon('archive', 15), ' Archive'));
         return el('article', { class: 'home-plan-tile' + (plan.id === App.state.activePlanId ? ' active' : ''),
           'data-plan-id': plan.id },
           el('div', { class: 'home-plan-tile-head' },
@@ -433,16 +446,7 @@
             plan.context && plan.context.horizonDays ? chip('Horizon', plan.context.horizonDays + 'd') : null,
             plan.context && plan.context.thesis ? chip('View', plan.context.thesis) : null,
             planIdentity.updated ? el('span', { class: 'muted small plan-updated-at' }, planIdentity.updated) : null,
-            live),
-          el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
-            if (terminalSession) {
-              App.state.focusSimControlRoom = plan.worldId;
-              App.navigate('#/data/simulation');
-              return;
-            }
-            PlanStore.focus(plan, plan.activeStage).catch(function (e) { UI.toast(e.message, 'error'); });
-          } }, terminalSession ? 'Review session' : sameMarket
-            ? (plan.open === false ? 'Open Plan' : 'Resume Plan') : 'Switch market & open'));
+            live), actions);
       }
       function group(title, rows, note) {
         if (!rows.length) return null;
@@ -2465,6 +2469,17 @@
     App.render();
   }
 
+  function confirmArchivePlan(plan, leavePlan) {
+    UI.confirmModal('Archive this Plan?', el('div', {},
+      el('p', {}, el('b', {}, plan.title), ' leaves the working collection.'),
+      el('p', { class: 'muted' }, 'Its evidence, selected structure, outcomes, decision, and review history remain as a read-only record. Account positions and trades are unchanged.')),
+    'Archive Plan', async function () {
+      await PlanStore.archive(await PlanStore.get(plan.id, true));
+      if (leavePlan) App.navigate('#/home');
+      else await App.render();
+    });
+  }
+
   function planHeader(plan, provisional) {
     var context = plan.context || {};
     var title = plan.title || (plan.symbol + ' · New plan');
@@ -2481,11 +2496,14 @@
           el('span', {}, 'Plan v' + plan.version),
           el('span', {}, 'Context r' + ((context && context.rev) || 1)),
           el('span', {}, String(plan.status || 'ACTIVE').replaceAll('_', ' ').toLowerCase()))),
-      provisional ? null : el('button', { type: 'button', class: 'btn btn-sm btn-secondary', id: 'plan-edit-context',
-        onclick: function () {
-          var editor = document.getElementById('plan-context-editor');
-          if (editor) { editor.hidden = !editor.hidden; if (!editor.hidden) editor.querySelector('input,select').focus(); }
-        } }, 'Edit view & limits'));
+      provisional ? null : el('div', { class: 'plan-header-actions' },
+        el('button', { type: 'button', class: 'btn btn-sm btn-secondary', id: 'plan-edit-context',
+          onclick: function () {
+            var editor = document.getElementById('plan-context-editor');
+            if (editor) { editor.hidden = !editor.hidden; if (!editor.hidden) editor.querySelector('input,select').focus(); }
+          } }, 'Edit view & limits'),
+        plan.status === 'POSITION_OPEN' ? null : el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
+          id: 'plan-archive', onclick: function () { confirmArchivePlan(plan, true); } }, icon('archive', 15), ' Archive')));
   }
 
   function planRail(plan, active, provisional) {
