@@ -70,6 +70,9 @@ public final class PlanManagementService {
         db.tx(c -> {
             PlanRow plan = requireOwned(c, planId, userId, true);
             if (plan.version() != expectedVersion) throw new IllegalStateException("This Plan changed before the review was recorded.");
+            if (!"DECIDED_CASH".equals(plan.status())) {
+                throw new IllegalStateException("Only an active frozen cash decision can record an opportunity review.");
+            }
             String decisionId = latestDecisionId(c, planId);
             if (decisionId == null) throw new IllegalStateException("This Plan has no frozen decision to review.");
             String action = Db.queryOn(c, "SELECT action FROM plan_decision WHERE id=?", r -> r.str("action"), decisionId)
@@ -176,8 +179,8 @@ public final class PlanManagementService {
     }
 
     private static PlanRow requireOwned(Connection c, String planId, String userId, boolean lock) throws SQLException {
-        List<PlanRow> rows = Db.queryOn(c, "SELECT user_id,version FROM plans WHERE id=?" + (lock ? " FOR UPDATE" : ""),
-                r -> new PlanRow(r.str("user_id"), r.lng("version")), planId);
+        List<PlanRow> rows = Db.queryOn(c, "SELECT user_id,version,status FROM plans WHERE id=?" + (lock ? " FOR UPDATE" : ""),
+                r -> new PlanRow(r.str("user_id"), r.lng("version"), r.str("status")), planId);
         if (rows.isEmpty()) throw new NoSuchElementException("no such Plan: " + planId);
         PlanRow row = rows.getFirst();
         if (!(userId == null ? row.userId() == null : userId.equals(row.userId()))) throw new NoSuchElementException("no such Plan: " + planId);
@@ -209,6 +212,6 @@ public final class PlanManagementService {
         else if (value instanceof Long l) node.put(key, l); else if (value instanceof Double d) node.put(key, d);
         else if (value instanceof Boolean b) node.put(key, b); else node.set(key, Json.MAPPER.valueToTree(value));
     }
-    private record PlanRow(String userId, long version) {}
+    private record PlanRow(String userId, long version, String status) {}
     private record DecisionReview(int horizonDays, Double pop) {}
 }

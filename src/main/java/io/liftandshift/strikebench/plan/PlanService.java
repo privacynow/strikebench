@@ -169,6 +169,7 @@ public final class PlanService {
         if (raw == null || raw.expectedVersion() == null) throw new IllegalArgumentException("expectedVersion is required");
         String intent = normalizeIntent(raw.intent(), false);
         Plan.View changed = db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, planId, userId);
             Plan.View current = selectViewOn(c, planId, userId, true);
             requireVersion(current, raw.expectedVersion());
             if (current.intent() != null) {
@@ -207,6 +208,9 @@ public final class PlanService {
         Plan.View changed = db.tx(c -> {
             Plan.View current = selectViewOn(c, planId, userId, true);
             requireVersion(current, raw.expectedVersion());
+            if (current.status() == Plan.Status.ARCHIVED || current.status() == Plan.Status.ABANDONED) {
+                throw new IllegalStateException("Archived Plans are read-only. Review this Plan without changing its saved stage.");
+            }
             if (stage == Plan.Stage.MANAGE_REVIEW && current.status() != Plan.Status.DECIDED_CASH
                     && current.status() != Plan.Status.POSITION_OPEN && current.status() != Plan.Status.CLOSED
                     && Db.queryOn(c, "SELECT 1 ok FROM plan_link WHERE plan_id=? AND role='REHEARSAL' LIMIT 1",
