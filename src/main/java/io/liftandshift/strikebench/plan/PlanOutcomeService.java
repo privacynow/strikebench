@@ -83,6 +83,8 @@ public final class PlanOutcomeService {
                 ? preview.receipt().anchorFreshness() : "MODELED";
         String asOf = preview != null && preview.receipt() != null
                 ? preview.receipt().asOf() : now.toString();
+        String datasetId = ensemble.scope().analysis().synthetic()
+                ? ensemble.scope().analysis().datasetId() : null;
 
         db.tx(c -> {
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
@@ -97,8 +99,8 @@ public final class PlanOutcomeService {
                     spotBytes, ivBytes, rateAnnual, 23_400.0 / Math.max(1, spec.stepsPerDay()), inputHash);
             Db.execOn(c, "UPDATE plan_ensemble pe SET state='STALE' FROM ensemble_artifact ea " +
                             "WHERE pe.fingerprint=ea.fingerprint AND pe.plan_id=? AND pe.context_rev=? " +
-                            "AND ea.basis=? AND pe.state='CURRENT'",
-                    plan.id(), plan.context().rev(), ensemble.basis().name());
+                            "AND ea.basis=? AND pe.dataset_id IS NOT DISTINCT FROM ? AND pe.state='CURRENT'",
+                    plan.id(), plan.context().rev(), ensemble.basis().name(), datasetId);
             Db.execOn(c, "INSERT INTO plan_ensemble(id,plan_id,context_rev,fingerprint,model_version," +
                             "anchor_spot_cents,anchor_source,anchor_freshness,dataset_id,as_of,input_hash,state," +
                             "spec_model,spec_shape,spec_horizon_days,spec_steps_per_day,spec_drift_annual,spec_vol_annual," +
@@ -108,7 +110,7 @@ public final class PlanOutcomeService {
                             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     ensembleId, plan.id(), plan.context().rev(), fingerprint, ensemble.modelVersion(),
                     Math.round(ensemble.spot() * 100), source, freshness,
-                    ensemble.scope().analysis().synthetic() ? ensemble.scope().analysis().datasetId() : null,
+                    datasetId,
                     OffsetDateTime.parse(asOf), inputHash, "CURRENT", spec.model().name(), spec.shape().name(),
                     spec.horizonDays(), spec.stepsPerDay(), spec.driftAnnual(), spec.volAnnual(),
                     spec.jumpsPerYear(), spec.jumpMean(), spec.jumpVol(), spec.tailNu(), spec.seed(), spec.paths(),
@@ -174,12 +176,15 @@ public final class PlanOutcomeService {
         });
     }
 
-    public StoredEnsemble latestEnsemble(String userId, Plan.View plan, String basis) {
+    public StoredEnsemble latestEnsemble(String userId, Plan.View plan, String basis,
+                                         io.liftandshift.strikebench.db.AnalysisContext analysis) {
+        String datasetId = analysis != null && analysis.synthetic() ? analysis.datasetId() : null;
         String id = db.with(c -> Db.queryOn(c, "SELECT pe.id FROM plan_ensemble pe " +
                         "JOIN ensemble_artifact ea ON ea.fingerprint=pe.fingerprint " +
                         "WHERE pe.plan_id=? AND pe.context_rev=? AND pe.state='CURRENT' AND ea.basis=? " +
+                        "AND pe.dataset_id IS NOT DISTINCT FROM ? " +
                         "ORDER BY pe.created_at DESC LIMIT 1", r -> r.str("id"),
-                plan.id(), plan.context().rev(), basis).stream().findFirst().orElse(null));
+                plan.id(), plan.context().rev(), basis, datasetId).stream().findFirst().orElse(null));
         return id == null ? null : loadEnsemble(userId, plan.id(), id);
     }
 
@@ -190,6 +195,8 @@ public final class PlanOutcomeService {
         String id = Ids.newId("por");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String inputHash = sha256(input == null ? Json.MAPPER.createObjectNode() : input);
+        String datasetId = stored.ensemble().scope().analysis().synthetic()
+                ? stored.ensemble().scope().analysis().datasetId() : null;
         String state = db.tx(c -> {
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != expectedVersion || current.contextRev() != plan.context().rev()) {
@@ -197,13 +204,14 @@ public final class PlanOutcomeService {
             }
             requireSelectedCandidate(c, plan.id(), plan.context().rev(), candidateId);
             Db.execOn(c, "UPDATE plan_outcome_run SET state='STALE' WHERE plan_id=? AND context_rev=? " +
-                    "AND basis=? AND state='CURRENT'", plan.id(), plan.context().rev(), stored.basis());
-            Db.execOn(c, "INSERT INTO plan_outcome_run(id,plan_id,context_rev,candidate_id,ensemble_id,basis," +
+                    "AND basis=? AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT'",
+                    plan.id(), plan.context().rev(), stored.basis(), datasetId);
+            Db.execOn(c, "INSERT INTO plan_outcome_run(id,plan_id,context_rev,candidate_id,ensemble_id,dataset_id,basis," +
                             "interpretation,entry_cost_cents,paths,horizon_days,p5_cents,p25_cents,p50_cents," +
                             "p75_cents,p95_cents,expected_pnl_cents,win_rate_pct,best_cents,worst_cents," +
                             "breach_probability_pct,input_hash,engine_version,state,created_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    id, plan.id(), plan.context().rev(), candidateId, stored.id(), stored.basis(), interpretation,
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    id, plan.id(), plan.context().rev(), candidateId, stored.id(), datasetId, stored.basis(), interpretation,
                     longOrNull(result, "entryCostCents"), integerOrNull(result, "paths"),
                     integerOrNull(result, "horizonDays"), longOrNull(result, "p5Cents"),
                     longOrNull(result, "p25Cents"), longOrNull(result, "p50Cents"),
@@ -219,10 +227,12 @@ public final class PlanOutcomeService {
 
     public SavedOutcome saveRiskNeutral(String userId, Plan.View plan, long expectedVersion,
                                         String candidateId, JsonNode result, JsonNode input,
-                                        String interpretation) {
+                                        String interpretation,
+                                        io.liftandshift.strikebench.db.AnalysisContext analysis) {
         String id = Ids.newId("por");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String inputHash = sha256(input == null ? Json.MAPPER.createObjectNode() : input);
+        String datasetId = analysis != null && analysis.synthetic() ? analysis.datasetId() : null;
         db.tx(c -> {
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != expectedVersion || current.contextRev() != plan.context().rev()) {
@@ -230,11 +240,12 @@ public final class PlanOutcomeService {
             }
             requireSelectedCandidate(c, plan.id(), plan.context().rev(), candidateId);
             Db.execOn(c, "UPDATE plan_outcome_run SET state='STALE' WHERE plan_id=? AND context_rev=? " +
-                    "AND basis='RISK_NEUTRAL' AND state='CURRENT'", plan.id(), plan.context().rev());
-            Db.execOn(c, "INSERT INTO plan_outcome_run(id,plan_id,context_rev,candidate_id,basis,interpretation," +
+                    "AND basis='RISK_NEUTRAL' AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT'",
+                    plan.id(), plan.context().rev(), datasetId);
+            Db.execOn(c, "INSERT INTO plan_outcome_run(id,plan_id,context_rev,candidate_id,dataset_id,basis,interpretation," +
                             "entry_cost_cents,expected_pnl_cents,input_hash,engine_version,state,created_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", id, plan.id(), plan.context().rev(), candidateId,
-                    "RISK_NEUTRAL", interpretation, longOrNull(result, "entryCostCents"),
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", id, plan.id(), plan.context().rev(), candidateId,
+                    datasetId, "RISK_NEUTRAL", interpretation, longOrNull(result, "entryCostCents"),
                     longOrNull(result, "expectedValueAfterFeesCents"), inputHash, ENGINE_VERSION, "CURRENT", now);
             flattenMetrics(c, id, "", result);
             return null;
@@ -244,24 +255,26 @@ public final class PlanOutcomeService {
 
     public SavedBacktest saveBacktest(String userId, Plan.View plan, long expectedVersion,
                                       String candidateId, String engineKind, JsonNode report,
-                                      JsonNode input) {
+                                      JsonNode input, io.liftandshift.strikebench.db.AnalysisContext analysis) {
         String id = Ids.newId("pbt");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String inputHash = sha256(input == null ? Json.MAPPER.createObjectNode() : input);
+        String datasetId = analysis != null && analysis.synthetic() ? analysis.datasetId() : null;
         db.tx(c -> {
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != expectedVersion || current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This Plan changed while the historical replay was running.");
             }
             requireSelectedCandidate(c, plan.id(), plan.context().rev(), candidateId);
-            Db.execOn(c, "UPDATE plan_backtest SET state='STALE' WHERE plan_id=? AND context_rev=? AND state='CURRENT'",
-                    plan.id(), plan.context().rev());
-            Db.execOn(c, "INSERT INTO plan_backtest(id,plan_id,context_rev,backtest_id,candidate_id,basis,as_of," +
+            Db.execOn(c, "UPDATE plan_backtest SET state='STALE' WHERE plan_id=? AND context_rev=? " +
+                            "AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT'",
+                    plan.id(), plan.context().rev(), datasetId);
+            Db.execOn(c, "INSERT INTO plan_backtest(id,plan_id,context_rev,backtest_id,candidate_id,dataset_id,basis,as_of," +
                             "sample_size,win_rate,total_pnl_cents,max_drawdown_cents,avg_return_on_risk," +
                             "evidence_provenance,input_hash,engine_version,state,engine_kind,pricing_mode,confidence," +
                             "starting_cents,ending_cents,max_drawdown_pct,demo_underlying,created_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    id, plan.id(), plan.context().rev(), text(report, "id"), candidateId, "HISTORICAL_REPLAY", now,
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    id, plan.id(), plan.context().rev(), text(report, "id"), candidateId, datasetId, "HISTORICAL_REPLAY", now,
                     integerOrNull(report, "sampleSize"), doubleOrNull(report, "winRate"),
                     endingDelta(report), maxDrawdownCents(report), doubleOrNull(report, "avgReturnOnRisk"),
                     backtestEvidence(report), inputHash, ENGINE_VERSION, "CURRENT", engineKind,
@@ -289,7 +302,9 @@ public final class PlanOutcomeService {
     }
 
     /** Latest current results for the Plan's current context, reconstructed from normalized rows. */
-    public ObjectNode latest(String userId, Plan.View plan) {
+    public ObjectNode latest(String userId, Plan.View plan,
+                             io.liftandshift.strikebench.db.AnalysisContext analysis) {
+        String datasetId = analysis != null && analysis.synthetic() ? analysis.datasetId() : null;
         return db.with(c -> {
             ownedPlanOn(c, plan.id(), userId, false);
             ObjectNode out = Json.MAPPER.createObjectNode();
@@ -298,11 +313,11 @@ public final class PlanOutcomeService {
                             "entry_cost_cents,paths,horizon_days,p5_cents,p25_cents,p50_cents,p75_cents,p95_cents," +
                             "expected_pnl_cents,win_rate_pct,best_cents,worst_cents,breach_probability_pct," +
                             "created_at::text created_at FROM plan_outcome_run WHERE plan_id=? AND context_rev=? " +
-                            "AND state='CURRENT' ORDER BY created_at",
-                    PlanOutcomeService::outcomeRow, plan.id(), plan.context().rev());
+                            "AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT' ORDER BY created_at",
+                    PlanOutcomeService::outcomeRow, plan.id(), plan.context().rev(), datasetId);
             for (OutcomeRow row : rows) runs.add(loadOutcome(c, row));
             ArrayNode backtests = out.putArray("backtests");
-            Db.queryOn(c, "SELECT id,context_rev,state,backtest_id,candidate_id,evidence_provenance,engine_kind,pricing_mode,confidence,sample_size," +
+            Db.queryOn(c, "SELECT id,context_rev,dataset_id,state,backtest_id,candidate_id,evidence_provenance,engine_kind,pricing_mode,confidence,sample_size," +
                             "win_rate,total_pnl_cents,avg_return_on_risk,starting_cents,ending_cents,max_drawdown_pct,demo_underlying," +
                             "created_at::text created_at FROM plan_backtest WHERE plan_id=? " +
                             "ORDER BY (context_rev=?) DESC,(state='CURRENT') DESC,created_at DESC,id DESC LIMIT 20",
@@ -310,7 +325,10 @@ public final class PlanOutcomeService {
                         ObjectNode n = Json.MAPPER.createObjectNode();
                         put(n, "id", r.str("id")); put(n, "backtestId", r.str("backtest_id"));
                         put(n, "contextRev", intOrNull(r, "context_rev")); put(n, "state", r.str("state"));
-                        n.put("currentContext", r.intv("context_rev") == plan.context().rev());
+                        put(n, "datasetId", r.str("dataset_id"));
+                        boolean currentDataset = java.util.Objects.equals(r.str("dataset_id"), datasetId);
+                        n.put("currentDataset", currentDataset);
+                        n.put("currentContext", r.intv("context_rev") == plan.context().rev() && currentDataset);
                         put(n, "candidateId", r.str("candidate_id")); put(n, "engineKind", r.str("engine_kind"));
                         put(n, "evidenceProvenance", r.str("evidence_provenance"));
                         put(n, "pricingMode", r.str("pricing_mode")); put(n, "confidence", r.str("confidence"));

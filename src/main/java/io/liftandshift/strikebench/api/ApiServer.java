@@ -2059,7 +2059,7 @@ public final class ApiServer {
     }
 
     private void planEvidenceLatest(Context ctx) {
-        var saved = planEvidence.latest(ownerId(ctx), ctx.pathParam("id"));
+        var saved = planEvidence.latest(ownerId(ctx), ctx.pathParam("id"), analysisCtx(ctx));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("evidence", saved);
         ctx.json(out);
@@ -2358,7 +2358,7 @@ public final class ApiServer {
 
     private void planOutcomesLatest(Context ctx) {
         var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
-        ObjectNode out = planOutcomes.latest(ownerId(ctx), plan);
+        ObjectNode out = planOutcomes.latest(ownerId(ctx), plan, analysisCtx(ctx));
         JsonNode selected = planStrategy.selectedCandidate(ownerId(ctx), plan.id());
         if (selected != null) out.set("selected", selected);
         ctx.json(out);
@@ -2405,7 +2405,7 @@ public final class ApiServer {
             var evaluated = evaluateOutcomes(ctx, request);
             JsonNode result = Json.MAPPER.valueToTree(evaluated.result());
             var saved = planOutcomes.saveRiskNeutral(ownerId(ctx), plan, body.expectedVersion(),
-                    candidate.path("id").asText(), result, input, evaluated.interpretation());
+                    candidate.path("id").asText(), result, input, evaluated.interpretation(), analysisCtx(ctx));
             ctx.json(Map.of("plan", plan, "outcome", saved));
             return;
         }
@@ -2452,7 +2452,7 @@ public final class ApiServer {
         } else throw new IllegalArgumentException("engine must be single or portfolio");
         JsonNode reportJson = Json.MAPPER.valueToTree(report);
         var saved = planOutcomes.saveBacktest(ownerId(ctx), plan, body.expectedVersion(),
-                candidate.path("id").asText(), engineKind, reportJson, Json.MAPPER.valueToTree(body));
+                candidate.path("id").asText(), engineKind, reportJson, Json.MAPPER.valueToTree(body), analysisCtx(ctx));
         ctx.json(Map.of("plan", plan, "backtest", saved, "report", report));
     }
 
@@ -2567,7 +2567,7 @@ public final class ApiServer {
                 (io.liftandshift.strikebench.eval.EconomicAssessment) payload.get("economics"),
                 io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx)),
                 body.qty(),
-                body.acknowledgedRisks() == null ? List.of() : body.acknowledgedRisks(), body.note());
+                body.acknowledgedRisks() == null ? List.of() : body.acknowledgedRisks(), body.note(), analysisCtx(ctx));
     }
 
     private void planManageGet(Context ctx) {
@@ -2772,7 +2772,7 @@ public final class ApiServer {
             if (!basis.name().equals(stored.basis())) throw new IllegalArgumentException("Stored ensemble basis does not match the requested basis");
             return stored;
         }
-        var existing = planOutcomes.latestEnsemble(ownerId(ctx), plan, basis.name());
+        var existing = planOutcomes.latestEnsemble(ownerId(ctx), plan, basis.name(), analysisCtx(ctx));
         if (existing != null && basis == io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC
                 && body.over() == null && body.iv() == null) return existing;
         var spec = planScenarioSpec(plan, body.over());
@@ -2786,7 +2786,7 @@ public final class ApiServer {
             ensemble = pathEnsembles.build(new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(
                     plan.symbol(), world, analysisCtx(ctx)), basis, spec, null, spot);
         } else {
-            var evidence = planEvidence.latest(ownerId(ctx), plan.id());
+            var evidence = planEvidence.latest(ownerId(ctx), plan.id(), analysisCtx(ctx));
             if (evidence == null) throw new IllegalStateException("Run Past evidence in this Plan before using historical analog outcomes.");
             ensemble = pathEnsembles.fromStudy(new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(
                     plan.symbol(), world, analysisCtx(ctx)), basis, spec, evidence.result(), spot);

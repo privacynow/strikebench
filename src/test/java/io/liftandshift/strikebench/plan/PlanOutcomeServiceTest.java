@@ -96,7 +96,7 @@ class PlanOutcomeServiceTest {
         outcomes.savePathOutcome(null, plan, plan.version(), candidateId, restored, result,
                 Json.parse("{\"basis\":\"PARAMETRIC\"}"), "same stored ensemble");
 
-        ObjectNode latest = outcomes.latest(null, plan);
+        ObjectNode latest = outcomes.latest(null, plan, AnalysisContext.OBSERVED);
         assertThat(latest.at("/outcomes/0/ensembleId").asText()).isEqualTo(stored.id());
         assertThat(latest.at("/outcomes/0/p50Cents").asLong()).isEqualTo(5000);
         assertThat(latest.at("/outcomes/0/bands/1/p90Cents").asLong()).isEqualTo(28000);
@@ -110,15 +110,15 @@ class PlanOutcomeServiceTest {
         db.exec("INSERT INTO backtests(id,created_at,request_json,report_json) VALUES (?,?,?,?)",
                 "bt-old", "2026-07-12T15:00:00Z", "{}", firstReport.toString());
         outcomes.saveBacktest(null, plan, plan.version(), candidateId, "single", firstReport,
-                Json.parse("{\"targetDte\":30}"));
+                Json.parse("{\"targetDte\":30}"), AnalysisContext.OBSERVED);
         ObjectNode secondReport = firstReport.deepCopy();
         secondReport.put("id", "bt-current"); secondReport.put("sampleSize", 18); secondReport.put("winRate", 0.61);
         db.exec("INSERT INTO backtests(id,created_at,request_json,report_json) VALUES (?,?,?,?)",
                 "bt-current", "2026-07-12T16:00:00Z", "{}", secondReport.toString());
         outcomes.saveBacktest(null, plan, plan.version(), candidateId, "portfolio", secondReport,
-                Json.parse("{\"targetDte\":45}"));
+                Json.parse("{\"targetDte\":45}"), AnalysisContext.OBSERVED);
 
-        ObjectNode withHistory = outcomes.latest(null, plan);
+        ObjectNode withHistory = outcomes.latest(null, plan, AnalysisContext.OBSERVED);
         assertThat(withHistory.at("/backtests")).hasSize(2);
         assertThat(withHistory.at("/backtests/0/backtestId").asText()).isEqualTo("bt-current");
         assertThat(withHistory.at("/backtests/0/evidenceProvenance").asText()).isEqualTo("DEMO_FIXTURE");
@@ -127,6 +127,49 @@ class PlanOutcomeServiceTest {
         assertThat(withHistory.at("/backtests/0/state").asText()).isEqualTo("CURRENT");
         assertThat(withHistory.at("/backtests/0/currentContext").asBoolean()).isTrue();
         assertThat(withHistory.at("/backtests/1/state").asText()).isEqualTo("STALE");
+
+        db.exec("INSERT INTO dataset(id,name,kind,symbol,seed,spec) VALUES(?,?,?,?,?,?::jsonb)",
+                "ds-plan-scope", "AAPL alternate history", "SYNTHETIC_PURE", "AAPL", 44L, "{}");
+        AnalysisContext scenarioAnalysis = new AnalysisContext(null, "ds-plan-scope");
+        double[][] alternatePaths = {
+                {250, 248, 246, 244}, {250, 253, 257, 262}, {250, 250, 251, 252}
+        };
+        var alternateEnsemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AAPL", "demo", scenarioAnalysis), 250, spec,
+                alternatePaths, null, "paths-test");
+        var alternateStored = outcomes.saveEnsemble(null, plan, alternateEnsemble, iv, 0.04, null,
+                Json.parse("{\"shape\":\"CHOP\",\"dataset\":\"alternate\"}"));
+        ObjectNode alternateResult = result.deepCopy();
+        alternateResult.put("p50Cents", 9000);
+        outcomes.savePathOutcome(null, plan, plan.version(), candidateId, alternateStored, alternateResult,
+                Json.parse("{\"basis\":\"PARAMETRIC\",\"dataset\":\"alternate\"}"), "alternate history");
+
+        assertThat(outcomes.latest(null, plan, AnalysisContext.OBSERVED).at("/outcomes/0/p50Cents").asLong())
+                .as("the observed/demo baseline result remains current in its own analysis lane")
+                .isEqualTo(5000);
+        assertThat(outcomes.latest(null, plan, scenarioAnalysis).at("/outcomes/0/p50Cents").asLong())
+                .as("the generated dataset restores only its own result")
+                .isEqualTo(9000);
+        assertThat(outcomes.latestEnsemble(null, plan, "PARAMETRIC", AnalysisContext.OBSERVED).id())
+                .isEqualTo(stored.id());
+        assertThat(outcomes.latestEnsemble(null, plan, "PARAMETRIC", scenarioAnalysis).id())
+                .isEqualTo(alternateStored.id());
+
+        ObjectNode scenarioReport = firstReport.deepCopy();
+        scenarioReport.put("id", "bt-scenario"); scenarioReport.put("sampleSize", 9);
+        db.exec("INSERT INTO backtests(id,created_at,request_json,report_json) VALUES (?,?,?,?)",
+                "bt-scenario", "2026-07-12T16:30:00Z", "{}", scenarioReport.toString());
+        outcomes.saveBacktest(null, plan, plan.version(), candidateId, "single", scenarioReport,
+                Json.parse("{\"targetDte\":30}"), scenarioAnalysis);
+        ObjectNode observedHistory = outcomes.latest(null, plan, AnalysisContext.OBSERVED);
+        ObjectNode scenarioHistory = outcomes.latest(null, plan, scenarioAnalysis);
+        java.util.function.BiFunction<ObjectNode, String, com.fasterxml.jackson.databind.JsonNode> replay =
+                (document, id) -> java.util.stream.StreamSupport.stream(document.withArray("backtests").spliterator(), false)
+                        .filter(row -> id.equals(row.path("backtestId").asText())).findFirst().orElseThrow();
+        assertThat(replay.apply(observedHistory, "bt-current").path("currentContext").asBoolean()).isTrue();
+        assertThat(replay.apply(observedHistory, "bt-scenario").path("currentContext").asBoolean()).isFalse();
+        assertThat(replay.apply(scenarioHistory, "bt-scenario").path("currentContext").asBoolean()).isTrue();
+        assertThat(replay.apply(scenarioHistory, "bt-current").path("currentContext").asBoolean()).isFalse();
 
         db.exec("INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded," +
                         "created_at,updated_at) VALUES(?,?,?,?,?,?,0,?,?)",
@@ -150,7 +193,8 @@ class PlanOutcomeServiceTest {
                 Clock.fixed(Instant.parse("2026-07-12T16:00:00Z"), ZoneOffset.UTC));
         ObjectNode decision = decisions.chooseCash(new PlanDecisionService.Input(null, plan, plan.version(),
                 candidateId, account, preview, economics,
-                new AccountRiskContext(null, null, null, null, null), 1, List.of(), "Kept cash"));
+                new AccountRiskContext(null, null, null, null, null), 1, List.of(), "Kept cash",
+                AnalysisContext.OBSERVED));
         assertThat(decision.path("ensembleId").asText()).isEqualTo(stored.id());
         assertThat(db.query("SELECT ea.pinned FROM ensemble_artifact ea JOIN plan_ensemble pe " +
                         "ON pe.fingerprint=ea.fingerprint WHERE pe.id=?", row -> row.bool("pinned"), stored.id()))

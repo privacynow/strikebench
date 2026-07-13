@@ -20,7 +20,7 @@ import java.util.Objects;
 public final class PlanEvidenceService {
     public record SavedStudy(String evidenceId, String state,
                              ResearchQuestionEngine.RunRequest request,
-                             ResearchQuestionEngine.QuestionResult result,
+                             ResearchQuestionEngine.QuestionResult result, String basis, String datasetId,
                              String createdAt) {}
 
     private final Db db;
@@ -48,16 +48,17 @@ public final class PlanEvidenceService {
         String id = Ids.newId("pe");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String basis = basis(plan, analysis);
+        String datasetId = analysis == null || !analysis.synthetic() ? null : analysis.datasetId();
 
         String state = db.tx(c -> {
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             boolean stillCurrent = current.contextRev() == plan.context().rev();
             String resultState = stillCurrent ? "CURRENT" : "STALE";
             if (stillCurrent) {
-                Db.execOn(c, "UPDATE plan_evidence SET state='STALE' WHERE plan_id=? AND basis=? AND state='CURRENT'",
-                        plan.id(), basis);
+                Db.execOn(c, "UPDATE plan_evidence SET state='STALE' WHERE plan_id=? AND basis=? " +
+                                "AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT'",
+                        plan.id(), basis, datasetId);
             }
-            String datasetId = analysis == null || !analysis.synthetic() ? null : analysis.datasetId();
             Db.execOn(c, "INSERT INTO plan_evidence(id,plan_id,context_rev,basis,dataset_id,question_key,study_key," +
                             "from_date,to_date,as_of,engine_version,input_hash,evidence_provenance,sample_size,state,created_at) " +
                             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -69,29 +70,32 @@ public final class PlanEvidenceService {
             persistResult(c, id, result);
             return resultState;
         });
-        return new SavedStudy(id, state, request, result, now.toString());
+        return new SavedStudy(id, state, request, result, basis, datasetId, now.toString());
     }
 
-    public SavedStudy latest(String userId, String planId) {
+    public SavedStudy latest(String userId, String planId, AnalysisContext analysis) {
         return db.with(c -> {
             CurrentPlan plan = ownedPlanOn(c, planId, userId, false);
+            String basis = basis(plan, analysis);
+            String datasetId = analysis == null || !analysis.synthetic() ? null : analysis.datasetId();
             List<EvidenceRow> rows = Db.queryOn(c,
-                    "SELECT e.id,e.question_key,e.study_key,e.evidence_provenance," +
+                    "SELECT e.id,e.question_key,e.study_key,e.evidence_provenance,e.basis,e.dataset_id," +
                             "e.from_date::text from_date,e.to_date::text to_date," +
                             "e.state,e.created_at::text created_at FROM plan_evidence e " +
                             "WHERE e.plan_id=? AND e.context_rev=? AND e.state='CURRENT' " +
-                            "AND e.basis IN ('OBSERVED_HISTORY','DEMO_HISTORY','SIMULATED_HISTORY','SCENARIO_DATASET') " +
+                            "AND e.basis=? AND e.dataset_id IS NOT DISTINCT FROM ? " +
                             "ORDER BY e.created_at DESC LIMIT 1",
                     r -> new EvidenceRow(r.str("id"), r.str("question_key"), r.str("study_key"),
-                            r.str("evidence_provenance"), r.str("from_date"),
+                            r.str("evidence_provenance"), r.str("basis"), r.str("dataset_id"), r.str("from_date"),
                             r.str("to_date"), r.str("state"), r.str("created_at")),
-                    planId, plan.contextRev());
+                    planId, plan.contextRev(), basis, datasetId);
             if (rows.isEmpty()) return null;
             EvidenceRow row = rows.getFirst();
             Map<String, Object> params = loadParams(c, row.id());
             ResearchQuestionEngine.RunRequest request = new ResearchQuestionEngine.RunRequest(
                     row.questionKey(), plan.symbol(), row.from(), row.to(), params);
-            return new SavedStudy(row.id(), row.state(), request, loadResult(c, row, plan.symbol()), row.createdAt());
+            return new SavedStudy(row.id(), row.state(), request, loadResult(c, row, plan.symbol()),
+                    row.basis(), row.datasetId(), row.createdAt());
         });
     }
 
@@ -267,14 +271,24 @@ public final class PlanEvidenceService {
     private static CurrentPlan ownedPlanOn(java.sql.Connection c, String id, String userId, boolean lock)
             throws java.sql.SQLException {
         List<CurrentPlan> rows = Db.queryOn(c,
-                "SELECT symbol,active_context_rev FROM plans WHERE id=? AND " + ownerClause("user_id")
+                "SELECT symbol,market_kind,active_context_rev FROM plans WHERE id=? AND " + ownerClause("user_id")
                         + (lock ? " FOR UPDATE" : ""),
-                r -> new CurrentPlan(r.str("symbol"), r.intv("active_context_rev")), id, userId, userId);
+                r -> new CurrentPlan(r.str("symbol"), Plan.MarketKind.valueOf(r.str("market_kind")),
+                        r.intv("active_context_rev")), id, userId, userId);
         if (rows.isEmpty()) throw new NoSuchElementException("no such plan: " + id);
         return rows.getFirst();
     }
 
     private static String basis(Plan.View plan, AnalysisContext analysis) {
+        if (analysis != null && analysis.synthetic()) return "SCENARIO_DATASET";
+        return switch (plan.marketKind()) {
+            case OBSERVED -> "OBSERVED_HISTORY";
+            case DEMO -> "DEMO_HISTORY";
+            case SIMULATED -> "SIMULATED_HISTORY";
+        };
+    }
+
+    private static String basis(CurrentPlan plan, AnalysisContext analysis) {
         if (analysis != null && analysis.synthetic()) return "SCENARIO_DATASET";
         return switch (plan.marketKind()) {
             case OBSERVED -> "OBSERVED_HISTORY";
@@ -302,8 +316,9 @@ public final class PlanEvidenceService {
         return m.containsKey(key) ? m.get(key).text() : null;
     }
 
-    private record CurrentPlan(String symbol, int contextRev) {}
+    private record CurrentPlan(String symbol, Plan.MarketKind marketKind, int contextRev) {}
     private record EvidenceRow(String id, String questionKey, String studyKey, String evidence,
+                               String basis, String datasetId,
                                String from, String to, String state, String createdAt) {}
     private record Metric(String key, Double number, String text) {}
     private record ParamRow(String key, Double number, String text, Long bool) {}
