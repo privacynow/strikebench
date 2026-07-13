@@ -511,6 +511,20 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
     'Expert sees the same five limits inline');
   await page.click('#plan-run-strategy');
   await page.waitForSelector('#plan-strategy-results table tbody tr', { timeout: 30000 });
+  const expertContainment = await page.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    document: document.documentElement.scrollWidth,
+    stage: document.querySelector('#plan-stage-strategy').getBoundingClientRect().width,
+    results: document.querySelector('#plan-strategy-results').getBoundingClientRect().width,
+    tableViewport: document.querySelector('#compare-table .tbl-wrap').getBoundingClientRect().width,
+    tableContent: document.querySelector('#compare-table table').getBoundingClientRect().width
+  }));
+  assert.ok(expertContainment.document <= expertContainment.viewport + 2,
+    'Expert ranked field must scroll inside its card, never widen the page: ' + JSON.stringify(expertContainment));
+  assert.ok(expertContainment.results <= expertContainment.stage + 2,
+    'ranked results remain contained by the Plan stage');
+  assert.ok(expertContainment.tableContent > expertContainment.tableViewport,
+    'the dense Expert table keeps its horizontal detail inside a deliberate local scroller');
   const expertRows = page.locator('#plan-strategy-results table tbody tr.clickable');
   assert.ok(await expertRows.count() >= 1, 'Expert ranked field has auditable rows');
   await expertRows.first().click();
