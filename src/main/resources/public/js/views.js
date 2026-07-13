@@ -2664,6 +2664,140 @@
         'Adjust exact contracts'));
   }
 
+  function planStrategyFilterPanel(ui) {
+    var filters = ui.strategyFilters = ui.strategyFilters || {};
+    function numField(key, id, beginnerLabel, expertLabel, infoKey, attrs) {
+      var input = el('input', Object.assign({ type: 'number', id: id, placeholder: 'any', value: filters[key] || '' }, attrs || {}));
+      input.addEventListener('input', function () { filters[key] = input.value; });
+      return el('div', { class: 'field' },
+        el('label', { for: id }, Learn.currentLevel() === 'beginner' ? beginnerLabel : expertLabel, UI.info(infoKey)), input);
+    }
+    var fields = [
+      numField('maxLoss', 'plan-f-maxloss', 'Most I am willing to lose ($)', 'Worst case \u2264 $', 'filterloss', { min: '0', step: '50' }),
+      numField('minPop', 'plan-f-pop', 'Minimum chance of any profit (%)', 'Chance of profit \u2265 %', 'filterpop', { min: '0', max: '100', step: '5' }),
+      numField('maxAssign', 'plan-f-assign', 'Chance I end up with shares (max %)', 'Assignment \u2264 %', 'filterassignment', { min: '0', max: '100', step: '5' }),
+      numField('minYield', 'plan-f-yield', 'Income pace (min %/yr)', 'Income \u2265 %/yr', 'filteryield', { min: '0', step: '1' }),
+      numField('maxCost', 'plan-f-cost', 'Cash I pay up front (max $)', 'Cash outlay \u2264 $', 'filtercost', { min: '0', step: '50' })
+    ];
+    var grid = el('div', { class: 'form-grid grid-5 plan-filter-grid' }, fields);
+    var node = Learn.currentLevel() === 'beginner'
+      ? UI.expandable('Only show proposed trades that fit my limits', function () {
+          return el('div', {}, grid,
+            el('p', { class: 'muted small' }, 'The same five limits stay available. Refused structures remain listed with the exact reason.'));
+        })
+      : el('div', { class: 'plan-filter-expert' }, grid,
+          el('p', { class: 'muted small' }, 'Blank means no extra limit; the Plan risk budget still applies.'));
+    node.id = 'plan-strategy-filters';
+    return node;
+  }
+
+  function planLadderView(result, planRef, ui, repaint) {
+    var intent = planRef.plan.intent;
+    var rungs = (result && result.rungs || []).filter(function (c) { return !!UI.firstOptionLeg(c && c.legs); });
+    var copy = {
+      ACQUIRE: ['Name your buy price', 'Each rung is a cash-secured put. Pick a stock price you would genuinely accept, then compare payment, effective purchase price and assignment chance.'],
+      EXIT: ['Name your sale price', 'Each rung is a covered call against shares you own. Pick a price you would genuinely accept, then compare payment and call-away chance.'],
+      HEDGE: ['Choose a protection floor', 'Each rung buys a put floor under shares you own. Compare the guaranteed floor, premium and expiration.']
+    }[intent];
+    if (!copy) return null;
+    var wrap = el('section', { class: 'card plan-intent-ladder', id: 'plan-intent-ladder' },
+      UI.cardHeader(copy[0], el('span', { class: 'badge badge-dim' }, rungs.length + ' RUNGS')),
+      el('p', { class: 'muted' }, copy[1]));
+    if (!rungs.length) {
+      wrap.appendChild(UI.emptyState('No listed rung fits right now', (result && result.notes || []).join(' ') || 'The active book and Plan limits produced no usable strike.'));
+      return wrap;
+    }
+    var spot = Number(result.spot || 0);
+    var target = planRef.plan.context && planRef.plan.context.targetCents ? planRef.plan.context.targetCents / 100 : null;
+    var reference = 0, best = Infinity;
+    function ladderEconomicsBadge(c) {
+      var verdict = economicVerdict(c);
+      var labels = { FAVORABLE: 'WORTH A LOOK', MIXED: 'COMPARE', UNFAVORABLE: 'LEARN FROM', UNAVAILABLE: 'MECHANICS ONLY' };
+      var classes = { FAVORABLE: 'badge-ok', MIXED: 'badge-caution', UNFAVORABLE: 'badge-danger', UNAVAILABLE: 'badge-dim' };
+      return verdict ? el('span', { class: 'badge ' + classes[verdict] }, labels[verdict]) : null;
+    }
+    rungs.forEach(function (c, i) {
+      var leg = UI.firstOptionLeg(c.legs), strike = Number(leg.strike);
+      var distance = target ? Math.abs(strike - target) : Math.abs(i - Math.floor(rungs.length / 2));
+      if (distance < best) { best = distance; reference = i; }
+    });
+    async function choose(c, button) {
+      button.disabled = true;
+      try {
+        var live = await PlanStore.get(planRef.plan.id, true);
+        var out = await PlanStore.saveCustom(live, { symbol: live.symbol, strategy: c.strategy, qty: c.qty || 1,
+          legs: c.legs, thesis: live.context && live.context.thesis, horizon: planHorizonName(live),
+          riskMode: live.context && live.context.riskMode, intent: live.intent, source: 'INTENT_LADDER' });
+        planRef.plan = out.plan;
+        planRef.selected = out.strategy && out.strategy.result && out.strategy.result.candidate;
+        ui.selectedCandidate = planRef.selected;
+        UI.toast('Exact ladder package selected for this Plan');
+        await repaint();
+      } catch (e) { button.disabled = false; UI.toast(e.message, 'error'); }
+    }
+    function facts(c) {
+      var leg = UI.firstOptionLeg(c.legs), strike = Number(leg.strike);
+      var pct = spot ? (strike - spot) / spot * 100 : null;
+      if (intent === 'ACQUIRE') return [
+        chip('Buy strike', '$' + fmtNum(strike, 2)), chip('Paid now', fmtMoney(c.entryNetPremiumCents)),
+        chip('Effective buy', c.effectivePrice == null ? '\u2014' : '$' + fmtNum(c.effectivePrice, 2)),
+        chip('Chance you buy', fmtPct(c.assignmentProb))];
+      if (intent === 'EXIT') return [
+        chip('Sell strike', '$' + fmtNum(strike, 2)), chip('Paid now', fmtMoney(c.entryNetPremiumCents)),
+        chip('Effective sale', c.effectivePrice == null ? '\u2014' : '$' + fmtNum(c.effectivePrice, 2)),
+        chip('Chance you sell', fmtPct(c.assignmentProb))];
+      return [chip('Floor', '$' + fmtNum(strike, 2)), chip('vs now', pct == null ? '\u2014' : Math.abs(pct).toFixed(1) + '% ' + (pct < 0 ? 'below' : 'above')),
+        chip('Premium at risk', fmtMoney(c.maxLossCents)), chip('Until', leg.expiration)];
+    }
+    if (Learn.currentLevel() === 'beginner') {
+      var list = el('div', { class: 'ladder-sentences' });
+      rungs.forEach(function (c, i) {
+        var button = el('button', { type: 'button', class: 'btn btn-sm' }, 'Select this rung');
+        button.onclick = function () { choose(c, button); };
+        list.appendChild(el('div', { class: 'ladder-row' + (i === reference ? ' recommended' : '') },
+          el('div', { class: 'ladder-row-badges' },
+            i === reference ? el('span', { class: 'badge badge-dim' }, target ? 'CLOSEST TO YOUR TARGET' : 'MIDDLE RUNG') : null,
+            ladderEconomicsBadge(c)),
+          el('div', { class: 'chip-row' }, facts(c)), button,
+          UI.expandable('See exact contracts and risk', function () { return candidateCard(c, true, planRef.plan.symbol); })));
+      });
+      wrap.appendChild(list);
+    } else {
+      var tbody = el('tbody', {});
+      rungs.forEach(function (c, i) {
+        var leg = UI.firstOptionLeg(c.legs), button = el('button', { type: 'button', class: 'btn btn-sm' }, 'Select');
+        button.onclick = function () { choose(c, button); };
+        tbody.appendChild(el('tr', { class: i === reference ? 'ladder-recommended' : '' },
+          el('td', {}, '$' + fmtNum(leg.strike, 2)), el('td', {}, fmtMoney(c.entryNetPremiumCents)),
+          el('td', {}, c.effectivePrice == null ? '\u2014' : '$' + fmtNum(c.effectivePrice, 2)),
+          el('td', {}, c.assignmentProb == null ? '\u2014' : fmtPct(c.assignmentProb)),
+          el('td', {}, c.annualizedYieldPct == null ? '\u2014' : fmtNum(c.annualizedYieldPct, 1) + '%'),
+          el('td', {}, ladderEconomicsBadge(c) || '\u2014'), el('td', {}, button)));
+      });
+      wrap.appendChild(el('div', { class: 'tbl-wrap' }, el('table', { class: 'tbl ladder-tbl' },
+        el('thead', {}, el('tr', {}, ['Strike', 'Premium', 'Effective price', 'Assignment', 'Yield/yr', 'Economics', ''].map(function (h) { return el('th', {}, h); }))), tbody)));
+    }
+    return wrap;
+  }
+
+  function planIncomeBoard(planRef, result, account, positions) {
+    var symbol = planRef.plan.symbol;
+    var holding = (positions || []).find(function (p) { return p.symbol === symbol; });
+    var candidates = result && result.candidates || [];
+    var best = candidates.filter(function (c) { return Number(c.entryNetPremiumCents) > 0; })
+      .sort(function (a, b) { return Number(b.entryNetPremiumCents) - Number(a.entryNetPremiumCents); })[0];
+    return el('section', { class: 'card plan-income-board', id: 'plan-income-board' },
+      UI.cardHeader('Your income picture'),
+      el('div', { class: 'chip-row' },
+        chip('Free buying power', account ? fmtMoney(account.buyingPowerCents) : '\u2014'),
+        chip('Shares available', holding ? holding.freeShares + ' ' + symbol : 'none'),
+        best ? chip('Largest listed credit', fmtMoney(best.entryNetPremiumCents)) : null,
+        best && best.annualizedYieldPct != null ? chip('Income pace', fmtNum(best.annualizedYieldPct, 1) + '%/yr') : null),
+      el('p', { class: 'muted' }, Learn.currentLevel() === 'beginner'
+        ? 'Income uses cash or shares you already have to collect option premium. The payment is real; so is the obligation to buy or sell shares if assigned.'
+        : 'Yield uses opening premium after fees over the shares or full strike cash backing the obligation. Assignment odds are the trade-off, not automatically a failure.'));
+  }
+
   function renderPlanCandidateField(host, planRef, ui, repaint) {
     var candidates = planRef.result && planRef.result.candidates || [];
     if (!candidates.length) {
@@ -2705,7 +2839,11 @@
       host.appendChild(el('div', { id: 'plan-candidate-detail' }));
       return;
     }
+    host.appendChild(el('div', { class: 'plan-proposed-heading' },
+      el('div', {}, el('span', { class: 'eyebrow' }, 'TOP PROPOSED TRADE'), el('h3', {}, 'Best fit under this Plan’s current limits')),
+      el('span', { class: 'muted small' }, 'Ranked, not guaranteed')));
     candidates.forEach(function (c, index) {
+      if (index === 1) host.appendChild(el('h3', { class: 'plan-other-ranked-title' }, 'Other ranked structures'));
       c._servedRank = index + 1;
       var card = candidateCard(c, false, planRef.plan.symbol);
       var heading = card.querySelector('h3') || card.firstChild;
@@ -2751,11 +2889,17 @@
       body.appendChild(alertBox('warn', 'Could not restore the last strategy comparison', [e.message]));
     }
 
-    var modes = [
-      { key: 'compare', label: 'Compare', icon: 'scope', note: 'Rank structures' },
-      { key: 'builder', label: 'Build', icon: 'pen', note: 'Shape exact contracts' },
+    var beginner = Learn.currentLevel() === 'beginner';
+    var modes = beginner ? [
+      { key: 'compare', label: 'Proposed trades', icon: 'scope', note: 'Ranked for this Plan' },
+      { key: 'builder', label: 'All strategies', icon: 'pen', note: 'Visual payoff guide' },
+      { key: 'chain', label: 'Option prices', icon: 'grid', note: 'Calls, puts and strikes' },
+      { key: 'scout', label: 'Scout', icon: 'compass', note: 'Look around this stock' }
+    ] : [
+      { key: 'compare', label: 'Ranked field', icon: 'scope', note: 'Economics · score · fit' },
+      { key: 'builder', label: 'Builder', icon: 'pen', note: 'Exact contracts' },
       { key: 'chain', label: 'Chain', icon: 'grid', note: 'Inspect the book' },
-      { key: 'scout', label: 'Scout', icon: 'compass', note: 'Find related plans' }
+      { key: 'scout', label: 'Scout', icon: 'compass', note: 'Peers · alternatives · hedges' }
     ];
     modes.forEach(function (mode) {
       selector.appendChild(el('button', { type: 'button', role: 'tab',
@@ -2774,11 +2918,14 @@
       body.innerHTML = '';
       if (ui.strategyView === 'builder') {
         body.appendChild(el('div', { class: 'plan-tool-intro' },
-          el('h3', {}, 'Build the exact package'),
-          el('p', { class: 'muted' }, 'The Plan fixes ' + planRef.plan.symbol + ' and ' + planIntentLabel(planRef.plan.intent)
-            + '. Every structure, strike, quantity and limit remains available here.')));
+          el('h3', {}, beginner ? 'Every strategy, shown by payoff shape' : 'Build the exact package'),
+          el('p', { class: 'muted' }, beginner
+            ? 'Choose a visual strategy card, then walk through what each contract adds. No strategy is removed; risky structures explain why the safety screen refuses them.'
+            : 'The Plan fixes ' + planRef.plan.symbol + ' and ' + planIntentLabel(planRef.plan.intent)
+              + '. Every structure, strike, quantity and limit remains available here.')));
         await Builder.render(body, {
           state: ui.buildState, lockedSymbol: planRef.plan.symbol, lockedGoal: planRef.plan.intent,
+          startInCatalog: beginner,
           thesis: planRef.plan.context && planRef.plan.context.thesis,
           horizon: planHorizonName(planRef.plan),
           completeLabel: 'Save exact package to Plan',
@@ -2896,43 +3043,66 @@
       }
 
       var filters = ui.strategyFilters;
-      function numField(key, id, label, attrs) {
-        var input = el('input', Object.assign({ type: 'number', id: id, placeholder: 'any', value: filters[key] || '' }, attrs || {}));
-        input.addEventListener('input', function () { filters[key] = input.value; });
-        return el('div', { class: 'field' }, el('label', { for: id }, label), input);
-      }
       var allow0 = el('input', { type: 'checkbox', id: 'plan-strategy-0dte', checked: filters.allow0dte ? '' : null });
       allow0.addEventListener('change', function () { filters.allow0dte = allow0.checked; });
+      function requestValues() {
+        var f = {};
+        if (filters.minPop) f.minPop = parseFloat(filters.minPop) / 100;
+        if (filters.maxAssign) f.maxAssignmentProb = parseFloat(filters.maxAssign) / 100;
+        if (filters.minYield) f.minAnnualizedYieldPct = parseFloat(filters.minYield);
+        if (filters.maxCost) f.maxCostCents = Math.round(parseFloat(filters.maxCost) * 100);
+        return {
+          allow0dte: !!filters.allow0dte,
+          maxLossCents: filters.maxLoss ? Math.round(parseFloat(filters.maxLoss) * 100) : null,
+          filters: Object.keys(f).length ? f : null
+        };
+      }
+      if (['ACQUIRE', 'EXIT', 'HEDGE'].indexOf(planRef.plan.intent) >= 0) {
+        try {
+          var ladderRequest = Object.assign({ symbol: planRef.plan.symbol, intent: planRef.plan.intent,
+            thesis: planRef.plan.context && planRef.plan.context.thesis,
+            horizon: planHorizonName(planRef.plan), riskMode: planRef.plan.context && planRef.plan.context.riskMode,
+            holdings: {
+              sharesOwned: planRef.plan.context && planRef.plan.context.holdingsShares,
+              costBasisCents: planRef.plan.context && planRef.plan.context.costBasisCents,
+              targetPriceCents: planRef.plan.context && planRef.plan.context.targetCents
+            } }, requestValues());
+          var ladderAndResearch = await Promise.all([
+            API.post('/api/research/' + encodeURIComponent(planRef.plan.symbol) + '/intent-ladder', ladderRequest),
+            API.get('/api/research/' + encodeURIComponent(planRef.plan.symbol)).catch(function () { return null; })
+          ]);
+          var ladder = ladderAndResearch[0];
+          ladder.spot = ladderAndResearch[1] && ladderAndResearch[1].displayPrice;
+          body.appendChild(planLadderView(ladder, planRef, ui, paint));
+        } catch (e) {
+          body.appendChild(alertBox('warn', 'The intent ladder is unavailable', [e.message]));
+        }
+      } else if (planRef.plan.intent === 'INCOME') {
+        try {
+          var incomeData = await Promise.all([API.get('/api/account'), API.get('/api/positions')]);
+          body.appendChild(planIncomeBoard(planRef, planRef.result, incomeData[0].account, incomeData[1].positions));
+        } catch (e) {
+          body.appendChild(alertBox('warn', 'The income capital summary is unavailable', [e.message]));
+        }
+      }
       var controls = el('div', { class: 'card plan-strategy-controls' },
-        UI.cardHeader('Compare structures for this Plan',
+        UI.cardHeader(beginner ? 'Find proposed trades for this Plan' : 'Compare structures for this Plan',
           el('span', { class: 'badge badge-dim' }, planRef.plan.symbol + ' · ' + planIntentLabel(planRef.plan.intent))),
-        el('p', { class: 'muted' }, 'The server uses the Plan’s thesis, horizon, holdings, target, account and risk budget. These optional screens narrow the same complete catalog.'),
-        el('div', { class: 'form-grid grid-5' },
-          numField('maxLoss', 'plan-f-maxloss', 'Worst case ≤ $', { min: '0', step: '50' }),
-          numField('minPop', 'plan-f-pop', 'Chance of profit ≥ %', { min: '0', max: '100', step: '5' }),
-          numField('maxAssign', 'plan-f-assign', 'Assignment ≤ %', { min: '0', max: '100', step: '5' }),
-          numField('minYield', 'plan-f-yield', 'Income ≥ %/yr', { min: '0', step: '1' }),
-          numField('maxCost', 'plan-f-cost', 'Cash outlay ≤ $', { min: '0', step: '50' })),
+        el('p', { class: 'muted' }, beginner
+          ? 'StrikeBench compares the complete strategy catalog using this Plan’s goal, view, time, holdings, account and risk budget. Poor fits stay visible as refused or teaching cases.'
+          : 'The server uses the Plan’s thesis, horizon, holdings, target, account and risk budget. Optional limits narrow the same complete catalog.'),
+        planStrategyFilterPanel(ui),
         el('label', { class: 'check-row', for: 'plan-strategy-0dte' }, allow0, ' Include same-day expirations (0DTE)'),
         el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', id: 'plan-run-strategy',
           onclick: async function () {
             this.disabled = true; this.setAttribute('aria-busy', 'true');
             try {
-              var f = {};
-              if (filters.minPop) f.minPop = parseFloat(filters.minPop) / 100;
-              if (filters.maxAssign) f.maxAssignmentProb = parseFloat(filters.maxAssign) / 100;
-              if (filters.minYield) f.minAnnualizedYieldPct = parseFloat(filters.minYield);
-              if (filters.maxCost) f.maxCostCents = Math.round(parseFloat(filters.maxCost) * 100);
-              var out = await PlanStore.runStrategy(planRef.plan, {
-                allow0dte: !!filters.allow0dte,
-                maxLossCents: filters.maxLoss ? Math.round(parseFloat(filters.maxLoss) * 100) : null,
-                filters: Object.keys(f).length ? f : null
-              });
+              var out = await PlanStore.runStrategy(planRef.plan, requestValues());
               planRef.plan = out.plan;
               planRef.result = out.strategy && out.strategy.result;
               await paint();
             } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
-          } }, planRef.result ? 'Run again with these limits' : 'Compare strategies')));
+          } }, planRef.result ? 'Refresh proposed trades' : beginner ? 'Find proposed trades' : 'Run ranked field')));
       body.appendChild(controls);
       var selectedInField = planRef.result && planRef.selected
         && (planRef.result.candidates || []).some(function (candidate) { return candidate.id === planRef.selected.id; });
@@ -2951,7 +3121,7 @@
         return;
       }
       body.appendChild(el('div', { class: 'card plan-strategy-summary' },
-        UI.cardHeader('Ranked field', el('span', { class: 'badge badge-dim' }, planRef.result.candidates.length + ' candidates')),
+        UI.cardHeader(beginner ? 'Proposed trades, in rank order' : 'Ranked field', el('span', { class: 'badge badge-dim' }, planRef.result.candidates.length + ' candidates')),
         el('p', {}, planRef.result.economicMessage || 'Compare mechanics, evidence, costs and economic placement together.'),
         el('div', { class: 'chip-row' },
           chip('Favorable', planRef.result.favorableCount || 0), chip('Mixed', planRef.result.mixedCount || 0),

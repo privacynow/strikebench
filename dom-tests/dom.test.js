@@ -47,7 +47,7 @@ async function go(hash) {
   await page.waitForSelector('#app[data-ready="true"]');
 }
 
-async function openPlan(symbol, stage = 'understand') {
+async function openPlan(symbol, stage = 'understand', intentOverride) {
   const context = await page.evaluate(() => ({
     goal: App.context.goal('DIRECTIONAL'),
     thesis: App.context.thesis('bullish'),
@@ -59,7 +59,7 @@ async function openPlan(symbol, stage = 'understand') {
   const response = await fetch(BASE + '/api/plans', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ clientRequestId: 'dom-plan-' + (++planSequence), symbol,
-      intent: context.goal, thesis: context.thesis, horizonDays, riskMode: 'conservative' })
+      intent: intentOverride || context.goal, thesis: context.thesis, horizonDays, riskMode: 'conservative' })
   });
   const body = await response.text();
   assert.ok(response.ok, 'test Plan creation failed: ' + body);
@@ -326,7 +326,7 @@ test('Plan stages orient both levels without hiding capabilities or stealing the
   assert.equal(await page.locator('.plan-rail [aria-current="step"]').count(), 1);
   assert.equal(await page.locator('.plan-next-action[data-recommended-next="STRATEGY"]').count(), 1);
 
-  await page.evaluate(() => Learn.setLevel('expert'));
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
   await page.waitForSelector('#plan-stage-evidence');
   assert.equal(await page.locator('.plan-header-receipt:visible').count(), 1,
     'Expert sees the compact Plan and context receipt');
@@ -351,11 +351,17 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
       + '\n' + error.message);
   });
   assert.equal(await page.locator('.plan-tool').count(), 4, 'one in-stage selector owns all Strategy tools');
+  assert.match(await page.textContent('.plan-tool-selector'), /Proposed trades.*All strategies.*Option prices.*Scout/s,
+    'Beginner gets plain, capability-oriented Strategy labels');
+  assert.ok(await page.locator('#plan-strategy-filters .xp-head:has-text("Only show proposed trades")').count(),
+    'Beginner keeps all five limits behind progressive disclosure');
   assert.equal(await page.locator('#plan-stage-strategy a[href^="#/trade"], #plan-stage-strategy button:has-text("Open strategy tools")').count(), 0,
     'Strategy has no cross-section Trade handoff');
 
   await page.click('#plan-run-strategy');
   await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
+  assert.match(await page.textContent('#plan-strategy-results'), /TOP PROPOSED TRADE.*Other ranked structures/s,
+    'Beginner sees a clear proposal first without losing the rest of the ranked field');
   const first = page.locator('#plan-strategy-results .candidate').first();
   assert.match(await first.textContent(), /Theoretical|Chance of any profit/);
   await first.locator('button').filter({ hasText: 'Select this structure' }).click();
@@ -369,15 +375,18 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   assert.match(await page.evaluate(() => location.hash), new RegExp('/plan/' + plan.id + '/strategy$'),
     'reload restores the Plan-owned Strategy stage');
 
-  await page.locator('.plan-tool').filter({ hasText: 'Build' }).click();
+  await page.locator('.plan-tool').filter({ hasText: 'All strategies' }).click();
   await page.waitForSelector('#builder');
+  await page.waitForSelector('#builder-catalog .tpl');
+  assert.ok(await page.locator('#builder-catalog .tpl-shape').count() >= 20,
+    'the visual all-strategies catalog remains a first-class Beginner capability');
   assert.equal(await page.locator('#builder-symbol-context').count(), 0,
     'the Builder does not recapture the Plan symbol');
   assert.match(await page.textContent('#plan-header'), /AAPL/);
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p3-strategy-builder.png'), fullPage: true });
 
-  await page.locator('.plan-tool').filter({ hasText: 'Chain' }).click();
+  await page.locator('.plan-tool').filter({ hasText: 'Option prices' }).click();
   await page.waitForSelector('#chain-anchor .card, #chain-anchor + .card, #expiration-select', { timeout: 20000 });
   assert.equal(await page.locator('#symbol-actions').count(), 0,
     'the Chain tool does not duplicate the old strategy-action surface');
@@ -404,6 +413,38 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p3-strategy-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test('Plan Strategy preserves intent-native ladders, income capital, and Expert density', async () => {
+  await page.evaluate(() => {
+    Learn.setLevel('beginner');
+    App.context.update({ goal: 'ACQUIRE', thesis: 'neutral', horizon: 'month' });
+  });
+  await openPlan('QQQ', 'strategy', 'ACQUIRE');
+  await page.waitForSelector('#plan-intent-ladder', { timeout: 30000 }).catch(async error => {
+    throw new Error('Intent ladder did not render: ' + (await page.locator('#app').textContent()) + '\n' + error.message);
+  });
+  assert.match(await page.textContent('#plan-intent-ladder'), /Name your buy price.*Buy strike.*Chance you buy/s,
+    'Buy-at-a-discount leads with a strike ladder rather than a generic strategy list');
+  assert.ok(await page.locator('#plan-intent-ladder .ladder-row').count() >= 2, 'multiple price rungs remain selectable');
+  await page.waitForTimeout(300); // observe the real card-arrival animation; never disable it for screenshots
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p11-ladder-beginner.png'), fullPage: true });
+  await page.locator('#plan-intent-ladder .ladder-row .btn:has-text("Select this rung")').first().click();
+  await page.waitForSelector('.plan-selected-structure, #plan-strategy-results button:has-text("Selected for this Plan")');
+
+  await openPlan('SPY', 'strategy', 'INCOME');
+  await page.waitForSelector('#plan-income-board');
+  assert.match(await page.textContent('#plan-income-board'), /Free buying power.*Shares available/s,
+    'income keeps its capital-and-collateral picture');
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p11-income-beginner.png'), fullPage: true });
+
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#plan-stage-strategy');
+  assert.match(await page.textContent('.plan-tool-selector'), /Ranked field.*Builder.*Chain.*Scout/s,
+    'Expert receives dense professional tool labels');
+  assert.equal(await page.locator('#plan-strategy-filters .plan-filter-grid input').count(), 5,
+    'Expert sees the same five limits inline');
 });
 
 test('Plan Outcomes reuses Evidence paths for one exact selected package', async () => {

@@ -205,6 +205,12 @@
         params = [];
         view = window.Views.home;
       }
+      var renderRouteKey = '#/' + [route].concat(params).join('/');
+      if (App._lastRenderedRoute && App._lastRenderedRoute !== renderRouteKey) {
+        var staleToast = document.getElementById('toast-region');
+        if (staleToast) staleToast.innerHTML = '';
+      }
+      App._lastRenderedRoute = renderRouteKey;
 
       document.querySelectorAll('#nav a, #bottom-nav a').forEach(function (a) {
         a.classList.toggle('active', a.getAttribute('data-route') === route);
