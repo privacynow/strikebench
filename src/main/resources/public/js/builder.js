@@ -303,6 +303,9 @@
     // goal a second time. A direct Builder visit with no goal still starts at step 1,
     // and the Back control remains the explicit way to revise a carried goal.
     if (!saved.step && !st.legs.length && TRADE_GOALS.indexOf(st.goal) >= 0) st.step = 2;
+    // A Plan's Beginner Strategy entry can open the visual catalog directly. The locked Plan goal
+    // still owns the finished package; BROWSE changes only how the user finds a structure.
+    if (options.startInCatalog && !st.legs.length) { st.goal = 'BROWSE'; st.step = 2; }
     // Cross-level coherence: a position built in the Expert terminal (or handed off) must not vanish
     // into Beginner's step-1 goal chooser and get overwritten — land it on Beginner's recap instead.
     if (level === 'beginner' && st.legs.length && st.step < 3) { st.step = 4; }
