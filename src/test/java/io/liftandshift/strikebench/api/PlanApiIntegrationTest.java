@@ -163,6 +163,9 @@ class PlanApiIntegrationTest {
         assertThat(candidate.get("id").asText()).startsWith("pcand_");
         assertThat(candidate.get("legs").size()).isGreaterThan(0);
         assertThat(candidate.has("economics")).isTrue();
+        assertThat(candidate.at("/evaluation/score/components").isArray()).isTrue();
+        assertThat(candidate.at("/evaluation/evidence/perDimension").isObject()).isTrue();
+        assertThat(candidate.at("/evaluation/management/rules").isArray()).isTrue();
 
         JsonNode latest = json(get("/api/plans/" + id + "/strategy/latest")).get("strategy");
         assertThat(latest.at("/result/candidates/0/id").asText()).isEqualTo(candidate.get("id").asText());
@@ -181,6 +184,8 @@ class PlanApiIntegrationTest {
         }
         assertThat(latest.at("/result/candidates/0/economics/verdict").asText())
                 .isEqualTo(candidate.at("/economics/verdict").asText());
+        assertThat(latest.at("/result/candidates/0/evaluation"))
+                .isEqualTo(candidate.at("/evaluation"));
 
         JsonNode selected = json(put("/api/plans/" + id + "/strategy/select",
                 "{\"candidateId\":\"" + candidate.get("id").asText() + "\",\"expectedVersion\":"

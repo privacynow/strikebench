@@ -364,10 +364,13 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
     'Beginner sees a clear proposal first without losing the rest of the ranked field');
   const first = page.locator('#plan-strategy-results .candidate').first();
   assert.match(await first.textContent(), /Theoretical|Chance of any profit/);
+  assert.match(await first.textContent(), /How you would manage this trade/,
+    'Beginner retains the plain-language management capability from the decision analysis');
   await first.locator('button').filter({ hasText: 'Select this structure' }).click();
   await page.waitForSelector('#plan-strategy-results button:has-text("Selected for this Plan")');
+  await first.scrollIntoViewIfNeeded();
   await page.waitForTimeout(500);
-  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p3-strategy-compare.png'), fullPage: true });
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p3-strategy-compare.png'), fullPage: false });
 
   await page.reload();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
@@ -445,6 +448,19 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
     'Expert receives dense professional tool labels');
   assert.equal(await page.locator('#plan-strategy-filters .plan-filter-grid input').count(), 5,
     'Expert sees the same five limits inline');
+  await page.click('#plan-run-strategy');
+  await page.waitForSelector('#plan-strategy-results table tbody tr', { timeout: 30000 });
+  const expertRows = page.locator('#plan-strategy-results table tbody tr.clickable');
+  assert.ok(await expertRows.count() >= 1, 'Expert ranked field has auditable rows');
+  await expertRows.first().click();
+  await page.waitForSelector('#plan-candidate-detail .candidate-evaluation-receipt');
+  const expertDetail = await page.textContent('#plan-candidate-detail');
+  assert.match(expertDetail, /Evidence by input/, 'Expert retains per-input evidence behind the ranking');
+  assert.match(expertDetail, /How the Decision score was built/, 'Expert retains the score construction');
+  assert.match(expertDetail, /Mechanical management plan/, 'Expert retains the management receipt');
+  await page.locator('#plan-candidate-detail').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p14-strategy-audit-expert.png'), fullPage: false });
 });
 
 test('Plan Outcomes reuses Evidence paths for one exact selected package', async () => {

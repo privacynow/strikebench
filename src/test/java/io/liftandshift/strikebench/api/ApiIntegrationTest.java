@@ -616,6 +616,8 @@ class ApiIntegrationTest {
                 "{\"intent\":\"acquire\",\"riskMode\":\"balanced\"}").body());
         assertThat(acq.get("intent").asText()).isEqualTo("ACQUIRE");
         assertThat(acq.get("rungs").size()).isGreaterThanOrEqualTo(4);
+        assertThat(acq.at("/rungs/0/evaluation/score/components").isArray()).isTrue();
+        assertThat(acq.at("/rungs/0/evaluation/management/rules").isArray()).isTrue();
         double prev = Double.MAX_VALUE;
         for (JsonNode r : acq.get("rungs")) {
             double strike = Double.parseDouble(r.get("legs").get(0).get("strike").asText());
