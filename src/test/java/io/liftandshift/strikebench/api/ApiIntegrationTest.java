@@ -1385,4 +1385,51 @@ class ApiIntegrationTest {
         assertThat(unacknowledged.statusCode()).isEqualTo(422);
         assertThat(unacknowledged.body()).contains("ack-capital");
     }
+
+    @Test
+    @Order(42)
+    void trackedPortfolioApiKeepsExternalAccountingSeparateAndExportsRealFiles() throws Exception {
+        HttpResponse<String> created = post("/api/portfolio/accounts", """
+                {"name":"Taxable review book","accountType":"TAXABLE","broker":"Review broker",
+                 "lotMethod":"FIFO","shortTermTaxRateBps":3000,"longTermTaxRateBps":1500,
+                 "ordinaryTaxRateBps":2400,"stateTaxRateBps":400,"openingCashCents":10000000}
+                """);
+        assertThat(created.statusCode()).isEqualTo(201);
+        String id = Json.parse(created.body()).get("id").asText();
+
+        HttpResponse<String> recorded = post("/api/portfolio/accounts/" + id + "/transactions", """
+                {"occurredAt":"2026-07-01","eventType":"TRADE","feesCents":0,"source":"BROKER",
+                 "externalRef":"BROKER-FILL-1","notes":"Recorded external fill","legs":[
+                   {"instrumentType":"STOCK","action":"BUY","positionEffect":"OPEN","symbol":"AAPL",
+                    "quantity":10,"multiplier":1,"price":250.00}]}
+                """);
+        assertThat(recorded.statusCode()).isEqualTo(201);
+        JsonNode summary = Json.parse(get("/api/portfolio/accounts/" + id + "/summary").body());
+        assertThat(summary.get("bookCashCents").asLong()).isEqualTo(9_750_000L);
+        assertThat(summary.get("positions")).singleElement().satisfies(p -> {
+            assertThat(p.get("symbol").asText()).isEqualTo("AAPL");
+            assertThat(p.get("complete").asBoolean()).isTrue();
+        });
+        assertThat(Json.parse(get("/api/account").body()).at("/account/startingCashCents").asLong())
+                .as("tracked brokerage activity never mutates practice money").isEqualTo(10_000_000L);
+
+        HttpResponse<String> csv = get("/api/portfolio/accounts/" + id + "/export.csv");
+        assertThat(csv.statusCode()).isEqualTo(200);
+        assertThat(csv.headers().firstValue("Content-Disposition").orElse("")).contains(".csv");
+        assertThat(csv.body()).contains("BROKER-FILL-1", "gross_amount_cents");
+
+        HttpResponse<byte[]> xlsx = http.send(HttpRequest.newBuilder(
+                        URI.create(base + "/api/portfolio/accounts/" + id + "/export.xlsx?year=2026")).GET().build(),
+                HttpResponse.BodyHandlers.ofByteArray());
+        assertThat(xlsx.statusCode()).isEqualTo(200);
+        assertThat(xlsx.headers().firstValue("Content-Type").orElse(""))
+                .contains("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        assertThat(xlsx.body()).startsWith((byte) 'P', (byte) 'K');
+
+        assertThat(delete("/api/portfolio/accounts/" + id).statusCode()).isEqualTo(200);
+        assertThat(post("/api/portfolio/accounts/" + id + "/transactions", """
+                {"eventType":"INTEREST","cashAmountCents":100,"source":"MANUAL"}
+                """).statusCode()).isEqualTo(409);
+        assertThat(post("/api/portfolio/accounts/" + id + "/restore", "{}").statusCode()).isEqualTo(200);
+    }
 }

@@ -225,6 +225,17 @@ public final class PortfolioAccountingService {
         });
     }
 
+    public AccountProfile setArchived(String ownerId, String id, boolean archived) {
+        String owner = owner(ownerId);
+        return db.tx(c -> {
+            requireAccount(c, owner, id, true);
+            Db.execOn(c, "UPDATE portfolio_account SET status=?,updated_at=? WHERE id=?",
+                    archived ? "ARCHIVED" : "ACTIVE",
+                    OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC), id);
+            return requireAccount(c, owner, id, false);
+        });
+    }
+
     // ---- Transactions and lots ----
 
     public TransactionView record(String ownerId, String accountId, TransactionInput input) {
