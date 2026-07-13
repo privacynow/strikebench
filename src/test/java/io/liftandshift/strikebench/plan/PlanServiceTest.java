@@ -61,6 +61,41 @@ class PlanServiceTest {
     }
 
     @Test
+    void presentationAndRiskDefaultsDoNotDuplicateAnActivePlan() {
+        Plan.CreateRequest initial = new Plan.CreateRequest("identity-1", "AAPL", "INCOME", null,
+                "First title", "neutral", 30, 25000L, "conservative", 100L, 20000L, null);
+        Plan.CreateRequest sameInquiry = new Plan.CreateRequest("identity-2", "AAPL", "INCOME", null,
+                "Renamed in another entry point", "neutral", 30, 25000L, "aggressive", 100L, 20000L, null);
+        Plan.View first = plans.create(null, Plan.MarketKind.DEMO, null, null, initial);
+        Plan.View resumed = plans.create(null, Plan.MarketKind.DEMO, null, null, sameInquiry);
+
+        assertThat(resumed.id()).isEqualTo(first.id());
+        assertThat(resumed.title()).isEqualTo("First title");
+        assertThat(resumed.context().riskMode()).isEqualTo("conservative");
+        assertThat(plans.list(null, Plan.MarketKind.DEMO, null, false)).hasSize(1);
+
+        Plan.View differentTarget = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                new Plan.CreateRequest("identity-3", "AAPL", "INCOME", null, "First title", "neutral",
+                        30, 24000L, "conservative", 100L, 20000L, null));
+        assertThat(differentTarget.id()).isNotEqualTo(first.id());
+
+        Plan.View closed = plans.setOpen(null, first.id(), new Plan.OpenRequest(first.version(), false));
+        Plan.View reopened = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                new Plan.CreateRequest("identity-reopen", "AAPL", "INCOME", null, "Resume", "neutral",
+                        30, 25000L, "balanced", 100L, 20000L, null));
+        assertThat(closed.open()).isFalse();
+        assertThat(reopened.id()).isEqualTo(first.id());
+        assertThat(reopened.open()).isTrue();
+        assertThat(reopened.version()).isEqualTo(closed.version() + 1);
+
+        db.exec("UPDATE plans SET status='DECIDED_CASH' WHERE id=?", first.id());
+        Plan.View newCycle = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                new Plan.CreateRequest("identity-4", "AAPL", "INCOME", null, "Next cycle", "neutral",
+                        30, 25000L, "balanced", 100L, 20000L, null));
+        assertThat(newCycle.id()).isNotEqualTo(first.id());
+    }
+
+    @Test
     void concurrentEquivalentContentWithDifferentRequestIdsCreatesExactlyOnePlan() throws Exception {
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch go = new CountDownLatch(1);

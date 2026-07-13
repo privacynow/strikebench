@@ -76,6 +76,11 @@ class PlanApiIntegrationTest {
         assertThat(replay.get("id").asText()).isEqualTo(id);
         JsonNode duplicate = json(post("/api/plans", body.replace("browser-create-1", "browser-create-2")));
         assertThat(duplicate.get("id").asText()).isEqualTo(id);
+        JsonNode sameInquiryDifferentPresentation = json(post("/api/plans", body
+                .replace("browser-create-1", "browser-create-presentation")
+                .replace("API CRUD plan", "Same inquiry from another entry point")
+                .replace("\"riskMode\":\"conservative\"", "\"riskMode\":\"aggressive\"")));
+        assertThat(sameInquiryDifferentPresentation.get("id").asText()).isEqualTo(id);
         JsonNode differentHorizon = json(post("/api/plans", body
                 .replace("browser-create-1", "browser-create-3").replace("\"horizonDays\":30", "\"horizonDays\":60")));
         assertThat(differentHorizon.get("id").asText()).isNotEqualTo(id);
@@ -305,7 +310,7 @@ class PlanApiIntegrationTest {
     @Test void builderFitUsesThePlanContextWithoutMutatingOrPersistingASecondWorkflow() throws Exception {
         JsonNode plan = json(post("/api/plans", """
                 {"clientRequestId":"strategy-fit-plan-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Builder fit plan",
-                 "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                 "thesis":"bullish","horizonDays":31,"riskMode":"conservative"}
                 """));
         String id = plan.get("id").asText();
         long version = plan.get("version").asLong();
