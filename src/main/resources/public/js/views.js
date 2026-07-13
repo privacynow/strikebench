@@ -824,6 +824,7 @@
 
     var section = embedded && embedded.stage || 'understand';
     if (section === 'evidence') {
+      root.appendChild(planAnalysisSourceControl(embedded.plan));
       root.appendChild(testYourViewSection(symbol, embedded.plan));
       return;
     }
@@ -7110,6 +7111,102 @@
    * Past evidence asks what followed a named historical condition; Possible futures applies the
    * user's view as a model seed. They share symbol and horizon, but never blend probabilities.
    */
+  function planAnalysisSourceControl(plan) {
+    var level = Learn.currentLevel();
+    var body = el('div', { class: 'plan-analysis-source-body' }, UI.spinner('Loading analysis sources…'));
+    var host = el('section', { class: 'card plan-analysis-source', id: 'plan-analysis-source' },
+      UI.cardHeader(level === 'beginner' ? 'History used in this Plan' : 'Analysis dataset'), body);
+
+    function baselineLabel() {
+      if (plan.marketKind === 'SIMULATED') return 'This simulated session’s generated history';
+      if (plan.marketKind === 'DEMO') return 'Demo baseline · fabricated teaching history';
+      return 'Observed market history';
+    }
+
+    function resetRenderedAnalysis() {
+      var ui = PlanStore.ui(plan.id);
+      var evidenceMode = ui.evidence && ui.evidence.mode;
+      var outcomeMode = ui.outcomes && ui.outcomes.mode;
+      ui.evidence = { mode: evidenceMode || 'past' };
+      ui.outcomes = { mode: outcomeMode || 'market' };
+      ui.outcomeRuns = {};
+      delete ui.planEnsembleId;
+      delete ui.planEnsembleFingerprint;
+      if (window.Workspace) Workspace.save();
+    }
+
+    (async function load() {
+      try {
+        var response = await API.getFresh('/api/datasets');
+        if (!host.isConnected) return;
+        var rows = response.datasets || [];
+        var active = response.active || 'observed';
+        var activeRow = rows.find(function (row) { return row.id === active; });
+        var matching = rows.filter(function (row) {
+          return row.id === 'observed' || String(row.symbol || '').toUpperCase() === plan.symbol;
+        });
+        if (active !== 'observed' && !matching.some(function (row) { return row.id === active; }) && activeRow) {
+          matching.push(activeRow);
+        }
+        var select = el('select', { id: 'plan-analysis-dataset', 'aria-label': level === 'beginner'
+          ? 'History used in this Plan' : 'Analysis dataset' });
+        matching.forEach(function (row) {
+          var matchingSymbol = row.id === 'observed' || String(row.symbol || '').toUpperCase() === plan.symbol;
+          var unavailableInWorld = plan.marketKind === 'SIMULATED' && row.id !== 'observed';
+          var label = row.id === 'observed' ? baselineLabel()
+            : row.name + (matchingSymbol ? '' : ' · for ' + (row.symbol || 'another symbol'));
+          select.appendChild(el('option', { value: row.id, selected: row.id === active ? 'selected' : null,
+            disabled: (!matchingSymbol || unavailableInWorld) ? 'disabled' : null }, label));
+        });
+        var detail = el('div', { class: 'plan-analysis-source-detail muted small' });
+        var error = el('div', { class: 'plan-analysis-source-error', 'aria-live': 'polite' });
+        function paintDetail() {
+          var row = rows.find(function (item) { return item.id === select.value; });
+          if (!row || row.id === 'observed') {
+            detail.textContent = level === 'beginner'
+              ? 'Changes charts, Past evidence and historical replays — never the market or account used to price this Plan.'
+              : 'Execution market unchanged · dataset observed · current Plan context retained.';
+          } else {
+            detail.textContent = level === 'beginner'
+              ? (row.bars || 0) + ' generated daily bars for ' + row.symbol
+                + '. The Plan and its execution market do not change.'
+              : row.kind + ' · ' + (row.bars || 0) + ' bars · ' + row.symbol + ' · dataset ' + row.id
+                + ' · execution market unchanged.';
+          }
+        }
+        paintDetail();
+        select.addEventListener('change', async function () {
+          var previous = active;
+          var next = select.value;
+          if (next === previous) return;
+          select.disabled = true; error.innerHTML = '';
+          try {
+            await API.put('/api/datasets/active', { id: next });
+            active = next;
+            resetRenderedAnalysis();
+            await App.refreshScenarioBanner();
+            await App.render();
+          } catch (e) {
+            select.value = previous; paintDetail(); select.disabled = false;
+            error.appendChild(alertBox('caution', 'Analysis source did not change', [e.message]));
+          }
+        });
+        body.replaceChildren(el('div', { class: 'plan-analysis-source-controls' },
+          el('div', { class: 'field' }, el('label', { for: 'plan-analysis-dataset' },
+            level === 'beginner' ? 'Test the Plan against' : 'Dataset'), select),
+          el('div', { class: 'plan-analysis-source-state' },
+            el('span', { class: 'badge ' + (active === 'observed' ? 'badge-info' : 'badge-caution') },
+              active === 'observed' ? (plan.marketKind === 'DEMO' ? 'DEMO HISTORY' : plan.marketKind === 'SIMULATED'
+                ? 'SESSION HISTORY' : 'OBSERVED') : 'GENERATED SCENARIO'), detail,
+            el('a', { href: '#/data/datasets', class: 'muted small' }, 'Manage saved datasets'))), error);
+      } catch (e) {
+        if (!host.isConnected) return;
+        body.replaceChildren(alertBox('warn', 'Analysis sources are unavailable', [e.message]));
+      }
+    })();
+    return host;
+  }
+
   function testYourViewSection(symbol, plan) {
     if (!plan) throw new Error('Evidence must be owned by a Plan.');
     var level = Learn.currentLevel();
@@ -7209,7 +7306,8 @@
   function studyClientKey(symbol, qKey, params, from, to) {
     var ordered = {};
     Object.keys(params || {}).sort().forEach(function (k) { ordered[k] = params[k]; });
-    return symbol + '|' + qKey + '|' + (from || '') + '..' + (to || '') + '|' + JSON.stringify(ordered);
+    var dataset = App.config && App.config.activeDataset || 'observed';
+    return dataset + '|' + symbol + '|' + qKey + '|' + (from || '') + '..' + (to || '') + '|' + JSON.stringify(ordered);
   }
 
   /** PAST EVIDENCE: the event study, inheriting page symbol and shared horizon. */

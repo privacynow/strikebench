@@ -2091,6 +2091,16 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-stage-carry-receipt { margin-left: auto; color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
 .plan-stage-content { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .plan-stage-content > * { min-width: 0; max-width: 100%; }
+.plan-analysis-source { margin-bottom: 12px; }
+.plan-analysis-source > .card-head { margin-bottom: 8px; }
+.plan-analysis-source-controls { display: grid; grid-template-columns: minmax(260px, .8fr) minmax(0, 1.2fr);
+  align-items: end; gap: 12px; }
+.plan-analysis-source-controls .field { margin: 0; }
+.plan-analysis-source-state { min-width: 0; min-height: 38px; display: flex; align-items: center;
+  flex-wrap: wrap; gap: 6px 9px; }
+.plan-analysis-source-detail { min-width: 0; flex: 1 1 320px; }
+.plan-analysis-source-error:empty { display: none; }
+.plan-analysis-source-error { margin-top: 8px; }
 .plan-understand-grid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .plan-understand-grid #history-card,
 .plan-understand-grid #news-card { grid-column: 1 / -1; }
@@ -2191,6 +2201,8 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .portfolio-inline-trade { display: grid; gap: 12px; margin-top: 14px; scroll-margin-top: 110px; }
 .plan-outcome-action-status .alert { margin-top: 10px; }
 @media (max-width: 640px) {
+  .plan-analysis-source-controls { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .plan-analysis-source-state { align-items: flex-start; }
   .plan-backtest-preset-row { grid-template-columns: 1fr; }
   .plan-backtest-presets { width: 100%; }
   .plan-backtest-presets > button { flex: 1 1 auto; }
