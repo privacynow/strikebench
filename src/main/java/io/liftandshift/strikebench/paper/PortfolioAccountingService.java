@@ -243,6 +243,18 @@ public final class PortfolioAccountingService {
         return db.tx(c -> recordOn(c, requireAccount(c, owner, accountId, true), input));
     }
 
+    public List<TransactionView> recordBatch(String ownerId, String accountId, List<TransactionInput> inputs) {
+        if (inputs == null || inputs.isEmpty()) throw new IllegalArgumentException("at least one transaction is required");
+        if (inputs.size() > 100_000) throw new IllegalArgumentException("an import may contain at most 100,000 transactions");
+        String owner = owner(ownerId);
+        return db.tx(c -> {
+            AccountProfile account = requireAccount(c, owner, accountId, true);
+            List<TransactionView> out = new ArrayList<>(inputs.size());
+            for (TransactionInput input : inputs) out.add(recordOn(c, account, input));
+            return List.copyOf(out);
+        });
+    }
+
     private TransactionView recordOn(Connection c, AccountProfile account, TransactionInput input) throws SQLException {
         if (!"ACTIVE".equals(account.status())) throw new IllegalStateException("This tracked account is archived and read-only.");
         if (input == null) throw new IllegalArgumentException("transaction details are required");
