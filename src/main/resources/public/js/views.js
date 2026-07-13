@@ -3538,7 +3538,7 @@
       host.appendChild(results);
       host.appendChild(history); paintHistory();
       if (latestBacktest && latestBacktest.backtestId) {
-        API.get('/api/plans/' + plan.id + '/outcomes/backtests/' + latestBacktest.backtestId).then(function (report) {
+        API.get('/api/plans/' + planRef.plan.id + '/outcomes/backtests/' + latestBacktest.backtestId).then(function (report) {
           if (results.isConnected && !results.hasChildNodes()) renderPlanBacktestReport(results, report);
         }).catch(function () { /* summary remains in the comparison; rerun is available */ });
       }

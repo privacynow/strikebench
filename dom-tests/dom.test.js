@@ -547,6 +547,22 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   await page.getByRole('button', { name: 'Quarterly' }).click();
   assert.equal(await page.locator('#plan-outcomes-panel input[type="number"]').first().inputValue(), '90',
     'the visual expiry preset drives the same exact DTE input');
+  await page.getByRole('button', { name: 'Run historical replay' }).click();
+  await page.waitForSelector('#plan-backtest-result .grid', { timeout: 30000 });
+  await page.reload();
+  await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
+  await page.click('#plan-outcomes-basis-backtest');
+  await page.waitForSelector('#plan-backtest-result .grid', { timeout: 30000 });
+  await page.waitForSelector('#plan-backtest-history .xp-head', { timeout: 5000 }).catch(async error => {
+    const debug = await page.evaluate(async planId => ({
+      latest: await API.getFresh('/api/plans/' + planId + '/outcomes/latest'),
+      panel: document.getElementById('plan-outcomes-panel') && document.getElementById('plan-outcomes-panel').innerText
+    }), plan.id);
+    throw new Error('Saved replay result restored without its history control: ' + JSON.stringify(debug) + '\n' + error.message);
+  });
+  await page.locator('#plan-backtest-history .xp-head').click();
+  assert.match(await page.textContent('#plan-backtest-history'), /Previous Plan replays \(1\).*CURRENT ASSUMPTIONS/s,
+    'a saved replay survives restart with a visible Plan-owned history and no legacy page');
 });
 
 test('a selected Plan future becomes one exact managed rehearsal with a durable receipt', async () => {
