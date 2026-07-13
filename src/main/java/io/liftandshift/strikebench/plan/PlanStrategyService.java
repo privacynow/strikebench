@@ -43,6 +43,7 @@ public final class PlanStrategyService {
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String inputHash = sha256(request == null ? Json.MAPPER.createObjectNode() : request);
         String state = db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             boolean stillCurrent = current.contextRev() == plan.context().rev();
             String runState = stillCurrent ? "CURRENT" : "STALE";
@@ -120,6 +121,7 @@ public final class PlanStrategyService {
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String inputHash = sha256(request == null ? Json.MAPPER.createObjectNode() : request);
         String state = db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             boolean stillCurrent = current.contextRev() == plan.context().rev();
             String runState = stillCurrent ? "CURRENT" : "STALE";
@@ -191,6 +193,7 @@ public final class PlanStrategyService {
 
     public Selection select(String userId, String planId, String candidateId, long expectedVersion) {
         return db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, planId, userId);
             CurrentPlan plan = ownedPlanOn(c, planId, userId, true);
             if (plan.version() != expectedVersion) {
                 throw new IllegalStateException("This plan changed in another tab. Reload it before choosing a structure.");
@@ -219,6 +222,7 @@ public final class PlanStrategyService {
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String inputHash = sha256(request == null ? Json.MAPPER.createObjectNode() : request);
         String candidateId = db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != expectedVersion) {
                 throw new IllegalStateException("This plan changed in another tab. Reload it before saving the structure.");
@@ -288,6 +292,7 @@ public final class PlanStrategyService {
         String runId = Ids.newId("psr");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String candidateId = db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != plan.version()) throw new IllegalStateException("The sibling Plan changed before its structure was saved");
             Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +

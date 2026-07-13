@@ -51,6 +51,7 @@ public final class PlanEvidenceService {
         String datasetId = analysis == null || !analysis.synthetic() ? null : analysis.datasetId();
 
         String state = db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             boolean stillCurrent = current.contextRev() == plan.context().rev();
             String resultState = stillCurrent ? "CURRENT" : "STALE";

@@ -100,6 +100,7 @@ public final class PlanOutcomeService {
                 ? ensemble.scope().analysis().datasetId() : null;
 
         db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("The Plan assumptions changed while the ensemble was running.");
@@ -227,6 +228,7 @@ public final class PlanOutcomeService {
         String datasetId = stored.ensemble().scope().analysis().synthetic()
                 ? stored.ensemble().scope().analysis().datasetId() : null;
         String state = db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != expectedVersion || current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This Plan changed while Outcomes was running. Reload it before saving the result.");
@@ -264,6 +266,7 @@ public final class PlanOutcomeService {
         String inputHash = sha256(input == null ? Json.MAPPER.createObjectNode() : input);
         String datasetId = analysis != null && analysis.synthetic() ? analysis.datasetId() : null;
         db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != expectedVersion || current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This Plan changed while market odds were running.");
@@ -295,6 +298,7 @@ public final class PlanOutcomeService {
         String datasetId = stored.ensemble().scope().analysis().synthetic()
                 ? stored.ensemble().scope().analysis().datasetId() : null;
         db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != expectedVersion || current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This Plan changed while proposals were being compared.");
@@ -338,6 +342,7 @@ public final class PlanOutcomeService {
         String inputHash = sha256(input == null ? Json.MAPPER.createObjectNode() : input);
         String datasetId = analysis != null && analysis.synthetic() ? analysis.datasetId() : null;
         db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != expectedVersion || current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This Plan changed while the historical replay was running.");
