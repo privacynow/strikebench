@@ -892,6 +892,17 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(300); // let responsive reflow and real animations settle
+  const manageMobile = await page.evaluate(() => ({
+    width: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    offenders: Array.from(document.querySelectorAll('#plan-stage-manage-review *')).map(node => {
+      const r = node.getBoundingClientRect();
+      return { id: node.id || '', cls: String(node.className || '').slice(0, 80),
+        left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width) };
+    }).filter(row => row.left < -1 || row.right > innerWidth + 1).slice(0, 12)
+  }));
+  assert.ok(manageMobile.scrollWidth <= manageMobile.width + 1,
+    'active-position Manage must fit the mobile viewport: ' + JSON.stringify(manageMobile));
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p6-manage-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
 
