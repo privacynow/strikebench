@@ -437,6 +437,7 @@ public final class ApiServer {
             c.routes.post("/api/plans/{id}/strategy/fit", this::planStrategyFit);
             c.routes.post("/api/plans/{id}/strategy/custom", this::planStrategyCustom);
             c.routes.put("/api/plans/{id}/strategy/select", this::planStrategySelect);
+            c.routes.delete("/api/plans/{id}/strategy/selection", this::planStrategySelectionDelete);
             c.routes.get("/api/plans/{id}/scout/latest", this::planScoutLatest);
             c.routes.post("/api/plans/{id}/scout/run", this::planScoutRun);
             c.routes.post("/api/plans/{id}/scout/spawn", this::planScoutSpawn);
@@ -2277,6 +2278,19 @@ public final class ApiServer {
         var selected = planStrategy.select(ownerId(ctx), ctx.pathParam("id"), request.candidateId(),
                 request.expectedVersion());
         ctx.json(Map.of("selection", selected, "plan", planSvc.get(ownerId(ctx), ctx.pathParam("id"))));
+    }
+
+    private void planStrategySelectionDelete(Context ctx) {
+        String rawVersion = ctx.queryParam("expectedVersion");
+        if (rawVersion == null || rawVersion.isBlank()) {
+            throw new IllegalArgumentException("expectedVersion is required");
+        }
+        long expectedVersion;
+        try { expectedVersion = Long.parseLong(rawVersion); }
+        catch (NumberFormatException e) { throw new IllegalArgumentException("expectedVersion must be an integer"); }
+        String id = ctx.pathParam("id");
+        var selection = planStrategy.clearSelection(ownerId(ctx), id, expectedVersion);
+        ctx.json(Map.of("selection", selection, "plan", planSvc.get(ownerId(ctx), id)));
     }
 
     private void planStrategyCustom(Context ctx) {

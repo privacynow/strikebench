@@ -2893,6 +2893,7 @@
       planRef.selected = candidate;
       ui.selectedCandidate = candidate;
       candidate.selected = true;
+      ui.strategyFocusCandidate = candidate.id;
       if (adjust) {
         ui.buildState = ui.buildState || {};
         Builder.adoptTicket({
@@ -2906,6 +2907,7 @@
         });
         ui.strategyView = 'builder';
       }
+      UI.toast('Structure selected for this Plan');
       await repaint();
     }
     return el('div', { class: 'btn-row plan-candidate-actions' },
@@ -2915,6 +2917,37 @@
       el('button', { type: 'button', class: 'btn btn-secondary',
         onclick: function () { choose(true).catch(function (e) { UI.toast(e.message, 'error'); }); } },
         'Adjust exact contracts'));
+  }
+
+  function candidatePackageKey(candidate) {
+    if (!candidate) return '';
+    return JSON.stringify([candidate.strategy, candidate.qty || 1, (candidate.legs || []).map(function (leg) {
+      return [leg.action, leg.type, String(leg.strike == null ? '' : leg.strike), leg.expiration, leg.ratio || 1];
+    })]);
+  }
+
+  function clearPlanStructureButton(planRef, ui, repaint) {
+    if (!planRef.selected) return null;
+    return el('button', { type: 'button', class: 'btn btn-secondary plan-clear-structure', onclick: async function () {
+      var button = this;
+      button.disabled = true;
+      try {
+        var live = await PlanStore.get(planRef.plan.id, true);
+        var out = await PlanStore.clearCandidate(live);
+        planRef.plan = out.plan;
+        planRef.selected = null;
+        ui.selectedCandidate = null;
+        ui.selectedLadderKey = null;
+        if (planRef.result && planRef.result.candidates) {
+          planRef.result.candidates.forEach(function (candidate) { candidate.selected = false; });
+        }
+        UI.toast('Structure cleared; the comparison remains available');
+        await repaint();
+      } catch (e) {
+        button.disabled = false;
+        UI.toast((e && e.message) || 'The structure could not be cleared.', 'error');
+      }
+    } }, 'Clear selection');
   }
 
   function planStrategyFilterPanel(ui, onShapeChange) {
@@ -2985,8 +3018,11 @@
         planRef.plan = out.plan;
         planRef.selected = out.strategy && out.strategy.result && out.strategy.result.candidate;
         ui.selectedCandidate = planRef.selected;
+        ui.selectedLadderKey = candidatePackageKey(planRef.selected || c);
         UI.toast('Exact ladder package selected for this Plan');
         await repaint();
+        var selectedRow = document.querySelector('#plan-intent-ladder .ladder-row.selected, #plan-intent-ladder tr.selected');
+        if (selectedRow) selectedRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
       } catch (e) { button.disabled = false; UI.toast(e.message, 'error'); }
     }
     function facts(c) {
@@ -3012,9 +3048,12 @@
     if (Learn.currentLevel() === 'beginner') {
       var list = el('div', { class: 'ladder-sentences' });
       rungs.forEach(function (c, i) {
-        var button = el('button', { type: 'button', class: 'btn btn-sm' }, 'Select this rung');
+        var selected = (ui.selectedLadderKey || candidatePackageKey(planRef.selected)) === candidatePackageKey(c);
+        var button = el('button', { type: 'button', class: 'btn btn-sm', disabled: selected ? '' : null },
+          selected ? 'Selected' : 'Select this rung');
         button.onclick = function () { choose(c, button); };
-        list.appendChild(el('div', { class: 'ladder-row' + (i === reference ? ' recommended' : '') },
+        list.appendChild(el('div', { class: 'ladder-row' + (i === reference ? ' recommended' : '') + (selected ? ' selected' : ''),
+          'aria-current': selected ? 'true' : null },
           el('div', { class: 'ladder-row-badges' },
             i === reference ? el('span', { class: 'badge badge-dim' }, target ? 'CLOSEST TO YOUR TARGET' : 'MIDDLE RUNG') : null,
             ladderEconomicsBadge(c)),
@@ -3025,11 +3064,14 @@
     } else {
       var tbody = el('tbody', {});
       rungs.forEach(function (c, i) {
-        var leg = UI.firstOptionLeg(c.legs), button = el('button', { type: 'button', class: 'btn btn-sm' }, 'Select');
+        var selected = (ui.selectedLadderKey || candidatePackageKey(planRef.selected)) === candidatePackageKey(c);
+        var leg = UI.firstOptionLeg(c.legs), button = el('button', { type: 'button', class: 'btn btn-sm',
+          disabled: selected ? '' : null }, selected ? 'Selected' : 'Select');
         var effective = c.effectivePrice == null ? Number(leg.strike) : Number(c.effectivePrice);
         var vsNow = spot ? (effective - spot) / spot * 100 : null;
         button.onclick = function () { choose(c, button); };
-        tbody.appendChild(el('tr', { class: i === reference ? 'ladder-recommended' : '' },
+        tbody.appendChild(el('tr', { class: (i === reference ? 'ladder-recommended ' : '') + (selected ? 'selected' : ''),
+          'aria-current': selected ? 'true' : null },
           el('td', {}, '$' + fmtNum(leg.strike, 2)), el('td', {}, fmtMoney(c.entryNetPremiumCents)),
           el('td', {}, c.effectivePrice == null ? '\u2014' : '$' + fmtNum(c.effectivePrice, 2)),
           el('td', {}, vsNow == null ? '\u2014' : Math.abs(vsNow).toFixed(1) + '% ' + (vsNow < 0 ? 'below' : vsNow > 0 ? 'above' : 'at now')),
@@ -3081,6 +3123,8 @@
             candidates.forEach(function (x) { x.selected = x.id === c.id; });
             planRef.selected = c;
             ui.selectedCandidate = c;
+            ui.strategyFocusCandidate = c.id;
+            UI.toast('Structure selected for this Plan');
             return repaint();
           }).catch(function (e) { button.disabled = false; UI.toast(e.message, 'error'); });
         },
@@ -3406,11 +3450,12 @@
       var selectedInField = planRef.result && planRef.selected
         && (planRef.result.candidates || []).some(function (candidate) { return candidate.id === planRef.selected.id; });
       if (planRef.selected && !selectedInField) {
-        var selectedCard = el('div', { class: 'card plan-selected-structure' },
+      var selectedCard = el('div', { class: 'card plan-selected-structure' },
           UI.cardHeader('Selected structure', el('span', { class: 'badge badge-ok' }, 'PLAN OWNED')),
           el('p', { class: 'muted' }, 'This exact package came from the Builder or a linked Scout pick. Run Compare to place it beside the full field.'));
         selectedCard.appendChild(candidateCard(planRef.selected, false, planRef.plan.symbol));
-        selectedCard.appendChild(planCandidateActions(planRef, planRef.selected, ui, paint));
+        selectedCard.appendChild(el('div', { class: 'btn-row' },
+          planCandidateActions(planRef, planRef.selected, ui, paint), clearPlanStructureButton(planRef, ui, paint)));
         body.appendChild(selectedCard);
       }
       if (!planRef.result) {
@@ -3431,6 +3476,9 @@
       var field = el('div', { id: 'plan-strategy-results' });
       body.appendChild(field);
       renderPlanCandidateField(field, planRef, ui, paint);
+      if (planRef.selected) {
+        body.appendChild(el('div', { class: 'plan-selection-actions' }, clearPlanStructureButton(planRef, ui, paint)));
+      }
       if (planRef.result.rejected && planRef.result.rejected.length) {
         body.appendChild(UI.expandable('Why ' + planRef.result.rejected.length + ' structures were refused', function () {
           return el('div', {}, planRef.result.rejected.map(function (r) {

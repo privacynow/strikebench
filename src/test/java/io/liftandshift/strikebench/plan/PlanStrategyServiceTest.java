@@ -94,6 +94,16 @@ class PlanStrategyServiceTest {
         assertThat(selection.planVersion()).isEqualTo(plan.version() + 1);
         assertThat(strategies.latestCompetition(null, plan.id()).result()
                 .at("/candidates/0/selected").asBoolean()).isTrue();
+
+        PlanStrategyService.Selection cleared = strategies.clearSelection(null, plan.id(), selection.planVersion());
+        assertThat(cleared.candidateId()).isNull();
+        assertThat(cleared.planVersion()).isEqualTo(selection.planVersion() + 1);
+        assertThat(strategies.selectedCandidate(null, plan.id())).isNull();
+        assertThat(strategies.latestCompetition(null, plan.id()).result()
+                .at("/candidates/0/selected").asBoolean()).isFalse();
+
+        PlanStrategyService.Selection alreadyClear = strategies.clearSelection(null, plan.id(), cleared.planVersion());
+        assertThat(alreadyClear.planVersion()).isEqualTo(cleared.planVersion());
     }
 
     @Test void customBuilderPackagePersistsAndRestoresAsTheSelectedStructure() {

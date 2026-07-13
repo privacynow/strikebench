@@ -607,7 +607,15 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   await page.waitForTimeout(300); // observe the real card-arrival animation; never disable it for screenshots
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p11-ladder-beginner.png'), fullPage: true });
   await page.locator('#plan-intent-ladder .ladder-row .btn:has-text("Select this rung")').first().click();
-  await page.waitForSelector('.plan-selected-structure, #plan-strategy-results button:has-text("Selected for this Plan")');
+  await page.waitForSelector('#plan-intent-ladder .ladder-row.selected');
+  assert.equal(await page.locator('#plan-intent-ladder .ladder-row.selected').count(), 1,
+    'a selected rung is highlighted in place instead of confirming below the fold');
+  assert.ok(await page.locator('.plan-clear-structure').isVisible(),
+    'a hypothetical Plan structure can be cleared before a decision');
+  await page.locator('.plan-clear-structure').click();
+  await page.waitForFunction(() => !document.querySelector('#plan-intent-ladder .ladder-row.selected'));
+  assert.equal(await page.locator('.plan-clear-structure').count(), 0,
+    'clearing the selection removes the durable chosen package while retaining the ladder');
 
   const incomePlan = await openPlan('SPY', 'strategy', 'INCOME');
   await page.waitForSelector('#plan-income-board');
