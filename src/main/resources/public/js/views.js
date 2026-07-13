@@ -2381,7 +2381,7 @@
         }
       }
       shown.forEach(function (x) {
-        var card = candidateCard(x.c, true);
+        var card = opts.renderCard ? opts.renderCard(x.c) : candidateCard(x.c, true);
         var head = card.querySelector('h3, .cand-head, .card-head') || card.firstChild;
         if (head && head.insertBefore) head.insertBefore(rankBadge(x.rank), head.firstChild);
         else card.insertBefore(rankBadge(x.rank), card.firstChild);
@@ -2978,6 +2978,80 @@
     return node;
   }
 
+  function planRiskBudgetReceipt(plan, result) {
+    var policy = App.state.riskBudget || {};
+    var modeName = String(plan.context && plan.context.riskMode || 'conservative').toLowerCase();
+    var mode = (policy.modes || []).find(function (item) { return item.mode === modeName; });
+    var basis = Number(policy.basisCents || 0);
+    var percent = mode && Number(mode.percent);
+    var acquire = plan.intent === 'ACQUIRE';
+    var budget = result && result.riskBudgetCents != null ? Number(result.riskBudgetCents)
+      : acquire && basis > 0 ? basis : mode && Number(mode.effectiveBudgetCents);
+    var line = acquire && budget === basis
+      ? fmtMoney(budget) + ' available buying power backs the possible share purchase.'
+      : budget != null && percent != null && basis > 0
+        ? fmtMoney(budget) + ' = ' + fmtNum(percent * 100, 0) + '% of ' + fmtMoney(basis) + ' current buying power.'
+        : budget != null ? 'This Plan can put up to ' + fmtMoney(budget) + ' at risk in one idea.'
+          : 'The server applies this Plan’s selected capital budget to every proposed trade.';
+    return el('div', { class: 'plan-budget-receipt', id: 'plan-budget-receipt' },
+      el('div', {}, el('span', { class: 'eyebrow' }, acquire ? 'PURCHASE CAPITAL' : 'PER-IDEA BUDGET'),
+        el('b', {}, line)),
+      el('p', { class: 'muted small' }, mode && mode.capped
+        ? 'Your declared risk capital caps this amount. The full catalog remains available for learning.'
+        : acquire
+          ? 'Cash-secured puts reserve strike × 100 shares. This is a purchase commitment, not a small option-risk allowance.'
+          : 'This controls sizing and screening, not the strategy catalog or the math.'));
+  }
+
+  function strategyShape(name) {
+    var meta = strategyMeta(name);
+    if (!meta || !meta.payoffShape) return null;
+    var span = el('span', { class: 'plan-teaching-shape', 'aria-hidden': 'true' });
+    span.innerHTML = '<svg viewBox="0 0 64 28" width="64" height="28">'
+      + '<line x1="0" y1="14" x2="64" y2="14" class="tpl-shape-zero"/>'
+      + '<polyline points="' + meta.payoffShape + '" class="tpl-shape-line"/></svg>';
+    return span;
+  }
+
+  function planRejectedTeaching(rejected, ui, repaint) {
+    var budget = (rejected || []).filter(function (item) {
+      return (item.reasons || []).some(function (reason) { return /above this Plan's .* budget/i.test(reason); });
+    });
+    var other = (rejected || []).filter(function (item) { return budget.indexOf(item) < 0; });
+    if (!budget.length && !other.length) return null;
+    var host = el('section', { class: 'plan-rejected-teaching', id: 'plan-rejected-teaching' });
+    if (budget.length) {
+      host.appendChild(el('div', { class: 'plan-section-head' }, el('div', {},
+        el('h3', {}, 'Useful structures above this Plan’s budget'),
+        el('p', { class: 'muted' }, 'They are not recommendations at this size, but they remain visible so you can learn the shape, compare the real one-lot risk, or change the Plan deliberately.'))));
+      var list = el('div', { class: 'plan-budget-teaching-list' });
+      budget.forEach(function (item) {
+        var meta = strategyMeta(item.strategy) || {};
+        list.appendChild(el('div', { class: 'plan-budget-teaching-row' },
+          strategyShape(item.strategy),
+          el('div', {}, el('b', {}, item.displayName || meta.display || item.strategy),
+            el('p', { class: 'muted small' }, meta.summary || 'A listed strategy with a one-lot position larger than this Plan allows.')),
+          el('div', { class: 'plan-budget-teaching-reason' },
+            el('span', { class: 'badge badge-caution' }, 'ABOVE BUDGET'),
+            el('span', {}, (item.reasons || []).join(' ')))));
+      });
+      host.appendChild(list);
+      host.appendChild(el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn btn-secondary',
+        onclick: function () {
+          ui.strategyView = 'builder';
+          repaint().catch(function (e) { UI.toast((e && e.message) || 'All strategies could not open.', 'error'); });
+        } }, 'Explore these in All strategies')));
+    }
+    if (other.length) {
+      host.appendChild(UI.expandable('Why ' + other.length + ' other structure' + (other.length === 1 ? ' was' : 's were') + ' refused', function () {
+        return el('div', {}, other.map(function (item) {
+          return alertBox('warn', item.displayName || item.strategy || 'Structure', (item.reasons || [item.reason]).filter(Boolean));
+        }));
+      }));
+    }
+    return host;
+  }
+
   function planLadderView(result, planRef, ui, repaint) {
     var intent = planRef.plan.intent;
     var rungs = (result && result.rungs || []).filter(function (c) { return !!UI.firstOptionLeg(c && c.legs); });
@@ -3155,16 +3229,14 @@
     host.appendChild(el('div', { class: 'plan-proposed-heading' },
       el('div', {}, el('span', { class: 'eyebrow' }, 'TOP PROPOSED TRADE'), el('h3', {}, 'Best fit under this Plan’s current limits')),
       el('span', { class: 'muted small' }, 'Ranked, not guaranteed')));
-    candidates.forEach(function (c, index) {
-      if (index === 1) host.appendChild(el('h3', { class: 'plan-other-ranked-title' }, 'Other ranked structures'));
-      c._servedRank = index + 1;
+    candidates.forEach(function (c, index) { c._servedRank = index + 1; });
+    renderRankedCards(host, candidates, { id: 'plan-ranked-cards', renderCard: function (c) {
       var card = candidateCard(c, false, planRef.plan.symbol);
       card.dataset.candidateId = c.id;
-      var heading = card.querySelector('h3') || card.firstChild;
-      if (heading) heading.insertBefore(el('span', { class: 'badge badge-dim rank-badge' }, '#' + (index + 1)), heading.firstChild);
+      if (c.selected) card.classList.add('plan-selected-candidate');
       card.appendChild(planCandidateActions(planRef, c, ui, repaint));
-      host.appendChild(card);
-    });
+      return card;
+    } });
     if (ui.strategyFocusCandidate) {
       var focused = host.querySelector('[data-candidate-id="' + CSS.escape(ui.strategyFocusCandidate) + '"]');
       if (focused) {
@@ -3429,6 +3501,7 @@
         el('p', { class: 'muted' }, beginner
           ? 'StrikeBench compares the complete strategy catalog using this Plan’s goal, view, time, holdings, account and risk budget. Poor fits stay visible as refused or teaching cases.'
           : 'The server uses the Plan’s thesis, horizon, holdings, target, account and risk budget. Optional limits narrow the same complete catalog.'),
+        planRiskBudgetReceipt(planRef.plan, planRef.result),
         planStrategyFilterPanel(ui, function () {
           planRef.result = null;
           ui.strategyDraftDirty = true;
@@ -3480,11 +3553,7 @@
         body.appendChild(el('div', { class: 'plan-selection-actions' }, clearPlanStructureButton(planRef, ui, paint)));
       }
       if (planRef.result.rejected && planRef.result.rejected.length) {
-        body.appendChild(UI.expandable('Why ' + planRef.result.rejected.length + ' structures were refused', function () {
-          return el('div', {}, planRef.result.rejected.map(function (r) {
-            return alertBox('warn', r.displayName || r.strategy || 'Structure', (r.reasons || [r.reason]).filter(Boolean));
-          }));
-        }));
+        body.appendChild(planRejectedTeaching(planRef.result.rejected, ui, paint));
       }
       if (planRef.selected || (planRef.result.candidates || []).some(function (c) { return c.selected; })) {
         appendPlanStrategyNext(body, planRef, paint);

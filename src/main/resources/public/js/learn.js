@@ -356,6 +356,69 @@
       win: 'The stock falls hard and your loss stops at the put strike — the insurance paid out.',
       lose: 'The stock does fine and the premium is gone, like unused car insurance.',
       watch: 'Insurance re-bought every month adds up — hedge what you actually fear, not everything always.'
+    },
+    RISK_REVERSAL: {
+      story: 'Use a sold put to help pay for a bullish call: little cash up front, but a real obligation to buy after a fall.',
+      how: ['Buy a call for upside.', 'Sell a put at a lower strike to finance it.', 'Reserve enough capital for the short put obligation.'],
+      win: 'The stock rises beyond the call strike.',
+      lose: 'The stock falls below the put strike and the short put behaves like a leveraged share purchase.',
+      watch: 'Low entry cost is not low risk. The short put creates substantial downside and capital requirements.'
+    },
+    CALL_BACKSPREAD: {
+      story: 'Sell one call and own two higher calls: a violent rally can pay, but a modest rise can land in the valley between them.',
+      how: ['Sell one nearer call.', 'Buy two farther calls in the same expiration.', 'Compare the middle loss pocket with the open-ended rally payoff.'],
+      win: 'The stock rallies far beyond the long calls.',
+      lose: 'The stock rises only into the gap between the short and long strikes.',
+      watch: 'This is not simply bullish; the worst region can be a moderate move in the expected direction.'
+    },
+    PUT_BACKSPREAD: {
+      story: 'Sell one put and own two lower puts: built for a crash, with a loss pocket on a merely modest decline.',
+      how: ['Sell one nearer put.', 'Buy two lower puts in the same expiration.', 'Inspect the middle loss pocket before focusing on the crash payoff.'],
+      win: 'The stock falls far beyond the long puts.',
+      lose: 'The stock falls only into the gap between the strikes.',
+      watch: 'A small bearish move can be worse than no move or a very large move.'
+    },
+    SYNTHETIC_LONG: {
+      story: 'A long call plus a short put at one strike behaves much like 100 shares, without buying the shares outright.',
+      how: ['Buy a call.', 'Sell a put with the same strike and expiration.', 'Keep capital available for the put assignment obligation.'],
+      win: 'The stock rises, much like a share position.',
+      lose: 'The stock falls; downside resembles owning shares from the strike.',
+      watch: 'Small option premium does not mean small exposure. This is stock-like risk with option assignment mechanics.'
+    },
+    SYNTHETIC_SHORT: {
+      story: 'A long put plus an uncovered short call behaves like short stock and can lose without limit in a rally.',
+      how: ['Buy a put.', 'Sell a call with the same strike and expiration.', 'Observe that the call has no protective ceiling.'],
+      win: 'The stock falls, much like a short-share position.',
+      lose: 'The stock rallies; the uncovered short call can keep losing as price rises.',
+      watch: 'StrikeBench shows this to teach the shape and refuses it because theoretical loss is unlimited.'
+    },
+    SHORT_STRADDLE: {
+      story: 'Sell an at-the-money call and put for a large credit, accepting uncovered risk on both sides.',
+      how: ['Sell the call and put at the same strike.', 'Collect both premiums.', 'Notice there is no protective wing above or below.'],
+      win: 'The stock finishes close to the shared strike.',
+      lose: 'A large move either way; the upside loss is unlimited.',
+      watch: 'The rich credit is payment for tail risk, not free income. StrikeBench refuses the uncovered structure.'
+    },
+    SHORT_STRANGLE: {
+      story: 'Sell an out-of-the-money call and put for a wider profit range, still with uncovered tail risk.',
+      how: ['Sell a call above the market.', 'Sell a put below the market.', 'Notice that neither side has a protective wing.'],
+      win: 'The stock stays between both short strikes.',
+      lose: 'A large move through either strike; the call side remains unlimited.',
+      watch: 'Wider breakevens reduce frequency of loss, not the severity of an uncovered tail.'
+    },
+    NAKED_CALL: {
+      story: 'Sell a call without shares or a higher call behind it: collect a small premium while accepting unlimited rally risk.',
+      how: ['Sell one call.', 'Observe that no stock or long call caps delivery cost.', 'Compare the fixed credit with an unbounded loss line.'],
+      win: 'The stock stays below the strike.',
+      lose: 'The stock rallies; every additional dollar adds roughly $100 of loss per contract.',
+      watch: 'StrikeBench keeps the lesson visible but refuses the trade because no finite worst case exists.'
+    },
+    NAKED_PUT: {
+      story: 'Sell a put without reserving the cash to buy shares: premium now, an unfunded purchase obligation after a fall.',
+      how: ['Sell one put.', 'Calculate strike × 100 cash needed if assigned.', 'Compare that obligation with the account’s available capital.'],
+      win: 'The stock stays above the strike.',
+      lose: 'The stock falls and you owe the difference down toward zero.',
+      watch: 'A cash-secured put has the same option shape but reserves the full purchase cash; the unsecured version is refused.'
     }
   };
 

@@ -487,8 +487,18 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
 
   await page.click('#plan-run-strategy');
   await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
-  assert.match(await page.textContent('#plan-strategy-results'), /TOP PROPOSED TRADE.*Other ranked structures/s,
-    'Beginner sees a clear proposal first without losing the rest of the ranked field');
+  assert.match(await page.textContent('#plan-budget-receipt'), /\$[\d,.]+ = 1% of \$[\d,.]+ current buying power/,
+    'the per-idea budget explains its live dollar basis on the face of the screen');
+  const initialRankedCount = await page.locator('#plan-ranked-cards > .candidate').count();
+  const servedRankedCount = Number((await page.textContent('.plan-strategy-summary .badge')).match(/\d+/)?.[0] || 0);
+  assert.ok(initialRankedCount <= 5 && initialRankedCount <= servedRankedCount,
+    'Beginner starts with a diverse, bounded ranked field instead of a wall of cards');
+  if (servedRankedCount > initialRankedCount) {
+    assert.ok(await page.locator('#show-all-ranked').isVisible(), 'the complete ranking remains one explicit action away');
+    await page.click('#show-all-ranked');
+    assert.equal(await page.locator('#plan-ranked-cards > .candidate').count(), servedRankedCount,
+      'Show all restores every ranked structure without changing its order');
+  }
   const rankedText = await page.textContent('#plan-stage-strategy');
   assert.match(rankedText, /Cash \/ no trade/, 'the no-trade baseline remains in the ranked decision field');
   assert.ok(await page.locator('#plan-strategy-results .candidate[data-economic-verdict]').count() >= 1,
@@ -496,8 +506,8 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   const economics = await page.locator('#plan-strategy-results .candidate .economic-assessment').allTextContents();
   assert.ok(economics.length > 0 && economics.every(text => /Market-implied EV/.test(text) && /Realized-vol scenario EV/.test(text)),
     'both EV lanes remain co-equal on the Plan candidate cards');
-  assert.ok(await page.locator('#plan-stage-strategy .xp-head:has-text("structures were refused")').count(),
-    'mechanically or economically refused structures remain inspectable with reasons');
+  assert.ok(await page.locator('#plan-rejected-teaching').count(),
+    'mechanically refused and over-budget structures remain available as named teaching cases');
 
   await page.locator('#plan-strategy-filters .xp-head').click();
   await page.fill('#plan-f-pop', '70');
@@ -516,6 +526,8 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
     'Beginner retains the plain-language management capability from the decision analysis');
   await first.locator('button').filter({ hasText: 'Select this structure' }).click();
   await page.waitForSelector('#plan-strategy-results button:has-text("Selected for this Plan")');
+  assert.ok(await first.evaluate(node => node.classList.contains('plan-selected-candidate')),
+    'the chosen candidate is highlighted in place');
   await first.scrollIntoViewIfNeeded();
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p3-strategy-compare.png'), fullPage: false });
@@ -682,6 +694,12 @@ test('Plan Builder preserves the Beginner walkthrough and Expert exact-contract 
     'Beginner retains the complete visual payoff catalog');
   assert.ok(await page.locator('#builder-catalog .tpl .badge:has-text("BLOCKED")').count() >= 3,
     'undefined-risk structures remain visible as labeled lessons');
+  await page.click('#builder-catalog .tpl[data-tpl="NAKED_PUT"]');
+  await page.waitForSelector('#bw-walk');
+  assert.ok(await page.locator('#bw-walk .xp-head:has-text("How this trade works")').count(),
+    'the promised blocked-structure walkthrough exists instead of disappearing at the risky example');
+  await page.locator('#bw-walk button').filter({ hasText: 'Back' }).click();
+  await page.waitForSelector('#builder-catalog .tpl[data-tpl="IRON_CONDOR"]');
   await page.click('#builder-catalog .tpl[data-tpl="IRON_CONDOR"]');
   await page.waitForSelector('#bw-walk');
   await page.waitForFunction(() => /Theoretical worst case/.test(

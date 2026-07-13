@@ -820,7 +820,7 @@
           var i = Math.min(st.legIdx, n - 1);
           var soFar = st.legs.slice(0, i + 1);
           var tSel = TEMPLATES.find(function (x) { return x.key === st.templateKey; });
-          var g = tSel && Learn.STRATEGY_GUIDE[tSel.family];
+          var g = tSel && (Learn.STRATEGY_GUIDE[tSel.key] || Learn.STRATEGY_GUIDE[tSel.family]);
           host.appendChild(el('div', { class: 'card', id: 'bw-walk' },
             el('div', { class: 'field-label' }, (tSel ? tSel.name + ' — ' : '') + 'leg ' + (i + 1) + ' of ' + n),
             el('h3', { class: 'mt0', id: 'bw-leg-story' }, legStory(st.legs[i])),
@@ -1080,7 +1080,7 @@
       function renderEducation() {
         eduHost.innerHTML = '';
         var t = TEMPLATES.find(function (x) { return x.key === st.templateKey; });
-        var g = t && Learn.STRATEGY_GUIDE[t.family];
+        var g = t && (Learn.STRATEGY_GUIDE[t.key] || Learn.STRATEGY_GUIDE[t.family]);
         if (g) {
           eduHost.appendChild(UI.expandable('About this structure — how it wins, loses, and surprises', function () {
             return el('div', {},

@@ -261,6 +261,23 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void overBudgetTeachingReasonNamesOneLotRiskAndPlanBudget() {
+        RecommendationEngine.Request request = new RecommendationEngine.Request(
+                "AAPL", "bullish", "month", "conservative", 1_000L, null, null,
+                List.of("LONG_CALL"), true, false, "DIRECTIONAL", null, null);
+        RecommendationEngine.Result result = engine.recommend(request, BP);
+
+        assertThat(result.candidates()).isEmpty();
+        assertThat(result.rejected()).filteredOn(rejection -> rejection.strategy().equals("LONG_CALL"))
+                .singleElement().satisfies(rejection -> {
+            assertThat(rejection.strategy()).isEqualTo("LONG_CALL");
+            assertThat(String.join(" ", rejection.reasons()))
+                    .contains("One lot risks")
+                    .contains("above this Plan's $10.00 budget");
+        });
+    }
+
+    @Test
     void neutralConservativeIncludesCreditStructuresAndRejectsNakedCall() {
         RecommendationEngine.Result result = engine.recommend(req("AAPL", "neutral", "month", "conservative"), BP);
         assertThat(result.candidates()).isNotEmpty();

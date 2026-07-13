@@ -301,13 +301,15 @@ public final class RecommendationEngine {
                 continue;
             }
 
+            CandidateProbe probe = new CandidateProbe();
             Candidate candidate = toCandidate(family, built, verdict, spot, today, budget, buyingPowerCents,
                     chain.freshness(), avoidEarnings, thesis, intent, holdings,
                     builtOnHeldShares ? coverLotsPerUnit : 0, builtOnHeldShares ? freeShares : 0,
-                    quote, riskFreeRate);
+                    quote, riskFreeRate, probe);
             if (candidate == null) {
                 rejected.add(new Rejection(family.name(), family.display(),
-                        List.of("Minimum position size exceeds the risk budget of " + Money.fmt(budget))));
+                        List.of(probe.reason != null ? probe.reason
+                                : "The current option book cannot produce an executable one-lot package")));
                 continue;
             }
             if (candidate.confidence() < minConfidence) {
@@ -441,7 +443,7 @@ public final class RecommendationEngine {
             Candidate c = toCandidate(family, built, Verdict.of(List.of(), List.of()), spot, today, budget,
                     buyingPowerCents, chain.freshness(), true, StrategyFamily.Thesis.NEUTRAL,
                     intent, holdings, sharesHeld ? coverLots : 0, sharesHeld ? freeShares : 0,
-                    quote, riskFreeRate);
+                    quote, riskFreeRate, new CandidateProbe());
             if (c == null) continue;
             String filterReason = failsFilter(c, filters);
             if (filterReason != null) {
@@ -487,7 +489,7 @@ public final class RecommendationEngine {
                                   LocalDate today, long budget, long buyingPowerCents, Freshness freshness, boolean avoidEarnings,
                                   StrategyFamily.Thesis thesis, StrategyIntent intent, Holdings holdings,
                                   int coverLotsPerUnit, int freeShares, Quote underlyingQuote,
-                                  double riskFreeRate) {
+                                  double riskFreeRate, CandidateProbe probe) {
         // Re-price legs at the EXECUTABLE side (buys pay the ask, sells receive the bid) so
         // the numbers a learner sees here match what a fill would actually cost. Structures
         // whose legs have no executable side are not real opportunities.
@@ -500,7 +502,7 @@ public final class RecommendationEngine {
                 if (side == null || side.signum() <= 0
                         || (underlyingQuote.bid() != null && underlyingQuote.ask() != null
                         && underlyingQuote.bid().compareTo(underlyingQuote.ask()) > 0)) {
-                    return null;
+                    return candidateFailure(probe, "The stock leg has no executable two-sided quote");
                 }
                 executableLegs.add(Leg.stock(leg.action(), leg.ratio(), side));
                 continue;
@@ -509,7 +511,7 @@ public final class RecommendationEngine {
             BigDecimal side = leg.action() == io.liftandshift.strikebench.model.LegAction.BUY ? q.ask() : q.bid();
             if (side == null || side.signum() <= 0
                     || (q.bid() != null && q.ask() != null && q.bid().compareTo(q.ask()) > 0)) {
-                return null; // one-sided, empty, or crossed book — unbuildable in reality
+                return candidateFailure(probe, "An option leg has no executable two-sided quote");
             }
             executableLegs.add(new io.liftandshift.strikebench.model.Leg(leg.action(), leg.type(), leg.strike(),
                     leg.expiration(), leg.ratio(), side));
@@ -535,28 +537,34 @@ public final class RecommendationEngine {
         Long unitMaxProfit;
         Long unitCombinedMaxLoss = null;
         if (multiExp) {
-            if (unitEntryNet >= 0) return null; // credit calendars blocked upstream; be safe
+            if (unitEntryNet >= 0) return candidateFailure(probe,
+                    "A multi-expiration credit cannot be bounded honestly");
             unitMaxLoss = -unitEntryNet;
             unitMaxProfit = null;
         } else if (onHeldShares) {
-            if (unitDisplayCurve.maxLossUnbounded()) return null; // shares don't cover this shape
+            if (unitDisplayCurve.maxLossUnbounded()) return candidateFailure(probe,
+                    "The available shares do not bound this structure's risk");
             unitMaxLoss = Math.max(0, -unitEntryNet); // incremental cash risk only
             unitCombinedMaxLoss = unitDisplayCurve.maxLossCents();
             unitMaxProfit = unitDisplayCurve.maxProfitUnbounded() ? null : unitDisplayCurve.maxProfitCents();
         } else {
-            if (unitCurve.maxLossUnbounded()) return null;
+            if (unitCurve.maxLossUnbounded()) return candidateFailure(probe, "Theoretical loss is unlimited");
             unitMaxLoss = unitCurve.maxLossCents();
             unitMaxProfit = unitCurve.maxProfitUnbounded() ? null : unitCurve.maxProfitCents();
         }
         int qty;
         if (onHeldShares) {
-            if (unitMaxLoss > budget) return null;
+            if (unitMaxLoss > budget) return candidateFailure(probe,
+                    "One lot requires " + Money.fmt(unitMaxLoss) + " of incremental risk, above this Plan's "
+                            + Money.fmt(budget) + " budget");
             int lotsAvailable = Math.max(1, freeShares / (100 * displayLotsPerUnit));
             long byBudget = unitMaxLoss > 0 ? Math.max(1, budget / unitMaxLoss) : lotsAvailable;
             qty = (int) Math.clamp(Math.min((long) lotsAvailable, byBudget), 1, MAX_QTY);
         } else {
             if (unitMaxLoss <= 0 || unitMaxLoss > budget) {
-                if (unitMaxLoss > budget) return null;
+                if (unitMaxLoss > budget) return candidateFailure(probe,
+                        "One lot risks " + Money.fmt(unitMaxLoss) + ", above this Plan's "
+                                + Money.fmt(budget) + " budget");
                 unitMaxLoss = Math.max(unitMaxLoss, 1);
             }
             qty = (int) Math.clamp(budget / unitMaxLoss, 1, MAX_QTY);
@@ -572,7 +580,9 @@ public final class RecommendationEngine {
         // Debits also consume CASH — never suggest a position the account cannot pay for.
         long unitCashNeeded = Math.max(0, -unitEntryNet);
         if (unitCashNeeded > 0) {
-            if (unitCashNeeded > buyingPowerCents) return null;
+            if (unitCashNeeded > buyingPowerCents) return candidateFailure(probe,
+                    "One lot costs " + Money.fmt(unitCashNeeded) + ", above the account's "
+                            + Money.fmt(buyingPowerCents) + " buying power");
             qty = (int) Math.clamp(Math.min((long) qty, buyingPowerCents / unitCashNeeded), 1, MAX_QTY);
         }
 
@@ -747,6 +757,15 @@ public final class RecommendationEngine {
                 onHeldShares ? Boolean.TRUE : null,
                 onHeldShares ? coverLotsPerUnit * 100 * qty : null,
                 combinedMaxLoss);
+    }
+
+    private static final class CandidateProbe {
+        private String reason;
+    }
+
+    private static Candidate candidateFailure(CandidateProbe probe, String reason) {
+        if (probe != null) probe.reason = reason;
+        return null;
     }
 
     /**
