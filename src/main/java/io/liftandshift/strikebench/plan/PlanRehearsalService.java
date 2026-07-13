@@ -152,6 +152,7 @@ public final class PlanRehearsalService {
 
     private void recordFinish(Connection c, String userId, String planId, String worldId,
                               SimulatedWorld world) throws SQLException {
+        PlanWriteGuard.requireMutable(c, planId, userId);
         PlanRow plan = requireOwned(c, planId, userId, true);
         SimulatedWorld.ReplaySource replay = world.replaySource();
         if (replay == null) throw new IllegalStateException("Plan rehearsal lost its replay identity");

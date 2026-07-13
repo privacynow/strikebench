@@ -570,6 +570,45 @@ class PlanApiIntegrationTest {
         assertThat(json(get("/api/plans/" + planId + "/rehearsals")).path("rehearsals").size()).isZero();
     }
 
+    @Test void archivedPlanCannotRecordARehearsalFinish() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"archived-rehearsal-finish","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Archive during rehearsal","thesis":"bullish","horizonDays":5,"riskMode":"conservative"}
+                """));
+        String planId = plan.get("id").asText();
+        JsonNode ensemble = json(post("/api/plans/" + planId + "/outcomes/ensemble", """
+                {"expectedVersion":%d,"over":{"model":"GBM","shape":"GRIND_UP","horizonDays":5,
+                 "stepsPerDay":2,"driftAnnual":0.10,"volAnnual":0.25,"jumpsPerYear":0,
+                 "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":5152,"paths":20}}
+                """.formatted(plan.get("version").asLong())));
+        JsonNode created = json(post("/api/plans/" + planId + "/rehearsals", """
+                {"expectedVersion":%d,"ensembleId":"%s","selection":"SAMPLE","pathIndex":0,"speed":26}
+                """.formatted(plan.get("version").asLong(), ensemble.at("/ensemble/id").asText())));
+        String worldId = created.at("/rehearsal/worldId").asText();
+        JsonNode archived = json(post("/api/plans/" + planId + "/archive",
+                "{\"expectedVersion\":" + created.at("/plan/version").asLong() + "}"));
+        long frozenVersion = archived.get("version").asLong();
+        String frozenStage = archived.get("activeStage").asText();
+
+        HttpResponse<String> rejected = delete("/api/sim/market/" + worldId);
+        assertThat(rejected.statusCode()).isEqualTo(409);
+        assertThat(Json.parse(rejected.body()).path("detail").asText()).contains("decision is frozen");
+        JsonNode after = json(get("/api/plans/" + planId));
+        assertThat(after.get("status").asText()).isEqualTo("ARCHIVED");
+        assertThat(after.get("version").asLong()).isEqualTo(frozenVersion);
+        assertThat(after.get("activeStage").asText()).isEqualTo(frozenStage);
+        assertThat(inspectDb.query("SELECT id FROM plan_management_action WHERE plan_id=?",
+                row -> row.str("id"), planId)).isEmpty();
+        assertThat(inspectDb.query("SELECT id FROM plan_review WHERE plan_id=?",
+                row -> row.str("id"), planId)).isEmpty();
+        assertThat(inspectDb.query("SELECT status FROM sim_session WHERE id=?",
+                row -> row.str("status"), worldId)).noneMatch("FINISHED"::equals);
+
+        // Return the test fixture to a finishable state so it does not consume session capacity.
+        inspectDb.exec("UPDATE plans SET status='ACTIVE' WHERE id=?", planId);
+        assertThat(delete("/api/sim/market/" + worldId).statusCode()).isBetween(200, 299);
+    }
+
     @Test void decideFreezesTheServerSelectedPackageAndLinksTradeOrCash() throws Exception {
         assertThat(put("/api/account/risk-context", """
                 {"nlvCents":1930000,"cashBpCents":1930000,"riskCapitalCents":193000}
