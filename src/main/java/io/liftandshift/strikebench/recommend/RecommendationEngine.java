@@ -233,7 +233,10 @@ public final class RecommendationEngine {
         double riskFreeRate = rateQuote.annualRate();
 
         BigDecimal spot = chain.underlyingPrice();
-        boolean earningsSoon = market.news(symbol, worldId).stream().anyMatch(n -> {
+        // Generated-lane catalyst copy is UI teaching material, not market evidence. Only
+        // observed headlines may add an event advisory or affect candidate ranking.
+        boolean earningsSoon = lane == io.liftandshift.strikebench.market.MarketLane.OBSERVED
+                && market.news(symbol, worldId).stream().anyMatch(n -> {
             String h = n.headline() == null ? "" : n.headline().toLowerCase(Locale.ROOT);
             return h.contains("earnings") || h.contains("guidance") || h.contains("results");
         });

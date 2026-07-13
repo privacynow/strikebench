@@ -45,23 +45,28 @@ class SignalEngineTest {
         assertThat(s.thesis()).isIn("BULLISH", "BEARISH", "NEUTRAL", "VOLATILE");
         assertThat(s.confidence()).isBetween(0.0, 1.0);
         assertThat(s.rationale()).isNotEmpty();
-        // AAPL fixture news has one clearly positive and one clearly negative headline
-        assertThat(s.positiveHeadlines()).anySatisfy(h -> assertThat(h).containsIgnoringCase("beats"));
-        assertThat(s.negativeHeadlines()).anySatisfy(h -> assertThat(h).containsIgnoringCase("probe"));
-        assertThat(s.eventRisk()).isTrue(); // "quarterly earnings call" headline
+        assertThat(s.positiveHeadlines()).isEmpty();
+        assertThat(s.negativeHeadlines()).isEmpty();
+        assertThat(s.sentimentScore()).isZero();
+        assertThat(s.eventRisk()).isFalse();
+        assertThat(s.rationale()).noneSatisfy(r -> assertThat(r)
+                .containsIgnoringCase("earnings/guidance-type"));
         assertThat(s.liquidityScore()).isBetween(0.0, 1.0);
     }
 
     @Test
-    void sentimentDiffersAcrossFixtureSymbols() {
+    void fabricatedFixtureHeadlinesNeverInfluenceDemoSignals() {
         SignalEngine.Signals spy = engine.analyze("SPY").orElseThrow();
-        assertThat(spy.positiveHeadlines()).isNotEmpty(); // "rally to record close ... cools"
+        assertThat(spy.positiveHeadlines()).isEmpty();
         assertThat(spy.negativeHeadlines()).isEmpty();
-        assertThat(spy.sentimentScore()).isGreaterThan(0);
+        assertThat(spy.sentimentScore()).isZero();
+        assertThat(spy.eventRisk()).isFalse();
 
         SignalEngine.Signals tsla = engine.analyze("TSLA").orElseThrow();
-        assertThat(tsla.positiveHeadlines()).isNotEmpty();
-        assertThat(tsla.negativeHeadlines()).isNotEmpty(); // recall/scrutiny
+        assertThat(tsla.positiveHeadlines()).isEmpty();
+        assertThat(tsla.negativeHeadlines()).isEmpty();
+        assertThat(tsla.sentimentScore()).isZero();
+        assertThat(tsla.eventRisk()).isFalse();
     }
 
     @Test
