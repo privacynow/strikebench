@@ -195,8 +195,8 @@ public final class PlanStrategyService {
                 throw new IllegalStateException("This plan changed in another tab. Reload it before choosing a structure.");
             }
             List<String> candidate = Db.queryOn(c, "SELECT id FROM plan_candidate WHERE id=? AND plan_id=? " +
-                            "AND context_rev=? AND state='CURRENT'",
-                    r -> r.str("id"), candidateId, planId, plan.contextRev());
+                            "AND context_rev=? AND underlying_symbol=? AND state='CURRENT'",
+                    r -> r.str("id"), candidateId, planId, plan.contextRev(), plan.symbol());
             if (candidate.isEmpty()) throw new NoSuchElementException("no current candidate " + candidateId);
             Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?", planId, plan.contextRev());
             Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", candidateId);
@@ -250,8 +250,9 @@ public final class PlanStrategyService {
             CurrentPlan plan = ownedPlanOn(c, planId, userId, false);
             List<CandidateRow> rows = Db.queryOn(c, candidateSelect() +
                             " WHERE pc.plan_id=? AND pc.context_rev=? AND pc.state='CURRENT' AND pc.selected=1 " +
+                            "AND pc.underlying_symbol=? " +
                             "ORDER BY pc.created_at DESC LIMIT 1",
-                    PlanStrategyService::candidateRow, planId, plan.contextRev());
+                    PlanStrategyService::candidateRow, planId, plan.contextRev(), plan.symbol());
             return rows.isEmpty() ? null : loadCandidate(c, rows.getFirst());
         });
     }

@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PlanStrategyServiceTest {
     private Db db;
@@ -164,6 +165,10 @@ class PlanStrategyServiceTest {
         String candidateId = saved.result().at("/candidates/0/id").asText();
         assertThat(strategies.latestScout(null, origin.id(), "PEERS").result().at("/candidates/0/symbol").asText())
                 .isEqualTo("SPY");
+        assertThatThrownBy(() -> strategies.select(null, origin.id(), candidateId, origin.version()))
+                .isInstanceOf(java.util.NoSuchElementException.class)
+                .hasMessageContaining("no current candidate");
+        assertThat(strategies.selectedCandidate(null, origin.id())).isNull();
 
         Plan.View child = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("strategy-scout-child", "SPY", "DIRECTIONAL", origin.id(), null,
