@@ -454,10 +454,34 @@
       }
       function group(title, rows, note) {
         if (!rows.length) return null;
-        return el('section', { class: 'home-plan-group' },
-          el('div', { class: 'home-plan-group-head' }, el('h3', {}, title),
-            note ? el('span', { class: 'muted small' }, note) : null),
-          el('div', { class: 'home-plan-grid' }, rows.map(planTile)));
+        var limit = 4;
+        var ordered = rows.slice().sort(function (a, b) {
+          if (a.id === App.state.activePlanId) return -1;
+          if (b.id === App.state.activePlanId) return 1;
+          return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+        });
+        var expanded = false;
+        var grid = el('div', { class: 'home-plan-grid' });
+        var count = el('span', { class: 'muted small home-plan-group-count' });
+        var toggle = ordered.length > limit ? el('button', { type: 'button',
+          class: 'btn btn-sm btn-secondary home-plan-group-toggle', 'aria-expanded': 'false' }) : null;
+        function paint() {
+          var shown = expanded ? ordered : ordered.slice(0, limit);
+          grid.replaceChildren.apply(grid, shown.map(planTile));
+          count.textContent = expanded || ordered.length <= limit
+            ? ordered.length + ' Plans'
+            : limit + ' of ' + ordered.length + ' Plans';
+          if (toggle) {
+            toggle.textContent = expanded ? 'Show fewer' : 'Show all ' + ordered.length;
+            toggle.setAttribute('aria-expanded', String(expanded));
+          }
+        }
+        if (toggle) toggle.onclick = function () { expanded = !expanded; paint(); };
+        var heading = el('div', { class: 'home-plan-group-title' },
+          el('div', {}, el('h3', {}, title), note ? el('span', { class: 'muted small' }, note) : null), count);
+        paint();
+        return el('section', { class: 'home-plan-group', 'data-plan-group': title.toLowerCase().replaceAll(' ', '-') },
+          el('div', { class: 'home-plan-group-head' }, heading, toggle), grid);
       }
 
       planLibrary.innerHTML = '';
