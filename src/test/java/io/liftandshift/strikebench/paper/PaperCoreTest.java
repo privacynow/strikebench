@@ -243,6 +243,26 @@ class PaperCoreTest {
     }
 
     @Test
+    void owningLifecycleHookRollsBackTheEntirePaperClose() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 1));
+        Account before = accounts.get(account.id());
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+
+        assertThatThrownBy(() -> trades.unwind(opened.id(), true, (connection, trade, realized) -> {
+            throw new java.sql.SQLException("owner lifecycle snapshot failed");
+        })).hasMessageContaining("owner lifecycle snapshot failed");
+
+        TradeRecord afterTrade = trades.get(opened.id());
+        Account after = accounts.get(account.id());
+        assertThat(afterTrade.status()).isEqualTo(TradeRecord.ACTIVE);
+        assertThat(after.cashCents()).isEqualTo(before.cashCents());
+        assertThat(after.reservedCents()).isEqualTo(before.reservedCents());
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst()).isEqualTo(ledgerBefore);
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
     void heldSharePopNowKeepsTheEntrySpotAsItsShareBasis() {
         Account acct = accounts.getOrCreateDefault();
         positions.buy(acct.id(), "AAPL", 100);

@@ -102,6 +102,7 @@ public final class ApiServer {
     io.liftandshift.strikebench.plan.PlanStrategyService planStrategy;
     io.liftandshift.strikebench.plan.PlanOutcomeService planOutcomes;
     io.liftandshift.strikebench.plan.PlanDecisionService planDecisions;
+    io.liftandshift.strikebench.plan.PlanManagementService planManagement;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
@@ -251,6 +252,7 @@ public final class ApiServer {
         server.planStrategy = new io.liftandshift.strikebench.plan.PlanStrategyService(db, clock);
         server.planOutcomes = new io.liftandshift.strikebench.plan.PlanOutcomeService(db, clock);
         server.planDecisions = new io.liftandshift.strikebench.plan.PlanDecisionService(db, clock);
+        server.planManagement = new io.liftandshift.strikebench.plan.PlanManagementService(db, clock);
         server.dataJobs.setEvents(server.events);
         server.dataJobs.setDataChangedHook(server::invalidateHistoricalViews);
         datasetSvc.setEvents(server.events);
@@ -417,6 +419,7 @@ public final class ApiServer {
             // ---- Plans: server-owned journey facts; workspace JSON keeps presentation only ----
             c.routes.get("/api/plans", this::plansList);
             c.routes.post("/api/plans", this::planCreate);
+            c.routes.get("/api/plans/portfolio", this::plansPortfolio);
             c.routes.get("/api/plans/{id}", this::planGet);
             c.routes.put("/api/plans/{id}/context", this::planContextPut);
             c.routes.put("/api/plans/{id}/intent", this::planIntentPut);
@@ -440,6 +443,13 @@ public final class ApiServer {
             c.routes.post("/api/plans/{id}/decision/preview", this::planDecisionPreview);
             c.routes.post("/api/plans/{id}/decision/trade", this::planDecisionTrade);
             c.routes.post("/api/plans/{id}/decision/cash", this::planDecisionCash);
+            c.routes.get("/api/plans/{id}/manage", this::planManageGet);
+            c.routes.post("/api/plans/{id}/manage/refresh", this::planManageRefresh);
+            c.routes.post("/api/plans/{id}/manage/unwind", this::planManageUnwind);
+            c.routes.post("/api/plans/{id}/manage/settle", this::planManageSettle);
+            c.routes.post("/api/plans/{id}/manage/roll", this::planManageRoll);
+            c.routes.post("/api/plans/{id}/manage/void", this::planManageVoid);
+            c.routes.post("/api/plans/{id}/manage/review", this::planManageReview);
 
             // ---- Data Center ----
             c.routes.get("/api/data/overview", this::dataOverview);
@@ -2065,6 +2075,7 @@ public final class ApiServer {
     public record PlanDecisionRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
                                       Long feesOverrideCents, List<String> acknowledgedRisks,
                                       String ackToken, String note) {}
+    public record PlanManageRequest(Long expectedVersion, Boolean confirm) {}
 
     private void planStrategyLatest(Context ctx) {
         var saved = planStrategy.latestCompetition(ownerId(ctx), ctx.pathParam("id"));
@@ -2482,7 +2493,202 @@ public final class ApiServer {
                 (io.liftandshift.strikebench.paper.TradePreview) payload.get("preview"),
                 (io.liftandshift.strikebench.eval.EconomicAssessment) payload.get("economics"),
                 io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx)),
+                body.qty(),
                 body.acknowledgedRisks() == null ? List.of() : body.acknowledgedRisks(), body.note());
+    }
+
+    private void planManageGet(Context ctx) {
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        ObjectNode management = planManagement.latest(ownerId(ctx), plan.id());
+        String tradeId = management.path("activeTradeId").asText(null);
+        if (tradeId == null) {
+            for (JsonNode link : management.withArray("links")) if (link.hasNonNull("tradeId")) tradeId = link.get("tradeId").asText();
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("plan", plan);
+        out.put("decision", planDecisions.latest(ownerId(ctx), plan.id()));
+        out.put("management", management);
+        if (tradeId != null) out.put("trade", tradeDetailData(tradeId));
+        ctx.json(out);
+    }
+
+    private void plansPortfolio(Context ctx) {
+        String world = worldParam(activeWorld(ctx));
+        var marketKind = activePlanMarket(ctx);
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (var plan : planSvc.list(ownerId(ctx), marketKind,
+                marketKind == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED ? world : null, false)) {
+            if (plan.status() == io.liftandshift.strikebench.plan.Plan.Status.ARCHIVED) continue;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("plan", plan);
+            ObjectNode decision = planDecisions.latest(ownerId(ctx), plan.id());
+            if (decision != null) row.put("decision", decision);
+            String tradeId = planManagement.activeTradeId(ownerId(ctx), plan.id());
+            if (tradeId != null) {
+                row.put("tradeId", tradeId);
+                try { row.put("mark", trades.currentMark(tradeId)); }
+                catch (RuntimeException e) { row.put("markUnavailable", true); }
+            }
+            rows.add(row);
+        }
+        ctx.json(Map.of("plans", rows, "market", marketKind.name()));
+    }
+
+    private void planManageRefresh(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanManageRequest.class));
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan); requirePlanVersion(plan, body.expectedVersion());
+        String tradeId = requirePlanActiveTrade(ctx, plan.id());
+        var mark = trades.refresh(tradeId);
+        planManagement.recordMark(ownerId(ctx), plan.id(), body.expectedVersion(), tradeId, mark);
+        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "mark", mark,
+                "management", planManagement.latest(ownerId(ctx), plan.id())));
+    }
+
+    private void planManageUnwind(Context ctx) { planManageClose(ctx, "CLOSE", false); }
+    private void planManageSettle(Context ctx) { planManageClose(ctx, "SETTLE", false); }
+    private void planManageRoll(Context ctx) { planManageClose(ctx, "ROLL", true); }
+
+    private void planManageClose(Context ctx, String kind, boolean roll) {
+        var body = requireBody(bodyOrNull(ctx, PlanManageRequest.class));
+        if (!Boolean.TRUE.equals(body.confirm())) throw new IllegalArgumentException("confirm=true is required");
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan); requirePlanVersion(plan, body.expectedVersion());
+        String tradeId = requirePlanActiveTrade(ctx, plan.id());
+        var hook = planManagement.lifecycleHook(ownerId(ctx), plan.id(), body.expectedVersion(), kind, roll);
+        TradeService.CloseResult result = "SETTLE".equals(kind)
+                ? trades.settle(tradeId, true, hook) : trades.unwind(tradeId, true, hook);
+        resolveRecommendationForTrade(tradeId, "SETTLE".equals(kind) ? "SETTLED" : "CLOSED",
+                decisionPnl(result.trade(), result.realizedPnlCents()));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("plan", planSvc.get(ownerId(ctx), plan.id())); out.put("trade", TradeView.of(result.trade()));
+        out.put("realizedPnlCents", result.realizedPnlCents());
+        out.put("management", planManagement.latest(ownerId(ctx), plan.id()));
+        if (roll) out.put("rolledPosition", rolledPosition(result.trade(), worldParam(activeWorld(ctx))));
+        ctx.json(out);
+    }
+
+    private void planManageVoid(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanManageRequest.class));
+        if (!Boolean.TRUE.equals(body.confirm())) throw new IllegalArgumentException("confirm=true is required");
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan); requirePlanVersion(plan, body.expectedVersion());
+        String tradeId = requirePlanActiveTrade(ctx, plan.id());
+        var hook = planManagement.lifecycleHook(ownerId(ctx), plan.id(), body.expectedVersion(), "VOID", false);
+        TradeRecord deleted = trades.delete(tradeId, true, hook);
+        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "trade", TradeView.of(deleted),
+                "management", planManagement.latest(ownerId(ctx), plan.id())));
+    }
+
+    private void planManageReview(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanManageRequest.class));
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan); requirePlanVersion(plan, body.expectedVersion());
+        ObjectNode decision = planDecisions.latest(ownerId(ctx), plan.id());
+        if (decision == null || !"CASH".equals(decision.path("action").asText())) {
+            throw new IllegalStateException("This Plan does not have a cash decision to review.");
+        }
+        ObjectNode metrics = decision.with("metrics");
+        int horizon = decision.path("reviewHorizonDays").asInt(30);
+        java.time.Instant decidedAt = java.time.OffsetDateTime.parse(decision.path("createdAt").asText()).toInstant();
+        java.time.Instant dueAt = decidedAt.plus(java.time.Duration.ofDays(horizon));
+        String world = plan.marketKind() == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
+                ? plan.worldId() : plan.marketKind() == io.liftandshift.strikebench.plan.Plan.MarketKind.DEMO ? "demo" : "observed";
+        java.time.Instant laneNow = market.simInstant(world).orElse(clock.instant());
+        if (laneNow.isBefore(dueAt)) {
+            throw new IllegalStateException("This opportunity review is scheduled for "
+                    + java.time.LocalDate.ofInstant(dueAt, io.liftandshift.strikebench.market.MarketHours.EASTERN) + ".");
+        }
+        java.time.LocalDate dueDate = java.time.LocalDate.ofInstant(dueAt,
+                io.liftandshift.strikebench.market.MarketHours.EASTERN);
+        var series = market.candleSeries(plan.symbol(), dueDate.minusDays(14), dueDate, world,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        io.liftandshift.strikebench.model.Candle dueBar = series.candles().stream()
+                .filter(c -> !c.date().isAfter(dueDate)).max(java.util.Comparator.comparing(
+                        io.liftandshift.strikebench.model.Candle::date))
+                .orElseThrow(() -> new IllegalStateException("No lane-owned closing price is available for the review horizon."));
+        long startUnderlying = metrics.path("underlyingCents").asLong(0);
+        if (startUnderlying <= 0) throw new IllegalStateException("The frozen decision has no underlying anchor.");
+        long endUnderlying = io.liftandshift.strikebench.util.Money.toCents(dueBar.close());
+        long riskCapital = Math.max(startUnderlying, decision.path("maxLossCents").asLong(startUnderlying));
+        long shares = Math.max(1, Math.min(10_000, riskCapital / startUnderlying));
+        long stockPnl = Math.multiplyExact(endUnderlying - startUnderlying, shares);
+        int qty = Math.max(1, (int) Math.round(metrics.path("decisionQty").asDouble(1)));
+        double rate = metrics.path("riskFreeRateAnnual").asDouble(Double.NaN);
+        if (!Double.isFinite(rate)) throw new IllegalStateException("The frozen decision has no pricing-rate snapshot.");
+        long packageEnd = modeledRejectedPackageValue(decision.withArray("legs"), dueBar.close(), dueDate, rate, qty);
+        long entry = decision.path("proposedNetCents").asLong();
+        long fees = metrics.path("feesOpenCents").asLong(0);
+        long rejectedPnl = entry + packageEnd - Math.multiplyExact(fees, 2L);
+        ObjectNode management = planManagement.recordCashReview(ownerId(ctx), plan.id(), body.expectedVersion(),
+                new io.liftandshift.strikebench.plan.PlanManagementService.CashReview(startUnderlying, endUnderlying,
+                        stockPnl, entry, packageEnd, rejectedPnl, horizon,
+                        decision.hasNonNull("pop") ? decision.get("pop").asDouble() : null,
+                        "Frozen-IV modeled value at the lane-owned horizon close; kept outside trade calibration"));
+        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "management", management));
+    }
+
+    private static long modeledRejectedPackageValue(ArrayNode legs, BigDecimal spot, java.time.LocalDate horizon,
+                                                     double rate, int qty) {
+        long value = 0;
+        for (JsonNode leg : legs) {
+            int ratio = Math.max(1, leg.path("ratio").asInt(1));
+            long units = Math.multiplyExact(100L, Math.multiplyExact((long) ratio, qty));
+            double price;
+            if ("STOCK".equals(leg.path("type").asText())) {
+                price = spot.doubleValue();
+            } else {
+                if (!leg.hasNonNull("strikeCents") || !leg.hasNonNull("expiration") || !leg.hasNonNull("iv")) {
+                    throw new IllegalStateException("The rejected package lacks a frozen strike, expiration, or IV.");
+                }
+                double strike = leg.get("strikeCents").asLong() / 100.0;
+                java.time.LocalDate expiry = java.time.LocalDate.parse(leg.get("expiration").asText());
+                double years = Math.max(0, java.time.temporal.ChronoUnit.DAYS.between(horizon, expiry) / 365.0);
+                price = io.liftandshift.strikebench.pricing.BlackScholes.price(
+                        "CALL".equals(leg.path("type").asText()), spot.doubleValue(), strike, years,
+                        rate, 0, leg.get("iv").asDouble());
+            }
+            long cents = io.liftandshift.strikebench.util.Money.centsFromPrice(BigDecimal.valueOf(price), units);
+            value += "BUY".equals(leg.path("action").asText()) ? cents : -cents;
+        }
+        return value;
+    }
+
+    private String requirePlanActiveTrade(Context ctx, String planId) {
+        String tradeId = planManagement.activeTradeId(ownerId(ctx), planId);
+        if (tradeId == null) throw new IllegalStateException("This Plan has no active linked position.");
+        return tradeId;
+    }
+
+    private Map<String, Object> rolledPosition(TradeRecord trade, String world) {
+        List<LocalDate> listed = market.expirations(trade.symbol(), world).stream().sorted().toList();
+        List<Map<String, Object>> legs = new ArrayList<>();
+        for (Leg leg : trade.legs()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("action", leg.action().name()); row.put("type", leg.isStock() ? "STOCK" : leg.type().name());
+            row.put("ratio", leg.ratio());
+            if (!leg.isStock()) {
+                LocalDate target = leg.expiration().plusDays(28);
+                LocalDate next = listed.stream().filter(date -> !date.isBefore(target)).findFirst()
+                        .orElseGet(() -> listed.stream().filter(date -> date.isAfter(leg.expiration()))
+                                .reduce((a, b) -> b).orElseThrow(() -> new IllegalStateException(
+                                        "No later listed expiration is available for this roll.")));
+                OptionChain chain = market.chain(trade.symbol(), next, world)
+                        .orElseThrow(() -> new IllegalStateException("The later expiration has no option book."));
+                List<OptionQuote> side = leg.type() == io.liftandshift.strikebench.model.OptionType.CALL
+                        ? chain.calls() : chain.puts();
+                BigDecimal strike = side.stream().map(OptionQuote::strike)
+                        .min(java.util.Comparator.comparing(value -> value.subtract(leg.strike()).abs()))
+                        .orElseThrow(() -> new IllegalStateException("The later expiration has no "
+                                + leg.type().name().toLowerCase(Locale.ROOT) + " strikes."));
+                row.put("strike", strike.toPlainString());
+                row.put("expiration", next.toString());
+            }
+            legs.add(row);
+        }
+        return Map.of("symbol", trade.symbol(), "strategy", trade.strategy(), "qty", trade.qty(), "legs", legs,
+                "intent", trade.intent() == null ? "DIRECTIONAL" : trade.intent(), "source", "PLAN");
     }
 
     private io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble resolvePlanEnsemble(
@@ -4893,6 +5099,10 @@ public final class ApiServer {
     private void tradeDetail(Context ctx) {
         String id = ctx.pathParam("id");
         ensureOwnedTrade(ctx, id);
+        ctx.json(tradeDetailData(id));
+    }
+
+    private Map<String, Object> tradeDetailData(String id) {
         TradeRecord t = trades.get(id);
         TradeService.MarkView current = null;
         if (TradeRecord.ACTIVE.equals(t.status())) {
@@ -4909,7 +5119,7 @@ public final class ApiServer {
         out.put("marksHistory", trades.marksHistory(id, 50));
         out.put("audit", audit.forTrade(id, 50));
         out.put("payoff", payoffPoints(t));
-        ctx.json(out);
+        return out;
     }
 
     /** Payoff table for charting: profit at expiration across a price grid (empty for calendars). */
@@ -5000,13 +5210,18 @@ public final class ApiServer {
         return trade.decisionPnlCents() != null ? trade.decisionPnlCents() : packagePnlCents;
     }
 
-    /** Best-effort: auto-resolve any recommendation tied to a trade that just closed. Sim-world
-     *  trades never resolve into the calibration record (they never link, but belt-and-braces). */
+    /** Best-effort: only observed/broker outcomes enter recommendation calibration. Generated
+     *  Demo and simulated markets remain separate Plan-review and rehearsal evidence lanes. */
     private void resolveRecommendationForTrade(String tradeId, String status, Long pnlCents) {
         try {
             var t = trades.get(tradeId);
-            var acctRows = db.query("SELECT world_id FROM accounts WHERE id=?", r -> r.str("world_id"), t.accountId());
-            if (!acctRows.isEmpty() && acctRows.getFirst() != null) return; // sim lane: not recorded
+            record AccountLane(String type, String worldId) {}
+            var acctRows = db.query("SELECT type,world_id FROM accounts WHERE id=?",
+                    r -> new AccountLane(r.str("type"), r.str("world_id")), t.accountId());
+            if (acctRows.isEmpty()) return;
+            AccountLane lane = acctRows.getFirst();
+            if (lane.worldId() != null || "DEMO".equals(lane.type()) || "SIMULATION".equals(lane.type())) return;
+            if (!("OBSERVED".equals(t.dataProvenance()) || "BROKER".equals(t.dataProvenance()))) return;
             evaluations.resolveByTrade(tradeId, status, pnlCents);
         }
         catch (RuntimeException e) {
