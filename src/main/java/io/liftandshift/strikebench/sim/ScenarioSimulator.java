@@ -84,7 +84,12 @@ public final class ScenarioSimulator {
 
     /** One structure to compare: resolved legs + an optional market-priced entry. */
     public record CompareItem(String key, List<SimLeg> legs, Long entryOverrideCents, String entryNote,
-                              long roundTripFeesCents) {}
+                              long roundTripFeesCents, Integer qty) {
+        public CompareItem(String key, List<SimLeg> legs, Long entryOverrideCents, String entryNote,
+                           long roundTripFeesCents) {
+            this(key, legs, entryOverrideCents, entryNote, roundTripFeesCents, null);
+        }
+    }
 
     public record CompareOutcome(String key, SimResult result) {}
 
@@ -102,27 +107,48 @@ public final class ScenarioSimulator {
                                       IvSpec ivSpec, double riskFreeRate) {
         try (AutoCloseable permit = SimBudget.acquire()) {
             PathEnsembleService.Ensemble ensemble = source.build(scope, basis, spec, study, spot);
-            ScenarioSpec s = ensemble.spec().sane();
-            validatePaths(ensemble.paths(), s);
-            long totalLegs = items.stream().mapToLong(it -> Math.max(1, it.legs().size())).sum();
-            requireWorkBudget((long) ensemble.paths().length * (s.totalSteps() + 1) * Math.max(1, totalLegs));
-            List<CompareOutcome> out = new ArrayList<>();
-            List<CompareRefusal> refused = new ArrayList<>();
-            for (CompareItem item : items) {
-                try {
-                    out.add(new CompareOutcome(item.key(), runInner(ensemble.paths(), ensemble.spot(),
-                            item.legs(), qty, s, ivSpec, riskFreeRate,
-                            item.entryOverrideCents(), item.entryNote(), item.roundTripFeesCents())));
-                } catch (RuntimeException e) {
-                    refused.add(new CompareRefusal(item.key(), publicReason(e)));
-                }
-            }
-            return new EnsembleComparison(ensemble, new CompareReport(out, refused));
+            return compareInner(ensemble, items, qty, ivSpec, riskFreeRate);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** Judge several exact packages on an already-persisted ensemble. Plan Outcomes uses this so
+     * its comparison cannot regenerate paths that merely resemble the Evidence receipt. */
+    public EnsembleComparison compare(PathEnsembleService.Ensemble ensemble, List<CompareItem> items,
+                                      int fallbackQty, IvSpec ivSpec, double riskFreeRate) {
+        try (AutoCloseable permit = SimBudget.acquire()) {
+            return compareInner(ensemble, items, fallbackQty, ivSpec, riskFreeRate);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private EnsembleComparison compareInner(PathEnsembleService.Ensemble ensemble, List<CompareItem> items,
+                                             int fallbackQty, IvSpec ivSpec, double riskFreeRate) {
+        if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
+        if (items == null || items.isEmpty()) throw new IllegalArgumentException("comparison items are required");
+        ScenarioSpec s = ensemble.spec().sane();
+        validatePaths(ensemble.paths(), s);
+        long totalLegs = items.stream().mapToLong(it -> Math.max(1, it.legs().size())).sum();
+        requireWorkBudget((long) ensemble.paths().length * (s.totalSteps() + 1) * Math.max(1, totalLegs));
+        List<CompareOutcome> out = new ArrayList<>();
+        List<CompareRefusal> refused = new ArrayList<>();
+        for (CompareItem item : items) {
+            try {
+                int qty = item.qty() == null ? fallbackQty : Math.clamp(item.qty(), 1, 100);
+                out.add(new CompareOutcome(item.key(), runInner(ensemble.paths(), ensemble.spot(),
+                        item.legs(), qty, s, ivSpec, riskFreeRate,
+                        item.entryOverrideCents(), item.entryNote(), item.roundTripFeesCents())));
+            } catch (RuntimeException e) {
+                refused.add(new CompareRefusal(item.key(), publicReason(e)));
+            }
+        }
+        return new EnsembleComparison(ensemble, new CompareReport(out, refused));
     }
 
     /**

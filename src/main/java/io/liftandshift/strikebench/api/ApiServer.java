@@ -442,6 +442,7 @@ public final class ApiServer {
             c.routes.get("/api/plans/{id}/outcomes/latest", this::planOutcomesLatest);
             c.routes.post("/api/plans/{id}/outcomes/ensemble", this::planEnsembleRun);
             c.routes.post("/api/plans/{id}/outcomes/run", this::planOutcomeRun);
+            c.routes.post("/api/plans/{id}/outcomes/compare", this::planOutcomeCompare);
             c.routes.post("/api/plans/{id}/outcomes/backtest", this::planBacktestRun);
             c.routes.get("/api/plans/{id}/outcomes/backtests/{backtestId}", this::planBacktestGet);
             c.routes.get("/api/plans/{id}/rehearsals", this::planRehearsalsList);
@@ -2089,6 +2090,10 @@ public final class ApiServer {
     public record PlanOutcomeRunRequest(Long expectedVersion, String basis, String ensembleId,
                                        io.liftandshift.strikebench.sim.ScenarioSpec over,
                                        io.liftandshift.strikebench.sim.IvSpec iv) {}
+    public record PlanOutcomeCompareRequest(Long expectedVersion, String basis, String ensembleId,
+                                            List<String> candidateIds,
+                                            io.liftandshift.strikebench.sim.ScenarioSpec over,
+                                            io.liftandshift.strikebench.sim.IvSpec iv) {}
     public record PlanBacktestRequest(Long expectedVersion, String engine, String from, String to,
                                       Integer targetDte, Integer entryEveryDays, Integer maxConcurrent,
                                       Integer qty, Double slippagePct, Long startingCashCents,
@@ -2427,6 +2432,135 @@ public final class ApiServer {
         ctx.json(Map.of("plan", plan, "outcome", saved,
                 "ensemble", Map.of("id", stored.id(), "fingerprint", stored.fingerprint(), "basis", stored.basis())));
     }
+
+    /** Compare the Plan's current proposals on one exact stored path artifact. */
+    private void planOutcomeCompare(Context ctx) {
+        var body = requireBody(bodyOrNull(ctx, PlanOutcomeCompareRequest.class));
+        var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
+        requireActivePlanMarket(ctx, plan);
+        requirePlanVersion(plan, body.expectedVersion());
+        String basisName = body.basis() == null ? "PARAMETRIC" : body.basis().trim().toUpperCase(Locale.ROOT);
+        io.liftandshift.strikebench.sim.PathEnsembleService.Basis basis;
+        try { basis = io.liftandshift.strikebench.sim.PathEnsembleService.Basis.valueOf(basisName); }
+        catch (Exception e) {
+            throw new IllegalArgumentException("comparison basis must be PARAMETRIC, HISTORICAL_ANALOGS, or CONDITIONAL_BOOTSTRAP");
+        }
+        var stored = resolvePlanEnsemble(ctx, plan,
+                new PlanOutcomeRunRequest(body.expectedVersion(), basisName, body.ensembleId(), body.over(), body.iv()), basis);
+
+        java.util.Set<String> wanted = body.candidateIds() == null || body.candidateIds().isEmpty()
+                ? null : body.candidateIds().stream().filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        LinkedHashMap<String, ObjectNode> field = new LinkedHashMap<>();
+        var competition = planStrategy.latestCompetition(ownerId(ctx), plan.id());
+        if (competition != null) for (JsonNode node : competition.result().path("candidates")) {
+            if (!(node instanceof ObjectNode candidate)) continue;
+            String id = candidate.path("id").asText();
+            if (!id.isBlank() && (wanted == null || wanted.contains(id))) field.put(id, candidate);
+        }
+        JsonNode selectedNode = planStrategy.selectedCandidate(ownerId(ctx), plan.id());
+        if (selectedNode instanceof ObjectNode selected) {
+            String id = selected.path("id").asText();
+            if (!id.isBlank() && (wanted == null || wanted.contains(id))) field.putIfAbsent(id, selected);
+        }
+        if (field.isEmpty()) throw new IllegalStateException("Run the Strategy comparison before comparing proposal outcomes.");
+        if (field.size() > 32) throw new IllegalArgumentException("at most 32 current Plan proposals can be compared together");
+
+        List<io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem> simItems = new ArrayList<>();
+        LinkedHashMap<String, PlanComparisonMeta> metadata = new LinkedHashMap<>();
+        LinkedHashMap<String, String> earlyRefusals = new LinkedHashMap<>();
+        for (ObjectNode candidate : field.values()) {
+            String id = candidate.path("id").asText();
+            int qty = Math.clamp(candidate.path("qty").asInt(1), 1, 100);
+            var position = planOutcomePosition(candidate);
+            long fees = candidate.path("economics").path("estimatedRoundTripFeesCents").isNumber()
+                    ? candidate.path("economics").path("estimatedRoundTripFeesCents").longValue()
+                    : position.legs().stream().filter(leg -> !"STOCK".equalsIgnoreCase(leg.type()))
+                    .mapToLong(leg -> Math.max(1, leg.ratio())).sum() * qty * cfg.feePerContractCents() * 2L
+                    + (position.legs().isEmpty() ? 0 : cfg.feePerOrderCents() * 2L);
+            metadata.put(id, new PlanComparisonMeta(candidate, position, qty, fees));
+            try {
+                var simLegs = toSimLegs(ctx, position.legs());
+                String problem = validateSimLegs(simLegs);
+                if (problem != null) {
+                    earlyRefusals.put(id, problem);
+                    continue;
+                }
+                simItems.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem(
+                        id, simLegs, position.entryCostCents(),
+                        "entry fixed to the Plan proposal's captured executable package", fees, qty));
+            } catch (RuntimeException e) {
+                earlyRefusals.put(id, io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));
+            }
+        }
+
+        LinkedHashMap<String, io.liftandshift.strikebench.sim.ScenarioSimulator.SimResult> results = new LinkedHashMap<>();
+        LinkedHashMap<String, String> refusals = new LinkedHashMap<>(earlyRefusals);
+        if (!simItems.isEmpty()) {
+            var compared = new io.liftandshift.strikebench.sim.ScenarioSimulator().compare(
+                    stored.ensemble(), simItems, 1, stored.iv(), stored.rateAnnual());
+            for (var outcome : compared.report().results()) results.put(outcome.key(), outcome.result());
+            for (var refusal : compared.report().refused()) refusals.put(refusal.key(), refusal.reason());
+        }
+
+        List<io.liftandshift.strikebench.plan.PlanOutcomeService.ComparisonItem> items = new ArrayList<>();
+        for (var entry : metadata.entrySet()) {
+            String id = entry.getKey();
+            PlanComparisonMeta meta = entry.getValue();
+            ObjectNode candidate = meta.candidate();
+            var result = results.get(id);
+            Long p5 = result == null ? null : result.p5Cents();
+            Long expected = result == null ? null : result.expectedPnlCents();
+            Double tailScore = expected == null || p5 == null ? null
+                    : expected.doubleValue() / Math.max(100.0, Math.max(0.0, -p5.doubleValue()));
+            String display = candidate.path("displayName").asText(candidate.path("strategy").asText("Structure"));
+            items.add(new io.liftandshift.strikebench.plan.PlanOutcomeService.ComparisonItem(
+                    id, id, 0, candidate.path("strategy").asText("CUSTOM"), display, meta.qty(),
+                    meta.position().entryCostCents(), candidate.hasNonNull("maxLossCents")
+                            ? candidate.path("maxLossCents").longValue() : null,
+                    result == null ? null : result.winRatePct(), expected, p5,
+                    result == null ? null : result.p50Cents(), result == null ? null : result.p95Cents(),
+                    tailScore, meta.roundTripFees(), candidate.path("economicVerdict").asText(null),
+                    candidate.path("economicPlacement").asText(null),
+                    candidate.hasNonNull("structurallyEligible") ? candidate.path("structurallyEligible").asBoolean() : null,
+                    candidate.hasNonNull("decisionScore") ? candidate.path("decisionScore").doubleValue() : null,
+                    candidate.path("selected").asBoolean(false), refusals.get(id)));
+        }
+        items.add(new io.liftandshift.strikebench.plan.PlanOutcomeService.ComparisonItem(
+                "CASH", null, 0, "CASH", "Keep cash", 0, 0L, 0L,
+                null, 0L, 0L, 0L, 0L, 0.0, 0L, null, "BASELINE", true, null, false, null));
+        items.sort((a, b) -> {
+            if ((a.refusalReason() != null) != (b.refusalReason() != null)) return a.refusalReason() == null ? -1 : 1;
+            double as = a.tailReturnScore() == null ? Double.NEGATIVE_INFINITY : a.tailReturnScore();
+            double bs = b.tailReturnScore() == null ? Double.NEGATIVE_INFINITY : b.tailReturnScore();
+            int score = Double.compare(bs, as);
+            if (score != 0) return score;
+            return a.displayName().compareToIgnoreCase(b.displayName());
+        });
+        List<io.liftandshift.strikebench.plan.PlanOutcomeService.ComparisonItem> ranked = new ArrayList<>();
+        int rank = 0;
+        for (var item : items) ranked.add(new io.liftandshift.strikebench.plan.PlanOutcomeService.ComparisonItem(
+                item.key(), item.candidateId(), ++rank, item.strategy(), item.displayName(), item.qty(),
+                item.entryCostCents(), item.maxLossCents(), item.winRatePct(), item.expectedPnlCents(),
+                item.p5Cents(), item.p50Cents(), item.p95Cents(), item.tailReturnScore(),
+                item.roundTripFeesCents(), item.economicVerdict(), item.economicPlacement(),
+                item.mechanicallyEligible(), item.decisionScore(), item.selected(), item.refusalReason()));
+
+        String interpretation = switch (basis) {
+            case PARAMETRIC -> "Every current Plan proposal repriced on the exact stored model futures.";
+            case HISTORICAL_ANALOGS -> "Every current Plan proposal repriced on the exact matching historical occurrences.";
+            case CONDITIONAL_BOOTSTRAP -> "Every current Plan proposal repriced on whole-path resamples of the same analog sample.";
+        };
+        String fairness = "Same ensemble " + stored.fingerprint() + ", captured proposal entries, quantities, and after-cost convention; cash is the zero-risk baseline.";
+        var saved = planOutcomes.saveComparison(ownerId(ctx), plan, body.expectedVersion(), stored, ranked,
+                Json.MAPPER.valueToTree(body), interpretation, fairness);
+        ctx.json(Map.of("plan", plan, "comparison", saved,
+                "ensemble", Map.of("id", stored.id(), "fingerprint", stored.fingerprint(), "basis", stored.basis())));
+    }
+
+    private record PlanComparisonMeta(ObjectNode candidate,
+                                      io.liftandshift.strikebench.outcomes.OutcomeContract.Position position,
+                                      int qty, long roundTripFees) {}
 
     private void planBacktestRun(Context ctx) {
         var body = requireBody(bodyOrNull(ctx, PlanBacktestRequest.class));

@@ -338,12 +338,23 @@ class PlanApiIntegrationTest {
         assertThat(modeled.at("/outcome/ensembleId").asText()).isEqualTo(ensembleId);
         assertThat(modeled.at("/outcome/result/paths").asInt()).isEqualTo(120);
 
+        JsonNode compared = json(post("/api/plans/" + id + "/outcomes/compare",
+                "{\"expectedVersion\":" + version + ",\"basis\":\"PARAMETRIC\",\"ensembleId\":\""
+                        + ensembleId + "\"}"));
+        assertThat(compared.at("/comparison/ensembleFingerprint").asText()).isEqualTo(fingerprint);
+        assertThat(compared.at("/comparison/items").size())
+                .isEqualTo(strategy.at("/strategy/result/candidates").size() + 1);
+        assertThat(compared.at("/comparison/items").toString()).contains("Keep cash");
+        assertThat(compared.at("/comparison/fairness").asText()).contains(fingerprint).contains("cash");
+
         JsonNode market = json(post("/api/plans/" + id + "/outcomes/run",
                 "{\"expectedVersion\":" + version + ",\"basis\":\"RISK_NEUTRAL\"}"));
         assertThat(market.at("/outcome/result/probabilityMap/pAnyProfit").isNumber()).isTrue();
 
         JsonNode latest = json(get("/api/plans/" + id + "/outcomes/latest"));
         assertThat(latest.get("outcomes")).hasSize(2);
+        assertThat(latest.get("comparisons")).hasSize(1);
+        assertThat(latest.at("/comparisons/0/ensembleFingerprint").asText()).isEqualTo(fingerprint);
         JsonNode restoredModel = null;
         for (JsonNode run : latest.get("outcomes")) if ("PARAMETRIC".equals(run.path("basis").asText())) restoredModel = run;
         assertThat(restoredModel).isNotNull();
