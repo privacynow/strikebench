@@ -2180,6 +2180,27 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-outcome-summary-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .plan-outcome-summary-card p { margin: 8px 0 0; }
 .plan-outcome-panel, .plan-market-outcome { min-width: 0; }
+.plan-proposal-comparison-result { min-width: 0; margin: 14px 0; padding: 16px;
+  border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius-sm);
+  background: var(--surface-2); }
+.plan-proposal-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.plan-proposal-result { min-width: 0; display: grid; align-content: start; gap: 10px; padding: 13px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.plan-proposal-result.selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.plan-proposal-result.refused { border-style: dashed; }
+.plan-proposal-result-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.plan-proposal-result-head h4 { margin: 2px 0 0; font-size: 17px; }
+.plan-proposal-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.plan-proposal-facts .stat { min-width: 0; }
+.plan-proposal-result p { margin: 0; }
+.plan-proposal-beginner > details { margin-top: 10px; }
+.plan-proposal-table-wrap { max-width: 100%; }
+.plan-proposal-table tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.plan-proposal-table td, .plan-proposal-table th { white-space: nowrap; }
+.plan-proposal-name-cell { min-width: 168px; }
+.plan-proposal-name-cell > .btn, .plan-proposal-name-cell > .badge { display: flex; width: fit-content; margin-top: 6px; }
+.plan-analog-comparison-actions { margin-top: 12px; }
+.plan-return-focus { outline: 2px solid var(--accent); outline-offset: 3px; }
 .plan-decision-position, .plan-decision-controls { margin-bottom: 10px; }
 .plan-decision-form { grid-template-columns: minmax(120px, .35fr) minmax(220px, 1fr); }
 .plan-decision-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px;
@@ -2215,6 +2236,10 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .plan-book-grid { grid-template-columns: minmax(0, 1fr); }
   .home-plan-grid { grid-template-columns: minmax(0, 1fr); }
   .home-plan-group-head { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .plan-proposal-comparison-result { padding: 12px; }
+  .plan-proposal-card-grid { grid-template-columns: minmax(0, 1fr); }
+  .plan-proposal-result-head { flex-direction: column; }
+  .plan-proposal-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .plan-market-outcome { display: grid; gap: 10px; }
 .research-plan-scout { margin-top: 18px; }

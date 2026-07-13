@@ -320,6 +320,13 @@
     return out;
   }
 
+  async function compareOutcomes(plan, request) {
+    var out = await API.post('/api/plans/' + plan.id + '/outcomes/compare',
+      Object.assign({ expectedVersion: plan.version }, request || {}));
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
   async function runBacktest(plan, request) {
     var out = await API.post('/api/plans/' + plan.id + '/outcomes/backtest',
       Object.assign({ expectedVersion: plan.version }, request || {}));
@@ -515,7 +522,7 @@
     selectCandidate: selectCandidate, saveCustom: saveCustom,
     latestScout: latestScout, runScout: runScout, spawnScoutedPlan: spawnScoutedPlan,
     latestOutcomes: latestOutcomes, runEnsemble: runEnsemble,
-    runOutcome: runOutcome, runBacktest: runBacktest,
+    runOutcome: runOutcome, compareOutcomes: compareOutcomes, runBacktest: runBacktest,
     rehearsals: rehearsals, createRehearsal: createRehearsal,
     latestDecision: latestDecision, previewDecision: previewDecision,
     tradeDecision: tradeDecision, cashDecision: cashDecision,
