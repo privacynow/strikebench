@@ -2656,7 +2656,8 @@
       try {
         var risk = document.getElementById('risk-mode');
         var persisted = await PlanStore.promote({ symbol: symbol, intent: intent,
-          thesis: App.context.thesis(), horizonDays: horizonDaysFromContext(),
+          thesis: plan.context && plan.context.thesis ? plan.context.thesis : null,
+          horizonDays: plan.context && plan.context.horizonDays ? plan.context.horizonDays : 30,
           riskMode: risk ? risk.value : 'conservative' });
         replacePlanRoute(persisted, intent == null ? 'EVIDENCE' : 'UNDERSTAND');
       } catch (e) { decisionHost.removeAttribute('aria-busy'); UI.toast(e.message, 'error'); }
@@ -7383,8 +7384,10 @@
     // "direction", even though it was not the user's market direction.
     th.setup = th.setup || THESIS_QUESTION[th.direction] || 'pullback_rebound';
     delete th.direction;
-    th.horizonDays = plan.context.horizonDays || th.horizonDays || 30;
-    th.thesis = plan.context.thesis || th.thesis || '';
+    // Durable Plan context is authoritative, including explicit absence. A lane-level
+    // or prior-render value must never invent a thesis/horizon for this Plan.
+    th.horizonDays = plan.context.horizonDays || 30;
+    th.thesis = plan.context.thesis || '';
     var wrap = el('div', { class: 'card', id: 'test-your-view' });
     wrap.appendChild(UI.cardHeader('Test your view \u2014 ' + symbol));
     wrap.appendChild(explain(level === 'beginner'
