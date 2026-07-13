@@ -87,6 +87,11 @@ public final class TradeService {
         void afterTradeCreated(Connection connection, TradeRecord trade) throws SQLException;
     }
 
+    @FunctionalInterface
+    public interface LifecycleHook {
+        void afterMutation(Connection connection, TradeRecord trade, Long realizedPnlCents) throws SQLException;
+    }
+
     // ---- Preview / create ----
 
     public TradePreview preview(OpenRequest req) {
@@ -342,6 +347,10 @@ public final class TradeService {
 
     /** Closes at current marks. Returns realized P/L net of all fees. */
     public CloseResult unwind(String tradeId, boolean confirm) {
+        return unwind(tradeId, confirm, null);
+    }
+
+    public CloseResult unwind(String tradeId, boolean confirm, LifecycleHook hook) {
         requireConfirm(confirm, "unwind");
         markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
         accountSnapshot.invalidateAll(); // the book changed — no consumer may see the old snapshot
@@ -372,8 +381,10 @@ public final class TradeService {
             long feesClose = closeFeesFor(t);
             Long decisionUnderlying = marks.underlyingMark(t.symbol(), worldOf(t.accountId()))
                     .map(Money::toCents).orElse(null);
-            return closeOut(c, t, acct, "PREMIUM_CLOSE", closeValue, feesClose,
+            CloseResult closed = closeOut(c, t, acct, "PREMIUM_CLOSE", closeValue, feesClose,
                     TradeRecord.CLOSED, "UNWIND", decisionUnderlying);
+            if (hook != null) hook.afterMutation(c, closed.trade(), closed.realizedPnlCents());
+            return closed;
         });
         auditSafe(result.trade().accountId(), tradeId, "TRADE_UNWOUND", "INFO",
                 Map.of("realizedPnlCents", result.realizedPnlCents()));
@@ -382,6 +393,10 @@ public final class TradeService {
 
     /** Settles an expired position at cash-equivalent intrinsic value. */
     public CloseResult settle(String tradeId, boolean confirm) {
+        return settle(tradeId, confirm, null);
+    }
+
+    public CloseResult settle(String tradeId, boolean confirm, LifecycleHook hook) {
         requireConfirm(confirm, "settle");
         markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
         accountSnapshot.invalidateAll(); // the book changed — no consumer may see the old snapshot
@@ -484,7 +499,9 @@ public final class TradeService {
                 long realizedX = t.entryNetPremiumCents() - t.feesOpenCents() + settleValue;
                 Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=0, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
                         TradeRecord.EXPIRED, "SETTLED (external)" + memoSuffix, realizedX, realizedX, nowTs, nowTs, t.id());
-                return new CloseResult(getOn(c, t.id()), realizedX);
+                CloseResult closed = new CloseResult(getOn(c, t.id()), realizedX);
+                if (hook != null) hook.afterMutation(c, closed.trade(), closed.realizedPnlCents());
+                return closed;
             }
             long cash = acct.cashCents(), reserved = acct.reservedCents();
             cash += settleValue;
@@ -525,7 +542,9 @@ public final class TradeService {
             Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=0, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
                     TradeRecord.EXPIRED, closeReason, realized, decisionPnl, nowTs, nowTs, t.id());
             Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, updated_at=? WHERE id=?", cash, reserved, nowTs, acct.id());
-            return new CloseResult(getOn(c, t.id()), realized);
+            CloseResult closed = new CloseResult(getOn(c, t.id()), realized);
+            if (hook != null) hook.afterMutation(c, closed.trade(), closed.realizedPnlCents());
+            return closed;
         });
         if (result.trade().closeReason() != null && result.trade().closeReason().contains("CURRENT market price")) {
             auditSafe(result.trade().accountId(), tradeId, "SETTLE_FALLBACK_PRICE", "WARN",
@@ -541,6 +560,10 @@ public final class TradeService {
      * cash row with a mirror ADJUSTMENT. Append-only — nothing is erased.
      */
     public TradeRecord delete(String tradeId, boolean confirm) {
+        return delete(tradeId, confirm, null);
+    }
+
+    public TradeRecord delete(String tradeId, boolean confirm, LifecycleHook hook) {
         requireConfirm(confirm, "delete");
         markMemo.invalidate(tradeId); // closing: never serve a pre-close mark
         accountSnapshot.invalidateAll(); // the book changed — no consumer may see the old snapshot
@@ -567,7 +590,9 @@ public final class TradeService {
             Db.execOn(c, "UPDATE trades SET status=?, close_reason='DELETED_BY_USER', closed_at=?, updated_at=? WHERE id=?",
                     TradeRecord.DELETED, now, now, tradeId);
             Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, updated_at=? WHERE id=?", cash, reserved, now, acct.id());
-            return getOn(c, tradeId);
+            TradeRecord deleted = getOn(c, tradeId);
+            if (hook != null) hook.afterMutation(c, deleted, null);
+            return deleted;
         });
         auditSafe(out.accountId(), tradeId, "TRADE_DELETED", "WARN", Map.of("note", "trade voided; entry cash reversed"));
         return out;

@@ -480,10 +480,42 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   assert.equal(frozen.decision.action, 'TRADE');
   assert.ok(frozen.decision.tradeId, 'the paper trade is linked inside the frozen decision');
 
+  await page.waitForSelector('#plan-stage-manage-review .quote-hero');
+  assert.match(await page.textContent('#plan-stage-manage-review'), /Frozen at Decide/);
+  assert.match(await page.textContent('#plan-stage-manage-review'), /Refresh marks/);
+  assert.equal(await page.locator('#plan-stage-manage-review a[href^="#/trade"], #plan-stage-manage-review .plan-stage-transition').count(), 0,
+    'Manage stays inside the Plan instead of linking to a standalone Trade detail');
+  await page.click('#refresh-btn');
+  await page.waitForSelector('#app[data-ready="true"]');
+  await page.waitForSelector('.plan-management-timeline');
+  assert.match(await page.textContent('.plan-management-timeline'), /MARK/);
+  await page.waitForTimeout(300); // real card-arrival motion, then inspect the settled frame
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p6-manage-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(300); // let responsive reflow and real animations settle
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p6-manage-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   await page.locator('.plan-rail button').filter({ hasText: 'Decide' }).click();
   await page.waitForSelector('.plan-decision-facts');
   assert.match(await page.textContent('#plan-stage-decide'), /Decision frozen/);
   assert.match(await page.textContent('#plan-stage-decide'), /Market EV after costs/);
+
+  await page.locator('.plan-rail button').filter({ hasText: 'Manage' }).click();
+  await page.click('#unwind-btn');
+  await page.waitForSelector('[role="dialog"]');
+  await page.getByRole('button', { name: 'Close position' }).click();
+  await page.waitForFunction(id => location.hash === '#/plan/' + id + '/manage-review', plan.id);
+  await page.waitForSelector('.plan-review-results');
+  assert.match(await page.textContent('#plan-stage-manage-review'), /trade decision/i);
+  assert.match(await page.textContent('#plan-stage-manage-review'), /plan position/i);
+
+  await go('#/portfolio');
+  await page.waitForSelector('#portfolio-plan-book .plan-book-card');
+  assert.match(await page.textContent('#portfolio-plan-book'), /AAPL/);
+  assert.match(await page.textContent('#portfolio-plan-book'), /Review Plan/);
 });
 
 test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {

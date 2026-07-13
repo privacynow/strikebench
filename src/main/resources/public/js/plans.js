@@ -236,6 +236,24 @@
     return out;
   }
 
+  function latestManagement(planId, force) {
+    var path = '/api/plans/' + planId + '/manage';
+    return force ? API.getFresh(path) : API.get(path);
+  }
+
+  async function manage(plan, action, request) {
+    var out = await API.post('/api/plans/' + plan.id + '/manage/' + action,
+      Object.assign({ expectedVersion: plan.version }, request || {}));
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
+  async function reviewCash(plan) {
+    var out = await API.post('/api/plans/' + plan.id + '/manage/review', { expectedVersion: plan.version });
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
   async function closeChip(plan) {
     var wasActive = App.state.activePlanId === plan.id;
     var updated = await API.put('/api/plans/' + plan.id + '/open', {
@@ -305,6 +323,7 @@
     runOutcome: runOutcome, runBacktest: runBacktest,
     latestDecision: latestDecision, previewDecision: previewDecision,
     tradeDecision: tradeDecision, cashDecision: cashDecision,
+    latestManagement: latestManagement, manage: manage, reviewCash: reviewCash,
     marketChanged: marketChanged, renderBar: renderBar, ui: ui,
     all: function () { return items.slice(); }
   };

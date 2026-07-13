@@ -2391,7 +2391,9 @@
       OUTCOMES: { title: 'Test the exact position',
         body: 'Judge the selected contracts under market-implied odds, the same stored futures, matching past episodes, and a no-look-ahead rule replay.' },
       DECIDE: { title: 'Trade it, or stay in cash',
-        body: 'Reprice the exact Plan package, retain theoretical risk and realistic context, then freeze one deliberate decision.' }
+        body: 'Reprice the exact Plan package, retain theoretical risk and realistic context, then freeze one deliberate decision.' },
+      MANAGE_REVIEW: { title: 'Manage & review',
+        body: 'Act on the linked position without leaving this Plan, then compare the result with the expectation frozen at Decide.' }
     }[stage.key];
     var content = el('div', { class: 'plan-stage-content', id: 'plan-stage-content' });
     root.appendChild(el('section', { class: 'plan-stage-frame', id: 'plan-stage-' + stage.path },
@@ -3019,7 +3021,7 @@
     }
   }
 
-  function renderFrozenPlanDecision(host, plan, decision) {
+  function renderFrozenPlanDecision(host, plan, decision, insideManage) {
     function label(value) { return String(value || '').replaceAll('_', ' ').toLowerCase(); }
     var traded = decision.action === 'TRADE';
     host.appendChild(alertBox(traded ? 'ok' : 'caution',
@@ -3046,7 +3048,7 @@
           el('td', {}, leg.fillCents == null ? '—' : fmtMoney(leg.fillCents)));
       }));
     }));
-    host.appendChild(el('div', { class: 'plan-next-action' },
+    if (!insideManage) host.appendChild(el('div', { class: 'plan-next-action' },
       el('div', {}, el('b', {}, 'Decision frozen'), el('p', { class: 'muted' },
         'Manage & Review now compares what happens with what this decision expected.')),
       el('button', { type: 'button', class: 'btn', onclick: async function () {
@@ -3062,7 +3064,7 @@
     var state = ui.decision;
     var content = planOwnedStage(root, initialPlan, stage);
     var latest = await PlanStore.latestDecision(initialPlan.id, true);
-    if (latest.decision) {
+    if (latest.decision && initialPlan.status !== 'ACTIVE') {
       renderFrozenPlanDecision(content, initialPlan, latest.decision);
       return;
     }
@@ -3191,6 +3193,115 @@
     }
   }
 
+  function planManagementTimeline(host, management, includeReviews) {
+    var actions = management && management.actions || [];
+    if (actions.length) host.appendChild(el('section', { class: 'card plan-management-timeline' },
+      UI.cardHeader('Plan timeline'),
+      el('div', { class: 'plan-timeline-list' }, actions.map(function (action) {
+        var value = action.realizedCents != null ? pnlSpan(action.realizedCents)
+          : action.unrealizedCents != null ? pnlSpan(action.unrealizedCents) : null;
+        return el('div', { class: 'status-item' },
+          el('span', { class: 'badge ' + (action.kind === 'CLOSE' || action.kind === 'SETTLE' ? 'badge-ok' : 'badge-dim') }, action.kind),
+          el('span', {}, action.note || 'Plan action'),
+          el('span', { class: 'spacer' }), value,
+          el('span', { class: 'muted' }, UI.fmtDate(action.at)));
+      }))));
+    var reviews = includeReviews === false ? [] : management && management.reviews || [];
+    if (reviews.length) host.appendChild(el('section', { class: 'card plan-review-results' },
+      UI.cardHeader('Decision review'),
+      el('p', { class: 'muted' }, 'Plan reviews stay separate from recommendation calibration unless the underlying trade carries observed or broker evidence.'),
+      table(['Lane', 'Benchmark', 'Predicted', 'Result'], reviews.map(function (review) {
+        return el('tr', {},
+          el('td', {}, String(review.category || '').replaceAll('_', ' ').toLowerCase()),
+          el('td', {}, String(review.benchmarkKind || '').replaceAll('_', ' ').toLowerCase()),
+          el('td', {}, review.predictedPop == null ? '—' : fmtPct(review.predictedPop)),
+          el('td', {}, review.realizedCents == null ? '—' : pnlSpan(review.realizedCents)));
+      }))));
+  }
+
+  function planCashReview(host, plan, decision, management) {
+    var created = new Date(decision.createdAt || decision.quoteAsOf);
+    var horizon = Number(decision.reviewHorizonDays || 30);
+    var due = new Date(created.getTime()); due.setUTCDate(due.getUTCDate() + horizon);
+    var dueNow = Date.now() >= due.getTime();
+    host.appendChild(alertBox('caution', 'Cash was an active decision', [
+      'The rejected strategy, its modeled odds, and its exact quoted package remain frozen.',
+      'Review horizon: ' + horizon + ' days · ' + UI.fmtDate(due.toISOString())
+    ]));
+    host.appendChild(el('div', { class: 'grid grid-3 plan-cash-benchmarks' },
+      stat('Cash', '$0 market P/L', 'Cash is the zero-risk benchmark before any interest assumption.'),
+      stat('Stock from decision', dueNow ? 'Ready for review' : 'Pending',
+        'Buy-and-hold is measured from the underlying price frozen at Decide to the review-horizon close.'),
+      stat('Rejected strategy', dueNow ? 'Ready for review' : 'Pending',
+        'The exact rejected package is judged separately; it never enters trade calibration.')));
+    if (!dueNow) host.appendChild(el('div', { class: 'plan-next-action' },
+      el('div', {}, el('b', {}, 'Opportunity review is scheduled'), el('p', { class: 'muted' },
+        'Until ' + UI.fmtDate(due.toISOString()) + ', no outcome is claimed. You can still inspect the frozen decision below.'))));
+    if (dueNow && !(management && management.reviews && management.reviews.length)) {
+      host.appendChild(el('div', { class: 'plan-next-action' },
+        el('div', {}, el('b', {}, 'The review horizon has arrived'), el('p', { class: 'muted' },
+          'Record cash, risk-matched stock, and the frozen-IV rejected-package counterfactual as separate benchmarks.')),
+        el('button', { type: 'button', class: 'btn', id: 'plan-run-cash-review', onclick: async function () {
+          this.disabled = true;
+          try { await PlanStore.reviewCash(await PlanStore.get(plan.id, true)); App.render(); }
+          catch (e) { this.disabled = false; UI.toast(e.message, 'error'); }
+        } }, 'Record opportunity review')));
+    }
+    if (management && management.reviews && management.reviews.length) {
+      host.appendChild(el('section', { class: 'card' }, UI.cardHeader('Recorded opportunity review'),
+        table(['Benchmark', 'Start', 'End', 'Result'], management.reviews.map(function (review) {
+          return el('tr', {}, el('td', {}, review.benchmarkKind),
+            el('td', {}, review.benchmarkStartCents == null ? '—' : fmtMoney(review.benchmarkStartCents)),
+            el('td', {}, review.benchmarkEndCents == null ? '—' : fmtMoney(review.benchmarkEndCents)),
+            el('td', {}, review.realizedCents == null ? '—' : pnlSpan(review.realizedCents)));
+        }))));
+    }
+    renderFrozenPlanDecision(host, plan, decision, true);
+  }
+
+  async function planManageStage(root, plan, stage) {
+    var content = planOwnedStage(root, plan, stage);
+    var data;
+    try { data = await PlanStore.latestManagement(plan.id, true); }
+    catch (e) {
+      content.appendChild(alertBox('danger', 'Manage & Review could not load', [e.message]));
+      return;
+    }
+    var decision = data.decision;
+    if (!decision) {
+      content.appendChild(UI.emptyState('No decision has been frozen',
+        'Manage & Review unlocks after this Plan records Trade or Cash.', 'Open Decide', function () {
+          PlanStore.focus(plan, 'DECIDE');
+        }));
+      return;
+    }
+    if (decision.action === 'CASH') {
+      planCashReview(content, plan, decision, data.management);
+      planManagementTimeline(content, data.management, false);
+      return;
+    }
+    if (!data.trade) {
+      content.appendChild(alertBox('danger', 'The linked position is unavailable', [
+        'The decision is preserved, but its trade record could not be loaded. No management action was attempted.'
+      ]));
+      renderFrozenPlanDecision(content, plan, decision, true);
+      return;
+    }
+    content.appendChild(el('section', { class: 'card card-slim plan-frozen-expectation' },
+      el('div', {}, el('b', {}, 'Frozen at Decide'), el('p', { class: 'muted' },
+        'POP ' + (decision.pop == null ? '—' : fmtPct(decision.pop)) + ' · market EV '
+          + (decision.evMarketCents == null ? '—' : fmtMoney(decision.evMarketCents, { plus: true }))
+          + ' · ' + String(decision.economicVerdict || 'unavailable').replaceAll('_', ' ').toLowerCase())),
+      el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+        var box = document.getElementById('plan-frozen-decision-detail');
+        box.hidden = !box.hidden;
+      } }, 'Inspect decision')));
+    var frozen = el('div', { id: 'plan-frozen-decision-detail', hidden: '' });
+    renderFrozenPlanDecision(frozen, plan, decision, true); content.appendChild(frozen);
+    await tradeDetail(content, [], { plan: plan, tradeId: decision.tradeId, data: data.trade });
+    planManagementTimeline(content, data.management);
+  }
+
   async function planWorkspace(root, params) {
     var id = params[0] || '';
     var rawStage = (params[1] || 'understand').split('?')[0];
@@ -3226,6 +3337,8 @@
       await planOutcomesStage(root, plan, stage);
     } else if (stage.key === 'DECIDE') {
       await planDecideStage(root, plan, stage);
+    } else if (stage.key === 'MANAGE_REVIEW') {
+      await planManageStage(root, plan, stage);
     } else transitionalPlanStage(root, plan, stage);
   }
 
@@ -3700,7 +3813,9 @@
   async function portfolio(root, params) {
     // One money home: Positions (holdings + trades) | Activity (the ledger) | Account
     // (starting cash, reset).
-    var section = params[0] === 'activity' ? 'activity' : params[0] === 'account' ? 'account' : params[0] === 'record' ? 'record' : 'positions';
+    var section = params[0] === 'positions' || params[0] === 'active' || params[0] === 'closed' ? 'positions'
+      : params[0] === 'activity' ? 'activity' : params[0] === 'account' ? 'account'
+        : params[0] === 'record' ? 'record' : 'plans';
     var tab = params[0] === 'closed' ? 'closed' : 'active';
     var page = parseInt(params[1] || '0', 10);
     root.appendChild(el('h1', {}, 'Portfolio'));
@@ -3736,14 +3851,54 @@
       statsRow.appendChild(stat('Started with', fmtMoney(acct.startingCashCents)));
     }
     root.appendChild(el('div', { class: 'tabs' },
+      el('button', { class: section === 'plans' ? 'active' : '', id: 'pf-sec-plans',
+        onclick: function () { App.navigate('#/portfolio'); } }, 'Plans'),
       el('button', { class: section === 'positions' ? 'active' : '', id: 'pf-sec-positions',
-        onclick: function () { App.navigate('#/portfolio'); } }, 'Positions'),
+        onclick: function () { App.navigate('#/portfolio/positions'); } }, 'Positions'),
       el('button', { class: section === 'activity' ? 'active' : '', id: 'pf-sec-activity',
         onclick: function () { App.navigate('#/portfolio/activity'); } }, 'Activity'),
       el('button', { class: section === 'record' ? 'active' : '', id: 'pf-sec-record',
         onclick: function () { App.navigate('#/portfolio/record'); } }, 'Your record'),
       el('button', { class: section === 'account' ? 'active' : '', id: 'pf-sec-account',
         onclick: function () { App.navigate('#/portfolio/account'); } }, 'Account')));
+
+    var planBook = null;
+    try { planBook = await API.getFresh('/api/plans/portfolio'); }
+    catch (e) { if (section === 'plans') root.appendChild(alertBox('warn', 'Plan book unavailable', [e.message])); }
+
+    if (section === 'plans') {
+      var planRows = planBook && planBook.plans || [];
+      if (!planRows.length) {
+        root.appendChild(UI.emptyState('No Plans in this market',
+          'Research a symbol or run the universe Scout to open a durable plan.', 'Open Research', function () {
+            App.navigate('#/research');
+          }));
+        return;
+      }
+      var planGrid = el('div', { class: 'plan-book-grid', id: 'portfolio-plan-book' });
+      planRows.forEach(function (row) {
+        var plan = row.plan, decision = row.decision || {}, mark = row.mark;
+        var action = decision.action === 'CASH' ? 'Cash decision'
+          : row.tradeId ? 'Position open' : plan.status === 'CLOSED' ? 'Reviewed' : 'Working plan';
+        var card = el('article', { class: 'card plan-book-card' },
+          el('div', { class: 'plan-book-head' },
+            el('div', {}, el('div', { class: 'eyebrow' }, planIntentLabel(plan.intent)),
+              el('h3', {}, plan.symbol), el('p', { class: 'muted' }, plan.title)),
+            el('span', { class: 'badge ' + (row.tradeId ? 'badge-ok' : decision.action === 'CASH' ? 'badge-caution' : 'badge-dim') }, action)),
+          el('div', { class: 'chip-row' },
+            chip('Stage', String(plan.activeStage).replaceAll('_', ' ').toLowerCase()),
+            decision.economicVerdict ? chip('Decision', String(decision.economicVerdict).toLowerCase()) : null,
+            mark && mark.decisionUnrealizedCents != null ? chip('Now', pnlSpan(mark.decisionUnrealizedCents)) : null,
+            decision.pop != null ? chip('POP at decision', fmtPct(decision.pop)) : null),
+          el('div', { class: 'btn-row' },
+            el('button', { type: 'button', class: 'btn', onclick: function () {
+              PlanStore.focus(plan, plan.activeStage).catch(function (e) { UI.toast(e.message, 'error'); });
+            } }, row.tradeId ? 'Manage Plan' : plan.status === 'DECIDED_CASH' || plan.status === 'CLOSED' ? 'Review Plan' : 'Resume Plan')));
+        planGrid.appendChild(card);
+      });
+      root.appendChild(planGrid);
+      return;
+    }
 
     if (section === 'record') {
       // The learning loop, closed: what the model PREDICTED vs what actually happened to YOUR
@@ -4113,9 +4268,19 @@
         : UI.emptyState('Nothing closed yet', 'Closed, settled, and voided trades land here.'));
       return;
     }
+    var linkedPlans = {};
+    ((planBook && planBook.plans) || []).forEach(function (row) {
+      if (row.tradeId) linkedPlans[row.tradeId] = row.plan;
+    });
     var rows = data.trades.map(function (t) {
       return pressable(el('tr', {
-        class: 'clickable', onclick: function () { App.navigate('#/trade/' + t.id); }
+        class: 'clickable', onclick: async function () {
+          var plan = linkedPlans[t.id];
+          if (plan) {
+            try { await PlanStore.focus(plan, 'MANAGE_REVIEW'); }
+            catch (e) { UI.toast(e.message, 'error'); }
+          } else { App.state.portfolioTradeId = t.id; await App.render(); }
+        }
       },
         el('td', {}, el('b', {}, t.symbol)),
         el('td', {}, prettyStrategy(t.strategy),
@@ -4137,6 +4302,11 @@
       tab === 'active'
         ? ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Theor. max loss', 'Now', 'Opened', 'Status']
         : ['Symbol', 'Strategy', 'Qty', 'Entry credit/debit', 'Theor. max loss', 'Decision P/L', 'Status'], rows));
+    if (App.state.portfolioTradeId && data.trades.some(function (trade) { return trade.id === App.state.portfolioTradeId; })) {
+      var detailHost = el('section', { class: 'portfolio-inline-trade', id: 'portfolio-inline-trade' });
+      root.appendChild(detailHost);
+      await tradeDetail(detailHost, [App.state.portfolioTradeId], { inline: true });
+    }
     // Inside a simulated session the book visibly MOVES: each world tick (already server-throttled)
     // refreshes the active rows' Now P/L in place — light trades-list fetch, no re-render.
     if (tab === 'active' && App.onEvent && App.state.world && App.state.world !== 'observed') {
@@ -4168,9 +4338,11 @@
 
   // ---------- 6. Trade detail + 7. confirm flows ----------
 
-  async function tradeDetail(root, params) {
-    var id = params[0];
-    var d = await API.get('/api/trades/' + id);
+  async function tradeDetail(root, params, options) {
+    options = options || {};
+    var id = options.tradeId || params[0];
+    var d = options.data || await API.get('/api/trades/' + id);
+    var managedPlan = options.plan || null;
     var t = d.trade;
     var active = t.status === 'ACTIVE';
     var optionPnl = active
@@ -4193,7 +4365,7 @@
         pnl !== null && pnl !== undefined
           ? el('span', { class: 'px ' + (pnl >= 0 ? 'gain' : 'loss') }, fmtMoney(pnl, { plus: true }))
           : null,
-        el('button', { class: 'btn btn-sm btn-secondary', style: 'margin-left:8px',
+        managedPlan ? null : el('button', { class: 'btn btn-sm btn-secondary', style: 'margin-left:8px',
           title: 'Full analysis for ' + t.symbol + ' \u2014 the trade itself stays exactly as placed',
           onclick: function () { App.navigate('#/plan/new?symbol=' + encodeURIComponent(t.symbol)); } }, 'Start plan')),
       el('div', { class: 'muted' },
@@ -4275,8 +4447,9 @@
               var btn = ev.currentTarget;
               btn.disabled = true;
               try {
-                await API.post('/api/trades/' + id + '/refresh');
-                App.render();
+                if (managedPlan) await PlanStore.manage(managedPlan, 'refresh', {});
+                else await API.post('/api/trades/' + id + '/refresh');
+                await App.render();
               } catch (e) {
                 btn.disabled = false;
                 var old = document.getElementById('refresh-error');
@@ -4299,8 +4472,13 @@
                   explain('Unwinding = doing the opposite of every leg at current prices.')),
                 'Close position',
                 async function () {
-                  await API.post('/api/trades/' + id + '/unwind', { confirm: true });
-                  App.navigate('#/trade/' + id);
+                  if (managedPlan) {
+                    var out = await PlanStore.manage(managedPlan, 'unwind', { confirm: true });
+                    await PlanStore.focus(out.plan, 'MANAGE_REVIEW');
+                  } else {
+                    await API.post('/api/trades/' + id + '/unwind', { confirm: true });
+                    App.render();
+                  }
                 });
             }
           }, 'Unwind…', el('span', { class: 'btn-sub' }, 'close now at market')),
@@ -4310,8 +4488,13 @@
                 el('p', {}, 'Only possible after all legs expired. Cash settles at intrinsic value.'),
                 'Settle',
                 async function () {
-                  await API.post('/api/trades/' + id + '/settle', { confirm: true });
-                  App.navigate('#/trade/' + id);
+                  if (managedPlan) {
+                    var out = await PlanStore.manage(managedPlan, 'settle', { confirm: true });
+                    await PlanStore.focus(out.plan, 'MANAGE_REVIEW');
+                  } else {
+                    await API.post('/api/trades/' + id + '/settle', { confirm: true });
+                    App.render();
+                  }
                 });
             }
           }, 'Settle…', el('span', { class: 'btn-sub' }, 'after expiration')),
@@ -4323,25 +4506,33 @@
                   explain('Management plans often say "roll at 21 DTE" — this is that action, honestly priced at current quotes.')),
                 'Close & rebuild',
                 async function () {
-                  await API.post('/api/trades/' + id + '/unwind', { confirm: true });
-                  var rolled = (t.legs || []).map(function (l) {
-                    var leg = { action: l.action, type: l.stock ? 'STOCK' : l.type, strike: String(l.strike || ''), ratio: l.ratio || 1 };
-                    if (!l.stock && l.expiration) {
-                      var d2 = new Date(l.expiration); d2.setDate(d2.getDate() + 28);
-                      leg.expiration = d2.toISOString().slice(0, 10);
-                    }
-                    return leg;
-                  });
-                  var seed = { symbol: t.symbol, qty: t.qty, goal: t.intent || 'DIRECTIONAL', templateKey: null,
-                    step: 4, legIdx: 0, legs: rolled, excluded: {} };
-                  var plan = await startPlan({ symbol: t.symbol, intent: t.intent || 'DIRECTIONAL',
-                    horizon: 'month', thesis: 'neutral' }, 'STRATEGY');
-                  if (plan) {
-                    var planUi = PlanStore.ui(plan.id);
+                  if (managedPlan) {
+                    var out = await PlanStore.manage(managedPlan, 'roll', { confirm: true });
+                    var saved = await PlanStore.saveCustom(out.plan, out.rolledPosition);
+                    var planUi = PlanStore.ui(saved.plan.id);
                     planUi.strategyView = 'builder';
-                    planUi.buildState = planUi.buildState || {};
-                    planUi.buildState.builderForm = seed;
-                    App.render();
+                    await PlanStore.focus(saved.plan, 'STRATEGY');
+                  } else {
+                    await API.post('/api/trades/' + id + '/unwind', { confirm: true });
+                    var rolled = (t.legs || []).map(function (l) {
+                      var leg = { action: l.action, type: l.stock ? 'STOCK' : l.type, strike: String(l.strike || ''), ratio: l.ratio || 1 };
+                      if (!l.stock && l.expiration) {
+                        var d2 = new Date(l.expiration); d2.setDate(d2.getDate() + 28);
+                        leg.expiration = d2.toISOString().slice(0, 10);
+                      }
+                      return leg;
+                    });
+                    var seed = { symbol: t.symbol, qty: t.qty, goal: t.intent || 'DIRECTIONAL', templateKey: null,
+                      step: 4, legIdx: 0, legs: rolled, excluded: {} };
+                    var plan = await startPlan({ symbol: t.symbol, intent: t.intent || 'DIRECTIONAL',
+                      horizon: 'month', thesis: 'neutral' }, 'STRATEGY');
+                    if (plan) {
+                      var planUi = PlanStore.ui(plan.id);
+                      planUi.strategyView = 'builder';
+                      planUi.buildState = planUi.buildState || {};
+                      planUi.buildState.builderForm = seed;
+                      App.render();
+                    }
                   }
                 });
             }
@@ -4356,8 +4547,13 @@
                   explain('Everything stays visible in the ledger and audit log — nothing is hidden.')),
                 'Void trade',
                 async function () {
-                  await API.del('/api/trades/' + id + '?confirm=true');
-                  App.navigate('#/portfolio');
+                  if (managedPlan) {
+                    var out = await PlanStore.manage(managedPlan, 'void', { confirm: true });
+                    await PlanStore.focus(out.plan, 'MANAGE_REVIEW');
+                  } else {
+                    await API.del('/api/trades/' + id + '?confirm=true');
+                    App.render();
+                  }
                 }, true);
             }
           }, 'Void…', el('span', { class: 'btn-sub' }, 'erase — practice only')))));

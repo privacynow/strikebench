@@ -30,7 +30,8 @@ public final class PlanDecisionService {
 
     public record Input(String userId, Plan.View plan, long expectedVersion, String candidateId,
                         Account account, TradePreview preview, EconomicAssessment economics,
-                        AccountRiskContext riskContext, List<String> acknowledgedRisks, String note) {}
+                        AccountRiskContext riskContext, Integer requestedQty,
+                        List<String> acknowledgedRisks, String note) {}
 
     public record PreparedTradeDecision(String id, TradeService.TransactionHook hook) {}
 
@@ -64,9 +65,10 @@ public final class PlanDecisionService {
                             "d.buying_power_cents,d.risk_capital_cents,d.max_loss_cents,d.max_profit_cents,d.pop," +
                             "d.p_max_profit,d.p_max_loss,d.ev_market_cents,d.ev_histvol_cents,d.cvar_cents," +
                             "d.economic_verdict,d.evidence_provenance,d.model_version,d.study_key,d.review_horizon_days," +
-                            "d.created_at::text created_at,l.trade_id FROM plan_decision d LEFT JOIN plan_link l " +
-                            "ON l.plan_id=d.plan_id AND l.trade_id IS NOT NULL AND l.role='ENTRY' " +
-                            "WHERE d.plan_id=? ORDER BY d.created_at DESC LIMIT 1",
+                            "d.created_at::text created_at,(SELECT l.trade_id FROM plan_link l WHERE l.decision_id=d.id " +
+                            "AND l.trade_id IS NOT NULL AND l.role IN ('ENTRY','ROLL','ADJUST') " +
+                            "ORDER BY l.created_at LIMIT 1) trade_id FROM plan_decision d " +
+                            "WHERE d.plan_id=? ORDER BY d.decision_seq DESC LIMIT 1",
                     row -> {
                         ObjectNode node = Json.MAPPER.createObjectNode();
                         put(node, "id", row.str("id")); put(node, "contextRev", row.intv("context_rev"));
@@ -126,26 +128,26 @@ public final class PlanDecisionService {
         if (current.version() != input.expectedVersion() || current.contextRev() != input.plan().context().rev()) {
             throw new IllegalStateException("This Plan changed while the decision was being recorded.");
         }
-        if (Db.queryOn(connection, "SELECT id FROM plan_decision WHERE plan_id=? LIMIT 1", row -> row.str("id"),
-                input.plan().id()).size() > 0) {
-            throw new IllegalStateException("This Plan already has a frozen decision.");
-        }
+        if (!"ACTIVE".equals(current.status())) throw new IllegalStateException("This Plan is not ready for another decision.");
         TradePreview preview = input.preview();
         EconomicAssessment economics = input.economics();
         Account account = input.account();
         AccountRiskContext risk = input.riskContext();
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        long decisionSeq = Db.queryOn(connection,
+                "SELECT COALESCE(MAX(decision_seq),0)+1 seq FROM plan_decision WHERE plan_id=?",
+                row -> row.lng("seq"), input.plan().id()).getFirst();
         Number pMaxProfit = nestedNumber(preview.analytics(), "probabilityMap", "pMaxProfit");
         Number pMaxLoss = nestedNumber(preview.analytics(), "probabilityMap", "pMaxLoss");
         Number cvar = nestedNumber(preview.analytics(), "probabilityMap", "cvar95Cents");
         Long actualEntry = trade == null ? preview.entryNetPremiumCents() : trade.entryNetPremiumCents();
         Integer qty = "TRADE".equals(action) ? (trade == null ? null : trade.qty()) : null;
-        Db.execOn(connection, "INSERT INTO plan_decision(id,plan_id,context_rev,candidate_id,account_id,action,qty," +
+        Db.execOn(connection, "INSERT INTO plan_decision(id,plan_id,decision_seq,context_rev,candidate_id,account_id,action,qty," +
                         "proposed_net_cents,quote_as_of,account_nlv_cents,buying_power_cents,risk_capital_cents," +
                         "max_loss_cents,max_profit_cents,pop,p_max_profit,p_max_loss,ev_market_cents,ev_histvol_cents," +
                         "cvar_cents,economic_verdict,evidence_provenance,model_version,study_key,review_horizon_days,created_at) " +
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                id, input.plan().id(), input.plan().context().rev(), input.candidateId(), account.id(), action, qty,
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                id, input.plan().id(), decisionSeq, input.plan().context().rev(), input.candidateId(), account.id(), action, qty,
                 actualEntry, now, null, account.buyingPowerCents(), risk == null ? null : risk.riskCapitalCents(),
                 trade == null ? preview.maxLossCents() : trade.maxLossCents(),
                 trade == null ? preview.maxProfitCents() : trade.maxProfitCents(),
@@ -163,12 +165,16 @@ public final class PlanDecisionService {
         metric(connection, id, "reserveCents", preview.reserveCents(), true);
         metric(connection, id, "buyingPowerAfterCents", preview.buyingPowerAfterCents(), true);
         metric(connection, id, "underlyingCents", preview.underlyingCents(), true);
+        metricNumber(connection, id, "decisionQty", input.requestedQty() == null ? 1 : input.requestedQty());
+        Number rate = nestedNumber(preview.analytics(), "rate", "annual");
+        if (rate != null) metricNumber(connection, id, "riskFreeRateAnnual", rate);
         metric(connection, id, "economicPlacement", economics.placement(), false);
         metric(connection, id, "economicSummary", economics.summary(), false);
         if (input.note() != null && !input.note().isBlank()) metric(connection, id, "decisionNote", input.note().trim(), false);
         if (trade != null) {
-            Db.execOn(connection, "INSERT INTO plan_link(id,plan_id,role,trade_id,created_at) VALUES(?,?,?,?,?)",
-                    Ids.newId("plink"), input.plan().id(), "ENTRY", trade.id(), now);
+            String role = nextTradeRole(connection, input.plan().id());
+            Db.execOn(connection, "INSERT INTO plan_link(id,plan_id,decision_id,role,trade_id,created_at) VALUES(?,?,?,?,?,?)",
+                    Ids.newId("plink"), input.plan().id(), id, role, trade.id(), now);
         }
         Db.execOn(connection, "UPDATE plans SET status=?,active_stage='MANAGE_REVIEW',version=version+1,updated_at=? WHERE id=?",
                 trade == null ? "DECIDED_CASH" : "POSITION_OPEN", now, input.plan().id());
@@ -186,9 +192,9 @@ public final class PlanDecisionService {
     }
 
     private static PlanRow requireOwned(Connection connection, String planId, String userId, boolean lock) throws SQLException {
-        List<PlanRow> rows = Db.queryOn(connection, "SELECT version,active_context_rev,user_id FROM plans WHERE id=?" +
+        List<PlanRow> rows = Db.queryOn(connection, "SELECT version,active_context_rev,user_id,status FROM plans WHERE id=?" +
                         (lock ? " FOR UPDATE" : ""), row -> new PlanRow(row.lng("version"),
-                        row.intv("active_context_rev"), row.str("user_id")), planId);
+                        row.intv("active_context_rev"), row.str("user_id"), row.str("status")), planId);
         if (rows.isEmpty()) throw new NoSuchElementException("no such Plan: " + planId);
         PlanRow row = rows.getFirst();
         if (!(userId == null ? row.userId() == null : userId.equals(row.userId()))) {
@@ -201,6 +207,22 @@ public final class PlanDecisionService {
         if (value == null) return;
         if (cents) Db.execOn(c, "INSERT INTO plan_decision_metric(decision_id,metric_key,value_cents) VALUES(?,?,?)", id, key, value);
         else Db.execOn(c, "INSERT INTO plan_decision_metric(decision_id,metric_key,value_text) VALUES(?,?,?)", id, key, String.valueOf(value));
+    }
+
+    private static void metricNumber(Connection c, String id, String key, Number value) throws SQLException {
+        if (value != null) Db.execOn(c,
+                "INSERT INTO plan_decision_metric(decision_id,metric_key,value_number) VALUES(?,?,?)",
+                id, key, value.doubleValue());
+    }
+
+    private static String nextTradeRole(Connection c, String planId) throws SQLException {
+        boolean prior = !Db.queryOn(c, "SELECT 1 ok FROM plan_link WHERE plan_id=? AND role IN ('ENTRY','ROLL','ADJUST') LIMIT 1",
+                row -> row.intv("ok"), planId).isEmpty();
+        if (!prior) return "ENTRY";
+        String action = Db.queryOn(c, "SELECT kind FROM plan_management_action WHERE plan_id=? " +
+                        "ORDER BY action_at DESC,CASE WHEN kind='MARK' THEN 1 ELSE 0 END,created_at DESC LIMIT 1",
+                row -> row.str("kind"), planId).stream().findFirst().orElse("ADJUST");
+        return "ROLL".equals(action) ? "ROLL" : "ADJUST";
     }
 
     private static Number nestedNumber(Map<String, Object> root, String parent, String child) {
@@ -227,6 +249,6 @@ public final class PlanDecisionService {
         else node.set(key, Json.MAPPER.valueToTree(value));
     }
 
-    private record PlanRow(long version, int contextRev, String userId) {}
+    private record PlanRow(long version, int contextRev, String userId, String status) {}
     private record Metric(String key, Double number, Long cents, String text) {}
 }

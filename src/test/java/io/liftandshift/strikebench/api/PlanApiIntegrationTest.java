@@ -309,6 +309,28 @@ class PlanApiIntegrationTest {
         assertThat(opened.at("/decision/proposedNetCents").asLong())
                 .isEqualTo(opened.at("/trade/entryNetPremiumCents").asLong());
 
+        long openVersion = opened.at("/plan/version").asLong();
+        JsonNode marked = json(post("/api/plans/" + tradePlanId + "/manage/refresh",
+                "{\"expectedVersion\":" + openVersion + "}"));
+        assertThat(marked.at("/management/actions/0/kind").asText()).isEqualTo("MARK");
+        JsonNode closed = json(post("/api/plans/" + tradePlanId + "/manage/roll",
+                "{\"expectedVersion\":" + openVersion + ",\"confirm\":true}"));
+        assertThat(closed.at("/plan/status").asText()).isEqualTo("ACTIVE");
+        assertThat(closed.at("/plan/activeStage").asText()).isEqualTo("STRATEGY");
+        assertThat(closed.at("/management/actions/0/kind").asText()).isEqualTo("ROLL");
+        assertThat(closed.at("/management/links").toString()).contains("ENTRY").contains("ROLL");
+        assertThat(closed.at("/management/reviews/0/category").asText()).isEqualTo("TRADE_DECISION");
+        assertThat(closed.at("/management/reviews/0/benchmarkKind").asText()).isEqualTo("PLAN_POSITION");
+        var rollPackage = Json.MAPPER.createObjectNode();
+        rollPackage.put("expectedVersion", closed.at("/plan/version").asLong());
+        rollPackage.set("position", closed.get("rolledPosition"));
+        JsonNode savedRoll = json(post("/api/plans/" + tradePlanId + "/strategy/custom", rollPackage.toString()));
+        JsonNode secondDecision = json(post("/api/plans/" + tradePlanId + "/decision/cash",
+                "{\"expectedVersion\":" + savedRoll.at("/plan/version").asLong() + ",\"qty\":1," +
+                        "\"note\":\"Skipped the replacement after closing the first cycle\"}"));
+        assertThat(secondDecision.at("/plan/status").asText()).isEqualTo("DECIDED_CASH");
+        assertThat(secondDecision.at("/decision/action").asText()).isEqualTo("CASH");
+
         JsonNode cashPlan = json(post("/api/plans", """
                 {"clientRequestId":"decision-cash-plan","symbol":"QQQ","intent":"INCOME",
                  "thesis":"neutral","horizonDays":30,"riskMode":"conservative"}
@@ -327,6 +349,8 @@ class PlanApiIntegrationTest {
         assertThat(cash.at("/decision/tradeId").isMissingNode()).isTrue();
         assertThat(cash.at("/decision/metrics/decisionNote").asText())
                 .isEqualTo("Costs outweighed the modeled edge");
+        assertThat(cash.at("/decision/metrics/decisionQty").asDouble()).isEqualTo(1.0);
+        assertThat(cash.at("/decision/metrics/riskFreeRateAnnual").isNumber()).isTrue();
     }
 
     private static HttpResponse<String> get(String path) throws Exception {

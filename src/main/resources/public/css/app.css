@@ -2037,11 +2037,25 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   border-radius: var(--radius-sm); background: var(--surface); }
 .plan-decision-actions p { margin: 4px 0 0; }
 .plan-decision-facts, .plan-decision-math { margin: 10px 0; }
+.plan-frozen-expectation { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.plan-frozen-expectation p { margin: 3px 0 0; }
+.plan-management-timeline { margin-top: 2px; }
+.plan-timeline-list { display: grid; gap: 0; }
+.plan-timeline-list .status-item { min-width: 0; }
+.plan-cash-benchmarks { margin: 4px 0 12px; }
+.plan-book-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.plan-book-card { display: grid; align-content: start; gap: 10px; }
+.plan-book-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.plan-book-head h3 { margin: 2px 0 0; font-size: 22px; }
+.plan-book-head p { margin: 2px 0 0; }
+.portfolio-inline-trade { display: grid; gap: 12px; margin-top: 14px; scroll-margin-top: 110px; }
 .plan-outcome-action-status .alert { margin-top: 10px; }
 @media (max-width: 640px) {
   .plan-decision-form { grid-template-columns: minmax(0, 1fr); }
   .plan-decision-actions { align-items: stretch; flex-direction: column; }
   .plan-decision-actions .btn-row { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; }
+  .plan-frozen-expectation { align-items: stretch; flex-direction: column; }
+  .plan-book-grid { grid-template-columns: minmax(0, 1fr); }
 }
 .plan-market-outcome { display: grid; gap: 10px; }
 .research-plan-scout { margin-top: 18px; }
