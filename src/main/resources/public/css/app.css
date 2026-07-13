@@ -596,10 +596,20 @@ body.lvl-expert .not-expert { display: none !important; }
 .chart.chart-down .line { stroke: var(--loss); }
 .chart.chart-down .area-line { fill: var(--risk-danger-bg); }
 
-/* "Coming up" events: chips are the unit; links stay chip-shaped */
+/* Dated events: compact chips in strips, a readable timeline in full Research. */
 .events-strip { margin: 2px 0 10px; }
 #events-card .chip-row a.chip, .events-strip a.chip { text-decoration: none; }
 #events-card .chip-row a.chip:hover b, .events-strip a.chip:hover b { color: var(--accent); }
+.event-timeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.event-timeline-item { position: relative; display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 8px;
+  min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.event-marker { width: 10px; height: 10px; margin-top: 4px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.event-near .event-marker, .event-event .event-marker { background: var(--risk-caution); }
+.event-filing .event-marker { background: var(--text-dim); }
+.event-copy { min-width: 0; display: grid; gap: 2px; }
+.event-copy a, .event-copy b { color: var(--text); line-height: 1.3; overflow-wrap: anywhere; }
+.event-simulation-note { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius-sm); }
 
 /* ---- Sector rail: THE sector affordance everywhere (home / research / trade) ---- */
 .sector-rail-wrap { display: flex; align-items: center; gap: 4px; min-width: 0; width: 100%; max-width: 100%; overflow: hidden; }
@@ -1801,6 +1811,8 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-dim); font-weight: 700; }
 .context-extras-action:hover { border-color: var(--border-strong); color: var(--text); text-decoration: none; }
 .research-recents { display: inline-flex; align-items: center; gap: 7px; min-width: 0; flex-wrap: wrap; }
+.sector-history-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 10px; }
+.sector-history-notice p { margin: 3px 0 0; }
 .context-extras-label { display: inline-flex; align-items: center; min-height: 30px; color: var(--muted);
   font-size: 11.5px; font-weight: 750; text-transform: uppercase; letter-spacing: 0; }
 .research-local-nav { margin: 12px 0 14px; border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -2025,6 +2037,9 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-stage-label { min-width: 0; line-height: 1.2; }
 .plan-context-editor { margin: 0 0 12px; }
 .plan-context-fields { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.plan-fork-intents { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.plan-existing-match { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 12px; }
+.plan-existing-match p { margin: 3px 0 0; }
 .plan-stage-frame { display: grid; gap: 10px; }
 .plan-stage-heading h2 { margin: 3px 0 5px; }
 .plan-stage-carry { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 8px; margin-top: 9px;
@@ -2114,6 +2129,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-stage-transition p { margin: 0; }
 .plan-intent-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .plan-start-card { margin-top: 0; }
+.research-plan-start { margin-top: 12px; border-color: var(--accent); }
 
 @media (max-width: 760px) {
   .plan-bar-inner { padding: 5px 10px; }
@@ -2141,6 +2157,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .plan-scout-results { grid-template-columns: minmax(0, 1fr); }
   .universe-scout-grid { grid-template-columns: minmax(0, 1fr); }
   .plan-stage-transition { align-items: flex-start; flex-direction: column; }
+  .sector-history-notice, .plan-existing-match { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 420px) {
   .plan-context-fields { grid-template-columns: minmax(0, 1fr); }

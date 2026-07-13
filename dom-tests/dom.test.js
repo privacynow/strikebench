@@ -204,9 +204,14 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
 test('plan foundation promotes once, survives reload, versions assumptions, and closes only the chip', async () => {
   await go('#/plan/new?symbol=AAPL');
   await page.waitForSelector('#plan-start');
-  assert.equal(await page.locator('.plan-rail li').count(), 6, 'the full six-stage journey is visible');
-  assert.equal(await page.locator('.plan-rail li').last().locator('button').isDisabled(), true,
-    'Manage & Review is gated before a decision');
+  await page.waitForSelector('#research-hero .quote-hero');
+  assert.equal(await page.locator('.plan-rail').count(), 0,
+    'opening a stock is full Research; no Plan journey exists before the user chooses a goal');
+  assert.ok(await page.locator('#events-card .event-timeline').count(), 'Research shows dated events as a timeline');
+  assert.equal(await page.locator('.market-facts .info-trigger').count(), 4,
+    'technical market facts carry visible explanations');
+  assert.equal(await page.locator('#research-hero .xp.open').count(), 1,
+    'desktop Research opens useful market detail instead of hiding it');
   await page.locator('#plan-start .choice-card').filter({ hasText: 'Earn income' }).click();
   await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/understand$/.test(location.hash));
   await page.waitForSelector('#plan-header, #route-error');
@@ -217,6 +222,9 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + planHash.split('/')[2] + '"]').count(), 1,
     'the promoted durable plan appears exactly once even when other plans are open');
   await page.waitForSelector('#research-symbol');
+  assert.equal(await page.locator('.plan-rail li').count(), 6, 'the full six-stage journey appears after Plan creation');
+  assert.equal(await page.locator('.plan-rail li').last().locator('button').isDisabled(), true,
+    'Manage & Review is gated before a decision');
   await page.waitForSelector('#history-card');
   assert.equal(await page.locator('#research-workspace-tabs').count(), 0,
     'the old Research-local workspace is gone; the Plan rail owns navigation');
@@ -224,6 +232,8 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   assert.ok(await page.locator('#news-overview-card').count(), 'Understand owns source-backed news');
 
   await page.click('#plan-edit-context');
+  assert.match(await page.textContent('#plan-context-editor'), /Goal:.*Earn income.*linked Plan/s,
+    'goal identity is visible and has an explicit fork path');
   await page.fill('#plan-horizon-days', '45');
   await page.selectOption('#plan-thesis', 'bearish');
   await page.click('#plan-save-context');
@@ -2865,9 +2875,10 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   });
   assert.deepEqual(cardA11y, { tag: 'A', href: '#/plan/new?symbol=AAPL', tab: 0, exp: null },
     'card is a native link into the provisional Plan without disclosure semantics');
-  // Pointer movement/arrow keys explore; clicking anywhere starts the Plan journey.
+  // Pointer movement/arrow keys explore; clicking anywhere opens full analysis before a Plan exists.
   await page.locator('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg').click();
   await page.waitForSelector('#plan-start', { timeout: 15000 });
+  await page.waitForSelector('#research-hero .quote-hero', { timeout: 15000 });
   assert.equal(await page.evaluate(() => window.location.hash), '#/plan/new?symbol=AAPL',
     'the chart area does not create a dead middle inside the destination card');
   await page.goBack();
@@ -2877,8 +2888,8 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.locator('#sector-grid .sym-card[data-sym="AAPL"]').click();
   await page.waitForSelector('#plan-start', { timeout: 15000 });
   await page.click('#plan-evidence-first');
-  await page.waitForSelector('.quote-hero', { timeout: 15000 });
-  assert.match(await page.evaluate(() => window.location.hash), /^#\/plan\/plan_[^/]+\/understand$/);
+  await page.waitForSelector('#test-your-view', { timeout: 15000 });
+  assert.match(await page.evaluate(() => window.location.hash), /^#\/plan\/plan_[^/]+\/evidence$/);
   assert.match(await page.textContent('#plan-header'), /AAPL/,
     'the immutable Plan header owns symbol identity without a duplicate change-stock control');
   await openResearchTab('view');

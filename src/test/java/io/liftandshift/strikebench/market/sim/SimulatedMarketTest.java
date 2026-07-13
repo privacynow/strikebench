@@ -47,6 +47,8 @@ class SimulatedMarketTest {
         assertThat(q.freshness()).isEqualTo(Freshness.SIMULATED);
         assertThat(q.source()).isEqualTo("simulated");
         assertThat(q.bid()).isLessThan(q.ask()); // never crossed
+        assertThat(q.dayHigh()).isNotNull().isGreaterThanOrEqualTo(q.last());
+        assertThat(q.dayLow()).isNotNull().isLessThanOrEqualTo(q.last());
 
         LocalDate exp = w.expirations().getFirst();
         OptionChain chain = w.chain("ACME", exp).orElseThrow();

@@ -108,6 +108,17 @@
     return libraryLoading;
   }
 
+  async function matching(symbol, intent) {
+    symbol = String(symbol || '').trim().toUpperCase();
+    intent = intent == null ? null : String(intent).trim().toUpperCase();
+    var all = await library(true);
+    return all.filter(function (plan) {
+      return plan.open !== false && plan.status !== 'ARCHIVED'
+        && planMarketKey(plan) === currentMarketKey()
+        && plan.symbol === symbol && (plan.intent || null) === intent;
+    });
+  }
+
   async function refresh() {
     await Promise.all([load(true), library(true)]);
     if ((window.location.hash || '#/home').startsWith('#/home') && App.render) await App.render();
@@ -394,7 +405,7 @@
     var match = (window.location.hash || '').match(/^#\/plan\/([^/?]+)/);
     if (match && match[1] !== 'new' && match[1] !== pendingFocusId
         && !items.some(function (p) { return p.id === match[1]; })) {
-      if (UI.toast) UI.toast('This market has a different set of plans');
+      if (UI.toast) UI.toast('Your Plans are preserved, but they belong to another market. Open one from Home to switch markets.');
       window.location.hash = '#/home';
     }
   }
@@ -457,7 +468,7 @@
     latestDecision: latestDecision, previewDecision: previewDecision,
     tradeDecision: tradeDecision, cashDecision: cashDecision,
     latestManagement: latestManagement, manage: manage, reviewCash: reviewCash,
-    marketChanged: marketChanged, renderBar: renderBar, ui: ui,
+    marketChanged: marketChanged, renderBar: renderBar, ui: ui, matching: matching,
     all: function () { return items.slice(); }, allMarkets: function () { return libraryItems.slice(); },
     currentMarketKey: currentMarketKey, marketKey: planMarketKey,
     libraryLoaded: function () { return libraryLoaded; }

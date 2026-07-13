@@ -454,7 +454,7 @@ public final class SimulatedWorld {
         double prev = st.daily.isEmpty() ? st.spot : st.daily.getLast().close().doubleValue();
         return java.util.Optional.of(new Quote(symbol.toUpperCase(Locale.ROOT),
                 cfg.name() + " (simulated)", bd(st.spot), bd(st.spot - spr / 2), bd(st.spot + spr / 2),
-                bd(prev), null, null, 1_000_000L, true, simMillis(), "simulated", Freshness.SIMULATED));
+                bd(prev), bd(st.high), bd(st.low), 1_000_000L, true, simMillis(), "simulated", Freshness.SIMULATED));
     }
 
     /** Listed expirations on the SIM calendar: the sim day's own expiry (if a Friday before the
