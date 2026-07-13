@@ -128,6 +128,48 @@ class PlanApiIntegrationTest {
         assertThat(!afterRevision.has("evidence") || afterRevision.get("evidence").isNull()).isTrue();
     }
 
+    @Test void planEvidenceRestoresOnlyTheActiveAnalysisDataset() throws Exception {
+        json(put("/api/datasets/active", "{\"id\":\"observed\"}"));
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"evidence-dataset-plan-1","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "thesis":"bullish","horizonDays":10,"riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        String study = """
+                {"key":"pullback_rebound","symbol":"AAPL","from":"2023-01-01","to":"2026-07-12",
+                 "params":{"lookback":20,"dropPct":1,"forward":10,"eventSpacing":10,
+                 "minSample":2,"confidencePct":95,"bootstrapSamples":100,
+                 "regime":"ALL","multiplicity":"CATALOG_BONFERRONI","splitHalf":true}}
+                """;
+        JsonNode baseline = json(post("/api/plans/" + id + "/evidence/study", study));
+        assertThat(baseline.get("basis").asText()).isEqualTo("DEMO_HISTORY");
+        assertThat(baseline.path("datasetId").isNull() || baseline.path("datasetId").isMissingNode()).isTrue();
+
+        JsonNode generated = json(post("/api/datasets/generate", """
+                {"symbol":"AAPL","spec":{"model":"GBM","shape":"CHOP","horizonDays":400,
+                 "stepsPerDay":4,"driftAnnual":0.0,"volAnnual":0.25,"jumpsPerYear":0,
+                 "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":424242,"paths":20}}
+                """));
+        String datasetId = generated.get("datasetId").asText();
+        json(put("/api/datasets/active", "{\"id\":\"" + datasetId + "\"}"));
+        JsonNode beforeScenarioRun = json(get("/api/plans/" + id + "/evidence/latest"));
+        assertThat(beforeScenarioRun.path("evidence").isNull() || beforeScenarioRun.path("evidence").isMissingNode())
+                .as("baseline evidence must not appear under a generated analysis label").isTrue();
+
+        JsonNode scenario = json(post("/api/plans/" + id + "/evidence/study", study));
+        assertThat(scenario.get("basis").asText()).isEqualTo("SCENARIO_DATASET");
+        assertThat(scenario.get("datasetId").asText()).isEqualTo(datasetId);
+
+        json(put("/api/datasets/active", "{\"id\":\"observed\"}"));
+        assertThat(json(get("/api/plans/" + id + "/evidence/latest"))
+                .at("/evidence/result/studyKey").asText()).isEqualTo(baseline.at("/result/studyKey").asText());
+        json(put("/api/datasets/active", "{\"id\":\"" + datasetId + "\"}"));
+        assertThat(json(get("/api/plans/" + id + "/evidence/latest"))
+                .at("/evidence/result/studyKey").asText()).isEqualTo(scenario.at("/result/studyKey").asText());
+        json(put("/api/datasets/active", "{\"id\":\"observed\"}"));
+        json(delete("/api/datasets/" + datasetId));
+    }
+
     @Test void finishingASimulatedMarketClosesItsPlanCollectionAtomically() throws Exception {
         JsonNode world = json(post("/api/sim/market", """
                 {"name":"Plan collection terminal","symbols":{"AAPL":1.0},"scenario":"CHOP","speed":26}

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountRiskContext;
@@ -31,7 +32,7 @@ public final class PlanDecisionService {
     public record Input(String userId, Plan.View plan, long expectedVersion, String candidateId,
                         Account account, TradePreview preview, EconomicAssessment economics,
                         AccountRiskContext riskContext, Integer requestedQty,
-                        List<String> acknowledgedRisks, String note) {}
+                        List<String> acknowledgedRisks, String note, AnalysisContext analysis) {}
 
     public record PreparedTradeDecision(String id, TradeService.TransactionHook hook) {}
 
@@ -137,7 +138,7 @@ public final class PlanDecisionService {
         Account account = input.account();
         AccountRiskContext risk = input.riskContext();
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
-        DecisionReferences references = decisionReferences(connection, input.plan(), input.candidateId());
+        DecisionReferences references = decisionReferences(connection, input.plan(), input.candidateId(), input.analysis());
         long decisionSeq = Db.queryOn(connection,
                 "SELECT COALESCE(MAX(decision_seq),0)+1 seq FROM plan_decision WHERE plan_id=?",
                 row -> row.lng("seq"), input.plan().id()).getFirst();
@@ -240,8 +241,10 @@ public final class PlanDecisionService {
     /** Resolve receipt identities from server-owned rows. Client state can choose neither a
      * foreign candidate nor a convenient ensemble after the fact. Prefer the parametric ensemble
      * actually used for this position; fall back to the current structure-less Plan ensemble. */
-    private static DecisionReferences decisionReferences(Connection c, Plan.View plan, String candidateId)
+    private static DecisionReferences decisionReferences(Connection c, Plan.View plan, String candidateId,
+                                                         AnalysisContext analysis)
             throws SQLException {
+        String datasetId = analysis != null && analysis.synthetic() ? analysis.datasetId() : null;
         List<String> recommendations = Db.queryOn(c, "SELECT recommendation_id FROM plan_candidate " +
                         "WHERE id=? AND plan_id=? AND context_rev=? AND underlying_symbol=? " +
                         "AND selected=1 AND state='CURRENT'",
@@ -251,20 +254,29 @@ public final class PlanDecisionService {
         }
         String ensembleId = Db.queryOn(c, "SELECT ensemble_id FROM plan_outcome_run WHERE plan_id=? " +
                         "AND context_rev=? AND candidate_id=? AND state='CURRENT' AND ensemble_id IS NOT NULL " +
+                        "AND dataset_id IS NOT DISTINCT FROM ? " +
                         "ORDER BY CASE WHEN basis='PARAMETRIC' THEN 0 ELSE 1 END,created_at DESC LIMIT 1",
-                row -> row.str("ensemble_id"), plan.id(), plan.context().rev(), candidateId)
+                row -> row.str("ensemble_id"), plan.id(), plan.context().rev(), candidateId, datasetId)
                 .stream().findFirst().orElse(null);
         if (ensembleId == null) {
             ensembleId = Db.queryOn(c, "SELECT pe.id FROM plan_ensemble pe JOIN ensemble_artifact ea " +
                             "ON ea.fingerprint=pe.fingerprint WHERE pe.plan_id=? AND pe.context_rev=? " +
-                            "AND pe.state='CURRENT' ORDER BY CASE WHEN ea.basis='PARAMETRIC' THEN 0 ELSE 1 END," +
+                            "AND pe.dataset_id IS NOT DISTINCT FROM ? AND pe.state='CURRENT' " +
+                            "ORDER BY CASE WHEN ea.basis='PARAMETRIC' THEN 0 ELSE 1 END," +
                             "pe.created_at DESC LIMIT 1",
-                    row -> row.str("id"), plan.id(), plan.context().rev())
+                    row -> row.str("id"), plan.id(), plan.context().rev(), datasetId)
                     .stream().findFirst().orElse(null);
         }
+        String evidenceBasis = analysis != null && analysis.synthetic() ? "SCENARIO_DATASET"
+                : switch (plan.marketKind()) {
+                    case OBSERVED -> "OBSERVED_HISTORY";
+                    case DEMO -> "DEMO_HISTORY";
+                    case SIMULATED -> "SIMULATED_HISTORY";
+                };
         String studyKey = Db.queryOn(c, "SELECT study_key FROM plan_evidence WHERE plan_id=? AND context_rev=? " +
-                        "AND state='CURRENT' ORDER BY created_at DESC LIMIT 1",
-                row -> row.str("study_key"), plan.id(), plan.context().rev())
+                        "AND basis=? AND dataset_id IS NOT DISTINCT FROM ? AND state='CURRENT' " +
+                        "ORDER BY created_at DESC LIMIT 1",
+                row -> row.str("study_key"), plan.id(), plan.context().rev(), evidenceBasis, datasetId)
                 .stream().findFirst().orElse(null);
         return new DecisionReferences(recommendations.getFirst(), ensembleId, studyKey);
     }
