@@ -829,10 +829,9 @@ public final class PortfolioAccountingService {
 
     private static String holdingTerm(LotRow lot, OffsetDateTime closed) {
         if ("SHORT".equals(lot.side())) return "SHORT_TERM";
-        long days = ChronoUnit.DAYS.between(
-                OffsetDateTime.parse(lot.openedAt()).atZoneSameInstant(MARKET_ZONE).toLocalDate(),
-                closed.atZoneSameInstant(MARKET_ZONE).toLocalDate());
-        return days > 365 ? "LONG_TERM" : "SHORT_TERM";
+        LocalDate openedDate = OffsetDateTime.parse(lot.openedAt()).atZoneSameInstant(MARKET_ZONE).toLocalDate();
+        LocalDate closedDate = closed.atZoneSameInstant(MARKET_ZONE).toLocalDate();
+        return closedDate.isAfter(openedDate.plusYears(1)) ? "LONG_TERM" : "SHORT_TERM";
     }
 
     private static long openingAmount(PreparedLeg leg) {

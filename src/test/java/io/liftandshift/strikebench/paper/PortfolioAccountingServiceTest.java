@@ -251,6 +251,21 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void leapYearHoldingTermUsesTheCalendarAnniversaryNotElapsedDays() {
+        var taxable = books.createAccount("local", account("Leap boundary", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2024-01-01", "TRADE", null, 0L, null, "BROKER", "leap-open",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 2, 1, "100"))));
+        books.record("local", taxable.id(), tx("2025-01-01", "TRADE", null, 0L, null, "BROKER", "anniversary-close",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "110"))));
+        books.record("local", taxable.id(), tx("2025-01-02", "TRADE", null, 0L, null, "BROKER", "past-anniversary-close",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "120"))));
+
+        assertThat(books.realizedLots("local", taxable.id(), 2025))
+                .extracting(PortfolioAccountingService.RealizedLotView::holdingTerm)
+                .containsExactly("SHORT_TERM", "LONG_TERM");
+    }
+
+    @Test
     void realizedLossesDoNotBecomeAStandaloneTaxRefundEstimate() {
         var taxable = books.createAccount("local", new PortfolioAccountingService.AccountInput(
                 "Taxable loss", "TAXABLE", null, "FIFO", 3200, 1500, 2400, 500, null));
