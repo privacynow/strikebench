@@ -44,7 +44,9 @@ async function go(hash) {
     if (window.location.hash === h) return App.render();
     window.location.hash = h;
   }, hash);
-  await page.waitForSelector('#app[data-ready="true"]');
+  await page.waitForFunction(expected => window.location.hash === expected
+    && App._lastRenderedRoute === expected
+    && document.getElementById('app').getAttribute('data-ready') === 'true', hash);
 }
 
 async function captureSettled(name) {
@@ -2818,12 +2820,23 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('button', { name: 'Save settings', exact: true }).click();
   await page.waitForFunction(() => /Account settings saved/.test(document.getElementById('toast-region')?.textContent || ''));
   await go('#/portfolio/book/tax');
+  assert.equal(await page.locator('#route-error').count(), 0,
+    'the tracked-book tax route renders: ' + await page.textContent('#app'));
   assert.match(await page.textContent('.book-tax-heading'), /Not tax advice/,
     'the tax report carries the required tax-advice boundary before any scenario');
   assert.match(await page.textContent('#app'), /Tax basis and reconciliation[\s\S]*Tax rules not reviewed for 2026[\s\S]*user-rate scenario is withheld/,
     'the current provisional year preserves recorded facts while withholding an unreviewed tax scenario');
   assert.equal(await page.locator('.book-tax-sources a').count(), 4,
     'the worksheet exposes the primary tax-rule sources instead of asking users to trust an opaque ruleset');
+  await page.getByRole('spinbutton', { name: 'Final short-term $', exact: true }).fill('125');
+  await page.getByRole('button', { name: 'Interest and dividend forms', exact: true }).click();
+  await page.getByRole('spinbutton', { name: 'Broker interest $', exact: true }).fill('7.50');
+  await page.getByRole('textbox', { name: 'Broker form reference', exact: true }).fill('Corrected 1099 package');
+  await page.getByRole('combobox', { name: 'Reconciliation status', exact: true }).selectOption('RECONCILED');
+  await page.getByRole('button', { name: 'Save reconciliation', exact: true }).click();
+  await page.waitForSelector('.book-tax-reconciliation:has-text("RECONCILED")');
+  assert.match(await page.textContent('.book-tax-comparison'), /Recorded book vs broker forms[\s\S]*Difference[\s\S]*Final short-term total[\s\S]*\$125\.00/,
+    'broker totals remain beside the tracked book with an explicit difference rather than overwriting it');
   assert.equal(await page.getByRole('link', { name: 'Download transactions CSV', exact: true }).count(), 1);
   assert.equal(await page.getByRole('link', { name: 'Download Excel workbook', exact: true }).count(), 1);
   assert.doesNotMatch(await page.textContent('#app'), /Rates needed/,
@@ -2877,6 +2890,24 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     if (width === 390) {
       await captureSettled('p110-accounting-activity-mobile.png');
     }
+    await go('#/portfolio/book/tax');
+    const taxGeometry = await page.evaluate(() => {
+      const card = document.querySelector('.book-tax-reconciliation');
+      const box = card.getBoundingClientRect();
+      const comparison = card.querySelector('.book-tax-comparison');
+      return { body: document.documentElement.scrollWidth, viewport: innerWidth,
+        cardLeft: box.left, cardRight: box.right,
+        comparisonOverflow: comparison ? comparison.scrollWidth - comparison.clientWidth : 0,
+        controls: Array.from(card.querySelectorAll('input,select,textarea,button')).some(node => {
+          const b = node.getBoundingClientRect(); return b.left < 0 || b.right > innerWidth;
+        }) };
+    });
+    assert.ok(taxGeometry.body <= taxGeometry.viewport,
+      width + 'px tax reconciliation has no page overflow: ' + JSON.stringify(taxGeometry));
+    assert.ok(taxGeometry.cardLeft >= 0 && taxGeometry.cardRight <= taxGeometry.viewport
+        && taxGeometry.comparisonOverflow <= 1 && !taxGeometry.controls,
+      width + 'px reconciliation card and controls remain fully visible: ' + JSON.stringify(taxGeometry));
+    if (width === 390) await captureSettled('p110-accounting-tax-mobile.png');
   }
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.evaluate(() => Learn.setLevel('expert'));

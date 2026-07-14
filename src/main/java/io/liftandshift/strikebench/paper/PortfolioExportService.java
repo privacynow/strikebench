@@ -170,7 +170,7 @@ public final class PortfolioExportService {
     }
 
     private static List<List<Cell>> taxRows(PortfolioAccountingService.TaxReport t) {
-        return List.of(cells("Tax field", "Value"), cells("Tax year", String.valueOf(t.year())),
+        List<List<Cell>> rows = new ArrayList<>(List.of(cells("Tax field", "Value"), cells("Tax year", String.valueOf(t.year())),
                 cells("Account type", t.accountType()),
                 cells("Disclaimer", "Not tax advice. Reconcile against broker tax forms and a qualified tax professional."),
                 moneyRow("Short-term gain", t.shortTermGainCents()),
@@ -186,7 +186,29 @@ public final class PortfolioExportService {
                 moneyRow("User-rate total scenario", t.scenarioTotalTaxCents()),
                 cells("Ruleset", t.rules().id()), cells("Ruleset status", t.rules().status()),
                 cells("Rules reviewed through", t.rules().reviewedThrough()),
-                cells("Ruleset scope", t.rules().scope()), cells("Limitations", t.note()));
+                cells("Ruleset scope", t.rules().scope()), cells("Limitations", t.note())));
+        if (t.reconciliation() != null) {
+            var r = t.reconciliation();
+            rows.add(List.of());
+            rows.add(cells("Broker-form reconciliation", r.status(), r.formReference(), r.updatedAt()));
+            rows.add(cells("Reconciliation field", "StrikeBench worksheet", "Broker form", "Broker minus StrikeBench"));
+            rows.add(reconciliationRow("Short-term gain", r.shortTermGain()));
+            rows.add(reconciliationRow("Long-term gain", r.longTermGain()));
+            rows.add(reconciliationRow("Wash adjustment", r.washAdjustment()));
+            rows.add(reconciliationRow("Section 1256 gain", r.section1256Gain()));
+            rows.add(reconciliationRow("Interest", r.interest()));
+            rows.add(reconciliationRow("Ordinary dividends", r.ordinaryDividend()));
+            rows.add(reconciliationRow("Qualified dividends", r.qualifiedDividend()));
+            rows.add(reconciliationRow("Capital-gain distributions", r.capitalGainDistribution()));
+            rows.add(cells("Reconciliation notes", r.notes()));
+        }
+        return rows;
+    }
+
+    private static List<Cell> reconciliationRow(String label,
+                                                  PortfolioAccountingService.ReconciliationAmount amount) {
+        return List.of(s(label), money(amount.strikeBenchCents()), money(amount.brokerCents()),
+                money(amount.differenceCents()));
     }
 
     private record Sheet(String name, List<List<Cell>> rows) {}

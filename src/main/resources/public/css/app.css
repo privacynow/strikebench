@@ -2473,6 +2473,31 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .book-roll-summary { display: grid; gap: 7px; padding: 10px; border-left: 3px solid var(--accent); background: var(--accent-soft); }
 .book-roll-summary p, .book-roll-summary .chip-row { margin: 0; }
 .book-performance-stats, .book-tax-stats { margin-bottom: 14px; }
+@media (min-width: 1100px) {
+  .book-tax-stats { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .book-tax-reconciliation-core { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .book-tax-reconciliation-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 700px) and (max-width: 1099px) {
+  .book-tax-reconciliation-core, .book-tax-reconciliation-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.book-tax-reconciliation-notes { width: min(100%, 520px); }
+.book-tax-reconciliation-notes textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+@media (max-width: 600px) {
+  .book-tax-comparison .tbl-wrap { overflow: visible; margin: 0; padding: 0; }
+  .book-tax-comparison table, .book-tax-comparison tbody { display: block; width: 100%; }
+  .book-tax-comparison thead { display: none; }
+  .book-tax-comparison tr {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+    width: 100%; padding: 10px 0; border-top: 1px solid var(--border);
+  }
+  .book-tax-comparison td { display: block; min-width: 0; padding: 0; border: 0; overflow-wrap: anywhere; }
+  .book-tax-comparison .book-tax-comparison-field { grid-column: 1 / -1; font-weight: 700; }
+  .book-tax-comparison td[data-label]::before {
+    content: attr(data-label); display: block; margin-bottom: 2px; color: var(--text-faint);
+    font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  }
+}
 .book-performance-chart .chart { margin-top: 6px; }
 .book-open-lot-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; }
 .book-open-lot-row + .book-open-lot-row { border-top: 1px solid var(--border); }

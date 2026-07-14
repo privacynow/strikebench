@@ -1433,6 +1433,18 @@ class ApiIntegrationTest {
         assertThat(Json.parse(get("/api/account").body()).at("/account/startingCashCents").asLong())
                 .as("tracked brokerage activity never mutates practice money").isEqualTo(10_000_000L);
 
+        HttpResponse<String> reconciled = put("/api/portfolio/accounts/" + id + "/tax/2026/reconciliation", """
+                {"status":"RECONCILED","formReference":"Corrected broker package",
+                 "shortTermGainCents":12500,"interestCents":300,"notes":"Compared outside forms"}
+                """);
+        assertThat(reconciled.statusCode()).isEqualTo(200);
+        assertThat(Json.parse(reconciled.body()).get("status").asText()).isEqualTo("RECONCILED");
+        JsonNode tax = Json.parse(get("/api/portfolio/accounts/" + id + "/tax?year=2026").body());
+        assertThat(tax.at("/rules/status").asText()).isEqualTo("PROVISIONAL");
+        assertThat(tax.at("/reconciliation/formReference").asText()).isEqualTo("Corrected broker package");
+        assertThat(tax.at("/reconciliation/shortTermGain/brokerCents").asLong()).isEqualTo(12_500L);
+        assertThat(tax.at("/reconciliation/shortTermGain/differenceCents").asLong()).isEqualTo(12_500L);
+
         HttpResponse<String> csv = get("/api/portfolio/accounts/" + id + "/export.csv");
         assertThat(csv.statusCode()).isEqualTo(200);
         assertThat(csv.headers().firstValue("Content-Disposition").orElse("")).contains(".csv");

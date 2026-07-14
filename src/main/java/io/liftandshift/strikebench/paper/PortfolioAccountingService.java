@@ -31,8 +31,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.stream.Stream;
 
 /**
  * Owner-scoped accounting for brokerage activity that a user records or imports. This book is
@@ -159,7 +161,29 @@ public final class PortfolioAccountingService {
                             long section1256LongTermCents,
                             Long scenarioFederalTaxCents, Long scenarioStateTaxCents,
                             Long scenarioTotalTaxCents, List<RealizedLotView> realizedLots,
-                            TaxRules.View rules, String note) {}
+                            TaxRules.View rules, TaxReconciliationView reconciliation,
+                            String note) {}
+
+    public record TaxReconciliationInput(String status, String formReference,
+                                         Long shortTermGainCents, Long longTermGainCents,
+                                         Long washAdjustmentCents, Long section1256GainCents,
+                                         Long interestCents, Long ordinaryDividendCents,
+                                         Long qualifiedDividendCents,
+                                         Long capitalGainDistributionCents, String notes) {}
+
+    public record ReconciliationAmount(long strikeBenchCents, Long brokerCents,
+                                       Long differenceCents) {}
+
+    public record TaxReconciliationView(int year, String status, String formReference,
+                                        ReconciliationAmount shortTermGain,
+                                        ReconciliationAmount longTermGain,
+                                        ReconciliationAmount washAdjustment,
+                                        ReconciliationAmount section1256Gain,
+                                        ReconciliationAmount interest,
+                                        ReconciliationAmount ordinaryDividend,
+                                        ReconciliationAmount qualifiedDividend,
+                                        ReconciliationAmount capitalGainDistribution,
+                                        String notes, String updatedAt) {}
 
     public record PositionView(String key, String instrumentType, String side, String symbol,
                                String optionType, BigDecimal strike, LocalDate expiration,
@@ -769,61 +793,147 @@ public final class PortfolioAccountingService {
         if (year < 1970 || year > 9999) throw new IllegalArgumentException("invalid tax year");
         TaxRules.View rules = TaxRules.forYear(year);
         String owner = owner(ownerId);
-        return db.tx(c -> {
-            AccountProfile account = requireAccount(c, owner, accountId, true);
-            if (rules.reviewed()) requireSection1256YearComplete(c, account, year);
-            List<RealizedLotView> realized = Db.queryOn(c,
+        return db.tx(c -> taxReportOn(c, requireAccount(c, owner, accountId, true), year, rules));
+    }
+
+    private TaxReport taxReportOn(Connection c, AccountProfile account, int year,
+                                  TaxRules.View rules) throws SQLException {
+        if (rules.reviewed()) requireSection1256YearComplete(c, account, year);
+        List<RealizedLotView> realized = Db.queryOn(c,
                     "SELECT m.*,l.symbol,l.instrument_type,l.side FROM portfolio_lot_match m "
                             + "JOIN portfolio_lot l ON l.id=m.lot_id WHERE m.portfolio_account_id=? "
                             + "AND EXTRACT(YEAR FROM (m.closed_at AT TIME ZONE 'America/New_York'))=? ORDER BY m.closed_at,m.id",
                     PortfolioAccountingService::mapRealized, account.id(), year);
-            long ordinarySt = exactSum(realized.stream().filter(r -> "SHORT_TERM".equals(r.holdingTerm()))
+        long ordinarySt = exactSum(realized.stream().filter(r -> "SHORT_TERM".equals(r.holdingTerm()))
                     .map(r -> Math.addExact(r.realizedGainCents(), r.washSaleAdjustmentCents())).toList(), "short-term gains");
-            long ordinaryLt = exactSum(realized.stream().filter(r -> "LONG_TERM".equals(r.holdingTerm()))
+        long ordinaryLt = exactSum(realized.stream().filter(r -> "LONG_TERM".equals(r.holdingTerm()))
                     .map(r -> Math.addExact(r.realizedGainCents(), r.washSaleAdjustmentCents())).toList(), "long-term gains");
-            long sectionTotal = exactSum(realized.stream().filter(RealizedLotView::section1256)
+        long sectionTotal = exactSum(realized.stream().filter(RealizedLotView::section1256)
                     .map(RealizedLotView::realizedGainCents).toList(), "Section 1256 gains");
-            // Character applies to the year's net Section 1256 result. Splitting each match first
-            // can move cents between the 60% and 40% buckets as the number of matches changes.
-            long sectionLong = percentage(sectionTotal, 60);
-            long sectionShort = Math.subtractExact(sectionTotal, sectionLong);
-            long st = Math.addExact(ordinarySt, sectionShort);
-            long lt = Math.addExact(ordinaryLt, sectionLong);
-            long interest = incomeOn(c, account.id(), "INTEREST", year);
-            long ordinaryDiv = incomeByCategoryOn(c, account.id(), year, "ORDINARY_DIVIDEND");
-            long qualifiedDiv = incomeByCategoryOn(c, account.id(), year, "QUALIFIED_DIVIDEND");
-            long capDist = incomeByCategoryOn(c, account.id(), year, "CAPITAL_GAIN_DISTRIBUTION");
-            long wash = exactSum(realized.stream().map(RealizedLotView::washSaleAdjustmentCents).toList(),
+        // Character applies to the year's net Section 1256 result. Splitting each match first
+        // can move cents between the 60% and 40% buckets as the number of matches changes.
+        long sectionLong = percentage(sectionTotal, 60);
+        long sectionShort = Math.subtractExact(sectionTotal, sectionLong);
+        long st = Math.addExact(ordinarySt, sectionShort);
+        long lt = Math.addExact(ordinaryLt, sectionLong);
+        long interest = incomeOn(c, account.id(), "INTEREST", year);
+        long ordinaryDiv = incomeByCategoryOn(c, account.id(), year, "ORDINARY_DIVIDEND");
+        long qualifiedDiv = incomeByCategoryOn(c, account.id(), year, "QUALIFIED_DIVIDEND");
+        long capDist = incomeByCategoryOn(c, account.id(), year, "CAPITAL_GAIN_DISTRIBUTION");
+        long wash = exactSum(realized.stream().map(RealizedLotView::washSaleAdjustmentCents).toList(),
                     "wash-sale adjustments");
-            Long federal = null, state = null, total = null;
-            String note;
-            if (!account.currentlyTaxable()) {
-                note = "No user-rate scenario is calculated for this retirement wrapper. Contributions, withdrawals, conversions, penalties, required distributions, and future distributions follow separate rules. "
+        Long federal = null, state = null, total = null;
+        String note;
+        if (!account.currentlyTaxable()) {
+            note = "No user-rate scenario is calculated for this retirement wrapper. Contributions, withdrawals, conversions, penalties, required distributions, and future distributions follow separate rules. "
                         + taxLimitNote(rules);
-            } else if (!rules.userRateScenarioAvailable()) {
-                note = "Recorded lots and income remain visible, but the user-rate scenario is withheld because the "
+        } else if (!rules.userRateScenarioAvailable()) {
+            note = "Recorded lots and income remain visible, but the user-rate scenario is withheld because the "
                         + year + " ruleset is " + rules.status().name().toLowerCase() + ". " + taxLimitNote(rules);
-            } else if (st < 0 || lt < 0) {
-                note = "Basis and realized losses are calculated, but the user-rate scenario is withheld because loss netting, carryovers, and the rest of the tax return are not recorded here. "
+        } else if (st < 0 || lt < 0) {
+            note = "Basis and realized losses are calculated, but the user-rate scenario is withheld because loss netting, carryovers, and the rest of the tax return are not recorded here. "
                         + taxLimitNote(rules);
-            } else if (account.shortTermTaxRateBps() != null && account.longTermTaxRateBps() != null
+        } else if (account.shortTermTaxRateBps() != null && account.longTermTaxRateBps() != null
                     && account.ordinaryTaxRateBps() != null) {
-                federal = Math.addExact(taxAt(st, account.shortTermTaxRateBps()),
+            federal = Math.addExact(taxAt(st, account.shortTermTaxRateBps()),
                         Math.addExact(taxAt(Math.addExact(interest, ordinaryDiv), account.ordinaryTaxRateBps()),
                                 taxAt(Math.addExact(lt, Math.addExact(capDist, qualifiedDiv)), account.longTermTaxRateBps())));
-                state = account.stateTaxRateBps() == null ? null
+            state = account.stateTaxRateBps() == null ? null
                         : taxAt(Math.addExact(Math.addExact(Math.addExact(st, lt), Math.addExact(interest, ordinaryDiv)),
                                 Math.addExact(qualifiedDiv, capDist)), account.stateTaxRateBps());
-                total = Math.addExact(federal, state == null ? 0 : state);
-                note = taxLimitNote(rules);
-            } else {
-                note = "Basis and holding periods are calculated, but the user-rate scenario needs the account's short-term, long-term, and ordinary-income scenario rates. "
+            total = Math.addExact(federal, state == null ? 0 : state);
+            note = taxLimitNote(rules);
+        } else {
+            note = "Basis and holding periods are calculated, but the user-rate scenario needs the account's short-term, long-term, and ordinary-income scenario rates. "
                         + taxLimitNote(rules);
+        }
+        TaxReconciliationView reconciliation = reconciliationOn(c, account.id(), year,
+                    st, lt, wash, sectionTotal, interest, ordinaryDiv, qualifiedDiv, capDist);
+        return new TaxReport(year, account.accountType(), st, lt, interest, ordinaryDiv, qualifiedDiv,
+                capDist, wash, sectionTotal, sectionShort, sectionLong,
+                federal, state, total, realized, rules, reconciliation, note);
+    }
+
+    public TaxReconciliationView saveTaxReconciliation(String ownerId, String accountId, int year,
+                                                        TaxReconciliationInput input) {
+        if (year < 1970 || year > 9999) throw new IllegalArgumentException("invalid tax year");
+        if (input == null) throw new IllegalArgumentException("reconciliation details are required");
+        String status = enumValue(input.status(), List.of("DRAFT", "RECONCILED"), "reconciliation status");
+        List<Long> entered = Stream.of(input.shortTermGainCents(), input.longTermGainCents(),
+                        input.washAdjustmentCents(), input.section1256GainCents(), input.interestCents(),
+                        input.ordinaryDividendCents(), input.qualifiedDividendCents(),
+                        input.capitalGainDistributionCents()).filter(Objects::nonNull).toList();
+        if (entered.isEmpty()) throw new IllegalArgumentException("enter at least one broker-form amount");
+        if (input.washAdjustmentCents() != null && input.washAdjustmentCents() < 0) {
+            throw new IllegalArgumentException("broker wash adjustment cannot be negative");
+        }
+        String owner = owner(ownerId);
+        return db.tx(c -> {
+            AccountProfile account = requireAccount(c, owner, accountId, true);
+            requireActive(account);
+            if (!account.currentlyTaxable()) {
+                throw new IllegalArgumentException("broker tax-form reconciliation is available only for taxable tracked accounts");
             }
-            return new TaxReport(year, account.accountType(), st, lt, interest, ordinaryDiv, qualifiedDiv,
-                    capDist, wash, sectionTotal, sectionShort, sectionLong,
-                    federal, state, total, realized, rules, note);
+            OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+            Db.execOn(c, "INSERT INTO portfolio_tax_reconciliation(portfolio_account_id,tax_year,status,form_reference,"
+                            + "broker_short_term_gain_cents,broker_long_term_gain_cents,broker_wash_adjustment_cents,"
+                            + "broker_section_1256_gain_cents,broker_interest_cents,broker_ordinary_dividend_cents,"
+                            + "broker_qualified_dividend_cents,broker_capital_gain_distribution_cents,notes,created_at,updated_at) "
+                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (portfolio_account_id,tax_year) DO UPDATE SET "
+                            + "status=EXCLUDED.status,form_reference=EXCLUDED.form_reference,"
+                            + "broker_short_term_gain_cents=EXCLUDED.broker_short_term_gain_cents,"
+                            + "broker_long_term_gain_cents=EXCLUDED.broker_long_term_gain_cents,"
+                            + "broker_wash_adjustment_cents=EXCLUDED.broker_wash_adjustment_cents,"
+                            + "broker_section_1256_gain_cents=EXCLUDED.broker_section_1256_gain_cents,"
+                            + "broker_interest_cents=EXCLUDED.broker_interest_cents,"
+                            + "broker_ordinary_dividend_cents=EXCLUDED.broker_ordinary_dividend_cents,"
+                            + "broker_qualified_dividend_cents=EXCLUDED.broker_qualified_dividend_cents,"
+                            + "broker_capital_gain_distribution_cents=EXCLUDED.broker_capital_gain_distribution_cents,"
+                            + "notes=EXCLUDED.notes,updated_at=EXCLUDED.updated_at",
+                    account.id(), year, status, trim(input.formReference(), 200), input.shortTermGainCents(),
+                    input.longTermGainCents(), input.washAdjustmentCents(), input.section1256GainCents(),
+                    input.interestCents(), input.ordinaryDividendCents(), input.qualifiedDividendCents(),
+                    input.capitalGainDistributionCents(), trim(input.notes(), 2_000), now, now);
+            return taxReportOn(c, account, year, TaxRules.forYear(year)).reconciliation();
         });
+    }
+
+    public void clearTaxReconciliation(String ownerId, String accountId, int year) {
+        if (year < 1970 || year > 9999) throw new IllegalArgumentException("invalid tax year");
+        String owner = owner(ownerId);
+        db.tx(c -> {
+            AccountProfile account = requireAccount(c, owner, accountId, true);
+            requireActive(account);
+            Db.execOn(c, "DELETE FROM portfolio_tax_reconciliation WHERE portfolio_account_id=? AND tax_year=?",
+                    account.id(), year);
+            return null;
+        });
+    }
+
+    private static TaxReconciliationView reconciliationOn(Connection c, String accountId, int year,
+                                                           long shortTerm, long longTerm, long wash,
+                                                           long section1256, long interest,
+                                                           long ordinaryDividend, long qualifiedDividend,
+                                                           long capitalGainDistribution) throws SQLException {
+        return Db.queryOn(c, "SELECT * FROM portfolio_tax_reconciliation "
+                        + "WHERE portfolio_account_id=? AND tax_year=?",
+                r -> new TaxReconciliationView(year, r.str("status"), r.str("form_reference"),
+                        reconciliationAmount(shortTerm, r.lngOrNull("broker_short_term_gain_cents")),
+                        reconciliationAmount(longTerm, r.lngOrNull("broker_long_term_gain_cents")),
+                        reconciliationAmount(wash, r.lngOrNull("broker_wash_adjustment_cents")),
+                        reconciliationAmount(section1256, r.lngOrNull("broker_section_1256_gain_cents")),
+                        reconciliationAmount(interest, r.lngOrNull("broker_interest_cents")),
+                        reconciliationAmount(ordinaryDividend, r.lngOrNull("broker_ordinary_dividend_cents")),
+                        reconciliationAmount(qualifiedDividend, r.lngOrNull("broker_qualified_dividend_cents")),
+                        reconciliationAmount(capitalGainDistribution,
+                                r.lngOrNull("broker_capital_gain_distribution_cents")),
+                        r.str("notes"), iso(r.odt("updated_at"))), accountId, year)
+                .stream().findFirst().orElse(null);
+    }
+
+    private static ReconciliationAmount reconciliationAmount(long strikeBench, Long broker) {
+        return new ReconciliationAmount(strikeBench, broker,
+                broker == null ? null : Math.subtractExact(broker, strikeBench));
     }
 
     public int markSection1256YearEnd(String ownerId, String accountId, int year) {

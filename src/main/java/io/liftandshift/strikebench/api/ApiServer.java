@@ -763,6 +763,15 @@ public final class ApiServer {
             c.routes.get("/api/portfolio/accounts/{id}/tax", ctx ->
                     ctx.json(portfolioBooks.taxReport(ownerId(ctx), ctx.pathParam("id"),
                             intParam(ctx, "year", java.time.Year.now(clock).getValue()))));
+            c.routes.put("/api/portfolio/accounts/{id}/tax/{year}/reconciliation", ctx ->
+                    ctx.json(portfolioBooks.saveTaxReconciliation(ownerId(ctx), ctx.pathParam("id"),
+                            Integer.parseInt(ctx.pathParam("year")), requireBody(bodyOrNull(ctx,
+                                    io.liftandshift.strikebench.paper.PortfolioAccountingService.TaxReconciliationInput.class)))));
+            c.routes.delete("/api/portfolio/accounts/{id}/tax/{year}/reconciliation", ctx -> {
+                portfolioBooks.clearTaxReconciliation(ownerId(ctx), ctx.pathParam("id"),
+                        Integer.parseInt(ctx.pathParam("year")));
+                ctx.json(Map.of("ok", true));
+            });
             c.routes.post("/api/portfolio/accounts/{id}/tax/{year}/mark-1256", ctx ->
                     ctx.json(Map.of("transactionsWritten", portfolioBooks.markSection1256YearEnd(
                             ownerId(ctx), ctx.pathParam("id"), Integer.parseInt(ctx.pathParam("year"))))));

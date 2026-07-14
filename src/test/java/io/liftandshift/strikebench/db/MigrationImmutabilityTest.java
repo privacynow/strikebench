@@ -68,7 +68,8 @@ class MigrationImmutabilityTest {
             Map.entry("V45__portfolio_roll_links.sql", "ad8398ba8ab4e6aa3f4c43e33c09a798741001529bd21dcef51f009ab0e35e42"),
             Map.entry("V46__complete_broad_based_index_taxonomy.sql", "3316e8d64bd2bbd882053f21a823d3e0c9146d1b7ae26b86c2e1eaa3e606978f"),
             Map.entry("V47__separate_economic_and_tax_basis.sql", "d437614aea2a2008edd1e38dd71cf75877d75459ee350e25a7df702ebd5270b1"),
-            Map.entry("V48__version_portfolio_tax_classifications.sql", "921bf767cb97f0fe06dc397a5114b452aa6b67a1a127f1e68dff463b4632d821")
+            Map.entry("V48__version_portfolio_tax_classifications.sql", "921bf767cb97f0fe06dc397a5114b452aa6b67a1a127f1e68dff463b4632d821"),
+            Map.entry("V49__portfolio_tax_reconciliation.sql", "a2d1325536607af6e5055411c16715b739332db68c9211e65062367d98d165aa")
     );
 
     @Test

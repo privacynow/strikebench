@@ -338,6 +338,80 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void brokerFormsReconcileAgainstTheBookWithoutRewritingIt() {
+        var taxable = books.createAccount("local", account("Broker forms", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2025-01-02", "TRADE", null, 0L, null, "BROKER", "recon-open",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 2, 1, "100"))));
+        books.record("local", taxable.id(), tx("2025-02-02", "TRADE", null, 0L, null, "BROKER", "recon-close",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 2, 1, "110"))));
+        books.record("local", taxable.id(), cash("2025-06-30", "INTEREST", 5_00L, "recon-interest", null));
+
+        var saved = books.saveTaxReconciliation("local", taxable.id(), 2025,
+                new PortfolioAccountingService.TaxReconciliationInput("DRAFT", "1099-B original",
+                        21_00L, null, 3_00L, null, 6_00L, null, null, null,
+                        "Broker includes one adjustment not recorded in this book"));
+        assertThat(saved.status()).isEqualTo("DRAFT");
+        assertThat(saved.shortTermGain().strikeBenchCents()).isEqualTo(20_00L);
+        assertThat(saved.shortTermGain().brokerCents()).isEqualTo(21_00L);
+        assertThat(saved.shortTermGain().differenceCents()).isEqualTo(1_00L);
+        assertThat(saved.interest().differenceCents()).isEqualTo(1_00L);
+        assertThat(saved.longTermGain().brokerCents()).isNull();
+        assertThat(books.taxReport("local", taxable.id(), 2025).reconciliation()).isEqualTo(saved);
+        assertThat(books.realizedLots("local", taxable.id(), 2025)).singleElement()
+                .satisfies(match -> assertThat(match.realizedGainCents()).isEqualTo(20_00L));
+
+        var updated = books.saveTaxReconciliation("local", taxable.id(), 2025,
+                new PortfolioAccountingService.TaxReconciliationInput("RECONCILED", "Corrected 1099-B",
+                        20_00L, 0L, 0L, 0L, 5_00L, 0L, 0L, 0L, "Matched after review"));
+        assertThat(updated.status()).isEqualTo("RECONCILED");
+        assertThat(updated.shortTermGain().differenceCents()).isZero();
+        assertThat(updated.formReference()).isEqualTo("Corrected 1099-B");
+
+        books.clearTaxReconciliation("local", taxable.id(), 2025);
+        assertThat(books.taxReport("local", taxable.id(), 2025).reconciliation()).isNull();
+    }
+
+    @Test
+    void reconciliationRequiresATaxableActiveOwnedAccountAndAtLeastOneAmount() {
+        var taxable = books.createAccount("local", account("Taxable reconcile", "TAXABLE", null));
+        var empty = new PortfolioAccountingService.TaxReconciliationInput(
+                "DRAFT", null, null, null, null, null, null, null, null, null, null);
+        assertThatThrownBy(() -> books.saveTaxReconciliation("local", taxable.id(), 2025, empty))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("at least one broker-form amount");
+        assertThatThrownBy(() -> books.saveTaxReconciliation("someone-else", taxable.id(), 2025,
+                new PortfolioAccountingService.TaxReconciliationInput("DRAFT", null, 1L, null, null,
+                        null, null, null, null, null, null)))
+                .isInstanceOf(io.liftandshift.strikebench.util.ResourceNotFoundException.class);
+
+        var roth = books.createAccount("local", account("Roth reconcile", "ROTH_IRA", null));
+        assertThatThrownBy(() -> books.saveTaxReconciliation("local", roth.id(), 2025,
+                new PortfolioAccountingService.TaxReconciliationInput("DRAFT", null, 1L, null, null,
+                        null, null, null, null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("only for taxable");
+
+        books.setArchived("local", taxable.id(), true);
+        assertThatThrownBy(() -> books.saveTaxReconciliation("local", taxable.id(), 2025,
+                new PortfolioAccountingService.TaxReconciliationInput("DRAFT", null, 1L, null, null,
+                        null, null, null, null, null, null)))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("archived");
+    }
+
+    @Test
+    void reconciliationSaveRollsBackWhenTheReviewedTaxViewCannotBeBuilt() {
+        var taxable = books.createAccount("local", account("Atomic reconciliation", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2025-12-01", "TRADE", null, 0L, null, "BROKER", "open-rut",
+                List.of(leg("OPTION", "BUY", "OPEN", "RUT", "PUT", "2000", "2026-03-20", 1, 100, "8"))));
+
+        assertThatThrownBy(() -> books.saveTaxReconciliation("local", taxable.id(), 2025,
+                new PortfolioAccountingService.TaxReconciliationInput("DRAFT", "1099-B", 1L, null,
+                        null, null, null, null, null, null, null)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("still need their observed 2025 year-end mark");
+        assertThat(db.query("SELECT COUNT(*) n FROM portfolio_tax_reconciliation", r -> r.lng("n")).getFirst())
+                .isZero();
+    }
+
+    @Test
     void section1256OpenIndexOptionMarksAtYearEndAndReceivesExactSixtyFortyCharacter() {
         var taxable = books.createAccount("local", new PortfolioAccountingService.AccountInput(
                 "1256", "TAXABLE", null, "FIFO", 3200, 1500, 2400, 0, null));

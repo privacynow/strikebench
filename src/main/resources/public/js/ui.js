@@ -291,8 +291,8 @@
     opts = opts || {};
     var body = el('div', { class: 'xp-body' });
     var built = false;
-    var chevron = el('span', { class: 'xp-chevron' }, '\u203A');
-    var head = el('button', { class: 'xp-head', 'aria-expanded': 'false' }, chevron, summaryContent);
+    var chevron = el('span', { class: 'xp-chevron', 'aria-hidden': 'true' }, '\u203A');
+    var head = el('button', { type: 'button', class: 'xp-head', 'aria-expanded': 'false' }, chevron, summaryContent);
     var wrap = el('div', { class: 'xp' + (opts.open ? ' open' : '') }, head, body);
     function toggle(force) {
       var open = force !== undefined ? force : !wrap.classList.contains('open');
