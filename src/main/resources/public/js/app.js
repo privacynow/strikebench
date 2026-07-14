@@ -59,9 +59,7 @@
         if (patch.horizon !== undefined) {
           var horizon = String(patch.horizon || '').trim();
           next.horizon = horizon || null;
-          next.horizonDays = /^\d+d$/.test(horizon) ? parseInt(horizon, 10)
-            : horizon === '0DTE' ? 1 : horizon === 'week' ? 7 : horizon === 'quarter' ? 63
-              : horizon === 'month' ? 30 : next.horizonDays;
+          next.horizonDays = Product.Horizon.sessions(horizon, next.horizonDays);
         }
         if (patch.thesis !== undefined) {
           var thesis = String(patch.thesis || '').trim().toLowerCase();
@@ -196,30 +194,12 @@
       if (App.refreshRiskBudget) App.refreshRiskBudget();
 
       var hash = window.location.hash || '#/home';
-      var parts = hash.replace(/^#\//, '').split('/').filter(function (p) { return p.length; });
+      var parts = hash.replace(/^#\//, '').split('?')[0].split('/').filter(function (p) { return p.length; });
       var route = parts[0] || 'home';
       var params = parts.slice(1);
-      function validRouteShape(name, args) {
-        if (name === 'home') return !args.length || (args.length === 1 && args[0] === 'tour');
-        if (name === 'research') return !args.length
-          || (args.length === 1 && /^[A-Z0-9._-]+$/i.test(args[0]));
-        if (name === 'plan') {
-          if (!args.length) return false;
-          return args.length === 2 && ['understand', 'evidence', 'strategy', 'outcomes', 'decide', 'manage-review']
-            .indexOf((args[1] || '').split('?')[0]) >= 0;
-        }
-        if (name === 'portfolio') return !args.length
-          || (args.length === 1 && ['construct', 'positions', 'active', 'closed', 'activity', 'record', 'account'].indexOf(args[0]) >= 0)
-          || (args[0] === 'book' && args.length === 2
-            && ['overview', 'activity', 'performance', 'tax', 'settings'].indexOf(args[1]) >= 0)
-          || (args[0] === 'trade' && args.length === 2 && /^tr_[A-Za-z0-9_-]+$/.test(args[1]));
-        if (name === 'data') return !args.length || (args.length === 1
-          && ['overview', 'datasets', 'simulation', 'sources', 'admin'].indexOf(args[0]) >= 0);
-        return false;
-      }
       // Routes are canonical product nouns. Internal aliases only obscure ownership and make
       // navigation tests prove redirects instead of the real screen contract.
-      var view = validRouteShape(route, params) && window.Views[route];
+      var view = Product.Routes.valid(route, params) && window.Views[route];
       if (!view) {
         window.history.replaceState(null, '', '#/home');
         route = 'home';
@@ -233,7 +213,7 @@
       }
       App._lastRenderedRoute = renderRouteKey;
 
-      var navRoute = route === 'plan' || (route === 'portfolio' && !params.length) ? 'plans' : route;
+      var navRoute = Product.Routes.navOwner(route, params);
       document.querySelectorAll('#nav a, #bottom-nav a').forEach(function (a) {
         a.classList.toggle('active', a.getAttribute('data-route') === navRoute);
       });

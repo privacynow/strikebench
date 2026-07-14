@@ -18,6 +18,7 @@ class JourneySurfaceTest {
         String views = source("js/views.js");
         String app = source("js/app.js");
         String workspace = source("js/workspace.js");
+        String contracts = source("js/contracts.js");
 
         for (String route : List.of("home", "research", "plans", "portfolio", "data")) {
             assertThat(html).contains("data-route=\"" + route + "\"");
@@ -31,9 +32,24 @@ class JourneySurfaceTest {
         assertThat(views.split("Outcomes\\.workspace\\(", -1)).hasSize(2);
         assertThat(views).contains("function planOutcomeWorkspace(config)");
         assertThat(app).doesNotContain("route === 'trade'", "marketContext", "LANE_KEYS", "_laneStash");
+        assertThat(app).contains("Product.Routes.valid", "Product.Routes.navOwner");
+        assertThat(workspace).contains("Product.Routes.canonical");
+        assertThat(contracts).contains("args[0] === 'book'", "keyForSessions", "expiryDays");
         assertThat(workspace).contains("v: 2").doesNotContain(
                 "discoverForm", "builderForm", "backtestForm", "verifyForm", "researchStudy",
                 "marketThesis", "evidencePrefill", "decisionCache", "recommendResults");
+    }
+
+    @Test void namedHorizonsHaveOneFrontendOwner() throws Exception {
+        String contracts = source("js/contracts.js");
+        String views = source("js/views.js");
+        String app = source("js/app.js");
+        String scenario = source("js/scenario.js");
+
+        assertThat(contracts).contains("quarter: { sessions: 63, expiryDays: 90 }");
+        assertThat(views).contains("Product.Horizon.sessions").doesNotContain("horizonDaysFromContext");
+        assertThat(app).contains("Product.Horizon.sessions");
+        assertThat(scenario).contains("Product.Horizon.sessions('quarter')");
     }
 
     @Test void legacyRecommendationAndBacktestRoutesAreNotRegistered() throws Exception {

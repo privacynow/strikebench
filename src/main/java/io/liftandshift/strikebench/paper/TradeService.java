@@ -609,12 +609,9 @@ public final class TradeService {
                     .expireAfterWrite(java.time.Duration.ofSeconds(10)).maximumSize(500).build();
 
     /** The world a trade's marks live in: its ACCOUNT's binding (null = observed lanes). */
-    private String worldOf(String accountId) {
-        try {
-            Account account = db.with(c -> AccountService.get(c, accountId));
-            return "DEMO".equals(account.type()) ? "demo" : account.worldId();
-        }
-        catch (RuntimeException e) { return null; }
+    String worldOf(String accountId) {
+        Account account = db.with(c -> AccountService.get(c, accountId));
+        return "DEMO".equals(account.type()) ? "demo" : account.worldId();
     }
 
     private io.liftandshift.strikebench.market.MarketLane laneFor(String worldId) {

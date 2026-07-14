@@ -162,9 +162,8 @@ public final class RecommendationEngine {
         Filters filters = req.filters() == null ? new Filters(null, null, null, null) : req.filters();
         boolean allow0dte = Boolean.TRUE.equals(req.allow0dte());
         boolean avoidEarnings = req.avoidEarnings() == null || req.avoidEarnings();
-        double riskPct = req.maxRiskPctOfAccount() != null ? Math.clamp(req.maxRiskPctOfAccount(), 0.001, 0.5) : mode.defaultRiskPct;
-        long budget = Math.round(buyingPowerCents * riskPct);
-        if (req.maxLossCents() != null && req.maxLossCents() > 0) budget = Math.min(budget, req.maxLossCents());
+        long budget = RiskBudgetPolicy.requestBudgetCents(
+                mode, buyingPowerCents, req.maxRiskPctOfAccount(), req.maxLossCents());
         double minConfidence = req.minConfidence() == null ? 0 : req.minConfidence();
 
         List<String> notes = new ArrayList<>();
@@ -413,11 +412,10 @@ public final class RecommendationEngine {
         // its cash-secured purchase commitment is the product and is disclosed as such. EXIT and
         // HEDGE never inflate the selected per-idea budget merely to manufacture a rung.
         RiskMode mode = RiskMode.parse(req.riskMode());
-        double riskPct = req.maxRiskPctOfAccount() != null ? Math.clamp(req.maxRiskPctOfAccount(), 0.001, 0.5) : mode.defaultRiskPct;
         long budget = intent == StrategyIntent.ACQUIRE && req.maxRiskPctOfAccount() == null && req.maxLossCents() == null
                 ? buyingPowerCents
-                : Math.min(Math.round(buyingPowerCents * riskPct) == 0 ? buyingPowerCents : Math.round(buyingPowerCents * riskPct),
-                           req.maxLossCents() != null && req.maxLossCents() > 0 ? req.maxLossCents() : Long.MAX_VALUE);
+                : RiskBudgetPolicy.requestBudgetCents(
+                        mode, buyingPowerCents, req.maxRiskPctOfAccount(), req.maxLossCents());
 
         // Rung strikes: EXIT climbs above spot, ACQUIRE/HEDGE step below it
         List<BigDecimal> strikes = new ArrayList<>();
@@ -981,12 +979,7 @@ public final class RecommendationEngine {
 
     private static LocalDate pickExpiration(List<LocalDate> expirations, String horizon, LocalDate today,
                                             boolean allow0dte, java.time.Instant now, List<String> notes) {
-        int targetDays = switch (horizon == null ? "month" : horizon.trim().toLowerCase(Locale.ROOT)) {
-            case "0dte" -> 0;
-            case "week" -> 7;
-            case "quarter" -> 90;
-            default -> 35;
-        };
+        int targetDays = io.liftandshift.strikebench.model.Horizon.parse(horizon).expiryCalendarDays();
         List<LocalDate> usable = expirations.stream()
                 .filter(d -> !d.isBefore(today))
                 // A contract whose final bell (4pm ET on expiration day) has passed is DEAD — never
