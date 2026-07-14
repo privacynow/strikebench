@@ -1,6 +1,5 @@
 package io.liftandshift.strikebench.paper;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.market.Universes;
@@ -558,13 +557,17 @@ public final class PortfolioAccountingService {
                     : "Known subtotal only; missing observed executable marks: " + String.join(", ", summary.missingMarks());
             String id = Ids.newId("pval");
             Db.execOn(c, "INSERT INTO portfolio_valuation(id,portfolio_account_id,as_of,cash_cents,securities_value_cents,total_value_cents,"
-                            + "source,external_ref,notes,complete,missing_marks) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+                            + "source,external_ref,notes,complete) VALUES (?,?,?,?,?,?,?,?,?,?) "
                             + "ON CONFLICT (portfolio_account_id,source,as_of) DO UPDATE SET cash_cents=EXCLUDED.cash_cents,"
                             + "securities_value_cents=EXCLUDED.securities_value_cents,total_value_cents=EXCLUDED.total_value_cents,"
-                            + "notes=EXCLUDED.notes,complete=EXCLUDED.complete,missing_marks=EXCLUDED.missing_marks",
+                            + "notes=EXCLUDED.notes,complete=EXCLUDED.complete",
                     id, account.id(), asOf, summary.bookCashCents(), knownSecurities, knownTotal,
-                    "CALCULATED", "observed-executable-nav", notes, summary.complete(), Json.write(summary.missingMarks()));
-            return Db.queryOn(c, "SELECT * FROM portfolio_valuation WHERE portfolio_account_id=? AND source='CALCULATED' AND as_of=?",
+                    "CALCULATED", "observed-executable-nav", notes, summary.complete());
+            String valuationId = Db.queryOn(c, "SELECT id FROM portfolio_valuation "
+                            + "WHERE portfolio_account_id=? AND source='CALCULATED' AND as_of=?",
+                    r -> r.str("id"), account.id(), asOf).getFirst();
+            replaceMissingMarks(c, valuationId, summary.missingMarks());
+            return Db.queryOn(c, valuationSelect("v.portfolio_account_id=? AND v.source='CALCULATED' AND v.as_of=?", ""),
                     PortfolioAccountingService::mapValuation, account.id(), asOf).getFirst();
         });
     }
@@ -589,8 +592,7 @@ public final class PortfolioAccountingService {
         String owner = owner(ownerId);
         return db.tx(c -> {
             AccountProfile account = requireAccount(c, owner, accountId, true);
-            List<ValuationView> values = Db.queryOn(c,
-                    "SELECT * FROM portfolio_valuation WHERE portfolio_account_id=? ORDER BY as_of,id",
+            List<ValuationView> values = Db.queryOn(c, valuationSelect("v.portfolio_account_id=?", "ORDER BY v.as_of,v.id"),
                     PortfolioAccountingService::mapValuation, account.id());
             List<ValuationView> completeValues = values.stream().filter(ValuationView::complete).toList();
             long interest = incomeOn(c, account.id(), "INTEREST", null);
@@ -1939,7 +1941,22 @@ public final class PortfolioAccountingService {
         return new ValuationView(r.str("id"), r.str("portfolio_account_id"), iso(r.odt("as_of")),
                 r.lngOrNull("cash_cents"), r.lngOrNull("securities_value_cents"), r.lng("total_value_cents"),
                 r.str("source"), r.str("external_ref"), r.str("notes"), r.bool("complete"),
-                Json.read(r.str("missing_marks"), new TypeReference<List<String>>() {}));
+                r.strings("missing_mark_list"));
+    }
+
+    private static String valuationSelect(String where, String order) {
+        return "SELECT v.*,COALESCE(array_agg(m.mark_label ORDER BY m.ordinal) "
+                + "FILTER (WHERE m.mark_label IS NOT NULL),ARRAY[]::text[]) missing_mark_list "
+                + "FROM portfolio_valuation v LEFT JOIN portfolio_valuation_missing_mark m ON m.valuation_id=v.id "
+                + "WHERE " + where + " GROUP BY v.id " + order;
+    }
+
+    private static void replaceMissingMarks(Connection c, String valuationId, List<String> marks) throws SQLException {
+        Db.execOn(c, "DELETE FROM portfolio_valuation_missing_mark WHERE valuation_id=?", valuationId);
+        for (int i = 0; i < marks.size(); i++) {
+            Db.execOn(c, "INSERT INTO portfolio_valuation_missing_mark(valuation_id,ordinal,mark_label) VALUES(?,?,?)",
+                    valuationId, i, marks.get(i));
+        }
     }
 
     private static long incomeOn(Connection c, String accountId, String event, Integer year) throws SQLException {

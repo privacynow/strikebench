@@ -185,6 +185,17 @@ public final class Db implements AutoCloseable {
             try { return rs.getObject(col, java.time.LocalDate.class); }
             catch (SQLException e) { throw new DbException(e); }
         }
+        public java.util.List<String> strings(String col) {
+            try {
+                java.sql.Array array = rs.getArray(col);
+                if (array == null) return java.util.List.of();
+                Object raw = array.getArray();
+                if (!(raw instanceof Object[] values)) return java.util.List.of();
+                java.util.List<String> out = new java.util.ArrayList<>(values.length);
+                for (Object value : values) if (value != null) out.add(value.toString());
+                return java.util.List.copyOf(out);
+            } catch (SQLException e) { throw new DbException(e); }
+        }
         public byte[] bytes(String col) {
             try { return rs.getBytes(col); } catch (SQLException e) { throw new DbException(e); }
         }
