@@ -319,16 +319,42 @@ class PortfolioAccountingServiceTest {
         assertThat(books.realizedLots("local", taxable.id(), 2025)).singleElement().satisfies(match -> {
             assertThat(match.section1256()).isTrue();
             assertThat(match.holdingTerm()).isEqualTo("SECTION_1256");
+            assertThat(match.realizedGainCents()).isEqualTo(200_00L);
+            assertThat(match.economicRealizedGainCents()).isZero();
         });
         assertThat(books.lots("local", taxable.id(), false)).singleElement().satisfies(lot -> {
             assertThat(lot.section1256()).isTrue();
             assertThat(lot.remainingOpenAmountCents()).isEqualTo(1_200_00L);
+            assertThat(lot.economicRemainingOpenAmountCents()).isEqualTo(1_000_00L);
         });
+        assertThat(books.summary("local", taxable.id()).realizedPnlCents()).isZero();
         assertThat(books.transactions("local", taxable.id(), 0, 20).getFirst()).satisfies(tx -> {
             assertThat(tx.eventType()).isEqualTo("MARK_TO_MARKET");
             assertThat(tx.source()).isEqualTo("CALCULATED");
             assertThat(tx.cashEffectCents()).isZero();
         });
+    }
+
+    @Test
+    void section1256YearEndKeepsLongAndShortLotsOfTheSameContractDistinct() {
+        var taxable = books.createAccount("local", account("1256 opposing lots", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2025-12-01", "TRADE", null, 0L, null,
+                "BROKER", "spx-opposing-open", List.of(
+                        leg("OPTION", "BUY", "OPEN", "SPX", "CALL", "5000", "2026-03-20", 1, 100, "10"),
+                        leg("OPTION", "SELL", "OPEN", "SPX", "CALL", "5000", "2026-03-20", 1, 100, "10"))));
+        db.exec("INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,mark,source,bid_ask_observed,dataset_id) "
+                + "VALUES ('SPX','2025-12-31','2026-03-20',5000,'CALL',11.9,12.1,12.0,'broker-year-end',1,'observed')");
+
+        assertThat(books.markSection1256YearEnd("local", taxable.id(), 2025)).isEqualTo(1);
+        assertThat(books.realizedLots("local", taxable.id(), 2025))
+                .hasSize(2)
+                .allMatch(match -> match.economicRealizedGainCents() == 0)
+                .extracting(PortfolioAccountingService.RealizedLotView::realizedGainCents)
+                .containsExactlyInAnyOrder(200_00L, -200_00L);
+        assertThat(books.lots("local", taxable.id(), false))
+                .hasSize(2)
+                .extracting(PortfolioAccountingService.LotView::side)
+                .containsExactlyInAnyOrder("LONG", "SHORT");
     }
 
     @Test
@@ -494,6 +520,12 @@ class PortfolioAccountingServiceTest {
 
     @Test
     void taxableWashSaleDisallowsLossProRataAndCarriesBasisAndHoldingPeriod() {
+        books = new PortfolioAccountingService(db, CLOCK, new MarksSource() {
+            @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.empty(); }
+            @Override public Optional<LegMark> legMark(String symbol, Leg leg) {
+                return "AAPL".equals(symbol) ? Optional.of(mark("95.00", "95.10")) : Optional.empty();
+            }
+        });
         var taxable = books.createAccount("local", account("Wash sale", "TAXABLE", null));
         books.record("local", taxable.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "wash-open",
                 List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 10, 1, "100"))));
@@ -506,19 +538,25 @@ class PortfolioAccountingServiceTest {
 
         var realized = books.realizedLots("local", taxable.id(), 2026).getFirst();
         assertThat(realized.realizedGainCents()).isEqualTo(-200_00L);
+        assertThat(realized.economicRealizedGainCents()).isEqualTo(-200_00L);
         assertThat(realized.washSaleAdjustmentCents()).isEqualTo(120_00L);
         var open = books.lots("local", taxable.id(), false);
         assertThat(open).filteredOn(l -> l.remainingQuantity() == 6).singleElement().satisfies(lot -> {
             assertThat(lot.remainingOpenAmountCents()).isEqualTo(660_00L);
+            assertThat(lot.economicRemainingOpenAmountCents()).isEqualTo(540_00L);
             assertThat(lot.openedAt()).startsWith("2026-01-02");
         });
         assertThat(open).filteredOn(l -> l.remainingQuantity() == 4).singleElement().satisfies(lot -> {
             assertThat(lot.remainingOpenAmountCents()).isEqualTo(360_00L);
+            assertThat(lot.economicRemainingOpenAmountCents()).isEqualTo(360_00L);
             assertThat(lot.openedAt()).startsWith("2026-03-10");
         });
         var tax = books.taxReport("local", taxable.id(), 2026);
         assertThat(tax.shortTermGainCents()).isEqualTo(-80_00L);
         assertThat(tax.washSaleAdjustmentsCents()).isEqualTo(120_00L);
+        var economic = books.summary("local", taxable.id());
+        assertThat(economic.realizedPnlCents()).isEqualTo(-200_00L);
+        assertThat(economic.unrealizedPnlCents()).isEqualTo(50_00L);
     }
 
     @Test
