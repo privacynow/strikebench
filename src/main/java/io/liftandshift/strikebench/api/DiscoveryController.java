@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
-import io.liftandshift.strikebench.auth.AuthService;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.market.MarketDataService;
@@ -21,11 +20,11 @@ import io.liftandshift.strikebench.util.Json;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.function.Function;
 
 /** Owns strategy discovery, shared ranking, universe scans, and portfolio construction. */
@@ -40,7 +39,8 @@ final class DiscoveryController {
     private final PositionsService positions;
     private final UniverseService universe;
     private final SimulationSessions simSessions;
-    private final AuthService auth;
+    private final Clock clock;
+    private final io.liftandshift.strikebench.sim.MarketVolatilityResolver marketVolatility;
     private final Function<Context, Account> accountResolver;
     private final Function<Context, String> ownerResolver;
     private final Function<Context, String> activeWorldResolver;
@@ -49,7 +49,8 @@ final class DiscoveryController {
     DiscoveryController(Db db, MarketDataService market, EvaluationService evaluations,
                         RecommendationEngine engine, AutoRecommender auto,
                         PositionsService positions, UniverseService universe,
-                        SimulationSessions simSessions, AuthService auth,
+                        SimulationSessions simSessions, Clock clock,
+                        io.liftandshift.strikebench.sim.MarketVolatilityResolver marketVolatility,
                         Function<Context, Account> accountResolver,
                         Function<Context, String> ownerResolver,
                         Function<Context, String> activeWorldResolver,
@@ -62,7 +63,8 @@ final class DiscoveryController {
         this.positions = positions;
         this.universe = universe;
         this.simSessions = simSessions;
-        this.auth = auth;
+        this.clock = clock;
+        this.marketVolatility = marketVolatility;
         this.accountResolver = accountResolver;
         this.ownerResolver = ownerResolver;
         this.activeWorldResolver = activeWorldResolver;
@@ -166,6 +168,90 @@ final class DiscoveryController {
         if (evaluation.explanation() != null) receipt.set("explanation", Json.MAPPER.valueToTree(evaluation.explanation()));
     }
 
+    /** Builds the one ranked Decision competition, including explicit cash and share-owning baselines. */
+    ApiResponses.DecisionCompetition decisionCompetition(Context ctx, RecommendationEngine.Request decision) {
+        RecommendationEngine.Result result = resolveAndRecommend(ctx, decision);
+        Account account = accountResolver.apply(ctx);
+        String world = activeWorldResolver.apply(ctx);
+        boolean generatedWorld = !"observed".equals(world);
+        String owner = ownerResolver.apply(ctx);
+        var ranked = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
+                result.riskMode(), result.candidates(), account.buyingPowerCents(), owner, !generatedWorld,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world));
+
+        String recommendationId = null;
+        if (!ranked.isEmpty() && !generatedWorld) {
+            try {
+                recommendationId = evaluations.recordSurfaced(ranked.getFirst().id(), owner);
+            } catch (RuntimeException e) {
+                log.warn("A recommendation could not be added to the learning record");
+                log.debug("Recommendation-record detail", e);
+            }
+        }
+
+        List<ApiResponses.DecisionBaseline> baselines = new java.util.ArrayList<>();
+        baselines.add(new ApiResponses.DecisionBaseline("CASH", 0L, 0L, 0L, null, 0L,
+                null, true, null, null, null, null, null, null,
+                "Do nothing: $0 expected, $0 at risk, zero costs — every idea above must beat this after fees and spreads."));
+        addBuyAndHoldBaseline(result, world, baselines);
+
+        return new ApiResponses.DecisionCompetition(result.symbol(), String.valueOf(result.intent()),
+                ranked, result.rejected(), baselines, recommendationId,
+                generatedWorld
+                        ? "Simulated market — this competition is NOT recorded in your calibration record."
+                        : null);
+    }
+
+    private void addBuyAndHoldBaseline(RecommendationEngine.Result result, String world,
+                                       List<ApiResponses.DecisionBaseline> baselines) {
+        String laneWorld = worldParam(world);
+        try {
+            var quote = market.quote(result.symbol(), laneWorld).orElse(null);
+            if (quote == null || quote.mark() == null) return;
+
+            double spot = quote.mark().doubleValue();
+            long capitalCents = Math.round(spot * 100) * 100;
+            LocalDate frontExpiration = result.candidates().stream()
+                    .flatMap(candidate -> candidate.legs().stream())
+                    .map(leg -> {
+                        try { return LocalDate.parse(leg.expiration()); }
+                        catch (RuntimeException invalidExpiration) { return null; }
+                    })
+                    .filter(java.util.Objects::nonNull)
+                    .min(LocalDate::compareTo)
+                    .orElse(null);
+            LocalDate laneToday = market.simInstant(laneWorld)
+                    .map(instant -> LocalDate.ofInstant(instant,
+                            io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                    .orElseGet(() -> LocalDate.now(clock));
+            int horizonDays = frontExpiration == null ? 30
+                    : (int) Math.max(1, ChronoUnit.DAYS.between(laneToday, frontExpiration));
+            Double iv = marketVolatility.atmIv(result.symbol(), laneWorld, 30);
+            double volatility = iv == null ? 0.3 : iv;
+            var stockLeg = io.liftandshift.strikebench.model.Leg.stock(
+                    io.liftandshift.strikebench.model.LegAction.BUY, 1, quote.mark());
+            var curve = io.liftandshift.strikebench.pricing.PayoffCurve.of(List.of(stockLeg), 1);
+            var rateQuote = market.riskFreeRateQuote(horizonDays, laneWorld);
+            double rate = rateQuote.annualRate();
+            var probability = io.liftandshift.strikebench.pricing.ProbabilityMap.of(
+                    curve, spot, volatility, horizonDays / 365.0, rate, List.of());
+
+            baselines.add(new ApiResponses.DecisionBaseline("BUY_AND_HOLD",
+                    curve.riskNeutralExpectedValueCents(spot, volatility, horizonDays / 365.0, rate),
+                    null, probability.cvar95Cents(), probability.stressLossCents(), capitalCents,
+                    probability.pAnyProfit(), true, market.lane(laneWorld).name(), laneToday.toString(),
+                    horizonDays, volatility, iv != null ? "same-market ATM IV" : "30% modeled fallback",
+                    rateQuote.evidence(),
+                    "Own 100 shares (" + io.liftandshift.strikebench.util.Money.fmt(capitalCents)
+                            + "): present-value risk-neutral EV is approximately $0 before costs (r="
+                            + String.format(Locale.ROOT, "%.2f", rate * 100)
+                            + "%, q=0 assumed), with no expiry or option spread; the tail numbers are its modeled "
+                            + horizonDays + "-day downside at the chain's own vol."));
+        } catch (RuntimeException e) {
+            log.debug("Buy-and-hold baseline unavailable", e);
+        }
+    }
+
     /** Parses the recommend request (injecting real holdings for hold-based intents) and runs the engine. */
     private RecommendationEngine.Result resolveAndRecommend(Context ctx) {
         return resolveAndRecommend(ctx, ApiRequest.bodyOrNull(ctx, RecommendationEngine.Request.class));
@@ -224,8 +310,7 @@ final class DiscoveryController {
                         ? market.worldSymbols(world).map(List::copyOf).orElse(List.of())
                         : universe.active().symbols();
         Account acct = accountResolver.apply(ctx);
-        String uid = auth.currentUserId(ctx);
-        String ownerId = io.liftandshift.strikebench.util.OwnerScope.id(uid);
+        String ownerId = ownerResolver.apply(ctx);
         int topN = req.topN() != null ? req.topN() : 8;
         var rcScan = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerResolver.apply(ctx));
         var result = evaluations.scan(symbols, req.intent(),
@@ -251,8 +336,7 @@ final class DiscoveryController {
                         ? market.worldSymbols(optWorld).map(List::copyOf).orElse(List.of())
                         : universe.active().symbols();
         Account acct = accountResolver.apply(ctx);
-        String uid = auth.currentUserId(ctx);
-        String ownerId = io.liftandshift.strikebench.util.OwnerScope.id(uid);
+        String ownerId = ownerResolver.apply(ctx);
         var rcOpt = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerResolver.apply(ctx));
         var scan = evaluations.scan(symbols, req.intent(),
                 req.thesis() != null ? req.thesis() : "neutral",
@@ -380,4 +464,3 @@ final class DiscoveryController {
     }
 
 }
-
