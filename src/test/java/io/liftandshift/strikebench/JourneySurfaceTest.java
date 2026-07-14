@@ -25,7 +25,7 @@ class JourneySurfaceTest {
         for (String name : List.of("ApiServer", "CoreRoutes", "PlanRoutes", "DataRoutes",
                 "DataController", "ResearchRoutes", "WorldRoutes", "TradeRoutes", "TradeController",
                 "ResearchController", "PortfolioRoutes", "PortfolioController", "BrokerRoutes",
-                "BrokerController", "OutcomeRoutes", "OutcomeController")) {
+                "BrokerController", "OutcomeRoutes", "OutcomeController", "WorldController")) {
             routes.append(Files.readString(Path.of(
                     "src/main/java/io/liftandshift/strikebench/api/" + name + ".java"))).append('\n');
         }
@@ -201,7 +201,7 @@ class JourneySurfaceTest {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
 
-        for (String owner : List.of("CoreRoutes", "PlanRoutes", "WorldRoutes")) {
+        for (String owner : List.of("CoreRoutes", "PlanRoutes")) {
             assertThat(api).contains(owner + ".register(c, new " + owner + ".Handlers(");
         }
         String portfolio = Files.readString(Path.of(
@@ -236,6 +236,12 @@ class JourneySurfaceTest {
         assertThat(api).doesNotContain("private void brokerVerify(",
                 "private void brokerPreview(", "private void brokerPlace(",
                 "private void brokerCancel(");
+        String world = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/WorldController.java"));
+        assertThat(api).contains("worldController.register(c);");
+        assertThat(world).contains("WorldRoutes.register(config, new WorldRoutes.Handlers(");
+        assertThat(api).doesNotContain("private void simMarketCreate(",
+                "private void simMarketReport(", "private void resolveWorldInBackground(");
         String outcome = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/OutcomeController.java"));
         assertThat(api).contains("outcomeController.register(c);");
@@ -319,12 +325,14 @@ class JourneySurfaceTest {
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
         String data = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/DataController.java"));
+        String world = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/WorldController.java"));
         String transitions = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/WorldTransitionService.java"));
 
-        assertThat(api + data).contains(
-                "worldTransitions.current(ownerId(ctx))",
-                "worldTransitions.transition(world, ownerId(ctx))",
+        assertThat(api + data + world).contains(
+                "worldTransitions.current(ownerId.apply(ctx))",
+                "worldTransitions.transition(world, ownerId.apply(ctx))",
                 "worldTransitions.afterFinish(wasActive, owner)",
                 "worldTransitions.resetAfterDataReset(ownerId.apply(ctx))",
                 "return worldTransitions.active(owner);")
