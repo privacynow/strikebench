@@ -11,8 +11,9 @@
       visibleCommand = S.visibleCommand, focusPlanFrom = S.focusPlanFrom,
       startPlan = S.startPlan, legLabel = S.legLabel, fmtBreakeven = S.fmtBreakeven,
       prettyStrategy = S.prettyStrategy, isYoungTrade = S.isYoungTrade,
-      pressable = S.pressable, guideBlock = S.guideBlock,
-      planMarketLabel = S.planMarketLabel, intentBadge = S.intentBadge;
+      pressable = S.pressable, intentBadge = S.intentBadge;
+  var guideBlock = window.ViewPlan.guideBlock,
+      planMarketLabel = window.ViewPlan.marketLabel;
 
   // ---- Shared position controls ----
 
