@@ -7,8 +7,9 @@
       fmtNum = S.fmtNum, badge = S.badge, explain = S.explain,
       alertBox = S.alertBox, table = S.table, chip = S.chip;
   var visibleCommand = S.visibleCommand, focusPlanFrom = S.focusPlanFrom,
-      historyFetch = S.historyFetch, lazySparklines = S.lazySparklines,
       pressable = S.pressable, prettyStrategy = S.prettyStrategy;
+  var historyFetch = window.ViewResearch.historyFetch,
+      lazySparklines = window.ViewResearch.lazySparklines;
 
   // ---------- 9. Data status ----------
 

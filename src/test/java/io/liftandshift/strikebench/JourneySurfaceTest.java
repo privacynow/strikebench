@@ -14,30 +14,55 @@ class JourneySurfaceTest {
     }
 
     private static String viewSource() throws Exception {
-        return source("js/views.js") + "\n" + source("js/views-plan.js")
+        return source("js/views.js") + "\n" + source("js/views-research.js")
+                + "\n" + source("js/views-plan.js")
                 + "\n" + source("js/views-portfolio.js")
                 + "\n" + source("js/views-data.js");
+    }
+
+    @Test void researchHasAnExplicitViewModuleBoundary() throws Exception {
+        String html = source("index.html");
+        String views = source("js/views.js");
+        String research = source("js/views-research.js");
+
+        assertThat(html.indexOf("/js/views.js")).isLessThan(html.indexOf("/js/views-research.js"));
+        assertThat(html.indexOf("/js/views-research.js")).isLessThan(html.indexOf("/js/views-plan.js"));
+        assertThat(html.indexOf("/js/views-research.js")).isLessThan(html.indexOf("/js/app.js"));
+        assertThat(views).contains("window.ViewResearch.route(root, params)",
+                        "window.ViewResearch.sectorRail", "window.ViewResearch.lazySparklines",
+                        "window.ViewResearch.missingSparkCopy", "stripZeros: stripZeros")
+                .doesNotContain("async function research(root, params, embedded)",
+                        "async function sectorExplorer(root, context)", "function verdictPanel(",
+                        "var THESIS_BADGE");
+        assertThat(research).contains("var S = window.ViewShared",
+                "async function research(root, params, embedded)",
+                "async function sectorExplorer(root, context)", "function verdictPanel(",
+                "var THESIS_BADGE", "window.ViewPlan.provisionalStage(root, symbol)",
+                "missingSparkCopy: missingSparkCopy", "stripZeros = S.stripZeros",
+                "window.ViewResearch = Object.freeze({")
+                .doesNotContain("async function home(root, params)");
     }
 
     @Test void planJourneyHasAnExplicitViewModuleBoundary() throws Exception {
         String html = source("index.html");
         String views = source("js/views.js");
+        String research = source("js/views-research.js");
         String plan = source("js/views-plan.js");
 
         assertThat(html.indexOf("/js/views.js")).isLessThan(html.indexOf("/js/views-plan.js"));
+        assertThat(html.indexOf("/js/views-research.js")).isLessThan(html.indexOf("/js/views-plan.js"));
         assertThat(html.indexOf("/js/views-plan.js")).isLessThan(html.indexOf("/js/views-portfolio.js"));
         assertThat(html.indexOf("/js/views-plan.js")).isLessThan(html.indexOf("/js/app.js"));
         assertThat(views).contains("window.ViewPlan.planWorkspace(root, params)",
-                        "window.ViewPlan.provisionalStage(root, symbol)",
-                        "window.ViewPlan.economicAssessmentBlock", "window.ViewPlan.stages",
-                        "var THESIS_BADGE")
+                        "window.ViewPlan.economicAssessmentBlock", "window.ViewPlan.stages")
                 .doesNotContain("async function planWorkspace(root, params)",
                         "function planOutcomeWorkspace(config)", "function candidateCard(",
-                        "var PLAN_STAGES");
+                        "var PLAN_STAGES", "var THESIS_BADGE");
+        assertThat(research).contains("var THESIS_BADGE");
         assertThat(plan).contains("var S = window.ViewShared",
                 "async function planWorkspace(root, params)", "function planOutcomeWorkspace(config)",
                 "function candidateCard(", "var PLAN_STAGES = Object.freeze([",
-                "verdictPanel = S.verdictPanel", "stages: PLAN_STAGES",
+                "verdictPanel = window.ViewResearch.verdictPanel", "stages: PLAN_STAGES",
                 "window.ViewPlan = Object.freeze({")
                 .doesNotContain("var THESIS_BADGE");
     }
