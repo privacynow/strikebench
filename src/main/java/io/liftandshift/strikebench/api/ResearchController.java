@@ -42,7 +42,6 @@ final class ResearchController {
     private final Handler teachingExample;
     private final Handler scout;
     private final Handler intentLadder;
-    private final Handler evaluate;
     private final Handler opportunities;
     private final Handler optimize;
 
@@ -52,7 +51,7 @@ final class ResearchController {
                        Function<Context, String> activeWorld,
                        Function<Context, AnalysisContext> analysisContext,
                        Handler symbolResearch, Handler teachingExample,
-                       Handler scout, Handler intentLadder, Handler evaluate,
+                       Handler scout, Handler intentLadder,
                        Handler opportunities, Handler optimize) {
         this.clock = clock;
         this.market = market;
@@ -67,7 +66,6 @@ final class ResearchController {
         this.teachingExample = teachingExample;
         this.scout = scout;
         this.intentLadder = intentLadder;
-        this.evaluate = evaluate;
         this.opportunities = opportunities;
         this.optimize = optimize;
     }
@@ -81,7 +79,7 @@ final class ResearchController {
                 ctx -> ctx.json(new ApiResponses.StrategyCatalog<>(
                         Arrays.stream(StrategyFamily.values()).map(Enum::name).toList(),
                         StrategyCatalog.families(), StrategyCatalog.templates())),
-                teachingExample, scout, intentLadder, evaluate, opportunities, optimize,
+                teachingExample, scout, intentLadder, opportunities, optimize,
                 this::sizeExposure,
                 ctx -> ctx.json(new ApiResponses.Evaluations<>(
                         evaluations.recent(ownerId.apply(ctx), 50))),

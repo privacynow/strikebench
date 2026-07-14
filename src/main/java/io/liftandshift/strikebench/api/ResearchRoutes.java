@@ -23,7 +23,6 @@ public final class ResearchRoutes {
             Handler teachingExample,
             Handler scout,
             Handler intentLadder,
-            Handler evaluate,
             Handler opportunities,
             Handler optimize,
             Handler exposure,
@@ -52,7 +51,6 @@ public final class ResearchRoutes {
         config.routes.get("/api/welcome/teaching-example", h.teachingExample());
         config.routes.post("/api/research/scout", h.scout());
         config.routes.post("/api/research/{symbol}/intent-ladder", h.intentLadder());
-        config.routes.post("/api/evaluate", h.evaluate());
         config.routes.post("/api/opportunities", h.opportunities());
         config.routes.post("/api/optimize", h.optimize());
         config.routes.post("/api/builder/exposure", h.exposure());
