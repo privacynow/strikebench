@@ -150,6 +150,17 @@ class ManagedBacktestTest {
                 AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence);
         assertThat(evidence.observedMarks()).isEqualTo(5);
         assertThat(evidence.totalMarks()).isEqualTo(6);
+
+        db.exec("INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,mark,source,"
+                        + "bid_ask_observed,iv_source,dataset_id) VALUES (?,?,?,?,?,?,?,?,?,1,'vendor','observed')",
+                "AAPL", asOf, expiration, new BigDecimal("260"), "CALL",
+                new BigDecimal("7.00"), new BigDecimal("6.00"), new BigDecimal("6.50"), "orats");
+        Leg crossedLong = Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("260"),
+                expiration, 1, BigDecimal.ZERO);
+        kernel.valueCents("AAPL", List.of(crossedLong), 1, 250, 0.30, asOf,
+                AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence);
+        assertThat(evidence.observedMarks()).isEqualTo(5); // crossed historical book fell to the model
+        assertThat(evidence.totalMarks()).isEqualTo(7);
     }
 
     @Test

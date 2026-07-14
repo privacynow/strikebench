@@ -485,20 +485,18 @@ public final class RecommendationEngine {
         for (int i = 0; i < built.legs().size(); i++) {
             io.liftandshift.strikebench.model.Leg leg = built.legs().get(i);
             if (leg.isStock()) {
-                BigDecimal side = leg.action() == LegAction.BUY
-                        ? underlyingQuote.ask() : underlyingQuote.bid();
-                if (side == null || side.signum() <= 0
-                        || (underlyingQuote.bid() != null && underlyingQuote.ask() != null
-                        && underlyingQuote.bid().compareTo(underlyingQuote.ask()) > 0)) {
+                BigDecimal side = io.liftandshift.strikebench.market.ExecutablePrice.forAction(
+                        underlyingQuote.bid(), underlyingQuote.ask(), leg.action());
+                if (side == null) {
                     return candidateFailure(probe, "The stock leg has no executable two-sided quote");
                 }
                 executableLegs.add(Leg.stock(leg.action(), leg.ratio(), side));
                 continue;
             }
             OptionQuote q = built.quotes().get(i);
-            BigDecimal side = leg.action() == io.liftandshift.strikebench.model.LegAction.BUY ? q.ask() : q.bid();
-            if (side == null || side.signum() <= 0
-                    || (q.bid() != null && q.ask() != null && q.bid().compareTo(q.ask()) > 0)) {
+            BigDecimal side = io.liftandshift.strikebench.market.ExecutablePrice.forAction(
+                    q.bid(), q.ask(), leg.action());
+            if (side == null) {
                 return candidateFailure(probe, "An option leg has no executable two-sided quote");
             }
             executableLegs.add(new io.liftandshift.strikebench.model.Leg(leg.action(), leg.type(), leg.strike(),

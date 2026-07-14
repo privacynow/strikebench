@@ -62,12 +62,7 @@ default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.u
          * the higher bid" mints fictional money, so crossed books are not executable at all.
          */
         public BigDecimal executable(io.liftandshift.strikebench.model.LegAction action) {
-            if (bid != null && ask != null && bid.signum() > 0 && ask.signum() > 0
-                    && bid.compareTo(ask) > 0) {
-                return null; // crossed book
-            }
-            BigDecimal side = action == io.liftandshift.strikebench.model.LegAction.BUY ? ask : bid;
-            return side != null && side.signum() > 0 ? side : null;
+            return io.liftandshift.strikebench.market.ExecutablePrice.forAction(bid, ask, action);
         }
     }
 
