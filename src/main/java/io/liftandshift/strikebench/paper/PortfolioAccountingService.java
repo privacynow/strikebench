@@ -766,11 +766,11 @@ public final class PortfolioAccountingService {
                     .map(r -> Math.addExact(r.realizedGainCents(), r.washSaleAdjustmentCents())).toList(), "short-term gains");
             long ordinaryLt = exactSum(realized.stream().filter(r -> "LONG_TERM".equals(r.holdingTerm()))
                     .map(r -> Math.addExact(r.realizedGainCents(), r.washSaleAdjustmentCents())).toList(), "long-term gains");
-            List<Long> sectionGains = realized.stream().filter(RealizedLotView::section1256)
-                    .map(RealizedLotView::realizedGainCents).toList();
-            long sectionTotal = exactSum(sectionGains, "Section 1256 gains");
-            long sectionLong = exactSum(sectionGains.stream().map(gain -> percentage(gain, 60)).toList(),
-                    "Section 1256 long-term character");
+            long sectionTotal = exactSum(realized.stream().filter(RealizedLotView::section1256)
+                    .map(RealizedLotView::realizedGainCents).toList(), "Section 1256 gains");
+            // Character applies to the year's net Section 1256 result. Splitting each match first
+            // can move cents between the 60% and 40% buckets as the number of matches changes.
+            long sectionLong = percentage(sectionTotal, 60);
             long sectionShort = Math.subtractExact(sectionTotal, sectionLong);
             long st = Math.addExact(ordinarySt, sectionShort);
             long lt = Math.addExact(ordinaryLt, sectionLong);

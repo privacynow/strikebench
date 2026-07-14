@@ -4767,7 +4767,7 @@
       UI.field('Short-term rate %', st), UI.field('Long-term rate %', lt),
       UI.field('Ordinary-income rate %', ordinary), UI.field('State rate %', state));
     var taxNote = el('p', { class: 'muted small' },
-      'These are worksheet rates for the tax year you inspect. Changing a rate changes only the estimate; it never rewrites lots, basis, or transactions.');
+      'Not tax advice. These are worksheet rates for the tax year you inspect. Changing a rate changes only the estimate; it never rewrites lots, basis, or transactions.');
     function syncTax() { taxFields.hidden = taxNote.hidden = type.value !== 'TAXABLE'; }
     type.addEventListener('change', syncTax); syncTax();
     function bps(input) {
@@ -4835,7 +4835,8 @@
     var source = portfolioSelect([['MANUAL', 'Entered manually'], ['BROKER', 'Copied from broker']], 'MANUAL');
     var reference = el('input', { type: 'text', maxlength: '160', placeholder: 'Optional order or statement reference' });
     var notes = el('textarea', { rows: '2', maxlength: '1000', placeholder: 'Why you rolled or what changed' });
-    var section1256 = el('input', { type: 'checkbox', checked: position.section1256 ? 'checked' : null });
+    var section1256 = el('input', { type: 'checkbox', checked: position.section1256 ? 'checked' : null,
+      disabled: 'disabled' });
     var body = el('div', { class: 'book-roll-form' },
       el('p', {}, el('b', {}, portfolioPositionLabel(position)), ' · ', longSide ? 'long' : 'short', ' · ', position.quantity, ' open'),
       el('p', { class: 'muted small' }, 'This records one linked transaction: the old contract closes and realizes its gain or loss; the replacement opens with its own exact basis. Net premium carryover is reported separately and never substituted into tax basis.'),
@@ -4846,7 +4847,7 @@
         UI.field('Total fees $', fees), UI.field('Source', source),
         UI.field('Broker reference', reference)),
       el('label', { class: 'check-row' }, section1256,
-        el('span', {}, 'Section 1256 contract', el('small', {}, 'SPX, NDX, and RUT are detected automatically.'))),
+        el('span', {}, 'Section 1256 contract', el('small', {}, 'Tax classification carries from the position being rolled.'))),
       UI.field('Notes', notes));
     UI.confirmModal('Roll ' + position.symbol + ' ' + position.optionType.toLowerCase(), body, 'Record roll', async function () {
       var qty = Number(quantity.value), closing = Number(closePrice.value), opening = Number(openPrice.value);
@@ -4856,7 +4857,7 @@
       if (!Number.isFinite(opening) || opening < 0) throw new Error('Enter the exact replacement fill price.');
       if (!Number.isFinite(strike) || strike <= 0 || !nextExpiry.value) throw new Error('Enter the replacement strike and expiration.');
       if (!Number.isFinite(feeAmount) || feeAmount < 0) throw new Error('Fees must be zero or more.');
-      var explicit1256 = section1256.checked ? true : null;
+      var explicit1256 = Boolean(position.section1256);
       var out = await API.post('/api/portfolio/accounts/' + account.id + '/transactions', {
         occurredAt: portfolioInstant(occurred, 'Activity date and time'), eventType: 'ROLL',
         cashAmountCents: null, feesCents: Math.round(feeAmount * 100), taxCategory: null,
@@ -5474,8 +5475,8 @@
     root.appendChild(el('div', { class: 'book-tax-heading' },
       el('div', {}, el('h2', {}, 'Tax basis and estimate'),
         el('p', { class: 'muted' }, account.accountType === 'TAXABLE'
-          ? 'A reconciliation aid for recorded lots and income, not a tax filing or broker 1099.'
-          : 'Basis and performance remain tracked; current capital-gains tax is not assigned inside this retirement wrapper.')),
+          ? 'Not tax advice. A reconciliation aid for recorded lots and income, not a tax filing or broker 1099.'
+          : 'Not tax advice. Basis and performance remain tracked; current capital-gains tax is not assigned inside this retirement wrapper.')),
       UI.field('Tax year', year)));
     var taxData;
     try {
