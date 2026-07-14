@@ -7,6 +7,9 @@ import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.paper.MarksSource;
 
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /** Bridges the paper core's MarksSource port onto the live MarketDataService chain. */
@@ -14,6 +17,7 @@ public final class MarketDataMarks implements MarksSource {
 
     private final MarketDataService market;
     private final boolean fixturesOnly;
+    private volatile MarketDataEngine engine;
 
     public MarketDataMarks(MarketDataService market) {
         this(market, true);
@@ -24,26 +28,57 @@ public final class MarketDataMarks implements MarksSource {
         this.fixturesOnly = fixturesOnly;
     }
 
+    /** Late-wired because ApiServer owns engine lifecycle; all request paths run after this hook. */
+    public void setEngine(MarketDataEngine engine) { this.engine = engine; }
+
+    private static boolean observed(String worldId) {
+        return worldId == null || worldId.isBlank() || "observed".equalsIgnoreCase(worldId);
+    }
+
+    private Optional<Quote> observedQuote(String symbol) {
+        MarketDataEngine current = engine;
+        if (current == null) return market.quote(symbol);
+        return current.quote(symbol).map(MarketDataMarks::snapshotQuote);
+    }
+
+    private static Quote snapshotQuote(MarketDataEngine.MarketSnapshot snapshot) {
+        return new Quote(snapshot.symbol(), snapshot.description(), snapshot.last(), snapshot.bid(), snapshot.ask(),
+                snapshot.prevClose(), null, null, null, snapshot.optionable(), snapshot.asOfEpochMs(),
+                snapshot.source(), snapshot.freshness());
+    }
+
     @Override
     public Optional<BigDecimal> underlyingMark(String symbol) {
-        return market.quote(symbol).map(Quote::mark).filter(m -> m != null && m.signum() > 0);
+        return observedQuote(symbol).map(Quote::mark).filter(m -> m != null && m.signum() > 0);
     }
 
     @Override
     public Optional<java.math.BigDecimal> underlyingMark(String symbol, String worldId) {
-        if (worldId == null) return underlyingMark(symbol);
+        if (observed(worldId)) return underlyingMark(symbol);
         return market.quote(symbol, worldId).map(io.liftandshift.strikebench.model.Quote::mark)
                 .filter(m -> m != null && m.signum() > 0);
     }
 
     @Override
+    public Map<String, BigDecimal> underlyingMarks(List<String> symbols, String worldId) {
+        if (!observed(worldId) || engine == null) return MarksSource.super.underlyingMarks(symbols, worldId);
+        Map<String, BigDecimal> out = new LinkedHashMap<>();
+        for (MarketDataEngine.MarketSnapshot snapshot : engine.quotes(symbols == null ? List.of() : symbols)) {
+            BigDecimal mark = snapshotQuote(snapshot).mark();
+            if (mark != null && mark.signum() > 0) out.put(snapshot.symbol(), mark);
+        }
+        return out;
+    }
+
+    @Override
     public Optional<io.liftandshift.strikebench.model.DataEvidence> underlyingEvidence(String symbol, String worldId) {
-        return market.quote(symbol, worldId).map(io.liftandshift.strikebench.model.Quote::evidence);
+        return (observed(worldId) ? observedQuote(symbol) : market.quote(symbol, worldId))
+                .map(io.liftandshift.strikebench.model.Quote::evidence);
     }
 
     @Override
     public Optional<LegMark> legMark(String symbol, io.liftandshift.strikebench.model.Leg leg, String worldId) {
-        if (worldId == null) return legMark(symbol, leg);
+        if (observed(worldId)) return legMark(symbol, leg);
         if (leg.isStock()) {
             return market.quote(symbol, worldId).map(MarketDataMarks::stockMark)
                     .filter(m -> m.mid() != null);
@@ -67,12 +102,12 @@ public final class MarketDataMarks implements MarksSource {
 
     @Override
     public Optional<Long> underlyingAsOfMs(String symbol) {
-        return market.quote(symbol).map(io.liftandshift.strikebench.model.Quote::asOfEpochMs);
+        return observedQuote(symbol).map(io.liftandshift.strikebench.model.Quote::asOfEpochMs);
     }
 
     @Override
     public Optional<Long> underlyingAsOfMs(String symbol, String worldId) {
-        if (worldId == null) return underlyingAsOfMs(symbol);
+        if (observed(worldId)) return underlyingAsOfMs(symbol);
         return market.quote(symbol, worldId).map(io.liftandshift.strikebench.model.Quote::asOfEpochMs);
     }
 
@@ -85,7 +120,7 @@ public final class MarketDataMarks implements MarksSource {
     public Optional<LegMark> legMark(String symbol, Leg leg) {
         if (leg.isStock()) {
             // A share behaves like a delta-1, greek-free contract
-            return market.quote(symbol).map(MarketDataMarks::stockMark)
+            return observedQuote(symbol).map(MarketDataMarks::stockMark)
                     .filter(m -> m.mid() != null);
         }
         return market.chain(symbol, leg.expiration())

@@ -25,8 +25,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalDouble;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Routes market data requests through an ordered provider chain (highest priority first),
@@ -51,28 +55,57 @@ public final class MarketDataService {
     private volatile NewsFilingsProvider demoNewsProvider;
     private volatile RatesProvider demoRatesProvider;
 
-    private final Cache<String, Quote> quoteCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(15)).maximumSize(500).build();
-    private final Cache<String, OptionChain> chainCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(60)).maximumSize(200).build();
-    private final Cache<String, List<LocalDate>> expirationsCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(60)).maximumSize(200).build();
+    private static final Duration EMPTY_QUOTE_TTL = Duration.ofSeconds(3);
+    private static final Duration EMPTY_OPTION_TTL = Duration.ofSeconds(5);
+    private static final Duration EMPTY_HISTORY_TTL = Duration.ofSeconds(15);
+    private static final Duration EMPTY_NEWS_TTL = Duration.ofSeconds(30);
+    private static final Duration MODELED_RATE_TTL = Duration.ofMinutes(5);
+    private final Cache<String, Optional<Quote>> quoteCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<Quote>optionalExpiry(Duration.ofSeconds(15), EMPTY_QUOTE_TTL))
+            .maximumSize(500).build();
+    private final Cache<String, Optional<OptionChain>> chainCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<OptionChain>optionalExpiry(Duration.ofSeconds(60), EMPTY_OPTION_TTL))
+            .maximumSize(200).build();
+    private final Cache<String, List<LocalDate>> expirationsCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<LocalDate>listExpiry(Duration.ofSeconds(60), EMPTY_OPTION_TTL))
+            .maximumSize(200).build();
     private record CachedCandleSeries(CandleSeries series, boolean partialObserved) {}
     private static final Duration COMPLETE_CANDLE_CACHE_TTL = Duration.ofHours(1);
     private static final Duration PARTIAL_CANDLE_CACHE_TTL = Duration.ofMinutes(5);
-    private final Cache<String, CachedCandleSeries> candlesCache = Caffeine.newBuilder()
-            .expireAfter(new Expiry<String, CachedCandleSeries>() {
-                @Override public long expireAfterCreate(String key, CachedCandleSeries value, long currentTime) {
-                    return candleCacheTtl(value.partialObserved()).toNanos();
+    private final Cache<String, Optional<CachedCandleSeries>> candlesCache = Caffeine.newBuilder()
+            .expireAfter(new Expiry<String, Optional<CachedCandleSeries>>() {
+                @Override public long expireAfterCreate(String key, Optional<CachedCandleSeries> value, long currentTime) {
+                    return value.map(v -> candleCacheTtl(v.partialObserved())).orElse(EMPTY_HISTORY_TTL).toNanos();
                 }
-                @Override public long expireAfterUpdate(String key, CachedCandleSeries value, long currentTime,
+                @Override public long expireAfterUpdate(String key, Optional<CachedCandleSeries> value, long currentTime,
                                                         long currentDuration) {
-                    return candleCacheTtl(value.partialObserved()).toNanos();
+                    return value.map(v -> candleCacheTtl(v.partialObserved())).orElse(EMPTY_HISTORY_TTL).toNanos();
                 }
-                @Override public long expireAfterRead(String key, CachedCandleSeries value, long currentTime,
+                @Override public long expireAfterRead(String key, Optional<CachedCandleSeries> value, long currentTime,
                                                       long currentDuration) {
                     return currentDuration;
                 }
             }).maximumSize(100).build();
-    private final Cache<String, List<NewsItem>> newsCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofMinutes(5)).maximumSize(200).build();
-    private final Cache<Integer, RateQuote> rateCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(1)).maximumSize(20).build();
+    private final Cache<String, List<NewsItem>> newsCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<NewsItem>listExpiry(Duration.ofMinutes(5), EMPTY_NEWS_TTL))
+            .maximumSize(200).build();
+    private final Cache<Integer, RateQuote> rateCache = Caffeine.newBuilder()
+            .expireAfter(new Expiry<Integer, RateQuote>() {
+                private long ttl(RateQuote value) {
+                    return (value != null && value.evidence() != null
+                            && value.evidence().provenance() == io.liftandshift.strikebench.model.DataProvenance.MODELED
+                            ? MODELED_RATE_TTL : Duration.ofHours(1)).toNanos();
+                }
+                @Override public long expireAfterCreate(Integer key, RateQuote value, long now) { return ttl(value); }
+                @Override public long expireAfterUpdate(Integer key, RateQuote value, long now, long current) { return ttl(value); }
+                @Override public long expireAfterRead(Integer key, RateQuote value, long now, long current) { return current; }
+            }).maximumSize(20).build();
+
+    /** Provider I/O never runs while a Caffeine mapping lock is held. One explicit future per
+     * domain/key collapses concurrent misses, while cacheGeneration prevents an old request from
+     * repopulating data after a world/reset invalidation. */
+    private final Map<String, CompletableFuture<Object>> inFlightLoads = new ConcurrentHashMap<>();
+    private final AtomicLong cacheGeneration = new AtomicLong();
 
     private final Map<String, ProviderStatusInfo> statusByKey = new ConcurrentHashMap<>();
 
@@ -130,7 +163,54 @@ public final class MarketDataService {
         return MarketLane.of(worldId, fixtureOnlyChain, context);
     }
 
+    private static <T> Expiry<String, Optional<T>> optionalExpiry(Duration present, Duration empty) {
+        return new Expiry<>() {
+            private long ttl(Optional<T> value) { return (value.isPresent() ? present : empty).toNanos(); }
+            @Override public long expireAfterCreate(String key, Optional<T> value, long now) { return ttl(value); }
+            @Override public long expireAfterUpdate(String key, Optional<T> value, long now, long current) { return ttl(value); }
+            @Override public long expireAfterRead(String key, Optional<T> value, long now, long current) { return current; }
+        };
+    }
+
+    private static <T> Expiry<String, List<T>> listExpiry(Duration present, Duration empty) {
+        return new Expiry<>() {
+            private long ttl(List<T> value) { return (value == null || value.isEmpty() ? empty : present).toNanos(); }
+            @Override public long expireAfterCreate(String key, List<T> value, long now) { return ttl(value); }
+            @Override public long expireAfterUpdate(String key, List<T> value, long now, long current) { return ttl(value); }
+            @Override public long expireAfterRead(String key, List<T> value, long now, long current) { return current; }
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private <K, V> V cached(Cache<K, V> cache, K key, String domain, Supplier<V> loader) {
+        V hit = cache.getIfPresent(key);
+        if (hit != null) return hit;
+        long generation = cacheGeneration.get();
+        String flightKey = domain + "|" + generation + "|" + key;
+        CompletableFuture<Object> mine = new CompletableFuture<>();
+        CompletableFuture<Object> joined = inFlightLoads.putIfAbsent(flightKey, mine);
+        if (joined != null) {
+            try { return (V) joined.join(); }
+            catch (CompletionException e) {
+                if (e.getCause() instanceof RuntimeException runtime) throw runtime;
+                throw e;
+            }
+        }
+        try {
+            V loaded = java.util.Objects.requireNonNull(loader.get(), "cache loader returned null");
+            if (cacheGeneration.get() == generation) cache.put(key, loaded);
+            mine.complete(loaded);
+            return loaded;
+        } catch (RuntimeException e) {
+            mine.completeExceptionally(e);
+            throw e;
+        } finally {
+            inFlightLoads.remove(flightKey, mine);
+        }
+    }
+
     public void invalidateAll() {
+        cacheGeneration.incrementAndGet();
         quoteCache.invalidateAll();
         chainCache.invalidateAll();
         expirationsCache.invalidateAll();
@@ -141,6 +221,7 @@ public final class MarketDataService {
 
     /** Durable bar imports/backfills changed history without changing the active dataset id. */
     public void invalidateHistoricalData() {
+        cacheGeneration.incrementAndGet();
         candlesCache.invalidateAll();
     }
 
@@ -262,16 +343,15 @@ public final class MarketDataService {
 
     public Optional<Quote> quote(String symbol) {
         String sym = norm(symbol);
-        Quote q = quoteCache.get(sym, s ->
-                firstNonEmpty(Domain.QUOTES, p -> p.quote(s).orElse(null)));
-        if (q == null && !fixtureOnlyChain && quoteSnapshotStore != null) {
-            try {
-                q = quoteSnapshotStore.load(sym).map(MarketDataService::snapshotQuote).orElse(null);
-                if (q != null) quoteCache.put(sym, q);
-            } catch (RuntimeException e) {
-                log.debug("Last-known quote lookup failed for {}", sym, e);
+        Optional<Quote> loaded = cached(quoteCache, sym, "quote", () -> {
+            Quote q = firstNonEmpty(Domain.QUOTES, p -> p.quote(sym).orElse(null));
+            if (q == null && !fixtureOnlyChain && quoteSnapshotStore != null) {
+                try { q = quoteSnapshotStore.load(sym).map(MarketDataService::snapshotQuote).orElse(null); }
+                catch (RuntimeException e) { log.debug("Last-known quote lookup failed for {}", sym, e); }
             }
-        }
+            return Optional.ofNullable(q);
+        });
+        Quote q = loaded.orElse(null);
         return Optional.ofNullable(q).map(this::gateQuote)
                 .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
     }
@@ -283,16 +363,17 @@ public final class MarketDataService {
 
     public List<LocalDate> expirations(String symbol) {
         String sym = norm(symbol);
-        List<LocalDate> r = expirationsCache.get(sym, s ->
-                firstNonEmptyList(Domain.OPTIONS, p -> p.expirations(s)));
-        return r == null ? List.of() : r;
+        return cached(expirationsCache, sym, "expirations", () -> {
+            List<LocalDate> values = firstNonEmptyList(Domain.OPTIONS, p -> p.expirations(sym));
+            return values == null ? List.of() : List.copyOf(values);
+        });
     }
 
     public Optional<OptionChain> chain(String symbol, LocalDate expiration) {
         String k = norm(symbol) + "|" + expiration;
-        OptionChain c = chainCache.get(k, key ->
-                firstNonEmpty(Domain.OPTIONS, p -> p.chain(norm(symbol), expiration).orElse(null)));
-        return Optional.ofNullable(c).map(this::gateChain)
+        Optional<OptionChain> loaded = cached(chainCache, k, "chain", () -> Optional.ofNullable(
+                firstNonEmpty(Domain.OPTIONS, p -> p.chain(norm(symbol), expiration).orElse(null))));
+        return loaded.map(this::gateChain)
                 .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
     }
 
@@ -322,52 +403,59 @@ public final class MarketDataService {
         // The dataset id is part of the cache key: switching datasets must never serve another
         // dataset's cached candles.
         String k = dataset + "|" + norm(symbol) + "|" + from + "|" + to;
-        CachedCandleSeries r = candlesCache.get(k, key -> {
-            CandleStore.Read storedFallback = null;
-            // Complete persisted bars win. Partial observed history remains a fallback, but first
-            // gives an eligible provider the chance to enrich the requested range.
-            if (candleStore != null) {
-                try {
-                    Optional<CandleStore.Read> stored = candleStore.candles(norm(symbol), from, to, dataset);
-                    if (stored.isPresent() && !stored.get().series().candles().isEmpty()
-                            && (fixtureOnlyChain || !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
-                                || observedEvidence(stored.get().series().evidence()))) {
-                        if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
-                                || stored.get().coverage().complete()) {
-                            return cachedCandles(stored.get().series(), dataset, from, to);
-                        }
-                        storedFallback = stored.get();
+        Optional<CachedCandleSeries> r = cached(candlesCache, k, "candles",
+                () -> loadCandles(symbol, from, to, dataset));
+        return r.map(CachedCandleSeries::series).orElse(CandleSeries.EMPTY);
+    }
+
+    private Optional<CachedCandleSeries> loadCandles(String symbol, LocalDate from, LocalDate to,
+                                                      String dataset) {
+        CandleStore.Read storedFallback = null;
+        // Complete persisted bars win. Partial observed history remains a fallback, but first
+        // gives an eligible provider the chance to enrich the requested range.
+        if (candleStore != null) {
+            try {
+                Optional<CandleStore.Read> stored = candleStore.candles(norm(symbol), from, to, dataset);
+                if (stored.isPresent() && !stored.get().series().candles().isEmpty()
+                        && (fixtureOnlyChain || !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
+                            || observedEvidence(stored.get().series().evidence()))) {
+                    if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
+                            || stored.get().coverage().complete()) {
+                        return Optional.of(cachedCandles(stored.get().series(), dataset, from, to));
                     }
-                } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol, e.toString()); }
-            }
-            // Generated datasets are closed worlds. Missing scenario bars stay unavailable;
-            // falling through here would splice observed or Demo prices into a scenario lane.
-            if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)) return null;
-            CandleSeries fromProviders = candleSeriesFromProviders(symbol, from, to);
-            if (!fromProviders.candles().isEmpty() && !fixtureOnlyChain
-                    && observedEvidence(fromProviders.evidence()) && candleStore != null) {
-                try {
-                    var providerCoverage = CandleCoverage.assess(fromProviders.candles(), from, to);
-                    int persisted = candleStore.persistObserved(norm(symbol), fromProviders);
-                    if (persisted > 0) log.debug("Saved {} observed daily bars for local reuse", persisted);
-                    if (!providerCoverage.complete()) {
-                        Optional<CandleStore.Read> refreshed = candleStore.candles(norm(symbol), from, to, dataset);
-                        if (refreshed.isPresent()
-                                && (refreshed.get().coverage().complete()
-                                || refreshed.get().coverage().availableSessions() >= providerCoverage.availableSessions())) {
-                            return cachedCandles(refreshed.get().series(), dataset, from, to);
-                        }
-                    }
-                } catch (RuntimeException e) {
-                    // The provider result remains usable for this request. Storage is an additive
-                    // optimization and must not turn a valid observed read into an outage.
-                    log.warn("Observed daily history could not be saved for local reuse");
+                    storedFallback = stored.get();
                 }
+            } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol, e.toString()); }
+        }
+        // Generated datasets are closed worlds. Missing scenario bars stay unavailable;
+        // falling through here would splice observed or Demo prices into a scenario lane.
+        if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)) return Optional.empty();
+        CandleSeries fromProviders = candleSeriesFromProviders(symbol, from, to);
+        if (!fromProviders.candles().isEmpty() && !fixtureOnlyChain
+                && observedEvidence(fromProviders.evidence()) && candleStore != null) {
+            try {
+                var providerCoverage = CandleCoverage.assess(fromProviders.candles(), from, to);
+                int persisted = candleStore.persistObserved(norm(symbol), fromProviders);
+                if (persisted > 0) log.debug("Saved {} observed daily bars for local reuse", persisted);
+                if (!providerCoverage.complete()) {
+                    Optional<CandleStore.Read> refreshed = candleStore.candles(norm(symbol), from, to, dataset);
+                    if (refreshed.isPresent()
+                            && (refreshed.get().coverage().complete()
+                            || refreshed.get().coverage().availableSessions() >= providerCoverage.availableSessions())) {
+                        return Optional.of(cachedCandles(refreshed.get().series(), dataset, from, to));
+                    }
+                }
+            } catch (RuntimeException e) {
+                // The provider result remains usable for this request. Storage is an additive
+                // optimization and must not turn a valid observed read into an outage.
+                log.warn("Observed daily history could not be saved for local reuse");
             }
-            if (!fromProviders.candles().isEmpty()) return cachedCandles(fromProviders, dataset, from, to);
-            return storedFallback == null ? null : cachedCandles(storedFallback.series(), dataset, from, to);
-        });
-        return r == null ? CandleSeries.EMPTY : r.series();
+        }
+        if (!fromProviders.candles().isEmpty()) {
+            return Optional.of(cachedCandles(fromProviders, dataset, from, to));
+        }
+        return storedFallback == null ? Optional.empty()
+                : Optional.of(cachedCandles(storedFallback.series(), dataset, from, to));
     }
 
     private static CachedCandleSeries cachedCandles(CandleSeries series, String dataset,
@@ -453,26 +541,25 @@ public final class MarketDataService {
      */
     public List<NewsItem> news(String symbol) {
         String sym = norm(symbol);
-        List<NewsItem> r = newsCache.get(sym, s -> {
+        return cached(newsCache, sym, "news", () -> {
             if (fixtureOnlyChain) {
                 List<NewsItem> demo = new ArrayList<>();
                 for (NewsFilingsProvider p : newsProviders) {
-                    if (FIXTURE.equals(p.name())) gatherNews(p.name(), () -> p.news(s), demo);
+                    if (FIXTURE.equals(p.name())) gatherNews(p.name(), () -> p.news(sym), demo);
                 }
-                return demo.isEmpty() ? null : dedupSortedNews(demo);
+                return demo.isEmpty() ? List.of() : dedupSortedNews(demo);
             }
             List<NewsItem> real = new ArrayList<>();
             for (NewsFilingsProvider p : newsProviders) {
                 if (FIXTURE.equals(p.name())) continue;
-                gatherNews(p.name(), () -> p.news(s), real);
+                gatherNews(p.name(), () -> p.news(sym), real);
             }
             for (MarketDataProvider p : providersFor(Domain.NEWS)) {
                 if (FIXTURE.equals(p.name())) continue;
-                gatherNews(p.name(), () -> p.news(s), real);
+                gatherNews(p.name(), () -> p.news(sym), real);
             }
-            return real.isEmpty() ? null : dedupSortedNews(real);
+            return real.isEmpty() ? List.of() : dedupSortedNews(real);
         });
-        return r == null ? List.of() : r;
     }
 
     /** World-aware news: simulated worlds have none; Demo gets Fixture Wire; Observed gets only real sources. */
@@ -524,14 +611,14 @@ public final class MarketDataService {
             return new RateQuote(0.04,
                     io.liftandshift.strikebench.model.DataEvidence.missing("unknown simulated market"));
         }
-        RateQuote r = rateCache.get(days, d -> {
+        return cached(rateCache, days, "rate", () -> {
             for (RatesProvider p : ratesProviders) {
                 // Fixture rates belong only to the explicit Demo build/lane. In an Observed
                 // chain, exhausted Treasury/FRED sources fall through to the MODELED default;
                 // disclosure never grants a Demo input permission to enter Observed pricing.
                 if (!fixtureOnlyChain && FIXTURE.equalsIgnoreCase(p.name())) continue;
                 try {
-                    OptionalDouble v = p.riskFreeRate(d);
+                    OptionalDouble v = p.riskFreeRate(days);
                     if (v.isPresent()) {
                         recordOk(p.name(), Domain.RATES);
                         return new RateQuote(v.getAsDouble(),
@@ -543,9 +630,8 @@ public final class MarketDataService {
                     recordError(p.name(), Domain.RATES, e);
                 }
             }
-            return null;
+            return RateQuote.modeledDefault(0.04);
         });
-        return r == null ? RateQuote.modeledDefault(0.04) : r;
     }
 
     public double riskFreeRate(int days) {
