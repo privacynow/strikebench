@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.api;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
 import io.liftandshift.strikebench.backtest.Backtester;
@@ -37,12 +39,14 @@ final class PlanController {
     private final PositionsService positions;
     private final PlanService planSvc;
     private final PlanEvidenceService planEvidence;
+    private final PlanStrategyService planStrategy;
     private final Function<Context, Account> currentAccountResolver;
     private final Function<Context, String> ownerResolver;
     private final Function<Context, String> activeWorldResolver;
     private final Function<Context, AnalysisContext> analysisContextResolver;
     private final PlanStrategyController strategyController;
     private final PlanOutcomeController planOutcomeController;
+    private final PlanDecisionController planDecisionController;
 
     PlanController(AppConfig cfg, Clock clock, Db db, MarketDataService market,
                    PositionsService positions,
@@ -64,21 +68,23 @@ final class PlanController {
         this.positions = positions;
         this.planSvc = planSvc;
         this.planEvidence = planEvidence;
+        this.planStrategy = planStrategy;
         this.currentAccountResolver = currentAccountResolver;
         this.ownerResolver = ownerResolver;
         this.activeWorldResolver = activeWorldResolver;
         this.analysisContextResolver = analysisContextResolver;
         this.strategyController = new PlanStrategyController(this, cfg, market, positions, trades,
                 auto, evaluations, planSvc, planStrategy, discoveryController, tradeController);
-        this.planOutcomeController = new PlanOutcomeController(this, cfg, clock, db, market,
-                trades, backtester, planSvc, planEvidence, planStrategy, planOutcomes,
-                planRehearsals, planDecisions, planManagement, pathEnsembles, simEngine,
-                outcomeController, tradeController);
+        this.planOutcomeController = new PlanOutcomeController(this, cfg, market, backtester,
+                planSvc, planEvidence, planStrategy, planOutcomes, pathEnsembles, simEngine,
+                outcomeController);
+        this.planDecisionController = new PlanDecisionController(this, clock, db, market, trades,
+                planSvc, planRehearsals, planDecisions, planManagement, tradeController);
     }
 
     void register(JavalinConfig config) {
         PlanRoutes.register(config, new PlanRoutes.Handlers(
-                this::plansList, this::planCreate, planOutcomeController::plansPortfolio, this::planGet,
+                this::plansList, this::planCreate, planDecisionController::plansPortfolio, this::planGet,
                 this::planContextPut, this::planIntentPut, this::planStagePut, this::planOpenPut,
                 this::planArchive, this::planDelete, this::planEvidenceLatest,
                 this::planEvidenceStudy, strategyController::planStrategyLatest,
@@ -89,14 +95,14 @@ final class PlanController {
                 strategyController::planScoutSpawn, planOutcomeController::planOutcomesLatest,
                 planOutcomeController::planEnsembleRun, planOutcomeController::planOutcomeRun,
                 planOutcomeController::planOutcomeCompare, planOutcomeController::planBacktestRun,
-                planOutcomeController::planBacktestGet, planOutcomeController::planRehearsalsList,
-                planOutcomeController::planRehearsalCreate,
-                planOutcomeController::planDecisionLatest, planOutcomeController::planDecisionPreview,
-                planOutcomeController::planDecisionTrade, planOutcomeController::planDecisionCash,
-                planOutcomeController::planManageGet, planOutcomeController::planManageRefresh,
-                planOutcomeController::planManageUnwind, planOutcomeController::planManageSettle,
-                planOutcomeController::planManageRoll, planOutcomeController::planManageVoid,
-                planOutcomeController::planManageReview));
+                planOutcomeController::planBacktestGet, planDecisionController::planRehearsalsList,
+                planDecisionController::planRehearsalCreate,
+                planDecisionController::planDecisionLatest, planDecisionController::planDecisionPreview,
+                planDecisionController::planDecisionTrade, planDecisionController::planDecisionCash,
+                planDecisionController::planManageGet, planDecisionController::planManageRefresh,
+                planDecisionController::planManageUnwind, planDecisionController::planManageSettle,
+                planDecisionController::planManageRoll, planDecisionController::planManageVoid,
+                planDecisionController::planManageReview));
         config.routes.exception(PlanMarketMismatchException.class, (e, ctx) ->
                 ctx.status(409).json(new ApiResponses.PlanMarketMismatchBody(
                         "plan_market_mismatch", e.getMessage(), e.marketKind, e.targetWorld)));
@@ -106,6 +112,13 @@ final class PlanController {
     String activeWorld(Context ctx) { return activeWorldResolver.apply(ctx); }
     Account currentAccount(Context ctx) { return currentAccountResolver.apply(ctx); }
     AnalysisContext analysisCtx(Context ctx) { return analysisContextResolver.apply(ctx); }
+    ObjectNode selectedCandidate(Context ctx, io.liftandshift.strikebench.plan.Plan.View plan,
+                                 boolean required) {
+        JsonNode selected = planStrategy.selectedCandidate(ownerId(ctx), plan.id());
+        if (selected instanceof ObjectNode candidate) return candidate;
+        if (required) throw new IllegalStateException("Select a structure in Strategy before continuing.");
+        return null;
+    }
     private static <T> T bodyOrNull(Context ctx, Class<T> type) { return ApiRequest.bodyOrNull(ctx, type); }
     private static <T> T requireBody(T body) { return ApiRequest.requireBody(body); }
     static String worldParam(String world) {
