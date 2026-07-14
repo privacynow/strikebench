@@ -5466,9 +5466,101 @@
           + ' long-term and ' + fmtMoney(report.section1256ShortTermCents || 0) + ' short-term.'),
       stat('User-rate scenario', report.scenarioTotalTaxCents == null ? 'Not calculated' : fmtMoney(report.scenarioTotalTaxCents),
         report.accountType !== 'TAXABLE' ? 'Not applicable to this retirement wrapper.'
-          : report.scenarioTotalTaxCents == null ? report.note
+          : report.scenarioTotalTaxCents == null ? 'Withheld; the tax-rules notice below explains the missing input or unsupported case.'
           : report.scenarioStateTaxCents == null ? 'Federal scenario only; no state scenario rate is entered.'
             : 'Federal plus state scenario using the rates in Settings. This is not tax owed.'));
+  }
+
+  function portfolioTaxReconciliation(report, account, year) {
+    var saved = report.reconciliation;
+    function dollars(amount) { return amount && amount.brokerCents != null ? (amount.brokerCents / 100).toFixed(2) : ''; }
+    function moneyInput(label, amount, opts) {
+      opts = opts || {};
+      return { label: label, input: el('input', { type: 'number', step: '0.01', min: opts.nonnegative ? '0' : null,
+        value: dollars(amount), placeholder: 'Optional', 'aria-label': label }) };
+    }
+    var fields = {
+      shortTerm: moneyInput('Final short-term $', saved && saved.shortTermGain),
+      longTerm: moneyInput('Final long-term $', saved && saved.longTermGain),
+      wash: moneyInput('Wash adjustment $', saved && saved.washAdjustment, { nonnegative: true }),
+      section1256: moneyInput('Section 1256 net $', saved && saved.section1256Gain),
+      interest: moneyInput('Broker interest $', saved && saved.interest),
+      ordinaryDividend: moneyInput('Broker ordinary dividends $', saved && saved.ordinaryDividend),
+      qualifiedDividend: moneyInput('Broker qualified dividends $', saved && saved.qualifiedDividend),
+      capitalGainDistribution: moneyInput('Broker capital-gain distributions $', saved && saved.capitalGainDistribution)
+    };
+    var status = el('select', { 'aria-label': 'Reconciliation status' },
+      [['DRAFT', 'Draft · still reviewing'], ['RECONCILED', 'Reconciled · compared with forms']]
+        .map(function (row) { return el('option', { value: row[0],
+          selected: row[0] === (saved ? saved.status : 'DRAFT') ? 'selected' : null }, row[1]); }));
+    var reference = el('input', { type: 'text', maxlength: '200', value: saved && saved.formReference || '',
+      placeholder: 'e.g. corrected 1099-B dated 2026-02-15', 'aria-label': 'Broker form reference' });
+    var notes = el('textarea', { maxlength: '2000', rows: '3', placeholder: 'Optional reconciliation notes',
+      'aria-label': 'Reconciliation notes' }, saved && saved.notes || '');
+    function fieldNodes(keys) {
+      return keys.map(function (key) { return UI.field(fields[key].label, fields[key].input); });
+    }
+    function cents(node, label) {
+      if (node.value.trim() === '') return null;
+      var value = Number(node.value), result = Math.round(value * 100);
+      if (!Number.isFinite(value) || !Number.isSafeInteger(result)) throw new Error(label + ' is outside the supported money range.');
+      return result;
+    }
+    var message = el('div', { class: 'small', 'aria-live': 'polite' });
+    var save = el('button', { type: 'button', class: 'btn', onclick: async function () {
+      save.disabled = true; save.setAttribute('aria-busy', 'true'); message.textContent = ''; message.className = 'small';
+      try {
+        var payload = { status: status.value, formReference: reference.value || null,
+          shortTermGainCents: cents(fields.shortTerm.input, fields.shortTerm.label),
+          longTermGainCents: cents(fields.longTerm.input, fields.longTerm.label),
+          washAdjustmentCents: cents(fields.wash.input, fields.wash.label),
+          section1256GainCents: cents(fields.section1256.input, fields.section1256.label),
+          interestCents: cents(fields.interest.input, fields.interest.label),
+          ordinaryDividendCents: cents(fields.ordinaryDividend.input, fields.ordinaryDividend.label),
+          qualifiedDividendCents: cents(fields.qualifiedDividend.input, fields.qualifiedDividend.label),
+          capitalGainDistributionCents: cents(fields.capitalGainDistribution.input, fields.capitalGainDistribution.label),
+          notes: notes.value || null };
+        await API.put('/api/portfolio/accounts/' + account.id + '/tax/' + year + '/reconciliation', payload);
+        UI.toast('Broker-form reconciliation saved', 'ok'); await App.render();
+      } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
+      finally { save.disabled = false; save.removeAttribute('aria-busy'); }
+    } }, saved ? 'Update reconciliation' : 'Save reconciliation');
+    var clear = saved ? el('button', { type: 'button', class: 'btn btn-secondary', onclick: async function () {
+      clear.disabled = save.disabled = true; clear.setAttribute('aria-busy', 'true'); message.textContent = ''; message.className = 'small';
+      try {
+        await API.del('/api/portfolio/accounts/' + account.id + '/tax/' + year + '/reconciliation');
+        UI.toast('Broker-form reconciliation cleared', 'ok'); await App.render();
+      } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
+      finally { clear.disabled = save.disabled = false; clear.removeAttribute('aria-busy'); }
+    } }, 'Clear reconciliation') : null;
+    var card = el('section', { class: 'card book-tax-reconciliation' },
+      UI.cardHeader('Broker-form reconciliation', el('span', { class: 'badge ' + (saved && saved.status === 'RECONCILED' ? 'badge-ok' : 'badge-dim') }, saved ? saved.status : 'NOT STARTED')),
+      el('p', { class: 'muted' }, 'Enter totals from your broker forms. StrikeBench compares them with this recorded book; it never overwrites lots, basis, or transactions.'),
+      el('p', { class: 'muted small' }, 'Short- and long-term fields mean the final totals after combining the applicable broker forms, including any Section 1256 character. The separate Section 1256 field reconciles that component.'),
+      el('div', { class: 'form-grid book-tax-reconciliation-meta' }, UI.field('Status', status), UI.field('Form reference', reference)),
+      el('div', { class: 'form-grid book-tax-reconciliation-core' }, fieldNodes(['shortTerm', 'longTerm', 'wash', 'section1256'])),
+      UI.expandable('Interest and dividend forms', function () {
+        return el('div', { class: 'form-grid' }, fieldNodes(['interest', 'ordinaryDividend', 'qualifiedDividend', 'capitalGainDistribution']));
+      }, { open: Learn.currentLevel() === 'expert' }), UI.field('Notes', notes, { className: 'book-tax-reconciliation-notes' }));
+    if (saved) {
+      var comparisons = [
+        ['Final short-term total', saved.shortTermGain], ['Final long-term total', saved.longTermGain],
+        ['Wash adjustment', saved.washAdjustment], ['Section 1256 net gain / loss', saved.section1256Gain],
+        ['Interest', saved.interest], ['Ordinary dividends', saved.ordinaryDividend],
+        ['Qualified dividends', saved.qualifiedDividend], ['Capital-gain distributions', saved.capitalGainDistribution]
+      ].filter(function (row) { return row[1].brokerCents != null; });
+      card.appendChild(el('div', { class: 'book-tax-comparison' },
+        el('h3', {}, 'Recorded book vs broker forms'),
+        el('p', { class: 'muted small' }, 'Difference is broker form minus StrikeBench. A non-zero amount is a prompt to investigate, not an automatic correction.'),
+        table(['Field', 'StrikeBench', 'Broker form', 'Difference'], comparisons.map(function (row) {
+          return el('tr', {}, el('td', { class: 'book-tax-comparison-field' }, row[0]),
+            el('td', { 'data-label': 'StrikeBench' }, fmtMoney(row[1].strikeBenchCents)),
+            el('td', { 'data-label': 'Broker form' }, fmtMoney(row[1].brokerCents)),
+            el('td', { 'data-label': 'Difference' }, pnlSpan(row[1].differenceCents)));
+        }))));
+    }
+    card.appendChild(el('div', { class: 'btn-row' }, save, clear)); card.appendChild(message);
+    return card;
   }
 
   async function renderPortfolioBookTax(root, account) {
@@ -5518,6 +5610,7 @@
         return el('span', {}, index ? ' · ' : '', el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, source.title));
       })));
     root.appendChild(rulesNotice);
+    if (account.accountType === 'TAXABLE') root.appendChild(portfolioTaxReconciliation(report, account, yearValue));
     var openCard = el('section', { class: 'card book-open-tax-lots' }, UI.cardHeader('Open tax lots',
       el('span', { class: 'badge badge-dim' }, openLots.length + ' lot' + (openLots.length === 1 ? '' : 's'))));
     if (!openLots.length) openCard.appendChild(UI.emptyState('No open tax lots',

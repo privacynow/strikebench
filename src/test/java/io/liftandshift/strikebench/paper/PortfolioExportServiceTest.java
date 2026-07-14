@@ -76,6 +76,9 @@ class PortfolioExportServiceTest {
                 "2026-01-01", 1_000_000L, 0L, 1_000_000L, "MANUAL", null, "start"));
         books.addValuation("local", account.id(), new PortfolioAccountingService.ValuationInput(
                 "2026-07-13", 1_010_000L, 0L, 1_010_000L, "MANUAL", null, "finish"));
+        books.saveTaxReconciliation("local", account.id(), 2026,
+                new PortfolioAccountingService.TaxReconciliationInput("RECONCILED", "Corrected 1099 package",
+                        12_00L, 0L, 0L, 0L, 1_00L, 0L, 0L, 0L, "Reviewed against broker forms"));
 
         byte[] xlsx = exports.workbook("local", account.id(), 2026);
         assertThat(xlsx.length).isGreaterThan(2_000);
@@ -96,7 +99,8 @@ class PortfolioExportServiceTest {
                 "xl/worksheets/sheet1.xml", "xl/worksheets/sheet6.xml");
         assertThat(xml).contains("Summary", "Transactions", "Performance", "Tax 2026", "Modified Dietz",
                 "Time-weighted return", "Money-weighted return (XIRR)", "Maximum drawdown", "SPY benchmark return",
-                "Primary transaction row", "Not tax advice", "User-rate total scenario", "Ruleset status");
+                "Primary transaction row", "Not tax advice", "User-rate total scenario", "Ruleset status",
+                "Broker-form reconciliation", "Corrected 1099 package", "Broker minus StrikeBench");
         assertThat(xml).contains("kept removed").doesNotContain("\u0001");
         assertThat(xml).doesNotContain("<f>");
     }
