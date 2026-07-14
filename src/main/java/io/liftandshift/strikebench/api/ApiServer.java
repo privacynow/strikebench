@@ -324,6 +324,7 @@ public final class ApiServer {
                 evaluations, this::ownerId, this::activeWorld, this::analysisCtx,
                 this::research, this::welcomeTeachingExample, this::researchScout,
                 this::researchIntentLadder, this::evaluate, this::opportunities, this::optimize);
+        BrokerController brokerController = new BrokerController(broker);
         app = Javalin.create(c -> {
             c.jetty.port = port;
             c.router.ignoreTrailingSlashes = true;
@@ -530,21 +531,7 @@ public final class ApiServer {
             // Historical replays are Plan-owned. The report id remains readable so a Plan can
             // restore its full normalized summary plus the existing detailed replay artifact.
 
-            BrokerRoutes.register(c, new BrokerRoutes.Handlers(
-                    ctx -> ctx.json(broker.status()),
-                    ctx -> ctx.json(new ApiResponses.AuthorizeUrl(broker.startConnect())),
-                    this::brokerVerify,
-                    ctx -> ctx.json(new ApiResponses.Accounts<>(broker.accounts())),
-                    ctx -> ctx.json(broker.balance(ctx.pathParam("k"))),
-                    ctx -> ctx.json(new ApiResponses.Positions<>(broker.positions(ctx.pathParam("k")))),
-                    ctx -> {
-                        String k = ctx.queryParam("accountIdKey");
-                        if (k == null || k.isBlank()) {
-                            throw new IllegalArgumentException("accountIdKey is required");
-                        }
-                        ctx.json(new ApiResponses.Orders<>(broker.orders(k)));
-                    },
-                    this::brokerPreview, this::brokerPlace, this::brokerCancel));
+            brokerController.register(c);
 
             c.routes.exception(io.liftandshift.strikebench.auth.UnauthorizedException.class, (e, ctx) ->
                     ctx.status(401).json(new ApiResponses.AuthErrorBody("auth_required",
@@ -4354,41 +4341,6 @@ public final class ApiServer {
                         (int) Math.min(Integer.MAX_VALUE, p.freeShares()), p.avgCostCents()))
                 .toList();
         ctx.json(auto.run(req, acct.buyingPowerCents(), held, worldParam(world)));
-    }
-
-    // ---- Broker (live trading; heavily gated) ----
-
-    public record BrokerVerifyRequest(String code) {}
-
-    public record BrokerOrderRequest(String accountIdKey, Map<String, Object> order,
-                                     String previewId, String clientOrderId, String confirmText) {}
-
-    private void brokerVerify(Context ctx) {
-        BrokerVerifyRequest req = requireBody(bodyOrNull(ctx, BrokerVerifyRequest.class));
-        broker.verifyConnect(req.code());
-        ctx.json(broker.status());
-    }
-
-    private void brokerPreview(Context ctx) {
-        BrokerOrderRequest req = requireBody(bodyOrNull(ctx, BrokerOrderRequest.class));
-        BrokerService.PreviewOutcome outcome = broker.preview(req.accountIdKey(), req.order());
-        ctx.json(new ApiResponses.BrokerPreview<>(
-                outcome.localId(), outcome.preview(), BrokerService.CONFIRM_TEXT));
-    }
-
-    private void brokerPlace(Context ctx) {
-        BrokerOrderRequest req = requireBody(bodyOrNull(ctx, BrokerOrderRequest.class));
-        BrokerService.PlaceOutcome outcome = broker.place(req.accountIdKey(), req.order(),
-                req.previewId(), req.clientOrderId(), req.confirmText());
-        ctx.json(outcome);
-    }
-
-    private void brokerCancel(Context ctx) {
-        String accountIdKey = ctx.queryParam("accountIdKey");
-        if (accountIdKey == null || accountIdKey.isBlank()) throw new IllegalArgumentException("accountIdKey is required");
-        broker.cancel(accountIdKey, ctx.pathParam("id"));
-        ctx.json(new ApiResponses.CancelRequested(true,
-                "Cancels are asynchronous and can lose the race to a fill — confirm via the orders list"));
     }
 
     /**
