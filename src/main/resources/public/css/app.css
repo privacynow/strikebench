@@ -481,6 +481,7 @@ body.lvl-expert .not-expert { display: none !important; }
 .chart .grid { stroke: var(--border); stroke-width: 1; }
 .chart .zero { stroke: var(--text-dim); stroke-dasharray: 4 3; stroke-width: 1.2; }
 .chart .line { fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linejoin: round; }
+.chart .benchmark-line { fill: none; stroke: var(--risk-warn); stroke-width: 2; stroke-linejoin: round; stroke-dasharray: 7 4; }
 .chart .area-gain { fill: var(--risk-ok); opacity: .14; }
 .chart .area-loss { fill: var(--risk-danger); opacity: .14; }
 .chart .area-line { fill: var(--accent); opacity: .1; }

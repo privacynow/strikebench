@@ -462,6 +462,53 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void performanceSeparatesTwrXirrDrawdownAndObservedSpyBenchmark() {
+        var account = books.createAccount("local", account("Performance book", "TAXABLE", null));
+        books.addValuation("local", account.id(), valuationAt("2026-01-02T16:00:00Z", 100_000_00L));
+        books.addValuation("local", account.id(), valuationAt("2026-04-01T14:00:00Z", 110_000_00L));
+        books.record("local", account.id(), cash("2026-04-01T15:00:00Z", "DEPOSIT", 100_000_00L,
+                "large-contribution", null));
+        books.addValuation("local", account.id(), valuationAt("2026-04-01T16:00:00Z", 210_000_00L));
+        books.addValuation("local", account.id(), valuationAt("2026-07-01T16:00:00Z", 189_000_00L));
+        db.exec("INSERT INTO dataset(id,name,kind) VALUES ('performance-demo','Generated control','FIXTURE_DEMO')");
+        db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,dataset_id,adjusted,quality_rank) VALUES "
+                + "('SPY','2026-01-02',100,'observed-feed',1,'observed',1,10),"
+                + "('SPY','2026-04-01',105,'observed-feed',1,'observed',1,10),"
+                + "('SPY','2026-07-01',110,'observed-feed',1,'observed',1,10),"
+                + "('SPY','2026-01-02',1000,'fixture',0,'performance-demo',1,99),"
+                + "('SPY','2026-07-01',1,'fixture',0,'performance-demo',1,99)");
+
+        var performance = books.performance("local", account.id());
+
+        assertThat(performance.timeWeightedReturn()).isCloseTo(-0.01, within(0.000001));
+        assertThat(performance.moneyWeightedIrr()).isCloseTo(-0.1418, within(0.001));
+        assertThat(performance.maxDrawdown()).isCloseTo(-0.10, within(0.000001));
+        assertThat(performance.drawdownPeakAt()).isEqualTo("2026-04-01T14:00Z");
+        assertThat(performance.drawdownTroughAt()).isEqualTo("2026-07-01T16:00Z");
+        assertThat(performance.benchmark().symbol()).isEqualTo("SPY");
+        assertThat(performance.benchmark().returnValue()).isCloseTo(0.10, within(0.000001));
+        assertThat(performance.benchmark().points()).hasSize(4);
+        assertThat(performance.benchmark().points().getLast().normalizedBenchmarkValueCents())
+                .isEqualTo(110_000_00L);
+        assertThat(performance.benchmark().source()).isEqualTo("observed-feed");
+        assertThat(performance.note()).contains("TWR", "IRR", "Partial valuations never enter");
+    }
+
+    @Test
+    void twrIsWithheldWhenAnExternalFlowHasNoSameDayAfterFlowValuation() {
+        var account = books.createAccount("local", account("Incomplete TWR", "TAXABLE", null));
+        books.addValuation("local", account.id(), valuationAt("2026-01-02T16:00:00Z", 100_000_00L));
+        books.record("local", account.id(), cash("2026-03-01T16:00:00Z", "DEPOSIT", 10_000_00L,
+                "unbounded-flow", null));
+        books.addValuation("local", account.id(), valuationAt("2026-07-01T16:00:00Z", 121_000_00L));
+
+        var performance = books.performance("local", account.id());
+        assertThat(performance.timeWeightedReturn()).isNull();
+        assertThat(performance.moneyWeightedIrr()).isNotNull();
+        assertThat(performance.modifiedDietzReturn()).isNotNull();
+    }
+
+    @Test
     void futureActivityAndValuationsAreRejectedBeforeTheyCanDistortAccounting() {
         var account = books.createAccount("local", account("Taxable", "TAXABLE", null));
 
@@ -898,6 +945,10 @@ class PortfolioAccountingServiceTest {
 
     private static PortfolioAccountingService.ValuationInput valuation(String date, long total) {
         return new PortfolioAccountingService.ValuationInput(date, null, null, total, "MANUAL", null, null);
+    }
+
+    private static PortfolioAccountingService.ValuationInput valuationAt(String time, long total) {
+        return new PortfolioAccountingService.ValuationInput(time, null, null, total, "MANUAL", null, null);
     }
 
     private static org.assertj.core.data.Offset<Double> within(double amount) {

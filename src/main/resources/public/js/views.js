@@ -5241,27 +5241,57 @@
   async function renderPortfolioBookPerformance(root, account) {
     var performance = await API.getFresh('/api/portfolio/accounts/' + account.id + '/performance');
     var values = performance.valuations || [];
+    var completeValues = values.filter(function (v) { return v.complete !== false; });
+    var benchmark = performance.benchmark || { symbol: 'SPY', points: [] };
     root.appendChild(el('div', { class: 'grid grid-4 book-performance-stats' },
-      stat('Investment gain', performance.investmentGainCents == null ? 'Unavailable' : pnlSpan(performance.investmentGainCents),
-        'Ending value minus starting value and net deposits or withdrawals.'),
-      stat('Modified Dietz return', performance.modifiedDietzReturn == null ? 'Unavailable' : fmtPct(performance.modifiedDietzReturn, 2),
-        'Weights each external cash flow by how long it was in the account.'),
-      stat('Annualized return', performance.annualizedReturn == null ? 'Unavailable' : fmtPct(performance.annualizedReturn, 2),
-        'Shown only after at least 30 days and a valid contribution-adjusted return.'),
-      stat('Income recorded', fmtMoney((performance.interestIncomeCents || 0) + (performance.dividendIncomeCents || 0)),
+      stat('Time-weighted return', performance.timeWeightedReturn == null ? 'Unavailable' : fmtPct(performance.timeWeightedReturn, 2),
+        performance.timeWeightedReturn == null
+          ? 'Needs a complete after-flow valuation on every deposit, withdrawal, or transfer date.'
+          : 'Geometrically chains each valuation period after removing external cash flows.'),
+      stat('Money-weighted return (IRR)', performance.moneyWeightedIrr == null ? 'Unavailable' : fmtPct(performance.moneyWeightedIrr, 2),
+        'Annualized XIRR from the actual dates and amounts of contributions, withdrawals, and ending value.'),
+      stat('Maximum drawdown', performance.maxDrawdown == null ? 'Unavailable' : fmtPct(performance.maxDrawdown, 2),
+        performance.drawdownPeakAt && performance.drawdownTroughAt
+          ? 'Cash-flow-adjusted decline from ' + UI.fmtDate(performance.drawdownPeakAt) + ' to ' + UI.fmtDate(performance.drawdownTroughAt) + '.'
+          : 'Largest cash-flow-adjusted peak-to-trough decline in the recorded window.'),
+      stat((benchmark.symbol || 'SPY') + ' benchmark', benchmark.returnValue == null ? 'Unavailable' : fmtPct(benchmark.returnValue, 2),
+        benchmark.note || 'Observed benchmark return over the same valuation window.')));
+    root.appendChild(el('div', { class: 'chip-row book-performance-secondary' },
+      chip('Investment gain', performance.investmentGainCents == null ? 'Unavailable' : fmtMoney(performance.investmentGainCents),
+        'Ending value minus starting value and net external flows.'),
+      chip('Modified Dietz', performance.modifiedDietzReturn == null ? 'Unavailable' : fmtPct(performance.modifiedDietzReturn, 2),
+        'A time-weighted cash-flow approximation retained for reconciliation; TWR and IRR above are separate metrics.'),
+      chip('Dietz annualized', performance.annualizedReturn == null ? 'Unavailable' : fmtPct(performance.annualizedReturn, 2),
+        'Annualized Modified Dietz approximation, shown only for windows of at least 30 days.'),
+      chip('Income recorded', fmtMoney((performance.interestIncomeCents || 0) + (performance.dividendIncomeCents || 0)),
         'Interest ' + fmtMoney(performance.interestIncomeCents || 0) + ' · dividends ' + fmtMoney(performance.dividendIncomeCents || 0) + '.')));
-    var chartCard = el('section', { class: 'card book-performance-chart' }, UI.cardHeader('Historical account value',
+    var chartCard = el('section', { class: 'card book-performance-chart' }, UI.cardHeader(
+      benchmark.points && benchmark.points.length >= 2 ? 'Account value vs ' + benchmark.symbol : 'Historical account value',
       el('span', { class: 'badge badge-dim' }, values.length + ' snapshot' + (values.length === 1 ? '' : 's'))));
-    if (values.length >= 2) {
-      chartCard.appendChild(UI.lineChart(values.map(function (v) {
+    if (completeValues.length >= 2) {
+      var chartValues;
+      if (benchmark.points && benchmark.points.length >= 2) {
+        chartValues = benchmark.points.map(function (p) {
+          return { date: UI.fmtDate(p.asOf), value: p.portfolioValueCents,
+            benchmark: p.normalizedBenchmarkValueCents };
+        });
+        chartCard.appendChild(el('div', { class: 'chip-row book-chart-legend' },
+          chip('Solid line', account.name + ' · flow-adjusted'), chip('Dashed line', benchmark.symbol + ' · observed')));
+      } else chartValues = completeValues.map(function (v) {
         return { date: UI.fmtDate(v.asOf), value: v.totalValueCents };
-      }), { money: true, baseline: values[0].totalValueCents }));
+      });
+      chartCard.appendChild(UI.lineChart(chartValues, { money: true, baseline: chartValues[0].value,
+        compareKey: chartValues[0].benchmark == null ? null : 'benchmark', primaryLabel: account.name + ' index',
+        compareLabel: benchmark.symbol }));
       chartCard.appendChild(el('div', { class: 'book-valuation-list' }, values.slice().reverse().map(function (v) {
         return el('div', { class: 'book-valuation-row' }, el('span', {}, UI.fmtDate(v.asOf)),
-          el('b', {}, fmtMoney(v.totalValueCents)), el('span', { class: 'muted small' }, v.source + (v.notes ? ' · ' + v.notes : '')));
+          el('b', {}, fmtMoney(v.totalValueCents)), el('span', { class: 'muted small' }, v.source
+            + (v.complete === false ? ' · partial' : ' · complete')
+            + (v.notes ? ' · ' + v.notes : '')));
       })));
-    } else chartCard.appendChild(UI.emptyState('Two snapshots are needed for a return',
-      values.length ? 'Record a later account value to separate performance from contributions and withdrawals.' : 'Record an account value now, then another later.'));
+    } else chartCard.appendChild(UI.emptyState('Two complete valuations are needed for performance',
+      values.length ? 'Partial valuations remain visible, but a return is not calculated until two complete account values exist.' : 'Record an account value now, then another later.'));
+    if (benchmark.returnValue == null) chartCard.appendChild(el('p', { class: 'muted small' }, benchmark.note));
     chartCard.appendChild(el('p', { class: 'muted small' }, performance.note));
     root.appendChild(chartCard);
     root.appendChild(portfolioValuationForm(account, performance));

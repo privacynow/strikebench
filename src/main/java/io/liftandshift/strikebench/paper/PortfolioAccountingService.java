@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.paper;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.model.DataEvidence;
@@ -7,6 +8,7 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.util.Ids;
+import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
@@ -28,6 +30,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 
 /**
  * Owner-scoped accounting for brokerage activity that a user records or imports. This book is
@@ -118,12 +121,22 @@ public final class PortfolioAccountingService {
 
     public record ValuationView(String id, String accountId, String asOf, Long cashCents,
                                 Long securitiesValueCents, long totalValueCents,
-                                String source, String externalRef, String notes) {}
+                                String source, String externalRef, String notes,
+                                boolean complete, List<String> missingMarks) {}
+
+    public record BenchmarkPoint(String asOf, long portfolioValueCents,
+                                 long normalizedBenchmarkValueCents) {}
+
+    public record BenchmarkView(String symbol, Double returnValue, List<BenchmarkPoint> points,
+                                String source, String note) {}
 
     public record PerformanceView(List<ValuationView> valuations, Long startingValueCents,
                                   Long endingValueCents, long netExternalFlowCents,
                                   Long investmentGainCents, Double modifiedDietzReturn,
-                                  Double annualizedReturn, long interestIncomeCents,
+                                  Double annualizedReturn, Double timeWeightedReturn,
+                                  Double moneyWeightedIrr, Double maxDrawdown,
+                                  String drawdownPeakAt, String drawdownTroughAt,
+                                  BenchmarkView benchmark, long interestIncomeCents,
                                   long dividendIncomeCents, String note) {}
 
     public record TaxReport(int year, String accountType, long shortTermGainCents,
@@ -182,6 +195,15 @@ public final class PortfolioAccountingService {
     private record WashAllocation(long quantity, String remainingReplacementLotId) {}
 
     private record YearEndMark(BigDecimal price, LocalDate asOf, String source) {}
+
+    private record ExternalFlow(OffsetDateTime occurredAt, long cents) {}
+
+    private record ReturnPath(Double timeWeightedReturn, Double maxDrawdown,
+                              String peakAt, String troughAt, boolean exactFlowBoundaries,
+                              List<Long> normalizedValues) {}
+
+    private record BenchmarkBar(LocalDate date, BigDecimal close, String source,
+                                boolean adjusted, int qualityRank) {}
 
     private record SummaryLedgerSnapshot(AccountProfile account, List<LotView> openLots,
                                          long cashCents, long realizedCents, long feesCents,
@@ -428,7 +450,8 @@ public final class PortfolioAccountingService {
                     id, account.id(), asOf, input.cashCents(), input.securitiesValueCents(), input.totalValueCents(),
                     source, trim(input.externalRef(), 160), trim(input.notes(), 1000));
             return new ValuationView(id, account.id(), asOf.toString(), input.cashCents(), input.securitiesValueCents(),
-                    input.totalValueCents(), source, trim(input.externalRef(), 160), trim(input.notes(), 1000));
+                    input.totalValueCents(), source, trim(input.externalRef(), 160), trim(input.notes(), 1000),
+                    true, List.of());
         });
     }
 
@@ -439,37 +462,203 @@ public final class PortfolioAccountingService {
             List<ValuationView> values = Db.queryOn(c,
                     "SELECT * FROM portfolio_valuation WHERE portfolio_account_id=? ORDER BY as_of,id",
                     PortfolioAccountingService::mapValuation, account.id());
+            List<ValuationView> completeValues = values.stream().filter(ValuationView::complete).toList();
             long interest = incomeOn(c, account.id(), "INTEREST", null);
             long dividends = incomeOn(c, account.id(), "DIVIDEND", null);
-            if (values.size() < 2) {
-                return new PerformanceView(values, values.isEmpty() ? null : values.getFirst().totalValueCents(),
-                        values.isEmpty() ? null : values.getLast().totalValueCents(), 0, null, null, null,
-                        interest, dividends, "Record at least two account-value snapshots to calculate a contribution-adjusted return.");
+            if (completeValues.size() < 2) {
+                return new PerformanceView(values,
+                        completeValues.isEmpty() ? null : completeValues.getFirst().totalValueCents(),
+                        completeValues.isEmpty() ? null : completeValues.getLast().totalValueCents(),
+                        0, null, null, null, null, null, null, null, null,
+                        unavailableBenchmark("At least two complete valuations are needed to align an observed SPY comparison."),
+                        interest, dividends, "At least two complete account valuations are needed. Partial valuations remain visible but never enter a return calculation.");
             }
-            OffsetDateTime start = OffsetDateTime.parse(values.getFirst().asOf());
-            OffsetDateTime end = OffsetDateTime.parse(values.getLast().asOf());
+            OffsetDateTime start = OffsetDateTime.parse(completeValues.getFirst().asOf());
+            OffsetDateTime end = OffsetDateTime.parse(completeValues.getLast().asOf());
             double totalSeconds = Math.max(1, Duration.between(start, end).toSeconds());
-            List<long[]> flows = Db.queryOn(c,
-                    "SELECT cash_effect_cents,EXTRACT(EPOCH FROM (occurred_at-?::timestamptz)) AS secs "
+            List<ExternalFlow> flows = Db.queryOn(c,
+                    "SELECT occurred_at,cash_effect_cents "
                             + "FROM portfolio_transaction WHERE portfolio_account_id=? AND occurred_at>? AND occurred_at<=? "
-                            + "AND event_type IN ('DEPOSIT','WITHDRAWAL','TRANSFER_IN','TRANSFER_OUT')",
-                    r -> new long[]{r.lng("cash_effect_cents"), Math.round(r.dbl("secs"))},
-                    start, account.id(), start, end);
+                            + "AND event_type IN ('DEPOSIT','WITHDRAWAL','TRANSFER_IN','TRANSFER_OUT') ORDER BY occurred_at,record_seq",
+                    r -> new ExternalFlow(r.odt("occurred_at"), r.lng("cash_effect_cents")),
+                    account.id(), start, end);
             long netFlows = 0;
-            for (long[] flow : flows) netFlows = Math.addExact(netFlows, flow[0]);
+            for (ExternalFlow flow : flows) netFlows = Math.addExact(netFlows, flow.cents());
             double weightedFlows = flows.stream().mapToDouble(f ->
-                    f[0] * (Math.max(0, totalSeconds - f[1]) / (double) totalSeconds)).sum();
-            long begin = values.getFirst().totalValueCents();
-            long finish = values.getLast().totalValueCents();
+                    f.cents() * (Math.max(0, totalSeconds - Duration.between(start, f.occurredAt()).toSeconds())
+                            / totalSeconds)).sum();
+            long begin = completeValues.getFirst().totalValueCents();
+            long finish = completeValues.getLast().totalValueCents();
             long gain = Math.subtractExact(Math.subtractExact(finish, begin), netFlows);
             double denominator = begin + weightedFlows;
             Double dietz = denominator == 0 ? null : gain / denominator;
             long days = Math.max(1, ChronoUnit.DAYS.between(start.toLocalDate(), end.toLocalDate()));
             Double annualized = dietz == null || dietz <= -1 || days < 30 ? null
                     : Math.pow(1 + dietz, 365.0 / days) - 1;
+            ReturnPath path = returnPath(completeValues, flows);
+            Double irr = xirr(start, begin, end, finish, flows);
+            BenchmarkView benchmark = benchmark(c, completeValues, path.normalizedValues());
+            String note = "TWR geometrically chains cash-flow-adjusted valuation periods; it is shown only when each external flow has a complete after-flow valuation on that market date. "
+                    + "IRR solves the actual dated investor cash flows. Drawdown uses the cash-flow-adjusted wealth path. Modified Dietz remains a disclosed approximation. "
+                    + "Partial valuations never enter these metrics.";
             return new PerformanceView(values, begin, finish, netFlows, gain, dietz, annualized,
-                    interest, dividends, "Modified Dietz weights external cash flows by time in the account; returns are only as complete as the recorded valuations and flows.");
+                    path.timeWeightedReturn(), irr, path.maxDrawdown(), path.peakAt(), path.troughAt(),
+                    benchmark, interest, dividends, note);
         });
+    }
+
+    private static ReturnPath returnPath(List<ValuationView> values, List<ExternalFlow> flows) {
+        boolean exactBoundaries = flows.stream().allMatch(flow -> {
+            LocalDate flowDate = flow.occurredAt().atZoneSameInstant(MARKET_ZONE).toLocalDate();
+            boolean before = values.stream().map(value -> OffsetDateTime.parse(value.asOf()))
+                    .anyMatch(at -> !at.isAfter(flow.occurredAt())
+                            && at.atZoneSameInstant(MARKET_ZONE).toLocalDate().equals(flowDate));
+            boolean after = values.stream().map(value -> OffsetDateTime.parse(value.asOf()))
+                    .anyMatch(at -> !at.isBefore(flow.occurredAt())
+                            && at.atZoneSameInstant(MARKET_ZONE).toLocalDate().equals(flowDate));
+            return before && after;
+        });
+        double wealth = 1.0;
+        double peak = 1.0;
+        double maxDrawdown = 0.0;
+        String peakAt = values.getFirst().asOf();
+        String drawdownPeakAt = peakAt;
+        String troughAt = peakAt;
+        boolean valid = true;
+        List<Long> normalized = new ArrayList<>();
+        normalized.add(values.getFirst().totalValueCents());
+        for (int i = 1; i < values.size(); i++) {
+            ValuationView previous = values.get(i - 1);
+            ValuationView current = values.get(i);
+            OffsetDateTime from = OffsetDateTime.parse(previous.asOf());
+            OffsetDateTime to = OffsetDateTime.parse(current.asOf());
+            long intervalFlows = 0;
+            for (ExternalFlow flow : flows) {
+                if (flow.occurredAt().isAfter(from) && !flow.occurredAt().isAfter(to)) {
+                    intervalFlows = Math.addExact(intervalFlows, flow.cents());
+                }
+            }
+            if (previous.totalValueCents() <= 0) { valid = false; break; }
+            double factor = (current.totalValueCents() - (double) intervalFlows) / previous.totalValueCents();
+            if (!Double.isFinite(factor) || factor < 0) { valid = false; break; }
+            wealth *= factor;
+            normalized.add(BigDecimal.valueOf(values.getFirst().totalValueCents())
+                    .multiply(BigDecimal.valueOf(wealth)).setScale(0, RoundingMode.HALF_UP).longValueExact());
+            if (wealth > peak) {
+                peak = wealth;
+                peakAt = current.asOf();
+            }
+            double drawdown = peak == 0 ? 0 : wealth / peak - 1.0;
+            if (drawdown < maxDrawdown) {
+                maxDrawdown = drawdown;
+                drawdownPeakAt = peakAt;
+                troughAt = current.asOf();
+            }
+        }
+        return new ReturnPath(valid && exactBoundaries ? wealth - 1.0 : null,
+                valid ? maxDrawdown : null, valid ? drawdownPeakAt : null,
+                valid ? troughAt : null, exactBoundaries, valid ? List.copyOf(normalized) : List.of());
+    }
+
+    private static Double xirr(OffsetDateTime start, long begin, OffsetDateTime end, long finish,
+                               List<ExternalFlow> flows) {
+        List<ExternalFlow> investorFlows = new ArrayList<>();
+        investorFlows.add(new ExternalFlow(start, Math.negateExact(begin)));
+        for (ExternalFlow flow : flows) investorFlows.add(new ExternalFlow(flow.occurredAt(), Math.negateExact(flow.cents())));
+        investorFlows.add(new ExternalFlow(end, finish));
+        boolean positive = investorFlows.stream().anyMatch(f -> f.cents() > 0);
+        boolean negative = investorFlows.stream().anyMatch(f -> f.cents() < 0);
+        if (!positive || !negative || !end.isAfter(start)) return null;
+        double[] candidates = {-0.999999, -0.99, -0.9, -0.5, -0.2, 0, 0.1, 0.25, 0.5, 1, 2, 5, 10, 100, 1_000, 1_000_000};
+        double low = candidates[0], lowValue = xnpv(low, start, investorFlows);
+        for (int i = 1; i < candidates.length; i++) {
+            double high = candidates[i];
+            double highValue = xnpv(high, start, investorFlows);
+            if (Math.abs(lowValue) < 0.000001) return low;
+            if (Double.isFinite(lowValue) && Double.isFinite(highValue) && Math.signum(lowValue) != Math.signum(highValue)) {
+                for (int j = 0; j < 200; j++) {
+                    double mid = (low + high) / 2.0;
+                    double midValue = xnpv(mid, start, investorFlows);
+                    if (Math.abs(midValue) < 0.000001) return mid;
+                    if (Math.signum(lowValue) == Math.signum(midValue)) {
+                        low = mid;
+                        lowValue = midValue;
+                    } else high = mid;
+                }
+                return (low + high) / 2.0;
+            }
+            low = high;
+            lowValue = highValue;
+        }
+        return null;
+    }
+
+    private static double xnpv(double rate, OffsetDateTime start, List<ExternalFlow> flows) {
+        double base = 1.0 + rate;
+        if (base <= 0) return Double.NaN;
+        double value = 0;
+        for (ExternalFlow flow : flows) {
+            double years = Duration.between(start, flow.occurredAt()).toSeconds() / (365.0 * 86_400.0);
+            value += flow.cents() / Math.pow(base, years);
+        }
+        return value;
+    }
+
+    private static BenchmarkView benchmark(Connection c, List<ValuationView> values,
+                                           List<Long> normalizedPortfolioValues) throws SQLException {
+        if (normalizedPortfolioValues.size() != values.size()) {
+            return unavailableBenchmark("The account return path is incomplete, so an observed SPY comparison would be misleading.");
+        }
+        LocalDate start = OffsetDateTime.parse(values.getFirst().asOf()).atZoneSameInstant(MARKET_ZONE).toLocalDate();
+        LocalDate end = OffsetDateTime.parse(values.getLast().asOf()).atZoneSameInstant(MARKET_ZONE).toLocalDate();
+        List<BenchmarkBar> rows = Db.queryOn(c,
+                "SELECT d,close,source,adjusted,quality_rank FROM underlying_bar WHERE symbol='SPY' "
+                        + "AND dataset_id='observed' AND observed=1 AND d BETWEEN ? AND ? "
+                        + "AND LOWER(source) NOT IN ('fixture','synthetic','simulation','scenario','model') ORDER BY source,adjusted,d",
+                r -> new BenchmarkBar(r.date("d"), r.bd("close"), r.str("source"), r.bool("adjusted"), r.intv("quality_rank")),
+                start.minusDays(10), end);
+        Map<String, List<BenchmarkBar>> candidates = new LinkedHashMap<>();
+        for (BenchmarkBar row : rows) {
+            candidates.computeIfAbsent(row.source() + "|" + row.adjusted(), ignored -> new ArrayList<>()).add(row);
+        }
+        List<List<BenchmarkBar>> eligible = candidates.values().stream().filter(series ->
+                series.stream().anyMatch(row -> !row.date().isAfter(start))
+                        && series.stream().anyMatch(row -> !row.date().isAfter(end))).sorted((a, b) -> {
+            LocalDate aEnd = a.getLast().date(), bEnd = b.getLast().date();
+            int recency = bEnd.compareTo(aEnd);
+            if (recency != 0) return recency;
+            int quality = Integer.compare(b.stream().mapToInt(BenchmarkBar::qualityRank).max().orElse(0),
+                    a.stream().mapToInt(BenchmarkBar::qualityRank).max().orElse(0));
+            return quality != 0 ? quality : Integer.compare(b.size(), a.size());
+        }).toList();
+        if (eligible.isEmpty()) return unavailableBenchmark("Observed SPY history is unavailable for this valuation window.");
+        List<BenchmarkBar> chosen = eligible.getFirst();
+        TreeMap<LocalDate, BenchmarkBar> byDate = new TreeMap<>();
+        for (BenchmarkBar row : chosen) byDate.put(row.date(), row);
+        BenchmarkBar baseline = byDate.floorEntry(start).getValue();
+        BenchmarkBar ending = byDate.floorEntry(end).getValue();
+        if (ChronoUnit.DAYS.between(baseline.date(), start) > 7
+                || ChronoUnit.DAYS.between(ending.date(), end) > 7) {
+            return unavailableBenchmark("Observed SPY history does not cover the same valuation window closely enough for an honest comparison.");
+        }
+        List<BenchmarkPoint> points = new ArrayList<>();
+        for (int i = 0; i < values.size(); i++) {
+            ValuationView value = values.get(i);
+            LocalDate date = OffsetDateTime.parse(value.asOf()).atZoneSameInstant(MARKET_ZONE).toLocalDate();
+            var bar = byDate.floorEntry(date);
+            if (bar == null) continue;
+            long normalized = BigDecimal.valueOf(values.getFirst().totalValueCents()).multiply(bar.getValue().close())
+                    .divide(baseline.close(), 0, RoundingMode.HALF_UP).longValueExact();
+            points.add(new BenchmarkPoint(value.asOf(), normalizedPortfolioValues.get(i), normalized));
+        }
+        double benchmarkReturn = ending.close().divide(baseline.close(), 12, RoundingMode.HALF_UP)
+                .subtract(BigDecimal.ONE).doubleValue();
+        return new BenchmarkView("SPY", benchmarkReturn, points, chosen.getFirst().source(),
+                "Observed SPY closes from one coherent source compared with the account's cash-flow-adjusted index; both start at the same account value. No generated or cross-source bars are used.");
+    }
+
+    private static BenchmarkView unavailableBenchmark(String note) {
+        return new BenchmarkView("SPY", null, List.of(), null, note);
     }
 
     public TaxReport taxReport(String ownerId, String accountId, int year) {
@@ -1303,7 +1492,8 @@ public final class PortfolioAccountingService {
     private static ValuationView mapValuation(Db.Row r) {
         return new ValuationView(r.str("id"), r.str("portfolio_account_id"), iso(r.odt("as_of")),
                 r.lngOrNull("cash_cents"), r.lngOrNull("securities_value_cents"), r.lng("total_value_cents"),
-                r.str("source"), r.str("external_ref"), r.str("notes"));
+                r.str("source"), r.str("external_ref"), r.str("notes"), r.bool("complete"),
+                Json.read(r.str("missing_marks"), new TypeReference<List<String>>() {}));
     }
 
     private static long incomeOn(Connection c, String accountId, String event, Integer year) throws SQLException {

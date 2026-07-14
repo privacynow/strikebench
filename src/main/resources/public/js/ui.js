@@ -924,7 +924,12 @@
     if (opts.baseline !== undefined && series[series.length - 1].value < opts.baseline) {
       svg.classList.add('chart-down');
     }
+    var compareKey = opts.compareKey;
+    var hasComparison = !!compareKey && series.every(function (p) {
+      return Number.isFinite(Number(p[compareKey]));
+    });
     var ys = series.map(function (p) { return p.value; });
+    if (hasComparison) ys = ys.concat(series.map(function (p) { return Number(p[compareKey]); }));
     var yMin = Math.min.apply(null, ys), yMax = Math.max.apply(null, ys);
     if (yMin === yMax) { yMin -= 1; yMax += 1; }
     var yPad = (yMax - yMin) * 0.08;
@@ -951,6 +956,12 @@
       d: line + ' L' + X(series.length - 1).toFixed(1) + ' ' + (H - padB) + ' L' + padL + ' ' + (H - padB) + ' Z'
     }));
     svg.appendChild(svgEl('path', { class: 'line', d: line }));
+    if (hasComparison) {
+      var compareLine = series.map(function (p, i) {
+        return (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(Number(p[compareKey])).toFixed(1);
+      }).join(' ');
+      svg.appendChild(svgEl('path', { class: 'benchmark-line', d: compareLine }));
+    }
 
     [0, Math.floor(series.length / 2), series.length - 1].forEach(function (i, idx) {
       var anchor = idx === 0 ? 'start' : idx === 1 ? 'middle' : 'end';
@@ -966,16 +977,23 @@
       i = Math.max(0, Math.min(series.length - 1, i));
       var v = series[i].value;
       var pct = first ? ((v - first) / Math.abs(first)) * 100 : 0;
+      var lines = [
+        series[i].date,
+        { text: (opts.primaryLabel ? opts.primaryLabel + ' ' : '') + (opts.money ? fmtMoney(v) : fmtNum(v, 2)), cls: '' },
+        { text: (pct >= 0 ? '+' : '') + pct.toFixed(1) + '% in window', cls: pct >= 0 ? 'gain' : 'loss' }
+      ];
+      if (hasComparison) {
+        var comparison = Number(series[i][compareKey]);
+        lines.push({ text: (opts.compareLabel || 'Comparison') + ' ' + (opts.money ? fmtMoney(comparison) : fmtNum(comparison, 2)), cls: '' });
+      }
       return {
         x: X(i), y: Y(v),
-        lines: [
-          series[i].date,
-          // Full precision under the cursor even when the axis rounds (prices deserve cents)
-          { text: opts.money ? fmtMoney(v) : fmtNum(v, 2), cls: '' },
-          { text: (pct >= 0 ? '+' : '') + pct.toFixed(1) + '% in window', cls: pct >= 0 ? 'gain' : 'loss' }
-        ]
+        // Full precision under the cursor even when the axis rounds (prices deserve cents).
+        lines: lines
       };
-    }, 'Price history chart. Use left and right arrow keys to inspect dates and values.');
+    }, hasComparison
+      ? 'Account value and benchmark comparison chart. Use left and right arrow keys to inspect dates and values.'
+      : 'Price history chart. Use left and right arrow keys to inspect dates and values.');
   }
 
   // ---- SVG icon system: the ONLY pictographic language in the app (no emoji, ever). ----

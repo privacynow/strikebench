@@ -143,15 +143,29 @@ public final class PortfolioExportService {
 
     private static List<List<Cell>> performanceRows(PortfolioAccountingService.PerformanceView p) {
         List<List<Cell>> rows = new ArrayList<>();
-        rows.add(cells("As of", "Cash", "Securities", "Total", "Source", "Reference", "Notes"));
+        rows.add(cells("As of", "Cash", "Securities", "Total", "Complete", "Missing marks", "Source", "Reference", "Notes"));
         for (var v : p.valuations()) rows.add(List.of(s(v.asOf()), money(v.cashCents()), money(v.securitiesValueCents()),
-                money(v.totalValueCents()), s(v.source()), s(v.externalRef()), s(v.notes())));
+                money(v.totalValueCents()), s(v.complete()), s(String.join(", ", v.missingMarks())),
+                s(v.source()), s(v.externalRef()), s(v.notes())));
         rows.add(List.of());
         rows.add(moneyRow("Investment gain", p.investmentGainCents()));
         rows.add(moneyRow("Net external flows", p.netExternalFlowCents()));
+        rows.add(cells("Time-weighted return", p.timeWeightedReturn() == null ? "Unavailable" : percent(p.timeWeightedReturn())));
+        rows.add(cells("Money-weighted return (XIRR)", p.moneyWeightedIrr() == null ? "Unavailable" : percent(p.moneyWeightedIrr())));
+        rows.add(cells("Maximum drawdown", p.maxDrawdown() == null ? "Unavailable" : percent(p.maxDrawdown())));
+        rows.add(cells("Drawdown peak", p.drawdownPeakAt()));
+        rows.add(cells("Drawdown trough", p.drawdownTroughAt()));
+        rows.add(cells("SPY benchmark return", p.benchmark().returnValue() == null ? "Unavailable" : percent(p.benchmark().returnValue())));
         rows.add(cells("Modified Dietz return", p.modifiedDietzReturn() == null ? "Unavailable" : percent(p.modifiedDietzReturn())));
         rows.add(cells("Annualized return", p.annualizedReturn() == null ? "Unavailable" : percent(p.annualizedReturn())));
         rows.add(cells("Method note", p.note()));
+        rows.add(cells("Benchmark note", p.benchmark().note()));
+        if (!p.benchmark().points().isEmpty()) {
+            rows.add(List.of());
+            rows.add(cells("Benchmark date", "Account value", "Normalized SPY value", "Benchmark source"));
+            for (var point : p.benchmark().points()) rows.add(List.of(s(point.asOf()), money(point.portfolioValueCents()),
+                    money(point.normalizedBenchmarkValueCents()), s(p.benchmark().source())));
+        }
         return rows;
     }
 
