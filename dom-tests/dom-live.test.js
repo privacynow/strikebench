@@ -307,8 +307,8 @@ test('live: universe Scout scans and reports with evidence within budget', async
     assert.match(await page.textContent('#universe-scout-results'), /Confidence|Evidence|Favorable|Mixed/i);
     if (researchReadiness.hv30 === null || researchReadiness.hv30 === undefined) {
       assert.match(await page.textContent('#universe-scout-results'),
-        /favorable observed verdict cannot be formed|daily history is insufficient|every candidate failed a mechanical or account check/i,
-        'Scout distinguishes missing realized history or an earlier mechanical block from an unfavorable economic scan');
+        /favorable observed verdict cannot be formed|daily history is insufficient|every candidate failed a mechanical or account check|no executable option chain/i,
+        'Scout distinguishes missing realized history, an unavailable executable chain, or a mechanical block from an unfavorable economic scan');
     }
   }
   assertClean('scout');
