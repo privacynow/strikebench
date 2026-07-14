@@ -2675,6 +2675,14 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('tab', { name: 'Activity', exact: true }).click();
   await page.waitForSelector('.book-record-card');
   await assertNamedControls('#app');
+  assert.match(await page.textContent('.book-record-card'),
+    /Other Section 1256 contract[\s\S]*SPX, SPXW, SPXpm, XSP, NDX, NDXP, VIX, VIXW, RUT, RUTW, DJX, OEX, XEO/,
+    'manual entry names the complete automatic broad-based index taxonomy');
+  await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('ASSIGNMENT');
+  assert.match(await page.textContent('.book-event-guidance'),
+    /broad-based Section 1256 index options are cash-settled[\s\S]*closing option transaction/i,
+    'physical-delivery entry tells users how to record an index cash settlement instead');
+  await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('TRADE');
   const leg = page.getByRole('group', { name: 'Security leg', exact: true });
   await leg.getByRole('combobox', { name: 'Instrument', exact: true }).selectOption('STOCK');
   await leg.getByRole('combobox', { name: 'Symbol', exact: true }).fill('AAPL');

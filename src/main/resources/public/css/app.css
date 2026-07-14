@@ -2449,6 +2449,9 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .book-leg-row { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .book-leg-row legend { padding: 0 6px; color: var(--text); font-size: 13px; font-weight: 700; }
 .book-leg-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; }
+.book-1256-flag { grid-column: 1 / -1; align-items: flex-start; gap: 8px; }
+.book-1256-flag > span { display: grid; gap: 3px; min-width: 0; }
+.book-1256-flag small { display: block; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .book-leg-remove { margin-top: 9px; }
 .book-import-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .book-import-row input[type="file"] { flex: 1 1 260px; min-width: 0; }

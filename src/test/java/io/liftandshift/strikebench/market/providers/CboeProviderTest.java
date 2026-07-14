@@ -120,6 +120,88 @@ class CboeProviderTest {
     }
 
     @Test
+    void broadBasedIndexRootsAndListedSeriesUseTheSharedCboePathMapping() throws Exception {
+        for (int i = 0; i < 5; i++) server.enqueue(new MockResponse().setBody(CHAIN_BODY));
+
+        assertThat(provider.quote("xsp")).isPresent();
+        assertThat(provider.quote("SPXW")).isPresent();
+        assertThat(provider.quote("NDXP")).isPresent();
+        assertThat(provider.quote("VIXW")).isPresent();
+        assertThat(provider.quote("RUTW")).isPresent();
+
+        assertThat(server.takeRequest().getPath())
+                .isEqualTo("/api/global/delayed_quotes/options/_XSP.json");
+        assertThat(server.takeRequest().getPath())
+                .isEqualTo("/api/global/delayed_quotes/options/_SPX.json");
+        assertThat(server.takeRequest().getPath())
+                .isEqualTo("/api/global/delayed_quotes/options/_NDX.json");
+        assertThat(server.takeRequest().getPath())
+                .isEqualTo("/api/global/delayed_quotes/options/_VIX.json");
+        assertThat(server.takeRequest().getPath())
+                .isEqualTo("/api/global/delayed_quotes/options/_RUT.json");
+    }
+
+    @Test
+    void listedSeriesShareTheCanonicalHeavyPayloadCache() throws Exception {
+        server.enqueue(new MockResponse().setBody(CHAIN_BODY));
+
+        assertThat(provider.quote("SPX")).isPresent();
+        assertThat(provider.quote("SPXW")).isPresent();
+
+        assertThat(server.getRequestCount()).isEqualTo(1);
+        assertThat(server.takeRequest().getPath())
+                .isEqualTo("/api/global/delayed_quotes/options/_SPX.json");
+    }
+
+    @Test
+    void explicitWeeklyRequestDoesNotMixCanonicalAmSettledContracts() {
+        server.enqueue(new MockResponse().setBody("""
+                {"data":{"symbol":"_SPX","current_price":5000,"options":[
+                  {"option":"SPX260821C05000000","bid":100,"ask":101},
+                  {"option":"SPXW260821C05010000","bid":90,"ask":91}
+                ]}}
+                """));
+
+        var expiration = LocalDate.of(2026, 8, 21);
+        assertThat(provider.expirations("SPXW")).containsExactly(expiration);
+        assertThat(provider.chain("SPXW", expiration).orElseThrow().calls())
+                .extracting(OptionQuote::occSymbol)
+                .containsExactly("SPXW260821C05010000");
+        assertThat(provider.chain("SPX", expiration).orElseThrow().calls())
+                .extracting(OptionQuote::occSymbol)
+                .containsExactly("SPX260821C05000000");
+        assertThat(server.getRequestCount()).isEqualTo(1);
+    }
+
+    @Test
+    void canonicalRootUsesTheAvailableWeeklySeriesWithoutMixingRoots() {
+        server.enqueue(new MockResponse().setBody("""
+                {"data":{"symbol":"_SPX","current_price":5000,"options":[
+                  {"option":"SPXW260814C05000000","bid":100,"ask":101},
+                  {"option":"SPXW260814P05000000","bid":99,"ask":100}
+                ]}}
+                """));
+
+        var chain = provider.chain("SPX", LocalDate.of(2026, 8, 14)).orElseThrow();
+        assertThat(chain.calls()).extracting(OptionQuote::occSymbol)
+                .containsExactly("SPXW260814C05000000");
+        assertThat(chain.puts()).extracting(OptionQuote::occSymbol)
+                .containsExactly("SPXW260814P05000000");
+    }
+
+    @Test
+    void explicitSeriesIsNotMarkedOptionableFromSiblingContractsAlone() {
+        server.enqueue(new MockResponse().setBody("""
+                {"data":{"symbol":"_SPX","current_price":5000,"options":[
+                  {"option":"SPX260821C05000000","bid":100,"ask":101}
+                ]}}
+                """));
+
+        assertThat(provider.quote("SPXW")).get()
+                .extracting(Quote::optionable).isEqualTo(false);
+    }
+
+    @Test
     void quoteFallsBackToCloseWhenCurrentPriceMissing() {
         server.enqueue(new MockResponse().setBody("""
                 {"data":{"symbol":"AAPL","close":254.90,"options":[]}}

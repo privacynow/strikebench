@@ -5038,8 +5038,10 @@
     var multiplier = el('input', { type: 'number', min: '1', max: '10000', step: '1', value: defaults.multiplier || '100' });
     var price = el('input', { type: 'number', min: '0', step: '0.0001', value: defaults.price == null ? '' : defaults.price, placeholder: '0.00' });
     var section1256 = el('input', { type: 'checkbox', checked: defaults.section1256 ? 'checked' : null });
+    var automatic1256 = App.config && Array.isArray(App.config.broadBasedIndexOptionSymbols)
+      ? App.config.broadBasedIndexOptionSymbols.join(', ') : 'known broad-based index roots and listed series';
     var section1256Field = el('label', { class: 'check-row book-1256-flag' }, section1256,
-      el('span', {}, 'Section 1256 contract', el('small', {}, 'SPX, NDX, and RUT are detected automatically; use this for another eligible broad-based index contract.')));
+      el('span', {}, 'Other Section 1256 contract', el('small', {}, 'Automatic: ' + automatic1256 + '. Check this only for another eligible contract confirmed by your broker.')));
     var optionFields = [optionType, strike, expiration, multiplier];
     var row = el('fieldset', { class: 'book-leg-row' },
       el('legend', {}, defaults.legend || 'Security leg'),
@@ -5179,7 +5181,7 @@
       }
       if (event.value === 'ASSIGNMENT' || event.value === 'EXERCISE') {
         addConversionLegs(event.value);
-        guidance.textContent = 'Record exactly one closing option leg and its resulting stock delivery. Share quantity follows contracts × the contract multiplier, including adjusted contracts. The put/call sets buy versus sell; choose Open or Close to match whether the delivery created a new share position or offset one you already held.';
+        guidance.textContent = 'Record exactly one closing equity-option leg and its resulting stock delivery. Broad-based Section 1256 index options are cash-settled: record their exact settlement as a closing option transaction instead. Share quantity follows contracts × the contract multiplier, including adjusted contracts. The put/call sets buy versus sell; choose Open or Close to match whether the delivery created a new share position or offset one you already held.';
       } else if (event.value === 'ROLL') {
         addRollLegs();
         guidance.textContent = 'Close the recorded option and open its replacement together. Choose Sell to close a long position or Buy to close a short position. Strike or expiration must change; exact realized P/L, replacement basis, fees, and net premium carryover are stored separately.';
