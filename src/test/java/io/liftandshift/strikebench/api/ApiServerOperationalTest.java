@@ -7,7 +7,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ApiServerOperationalTest {
     @Test
     void throttleEvictsIndividualBucketsWithoutResettingTheWholePopulation() {
-        ApiServer.IpThrottle throttle = new ApiServer.IpThrottle(1, 0, 3);
+        ApiTelemetry.IpThrottle throttle = new ApiTelemetry.IpThrottle(1, 0, 3);
         String activeClient = "10.0.0.1";
         assertThat(throttle.tryAcquire(activeClient)).isTrue();
         assertThat(throttle.tryAcquire(activeClient)).isFalse();
