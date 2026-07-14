@@ -187,16 +187,10 @@
       var economics = economicAssessmentBlock(candidate);
       if (economics) card.appendChild(economics);
       card.appendChild(el('div', { class: 'fact-grid welcome-proof-facts' },
-        el('div', { class: 'fact' },
-          el('div', { class: 'f-label' }, 'Theoretical max loss'),
-          el('div', { class: 'f-value loss' }, fmtMoney(candidate.maxLossCents))),
-        el('div', { class: 'fact' },
-          el('div', { class: 'f-label' }, 'Chance of any profit'),
-          el('div', { class: 'f-value' }, fmtPct(candidate.pop))),
-        el('div', { class: 'fact' },
-          el('div', { class: 'f-label' }, 'Theoretical max profit'),
-          el('div', { class: 'f-value' }, UI.maxProfitLabel(
-            candidate.strategy, candidate.structureGroup, candidate.maxProfitCents, true, candidate.legs)))));
+        UI.fact('Theoretical max loss', fmtMoney(candidate.maxLossCents), 'f-danger'),
+        UI.fact('Chance of any profit', fmtPct(candidate.pop)),
+        UI.fact('Theoretical max profit', UI.maxProfitLabel(
+          candidate.strategy, candidate.structureGroup, candidate.maxProfitCents, true, candidate.legs))));
       card.appendChild(el('div', { class: 'welcome-proof-action' },
         el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
           App.navigate('#/research/' + encodeURIComponent(candidate.symbol || 'AAPL'));
@@ -373,10 +367,6 @@
   }
 
   function riskMode() { return document.getElementById('risk-mode').value; }
-
-  function brandName() {
-    return (App.state.brand && App.state.brand.name) || 'StrikeBench';
-  }
 
   // ---------- 0. Home dashboard ----------
 
@@ -712,25 +702,11 @@
         }
         updateHomeHistoryNotice();
       }
-      try {
-        var sp = await API.prefetch('/api/sparklines?symbols=' + marketSymbols.join(',') + '&range=3m');
-        if (!sp) {
-          marketSymbols.forEach(function (symbol) { paintHomeSpark(missingSparkRow(symbol,
-            'History lookup yielded to interactive market work. Open analysis to try on demand.')); });
-          return;
-        }
-        var returned = {};
-        (sp.sparklines || []).forEach(function (row) {
-          returned[row.symbol] = true;
-          paintHomeSpark(row);
-        });
-        marketSymbols.forEach(function (symbol) {
-          if (!returned[symbol]) paintHomeSpark(missingSparkRow(symbol, 'Daily history was not returned for this symbol.'));
-        });
-      } catch (e) {
-        marketSymbols.forEach(function (symbol) { paintHomeSpark(missingSparkRow(symbol,
-          'Chart unavailable right now; the quote remains usable.')); });
-      }
+      lazySparklines(tiles, marketSymbols, {
+        range: function () { return '3m'; },
+        valid: function () { return tiles.isConnected; },
+        paint: paintHomeSpark
+      });
     })();
 
     // Open positions (review #8): a 256px empty card was wasted real estate — with no trades
@@ -876,14 +852,6 @@
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); node.click(); }
     });
     return node;
-  }
-
-  function quickAction(title, hint, hash, ic) {
-    return pressable(el('div', { class: 'tile qa-tile clickable', onclick: function () { App.navigate(hash); } },
-      el('div', { class: 'qa-head' },
-        el('div', { class: 'icon-tile icon-tile-sm' }, icon(ic || 'compass', 18)),
-        el('div', {}, el('div', { class: 't-sym' }, title),
-          el('div', { class: 'muted qa-hint' }, hint)))), title + ': ' + hint, 'link');
   }
 
   // ---------- 2. Research ----------
@@ -1825,20 +1793,6 @@
    * quote/freshness/lane chip to any EDITABLE symbol input: same look, same data, every
    * surface. Debounced, supersede-guarded; failures show honestly as 'no live quote'.
    */
-  /**
-   * LOCKED symbol context (interaction contract #5): a placed/reviewed package shows its
-   * symbol but cannot silently mutate it — changing means going back through the workflow.
-   */
-  function lockedSymbolBar(symbol, opts) {
-    opts = opts || {};
-    return UI.symbolContext({
-      mode: 'locked', symbol: symbol, id: opts.id || 'locked-symbol',
-      label: opts.label || 'Position symbol',
-      onResearch: function () { App.navigate('#/research/' + encodeURIComponent(symbol)); },
-      onChange: opts.noChange ? null : function () { App.navigate('#/research'); }
-    });
-  }
-
   function symbolPanel(symbol, opts) {
     opts = opts || {};
     symbol = symbol.toUpperCase();
@@ -2142,11 +2096,6 @@
     return v === 'FAVORABLE' ? 3 : v === 'MIXED' ? 2 : v === 'UNAVAILABLE' ? 1 : 0;
   }
 
-  function decisionScoreOf(e) {
-    var value = Number(e && e.decisionScore);
-    return Number.isFinite(value) ? value : 0;
-  }
-
   function marketEvAfterCosts(c) {
     return c && c.economics && c.economics.marketEvAfterCostsCents;
   }
@@ -2301,19 +2250,11 @@
     var g = Learn.STRATEGY_GUIDE[c.strategy] || {};
     var assignGoal = c.intent === 'EXIT' || c.intent === 'ACQUIRE';
     var maxLossFact = c.usesHeldShares && c.maxLossCents === 0
-        ? el('div', { class: 'fact' },
-            el('div', { class: 'f-label' }, 'New cash at risk'),
-            el('div', { class: 'f-value' }, '$0'))
-        : el('div', { class: 'fact f-danger' },
-            el('div', { class: 'f-label' }, 'Theoretical worst case'),
-            el('div', { class: 'f-value' }, fmtMoney(c.maxLossCents)));
-    var profitFact = el('div', { class: 'fact' },
-      el('div', { class: 'f-label' }, 'Chance of any profit'),
-      el('div', { class: 'f-value' }, fmtPct(c.pop)));
+        ? UI.fact('New cash at risk', '$0')
+        : UI.fact('Theoretical worst case', fmtMoney(c.maxLossCents), 'f-danger');
+    var profitFact = UI.fact('Chance of any profit', fmtPct(c.pop));
     var assignmentFact = assignGoal && c.assignmentProb !== null && c.assignmentProb !== undefined
-      ? el('div', { class: 'fact f-ok' },
-          el('div', { class: 'f-label' }, c.intent === 'EXIT' ? 'Chance you sell' : 'Chance you buy'),
-          el('div', { class: 'f-value' }, fmtPct(c.assignmentProb))) : null;
+      ? UI.fact(c.intent === 'EXIT' ? 'Chance you sell' : 'Chance you buy', fmtPct(c.assignmentProb), 'f-ok') : null;
     var card = el('div', { class: 'candidate', 'data-strategy': c.strategy,
       'data-economic-verdict': economicVerdict(c) || 'UNKNOWN' },
       el('div', { class: 'head' },
@@ -2325,10 +2266,8 @@
       intentNoteBlock(c),
       el('div', { class: 'fact-grid' },
         maxLossFact,
-        el('div', { class: 'fact f-ok' },
-          el('div', { class: 'f-label' }, 'Theoretical ceiling'),
-          el('div', { class: 'f-value' }, UI.maxProfitLabel(
-            c.strategy, c.structureGroup, c.maxProfitCents, true, c.legs))),
+        UI.fact('Theoretical ceiling', UI.maxProfitLabel(
+          c.strategy, c.structureGroup, c.maxProfitCents, true, c.legs), 'f-ok'),
         profitFact,
         assignmentFact),
       el('p', { style: 'margin:6px 0' },
@@ -2415,11 +2354,6 @@
     return ((App.strategyCatalog && App.strategyCatalog.catalog) || []).find(function (m) { return m.name === name; }) || null;
   }
 
-  function canBacktest(name) {
-    var meta = strategyMeta(name);
-    return !!(meta && meta.backtestEnabled);
-  }
-
   var THESIS_BADGE = { BULLISH: 'badge-ok', BEARISH: 'badge-danger', NEUTRAL: 'badge-dim', VOLATILE: 'badge-warn' };
 
   /** Pro: side-by-side strategy comparison — sortable columns, expandable detail rows. */
@@ -2465,37 +2399,6 @@
       }
     }
     paint(candidates.length <= 5);
-  }
-
-  /** Beginner keeps the complete catalog, but endorsement and teaching cases no longer blur. */
-  function renderEconomicGroups(results, candidates) {
-    candidates.forEach(function (c, i) { c._servedRank = i + 1; });
-    var primary = candidates.filter(function (c) {
-      var v = economicVerdict(c);
-      return v !== 'UNFAVORABLE' && v !== 'UNAVAILABLE';
-    });
-    var learning = candidates.filter(function (c) {
-      var v = economicVerdict(c);
-      return v === 'UNFAVORABLE' || v === 'UNAVAILABLE';
-    });
-    if (primary.length) {
-      results.appendChild(el('h3', { class: 'economic-group-title' }, 'Candidates to investigate'));
-      renderRankedCards(results, primary, { id: 'ranked-cards-primary' });
-    }
-    if (learning.length) {
-      var section = el('details', { class: 'card economic-learning-group', open: primary.length ? null : '' },
-        el('summary', {}, 'Learn from ' + learning.length + ' trade-off' + (learning.length === 1 ? '' : 's')));
-      var body = el('div', { class: 'economic-learning-body' });
-      section.appendChild(body);
-      learning.forEach(function (c) {
-        var card = candidateCard(c, true);
-        var head = card.querySelector('h3') || card.firstChild;
-        if (head && head.insertBefore) head.insertBefore(
-          el('span', { class: 'badge badge-dim rank-badge' }, '#' + c._servedRank), head.firstChild);
-        body.appendChild(card);
-      });
-      results.appendChild(section);
-    }
   }
 
   function comparisonTable(candidates, options) {
@@ -4603,14 +4506,14 @@
       result.diagnostic ? ['Mixed, adverse, or unavailable ideas may appear so you can inspect the least-bad set.']
         : ['This allocates research capital only. It does not place trades or reserve buying power.']));
     host.appendChild(el('div', { class: 'fact-grid portfolio-construct-summary', id: 'portfolio-summary' },
-      metricFact('Capital in draft', fmtMoney(result.capitalUsedCents)),
-      metricFact('Positions', String(allocations.length)),
-      metricFact('Market EV after costs', result.marketEvAfterCostsCents == null ? '\u2014' : pnlSpan(result.marketEvAfterCostsCents),
+      UI.fact('Capital in draft', fmtMoney(result.capitalUsedCents)),
+      UI.fact('Positions', String(allocations.length)),
+      UI.fact('Market EV after costs', result.marketEvAfterCostsCents == null ? '\u2014' : pnlSpan(result.marketEvAfterCostsCents),
         result.marketEvAfterCostsCents == null ? '' : result.marketEvAfterCostsCents >= 0 ? 'f-ok' : 'f-danger'),
-      metricFact('History EV after costs', result.realizedVolEvAfterCostsCents == null ? '\u2014' : pnlSpan(result.realizedVolEvAfterCostsCents),
+      UI.fact('History EV after costs', result.realizedVolEvAfterCostsCents == null ? '\u2014' : pnlSpan(result.realizedVolEvAfterCostsCents),
         result.realizedVolEvAfterCostsCents == null ? '' : result.realizedVolEvAfterCostsCents >= 0 ? 'f-ok' : 'f-danger'),
-      metricFact('Worst modeled tail', el('span', { class: 'loss' }, fmtMoney(-Math.abs(result.totalTailLossCents || 0))), 'f-danger'),
-      metricFact('Average Decision score', String(Math.round(result.avgScore || 0)))));
+      UI.fact('Worst modeled tail', el('span', { class: 'loss' }, fmtMoney(-Math.abs(result.totalTailLossCents || 0))), 'f-danger'),
+      UI.fact('Average Decision score', String(Math.round(result.avgScore || 0)))));
     host.appendChild(el('h3', {}, 'Capital by symbol'));
     host.appendChild(portfolioComposition(result.perSymbolCents));
     if (Learn.currentLevel() === 'expert') {
@@ -4968,11 +4871,6 @@
       el('span', {}, 'By symbol · ', (allocation.bySymbol || []).length, ' rows'),
       function () { return allocationRows(allocation.bySymbol); }));
     root.appendChild(allocCard);
-  }
-
-  function portfolioToday() {
-    var now = new Date();
-    return [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
   }
 
   function portfolioNowLocal() {
@@ -6679,8 +6577,6 @@
               pathIndex: pathIndex == null ? null : pathIndex, speed: 26
             });
             var rehearsal = created.rehearsal;
-            App.state.planReturn = { planId: plan.id, stage: 'EVIDENCE',
-              label: plan.title + ' · Evidence', rehearsalWorld: rehearsal.worldId };
             App.state.focusSimControlRoom = rehearsal.worldId;
             var switched = await App.switchWorld(rehearsal.worldId, button);
             if (!switched) throw new Error('The exact rehearsal was created but its market could not be entered.');
@@ -8726,17 +8622,6 @@
 
   // ---- Shared Plan research workbench components ----
 
-  function toolField(label, input) {
-    return UI.field(label, input);
-  }
-
-  /** A stat/fact tile (label over value), matching the tiles the recommendation pages use. */
-  function metricFact(label, value, cls) {
-    return el('div', { class: 'fact' + (cls ? ' ' + cls : '') },
-      el('div', { class: 'f-label' }, label),
-      el('div', { class: 'f-value' }, value));
-  }
-
   /** A card header with an icon-tile accent, like the recommendation surfaces. */
   function toolHeader(iconName, title, right) {
     return UI.cardHeader(
@@ -8755,14 +8640,6 @@
       + '<circle cx="' + v.toFixed(2) + '" cy="8" r="2.4" fill="' + col + '" stroke="var(--surface)" stroke-width="0.8"/></svg>';
     return el('div', {}, el('div', { class: 'tool-chart', html: svg }),
       caption ? el('div', { class: 'muted small' }, caption) : null);
-  }
-
-  function contextHorizonDays(horizon) {
-    return Product.Horizon.sessions(horizon);
-  }
-
-  function contextHorizonForDays(days) {
-    return Product.Horizon.keyForSessions(days);
   }
 
   // A distribution histogram of forward returns — green bars for gaining outcomes, red for losing.
@@ -9105,7 +8982,7 @@
           value: saved == null ? strictValue(q.key, pr, protocol.strictness) : saved,
           min: String(pr.min), max: String(pr.max), step: '1' });
         paramInputs[pr.key] = inp;
-        signalFields.push(toolField((level === 'beginner' ? pr.label : pr.label + ' (' + pr.unit + ')'), inp));
+        signalFields.push(UI.field((level === 'beginner' ? pr.label : pr.label + ' (' + pr.unit + ')'), inp));
       });
 
       protocolInputs.window = el('select', { id: 'study-window' },
@@ -9128,9 +9005,9 @@
       protocolInputs.regime.value = protocol.regime;
 
       var beginnerControls = el('div', { class: 'form-grid study-beginner-controls' },
-        toolField('History to check', protocolInputs.window),
-        toolField('How selective?', protocolInputs.strictness),
-        toolField('Market conditions', protocolInputs.regime));
+        UI.field('History to check', protocolInputs.window),
+        UI.field('How selective?', protocolInputs.strictness),
+        UI.field('Market conditions', protocolInputs.regime));
       picker.appendChild(beginnerControls);
 
       protocolInputs.from = el('input', { type: 'date', id: 'study-from', value: protocol.from });
@@ -9149,13 +9026,13 @@
       protocolInputs.splitHalf = el('input', { type: 'checkbox', id: 'study-split-half', checked: protocol.splitHalf ? '' : null });
 
       var exactFields = el('div', { class: 'form-grid study-protocol-grid' }, signalFields,
-        toolField(level === 'beginner' ? 'Start date' : 'Sample start', protocolInputs.from),
-        toolField(level === 'beginner' ? 'End date' : 'Sample end', protocolInputs.to),
-        toolField(level === 'beginner' ? 'Days between examples' : 'Minimum event separation (days)', protocolInputs.eventSpacing),
-        toolField(level === 'beginner' ? 'Minimum examples' : 'Minimum event sample', protocolInputs.minSample),
-        toolField('Confidence', protocolInputs.confidencePct),
-        toolField(level === 'beginner' ? 'Resamples' : 'Bootstrap draws', protocolInputs.bootstrapSamples),
-        toolField(level === 'beginner' ? 'Lucky-finding protection' : 'Multiple-testing policy', protocolInputs.multiplicity),
+        UI.field(level === 'beginner' ? 'Start date' : 'Sample start', protocolInputs.from),
+        UI.field(level === 'beginner' ? 'End date' : 'Sample end', protocolInputs.to),
+        UI.field(level === 'beginner' ? 'Days between examples' : 'Minimum event separation (days)', protocolInputs.eventSpacing),
+        UI.field(level === 'beginner' ? 'Minimum examples' : 'Minimum event sample', protocolInputs.minSample),
+        UI.field('Confidence', protocolInputs.confidencePct),
+        UI.field(level === 'beginner' ? 'Resamples' : 'Bootstrap draws', protocolInputs.bootstrapSamples),
+        UI.field(level === 'beginner' ? 'Lucky-finding protection' : 'Multiple-testing policy', protocolInputs.multiplicity),
         el('div', { class: 'field inline-check study-split-check' }, protocolInputs.splitHalf,
           el('label', { for: 'study-split-half' }, level === 'beginner' ? 'Check both halves of history' : 'Split-half consistency check')));
       var protocolDetails = el('details', { class: 'study-protocol', open: level === 'expert' ? '' : null },
@@ -9412,14 +9289,14 @@
     out.appendChild(gaugeChart(r.conditioned.winRatePct / 100, r.baseline.winRatePct / 100,
       'Positive ' + Math.round(r.conditioned.winRatePct) + '% of the time after the signal vs ' + Math.round(r.baseline.winRatePct) + '% normally — over ' + r.conditioned.sample + ' signals'));
     var facts = el('div', { class: 'fact-grid' },
-      metricFact('After the signal', Math.round(r.conditioned.winRatePct) + '% up', r.winRateEdgePct >= 0 ? 'f-ok' : 'f-danger'),
-      metricFact('Normally', Math.round(r.baseline.winRatePct) + '% up'),
-      metricFact('Edge', (r.winRateEdgePct >= 0 ? '+' : '') + r.winRateEdgePct + ' pts', r.winRateEdgePct >= 0 ? 'f-ok' : 'f-danger'));
+      UI.fact('After the signal', Math.round(r.conditioned.winRatePct) + '% up', r.winRateEdgePct >= 0 ? 'f-ok' : 'f-danger'),
+      UI.fact('Normally', Math.round(r.baseline.winRatePct) + '% up'),
+      UI.fact('Edge', (r.winRateEdgePct >= 0 ? '+' : '') + r.winRateEdgePct + ' pts', r.winRateEdgePct >= 0 ? 'f-ok' : 'f-danger'));
     out.appendChild(facts);
     var mean = el('div', { class: 'fact-grid' },
-      metricFact('Avg return', (r.conditioned.meanReturnPct >= 0 ? '+' : '') + r.conditioned.meanReturnPct + '%', r.meanEdgePct >= 0 ? 'f-ok' : 'f-danger'),
-      metricFact('Worst case', r.conditioned.worstPct + '%', 'f-danger'),
-      metricFact('Best case', '+' + r.conditioned.bestPct + '%', 'f-ok'));
+      UI.fact('Avg return', (r.conditioned.meanReturnPct >= 0 ? '+' : '') + r.conditioned.meanReturnPct + '%', r.meanEdgePct >= 0 ? 'f-ok' : 'f-danger'),
+      UI.fact('Worst case', r.conditioned.worstPct + '%', 'f-danger'),
+      UI.fact('Best case', '+' + r.conditioned.bestPct + '%', 'f-ok'));
     out.appendChild(mean);
     var dc = distChart(r.distribution);
     if (dc) out.appendChild(dc);
@@ -9506,7 +9383,7 @@
     var body = el('textarea', { rows: '4', placeholder: 'Your analysis…' }, (n && n.body) || '');
     var tags = el('input', { type: 'text', placeholder: 'tags (comma-separated)', value: (n && n.tags) || '' });
     var wrap = el('div', { class: 'note-editor' },
-      toolField('Title', title), toolField('Notes', body), toolField('Tags', tags));
+      UI.field('Title', title), UI.field('Notes', body), UI.field('Tags', tags));
     var save = el('button', { class: 'btn btn-sm' }, 'Save');
     save.addEventListener('click', async function () {
       save.disabled = true;

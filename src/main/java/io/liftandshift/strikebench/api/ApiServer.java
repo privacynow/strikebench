@@ -1751,9 +1751,6 @@ public final class ApiServer {
     private static String latencyClass(String path) {
         if (path == null) return "other";
         if (path.contains("/chain")) return "chain";
-        // Heavy analysis routes get their OWN buckets (review P2: backtests hiding inside
-        // 'other' made /api/metrics look healthy while Research stayed slow).
-        if (path.startsWith("/api/backtest")) return "backtest";
         if (path.startsWith("/api/sim/market")) return "world";
         if (path.startsWith("/api/datasets") || path.startsWith("/api/data")) return "data-ops";
         if (path.startsWith("/api/broker")) return "broker";
