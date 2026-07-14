@@ -2431,6 +2431,14 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .allocation-label { display: flex; justify-content: space-between; gap: 10px; }
 .allocation-track { height: 10px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; }
 .allocation-track span { display: block; height: 100%; background: var(--accent); }
+.book-exposure-totals { margin: 12px 0 2px; }
+.book-allocation-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 14px; }
+.book-allocation-group:last-child { grid-column: 1 / -1; }
+.book-allocation-group h3 { margin: 0 0 2px; font-size: 15px; }
+.book-exposure-rows { display: grid; gap: 0; }
+.book-exposure-money { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; text-align: right; }
+.book-allocation .allocation-row { grid-template-columns: minmax(130px, .7fr) minmax(120px, 1fr) minmax(240px, 1.2fr); }
+.book-allocation > details { margin-top: 14px; border-top: 1px solid var(--border); }
 .portfolio-account-form > * + * { margin-top: 13px; }
 .portfolio-tax-rate-fields[hidden] { display: none; }
 .book-record-card, .book-journal { display: grid; gap: 12px; }
@@ -2486,6 +2494,10 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .book-position-facts { grid-template-columns: minmax(0, 1fr); }
   .allocation-row { grid-template-columns: minmax(0, 1fr) 50px; }
   .allocation-label { grid-column: 1 / -1; }
+  .book-allocation-groups { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .book-allocation-group:last-child { grid-column: auto; }
+  .book-allocation .allocation-row { grid-template-columns: minmax(0, 1fr) 48px; }
+  .book-allocation .book-exposure-money { grid-column: 1 / -1; justify-content: flex-start; text-align: left; }
   .book-transaction-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .book-leg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .book-roll-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

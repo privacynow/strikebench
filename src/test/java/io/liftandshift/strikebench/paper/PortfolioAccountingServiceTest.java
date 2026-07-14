@@ -709,6 +709,29 @@ class PortfolioAccountingServiceTest {
         assertThat(summary.collateral().availableCashCents()).isEqualTo(5_420_000L);
         assertThat(summary.collateral().cashSecuredPutContracts()).isEqualTo(1);
         assertThat(summary.positions()).allMatch(PortfolioAccountingService.PositionView::complete);
+        assertThat(summary.allocation().longExposureCents()).isEqualTo(10_029_900L);
+        assertThat(summary.allocation().shortExposureCents()).isEqualTo(15_000L);
+        assertThat(summary.allocation().grossExposureCents()).isEqualTo(10_044_900L);
+        assertThat(summary.allocation().netExposureCents()).isEqualTo(10_014_900L);
+        assertThat(summary.allocation().byAssetClass())
+                .extracting(PortfolioAccountingService.ExposureRow::label,
+                        PortfolioAccountingService.ExposureRow::longExposureCents,
+                        PortfolioAccountingService.ExposureRow::shortExposureCents)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple("Cash", 9_920_000L, 0L),
+                        org.assertj.core.groups.Tuple.tuple("Stocks", 109_900L, 0L),
+                        org.assertj.core.groups.Tuple.tuple("Options", 0L, 15_000L));
+        assertThat(summary.allocation().bySector())
+                .extracting(PortfolioAccountingService.ExposureRow::label,
+                        PortfolioAccountingService.ExposureRow::netExposureCents)
+                .contains(org.assertj.core.groups.Tuple.tuple("Technology", 109_900L),
+                        org.assertj.core.groups.Tuple.tuple("Index & macro ETFs", -15_000L));
+        assertThat(summary.allocation().byDirection())
+                .extracting(PortfolioAccountingService.ExposureRow::label,
+                        PortfolioAccountingService.ExposureRow::grossExposureCents,
+                        PortfolioAccountingService.ExposureRow::netExposureCents)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("Long", 10_029_900L, 10_029_900L),
+                        org.assertj.core.groups.Tuple.tuple("Short", 15_000L, -15_000L));
         assertThat(summary.valuationBasis()).contains("executable closing sides");
     }
 
