@@ -163,7 +163,6 @@ public final class Backtester {
 
         // Lookback padding so HV is available on day one — filtered per-day to <= that day
         HistoricalReplayKernel.Window replayWindow = replay.window(symbol, from, to, 200, actx);
-        List<Candle> allCandles = replayWindow.all();
         boolean demoUnderlying = replayWindow.demo();
         if (demoUnderlying) {
             notes.add("Underlying price history is built-in DEMO DATA (no live candle source is configured — "
@@ -186,100 +185,98 @@ public final class Backtester {
             notes.add("Data covers only " + daysCovered + " of " + daysRequested + " requested weekdays");
         }
 
-        long cash = startingCash;
-        long reserved = 0;
-        OpenPosition open = null;
-        String pricingMode = null;
-        int daysSinceFlat = 0;
-
-        for (Candle day : window) {
+        SingleReplayState state = new SingleReplayState(startingCash);
+        replay.forEachDay(replayWindow, state, (run, replayDay) -> {
+            Candle day = replayDay.candle();
             LocalDate date = day.date();
             double close = day.close().doubleValue();
-            List<Candle> known = allCandles.stream().filter(c -> !c.date().isAfter(date)).toList();
+            List<Candle> known = replayDay.known();
             double hv = HistoricalVol.annualized(known, HV_WINDOW);
             boolean hvKnown = !Double.isNaN(hv);
             double ivProxy = hvKnown ? hv : modelInputs.fallbackVolatility();
 
             // Exit first: settle at intrinsic once the expiration date is reached — valued at
             // the close ON (or last before) the expiration date, never a later bar's price.
-            if (open != null && !date.isBefore(open.expiration)) {
-                final LocalDate exp = open.expiration;
+            if (run.open != null && !date.isBefore(run.open.expiration)) {
+                final LocalDate exp = run.open.expiration;
                 BigDecimal expiryClose = known.stream()
                         .filter(c -> !c.date().isAfter(exp))
                         .reduce((a, b) -> b).map(Candle::close).orElse(day.close());
-                long exitValue = HistoricalReplayKernel.intrinsicValueCents(open.legs, open.qty, expiryClose);
-                boolean assigned = open.legs.stream().anyMatch(l -> !l.isStock()
+                long exitValue = HistoricalReplayKernel.intrinsicValueCents(run.open.legs, run.open.qty, expiryClose);
+                boolean assigned = run.open.legs.stream().anyMatch(l -> !l.isStock()
                         && l.action() == io.liftandshift.strikebench.model.LegAction.SELL
                         && l.intrinsicPerShare(expiryClose).signum() > 0);
-                cash += exitValue;
-                reserved -= Math.max(0, open.maxLossCents + open.entryNetCents);
-                trades.add(closeOut(open, date, exitValue, "EXPIRED", assigned));
-                open = null;
-                daysSinceFlat = 0;
+                run.cash += exitValue;
+                run.reserved -= Math.max(0, run.open.maxLossCents + run.open.entryNetCents);
+                trades.add(closeOut(run.open, date, exitValue, "EXPIRED", assigned));
+                run.open = null;
+                run.daysSinceFlat = 0;
             }
 
             // Entry: every N trading days while flat
-            if (open == null) {
-                if (daysSinceFlat % entryEvery == 0) {
+            if (run.open == null) {
+                if (run.daysSinceFlat % entryEvery == 0) {
                     EntryAttempt attempt = tryEnter(symbol, family, date, targetDte, qty, slippage, known,
                             ivProxy, hvKnown, actx, modelInputs);
                     if (attempt.position != null
-                            && cash + attempt.position.entryNetCents - attempt.position.feesCents
-                               - (reserved + Math.max(0, attempt.position.maxLossCents + attempt.position.entryNetCents)) < 0) {
+                            && run.cash + attempt.position.entryNetCents - attempt.position.feesCents
+                               - (run.reserved + Math.max(0, attempt.position.maxLossCents + attempt.position.entryNetCents)) < 0) {
                         skipped.add(Map.of("date", date.toString(), "reason", "insufficient buying power for entry"));
                         attempt = new EntryAttempt(null, attempt.mode, "insufficient buying power");
                     }
                     if (attempt.position != null) {
-                        open = attempt.position;
-                        reserved += Math.max(0, open.maxLossCents + open.entryNetCents);
-                        cash += open.entryNetCents - open.feesCents;
+                        run.open = attempt.position;
+                        run.reserved += Math.max(0, run.open.maxLossCents + run.open.entryNetCents);
+                        run.cash += run.open.entryNetCents - run.open.feesCents;
                         // Report the WORST tier used anywhere in the run — one modeled entry
                         // means the whole report is (at best) partially modeled.
-                        if (pricingMode == null || tierRank(attempt.mode) > tierRank(pricingMode)) pricingMode = attempt.mode;
+                        if (run.pricingMode == null || tierRank(attempt.mode) > tierRank(run.pricingMode)) {
+                            run.pricingMode = attempt.mode;
+                        }
                     } else {
                         skipped.add(Map.of("date", date.toString(), "reason", attempt.reason));
                     }
                 }
-                daysSinceFlat++;
+                run.daysSinceFlat++;
             }
 
-            long equity = cash + (open == null ? 0 : replay.valueCents(symbol, open.legs, open.qty,
+            long equity = run.cash + (run.open == null ? 0 : replay.valueCents(symbol, run.open.legs, run.open.qty,
                     close, ivProxy, modelInputs.annualRate(), date, actx, HistoricalReplayKernel.PriceIntent.MARK,
                     !hvKnown, replayEvidence));
             equityCurve.add(Map.of("date", date.toString(), "equityCents", equity));
-        }
+        });
 
         // Window ended with an open position: close at model value, flagged
-        if (open != null) {
+        if (state.open != null) {
             Candle last = window.getLast();
-            List<Candle> known = allCandles;
+            List<Candle> known = replayWindow.all();
             double hv = HistoricalVol.annualized(known, HV_WINDOW);
             boolean hvKnown = !Double.isNaN(hv);
-            long exitValue = replay.valueCents(symbol, open.legs, open.qty, last.close().doubleValue(),
+            long exitValue = replay.valueCents(symbol, state.open.legs, state.open.qty, last.close().doubleValue(),
                     hvKnown ? hv : modelInputs.fallbackVolatility(), modelInputs.annualRate(),
                     last.date(), actx, HistoricalReplayKernel.PriceIntent.EXIT,
                     !hvKnown, replayEvidence);
-            long feesClose = feesFor(open.legs, open.qty);
-            cash += exitValue - feesClose;
-            reserved -= Math.max(0, open.maxLossCents + open.entryNetCents);
-            open.feesCents += feesClose;
-            trades.add(closeOut(open, last.date(), exitValue, "WINDOW_END", null));
+            long feesClose = feesFor(state.open.legs, state.open.qty);
+            state.cash += exitValue - feesClose;
+            state.reserved -= Math.max(0, state.open.maxLossCents + state.open.entryNetCents);
+            state.open.feesCents += feesClose;
+            trades.add(closeOut(state.open, last.date(), exitValue, "WINDOW_END", null));
             notes.add("Final trade closed at model value (with close fees) because the window ended before expiration; "
                     + "it is excluded from win-rate and return statistics");
             equityCurve.set(equityCurve.size() - 1,
-                    Map.of("date", last.date().toString(), "equityCents", cash));
+                    Map.of("date", last.date().toString(), "equityCents", state.cash));
         }
 
-        if (pricingMode == null) pricingMode = "MODELED_FROM_UNDERLYING";
+        if (state.pricingMode == null) state.pricingMode = "MODELED_FROM_UNDERLYING";
         String confidence = trades.isEmpty() ? "none (no trades entered)"
                 : demoUnderlying ? "none (demo data)"
-                : actx.synthetic() ? "modeled (generated underlying)" : switch (pricingMode) {
+                : actx.synthetic() ? "modeled (generated underlying)" : switch (state.pricingMode) {
             case "HISTORICAL_CHAIN" -> "high";
             case "MODELED_FROM_UNDERLYING" -> "medium";
             default -> "low";
         };
-        notes.add("Pricing mode " + pricingMode + ": "
-                + (pricingMode.equals("HISTORICAL_CHAIN")
+        notes.add("Pricing mode " + state.pricingMode + ": "
+                + (state.pricingMode.equals("HISTORICAL_CHAIN")
                     ? "entries used recorded option chains"
                     : "option prices are Black-Scholes estimates from the underlying — not observed option prices"));
 
@@ -299,8 +296,8 @@ public final class Backtester {
         }
 
         return persist(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
-                pricingMode, confidence, daysRequested, daysCovered, n, winRate, avgRoR,
-                startingCash, cash, HistoricalReplayKernel.maxDrawdownPct(equityCurve), worst, trades, skipped,
+                state.pricingMode, confidence, daysRequested, daysCovered, n, winRate, avgRoR,
+                startingCash, state.cash, HistoricalReplayKernel.maxDrawdownPct(equityCurve), worst, trades, skipped,
                 assumptions(slippage, family, modelInputs), equityCurve, notes, assignments, demoUnderlying, DISCLAIMER), req, userId);
     }
 
@@ -319,6 +316,24 @@ public final class Backtester {
         long maxLossCents;
         long openFeesCents;
         ManagedFamily family;
+    }
+
+    private static final class SingleReplayState {
+        long cash;
+        long reserved;
+        OpenPosition open;
+        String pricingMode;
+        int daysSinceFlat;
+
+        SingleReplayState(long cash) {
+            this.cash = cash;
+        }
+    }
+
+    private static final class ManagedReplayState {
+        final List<ManagedPosition> open = new ArrayList<>();
+        long realized;
+        int peakConcurrent;
     }
 
     public PortfolioReport runPortfolio(PortfolioRequest req) {
@@ -356,7 +371,6 @@ public final class Backtester {
         BacktestModelInputs modelInputs = BacktestModelInputs.resolve(market, targetDte, worldId);
 
         HistoricalReplayKernel.Window rw = replay.window(symbol, from, to, 220, analysis);
-        List<Candle> all = rw.all();
         List<Candle> window = rw.requested();
         HistoricalReplayKernel.Evidence evidence = new HistoricalReplayKernel.Evidence();
         List<String> notes = new ArrayList<>();
@@ -373,25 +387,23 @@ public final class Backtester {
                     rw.demo(), DISCLAIMER), req, userId);
         }
 
-        List<ManagedPosition> open = new ArrayList<>();
-        long realized = 0;
-        int peakConcurrent = 0;
-        int dayIndex = 0;
-        for (Candle day : window) {
+        ManagedReplayState state = new ManagedReplayState();
+        replay.forEachDay(rw, state, (run, replayDay) -> {
+            Candle day = replayDay.candle();
             LocalDate date = day.date();
             double spot = day.close().doubleValue();
-            List<Candle> known = HistoricalReplayKernel.known(all, date);
+            List<Candle> known = replayDay.known();
             double iv = HistoricalReplayKernel.volatility(known, HV_WINDOW, modelInputs.fallbackVolatility());
 
-            for (ManagedPosition position : new ArrayList<>(open)) {
+            for (ManagedPosition position : new ArrayList<>(run.open)) {
                 if (!date.isBefore(position.expiration)) {
                     BigDecimal expiryClose = known.stream().filter(c -> !c.date().isAfter(position.expiration))
                             .reduce((a, b) -> b).map(Candle::close).orElse(day.close());
                     long pnl = HistoricalReplayKernel.intrinsicValueCents(position.legs, position.qty, expiryClose)
                             - position.entryValueCents - position.openFeesCents;
-                    realized += pnl;
+                    run.realized += pnl;
                     trades.add(closeManaged(position, date, pnl, "EXPIRED"));
-                    open.remove(position);
+                    run.open.remove(position);
                     continue;
                 }
                 long exitValue = replay.valueCents(symbol, position.legs, position.qty, spot, iv,
@@ -407,48 +419,47 @@ public final class Backtester {
                 else if (ChronoUnit.DAYS.between(date, position.expiration) <= rollDte)
                     reason = "TIME";
                 if (reason != null) {
-                    realized += pnlIfClosed;
+                    run.realized += pnlIfClosed;
                     trades.add(closeManaged(position, date, pnlIfClosed, reason));
-                    open.remove(position);
+                    run.open.remove(position);
                 }
             }
 
-            if (dayIndex % entryEvery == 0 && open.size() < maxConcurrent) {
+            if (replayDay.index() % entryEvery == 0 && run.open.size() < maxConcurrent) {
                 ManagedPosition position = buildManagedPosition(symbol, family, spot, iv, date,
                         targetDte, qty, shortDelta, widthPct, analysis, evidence, modelInputs);
                 if (position != null) {
-                    long committed = open.stream().mapToLong(x -> x.maxLossCents).sum();
-                    long currentCapital = Math.max(0, startingCash + realized);
-                    if (committed + position.maxLossCents <= currentCapital) open.add(position);
+                    long committed = run.open.stream().mapToLong(x -> x.maxLossCents).sum();
+                    long currentCapital = Math.max(0, startingCash + run.realized);
+                    if (committed + position.maxLossCents <= currentCapital) run.open.add(position);
                 }
             }
 
             long openPnl = 0;
-            for (ManagedPosition position : open) {
+            for (ManagedPosition position : run.open) {
                 long mark = replay.valueCents(symbol, position.legs, position.qty, spot, iv,
                         modelInputs.annualRate(), date, analysis,
                         HistoricalReplayKernel.PriceIntent.MARK, false, evidence);
                 openPnl += mark - position.entryValueCents - position.openFeesCents;
             }
-            long accountValue = startingCash + realized + openPnl;
+            long accountValue = startingCash + run.realized + openPnl;
             equity.add(Map.of("date", date.toString(), "equityCents", accountValue));
-            peakConcurrent = Math.max(peakConcurrent, open.size());
-            dayIndex++;
-        }
+            run.peakConcurrent = Math.max(run.peakConcurrent, run.open.size());
+        });
 
         Candle last = window.getLast();
-        double lastIv = HistoricalReplayKernel.volatility(all, HV_WINDOW, modelInputs.fallbackVolatility());
-        for (ManagedPosition position : new ArrayList<>(open)) {
+        double lastIv = HistoricalReplayKernel.volatility(rw.all(), HV_WINDOW, modelInputs.fallbackVolatility());
+        for (ManagedPosition position : new ArrayList<>(state.open)) {
             long exit = replay.valueCents(symbol, position.legs, position.qty, last.close().doubleValue(),
                     lastIv, modelInputs.annualRate(), last.date(), analysis,
                     HistoricalReplayKernel.PriceIntent.EXIT, false, evidence);
             long pnl = exit - position.entryValueCents - position.openFeesCents
                     - feesFor(position.legs, position.qty);
-            realized += pnl;
+            state.realized += pnl;
             trades.add(closeManaged(position, last.date(), pnl, "WINDOW_END"));
         }
         equity.set(equity.size() - 1,
-                Map.of("date", last.date().toString(), "equityCents", startingCash + realized));
+                Map.of("date", last.date().toString(), "equityCents", startingCash + state.realized));
 
         List<PortfolioTrade> completed = trades.stream()
                 .filter(t -> !"WINDOW_END".equals(t.exitReason())).toList();
@@ -470,8 +481,8 @@ public final class Backtester {
                     ? "modeled (" + (evidence.observedMarks() * 100 / Math.max(1, evidence.totalMarks())) + "% observed marks)"
                     : "modeled";
         return persistPortfolio(new PortfolioReport(Ids.backtest(), symbol, family.name(), from.toString(),
-                to.toString(), pricingMode, confidence, window.size(), sample, peakConcurrent,
-                winRate, avgRor, startingCash, startingCash + realized,
+                to.toString(), pricingMode, confidence, window.size(), sample, state.peakConcurrent,
+                winRate, avgRor, startingCash, startingCash + state.realized,
                 HistoricalReplayKernel.maxDrawdownPct(equity), trades, equity,
                 modelInputs.disclosure(), notes, rw.demo(), DISCLAIMER), req, userId);
     }
