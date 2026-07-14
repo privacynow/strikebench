@@ -25,7 +25,8 @@ class JourneySurfaceTest {
         for (String name : List.of("ApiServer", "CoreRoutes", "PlanRoutes", "DataRoutes",
                 "DataController", "ResearchRoutes", "WorldRoutes", "TradeRoutes", "TradeController",
                 "ResearchController", "PortfolioRoutes", "PortfolioController", "BrokerRoutes",
-                "BrokerController", "OutcomeRoutes", "OutcomeController", "WorldController")) {
+                "BrokerController", "OutcomeRoutes", "OutcomeController", "WorldController",
+                "DiscoveryRoutes", "DiscoveryController")) {
             routes.append(Files.readString(Path.of(
                     "src/main/java/io/liftandshift/strikebench/api/" + name + ".java"))).append('\n');
         }
@@ -249,6 +250,13 @@ class JourneySurfaceTest {
         assertThat(api).doesNotContain("private void evaluate(Context ctx)",
                 "private Object simCompareResult(", "private Object simStrategyResult(",
                 "private Map<String, Object> riskNeutralPositionResult(");
+        String discovery = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/DiscoveryController.java"));
+        assertThat(api).contains("discoveryController.register(c);");
+        assertThat(discovery).contains("DiscoveryRoutes.register(config, new DiscoveryRoutes.Handlers(");
+        assertThat(api).doesNotContain("private void welcomeTeachingExample(",
+                "private void researchScout(", "private void researchIntentLadder(",
+                "private void opportunities(", "private void optimize(");
         assertThat(api).doesNotContain(
                 "c.routes.get(\"/api/metrics\"",
                 "c.routes.get(\"/api/research/",

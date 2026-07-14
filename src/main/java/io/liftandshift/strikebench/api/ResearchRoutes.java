@@ -20,11 +20,6 @@ public final class ResearchRoutes {
             Handler news,
             Handler lookup,
             Handler strategies,
-            Handler teachingExample,
-            Handler scout,
-            Handler intentLadder,
-            Handler opportunities,
-            Handler optimize,
             Handler exposure,
             Handler evaluations,
             Handler calibration,
@@ -48,11 +43,6 @@ public final class ResearchRoutes {
         config.routes.get("/api/research/{symbol}/news", h.news());
         config.routes.get("/api/lookup", h.lookup());
         config.routes.get("/api/strategies", h.strategies());
-        config.routes.get("/api/welcome/teaching-example", h.teachingExample());
-        config.routes.post("/api/research/scout", h.scout());
-        config.routes.post("/api/research/{symbol}/intent-ladder", h.intentLadder());
-        config.routes.post("/api/opportunities", h.opportunities());
-        config.routes.post("/api/optimize", h.optimize());
         config.routes.post("/api/builder/exposure", h.exposure());
         config.routes.get("/api/evaluations", h.evaluations());
         config.routes.get("/api/calibration", h.calibration());

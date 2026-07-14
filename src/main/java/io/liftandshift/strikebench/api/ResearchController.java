@@ -39,20 +39,13 @@ final class ResearchController {
     private final Function<Context, String> activeWorld;
     private final Function<Context, AnalysisContext> analysisContext;
     private final Handler symbolResearch;
-    private final Handler teachingExample;
-    private final Handler scout;
-    private final Handler intentLadder;
-    private final Handler opportunities;
-    private final Handler optimize;
 
     ResearchController(Db db, Clock clock, MarketDataService market,
                        EvaluationService evaluations,
                        Function<Context, String> ownerId,
                        Function<Context, String> activeWorld,
                        Function<Context, AnalysisContext> analysisContext,
-                       Handler symbolResearch, Handler teachingExample,
-                       Handler scout, Handler intentLadder,
-                       Handler opportunities, Handler optimize) {
+                       Handler symbolResearch) {
         this.clock = clock;
         this.market = market;
         this.evaluations = evaluations;
@@ -63,11 +56,6 @@ final class ResearchController {
         this.activeWorld = activeWorld;
         this.analysisContext = analysisContext;
         this.symbolResearch = symbolResearch;
-        this.teachingExample = teachingExample;
-        this.scout = scout;
-        this.intentLadder = intentLadder;
-        this.opportunities = opportunities;
-        this.optimize = optimize;
     }
 
     void register(JavalinConfig config) {
@@ -79,7 +67,6 @@ final class ResearchController {
                 ctx -> ctx.json(new ApiResponses.StrategyCatalog<>(
                         Arrays.stream(StrategyFamily.values()).map(Enum::name).toList(),
                         StrategyCatalog.families(), StrategyCatalog.templates())),
-                teachingExample, scout, intentLadder, opportunities, optimize,
                 this::sizeExposure,
                 ctx -> ctx.json(new ApiResponses.Evaluations<>(
                         evaluations.recent(ownerId.apply(ctx), 50))),
