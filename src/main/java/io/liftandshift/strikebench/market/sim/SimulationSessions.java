@@ -4,6 +4,7 @@ import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.util.EventBus;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.nio.ByteBuffer;
 import java.sql.Connection;
@@ -65,7 +66,7 @@ public final class SimulationSessions {
     /** ApiServer.create assigns the pool AFTER the constructor runs — same late wiring as setEvents. */
     public void attachDb(Db db) { this.db = db; }
 
-    private static String owner(String userId) { return userId == null || userId.isBlank() ? "local" : userId; }
+    private static String owner(String userId) { return OwnerScope.id(userId); }
 
     /** Persisted checkpoint: display state + the authoritative replay coordinates. */
     private record Checkpoint(long quantum, String simTime, double speed, boolean running) {}
@@ -130,6 +131,7 @@ public final class SimulationSessions {
         SimulatedWorld w = new SimulatedWorld(cfg, replay); // validate BEFORE any write
         String[] acctId = new String[1];
         db.tx(c -> {
+            OwnerScope.ensure(c, userId);
             Db.execOn(c, "INSERT INTO sim_session(id,name,user_id,config,status,model_version,events,anchors) "
                             + "VALUES (?,?,?,?::jsonb,?,?,'[]'::jsonb,?::jsonb)",
                     id, cfg.name() == null ? id : cfg.name(), owner(userId), Json.write(cfg),

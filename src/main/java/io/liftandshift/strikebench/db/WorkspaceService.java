@@ -8,6 +8,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 /**
  * Per-user workspace persistence. The blob is CLIENT-AUTHORITATIVE: the browser owns the
@@ -34,7 +35,7 @@ public final class WorkspaceService {
     public record Workspace(String stateJson, long rev, String updatedAt) {}
 
     /** Anonymous (auth off) sessions share the single local workspace. */
-    private static String key(String userId) { return userId == null || userId.isBlank() ? "local" : userId; }
+    private static String key(String userId) { return OwnerScope.id(userId); }
 
     public Optional<Workspace> get(String userId) {
         List<Workspace> rows = db.query(
@@ -55,6 +56,7 @@ public final class WorkspaceService {
         // Db.prep uses RETURN_GENERATED_KEYS, which PgJDBC can't combine with INSERT..RETURNING
         // through executeQuery — so upsert and read the new rev atomically in one transaction.
         long rev = db.tx(c -> {
+            OwnerScope.ensure(c, k);
             Db.execOn(c, "INSERT INTO workspace (user_id, state, rev, updated_at) VALUES (?, ?::jsonb, 1, ?) "
                   + "ON CONFLICT (user_id) DO UPDATE SET state=excluded.state, rev=workspace.rev+1, "
                   + "updated_at=excluded.updated_at", k, stateJson, now);

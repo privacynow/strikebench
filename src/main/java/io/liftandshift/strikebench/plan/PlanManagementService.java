@@ -183,7 +183,9 @@ public final class PlanManagementService {
                 r -> new PlanRow(r.str("user_id"), r.lng("version"), r.str("status")), planId);
         if (rows.isEmpty()) throw new ResourceNotFoundException("no such Plan: " + planId);
         PlanRow row = rows.getFirst();
-        if (!(userId == null ? row.userId() == null : userId.equals(row.userId()))) throw new ResourceNotFoundException("no such Plan: " + planId);
+        if (!io.liftandshift.strikebench.util.OwnerScope.id(userId).equals(row.userId())) {
+            throw new ResourceNotFoundException("no such Plan: " + planId);
+        }
         return row;
     }
 

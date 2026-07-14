@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.market.SnapshotService;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.OwnerScope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -127,16 +128,18 @@ public final class DataJobService {
         List<String> labels = itemsFor(k, p);
         String id = Ids.newId("job");
         String paramsJson = Json.write(p);
+        String owner = OwnerScope.id(userId);
         db.tx(c -> {
+            OwnerScope.ensure(c, owner);
             Db.execOn(c, "INSERT INTO data_job (id, kind, status, params, total, done, user_id) VALUES (?,?,?,?::jsonb,?,0,?)",
-                    id, k, "QUEUED", paramsJson, labels.size(), userId);
+                    id, k, "QUEUED", paramsJson, labels.size(), owner);
             for (int i = 0; i < labels.size(); i++) {
                 Db.execOn(c, "INSERT INTO data_job_item (job_id, seq, label, status) VALUES (?,?,?,?)",
                         id, i, labels.get(i), "PENDING");
             }
             return null;
         });
-        jobPool.submit(() -> run(id, k, p, labels, userId));
+        jobPool.submit(() -> run(id, k, p, labels, owner));
         return get(id).job();
     }
 
@@ -176,7 +179,7 @@ public final class DataJobService {
         return new JobView((DataJob) head.getFirst()[0], items, (String) head.getFirst()[1]);
     }
 
-    /** The owner user_id of a job (null = local/anonymous), or null if the job doesn't exist. */
+    /** The owner user_id of a job, or null if the job doesn't exist. */
     public String ownerOf(String jobId) {
         return db.query("SELECT user_id FROM data_job WHERE id=?", r -> r.str("user_id"), jobId)
                 .stream().findFirst().orElse(null);
@@ -195,11 +198,11 @@ public final class DataJobService {
         return db.query(
                 "SELECT id, kind, status, total, done, rows_written, message, error, "
               + "created_at::text ca, updated_at::text ua FROM data_job "
-              + "WHERE user_id IS NOT DISTINCT FROM ? ORDER BY created_at DESC LIMIT ?",
+              + "WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
                 r -> new DataJob(r.str("id"), r.str("kind"), r.str("status"), (int) r.lng("total"),
                         (int) r.lng("done"), r.lng("rows_written"), r.str("message"), r.str("error"),
                         r.str("ca"), r.str("ua")),
-                userId, lim);
+                OwnerScope.id(userId), lim);
     }
 
     public List<DataJob> recent(int limit) {

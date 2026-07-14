@@ -147,6 +147,7 @@ class PlanServiceTest {
     void ownersAndMarketsAreIsolated() {
         db.exec("INSERT INTO users(id,email,created_at,updated_at) VALUES('u1','u1@example.test','now','now')");
         db.exec("INSERT INTO users(id,email,created_at,updated_at) VALUES('u2','u2@example.test','now','now')");
+        db.exec("INSERT INTO sim_session(id,name,user_id,config,status) VALUES('simw_1','Test world','u1','{}','CREATED')");
         Plan.View observed = plans.create("u1", Plan.MarketKind.OBSERVED, null, null,
                 create("shared-owner-request", "SPY", "DIRECTIONAL", 14));
         Plan.View simulated = plans.create("u1", Plan.MarketKind.SIMULATED, "simw_1", null,

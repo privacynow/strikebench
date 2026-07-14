@@ -107,8 +107,8 @@ class SqliteToPostgresEtlTest {
                 r -> new Object[]{r.lng("cash_cents"), r.lng("reserved_cents"), r.str("user_id")}).getFirst();
         assertThat(acct[0]).isEqualTo(9950000L);
         assertThat(acct[1]).isEqualTo(20000L);
-        // Postgres-only column (absent in source) stays null.
-        assertThat(acct[2]).isNull();
+        // Postgres-only ownership is assigned to the explicit local identity.
+        assertThat(acct[2]).isEqualTo("local");
 
         // Exact values survived the copy (ids, intent/shares_locked from V2, doubles).
         var trade = pg.query("SELECT intent, shares_locked, max_loss_cents FROM trades WHERE id='tr_1'",

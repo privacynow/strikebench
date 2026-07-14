@@ -7,6 +7,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import io.liftandshift.strikebench.util.ResourceNotFoundException;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 /**
  * Research notebook: per-user saved analyses (title + freeform/markdown body + tags),
@@ -29,24 +30,28 @@ public final class NotebookService {
         if (title == null || title.isBlank()) throw new IllegalArgumentException("title is required");
         String id = Ids.newId("note");
         String now = Instant.now(clock).toString();
-        db.exec("INSERT INTO research_note(id,user_id,title,body,tags,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
-                id, userId, title.trim(), body == null ? "" : body, tags, now, now);
+        db.tx(c -> {
+            String owner = OwnerScope.ensure(c, userId);
+            Db.execOn(c, "INSERT INTO research_note(id,user_id,title,body,tags,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+                    id, owner, title.trim(), body == null ? "" : body, tags, now, now);
+            return null;
+        });
         return get(userId, id);
     }
 
     public List<Note> list(String userId) {
         return db.query("""
                 SELECT id,title,body,tags,created_at,updated_at FROM research_note
-                WHERE (user_id = ?::text OR (?::text IS NULL AND user_id IS NULL))
+                WHERE user_id=?::text
                 ORDER BY updated_at DESC LIMIT 200
-                """, NotebookService::map, userId, userId);
+                """, NotebookService::map, OwnerScope.id(userId));
     }
 
     public Note get(String userId, String id) {
         var rows = db.query("""
                 SELECT id,title,body,tags,created_at,updated_at FROM research_note
-                WHERE id=? AND (user_id = ?::text OR (?::text IS NULL AND user_id IS NULL))
-                """, NotebookService::map, id, userId, userId);
+                WHERE id=? AND user_id=?::text
+                """, NotebookService::map, id, OwnerScope.id(userId));
         if (rows.isEmpty()) throw new ResourceNotFoundException("no such note " + id);
         return rows.getFirst();
     }
@@ -55,15 +60,14 @@ public final class NotebookService {
         get(userId, id); // ownership check (404 otherwise)
         String now = Instant.now(clock).toString();
         db.exec("UPDATE research_note SET title=COALESCE(?,title), body=COALESCE(?,body), tags=?, updated_at=? "
-                + "WHERE id=? AND (user_id = ?::text OR (?::text IS NULL AND user_id IS NULL))",
-                title, body, tags, now, id, userId, userId);
+                + "WHERE id=? AND user_id=?::text",
+                title, body, tags, now, id, OwnerScope.id(userId));
         return get(userId, id);
     }
 
     public void delete(String userId, String id) {
         get(userId, id); // ownership check
-        db.exec("DELETE FROM research_note WHERE id=? AND (user_id = ?::text OR (?::text IS NULL AND user_id IS NULL))",
-                id, userId, userId);
+        db.exec("DELETE FROM research_note WHERE id=? AND user_id=?::text", id, OwnerScope.id(userId));
     }
 
     private static Note map(Db.Row r) {

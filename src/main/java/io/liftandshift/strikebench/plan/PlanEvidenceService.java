@@ -275,7 +275,7 @@ public final class PlanEvidenceService {
                 "SELECT symbol,market_kind,active_context_rev FROM plans WHERE id=? AND " + ownerClause("user_id")
                         + (lock ? " FOR UPDATE" : ""),
                 r -> new CurrentPlan(r.str("symbol"), Plan.MarketKind.valueOf(r.str("market_kind")),
-                        r.intv("active_context_rev")), id, userId, userId);
+                        r.intv("active_context_rev")), id, io.liftandshift.strikebench.util.OwnerScope.id(userId));
         if (rows.isEmpty()) throw new ResourceNotFoundException("no such plan: " + id);
         return rows.getFirst();
     }
@@ -299,7 +299,7 @@ public final class PlanEvidenceService {
     }
 
     private static String ownerClause(String column) {
-        return "(" + column + "=?::text OR (?::text IS NULL AND " + column + " IS NULL))";
+        return column + "=?::text";
     }
 
     private static double number(Map<String, Metric> m, String key) {

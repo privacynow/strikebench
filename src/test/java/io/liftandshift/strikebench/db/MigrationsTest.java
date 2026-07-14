@@ -8,8 +8,59 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MigrationsTest {
+
+    @Test
+    void canonicalOwnerMigrationPreservesRowsAndEnforcesOneIdentityKey() {
+        Map<String, String> cfg = TestDb.freshConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure().dataSource(db.dataSource()).locations("classpath:db/migrations")
+                    .target("49").load().migrate();
+            db.exec("INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,created_at,updated_at) "
+                    + "VALUES('acct_local','Local','PAPER',100000,100000,'now','now')");
+            db.exec("INSERT INTO dataset(id,name,kind) VALUES('ds_local','Legacy local','SYNTHETIC_PURE')");
+            db.exec("INSERT INTO workspace(user_id,state) VALUES('__local__','{}')");
+            db.exec("INSERT INTO settings(k,v,updated_at) VALUES('active_world:null','demo','now')");
+            db.exec("INSERT INTO sim_session(id,name,user_id,config,status) "
+                    + "VALUES('sim_legacy','Legacy world','user:legacy-owner','{}','CREATED')");
+            db.exec("INSERT INTO portfolio_account(id,owner_id,name,account_type) "
+                    + "VALUES('pa_legacy','legacy-owner','Legacy book','TAXABLE')");
+            db.exec("INSERT INTO data_sync_cursor(owner_key,source_key,symbol) "
+                    + "VALUES('user:legacy-owner','csv','AAPL')");
+            db.exec("INSERT INTO plans(id,client_request_id,create_input_hash,symbol,market_kind,status,active_stage) "
+                    + "VALUES('plan_local','legacy-request','legacy-hash','AAPL','DEMO','ACTIVE','UNDERSTAND')");
+            db.exec("INSERT INTO plan_create_request(owner_key,client_request_id,input_hash,plan_id) "
+                    + "VALUES('__local__','legacy-request','legacy-hash','plan_local') ON CONFLICT DO NOTHING");
+
+            Migrations.run(db);
+
+            assertThat(db.query("SELECT user_id FROM accounts WHERE id='acct_local'", r -> r.str("user_id")))
+                    .containsExactly("local");
+            assertThat(db.query("SELECT user_id FROM dataset WHERE id='ds_local'", r -> r.str("user_id")))
+                    .containsExactly("local");
+            assertThat(db.query("SELECT user_id FROM workspace", r -> r.str("user_id"))).containsExactly("local");
+            assertThat(db.query("SELECT v FROM settings WHERE k='active_world:local'", r -> r.str("v")))
+                    .containsExactly("demo");
+            assertThat(db.query("SELECT user_id FROM sim_session WHERE id='sim_legacy'", r -> r.str("user_id")))
+                    .containsExactly("legacy-owner");
+            assertThat(db.query("SELECT user_id FROM portfolio_account WHERE id='pa_legacy'", r -> r.str("user_id")))
+                    .containsExactly("legacy-owner");
+            assertThat(db.query("SELECT user_id FROM data_sync_cursor", r -> r.str("user_id")))
+                    .containsExactly("legacy-owner");
+            assertThat(db.query("SELECT user_id FROM plan_create_request WHERE plan_id='plan_local'", r -> r.str("user_id")))
+                    .containsExactly("local");
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_name='plans' AND column_name IN ('client_request_id','create_input_hash')",
+                    r -> r.str("column_name"))).isEmpty();
+            assertThatThrownBy(() -> db.exec("INSERT INTO workspace(user_id,state) VALUES('missing-owner','{}')"))
+                    .hasMessageContaining("foreign key");
+            assertThatThrownBy(() -> db.exec("INSERT INTO plans(id,user_id,symbol,market_kind,world_id,status,active_stage) "
+                            + "VALUES('bad-world','local','AAPL','SIMULATED','missing-world','ACTIVE','UNDERSTAND')"))
+                    .hasMessageContaining("foreign key");
+        }
+    }
 
     @Test
     void broadBasedIndexTaxonomyBackfillsExistingLotsAndRealizedMatches() {

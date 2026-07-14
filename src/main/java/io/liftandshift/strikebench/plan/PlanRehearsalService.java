@@ -265,9 +265,9 @@ public final class PlanRehearsalService {
 
     private static PlanRow requireOwned(Connection c, String planId, String userId, boolean lock) throws SQLException {
         List<PlanRow> rows = Db.queryOn(c, "SELECT user_id,version,active_context_rev FROM plans WHERE id=? " +
-                        "AND (user_id=?::text OR (?::text IS NULL AND user_id IS NULL))" + (lock ? " FOR UPDATE" : ""),
+                        "AND user_id=?::text" + (lock ? " FOR UPDATE" : ""),
                 r -> new PlanRow(r.str("user_id"), r.lng("version"), r.intv("active_context_rev")),
-                planId, userId, userId);
+                planId, io.liftandshift.strikebench.util.OwnerScope.id(userId));
         if (rows.isEmpty()) throw new ResourceNotFoundException("no such Plan: " + planId);
         return rows.getFirst();
     }

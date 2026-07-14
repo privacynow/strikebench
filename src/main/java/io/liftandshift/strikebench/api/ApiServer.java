@@ -541,12 +541,12 @@ public final class ApiServer {
                                     worldParam(activeWorld(ctx)))));
             c.routes.get("/api/evaluations", ctx -> {
                 String uid = auth.currentUserId(ctx);
-                String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+                String ownerId = io.liftandshift.strikebench.util.OwnerScope.id(uid);
                 ctx.json(Map.of("evaluations", evaluations.recent(ownerId, 50)));
             });
             c.routes.get("/api/calibration", ctx -> {
                 String uid = auth.currentUserId(ctx);
-                String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+                String ownerId = io.liftandshift.strikebench.util.OwnerScope.id(uid);
                 ctx.json(evaluations.calibrationReport(ownerId));
             });
             c.routes.post("/api/calibration/resolve", this::calibrationResolve);
@@ -986,7 +986,7 @@ public final class ApiServer {
         return accounts.getOrCreateDefaultForUser(auth.currentUserId(ctx));
     }
 
-    /** The persistence owner id for the current user (null = local/anonymous). */
+    /** The canonical persistence owner id for the current user. */
     /**
      * The caller's explicit analysis context: identity + their active dataset. Built per request
      * and PASSED to engines — never stored in a ThreadLocal (virtual-thread fan-outs would lose it,
@@ -1515,8 +1515,7 @@ public final class ApiServer {
     }
 
     private String ownerId(Context ctx) {
-        String uid = auth.currentUserId(ctx);
-        return io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+        return io.liftandshift.strikebench.util.OwnerScope.id(auth.currentUserId(ctx));
     }
 
     /**
@@ -4589,7 +4588,7 @@ public final class ApiServer {
         String world = activeWorld(ctx);
         boolean inWorld = !"observed".equals(world);
         String uid = auth.currentUserId(ctx);
-        String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+        String ownerId = io.liftandshift.strikebench.util.OwnerScope.id(uid);
         var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
                 result.riskMode(), result.candidates(), acct.buyingPowerCents(), ownerId, !inWorld,
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world));
@@ -5005,7 +5004,7 @@ public final class ApiServer {
                         : universe.active().symbols();
         Account acct = currentAccount(ctx);
         String uid = auth.currentUserId(ctx);
-        String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+        String ownerId = io.liftandshift.strikebench.util.OwnerScope.id(uid);
         int topN = req.topN() != null ? req.topN() : 8;
         var rcScan = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
         var result = evaluations.scan(symbols, req.intent(),
@@ -5032,7 +5031,7 @@ public final class ApiServer {
                         : universe.active().symbols();
         Account acct = currentAccount(ctx);
         String uid = auth.currentUserId(ctx);
-        String ownerId = io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid) ? null : uid;
+        String ownerId = io.liftandshift.strikebench.util.OwnerScope.id(uid);
         var rcOpt = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
         var scan = evaluations.scan(symbols, req.intent(),
                 req.thesis() != null ? req.thesis() : "neutral",
