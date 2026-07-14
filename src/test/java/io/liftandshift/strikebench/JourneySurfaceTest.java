@@ -213,6 +213,22 @@ class JourneySurfaceTest {
                 "c.routes.get(\"/api/broker/");
     }
 
+    @Test void apiUsesNamedTopLevelResponseContracts() throws Exception {
+        String api = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
+        String contracts = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ApiResponses.java"));
+
+        assertThat(api).doesNotContain("ctx.json(Map.of(", "ctx.json(body)",
+                        "Map<String, Object> tradePreviewPayload")
+                .contains("new ApiResponses.TradePreviewResponse(",
+                        "new ApiResponses.ResearchDetail<>(",
+                        "new ApiResponses.PortfolioSummary(");
+        assertThat(contracts).contains("public record ErrorBody(",
+                "public record TradePreviewResponse(", "public record ResearchDetail<",
+                "public record DataSyncPlan<", "public record PortfolioSummary(");
+    }
+
     @Test void supersededJourneyArtifactsStayDeletedWhileTheLiveChartDependencyRemains() throws Exception {
         String views = viewSource();
         String client = source("js/api.js");

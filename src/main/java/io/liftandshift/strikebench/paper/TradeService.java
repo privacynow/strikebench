@@ -845,7 +845,10 @@ public final class TradeService {
     /** Liquidation view of all ACTIVE trades: what unwinding everything now would pay
      *  (executable sides, BEFORE close fees). Sums computeMark per trade; incomplete marks
      *  make the whole answer honest-partial rather than silently wrong. */
-    public Map<String, Object> openPositionsValue(String accountId) {
+    public record OpenPositionsValue(int openTradesCount, int markedTradesCount, long valueCents,
+                                     long unrealizedCents, boolean complete, String freshness) {}
+
+    public OpenPositionsValue openPositionsValue(String accountId) {
         // EXTERNAL trades are excluded from paper-money math: their cash lives at the broker,
         // so including their close value would break totalValue = cash + shares + open closes.
         List<TradeRecord> active = list(accountId, TradeRecord.ACTIVE, 0, 200).trades().stream()
@@ -864,14 +867,7 @@ public final class TradeService {
             worst = worse(worst, Freshness.valueOf(view.freshness()));
             counted++;
         }
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("openTradesCount", active.size());
-        out.put("markedTradesCount", counted);
-        out.put("valueCents", value);
-        out.put("unrealizedCents", unrealized);
-        out.put("complete", complete);
-        out.put("freshness", worst.name());
-        return out;
+        return new OpenPositionsValue(active.size(), counted, value, unrealized, complete, worst.name());
     }
 
     /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Never touches money. */    /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Never touches money. */
