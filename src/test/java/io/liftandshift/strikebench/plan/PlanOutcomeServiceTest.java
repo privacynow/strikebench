@@ -159,14 +159,12 @@ class PlanOutcomeServiceTest {
                  "pricingMode":"MODELED_FROM_UNDERLYING","confidence":"modeled","sampleSize":12,"winRate":0.50,
                  "avgReturnOnRisk":0.08,"startingCents":10000000,"endingCents":10096000,"maxDrawdownPct":0.06,"demoUnderlying":true}
                 """);
-        db.exec("INSERT INTO backtests(id,created_at,request_json,report_json) VALUES (?,?,?,?)",
-                "bt-old", "2026-07-12T15:00:00Z", "{}", firstReport.toString());
+        insertBacktest(firstReport, "2026-07-12T15:00:00Z");
         outcomes.saveBacktest(null, plan, plan.version(), candidateId, "single", firstReport,
                 Json.parse("{\"targetDte\":30}"), AnalysisContext.OBSERVED);
         ObjectNode secondReport = firstReport.deepCopy();
         secondReport.put("id", "bt-current"); secondReport.put("sampleSize", 18); secondReport.put("winRate", 0.61);
-        db.exec("INSERT INTO backtests(id,created_at,request_json,report_json) VALUES (?,?,?,?)",
-                "bt-current", "2026-07-12T16:00:00Z", "{}", secondReport.toString());
+        insertBacktest(secondReport, "2026-07-12T16:00:00Z");
         outcomes.saveBacktest(null, plan, plan.version(), candidateId, "portfolio", secondReport,
                 Json.parse("{\"targetDte\":45}"), AnalysisContext.OBSERVED);
 
@@ -224,8 +222,7 @@ class PlanOutcomeServiceTest {
 
         ObjectNode scenarioReport = firstReport.deepCopy();
         scenarioReport.put("id", "bt-scenario"); scenarioReport.put("sampleSize", 9);
-        db.exec("INSERT INTO backtests(id,created_at,request_json,report_json) VALUES (?,?,?,?)",
-                "bt-scenario", "2026-07-12T16:30:00Z", "{}", scenarioReport.toString());
+        insertBacktest(scenarioReport, "2026-07-12T16:30:00Z");
         outcomes.saveBacktest(null, plan, plan.version(), candidateId, "single", scenarioReport,
                 Json.parse("{\"targetDte\":30}"), scenarioAnalysis);
         ObjectNode observedHistory = outcomes.latest(null, plan, AnalysisContext.OBSERVED);
@@ -270,5 +267,18 @@ class PlanOutcomeServiceTest {
         assertThat(db.query("SELECT ea.pinned FROM ensemble_artifact ea JOIN plan_ensemble pe " +
                         "ON pe.fingerprint=ea.fingerprint WHERE pe.id=?", row -> row.bool("pinned"), stored.id()))
                 .containsExactly(true);
+    }
+
+    private void insertBacktest(ObjectNode report, String createdAt) {
+        db.exec("INSERT INTO backtests(id,user_id,created_at,run_kind,symbol,strategy,from_date,to_date," +
+                        "pricing_mode,confidence,days_covered,sample_size,starting_cents,ending_cents," +
+                        "max_drawdown_pct,demo_underlying,disclaimer) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                report.path("id").asText(), "local", createdAt, "SINGLE", report.path("symbol").asText(),
+                report.path("strategy").asText(), report.path("from").asText(), report.path("to").asText(),
+                report.path("pricingMode").asText(), report.path("confidence").asText(),
+                report.path("daysCovered").asInt(0), report.path("sampleSize").asInt(),
+                report.path("startingCents").asLong(), report.path("endingCents").asLong(),
+                report.path("maxDrawdownPct").asDouble(), report.path("demoUnderlying").asBoolean() ? 1 : 0,
+                "Plan outcome test backtest");
     }
 }

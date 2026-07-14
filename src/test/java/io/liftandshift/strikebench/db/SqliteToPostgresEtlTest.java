@@ -61,6 +61,8 @@ class SqliteToPostgresEtlTest {
                   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, account_id TEXT, trade_id TEXT,
                   action TEXT NOT NULL, level TEXT NOT NULL DEFAULT 'INFO', detail_json TEXT)""");
             st.executeUpdate("CREATE TABLE settings (k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at TEXT NOT NULL)");
+            st.executeUpdate("CREATE TABLE backtests (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, "
+                    + "request_json TEXT NOT NULL, report_json TEXT NOT NULL)");
 
             // Account whose cash/reserve MUST equal its latest ledger row.
             st.executeUpdate("INSERT INTO accounts VALUES ('acct_1','Paper','PAPER',10000000,9950000,20000,1,'2026-01-01T00:00:00Z','2026-07-01T00:00:00Z')");
@@ -79,6 +81,28 @@ class SqliteToPostgresEtlTest {
             st.executeUpdate("INSERT INTO audit (ts,account_id,trade_id,action,level,detail_json) VALUES "
                     + "('2026-02-01T00:00:00Z','acct_1','tr_1','TRADE_OPEN','INFO','{}')");
             st.executeUpdate("INSERT INTO settings VALUES ('universe.sector','CORE','2026-06-01T00:00:00Z')");
+            st.executeUpdate("INSERT INTO backtests VALUES ('bt_legacy','2026-06-30T20:00:00Z',"
+                    + "'{\"symbol\":\"AAPL\",\"strategy\":\"LONG_CALL\",\"from\":\"2026-01-02\","
+                    + "\"to\":\"2026-06-30\",\"targetDte\":30,\"entryEveryDays\":5,\"qty\":1,"
+                    + "\"slippagePct\":0.005,\"startingCashCents\":10000000}',"
+                    + "'{\"id\":\"bt_legacy\",\"symbol\":\"AAPL\",\"strategy\":\"LONG_CALL\","
+                    + "\"from\":\"2026-01-02\",\"to\":\"2026-06-30\","
+                    + "\"pricingMode\":\"MODELED_FROM_UNDERLYING\",\"confidence\":\"medium\","
+                    + "\"daysRequested\":128,\"daysCovered\":124,\"sampleSize\":1,\"winRate\":1.0,"
+                    + "\"avgReturnOnRisk\":0.2,\"startingCents\":10000000,\"endingCents\":10010000,"
+                    + "\"maxDrawdownPct\":0.01,\"worstTrade\":{\"entryDate\":\"2026-01-02\","
+                    + "\"exitDate\":\"2026-02-02\",\"label\":\"BUY 250C\",\"entryNetPremiumCents\":-50000,"
+                    + "\"exitValueCents\":61000,\"feesCents\":1000,\"pnlCents\":10000,"
+                    + "\"maxLossCents\":50000,\"returnOnRisk\":0.2,\"exitReason\":\"EXPIRED\","
+                    + "\"assigned\":false,\"entryUnderlyingCents\":25500},\"trades\":[{"
+                    + "\"entryDate\":\"2026-01-02\",\"exitDate\":\"2026-02-02\",\"label\":\"BUY 250C\","
+                    + "\"entryNetPremiumCents\":-50000,\"exitValueCents\":61000,\"feesCents\":1000,"
+                    + "\"pnlCents\":10000,\"maxLossCents\":50000,\"returnOnRisk\":0.2,"
+                    + "\"exitReason\":\"EXPIRED\",\"assigned\":false,\"entryUnderlyingCents\":25500}],"
+                    + "\"skipped\":[],\"assumptions\":{\"slippagePct\":0.005},"
+                    + "\"equityCurve\":[{\"date\":\"2026-01-02\",\"equityCents\":10000000}],"
+                    + "\"notes\":[\"Legacy run\"],\"assignments\":0,\"demoUnderlying\":false,"
+                    + "\"disclaimer\":\"Educational\"}')");
         }
         return path;
     }
@@ -101,6 +125,9 @@ class SqliteToPostgresEtlTest {
         assertThat(count("positions")).isEqualTo(1);
         assertThat(count("audit")).isEqualTo(1);
         assertThat(count("settings")).isEqualTo(1);
+        assertThat(count("backtests")).isEqualTo(1);
+        assertThat(count("backtest_trade")).isEqualTo(1);
+        assertThat(count("backtest_equity_point")).isEqualTo(1);
 
         // Ledger invariant: account cash/reserve equal the latest ledger row.
         var acct = pg.query("SELECT cash_cents, reserved_cents, user_id FROM accounts WHERE id='acct_1'",
@@ -119,6 +146,10 @@ class SqliteToPostgresEtlTest {
         // Ledger ids preserved verbatim.
         assertThat(pg.query("SELECT string_agg(id::text, ',' ORDER BY id) AS ids FROM ledger", r -> r.str("ids")).getFirst())
                 .isEqualTo("1,2,3,4");
+        assertThat(pg.query("SELECT run_kind || ':' || symbol || ':' || sample_size AS run FROM backtests "
+                        + "WHERE id='bt_legacy'", r -> r.str("run"))).containsExactly("SINGLE:AAPL:1");
+        assertThat(pg.query("SELECT pnl_cents FROM backtest_trade WHERE backtest_id='bt_legacy'",
+                r -> r.lng("pnl_cents"))).containsExactly(10000L);
     }
 
     @Test void resetsIdentitySequencesSoNewInsertsDoNotCollide(@TempDir Path dir) throws SQLException {
