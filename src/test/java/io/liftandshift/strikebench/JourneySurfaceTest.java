@@ -192,6 +192,26 @@ class JourneySurfaceTest {
         assertThat(api).doesNotContain("exception(java.util.NoSuchElementException.class");
     }
 
+    @Test void marketTransitionsHaveOneBackendOwner() throws Exception {
+        String api = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
+        String transitions = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/WorldTransitionService.java"));
+
+        assertThat(api).contains(
+                "worldTransitions.current(ownerId(ctx))",
+                "worldTransitions.transition(w, ownerId(ctx))",
+                "worldTransitions.afterFinish(wasActive, owner)",
+                "worldTransitions.resetAfterDataReset(ownerId(ctx))",
+                "return worldTransitions.active(owner);")
+                .doesNotContain("active_world:", "active_dataset:", "worldRevision");
+        assertThat(transitions).contains(
+                "Object universe = universeResolver.apply(world, owner)",
+                "persist(owner, world, datasetReset, null)",
+                "events.publish(\"world.selected\", event)",
+                "public record Result(", "public record FinishResult(");
+    }
+
     @Test void canonicalOwnersRetainTheFullDecisionAndLearningToolset() throws Exception {
         String views = viewSource();
         String builder = source("js/builder.js");

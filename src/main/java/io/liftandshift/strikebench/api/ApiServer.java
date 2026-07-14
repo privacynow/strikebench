@@ -124,7 +124,7 @@ public final class ApiServer {
     private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
     private java.util.concurrent.ScheduledExecutorService portfolioValuationScheduler;
     private final String startedAt = java.time.Instant.now().toString();
-    private final java.util.concurrent.atomic.AtomicLong worldRevision = new java.util.concurrent.atomic.AtomicLong();
+    private WorldTransitionService worldTransitions;
 
     public ApiServer(AppConfig cfg, Clock clock, MarketDataService market, AuditLog audit,
                      AccountService accounts, TradeService trades, RecommendationEngine engine,
@@ -252,6 +252,10 @@ public final class ApiServer {
         server.pathEnsembles = new io.liftandshift.strikebench.sim.PathEnsembleService(market, clock);
         server.simEngine = new io.liftandshift.strikebench.sim.SimulationEngine(
                 market, datasetSvc, db, clock, server.pathEnsembles);
+        server.worldTransitions = new WorldTransitionService(cfg, clock, db, datasetSvc, market,
+                server.simSessions, server.events,
+                (world, owner) -> server.universeViewFor(worldParam(world), owner),
+                server.startedAt);
         // Workspace continuity + the event bus: services announce, /api/events streams to the browser.
         server.workspaceSvc = new io.liftandshift.strikebench.db.WorkspaceService(db, clock);
         server.workspaceSvc.setEvents(server.events);
@@ -554,57 +558,11 @@ public final class ApiServer {
             c.routes.post("/api/calibration/resolve", this::calibrationResolve);
 
             // ---- The simulated market (Block S): per-user runtime switch, never a boot flag ----
-            c.routes.get("/api/world", ctx -> ctx.json(Map.of(
-                    "world", activeWorld(ctx), "revision", worldRevision.get(), "epoch", startedAt)));
+            c.routes.get("/api/world", ctx -> ctx.json(worldTransitions.current(ownerId(ctx))));
             c.routes.put("/api/world", ctx -> {
                 var body = requireBody(bodyOrNull(ctx, java.util.Map.class));
                 String w = String.valueOf(body.getOrDefault("world", "observed"));
-                String owner = ownerId(ctx);
-                if (cfg.fixturesOnly() && "observed".equals(w)) {
-                    throw new IllegalStateException("Observed market is unavailable in this explicit demo build");
-                }
-                if (!"observed".equals(w) && !"demo".equals(w)) {
-                    simSessions.ensureReady(w, owner);
-                    simSessions.getOrRestore(w, owner)
-                            .orElseThrow(() -> new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + w));
-                }
-                // Resolve the full target before changing either server-side selector. If this
-                // cannot be built, the caller remains wholly in the old market.
-                Object bootstrap = universeViewFor("observed".equals(w) ? null : w, owner);
-                // ONE MARKET MODE AT A TIME (M10 + holistic review P0): leaving a sim world drops
-                // any active SYNTHETIC dataset ('back to the real market' must never land on a
-                // forgotten scenario), and ENTERING a world does too (a world layered on a scenario
-                // dataset would silently blend two generated markets). setActive publishes
-                // dataset.selected so the scenario banner clears everywhere.
-                boolean datasetReset = !"observed".equals(datasets.activeId(owner));
-                String now = clock.instant().toString();
-                db.tx(conn -> {
-                    Db.execOn(conn, "INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
-                                    + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-                            "active_world:" + owner, w, now);
-                    if (datasetReset) {
-                        String datasetOwner = owner == null || owner.isBlank() ? "local" : owner;
-                        Db.execOn(conn, "INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
-                                        + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-                                "active_dataset:" + datasetOwner, "observed", now);
-                    }
-                    return null;
-                });
-                if (datasetReset) datasets.invalidateActiveCache();
-                market.invalidateAll();
-                long revision = worldRevision.incrementAndGet();
-                String eventOwner = owner == null ? "local" : owner;
-                if (datasetReset) events.publish("dataset.selected", Map.of(
-                        "active", "observed", "user", eventOwner));
-                Map<String, Object> event = new LinkedHashMap<>();
-                event.put("world", w);
-                event.put("user", eventOwner);
-                event.put("revision", revision);
-                event.put("epoch", startedAt);
-                event.put("universe", bootstrap);
-                events.publish("world.selected", event);
-                ctx.json(Map.of("world", w, "datasetReset", datasetReset,
-                        "universe", bootstrap, "revision", revision, "epoch", startedAt));
+                ctx.json(worldTransitions.transition(w, ownerId(ctx)));
             });
             c.routes.get("/api/sim/market", ctx -> ctx.json(Map.of("sessions", simSessions.list(ownerId(ctx)))));
             c.routes.get("/api/sim/market/{id}/anchors", ctx ->
@@ -658,47 +616,9 @@ public final class ApiServer {
                     if (rehearsalFinish != null) rehearsalFinish.beforeFinish(conn, worldId, world);
                     planSvc.closeFinishedWorldPlansOn(conn, owner, worldId);
                 });
-                // Finishing the ACTIVE world IS a world transition: flip the setting, drop any
-                // synthetic dataset, and PUBLISH it — every tab (including the caller's own SSE)
-                // reconciles through the same event as an explicit return-to-real (review P0 #2).
-                if (wasActive) {
-                    String baseline = cfg.fixturesOnly() ? "demo" : "observed";
-                    Object bootstrap = universeViewFor(worldParam(baseline), owner);
-                    boolean datasetReset = !io.liftandshift.strikebench.db.DatasetService.OBSERVED
-                            .equals(datasets.activeId(owner));
-                    String now = clock.instant().toString();
-                    db.tx(conn -> {
-                        Db.execOn(conn, "INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
-                                        + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-                                "active_world:" + owner, baseline, now);
-                        if (datasetReset) {
-                            String datasetOwner = owner == null || owner.isBlank() ? "local" : owner;
-                            Db.execOn(conn, "INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
-                                            + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-                                    "active_dataset:" + datasetOwner,
-                                    io.liftandshift.strikebench.db.DatasetService.OBSERVED, now);
-                        }
-                        return null;
-                    });
-                    if (datasetReset) datasets.invalidateActiveCache();
-                    market.invalidateAll();
-                    long revision = worldRevision.incrementAndGet();
-                    String eventOwner = owner == null ? "local" : owner;
-                    if (datasetReset) events.publish("dataset.selected", Map.of(
-                            "active", "observed", "user", eventOwner));
-                    Map<String, Object> event = new LinkedHashMap<>();
-                    event.put("world", baseline);
-                    event.put("user", eventOwner);
-                    event.put("revision", revision);
-                    event.put("epoch", startedAt);
-                    event.put("universe", bootstrap);
-                    events.publish("world.selected", event);
-                    ctx.json(Map.of("ok", true, "worldReset", true, "world", baseline,
-                            "datasetReset", datasetReset, "revision", revision,
-                            "epoch", startedAt, "universe", bootstrap));
-                    return;
-                }
-                ctx.json(Map.of("ok", true, "worldReset", false));
+                // Finishing an active session uses the exact transition contract as an explicit
+                // return: hydrate first, then commit selectors, revision, caches, and events.
+                ctx.json(worldTransitions.afterFinish(wasActive, owner));
             });
             c.routes.get("/api/sim/market/{id}/report", this::simMarketReport);
 
@@ -1017,33 +937,7 @@ public final class ApiServer {
     }
 
     private String activeWorldFor(String owner) {
-        var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), "active_world:" + owner);
-        String fallback = cfg.fixturesOnly() ? "demo" : "observed";
-        String w = rows.isEmpty() || rows.getFirst() == null || rows.getFirst().isBlank() ? fallback : rows.getFirst();
-        if (cfg.fixturesOnly() && "observed".equals(w)) return repairActiveWorld(owner, w, fallback);
-        if (!"observed".equals(w) && !"demo".equals(w)
-                && simSessions.getOrRestore(w, owner).isEmpty()) return repairActiveWorld(owner, w, fallback);
-        return w;
-    }
-
-    /** A missing saved session is a real market transition, not a per-request fallback. */
-    private String repairActiveWorld(String owner, String expected, String fallback) {
-        String key = "active_world:" + owner;
-        String now = clock.instant().toString();
-        int changed = db.tx(connection -> Db.execOn(connection,
-                "UPDATE settings SET v=?,updated_at=? WHERE k=? AND v=?",
-                fallback, now, key, expected));
-        if (changed == 0) return fallback;
-        market.invalidateAll();
-        long revision = worldRevision.incrementAndGet();
-        Map<String, Object> event = new LinkedHashMap<>();
-        event.put("world", fallback);
-        event.put("user", owner == null ? "local" : owner);
-        event.put("revision", revision);
-        event.put("epoch", startedAt);
-        event.put("universe", universeViewFor(worldParam(fallback), owner));
-        events.publish("world.selected", event);
-        return fallback;
+        return worldTransitions.active(owner);
     }
 
     public record SimMarketCreate(String name, java.util.Map<String, Double> symbols,
@@ -3998,13 +3892,11 @@ public final class ApiServer {
             // The rows and simulation accounts are gone; cancel their resident loops and make
             // every connected tab reconcile to the surviving baseline market immediately.
             simSessions.clearResident();
-            String baseline = cfg.fixturesOnly() ? "demo" : "observed";
-            long revision = worldRevision.incrementAndGet();
-            events.publish("world.selected", Map.of(
-                    "world", baseline, "revision", revision, "epoch", startedAt));
+            worldTransitions.resetAfterDataReset(ownerId(ctx));
+        } else {
+            datasets.invalidateActiveCache(); // the settings row may be gone; memory must follow
+            market.invalidateAll();
         }
-        datasets.invalidateActiveCache(); // the settings row is gone; in-memory state must follow
-        market.invalidateAll();
         invalidateHistoricalViews();
         try { audit.log(null, null, "DATA_RESET", "WARN", Map.of("tier", result.tier(), "areas", result.areasCleared())); }
         catch (Exception e) { /* best-effort; the reset itself succeeded */ }

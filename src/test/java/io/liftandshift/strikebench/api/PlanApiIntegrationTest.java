@@ -44,6 +44,13 @@ class PlanApiIntegrationTest {
     }
 
     @Test void invalidSavedWorldIsDurablyReconciledToTheAvailableBaseline() throws Exception {
+        JsonNode generated = json(post("/api/datasets/generate", """
+                {"symbol":"AAPL","spec":{"model":"GBM","shape":"CHOP","horizonDays":40,
+                 "stepsPerDay":4,"driftAnnual":0.0,"volAnnual":0.25,"jumpsPerYear":0,
+                 "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":8484,"paths":20}}
+                """));
+        String datasetId = generated.get("datasetId").asText();
+        json(put("/api/datasets/active", "{\"id\":\"" + datasetId + "\"}"));
         inspectDb.exec("INSERT INTO settings(k,v,updated_at) VALUES(?,?,now()) " +
                         "ON CONFLICT (k) DO UPDATE SET v=excluded.v,updated_at=excluded.updated_at",
                 "active_world:local", "observed");
@@ -51,6 +58,8 @@ class PlanApiIntegrationTest {
         assertThat(world.path("world").asText()).isEqualTo("demo");
         assertThat(inspectDb.query("SELECT v FROM settings WHERE k=?", row -> row.str("v"),
                 "active_world:local")).containsExactly("demo");
+        assertThat(json(get("/api/datasets")).get("active").asText()).isEqualTo("observed");
+        json(delete("/api/datasets/" + datasetId));
     }
 
     @Test void planCrudIsServerMarketOwnedVersionedAndIdempotent() throws Exception {
