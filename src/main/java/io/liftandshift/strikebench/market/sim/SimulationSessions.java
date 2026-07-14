@@ -132,8 +132,8 @@ public final class SimulationSessions {
         String[] acctId = new String[1];
         db.tx(c -> {
             OwnerScope.ensure(c, userId);
-            Db.execOn(c, "INSERT INTO sim_session(id,name,user_id,config,status,model_version,events,anchors) "
-                            + "VALUES (?,?,?,?::jsonb,?,?,'[]'::jsonb,?::jsonb)",
+            Db.execOn(c, "INSERT INTO sim_session(id,name,user_id,config,status,model_version,anchors) "
+                            + "VALUES (?,?,?,?::jsonb,?,?,?::jsonb)",
                     id, cfg.name() == null ? id : cfg.name(), owner(userId), Json.write(cfg),
                     preparing ? "PREPARING" : "CREATED", SimulatedWorld.MODEL_VERSION, anchorsJson);
             if (accounts != null) {
@@ -270,24 +270,26 @@ public final class SimulationSessions {
     public synchronized java.util.Optional<SimulatedWorld> getOrRestore(String worldId, String userId) {
         var existing = get(worldId, userId);
         if (existing.isPresent()) return existing;
-        var rows = db.query("SELECT config::text c, status, events::text e, state::text st "
-                        + "FROM sim_session WHERE id=? AND user_id=? AND status <> 'FINISHED'",
-                r -> new String[]{r.str("c"), r.str("status"), r.str("e"), r.str("st")},
-                worldId, owner(userId));
-        if (rows.isEmpty()) return java.util.Optional.empty();
-        String[] row = rows.getFirst();
-        SimulatedWorld restored = new SimulatedWorld(Json.read(row[0], SimulatedWorld.Config.class),
+        StoredWorld stored = db.tx(c -> {
+            var rows = Db.queryOn(c, "SELECT config::text c,status,state::text st FROM sim_session "
+                            + "WHERE id=? AND user_id=? AND status<>'FINISHED' FOR SHARE",
+                    r -> new StoredWorld(r.str("c"), r.str("status"), r.str("st"), List.of()),
+                    worldId, owner(userId));
+            if (rows.isEmpty()) return null;
+            StoredWorld row = rows.getFirst();
+            return new StoredWorld(row.config(), row.status(), row.state(), loadEvents(c, worldId));
+        });
+        if (stored == null) return java.util.Optional.empty();
+        SimulatedWorld restored = new SimulatedWorld(Json.read(stored.config(), SimulatedWorld.Config.class),
                 loadReplaySource(worldId));
-        List<SimulatedWorld.WorldEvent> log = row[2] == null ? List.of()
-                : Json.read(row[2], new com.fasterxml.jackson.core.type.TypeReference<List<SimulatedWorld.WorldEvent>>() {});
-        if (row[3] != null) {
-            Checkpoint cp = Json.read(row[3], Checkpoint.class);
-            restored.replayTo(cp.quantum(), log);
+        Checkpoint cp = stored.state() == null ? null : Json.read(stored.state(), Checkpoint.class);
+        restored.replayTo(cp == null ? 0 : cp.quantum(), stored.events());
+        if (cp != null) {
             restored.setSpeedSilently(cp.speed());
         }
         admit(worldId, restored, owner(userId));
         // A session the DB says is RUNNING resumes ticking — restarts must not freeze the clock.
-        if ("RUNNING".equals(row[1])) start(worldId, userId);
+        if ("RUNNING".equals(stored.status())) start(worldId, userId);
         return java.util.Optional.of(restored);
     }
 
@@ -390,9 +392,10 @@ public final class SimulationSessions {
         w.pause();
         Checkpoint cp = new Checkpoint(w.ticks(), w.simTime().toString(), w.speed(), false);
         db.tx(c -> {
-            Db.execOn(c, "UPDATE sim_session SET state=?::jsonb, events=?::jsonb, status='FINISHED', "
+            Db.execOn(c, "UPDATE sim_session SET state=?::jsonb,status='FINISHED', "
                             + "finished_at=now() WHERE id=?",
-                    Json.write(cp), Json.write(w.eventLog()), worldId);
+                    Json.write(cp), worldId);
+            persistEvents(c, worldId, w.eventLog());
             if (hook != null) hook.beforeFinish(c, worldId, w);
             return null;
         });
@@ -407,8 +410,13 @@ public final class SimulationSessions {
      */
     private void persistOrThrow(String worldId, SimulatedWorld w) {
         Checkpoint cp = new Checkpoint(w.ticks(), w.simTime().toString(), w.speed(), w.running());
-        db.exec("UPDATE sim_session SET state=?::jsonb, events=?::jsonb WHERE id=?",
-                Json.write(cp), Json.write(w.eventLog()), worldId);
+        db.tx(c -> {
+            if (Db.execOn(c, "UPDATE sim_session SET state=?::jsonb WHERE id=?", Json.write(cp), worldId) != 1) {
+                throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + worldId);
+            }
+            persistEvents(c, worldId, w.eventLog());
+            return null;
+        });
     }
 
     private void persistQuietly(String worldId, SimulatedWorld w) {
@@ -466,7 +474,8 @@ public final class SimulationSessions {
         }
         List<Map<String, Object>> out = new ArrayList<>();
         db.query("SELECT s.id, s.name, s.status, s.config::text c, s.model_version, s.created_at::text ca, "
-                        + "s.state::text st, s.events::text ev, s.anchors::text an,rs.plan_id,rs.ensemble_id," +
+                        + "s.state::text st,s.anchors::text an,(SELECT count(*) FROM sim_session_event e "
+                        + "WHERE e.sim_session_id=s.id) event_count,rs.plan_id,rs.ensemble_id," +
                         "rs.fingerprint,rs.path_index,rs.selection_kind,rs.symbol replay_symbol,rs.model_version replay_model " +
                         "FROM sim_session s LEFT JOIN sim_replay_source rs ON rs.sim_session_id=s.id "
                         + "WHERE s.user_id=? ORDER BY (s.status='FINISHED'), s.created_at DESC",
@@ -484,8 +493,7 @@ public final class SimulationSessions {
                                 "selection", r.str("selection_kind"), "symbol", r.str("replay_symbol"),
                                 "modelVersion", r.str("replay_model")));
                     }
-                    String ev = r.str("ev");
-                    m.put("eventCount", ev == null ? 0 : Json.parse(ev).size());
+                    m.put("eventCount", r.lng("event_count"));
                     // F8: anchor COVERAGE rides on every row (counts, not the full provenance —
                     // the detail endpoint serves that), so the UI can show what this world is
                     // anchored to before it starts and throughout.
@@ -521,19 +529,24 @@ public final class SimulationSessions {
 
     /** The event log + model version for the session report (owner-checked). */
     public Map<String, Object> replayRecord(String worldId, String userId) {
-        var rows = db.query("SELECT s.events::text e,s.model_version,rs.plan_id,rs.ensemble_id,rs.fingerprint," +
-                        "rs.path_index,rs.selection_kind,rs.symbol,rs.model_version replay_model,rs.rate_annual " +
-                        "FROM sim_session s LEFT JOIN sim_replay_source rs ON rs.sim_session_id=s.id " +
-                        "WHERE s.id=? AND s.user_id=?", r -> new ReplayRecordRow(r.str("e"),
-                        r.str("model_version"), r.str("plan_id"), r.str("ensemble_id"), r.str("fingerprint"),
-                        r.lngOrNull("path_index"), r.str("selection_kind"), r.str("symbol"),
-                        r.str("replay_model"), r.dblOrNull("rate_annual")), worldId, owner(userId));
-        if (rows.isEmpty()) return Map.of();
+        ReplayRecordRow row = db.tx(c -> {
+            var rows = Db.queryOn(c, "SELECT s.model_version,rs.plan_id,rs.ensemble_id,rs.fingerprint," +
+                            "rs.path_index,rs.selection_kind,rs.symbol,rs.model_version replay_model,rs.rate_annual " +
+                            "FROM sim_session s LEFT JOIN sim_replay_source rs ON rs.sim_session_id=s.id " +
+                            "WHERE s.id=? AND s.user_id=? FOR SHARE OF s", r -> new ReplayRecordRow(
+                            r.str("model_version"), r.str("plan_id"), r.str("ensemble_id"), r.str("fingerprint"),
+                            r.lngOrNull("path_index"), r.str("selection_kind"), r.str("symbol"),
+                            r.str("replay_model"), r.dblOrNull("rate_annual"), List.of()), worldId, owner(userId));
+            if (rows.isEmpty()) return null;
+            ReplayRecordRow head = rows.getFirst();
+            return new ReplayRecordRow(head.modelVersion(), head.planId(), head.ensembleId(), head.fingerprint(),
+                    head.pathIndex(), head.selection(), head.symbol(), head.replayModel(), head.rateAnnual(),
+                    loadEvents(c, worldId));
+        });
+        if (row == null) return Map.of();
         Map<String, Object> m = new java.util.LinkedHashMap<>();
-        var row = rows.getFirst();
         m.put("modelVersion", row.modelVersion());
-        String rawEvents = row.events();
-        m.put("events", rawEvents == null ? List.of() : Json.parse(rawEvents));
+        m.put("events", row.events());
         if (row.planId() != null) {
             Map<String, Object> replay = new java.util.LinkedHashMap<>();
             replay.put("planId", row.planId()); replay.put("ensembleId", row.ensembleId());
@@ -578,9 +591,33 @@ public final class SimulationSessions {
     private record ReplayRow(String planId, String ensembleId, String fingerprint, int pathIndex,
                              String selection, String symbol, String modelVersion, int steps,
                              double stepSeconds, double rateAnnual, byte[] spotPath, byte[] ivPath) {}
-    private record ReplayRecordRow(String events, String modelVersion, String planId, String ensembleId,
+    private record StoredWorld(String config, String status, String state,
+                               List<SimulatedWorld.WorldEvent> events) {}
+    private record ReplayRecordRow(String modelVersion, String planId, String ensembleId,
                                    String fingerprint, Long pathIndex, String selection, String symbol,
-                                   String replayModel, Double rateAnnual) {}
+                                   String replayModel, Double rateAnnual,
+                                   List<SimulatedWorld.WorldEvent> events) {}
+
+    private static List<SimulatedWorld.WorldEvent> loadEvents(Connection c, String worldId) throws SQLException {
+        return Db.queryOn(c, "SELECT quantum,kind,symbol,value FROM sim_session_event "
+                        + "WHERE sim_session_id=? ORDER BY event_index",
+                r -> new SimulatedWorld.WorldEvent(r.lng("quantum"), r.str("kind"), r.str("symbol"), r.dbl("value")),
+                worldId);
+    }
+
+    private static void persistEvents(Connection c, String worldId,
+                                      List<SimulatedWorld.WorldEvent> current) throws SQLException {
+        List<SimulatedWorld.WorldEvent> stored = loadEvents(c, worldId);
+        if (stored.size() > current.size() || !stored.equals(current.subList(0, stored.size()))) {
+            throw new IllegalStateException("The simulated-session event log is append-only");
+        }
+        for (int i = stored.size(); i < current.size(); i++) {
+            SimulatedWorld.WorldEvent event = current.get(i);
+            Db.execOn(c, "INSERT INTO sim_session_event(sim_session_id,event_index,quantum,kind,symbol,value) "
+                            + "VALUES(?,?,?,?,?,?)",
+                    worldId, i, event.quantum(), event.kind(), event.symbol(), event.value());
+        }
+    }
 
     private SimulatedWorld require(String worldId, String userId) {
         return getOrRestore(worldId, userId)

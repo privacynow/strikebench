@@ -13,6 +13,38 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class MigrationsTest {
 
     @Test
+    void structuredCollectionsMigrationPreservesOrderAndDropsJsonColumns() {
+        Map<String, String> cfg = TestDb.freshConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure().dataSource(db.dataSource()).locations("classpath:db/migrations")
+                    .target("51").load().migrate();
+            db.exec("INSERT INTO portfolio_account(id,user_id,name,account_type) "
+                    + "VALUES('pa_collections','local','Collections','TAXABLE')");
+            db.exec("INSERT INTO portfolio_valuation(id,portfolio_account_id,as_of,total_value_cents,source,complete,missing_marks) "
+                            + "VALUES('pval_collections','pa_collections','2026-07-13T20:00:00Z',100000,'CALCULATED',0,?)",
+                    "[\"AAPL option\",\"SPY\"]");
+            db.exec("INSERT INTO sim_session(id,name,user_id,config,status,events) VALUES(?,?,?,?,?,?::jsonb)",
+                    "sim_collections", "Collections", "local", "{}", "PAUSED",
+                    "[{\"quantum\":2,\"kind\":\"SPEED\",\"symbol\":null,\"value\":26.0},"
+                            + "{\"quantum\":5,\"kind\":\"MOVE\",\"symbol\":\"AAPL\",\"value\":-0.05}]");
+
+            Migrations.run(db);
+
+            assertThat(db.query("SELECT ordinal || ':' || mark_label AS mark FROM portfolio_valuation_missing_mark "
+                            + "WHERE valuation_id='pval_collections' ORDER BY ordinal", r -> r.str("mark")))
+                    .containsExactly("0:AAPL option", "1:SPY");
+            assertThat(db.query("SELECT event_index || ':' || quantum || ':' || kind || ':' || COALESCE(symbol,'-') "
+                            + "AS event FROM sim_session_event WHERE sim_session_id='sim_collections' ORDER BY event_index",
+                    r -> r.str("event"))).containsExactly("0:2:SPEED:-", "1:5:MOVE:AAPL");
+            assertThat(db.query("SELECT table_name || '.' || column_name AS legacy_column "
+                            + "FROM information_schema.columns WHERE table_schema='public' AND "
+                            + "((table_name='portfolio_valuation' AND column_name='missing_marks') OR "
+                            + "(table_name='sim_session' AND column_name='events'))",
+                    r -> r.str("legacy_column"))).isEmpty();
+        }
+    }
+
+    @Test
     void canonicalTimeAndPriceMigrationPreservesInstantsAndSixDecimalPrices() {
         Map<String, String> cfg = TestDb.freshConfig();
         try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
