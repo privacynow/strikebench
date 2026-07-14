@@ -2475,6 +2475,15 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .book-open-lot-row + .book-open-lot-row { border-top: 1px solid var(--border); }
 .book-open-lot-row > div:first-child { display: grid; gap: 3px; }
 .book-open-lot-row .chip-row { margin: 0; justify-content: flex-end; }
+.book-realized-lot-row {
+  display: grid; grid-template-columns: minmax(190px, .8fr) minmax(0, 1.5fr);
+  align-items: center; gap: 8px 16px; padding: 12px 0;
+}
+.book-realized-lot-row + .book-realized-lot-row { border-top: 1px solid var(--border); }
+.book-realized-lot-row > div:first-child { display: grid; gap: 3px; }
+.book-realized-lot-row .chip-row { margin: 0; justify-content: flex-end; }
+.book-realized-lot-detail { grid-column: 1 / -1; margin: 0; }
+.book-realized .tbl-wrap { max-width: 100%; scrollbar-gutter: stable; }
 .book-valuation-list { display: grid; gap: 0; margin-top: 12px; border-top: 1px solid var(--border); }
 .book-valuation-row { display: grid; grid-template-columns: 120px 150px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
 .book-valuation-form > .form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -2509,6 +2518,9 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .book-transaction-summary, .book-transaction-leg { align-items: flex-start; flex-direction: column; gap: 5px; }
   .book-open-lot-row { align-items: flex-start; flex-direction: column; }
   .book-open-lot-row .chip-row { justify-content: flex-start; }
+  .book-realized-lot-row { grid-template-columns: minmax(0, 1fr); }
+  .book-realized-lot-row .chip-row { justify-content: flex-start; }
+  .book-realized-lot-detail { grid-column: auto; }
   .book-valuation-form > .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .book-tax-heading { align-items: stretch; flex-direction: column; }
   .book-valuation-row { grid-template-columns: 96px 120px minmax(0, 1fr); }

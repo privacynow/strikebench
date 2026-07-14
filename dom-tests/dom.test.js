@@ -47,6 +47,16 @@ async function go(hash) {
   await page.waitForSelector('#app[data-ready="true"]');
 }
 
+async function captureSettled(name) {
+  await page.waitForFunction(() => !document.querySelector('#toast-region .toast-message'), null, { timeout: 10000 });
+  await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  });
+  await page.waitForTimeout(250); // keep production motion enabled and capture its settled state
+  await page.screenshot({ path: path.join(__dirname, 'shots', name), fullPage: true });
+}
+
 async function assertNamedControls(scope = 'body') {
   const unnamed = await page.locator(scope).evaluate(root => {
     function visible(node) {
@@ -2683,6 +2693,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   assert.match(await page.textContent('.book-journal'), /interest[\s\S]*\+\$5\.00/i,
     'cash income is a visible normalized transaction');
 
+  const trackedId = await page.evaluate(() => App.state.portfolioBookAccountId);
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   await page.waitForSelector('.book-positions');
   const overview = await page.textContent('#app');
@@ -2694,15 +2705,65 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     'the fixture market cannot manufacture a current value for an external tracked account');
   assert.match(overview, /does not turn missing prices into zero or use Demo, simulated, or modeled prices/,
     'the lane boundary is explained where the missing mark affects the total');
-  await page.waitForTimeout(250); // keep real motion enabled; capture the settled card-arrival frame
-  await page.screenshot({ path: path.join(__dirname, 'shots', 'portfolio-tracked-desktop.png'), fullPage: true });
+  assert.match(overview, /By asset class[\s\S]*By sector[\s\S]*Long and short/,
+    'allocation exposes all three accounting lenses even while unavailable marks remain excluded');
+  await captureSettled('p110-accounting-overview-desktop.png');
 
-  const trackedId = await page.evaluate(() => App.state.portfolioBookAccountId);
+  const rollOpen = await page.evaluate(async id => API.post('/api/portfolio/accounts/' + id + '/transactions', {
+    occurredAt: new Date(Date.now() - 250).toISOString(), eventType: 'TRADE', cashAmountCents: null,
+    feesCents: 100, taxCategory: null, source: 'MANUAL', externalRef: 'dom-roll-open-1',
+    notes: 'Position to exercise the linked roll control', legs: [{
+      instrumentType: 'OPTION', action: 'BUY', positionEffect: 'OPEN', symbol: 'QQQ', optionType: 'CALL',
+      strike: 500, expiration: '2027-06-18', quantity: 1, multiplier: 100, price: 5, section1256: false
+    }]
+  }), trackedId);
+  assert.equal(rollOpen.cashEffectCents, -50100, 'the option opening and fee post in exact cents');
+  await go('#/portfolio/book/overview');
+  await page.getByRole('button', { name: 'Roll position', exact: true }).click();
+  const rollDialog = page.getByRole('dialog');
+  await rollDialog.waitFor();
+  assert.equal(await rollDialog.getByRole('checkbox', { name: /Section 1256 contract/ }).isDisabled(), true,
+    'the linked roll preserves rather than silently changes the position tax classification');
+  await rollDialog.getByRole('spinbutton', { name: 'Exact closing price $', exact: true }).fill('7');
+  await rollDialog.getByRole('spinbutton', { name: 'Replacement strike $', exact: true }).fill('510');
+  await rollDialog.getByRole('textbox', { name: 'Replacement expiration', exact: true }).fill('2027-09-17');
+  await rollDialog.getByRole('spinbutton', { name: 'Exact replacement price $', exact: true }).fill('9');
+  await rollDialog.getByRole('spinbutton', { name: 'Total fees $', exact: true }).fill('2');
+  await rollDialog.getByRole('button', { name: 'Record roll', exact: true }).click();
+  await page.waitForFunction(() => /Roll recorded · net premium/.test(document.getElementById('toast-region')?.textContent || ''));
+  await rollDialog.waitFor({ state: 'detached' });
+  await go('#/portfolio/book/activity');
+  await page.locator('.book-journal .xp-head').filter({ hasText: /roll/i }).first().click();
+  assert.match(await page.textContent('.book-roll-summary'), /Linked roll[\s\S]*Net premium before fees[\s\S]*−\$200\.00/i,
+    'one roll control records the realized close, linked replacement, and premium carryover');
+
+  const importDate = await page.evaluate(() => {
+    const now = new Date();
+    return [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+  });
+  const mixedImport = 'transaction_ref,occurred_at,event_type,cash_effect_cents,fees_cents,tax_category,notes,leg_no,instrument,action,position_effect,symbol,option_type,strike,expiration,quantity,multiplier,price,section_1256\n'
+    + 'dom-import-interest,' + importDate + ',INTEREST,250,0,ORDINARY_INTEREST,Valid imported income\n'
+    + 'dom-import-bad,' + importDate + ',TRADE,,0,,,0,STOCK,BUY,OPEN,NVDA,,,,not-a-number,1,100,false\n';
+  await page.getByLabel('Portfolio activity CSV').setInputFiles({
+    name: 'mixed-portfolio-history.csv', mimeType: 'text/csv', buffer: Buffer.from(mixedImport)
+  });
+  await page.getByRole('button', { name: 'Import CSV', exact: true }).click();
+  await page.waitForSelector('.book-import-result');
+  assert.match(await page.textContent('.book-import-result'), /Imported 1 transaction from 2 rows\. 1 row quarantined\./,
+    'a malformed row cannot discard the valid transaction');
+  await page.locator('.book-import-result button').filter({ hasText: 'Review quarantined rows' }).click();
+  assert.match(await page.textContent('.book-import-rejects'), /Line 3[\s\S]*dom-import-bad[\s\S]*quantity must be an integer/,
+    'the rejected row keeps its line, transaction reference, and reason');
+  await captureSettled('p110-accounting-activity-desktop.png');
+
   const pastSnapshot = await page.evaluate(async id => API.post('/api/portfolio/accounts/' + id + '/valuations', {
     asOf: '2026-06-02T00:30:00Z', totalValueCents: 10000000, cashCents: 10000000,
     securitiesValueCents: 0, source: 'MANUAL', externalRef: 'dom-value-start', notes: 'Opening statement'
   }), trackedId);
   assert.ok(pastSnapshot.id, 'a prior exact valuation is recorded');
+  pg.sql("INSERT INTO underlying_bar(symbol,d,close,source,observed,dataset_id,adjusted,quality_rank) VALUES "
+    + "('SPY','2026-06-01',100,'dom-observed',1,'observed',1,10),"
+    + "('SPY','2026-07-13',110,'dom-observed',1,'observed',1,10) ON CONFLICT DO NOTHING");
   await go('#/portfolio/book/performance');
   await page.getByRole('button', { name: 'Use current book value', exact: true }).click();
   await page.waitForFunction(() => /Current total is unavailable/.test(document.querySelector('.book-valuation-form')?.textContent || ''));
@@ -2713,7 +2774,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('spinbutton', { name: 'Securities $ (optional)', exact: true }).fill('1996');
   await page.getByRole('textbox', { name: 'Statement reference', exact: true }).fill('dom-value-later');
   await page.getByRole('textbox', { name: 'Notes', exact: true }).fill('Manual statement value');
-  await page.getByRole('button', { name: 'Record snapshot', exact: true }).click();
+  await page.getByRole('button', { name: 'Record reconciliation', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.book-valuation-row').length === 2, null, { timeout: 10000 });
   const performanceApi = await (await fetch(BASE + '/api/portfolio/accounts/' + trackedId + '/performance')).json();
   assert.equal(performanceApi.netExternalFlowCents, 0,
@@ -2723,13 +2784,25 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     'performance reconciles exactly when there are no real external flows between snapshots');
   assert.equal(await page.locator('.book-performance-chart svg.chart').count(), 1,
     'two snapshots produce the contribution-adjusted performance chart');
+  const performanceDates = (await page.locator('.book-performance-chart svg.chart text').allTextContents())
+    .filter(text => /^\d{4}-\d{2}-\d{2}$/.test(text));
+  assert.equal(new Set(performanceDates).size, performanceDates.length,
+    'a short performance series never paints duplicate date labels on top of each other');
   assert.match(await page.textContent('.book-valuation-list'), /2026-06-01/,
     'an evening US snapshot renders on the local calendar date, not the next UTC date');
   assert.doesNotMatch(await page.textContent('.book-valuation-list'), /2026-06-02/,
     'performance history never exposes the UTC slice as the user-facing date');
-  assert.match(await page.textContent('#app'), /Income recorded[\s\S]*\$5\.00/);
+  assert.match(await page.textContent('#app'), /Income recorded[\s\S]*\$7\.50/,
+    'performance includes both manually recorded and valid imported income');
+  for (const label of ['Time-weighted return', 'Money-weighted return (IRR)', 'Maximum drawdown', 'SPY benchmark']) {
+    const metric = await page.locator('.book-performance-stats .stat').filter({ hasText: label }).textContent();
+    assert.doesNotMatch(metric, /Unavailable/, label + ' is computed in the golden tracked-book journey');
+  }
+  await captureSettled('p110-accounting-performance-desktop.png');
 
   await go('#/portfolio/book/settings');
+  assert.match(await page.textContent('.portfolio-account-form'), /Not tax advice/,
+    'the tax-rate settings carry the required tax-advice boundary');
   await page.getByRole('spinbutton', { name: 'Short-term rate %', exact: true }).fill('32');
   await page.getByRole('spinbutton', { name: 'Long-term rate %', exact: true }).fill('15');
   await page.getByRole('spinbutton', { name: 'Ordinary-income rate %', exact: true }).fill('24');
@@ -2737,12 +2810,35 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('button', { name: 'Save settings', exact: true }).click();
   await page.waitForFunction(() => /Account settings saved/.test(document.getElementById('toast-region')?.textContent || ''));
   await go('#/portfolio/book/tax');
+  assert.match(await page.textContent('.book-tax-heading'), /Not tax advice/,
+    'the tax report carries the required tax-advice boundary before any estimate');
   assert.equal(await page.getByRole('link', { name: 'Download transactions CSV', exact: true }).count(), 1);
   assert.equal(await page.getByRole('link', { name: 'Download Excel workbook', exact: true }).count(), 1);
   assert.doesNotMatch(await page.textContent('#app'), /Rates needed/,
     'taxable rates unlock the explicit estimate without changing lot accounting');
   assert.match(await page.textContent('.book-open-tax-lots'), /AAPL shares[\s\S]*Basis remaining[\s\S]*\$1,001\.00/,
     'open tax lots expose their exact remaining basis in the product, not only in exports');
+  assert.equal(await page.locator('.book-realized-lot-row').count(), 1,
+    'Beginner gets a readable exact realized-lot row instead of an eleven-column ledger');
+  assert.equal(await page.locator('.book-realized .tbl-wrap').count(), 0,
+    'the dense realized-lot table is reserved for Expert');
+  await captureSettled('p110-accounting-tax-desktop.png');
+
+  await page.evaluate(() => Learn.setLevel('expert'));
+  await go('#/portfolio/book/tax');
+  assert.equal(await page.locator('.book-realized .tbl-wrap').count(), 1,
+    'Expert retains every exact tax-lot column');
+  const expertTaxGeometry = await page.evaluate(() => {
+    const wrap = document.querySelector('.book-realized .tbl-wrap');
+    const box = wrap.getBoundingClientRect();
+    return { page: document.documentElement.scrollWidth, viewport: innerWidth,
+      left: box.left, right: box.right, client: wrap.clientWidth, scroll: wrap.scrollWidth };
+  });
+  assert.ok(expertTaxGeometry.page <= expertTaxGeometry.viewport,
+    'the Expert tax ledger must scroll internally, not widen the page: ' + JSON.stringify(expertTaxGeometry));
+  assert.ok(expertTaxGeometry.left >= 0 && expertTaxGeometry.right <= expertTaxGeometry.viewport,
+    'the Expert ledger container remains fully on screen: ' + JSON.stringify(expertTaxGeometry));
+  await page.evaluate(() => Learn.setLevel('beginner'));
 
   await go('#/portfolio/book/settings');
   await page.getByRole('button', { name: 'Archive account', exact: true }).click();
@@ -2767,8 +2863,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     assert.equal(geometry.clipped, false, width + 'px account tabs remain fully visible');
     assert.ok(geometry.rows >= 3, width + 'px account navigation uses a readable grid instead of a clipped rail');
     if (width === 390) {
-      await page.waitForTimeout(250); // animation remains on; the screenshot represents what the user settles on
-      await page.screenshot({ path: path.join(__dirname, 'shots', 'portfolio-tracked-mobile.png'), fullPage: true });
+      await captureSettled('p110-accounting-activity-mobile.png');
     }
   }
   await page.setViewportSize({ width: 1280, height: 720 });

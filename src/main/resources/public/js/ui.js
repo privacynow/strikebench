@@ -963,8 +963,10 @@
       svg.appendChild(svgEl('path', { class: 'benchmark-line', d: compareLine }));
     }
 
-    [0, Math.floor(series.length / 2), series.length - 1].forEach(function (i, idx) {
-      var anchor = idx === 0 ? 'start' : idx === 1 ? 'middle' : 'end';
+    [0, Math.floor(series.length / 2), series.length - 1].filter(function (i, idx, all) {
+      return all.indexOf(i) === idx;
+    }).forEach(function (i) {
+      var anchor = i === 0 ? 'start' : i === series.length - 1 ? 'end' : 'middle';
       var t = svgEl('text', { x: X(i), y: H - padB + 16, 'text-anchor': anchor });
       t.textContent = series[i].date;
       svg.appendChild(t);

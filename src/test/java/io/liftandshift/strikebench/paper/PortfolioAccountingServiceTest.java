@@ -10,7 +10,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -1058,6 +1060,118 @@ class PortfolioAccountingServiceTest {
         assertThat(collateral.definedRiskCallContracts()).isEqualTo(1);
         assertThat(collateral.uncoveredShortCallShares()).isZero();
         assertThat(collateral.complete()).isTrue();
+    }
+
+    @Test
+    void goldenTrackedAccountingJourneyKeepsTaxPerformanceExposureAndImportExact() throws Exception {
+        MarksSource observed = new MarksSource() {
+            @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.empty(); }
+            @Override public Optional<LegMark> legMark(String symbol, Leg leg) {
+                if (leg.isStock() && "AAPL".equals(symbol)) return Optional.of(mark("110.00", "110.10"));
+                if (leg.isStock() && "AMZN".equals(symbol)) return Optional.of(mark("55.00", "55.10"));
+                if (!leg.isStock() && "SPX".equals(symbol)) return Optional.of(mark("13.00", "13.10"));
+                if (!leg.isStock() && "QQQ".equals(symbol) && leg.type() == io.liftandshift.strikebench.model.OptionType.CALL) {
+                    return Optional.of(mark("10.00", "10.10"));
+                }
+                if (!leg.isStock() && "QQQ".equals(symbol) && leg.type() == io.liftandshift.strikebench.model.OptionType.PUT) {
+                    return Optional.of(mark("1.40", "1.50"));
+                }
+                return Optional.empty();
+            }
+        };
+        books = new PortfolioAccountingService(db, CLOCK, observed);
+        var account = books.createAccount("local", account("Golden accounting book", "TAXABLE", 100_000_00L));
+
+        books.record("local", account.id(), tx("2024-01-01", "TRADE", null, 0L, null, "BROKER", "golden-leap-open",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 2, 1, "100"))));
+        books.record("local", account.id(), tx("2025-01-01", "TRADE", null, 0L, null, "BROKER", "golden-leap-anniversary",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "110"))));
+        books.record("local", account.id(), tx("2025-01-02", "TRADE", null, 0L, null, "BROKER", "golden-leap-past",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "120"))));
+
+        books.record("local", account.id(), tx("2025-12-01", "TRADE", null, 0L, null, "BROKER", "golden-spx-open",
+                List.of(leg("OPTION", "BUY", "OPEN", "SPX", "CALL", "5000", "2026-12-18", 1, 100, "10"))));
+        db.exec("INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,mark,source,bid_ask_observed,dataset_id) "
+                + "VALUES ('SPX','2025-12-31','2026-12-18',5000,'CALL',11.9,12.1,12.0,'golden-observed',1,'observed')");
+        assertThat(books.markSection1256YearEnd("local", account.id(), 2025)).isEqualTo(1);
+
+        books.record("local", account.id(), tx("2026-01-10", "TRADE", null, 100L, null, "BROKER", "golden-roll-open",
+                List.of(leg("OPTION", "BUY", "OPEN", "QQQ", "CALL", "500", "2026-08-21", 1, 100, "5"))));
+        var roll = books.record("local", account.id(), tx("2026-02-02", "ROLL", null, 200L, null, "BROKER", "golden-roll",
+                List.of(
+                        leg("OPTION", "SELL", "CLOSE", "QQQ", "CALL", "500", "2026-08-21", 1, 100, "7"),
+                        leg("OPTION", "BUY", "OPEN", "QQQ", "CALL", "510", "2026-09-18", 1, 100, "9"))));
+        assertThat(roll.roll().premiumCarryoverCents()).isEqualTo(-20_000L);
+        assertThat(roll.roll().realizedMatchIds()).singleElement();
+
+        books.record("local", account.id(), tx("2026-03-01", "TRADE", null, 0L, null, "BROKER", "golden-wash-open",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 10, 1, "100"))));
+        books.record("local", account.id(), tx("2026-04-01T12:00:00Z", "TRADE", null, 0L, null, "BROKER", "golden-wash-loss",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 10, 1, "80"))));
+        books.record("local", account.id(), tx("2026-04-15", "TRADE", null, 0L, null, "BROKER", "golden-wash-rebuy",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 6, 1, "90"))));
+        books.record("local", account.id(), tx("2026-05-05", "TRADE", null, 0L, null, "BROKER", "golden-wash-outside",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 4, 1, "90"))));
+
+        String csv = PortfolioCsvImport.TEMPLATE_HEADER + "\n"
+                + "golden-amzn,2026-06-01,TRADE,,0,,,0,STOCK,BUY,OPEN,AMZN,,,,2,1,50,false\n"
+                + "golden-bad,2026-06-01,TRADE,,0,,,0,STOCK,BUY,OPEN,NVDA,,,,oops,1,50,false\n"
+                + "golden-short,2026-06-01T13:00:00Z,TRADE,,0,,,0,OPTION,SELL,OPEN,QQQ,PUT,450,2026-08-21,1,100,2.00,false\n"
+                + "golden-interest,2026-06-02,INTEREST,1234,0,ORDINARY_INTEREST,Imported interest\n";
+        var imported = PortfolioCsvImport.run(new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8)),
+                "local", account.id(), books);
+        assertThat(imported.transactionsWritten()).isEqualTo(3);
+        assertThat(imported.rejectedRows()).isEqualTo(1);
+        assertThat(imported.quarantine()).singleElement().satisfies(reject -> {
+            assertThat(reject.line()).isEqualTo(3);
+            assertThat(reject.transactionRef()).isEqualTo("golden-bad");
+            assertThat(reject.reason()).contains("quantity must be an integer");
+        });
+
+        books.addValuation("local", account.id(), valuationAt("2026-01-02T16:00:00Z", 100_000_00L));
+        books.addValuation("local", account.id(), valuationAt("2026-04-01T14:00:00Z", 110_000_00L));
+        books.record("local", account.id(), cash("2026-04-01T15:00:00Z", "DEPOSIT", 100_000_00L,
+                "golden-performance-flow", null));
+        books.addValuation("local", account.id(), valuationAt("2026-04-01T16:00:00Z", 210_000_00L));
+        books.addValuation("local", account.id(), valuationAt("2026-07-01T16:00:00Z", 189_000_00L));
+        db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,dataset_id,adjusted,quality_rank) VALUES "
+                + "('SPY','2026-01-02',100,'golden-observed',1,'observed',1,10),"
+                + "('SPY','2026-04-01',105,'golden-observed',1,'observed',1,10),"
+                + "('SPY','2026-07-01',110,'golden-observed',1,'observed',1,10)");
+
+        var tax2025 = books.taxReport("local", account.id(), 2025);
+        assertThat(tax2025.shortTermGainCents()).isEqualTo(90_00L);
+        assertThat(tax2025.longTermGainCents()).isEqualTo(140_00L);
+        assertThat(tax2025.section1256GainCents()).isEqualTo(200_00L);
+        var tax2026 = books.taxReport("local", account.id(), 2026);
+        assertThat(tax2026.washSaleAdjustmentsCents()).isEqualTo(120_00L);
+        assertThat(tax2026.shortTermGainCents()).isEqualTo(118_12L);
+
+        var performance = books.performance("local", account.id());
+        assertThat(performance.timeWeightedReturn()).isCloseTo(-0.01, within(0.000001));
+        assertThat(performance.moneyWeightedIrr()).isCloseTo(-0.1418, within(0.001));
+        assertThat(performance.maxDrawdown()).isCloseTo(-0.10, within(0.000001));
+        assertThat(performance.benchmark().returnValue()).isCloseTo(0.10, within(0.000001));
+
+        var summary = books.summary("local", account.id());
+        assertThat(summary.complete()).isTrue();
+        assertThat(summary.bookCashCents()).isEqualTo(19_733_934L);
+        assertThat(summary.securitiesLiquidationValueCents()).isEqualTo(336_000L);
+        assertThat(summary.totalValueCents()).isEqualTo(20_069_934L);
+        assertThat(summary.allocation().longExposureCents()).isEqualTo(20_084_934L);
+        assertThat(summary.allocation().shortExposureCents()).isEqualTo(15_000L);
+        assertThat(summary.allocation().grossExposureCents()).isEqualTo(20_099_934L);
+        assertThat(summary.allocation().netExposureCents()).isEqualTo(20_069_934L);
+        assertThat(summary.allocation().byAssetClass()).extracting(PortfolioAccountingService.ExposureRow::label)
+                .containsExactlyInAnyOrder("Cash", "Stocks", "Options");
+        assertThat(summary.allocation().bySector()).extracting(PortfolioAccountingService.ExposureRow::label)
+                .contains("Technology", "Consumer discretionary", "Index & macro ETFs", "Other / unclassified");
+        assertThat(summary.positions()).allMatch(p -> "OBSERVED".equals(p.provenance()));
+
+        var calculated = books.recordCalculatedValuation("local", account.id(), Instant.parse("2026-07-13T15:00:00Z"));
+        assertThat(calculated.source()).isEqualTo("CALCULATED");
+        assertThat(calculated.complete()).isTrue();
+        assertThat(calculated.totalValueCents()).isEqualTo(20_069_934L);
     }
 
     private static MarksSource.LegMark mark(String bid, String ask) {
