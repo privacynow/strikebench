@@ -347,9 +347,9 @@ public final class ApiServer {
                     sf.hostedPath = "/";
                     sf.directory = "/public";
                     sf.location = Location.CLASSPATH;
-                    // Local-first app, tiny assets: never let a browser pair old ui.js with new
-                    // views.js across a rebuild. no-store beats cache-busting with no build step.
-                    sf.headers = Map.of("Cache-Control", "no-store");
+                    // index.html and build-stamped assets may be revalidated. The stamp changes on
+                    // every build, so a browser cannot pair JavaScript or CSS from different jars.
+                    sf.headers = Map.of("Cache-Control", "public, max-age=0, must-revalidate");
                 });
             }
             // Auth: sign-in flow lives outside /api; /api/auth/me is always readable so the SPA
