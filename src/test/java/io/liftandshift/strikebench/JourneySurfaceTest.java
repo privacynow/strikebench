@@ -14,7 +14,27 @@ class JourneySurfaceTest {
     }
 
     private static String viewSource() throws Exception {
-        return source("js/views.js") + "\n" + source("js/views-data.js");
+        return source("js/views.js") + "\n" + source("js/views-portfolio.js")
+                + "\n" + source("js/views-data.js");
+    }
+
+    @Test void portfolioHasAnExplicitViewModuleBoundary() throws Exception {
+        String html = source("index.html");
+        String views = source("js/views.js");
+        String portfolio = source("js/views-portfolio.js");
+
+        assertThat(html.indexOf("/js/views.js")).isLessThan(html.indexOf("/js/views-portfolio.js"));
+        assertThat(html.indexOf("/js/views-portfolio.js")).isLessThan(html.indexOf("/js/app.js"));
+        assertThat(views).contains("window.ViewPortfolio.portfolio(root, params)",
+                        "window.ViewPortfolio.tradeDetail(content", "var INTENT_BADGE",
+                        "function intentBadge(intent)")
+                .doesNotContain("async function portfolio(root, params)",
+                        "async function tradeDetail(root, params, options)");
+        assertThat(portfolio).contains("var S = window.ViewShared", "intentBadge = S.intentBadge",
+                "async function portfolio(root, params)",
+                "async function tradeDetail(root, params, options)",
+                "window.ViewPortfolio = Object.freeze({ portfolio: portfolio, tradeDetail: tradeDetail })")
+                .doesNotContain("var INTENT_BADGE", "function intentBadge(intent)");
     }
 
     @Test void dataCenterHasAnExplicitViewModuleBoundary() throws Exception {
