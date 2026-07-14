@@ -4727,16 +4727,713 @@
     return card;
   }
 
+  function portfolioModeNav(tracked) {
+    return el('div', { class: 'portfolio-mode seg', role: 'tablist', 'aria-label': 'Portfolio workspace' },
+      el('button', { type: 'button', role: 'tab', class: tracked ? '' : 'active', 'aria-selected': tracked ? 'false' : 'true',
+        tabindex: tracked ? '-1' : '0',
+        onclick: function () { App.navigate('#/portfolio'); } }, 'Practice desk'),
+      el('button', { type: 'button', role: 'tab', class: tracked ? 'active' : '', 'aria-selected': tracked ? 'true' : 'false',
+        tabindex: tracked ? '0' : '-1',
+        onclick: function () { App.navigate('#/portfolio/book/overview'); } }, 'Tracked accounts'));
+  }
+
+  var PORTFOLIO_ACCOUNT_TYPES = [
+    ['TAXABLE', 'Taxable brokerage'], ['TRADITIONAL_IRA', 'Traditional IRA'], ['ROTH_IRA', 'Roth IRA'],
+    ['TRADITIONAL_401K', 'Traditional 401(k)'], ['ROTH_401K', 'Roth 401(k)']
+  ];
+
+  function portfolioAccountTypeLabel(value) {
+    var match = PORTFOLIO_ACCOUNT_TYPES.find(function (row) { return row[0] === value; });
+    return match ? match[1] : String(value || '').replaceAll('_', ' ').toLowerCase();
+  }
+
+  function portfolioAccountForm(existing, onSaved) {
+    existing = existing || {};
+    var archived = existing.status === 'ARCHIVED';
+    function opt(value, label, selected) { return el('option', { value: value, selected: value === selected ? 'selected' : null }, label); }
+    var name = el('input', { type: 'text', maxlength: '100', value: existing.name || '', placeholder: 'e.g. Main taxable account' });
+    var type = el('select', {}, PORTFOLIO_ACCOUNT_TYPES.map(function (row) { return opt(row[0], row[1], existing.accountType || 'TAXABLE'); }));
+    var broker = el('input', { type: 'text', maxlength: '100', value: existing.broker || '', placeholder: 'Optional' });
+    var method = el('select', {}, [['FIFO', 'FIFO · oldest lots first'], ['LIFO', 'LIFO · newest lots first'], ['HIFO', 'HIFO · tax-aware basis/proceeds']]
+      .map(function (row) { return opt(row[0], row[1], existing.lotMethod || 'FIFO'); }));
+    var opening = el('input', { type: 'number', min: '0', step: '0.01', value: '', placeholder: 'Optional' });
+    var st = el('input', { type: 'number', min: '0', max: '100', step: '0.1', value: existing.shortTermTaxRateBps == null ? '' : existing.shortTermTaxRateBps / 100 });
+    var lt = el('input', { type: 'number', min: '0', max: '100', step: '0.1', value: existing.longTermTaxRateBps == null ? '' : existing.longTermTaxRateBps / 100 });
+    var ordinary = el('input', { type: 'number', min: '0', max: '100', step: '0.1', value: existing.ordinaryTaxRateBps == null ? '' : existing.ordinaryTaxRateBps / 100 });
+    var state = el('input', { type: 'number', min: '0', max: '100', step: '0.1', value: existing.stateTaxRateBps == null ? '' : existing.stateTaxRateBps / 100 });
+    if (existing.id) type.disabled = true;
+    if (archived) [name, broker, method, st, lt, ordinary, state].forEach(function (control) { control.disabled = true; });
+    var taxFields = el('div', { class: 'form-grid portfolio-tax-rate-fields' },
+      UI.field('Short-term rate %', st), UI.field('Long-term rate %', lt),
+      UI.field('Ordinary-income rate %', ordinary), UI.field('State rate %', state));
+    var taxNote = el('p', { class: 'muted small' },
+      'These are worksheet rates for the tax year you inspect. Changing a rate changes only the estimate; it never rewrites lots, basis, or transactions.');
+    function syncTax() { taxFields.hidden = taxNote.hidden = type.value !== 'TAXABLE'; }
+    type.addEventListener('change', syncTax); syncTax();
+    function bps(input) {
+      if (input.value === '') return null;
+      var n = Number(input.value); if (!Number.isFinite(n) || n < 0 || n > 100) throw new Error('Tax rates must be between 0% and 100%.');
+      return Math.round(n * 100);
+    }
+    var msg = el('div', { class: 'small', 'aria-live': 'polite' });
+    var save = el('button', { type: 'button', class: 'btn', disabled: archived ? 'disabled' : null, onclick: async function () {
+      save.disabled = true; save.setAttribute('aria-busy', 'true'); msg.textContent = '';
+      try {
+        var payload = { name: name.value, accountType: type.value, broker: existing.id ? broker.value : (broker.value || null),
+          lotMethod: method.value, shortTermTaxRateBps: bps(st), longTermTaxRateBps: bps(lt),
+          ordinaryTaxRateBps: bps(ordinary), stateTaxRateBps: bps(state) };
+        if (!existing.id && opening.value !== '') {
+          var openingValue = Number(opening.value);
+          if (!Number.isFinite(openingValue) || openingValue < 0) throw new Error('Opening cash must be a non-negative amount.');
+          payload.openingCashCents = Math.round(openingValue * 100);
+        }
+        var saved = existing.id ? await API.put('/api/portfolio/accounts/' + existing.id, payload)
+          : await API.post('/api/portfolio/accounts', payload);
+        App.state.portfolioBookAccountId = saved.id;
+        try { localStorage.setItem('strikebench.portfolioBookAccount', saved.id); } catch (e) { /* optional */ }
+        UI.toast(existing.id ? 'Account settings saved' : 'Tracked account created', 'ok');
+        if (onSaved) await onSaved(saved);
+      } catch (e) { msg.textContent = e.message || String(e); msg.className = 'small loss'; }
+      finally { save.disabled = archived; save.removeAttribute('aria-busy'); }
+    } }, existing.id ? 'Save settings' : 'Create tracked account');
+    return el('div', { class: 'portfolio-account-form' },
+      el('div', { class: 'form-grid' }, UI.field('Account name', name), UI.field('Account type', type,
+        existing.id ? { hint: 'The tax wrapper is fixed for this book. Use a separate tracked account for another wrapper.' } : null),
+        UI.field('Broker', broker), UI.field('Tax-lot method', method,
+          { hint: 'HIFO uses the highest remaining basis for long lots and the lowest remaining opening proceeds for short lots. Future closes use this method; realized matches never change.' }),
+        existing.id ? null : UI.field('Opening cash $', opening, { hint: 'Establishes this tracked book’s opening balance; it is not treated as an in-period contribution, and practice cash is untouched.' })),
+      taxFields,
+      taxNote,
+      Learn.currentLevel() === 'beginner' ? explain('A taxable account estimates current capital-gains and income tax from the rates you enter. IRA and 401(k) activity is tracked, but per-trade gains are not presented as currently taxable.') : null,
+      el('div', { class: 'btn-row' }, save), msg);
+  }
+
+  function portfolioBookTabs(section) {
+    var tabs = [['overview', 'Overview'], ['activity', 'Activity'], ['performance', 'Performance'],
+      ['tax', 'Taxes & export'], ['settings', 'Settings']];
+    return el('div', { class: 'tabs portfolio-book-tabs', role: 'tablist', 'aria-label': 'Tracked account sections' },
+      tabs.map(function (tab) { return el('button', { type: 'button', role: 'tab', class: section === tab[0] ? 'active' : '',
+        'aria-selected': section === tab[0] ? 'true' : 'false', tabindex: section === tab[0] ? '0' : '-1',
+        onclick: function () { App.navigate('#/portfolio/book/' + tab[0]); } }, tab[1]); }));
+  }
+
+  function portfolioPositionLabel(p) {
+    return p.instrumentType === 'STOCK' ? p.symbol + ' shares'
+      : p.symbol + ' ' + p.expiration + ' · ' + fmtNum(Number(p.strike), 2) + ' ' + p.optionType.toLowerCase();
+  }
+
+  function renderPortfolioBookOverview(root, account, summary) {
+    var stats = el('div', { class: 'grid grid-4 book-summary-stats' },
+      stat('Total value', summary.totalValueCents == null
+        ? el('span', { class: 'muted' }, 'Unavailable') : fmtMoney(summary.totalValueCents),
+        summary.complete ? 'Cash plus executable liquidation value.' : 'A total is withheld because one or more positions cannot be marked.'),
+      stat('Cash in this book', fmtMoney(summary.bookCashCents), 'Recorded cash effects only; this never includes practice cash.'),
+      stat('Realized P/L', pnlSpan(summary.realizedPnlCents), 'Exact matched-lot gains and losses after recorded opening and closing fees.'),
+      stat('Unrealized P/L', summary.unrealizedPnlCents == null ? el('span', { class: 'muted' }, 'Unavailable') : pnlSpan(summary.unrealizedPnlCents),
+        'What closing the recorded open lots at executable sides would produce, before new close fees.'));
+    root.appendChild(stats);
+    if (!summary.complete) root.appendChild(alertBox('caution', 'Current value is partial', [
+      'Missing observed executable marks: ' + (summary.missingMarks || []).join(', ') + '. The book keeps basis and activity intact and does not turn missing prices into zero or use Demo, simulated, or modeled prices for an external account.'
+    ]));
+
+    var col = summary.collateral;
+    root.appendChild(el('section', { class: 'card card-slim book-capital' },
+      UI.cardHeader('Cash and obligations'),
+      el('div', { class: 'chip-row' }, chip('Known cash blocked', fmtMoney(col.knownBlockedCashCents)),
+        chip('Available cash', col.availableCashCents == null ? 'Not estimated' : fmtMoney(col.availableCashCents)),
+        col.cashSecuredPutContracts ? chip('Cash-secured puts', String(col.cashSecuredPutContracts)) : null,
+        col.definedRiskPutContracts ? chip('Put spreads', String(col.definedRiskPutContracts)) : null,
+        col.coveredCallContracts ? chip('Covered calls', String(col.coveredCallContracts)) : null,
+        col.uncoveredShortCallShares ? el('span', { class: 'badge badge-danger' }, col.uncoveredShortCallShares + ' uncovered call shares') : null),
+      el('p', { class: 'muted small' }, (col.notes || []).join(' '))));
+
+    var positions = summary.positions || [];
+    var posCard = el('section', { class: 'card book-positions' }, UI.cardHeader('Open positions',
+      el('span', { class: 'badge badge-dim' }, positions.length + ' instrument' + (positions.length === 1 ? '' : 's'))));
+    if (!positions.length) posCard.appendChild(UI.emptyState('No open positions recorded',
+      'Use Activity to record a broker fill, assignment, exercise, expiration, or stock transaction.'));
+    else if (Learn.currentLevel() === 'beginner') {
+      var list = el('div', { class: 'book-position-list' });
+      positions.forEach(function (p) {
+        list.appendChild(el('article', { class: 'book-position-row' },
+          el('div', {}, el('h3', {}, portfolioPositionLabel(p)),
+            el('p', { class: 'muted' }, (p.side === 'LONG' ? 'You own ' : 'You are short ') + p.quantity + (p.instrumentType === 'OPTION' ? ' contract' + (p.quantity === 1 ? '' : 's') : ' share' + (p.quantity === 1 ? '' : 's')))),
+          el('div', { class: 'book-position-facts' },
+            chip(p.side === 'LONG' ? 'Cost basis' : 'Opening proceeds', fmtMoney(p.openAmountCents)),
+            chip('Close value now', p.liquidationValueCents == null ? 'Unavailable' : fmtMoney(p.liquidationValueCents)),
+            chip('Gain / loss now', p.unrealizedPnlCents == null ? 'Unavailable' : pnlSpan(p.unrealizedPnlCents))),
+          el('div', { class: 'muted small' }, p.complete
+            ? [p.provenance, p.age === 'NOT_APPLICABLE' ? null : p.age, p.source].filter(Boolean).join(' · ')
+            : 'No executable closing price is available.')));
+      });
+      posCard.appendChild(list);
+    } else {
+      posCard.appendChild(table(['Position', 'Side', 'Qty', 'Basis / proceeds', 'Close price', 'Liquidation value', 'Unrealized', 'Evidence'],
+        positions.map(function (p) { return el('tr', {}, el('td', {}, el('b', {}, portfolioPositionLabel(p))),
+          el('td', {}, p.side), el('td', {}, String(p.quantity) + (p.multiplier !== 1 ? ' ×' + p.multiplier : '')),
+          el('td', {}, fmtMoney(p.openAmountCents)), el('td', {}, p.liquidationPrice == null ? '—' : '$' + Number(p.liquidationPrice).toFixed(4)),
+          el('td', {}, p.liquidationValueCents == null ? '—' : fmtMoney(p.liquidationValueCents)),
+          el('td', {}, p.unrealizedPnlCents == null ? '—' : pnlSpan(p.unrealizedPnlCents)),
+          el('td', {}, badge(p.provenance), p.age === 'NOT_APPLICABLE' ? null
+            : (p.age && p.age !== p.provenance ? el('span', { class: 'muted small' }, ' ' + p.age) : null))); })));
+    }
+    root.appendChild(posCard);
+
+    var allocation = summary.allocation || [];
+    var allocCard = el('section', { class: 'card book-allocation' }, UI.cardHeader('Asset allocation'),
+      el('p', { class: 'muted small' }, 'Shares of known gross liquidation exposure. Short liabilities remain signed in the value label; missing marks are excluded rather than treated as zero.'));
+    allocation.forEach(function (a) {
+      allocCard.appendChild(el('div', { class: 'allocation-row' },
+        el('div', { class: 'allocation-label' }, el('b', {}, a.symbol), el('span', {}, fmtMoney(a.knownMarketValueCents))),
+        el('div', { class: 'allocation-track', role: 'img', 'aria-label': a.symbol + ' ' + fmtPct(a.percentOfKnownGross) + ' of known gross exposure' },
+          el('span', { style: 'width:' + Math.max(1, Math.round((a.percentOfKnownGross || 0) * 100)) + '%' })),
+        el('span', { class: 'muted small' }, fmtPct(a.percentOfKnownGross))));
+    });
+    root.appendChild(allocCard);
+  }
+
+  function portfolioToday() {
+    var now = new Date();
+    return [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+  }
+
+  function portfolioNowLocal() {
+    var now = new Date(), offset = now.getTimezoneOffset() * 60000;
+    return new Date(now.getTime() - offset).toISOString().slice(0, 16);
+  }
+
+  function portfolioInstant(input, label) {
+    var parsed = new Date(input.value);
+    if (!input.value || isNaN(parsed.getTime())) throw new Error((label || 'Date and time') + ' is required.');
+    return parsed.toISOString();
+  }
+
+  function portfolioOccurredLabel(raw) {
+    if (!raw) return 'Date unavailable';
+    if (/T12:00:00(?:\.0+)?(?:Z|\+00:00)$/.test(raw)) {
+      return new Date(raw).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+    var parsed = new Date(raw);
+    if (isNaN(parsed.getTime())) return String(raw).slice(0, 10);
+    return parsed.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function portfolioLegLabel(leg) {
+    if (leg.instrumentType === 'STOCK') return leg.action + ' ' + leg.positionEffect.toLowerCase() + ' '
+      + leg.quantity + ' ' + leg.symbol + ' shares @ $' + Number(leg.price).toFixed(4);
+    return leg.action + ' ' + leg.positionEffect.toLowerCase() + ' ' + leg.quantity + ' '
+      + leg.symbol + ' ' + leg.expiration + ' ' + Number(leg.strike).toFixed(2) + ' '
+      + leg.optionType.toLowerCase() + ' @ $' + Number(leg.price).toFixed(4) + ' ×' + leg.multiplier;
+  }
+
+  function portfolioSelect(values, current, attrs) {
+    return el('select', attrs || {}, values.map(function (row) {
+      return el('option', { value: row[0], selected: row[0] === current ? 'selected' : null }, row[1]);
+    }));
+  }
+
+  function portfolioLegEditor(defaults, remove) {
+    defaults = defaults || {};
+    var instrument = portfolioSelect([['STOCK', 'Shares'], ['OPTION', 'Option contract']], defaults.instrumentType || 'STOCK');
+    var action = portfolioSelect([['BUY', 'Buy'], ['SELL', 'Sell']], defaults.action || 'BUY');
+    var effect = portfolioSelect([['OPEN', 'Open a position'], ['CLOSE', 'Close a position']], defaults.positionEffect || 'OPEN');
+    var symbol = el('input', { type: 'text', maxlength: '20', value: defaults.symbol || '', placeholder: 'AAPL', list: 'universe-symbols' });
+    var optionType = portfolioSelect([['CALL', 'Call'], ['PUT', 'Put']], defaults.optionType || 'CALL');
+    var strike = el('input', { type: 'number', min: '0.0001', step: '0.01', value: defaults.strike || '', placeholder: '250.00' });
+    var expiration = el('input', { type: 'date', value: defaults.expiration || '' });
+    var quantity = el('input', { type: 'number', min: '1', max: '10000000', step: '1', value: defaults.quantity || '1' });
+    var multiplier = el('input', { type: 'number', min: '1', max: '10000', step: '1', value: defaults.multiplier || '100' });
+    var price = el('input', { type: 'number', min: '0', step: '0.0001', value: defaults.price == null ? '' : defaults.price, placeholder: '0.00' });
+    var optionFields = [optionType, strike, expiration, multiplier];
+    var row = el('fieldset', { class: 'book-leg-row' },
+      el('legend', {}, defaults.legend || 'Security leg'),
+      el('div', { class: 'book-leg-grid' },
+        UI.field('Instrument', instrument), UI.field('Action', action), UI.field('Position', effect),
+        UI.field('Symbol', symbol),
+        UI.field('Option type', optionType), UI.field('Strike $', strike), UI.field('Expiration', expiration),
+        UI.field('Quantity', quantity), UI.field('Multiplier', multiplier), UI.field('Exact price $', price)),
+      remove ? el('button', { type: 'button', class: 'btn btn-secondary btn-sm book-leg-remove',
+        'aria-label': 'Remove this security leg', onclick: function () { row.remove(); } }, 'Remove leg') : null);
+    function syncInstrument() {
+      var isOption = instrument.value === 'OPTION';
+      optionFields.forEach(function (node) { var field = node.closest('.field'); if (field) field.hidden = !isOption; });
+      if (!isOption) multiplier.value = '1';
+      else if (multiplier.value === '1') multiplier.value = '100';
+    }
+    instrument.addEventListener('change', syncInstrument); syncInstrument();
+    row.read = function () {
+      var qty = Number(quantity.value), mult = Number(multiplier.value), px = Number(price.value);
+      if (!symbol.value.trim()) throw new Error('Every security leg needs a symbol.');
+      if (!Number.isInteger(qty) || qty <= 0) throw new Error('Every leg quantity must be a positive whole number.');
+      if (!Number.isInteger(mult) || mult <= 0) throw new Error('Every leg multiplier must be a positive whole number.');
+      if (!Number.isFinite(px) || px < 0) throw new Error('Every leg needs an exact non-negative price.');
+      if (instrument.value === 'OPTION' && (!strike.value || !expiration.value)) {
+        throw new Error('Every option leg needs a strike and expiration.');
+      }
+      return { instrumentType: instrument.value, action: action.value, positionEffect: effect.value,
+        symbol: symbol.value.trim().toUpperCase(), optionType: instrument.value === 'OPTION' ? optionType.value : null,
+        strike: instrument.value === 'OPTION' ? strike.value : null,
+        expiration: instrument.value === 'OPTION' ? expiration.value : null, quantity: qty,
+        multiplier: instrument.value === 'OPTION' ? mult : 1, price: px };
+    };
+    row.controls = { instrument: instrument, action: action, effect: effect, symbol: symbol,
+      optionType: optionType, strike: strike, expiration: expiration, quantity: quantity,
+      multiplier: multiplier, price: price };
+    return row;
+  }
+
+  function portfolioTransactionForm(account) {
+    var cashEvents = ['DEPOSIT', 'WITHDRAWAL', 'TRANSFER_IN', 'TRANSFER_OUT', 'INTEREST', 'DIVIDEND', 'FEE', 'ADJUSTMENT'];
+    var event = portfolioSelect([
+      ['TRADE', 'Buy, sell, open, or close securities'], ['ASSIGNMENT', 'Record an option assignment'],
+      ['EXERCISE', 'Record an option exercise'], ['EXPIRATION', 'Record an option expiration'],
+      ['DEPOSIT', 'Deposit'], ['WITHDRAWAL', 'Withdrawal'], ['TRANSFER_IN', 'Transfer in'],
+      ['TRANSFER_OUT', 'Transfer out'], ['INTEREST', 'Interest received'], ['DIVIDEND', 'Dividend received'],
+      ['FEE', 'Account fee'], ['ADJUSTMENT', 'Cash adjustment']
+    ], 'TRADE', { id: 'portfolio-book-event' });
+    var occurred = el('input', { type: 'datetime-local', value: portfolioNowLocal() });
+    var amount = el('input', { type: 'number', step: '0.01', value: '', placeholder: '0.00' });
+    var fees = el('input', { type: 'number', min: '0', step: '0.01', value: '0.00' });
+    var source = portfolioSelect([['MANUAL', 'Entered manually'], ['BROKER', 'Copied from broker']], 'MANUAL');
+    var taxCategory = portfolioSelect([['', 'Default treatment'], ['ORDINARY_INTEREST', 'Ordinary interest'],
+      ['ORDINARY_DIVIDEND', 'Ordinary dividend'], ['QUALIFIED_DIVIDEND', 'Qualified dividend'],
+      ['CAPITAL_GAIN_DISTRIBUTION', 'Capital-gain distribution']], '');
+    var reference = el('input', { type: 'text', maxlength: '160', placeholder: 'Optional order or statement reference' });
+    var notes = el('textarea', { rows: '2', maxlength: '1000', placeholder: 'Optional notes' });
+    var cashField = UI.field('Amount $', amount, { hint: 'Enter a positive amount; withdrawals, transfers out, and fees become cash outflows. Adjustments may be signed.' });
+    var feeField = UI.field('Total fees $', fees, { hint: 'Allocated across exact legs and included in tax-lot basis/proceeds.' });
+    var taxField = UI.field('Tax category', taxCategory);
+    var legs = el('div', { class: 'book-legs', id: 'portfolio-book-legs' });
+    var addLeg = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: function () {
+      legs.appendChild(portfolioLegEditor({}, true));
+    } }, '+ Security leg');
+    var guidance = el('div', { class: 'muted small book-event-guidance' });
+
+    function addConversionLegs(kind) {
+      var optionAction = kind === 'ASSIGNMENT' ? 'BUY' : 'SELL';
+      var option = portfolioLegEditor({ legend: kind === 'ASSIGNMENT' ? 'Assigned option (close at $0)' : 'Exercised option (close at $0)',
+        instrumentType: 'OPTION', action: optionAction, positionEffect: 'CLOSE', price: '0.00' }, false);
+      var stock = portfolioLegEditor({ legend: 'Resulting share transaction at the strike', instrumentType: 'STOCK',
+        action: 'BUY', positionEffect: 'OPEN', quantity: '100' }, false);
+      option.controls.effect.disabled = true; option.controls.price.disabled = true;
+      stock.controls.instrument.disabled = true;
+      function syncStockDirection() {
+        var buyShares = kind === 'ASSIGNMENT'
+          ? option.controls.optionType.value === 'PUT'
+          : option.controls.optionType.value === 'CALL';
+        stock.controls.action.value = buyShares ? 'BUY' : 'SELL';
+        stock.controls.effect.value = buyShares ? 'OPEN' : 'CLOSE';
+      }
+      function syncDeliverable() {
+        var contracts = Number(option.controls.quantity.value), contractMultiplier = Number(option.controls.multiplier.value);
+        if (Number.isInteger(contracts) && contracts > 0 && Number.isInteger(contractMultiplier) && contractMultiplier > 0) {
+          stock.controls.quantity.value = String(contracts * contractMultiplier);
+        }
+      }
+      option.controls.quantity.addEventListener('input', syncDeliverable);
+      option.controls.multiplier.addEventListener('input', syncDeliverable);
+      option.controls.optionType.addEventListener('change', syncStockDirection);
+      syncStockDirection(); syncDeliverable();
+      legs.append(option, stock);
+    }
+
+    function syncEvent() {
+      legs.innerHTML = '';
+      var isCash = cashEvents.indexOf(event.value) >= 0;
+      cashField.hidden = !isCash;
+      feeField.hidden = isCash;
+      taxField.hidden = event.value !== 'DIVIDEND';
+      taxCategory.innerHTML = '';
+      [['', 'Ordinary dividend'], ['QUALIFIED_DIVIDEND', 'Qualified dividend'],
+        ['CAPITAL_GAIN_DISTRIBUTION', 'Capital-gain distribution']].forEach(function (row) {
+        taxCategory.appendChild(el('option', { value: row[0] }, row[1]));
+      });
+      legs.hidden = isCash; addLeg.hidden = isCash || ['ASSIGNMENT', 'EXERCISE'].indexOf(event.value) >= 0;
+      if (isCash) {
+        guidance.textContent = event.value === 'ADJUSTMENT'
+          ? 'Use a signed adjustment only when reconciling to a statement; keep the reason in Notes.'
+          : 'This records cash in the tracked account only. It never changes the practice account.';
+        return;
+      }
+      if (event.value === 'ASSIGNMENT' || event.value === 'EXERCISE') {
+        addConversionLegs(event.value);
+        guidance.textContent = 'Record exactly one closing option leg and its resulting stock delivery. Share quantity follows contracts × the contract multiplier, including adjusted contracts. The put/call sets buy versus sell; choose Open or Close to match whether the delivery created a new share position or offset one you already held.';
+      } else {
+        var first = portfolioLegEditor({ instrumentType: 'OPTION', positionEffect: event.value === 'EXPIRATION' ? 'CLOSE' : 'OPEN',
+          action: event.value === 'EXPIRATION' ? 'SELL' : 'BUY', price: event.value === 'EXPIRATION' ? '0.00' : '' }, false);
+        if (event.value === 'EXPIRATION') { first.controls.effect.disabled = true; first.controls.price.disabled = true; }
+        legs.appendChild(first);
+        guidance.textContent = event.value === 'EXPIRATION'
+          ? 'Add each expired contract as a closing leg at $0. The lot matcher verifies that the exact position was open.'
+          : 'One transaction may contain every stock and option leg in an exact package. Use Open/Close explicitly so basis cannot be inferred incorrectly.';
+      }
+    }
+    event.addEventListener('change', syncEvent); syncEvent();
+
+    var message = el('div', { class: 'small', 'aria-live': 'polite' });
+    var save = el('button', { type: 'button', class: 'btn', disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
+      onclick: async function () {
+        save.disabled = true; save.setAttribute('aria-busy', 'true'); message.textContent = '';
+        try {
+          var isCash = cashEvents.indexOf(event.value) >= 0;
+          var cashAmount = isCash ? Number(amount.value) : null;
+          var feeAmount = Number(fees.value || 0);
+          if (isCash && (!Number.isFinite(cashAmount) || cashAmount === 0 || (event.value !== 'ADJUSTMENT' && cashAmount < 0))) {
+            throw new Error(event.value === 'ADJUSTMENT' ? 'Enter a non-zero signed cash adjustment.' : 'Enter a positive cash amount.');
+          }
+          if (!Number.isFinite(feeAmount) || feeAmount < 0) throw new Error('Fees must be zero or more.');
+          var legInputs = isCash ? [] : Array.from(legs.querySelectorAll('.book-leg-row')).map(function (row) { return row.read(); });
+          await API.post('/api/portfolio/accounts/' + account.id + '/transactions', {
+            occurredAt: portfolioInstant(occurred, 'Activity date and time'), eventType: event.value,
+            cashAmountCents: isCash ? Math.round(cashAmount * 100) : null,
+            feesCents: Math.round(feeAmount * 100), taxCategory: taxCategory.value || null,
+            source: source.value, externalRef: reference.value || null, notes: notes.value || null, legs: legInputs
+          });
+          UI.toast('Activity recorded in ' + account.name, 'ok');
+          await App.render();
+        } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
+        finally { save.disabled = account.status === 'ARCHIVED'; save.removeAttribute('aria-busy'); }
+      } }, 'Record activity');
+    return el('section', { class: 'card book-record-card' },
+      UI.cardHeader('Record activity', el('span', { class: 'badge badge-dim' }, 'APPEND-ONLY')),
+      el('p', { class: 'muted' }, Learn.currentLevel() === 'beginner'
+        ? 'Copy what actually happened at your broker. StrikeBench keeps exact share and option lots, cash, fees, and basis; it never guesses whether a leg opened or closed.'
+        : 'Post normalized cash or market activity to the owner-scoped accounting book. Corrections use offsetting entries; recorded history is not rewritten.'),
+      el('p', { class: 'muted small' }, 'Enter market activity oldest to newest so every close can match the lots that existed at that time. CSV imports are sorted before their single atomic commit.'),
+      el('div', { class: 'form-grid book-transaction-meta' }, UI.field('What happened?', event), UI.field('Date and time', occurred),
+        UI.field('Source', source), UI.field('Broker reference', reference,
+          { hint: 'Required for broker-sourced activity so a repeated fill cannot be recorded twice.' }), cashField, feeField, taxField),
+      guidance, legs,
+      el('div', { class: 'btn-row' }, addLeg), UI.field('Notes', notes),
+      el('div', { class: 'btn-row' }, save), message);
+  }
+
+  function portfolioImportCard(account) {
+    var file = el('input', { type: 'file', accept: '.csv,text/csv', 'aria-label': 'Portfolio activity CSV' });
+    var result = el('div', { class: 'small', 'aria-live': 'polite' });
+    var upload = el('button', { type: 'button', class: 'btn btn-secondary', disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
+      onclick: async function () {
+        if (!file.files || !file.files[0]) { result.textContent = 'Choose a CSV file first.'; result.className = 'small loss'; return; }
+        upload.disabled = true; upload.setAttribute('aria-busy', 'true'); result.textContent = 'Validating the entire file…';
+        try {
+          var fd = new FormData(); fd.append('file', file.files[0]);
+          var out = await API.upload('/api/portfolio/accounts/' + account.id + '/import.csv', fd);
+          UI.toast('Imported ' + out.transactions + ' transaction' + (out.transactions === 1 ? '' : 's'), 'ok');
+          await App.render();
+        } catch (e) { result.textContent = e.message || String(e); result.className = 'small loss'; }
+        finally { upload.disabled = account.status === 'ARCHIVED'; upload.removeAttribute('aria-busy'); }
+      } }, 'Import CSV');
+    return el('section', { class: 'card card-slim book-import-card' },
+      UI.cardHeader('Import a broker history'),
+      el('p', { class: 'muted small' }, 'The complete file is sorted chronologically and validated before anything is written. Stable references make duplicate imports fail visibly instead of duplicating lots. To add history older than activity already recorded here, import it into a new tracked account.'),
+      el('div', { class: 'book-import-row' }, file, upload,
+        el('a', { class: 'btn btn-secondary', href: '/api/portfolio/import-template.csv', download: 'StrikeBench-portfolio-import-template.csv' }, 'Download template')),
+      result);
+  }
+
+  function portfolioTransactionRow(tx) {
+    var cashClass = tx.cashEffectCents > 0 ? 'gain' : tx.cashEffectCents < 0 ? 'loss' : '';
+    var summary = el('div', { class: 'book-transaction-summary' },
+      el('div', {}, el('b', {}, tx.eventType.replaceAll('_', ' ').toLowerCase()),
+        el('span', { class: 'muted small' }, portfolioOccurredLabel(tx.occurredAt))),
+      el('div', { class: cashClass }, fmtMoney(tx.cashEffectCents, { plus: true })));
+    return UI.expandable(summary, function () {
+      return el('div', { class: 'book-transaction-detail' },
+        el('div', { class: 'chip-row' }, chip('Source', tx.source), chip('Fees', fmtMoney(tx.feesCents)),
+          tx.taxCategory ? chip('Tax category', tx.taxCategory.replaceAll('_', ' ').toLowerCase()) : null,
+          tx.externalRef ? chip('Reference', tx.externalRef) : null),
+        (tx.legs || []).length ? el('div', { class: 'book-transaction-legs' }, (tx.legs || []).map(function (leg) {
+          return el('div', { class: 'book-transaction-leg' }, el('span', {}, portfolioLegLabel(leg)),
+            el('span', { class: 'muted small' }, 'Gross ' + fmtMoney(leg.grossAmountCents) + (leg.allocatedFeeCents ? ' · fee ' + fmtMoney(leg.allocatedFeeCents) : '')));
+        })) : el('p', { class: 'muted small' }, 'Cash-only activity.'),
+        tx.notes ? el('p', {}, tx.notes) : null,
+        el('div', { class: 'muted small' }, 'Transaction ' + tx.id + ' · recorded history is append-only.'));
+    });
+  }
+
+  async function renderPortfolioBookActivity(root, account) {
+    root.appendChild(portfolioTransactionForm(account));
+    root.appendChild(portfolioImportCard(account));
+    var pageSize = 25, pageIndex = 0;
+    var data = await API.getFresh('/api/portfolio/accounts/' + account.id + '/transactions?page=0&size=' + pageSize);
+    var transactions = data.transactions || [];
+    var countBadge = el('span', { class: 'badge badge-dim' }, transactions.length + (transactions.length === pageSize ? '+' : '') + ' shown');
+    var journal = el('section', { class: 'card book-journal' }, UI.cardHeader('Transaction history', countBadge));
+    if (!transactions.length) journal.appendChild(UI.emptyState('No activity recorded', 'Record a cash movement, stock or option fill, assignment, exercise, or expiration above.'));
+    else transactions.forEach(function (tx) { journal.appendChild(portfolioTransactionRow(tx)); });
+    if (transactions.length === pageSize) {
+      var olderMessage = el('div', { class: 'small', 'aria-live': 'polite' });
+      var older = el('button', { type: 'button', class: 'btn btn-secondary', onclick: async function () {
+        older.disabled = true; older.setAttribute('aria-busy', 'true'); olderMessage.textContent = '';
+        try {
+          pageIndex++;
+          var next = await API.getFresh('/api/portfolio/accounts/' + account.id + '/transactions?page=' + pageIndex + '&size=' + pageSize);
+          var rows = next.transactions || [];
+          rows.forEach(function (tx) { journal.insertBefore(portfolioTransactionRow(tx), loadRow); });
+          transactions = transactions.concat(rows);
+          countBadge.textContent = transactions.length + (rows.length === pageSize ? '+' : '') + ' shown';
+          if (rows.length < pageSize) loadRow.remove();
+        } catch (e) {
+          pageIndex--;
+          olderMessage.textContent = e.message || String(e); olderMessage.className = 'small loss';
+        } finally { older.disabled = false; older.removeAttribute('aria-busy'); }
+      } }, 'Load older activity');
+      var loadRow = el('div', { class: 'book-journal-more' }, older, olderMessage);
+      journal.appendChild(loadRow);
+    }
+    root.appendChild(journal);
+  }
+
+  function portfolioValuationForm(account, performance) {
+    var last = (performance.valuations || []).length ? performance.valuations[performance.valuations.length - 1] : null;
+    var asOf = el('input', { type: 'datetime-local', value: portfolioNowLocal() });
+    var total = el('input', { type: 'number', min: '0', step: '0.01', value: '', placeholder: last ? (last.totalValueCents / 100).toFixed(2) : '100000.00' });
+    var cash = el('input', { type: 'number', step: '0.01', value: '', placeholder: 'Optional' });
+    var securities = el('input', { type: 'number', step: '0.01', value: '', placeholder: 'Optional' });
+    var reference = el('input', { type: 'text', maxlength: '160', placeholder: 'Optional statement reference' });
+    var notes = el('input', { type: 'text', maxlength: '1000', placeholder: 'Optional note' });
+    var message = el('div', { class: 'small', 'aria-live': 'polite' });
+    var current = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: async function () {
+      current.disabled = true; current.setAttribute('aria-busy', 'true');
+      try {
+        var summary = await API.getFresh('/api/portfolio/accounts/' + account.id + '/summary');
+        if (summary.totalValueCents == null) throw new Error('Current total is unavailable until every open position has an executable closing mark.');
+        total.value = (summary.totalValueCents / 100).toFixed(2);
+        cash.value = (summary.bookCashCents / 100).toFixed(2);
+        securities.value = (summary.securitiesLiquidationValueCents / 100).toFixed(2);
+        message.textContent = 'Filled from the current executable liquidation view.'; message.className = 'small muted';
+      } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
+      finally { current.disabled = false; current.removeAttribute('aria-busy'); }
+    } }, 'Use current book value');
+    var save = el('button', { type: 'button', class: 'btn', disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
+      onclick: async function () {
+        save.disabled = true; save.setAttribute('aria-busy', 'true'); message.textContent = '';
+        try {
+          var totalValue = Number(total.value), cashValue = cash.value === '' ? null : Number(cash.value),
+            securitiesValue = securities.value === '' ? null : Number(securities.value);
+          if (!Number.isFinite(totalValue) || totalValue < 0) throw new Error('Enter a non-negative total account value.');
+          if (cashValue != null && !Number.isFinite(cashValue)) throw new Error('Enter a valid cash value.');
+          if (securitiesValue != null && !Number.isFinite(securitiesValue)) throw new Error('Enter a valid securities value.');
+          await API.post('/api/portfolio/accounts/' + account.id + '/valuations', {
+            asOf: portfolioInstant(asOf, 'Snapshot date and time'), totalValueCents: Math.round(totalValue * 100),
+            cashCents: cashValue == null ? null : Math.round(cashValue * 100),
+            securitiesValueCents: securitiesValue == null ? null : Math.round(securitiesValue * 100),
+            source: 'MANUAL', externalRef: reference.value || null, notes: notes.value || null
+          });
+          UI.toast('Account-value snapshot recorded', 'ok'); await App.render();
+        } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
+        finally { save.disabled = account.status === 'ARCHIVED'; save.removeAttribute('aria-busy'); }
+      } }, 'Record snapshot');
+    return el('section', { class: 'card book-valuation-form' },
+      UI.cardHeader('Record account value', current),
+      el('p', { class: 'muted small' }, 'Periodic total-value snapshots make contribution-adjusted performance possible. Cash and securities are optional detail, but when both are entered they must add to the total exactly.'),
+      el('div', { class: 'form-grid' }, UI.field('As of date and time', asOf), UI.field('Total account value $', total),
+        UI.field('Cash $ (optional)', cash), UI.field('Securities $ (optional)', securities),
+        UI.field('Statement reference', reference), UI.field('Notes', notes)),
+      el('div', { class: 'btn-row' }, save), message);
+  }
+
+  async function renderPortfolioBookPerformance(root, account) {
+    var performance = await API.getFresh('/api/portfolio/accounts/' + account.id + '/performance');
+    var values = performance.valuations || [];
+    root.appendChild(el('div', { class: 'grid grid-4 book-performance-stats' },
+      stat('Investment gain', performance.investmentGainCents == null ? 'Unavailable' : pnlSpan(performance.investmentGainCents),
+        'Ending value minus starting value and net deposits or withdrawals.'),
+      stat('Modified Dietz return', performance.modifiedDietzReturn == null ? 'Unavailable' : fmtPct(performance.modifiedDietzReturn, 2),
+        'Weights each external cash flow by how long it was in the account.'),
+      stat('Annualized return', performance.annualizedReturn == null ? 'Unavailable' : fmtPct(performance.annualizedReturn, 2),
+        'Shown only after at least 30 days and a valid contribution-adjusted return.'),
+      stat('Income recorded', fmtMoney((performance.interestIncomeCents || 0) + (performance.dividendIncomeCents || 0)),
+        'Interest ' + fmtMoney(performance.interestIncomeCents || 0) + ' · dividends ' + fmtMoney(performance.dividendIncomeCents || 0) + '.')));
+    var chartCard = el('section', { class: 'card book-performance-chart' }, UI.cardHeader('Historical account value',
+      el('span', { class: 'badge badge-dim' }, values.length + ' snapshot' + (values.length === 1 ? '' : 's'))));
+    if (values.length >= 2) {
+      chartCard.appendChild(UI.lineChart(values.map(function (v) {
+        return { date: UI.fmtDate(v.asOf), value: v.totalValueCents };
+      }), { money: true, baseline: values[0].totalValueCents }));
+      chartCard.appendChild(el('div', { class: 'book-valuation-list' }, values.slice().reverse().map(function (v) {
+        return el('div', { class: 'book-valuation-row' }, el('span', {}, UI.fmtDate(v.asOf)),
+          el('b', {}, fmtMoney(v.totalValueCents)), el('span', { class: 'muted small' }, v.source + (v.notes ? ' · ' + v.notes : '')));
+      })));
+    } else chartCard.appendChild(UI.emptyState('Two snapshots are needed for a return',
+      values.length ? 'Record a later account value to separate performance from contributions and withdrawals.' : 'Record an account value now, then another later.'));
+    chartCard.appendChild(el('p', { class: 'muted small' }, performance.note));
+    root.appendChild(chartCard);
+    root.appendChild(portfolioValuationForm(account, performance));
+  }
+
+  function portfolioTaxFacts(report) {
+    return el('div', { class: 'grid grid-4 book-tax-stats' },
+      stat('Short-term gains', pnlSpan(report.shortTermGainCents), 'Matched taxable lots held one year or less; short positions remain short-term in this estimator.'),
+      stat('Long-term gains', pnlSpan(report.longTermGainCents), 'Matched long lots held more than one year.'),
+      stat('Interest + dividends', fmtMoney((report.ordinaryInterestCents || 0) + (report.ordinaryDividendCents || 0)
+        + (report.qualifiedDividendCents || 0) + (report.capitalGainDistributionCents || 0)), 'Recorded income categories for this year.'),
+      stat('Estimated tax', report.estimatedTotalTaxCents == null ? 'Unavailable' : fmtMoney(report.estimatedTotalTaxCents),
+        report.accountType !== 'TAXABLE' ? 'No current per-trade tax estimate for this retirement wrapper.'
+          : report.estimatedTotalTaxCents == null ? report.note
+          : report.estimatedStateTaxCents == null ? 'Federal estimate only; no state rate is entered.'
+            : 'Federal plus state estimate from the rates in Settings.'));
+  }
+
+  async function renderPortfolioBookTax(root, account) {
+    var currentYear = new Date().getFullYear();
+    var yearValue = App.state.portfolioTaxYear || currentYear;
+    var year = el('input', { type: 'number', min: '1970', max: '9999', step: '1', value: yearValue, 'aria-label': 'Tax year' });
+    year.addEventListener('change', function () {
+      var parsed = Number(year.value); if (!Number.isInteger(parsed) || parsed < 1970 || parsed > 9999) return;
+      App.state.portfolioTaxYear = parsed; App.render();
+    });
+    var taxData = await Promise.all([
+      API.getFresh('/api/portfolio/accounts/' + account.id + '/tax?year=' + encodeURIComponent(yearValue)),
+      API.getFresh('/api/portfolio/accounts/' + account.id + '/lots?includeClosed=false')
+    ]);
+    var report = taxData[0], openLots = taxData[1].lots || [];
+    root.appendChild(el('div', { class: 'book-tax-heading' },
+      el('div', {}, el('h2', {}, 'Tax basis and estimate'),
+        el('p', { class: 'muted' }, account.accountType === 'TAXABLE'
+          ? 'A reconciliation aid for recorded lots and income, not a tax filing or broker 1099.'
+          : 'Basis and performance remain tracked; current capital-gains tax is not assigned inside this retirement wrapper.')),
+      UI.field('Tax year', year)));
+    root.appendChild(portfolioTaxFacts(report));
+    root.appendChild(alertBox('caution', 'Use this as a reconciliation worksheet', [report.note]));
+    var openCard = el('section', { class: 'card book-open-tax-lots' }, UI.cardHeader('Open tax lots',
+      el('span', { class: 'badge badge-dim' }, openLots.length + ' lot' + (openLots.length === 1 ? '' : 's'))));
+    if (!openLots.length) openCard.appendChild(UI.emptyState('No open tax lots',
+      'Recorded stock and option openings appear here until they are closed, assigned, exercised, or expired.'));
+    else if (Learn.currentLevel() === 'beginner') {
+      openLots.forEach(function (lot) {
+        openCard.appendChild(el('div', { class: 'book-open-lot-row' },
+          el('div', {}, el('b', {}, portfolioPositionLabel(lot)),
+            el('span', { class: 'muted small' }, 'Opened ' + portfolioOccurredLabel(lot.openedAt))),
+          el('div', { class: 'chip-row' }, chip(lot.side === 'LONG' ? 'Basis remaining' : 'Proceeds remaining', fmtMoney(lot.remainingOpenAmountCents)),
+            chip('Quantity open', String(lot.remainingQuantity)), chip('Side', lot.side.toLowerCase()))));
+      });
+    } else {
+      openCard.appendChild(table(['Opened', 'Position', 'Side', 'Remaining qty', 'Multiplier', 'Remaining basis / proceeds'],
+        openLots.map(function (lot) { return el('tr', {}, el('td', {}, portfolioOccurredLabel(lot.openedAt)),
+          el('td', {}, el('b', {}, portfolioPositionLabel(lot))), el('td', {}, lot.side.toLowerCase()),
+          el('td', {}, String(lot.remainingQuantity)), el('td', {}, String(lot.multiplier)),
+          el('td', {}, fmtMoney(lot.remainingOpenAmountCents))); })));
+    }
+    root.appendChild(openCard);
+    var realized = report.realizedLots || [];
+    var realizedCard = el('section', { class: 'card book-realized' }, UI.cardHeader('Realized tax lots',
+      el('span', { class: 'badge badge-dim' }, realized.length + ' match' + (realized.length === 1 ? '' : 'es'))));
+    if (!realized.length) realizedCard.appendChild(UI.emptyState('No realized lots in ' + yearValue,
+      'Closing stock or option lots, assignment, exercise, and expiration populate this ledger.'));
+    else realizedCard.appendChild(table(['Closed', 'Symbol', 'Instrument', 'Side', 'Qty', 'Opening basis / proceeds', 'Closing proceeds / cost', 'Realized', 'Term'],
+      realized.map(function (r) { return el('tr', {}, el('td', {}, String(r.closedAt).slice(0, 10)), el('td', {}, el('b', {}, r.symbol)),
+        el('td', {}, r.instrumentType.toLowerCase()), el('td', {}, r.side.toLowerCase()), el('td', {}, String(r.quantity)),
+        el('td', {}, fmtMoney(r.openAmountCents)), el('td', {}, fmtMoney(r.closeAmountCents)),
+        el('td', {}, pnlSpan(r.realizedGainCents)), el('td', {}, r.holdingTerm.replaceAll('_', ' ').toLowerCase())); })));
+    root.appendChild(realizedCard);
+    root.appendChild(el('section', { class: 'card card-slim book-exports' }, UI.cardHeader('Export exact records'),
+      el('p', { class: 'muted small' }, 'CSV exports every normalized transaction leg. The row marked as the primary transaction row carries net cash and total fees once, so summing a multi-leg package cannot double-count it. Excel includes Summary, Transactions, Lots, Realized, Performance, and Tax sheets with numeric cells and no executable formulas.'),
+      el('div', { class: 'btn-row' },
+        el('a', { class: 'btn btn-secondary', href: '/api/portfolio/accounts/' + account.id + '/export.csv', download: '' }, 'Download transactions CSV'),
+        el('a', { class: 'btn', href: '/api/portfolio/accounts/' + account.id + '/export.xlsx?year=' + encodeURIComponent(yearValue), download: '' }, 'Download Excel workbook'))));
+  }
+
+  async function renderPortfolioBookSettings(root, account) {
+    if (App.state.portfolioBookNew) {
+      root.appendChild(el('section', { class: 'card book-new-account' }, UI.cardHeader('Add another tracked account',
+        el('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: function () {
+          App.state.portfolioBookNew = false; App.render();
+        } }, 'Cancel')),
+        portfolioAccountForm(null, async function () {
+          App.state.portfolioBookNew = false; App.navigate('#/portfolio/book/overview');
+        })));
+    }
+    root.appendChild(el('section', { class: 'card book-settings' }, UI.cardHeader('Account settings'),
+      portfolioAccountForm(account, async function () { await App.render(); })));
+    var statusMessage = el('div', { class: 'small', 'aria-live': 'polite' });
+    var toggle = el('button', { type: 'button', class: account.status === 'ARCHIVED' ? 'btn' : 'btn btn-danger', onclick: async function () {
+      toggle.disabled = true; toggle.setAttribute('aria-busy', 'true'); statusMessage.textContent = '';
+      try {
+        if (account.status === 'ARCHIVED') await API.post('/api/portfolio/accounts/' + account.id + '/restore', {});
+        else await API.del('/api/portfolio/accounts/' + account.id);
+        UI.toast(account.status === 'ARCHIVED' ? 'Tracked account restored' : 'Tracked account archived', 'ok');
+        await App.render();
+      } catch (e) { statusMessage.textContent = e.message || String(e); statusMessage.className = 'small loss'; }
+      finally { toggle.disabled = false; toggle.removeAttribute('aria-busy'); }
+    } }, account.status === 'ARCHIVED' ? 'Restore account' : 'Archive account');
+    root.appendChild(el('section', { class: 'card card-slim book-account-status' },
+      UI.cardHeader('Record status', el('span', { class: 'badge ' + (account.status === 'ARCHIVED' ? 'badge-caution' : 'badge-ok') }, account.status)),
+      el('p', { class: 'muted' }, account.status === 'ARCHIVED'
+        ? 'The full transaction, lot, valuation, performance, and tax history remains readable. Restore the account to add records.'
+        : 'Archiving makes this account read-only without erasing its accounting history or exports.'),
+      el('div', { class: 'btn-row' }, toggle), statusMessage));
+    root.appendChild(el('section', { class: 'card card-slim book-boundary' }, UI.cardHeader('Accounting boundary'),
+      el('p', {}, 'Tracked accounts are an owner-scoped record of external activity. They never place an order, reserve practice buying power, or mutate the practice ledger.'),
+      el('p', { class: 'muted small' }, 'Adjusted contracts are supported when the recorded multiplier is the complete share deliverable. Record cash or other non-share deliverables as separate statement adjustments so the book reconciles exactly.'),
+      el('p', { class: 'muted small' }, 'Tax estimates do not automatically apply wash-sale deferrals, qualified-covered-call rules, Section 1256, straddles, loss limits, state-specific rules, return-of-capital basis allocation, or filing elections. Reconcile exports against broker tax forms and a qualified tax professional.')));
+  }
+
+  async function portfolioBook(root, params) {
+    var section = ['overview', 'activity', 'performance', 'tax', 'settings'].includes(params[0]) ? params[0] : 'overview';
+    var data = await API.getFresh('/api/portfolio/accounts');
+    var accounts = data.accounts || [];
+    if (!accounts.length) {
+      root.appendChild(el('section', { class: 'card portfolio-book-start' }, UI.cardHeader('Set up a tracked account'),
+        el('p', {}, 'Record brokerage, IRA, or 401(k) activity without changing the practice account.'),
+        portfolioAccountForm(null, async function () { App.navigate('#/portfolio/book/overview'); })));
+      return;
+    }
+    var remembered = App.state.portfolioBookAccountId;
+    if (!remembered) try { remembered = localStorage.getItem('strikebench.portfolioBookAccount'); } catch (e) { /* optional */ }
+    var account = accounts.find(function (a) { return a.id === remembered; }) || accounts.find(function (a) { return a.status === 'ACTIVE'; }) || accounts[0];
+    App.state.portfolioBookAccountId = account.id;
+    var picker = el('select', { id: 'portfolio-book-account', 'aria-label': 'Tracked account' }, accounts.map(function (a) {
+      return el('option', { value: a.id, selected: a.id === account.id ? 'selected' : null }, a.name + ' · ' + portfolioAccountTypeLabel(a.accountType) + (a.status === 'ARCHIVED' ? ' · archived' : ''));
+    }));
+    picker.addEventListener('change', function () {
+      App.state.portfolioBookAccountId = picker.value;
+      try { localStorage.setItem('strikebench.portfolioBookAccount', picker.value); } catch (e) { /* optional */ }
+      App.render();
+    });
+    root.appendChild(el('div', { class: 'portfolio-book-context' },
+      el('div', {}, el('div', { class: 'eyebrow' }, 'TRACKED ACCOUNT'), el('h2', {}, account.name),
+        el('p', { class: 'muted' }, portfolioAccountTypeLabel(account.accountType) + (account.broker ? ' · ' + account.broker : '') + ' · ' + account.lotMethod + ' lots')),
+      el('div', { class: 'portfolio-book-picker' }, picker,
+        el('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: function () {
+          App.state.portfolioBookNew = true; App.navigate('#/portfolio/book/settings');
+        } }, '+ Account'))));
+    root.appendChild(portfolioBookTabs(section));
+    if (account.status === 'ARCHIVED') root.appendChild(alertBox('caution', 'This tracked account is archived and read-only.', ['Restore it in Settings before recording new activity.']));
+    var loading = el('div', { class: 'book-section-loading', 'aria-live': 'polite' },
+      UI.spinner('Loading ' + section.replaceAll('_', ' ') + '…'));
+    root.appendChild(loading);
+    try {
+      if (section === 'overview') {
+        var summary = await API.getFresh('/api/portfolio/accounts/' + account.id + '/summary');
+        renderPortfolioBookOverview(root, account, summary);
+        return;
+      }
+      if (section === 'activity') return await renderPortfolioBookActivity(root, account);
+      if (section === 'performance') return await renderPortfolioBookPerformance(root, account);
+      if (section === 'tax') return await renderPortfolioBookTax(root, account);
+      return await renderPortfolioBookSettings(root, account);
+    } finally {
+      loading.remove();
+    }
+  }
+
   async function portfolio(root, params) {
     // One money home: Positions (holdings + trades) | Activity (the ledger) | Account
     // (starting cash, reset).
+    var trackedBook = params[0] === 'book';
     var directTradeId = params[0] === 'trade' ? params[1] : null;
     var section = directTradeId || params[0] === 'positions' || params[0] === 'active' || params[0] === 'closed' ? 'positions'
       : params[0] === 'activity' ? 'activity' : params[0] === 'account' ? 'account'
         : params[0] === 'record' ? 'record' : params[0] === 'construct' ? 'construct' : 'plans';
     var tab = params[0] === 'closed' ? 'closed' : 'active';
     var page = parseInt(params[1] || '0', 10);
-    root.appendChild(el('h1', {}, section === 'plans' ? 'Plans' : 'Portfolio'));
+    root.appendChild(el('h1', {}, 'Portfolio'));
+    root.appendChild(portfolioModeNav(trackedBook));
+    if (trackedBook) {
+      await portfolioBook(root, params.slice(1));
+      return;
+    }
     if (section === 'plans') root.appendChild(el('p', { class: 'muted page-intro' },
       'Each Plan keeps one stock, goal, market, evidence, structure and decision together. Resume it here without reconstructing the journey.'));
 

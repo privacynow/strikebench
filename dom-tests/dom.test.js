@@ -1592,8 +1592,12 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
 
   await go('#/portfolio');
   await page.waitForSelector('#portfolio-plan-book .plan-book-card');
-  assert.equal((await page.locator('#app > h1').textContent()).trim(), 'Plans',
-    'the primary Plans destination names itself as Plans, not Portfolio');
+  assert.equal((await page.locator('#app > h1').textContent()).trim(), 'Portfolio',
+    'Plans and tracked accounts share one honest Portfolio destination');
+  assert.equal((await page.locator('#pf-sec-plans').textContent()).trim(), 'Plans',
+    'the Plan library still names and highlights its own subsection');
+  assert.equal(await page.locator('#pf-sec-plans').evaluate(node => node.classList.contains('active')), true,
+    'the Portfolio destination keeps the Plans subsection visibly selected');
   assert.match(await page.textContent('#portfolio-plan-book'), /AAPL/);
   assert.match(await page.textContent('#portfolio-plan-book'), /Review Plan/);
   const libraryCardText = await page.locator('#portfolio-plan-book .plan-book-card').first().innerText();
@@ -2643,6 +2647,132 @@ test('portfolio absorbs account: sections, ledger under Activity, guarded reset'
   await page.waitForSelector('#reset-cash');
   assert.equal(await page.inputValue('#reset-cash'), '250000', 'reset-cash draft persists across level flip');
   await page.evaluate(() => { App.state.resetCashDraft = null; Learn.setLevel('expert'); });
+});
+
+test('tracked portfolios preserve external accounting, performance, tax, exports, and mobile navigation', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  await go('#/portfolio/book/overview');
+  assert.equal(await page.locator('#route-error').count(), 0, 'the canonical tracked-account route is reachable');
+  await assertTabContracts('#app');
+  await page.getByRole('textbox', { name: 'Account name', exact: true }).fill('Tracked taxable test');
+  await page.getByRole('spinbutton', { name: 'Opening cash $', exact: true }).fill('100000');
+  await page.getByRole('button', { name: 'Create tracked account', exact: true }).click();
+  await page.waitForSelector('.portfolio-book-context:has-text("Tracked taxable test")');
+  await page.waitForSelector('.book-summary-stats');
+  assert.match(await page.textContent('#app'), /Cash in this book[\s\S]*\$100,000\.00/,
+    'tracked opening cash is visible in its own book');
+
+  await page.getByRole('tab', { name: 'Activity', exact: true }).click();
+  await page.waitForSelector('.book-record-card');
+  await assertNamedControls('#app');
+  const leg = page.getByRole('group', { name: 'Security leg', exact: true });
+  await leg.getByRole('combobox', { name: 'Instrument', exact: true }).selectOption('STOCK');
+  await leg.getByRole('combobox', { name: 'Symbol', exact: true }).fill('AAPL');
+  await leg.getByRole('spinbutton', { name: 'Quantity', exact: true }).fill('10');
+  await leg.getByRole('spinbutton', { name: 'Exact price $', exact: true }).fill('100');
+  await page.getByRole('spinbutton', { name: 'Total fees $', exact: true }).fill('1');
+  await page.getByRole('textbox', { name: 'Broker reference', exact: true }).fill('dom-stock-open-1');
+  await page.getByRole('button', { name: 'Record activity', exact: true }).click();
+  await page.waitForFunction(() => /2 shown/.test(document.querySelector('.book-journal')?.textContent || ''));
+
+  await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('INTEREST');
+  await page.getByRole('spinbutton', { name: 'Amount $', exact: true }).fill('5');
+  await page.getByRole('textbox', { name: 'Broker reference', exact: true }).fill('dom-interest-1');
+  await page.getByRole('button', { name: 'Record activity', exact: true }).click();
+  await page.waitForFunction(() => /3 shown/.test(document.querySelector('.book-journal')?.textContent || ''));
+  assert.match(await page.textContent('.book-journal'), /interest[\s\S]*\+\$5\.00/i,
+    'cash income is a visible normalized transaction');
+
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await page.waitForSelector('.book-positions');
+  const overview = await page.textContent('#app');
+  assert.match(overview, /AAPL shares[\s\S]*You own 10 shares[\s\S]*Cost basis[\s\S]*\$1,001\.00/,
+    'stock basis includes the exact opening fee');
+  assert.match(overview, /Cash in this book[\s\S]*\$99,004\.00/,
+    'tracked cash includes the stock fill, fee, and interest without touching practice cash');
+  assert.match(overview, /Total value[\s\S]*Unavailable[\s\S]*Current value is partial/,
+    'the fixture market cannot manufacture a current value for an external tracked account');
+  assert.match(overview, /does not turn missing prices into zero or use Demo, simulated, or modeled prices/,
+    'the lane boundary is explained where the missing mark affects the total');
+  await page.waitForTimeout(250); // keep real motion enabled; capture the settled card-arrival frame
+  await page.screenshot({ path: path.join(__dirname, 'shots', 'portfolio-tracked-desktop.png'), fullPage: true });
+
+  const trackedId = await page.evaluate(() => App.state.portfolioBookAccountId);
+  const pastSnapshot = await page.evaluate(async id => API.post('/api/portfolio/accounts/' + id + '/valuations', {
+    asOf: '2026-06-02T00:30:00Z', totalValueCents: 10000000, cashCents: 10000000,
+    securitiesValueCents: 0, source: 'MANUAL', externalRef: 'dom-value-start', notes: 'Opening statement'
+  }), trackedId);
+  assert.ok(pastSnapshot.id, 'a prior exact valuation is recorded');
+  await go('#/portfolio/book/performance');
+  await page.getByRole('button', { name: 'Use current book value', exact: true }).click();
+  await page.waitForFunction(() => /Current total is unavailable/.test(document.querySelector('.book-valuation-form')?.textContent || ''));
+  assert.equal(await page.getByRole('spinbutton', { name: 'Total account value $', exact: true }).inputValue(), '',
+    'generated marks never leak into the manual account-value form');
+  await page.getByRole('spinbutton', { name: 'Total account value $', exact: true }).fill('101000');
+  await page.getByRole('spinbutton', { name: 'Cash $ (optional)', exact: true }).fill('99004');
+  await page.getByRole('spinbutton', { name: 'Securities $ (optional)', exact: true }).fill('1996');
+  await page.getByRole('textbox', { name: 'Statement reference', exact: true }).fill('dom-value-later');
+  await page.getByRole('textbox', { name: 'Notes', exact: true }).fill('Manual statement value');
+  await page.getByRole('button', { name: 'Record snapshot', exact: true }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.book-valuation-row').length === 2, null, { timeout: 10000 });
+  const performanceApi = await (await fetch(BASE + '/api/portfolio/accounts/' + trackedId + '/performance')).json();
+  assert.equal(performanceApi.netExternalFlowCents, 0,
+    'account setup cash is the book baseline, not a fictitious contribution inside historical performance');
+  assert.equal(performanceApi.investmentGainCents,
+    performanceApi.endingValueCents - performanceApi.startingValueCents,
+    'performance reconciles exactly when there are no real external flows between snapshots');
+  assert.equal(await page.locator('.book-performance-chart svg.chart').count(), 1,
+    'two snapshots produce the contribution-adjusted performance chart');
+  assert.match(await page.textContent('.book-valuation-list'), /2026-06-01/,
+    'an evening US snapshot renders on the local calendar date, not the next UTC date');
+  assert.doesNotMatch(await page.textContent('.book-valuation-list'), /2026-06-02/,
+    'performance history never exposes the UTC slice as the user-facing date');
+  assert.match(await page.textContent('#app'), /Income recorded[\s\S]*\$5\.00/);
+
+  await go('#/portfolio/book/settings');
+  await page.getByRole('spinbutton', { name: 'Short-term rate %', exact: true }).fill('32');
+  await page.getByRole('spinbutton', { name: 'Long-term rate %', exact: true }).fill('15');
+  await page.getByRole('spinbutton', { name: 'Ordinary-income rate %', exact: true }).fill('24');
+  await page.getByRole('spinbutton', { name: 'State rate %', exact: true }).fill('5');
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await page.waitForFunction(() => /Account settings saved/.test(document.getElementById('toast-region')?.textContent || ''));
+  await go('#/portfolio/book/tax');
+  assert.equal(await page.getByRole('link', { name: 'Download transactions CSV', exact: true }).count(), 1);
+  assert.equal(await page.getByRole('link', { name: 'Download Excel workbook', exact: true }).count(), 1);
+  assert.doesNotMatch(await page.textContent('#app'), /Rates needed/,
+    'taxable rates unlock the explicit estimate without changing lot accounting');
+  assert.match(await page.textContent('.book-open-tax-lots'), /AAPL shares[\s\S]*Basis remaining[\s\S]*\$1,001\.00/,
+    'open tax lots expose their exact remaining basis in the product, not only in exports');
+
+  await go('#/portfolio/book/settings');
+  await page.getByRole('button', { name: 'Archive account', exact: true }).click();
+  await page.waitForSelector('.book-account-status:has-text("ARCHIVED")');
+  await go('#/portfolio/book/activity');
+  assert.equal(await page.getByRole('button', { name: 'Record activity', exact: true }).isDisabled(), true,
+    'archived tracked accounts are read-only in the UI as well as the service');
+  await go('#/portfolio/book/settings');
+  await page.getByRole('button', { name: 'Restore account', exact: true }).click();
+  await page.waitForSelector('.book-account-status:has-text("ACTIVE")');
+
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await go('#/portfolio/book/activity');
+    const geometry = await page.evaluate(() => {
+      const tabs = document.querySelector('.portfolio-book-tabs');
+      const boxes = Array.from(tabs.querySelectorAll('[role="tab"]')).map(tab => tab.getBoundingClientRect());
+      return { body: document.documentElement.scrollWidth, viewport: innerWidth,
+        clipped: boxes.some(box => box.left < 0 || box.right > innerWidth || box.width < 90), rows: new Set(boxes.map(box => Math.round(box.top))).size };
+    });
+    assert.ok(geometry.body <= geometry.viewport, width + 'px tracked activity has no page overflow: ' + JSON.stringify(geometry));
+    assert.equal(geometry.clipped, false, width + 'px account tabs remain fully visible');
+    assert.ok(geometry.rows >= 3, width + 'px account navigation uses a readable grid instead of a clipped rail');
+    if (width === 390) {
+      await page.waitForTimeout(250); // animation remains on; the screenshot represents what the user settles on
+      await page.screenshot({ path: path.join(__dirname, 'shots', 'portfolio-tracked-mobile.png'), fullPage: true });
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(() => Learn.setLevel('expert'));
 });
 
 test('explanation system: visible triggers, registry-backed bubbles, both levels, no title dups', async () => {

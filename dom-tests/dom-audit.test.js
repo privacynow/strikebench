@@ -69,6 +69,12 @@ before(async () => {
   planId = JSON.parse(createdBody).id;
   ROUTES.push(...['understand', 'evidence', 'strategy', 'outcomes', 'decide', 'manage-review']
     .map(stage => `#/plan/${planId}/${stage}`));
+  const tracked = await fetch(BASE + '/api/portfolio/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Responsive audit', accountType: 'TAXABLE', lotMethod: 'FIFO', openingCashCents: 10000000 }) });
+  const trackedBody = await tracked.text();
+  assert.ok(tracked.ok, 'tracked-account audit setup failed: ' + trackedBody);
+  ROUTES.push(...['overview', 'activity', 'performance', 'tax', 'settings']
+    .map(section => `#/portfolio/book/${section}`));
 });
 
 after(async () => {

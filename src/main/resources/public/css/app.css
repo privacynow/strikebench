@@ -2400,3 +2400,97 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .plan-chip-main { max-width: 210px; }
   .portfolio-construct-primary, .portfolio-construct-advanced > .form-grid { grid-template-columns: minmax(0, 1fr); }
 }
+/* Tracked-account portfolio: separate from the practice desk so real records never imply
+   they share paper cash. The section nav becomes a measured grid on phones, never clipped. */
+.portfolio-mode { width: fit-content; margin: 0 0 14px; }
+.portfolio-book-context {
+  display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  padding: 16px 0 14px; border-bottom: 1px solid var(--border);
+}
+.portfolio-book-context h2 { margin: 2px 0 3px; }
+.portfolio-book-context p { margin: 0; }
+.portfolio-book-picker { display: flex; align-items: center; gap: 8px; min-width: min(420px, 48%); }
+.portfolio-book-picker select { min-width: 0; flex: 1; }
+.portfolio-book-tabs { margin: 0 0 16px; }
+.book-summary-stats { margin-bottom: 14px; }
+.book-capital .chip-row { margin: 0; }
+.book-position-list { display: grid; gap: 0; }
+.book-position-row {
+  display: grid; grid-template-columns: minmax(180px, .8fr) minmax(360px, 1.5fr) minmax(180px, .8fr);
+  align-items: center; gap: 16px; padding: 15px 0; border-top: 1px solid var(--border);
+}
+.book-position-row:first-child { border-top: 0; }
+.book-position-row h3, .book-position-row p { margin: 0; }
+.book-position-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.book-position-facts .chip { min-width: 0; white-space: normal; }
+.allocation-row {
+  display: grid; grid-template-columns: minmax(150px, 230px) minmax(160px, 1fr) 58px;
+  align-items: center; gap: 12px; margin-top: 12px;
+}
+.allocation-label { display: flex; justify-content: space-between; gap: 10px; }
+.allocation-track { height: 10px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; }
+.allocation-track span { display: block; height: 100%; background: var(--accent); }
+.portfolio-account-form > * + * { margin-top: 13px; }
+.portfolio-tax-rate-fields[hidden] { display: none; }
+.book-record-card, .book-journal { display: grid; gap: 12px; }
+.book-transaction-meta { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.book-event-guidance { padding: 9px 11px; border-left: 3px solid var(--accent); background: var(--accent-soft); }
+.book-legs { display: grid; gap: 10px; }
+.book-leg-row { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.book-leg-row legend { padding: 0 6px; color: var(--text); font-size: 13px; font-weight: 700; }
+.book-leg-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; }
+.book-leg-remove { margin-top: 9px; }
+.book-import-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.book-import-row input[type="file"] { flex: 1 1 260px; min-width: 0; }
+.book-journal > details { border-top: 1px solid var(--border); }
+.book-journal > details:first-of-type { border-top: 0; }
+.book-journal-more { display: flex; align-items: center; gap: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.book-transaction-summary { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.book-transaction-summary > div:first-child { display: grid; gap: 2px; text-transform: capitalize; }
+.book-transaction-detail { display: grid; gap: 9px; padding: 2px 0 10px; }
+.book-transaction-legs { display: grid; gap: 6px; }
+.book-transaction-leg { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.book-performance-stats, .book-tax-stats { margin-bottom: 14px; }
+.book-performance-chart .chart { margin-top: 6px; }
+.book-open-lot-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; }
+.book-open-lot-row + .book-open-lot-row { border-top: 1px solid var(--border); }
+.book-open-lot-row > div:first-child { display: grid; gap: 3px; }
+.book-open-lot-row .chip-row { margin: 0; justify-content: flex-end; }
+.book-valuation-list { display: grid; gap: 0; margin-top: 12px; border-top: 1px solid var(--border); }
+.book-valuation-row { display: grid; grid-template-columns: 120px 150px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.book-valuation-form > .form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.book-tax-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin: 2px 0 14px; }
+.book-tax-heading h2, .book-tax-heading p { margin: 0; }
+.book-tax-heading .field { min-width: 130px; }
+.book-exports .btn-row { margin-bottom: 0; }
+.book-settings, .book-new-account { display: grid; gap: 12px; }
+.book-account-status p, .book-boundary p { margin: 4px 0; }
+
+@media (max-width: 760px) {
+  .portfolio-mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .portfolio-book-context { align-items: stretch; flex-direction: column; gap: 12px; }
+  .portfolio-book-picker { min-width: 0; width: 100%; }
+  .portfolio-book-tabs {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible;
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 0;
+  }
+  .portfolio-book-tabs button { min-width: 0; width: 100%; white-space: normal; min-height: 44px; border-bottom: 1px solid var(--border); }
+  .portfolio-book-tabs button:last-child { grid-column: 1 / -1; }
+  .book-position-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .book-position-facts { grid-template-columns: minmax(0, 1fr); }
+  .allocation-row { grid-template-columns: minmax(0, 1fr) 50px; }
+  .allocation-label { grid-column: 1 / -1; }
+  .book-transaction-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .book-leg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .book-transaction-summary, .book-transaction-leg { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .book-open-lot-row { align-items: flex-start; flex-direction: column; }
+  .book-open-lot-row .chip-row { justify-content: flex-start; }
+  .book-valuation-form > .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .book-tax-heading { align-items: stretch; flex-direction: column; }
+  .book-valuation-row { grid-template-columns: 96px 120px minmax(0, 1fr); }
+}
+@media (max-width: 420px) {
+  .book-transaction-meta, .book-leg-grid { grid-template-columns: minmax(0, 1fr); }
+  .book-import-row { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .book-valuation-form > .form-grid, .book-valuation-row { grid-template-columns: minmax(0, 1fr); }
+}

@@ -47,7 +47,31 @@ class PortfolioExportServiceTest {
     }
 
     @Test
+    void multiLegExportEmitsTransactionCashAndFeesOnce() {
+        books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
+                "2026-07-10", "TRADE", null, 1_30L, null, "MANUAL", "spread-1", null,
+                List.of(option("BUY", "OPEN", "250", "8.25"), option("SELL", "OPEN", "260", "3.10"))));
+
+        String csv = new String(exports.transactionsCsv("local", account.id()), StandardCharsets.UTF_8);
+        String[] lines = csv.split("\\r?\\n");
+        String[] header = lines[0].replace("\"", "").split(",", -1);
+        int primary = java.util.Arrays.asList(header).indexOf("primary_transaction_row");
+        int cash = java.util.Arrays.asList(header).indexOf("cash_effect_cents");
+        int fees = java.util.Arrays.asList(header).indexOf("fees_cents");
+        List<String[]> spreadRows = java.util.Arrays.stream(lines)
+                .filter(line -> line.contains("\"spread-1\""))
+                .map(line -> line.replace("\"", "").split(",", -1)).toList();
+        assertThat(spreadRows).hasSize(2);
+        assertThat(spreadRows).extracting(row -> row[primary]).containsExactly("true", "false");
+        assertThat(spreadRows).extracting(row -> row[cash]).containsExactly("-51630", "");
+        assertThat(spreadRows).extracting(row -> row[fees]).containsExactly("130", "");
+    }
+
+    @Test
     void xlsxIsARealOpenXmlWorkbookWithAccountingSheetsAndNoFormulas() throws Exception {
+        books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
+                "2026-01-01", "INTEREST", 1_00L, 0L, null, "MANUAL", "xml-control",
+                "kept\u0001 removed", List.of()));
         books.addValuation("local", account.id(), new PortfolioAccountingService.ValuationInput(
                 "2026-01-01", 1_000_000L, 0L, 1_000_000L, "MANUAL", null, "start"));
         books.addValuation("local", account.id(), new PortfolioAccountingService.ValuationInput(
@@ -60,12 +84,25 @@ class PortfolioExportServiceTest {
         try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(xlsx), StandardCharsets.UTF_8)) {
             for (var entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {
                 names.add(entry.getName());
-                if (entry.getName().endsWith(".xml")) xml.append(new String(zip.readAllBytes(), StandardCharsets.UTF_8));
+                if (entry.getName().endsWith(".xml")) {
+                    byte[] body = zip.readAllBytes();
+                    javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
+                            .parse(new ByteArrayInputStream(body));
+                    xml.append(new String(body, StandardCharsets.UTF_8));
+                }
             }
         }
         assertThat(names).contains("[Content_Types].xml", "xl/workbook.xml", "xl/styles.xml",
                 "xl/worksheets/sheet1.xml", "xl/worksheets/sheet6.xml");
-        assertThat(xml).contains("Summary", "Transactions", "Performance", "Tax 2026", "Modified Dietz");
+        assertThat(xml).contains("Summary", "Transactions", "Performance", "Tax 2026", "Modified Dietz",
+                "Primary transaction row");
+        assertThat(xml).contains("kept removed").doesNotContain("\u0001");
         assertThat(xml).doesNotContain("<f>");
+    }
+
+    private static PortfolioAccountingService.LegInput option(String action, String effect, String strike, String price) {
+        return new PortfolioAccountingService.LegInput("OPTION", action, effect, "AAPL", "CALL",
+                new java.math.BigDecimal(strike), java.time.LocalDate.parse("2026-08-21"), 1L, 100,
+                new java.math.BigDecimal(price));
     }
 }
