@@ -14,23 +14,50 @@ class JourneySurfaceTest {
     }
 
     private static String viewSource() throws Exception {
-        return source("js/views.js") + "\n" + source("js/views-portfolio.js")
+        return source("js/views.js") + "\n" + source("js/views-plan.js")
+                + "\n" + source("js/views-portfolio.js")
                 + "\n" + source("js/views-data.js");
+    }
+
+    @Test void planJourneyHasAnExplicitViewModuleBoundary() throws Exception {
+        String html = source("index.html");
+        String views = source("js/views.js");
+        String plan = source("js/views-plan.js");
+
+        assertThat(html.indexOf("/js/views.js")).isLessThan(html.indexOf("/js/views-plan.js"));
+        assertThat(html.indexOf("/js/views-plan.js")).isLessThan(html.indexOf("/js/views-portfolio.js"));
+        assertThat(html.indexOf("/js/views-plan.js")).isLessThan(html.indexOf("/js/app.js"));
+        assertThat(views).contains("window.ViewPlan.planWorkspace(root, params)",
+                        "window.ViewPlan.provisionalStage(root, symbol)",
+                        "window.ViewPlan.economicAssessmentBlock", "window.ViewPlan.stages",
+                        "var THESIS_BADGE")
+                .doesNotContain("async function planWorkspace(root, params)",
+                        "function planOutcomeWorkspace(config)", "function candidateCard(",
+                        "var PLAN_STAGES");
+        assertThat(plan).contains("var S = window.ViewShared",
+                "async function planWorkspace(root, params)", "function planOutcomeWorkspace(config)",
+                "function candidateCard(", "var PLAN_STAGES = Object.freeze([",
+                "verdictPanel = S.verdictPanel", "stages: PLAN_STAGES",
+                "window.ViewPlan = Object.freeze({")
+                .doesNotContain("var THESIS_BADGE");
     }
 
     @Test void portfolioHasAnExplicitViewModuleBoundary() throws Exception {
         String html = source("index.html");
         String views = source("js/views.js");
+        String plan = source("js/views-plan.js");
         String portfolio = source("js/views-portfolio.js");
 
         assertThat(html.indexOf("/js/views.js")).isLessThan(html.indexOf("/js/views-portfolio.js"));
         assertThat(html.indexOf("/js/views-portfolio.js")).isLessThan(html.indexOf("/js/app.js"));
-        assertThat(views).contains("window.ViewPortfolio.portfolio(root, params)",
-                        "window.ViewPortfolio.tradeDetail(content", "var INTENT_BADGE",
+        assertThat(views).contains("window.ViewPortfolio.portfolio(root, params)", "var INTENT_BADGE",
                         "function intentBadge(intent)")
                 .doesNotContain("async function portfolio(root, params)",
                         "async function tradeDetail(root, params, options)");
+        assertThat(plan).contains("window.ViewPortfolio.tradeDetail(content")
+                .doesNotContain("async function tradeDetail(root, params, options)");
         assertThat(portfolio).contains("var S = window.ViewShared", "intentBadge = S.intentBadge",
+                "var guideBlock = window.ViewPlan.guideBlock",
                 "async function portfolio(root, params)",
                 "async function tradeDetail(root, params, options)",
                 "window.ViewPortfolio = Object.freeze({ portfolio: portfolio, tradeDetail: tradeDetail })")
