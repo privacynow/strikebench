@@ -13,6 +13,7 @@ import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.PositionsService;
 import io.liftandshift.strikebench.recommend.AutoRecommender;
 import io.liftandshift.strikebench.recommend.Candidate;
+import io.liftandshift.strikebench.recommend.OpportunityScanner;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
@@ -35,6 +36,7 @@ final class DiscoveryController {
     private final Db db;
     private final MarketDataService market;
     private final EvaluationService evaluations;
+    private final OpportunityScanner opportunityScanner;
     private final RecommendationEngine engine;
     private final AutoRecommender auto;
     private final PositionsService positions;
@@ -48,6 +50,7 @@ final class DiscoveryController {
     private final Function<Context, Long> riskCapResolver;
 
     DiscoveryController(Db db, MarketDataService market, EvaluationService evaluations,
+                        OpportunityScanner opportunityScanner,
                         RecommendationEngine engine, AutoRecommender auto,
                         PositionsService positions, UniverseService universe,
                         SimulationSessions simSessions, Clock clock,
@@ -59,6 +62,7 @@ final class DiscoveryController {
         this.db = db;
         this.market = market;
         this.evaluations = evaluations;
+        this.opportunityScanner = opportunityScanner;
         this.engine = engine;
         this.auto = auto;
         this.positions = positions;
@@ -318,7 +322,7 @@ final class DiscoveryController {
         String ownerId = ownerResolver.apply(ctx);
         int topN = req.topN() != null ? req.topN() : 8;
         var rcScan = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerResolver.apply(ctx));
-        var result = evaluations.scan(symbols, req.intent(),
+        var result = opportunityScanner.scan(symbols, req.intent(),
                 req.thesis() != null ? req.thesis() : "neutral",
                 req.horizon() != null ? req.horizon() : "month",
                 req.riskMode() != null ? req.riskMode() : "balanced",
@@ -343,7 +347,7 @@ final class DiscoveryController {
         Account acct = accountResolver.apply(ctx);
         String ownerId = ownerResolver.apply(ctx);
         var rcOpt = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerResolver.apply(ctx));
-        var scan = evaluations.scan(symbols, req.intent(),
+        var scan = opportunityScanner.scan(symbols, req.intent(),
                 req.thesis() != null ? req.thesis() : "neutral",
                 req.horizon() != null ? req.horizon() : "month",
                 req.riskMode() != null ? req.riskMode() : "balanced",

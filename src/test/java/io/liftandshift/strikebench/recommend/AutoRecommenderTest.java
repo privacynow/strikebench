@@ -29,6 +29,7 @@ class AutoRecommenderTest {
     private static final long BP = 10_000_000L;
 
     private AutoRecommender auto;
+    private OpportunityScanner opportunityScanner;
     private Db db;
 
     @BeforeAll
@@ -43,13 +44,29 @@ class AutoRecommenderTest {
         MarketDataService market = new MarketDataService(List.of(fixture), List.of(fixture), List.of(fixture));
         AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
         RecommendationEngine engine = new RecommendationEngine(market, CLOCK);
-        EvaluationService evaluations = new EvaluationService(market, engine, db, CLOCK);
+        EvaluationService evaluations = new EvaluationService(market, db, CLOCK);
         auto = new AutoRecommender(new SignalEngine(market, CLOCK), engine, evaluations, cfg, CLOCK);
+        opportunityScanner = new OpportunityScanner(engine, evaluations);
     }
 
     private static AutoRecommender.AutoRequest req(List<String> horizons, Long targetProfit, Boolean allow0dte) {
         return new AutoRecommender.AutoRequest(null, horizons, 3, targetProfit, null, null, null,
                 "balanced", allow0dte, null, null, null);
+    }
+
+    @Test
+    void opportunityScannerNormalizesUniverseAndUsesDecisionOrder() {
+        OpportunityScanner.ScanResult result = opportunityScanner.scan(
+                List.of("aapl", " AAPL ", "spy"), "DIRECTIONAL", "bullish", "month", "balanced",
+                BP, "local", 2, null, null);
+
+        assertThat(result.scanned()).isEqualTo(2);
+        assertThat(result.ranked()).isNotEmpty().hasSizeLessThanOrEqualTo(2);
+        double previous = Double.POSITIVE_INFINITY;
+        for (var evaluation : result.ranked()) {
+            assertThat(evaluation.decisionScore()).isLessThanOrEqualTo(previous);
+            previous = evaluation.decisionScore();
+        }
     }
 
     @Test

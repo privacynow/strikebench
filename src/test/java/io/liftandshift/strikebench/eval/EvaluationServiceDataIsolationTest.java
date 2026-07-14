@@ -23,7 +23,7 @@ class EvaluationServiceDataIsolationTest {
         insertIv("observed", "2026-07-01", 0.22, "observed-csv");
         insertIv("scenario-aapl", "2026-07-02", 0.91, "scenario-csv");
 
-        EvaluationService service = new EvaluationService(null, null, db, Clock.systemUTC());
+        EvaluationService service = new EvaluationService(null, db, Clock.systemUTC());
         assertThat(service.ivHistory("AAPL")).containsExactly(0.22);
         insertIv("observed", "2026-07-03", 0.31, "observed-csv-2");
         assertThat(service.ivHistory("AAPL")).containsExactly(0.22); // memoized until data changes
@@ -38,7 +38,7 @@ class EvaluationServiceDataIsolationTest {
         insertIvAt("2026-07-01T19:00:00Z", 0.30, "afternoon");
         insertIvAt("2026-07-02T19:00:00Z", 0.40, "next-day");
 
-        EvaluationService service = new EvaluationService(null, null, db, Clock.systemUTC());
+        EvaluationService service = new EvaluationService(null, db, Clock.systemUTC());
         assertThat(service.ivHistory("AAPL")).containsExactly(0.40, 0.25);
     }
 
