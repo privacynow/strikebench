@@ -380,17 +380,14 @@ class RecommendationEngineTest {
     }
 
     @Test
-    void candidatesAreRankedByScoreDescendingAndComplete() {
-        // RANKING TRUTH: the engine returns the COMPLETE score-sorted list — presentation may
-        // summarize with diverse representatives, but the engine never hides a ranked candidate.
+    void candidateConstructionReturnsTheCompleteFieldForDecisionPolicy() {
+        // The engine constructs the COMPLETE field. DecisionPolicy is the only component allowed
+        // to rank it; presentation may summarize with diverse representatives but cannot hide one.
         RecommendationEngine.Result result = engine.recommend(req("AAPL", "neutral", "month", "aggressive"), BP);
         List<Candidate> c = result.candidates();
         assertThat(c.size()).isGreaterThanOrEqualTo(2);
-        for (int i = 1; i < c.size(); i++) {
-            assertThat(c.get(i - 1).score()).isGreaterThanOrEqualTo(c.get(i).score());
-        }
-        // Every defined-risk family that fits the thesis and passed screens is present — no
-        // top-N cap, no structural-group trim (a neutral month view offers many structures).
+        // Every defined-risk family that fits the thesis and passed screens is present: no top-N
+        // cap and no structural-group trim (a neutral month view offers many structures).
         assertThat(c.size()).isGreaterThanOrEqualTo(5);
     }
 

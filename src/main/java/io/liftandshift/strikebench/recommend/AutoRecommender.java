@@ -18,9 +18,9 @@ import java.util.Locale;
  * The auto-scout: scans a universe of optionable symbols, derives a thesis per symbol from
  * price action + news sentiment + IV-vs-HV (SignalEngine), picks the most interesting names,
  * and asks the RecommendationEngine for defined-risk structures per requested horizon
- * (0DTE / week / month). Candidates are re-scored for volatility fit (rich IV favors credit
- * structures, cheap IV favors debit) and annotated against the user's profit target and
- * max-loss/risk budget. Educational output only — every pick carries its evidence.
+ * (0DTE / week / month). Every structure is ranked by the shared DecisionPolicy and annotated
+ * against the user's profit target and max-loss/risk budget. Educational output only — every
+ * pick carries its evidence.
  */
 public final class AutoRecommender {
 
@@ -50,8 +50,8 @@ public final class AutoRecommender {
     /** A held equity position, injected by the API layer for EXIT/HEDGE/INCOME scans. */
     public record HoldingInfo(String symbol, int freeShares, long avgCostCents) {}
 
-    public record ScoredCandidate(Candidate candidate, double rankingScore, String targetFit,
-                                  EconomicAssessment economics, Double decisionScore) {}
+    public record ScoredCandidate(Candidate candidate, double decisionScore, String targetFit,
+                                  EconomicAssessment economics) {}
 
     public record HorizonIdeas(String horizon, List<ScoredCandidate> candidates, List<String> notes) {}
 
@@ -65,19 +65,15 @@ public final class AutoRecommender {
     private final RecommendationEngine engine;
     private final AppConfig cfg;
     private final Clock clock;
-    private EvaluationService evaluations;
+    private final EvaluationService evaluations;
 
-    public AutoRecommender(SignalEngine signals, RecommendationEngine engine, AppConfig cfg, Clock clock) {
+    public AutoRecommender(SignalEngine signals, RecommendationEngine engine, EvaluationService evaluations,
+                           AppConfig cfg, Clock clock) {
         this.signals = signals;
         this.engine = engine;
+        this.evaluations = java.util.Objects.requireNonNull(evaluations, "evaluations");
         this.cfg = cfg;
         this.clock = clock;
-    }
-
-    /** Wires the same DecisionPolicy used by manual Ideas after both services are constructed. */
-    public AutoRecommender withEvaluationService(EvaluationService service) {
-        this.evaluations = service;
-        return this;
     }
 
     public AutoResult run(AutoRequest req, long buyingPowerCents) {
@@ -228,20 +224,17 @@ public final class AutoRecommender {
                 hNotes.add("Elevated event risk: rich premium often reflects a coming catalyst — gaps can blow through short strikes");
             }
             List<ScoredCandidate> assessed;
-            if (evaluations != null && !pool.isEmpty()) {
+            if (!pool.isEmpty()) {
                 List<StrategyEvaluation> evals = evaluations.evaluate(s.symbol(), intent.name(), thesis, horizon,
                         req.riskMode(), pool, buyingPowerCents, null, false,
                         io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId);
                 assessed = evals.stream().map(e -> new ScoredCandidate(e.candidate(),
                                 e.decisionScore(),
-                                targetFit(e.candidate(), req.targetProfitCents()), e.economics(), e.decisionScore()))
-                        .sorted(Comparator.comparingDouble(ScoredCandidate::rankingScore).reversed())
+                                targetFit(e.candidate(), req.targetProfitCents()), e.economics()))
+                        .sorted(Comparator.comparingDouble(ScoredCandidate::decisionScore).reversed())
                         .toList();
             } else {
-                assessed = pool.stream()
-                        .map(c -> new ScoredCandidate(c, autoScore(c, s), targetFit(c, req.targetProfitCents()), null, null))
-                        .sorted(Comparator.comparingDouble(ScoredCandidate::rankingScore).reversed())
-                        .toList();
+                assessed = List.of();
             }
             boolean anyFavorable = assessed.stream().anyMatch(x -> x.economics() != null
                     && x.economics().verdict() == EconomicAssessment.Verdict.FAVORABLE);
@@ -305,15 +298,6 @@ public final class AutoRecommender {
                 : Math.clamp(Math.abs(Math.log(s.ivHvRatio())) / Math.log(2), 0, 1); // 2x or 0.5x saturates
         double liquidity = s.liquidityScore() == null ? 0.5 : s.liquidityScore();
         return 0.5 * s.confidence() + 0.3 * volEdge + 0.2 * liquidity;
-    }
-
-    /** Engine score adjusted for volatility fit: rich IV favors credit structures, cheap IV debit. */
-    private static double autoScore(Candidate c, SignalEngine.Signals s) {
-        double score = c.score();
-        boolean credit = c.entryNetPremiumCents() > 0;
-        if ("RICH".equals(s.volSignal())) score += credit ? 8 : -4;
-        if ("CHEAP".equals(s.volSignal())) score += credit ? -4 : 8;
-        return score;
     }
 
     private static String targetFit(Candidate c, Long targetProfitCents) {

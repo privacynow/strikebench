@@ -1,10 +1,16 @@
 package io.liftandshift.strikebench.recommend;
 
 import io.liftandshift.strikebench.config.AppConfig;
+import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
+import io.liftandshift.strikebench.support.TestDb;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -15,6 +21,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class AutoRecommenderTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("America/New_York"));
@@ -22,13 +29,22 @@ class AutoRecommenderTest {
     private static final long BP = 10_000_000L;
 
     private AutoRecommender auto;
+    private Db db;
+
+    @BeforeAll
+    void openDb() { db = TestDb.fresh(); }
+
+    @AfterAll
+    void closeDb() { if (db != null) db.close(); }
 
     @BeforeEach
     void setUp() {
         FixtureProvider fixture = new FixtureProvider(CLOCK);
         MarketDataService market = new MarketDataService(List.of(fixture), List.of(fixture), List.of(fixture));
         AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
-        auto = new AutoRecommender(new SignalEngine(market, CLOCK), new RecommendationEngine(market, CLOCK), cfg, CLOCK);
+        RecommendationEngine engine = new RecommendationEngine(market, CLOCK);
+        EvaluationService evaluations = new EvaluationService(market, engine, db, CLOCK);
+        auto = new AutoRecommender(new SignalEngine(market, CLOCK), engine, evaluations, cfg, CLOCK);
     }
 
     private static AutoRecommender.AutoRequest req(List<String> horizons, Long targetProfit, Boolean allow0dte) {
@@ -50,7 +66,8 @@ class AutoRecommenderTest {
             assertThat(pick.horizons()).extracting(AutoRecommender.HorizonIdeas::horizon)
                     .containsExactly("week", "month");
             for (AutoRecommender.HorizonIdeas h : pick.horizons()) {
-                assertThat(h.candidates()).hasSizeLessThanOrEqualTo(2);
+                // Two curated ideas plus at most one explicitly labeled teaching counterexample.
+                assertThat(h.candidates()).hasSizeLessThanOrEqualTo(3);
                 for (AutoRecommender.ScoredCandidate sc : h.candidates()) {
                     assertThat(sc.candidate().maxLossCents()).isPositive();
                     io.liftandshift.strikebench.strategy.StrategyFamily family =
@@ -94,7 +111,7 @@ class AutoRecommenderTest {
                 "COMPARE_CAREFULLY", "Economics incomplete", "history missing",
                 -100L, null, 260L, -0.5, false,
                 List.of(io.liftandshift.strikebench.eval.EconomicAssessment.DAILY_HISTORY_REASON));
-        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, incomplete, 50.0));
+        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, incomplete));
 
         assertThat(AutoRecommender.noFavorableNote(rows, true))
                 .contains("cannot be formed yet")
@@ -110,7 +127,7 @@ class AutoRecommenderTest {
                 "COMPARE_CAREFULLY", "Economics incomplete", "model unsupported",
                 -100L, null, 260L, -0.5, false,
                 List.of("The realized-volatility EV lane is unavailable for this multi-expiration structure."));
-        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, unsupported, 50.0));
+        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, unsupported));
 
         assertThat(AutoRecommender.noFavorableNote(rows, true))
                 .contains("available after-cost economic checks")
@@ -123,7 +140,7 @@ class AutoRecommenderTest {
                 io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE,
                 "MECHANICALLY_INELIGIBLE", "Cannot assess as a trade", "mechanical failure",
                 -100L, null, 260L, -0.5, true, List.of("book is not executable"));
-        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, blocked, 50.0));
+        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, blocked));
 
         assertThat(AutoRecommender.noFavorableNote(rows, true))
                 .contains("every candidate failed a mechanical or account check")
@@ -184,20 +201,22 @@ class AutoRecommenderTest {
     }
 
     @Test
-    void volFitPrefersCreditWhenIvRich() {
-        // Fixture IV (~base) vs fixture HV differ per symbol; verify the rescoring direction:
-        // for a RICH pick, the top candidate should not be ranked below an equal-score debit.
+    void everyScoutCandidateCarriesTheSharedDecisionRanking() {
         AutoRecommender.AutoResult result = auto.run(req(List.of("month"), null, false), BP);
+        boolean sawCandidate = false;
         for (AutoRecommender.Pick p : result.picks()) {
-            if (!"RICH".equals(p.signals().volSignal())) continue;
             for (AutoRecommender.HorizonIdeas h : p.horizons()) {
+                double previous = Double.POSITIVE_INFINITY;
                 for (AutoRecommender.ScoredCandidate sc : h.candidates()) {
-                    if (sc.candidate().entryNetPremiumCents() > 0) {
-                        assertThat(sc.rankingScore()).isGreaterThan(sc.candidate().score());
-                    }
+                    sawCandidate = true;
+                    assertThat(sc.economics()).isNotNull();
+                    assertThat(sc.decisionScore()).isBetween(0.0, 100.0)
+                            .isLessThanOrEqualTo(previous);
+                    previous = sc.decisionScore();
                 }
             }
         }
+        assertThat(sawCandidate).isTrue();
     }
 
     @Test

@@ -266,7 +266,8 @@
         intentBadge(c.intent),
         heldSharesBadge(c),
         badge(c.freshness),
-        UI.scoreBar(c.score, 'Screen score — fast candidate fit before the full decision analysis')),
+        c.decisionScore !== null && c.decisionScore !== undefined
+          ? UI.scoreBar(c.decisionScore, 'Decision score — the shared economic, risk and evidence ranking') : null),
       el('div', { class: 'label-line' }, c.label + '  ·  qty ' + c.qty),
       intentNoteBlock(c),
       el('div', { class: 'chip-row' },
@@ -287,13 +288,10 @@
     var econ = economicAssessmentBlock(c);
     if (econ) card.insertBefore(econ, card.querySelector('.chip-row'));
     card.appendChild(el('div', { class: 'chip-row expert-only' },
-      c.decisionScore !== null && c.decisionScore !== undefined
-        ? chip(el('span', {}, 'Decision score', UI.info('decisionscore')), fmtNum(c.decisionScore, 0)) : null,
       !c.economics && c.expectedValueCents !== null && c.expectedValueCents !== undefined
         ? chip(el('span', {}, 'Market EV (pre-fee)', UI.info('ev')), fmtMoney(c.expectedValueCents, { plus: true })) : null,
       !c.economics ? chip(el('span', {}, 'History EV', UI.info('evhistvol')), 'Unavailable') : null,
-      chip('Liquidity', fmtNum(c.liquidityScore, 2)),
-      chip(el('span', {}, 'Screen score', UI.info('screenscore')), fmtNum(c.score, 0))));
+      chip('Liquidity', fmtNum(c.liquidityScore, 2))));
     if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.context.symbol(), c));
     var expertReceipt = candidateEvaluationReceipt(c, false);
     if (expertReceipt) card.appendChild(expertReceipt);
@@ -361,7 +359,7 @@
   function comparisonTable(candidates, options) {
     options = options || {};
     var sortKey = 'rank', sortDir = 1;
-    // The served order IS the ranking (decision-ranked; screen order on fallback) — stamp it
+    // The served order IS the DecisionPolicy ranking — stamp it
     // once so re-sorting by any column keeps the true rank visible on every row (review P1).
     var rankOf = new Map();
     candidates.forEach(function (c, i) { rankOf.set(c, i + 1); });
@@ -386,8 +384,7 @@
       { key: 'assignmentProb', label: 'Assign%', get: function (c) { return c.assignmentProb === null || c.assignmentProb === undefined ? -1 : c.assignmentProb; }, render: function (c) { return el('span', {}, c.assignmentProb === null || c.assignmentProb === undefined ? '\u2014' : fmtPct(c.assignmentProb)); } },
       { key: 'annualizedYieldPct', label: 'Net premium yield/yr', get: function (c) { return c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? -1 : c.annualizedYieldPct; }, render: function (c) { return el('span', {}, c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? '\u2014' : fmtNum(c.annualizedYieldPct, 1) + '%'); } },
       { key: 'liquidityScore', label: 'Liq', get: function (c) { return c.liquidityScore; }, render: function (c) { return el('span', {}, fmtNum(c.liquidityScore, 2)); } },
-      { key: 'decisionScore', label: 'Decision score', get: function (c) { return c.decisionScore; }, render: function (c) { return c.decisionScore === null || c.decisionScore === undefined ? '\u2014' : el('b', {}, fmtNum(c.decisionScore, 0)); } },
-      { key: 'score', label: 'Screen score', get: function (c) { return c.score; }, render: function (c) { return fmtNum(c.score, 0); } }
+      { key: 'decisionScore', label: 'Decision score', get: function (c) { return c.decisionScore; }, render: function (c) { return c.decisionScore === null || c.decisionScore === undefined ? '\u2014' : el('b', {}, fmtNum(c.decisionScore, 0)); } }
     ];
     var wrap = el('div', { class: 'card', id: 'compare-table' });
     function render() {
