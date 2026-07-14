@@ -121,6 +121,7 @@ public final class ApiServer {
     private io.liftandshift.strikebench.sim.PathEnsembleService pathEnsembles;   // one lane-aware path source
     private java.util.concurrent.ScheduledExecutorService streamScheduler;     // pushes SSE market frames
     private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
+    private java.util.concurrent.ScheduledExecutorService portfolioValuationScheduler;
     private final String startedAt = java.time.Instant.now().toString();
     private final java.util.concurrent.atomic.AtomicLong worldRevision = new java.util.concurrent.atomic.AtomicLong();
 
@@ -829,6 +830,7 @@ public final class ApiServer {
         }).start();
         warmUpErrorPipeline(app.port());
         startSnapshotScheduler();
+        startPortfolioValuationScheduler();
         streamScheduler = java.util.concurrent.Executors.newScheduledThreadPool(2, r -> {
             Thread t = new Thread(r, "market-stream"); t.setDaemon(true); return t;
         });
@@ -862,6 +864,29 @@ public final class ApiServer {
             }
         }, initial, periodSec, java.util.concurrent.TimeUnit.SECONDS);
         log.info("snapshot scheduler on — first run in {}s, then every {}h", initial, cfg.snapshotIntervalHours());
+    }
+
+    private void startPortfolioValuationScheduler() {
+        if (!cfg.portfolioNavEnabled()) return;
+        portfolioValuationScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "portfolio-valuation-scheduler");
+            t.setDaemon(true);
+            return t;
+        });
+        long initial = Math.max(0, cfg.portfolioNavInitialDelaySeconds());
+        long period = Math.max(1, cfg.portfolioNavIntervalMinutes());
+        portfolioValuationScheduler.scheduleWithFixedDelay(() -> {
+            try {
+                var run = portfolioBooks.recordActiveCalculatedValuations();
+                if (run.failed() > 0) {
+                    log.warn("Some tracked account values were unavailable; the next scheduled pass will retry");
+                }
+            } catch (RuntimeException e) {
+                log.warn("Scheduled tracked-account valuation did not complete; the next run will retry");
+                log.debug("Scheduled tracked-account valuation detail", e);
+            }
+        }, initial, Math.multiplyExact(period, 60L), java.util.concurrent.TimeUnit.SECONDS);
+        log.info("tracked account history on — first pass in {}s, then every {}m", initial, period);
     }
 
     /**
@@ -920,6 +945,7 @@ public final class ApiServer {
         if (marketEngine != null) marketEngine.stop();
         if (streamScheduler != null) streamScheduler.shutdownNow();
         if (snapshotScheduler != null) snapshotScheduler.shutdownNow();
+        if (portfolioValuationScheduler != null) portfolioValuationScheduler.shutdownNow();
         if (app != null) app.stop();
         if (db != null) db.close();
     }
