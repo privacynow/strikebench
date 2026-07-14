@@ -5,6 +5,9 @@ import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -18,6 +21,17 @@ public interface MarksSource {
      *  ignore the world (observed) so existing implementations stay correct. */
     default java.util.Optional<java.math.BigDecimal> underlyingMark(String symbol, String worldId) {
         return underlyingMark(symbol);
+    }
+
+    /** Batch counterpart for holdings/valuation screens. Implementations backed by a shared
+     * market engine override this so N symbols do not become N provider/cache traversals. */
+    default Map<String, BigDecimal> underlyingMarks(List<String> symbols, String worldId) {
+        Map<String, BigDecimal> out = new LinkedHashMap<>();
+        if (symbols == null) return out;
+        for (String symbol : symbols) {
+            underlyingMark(symbol, worldId).ifPresent(mark -> out.put(symbol, mark));
+        }
+        return out;
     }
 
     /** Provenance/age of the exact underlying value returned by underlyingMark. */

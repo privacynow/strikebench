@@ -25,6 +25,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -75,6 +76,8 @@ class PaperCoreTest {
      */
     static final class StubMarks implements MarksSource {
         BigDecimal underlying = new BigDecimal("100.00");
+        AtomicInteger scalarUnderlyingCalls = new AtomicInteger();
+        AtomicInteger batchUnderlyingCalls = new AtomicInteger();
         BigDecimal closeOnValue = null; // when set, the close used for settlement (any date)
         Map<LocalDate, BigDecimal> closesByDate = new java.util.HashMap<>();
         Freshness freshness = Freshness.FIXTURE;
@@ -85,7 +88,16 @@ class PaperCoreTest {
                 "CALL100", new BigDecimal("2.50"),
                 "CALL105", new BigDecimal("1.10")));
         Map<String, LegMark> exact = new java.util.HashMap<>();
-        @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.of(underlying); }
+        @Override public Optional<BigDecimal> underlyingMark(String symbol) {
+            scalarUnderlyingCalls.incrementAndGet();
+            return Optional.of(underlying);
+        }
+        @Override public Map<String, BigDecimal> underlyingMarks(List<String> symbols, String worldId) {
+            batchUnderlyingCalls.incrementAndGet();
+            Map<String, BigDecimal> out = new java.util.LinkedHashMap<>();
+            if (symbols != null) symbols.forEach(symbol -> out.put(symbol, underlying));
+            return out;
+        }
         @Override public Optional<BigDecimal> closeOn(String symbol, LocalDate date) {
             if (closesByDate.containsKey(date)) return Optional.of(closesByDate.get(date));
             return Optional.ofNullable(closeOnValue);
@@ -1058,6 +1070,20 @@ class PaperCoreTest {
         assertThat(accounts.get(acct.id()).cashCents())
                 .isEqualTo(START - 1_000_000 + 432_000 - 648_000);
         assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void holdingsListUsesOneBatchMarkReadForTheWholeAccount() {
+        Account acct = accounts.getOrCreateDefault();
+        positions.buy(acct.id(), "AAPL", 10);
+        positions.buy(acct.id(), "SPY", 5);
+        marks.scalarUnderlyingCalls.set(0);
+        marks.batchUnderlyingCalls.set(0);
+
+        assertThat(positions.list(acct.id())).extracting(PositionsService.PositionView::symbol)
+                .containsExactly("AAPL", "SPY");
+        assertThat(marks.batchUnderlyingCalls).hasValue(1);
+        assertThat(marks.scalarUnderlyingCalls).hasValue(0);
     }
 
     @Test

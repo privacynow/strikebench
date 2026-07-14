@@ -70,14 +70,27 @@ public final class PositionsService {
                                     long totalCents, List<String> warnings,
                                     io.liftandshift.strikebench.model.DataEvidence evidence) {}
 
+    private record PositionRead(Position position, long lockedShares, String worldId) {}
+
     // ---- Reads ----
 
     public List<PositionView> list(String accountId) {
-        List<Position> rows = db.query("SELECT * FROM positions WHERE account_id=? ORDER BY symbol",
-                PositionsService::map, accountId);
+        List<PositionRead> rows = db.query("SELECT p.*,COALESCE(l.locked,0) locked,a.type,a.world_id " +
+                        "FROM positions p JOIN accounts a ON a.id=p.account_id LEFT JOIN (" +
+                        "SELECT account_id,symbol,SUM(shares_locked) locked FROM trades " +
+                        "WHERE status='ACTIVE' GROUP BY account_id,symbol) l " +
+                        "ON l.account_id=p.account_id AND l.symbol=p.symbol " +
+                        "WHERE p.account_id=? ORDER BY p.symbol",
+                row -> new PositionRead(map(row), row.lng("locked"),
+                        "DEMO".equals(row.str("type")) ? "demo" : row.str("world_id")), accountId);
+        if (rows.isEmpty()) return List.of();
+        String world = rows.getFirst().worldId();
+        Map<String, BigDecimal> marksBySymbol = marks.underlyingMarks(
+                rows.stream().map(row -> row.position().symbol()).toList(), world);
         List<PositionView> out = new ArrayList<>(rows.size());
-        for (Position p : rows) {
-            out.add(view(p));
+        for (PositionRead row : rows) {
+            BigDecimal mark = marksBySymbol.get(row.position().symbol());
+            out.add(view(row.position(), row.lockedShares(), mark == null ? null : Money.toCents(mark)));
         }
         return out;
     }
@@ -108,6 +121,10 @@ public final class PositionsService {
         long locked = db.with(c -> lockedShares(c, p.accountId(), p.symbol()));
         Long last = marks.underlyingMark(p.symbol(), worldOf(p.accountId()))
                 .map(Money::toCents).orElse(null); // per-share cents
+        return view(p, locked, last);
+    }
+
+    private static PositionView view(Position p, long locked, Long last) {
         Long mv = last == null ? null : last * p.shares();
         Long unreal = last == null ? null : (last - p.avgCostCents()) * p.shares();
         Double gainPct = last == null || p.avgCostCents() <= 0 ? null

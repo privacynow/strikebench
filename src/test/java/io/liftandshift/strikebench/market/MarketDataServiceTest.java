@@ -18,6 +18,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,6 +60,51 @@ class MarketDataServiceTest {
         @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) { throw new RuntimeException("boom"); }
     }
 
+    /** Empty observed source with counters: empty is a real cacheable result, not an exception. */
+    static final class EmptyCountingProvider implements MarketDataProvider {
+        final AtomicInteger quoteCalls = new AtomicInteger();
+        final AtomicInteger chainCalls = new AtomicInteger();
+        @Override public String name() { return "empty-observed"; }
+        @Override public Set<Domain> domains() { return Set.of(Domain.QUOTES, Domain.OPTIONS); }
+        @Override public List<SymbolMatch> lookup(String q) { return List.of(); }
+        @Override public Optional<Quote> quote(String s) {
+            quoteCalls.incrementAndGet();
+            try { Thread.sleep(75); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            return Optional.empty();
+        }
+        @Override public List<LocalDate> expirations(String s) { return List.of(); }
+        @Override public Optional<OptionChain> chain(String s, LocalDate e) {
+            chainCalls.incrementAndGet();
+            return Optional.empty();
+        }
+        @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) { return List.of(); }
+    }
+
+    static final class GenerationProvider implements MarketDataProvider {
+        final AtomicInteger calls = new AtomicInteger();
+        final CountDownLatch firstEntered = new CountDownLatch(1);
+        final CountDownLatch releaseFirst = new CountDownLatch(1);
+        @Override public String name() { return "generation-observed"; }
+        @Override public Set<Domain> domains() { return Set.of(Domain.QUOTES); }
+        @Override public List<SymbolMatch> lookup(String q) { return List.of(); }
+        @Override public Optional<Quote> quote(String symbol) {
+            int call = calls.incrementAndGet();
+            if (call == 1) {
+                firstEntered.countDown();
+                try { releaseFirst.await(2, TimeUnit.SECONDS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            }
+            String price = call == 1 ? "100.00" : "200.00";
+            return Optional.of(new Quote(symbol, "Generation " + call, new java.math.BigDecimal(price),
+                    null, null, null, null, null, null, true, CLOCK.millis(), name(),
+                    io.liftandshift.strikebench.model.Freshness.DELAYED));
+        }
+        @Override public List<LocalDate> expirations(String s) { return List.of(); }
+        @Override public Optional<OptionChain> chain(String s, LocalDate e) { return Optional.empty(); }
+        @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) { return List.of(); }
+    }
+
     /** A provider accidentally mounted in the observed chain but explicitly returning modeled evidence. */
     static final class SyntheticCandleProvider implements MarketDataProvider {
         private final ObservedFixtureProvider inner = new ObservedFixtureProvider(CLOCK);
@@ -78,6 +127,56 @@ class MarketDataServiceTest {
         assertThat(p.quoteCalls.get()).isEqualTo(1);
         assertThat(svc.quote("SPY")).isPresent();
         assertThat(p.quoteCalls.get()).isEqualTo(2);
+    }
+
+    @Test
+    void concurrentEmptyReadsSingleflightAndNegativeCacheUntilInvalidated() throws Exception {
+        EmptyCountingProvider p = new EmptyCountingProvider();
+        MarketDataService svc = new MarketDataService(List.of(p), List.of(), List.of());
+        CountDownLatch start = new CountDownLatch(1);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<Optional<Quote>>> calls = java.util.stream.IntStream.range(0, 12)
+                    .mapToObj(i -> executor.submit(() -> {
+                        start.await(2, TimeUnit.SECONDS);
+                        return svc.quote("MISSING");
+                    })).toList();
+            start.countDown();
+            for (Future<Optional<Quote>> call : calls) assertThat(call.get(2, TimeUnit.SECONDS)).isEmpty();
+        }
+        assertThat(p.quoteCalls).hasValue(1);
+        assertThat(svc.quote("MISSING")).isEmpty();
+        assertThat(p.quoteCalls).hasValue(1);
+
+        LocalDate expiry = LocalDate.of(2026, 8, 21);
+        assertThat(svc.chain("MISSING", expiry)).isEmpty();
+        assertThat(svc.chain("MISSING", expiry)).isEmpty();
+        assertThat(p.chainCalls).hasValue(1);
+
+        svc.invalidateAll();
+        assertThat(svc.quote("MISSING")).isEmpty();
+        assertThat(svc.chain("MISSING", expiry)).isEmpty();
+        assertThat(p.quoteCalls).hasValue(2);
+        assertThat(p.chainCalls).hasValue(2);
+    }
+
+    @Test
+    void invalidationStartsANewFlightAndLateOldLoadCannotRepopulateCache() throws Exception {
+        GenerationProvider provider = new GenerationProvider();
+        MarketDataService svc = new MarketDataService(List.of(provider), List.of(), List.of());
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Optional<Quote>> oldFlight = executor.submit(() -> svc.quote("AAPL"));
+            assertThat(provider.firstEntered.await(1, TimeUnit.SECONDS)).isTrue();
+
+            svc.invalidateAll();
+            Future<Optional<Quote>> newFlight = executor.submit(() -> svc.quote("AAPL"));
+            assertThat(newFlight.get(1, TimeUnit.SECONDS).orElseThrow().last()).isEqualByComparingTo("200.00");
+            provider.releaseFirst.countDown();
+            assertThat(oldFlight.get(1, TimeUnit.SECONDS).orElseThrow().last()).isEqualByComparingTo("100.00");
+        }
+
+        assertThat(provider.calls).hasValue(2);
+        assertThat(svc.quote("AAPL").orElseThrow().last()).isEqualByComparingTo("200.00");
+        assertThat(provider.calls).hasValue(2);
     }
 
     @Test

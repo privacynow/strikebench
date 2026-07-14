@@ -62,6 +62,23 @@ class MarketDataEngineTest {
         public List<NewsItem> news(String s) { return inner.news(s); }
     }
 
+    static final class BidAskOnlyProvider implements MarketDataProvider {
+        final AtomicInteger calls = new AtomicInteger();
+        public String name() { return "bid-ask-observed"; }
+        public java.util.Set<Domain> domains() { return java.util.Set.of(Domain.QUOTES); }
+        public List<SymbolMatch> lookup(String q) { return List.of(); }
+        public Optional<Quote> quote(String symbol) {
+            calls.incrementAndGet();
+            return Optional.of(new Quote(symbol, "Bid/ask only", null,
+                    new java.math.BigDecimal("99.90"), new java.math.BigDecimal("100.10"),
+                    new java.math.BigDecimal("99.00"), null, null, null, true, 1_783_348_200_000L,
+                    name(), io.liftandshift.strikebench.model.Freshness.DELAYED));
+        }
+        public List<LocalDate> expirations(String s) { return List.of(); }
+        public Optional<OptionChain> chain(String s, LocalDate e) { return Optional.empty(); }
+        public List<Candle> candles(String s, LocalDate f, LocalDate t) { return List.of(); }
+    }
+
     private MarketDataEngine engine(CountingProvider p, AppConfig cfg) {
         db = TestDb.fresh();
         MarketDataService market = new MarketDataService(
@@ -106,6 +123,25 @@ class MarketDataEngineTest {
         eng.quote("AAPL");            // warm + fresh (fixed clock → not stale): no refetch
         eng.quote("AAPL");
         assertThat(p.quoteCalls.get("AAPL").get()).isEqualTo(1);
+    }
+
+    @Test
+    void batchMarksReuseWarmEngineAndKeepBidAskOnlyQuotesUsable() {
+        db = TestDb.fresh();
+        AppConfig cfg = new AppConfig(Map.of());
+        BidAskOnlyProvider provider = new BidAskOnlyProvider();
+        MarketDataService market = new MarketDataService(List.of(provider), List.of(), List.of());
+        MarketDataEngine engine = new MarketDataEngine(market, new UniverseService(db, cfg, clock), cfg, clock);
+        MarketDataMarks marks = new MarketDataMarks(market, false);
+        marks.setEngine(engine);
+
+        assertThat(engine.quotes(List.of("AAPL"))).hasSize(1);
+        assertThat(provider.calls).hasValue(1);
+        assertThat(marks.underlyingMarks(List.of("AAPL"), "observed").get("AAPL"))
+                .isEqualByComparingTo("100.00");
+        assertThat(marks.underlyingMark("AAPL", "observed").orElseThrow())
+                .isEqualByComparingTo("100.00");
+        assertThat(provider.calls).hasValue(1);
     }
 
     @Test

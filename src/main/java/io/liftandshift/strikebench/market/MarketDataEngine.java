@@ -194,6 +194,19 @@ public final class MarketDataEngine {
         running = false;
         if (scheduler != null) scheduler.shutdownNow();
         if (refreshPool != null) refreshPool.shutdownNow();
+        awaitStopped(scheduler);
+        awaitStopped(refreshPool);
+    }
+
+    private static void awaitStopped(java.util.concurrent.ExecutorService executor) {
+        if (executor == null) return;
+        try {
+            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                log.warn("Market-data worker did not stop within the shutdown window");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     // ---- Serving ----
@@ -226,9 +239,20 @@ public final class MarketDataEngine {
         List<MarketSnapshot> out = new ArrayList<>();
         for (String raw : symbols) {
             MarketSnapshot snap = snapshots.get(norm(raw));
-            if (snap != null && snap.last() != null) out.add(snap);
+            if (hasUsablePrice(snap)) out.add(snap);
         }
         return out;
+    }
+
+    /** A snapshot can still carry an honest mark when the feed omits last trade: a sane
+     * two-sided book or the explicitly stale previous close remains usable and disclosed. */
+    private static boolean hasUsablePrice(MarketSnapshot snapshot) {
+        if (snapshot == null) return false;
+        if (snapshot.last() != null && snapshot.last().signum() > 0) return true;
+        if (snapshot.bid() != null && snapshot.ask() != null
+                && snapshot.bid().signum() > 0 && snapshot.ask().signum() > 0
+                && snapshot.bid().compareTo(snapshot.ask()) <= 0) return true;
+        return snapshot.prevClose() != null && snapshot.prevClose().signum() > 0;
     }
 
     /** Single-symbol accessor: warm state now (refresh behind if stale), or a blocking fetch if cold. */
