@@ -43,27 +43,27 @@ interactive candle chart (1M to MAX, crosshair readout), what's coming up (optio
 earnings mentions, SEC filings), headlines, the full option chain with greeks, and
 "what you can do with this stock" — live per-goal suggestions computed from the active market lane.
 
-**Trade → Ideas** — start from what you're *trying to do*: trade a view, earn income, buy a
-stock at a discount, sell your shares at a target, or protect them. Name a ticker or let the
-scout scan the market for you — every pick shows its evidence (momentum, news sentiment,
-volatility) and every refused idea says exactly why it was refused. Screen by what matters:
-chance of profit, assignment risk, income rate, cash outlay, worst case.
+**Plans** — one continuous journey from a market question to review: Understand → Evidence →
+Strategy → Outcomes → Decide → Manage & Review. Start with one stock or let the universe Scout
+surface alternatives. The same Plan carries its market lane, goal, horizon, thesis, evidence,
+exact contracts, scenario receipt, and decision forward, so moving between Research, strategy
+selection, historical replay, futures, and a paper order does not ask for the same context again.
+Beginners and experts use the same catalog, controls, and math; the presentation changes, not
+the capability. Unfavorable and over-budget structures remain visible as teaching cases with
+the reason stated rather than disappearing.
 
-**Trade → Builder** — every structure a broker menu carries (verticals, condors, butterflies,
-calendars, collars, straddles…), built leg by leg. Beginners get a story per leg and its live
-impact; experts get a terminal with per-leg market data and toggles. On the payoff chart you
-can **drag any strike** — it snaps to real chain strikes and re-prices the position live, so
-you can *feel* what moving a strike does to your worst case and odds. A fine-tune panel gives
-you the exact numbers when you want them.
+**Portfolio → Practice desk** — review the isolated paper account: total value, buying power,
+share holdings, open and closed option positions, executable marks, greeks, management actions,
+and the append-only practice ledger.
 
-**Trade → Backtest** — before risking even paper money on a rule like "sell a monthly covered
-call," see how it would actually have gone, trade by trade, with honest labels on what is real
-data and what is modeled.
-
-**Trade → Place** — review with explicit money effects (what you pay or collect, worst case,
-buying power after, fees) and a plain-language safety check, then place it in the paper
-account. Track it in **Portfolio**: total value, P/L since start, your shares, every trade's
-live marks, and an append-only ledger of every cent.
+**Portfolio → Tracked accounts** — maintain a separate owner-scoped record of external taxable,
+IRA, or 401(k) activity without placing orders or changing practice cash. Record normalized
+stock and multi-leg option fills, short positions, fees, interest, dividends, deposits,
+withdrawals, assignment, exercise, and expiration; import a chronological CSV atomically;
+reconcile exact FIFO/LIFO/HIFO lots and realized basis; inspect executable-side P/L, known cash
+obligations, allocation, and Modified Dietz performance; estimate taxes from explicit worksheet
+rates; and export exact CSV or a six-sheet Excel workbook. Generated Demo/simulated/model prices
+never mark an external account, and unavailable observed marks stay unavailable rather than zero.
 
 **Data → Simulated market** — a practice market that *moves*, any day, at any speed. Pick a
 story (steady climb, sell-off then rebound, volatility event...), name your symbols, and

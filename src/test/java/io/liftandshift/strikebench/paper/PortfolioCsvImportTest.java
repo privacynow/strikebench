@@ -35,7 +35,7 @@ class PortfolioCsvImportTest {
         String csv = PortfolioCsvImport.TEMPLATE_HEADER + "\r\n"
                 + "spread-1,2026-07-01,TRADE,,130,,\"Opening, exact vertical\",0,OPTION,BUY,OPEN,AAPL,CALL,250,2026-08-21,1,100,8.25\r\n"
                 + "spread-1,2026-07-01,TRADE,,130,,\"Opening, exact vertical\",1,OPTION,SELL,OPEN,AAPL,CALL,260,2026-08-21,1,100,3.10\r\n"
-                + "interest-1,2026-07-31,INTEREST,425,0,ORDINARY_INTEREST,Monthly interest,,,,,,,,,,,\r\n";
+                + "interest-1,2026-07-02,INTEREST,425,0,ORDINARY_INTEREST,Monthly interest,,,,,,,,,,,\r\n";
 
         var result = PortfolioCsvImport.run(stream(csv), "local", accountId, books);
         assertThat(result.transactionsWritten()).isEqualTo(2);
@@ -51,8 +51,8 @@ class PortfolioCsvImportTest {
     @Test
     void oneInvalidCloseRollsBackEveryTransactionInTheFile() {
         String csv = PortfolioCsvImport.TEMPLATE_HEADER + "\n"
-                + "interest-2,2026-07-31,INTEREST,500,0,ORDINARY_INTEREST,Would otherwise be valid,,,,,,,,,,,\n"
-                + "bad-close,2026-08-01,TRADE,,0,,,0,STOCK,SELL,CLOSE,NVDA,,,,1,1,200\n";
+                + "interest-2,2026-07-02,INTEREST,500,0,ORDINARY_INTEREST,Would otherwise be valid,,,,,,,,,,,\n"
+                + "bad-close,2026-07-03,TRADE,,0,,,0,STOCK,SELL,CLOSE,NVDA,,,,1,1,200\n";
 
         assertThatThrownBy(() -> PortfolioCsvImport.run(stream(csv), "local", accountId, books))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("only 0 matching long units");

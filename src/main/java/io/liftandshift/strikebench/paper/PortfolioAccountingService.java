@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
@@ -17,6 +18,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -37,8 +39,9 @@ public final class PortfolioAccountingService {
     public static final List<String> ACCOUNT_TYPES = List.of(
             "TAXABLE", "TRADITIONAL_IRA", "ROTH_IRA", "TRADITIONAL_401K", "ROTH_401K");
     public static final List<String> LOT_METHODS = List.of("FIFO", "LIFO", "HIFO");
+    private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
     private static final List<String> CASH_EVENTS = List.of(
-            "DEPOSIT", "WITHDRAWAL", "TRANSFER_IN", "TRANSFER_OUT", "INTEREST", "DIVIDEND", "FEE", "ADJUSTMENT");
+            "OPENING_BALANCE", "DEPOSIT", "WITHDRAWAL", "TRANSFER_IN", "TRANSFER_OUT", "INTEREST", "DIVIDEND", "FEE", "ADJUSTMENT");
     private static final List<String> MARKET_EVENTS = List.of("TRADE", "EXPIRATION", "ASSIGNMENT", "EXERCISE");
 
     private final Db db;
@@ -157,6 +160,11 @@ public final class PortfolioAccountingService {
                           int multiplier, String openedAt, long originalQuantity, long remainingQuantity,
                           long originalOpenAmount, long remainingOpenAmount, String status) {}
 
+    private record SummaryLedgerSnapshot(AccountProfile account, List<LotView> openLots,
+                                         long cashCents, long realizedCents, long feesCents,
+                                         long externalFlowsCents, long interestCents,
+                                         long dividendCents) {}
+
     // ---- Accounts ----
 
     public List<AccountProfile> accounts(String ownerId) {
@@ -192,8 +200,8 @@ public final class PortfolioAccountingService {
                     input.shortTermTaxRateBps(), input.longTermTaxRateBps(), input.ordinaryTaxRateBps(),
                     input.stateTaxRateBps(), now, now);
             if (input.openingCashCents() != null && input.openingCashCents() > 0) {
-                recordOn(c, requireAccount(c, owner, id, true), new TransactionInput(now.toString(), "DEPOSIT",
-                        input.openingCashCents(), 0L, null, "MANUAL", "opening-balance", "Opening cash", List.of()));
+                recordOn(c, requireAccount(c, owner, id, true), new TransactionInput(now.toString(), "OPENING_BALANCE",
+                        input.openingCashCents(), 0L, null, "MANUAL", "opening-balance", "Opening cash", List.of()), true);
             }
             return requireAccount(c, owner, id, false);
         });
@@ -204,15 +212,21 @@ public final class PortfolioAccountingService {
         String owner = owner(ownerId);
         return db.tx(c -> {
             AccountProfile current = requireAccount(c, owner, id, true);
+            requireActive(current);
             String name = input.name() == null ? current.name() : text(input.name(), "account name", 100);
             String type = input.accountType() == null ? current.accountType()
                     : enumValue(input.accountType(), ACCOUNT_TYPES, "account type");
+            if (!type.equals(current.accountType())) {
+                throw new IllegalArgumentException("account type is fixed after creation; create a separate tracked account for a different tax wrapper");
+            }
             String method = input.lotMethod() == null ? current.lotMethod()
                     : enumValue(input.lotMethod(), LOT_METHODS, "lot method");
-            Integer st = input.shortTermTaxRateBps() == null ? current.shortTermTaxRateBps() : input.shortTermTaxRateBps();
-            Integer lt = input.longTermTaxRateBps() == null ? current.longTermTaxRateBps() : input.longTermTaxRateBps();
-            Integer ordinary = input.ordinaryTaxRateBps() == null ? current.ordinaryTaxRateBps() : input.ordinaryTaxRateBps();
-            Integer state = input.stateTaxRateBps() == null ? current.stateTaxRateBps() : input.stateTaxRateBps();
+            // PUT is a full settings replacement. Null rates deliberately clear an estimate input;
+            // they never alter lots, basis, or transaction history.
+            Integer st = input.shortTermTaxRateBps();
+            Integer lt = input.longTermTaxRateBps();
+            Integer ordinary = input.ordinaryTaxRateBps();
+            Integer state = input.stateTaxRateBps();
             validateRate(st, "short-term rate"); validateRate(lt, "long-term rate");
             validateRate(ordinary, "ordinary-income rate"); validateRate(state, "state rate");
             String broker = input.broker() == null ? current.broker() : trim(input.broker(), 100);
@@ -240,50 +254,80 @@ public final class PortfolioAccountingService {
 
     public TransactionView record(String ownerId, String accountId, TransactionInput input) {
         String owner = owner(ownerId);
-        return db.tx(c -> recordOn(c, requireAccount(c, owner, accountId, true), input));
+        try {
+            return db.tx(c -> recordOn(c, requireAccount(c, owner, accountId, true), input));
+        } catch (ArithmeticException e) {
+            throw new IllegalArgumentException("transaction amounts exceed the supported range");
+        }
     }
 
     public List<TransactionView> recordBatch(String ownerId, String accountId, List<TransactionInput> inputs) {
         if (inputs == null || inputs.isEmpty()) throw new IllegalArgumentException("at least one transaction is required");
         if (inputs.size() > 100_000) throw new IllegalArgumentException("an import may contain at most 100,000 transactions");
         String owner = owner(ownerId);
-        return db.tx(c -> {
-            AccountProfile account = requireAccount(c, owner, accountId, true);
-            List<TransactionView> out = new ArrayList<>(inputs.size());
-            for (TransactionInput input : inputs) out.add(recordOn(c, account, input));
-            return List.copyOf(out);
-        });
+        List<TransactionInput> ordered = new ArrayList<>(inputs);
+        ordered.sort(Comparator.comparing(input -> parseTime(input == null ? null : input.occurredAt())));
+        try {
+            return db.tx(c -> {
+                AccountProfile account = requireAccount(c, owner, accountId, true);
+                List<TransactionView> out = new ArrayList<>(ordered.size());
+                for (TransactionInput input : ordered) out.add(recordOn(c, account, input));
+                return List.copyOf(out);
+            });
+        } catch (ArithmeticException e) {
+            throw new IllegalArgumentException("transaction amounts exceed the supported range");
+        }
     }
 
     private TransactionView recordOn(Connection c, AccountProfile account, TransactionInput input) throws SQLException {
+        return recordOn(c, account, input, false);
+    }
+
+    private TransactionView recordOn(Connection c, AccountProfile account, TransactionInput input,
+                                     boolean allowOpeningBalance) throws SQLException {
         if (!"ACTIVE".equals(account.status())) throw new IllegalStateException("This tracked account is archived and read-only.");
         if (input == null) throw new IllegalArgumentException("transaction details are required");
         String event = enumValue(input.eventType(), concat(CASH_EVENTS, MARKET_EVENTS), "event type");
+        if ("OPENING_BALANCE".equals(event) && !allowOpeningBalance) {
+            throw new IllegalArgumentException("opening balance is created only when a tracked account is set up");
+        }
         OffsetDateTime occurred = parseTime(input.occurredAt());
+        requireNotFuture(input.occurredAt(), occurred, "transaction");
         long fees = input.feesCents() == null ? 0 : input.feesCents();
         if (fees < 0) throw new IllegalArgumentException("fees cannot be negative");
         String source = input.source() == null || input.source().isBlank() ? "MANUAL"
                 : enumValue(input.source(), List.of("MANUAL", "BROKER", "IMPORT"), "source");
         String externalRef = trim(input.externalRef(), 160);
+        if ("BROKER".equals(source) && externalRef == null) {
+            throw new IllegalArgumentException("broker-sourced activity requires a stable order or statement reference");
+        }
         if (externalRef != null) {
             var duplicate = Db.queryOn(c, "SELECT id FROM portfolio_transaction WHERE portfolio_account_id=? AND source=? AND external_ref=?",
                     r -> r.str("id"), account.id(), source, externalRef);
             if (!duplicate.isEmpty()) throw new IllegalStateException("That " + source.toLowerCase(Locale.ROOT)
                     + " reference is already recorded as " + duplicate.getFirst() + ".");
         }
+        if (MARKET_EVENTS.contains(event)) requireChronologicalMarketActivity(c, account.id(), occurred);
 
-        List<PreparedLeg> legs = prepareLegs(input.legs(), fees, event);
-        long computedCash = legs.stream().mapToLong(l -> "SELL".equals(l.action())
-                ? l.grossAmountCents() : -l.grossAmountCents()).sum() - fees;
+        List<PreparedLeg> legs = prepareLegs(input.legs(), fees, event,
+                occurred.atZoneSameInstant(MARKET_ZONE).toLocalDate());
+        long computedCash = Math.negateExact(fees);
+        for (PreparedLeg leg : legs) {
+            long signed = "SELL".equals(leg.action()) ? leg.grossAmountCents()
+                    : Math.negateExact(leg.grossAmountCents());
+            computedCash = Math.addExact(computedCash, signed);
+        }
         long cashEffect;
         if (CASH_EVENTS.contains(event)) {
             if (!legs.isEmpty()) throw new IllegalArgumentException(event + " does not take security legs");
             if (input.cashAmountCents() == null) throw new IllegalArgumentException("cash amount is required for " + event);
+            if (input.cashAmountCents() == 0) throw new IllegalArgumentException("cash amount cannot be zero for " + event);
+            if (fees != 0) throw new IllegalArgumentException("cash-only activity cannot carry separate leg fees; record a FEE event instead");
             cashEffect = normalizedCash(event, input.cashAmountCents());
             if ("FEE".equals(event)) fees = Math.abs(cashEffect);
         } else {
             if (legs.isEmpty()) throw new IllegalArgumentException(event + " requires at least one security leg");
-            if (input.cashAmountCents() != null && Math.abs(input.cashAmountCents() - computedCash) > 1) {
+            if (input.cashAmountCents() != null && !withinOneCent(input.cashAmountCents(), computedCash)) {
                 throw new IllegalArgumentException("The stated cash effect does not reconcile with the exact legs and fees: legs produce "
                         + Money.fmt(computedCash) + " but the transaction says " + Money.fmt(input.cashAmountCents()) + ".");
             }
@@ -309,9 +353,9 @@ public final class PortfolioAccountingService {
     public List<TransactionView> transactions(String ownerId, String accountId, int page, int size) {
         AccountProfile account = account(ownerId, accountId);
         int bounded = Math.max(1, Math.min(500, size));
-        int offset = Math.max(0, page) * bounded;
+        long offset = Math.multiplyExact((long) Math.max(0, page), bounded);
         return db.with(c -> Db.queryOn(c, "SELECT id FROM portfolio_transaction WHERE portfolio_account_id=? "
-                        + "ORDER BY occurred_at DESC,id DESC LIMIT ? OFFSET ?", r -> r.str("id"),
+                        + "ORDER BY occurred_at DESC,record_seq DESC LIMIT ? OFFSET ?", r -> r.str("id"),
                 account.id(), bounded, offset).stream().map(id -> {
                     try { return transaction(c, account.id(), id); }
                     catch (SQLException e) { throw new Db.DbException(e); }
@@ -320,102 +364,131 @@ public final class PortfolioAccountingService {
 
     public List<LotView> lots(String ownerId, String accountId, boolean includeClosed) {
         AccountProfile account = account(ownerId, accountId);
-        String sql = "SELECT * FROM portfolio_lot WHERE portfolio_account_id=?"
-                + (includeClosed ? "" : " AND status='OPEN'") + " ORDER BY symbol,instrument_type,opened_at,id";
+        String sql = "SELECT l.* FROM portfolio_lot l JOIN portfolio_transaction t ON t.id=l.opening_transaction_id "
+                + "WHERE l.portfolio_account_id=?" + (includeClosed ? "" : " AND l.status='OPEN'")
+                + " ORDER BY l.symbol,l.instrument_type,l.opened_at,t.record_seq,l.id";
         return db.query(sql, PortfolioAccountingService::mapLotView, account.id());
     }
 
     public List<RealizedLotView> realizedLots(String ownerId, String accountId, int year) {
         AccountProfile account = account(ownerId, accountId);
         return db.query("SELECT m.*,l.symbol,l.instrument_type,l.side FROM portfolio_lot_match m JOIN portfolio_lot l ON l.id=m.lot_id "
-                        + "WHERE m.portfolio_account_id=? AND EXTRACT(YEAR FROM m.closed_at)=? ORDER BY m.closed_at,m.id",
+                        + "WHERE m.portfolio_account_id=? AND EXTRACT(YEAR FROM (m.closed_at AT TIME ZONE 'America/New_York'))=? "
+                        + "ORDER BY m.closed_at,m.id",
                 PortfolioAccountingService::mapRealized, account.id(), year);
     }
 
     // ---- Valuation, performance, and taxes ----
 
     public ValuationView addValuation(String ownerId, String accountId, ValuationInput input) {
-        AccountProfile account = account(ownerId, accountId);
         if (input == null || input.totalValueCents() == null) throw new IllegalArgumentException("total account value is required");
         if (input.totalValueCents() < 0) throw new IllegalArgumentException("total account value cannot be negative");
         OffsetDateTime asOf = parseTime(input.asOf());
+        requireNotFuture(input.asOf(), asOf, "valuation");
         if (input.cashCents() != null && input.securitiesValueCents() != null
-                && input.cashCents() + input.securitiesValueCents() != input.totalValueCents()) {
+                && exactValuationTotal(input.cashCents(), input.securitiesValueCents()) != input.totalValueCents()) {
             throw new IllegalArgumentException("cash plus securities value must equal total account value");
         }
         String source = input.source() == null || input.source().isBlank() ? "MANUAL"
                 : enumValue(input.source(), List.of("MANUAL", "BROKER", "CALCULATED", "IMPORT"), "valuation source");
         String id = Ids.newId("pval");
-        db.exec("INSERT INTO portfolio_valuation(id,portfolio_account_id,as_of,cash_cents,securities_value_cents,total_value_cents,"
-                        + "source,external_ref,notes) VALUES (?,?,?,?,?,?,?,?,?)",
-                id, account.id(), asOf, input.cashCents(), input.securitiesValueCents(), input.totalValueCents(),
-                source, trim(input.externalRef(), 160), trim(input.notes(), 1000));
-        return new ValuationView(id, account.id(), asOf.toString(), input.cashCents(), input.securitiesValueCents(),
-                input.totalValueCents(), source, trim(input.externalRef(), 160), trim(input.notes(), 1000));
+        String owner = owner(ownerId);
+        return db.tx(c -> {
+            AccountProfile account = requireAccount(c, owner, accountId, true);
+            requireActive(account);
+            Db.execOn(c, "INSERT INTO portfolio_valuation(id,portfolio_account_id,as_of,cash_cents,securities_value_cents,total_value_cents,"
+                            + "source,external_ref,notes) VALUES (?,?,?,?,?,?,?,?,?)",
+                    id, account.id(), asOf, input.cashCents(), input.securitiesValueCents(), input.totalValueCents(),
+                    source, trim(input.externalRef(), 160), trim(input.notes(), 1000));
+            return new ValuationView(id, account.id(), asOf.toString(), input.cashCents(), input.securitiesValueCents(),
+                    input.totalValueCents(), source, trim(input.externalRef(), 160), trim(input.notes(), 1000));
+        });
     }
 
     public PerformanceView performance(String ownerId, String accountId) {
-        AccountProfile account = account(ownerId, accountId);
-        List<ValuationView> values = db.query("SELECT * FROM portfolio_valuation WHERE portfolio_account_id=? ORDER BY as_of,id",
-                PortfolioAccountingService::mapValuation, account.id());
-        long interest = income(account.id(), "INTEREST", null);
-        long dividends = income(account.id(), "DIVIDEND", null);
-        if (values.size() < 2) {
-            return new PerformanceView(values, values.isEmpty() ? null : values.getFirst().totalValueCents(),
-                    values.isEmpty() ? null : values.getLast().totalValueCents(), 0, null, null, null,
-                    interest, dividends, "Record at least two account-value snapshots to calculate a contribution-adjusted return.");
-        }
-        OffsetDateTime start = OffsetDateTime.parse(values.getFirst().asOf());
-        OffsetDateTime end = OffsetDateTime.parse(values.getLast().asOf());
-        double totalSeconds = Math.max(1, Duration.between(start, end).toSeconds());
-        List<long[]> flows = db.query("SELECT cash_effect_cents,EXTRACT(EPOCH FROM (occurred_at-?::timestamptz)) AS secs "
-                        + "FROM portfolio_transaction WHERE portfolio_account_id=? AND occurred_at>? AND occurred_at<=? "
-                        + "AND event_type IN ('DEPOSIT','WITHDRAWAL','TRANSFER_IN','TRANSFER_OUT')",
-                r -> new long[]{r.lng("cash_effect_cents"), Math.round(r.dbl("secs"))}, start, account.id(), start, end);
-        long netFlows = flows.stream().mapToLong(f -> f[0]).sum();
-        double weightedFlows = flows.stream().mapToDouble(f -> f[0] * Math.max(0, totalSeconds - f[1]) / totalSeconds).sum();
-        long begin = values.getFirst().totalValueCents();
-        long finish = values.getLast().totalValueCents();
-        long gain = finish - begin - netFlows;
-        double denominator = begin + weightedFlows;
-        Double dietz = denominator == 0 ? null : gain / denominator;
-        long days = Math.max(1, ChronoUnit.DAYS.between(start.toLocalDate(), end.toLocalDate()));
-        Double annualized = dietz == null || dietz <= -1 || days < 30 ? null
-                : Math.pow(1 + dietz, 365.0 / days) - 1;
-        return new PerformanceView(values, begin, finish, netFlows, gain, dietz, annualized,
-                interest, dividends, "Modified Dietz weights external cash flows by time in the account; returns are only as complete as the recorded valuations and flows.");
+        String owner = owner(ownerId);
+        return db.tx(c -> {
+            AccountProfile account = requireAccount(c, owner, accountId, true);
+            List<ValuationView> values = Db.queryOn(c,
+                    "SELECT * FROM portfolio_valuation WHERE portfolio_account_id=? ORDER BY as_of,id",
+                    PortfolioAccountingService::mapValuation, account.id());
+            long interest = incomeOn(c, account.id(), "INTEREST", null);
+            long dividends = incomeOn(c, account.id(), "DIVIDEND", null);
+            if (values.size() < 2) {
+                return new PerformanceView(values, values.isEmpty() ? null : values.getFirst().totalValueCents(),
+                        values.isEmpty() ? null : values.getLast().totalValueCents(), 0, null, null, null,
+                        interest, dividends, "Record at least two account-value snapshots to calculate a contribution-adjusted return.");
+            }
+            OffsetDateTime start = OffsetDateTime.parse(values.getFirst().asOf());
+            OffsetDateTime end = OffsetDateTime.parse(values.getLast().asOf());
+            double totalSeconds = Math.max(1, Duration.between(start, end).toSeconds());
+            List<long[]> flows = Db.queryOn(c,
+                    "SELECT cash_effect_cents,EXTRACT(EPOCH FROM (occurred_at-?::timestamptz)) AS secs "
+                            + "FROM portfolio_transaction WHERE portfolio_account_id=? AND occurred_at>? AND occurred_at<=? "
+                            + "AND event_type IN ('DEPOSIT','WITHDRAWAL','TRANSFER_IN','TRANSFER_OUT')",
+                    r -> new long[]{r.lng("cash_effect_cents"), Math.round(r.dbl("secs"))},
+                    start, account.id(), start, end);
+            long netFlows = 0;
+            for (long[] flow : flows) netFlows = Math.addExact(netFlows, flow[0]);
+            double weightedFlows = flows.stream().mapToDouble(f ->
+                    f[0] * (Math.max(0, totalSeconds - f[1]) / (double) totalSeconds)).sum();
+            long begin = values.getFirst().totalValueCents();
+            long finish = values.getLast().totalValueCents();
+            long gain = Math.subtractExact(Math.subtractExact(finish, begin), netFlows);
+            double denominator = begin + weightedFlows;
+            Double dietz = denominator == 0 ? null : gain / denominator;
+            long days = Math.max(1, ChronoUnit.DAYS.between(start.toLocalDate(), end.toLocalDate()));
+            Double annualized = dietz == null || dietz <= -1 || days < 30 ? null
+                    : Math.pow(1 + dietz, 365.0 / days) - 1;
+            return new PerformanceView(values, begin, finish, netFlows, gain, dietz, annualized,
+                    interest, dividends, "Modified Dietz weights external cash flows by time in the account; returns are only as complete as the recorded valuations and flows.");
+        });
     }
 
     public TaxReport taxReport(String ownerId, String accountId, int year) {
-        AccountProfile account = account(ownerId, accountId);
         if (year < 1970 || year > 9999) throw new IllegalArgumentException("invalid tax year");
-        List<RealizedLotView> realized = realizedLots(ownerId, accountId, year);
-        long st = realized.stream().filter(r -> "SHORT_TERM".equals(r.holdingTerm())).mapToLong(RealizedLotView::realizedGainCents).sum();
-        long lt = realized.stream().filter(r -> "LONG_TERM".equals(r.holdingTerm())).mapToLong(RealizedLotView::realizedGainCents).sum();
-        long interest = income(account.id(), "INTEREST", year);
-        long ordinaryDiv = incomeByCategory(account.id(), year, "ORDINARY_DIVIDEND");
-        long qualifiedDiv = incomeByCategory(account.id(), year, "QUALIFIED_DIVIDEND");
-        long capDist = incomeByCategory(account.id(), year, "CAPITAL_GAIN_DISTRIBUTION");
-        long wash = realized.stream().mapToLong(RealizedLotView::washSaleAdjustmentCents).sum();
-        Long federal = null, state = null, total = null;
-        String note;
-        if (!account.currentlyTaxable()) {
-            federal = state = total = 0L;
-            note = "This wrapper has no current per-trade capital-gains estimate. Contributions, withdrawals, conversions, penalties, and future distributions follow separate tax rules.";
-        } else if (account.shortTermTaxRateBps() != null && account.longTermTaxRateBps() != null
-                && account.ordinaryTaxRateBps() != null) {
-            federal = taxAt(st, account.shortTermTaxRateBps())
-                    + taxAt(interest + ordinaryDiv, account.ordinaryTaxRateBps())
-                    + taxAt(lt + capDist + qualifiedDiv, account.longTermTaxRateBps());
-            state = account.stateTaxRateBps() == null ? null
-                    : taxAt(st + lt + interest + ordinaryDiv + qualifiedDiv + capDist, account.stateTaxRateBps());
-            total = federal + (state == null ? 0 : state);
-            note = taxLimitNote();
-        } else {
-            note = "Basis and holding periods are calculated, but a tax estimate needs the account's short-term, long-term, and ordinary-income rates. " + taxLimitNote();
-        }
-        return new TaxReport(year, account.accountType(), st, lt, interest, ordinaryDiv, qualifiedDiv,
-                capDist, wash, federal, state, total, realized, note);
+        String owner = owner(ownerId);
+        return db.tx(c -> {
+            AccountProfile account = requireAccount(c, owner, accountId, true);
+            List<RealizedLotView> realized = Db.queryOn(c,
+                    "SELECT m.*,l.symbol,l.instrument_type,l.side FROM portfolio_lot_match m "
+                            + "JOIN portfolio_lot l ON l.id=m.lot_id WHERE m.portfolio_account_id=? "
+                            + "AND EXTRACT(YEAR FROM (m.closed_at AT TIME ZONE 'America/New_York'))=? ORDER BY m.closed_at,m.id",
+                    PortfolioAccountingService::mapRealized, account.id(), year);
+            long st = exactSum(realized.stream().filter(r -> "SHORT_TERM".equals(r.holdingTerm()))
+                    .map(RealizedLotView::realizedGainCents).toList(), "short-term gains");
+            long lt = exactSum(realized.stream().filter(r -> "LONG_TERM".equals(r.holdingTerm()))
+                    .map(RealizedLotView::realizedGainCents).toList(), "long-term gains");
+            long interest = incomeOn(c, account.id(), "INTEREST", year);
+            long ordinaryDiv = incomeByCategoryOn(c, account.id(), year, "ORDINARY_DIVIDEND");
+            long qualifiedDiv = incomeByCategoryOn(c, account.id(), year, "QUALIFIED_DIVIDEND");
+            long capDist = incomeByCategoryOn(c, account.id(), year, "CAPITAL_GAIN_DISTRIBUTION");
+            long wash = exactSum(realized.stream().map(RealizedLotView::washSaleAdjustmentCents).toList(),
+                    "wash-sale adjustments");
+            Long federal = null, state = null, total = null;
+            String note;
+            if (!account.currentlyTaxable()) {
+                federal = state = total = 0L;
+                note = "This wrapper has no current per-trade capital-gains estimate. Contributions, withdrawals, conversions, penalties, and future distributions follow separate tax rules.";
+            } else if (st < 0 || lt < 0) {
+                note = "Basis and realized losses are calculated, but a tax estimate is withheld because loss netting, carryovers, and the rest of the tax return are not recorded here. "
+                        + taxLimitNote();
+            } else if (account.shortTermTaxRateBps() != null && account.longTermTaxRateBps() != null
+                    && account.ordinaryTaxRateBps() != null) {
+                federal = Math.addExact(taxAt(st, account.shortTermTaxRateBps()),
+                        Math.addExact(taxAt(Math.addExact(interest, ordinaryDiv), account.ordinaryTaxRateBps()),
+                                taxAt(Math.addExact(lt, Math.addExact(capDist, qualifiedDiv)), account.longTermTaxRateBps())));
+                state = account.stateTaxRateBps() == null ? null
+                        : taxAt(Math.addExact(Math.addExact(Math.addExact(st, lt), Math.addExact(interest, ordinaryDiv)),
+                                Math.addExact(qualifiedDiv, capDist)), account.stateTaxRateBps());
+                total = Math.addExact(federal, state == null ? 0 : state);
+                note = taxLimitNote();
+            } else {
+                note = "Basis and holding periods are calculated, but a tax estimate needs the account's short-term, long-term, and ordinary-income rates. " + taxLimitNote();
+            }
+            return new TaxReport(year, account.accountType(), st, lt, interest, ordinaryDiv, qualifiedDiv,
+                    capDist, wash, federal, state, total, realized, note);
+        });
     }
 
     /**
@@ -423,8 +496,24 @@ public final class PortfolioAccountingService {
      * never a midpoint. A missing mark makes aggregate value/P&L unavailable instead of becoming $0.
      */
     public PortfolioSummary summary(String ownerId, String accountId) {
-        AccountProfile account = account(ownerId, accountId);
-        List<LotView> open = lots(ownerId, accountId, false);
+        String owner = owner(ownerId);
+        SummaryLedgerSnapshot ledger = db.tx(c -> {
+            AccountProfile account = requireAccount(c, owner, accountId, true);
+            List<LotView> openLots = Db.queryOn(c,
+                    "SELECT l.* FROM portfolio_lot l JOIN portfolio_transaction t ON t.id=l.opening_transaction_id "
+                            + "WHERE l.portfolio_account_id=? AND l.status='OPEN' "
+                            + "ORDER BY l.symbol,l.instrument_type,l.opened_at,t.record_seq,l.id",
+                    PortfolioAccountingService::mapLotView, account.id());
+            return new SummaryLedgerSnapshot(account, openLots,
+                    scalarOn(c, "SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?", account.id()),
+                    scalarOn(c, "SELECT COALESCE(SUM(realized_gain_cents),0) n FROM portfolio_lot_match WHERE portfolio_account_id=?", account.id()),
+                    scalarOn(c, "SELECT COALESCE(SUM(fees_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?", account.id()),
+                    scalarOn(c, "SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=? "
+                            + "AND event_type IN ('DEPOSIT','WITHDRAWAL','TRANSFER_IN','TRANSFER_OUT')", account.id()),
+                    incomeOn(c, account.id(), "INTEREST", null), incomeOn(c, account.id(), "DIVIDEND", null));
+        });
+        AccountProfile account = ledger.account();
+        List<LotView> open = ledger.openLots();
         Map<String, List<LotView>> groups = new LinkedHashMap<>();
         for (LotView lot : open) groups.computeIfAbsent(lotKey(lot), ignored -> new ArrayList<>()).add(lot);
 
@@ -436,8 +525,12 @@ public final class PortfolioAccountingService {
         for (var entry : groups.entrySet()) {
             List<LotView> lots = entry.getValue();
             LotView first = lots.getFirst();
-            long quantity = lots.stream().mapToLong(LotView::remainingQuantity).sum();
-            long openAmount = lots.stream().mapToLong(LotView::remainingOpenAmountCents).sum();
+            long quantity = 0;
+            long openAmount = 0;
+            for (LotView lot : lots) {
+                quantity = Math.addExact(quantity, lot.remainingQuantity());
+                openAmount = Math.addExact(openAmount, lot.remainingOpenAmountCents());
+            }
             Optional<MarksSource.LegMark> mark = mark(first);
             BigDecimal closePrice = null;
             Long value = null;
@@ -470,23 +563,19 @@ public final class PortfolioAccountingService {
                     evidence.provenance().name(), evidence.age().name(), evidence.source(), rowComplete));
         }
 
-        long cash = scalar("SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?",
-                account.id());
-        long realized = scalar("SELECT COALESCE(SUM(realized_gain_cents),0) n FROM portfolio_lot_match WHERE portfolio_account_id=?",
-                account.id());
-        long fees = scalar("SELECT COALESCE(SUM(fees_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?",
-                account.id());
-        long flows = scalar("SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=? "
-                        + "AND event_type IN ('DEPOSIT','WITHDRAWAL','TRANSFER_IN','TRANSFER_OUT')", account.id());
+        long cash = ledger.cashCents();
+        long realized = ledger.realizedCents();
+        long fees = ledger.feesCents();
+        long flows = ledger.externalFlowsCents();
         CollateralView collateral = collateral(open, cash);
         List<AllocationView> allocation = allocation(positions, cash);
         Long securities = complete ? knownSecurities : null;
         Long total = complete ? Math.addExact(cash, knownSecurities) : null;
         Long unrealized = complete ? knownUnrealized : null;
         return new PortfolioSummary(account, cash, securities, total, realized, unrealized,
-                income(account.id(), "INTEREST", null), income(account.id(), "DIVIDEND", null), fees, flows,
+                ledger.interestCents(), ledger.dividendCents(), fees, flows,
                 collateral, positions, allocation, List.copyOf(missing), complete,
-                "Current liquidation at executable closing sides; fees to close and broker-specific margin rules are not modeled. Missing marks never become zero.");
+                "Current liquidation uses observed or broker marks at executable closing sides. Demo, simulated, and modeled marks are never applied to tracked external accounts. Fees to close and broker-specific margin rules are not modeled. Missing marks never become zero.");
     }
 
     private Optional<MarksSource.LegMark> mark(LotView lot) {
@@ -498,7 +587,11 @@ public final class PortfolioAccountingService {
             leg = Leg.option(LegAction.BUY, OptionType.valueOf(lot.optionType()), lot.strike(),
                     lot.expiration(), 1, BigDecimal.ZERO);
         }
-        return marks.legMark(lot.symbol(), leg);
+        return marks.legMark(lot.symbol(), leg).filter(mark -> {
+            DataEvidence evidence = mark.evidence() == null
+                    ? DataEvidence.of(null, mark.freshness()) : mark.evidence();
+            return evidence.executableIn(MarketLane.OBSERVED);
+        });
     }
 
     private CollateralView collateral(List<LotView> lots, long cash) {
@@ -567,29 +660,34 @@ public final class PortfolioAccountingService {
     }
 
     private static List<CollateralLot> collateralLots(List<LotView> lots, String type, String side) {
+        Comparator<LotView> byStrike = "PUT".equals(type)
+                ? Comparator.comparing(LotView::strike).reversed()
+                : Comparator.comparing(LotView::strike);
         return lots.stream().filter(l -> "OPTION".equals(l.instrumentType()) && type.equals(l.optionType())
                         && side.equals(l.side()))
                 .sorted(Comparator.comparing(LotView::symbol).thenComparing(LotView::expiration)
-                        .thenComparing(LotView::strike).reversed())
+                        .thenComparing(byStrike))
                 .map(l -> new CollateralLot(l.symbol(), l.expiration(), l.multiplier(), l.strike(), l.remainingQuantity()))
                 .toList();
     }
 
     private static List<AllocationView> allocation(List<PositionView> positions, long cash) {
         Map<String, long[]> values = new LinkedHashMap<>();
-        if (cash != 0) values.put("CASH", new long[]{cash, Math.abs(cash)});
+        if (cash != 0) values.put("CASH", new long[]{cash, absolute(cash, "cash exposure")});
         for (PositionView p : positions) if (p.liquidationValueCents() != null) {
             long[] row = values.computeIfAbsent(p.symbol(), ignored -> new long[2]);
             row[0] = Math.addExact(row[0], p.liquidationValueCents());
-            row[1] = Math.addExact(row[1], Math.abs(p.liquidationValueCents()));
+            row[1] = Math.addExact(row[1], absolute(p.liquidationValueCents(), "position exposure"));
         }
-        long gross = values.values().stream().mapToLong(v -> v[1]).sum();
+        long gross = 0;
+        for (long[] value : values.values()) gross = Math.addExact(gross, value[1]);
+        long knownGross = gross;
         return values.entrySet().stream().map(e -> new AllocationView(e.getKey(), e.getValue()[0], e.getValue()[1],
-                gross == 0 ? null : e.getValue()[1] / (double) gross)).toList();
+                knownGross == 0 ? null : e.getValue()[1] / (double) knownGross)).toList();
     }
 
-    private long scalar(String sql, Object... args) {
-        return db.query(sql, r -> r.lng("n"), args).getFirst();
+    private static long scalarOn(Connection c, String sql, Object... args) throws SQLException {
+        return Db.queryOn(c, sql, r -> r.lng("n"), args).getFirst();
     }
 
     private static String lotKey(LotView lot) {
@@ -648,8 +746,9 @@ public final class PortfolioAccountingService {
         if (!"CLOSE".equals(option.positionEffect()) || option.price().signum() != 0) {
             throw new IllegalArgumentException(event + " option leg must CLOSE at $0; its premium transfers into stock basis/proceeds");
         }
-        if (!option.symbol().equals(stock.symbol()) || stock.quantity() != option.quantity() * 100L) {
-            throw new IllegalArgumentException(event + " stock quantity must equal option contracts x 100 for the same symbol");
+        long deliverable = Math.multiplyExact(option.quantity(), (long) option.multiplier());
+        if (!option.symbol().equals(stock.symbol()) || stock.quantity() != deliverable) {
+            throw new IllegalArgumentException(event + " stock quantity must equal option contracts x multiplier for the same symbol");
         }
         if (stock.price().compareTo(option.strike()) != 0) {
             throw new IllegalArgumentException(event + " stock price must equal the option strike");
@@ -661,13 +760,13 @@ public final class PortfolioAccountingService {
         boolean put = "PUT".equals(option.optionType());
         long adjustment;
         if (("SHORT".equals(expectedSide) && put) || ("LONG".equals(expectedSide) && !put)) {
-            if (!"BUY".equals(stock.action()) || !"OPEN".equals(stock.positionEffect())) {
-                throw new IllegalArgumentException(event + " of this option requires BUY/OPEN stock");
+            if (!"BUY".equals(stock.action())) {
+                throw new IllegalArgumentException(event + " of this option requires a BUY stock leg");
             }
             adjustment = "SHORT".equals(expectedSide) ? -transferred : transferred;
         } else {
-            if (!"SELL".equals(stock.action()) || !"CLOSE".equals(stock.positionEffect())) {
-                throw new IllegalArgumentException(event + " of this option requires SELL/CLOSE stock");
+            if (!"SELL".equals(stock.action())) {
+                throw new IllegalArgumentException(event + " of this option requires a SELL stock leg");
             }
             adjustment = "SHORT".equals(expectedSide) ? transferred : -transferred;
         }
@@ -679,7 +778,8 @@ public final class PortfolioAccountingService {
                            PreparedLeg leg, long totalCloseAmount, boolean rolled) throws SQLException {
         String side = "BUY".equals(leg.action()) ? "SHORT" : "LONG";
         List<LotRow> candidates = matchingLots(c, account, leg, side);
-        long available = candidates.stream().mapToLong(LotRow::remainingQuantity).sum();
+        long available = 0;
+        for (LotRow candidate : candidates) available = Math.addExact(available, candidate.remainingQuantity());
         if (available < leg.quantity()) {
             throw new IllegalStateException("Cannot close " + leg.quantity() + " " + leg.symbol() + " "
                     + leg.instrumentType().toLowerCase(Locale.ROOT) + " units; only " + available + " matching "
@@ -693,40 +793,45 @@ public final class PortfolioAccountingService {
             long qty = Math.min(remainingQty, lot.remainingQuantity());
             long openPart = allocate(lot.remainingOpenAmount(), qty, lot.remainingQuantity());
             long closePart = remainingQty == qty ? remainingClose : allocate(remainingClose, qty, remainingQty);
-            long realized = rolled ? 0 : "LONG".equals(side) ? closePart - openPart : openPart - closePart;
+            long realized = rolled ? 0 : "LONG".equals(side)
+                    ? Math.subtractExact(closePart, openPart) : Math.subtractExact(openPart, closePart);
             String term = rolled ? "ROLLED" : holdingTerm(lot, occurred);
             Db.execOn(c, "INSERT INTO portfolio_lot_match(portfolio_account_id,lot_id,closing_transaction_id,closing_leg_no,"
                             + "quantity,opened_at,closed_at,open_amount_cents,close_amount_cents,realized_gain_cents,holding_term) "
                             + "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     account.id(), lot.id(), txId, leg.legNo(), qty, OffsetDateTime.parse(lot.openedAt()), occurred,
                     openPart, rolled ? openPart : closePart, realized, term);
-            long lotQtyAfter = lot.remainingQuantity() - qty;
-            long lotAmountAfter = lot.remainingOpenAmount() - openPart;
+            long lotQtyAfter = Math.subtractExact(lot.remainingQuantity(), qty);
+            long lotAmountAfter = Math.subtractExact(lot.remainingOpenAmount(), openPart);
             Db.execOn(c, "UPDATE portfolio_lot SET remaining_quantity=?,remaining_open_amount_cents=?,status=? WHERE id=?",
                     lotQtyAfter, lotAmountAfter, lotQtyAfter == 0 ? (rolled ? "ROLLED" : "CLOSED") : "OPEN", lot.id());
-            remainingQty -= qty;
-            remainingClose -= closePart;
-            transferred += openPart;
+            remainingQty = Math.subtractExact(remainingQty, qty);
+            remainingClose = Math.subtractExact(remainingClose, closePart);
+            transferred = Math.addExact(transferred, openPart);
         }
         return transferred;
     }
 
     private List<LotRow> matchingLots(Connection c, AccountProfile account, PreparedLeg leg, String side) throws SQLException {
         String order = switch (account.lotMethod()) {
-            case "LIFO" -> "opened_at DESC,id DESC";
-            case "HIFO" -> "(remaining_open_amount_cents::numeric/remaining_quantity) DESC,opened_at,id";
-            default -> "opened_at,id";
+            case "LIFO" -> "l.opened_at DESC,t.record_seq DESC,l.id DESC";
+            case "HIFO" -> "(l.remaining_open_amount_cents::numeric/l.remaining_quantity) "
+                    + ("SHORT".equals(side) ? "ASC" : "DESC") + ",l.opened_at,t.record_seq,l.id";
+            default -> "l.opened_at,t.record_seq,l.id";
         };
-        return Db.queryOn(c, "SELECT * FROM portfolio_lot WHERE portfolio_account_id=? AND status='OPEN' "
-                        + "AND instrument_type=? AND side=? AND symbol=? AND option_type IS NOT DISTINCT FROM ? "
-                        + "AND strike IS NOT DISTINCT FROM ? AND expiration IS NOT DISTINCT FROM ? AND multiplier=? ORDER BY " + order + " FOR UPDATE",
+        return Db.queryOn(c, "SELECT l.* FROM portfolio_lot l JOIN portfolio_transaction t ON t.id=l.opening_transaction_id "
+                        + "WHERE l.portfolio_account_id=? AND l.status='OPEN' "
+                        + "AND l.instrument_type=? AND l.side=? AND l.symbol=? AND l.option_type IS NOT DISTINCT FROM ? "
+                        + "AND l.strike IS NOT DISTINCT FROM ? AND l.expiration IS NOT DISTINCT FROM ? AND l.multiplier=? ORDER BY " + order + " FOR UPDATE OF l",
                 PortfolioAccountingService::mapLot, account.id(), leg.instrumentType(), side, leg.symbol(),
                 leg.optionType(), leg.strike(), leg.expiration(), leg.multiplier());
     }
 
     private static String holdingTerm(LotRow lot, OffsetDateTime closed) {
         if ("SHORT".equals(lot.side())) return "SHORT_TERM";
-        long days = ChronoUnit.DAYS.between(OffsetDateTime.parse(lot.openedAt()).toLocalDate(), closed.toLocalDate());
+        long days = ChronoUnit.DAYS.between(
+                OffsetDateTime.parse(lot.openedAt()).atZoneSameInstant(MARKET_ZONE).toLocalDate(),
+                closed.atZoneSameInstant(MARKET_ZONE).toLocalDate());
         return days > 365 ? "LONG_TERM" : "SHORT_TERM";
     }
 
@@ -756,7 +861,7 @@ public final class PortfolioAccountingService {
 
     // ---- Mapping and validation ----
 
-    private List<PreparedLeg> prepareLegs(List<LegInput> raw, long fees, String event) {
+    private List<PreparedLeg> prepareLegs(List<LegInput> raw, long fees, String event, LocalDate eventDate) {
         List<LegInput> legs = raw == null ? List.of() : raw;
         List<PreparedLeg> base = new ArrayList<>();
         for (int i = 0; i < legs.size(); i++) {
@@ -785,20 +890,31 @@ public final class PortfolioAccountingService {
             if ("EXPIRATION".equals(event) && (!"CLOSE".equals(effect) || price.signum() != 0)) {
                 throw new IllegalArgumentException("Expiration legs must CLOSE at $0");
             }
+            if ("EXPIRATION".equals(event) && !"OPTION".equals(instrument)) {
+                throw new IllegalArgumentException("Expiration accepts option legs only");
+            }
+            if ("EXPIRATION".equals(event) && expiration.isAfter(eventDate)) {
+                throw new IllegalArgumentException("An option cannot be recorded as expired before its expiration date");
+            }
             long units = Math.multiplyExact(quantity, (long) multiplier);
             long gross = Money.centsFromPrice(price, units);
             base.add(new PreparedLeg(i, instrument, action, effect, symbol, optionType, strike,
                     expiration, quantity, multiplier, price, gross, 0));
         }
         if (base.isEmpty() || fees == 0) return base;
-        long totalGross = base.stream().mapToLong(PreparedLeg::grossAmountCents).sum();
+        long totalGross = 0;
+        long totalUnits = 0;
+        for (PreparedLeg leg : base) totalGross = Math.addExact(totalGross, leg.grossAmountCents());
+        for (PreparedLeg leg : base) totalUnits = Math.addExact(totalUnits,
+                Math.multiplyExact(leg.quantity(), (long) leg.multiplier()));
         long remaining = fees;
         List<PreparedLeg> allocated = new ArrayList<>(base.size());
         for (int i = 0; i < base.size(); i++) {
             PreparedLeg leg = base.get(i);
             long fee = i == base.size() - 1 ? remaining
-                    : totalGross == 0 ? 0 : BigDecimal.valueOf(fees).multiply(BigDecimal.valueOf(leg.grossAmountCents()))
-                    .divide(BigDecimal.valueOf(totalGross), 0, RoundingMode.HALF_UP).longValueExact();
+                    : proportionalFee(fees, totalGross == 0
+                            ? Math.multiplyExact(leg.quantity(), (long) leg.multiplier()) : leg.grossAmountCents(),
+                            totalGross == 0 ? totalUnits : totalGross);
             fee = Math.min(remaining, fee);
             remaining -= fee;
             allocated.add(new PreparedLeg(leg.legNo(), leg.instrumentType(), leg.action(), leg.positionEffect(),
@@ -806,6 +922,12 @@ public final class PortfolioAccountingService {
                     leg.price(), leg.grossAmountCents(), fee));
         }
         return allocated;
+    }
+
+    private static long proportionalFee(long fees, long weight, long totalWeight) {
+        if (fees == 0 || weight == 0 || totalWeight == 0) return 0;
+        return BigDecimal.valueOf(fees).multiply(BigDecimal.valueOf(weight))
+                .divide(BigDecimal.valueOf(totalWeight), 0, RoundingMode.HALF_UP).longValueExact();
     }
 
     private static void insertLeg(Connection c, String txId, PreparedLeg leg) throws SQLException {
@@ -885,34 +1007,42 @@ public final class PortfolioAccountingService {
                 r.str("source"), r.str("external_ref"), r.str("notes"));
     }
 
-    private long income(String accountId, String event, Integer year) {
-        String yearSql = year == null ? "" : " AND EXTRACT(YEAR FROM occurred_at)=?";
+    private static long incomeOn(Connection c, String accountId, String event, Integer year) throws SQLException {
+        String yearSql = year == null ? ""
+                : " AND EXTRACT(YEAR FROM (occurred_at AT TIME ZONE 'America/New_York'))=?";
         Object[] args = year == null ? new Object[]{accountId, event} : new Object[]{accountId, event, year};
-        return db.query("SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=? AND event_type=?" + yearSql,
-                r -> r.lng("n"), args).getFirst();
+        return scalarOn(c, "SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction "
+                + "WHERE portfolio_account_id=? AND event_type=?" + yearSql, args);
     }
 
-    private long incomeByCategory(String accountId, int year, String category) {
-        return db.query("SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=? "
-                        + "AND EXTRACT(YEAR FROM occurred_at)=? AND tax_category=?",
-                r -> r.lng("n"), accountId, year, category).getFirst();
+    private static long incomeByCategoryOn(Connection c, String accountId, int year,
+                                           String category) throws SQLException {
+        return scalarOn(c, "SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction "
+                + "WHERE portfolio_account_id=? "
+                + "AND EXTRACT(YEAR FROM (occurred_at AT TIME ZONE 'America/New_York'))=? AND tax_category=?",
+                accountId, year, category);
     }
 
     private static String normalizeTaxCategory(String raw, String event) {
-        if (raw == null || raw.isBlank()) {
-            return switch (event) {
-                case "INTEREST" -> "ORDINARY_INTEREST";
-                case "DIVIDEND" -> "ORDINARY_DIVIDEND";
-                default -> null;
-            };
+        if ("INTEREST".equals(event)) {
+            if (raw == null || raw.isBlank()) return "ORDINARY_INTEREST";
+            return enumValue(raw, List.of("ORDINARY_INTEREST"), "tax category for interest");
         }
-        return enumValue(raw, List.of("ORDINARY_INTEREST", "ORDINARY_DIVIDEND", "QUALIFIED_DIVIDEND",
-                "RETURN_OF_CAPITAL", "CAPITAL_GAIN_DISTRIBUTION"), "tax category");
+        if ("DIVIDEND".equals(event)) {
+            if (raw == null || raw.isBlank()) return "ORDINARY_DIVIDEND";
+            return enumValue(raw, List.of("ORDINARY_DIVIDEND", "QUALIFIED_DIVIDEND",
+                    "CAPITAL_GAIN_DISTRIBUTION"), "tax category for a dividend");
+        }
+        if (raw != null && !raw.isBlank()) {
+            throw new IllegalArgumentException("tax category applies only to interest or dividend activity");
+        }
+        return null;
     }
 
     private static long normalizedCash(String event, long amount) {
+        if (amount == Long.MIN_VALUE) throw new IllegalArgumentException("cash amount is outside the supported range");
         return switch (event) {
-            case "DEPOSIT", "TRANSFER_IN", "INTEREST", "DIVIDEND" -> Math.abs(amount);
+            case "OPENING_BALANCE", "DEPOSIT", "TRANSFER_IN", "INTEREST", "DIVIDEND" -> Math.abs(amount);
             case "WITHDRAWAL", "TRANSFER_OUT", "FEE" -> -Math.abs(amount);
             case "ADJUSTMENT" -> amount;
             default -> throw new IllegalArgumentException("not a cash event " + event);
@@ -930,8 +1060,47 @@ public final class PortfolioAccountingService {
                 .divide(BigDecimal.valueOf(10_000), 0, RoundingMode.HALF_UP).longValueExact();
     }
 
+    private static long exactValuationTotal(long cash, long securities) {
+        try { return Math.addExact(cash, securities); }
+        catch (ArithmeticException e) { throw new IllegalArgumentException("valuation amounts exceed the supported range"); }
+    }
+
+    private static long exactSum(List<Long> values, String label) {
+        try {
+            long total = 0;
+            for (Long value : values) total = Math.addExact(total, value == null ? 0 : value);
+            return total;
+        } catch (ArithmeticException e) {
+            throw new IllegalArgumentException(label + " exceed the supported range");
+        }
+    }
+
+    private static long absolute(long value, String label) {
+        if (value == Long.MIN_VALUE) throw new IllegalArgumentException(label + " exceeds the supported range");
+        return Math.abs(value);
+    }
+
+    private static boolean withinOneCent(long first, long second) {
+        return first == second
+                || (first != Long.MAX_VALUE && first + 1 == second)
+                || (second != Long.MAX_VALUE && second + 1 == first);
+    }
+
+    private static void requireChronologicalMarketActivity(Connection c, String accountId,
+                                                           OffsetDateTime occurred) throws SQLException {
+        List<OffsetDateTime> latest = Db.queryOn(c,
+                "SELECT occurred_at FROM portfolio_transaction WHERE portfolio_account_id=? "
+                        + "AND event_type IN ('TRADE','EXPIRATION','ASSIGNMENT','EXERCISE') "
+                        + "ORDER BY occurred_at DESC,record_seq DESC LIMIT 1",
+                r -> r.odt("occurred_at"), accountId);
+        if (!latest.isEmpty() && latest.getFirst().isAfter(occurred)) {
+            throw new IllegalStateException("Market activity must be recorded oldest to newest so tax-lot matches remain exact. "
+                    + "Import a chronological history into a new tracked account when adding older activity.");
+        }
+    }
+
     private static String taxLimitNote() {
-        return "Estimate only: this does not apply wash-sale deferrals automatically, qualified-covered-call rules, Section 1256 treatment, straddle rules, loss limits, state-specific rules, or filing elections. Reconcile against broker tax forms.";
+        return "Estimate only: this does not apply wash-sale deferrals automatically, qualified-covered-call rules, Section 1256 treatment, straddle rules, loss limits or carryovers, state-specific rules, or filing elections. Reconcile against broker tax forms.";
     }
 
     private static void validateRate(Integer bps, String label) {
@@ -945,6 +1114,25 @@ public final class PortfolioAccountingService {
             // Noon UTC preserves the user's calendar date across every ordinary local offset.
             try { return LocalDate.parse(raw).atTime(12, 0).atOffset(ZoneOffset.UTC); }
             catch (RuntimeException e) { throw new IllegalArgumentException("date/time must be ISO-8601"); }
+        }
+    }
+
+    private void requireNotFuture(String raw, OffsetDateTime value, String label) {
+        if (raw != null && raw.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            LocalDate today = LocalDate.now(clock.withZone(ZoneId.systemDefault()));
+            if (LocalDate.parse(raw).isAfter(today)) {
+                throw new IllegalArgumentException(label + " date/time cannot be in the future");
+            }
+            return;
+        }
+        if (value.toInstant().isAfter(clock.instant().plus(Duration.ofMinutes(5)))) {
+            throw new IllegalArgumentException(label + " date/time cannot be in the future");
+        }
+    }
+
+    private static void requireActive(AccountProfile account) {
+        if (!"ACTIVE".equals(account.status())) {
+            throw new IllegalStateException("This tracked account is archived and read-only.");
         }
     }
 

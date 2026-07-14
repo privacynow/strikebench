@@ -209,7 +209,9 @@
             .indexOf((args[1] || '').split('?')[0]) >= 0;
         }
         if (name === 'portfolio') return !args.length
-          || ['construct', 'positions', 'active', 'closed', 'activity', 'record', 'account'].indexOf(args[0]) >= 0
+          || (args.length === 1 && ['construct', 'positions', 'active', 'closed', 'activity', 'record', 'account'].indexOf(args[0]) >= 0)
+          || (args[0] === 'book' && args.length === 2
+            && ['overview', 'activity', 'performance', 'tax', 'settings'].indexOf(args[1]) >= 0)
           || (args[0] === 'trade' && args.length === 2 && /^tr_[A-Za-z0-9_-]+$/.test(args[1]));
         if (name === 'data') return !args.length || (args.length === 1
           && ['overview', 'datasets', 'simulation', 'sources', 'admin'].indexOf(args[0]) >= 0);

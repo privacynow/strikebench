@@ -592,7 +592,7 @@ class PlanApiIntegrationTest {
 
         HttpResponse<String> rejected = delete("/api/sim/market/" + worldId);
         assertThat(rejected.statusCode()).isEqualTo(409);
-        assertThat(Json.parse(rejected.body()).path("detail").asText()).contains("decision is frozen");
+        assertThat(Json.parse(rejected.body()).path("detail").asText()).contains("archived and read-only");
         JsonNode after = json(get("/api/plans/" + planId));
         assertThat(after.get("status").asText()).isEqualTo("ARCHIVED");
         assertThat(after.get("version").asLong()).isEqualTo(frozenVersion);

@@ -1406,9 +1406,14 @@ class ApiIntegrationTest {
         assertThat(recorded.statusCode()).isEqualTo(201);
         JsonNode summary = Json.parse(get("/api/portfolio/accounts/" + id + "/summary").body());
         assertThat(summary.get("bookCashCents").asLong()).isEqualTo(9_750_000L);
+        assertThat(summary.get("complete").asBoolean()).isFalse();
+        assertThat(summary.has("totalValueCents")).isFalse();
+        assertThat(summary.get("valuationBasis").asText())
+                .contains("Demo, simulated, and modeled marks are never applied");
         assertThat(summary.get("positions")).singleElement().satisfies(p -> {
             assertThat(p.get("symbol").asText()).isEqualTo("AAPL");
-            assertThat(p.get("complete").asBoolean()).isTrue();
+            assertThat(p.get("complete").asBoolean()).isFalse();
+            assertThat(p.get("provenance").asText()).isEqualTo("MISSING");
         });
         assertThat(Json.parse(get("/api/account").body()).at("/account/startingCashCents").asLong())
                 .as("tracked brokerage activity never mutates practice money").isEqualTo(10_000_000L);

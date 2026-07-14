@@ -18,6 +18,8 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -45,12 +47,29 @@ class PortfolioAccountingServiceTest {
         assertThat(tracked.accountType()).isEqualTo("TAXABLE");
         assertThat(books.transactions("local", tracked.id(), 0, 20))
                 .singleElement().satisfies(tx -> {
-                    assertThat(tx.eventType()).isEqualTo("DEPOSIT");
+                    assertThat(tx.eventType()).isEqualTo("OPENING_BALANCE");
                     assertThat(tx.cashEffectCents()).isEqualTo(1_000_000L);
                 });
         assertThat(new AccountService(db, new AppConfig(Map.of("FIXTURES_ONLY", "true")), audit, CLOCK)
                 .get(paper.id()).cashCents()).isEqualTo(paper.cashCents());
         assertThat(db.query("SELECT COUNT(*) n FROM ledger", r -> r.lng("n")).getFirst()).isEqualTo(1);
+    }
+
+    @Test
+    void trackedAccountsAndEveryDerivedBookRemainOwnerScoped() {
+        var account = books.createAccount("owner-a", account("Owner A", "TAXABLE", 1_000_00L));
+        books.record("owner-a", account.id(), trade("2026-01-02", 0L,
+                leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100")));
+
+        assertThat(books.accounts("owner-b")).isEmpty();
+        assertThatThrownBy(() -> books.account("owner-b", account.id()))
+                .isInstanceOf(java.util.NoSuchElementException.class);
+        assertThatThrownBy(() -> books.summary("owner-b", account.id()))
+                .isInstanceOf(java.util.NoSuchElementException.class);
+        assertThatThrownBy(() -> books.record("owner-b", account.id(), cash(
+                "2026-01-03", "INTEREST", 1_00L, "cross-owner", null)))
+                .isInstanceOf(java.util.NoSuchElementException.class);
+        assertThat(books.transactions("owner-a", account.id(), 0, 20)).hasSize(2);
     }
 
     @Test
@@ -71,6 +90,33 @@ class PortfolioAccountingServiceTest {
         assertThat(realized.openAmountCents()).isEqualTo(20_02L);
         assertThat(realized.closeAmountCents()).isEqualTo(23_98L);
         assertThat(realized.realizedGainCents()).isEqualTo(3_96L);
+    }
+
+    @Test
+    void sameTimestampLotsUseAppendSequenceForDeterministicFifoAndLifo() {
+        var fifo = books.createAccount("local", account("FIFO", "TAXABLE", null));
+        books.record("local", fifo.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "fifo-first",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100"))));
+        books.record("local", fifo.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "fifo-second",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "200"))));
+        books.record("local", fifo.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "fifo-close",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "150"))));
+        assertThat(books.realizedLots("local", fifo.id(), 2026).getFirst().realizedGainCents()).isEqualTo(50_00L);
+        assertThat(books.lots("local", fifo.id(), false).getFirst().remainingOpenAmountCents()).isEqualTo(200_00L);
+        assertThat(books.transactions("local", fifo.id(), 0, 10))
+                .extracting(PortfolioAccountingService.TransactionView::externalRef)
+                .containsExactly("fifo-close", "fifo-second", "fifo-first");
+
+        var lifo = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "LIFO", "TAXABLE", null, "LIFO", null, null, null, null, null));
+        books.record("local", lifo.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "lifo-first",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100"))));
+        books.record("local", lifo.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "lifo-second",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "200"))));
+        books.record("local", lifo.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "lifo-close",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "150"))));
+        assertThat(books.realizedLots("local", lifo.id(), 2026).getFirst().realizedGainCents()).isEqualTo(-50_00L);
+        assertThat(books.lots("local", lifo.id(), false).getFirst().remainingOpenAmountCents()).isEqualTo(100_00L);
     }
 
     @Test
@@ -178,17 +224,162 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void taxYearAndHoldingPeriodUseTheNewYorkMarketCalendar() {
+        var taxable = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Taxable", "TAXABLE", null, "FIFO", 3000, 1500, 2400, null, null));
+        books.record("local", taxable.id(), tx("2024-12-31T23:30:00-05:00", "TRADE", null, 0L,
+                null, "BROKER", "late-open", List.of(
+                        leg("STOCK", "BUY", "OPEN", "MSFT", null, null, null, 1, 1, "100"))));
+        books.record("local", taxable.id(), tx("2025-01-02T10:00:00-05:00", "TRADE", null, 0L,
+                null, "BROKER", "year-open", List.of(
+                        leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100"))));
+        books.record("local", taxable.id(), tx("2025-12-31T23:30:00-05:00", "TRADE", null, 0L,
+                null, "BROKER", "year-close", List.of(
+                        leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "110"))));
+        books.record("local", taxable.id(), cash("2025-12-31T23:45:00-05:00", "INTEREST", 5_00L,
+                "year-interest", null));
+        books.record("local", taxable.id(), tx("2026-01-01T00:15:00-05:00", "TRADE", null, 0L,
+                null, "BROKER", "late-close", List.of(
+                        leg("STOCK", "SELL", "CLOSE", "MSFT", null, null, null, 1, 1, "120"))));
+
+        var year2025 = books.taxReport("local", taxable.id(), 2025);
+        assertThat(year2025.shortTermGainCents()).isEqualTo(10_00L);
+        assertThat(year2025.ordinaryInterestCents()).isEqualTo(5_00L);
+        var year2026 = books.taxReport("local", taxable.id(), 2026);
+        assertThat(year2026.longTermGainCents()).isEqualTo(20_00L);
+        assertThat(year2026.shortTermGainCents()).isZero();
+    }
+
+    @Test
+    void realizedLossesDoNotBecomeAStandaloneTaxRefundEstimate() {
+        var taxable = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Taxable loss", "TAXABLE", null, "FIFO", 3200, 1500, 2400, 500, null));
+        books.record("local", taxable.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "loss-buy",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 10, 1, "100"))));
+        books.record("local", taxable.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "loss-sell",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 10, 1, "80"))));
+
+        var tax = books.taxReport("local", taxable.id(), 2026);
+        assertThat(tax.shortTermGainCents()).isEqualTo(-200_00L);
+        assertThat(tax.estimatedFederalTaxCents()).isNull();
+        assertThat(tax.estimatedStateTaxCents()).isNull();
+        assertThat(tax.estimatedTotalTaxCents()).isNull();
+        assertThat(tax.note()).contains("loss netting").contains("carryovers");
+    }
+
+    @Test
+    void accountTaxWrapperCannotBeRewrittenAfterCreation() {
+        var taxable = books.createAccount("local", account("Taxable", "TAXABLE", 10_000_00L));
+
+        assertThatThrownBy(() -> books.updateAccount("local", taxable.id(), account("Taxable", "ROTH_IRA", null)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("fixed after creation");
+        assertThat(books.account("local", taxable.id()).accountType()).isEqualTo("TAXABLE");
+        assertThat(books.transactions("local", taxable.id(), 0, 20)).singleElement()
+                .satisfies(tx -> assertThat(tx.eventType()).isEqualTo("OPENING_BALANCE"));
+    }
+
+    @Test
+    void fullSettingsUpdateCanClearEstimateRatesAndBrokerWithoutTouchingLots() {
+        var taxable = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Taxable", "TAXABLE", "Example broker", "FIFO", 3200, 1500, 2400, 500, null));
+        books.record("local", taxable.id(), trade("2026-01-02", 0L,
+                leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100")));
+
+        var cleared = books.updateAccount("local", taxable.id(), new PortfolioAccountingService.AccountInput(
+                "Taxable", "TAXABLE", "", "FIFO", null, null, null, null, null));
+
+        assertThat(cleared.broker()).isNull();
+        assertThat(cleared.shortTermTaxRateBps()).isNull();
+        assertThat(cleared.longTermTaxRateBps()).isNull();
+        assertThat(cleared.ordinaryTaxRateBps()).isNull();
+        assertThat(cleared.stateTaxRateBps()).isNull();
+        assertThat(books.lots("local", taxable.id(), false)).singleElement();
+    }
+
+    @Test
     void modifiedDietzSeparatesInvestmentGainFromExternalFlows() {
         var account = books.createAccount("local", account("401k", "TRADITIONAL_401K", null));
         books.addValuation("local", account.id(), valuation("2026-01-01", 100_000_00L));
         books.record("local", account.id(), cash("2026-07-02", "DEPOSIT", 10_000_00L, "contribution", null));
-        books.addValuation("local", account.id(), valuation("2027-01-01", 121_000_00L));
+        books.addValuation("local", account.id(), valuation("2026-07-13", 121_000_00L));
 
         var performance = books.performance("local", account.id());
         assertThat(performance.netExternalFlowCents()).isEqualTo(10_000_00L);
         assertThat(performance.investmentGainCents()).isEqualTo(11_000_00L);
-        assertThat(performance.modifiedDietzReturn()).isCloseTo(0.10476, within(0.0002));
+        assertThat(performance.modifiedDietzReturn()).isCloseTo(0.10938, within(0.0002));
         assertThat(performance.note()).contains("Modified Dietz");
+    }
+
+    @Test
+    void openingBalanceIsBookBaselineRatherThanAContributionInsideHistoricalPerformance() {
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", 100_000_00L));
+        books.addValuation("local", account.id(), valuation("2026-06-01", 100_000_00L));
+        books.addValuation("local", account.id(), valuation("2026-07-13", 101_000_00L));
+
+        var performance = books.performance("local", account.id());
+        assertThat(performance.netExternalFlowCents()).isZero();
+        assertThat(performance.investmentGainCents()).isEqualTo(1_000_00L);
+        assertThat(performance.modifiedDietzReturn()).isCloseTo(0.01, within(0.00001));
+        assertThat(books.transactions("local", account.id(), 0, 20)).singleElement()
+                .satisfies(tx -> assertThat(tx.eventType()).isEqualTo("OPENING_BALANCE"));
+    }
+
+    @Test
+    void futureActivityAndValuationsAreRejectedBeforeTheyCanDistortAccounting() {
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", null));
+
+        books.record("local", account.id(), cash(
+                "2026-07-13", "DEPOSIT", 5_00L, "same-day-cash", null));
+
+        assertThatThrownBy(() -> books.record("local", account.id(), cash(
+                "2026-07-14", "DEPOSIT", 10_00L, "future-cash", null)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cannot be in the future");
+        assertThatThrownBy(() -> books.addValuation("local", account.id(), valuation(
+                "2026-07-14", 10_00L)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cannot be in the future");
+
+        assertThat(books.transactions("local", account.id(), 0, 20))
+                .extracting(PortfolioAccountingService.TransactionView::externalRef)
+                .containsExactly("same-day-cash");
+        assertThat(books.performance("local", account.id()).valuations()).isEmpty();
+    }
+
+    @Test
+    void zeroAndOverflowingMoneyFailBeforeAnyAccountingRowIsWritten() {
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", null));
+
+        assertThatThrownBy(() -> books.record("local", account.id(), cash(
+                "2026-07-13", "DEPOSIT", 0, "zero-cash", null)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cannot be zero");
+        assertThatThrownBy(() -> books.record("local", account.id(), cash(
+                "2026-07-13", "DEPOSIT", Long.MIN_VALUE, "overflow-cash", null)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("supported range");
+        assertThatThrownBy(() -> books.addValuation("local", account.id(),
+                new PortfolioAccountingService.ValuationInput("2026-07-13", Long.MAX_VALUE,
+                        Long.MAX_VALUE, 1L, "MANUAL", null, null)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("supported range");
+
+        assertThat(books.transactions("local", account.id(), 0, 20)).isEmpty();
+        assertThat(books.performance("local", account.id()).valuations()).isEmpty();
+    }
+
+    @Test
+    void archivedAccountBlocksSettingsTransactionsAndValuationsUntilRestore() {
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", 10_000_00L));
+        books.setArchived("local", account.id(), true);
+
+        assertThatThrownBy(() -> books.updateAccount("local", account.id(), account("Renamed", "TAXABLE", null)))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("archived and read-only");
+        assertThatThrownBy(() -> books.record("local", account.id(), cash(
+                "2026-07-13", "INTEREST", 5_00L, "archived-interest", null)))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("archived and read-only");
+        assertThatThrownBy(() -> books.addValuation("local", account.id(), valuation(
+                "2026-07-13", 10_005_00L)))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("archived and read-only");
+
+        books.setArchived("local", account.id(), false);
+        books.addValuation("local", account.id(), valuation("2026-07-13", 10_000_00L));
+        assertThat(books.performance("local", account.id()).valuations()).hasSize(1);
     }
 
     @Test
@@ -202,6 +393,17 @@ class PortfolioAccountingServiceTest {
         assertThat(books.transactions("local", account.id(), 0, 20)).hasSize(1);
         assertThat(books.lots("local", account.id(), false)).singleElement()
                 .satisfies(lot -> assertThat(lot.remainingQuantity()).isEqualTo(5));
+    }
+
+    @Test
+    void brokerSourceRequiresAStableReferenceForIdempotency() {
+        var account = books.createAccount("local", account("Brokerage", "TAXABLE", null));
+        var missingReference = tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", null,
+                List.of(leg("STOCK", "BUY", "OPEN", "AMD", null, null, null, 5, 1, "100")));
+
+        assertThatThrownBy(() -> books.record("local", account.id(), missingReference))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("stable order or statement reference");
+        assertThat(books.transactions("local", account.id(), 0, 20)).isEmpty();
     }
 
     @Test
@@ -234,6 +436,43 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void summaryNeverMixesPreTradeLotsWithPostTradeCash() {
+        AtomicBoolean injectOnce = new AtomicBoolean(true);
+        AtomicReference<PortfolioAccountingService> service = new AtomicReference<>();
+        AtomicReference<String> accountId = new AtomicReference<>();
+        MarksSource marks = new MarksSource() {
+            @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.empty(); }
+            @Override public Optional<LegMark> legMark(String symbol, Leg leg) {
+                if (injectOnce.compareAndSet(true, false)) {
+                    service.get().record("local", accountId.get(), tx("2026-01-03", "TRADE", null, 0L,
+                            null, "BROKER", "concurrent-second-fill", List.of(
+                                    leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100"))));
+                }
+                return Optional.of(mark("109.90", "110.00"));
+            }
+        };
+        books = new PortfolioAccountingService(db, CLOCK, marks);
+        service.set(books);
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", 1_000_00L));
+        accountId.set(account.id());
+        books.record("local", account.id(), tx("2026-01-02", "TRADE", null, 0L,
+                null, "BROKER", "first-fill", List.of(
+                        leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100"))));
+
+        var during = books.summary("local", account.id());
+        assertThat(during.bookCashCents()).isEqualTo(90_000L);
+        assertThat(during.positions()).singleElement()
+                .satisfies(position -> assertThat(position.quantity()).isEqualTo(1));
+        assertThat(during.totalValueCents()).isEqualTo(100_990L);
+
+        var after = books.summary("local", account.id());
+        assertThat(after.bookCashCents()).isEqualTo(80_000L);
+        assertThat(after.positions()).singleElement()
+                .satisfies(position -> assertThat(position.quantity()).isEqualTo(2));
+        assertThat(after.totalValueCents()).isEqualTo(101_980L);
+    }
+
+    @Test
     void missingMarkNeverBecomesZeroPortfolioValue() {
         var account = books.createAccount("local", account("Taxable", "TAXABLE", 1_000_000L));
         books.record("local", account.id(), trade("2026-01-02", 0L,
@@ -248,6 +487,50 @@ class PortfolioAccountingServiceTest {
             assertThat(p.liquidationValueCents()).isNull();
             assertThat(p.provenance()).isEqualTo("MISSING");
         });
+    }
+
+    @Test
+    void generatedMarksNeverValueAnExternalTrackedAccount() {
+        MarksSource generated = new MarksSource() {
+            @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.of(new BigDecimal("255.30")); }
+            @Override public Optional<LegMark> legMark(String symbol, Leg leg) {
+                return Optional.of(new LegMark(new BigDecimal("255.20"), new BigDecimal("255.30"),
+                        new BigDecimal("255.25"), null, Freshness.FIXTURE, null, null, null, null,
+                        DataEvidence.of("fixture", Freshness.FIXTURE)));
+            }
+        };
+        books = new PortfolioAccountingService(db, CLOCK, generated);
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", 1_000_000L));
+        books.record("local", account.id(), trade("2026-01-02", 0L,
+                leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 2, 1, "100")));
+
+        var summary = books.summary("local", account.id());
+        assertThat(summary.complete()).isFalse();
+        assertThat(summary.totalValueCents()).isNull();
+        assertThat(summary.positions()).singleElement()
+                .satisfies(position -> assertThat(position.liquidationValueCents()).isNull());
+        assertThat(summary.valuationBasis()).contains("Demo, simulated, and modeled marks are never applied");
+    }
+
+    @Test
+    void staleObservedMarksAreNotPresentedAsExecutableLiquidationValue() {
+        MarksSource stale = new MarksSource() {
+            @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.of(new BigDecimal("110")); }
+            @Override public Optional<LegMark> legMark(String symbol, Leg leg) {
+                return Optional.of(new LegMark(new BigDecimal("109.90"), new BigDecimal("110.00"),
+                        new BigDecimal("109.95"), null, Freshness.STALE, null, null, null, null,
+                        DataEvidence.of("cboe", Freshness.STALE)));
+            }
+        };
+        books = new PortfolioAccountingService(db, CLOCK, stale);
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", 1_000_000L));
+        books.record("local", account.id(), trade("2026-01-02", 0L,
+                leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 2, 1, "100")));
+
+        var summary = books.summary("local", account.id());
+        assertThat(summary.complete()).isFalse();
+        assertThat(summary.totalValueCents()).isNull();
+        assertThat(summary.missingMarks()).containsExactly("AAPL shares");
     }
 
     @Test
@@ -274,6 +557,165 @@ class PortfolioAccountingServiceTest {
         assertThatThrownBy(() -> books.record("local", account.id(), trade("2026-01-03", 0L,
                 leg("OPTION", "SELL", "CLOSE", "XYZ", "CALL", "10", "2026-08-21", 1, 100, "2"))))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("only 0 matching long units");
+    }
+
+    @Test
+    void adjustedContractAssignmentUsesItsRecordedDeliverableMultiplier() {
+        var account = books.createAccount("local", account("Adjusted assignment", "TAXABLE", null));
+        books.record("local", account.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "adjusted-put-open",
+                List.of(leg("OPTION", "SELL", "OPEN", "XYZ", "PUT", "20", "2026-02-20", 1, 50, "2"))));
+
+        var assigned = books.record("local", account.id(), tx("2026-02-20", "ASSIGNMENT", null, 0L, null,
+                "BROKER", "adjusted-put-assignment", List.of(
+                        leg("OPTION", "BUY", "CLOSE", "XYZ", "PUT", "20", "2026-02-20", 1, 50, "0"),
+                        leg("STOCK", "BUY", "OPEN", "XYZ", null, null, null, 50, 1, "20"))));
+
+        assertThat(assigned.cashEffectCents()).isEqualTo(-100_000L);
+        assertThat(books.lots("local", account.id(), false)).singleElement().satisfies(lot -> {
+            assertThat(lot.instrumentType()).isEqualTo("STOCK");
+            assertThat(lot.remainingQuantity()).isEqualTo(50);
+            assertThat(lot.remainingOpenAmountCents()).isEqualTo(90_000L);
+        });
+    }
+
+    @Test
+    void assignmentAndExerciseCanCreateTheShortOrCoveringSharePositionActuallyDelivered() {
+        var assigned = books.createAccount("local", account("Uncovered assignment", "TAXABLE", null));
+        books.record("local", assigned.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "short-call",
+                List.of(leg("OPTION", "SELL", "OPEN", "AAPL", "CALL", "100", "2026-02-20", 1, 100, "4"))));
+        books.record("local", assigned.id(), tx("2026-02-20", "ASSIGNMENT", null, 0L, null, "BROKER", "short-call-assigned",
+                List.of(
+                        leg("OPTION", "BUY", "CLOSE", "AAPL", "CALL", "100", "2026-02-20", 1, 100, "0"),
+                        leg("STOCK", "SELL", "OPEN", "AAPL", null, null, null, 100, 1, "100"))));
+        assertThat(books.lots("local", assigned.id(), false)).singleElement().satisfies(lot -> {
+            assertThat(lot.instrumentType()).isEqualTo("STOCK");
+            assertThat(lot.side()).isEqualTo("SHORT");
+            assertThat(lot.remainingOpenAmountCents()).isEqualTo(1_040_000L);
+        });
+
+        var exercised = books.createAccount("local", account("Put exercise", "TAXABLE", null));
+        books.record("local", exercised.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "long-put",
+                List.of(leg("OPTION", "BUY", "OPEN", "MSFT", "PUT", "300", "2026-02-20", 1, 100, "5"))));
+        books.record("local", exercised.id(), tx("2026-02-20", "EXERCISE", null, 0L, null, "BROKER", "long-put-exercised",
+                List.of(
+                        leg("OPTION", "SELL", "CLOSE", "MSFT", "PUT", "300", "2026-02-20", 1, 100, "0"),
+                        leg("STOCK", "SELL", "OPEN", "MSFT", null, null, null, 100, 1, "300"))));
+        assertThat(books.lots("local", exercised.id(), false)).singleElement().satisfies(lot -> {
+            assertThat(lot.side()).isEqualTo("SHORT");
+            assertThat(lot.remainingOpenAmountCents()).isEqualTo(2_950_000L);
+        });
+    }
+
+    @Test
+    void batchHistoryIsAppliedChronologicallyAndLaterBackdatingIsRefused() {
+        var account = books.createAccount("local", account("Imported history", "TAXABLE", null));
+        var close = tx("2026-02-02", "TRADE", null, 0L, null, "IMPORT", "close",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "120")));
+        var open = tx("2026-01-02", "TRADE", null, 0L, null, "IMPORT", "open",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100")));
+
+        assertThat(books.recordBatch("local", account.id(), List.of(close, open)))
+                .extracting(PortfolioAccountingService.TransactionView::externalRef)
+                .containsExactly("open", "close");
+        assertThat(books.realizedLots("local", account.id(), 2026)).singleElement()
+                .satisfies(match -> assertThat(match.realizedGainCents()).isEqualTo(20_00L));
+
+        assertThatThrownBy(() -> books.record("local", account.id(), tx("2026-01-15", "TRADE", null, 0L,
+                null, "BROKER", "late-backfill", List.of(
+                        leg("STOCK", "BUY", "OPEN", "MSFT", null, null, null, 1, 1, "200")))))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("oldest to newest");
+        assertThat(books.transactions("local", account.id(), 0, 20)).hasSize(2);
+    }
+
+    @Test
+    void expirationAcceptsOnlyOptionsOnOrAfterTheirExpirationDate() {
+        var account = books.createAccount("local", account("Expiration", "TAXABLE", null));
+        books.record("local", account.id(), trade("2026-01-02", 0L,
+                leg("OPTION", "BUY", "OPEN", "AAPL", "CALL", "100", "2026-02-20", 1, 100, "2")));
+
+        assertThatThrownBy(() -> books.record("local", account.id(), tx("2026-02-01", "EXPIRATION", null, 0L,
+                null, "BROKER", "early-expiry", List.of(
+                        leg("OPTION", "SELL", "CLOSE", "AAPL", "CALL", "100", "2026-02-20", 1, 100, "0")))))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("before its expiration date");
+        assertThatThrownBy(() -> books.record("local", account.id(), tx("2026-02-20", "EXPIRATION", null, 0L,
+                null, "BROKER", "stock-expiry", List.of(
+                        leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "0")))))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("option legs only");
+    }
+
+    @Test
+    void zeroValueMultiLegExpirationAllocatesFeesAcrossEveryExpiredContract() {
+        var account = books.createAccount("local", account("Expiration fees", "TAXABLE", null));
+        books.record("local", account.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "open-strangle",
+                List.of(
+                        leg("OPTION", "BUY", "OPEN", "AAPL", "CALL", "110", "2026-02-20", 1, 100, "1"),
+                        leg("OPTION", "BUY", "OPEN", "AAPL", "PUT", "90", "2026-02-20", 1, 100, "1"))));
+
+        var expired = books.record("local", account.id(), tx("2026-02-20", "EXPIRATION", null, 200L,
+                null, "BROKER", "expire-strangle", List.of(
+                        leg("OPTION", "SELL", "CLOSE", "AAPL", "CALL", "110", "2026-02-20", 1, 100, "0"),
+                        leg("OPTION", "SELL", "CLOSE", "AAPL", "PUT", "90", "2026-02-20", 1, 100, "0"))));
+
+        assertThat(expired.legs()).extracting(PortfolioAccountingService.LegView::allocatedFeeCents)
+                .containsExactly(100L, 100L);
+        assertThat(books.realizedLots("local", account.id(), 2026))
+                .extracting(PortfolioAccountingService.RealizedLotView::realizedGainCents)
+                .containsExactly(-101_00L, -101_00L);
+    }
+
+    @Test
+    void hifoUsesHighestBasisForLongLotsAndLowestProceedsForShortLots() {
+        var account = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "HIFO", "TAXABLE", null, "HIFO", null, null, null, null, null));
+        books.record("local", account.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "short-low",
+                List.of(leg("OPTION", "SELL", "OPEN", "QQQ", "PUT", "450", "2026-08-21", 1, 100, "2"))));
+        books.record("local", account.id(), tx("2026-01-03", "TRADE", null, 0L, null, "BROKER", "short-high",
+                List.of(leg("OPTION", "SELL", "OPEN", "QQQ", "PUT", "450", "2026-08-21", 1, 100, "4"))));
+        books.record("local", account.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "short-close",
+                List.of(leg("OPTION", "BUY", "CLOSE", "QQQ", "PUT", "450", "2026-08-21", 1, 100, "3"))));
+
+        assertThat(books.realizedLots("local", account.id(), 2026)).singleElement()
+                .satisfies(match -> assertThat(match.realizedGainCents()).isEqualTo(-100_00L));
+        assertThat(books.lots("local", account.id(), false)).singleElement()
+                .satisfies(lot -> assertThat(lot.remainingOpenAmountCents()).isEqualTo(400_00L));
+    }
+
+    @Test
+    void cashFeesAndTaxCategoriesCannotSilentlyMisclassifyIncome() {
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", null));
+
+        assertThatThrownBy(() -> books.record("local", account.id(), tx("2026-01-02", "DEPOSIT", 100_00L,
+                1_00L, null, "BROKER", "ambiguous-fee", List.of())))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("record a FEE event");
+        assertThatThrownBy(() -> books.record("local", account.id(), tx("2026-01-02", "TRADE", null,
+                0L, "QUALIFIED_DIVIDEND", "BROKER", "trade-as-dividend",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100")))))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("only to interest or dividend");
+        assertThatThrownBy(() -> books.record("local", account.id(), cash("2026-01-02", "INTEREST",
+                10_00L, "interest-as-dividend", "QUALIFIED_DIVIDEND")))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("tax category for interest");
+
+        books.record("local", account.id(), cash("2026-01-02", "DIVIDEND",
+                10_00L, "qualified-dividend", "QUALIFIED_DIVIDEND"));
+        assertThat(books.transactions("local", account.id(), 0, 20)).singleElement()
+                .satisfies(tx -> assertThat(tx.taxCategory()).isEqualTo("QUALIFIED_DIVIDEND"));
+    }
+
+    @Test
+    void collateralPairsShortCallsWithTheStrongestRecordedProtectionFirst() {
+        books = new PortfolioAccountingService(db, CLOCK, new EmptyMarks());
+        var account = books.createAccount("local", account("Taxable", "TAXABLE", 100_000_00L));
+        books.record("local", account.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "call-portfolio",
+                List.of(
+                        leg("OPTION", "BUY", "OPEN", "AAPL", "CALL", "90", "2026-08-21", 1, 100, "12"),
+                        leg("OPTION", "SELL", "OPEN", "AAPL", "CALL", "100", "2026-08-21", 1, 100, "5"),
+                        leg("OPTION", "BUY", "OPEN", "AAPL", "CALL", "110", "2026-08-21", 1, 100, "2"))));
+
+        var collateral = books.summary("local", account.id()).collateral();
+        assertThat(collateral.knownBlockedCashCents()).isZero();
+        assertThat(collateral.definedRiskCallContracts()).isEqualTo(1);
+        assertThat(collateral.uncoveredShortCallShares()).isZero();
+        assertThat(collateral.complete()).isTrue();
     }
 
     private static MarksSource.LegMark mark(String bid, String ask) {

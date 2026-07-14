@@ -5102,7 +5102,7 @@ public final class ApiServer {
                 .map(p -> new AutoRecommender.HoldingInfo(p.symbol(),
                         (int) Math.min(Integer.MAX_VALUE, p.freeShares()), p.avgCostCents()))
                 .toList();
-        ctx.json(auto.run(req, acct.buyingPowerCents(), held, world));
+        ctx.json(auto.run(req, acct.buyingPowerCents(), held, worldParam(world)));
     }
 
     // ---- Trades ----
@@ -5642,7 +5642,7 @@ public final class ApiServer {
         String h = io.liftandshift.strikebench.paper.PortfolioCsvImport.TEMPLATE_HEADER;
         String examples = "\r\ntrade-001,2026-07-01,TRADE,,130,,Opening vertical,0,OPTION,BUY,OPEN,AAPL,CALL,250,2026-08-21,1,100,8.25"
                 + "\r\ntrade-001,2026-07-01,TRADE,,130,,Opening vertical,1,OPTION,SELL,OPEN,AAPL,CALL,260,2026-08-21,1,100,3.10"
-                + "\r\ninterest-001,2026-07-31,INTEREST,425,0,ORDINARY_INTEREST,Monthly interest,,,,,,,,,,,\r\n";
+                + "\r\ninterest-001,2026-07-02,INTEREST,425,0,ORDINARY_INTEREST,Monthly interest,,,,,,,,,,,\r\n";
         ctx.result((h + examples).getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 

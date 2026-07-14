@@ -22,18 +22,19 @@ public final class PortfolioExportService {
     public byte[] transactionsCsv(String ownerId, String accountId) {
         var account = books.account(ownerId, accountId);
         StringBuilder out = new StringBuilder();
-        row(out, "account", "transaction_id", "occurred_at", "event_type", "source", "external_ref",
+        row(out, "account", "transaction_id", "primary_transaction_row", "occurred_at", "event_type", "source", "external_ref",
                 "cash_effect_cents", "fees_cents", "tax_category", "leg_no", "instrument", "action",
                 "position_effect", "symbol", "option_type", "strike", "expiration", "quantity",
                 "multiplier", "price", "gross_amount_cents", "allocated_fee_cents", "notes");
         for (var tx : allTransactions(ownerId, accountId)) {
             if (tx.legs().isEmpty()) {
-                row(out, text(account.name()), text(tx.id()), text(tx.occurredAt()), text(tx.eventType()), text(tx.source()),
+                row(out, text(account.name()), text(tx.id()), text("true"), text(tx.occurredAt()), text(tx.eventType()), text(tx.source()),
                         text(tx.externalRef()), number(tx.cashEffectCents()), number(tx.feesCents()), text(tx.taxCategory()),
                         "", "", "", "", "", "", "", "", "", "", "", "", text(tx.notes()));
-            } else for (var leg : tx.legs()) {
-                row(out, text(account.name()), text(tx.id()), text(tx.occurredAt()), text(tx.eventType()), text(tx.source()),
-                        text(tx.externalRef()), number(tx.cashEffectCents()), number(tx.feesCents()), text(tx.taxCategory()),
+            } else for (int i = 0; i < tx.legs().size(); i++) {
+                var leg = tx.legs().get(i);
+                row(out, text(account.name()), text(tx.id()), text(i == 0 ? "true" : "false"), text(tx.occurredAt()), text(tx.eventType()), text(tx.source()),
+                        text(tx.externalRef()), i == 0 ? number(tx.cashEffectCents()) : "", i == 0 ? number(tx.feesCents()) : "", text(tx.taxCategory()),
                         number(leg.legNo()), text(leg.instrumentType()), text(leg.action()), text(leg.positionEffect()),
                         text(leg.symbol()), text(leg.optionType()), decimal(leg.strike()), text(leg.expiration()),
                         number(leg.quantity()), number(leg.multiplier()), decimal(leg.price()),
@@ -98,18 +99,21 @@ public final class PortfolioExportService {
 
     private static List<List<Cell>> transactionRows(List<PortfolioAccountingService.TransactionView> txs) {
         List<List<Cell>> rows = new ArrayList<>();
-        rows.add(cells("Occurred", "Event", "Transaction", "Source", "Reference", "Cash effect", "Fees",
+        rows.add(cells("Occurred", "Event", "Transaction", "Primary transaction row", "Source", "Reference", "Cash effect", "Fees",
                 "Leg", "Instrument", "Action", "Effect", "Symbol", "Type", "Strike", "Expiration",
                 "Quantity", "Multiplier", "Price", "Gross", "Allocated fee", "Notes"));
         for (var tx : txs) {
-            if (tx.legs().isEmpty()) rows.add(List.of(s(tx.occurredAt()), s(tx.eventType()), s(tx.id()), s(tx.source()),
+            if (tx.legs().isEmpty()) rows.add(List.of(s(tx.occurredAt()), s(tx.eventType()), s(tx.id()), s("true"), s(tx.source()),
                     s(tx.externalRef()), money(tx.cashEffectCents()), money(tx.feesCents()), blank(), blank(), blank(),
                     blank(), blank(), blank(), blank(), blank(), blank(), blank(), blank(), blank(), blank(), s(tx.notes())));
-            else for (var leg : tx.legs()) rows.add(List.of(s(tx.occurredAt()), s(tx.eventType()), s(tx.id()), s(tx.source()),
-                    s(tx.externalRef()), money(tx.cashEffectCents()), money(tx.feesCents()), n(leg.legNo()),
+            else for (int i = 0; i < tx.legs().size(); i++) {
+                var leg = tx.legs().get(i);
+                rows.add(List.of(s(tx.occurredAt()), s(tx.eventType()), s(tx.id()), s(i == 0 ? "true" : "false"), s(tx.source()),
+                    s(tx.externalRef()), i == 0 ? money(tx.cashEffectCents()) : blank(), i == 0 ? money(tx.feesCents()) : blank(), n(leg.legNo()),
                     s(leg.instrumentType()), s(leg.action()), s(leg.positionEffect()), s(leg.symbol()), s(leg.optionType()),
                     decimalCell(leg.strike()), s(leg.expiration()), n(leg.quantity()), n(leg.multiplier()),
                     decimalCell(leg.price()), money(leg.grossAmountCents()), money(leg.allocatedFeeCents()), s(tx.notes())));
+            }
         }
         return rows;
     }
@@ -242,10 +246,19 @@ public final class PortfolioExportService {
 
     private static String safeText(String raw) {
         if (raw == null) return "";
-        String value = raw.replace("\u0000", "");
+        StringBuilder cleaned = new StringBuilder(raw.length());
+        raw.codePoints().filter(PortfolioExportService::validXmlCodePoint).forEach(cleaned::appendCodePoint);
+        String value = cleaned.toString();
         if (!value.isEmpty() && (value.charAt(0) == '=' || value.charAt(0) == '+' || value.charAt(0) == '-'
                 || value.charAt(0) == '@' || value.charAt(0) == '\t' || value.charAt(0) == '\r')) return "'" + value;
         return value;
+    }
+
+    private static boolean validXmlCodePoint(int cp) {
+        return cp == 0x9 || cp == 0xA || cp == 0xD
+                || (cp >= 0x20 && cp <= 0xD7FF)
+                || (cp >= 0xE000 && cp <= 0xFFFD)
+                || (cp >= 0x10000 && cp <= 0x10FFFF);
     }
 
     private static String text(Object value) { return quote(safeText(value == null ? "" : String.valueOf(value))); }
