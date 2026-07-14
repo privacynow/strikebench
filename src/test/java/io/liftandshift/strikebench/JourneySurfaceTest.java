@@ -255,10 +255,12 @@ class JourneySurfaceTest {
         String research = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ResearchController.java"));
         assertThat(api).contains("researchController.register(c);");
-        assertThat(research).contains("ResearchRoutes.register(config, new ResearchRoutes.Handlers(");
+        assertThat(research).contains("ResearchRoutes.register(config, new ResearchRoutes.Handlers(",
+                "private void symbolResearch(Context ctx)",
+                "PlanEligibility planEligibility");
         assertThat(api).doesNotContain("private void noteCreate(",
                 "private void expirations(Context", "private void history(Context",
-                "private void calibrationResolve(");
+                "private void calibrationResolve(", "private void research(Context");
         String broker = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/BrokerController.java"));
         assertThat(api).contains("brokerController.register(c);");
@@ -307,10 +309,12 @@ class JourneySurfaceTest {
                 "src/main/java/io/liftandshift/strikebench/api/TradeController.java"));
         String data = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/DataController.java"));
+        String research = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ResearchController.java"));
 
         assertThat(api).doesNotContain("ctx.json(Map.of(", "ctx.json(body)",
-                        "Map<String, Object> tradePreviewPayload")
-                .contains("new ApiResponses.ResearchDetail<>(");
+                "Map<String, Object> tradePreviewPayload");
+        assertThat(research).contains("new ApiResponses.ResearchDetail<>(");
         assertThat(portfolio).contains("new ApiResponses.PortfolioSummary(");
         assertThat(trade).contains("new ApiResponses.TradePreviewResponse(",
                 "new ApiResponses.TradeDetail<>(");
