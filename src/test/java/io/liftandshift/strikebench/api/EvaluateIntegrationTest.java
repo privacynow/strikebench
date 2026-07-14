@@ -290,9 +290,9 @@ class EvaluateIntegrationTest {
     }
 
     @Test void outcomeExpiryUsesTheSharedTradingCalendar() {
-        assertThat(ApiServer.outcomeExpiryDay(java.time.LocalDate.parse("2026-07-02"),
+        assertThat(OutcomeController.outcomeExpiryDay(java.time.LocalDate.parse("2026-07-02"),
                 java.time.LocalDate.parse("2026-07-06"))).isEqualTo(1); // July 3 observed holiday + weekend
-        assertThat(ApiServer.outcomeExpiryDay(java.time.LocalDate.parse("2026-07-08"),
+        assertThat(OutcomeController.outcomeExpiryDay(java.time.LocalDate.parse("2026-07-08"),
                 java.time.LocalDate.parse("2026-07-13"))).isEqualTo(3); // Thu, Fri, Mon
     }
 

@@ -98,15 +98,16 @@ async function assertTabContracts(scope = 'body') {
     + JSON.stringify(violations));
 }
 
-async function openPlan(symbol, stage = 'understand', intentOverride, thesisOverride) {
+async function openPlan(symbol, stage = 'understand', intentOverride, thesisOverride, horizonOverride) {
   const context = await page.evaluate(() => ({
     goal: App.context.goal('DIRECTIONAL'),
     thesis: App.context.thesis('bullish'),
     horizon: App.context.horizon('month')
   }));
-  const horizonDays = context.horizon === '0DTE' ? 1 : context.horizon === 'week' ? 7
-    : context.horizon === 'quarter' ? 63 : /^\d+d$/.test(context.horizon || '')
-      ? parseInt(context.horizon, 10) : 30;
+  const horizon = horizonOverride || context.horizon;
+  const horizonDays = horizon === '0DTE' ? 1 : horizon === 'week' ? 7
+    : horizon === 'quarter' ? 63 : /^\d+d$/.test(horizon || '')
+      ? parseInt(horizon, 10) : 30;
   const response = await fetch(BASE + '/api/plans', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ clientRequestId: 'dom-plan-' + (++planSequence), symbol,
@@ -1920,10 +1921,7 @@ async function openFutures() {
 
 test('scenario studio: beginner view → decision facts → same-receipt strategy outcomes', async () => {
   await page.click('#level-switch button[data-level="beginner"]');
-  await page.evaluate(() => {
-    App.context.update({ symbol: 'AAPL', thesis: 'bearish', horizon: 'quarter' });
-  });
-  await openPlan('AAPL');
+  await openPlan('AAPL', 'understand', 'DIRECTIONAL', 'bearish', 'quarter');
   await openResearchTab('view');
   await page.waitForSelector('#tv-view');
   assert.equal(await page.inputValue('#tv-view'), 'bearish', 'Research consumes the canonical market view');
