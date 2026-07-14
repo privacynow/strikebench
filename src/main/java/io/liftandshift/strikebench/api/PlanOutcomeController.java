@@ -126,8 +126,8 @@ final class PlanOutcomeController {
         try { basis = io.liftandshift.strikebench.sim.PathEnsembleService.Basis.valueOf(basisName); }
         catch (Exception e) { throw new IllegalArgumentException("basis must be RISK_NEUTRAL, PARAMETRIC, HISTORICAL_ANALOGS, or CONDITIONAL_BOOTSTRAP"); }
         var stored = resolvePlanEnsemble(ctx, plan, body, basis);
-        var legs = outcomeController.toSimLegs(ctx, position.legs());
-        var simRequest = new OutcomeController.StrategySimRequest(plan.symbol(), legs, position.qty(),
+        var pathPosition = outcomeController.toPathPosition(ctx, position.legs());
+        var simRequest = new OutcomeController.StrategySimRequest(plan.symbol(), pathPosition, position.qty(),
                 stored.ensemble().spec(), stored.iv(), basis, null, position.entryCostCents(),
                 outcomeController.contractExpirations(position.legs()));
         JsonNode result = Json.MAPPER.valueToTree(
@@ -190,14 +190,9 @@ final class PlanOutcomeController {
                     + (position.legs().isEmpty() ? 0 : cfg.feePerOrderCents() * 2L);
             metadata.put(id, new PlanComparisonMeta(candidate, position, qty, fees));
             try {
-                var simLegs = outcomeController.toSimLegs(ctx, position.legs());
-                String problem = outcomeController.validateSimLegs(simLegs);
-                if (problem != null) {
-                    earlyRefusals.put(id, problem);
-                    continue;
-                }
+                var pathPosition = outcomeController.toPathPosition(ctx, position.legs());
                 simItems.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem(
-                        id, simLegs, position.entryCostCents(),
+                        id, pathPosition, position.entryCostCents(),
                         "entry fixed to the Plan proposal's captured executable package", fees, qty));
             } catch (RuntimeException e) {
                 earlyRefusals.put(id, io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));

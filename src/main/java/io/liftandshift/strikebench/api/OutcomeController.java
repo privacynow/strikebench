@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.pricing.PayoffCurve;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.util.Json;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -70,7 +71,7 @@ final class OutcomeController {
                                   List<io.liftandshift.strikebench.sim.SimulationEngine.DecisionLevel> levels) {}
 
     public record StrategySimRequest(String symbol,
-                                     java.util.List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
+                                     io.liftandshift.strikebench.sim.PathPosition position,
                                      Integer qty,
                                      io.liftandshift.strikebench.sim.ScenarioSpec spec,
                                      io.liftandshift.strikebench.sim.IvSpec iv,
@@ -84,7 +85,7 @@ final class OutcomeController {
                                      java.util.List<String> contractExpirations) {}
 
     public record CompareStructure(String key,
-                                   List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
+                                   io.liftandshift.strikebench.sim.PathPosition position,
                                    Long entryCostCents,
                                    List<String> contractExpirations) {}
     public record CompareRequest(String symbol, io.liftandshift.strikebench.sim.ScenarioSpec spec,
@@ -123,25 +124,25 @@ final class OutcomeController {
         List<io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem> items = new ArrayList<>();
         List<Map<String, Object>> refusedEarly = new ArrayList<>();
         for (CompareStructure st : b.structures()) {
-            String legProblem = validateSimLegs(st.legs());
-            if (legProblem != null) {
-                refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(), "reason", legProblem));
+            if (st.position() == null) {
+                refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(), "reason", "no position"));
                 continue;
             }
-            MarketEntry me = marketEntry(sym, st.legs(), qty, world, book,
+            MarketEntry me = marketEntry(sym, st.position(), qty, world, book,
                     st.contractExpirations());
             if (st.contractExpirations() != null && me == null) {
                 refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(),
                         "reason", "one of the exact listed contracts is unavailable at an executable price"));
                 continue;
             }
-            var legsToRun = me != null && me.resolvedLegs() != null ? me.resolvedLegs() : st.legs();
+            var positionToRun = me != null && me.resolvedPosition() != null
+                    ? me.resolvedPosition() : st.position();
             items.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem(
-                    st.key(), legsToRun,
+                    st.key(), positionToRun,
                     st.entryCostCents() != null ? st.entryCostCents() : me == null ? null : me.entryCents(),
                     st.entryCostCents() != null ? "entry fixed to the supplied package price"
                             : me == null ? null : "entry at " + me.source() + " executable quotes",
-                    scenarioRoundTripFees(legsToRun, qty)));
+                    scenarioRoundTripFees(positionToRun, qty)));
         }
         var pathBasis = b.pathBasis() == null
                 ? io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC : b.pathBasis();
@@ -190,30 +191,12 @@ final class OutcomeController {
         return outCmp;
     }
 
-    /** Uniform structural validation for simulation legs; null = fine, else the refusal reason. */
-    String validateSimLegs(List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs) {
-        if (legs == null || legs.isEmpty()) return "no legs";
-        if (legs.size() > 8) return "more than 8 legs";
-        for (var l : legs) {
-            if (l == null) return "null leg";
-            if (l.ratio() < 1 || l.ratio() > 10) return "leg ratio out of 1..10";
-            boolean stock = "STOCK".equalsIgnoreCase(l.type());
-            if (!stock) {
-                if (l.strike() <= 0) return "non-positive strike";
-                if (l.expiryDay() < 0) return "negative expiry day";
-                if (!"CALL".equalsIgnoreCase(l.type()) && !"PUT".equalsIgnoreCase(l.type())) return "unknown leg type";
-            }
-            if (!"BUY".equalsIgnoreCase(l.action()) && !"SELL".equalsIgnoreCase(l.action())) return "unknown leg action";
-        }
-        return null;
-    }
-
     private long scenarioRoundTripFees(
-            List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs, int qty) {
-        long contracts = (legs == null ? List.<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg>of() : legs)
-                .stream().filter(l -> !"STOCK".equalsIgnoreCase(l.type()))
+            io.liftandshift.strikebench.sim.PathPosition position, int qty) {
+        long contracts = (position == null ? List.<Leg>of() : position.legs())
+                .stream().filter(l -> !l.isStock())
                 .mapToLong(l -> Math.max(1, l.ratio())).sum() * Math.max(1, qty);
-        long orderFees = legs == null || legs.isEmpty() ? 0 : cfg.feePerOrderCents() * 2L;
+        long orderFees = position == null ? 0 : cfg.feePerOrderCents() * 2L;
         return contracts * cfg.feePerContractCents() * 2L + orderFees;
     }
 
@@ -266,7 +249,7 @@ final class OutcomeController {
     Object simStrategyResult(Context ctx, StrategySimRequest b,
                                      io.liftandshift.strikebench.sim.PathEnsembleService.Ensemble fixedEnsemble) {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
-        if (b.legs() == null || b.legs().isEmpty()) throw new IllegalArgumentException("legs are required");
+        if (b.position() == null) throw new IllegalArgumentException("position is required");
         String sym = b.symbol() == null ? "" : b.symbol().trim().toUpperCase(Locale.ROOT);
         if (sym.isEmpty()) throw new IllegalArgumentException("symbol is required");
         String world = worldParam(activeWorld.apply(ctx));
@@ -286,23 +269,19 @@ final class OutcomeController {
         int qty = b.qty() == null ? 1 : b.qty();
         // Guard the FULL work product: paths×steps are capped in ScenarioSpec, but legs/qty/ratio
         // multiply the pricing loop and the exposure — bound them here too.
-        if (b.legs().size() > 8) throw new IllegalArgumentException("at most 8 legs");
         if (qty < 1 || qty > 100) throw new IllegalArgumentException("qty must be 1..100");
-        for (var lg : b.legs()) {
-            if (lg.ratio() > 10) throw new IllegalArgumentException("ratio must be 1..10");
-        }
         if (b.entryCostCents() != null && Math.abs(b.entryCostCents()) > 1_000_000_000L) {
             throw new IllegalArgumentException("entry cost is outside the supported range");
         }
         if (b.contractExpirations() != null) {
-            if (b.contractExpirations().size() != b.legs().size()) {
+            if (b.contractExpirations().size() != b.position().legs().size()) {
                 throw new IllegalArgumentException("contract expirations must align with the legs");
             }
             for (String exp : b.contractExpirations()) {
                 if (exp != null && !exp.isBlank()) java.time.LocalDate.parse(exp);
             }
         }
-        MarketEntry me = marketEntry(sym, b.legs(), qty, world, entryBook,
+        MarketEntry me = marketEntry(sym, b.position(), qty, world, entryBook,
                 b.contractExpirations());
         if (b.contractExpirations() != null && me == null) {
             throw new IllegalArgumentException(
@@ -324,7 +303,8 @@ final class OutcomeController {
         // CONTRACT IDENTITY: when the entry was priced from listed contracts, SIMULATE THOSE
         // CONTRACTS — pricing one strike/expiry and simulating another silently compared two
         // different trades. The note names every snap so nothing shifts silently.
-        var legsToRun = me != null && me.resolvedLegs() != null ? me.resolvedLegs() : b.legs();
+        var positionToRun = me != null && me.resolvedPosition() != null
+                ? me.resolvedPosition() : b.position();
         String entryNote = null;
         if (me != null) {
             String fresh = me.freshness() == null ? "" : me.freshness();
@@ -356,15 +336,15 @@ final class OutcomeController {
             if (fixedEnsemble.basis() != pathBasis) {
                 throw new IllegalArgumentException("the supplied position must use the stored ensemble's path basis");
             }
-            var result = simulator.runOnPaths(fixedEnsemble.paths(), fixedEnsemble.spot(), legsToRun, qty,
+            var result = simulator.runOnPaths(fixedEnsemble.paths(), positionToRun, qty,
                     fixedEnsemble.spec(), iv, r, entryCost, entryNote,
-                    scenarioRoundTripFees(legsToRun, qty));
+                    scenarioRoundTripFees(positionToRun, qty));
             evaluated = new io.liftandshift.strikebench.sim.ScenarioSimulator.EnsembleRun(fixedEnsemble, result);
         } else {
             evaluated = simulator.run(pathEnsembles,
                     new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(sym, world, analysisContext.apply(ctx)),
-                    pathBasis, spec, b.study(), spot, legsToRun, qty, iv, r, entryCost, entryNote,
-                    scenarioRoundTripFees(legsToRun, qty));
+                    pathBasis, spec, b.study(), spot, positionToRun, qty, iv, r, entryCost, entryNote,
+                    scenarioRoundTripFees(positionToRun, qty));
         }
         var studyRes = evaluated.ensemble().study();
         String pathModelVersion = evaluated.ensemble().modelVersion();
@@ -405,8 +385,10 @@ final class OutcomeController {
 
     private record MarketEntry(long entryCents, Double atmIv, Double averageIv,
                                String source, String freshness,
-                               List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> resolvedLegs,
-                               List<Leg> pricedLegs, List<String> snaps) {}
+                               io.liftandshift.strikebench.sim.PathPosition resolvedPosition,
+                               List<String> snaps) {
+        List<Leg> pricedLegs() { return resolvedPosition == null ? List.of() : resolvedPosition.legs(); }
+    }
 
     /**
      * Prices the position's entry from the live chain at EXECUTABLE sides. Returns null when any
@@ -447,7 +429,7 @@ final class OutcomeController {
         }
     }
 
-    private MarketEntry marketEntry(String symbol, List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
+    private MarketEntry marketEntry(String symbol, io.liftandshift.strikebench.sim.PathPosition position,
                                     int qty, String worldId, EntryBook book, List<String> contractExpirations) {
         try {
             List<java.time.LocalDate> exps = book != null ? book.expirations() : market.expirations(symbol, worldId);
@@ -460,20 +442,17 @@ final class OutcomeController {
             String source = null;
             String freshness = null;
             java.math.BigDecimal spotBd = null;
-            List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> resolved = new ArrayList<>();
-            List<Leg> priced = new ArrayList<>();
+            List<Leg> resolved = new ArrayList<>();
             List<Double> marketIvs = new ArrayList<>();
             List<String> snaps = new ArrayList<>();
-            for (int legIndex = 0; legIndex < legs.size(); legIndex++) {
-                var leg = legs.get(legIndex);
-                if ("STOCK".equalsIgnoreCase(leg.type())) {
+            for (int legIndex = 0; legIndex < position.legs().size(); legIndex++) {
+                var leg = position.legs().get(legIndex);
+                if (leg.isStock()) {
                     var q = (book != null ? book.quote() : market.quote(symbol, worldId)).orElse(null);
                     if (q == null || q.mark() == null) return null;
-                    double sign = "SELL".equalsIgnoreCase(leg.action()) ? -1 : 1;
+                    double sign = leg.action() == io.liftandshift.strikebench.model.LegAction.SELL ? -1 : 1;
                     entryPerUnit += sign * Math.max(1, leg.ratio()) * 100 * q.mark().doubleValue();
-                    resolved.add(leg);
-                    priced.add(Leg.stock(io.liftandshift.strikebench.model.LegAction.valueOf(
-                            leg.action().trim().toUpperCase(Locale.ROOT)), Math.max(1, leg.ratio()), q.mark()));
+                    resolved.add(Leg.stock(leg.action(), Math.max(1, leg.ratio()), q.mark()));
                     continue;
                 }
                 String exactRaw = contractExpirations != null ? contractExpirations.get(legIndex) : null;
@@ -485,7 +464,7 @@ final class OutcomeController {
                 } else {
                     // Generic scenario: nearest listed expiration to the requested trading-session horizon.
                     java.time.LocalDate target = io.liftandshift.strikebench.market.MarketHours
-                            .tradingDateAfter(today, leg.expiryDay());
+                            .tradingDateAfter(today, position.expiryDay(leg));
                     exp = exps.stream()
                             .min(java.util.Comparator.comparingLong(e2 -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e2, target))))
                             .orElse(null);
@@ -494,17 +473,18 @@ final class OutcomeController {
                 var chain = (book != null ? book.chain(exp) : market.chain(symbol, exp, worldId)).orElse(null);
                 if (chain == null || chain.isEmpty()) return null;
                 if (spotBd == null) spotBd = chain.underlyingPrice();
-                boolean call = "CALL".equalsIgnoreCase(leg.type());
+                boolean call = leg.type() == io.liftandshift.strikebench.model.OptionType.CALL;
                 var side = call ? chain.calls() : chain.puts();
                 var quote = side.stream()
-                        .min(java.util.Comparator.comparingDouble(o -> Math.abs(o.strike().doubleValue() - leg.strike())))
+                        .min(java.util.Comparator.comparingDouble(o -> Math.abs(
+                                o.strike().doubleValue() - leg.strike().doubleValue())))
                         .orElse(null);
                 // The nearest listed strike must be reasonably close, or this isn't the same trade.
                 double strikeGap = quote == null ? Double.POSITIVE_INFINITY
-                        : Math.abs(quote.strike().doubleValue() - leg.strike());
+                        : Math.abs(quote.strike().doubleValue() - leg.strike().doubleValue());
                 if (quote == null || (exactContract ? strikeGap > 1e-9
-                        : strikeGap > Math.max(2.5, leg.strike() * 0.03))) return null;
-                boolean buy = !"SELL".equalsIgnoreCase(leg.action());
+                        : strikeGap > Math.max(2.5, leg.strike().doubleValue() * 0.03))) return null;
+                boolean buy = leg.action() == io.liftandshift.strikebench.model.LegAction.BUY;
                 java.math.BigDecimal px = buy ? quote.ask() : quote.bid(); // executable sides
                 if (px == null || px.signum() <= 0) return null;
                 if (source == null) source = chain.source();
@@ -522,23 +502,21 @@ final class OutcomeController {
                 // THE SIMULATED LEG IS THE PRICED LEG: exact listed strike + that expiration's
                 // trading-day horizon. Anything that moved is named in the snap note.
                 double listedStrike = quote.strike().doubleValue();
-                int listedDays = Math.max(1, io.liftandshift.strikebench.market.MarketHours
-                        .tradingDaysBetween(today, exp));
-                resolved.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg(
-                        leg.action(), leg.type(), listedStrike, listedDays, leg.ratio()));
-                priced.add(Leg.option(io.liftandshift.strikebench.model.LegAction.valueOf(
-                                leg.action().trim().toUpperCase(Locale.ROOT)),
-                        io.liftandshift.strikebench.model.OptionType.valueOf(
-                                leg.type().trim().toUpperCase(Locale.ROOT)),
+                int listedDays = io.liftandshift.strikebench.market.MarketHours
+                        .tradingDaysBetween(today, exp);
+                resolved.add(Leg.option(leg.action(), leg.type(),
                         quote.strike(), exp, Math.max(1, leg.ratio()), px));
-                if (Math.abs(listedStrike - leg.strike()) > 1e-9 || Math.abs(listedDays - leg.expiryDay()) > 1) {
-                    snaps.add(leg.type() + " " + trimNum(leg.strike()) + "\u2192" + trimNum(listedStrike) + " exp " + exp);
+                if (Math.abs(listedStrike - leg.strike().doubleValue()) > 1e-9
+                        || Math.abs(listedDays - position.expiryDay(leg)) > 1) {
+                    snaps.add(leg.type() + " " + trimNum(leg.strike().doubleValue())
+                            + "\u2192" + trimNum(listedStrike) + " exp " + exp);
                 }
             }
             Double averageIv = marketIvs.isEmpty() ? null
                     : marketIvs.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN);
             return new MarketEntry(Math.round(entryPerUnit * qty * 100), atmIv, averageIv,
-                    source == null ? "live" : source, freshness, resolved, priced, snaps);
+                    source == null ? "live" : source, freshness,
+                    new io.liftandshift.strikebench.sim.PathPosition(today, resolved), snaps);
         } catch (Exception e) {
             return null; // no market pricing available — model entry, honestly labeled
         }
@@ -591,8 +569,8 @@ final class OutcomeController {
                 var pathResult = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(run.preview());
                 if (request.position() != null) {
                     var position = requireOutcomePosition(request.position());
-                    var legs = toSimLegs(ctx, position.legs());
-                    Object positionOutcome = simStrategyResult(ctx, new StrategySimRequest(symbol, legs,
+                    var pathPosition = toPathPosition(ctx, position.legs());
+                    Object positionOutcome = simStrategyResult(ctx, new StrategySimRequest(symbol, pathPosition,
                             position.qty(), run.ensemble().spec(), request.iv(),
                             io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC,
                             null, position.entryCostCents(), contractExpirations(position.legs())), run.ensemble());
@@ -610,8 +588,8 @@ final class OutcomeController {
                     interpretation = "Market-implied terminal odds from the exact listed package and executable entry; not a forecast.";
                     break;
                 }
-                var legs = toSimLegs(ctx, position.legs());
-                result = simStrategyResult(ctx, new StrategySimRequest(symbol, legs,
+                var pathPosition = toPathPosition(ctx, position.legs());
+                result = simStrategyResult(ctx, new StrategySimRequest(symbol, pathPosition,
                         position.qty(), requireOutcomeSpec(request.over()), request.iv(), pathBasis(basis),
                         request.study(), position.entryCostCents(), contractExpirations(position.legs())));
                 interpretation = basis == io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.PARAMETRIC
@@ -636,7 +614,7 @@ final class OutcomeController {
                     requireOutcomePosition(position);
                     int pq = position.qty() == null ? 1 : position.qty();
                     if (pq != qty) throw new IllegalArgumentException("COMPARE positions must use the same quantity");
-                    structures.add(new CompareStructure(position.key(), toSimLegs(ctx, position.legs()),
+                    structures.add(new CompareStructure(position.key(), toPathPosition(ctx, position.legs()),
                             position.entryCostCents(), contractExpirations(position.legs())));
                 }
                 result = simCompareResult(ctx, new CompareRequest(symbol, requireOutcomeSpec(request.over()),
@@ -696,8 +674,9 @@ final class OutcomeController {
             throw new IllegalArgumentException("risk-neutral terminal odds support one expiration; use path evaluation for calendars and diagonals");
         }
         int qty = position.qty() == null ? 1 : position.qty();
-        List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> simLegs = toSimLegs(ctx, position.legs());
-        MarketEntry entry = marketEntry(symbol, simLegs, qty, worldParam(activeWorld.apply(ctx)), book, expirations);
+        io.liftandshift.strikebench.sim.PathPosition pathPosition = toPathPosition(ctx, position.legs());
+        MarketEntry entry = marketEntry(symbol, pathPosition, qty,
+                worldParam(activeWorld.apply(ctx)), book, expirations);
         if (entry == null || entry.pricedLegs() == null || entry.pricedLegs().isEmpty()) {
             throw new IllegalArgumentException("the exact listed package is unavailable at executable prices");
         }
@@ -772,9 +751,9 @@ final class OutcomeController {
         return position;
     }
 
-    List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> toSimLegs(
+    io.liftandshift.strikebench.sim.PathPosition toPathPosition(
             Context ctx, List<io.liftandshift.strikebench.outcomes.OutcomeContract.Leg> legs) {
-        List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> out = new ArrayList<>();
+        List<Leg> out = new ArrayList<>();
         java.time.LocalDate laneToday = market.simInstant(worldParam(activeWorld.apply(ctx)))
                 .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
                 .orElseGet(() -> java.time.LocalDate.now(clock));
@@ -784,29 +763,36 @@ final class OutcomeController {
             }
             String type = leg.type().trim().toUpperCase(Locale.ROOT);
             int ratio = leg.ratio() == null ? 1 : leg.ratio();
+            io.liftandshift.strikebench.model.LegAction action;
+            try {
+                action = io.liftandshift.strikebench.model.LegAction.valueOf(
+                        leg.action().trim().toUpperCase(Locale.ROOT));
+            } catch (RuntimeException e) {
+                throw new IllegalArgumentException("leg action must be BUY or SELL");
+            }
             if ("STOCK".equals(type)) {
-                out.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg(
-                        leg.action().trim().toUpperCase(Locale.ROOT), "STOCK", 0, 0, ratio));
+                out.add(Leg.stock(action, ratio, BigDecimal.ZERO));
                 continue;
             }
             if (leg.strike() == null || leg.strike().signum() <= 0) {
                 throw new IllegalArgumentException("option legs need a positive strike");
             }
-            int expiryDay;
-            if (leg.expiryDay() != null) expiryDay = leg.expiryDay();
-            else if (leg.expiration() != null && !leg.expiration().isBlank()) {
-                expiryDay = outcomeExpiryDay(laneToday, java.time.LocalDate.parse(leg.expiration()));
-            } else throw new IllegalArgumentException("option legs need expiration or expiryDay");
-            out.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg(
-                    leg.action().trim().toUpperCase(Locale.ROOT), type,
-                    leg.strike().doubleValue(), expiryDay, ratio));
+            io.liftandshift.strikebench.model.OptionType optionType;
+            try {
+                optionType = io.liftandshift.strikebench.model.OptionType.valueOf(type);
+            } catch (RuntimeException e) {
+                throw new IllegalArgumentException("leg type must be CALL, PUT, or STOCK");
+            }
+            java.time.LocalDate expiration;
+            if (leg.expiration() != null && !leg.expiration().isBlank()) {
+                expiration = java.time.LocalDate.parse(leg.expiration());
+            } else if (leg.expiryDay() != null && leg.expiryDay() >= 0) {
+                expiration = io.liftandshift.strikebench.market.MarketHours
+                        .tradingDateAfter(laneToday, leg.expiryDay());
+            } else throw new IllegalArgumentException("option legs need expiration or a non-negative expiryDay");
+            out.add(Leg.option(action, optionType, leg.strike(), expiration, ratio, BigDecimal.ZERO));
         }
-        return out;
-    }
-
-    static int outcomeExpiryDay(java.time.LocalDate today, java.time.LocalDate expiration) {
-        return Math.max(1, io.liftandshift.strikebench.market.MarketHours
-                .tradingDaysBetween(today, expiration));
+        return new io.liftandshift.strikebench.sim.PathPosition(laneToday, out);
     }
 
     List<String> contractExpirations(

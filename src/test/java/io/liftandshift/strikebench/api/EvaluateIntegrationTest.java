@@ -289,11 +289,22 @@ class EvaluateIntegrationTest {
         assertThat(comparison.get("fairness").asText()).contains("one captured");
     }
 
-    @Test void outcomeExpiryUsesTheSharedTradingCalendar() {
-        assertThat(OutcomeController.outcomeExpiryDay(java.time.LocalDate.parse("2026-07-02"),
-                java.time.LocalDate.parse("2026-07-06"))).isEqualTo(1); // July 3 observed holiday + weekend
-        assertThat(OutcomeController.outcomeExpiryDay(java.time.LocalDate.parse("2026-07-08"),
-                java.time.LocalDate.parse("2026-07-13"))).isEqualTo(3); // Thu, Fri, Mon
+    @Test void pathPositionsUseTheSharedTradingCalendar() {
+        var beforeHoliday = java.time.LocalDate.parse("2026-07-02");
+        var holidayLeg = io.liftandshift.strikebench.model.Leg.option(
+                io.liftandshift.strikebench.model.LegAction.BUY,
+                io.liftandshift.strikebench.model.OptionType.CALL, java.math.BigDecimal.valueOf(100),
+                java.time.LocalDate.parse("2026-07-06"), 1, java.math.BigDecimal.ZERO);
+        assertThat(new io.liftandshift.strikebench.sim.PathPosition(beforeHoliday, List.of(holidayLeg))
+                .expiryDay(holidayLeg)).isEqualTo(1); // July 3 observed holiday + weekend
+
+        var midweek = java.time.LocalDate.parse("2026-07-08");
+        var mondayLeg = io.liftandshift.strikebench.model.Leg.option(
+                io.liftandshift.strikebench.model.LegAction.BUY,
+                io.liftandshift.strikebench.model.OptionType.CALL, java.math.BigDecimal.valueOf(100),
+                java.time.LocalDate.parse("2026-07-13"), 1, java.math.BigDecimal.ZERO);
+        assertThat(new io.liftandshift.strikebench.sim.PathPosition(midweek, List.of(mondayLeg))
+                .expiryDay(mondayLeg)).isEqualTo(3); // Thu, Fri, Mon
     }
 
     @Test void currentExpirationContractFiltersAfterItsFinalBell() {
