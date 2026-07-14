@@ -206,7 +206,7 @@ public final class ApiServer {
         io.liftandshift.strikebench.market.UniverseService universe = new io.liftandshift.strikebench.market.UniverseService(db, cfg, clock);
         io.liftandshift.strikebench.market.SnapshotService snapshots = new io.liftandshift.strikebench.market.SnapshotService(market, universe, db, clock);
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
-        io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, engine, db, clock)
+        io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, db, clock)
                 .withFees(cfg.feePerContractCents(), cfg.feePerOrderCents()); // decision EV matches the REAL commission
         AutoRecommender auto = new AutoRecommender(new SignalEngine(market, clock, cfg.fixturesOnly()),
                 engine, evaluations, cfg, clock);
@@ -296,7 +296,8 @@ public final class ApiServer {
                 trades, positions, evaluations, snapshots, auth, this::currentAccount,
                 this::ownerId, this::activeWorld, this::analysisCtx, this::requireAdmin);
         var marketVolatility = new io.liftandshift.strikebench.sim.MarketVolatilityResolver(market, clock);
-        discoveryController = new DiscoveryController(db, market, evaluations, engine, auto,
+        var opportunityScanner = new io.liftandshift.strikebench.recommend.OpportunityScanner(engine, evaluations);
+        discoveryController = new DiscoveryController(db, market, evaluations, opportunityScanner, engine, auto,
                 positions, universe, simSessions, clock, marketVolatility, this::currentAccount, this::ownerId,
                 this::activeWorld, tradeController::riskCapCents);
         outcomeController = new OutcomeController(cfg, clock, market, simEngine, pathEnsembles,

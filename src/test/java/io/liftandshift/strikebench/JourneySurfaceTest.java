@@ -418,6 +418,22 @@ class JourneySurfaceTest {
         assertThat(learn).doesNotContain("screenscore:");
     }
 
+    @Test void opportunityScanningIsOutsideTheEvaluationKernel() throws Exception {
+        String evaluation = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/eval/EvaluationService.java"));
+        String scanner = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/recommend/OpportunityScanner.java"));
+        String discovery = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/DiscoveryController.java"));
+
+        assertThat(evaluation).doesNotContain("RecommendationEngine", "ScanResult", " scan(",
+                "newVirtualThreadPerTaskExecutor", "Semaphore");
+        assertThat(scanner).contains("class OpportunityScanner", "newVirtualThreadPerTaskExecutor",
+                "evaluations.evaluate(", "evaluations.persist(");
+        assertThat(discovery).contains("opportunityScanner.scan(")
+                .doesNotContain("evaluations.scan(");
+    }
+
     @Test void marketTransitionsHaveOneBackendOwner() throws Exception {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
