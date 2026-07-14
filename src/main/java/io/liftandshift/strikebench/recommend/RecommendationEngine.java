@@ -331,10 +331,8 @@ public final class RecommendationEngine {
             }
         }
 
-        candidates.sort(Comparator.comparingDouble(Candidate::score).reversed());
-        // RANKING TRUTH: the engine returns the COMPLETE score-sorted list. Structural diversity
-        // is a PRESENTATION concern (the UI may summarize with representatives per shape group,
-        // with a Show-all affordance) — it must never rewrite the engine's ranked truth.
+        // Return the complete construction field. DecisionPolicy is the sole ranking owner;
+        // structural diversity is a presentation concern with an explicit Show-all affordance.
         if (candidates.isEmpty()) notes.add("No strategy passed the risk screens for this combination — try a wider risk budget or different horizon");
         return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, candidates, rejected, notes, DISCLAIMER);
     }
@@ -674,24 +672,6 @@ public final class RecommendationEngine {
             case FIXTURE -> 0.45;
             default -> 0.40;
         };
-        double rr = maxProfit == null ? 0.6 : Math.min(3.0, maxProfit / (double) Math.max(1, maxLoss)) / 3.0;
-        double popScore = pop == null ? 0.5 : pop;
-        double capEff = Math.clamp(1.0 - maxLoss / (double) Math.max(1, budget), 0, 1);
-        double event = 1.0 - (zeroDte ? 0.4 : 0);
-        double score = 100 * (0.15 * freshScore + 0.20 * liquidity + 0.15 * rr + 0.25 * popScore + 0.10 * capEff + 0.15 * event);
-        // Intent-aware rank adjustments, kept small and explainable: income flows prefer richer
-        // annualized yield with tolerable assignment odds; exit/acquire flows prefer candidates
-        // that actually reach the user's target price.
-        BigDecimal target = holdings != null && holdings.targetPriceCents() != null && holdings.targetPriceCents() > 0
-                ? Money.priceFromCents(holdings.targetPriceCents()) : null;
-        if (intent == StrategyIntent.INCOME && annualYieldPct != null) {
-            score += Math.min(15, annualYieldPct / 2.0) - (assignProb == null ? 0 : assignProb * 10);
-        } else if (intent == StrategyIntent.EXIT && target != null && shortCallStrike != null) {
-            if (shortCallStrike.compareTo(target) >= 0) score += 10;
-        } else if (intent == StrategyIntent.ACQUIRE && target != null && shortPutStrike != null) {
-            if (shortPutStrike.compareTo(target) <= 0) score += 10;
-        }
-        score = Math.clamp(score, 0, 100);
         double modelConf = multiExp ? 0.4 : ivMissing ? 0.5 : (pop != null ? 0.9 : 0.6);
         double confidence = Math.clamp(0.40 * freshScore + 0.35 * liquidity + 0.25 * modelConf, 0, 1);
 
@@ -740,7 +720,7 @@ public final class RecommendationEngine {
                 built.legs().stream().map(LegView::of).toList(), qty,
                 entryNet, maxProfit, maxLoss, breakevens, pop, ev,
                 round2(liquidity), freshness.name(), candidateWarnings,
-                round2(score), round2(confidence), why, upside, risk, invalidate, beginner,
+                round2(confidence), why, upside, risk, invalidate, beginner,
                 intent.name(), family.intents().stream().map(Enum::name).sorted().toList(),
                 assignProb,
                 annualYieldPct, effectivePrice, intentNote,

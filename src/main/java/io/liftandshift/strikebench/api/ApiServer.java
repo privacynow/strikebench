@@ -190,7 +190,6 @@ public final class ApiServer {
         PositionsService positions = new PositionsService(db, marksSource, audit, clock, cfg.fixturesOnly());
         RecommendationEngine engine = new RecommendationEngine(market, clock)
                 .withFees(cfg.feePerContractCents(), cfg.feePerOrderCents());
-        AutoRecommender auto = new AutoRecommender(new SignalEngine(market, clock, cfg.fixturesOnly()), engine, cfg, clock);
         BrokerService broker = new BrokerService(etrade, db, audit, clock);
         // Historical option data for backtests: real chains (Polygon) in live mode,
         // deterministic fixtures in fixture mode — never mixed.
@@ -209,7 +208,8 @@ public final class ApiServer {
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
         io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, engine, db, clock)
                 .withFees(cfg.feePerContractCents(), cfg.feePerOrderCents()); // decision EV matches the REAL commission
-        auto.withEvaluationService(evaluations);
+        AutoRecommender auto = new AutoRecommender(new SignalEngine(market, clock, cfg.fixturesOnly()),
+                engine, evaluations, cfg, clock);
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
         server.db = db;
         server.portfolioBooks = new io.liftandshift.strikebench.paper.PortfolioAccountingService(db, clock, marksSource);

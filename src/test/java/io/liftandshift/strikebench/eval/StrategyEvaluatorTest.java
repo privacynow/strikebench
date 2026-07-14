@@ -22,7 +22,7 @@ class StrategyEvaluatorTest {
         return new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 250C / SELL 255C Aug21",
                 legs, 1, -20_000L, 30_000L, 20_000L, List.of("252.00"),
                 0.45, 2_000L, 0.70, freshness, List.of(),
-                55.0, confidence, "Cheap defined-risk way to play a move up",
+                confidence, "Cheap defined-risk way to play a move up",
                 "Up to $300 if AAPL is above $255", "Loses the $200 debit if AAPL stays flat/down",
                 "AAPL closes below $250 at expiry", "You risk $200 to make up to $300",
                 "DIRECTIONAL", List.of("DIRECTIONAL"),

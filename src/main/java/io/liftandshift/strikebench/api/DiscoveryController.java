@@ -16,6 +16,7 @@ import io.liftandshift.strikebench.recommend.Candidate;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
+import io.liftandshift.strikebench.util.DataUnavailableException;
 import io.liftandshift.strikebench.util.Json;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -93,8 +94,8 @@ final class DiscoveryController {
     /**
      * ONE ranking everywhere: candidates leave this API ordered by the DECISION score (the full
      * StrategyEvaluation composite — gates, capital, tail risk, evidence haircut), the same score
-     * the Decision page and the opportunity scan use. The engine's quick screen score stays on each
-     * candidate as a disclosed component. Evaluation trouble falls back to screen order, labeled.
+     * the Decision page and opportunity scan use. Ranking is mandatory: returning a second plausible
+     * order on evaluation failure would make a data problem look like a product judgment.
      */
     Object decisionRanked(RecommendationEngine.Result result, Account acct, String world) {
         if (result.candidates() == null || result.candidates().isEmpty()) return result;
@@ -104,7 +105,9 @@ final class DiscoveryController {
             var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
                     result.riskMode(), result.candidates(), acct.buyingPowerCents(), null, false,
                     io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world));
-            if (evals.size() != result.candidates().size()) return result; // partial evaluation: keep screen order
+            if (evals.size() != result.candidates().size()) {
+                throw new DataUnavailableException("Decision ranking did not evaluate every candidate");
+            }
             com.fasterxml.jackson.databind.node.ObjectNode out =
                     (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(result);
             com.fasterxml.jackson.databind.node.ArrayNode cands = out.putArray("candidates");
@@ -151,9 +154,11 @@ final class DiscoveryController {
                     : "No setup currently shows a robust after-cost edge. Mixed and unfavorable structures remain available for comparison and learning.");
             return out;
         } catch (RuntimeException e) {
-            log.warn("Decision ranking is temporarily unavailable; showing the screened order");
+            log.warn("Decision ranking is temporarily unavailable");
             log.debug("Decision-ranking failure detail", e);
-            return result;
+            if (e instanceof DataUnavailableException unavailable) throw unavailable;
+            throw new DataUnavailableException(
+                    "Decision ranking is unavailable right now; no alternate ranking was substituted", e);
         }
     }
 
@@ -424,8 +429,11 @@ final class DiscoveryController {
         } catch (RuntimeException e) {
             log.warn("Ladder decision details are temporarily unavailable");
             log.debug("Ladder decision-detail failure", e);
+            if (e instanceof DataUnavailableException unavailable) throw unavailable;
+            throw new DataUnavailableException(
+                    "The strike ladder cannot be compared until its decision analysis is available", e);
         }
-        ctx.json(ladder);
+        throw new DataUnavailableException("The strike ladder did not evaluate every rung");
     }
 
     private void researchScout(Context ctx) {

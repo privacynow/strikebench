@@ -590,7 +590,7 @@ final class TradeController {
         return new Candidate(request.strategy(), display, group, display, legs, request.qty(),
                 preview.entryNetPremiumCents(), preview.maxProfitCents(), preview.maxLossCents(),
                 preview.breakevens(), preview.popEntry(), preview.expectedValueCents(),
-                liquid ? 1.0 : 0.0, preview.freshness(), preview.warnings(), 0, 1,
+                liquid ? 1.0 : 0.0, preview.freshness(), preview.warnings(), 1,
                 "Exact ticket", "", "", "", "", intent, intents, preview.assignmentProb(),
                 null, null, null, request.heldShares() ? Boolean.TRUE : null,
                 sharesNeeded, combinedMaxLoss);

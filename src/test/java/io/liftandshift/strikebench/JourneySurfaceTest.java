@@ -396,6 +396,28 @@ class JourneySurfaceTest {
         assertThat(api).doesNotContain("exception(java.util.NoSuchElementException.class");
     }
 
+    @Test void decisionPolicyIsTheOnlyStrategyRankingContract() throws Exception {
+        String candidate = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/recommend/Candidate.java"));
+        String engine = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/recommend/RecommendationEngine.java"));
+        String scout = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/recommend/AutoRecommender.java"));
+        String discovery = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/DiscoveryController.java"));
+        String views = source("js/views-plan.js");
+        String learn = source("js/learn.js");
+
+        assertThat(candidate).doesNotContain("double score");
+        assertThat(engine).doesNotContain("Candidate::score", "double score = 100 *");
+        assertThat(scout).contains("private final EvaluationService evaluations")
+                .doesNotContain("autoScore(", "withEvaluationService", "rankingScore");
+        assertThat(discovery).contains("no alternate ranking was substituted")
+                .doesNotContain("showing the screened order", "partial evaluation: keep screen order");
+        assertThat(views).doesNotContain("Screen score", "c.score");
+        assertThat(learn).doesNotContain("screenscore:");
+    }
+
     @Test void marketTransitionsHaveOneBackendOwner() throws Exception {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));

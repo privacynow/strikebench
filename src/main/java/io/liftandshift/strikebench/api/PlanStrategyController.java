@@ -283,9 +283,8 @@ final class PlanStrategyController {
                             ? wantedThesis : pick.signals().thesis());
                     candidate.put("scoutScope", scope); candidate.put("scoutHorizon", horizon.horizon());
                     candidate.put("opportunityScore", pick.opportunityScore());
-                    candidate.put("rankingScore", scored.rankingScore());
                     if (scored.targetFit() != null) candidate.put("targetFit", scored.targetFit());
-                    if (scored.decisionScore() != null) candidate.put("decisionScore", scored.decisionScore());
+                    candidate.put("decisionScore", scored.decisionScore());
                     if (scored.economics() != null) {
                         anyEconomicAssessment = true;
                         if (!"MECHANICALLY_INELIGIBLE".equals(scored.economics().placement())) {
