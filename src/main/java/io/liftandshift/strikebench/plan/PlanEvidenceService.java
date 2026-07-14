@@ -13,7 +13,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.NoSuchElementException;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import java.util.Objects;
 
 /** Durable, plan-owned historical evidence. Every rendered result is reconstructed from rows. */
@@ -276,7 +276,7 @@ public final class PlanEvidenceService {
                         + (lock ? " FOR UPDATE" : ""),
                 r -> new CurrentPlan(r.str("symbol"), Plan.MarketKind.valueOf(r.str("market_kind")),
                         r.intv("active_context_rev")), id, userId, userId);
-        if (rows.isEmpty()) throw new NoSuchElementException("no such plan: " + id);
+        if (rows.isEmpty()) throw new ResourceNotFoundException("no such plan: " + id);
         return rows.getFirst();
     }
 

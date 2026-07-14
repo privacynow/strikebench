@@ -73,7 +73,7 @@ public final class DatasetService {
 
     public void setActive(String id, String userId) {
         if (!OBSERVED.equals(id) && !ownedBy(id, userId)) {
-            throw new java.util.NoSuchElementException("no such dataset: " + id); // absent OR someone else's — same answer
+            throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such dataset: " + id); // absent OR someone else's — same answer
         }
         String k = ACTIVE_KEY + ":" + owner(userId);
         db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
@@ -128,7 +128,7 @@ public final class DatasetService {
     /** Deletes a synthetic dataset the caller OWNS (bars cascade). 'observed' is untouchable. */
     public void delete(String id, String userId) {
         if (OBSERVED.equals(id)) throw new IllegalArgumentException("The observed dataset cannot be deleted");
-        if (!ownedBy(id, userId)) throw new java.util.NoSuchElementException("no such dataset: " + id);
+        if (!ownedBy(id, userId)) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such dataset: " + id);
         if (id.equals(activeId(userId))) setActive(OBSERVED, userId); // never leave this user pointed at a ghost
         db.exec("DELETE FROM dataset WHERE id=?", id);
     }

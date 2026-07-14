@@ -223,6 +223,7 @@ Environment variables, or the same keys lowercase-dotted in `./strikebench.prope
 | `ALPHAVANTAGE_FULL_HISTORY_ENABLED` | `false` | Use full daily history only when the key's plan is entitled |
 | `ALPHAVANTAGE_DAILY_REQUEST_LIMIT` | `25` | Durable daily request safety cap shared by screens and jobs |
 | `FRED_API_KEY` | — | Risk-free rates (else keyless Treasury XML) |
+| `EDGAR_USER_AGENT` | — | Required contact identity for SEC filings, for example `MyStrikeBench/1.0 (me@example.com)`; blank disables EDGAR |
 | `ETRADE_CONSUMER_KEY` / `ETRADE_CONSUMER_SECRET` | — | Enables the E*TRADE adapter |
 | `ETRADE_SANDBOX` | `true` | Sandbox vs live E*TRADE |
 | `*_BASE_URL` (Cboe/Stooq/EDGAR/Treasury/FRED/Polygon/AlphaVantage/ETrade) | real endpoints | Overridable for tests |

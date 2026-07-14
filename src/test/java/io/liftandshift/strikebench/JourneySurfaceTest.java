@@ -67,6 +67,13 @@ class JourneySurfaceTest {
                 "routes.get(\"/api/plans/{id}/outcomes/backtests/{backtestId}\"");
     }
 
+    @Test void onlyDeliberateResourceAbsenceMapsToHttp404() throws Exception {
+        String api = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
+        assertThat(api).contains("ResourceNotFoundException.class", "DataUnavailableException.class");
+        assertThat(api).doesNotContain("exception(java.util.NoSuchElementException.class");
+    }
+
     @Test void canonicalOwnersRetainTheFullDecisionAndLearningToolset() throws Exception {
         String views = source("js/views.js");
         String builder = source("js/builder.js");

@@ -23,7 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.NoSuchElementException;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /**
  * Plan-owned bridge from a persisted path ensemble to the live simulated exchange. Selection,
@@ -268,7 +268,7 @@ public final class PlanRehearsalService {
                         "AND (user_id=?::text OR (?::text IS NULL AND user_id IS NULL))" + (lock ? " FOR UPDATE" : ""),
                 r -> new PlanRow(r.str("user_id"), r.lng("version"), r.intv("active_context_rev")),
                 planId, userId, userId);
-        if (rows.isEmpty()) throw new NoSuchElementException("no such Plan: " + planId);
+        if (rows.isEmpty()) throw new ResourceNotFoundException("no such Plan: " + planId);
         return rows.getFirst();
     }
 

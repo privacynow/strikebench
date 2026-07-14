@@ -6,7 +6,7 @@ import io.liftandshift.strikebench.util.Ids;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
-import java.util.NoSuchElementException;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /**
  * Research notebook: per-user saved analyses (title + freeform/markdown body + tags),
@@ -47,7 +47,7 @@ public final class NotebookService {
                 SELECT id,title,body,tags,created_at,updated_at FROM research_note
                 WHERE id=? AND (user_id = ?::text OR (?::text IS NULL AND user_id IS NULL))
                 """, NotebookService::map, id, userId, userId);
-        if (rows.isEmpty()) throw new NoSuchElementException("no such note " + id);
+        if (rows.isEmpty()) throw new ResourceNotFoundException("no such note " + id);
         return rows.getFirst();
     }
 

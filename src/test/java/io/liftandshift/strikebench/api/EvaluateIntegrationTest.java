@@ -223,6 +223,20 @@ class EvaluateIntegrationTest {
         assertThat(post("/api/trade/replicate", "{}").statusCode()).isEqualTo(404);
     }
 
+    @Test void aMissingMarketAnchorIsADataGapRatherThanAFakeMissingRoute() throws Exception {
+        String body = """
+                {"operation":"PATHS","basis":"PARAMETRIC",
+                 "context":{"symbol":"NVDA","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+                 "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":2,
+                         "driftAnnual":0,"volAnnual":0.25,"jumpsPerYear":0,"jumpMean":0,
+                         "jumpVol":0,"tailNu":6,"seed":77,"paths":40}}
+                """;
+        HttpResponse<String> response = post("/api/evaluate", body);
+        assertThat(response.statusCode()).isEqualTo(422);
+        assertThat(Json.MAPPER.readTree(response.body()).get("error").asText())
+                .isEqualTo("data_unavailable");
+    }
+
     @Test void beginnerEventScenarioAnchorsIvCrushToTheActiveMarket() throws Exception {
         String body = """
                 {"operation":"PATHS","basis":"PARAMETRIC",

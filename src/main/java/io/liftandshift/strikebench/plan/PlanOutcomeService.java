@@ -27,7 +27,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.NoSuchElementException;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import java.util.zip.DeflaterOutputStream;
 import java.util.zip.InflaterInputStream;
 
@@ -167,7 +167,7 @@ public final class PlanOutcomeService {
                             "JOIN plans p ON p.id=pe.plan_id " +
                             "WHERE pe.id=? AND pe.plan_id=?",
                     PlanOutcomeService::ensembleRow, ensembleId, planId);
-            if (rows.isEmpty()) throw new NoSuchElementException("no such Plan ensemble: " + ensembleId);
+            if (rows.isEmpty()) throw new ResourceNotFoundException("no such Plan ensemble: " + ensembleId);
             EnsembleRow r = rows.getFirst();
             if (!CODEC.equals(r.codec())) throw new IllegalStateException("Unsupported ensemble codec " + r.codec());
             double[][] paths = decodeMatrix(inflate(r.spotMatrix()), r.nPaths(), r.nSteps() + 1);
@@ -378,7 +378,7 @@ public final class PlanOutcomeService {
             ownedPlanOn(c, planId, userId, false);
             boolean linked = !Db.queryOn(c, "SELECT id FROM plan_backtest WHERE plan_id=? AND backtest_id=? LIMIT 1",
                     r -> r.str("id"), planId, backtestId).isEmpty();
-            if (!linked) throw new NoSuchElementException("no such Plan backtest: " + backtestId);
+            if (!linked) throw new ResourceNotFoundException("no such Plan backtest: " + backtestId);
             return null;
         });
     }
@@ -667,7 +667,7 @@ public final class PlanOutcomeService {
                         "WHERE p.id=? AND " + ownerClause("p.user_id") + (lock ? " FOR UPDATE OF p" : ""),
                 r -> new CurrentPlan(r.str("symbol"), r.str("market_kind"), r.str("world_id"),
                         r.intv("active_context_rev"), r.lng("version"), r.str("input_hash")), id, userId, userId);
-        if (rows.isEmpty()) throw new NoSuchElementException("no such Plan: " + id);
+        if (rows.isEmpty()) throw new ResourceNotFoundException("no such Plan: " + id);
         return rows.getFirst();
     }
 

@@ -95,6 +95,16 @@ class EdgarProviderTest {
     }
 
     @Test
+    void missingInstallationIdentityDisablesRatherThanImpersonatesAnotherOwner() {
+        AppConfig blank = new AppConfig(Map.of("EDGAR_USER_AGENT", ""));
+        assertThat(blank.edgarConfigured()).isFalse();
+        assertThat(blank.edgarUserAgent()).isBlank();
+        assertThatThrownBy(() -> new EdgarProvider(blank))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("EDGAR_USER_AGENT");
+    }
+
+    @Test
     void unknownTickerReturnsEmptyWithoutSubmissionsRequest() {
         server.enqueue(json(TICKER_MAP_JSON));
 

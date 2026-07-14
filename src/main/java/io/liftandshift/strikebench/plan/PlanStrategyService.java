@@ -19,7 +19,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.NoSuchElementException;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /** Normalized, exact Strategy-stage competition persistence for one Plan context. */
 public final class PlanStrategyService {
@@ -201,7 +201,7 @@ public final class PlanStrategyService {
             List<String> candidate = Db.queryOn(c, "SELECT id FROM plan_candidate WHERE id=? AND plan_id=? " +
                             "AND context_rev=? AND underlying_symbol=? AND state='CURRENT'",
                     r -> r.str("id"), candidateId, planId, plan.contextRev(), plan.symbol());
-            if (candidate.isEmpty()) throw new NoSuchElementException("no current candidate " + candidateId);
+            if (candidate.isEmpty()) throw new ResourceNotFoundException("no current candidate " + candidateId);
             String prior = Db.queryOn(c, "SELECT id FROM plan_candidate WHERE plan_id=? AND context_rev=? " +
                             "AND state='CURRENT' AND selected=1 ORDER BY created_at DESC LIMIT 1",
                     r -> r.str("id"), planId, plan.contextRev()).stream().findFirst().orElse(null);
@@ -303,7 +303,7 @@ public final class PlanStrategyService {
             List<CandidateRow> rows = Db.queryOn(c, candidateSelect() +
                             " WHERE pc.id=? AND pc.plan_id=? AND pc.source_kind='SCOUT' AND pc.state='CURRENT'",
                     PlanStrategyService::candidateRow, candidateId, originPlanId);
-            if (rows.isEmpty()) throw new NoSuchElementException("no current scouted candidate " + candidateId);
+            if (rows.isEmpty()) throw new ResourceNotFoundException("no current scouted candidate " + candidateId);
             return loadCandidate(c, rows.getFirst());
         });
     }
@@ -602,7 +602,7 @@ public final class PlanStrategyService {
                         ownerClause("user_id") + (lock ? " FOR UPDATE" : ""),
                 r -> new CurrentPlan(r.str("symbol"), r.intv("active_context_rev"), r.lng("version")),
                 id, userId, userId);
-        if (rows.isEmpty()) throw new NoSuchElementException("no such plan: " + id);
+        if (rows.isEmpty()) throw new ResourceNotFoundException("no such plan: " + id);
         return rows.getFirst();
     }
 

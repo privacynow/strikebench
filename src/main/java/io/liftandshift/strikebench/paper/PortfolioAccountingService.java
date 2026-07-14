@@ -1644,7 +1644,7 @@ public final class PortfolioAccountingService {
         if (id == null || id.isBlank()) throw new IllegalArgumentException("portfolio account id is required");
         var rows = Db.queryOn(c, "SELECT * FROM portfolio_account WHERE id=? AND owner_id=?" + (lock ? " FOR UPDATE" : ""),
                 PortfolioAccountingService::mapAccount, id, owner);
-        if (rows.isEmpty()) throw new java.util.NoSuchElementException("No tracked portfolio account " + id);
+        if (rows.isEmpty()) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("No tracked portfolio account " + id);
         return rows.getFirst();
     }
 

@@ -598,6 +598,21 @@ class ApiIntegrationTest {
         assertThat(Json.parse(get("/api/quotes").body()).get("quotes").size())
                 .isEqualTo(u.at("/active/symbols").size());
 
+        String fifty = java.util.stream.IntStream.range(0, 50)
+                .mapToObj(i -> "SYM" + i).collect(java.util.stream.Collectors.joining(","));
+        JsonNode completeBatch = Json.parse(get("/api/quotes?symbols=" + fifty).body());
+        assertThat(completeBatch.get("requested").asInt()).isEqualTo(50);
+        assertThat(completeBatch.get("considered").asInt()).isEqualTo(50);
+        assertThat(completeBatch.get("truncated").asBoolean()).isFalse();
+
+        String tooMany = java.util.stream.IntStream.range(0, 125)
+                .mapToObj(i -> "SYM" + i).collect(java.util.stream.Collectors.joining(","));
+        JsonNode boundedBatch = Json.parse(get("/api/quotes?symbols=" + tooMany).body());
+        assertThat(boundedBatch.get("requested").asInt()).isEqualTo(125);
+        assertThat(boundedBatch.get("considered").asInt()).isEqualTo(120);
+        assertThat(boundedBatch.get("truncated").asBoolean()).isTrue();
+        assertThat(boundedBatch.get("limit").asInt()).isEqualTo(120);
+
         // The scout's default scan list is the selected universe
         JsonNode scan = Json.parse(post("/api/research/scout", "{}").body());
         java.util.Set<String> activeSymbols = new java.util.LinkedHashSet<>();

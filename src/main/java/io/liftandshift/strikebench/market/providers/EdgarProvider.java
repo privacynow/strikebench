@@ -45,6 +45,9 @@ public final class EdgarProvider implements NewsFilingsProvider {
         this.baseUrl = Http.normalizeBase(cfg.edgarBaseUrl());
         this.dataBaseUrl = Http.normalizeBase(cfg.edgarDataBaseUrl());
         this.userAgent = cfg.edgarUserAgent();
+        if (userAgent.isBlank()) {
+            throw new IllegalStateException("EDGAR_USER_AGENT must identify this installation and include a contact email");
+        }
     }
 
     @Override

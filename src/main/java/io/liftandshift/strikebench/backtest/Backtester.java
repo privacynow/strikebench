@@ -798,7 +798,7 @@ public final class Backtester {
     public Map<String, Object> get(String id) {
         List<Map<String, Object>> rows = db.query("SELECT report_json FROM backtests WHERE id=?",
                 r -> Json.read(r.str("report_json"), Map.class), id);
-        if (rows.isEmpty()) throw new java.util.NoSuchElementException("no such backtest " + id);
+        if (rows.isEmpty()) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such backtest " + id);
         @SuppressWarnings("unchecked")
         Map<String, Object> report = (Map<String, Object>) rows.getFirst();
         return report;

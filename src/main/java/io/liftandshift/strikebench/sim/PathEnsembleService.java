@@ -11,7 +11,7 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
-import java.util.NoSuchElementException;
+import io.liftandshift.strikebench.util.DataUnavailableException;
 
 /**
  * The one source of price-path ensembles. It owns lane-aware anchors, bootstrap history and
@@ -58,7 +58,7 @@ public final class PathEnsembleService {
                 .filter(java.util.Objects::nonNull)
                 .map(BigDecimal::doubleValue)
                 .filter(v -> v > 0)
-                .orElseThrow(() -> new NoSuchElementException(
+                .orElseThrow(() -> new DataUnavailableException(
                         "No price for " + scope.symbol() + " — this analysis needs a price in the active market."));
     }
 

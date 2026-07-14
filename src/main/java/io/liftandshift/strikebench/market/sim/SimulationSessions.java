@@ -238,7 +238,7 @@ public final class SimulationSessions {
     public Map<String, Object> anchors(String worldId, String userId) {
         var rows = db.query("SELECT anchors::text a FROM sim_session WHERE id=? AND user_id=?",
                 r -> r.str("a"), worldId, owner(userId));
-        if (rows.isEmpty()) throw new java.util.NoSuchElementException("no such simulated session: " + worldId);
+        if (rows.isEmpty()) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + worldId);
         String a = rows.getFirst();
         if (a == null) return Map.of("anchors", List.of(), "excluded", List.of(), "pending", List.of());
         return Json.read(a, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
@@ -431,7 +431,7 @@ public final class SimulationSessions {
     public void ensureReady(String worldId, String userId) {
         var rows = db.query("SELECT status FROM sim_session WHERE id=? AND user_id=?",
                 r -> r.str("status"), worldId, owner(userId));
-        if (rows.isEmpty()) throw new java.util.NoSuchElementException("no such simulated session: " + worldId);
+        if (rows.isEmpty()) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + worldId);
         String status = rows.getFirst();
         if ("PREPARING".equals(status)) {
             throw new IllegalStateException("This simulated market is still preparing its symbols and volatility. Wait for READY before entering or starting it.");
@@ -582,6 +582,6 @@ public final class SimulationSessions {
 
     private SimulatedWorld require(String worldId, String userId) {
         return getOrRestore(worldId, userId)
-                .orElseThrow(() -> new java.util.NoSuchElementException("no such simulated session: " + worldId));
+                .orElseThrow(() -> new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + worldId));
     }
 }
