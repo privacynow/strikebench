@@ -74,7 +74,8 @@ class MigrationImmutabilityTest {
             Map.entry("V51__canonical_time_and_price_types.sql", "e7220846f7ae717ca1f2b48471d592c4c37834cfa62d3d5ffddafb48597d026e"),
             Map.entry("V52__structure_persisted_collections.sql", "5d437c7770ca116d26bad0bb049a3d75bbc2c5eb0023cdf196954d38706f2d82"),
             Map.entry("V53__canonical_json_receipts.sql", "592a6769093ac0bbb18acf0fd19422c09d1d1b0b6dc139b62b725685a08407d3"),
-            Map.entry("V54__normalize_backtest_runs.sql", "8c83fc6aebb3cc37d93bf0691b362fce63b392b337011ac0415b93a567c67463")
+            Map.entry("V54__normalize_backtest_runs.sql", "8c83fc6aebb3cc37d93bf0691b362fce63b392b337011ac0415b93a567c67463"),
+            Map.entry("V55__artifact_retention_indexes.sql", "56f421d9acb43886e16a373c0654cd3b2b4e263be5ce85320f768061c9688e15")
     );
 
     @Test

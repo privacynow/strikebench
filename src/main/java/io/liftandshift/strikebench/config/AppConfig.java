@@ -212,6 +212,18 @@ public final class AppConfig {
     /** Fixed cadence for the durable account-value curve. */
     public int portfolioNavIntervalMinutes() { return getInt("PORTFOLIO_NAV_INTERVAL_MINUTES", 15); }
 
+    // ---- Durable computed-artifact retention ----
+    /** Cleanup is deliberately independent of market mode: local Demo sessions can create the
+     *  same dense path artifacts as Observed sessions. Decision, rehearsal, accounting, audit,
+     *  calibration, and market-history records are never eligible. */
+    public boolean artifactRetentionEnabled() { return getBool("ARTIFACT_RETENTION_ENABLED", true); }
+    /** Stale/blocked intermediate Plan calculations remain available for this many days. */
+    public int stalePlanArtifactRetentionDays() { return getInt("STALE_PLAN_ARTIFACT_RETENTION_DAYS", 30); }
+    /** Unreferenced dense ensemble payloads remain available for deduplication for this many days. */
+    public int orphanEnsembleRetentionDays() { return getInt("ORPHAN_ENSEMBLE_RETENTION_DAYS", 90); }
+    public int artifactRetentionInitialDelaySeconds() { return getInt("ARTIFACT_RETENTION_INITIAL_DELAY_SECONDS", 300); }
+    public int artifactRetentionIntervalHours() { return getInt("ARTIFACT_RETENTION_INTERVAL_HOURS", 24); }
+
     // ---- In-memory market-data engine (warm cache + background refresh + streaming) ----
     /** When true (default), the engine warms the active universe on boot and refreshes in the background. */
     public boolean engineEnabled() { return getBool("ENGINE_ENABLED", true); }
