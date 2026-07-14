@@ -171,7 +171,9 @@ public final class PortfolioExportService {
 
     private static List<List<Cell>> taxRows(PortfolioAccountingService.TaxReport t) {
         return List.of(cells("Tax field", "Value"), cells("Tax year", String.valueOf(t.year())),
-                cells("Account type", t.accountType()), moneyRow("Short-term gain", t.shortTermGainCents()),
+                cells("Account type", t.accountType()),
+                cells("Disclaimer", "Not tax advice. Reconcile against broker tax forms and a qualified tax professional."),
+                moneyRow("Short-term gain", t.shortTermGainCents()),
                 moneyRow("Long-term gain", t.longTermGainCents()), moneyRow("Ordinary interest", t.ordinaryInterestCents()),
                 moneyRow("Ordinary dividends", t.ordinaryDividendCents()), moneyRow("Qualified dividends", t.qualifiedDividendCents()),
                 moneyRow("Capital-gain distributions", t.capitalGainDistributionCents()),

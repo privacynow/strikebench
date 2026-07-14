@@ -189,6 +189,30 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void rollPreservesAnExplicitNon1256IndexClassification() {
+        var account = books.createAccount("local", account("Explicit index classification", "TAXABLE", 100_000_00L));
+        var original = new PortfolioAccountingService.LegInput("OPTION", "BUY", "OPEN", "SPX", "CALL",
+                new BigDecimal("5000"), LocalDate.parse("2026-08-21"), 1L, 100,
+                new BigDecimal("5.00"), false);
+        books.record("local", account.id(), tx("2026-01-02", "TRADE", null, 0L, null,
+                "BROKER", "explicit-non-1256-open", List.of(original)));
+        var close = new PortfolioAccountingService.LegInput("OPTION", "SELL", "CLOSE", "SPX", "CALL",
+                new BigDecimal("5000"), LocalDate.parse("2026-08-21"), 1L, 100,
+                new BigDecimal("7.00"), false);
+        var replacement = new PortfolioAccountingService.LegInput("OPTION", "BUY", "OPEN", "SPX", "CALL",
+                new BigDecimal("5100"), LocalDate.parse("2026-09-18"), 1L, 100,
+                new BigDecimal("8.00"), false);
+
+        var rolled = books.record("local", account.id(), tx("2026-02-02", "ROLL", null, 0L, null,
+                "BROKER", "explicit-non-1256-roll", List.of(close, replacement)));
+
+        assertThat(rolled.roll()).isNotNull();
+        assertThat(rolled.legs()).allMatch(leg -> !leg.section1256());
+        assertThat(books.lots("local", account.id(), false)).singleElement()
+                .satisfies(lot -> assertThat(lot.section1256()).isFalse());
+    }
+
+    @Test
     void shortPutAssignmentTransfersPremiumIntoShareBasis() {
         var account = books.createAccount("local", account("Brokerage", "TAXABLE", null));
         books.record("local", account.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "put-open",
@@ -303,6 +327,24 @@ class PortfolioAccountingServiceTest {
             assertThat(tx.source()).isEqualTo("CALCULATED");
             assertThat(tx.cashEffectCents()).isZero();
         });
+    }
+
+    @Test
+    void section1256CharacterRoundsOnceOnTheAnnualNetResult() {
+        var taxable = books.createAccount("local", account("1256 cent split", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "cent-opens",
+                List.of(
+                        leg("OPTION", "BUY", "OPEN", "SPX", "CALL", "5000", "2026-12-18", 1, 1, "1.00"),
+                        leg("OPTION", "BUY", "OPEN", "SPX", "CALL", "5100", "2026-12-18", 1, 1, "1.00"))));
+        books.record("local", taxable.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "cent-closes",
+                List.of(
+                        leg("OPTION", "SELL", "CLOSE", "SPX", "CALL", "5000", "2026-12-18", 1, 1, "1.01"),
+                        leg("OPTION", "SELL", "CLOSE", "SPX", "CALL", "5100", "2026-12-18", 1, 1, "1.01"))));
+
+        var tax = books.taxReport("local", taxable.id(), 2026);
+        assertThat(tax.section1256GainCents()).isEqualTo(2L);
+        assertThat(tax.section1256LongTermCents()).isEqualTo(1L);
+        assertThat(tax.section1256ShortTermCents()).isEqualTo(1L);
     }
 
     @Test
