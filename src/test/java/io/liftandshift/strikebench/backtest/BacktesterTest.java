@@ -85,7 +85,8 @@ class BacktesterTest {
         assertThat(report.confidence()).isEqualTo("none (demo data)");
         assertThat(report.equityCurve()).hasSize(report.daysCovered());
         assertThat(report.startingCents()).isEqualTo(10_000_000L);
-        assertThat(report.assumptions()).containsKeys("slippagePctPerLeg", "feePerContractCents", "ivModel", "fills");
+        assertThat(report.assumptions()).containsKeys("slippagePctPerLeg", "feePerContractCents", "ivModel", "fills",
+                "annualRate", "rateSource", "rateProvenance", "rateConvention", "fallbackVolatility");
         assertThat(report.maxDrawdownPct()).isBetween(0.0, 1.0);
         assertThat(report.winRate()).isBetween(0.0, 1.0);
         assertThat(report.disclaimer()).containsIgnoringCase("not real historical option prices");

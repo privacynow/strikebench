@@ -207,12 +207,12 @@ public final class BacktestStore {
                             ObjectNode item = Json.obj(); item.put("date", r.str("skip_date"));
                             item.put("reason", r.str("reason")); return item;
                         }, id).forEach(skipped::add);
-                ObjectNode assumptions = report.putObject("assumptions");
-                Db.queryOn(c, "SELECT assumption_key,assumption_value::text assumption_value FROM backtest_assumption " +
-                                "WHERE backtest_id=? ORDER BY assumption_key",
-                        r -> Map.entry(r.str("assumption_key"), Json.parse(r.str("assumption_value"))), id)
-                        .forEach(entry -> assumptions.set(entry.getKey(), entry.getValue()));
             }
+            ObjectNode assumptions = report.putObject("assumptions");
+            Db.queryOn(c, "SELECT assumption_key,assumption_value::text assumption_value FROM backtest_assumption " +
+                            "WHERE backtest_id=? ORDER BY assumption_key",
+                    r -> Map.entry(r.str("assumption_key"), Json.parse(r.str("assumption_value"))), id)
+                    .forEach(entry -> assumptions.set(entry.getKey(), entry.getValue()));
             @SuppressWarnings("unchecked")
             Map<String, Object> out = Json.MAPPER.convertValue(report, Map.class);
             return out;

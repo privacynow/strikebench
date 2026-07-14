@@ -38,7 +38,6 @@ public final class HistoricalReplayKernel {
         public boolean mostlyObserved() { return totalMarks > 0 && observedMarks * 10 >= totalMarks * 9; }
     }
 
-    private static final double RATE = 0.04;
     private final MarketDataService market;
     private final Db db;
 
@@ -65,7 +64,7 @@ public final class HistoricalReplayKernel {
         return Double.isNaN(hv) || hv <= 0 ? fallback : hv;
     }
 
-    public long valueCents(String symbol, List<Leg> legs, int qty, double spot, double iv,
+    public long valueCents(String symbol, List<Leg> legs, int qty, double spot, double iv, double annualRate,
                            LocalDate asOf, AnalysisContext analysis, PriceIntent intent,
                            boolean payoffOnly, Evidence evidence) {
         double total = 0;
@@ -87,7 +86,7 @@ public final class HistoricalReplayKernel {
                     } else {
                         double smileIv = VolSurface.smile(iv, spot, strike, t);
                         value = BlackScholes.price(leg.type() == OptionType.CALL, spot, strike,
-                                t, RATE, 0, smileIv);
+                                t, annualRate, 0, smileIv);
                     }
                 }
             }
