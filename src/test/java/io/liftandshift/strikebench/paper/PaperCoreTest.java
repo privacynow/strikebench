@@ -397,8 +397,8 @@ class PaperCoreTest {
         assertThat(ledgerRows).isZero();
 
         // Excluded from the paper-money aggregate (identity: totalValue = cash + shares + closes)...
-        Map<String, Object> open = trades.openPositionsValue(acct.id());
-        assertThat((Integer) open.get("openTradesCount")).isZero();
+        TradeService.OpenPositionsValue open = trades.openPositionsValue(acct.id());
+        assertThat(open.openTradesCount()).isZero();
 
         // ...but closing records the real outcome on the trade row — still zero ledger rows.
         TradeService.CloseResult closed = trades.unwind(t.id(), true);

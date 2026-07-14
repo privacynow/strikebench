@@ -398,8 +398,8 @@ public final class ApiServer {
                 if (!throttle.tryAcquire(ip)) {
                     apiThrottled.incrementAndGet();
                     ctx.status(429);
-                    ctx.json(java.util.Map.of("error", "rate limited",
-                            "detail", "too many requests from this address — slow down and retry"));
+                    ctx.json(new ApiResponses.ErrorBody("rate limited",
+                            "too many requests from this address — slow down and retry"));
                     ctx.skipRemainingHandlers();
                 }
             });
@@ -445,14 +445,16 @@ public final class ApiServer {
                     ctx -> ctx.json(datasets.describe(ownerId(ctx))), this::datasetSetActive,
                     ctx -> {
                         datasets.delete(ctx.pathParam("id"), ownerId(ctx));
-                        ctx.json(Map.of("ok", true));
+                        ctx.json(new ApiResponses.Ok(true));
                     },
                     this::simDataset));
 
             // Historical event studies live under Research. There is no legacy Lab destination:
             // every capability has one canonical owner and route.
             io.javalin.http.Handler questionsHandler = ctx ->
-                    ctx.json(Map.of("questions", new io.liftandshift.strikebench.research.ResearchQuestionEngine(market, clock).catalog()));
+                    ctx.json(new ApiResponses.Questions<>(
+                            new io.liftandshift.strikebench.research.ResearchQuestionEngine(market, clock)
+                                    .catalog()));
             io.javalin.http.Handler studyHandler = ctx ->
                     ctx.json(new io.liftandshift.strikebench.research.ResearchQuestionEngine(market, clock)
                             .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest.class)),
@@ -461,12 +463,11 @@ public final class ApiServer {
                     questionsHandler, studyHandler, this::noteCreate, this::noteList,
                     this::noteGet, this::noteUpdate, this::noteDelete, this::research,
                     this::expirations, this::chain, this::history, this::news, this::lookup,
-                    ctx -> ctx.json(Map.of(
-                            "families", java.util.Arrays.stream(
-                                            io.liftandshift.strikebench.strategy.StrategyFamily.values())
+                    ctx -> ctx.json(new ApiResponses.StrategyCatalog<>(
+                            java.util.Arrays.stream(io.liftandshift.strikebench.strategy.StrategyFamily.values())
                                     .map(Enum::name).toList(),
-                            "catalog", io.liftandshift.strikebench.strategy.StrategyCatalog.families(),
-                            "templates", io.liftandshift.strikebench.strategy.StrategyCatalog.templates())),
+                            io.liftandshift.strikebench.strategy.StrategyCatalog.families(),
+                            io.liftandshift.strikebench.strategy.StrategyCatalog.templates())),
                     this::welcomeTeachingExample, this::researchScout, this::researchIntentLadder,
                     this::evaluate, this::opportunities, this::optimize,
                     ctx -> ctx.json(new io.liftandshift.strikebench.strategy.ExposureSizer(market)
@@ -475,7 +476,7 @@ public final class ApiServer {
                                     worldParam(activeWorld(ctx)))),
                     ctx -> {
                         String owner = io.liftandshift.strikebench.util.OwnerScope.id(auth.currentUserId(ctx));
-                        ctx.json(Map.of("evaluations", evaluations.recent(owner, 50)));
+                        ctx.json(new ApiResponses.Evaluations<>(evaluations.recent(owner, 50)));
                     },
                     ctx -> {
                         String owner = io.liftandshift.strikebench.util.OwnerScope.id(auth.currentUserId(ctx));
@@ -491,7 +492,7 @@ public final class ApiServer {
                         String world = String.valueOf(body.getOrDefault("world", "observed"));
                         ctx.json(worldTransitions.transition(world, ownerId(ctx)));
                     },
-                    ctx -> ctx.json(Map.of("sessions", simSessions.list(ownerId(ctx)))),
+                    ctx -> ctx.json(new ApiResponses.Sessions<>(simSessions.list(ownerId(ctx)))),
                     ctx -> ctx.json(simSessions.anchors(ctx.pathParam("id"), ownerId(ctx))),
                     this::simMarketCreate,
                     ctx -> {
@@ -500,7 +501,7 @@ public final class ApiServer {
                         simSessions.start(id, owner);
                         events.publish("world.control", Map.of("world", id,
                                 "user", owner == null ? "local" : owner, "running", true));
-                        ctx.json(Map.of("ok", true, "running", true));
+                        ctx.json(new ApiResponses.Running(true, true));
                     },
                     ctx -> {
                         String id = ctx.pathParam("id");
@@ -508,11 +509,11 @@ public final class ApiServer {
                         simSessions.pause(id, owner);
                         events.publish("world.control", Map.of("world", id,
                                 "user", owner == null ? "local" : owner, "running", false));
-                        ctx.json(Map.of("ok", true, "running", false));
+                        ctx.json(new ApiResponses.Running(true, false));
                     },
                     ctx -> {
                         simSessions.step(ctx.pathParam("id"), ownerId(ctx));
-                        ctx.json(Map.of("ok", true));
+                        ctx.json(new ApiResponses.Ok(true));
                     },
                     ctx -> {
                         var body = requireBody(bodyOrNull(ctx, java.util.Map.class));
@@ -522,7 +523,7 @@ public final class ApiServer {
                         simSessions.setSpeed(id, owner, speed);
                         events.publish("world.control", Map.of("world", id,
                                 "user", owner == null ? "local" : owner, "speed", speed));
-                        ctx.json(Map.of("ok", true, "speed", speed));
+                        ctx.json(new ApiResponses.Speed(true, speed));
                     },
                     ctx -> {
                         var body = requireBody(bodyOrNull(ctx, java.util.Map.class));
@@ -535,7 +536,7 @@ public final class ApiServer {
                             simSessions.injectVol(ctx.pathParam("id"), ownerId(ctx),
                                     Double.parseDouble(String.valueOf(body.get("volShift"))));
                         }
-                        ctx.json(Map.of("ok", true));
+                        ctx.json(new ApiResponses.Ok(true));
                     },
                     ctx -> {
                         String id = ctx.pathParam("id");
@@ -579,7 +580,7 @@ public final class ApiServer {
                     },
                     this::riskBudget,
                     ctx -> ctx.json(trades.portfolioGreeks(currentAccount(ctx).id())),
-                    ctx -> ctx.json(Map.of("accounts", portfolioBooks.accounts(ownerId(ctx)))),
+                    ctx -> ctx.json(new ApiResponses.Accounts<>(portfolioBooks.accounts(ownerId(ctx)))),
                     this::portfolioAccountCreate,
                     ctx -> ctx.json(portfolioBooks.account(ownerId(ctx), ctx.pathParam("id"))),
                     this::portfolioAccountUpdate,
@@ -589,9 +590,9 @@ public final class ApiServer {
                             ownerId(ctx), ctx.pathParam("id"), false)),
                     ctx -> ctx.json(portfolioBooks.summary(ownerId(ctx), ctx.pathParam("id"))),
                     this::portfolioTransactions, this::portfolioTransactionCreate,
-                    ctx -> ctx.json(Map.of("lots", portfolioBooks.lots(ownerId(ctx),
+                    ctx -> ctx.json(new ApiResponses.Lots<>(portfolioBooks.lots(ownerId(ctx),
                             ctx.pathParam("id"), Boolean.parseBoolean(ctx.queryParam("includeClosed"))))),
-                    ctx -> ctx.json(Map.of("realized", portfolioBooks.realizedLots(ownerId(ctx),
+                    ctx -> ctx.json(new ApiResponses.Realized<>(portfolioBooks.realizedLots(ownerId(ctx),
                             ctx.pathParam("id"), intParam(ctx, "year",
                                     java.time.Year.now(clock).getValue())))),
                     this::portfolioValuationCreate,
@@ -606,9 +607,9 @@ public final class ApiServer {
                     ctx -> {
                         portfolioBooks.clearTaxReconciliation(ownerId(ctx), ctx.pathParam("id"),
                                 Integer.parseInt(ctx.pathParam("year")));
-                        ctx.json(Map.of("ok", true));
+                        ctx.json(new ApiResponses.Ok(true));
                     },
-                    ctx -> ctx.json(Map.of("transactionsWritten",
+                    ctx -> ctx.json(new ApiResponses.TransactionsWritten(
                             portfolioBooks.markSection1256YearEnd(ownerId(ctx), ctx.pathParam("id"),
                                     Integer.parseInt(ctx.pathParam("year"))))),
                     this::portfolioCsvExport, this::portfolioWorkbookExport,
@@ -619,44 +620,47 @@ public final class ApiServer {
 
             BrokerRoutes.register(c, new BrokerRoutes.Handlers(
                     ctx -> ctx.json(broker.status()),
-                    ctx -> ctx.json(Map.of("authorizeUrl", broker.startConnect())),
+                    ctx -> ctx.json(new ApiResponses.AuthorizeUrl(broker.startConnect())),
                     this::brokerVerify,
-                    ctx -> ctx.json(Map.of("accounts", broker.accounts())),
+                    ctx -> ctx.json(new ApiResponses.Accounts<>(broker.accounts())),
                     ctx -> ctx.json(broker.balance(ctx.pathParam("k"))),
-                    ctx -> ctx.json(Map.of("positions", broker.positions(ctx.pathParam("k")))),
+                    ctx -> ctx.json(new ApiResponses.Positions<>(broker.positions(ctx.pathParam("k")))),
                     ctx -> {
                         String k = ctx.queryParam("accountIdKey");
                         if (k == null || k.isBlank()) {
                             throw new IllegalArgumentException("accountIdKey is required");
                         }
-                        ctx.json(Map.of("orders", broker.orders(k)));
+                        ctx.json(new ApiResponses.Orders<>(broker.orders(k)));
                     },
                     this::brokerPreview, this::brokerPlace, this::brokerCancel));
 
             c.routes.exception(io.liftandshift.strikebench.auth.UnauthorizedException.class, (e, ctx) ->
-                    ctx.status(401).json(Map.of("error", "auth_required", "detail", String.valueOf(e.getMessage()), "loginUrl", "/auth/login")));
+                    ctx.status(401).json(new ApiResponses.AuthErrorBody("auth_required",
+                            String.valueOf(e.getMessage()), "/auth/login")));
             c.routes.exception(TradeRejectedException.class, (e, ctx) ->
-                    ctx.status(422).json(Map.of("error", "trade_rejected", "detail", e.getMessage(), "reasons", e.reasons())));
-            c.routes.exception(PlanMarketMismatchException.class, (e, ctx) -> {
-                Map<String, Object> body = new LinkedHashMap<>();
-                body.put("error", "plan_market_mismatch");
-                body.put("detail", e.getMessage());
-                body.put("market", e.marketKind);
-                body.put("targetWorld", e.targetWorld);
-                ctx.status(409).json(body);
-            });
+                    ctx.status(422).json(new ApiResponses.TradeRejectedBody("trade_rejected",
+                            e.getMessage(), e.reasons())));
+            c.routes.exception(PlanMarketMismatchException.class, (e, ctx) ->
+                    ctx.status(409).json(new ApiResponses.PlanMarketMismatchBody(
+                            "plan_market_mismatch", e.getMessage(), e.marketKind, e.targetWorld)));
             c.routes.exception(IllegalArgumentException.class, (e, ctx) ->
-                    ctx.status(400).json(Map.of("error", "bad_request", "detail", String.valueOf(e.getMessage()))));
+                    ctx.status(400).json(new ApiResponses.ErrorBody(
+                            "bad_request", String.valueOf(e.getMessage()))));
             c.routes.exception(java.time.format.DateTimeParseException.class, (e, ctx) ->
-                    ctx.status(400).json(Map.of("error", "bad_request", "detail", "Invalid date: " + e.getParsedString())));
+                    ctx.status(400).json(new ApiResponses.ErrorBody(
+                            "bad_request", "Invalid date: " + e.getParsedString())));
             c.routes.exception(com.fasterxml.jackson.core.JacksonException.class, (e, ctx) ->
-                    ctx.status(400).json(Map.of("error", "bad_request", "detail", "Malformed request body (expected JSON matching this endpoint's schema)")));
+                    ctx.status(400).json(new ApiResponses.ErrorBody("bad_request",
+                            "Malformed request body (expected JSON matching this endpoint's schema)")));
             c.routes.exception(io.liftandshift.strikebench.util.ResourceNotFoundException.class, (e, ctx) ->
-                    ctx.status(404).json(Map.of("error", "not_found", "detail", String.valueOf(e.getMessage()))));
+                    ctx.status(404).json(new ApiResponses.ErrorBody(
+                            "not_found", String.valueOf(e.getMessage()))));
             c.routes.exception(io.liftandshift.strikebench.util.DataUnavailableException.class, (e, ctx) ->
-                    ctx.status(422).json(Map.of("error", "data_unavailable", "detail", String.valueOf(e.getMessage()))));
+                    ctx.status(422).json(new ApiResponses.ErrorBody(
+                            "data_unavailable", String.valueOf(e.getMessage()))));
             c.routes.exception(IllegalStateException.class, (e, ctx) ->
-                    ctx.status(409).json(Map.of("error", "conflict", "detail", String.valueOf(e.getMessage()))));
+                    ctx.status(409).json(new ApiResponses.ErrorBody(
+                            "conflict", String.valueOf(e.getMessage()))));
             c.routes.exception(Exception.class, (e, ctx) -> {
                 apiErrors.incrementAndGet();
                 boolean changed = !jarChangedHint().isEmpty();
@@ -666,11 +670,11 @@ public final class ApiServer {
                 String detail = changed
                         ? "StrikeBench changed while it was running. Restart it and try again."
                         : "The request failed unexpectedly. Retry it, then check Data health if the problem persists.";
-                ctx.status(500).json(Map.of("error", "internal", "detail", detail));
+                ctx.status(500).json(new ApiResponses.ErrorBody("internal", detail));
             });
             c.routes.error(404, ctx -> {
                 if (ctx.path().startsWith("/api") && ctx.attribute("apiErrorWritten") == null) {
-                    ctx.json(Map.of("error", "not_found", "detail", ctx.path()));
+                    ctx.json(new ApiResponses.ErrorBody("not_found", ctx.path()));
                 }
             });
         }).start();
@@ -802,13 +806,8 @@ public final class ApiServer {
     private void adminSnapshot(Context ctx) {
         requireAdmin(ctx);
         SnapshotService.SnapshotResult r = snapshots.snapshotActiveUniverse();
-        ctx.json(Map.of(
-                "asof", r.asof().toString(),
-                "symbols", r.symbols(),
-                "underlyingRows", r.underlyingRows(),
-                "optionRows", r.optionRows(),
-                "errors", r.errors(),
-                "elapsedMs", r.elapsedMs()));
+        ctx.json(new ApiResponses.Snapshot(r.asof().toString(), r.symbols(), r.underlyingRows(),
+                r.optionRows(), r.errors(), r.elapsedMs()));
     }
 
     /**
@@ -1277,43 +1276,31 @@ public final class ApiServer {
                 }
             }
         }
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("worldId", worldId);
-        out.put("config", w.config());
-        out.put("simTime", w.simTime().toString());
-        out.put("ticks", w.ticks());
-        out.put("trades", tradeRows);
-        out.put("resolved", resolved);
-        out.put("winRate", resolved > 0 ? Math.round(100.0 * wins / resolved) : null);
-        out.put("decisionPnlCents", realized);
-        // Decision-vs-outcome: predicted odds against realized frequency, per POP band.
-        Map<String, Object> popVsOutcome = new LinkedHashMap<>();
-        popVsOutcome.put("highPopTrades", hiPop);
-        popVsOutcome.put("highPopWinRate", hiPop > 0 ? Math.round(100.0 * hiPopWins / hiPop) : null);
-        popVsOutcome.put("lowPopTrades", loPop);
-        popVsOutcome.put("lowPopWinRate", loPop > 0 ? Math.round(100.0 * loPopWins / loPop) : null);
-        popVsOutcome.put("note", "Entries with POP ≥ 50% vs below — with few trades this is noise, not a verdict.");
-        out.put("popVsOutcome", popVsOutcome);
+        ApiResponses.PopVsOutcome popVsOutcome = new ApiResponses.PopVsOutcome(hiPop,
+                hiPop > 0 ? Math.round(100.0 * hiPopWins / hiPop) : null,
+                loPop, loPop > 0 ? Math.round(100.0 * loPopWins / loPop) : null,
+                "Entries with POP ≥ 50% vs below — with few trades this is noise, not a verdict.");
         // Replay record: model version + every injected event/speed change — WITHOUT this the
         // seed line below would overclaim (injections are not derivable from the seed).
         var replay = simSessions.replayRecord(worldId, ownerId(ctx));
-        out.put("modelVersion", replay.getOrDefault("modelVersion", "sim-1"));
-        out.put("events", replay.getOrDefault("events", List.of()));
-        if (replay.get("rehearsal") != null) out.put("rehearsal", replay.get("rehearsal"));
         int eventCount = replay.get("events") instanceof List<?> l ? l.size() : 0;
+        String note;
         if (replay.get("rehearsal") instanceof Map<?, ?> source) {
-            out.put("note", "This session replayed exact path " + (((Number) source.get("pathIndex")).intValue() + 1) + " ("
+            note = "This session replayed exact path " + (((Number) source.get("pathIndex")).intValue() + 1) + " ("
                     + String.valueOf(source.get("selection")).toLowerCase(Locale.ROOT) + ") from Plan ensemble "
                     + source.get("ensembleId") + " · receipt " + source.get("fingerprint")
-                    + ". Prices and IV follow that stored realization; outcomes measure management decisions, not a forecast.");
+                    + ". Prices and IV follow that stored realization; outcomes measure management decisions, not a forecast.";
         } else {
-            out.put("note", "Every price in this world was generated (model " + replay.getOrDefault("modelVersion", "sim-1")
+            note = "Every price in this world was generated (model " + replay.getOrDefault("modelVersion", "sim-1")
                     + ", seed " + w.config().seed() + ", scenario " + w.config().scenario() + ")"
                     + (eventCount > 0 ? " plus " + eventCount + " manually injected event" + (eventCount == 1 ? "" : "s")
                             + " listed below — replay needs the seed AND the event log" : "")
-                    + " — outcomes measure DECISIONS, not the market.");
+                    + " — outcomes measure DECISIONS, not the market.";
         }
-        ctx.json(out);
+        ctx.json(new ApiResponses.SimulationReport<>(worldId, w.config(), w.simTime().toString(), w.ticks(),
+                tradeRows, resolved, resolved > 0 ? Math.round(100.0 * wins / resolved) : null,
+                realized, popVsOutcome, String.valueOf(replay.getOrDefault("modelVersion", "sim-1")),
+                replay.getOrDefault("events", List.of()), replay.get("rehearsal"), note));
     }
 
     private io.liftandshift.strikebench.db.AnalysisContext analysisCtx(Context ctx) {
@@ -1386,7 +1373,8 @@ public final class ApiServer {
     }
 
     private void noteList(Context ctx) {
-        ctx.json(Map.of("notes", new io.liftandshift.strikebench.research.NotebookService(db, clock).list(ownerId(ctx))));
+        ctx.json(new ApiResponses.Notes<>(
+                new io.liftandshift.strikebench.research.NotebookService(db, clock).list(ownerId(ctx))));
     }
 
     private void noteGet(Context ctx) {
@@ -1401,7 +1389,7 @@ public final class ApiServer {
 
     private void noteDelete(Context ctx) {
         new io.liftandshift.strikebench.research.NotebookService(db, clock).delete(ownerId(ctx), ctx.pathParam("id"));
-        ctx.json(Map.of("ok", true));
+        ctx.json(new ApiResponses.Ok(true));
     }
 
     /**
@@ -1419,44 +1407,32 @@ public final class ApiServer {
     // ---- Status / config ----
 
     private void status(Context ctx) {
-        Map<String, Object> out = new LinkedHashMap<>();
         try {
-            out.put("ok", true);
-            out.put("asOf", Instant.now(clock).toString());
-            out.put("fixturesOnly", cfg.fixturesOnly());
-            out.put("domains", market.status());
+            ctx.json(new ApiResponses.Status<>(true, Instant.now(clock).toString(),
+                    cfg.fixturesOnly(), market.status(), null));
         } catch (Exception e) {
             log.warn("Market-data status is temporarily unavailable");
             log.debug("Market-data status failure detail", e);
-            out.put("ok", false);
-            out.put("error", "Market-data status is temporarily unavailable");
+            ctx.json(new ApiResponses.Status<>(false, null, null, null,
+                    "Market-data status is temporarily unavailable"));
         }
-        ctx.json(out); // 200 always, by contract
     }
 
     private void config(Context ctx) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("port", cfg.port());
-        out.put("fixturesOnly", cfg.fixturesOnly());
-        out.put("marketOpen", io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()));
-        out.put("authEnabled", auth.enabled());  // always-readable auth signal (config is in the auth-open allowlist)
-        out.put("feePerContractCents", cfg.feePerContractCents());
-        out.put("feePerOrderCents", cfg.feePerOrderCents());
-        out.put("defaultStartingCashCents", cfg.defaultStartingCashCents());
-        out.put("brand", Map.of("name", cfg.brandName(), "tagline", cfg.brandTagline()));
-        out.put("broadBasedIndexOptionSymbols", io.liftandshift.strikebench.model.BroadBasedIndexOptions.AUTOMATIC_SYMBOLS);
-        out.put("disclaimer", RecommendationEngine.DISCLAIMER);
         // Scenario mode is PERSONAL: the signal reflects the CALLER's active dataset.
         String active = datasets == null ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : datasets.activeId(ownerId(ctx));
-        out.put("activeDataset", active);
-        out.put("activeDatasetName", datasets == null ? active : datasets.nameOf(active)); // banners show NAMES, not ds_… ids
-        out.put("scenarioMode", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(active));
         String world = activeWorld(ctx);
-        out.put("world", world);
-        out.put("marketLane", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(active)
+        String lane = !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(active)
                 && "observed".equals(world) ? "SCENARIO"
-                : io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly()).name());
-        ctx.json(out);
+                : io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly()).name();
+        ctx.json(new ApiResponses.Config<>(cfg.port(), cfg.fixturesOnly(),
+                io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()), auth.enabled(),
+                cfg.feePerContractCents(), cfg.feePerOrderCents(), cfg.defaultStartingCashCents(),
+                new ApiResponses.Brand(cfg.brandName(), cfg.brandTagline()),
+                io.liftandshift.strikebench.model.BroadBasedIndexOptions.AUTOMATIC_SYMBOLS,
+                RecommendationEngine.DISCLAIMER, active,
+                datasets == null ? active : datasets.nameOf(active),
+                !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(active), world, lane));
     }
 
     /**
@@ -1469,15 +1445,14 @@ public final class ApiServer {
     { new java.security.SecureRandom().nextBytes(ackSecret); }
 
     /** The server's list of risks the user MUST acknowledge for this package (id + label). */
-    @SuppressWarnings("unchecked")
-    private List<Map<String, String>> requiredAcksFor(io.liftandshift.strikebench.paper.TradePreview p,
-                                                      long effectiveRiskBudgetCents) {
-        List<Map<String, String>> out = new ArrayList<>();
+    private List<ApiResponses.RiskAcknowledgment> requiredAcksFor(
+            io.liftandshift.strikebench.paper.TradePreview p, long effectiveRiskBudgetCents) {
+        List<ApiResponses.RiskAcknowledgment> out = new ArrayList<>();
         if (p == null || p.analytics() == null) return out;
         Long marketEvAfterCosts = p.expectedValueCents() == null ? null
                 : p.expectedValueCents() - Math.multiplyExact(p.feesOpenCents(), 2L);
         if (marketEvAfterCosts != null && marketEvAfterCosts < 0) {
-            out.add(Map.of("id", "ack-ev", "label", "The model expects this trade to LOSE "
+            out.add(new ApiResponses.RiskAcknowledgment("ack-ev", "The model expects this trade to LOSE "
                     + io.liftandshift.strikebench.util.Money.fmt(-marketEvAfterCosts)
                     + " on average at the market's own volatility."));
         }
@@ -1485,17 +1460,17 @@ public final class ApiServer {
         if (execO instanceof Map<?, ?> exec) {
             Object pct = exec.get("concessionPctOfMid");
             if (pct instanceof Double d && Math.abs(d) > 0.10) {
-                out.add(Map.of("id", "ack-exec", "label", "Entering surrenders "
+                out.add(new ApiResponses.RiskAcknowledgment("ack-exec", "Entering surrenders "
                         + Math.round(Math.abs(d) * 100) + "% of the package midpoint to the bid/ask spread."));
             }
         }
         Object planO = p.analytics().get("managementPlan");
         if (planO instanceof Map<?, ?> plan && String.valueOf(plan.get("regime")).contains("near-expiry")) {
-            out.add(Map.of("id", "ack-dte", "label", "Only " + plan.get("sessions")
+            out.add(new ApiResponses.RiskAcknowledgment("ack-dte", "Only " + plan.get("sessions")
                     + " trading session(s) remain — gamma, weekend gaps and pin risk dominate."));
         }
         if (effectiveRiskBudgetCents > 0 && p.maxLossCents() > effectiveRiskBudgetCents) {
-            out.add(Map.of("id", "ack-capital", "label", "The theoretical worst case "
+            out.add(new ApiResponses.RiskAcknowledgment("ack-capital", "The theoretical worst case "
                     + io.liftandshift.strikebench.util.Money.fmt(p.maxLossCents())
                     + " exceeds your selected per-trade risk budget ("
                     + io.liftandshift.strikebench.util.Money.fmt(effectiveRiskBudgetCents) + ")."));
@@ -1628,19 +1603,15 @@ public final class ApiServer {
 
     /** Operational counters — request volume, error volume, throttle hits, engine health. */
     private void metrics(io.javalin.http.Context ctx) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("requests", apiRequests.get());
-        out.put("latency", latencyPercentiles());
-        out.put("errors", apiErrors.get());
-        out.put("throttled", apiThrottled.get());
-        out.put("throttleActive", !cfg.fixturesOnly());
+        Object engineStatus;
         try {
-            out.put("engine", marketEngine.status());
+            engineStatus = marketEngine.status();
         } catch (Exception e) {
             log.debug("Market-engine metrics failure detail", e);
-            out.put("engine", Map.of("error", "Market engine status is temporarily unavailable"));
+            engineStatus = new ApiResponses.ErrorOnly("Market engine status is temporarily unavailable");
         }
-        ctx.json(out);
+        ctx.json(new ApiResponses.Metrics<>(apiRequests.get(), latencyPercentiles(), apiErrors.get(),
+                apiThrottled.get(), !cfg.fixturesOnly(), engineStatus));
     }
 
     private void health(Context ctx) {
@@ -1650,10 +1621,7 @@ public final class ApiServer {
         } catch (RuntimeException e) {
             changed = false;
         }
-        ctx.json(Map.of(
-                "ok", true,
-                "startedAt", startedAt,
-                "jarChangedSinceBoot", changed));
+        ctx.json(new ApiResponses.Health(true, startedAt, changed));
     }
 
     public record UniverseSelectRequest(String sector, List<String> symbols) {}
@@ -1713,9 +1681,8 @@ public final class ApiServer {
                     rows.add(m);
                 });
             }
-            ctx.json(Map.of("quotes", rows, "requested", requested, "considered", bounded.size(),
-                    "truncated", requested > limit, "limit", limit, "world", world,
-                    "marketLane", market.lane(world).name()));
+            ctx.json(new ApiResponses.WorldQuotes<>(rows, requested, bounded.size(), requested > limit,
+                    limit, world, market.lane(world).name()));
             return;
         }
         List<String> symbols = raw == null || raw.isBlank()
@@ -1731,9 +1698,8 @@ public final class ApiServer {
         for (var snap : marketEngine.quotes(symbols)) {
             out.add(io.liftandshift.strikebench.market.MarketDataEngine.toRow(snap));
         }
-        ctx.json(Map.of("quotes", out, "requested", requested, "considered", symbols.size(),
-                "truncated", requested > limit, "limit", limit,
-                "marketLane", cfg.fixturesOnly() ? "DEMO" : "OBSERVED"));
+        ctx.json(new ApiResponses.Quotes<>(out, requested, symbols.size(), requested > limit,
+                limit, cfg.fixturesOnly() ? "DEMO" : "OBSERVED"));
     }
 
     /**
@@ -1907,23 +1873,26 @@ public final class ApiServer {
     }
 
     private void workspaceGet(Context ctx) {
-        if (workspaceSvc == null) { ctx.json(Map.of("rev", 0)); return; }
+        if (workspaceSvc == null) { ctx.json(new ApiResponses.Revision(0)); return; }
         var ws = workspaceSvc.get(ownerId(ctx));
-        if (ws.isEmpty()) { ctx.json(Map.of("rev", 0)); return; }
-        ctx.json(Map.of("rev", ws.get().rev(), "updatedAt", ws.get().updatedAt(),
-                "state", Json.parse(ws.get().stateJson())));
+        if (ws.isEmpty()) { ctx.json(new ApiResponses.Revision(0)); return; }
+        ctx.json(new ApiResponses.Workspace<>(ws.get().rev(), ws.get().updatedAt(),
+                Json.parse(ws.get().stateJson())));
     }
 
     /** Body IS the state object (client-owned shape). Validated as JSON, size-capped, last-write-wins. */
     private void workspacePut(Context ctx) {
-        if (workspaceSvc == null) { ctx.status(503).json(Map.of("error", "workspace store unavailable")); return; }
+        if (workspaceSvc == null) {
+            ctx.status(503).json(new ApiResponses.ErrorOnly("workspace store unavailable"));
+            return;
+        }
         String body = ctx.body();
         if (body == null || body.isBlank()) throw new IllegalArgumentException("state body required");
         com.fasterxml.jackson.databind.JsonNode node;
         try { node = Json.parse(body); } catch (Exception e) { throw new IllegalArgumentException("state must be JSON"); }
         if (!node.isObject()) throw new IllegalArgumentException("state must be a JSON object");
         long rev = workspaceSvc.put(ownerId(ctx), body);
-        ctx.json(Map.of("ok", true, "rev", rev));
+        ctx.json(new ApiResponses.SavedRevision(true, rev));
     }
 
     // ---- Plan-centered journey ----
@@ -1986,8 +1955,8 @@ public final class ApiServer {
         var market = allMarkets ? null : activePlanMarket(ctx);
         String world = market == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
                 ? activeWorld(ctx) : null;
-        ctx.json(Map.of("plans", planSvc.list(ownerId(ctx), market, world, openOnly),
-                "market", activePlanMarket(ctx).name(), "world", activeWorld(ctx)));
+        ctx.json(new ApiResponses.Plans<>(planSvc.list(ownerId(ctx), market, world, openOnly),
+                activePlanMarket(ctx).name(), activeWorld(ctx)));
     }
 
     private void planCreate(Context ctx) {
@@ -2001,8 +1970,8 @@ public final class ApiServer {
             var eligibility = planSymbolEligibility(request.symbol(), marketWorld);
             if (!eligibility.eligible()) {
                 ctx.attribute("apiErrorWritten", true);
-                ctx.status(422).json(Map.of("error", "plan_symbol_unavailable",
-                        "detail", eligibility.detail(), "market", market.name()));
+                ctx.status(422).json(new ApiResponses.PlanSymbolError(
+                        "plan_symbol_unavailable", eligibility.detail(), market.name()));
                 return;
             }
         }
@@ -2076,7 +2045,7 @@ public final class ApiServer {
         catch (NumberFormatException e) { throw new IllegalArgumentException("expectedVersion must be an integer"); }
         String id = ctx.pathParam("id");
         planSvc.deleteDraft(ownerId(ctx), id, expectedVersion);
-        ctx.json(Map.of("deleted", id));
+        ctx.json(new ApiResponses.Deleted(id));
     }
 
     private void requireActivePlanMarket(Context ctx, io.liftandshift.strikebench.plan.Plan.View plan) {
@@ -2098,9 +2067,7 @@ public final class ApiServer {
 
     private void planEvidenceLatest(Context ctx) {
         var saved = planEvidence.latest(ownerId(ctx), ctx.pathParam("id"), analysisCtx(ctx));
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("evidence", saved);
-        ctx.json(out);
+        ctx.json(new ApiResponses.Evidence<>(saved));
     }
 
     private void planEvidenceStudy(Context ctx) {
@@ -2143,10 +2110,8 @@ public final class ApiServer {
 
     private void planStrategyLatest(Context ctx) {
         var saved = planStrategy.latestCompetition(ownerId(ctx), ctx.pathParam("id"));
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("strategy", saved);
-        out.put("selected", planStrategy.selectedCandidate(ownerId(ctx), ctx.pathParam("id")));
-        ctx.json(out);
+        ctx.json(new ApiResponses.StrategyState<>(saved,
+                planStrategy.selectedCandidate(ownerId(ctx), ctx.pathParam("id"))));
     }
 
     private void planStrategyRun(Context ctx) {
@@ -2161,7 +2126,7 @@ public final class ApiServer {
         JsonNode ranked = Json.MAPPER.valueToTree(decisionRanked(recommended, currentAccount(ctx), activeWorld(ctx)));
         JsonNode input = Json.MAPPER.valueToTree(request);
         var saved = planStrategy.saveCompetition(ownerId(ctx), plan, input, ranked);
-        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "strategy", saved));
+        ctx.json(new ApiResponses.PlanStrategy<>(planSvc.get(ownerId(ctx), plan.id()), saved));
     }
 
     /** Price one named Builder structure against this Plan without creating a second strategy workflow. */
@@ -2181,12 +2146,9 @@ public final class ApiServer {
         var request = planStrategyRequest(plan, controls);
         var ranked = Json.MAPPER.valueToTree(decisionRanked(resolveAndRecommend(ctx, request),
                 currentAccount(ctx), activeWorld(ctx)));
-        ObjectNode out = Json.MAPPER.createObjectNode();
-        out.set("plan", Json.MAPPER.valueToTree(plan));
-        out.set("result", ranked);
         JsonNode candidates = ranked.path("candidates");
-        if (candidates.isArray() && !candidates.isEmpty()) out.set("candidate", candidates.get(0));
-        ctx.json(out);
+        ctx.json(new ApiResponses.PlanStrategyFit<>(plan, ranked,
+                candidates.isArray() && !candidates.isEmpty() ? candidates.get(0) : null));
     }
 
     private static RecommendationEngine.Request planStrategyRequest(
@@ -2211,7 +2173,8 @@ public final class ApiServer {
         }
         var selected = planStrategy.select(ownerId(ctx), ctx.pathParam("id"), request.candidateId(),
                 request.expectedVersion());
-        ctx.json(Map.of("selection", selected, "plan", planSvc.get(ownerId(ctx), ctx.pathParam("id"))));
+        ctx.json(new ApiResponses.PlanSelection<>(selected,
+                planSvc.get(ownerId(ctx), ctx.pathParam("id"))));
     }
 
     private void planStrategySelectionDelete(Context ctx) {
@@ -2224,7 +2187,7 @@ public final class ApiServer {
         catch (NumberFormatException e) { throw new IllegalArgumentException("expectedVersion must be an integer"); }
         String id = ctx.pathParam("id");
         var selection = planStrategy.clearSelection(ownerId(ctx), id, expectedVersion);
-        ctx.json(Map.of("selection", selection, "plan", planSvc.get(ownerId(ctx), id)));
+        ctx.json(new ApiResponses.PlanSelection<>(selection, planSvc.get(ownerId(ctx), id)));
     }
 
     private void planStrategyCustom(Context ctx) {
@@ -2278,16 +2241,14 @@ public final class ApiServer {
         candidateJson.put("structurallyEligible", preview.ok());
         JsonNode requestJson = Json.MAPPER.valueToTree(exactBody);
         var saved = planStrategy.saveCustom(ownerId(ctx), plan, requestJson, candidateJson, body.expectedVersion());
-        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "strategy", saved,
-                "preview", preview));
+        ctx.json(new ApiResponses.PlanStrategyPreview<>(
+                planSvc.get(ownerId(ctx), plan.id()), saved, preview));
     }
 
     private void planScoutLatest(Context ctx) {
         String scope = java.util.Objects.requireNonNullElse(ctx.queryParam("scope"), "PEERS");
         var saved = planStrategy.latestScout(ownerId(ctx), ctx.pathParam("id"), scope);
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("scout", saved);
-        ctx.json(out);
+        ctx.json(new ApiResponses.Scout<>(saved));
     }
 
     private void planScoutRun(Context ctx) {
@@ -2334,7 +2295,7 @@ public final class ApiServer {
         AutoRecommender.AutoResult raw = auto.run(request, account.buyingPowerCents(), held, world);
         ObjectNode result = flattenPlanScout(plan, scope, raw);
         var saved = planStrategy.saveScout(ownerId(ctx), plan, scope, Json.MAPPER.valueToTree(request), result);
-        ctx.json(Map.of("plan", plan, "scout", saved));
+        ctx.json(new ApiResponses.PlanScout<>(plan, saved));
     }
 
     private static ObjectNode flattenPlanScout(io.liftandshift.strikebench.plan.Plan.View plan, String scope,
@@ -2428,15 +2389,15 @@ public final class ApiServer {
             planStrategy.copyScoutSelection(ownerId(ctx), origin.id(), request.candidateId(), child);
         }
         child = planSvc.get(ownerId(ctx), child.id());
-        ctx.json(Map.of("origin", origin, "plan", child, "role", role));
+        ctx.json(new ApiResponses.ScoutSpawn<>(origin, child, role));
     }
 
     private void planOutcomesLatest(Context ctx) {
         var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
         ObjectNode out = planOutcomes.latest(ownerId(ctx), plan, analysisCtx(ctx));
         JsonNode selected = planStrategy.selectedCandidate(ownerId(ctx), plan.id());
-        if (selected != null) out.set("selected", selected);
-        ctx.json(out);
+        ctx.json(new ApiResponses.PlanOutcomesLatest<>(out.path("outcomes"), out.path("comparisons"),
+                out.path("backtests"), selected));
     }
 
     /** Evidence owns path generation; Outcomes later values the exact selected package on this artifact. */
@@ -2459,8 +2420,8 @@ public final class ApiServer {
         preview.put("planEnsembleId", stored.id());
         preview.put("planEnsembleFingerprint", stored.fingerprint());
         if (preview.path("receipt") instanceof ObjectNode receipt) receipt.put("fingerprint", stored.fingerprint());
-        ctx.json(Map.of("plan", plan, "ensemble", Map.of("id", stored.id(), "fingerprint", stored.fingerprint(),
-                "basis", stored.basis()), "preview", preview));
+        ctx.json(new ApiResponses.PlanEnsemble<>(plan,
+                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis()), preview));
     }
 
     private void planOutcomeRun(Context ctx) {
@@ -2481,7 +2442,7 @@ public final class ApiServer {
             JsonNode result = Json.MAPPER.valueToTree(evaluated.result());
             var saved = planOutcomes.saveRiskNeutral(ownerId(ctx), plan, body.expectedVersion(),
                     candidate.path("id").asText(), result, input, evaluated.interpretation(), analysisCtx(ctx));
-            ctx.json(Map.of("plan", plan, "outcome", saved));
+            ctx.json(new ApiResponses.PlanOutcome<>(plan, saved));
             return;
         }
         io.liftandshift.strikebench.sim.PathEnsembleService.Basis basis;
@@ -2499,8 +2460,8 @@ public final class ApiServer {
         };
         var saved = planOutcomes.savePathOutcome(ownerId(ctx), plan, body.expectedVersion(),
                 candidate.path("id").asText(), stored, result, input, interpretation);
-        ctx.json(Map.of("plan", plan, "outcome", saved,
-                "ensemble", Map.of("id", stored.id(), "fingerprint", stored.fingerprint(), "basis", stored.basis())));
+        ctx.json(new ApiResponses.PlanOutcomeWithEnsemble<>(plan, saved,
+                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis())));
     }
 
     /** Compare the Plan's current proposals on one exact stored path artifact. */
@@ -2624,8 +2585,8 @@ public final class ApiServer {
         String fairness = "Same ensemble " + stored.fingerprint() + ", captured proposal entries, quantities, and after-cost convention; cash is the zero-risk baseline.";
         var saved = planOutcomes.saveComparison(ownerId(ctx), plan, body.expectedVersion(), stored, ranked,
                 Json.MAPPER.valueToTree(body), interpretation, fairness);
-        ctx.json(Map.of("plan", plan, "comparison", saved,
-                "ensemble", Map.of("id", stored.id(), "fingerprint", stored.fingerprint(), "basis", stored.basis())));
+        ctx.json(new ApiResponses.PlanComparison<>(plan, saved,
+                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis())));
     }
 
     private record PlanComparisonMeta(ObjectNode candidate,
@@ -2657,7 +2618,7 @@ public final class ApiServer {
         JsonNode reportJson = Json.MAPPER.valueToTree(report);
         var saved = planOutcomes.saveBacktest(ownerId(ctx), plan, body.expectedVersion(),
                 candidate.path("id").asText(), engineKind, reportJson, Json.MAPPER.valueToTree(body), analysisCtx(ctx));
-        ctx.json(Map.of("plan", plan, "backtest", saved, "report", report));
+        ctx.json(new ApiResponses.PlanBacktest<>(plan, saved, report));
     }
 
     private void planBacktestGet(Context ctx) {
@@ -2677,18 +2638,16 @@ public final class ApiServer {
         var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
         requireActivePlanMarket(ctx, plan);
         var created = planRehearsals.create(ownerId(ctx), plan, body, analysisCtx(ctx));
-        ctx.status(201).json(Map.of("rehearsal", created,
-                "plan", planSvc.get(ownerId(ctx), plan.id())));
+        ctx.status(201).json(new ApiResponses.PlanRehearsal<>(
+                created, planSvc.get(ownerId(ctx), plan.id())));
     }
 
     private void planDecisionLatest(Context ctx) {
         var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
         requireActivePlanMarket(ctx, plan);
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("plan", plan);
-        out.put("selected", planStrategy.selectedCandidate(ownerId(ctx), plan.id()));
-        out.put("decision", planDecisions.latest(ownerId(ctx), plan.id()));
-        ctx.json(out);
+        ctx.json(new ApiResponses.PlanDecisionState<>(plan,
+                planStrategy.selectedCandidate(ownerId(ctx), plan.id()),
+                planDecisions.latest(ownerId(ctx), plan.id())));
     }
 
     private void planDecisionPreview(Context ctx) {
@@ -2698,20 +2657,18 @@ public final class ApiServer {
         requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = selectedPlanCandidate(ctx, plan);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
-        Map<String, Object> payload = tradePreviewPayload(ctx, order);
-        var first = (io.liftandshift.strikebench.paper.TradePreview) payload.get("preview");
+        ApiResponses.TradePreviewResponse payload = tradePreviewPayload(ctx, order);
+        var first = payload.preview();
         if (order.proposedNetCents() == null) {
             body = new PlanDecisionRequest(body.expectedVersion(), body.qty(), first.entryNetPremiumCents(),
                     body.feesOverrideCents(), body.acknowledgedRisks(), body.ackToken(), body.note());
             order = planDecisionOrder(plan, candidate, body);
             payload = tradePreviewPayload(ctx, order);
         }
-        Map<String, Object> out = new LinkedHashMap<>(payload);
-        out.put("plan", plan);
-        out.put("selected", candidate);
-        out.put("order", Map.of("qty", order.qty(), "proposedNetCents", order.proposedNetCents(),
-                "feesOverrideCents", order.feesOverrideCents() == null ? 0L : order.feesOverrideCents()));
-        ctx.json(out);
+        ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.economics(),
+                payload.guardrails(), payload.requiredAcks(), payload.ackToken(), payload.accountFit(),
+                plan, candidate, new ApiResponses.OrderSummary(order.qty(), order.proposedNetCents(),
+                order.feesOverrideCents() == null ? 0L : order.feesOverrideCents())));
     }
 
     private void planDecisionTrade(Context ctx) {
@@ -2721,13 +2678,13 @@ public final class ApiServer {
         requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = selectedPlanCandidate(ctx, plan);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
-        Map<String, Object> payload = tradePreviewPayload(ctx, order);
+        ApiResponses.TradePreviewResponse payload = tradePreviewPayload(ctx, order);
         var decisionInput = planDecisionInput(ctx, plan, body, candidate, payload);
         var prepared = planDecisions.prepareTrade(decisionInput);
         CreatedTrade created = executeTrade(ctx, order, prepared.hook());
         var updated = planSvc.get(ownerId(ctx), plan.id());
-        ctx.status(201).json(Map.of("plan", updated, "trade", TradeView.of(created.trade()),
-                "warnings", created.verdict().warnings(), "decision", planDecisions.latest(ownerId(ctx), plan.id())));
+        ctx.status(201).json(new ApiResponses.PlanPlacedTrade<>(updated, TradeView.of(created.trade()),
+                planDecisions.latest(ownerId(ctx), plan.id()), created.verdict().warnings()));
     }
 
     private void planDecisionCash(Context ctx) {
@@ -2737,10 +2694,10 @@ public final class ApiServer {
         requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = selectedPlanCandidate(ctx, plan);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
-        Map<String, Object> payload = tradePreviewPayload(ctx, order);
+        ApiResponses.TradePreviewResponse payload = tradePreviewPayload(ctx, order);
         ObjectNode decision = planDecisions.chooseCash(planDecisionInput(ctx, plan, body, candidate, payload));
         var updated = planSvc.get(ownerId(ctx), plan.id());
-        ctx.status(201).json(Map.of("plan", updated, "decision", decision));
+        ctx.status(201).json(new ApiResponses.PlanDecision<>(updated, decision));
     }
 
     private TradeOpenRequest planDecisionOrder(io.liftandshift.strikebench.plan.Plan.View plan,
@@ -2763,14 +2720,12 @@ public final class ApiServer {
                 "PLAN", null, null, null, false, body.acknowledgedRisks(), body.ackToken());
     }
 
-    @SuppressWarnings("unchecked")
     private io.liftandshift.strikebench.plan.PlanDecisionService.Input planDecisionInput(
             Context ctx, io.liftandshift.strikebench.plan.Plan.View plan, PlanDecisionRequest body,
-            ObjectNode candidate, Map<String, Object> payload) {
+            ObjectNode candidate, ApiResponses.TradePreviewResponse payload) {
         return new io.liftandshift.strikebench.plan.PlanDecisionService.Input(ownerId(ctx), plan,
                 body.expectedVersion(), candidate.path("id").asText(), currentAccount(ctx),
-                (io.liftandshift.strikebench.paper.TradePreview) payload.get("preview"),
-                (io.liftandshift.strikebench.eval.EconomicAssessment) payload.get("economics"),
+                payload.preview(), payload.economics(),
                 io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx)),
                 body.qty(),
                 body.acknowledgedRisks() == null ? List.of() : body.acknowledgedRisks(), body.note(), analysisCtx(ctx));
@@ -2784,12 +2739,9 @@ public final class ApiServer {
         if (tradeId == null) {
             for (JsonNode link : management.withArray("links")) if (link.hasNonNull("tradeId")) tradeId = link.get("tradeId").asText();
         }
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("plan", plan);
-        out.put("decision", planDecisions.latest(ownerId(ctx), plan.id()));
-        out.put("management", management);
-        if (tradeId != null) out.put("trade", tradeDetailData(tradeId));
-        ctx.json(out);
+        ctx.json(new ApiResponses.PlanWorkspace<>(plan,
+                planDecisions.latest(ownerId(ctx), plan.id()), management,
+                tradeId == null ? null : tradeDetailData(tradeId)));
     }
 
     private void plansPortfolio(Context ctx) {
@@ -2811,7 +2763,7 @@ public final class ApiServer {
             }
             rows.add(row);
         }
-        ctx.json(Map.of("plans", rows, "market", marketKind.name()));
+        ctx.json(new ApiResponses.PlanRows<>(rows, marketKind.name()));
     }
 
     private void planManageRefresh(Context ctx) {
@@ -2821,8 +2773,8 @@ public final class ApiServer {
         String tradeId = requirePlanActiveTrade(ctx, plan.id());
         var mark = trades.refresh(tradeId);
         planManagement.recordMark(ownerId(ctx), plan.id(), body.expectedVersion(), tradeId, mark);
-        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "mark", mark,
-                "management", planManagement.latest(ownerId(ctx), plan.id())));
+        ctx.json(new ApiResponses.PlanMark<>(planSvc.get(ownerId(ctx), plan.id()), mark,
+                planManagement.latest(ownerId(ctx), plan.id())));
     }
 
     private void planManageUnwind(Context ctx) { planManageClose(ctx, "CLOSE", false); }
@@ -2840,12 +2792,10 @@ public final class ApiServer {
                 ? trades.settle(tradeId, true, hook) : trades.unwind(tradeId, true, hook);
         resolveRecommendationForTrade(tradeId, "SETTLE".equals(kind) ? "SETTLED" : "CLOSED",
                 decisionPnl(result.trade(), result.realizedPnlCents()));
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("plan", planSvc.get(ownerId(ctx), plan.id())); out.put("trade", TradeView.of(result.trade()));
-        out.put("realizedPnlCents", result.realizedPnlCents());
-        out.put("management", planManagement.latest(ownerId(ctx), plan.id()));
-        if (roll) out.put("rolledPosition", rolledPosition(result.trade(), worldParam(activeWorld(ctx))));
-        ctx.json(out);
+        ctx.json(new ApiResponses.PlanClosedTrade<>(planSvc.get(ownerId(ctx), plan.id()),
+                TradeView.of(result.trade()), result.realizedPnlCents(),
+                planManagement.latest(ownerId(ctx), plan.id()),
+                roll ? rolledPosition(result.trade(), worldParam(activeWorld(ctx))) : null));
     }
 
     private void planManageVoid(Context ctx) {
@@ -2856,8 +2806,8 @@ public final class ApiServer {
         String tradeId = requirePlanActiveTrade(ctx, plan.id());
         var hook = planManagement.lifecycleHook(ownerId(ctx), plan.id(), body.expectedVersion(), "VOID", false);
         TradeRecord deleted = trades.delete(tradeId, true, hook);
-        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "trade", TradeView.of(deleted),
-                "management", planManagement.latest(ownerId(ctx), plan.id())));
+        ctx.json(new ApiResponses.PlanTrade<>(planSvc.get(ownerId(ctx), plan.id()),
+                TradeView.of(deleted), planManagement.latest(ownerId(ctx), plan.id())));
     }
 
     private void planManageReview(Context ctx) {
@@ -2905,7 +2855,7 @@ public final class ApiServer {
                         stockPnl, entry, packageEnd, rejectedPnl, horizon,
                         decision.hasNonNull("pop") ? decision.get("pop").asDouble() : null,
                         "Frozen-IV modeled value at the lane-owned horizon close; kept outside trade calibration"));
-        ctx.json(Map.of("plan", planSvc.get(ownerId(ctx), plan.id()), "management", management));
+        ctx.json(new ApiResponses.PlanManagement<>(planSvc.get(ownerId(ctx), plan.id()), management));
     }
 
     private static long modeledRejectedPackageValue(ArrayNode legs, BigDecimal spot, java.time.LocalDate horizon,
@@ -3070,26 +3020,25 @@ public final class ApiServer {
 
     /** One call for the Data Center header: engine health + coverage summary + mode. Never 500s. */
     private void dataOverview(Context ctx) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        try { out.put("engine", marketEngine.status()); } catch (Exception e) { out.put("engine", null); }
-        try { out.put("coverage", dataCoverage.summary()); } catch (Exception e) { out.put("coverage", null); }
-        try { out.put("jobs", dataJobs.recent(ownerId(ctx), isAdmin(ctx), 8)); } catch (Exception e) { out.put("jobs", List.of()); }
-        out.put("fixturesOnly", cfg.fixturesOnly());
-        out.put("marketLane", io.liftandshift.strikebench.market.MarketLane
-                .of(activeWorld(ctx), cfg.fixturesOnly()).name());
-        out.put("marketOpen", io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()));
-        out.put("jobKinds", io.liftandshift.strikebench.db.DataJobService.KINDS);
-        out.put("admin", isAdmin(ctx)); // UI hides destructive controls when the caller isn't admin
-        ctx.json(out);
+        Object engineStatus;
+        Object coverage;
+        Object jobs;
+        try { engineStatus = marketEngine.status(); } catch (Exception e) { engineStatus = null; }
+        try { coverage = dataCoverage.summary(); } catch (Exception e) { coverage = null; }
+        try { jobs = dataJobs.recent(ownerId(ctx), isAdmin(ctx), 8); } catch (Exception e) { jobs = List.of(); }
+        ctx.json(new ApiResponses.DataOverview<>(engineStatus, coverage, jobs, cfg.fixturesOnly(),
+                io.liftandshift.strikebench.market.MarketLane.of(activeWorld(ctx), cfg.fixturesOnly()).name(),
+                io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()),
+                io.liftandshift.strikebench.db.DataJobService.KINDS, isAdmin(ctx)));
     }
 
     private void dataCoverageRoute(Context ctx) {
-        ctx.json(Map.of("symbols", dataCoverage.bySymbol(), "summary", dataCoverage.summary()));
+        ctx.json(new ApiResponses.Coverage<>(dataCoverage.bySymbol(), dataCoverage.summary()));
     }
 
     /** Connector setup cards: what each source covers, whether it's on, and its license/use mode. */
     private void dataSources(Context ctx) {
-        List<Map<String, Object>> sources = new ArrayList<>();
+        List<ApiResponses.DataSource> sources = new ArrayList<>();
         boolean fx = cfg.fixturesOnly();
         boolean cboeThrottled = cboe != null && cboe.coolingDown();
         String cboeHint = "Keyless, HEAVY (each request is a full option-chain payload). Current chains with "
@@ -3106,8 +3055,8 @@ public final class ApiServer {
         sources.add(source("Treasury / FRED", "Risk-free rates", !fx, "keyless / keyed", "Treasury is keyless; FRED needs FRED_API_KEY."));
         sources.add(source("Historical options CSV", "Owned options history", true, "licensed · internal-use (no redistribution)",
                 "Import a licensed vendor CSV (ORATS / Cboe DataShop / Databento) via a backfill job — the 'own the past' path."));
-        ctx.json(Map.of("feeds", sources, "connectors", dataConnectors.all(),
-                "recommendedCandleSource", dataConnectors.recommendedSource(), "fixturesOnly", fx));
+        ctx.json(new ApiResponses.DataSources<>(sources, dataConnectors.all(),
+                dataConnectors.recommendedSource(), fx));
     }
 
     public record DataSyncPlanRequest(List<String> symbols, String source, String from, String to, Integer years) {}
@@ -3116,15 +3065,12 @@ public final class ApiServer {
 
     private void dataSyncStatus(Context ctx) {
         var schedule = dataSyncState.schedule(ownerId(ctx));
-        ctx.json(Map.of(
-                "connectors", dataConnectors.all(),
-                "recommendedSource", dataConnectors.recommendedSource(),
-                "cursors", dataSyncState.cursors(ownerId(ctx)),
-                "schedule", schedule,
-                "quarantine", dataSyncState.quarantineSummary(ownerId(ctx)),
-                "latestCompletedSession", io.liftandshift.strikebench.db.DataSyncScheduler
-                        .latestCompletedSession(clock).toString(),
-                "note", "Daily price maintenance runs once after a completed market session. Hourly daily-bar downloads are intentionally avoided."));
+        ctx.json(new ApiResponses.DataSync<>(dataConnectors.all(), dataConnectors.recommendedSource(),
+                dataSyncState.cursors(ownerId(ctx)), schedule,
+                dataSyncState.quarantineSummary(ownerId(ctx)),
+                io.liftandshift.strikebench.db.DataSyncScheduler.latestCompletedSession(clock).toString(),
+                "Daily price maintenance runs once after a completed market session. "
+                        + "Hourly daily-bar downloads are intentionally avoided."));
     }
 
     private void dataSyncPlan(Context ctx) {
@@ -3149,24 +3095,19 @@ public final class ApiServer {
         List<String> symbols = normalizeSymbols(b.symbols());
         if (symbols.isEmpty()) symbols = universe.active().symbols();
         var planner = new io.liftandshift.strikebench.db.MissingRangePlanner(db);
-        List<Map<String, Object>> plans = new ArrayList<>();
+        List<ApiResponses.SyncSymbolPlan<?>> plans = new ArrayList<>();
         int requests = 0, missing = 0;
         for (String symbol : symbols.stream().distinct().limit(120).toList()) {
             var plan = planner.plan(symbol, effectiveFrom, to, connector.key());
             int symbolRequests = "alphavantage".equals(connector.key()) && !plan.complete()
                     ? 1 : plan.ranges().size();
             requests += symbolRequests; missing += plan.missingSessions();
-            plans.add(Map.of("symbol", symbol, "existingSessions", plan.existingSessions(),
-                    "missingSessions", plan.missingSessions(), "requests", symbolRequests,
-                    "complete", plan.complete(), "ranges", plan.ranges()));
+            plans.add(new ApiResponses.SyncSymbolPlan<>(symbol, plan.existingSessions(),
+                    plan.missingSessions(), symbolRequests, plan.complete(), plan.ranges()));
         }
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("source", connector); out.put("requestedFrom", from); out.put("effectiveFrom", effectiveFrom);
-        out.put("to", to); out.put("symbols", symbols.size()); out.put("missingSessions", missing);
-        out.put("estimatedRequests", requests); out.put("plans", plans);
-        if (limitation != null) out.put("limitation", limitation);
-        if (futureCapped) out.put("dateNote", "The end date was capped at the latest completed market session.");
-        ctx.json(out);
+        ctx.json(new ApiResponses.DataSyncPlan<>(connector, from.toString(), effectiveFrom.toString(),
+                to.toString(), symbols.size(), missing, requests, plans, limitation,
+                futureCapped ? "The end date was capped at the latest completed market session." : null));
     }
 
     private void dataSyncSchedulePut(Context ctx) {
@@ -3207,14 +3148,14 @@ public final class ApiServer {
                 .distinct().limit(120).toList();
     }
 
-    private static Map<String, Object> source(String name, String covers, boolean enabled, String license, String hint) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("name", name); m.put("covers", covers); m.put("enabled", enabled);
-        m.put("license", license); m.put("hint", hint);
-        return m;
+    private static ApiResponses.DataSource source(String name, String covers, boolean enabled,
+                                                   String license, String hint) {
+        return new ApiResponses.DataSource(name, covers, enabled, license, hint);
     }
 
-    private void dataJobsList(Context ctx) { ctx.json(Map.of("jobs", dataJobs.recent(ownerId(ctx), isAdmin(ctx), 30))); }
+    private void dataJobsList(Context ctx) {
+        ctx.json(new ApiResponses.Jobs<>(dataJobs.recent(ownerId(ctx), isAdmin(ctx), 30)));
+    }
 
     /** Admin, or the job's owner (null==null for the local/anonymous case). Otherwise 404 (no leak). */
     private void requireJobAccess(Context ctx, String jobId) {
@@ -3228,7 +3169,7 @@ public final class ApiServer {
         requireJobAccess(ctx, id);
         var v = dataJobs.get(id);
         if (v.job() == null) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such job");
-        ctx.json(Map.of("job", v.job(), "items", v.items()));
+        ctx.json(new ApiResponses.Job<>(v.job(), v.items()));
     }
 
     public record JobRequest(String kind, Map<String, Object> params) {}
@@ -3245,7 +3186,7 @@ public final class ApiServer {
         requireJobAccess(ctx, id);
         if (privilegedDataJobKind(dataJobs.kindOf(id))) requireAdmin(ctx);
         dataJobs.cancel(id);
-        ctx.json(Map.of("ok", true));
+        ctx.json(new ApiResponses.Ok(true));
     }
 
     private void dataJobRetry(Context ctx) {
@@ -3297,8 +3238,8 @@ public final class ApiServer {
         }
         datasets.setActive(b.id(), owner);
         String nowActive = datasets.activeId(owner);
-        ctx.json(Map.of("ok", true, "active", nowActive,
-                "scenarioMode", !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(nowActive)));
+        ctx.json(new ApiResponses.DatasetActivation(true, nowActive,
+                !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(nowActive)));
     }
 
     public record CompareStructure(String key,
@@ -3795,7 +3736,8 @@ public final class ApiServer {
         requireAdmin(ctx); // destructive: never reachable by an anonymous internet visitor
         DataResetRequest b = requireBody(bodyOrNull(ctx, DataResetRequest.class));
         if (b.confirm() == null || !b.confirm()) {
-            ctx.status(400).json(Map.of("error", "confirm_required", "detail", "Reset requires confirm:true"));
+            ctx.status(400).json(new ApiResponses.ErrorBody(
+                    "confirm_required", "Reset requires confirm:true"));
             return;
         }
         var tier = io.liftandshift.strikebench.db.DataResetService.parseTier(b.tier());
@@ -3820,9 +3762,8 @@ public final class ApiServer {
 
     private void account(Context ctx) {
         Account acct = currentAccount(ctx);
-        ctx.json(Map.of(
-                "account", accountView(acct),
-                "ledger", accounts.ledger(acct.id(), 0, 20)));
+        ctx.json(new ApiResponses.AccountLedger<>(
+                accountView(acct), accounts.ledger(acct.id(), 0, 20)));
     }
 
     public record ResetRequest(Long startingCashCents, Boolean confirm, Boolean force) {}
@@ -3833,7 +3774,7 @@ public final class ApiServer {
         // Scope the reset to the CALLER's account so a user can never reset someone else's.
         Account acct = accounts.resetAccount(currentAccount(ctx).id(), cash,
                 Boolean.TRUE.equals(req.confirm()), Boolean.TRUE.equals(req.force()));
-        ctx.json(Map.of("account", accountView(acct)));
+        ctx.json(new ApiResponses.Account<>(accountView(acct)));
     }
 
     private static Map<String, Object> accountView(Account acct) {
@@ -3858,7 +3799,8 @@ public final class ApiServer {
         Optional<Quote> quote = market.quote(symbol, world);
         if (quote.isEmpty()) {
             ctx.attribute("apiErrorWritten", true);
-            ctx.status(404).json(Map.of("error", "unknown_symbol", "detail", "No data for " + symbol));
+            ctx.status(404).json(new ApiResponses.ErrorBody(
+                    "unknown_symbol", "No data for " + symbol));
             return;
         }
         Quote q = quote.get();
@@ -3866,8 +3808,8 @@ public final class ApiServer {
         if (!q.evidence().usableIn(lane == io.liftandshift.strikebench.market.MarketLane.SCENARIO
                 ? io.liftandshift.strikebench.market.MarketLane.OBSERVED : lane)) {
             ctx.attribute("apiErrorWritten", true);
-            ctx.status(409).json(Map.of("error", "market_lane_mismatch",
-                    "detail", "The " + lane + " workflow cannot use " + q.evidence().provenance()
+            ctx.status(409).json(new ApiResponses.ErrorBody("market_lane_mismatch",
+                    "The " + lane + " workflow cannot use " + q.evidence().provenance()
                             + " quote data from " + q.evidence().source()));
             return;
         }
@@ -3897,7 +3839,8 @@ public final class ApiServer {
             var actx = analysisCtx(ctx); // capture BEFORE the fan-out: explicit context survives vthreads
             var candlesF = exec.submit(() -> market.candleSeries(symbol, today.minusDays(120), today, world, actx));
             var benchF = exec.submit(() -> {
-                List<Map<String, Object>> b = new ArrayList<>();
+                List<ApiResponses.Benchmark<BigDecimal, io.liftandshift.strikebench.model.DataEvidence>> b =
+                        new ArrayList<>();
                 for (String bench : List.of("SPY", "QQQ")) {
                     if (bench.equals(symbol)) continue;
                     // Benchmarks come from the SAME world as the symbol — inside a simulated
@@ -3905,12 +3848,8 @@ public final class ApiServer {
                     market.quote(bench, world).filter(x -> x.evidence().usableIn(
                             lane == io.liftandshift.strikebench.market.MarketLane.SCENARIO
                                     ? io.liftandshift.strikebench.market.MarketLane.OBSERVED : lane)).ifPresent(x -> {
-                        Map<String, Object> bm = new LinkedHashMap<>();
-                        bm.put("symbol", x.symbol());
-                        bm.put("last", x.mark());
-                        bm.put("freshness", x.markFreshness().name());
-                        bm.put("evidence", x.evidence());
-                        b.add(bm);
+                        b.add(new ApiResponses.Benchmark<>(x.symbol(), x.mark(),
+                                x.markFreshness().name(), x.evidence()));
                     });
                 }
                 return b;
@@ -3927,64 +3866,47 @@ public final class ApiServer {
             boolean demoHistory = candleSeries.evidence().provenance()
                     == io.liftandshift.strikebench.model.DataProvenance.DEMO;
 
-            Map<String, Object> out = new LinkedHashMap<>();
-            out.put("symbol", symbol);
-            out.put("quote", q);
-            out.put("displayPrice", q.mark());
-            out.put("priceIsPreviousClose", q.usesPreviousCloseFallback());
-            out.put("marketLane", lane.name());
-            out.put("optionable", q.optionable());
-            out.put("ivAtm", ie.ivAtm());
-            out.put("ivRankAvailable", volatility.ivRankPct() != null);
-            out.put("ivRankPct", volatility.ivRankPct());
-            out.put("ivPercentilePct", volatility.ivPercentilePct());
-            out.put("ivHistoryDays", volatility.historyDays());
-            out.put("ivRankRequiredDays", io.liftandshift.strikebench.eval.VolatilityProfiler.MIN_HISTORY);
-            out.put("ivRankNote", volatility.source());
             // The event model: an ESTIMATED earnings window from the issuer's SEC filing cadence
             // (never keywords), and an HONESTLY-ABSENT ex-div (no keyless source exists).
             // A simulated world has NO earnings — a real company's calendar attached to a
             // generated market would be a phantom event (review P2).
+            ApiResponses.ResearchEvent earningsEstimate;
             if ("demo".equals(world)) {
-                out.put("earningsEstimate", Map.of("available", false,
-                        "note", "demo market — its companies and events are fabricated teaching data"));
+                earningsEstimate = new ApiResponses.ResearchEvent(false, null, null, null, null,
+                        "demo market — its companies and events are fabricated teaching data");
             } else if (!"observed".equals(world)) {
-                out.put("earningsEstimate", Map.of("available", false,
-                        "note", "simulated market — no earnings exist in this world"));
+                earningsEstimate = new ApiResponses.ResearchEvent(false, null, null, null, null,
+                        "simulated market — no earnings exist in this world");
             } else {
-                eventCalendar.nextEarnings(symbol).ifPresentOrElse(
-                        e -> out.put("earningsEstimate", Map.of(
-                                "date", e.estimated().toString(), "windowDays", e.windowDays(),
-                                "basis", e.basis(), "confirmed", e.confirmed())),
-                        () -> out.put("earningsEstimate", Map.of("available", false,
-                                "note", "not enough SEC quarterly filings to project a cadence")));
+                var next = eventCalendar.nextEarnings(symbol);
+                earningsEstimate = next.<ApiResponses.ResearchEvent>map(e ->
+                        new ApiResponses.ResearchEvent(null, e.estimated().toString(), e.windowDays(),
+                                e.basis(), e.confirmed(), null)).orElseGet(() ->
+                        new ApiResponses.ResearchEvent(false, null, null, null, null,
+                                "not enough SEC quarterly filings to project a cadence"));
             }
-            out.put("exDividend", Map.of("available", false,
-                    "note", "no keyless ex-dividend source \u2014 connect a licensed calendar for confirmed dates"));
-            out.put("hv30", realizedVol30);
-            out.put("hvHistoryDays", candleSeries.candles().size());
-            out.put("hvRequiredDays", HistoricalVol.MIN_OBSERVATIONS);
-            out.put("historyDemo", demoHistory);
-            out.put("historyBarBasis", candleSeries.barBasis());
-            out.put("historyPriceBasis", candleSeries.priceBasis());
             Map<String, io.liftandshift.strikebench.model.DataEvidence> evidenceInputs = new LinkedHashMap<>();
             evidenceInputs.put("quote", q.evidence());
             evidenceInputs.put("history", candleSeries.isEmpty()
                     ? io.liftandshift.strikebench.model.DataEvidence.missing("daily history")
                     : candleSeries.evidence());
             if (q.optionable()) evidenceInputs.put("options", ie.evidence());
-            out.put("evidence", Map.of(
-                    "summary", io.liftandshift.strikebench.model.DataEvidence.aggregate(evidenceInputs.values()),
-                    "inputs", evidenceInputs));
-            out.put("expirations", ie.exps().stream().map(LocalDate::toString).toList());
+            var evidence = new ApiResponses.EvidenceSummary<>(
+                    io.liftandshift.strikebench.model.DataEvidence.aggregate(evidenceInputs.values()),
+                    evidenceInputs);
             var planLane = io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly());
             var planEligibility = planSymbolEligibility(symbol, planLane, q, ie.exps(), ie.evidence());
-            out.put("planEligible", planEligibility.eligible());
-            out.put("planEligibility", planEligibility.detail());
-            out.put("benchmarks", benchF.get());
-            out.put("freshness", q.markFreshness().name());
-            out.put("asOfDate", today.toString()); // the LANE's today — client DTE math uses this, never Date.now()
-            ctx.json(out);
+            ctx.json(new ApiResponses.ResearchDetail<>(symbol, q, q.mark(),
+                    q.usesPreviousCloseFallback(), lane.name(), q.optionable(), ie.ivAtm(),
+                    volatility.ivRankPct() != null, volatility.ivRankPct(), volatility.ivPercentilePct(),
+                    volatility.historyDays(), io.liftandshift.strikebench.eval.VolatilityProfiler.MIN_HISTORY,
+                    volatility.source(), earningsEstimate,
+                    new ApiResponses.ResearchEvent(false, null, null, null, null,
+                            "no keyless ex-dividend source \u2014 connect a licensed calendar for confirmed dates"),
+                    realizedVol30, candleSeries.candles().size(), HistoricalVol.MIN_OBSERVATIONS,
+                    demoHistory, candleSeries.barBasis(), candleSeries.priceBasis(), evidence,
+                    ie.exps().stream().map(LocalDate::toString).toList(), planEligibility.eligible(),
+                    planEligibility.detail(), benchF.get(), q.markFreshness().name(), today.toString()));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
@@ -4007,9 +3929,9 @@ public final class ApiServer {
         String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
         String world = activeWorld(ctx);
         java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
-        ctx.json(Map.of("symbol", symbol,
-                "asOfDate", LocalDate.ofInstant(now, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString(),
-                "expirations", activeExpirations(market.expirations(symbol, world), now).stream()
+        ctx.json(new ApiResponses.Expirations<>(symbol,
+                LocalDate.ofInstant(now, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString(),
+                activeExpirations(market.expirations(symbol, world), now).stream()
                         .map(LocalDate::toString).toList()));
     }
 
@@ -4040,7 +3962,8 @@ public final class ApiServer {
         Optional<OptionChain> chain = market.chain(symbol, exp, world);
         if (chain.isEmpty()) {
             ctx.attribute("apiErrorWritten", true);
-            ctx.status(404).json(Map.of("error", "no_chain", "detail", "No option chain for " + symbol + " " + exp));
+            ctx.status(404).json(new ApiResponses.ErrorBody(
+                    "no_chain", "No option chain for " + symbol + " " + exp));
             return;
         }
         ctx.json(chain.get());
@@ -4196,12 +4119,7 @@ public final class ApiServer {
         for (Thread t : workers) { try { t.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }
         List<Map<String, Object>> out = new ArrayList<>();
         for (String sym : symbols) { var r = rows.get(sym); if (r != null) out.add(r); }
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("range", range);
-        body.put("sparklines", out);
-        body.put("totalRequested", totalRequested);
-        if (world != null) body.put("world", world);
-        ctx.json(body);
+        ctx.json(new ApiResponses.Sparklines<>(range, out, totalRequested, world));
     }
 
     private void history(Context ctx) {
@@ -4227,34 +4145,26 @@ public final class ApiServer {
         };
         LocalDate requestedFrom = today.minusDays(days);
         var series = market.candleSeries(symbol, requestedFrom, today, activeWorld(ctx), analysisCtx(ctx));
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("symbol", symbol);
-        out.put("range", range);
-        out.put("candles", series.candles());
-        out.put("source", series.source());
-        out.put("freshness", series.freshness().name());
-        out.put("barBasis", series.barBasis());
-        out.put("priceBasis", series.priceBasis());
-        out.put("evidence", series.evidence());
-        out.put("coverage", io.liftandshift.strikebench.market.CandleCoverage.assess(
-                series.candles(), requestedFrom, today));
-        ctx.json(out);
+        ctx.json(new ApiResponses.History<>(symbol, range, series.candles(), series.source(),
+                series.freshness().name(), series.barBasis(), series.priceBasis(), series.evidence(),
+                io.liftandshift.strikebench.market.CandleCoverage.assess(series.candles(), requestedFrom, today)));
     }
 
     private void news(Context ctx) {
         String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
         String world = activeWorld(ctx);
         if (!"observed".equals(world) && !"demo".equals(world)) {
-            ctx.json(Map.of("symbol", symbol, "items", List.of(),
-                    "note", "simulated market \u2014 there is no news in this world; headlines belong to the real market"));
+            ctx.json(new ApiResponses.SymbolItems<>(symbol, List.of(), null,
+                    "simulated market \u2014 there is no news in this world; headlines belong to the real market"));
             return;
         }
-        ctx.json(Map.of("symbol", symbol, "items", market.news(symbol, world)));
+        ctx.json(new ApiResponses.SymbolItems<>(symbol, market.news(symbol, world), null, null));
     }
 
     private void lookup(Context ctx) {
         String q = ctx.queryParam("q");
-        ctx.json(Map.of("matches", q == null ? List.of() : market.lookup(q, activeWorld(ctx))));
+        ctx.json(new ApiResponses.Matches<>(
+                q == null ? List.of() : market.lookup(q, activeWorld(ctx))));
     }
 
     // ---- Product-owned strategy discovery ----
@@ -4821,7 +4731,7 @@ public final class ApiServer {
                 req.horizon() != null ? req.horizon() : "month",
                 req.riskMode() != null ? req.riskMode() : "balanced",
                 acct.buyingPowerCents(), world != null ? null : ownerId, topN, world, rcScan.riskCapitalCents());
-        ctx.json(Map.of("ranked", result.ranked(), "notes", result.notes(), "scanned", result.scanned()));
+        ctx.json(new ApiResponses.Opportunities<>(result.ranked(), result.notes(), result.scanned()));
     }
 
     public record OptimizeRequest(List<String> universe, String thesis, String horizon, String riskMode,
@@ -4853,7 +4763,7 @@ public final class ApiServer {
                 new io.liftandshift.strikebench.research.PortfolioOptimizer.Constraints(
                         budget, req.maxPerPositionCents(), req.maxPositions(), req.maxSymbolPct(), req.objective(),
                         Boolean.TRUE.equals(req.diagnostic())));
-        ctx.json(Map.of("optimization", result, "scanned", scan.scanned(), "scanNotes", scan.notes()));
+        ctx.json(new ApiResponses.Optimization<>(result, scan.scanned(), scan.notes()));
     }
 
     public record ResolveRequest(String recommendationId, String status, Long pnlCents) {}
@@ -4865,7 +4775,7 @@ public final class ApiServer {
             throw new IllegalArgumentException("recommendationId is required");
         }
         evaluations.resolveOutcome(req.recommendationId(), req.status(), req.pnlCents());
-        ctx.json(Map.of("ok", true));
+        ctx.json(new ApiResponses.Ok(true));
     }
 
     private void researchIntentLadder(Context ctx) {
@@ -5020,31 +4930,19 @@ public final class ApiServer {
     private void riskBudget(Context ctx) {
         Account acct = currentAccount(ctx);
         Long cap = riskCapCents(ctx);
-        java.util.List<Map<String, Object>> modes = new ArrayList<>();
+        java.util.List<ApiResponses.RiskModeBudget> modes = new ArrayList<>();
         for (RecommendationEngine.RiskMode m : RecommendationEngine.RiskMode.values()) {
             var b = RiskBudgetPolicy.compute(m, acct.buyingPowerCents(), cap);
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("mode", b.mode());
-            row.put("label", b.label());
-            row.put("percent", b.percent());
-            row.put("policyBudgetCents", b.policyBudgetCents());
-            row.put("effectiveBudgetCents", b.effectiveBudgetCents());
-            row.put("capped", b.capped());
-            modes.add(row);
+            modes.add(new ApiResponses.RiskModeBudget(b.mode(), b.label(), b.percent(),
+                    b.policyBudgetCents(), b.effectiveBudgetCents(), b.capped()));
         }
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("basisType", "BUYING_POWER");
-        out.put("basisCents", acct.buyingPowerCents());
-        out.put("accountType", acct.type());
-        out.put("explicitCapCents", cap);
-        out.put("capSource", cap != null ? "RISK_CAPITAL" : null);
-        out.put("modes", modes);
-        out.put("note", "Per-idea budget = percent \u00d7 buying power (cash minus reserves; this practice "
-                + "account is cash-only, no margin). Your declared risk capital, when set, caps every mode. "
-                + "The screening engine enforces these same numbers server-side.");
-        out.put("acquireException", "Buy-shares-at-a-discount ideas are capped by buying power instead \u2014 "
-                + "a cash-secured put sets aside the full purchase price by design.");
-        ctx.json(out);
+        ctx.json(new ApiResponses.RiskBudget<>("BUYING_POWER", acct.buyingPowerCents(), acct.type(), cap,
+                cap != null ? "RISK_CAPITAL" : null, modes,
+                "Per-idea budget = percent \u00d7 buying power (cash minus reserves; this practice "
+                        + "account is cash-only, no margin). Your declared risk capital, when set, caps every mode. "
+                        + "The screening engine enforces these same numbers server-side.",
+                "Buy-shares-at-a-discount ideas are capped by buying power instead \u2014 "
+                        + "a cash-secured put sets aside the full purchase price by design."));
     }
 
     private Verdict guardrailCheck(TradeService.OpenRequest req, Account acct, Long riskCapCents) {
@@ -5182,13 +5080,11 @@ public final class ApiServer {
         ctx.json(tradePreviewPayload(ctx, bodyOrNull(ctx, TradeOpenRequest.class)));
     }
 
-    private Map<String, Object> tradePreviewPayload(Context ctx, TradeOpenRequest body) {
+    private ApiResponses.TradePreviewResponse tradePreviewPayload(Context ctx, TradeOpenRequest body) {
         Account acct = currentAccount(ctx);
         TradeService.OpenRequest req = toOpenRequest(body, acct);
         Verdict verdict = guardrailCheck(req, acct, riskCapCents(ctx));
         var preview = trades.preview(req);
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("preview", preview);
         Candidate exact = exactPreviewCandidate(req, preview);
         io.liftandshift.strikebench.eval.EconomicAssessment economics;
         long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
@@ -5210,11 +5106,8 @@ public final class ApiServer {
                     null, roundTripFees, null, observed,
                     List.of("Exact economic comparison is unavailable; no favorable claim is made."));
         }
-        out.put("economics", economics);
-        out.put("guardrails", Map.of(
-                "level", verdict.level().name(),
-                "blockReasons", verdict.blockReasons(),
-                "warnings", verdict.warnings()));
+        ApiResponses.Guardrails guardrails = new ApiResponses.Guardrails(
+                verdict.level().name(), verdict.blockReasons(), verdict.warnings());
         // The REAL denominators, when the user declared them: risk judged against paper cash was
         // the MU lesson's sizing blind spot ('sane vs \$100k paper' was 6.5% of the real account).
         var rc = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
@@ -5224,28 +5117,27 @@ public final class ApiServer {
         long effectiveRiskBudget = RiskBudgetPolicy.compute(
                 RecommendationEngine.RiskMode.parse(req.riskMode()), acct.buyingPowerCents(), riskCapCents(ctx))
                 .effectiveBudgetCents();
-        List<Map<String, String>> requiredAcks = requiredAcksFor(preview, effectiveRiskBudget);
-        if (!requiredAcks.isEmpty()) {
-            out.put("requiredAcks", requiredAcks);
-            out.put("ackToken", ackToken(req));
-        }
+        List<ApiResponses.RiskAcknowledgment> requiredAcks = requiredAcksFor(preview, effectiveRiskBudget);
+        String ackToken = requiredAcks.isEmpty() ? null : ackToken(req);
+        ApiResponses.AccountFit accountFit = null;
         if (!rc.isEmpty() && preview.maxLossCents() > 0) {
-            Map<String, Object> fit = new LinkedHashMap<>();
-            if (rc.nlvCents() != null && rc.nlvCents() > 0)
-                fit.put("pctOfNlv", Math.round(1000.0 * preview.maxLossCents() / rc.nlvCents()) / 10.0);
-            if (rc.cashBpCents() != null && rc.cashBpCents() > 0)
-                fit.put("pctOfCashBp", Math.round(1000.0 * preview.maxLossCents() / rc.cashBpCents()) / 10.0);
-            if (rc.marginBpCents() != null && rc.marginBpCents() > 0)
-                fit.put("pctOfMarginBp", Math.round(1000.0 * preview.maxLossCents() / rc.marginBpCents()) / 10.0);
+            Double pctOfNlv = rc.nlvCents() != null && rc.nlvCents() > 0
+                    ? Math.round(1000.0 * preview.maxLossCents() / rc.nlvCents()) / 10.0 : null;
+            Double pctOfCashBp = rc.cashBpCents() != null && rc.cashBpCents() > 0
+                    ? Math.round(1000.0 * preview.maxLossCents() / rc.cashBpCents()) / 10.0 : null;
+            Double pctOfMarginBp = rc.marginBpCents() != null && rc.marginBpCents() > 0
+                    ? Math.round(1000.0 * preview.maxLossCents() / rc.marginBpCents()) / 10.0 : null;
+            Double pctOfRiskCapital = null;
+            Boolean overRiskCapital = null;
             if (rc.riskCapitalCents() != null && rc.riskCapitalCents() > 0) {
-                fit.put("pctOfRiskCapital", Math.round(1000.0 * preview.maxLossCents() / rc.riskCapitalCents()) / 10.0);
-                if (preview.maxLossCents() > rc.riskCapitalCents()) {
-                    fit.put("overRiskCapital", true);
-                }
+                pctOfRiskCapital = Math.round(1000.0 * preview.maxLossCents() / rc.riskCapitalCents()) / 10.0;
+                overRiskCapital = preview.maxLossCents() > rc.riskCapitalCents() ? true : null;
             }
-            out.put("accountFit", fit);
+            accountFit = new ApiResponses.AccountFit(pctOfNlv, pctOfCashBp, pctOfMarginBp,
+                    pctOfRiskCapital, overRiskCapital);
         }
-        return out;
+        return new ApiResponses.TradePreviewResponse(preview, economics, guardrails,
+                requiredAcks.isEmpty() ? null : requiredAcks, ackToken, accountFit);
     }
 
     /** Builds the evaluator's position contract from the SERVER-priced preview. Package entry,
@@ -5290,7 +5182,8 @@ public final class ApiServer {
 
     private void tradeCreate(Context ctx) {
         CreatedTrade created = executeTrade(ctx, bodyOrNull(ctx, TradeOpenRequest.class), null);
-        ctx.status(201).json(Map.of("trade", TradeView.of(created.trade()), "warnings", created.verdict().warnings()));
+        ctx.status(201).json(new ApiResponses.CreatedTrade<>(
+                TradeView.of(created.trade()), created.verdict().warnings()));
     }
 
     private record CreatedTrade(TradeRecord trade, Verdict verdict) {}
@@ -5312,11 +5205,11 @@ public final class ApiServer {
         long effectiveRiskBudget = RiskBudgetPolicy.compute(
                 RecommendationEngine.RiskMode.parse(req.riskMode()), acct.buyingPowerCents(), riskCapCents(ctx))
                 .effectiveBudgetCents();
-        List<Map<String, String>> required = requiredAcksFor(trades.preview(req), effectiveRiskBudget);
+        List<ApiResponses.RiskAcknowledgment> required = requiredAcksFor(trades.preview(req), effectiveRiskBudget);
         if (!required.isEmpty()) {
             java.util.Set<String> acked = body.acknowledgedRisks() == null
                     ? java.util.Set.of() : new java.util.HashSet<>(body.acknowledgedRisks());
-            List<String> missing = required.stream().map(m -> m.get("id"))
+            List<String> missing = required.stream().map(ApiResponses.RiskAcknowledgment::id)
                     .filter(id -> !acked.contains(id)).toList();
             if (!missing.isEmpty()) {
                 throw new TradeRejectedException(List.of("This trade carries material risks that must be "
@@ -5366,8 +5259,8 @@ public final class ApiServer {
             }
             rows.add(row);
         }
-        ctx.json(Map.of("trades", rows,
-                "total", result.total(), "page", result.page(), "size", result.size()));
+        ctx.json(new ApiResponses.TradePage<>(
+                rows, result.total(), result.page(), result.size()));
     }
 
     // ---- Equity positions ----
@@ -5377,8 +5270,8 @@ public final class ApiServer {
 
     private void positionsList(Context ctx) {
         Account acct = currentAccount(ctx);
-        ctx.json(Map.of("positions", positions.list(acct.id()),
-                "note", "Shares locked as covered-call coverage cannot be sold until the covering trade closes"));
+        ctx.json(new ApiResponses.PositionBook<>(positions.list(acct.id()),
+                "Shares locked as covered-call coverage cannot be sold until the covering trade closes"));
     }
 
     private void positionsBuy(Context ctx) {
@@ -5472,8 +5365,9 @@ public final class ApiServer {
     }
 
     private void portfolioTransactions(Context ctx) {
-        ctx.json(Map.of("transactions", portfolioBooks.transactions(ownerId(ctx), ctx.pathParam("id"),
-                intParam(ctx, "page", 0), Math.clamp(intParam(ctx, "size", 50), 1, 500))));
+        ctx.json(new ApiResponses.Transactions<>(portfolioBooks.transactions(ownerId(ctx),
+                ctx.pathParam("id"), intParam(ctx, "page", 0),
+                Math.clamp(intParam(ctx, "size", 50), 1, 500))));
     }
 
     private void portfolioTransactionCreate(Context ctx) {
@@ -5541,26 +5435,15 @@ public final class ApiServer {
             if (p.marketValueCents() == null) { complete = false; continue; }
             sharesValue += p.marketValueCents();
         }
-        Map<String, Object> open = trades.openPositionsValue(acct.id());
-        long openValue = (long) open.get("valueCents");
-        if (!(boolean) open.get("complete")) complete = false;
+        TradeService.OpenPositionsValue open = trades.openPositionsValue(acct.id());
+        long openValue = open.valueCents();
+        if (!open.complete()) complete = false;
         long total = acct.cashCents() + sharesValue + openValue;
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("cashCents", acct.cashCents());
-        out.put("reservedCents", acct.reservedCents());
-        out.put("buyingPowerCents", acct.buyingPowerCents());
-        out.put("startingCashCents", acct.startingCashCents());
-        out.put("sharesValueCents", sharesValue);
-        out.put("sharesPositions", sharesCount);
-        out.put("openTradesCount", open.get("openTradesCount"));
-        out.put("openTradesValueCents", openValue);
-        out.put("openTradesUnrealizedCents", open.get("unrealizedCents"));
-        out.put("totalValueCents", total);
-        out.put("totalPnlCents", total - acct.startingCashCents());
-        out.put("complete", complete);
-        out.put("freshness", open.get("freshness"));
-        out.put("note", "Liquidation view at current marks: cash + shares + closing every open trade at executable prices, BEFORE close fees. Reserve is part of cash, never double-counted.");
-        ctx.json(out);
+        ctx.json(new ApiResponses.PortfolioSummary(acct.cashCents(), acct.reservedCents(),
+                acct.buyingPowerCents(), acct.startingCashCents(), sharesValue, sharesCount,
+                open.openTradesCount(), openValue, open.unrealizedCents(), total,
+                total - acct.startingCashCents(), complete, open.freshness(),
+                "Liquidation view at current marks: cash + shares + closing every open trade at executable prices, BEFORE close fees. Reserve is part of cash, never double-counted."));
     }
 
     private void tradeRefresh(Context ctx) {
@@ -5575,8 +5458,8 @@ public final class ApiServer {
                 req != null && Boolean.TRUE.equals(req.confirm()));
         long decisionPnl = decisionPnl(result.trade(), result.realizedPnlCents());
         resolveRecommendationForTrade(ctx.pathParam("id"), "CLOSED", decisionPnl);
-        ctx.json(Map.of("trade", TradeView.of(result.trade()),
-                "realizedPnlCents", result.realizedPnlCents(), "decisionPnlCents", decisionPnl));
+        ctx.json(new ApiResponses.ClosedTrade<>(TradeView.of(result.trade()),
+                result.realizedPnlCents(), decisionPnl));
     }
 
     private void tradeSettle(Context ctx) {
@@ -5586,8 +5469,8 @@ public final class ApiServer {
                 req != null && Boolean.TRUE.equals(req.confirm()));
         long decisionPnl = decisionPnl(result.trade(), result.realizedPnlCents());
         resolveRecommendationForTrade(ctx.pathParam("id"), "SETTLED", decisionPnl);
-        ctx.json(Map.of("trade", TradeView.of(result.trade()),
-                "realizedPnlCents", result.realizedPnlCents(), "decisionPnlCents", decisionPnl));
+        ctx.json(new ApiResponses.ClosedTrade<>(TradeView.of(result.trade()),
+                result.realizedPnlCents(), decisionPnl));
     }
 
     private static long decisionPnl(TradeRecord trade, long packagePnlCents) {
@@ -5618,7 +5501,7 @@ public final class ApiServer {
         ensureOwnedTrade(ctx, ctx.pathParam("id"));
         boolean confirm = "true".equalsIgnoreCase(ctx.queryParam("confirm"));
         TradeRecord t = trades.delete(ctx.pathParam("id"), confirm);
-        ctx.json(Map.of("trade", TradeView.of(t)));
+        ctx.json(new ApiResponses.Trade<>(TradeView.of(t)));
     }
 
     // ---- Broker (live trading; heavily gated) ----
@@ -5637,8 +5520,8 @@ public final class ApiServer {
     private void brokerPreview(Context ctx) {
         BrokerOrderRequest req = requireBody(bodyOrNull(ctx, BrokerOrderRequest.class));
         BrokerService.PreviewOutcome outcome = broker.preview(req.accountIdKey(), req.order());
-        ctx.json(Map.of("localId", outcome.localId(), "preview", outcome.preview(),
-                "confirmTextRequired", BrokerService.CONFIRM_TEXT));
+        ctx.json(new ApiResponses.BrokerPreview<>(
+                outcome.localId(), outcome.preview(), BrokerService.CONFIRM_TEXT));
     }
 
     private void brokerPlace(Context ctx) {
@@ -5652,8 +5535,8 @@ public final class ApiServer {
         String accountIdKey = ctx.queryParam("accountIdKey");
         if (accountIdKey == null || accountIdKey.isBlank()) throw new IllegalArgumentException("accountIdKey is required");
         broker.cancel(accountIdKey, ctx.pathParam("id"));
-        ctx.json(Map.of("cancelRequested", true,
-                "note", "Cancels are asynchronous and can lose the race to a fill — confirm via the orders list"));
+        ctx.json(new ApiResponses.CancelRequested(true,
+                "Cancels are asynchronous and can lose the race to a fill — confirm via the orders list"));
     }
 
     // ---- Audit ----
@@ -5664,7 +5547,7 @@ public final class ApiServer {
         var entries = auth.enabled()
                 ? audit.pageForAccount(currentAccount(ctx).id(), page, 50)
                 : audit.page(page, 50);
-        ctx.json(Map.of("entries", entries));
+        ctx.json(new ApiResponses.Entries<>(entries));
     }
 
     /**
