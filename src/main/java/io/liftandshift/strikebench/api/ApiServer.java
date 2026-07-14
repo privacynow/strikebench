@@ -115,6 +115,7 @@ public final class ApiServer {
     private io.liftandshift.strikebench.db.DataConnectorCatalog dataConnectors;
     private io.liftandshift.strikebench.db.DataSyncState dataSyncState;
     private io.liftandshift.strikebench.db.DataSyncScheduler dataSyncScheduler;
+    private io.liftandshift.strikebench.db.ArtifactRetentionService artifactRetention;
     private CboeProvider cboe;                                                  // for Data Center throttle display
     private io.liftandshift.strikebench.db.DatasetService datasets;             // observed + synthetic dataset registry
     private io.liftandshift.strikebench.sim.SimulationEngine simEngine;         // scenario previews + dataset runs
@@ -240,6 +241,7 @@ public final class ApiServer {
                 snapshots, backfill, universe, cfg, server.dataConnectors);
         server.dataSyncScheduler = new io.liftandshift.strikebench.db.DataSyncScheduler(
                 cfg, clock, server.dataSyncState, server.dataJobs);
+        server.artifactRetention = new io.liftandshift.strikebench.db.ArtifactRetentionService(db, clock, cfg);
         server.dataCoverage = new io.liftandshift.strikebench.db.DataCoverage(db);
         server.dataReset = new io.liftandshift.strikebench.db.DataResetService(db, accounts);
         server.cboe = cboeRef[0];
@@ -848,6 +850,7 @@ public final class ApiServer {
         if (dataJobs != null) dataJobs.reconcileOnBoot(); // fail orphaned jobs from a prior run so they can retry
         if (marketEngine != null) marketEngine.start(); // warm the universe + background refresh
         if (dataSyncScheduler != null) dataSyncScheduler.start();
+        if (artifactRetention != null) artifactRetention.start();
         log.info("StrikeBench listening on http://localhost:{} (market mode: {})",
                 app.port(), cfg.fixturesOnly() ? "demo" : "observed");
         return app;
@@ -951,6 +954,7 @@ public final class ApiServer {
     }
 
     public void stop() {
+        if (artifactRetention != null) artifactRetention.close();
         if (dataSyncScheduler != null) dataSyncScheduler.close();
         if (dataJobs != null) dataJobs.shutdown();
         if (marketEngine != null) marketEngine.stop();
