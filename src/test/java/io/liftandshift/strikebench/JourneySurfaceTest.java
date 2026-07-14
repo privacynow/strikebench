@@ -24,7 +24,7 @@ class JourneySurfaceTest {
         StringBuilder routes = new StringBuilder();
         for (String name : List.of("ApiServer", "CoreRoutes", "PlanRoutes", "DataRoutes",
                 "DataController", "ResearchRoutes", "WorldRoutes", "TradeRoutes", "TradeController",
-                "PortfolioRoutes", "PortfolioController", "BrokerRoutes")) {
+                "ResearchController", "PortfolioRoutes", "PortfolioController", "BrokerRoutes")) {
             routes.append(Files.readString(Path.of(
                     "src/main/java/io/liftandshift/strikebench/api/" + name + ".java"))).append('\n');
         }
@@ -200,7 +200,7 @@ class JourneySurfaceTest {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
 
-        for (String owner : List.of("CoreRoutes", "PlanRoutes", "ResearchRoutes",
+        for (String owner : List.of("CoreRoutes", "PlanRoutes",
                 "WorldRoutes", "BrokerRoutes")) {
             assertThat(api).contains(owner + ".register(c, new " + owner + ".Handlers(");
         }
@@ -222,6 +222,13 @@ class JourneySurfaceTest {
         assertThat(api).doesNotContain("private void dataOverview(",
                 "private void dataSyncPlan(", "private void dataResetRoute(",
                 "private void datasetSetActive(");
+        String research = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ResearchController.java"));
+        assertThat(api).contains("researchController.register(c);");
+        assertThat(research).contains("ResearchRoutes.register(config, new ResearchRoutes.Handlers(");
+        assertThat(api).doesNotContain("private void noteCreate(",
+                "private void expirations(Context", "private void history(Context",
+                "private void calibrationResolve(");
         assertThat(api).doesNotContain(
                 "c.routes.get(\"/api/metrics\"",
                 "c.routes.get(\"/api/research/",
