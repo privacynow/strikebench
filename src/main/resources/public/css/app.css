@@ -2451,6 +2451,11 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .book-transaction-detail { display: grid; gap: 9px; padding: 2px 0 10px; }
 .book-transaction-legs { display: grid; gap: 6px; }
 .book-transaction-leg { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.book-roll-form { display: grid; gap: 10px; }
+.book-roll-form > p { margin: 0; }
+.book-roll-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.book-roll-summary { display: grid; gap: 7px; padding: 10px; border-left: 3px solid var(--accent); background: var(--accent-soft); }
+.book-roll-summary p, .book-roll-summary .chip-row { margin: 0; }
 .book-performance-stats, .book-tax-stats { margin-bottom: 14px; }
 .book-performance-chart .chart { margin-top: 6px; }
 .book-open-lot-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; }
@@ -2483,6 +2488,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .allocation-label { grid-column: 1 / -1; }
   .book-transaction-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .book-leg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .book-roll-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .book-transaction-summary, .book-transaction-leg { align-items: flex-start; flex-direction: column; gap: 5px; }
   .book-open-lot-row { align-items: flex-start; flex-direction: column; }
   .book-open-lot-row .chip-row { justify-content: flex-start; }
@@ -2491,7 +2497,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .book-valuation-row { grid-template-columns: 96px 120px minmax(0, 1fr); }
 }
 @media (max-width: 420px) {
-  .book-transaction-meta, .book-leg-grid { grid-template-columns: minmax(0, 1fr); }
+  .book-transaction-meta, .book-leg-grid, .book-roll-grid { grid-template-columns: minmax(0, 1fr); }
   .book-import-row { display: grid; grid-template-columns: minmax(0, 1fr); }
   .book-valuation-form > .form-grid, .book-valuation-row { grid-template-columns: minmax(0, 1fr); }
 }
