@@ -67,6 +67,35 @@ class JourneySurfaceTest {
                 "routes.get(\"/api/plans/{id}/outcomes/backtests/{backtestId}\"");
     }
 
+    @Test void supersededJourneyArtifactsStayDeletedWhileTheLiveChartDependencyRemains() throws Exception {
+        String views = source("js/views.js");
+        String client = source("js/api.js");
+        String ui = source("js/ui.js");
+        String html = source("index.html");
+        String server = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
+        String engine = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/recommend/RecommendationEngine.java"));
+
+        assertThat(views).doesNotContain(
+                "function brandName(", "function quickAction(", "function lockedSymbolBar(",
+                "function decisionScoreOf(", "function canBacktest(", "function renderEconomicGroups(",
+                "function portfolioToday(", "function contextHorizonDays(",
+                "function contextHorizonForDays(", "function toolField(", "function metricFact(",
+                "App.state.planReturn", "API.prefetch('/api/sparklines?symbols=' + marketSymbols");
+        assertThat(views).contains("lazySparklines(tiles, marketSymbols");
+        assertThat(client).doesNotContain("recommend($|/)");
+        assertThat(server).doesNotContain("path.startsWith(\"/api/backtest\")");
+        assertThat(engine).doesNotContain("recommendInner", "ladderInner");
+        assertThat(Path.of("scripts/finish-java25-cleanup.sh")).doesNotExist();
+
+        // D3 was reported as dead, but the production range chart still reaches it through
+        // UI.candleChart. Keep this pin so a future cleanup cannot delete a live dependency.
+        assertThat(ui).contains("function fact(", "fact: fact", "function candleChart(",
+                "d3.scaleBand()", "d3.scaleLinear()", "d3.create('svg')");
+        assertThat(html).contains("/vendor/d3.min.js");
+    }
+
     @Test void onlyDeliberateResourceAbsenceMapsToHttp404() throws Exception {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));

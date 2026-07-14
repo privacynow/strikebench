@@ -219,6 +219,13 @@
       explainText ? explain(explainText) : null);
   }
 
+  /** Compact decision fact used by strategy, scenario, and comparison surfaces. */
+  function fact(label, valueNode, className) {
+    return el('div', { class: 'fact' + (className ? ' ' + className : '') },
+      el('div', { class: 'f-label' }, label),
+      el('div', { class: 'f-value' }, valueNode));
+  }
+
   var _bmSeq = 0;
   /** The StrikeBench mark: a bench that kinks upward at the strike — the payoff story. */
   function brandMark(size) {
@@ -1440,6 +1447,7 @@
     alertBox: alertBox,
     toast: toast,
     stat: stat,
+    fact: fact,
     chip: chip,
     table: table,
     spinner: spinner,

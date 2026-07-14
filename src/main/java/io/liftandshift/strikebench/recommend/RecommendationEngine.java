@@ -146,10 +146,6 @@ public final class RecommendationEngine {
     /** World-aware: inside a SIMULATED session, recommendations price against THAT world —
      *  the whole point of a reviewer market. null = observed (the real-lane rule stands). */
     public Result recommend(Request req, long buyingPowerCents, String worldId) {
-        return recommendInner(req, buyingPowerCents, worldId);
-    }
-
-    private Result recommendInner(Request req, long buyingPowerCents, String worldId) {
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         RiskMode mode = RiskMode.parse(req.riskMode());
         StrategyIntent intent = StrategyIntent.parse(req.intent());
@@ -359,10 +355,6 @@ public final class RecommendationEngine {
 
     /** World-aware twin of recommend(req, bp, worldId) — same CALL-scoped discipline. */
     public LadderResult ladder(Request req, long buyingPowerCents, String worldId) {
-        return ladderInner(req, buyingPowerCents, worldId);
-    }
-
-    private LadderResult ladderInner(Request req, long buyingPowerCents, String worldId) {
         StrategyIntent intent = StrategyIntent.parse(req.intent());
         StrategyFamily family = switch (intent) {
             case ACQUIRE -> StrategyFamily.CASH_SECURED_PUT;
