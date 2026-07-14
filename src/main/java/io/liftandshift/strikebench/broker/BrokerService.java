@@ -113,7 +113,7 @@ public final class BrokerService {
         if (!previewRow.get().get("account").equals(accountIdKey)) {
             throw new IllegalArgumentException("previewId belongs to a different account");
         }
-        if (!previewRow.get().get("payload").equals(canonicalPayload)) {
+        if (!samePayload(previewRow.get().get("payload"), canonicalPayload)) {
             throw new IllegalArgumentException("The order differs from the one you previewed — preview again to confirm against current numbers");
         }
         java.time.Instant previewedAt = java.time.Instant.parse(previewRow.get().get("createdAt"));
@@ -132,7 +132,7 @@ public final class BrokerService {
                         "previewId", String.valueOf(r.str("preview_id"))), clientOrderId).stream().findFirst();
         if (existing.isPresent() && !"null".equals(existing.get().get("brokerOrderId"))) {
             Map<String, String> row = existing.get();
-            if (!canonicalPayload.equals(row.get("payload"))) {
+            if (!samePayload(row.get("payload"), canonicalPayload)) {
                 throw new IllegalStateException("clientOrderId '" + clientOrderId
                         + "' was already used for a DIFFERENT order — use a fresh clientOrderId");
             }
@@ -173,6 +173,10 @@ public final class BrokerService {
             throw new IllegalStateException("No brokerage is configured (set ETRADE_CONSUMER_KEY / ETRADE_CONSUMER_SECRET)");
         }
         return broker;
+    }
+
+    private static boolean samePayload(String left, String right) {
+        return Json.parse(left).equals(Json.parse(right));
     }
 
     private static void requireArgs(String accountIdKey, Map<String, Object> payload) {

@@ -586,7 +586,8 @@ class PaperCoreTest {
 
         TradeRecord opened = trades.create(req);
         assertThat(opened.feesOpenCents()).isEqualTo(200L);
-        assertThat(opened.entrySnapshotJson()).contains("\"feeOverridePerSideCents\":200");
+        assertThat(io.liftandshift.strikebench.util.Json.parse(opened.entrySnapshotJson())
+                .path("feeOverridePerSideCents").asLong()).isEqualTo(200L);
 
         TradeService.CloseResult result = trades.unwind(opened.id(), true);
         assertThat(result.trade().feesCloseCents()).isEqualTo(200L);

@@ -11,7 +11,7 @@ import java.util.Map;
 
 /**
  * Persists {@link StrategyEvaluation}s to the {@code strategy_evaluation} table: typed columns for
- * what we rank/query, JSONB for the rich producer sub-profiles. This is what lets recommendations
+ * what we rank/query, plus one immutable JSONB producer receipt. This is what lets recommendations
  * be reviewed later and (Phase 4) calibrated against their outcomes.
  */
 public final class EvaluationStore {
@@ -20,11 +20,8 @@ public final class EvaluationStore {
             INSERT INTO strategy_evaluation
               (id, user_id, symbol, strategy, objective, score, ev_cents, roc, ann_roc, pop,
                assignment_prob, capital_incremental_cents, capital_economic_cents, max_loss_cents,
-               tail_loss_cents, evidence_level, spec_json, candidate_json, capital_json,
-               volatility_json, risk_json, management_json, score_json, evidence_json,
-               economics_json, explanation_json)
-            VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,
-                    ?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb)
+               tail_loss_cents, evidence_level, receipt)
+            VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?, ?::jsonb)
             """;
 
     private final Db db;
@@ -38,11 +35,7 @@ public final class EvaluationStore {
                 e.spec() == null ? null : e.spec().objective(),
                 e.decisionScore(), e.evCents(), e.roc(), e.annRoc(), e.pop(),
                 e.assignmentProb(), e.capitalIncrementalCents(), e.capitalEconomicCents(), e.maxLossCents(),
-                e.tailLossCents(), e.evidenceLevel().name(),
-                Json.write(e.spec()), Json.write(e.candidate()), Json.write(e.capital()),
-                Json.write(e.volatility()), Json.write(e.risk()), Json.write(e.management()),
-                Json.write(e.score()), Json.write(e.evidence()), Json.write(e.economics()),
-                Json.write(e.explanation()) };
+                e.tailLossCents(), e.evidenceLevel().name(), Json.write(e) };
     }
 
     /** Saves one evaluation for a canonical user; null callers resolve to the explicit local owner. */

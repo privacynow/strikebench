@@ -10,6 +10,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import org.postgresql.util.PGobject;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -138,8 +139,20 @@ public final class SqliteToPostgresEtl {
             case "double precision", "real" -> ((Number) num(v)).doubleValue();
             case "numeric" -> v instanceof BigDecimal b ? b : new BigDecimal(v.toString());
             case "timestamp with time zone" -> timestamp(v.toString());
+            case "jsonb" -> jsonb(v.toString());
             default -> v.toString(); // text / varchar / etc.
         };
+    }
+
+    private static PGobject jsonb(String raw) {
+        try {
+            PGobject value = new PGobject();
+            value.setType("jsonb");
+            value.setValue(raw);
+            return value;
+        } catch (SQLException e) {
+            throw new Db.DbException(e);
+        }
     }
 
     private static java.time.OffsetDateTime timestamp(String raw) {

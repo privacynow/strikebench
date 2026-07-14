@@ -72,7 +72,8 @@ class MigrationImmutabilityTest {
             Map.entry("V49__portfolio_tax_reconciliation.sql", "a2d1325536607af6e5055411c16715b739332db68c9211e65062367d98d165aa"),
             Map.entry("V50__canonical_owner_scope.sql", "c30b941ad8e1f1a5808fe275deb664e0d9bb8eae729992746daec4a4910a52d0"),
             Map.entry("V51__canonical_time_and_price_types.sql", "e7220846f7ae717ca1f2b48471d592c4c37834cfa62d3d5ffddafb48597d026e"),
-            Map.entry("V52__structure_persisted_collections.sql", "5d437c7770ca116d26bad0bb049a3d75bbc2c5eb0023cdf196954d38706f2d82")
+            Map.entry("V52__structure_persisted_collections.sql", "5d437c7770ca116d26bad0bb049a3d75bbc2c5eb0023cdf196954d38706f2d82"),
+            Map.entry("V53__canonical_json_receipts.sql", "592a6769093ac0bbb18acf0fd19422c09d1d1b0b6dc139b62b725685a08407d3")
     );
 
     @Test
