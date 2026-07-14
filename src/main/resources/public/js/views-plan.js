@@ -11,7 +11,9 @@
       legLabel = S.legLabel, fmtBreakeven = S.fmtBreakeven,
       prettyStrategy = S.prettyStrategy, intentBadge = S.intentBadge,
       riskMode = S.riskMode, prettyPricingMode = S.prettyPricingMode,
-      pressable = S.pressable, research = S.research, verdictPanel = S.verdictPanel;
+      pressable = S.pressable;
+  var research = window.ViewResearch.research,
+      verdictPanel = window.ViewResearch.verdictPanel;
   var icon = UI.icon;
 
   // ---------- 3. Recommendations ----------
