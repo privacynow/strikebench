@@ -113,22 +113,24 @@ public final class HistoricalReplayKernel {
         var rows = db.query(
                 "SELECT mark, bid, ask FROM option_bar WHERE symbol=? AND asof=? AND expiration=? AND strike=? "
               + "AND opt_type=? AND dataset_id=? AND bid_ask_observed=1 LIMIT 1",
-                r -> new Double[]{r.dblOrNull("mark"), r.dblOrNull("bid"), r.dblOrNull("ask")},
+                r -> new BigDecimal[]{r.bd("mark"), r.bd("bid"), r.bd("ask")},
                 symbol, date, leg.expiration(), leg.strike(), leg.type().name(), analysis.datasetId());
         if (rows.isEmpty()) return null;
-        Double mark = rows.getFirst()[0], bid = rows.getFirst()[1], ask = rows.getFirst()[2];
-        Double side = switch (intent) {
-            case ENTRY -> leg.action() == LegAction.BUY ? ask : bid;
-            case EXIT -> leg.action() == LegAction.BUY ? bid : ask;
+        BigDecimal mark = rows.getFirst()[0], bid = rows.getFirst()[1], ask = rows.getFirst()[2];
+        BigDecimal side = switch (intent) {
+            case ENTRY -> io.liftandshift.strikebench.market.ExecutablePrice.forAction(bid, ask, leg.action());
+            case EXIT -> io.liftandshift.strikebench.market.ExecutablePrice.forAction(
+                    bid, ask, leg.action().opposite());
             case MARK -> null;
         };
         if (intent != PriceIntent.MARK) {
             // An observed mark is not an executable fill. Missing historical bid/ask falls back to
             // the model and therefore lowers the run's observed-evidence ratio.
-            return side != null && side >= 0 ? side : null;
+            return side == null ? null : side.doubleValue();
         }
-        if (mark != null) return mark;
-        return bid != null && ask != null && ask >= bid ? (bid + ask) / 2.0 : null;
+        if (mark != null) return mark.doubleValue();
+        BigDecimal midpoint = io.liftandshift.strikebench.market.ExecutablePrice.midpoint(bid, ask);
+        return midpoint == null ? null : midpoint.doubleValue();
     }
 
     public List<Double> listedStrikes(String symbol, LocalDate date, LocalDate expiration,

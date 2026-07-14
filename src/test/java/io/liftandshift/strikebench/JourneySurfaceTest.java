@@ -434,6 +434,25 @@ class JourneySurfaceTest {
                 .doesNotContain("evaluations.scan(");
     }
 
+    @Test void everyExecutableFillUsesOneBookRule() throws Exception {
+        String rule = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/market/ExecutablePrice.java"));
+        String marks = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/paper/MarksSource.java"));
+        String recommendations = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/recommend/RecommendationEngine.java"));
+        String backtester = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/backtest/Backtester.java"));
+        String replay = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/backtest/HistoricalReplayKernel.java"));
+
+        assertThat(rule).contains("forAction(", "bid.compareTo(ask) > 0", "midpoint(");
+        assertThat(marks).contains("ExecutablePrice.forAction(bid, ask, action)");
+        assertThat(recommendations).contains("ExecutablePrice.forAction(");
+        assertThat(backtester).contains("ExecutablePrice.forAction(");
+        assertThat(replay).contains("ExecutablePrice.forAction(", "ExecutablePrice.midpoint(");
+    }
+
     @Test void marketTransitionsHaveOneBackendOwner() throws Exception {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
