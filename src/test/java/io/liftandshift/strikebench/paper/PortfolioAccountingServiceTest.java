@@ -509,6 +509,49 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void calculatedValuationsBuildHistoryWithoutManualSnapshotsAndLabelPartialMarks() {
+        AtomicReference<BigDecimal> aaplBid = new AtomicReference<>(new BigDecimal("109.90"));
+        MarksSource observed = new MarksSource() {
+            @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.empty(); }
+            @Override public Optional<LegMark> legMark(String symbol, Leg leg) {
+                if (!"AAPL".equals(symbol)) return Optional.empty();
+                return Optional.of(mark(aaplBid.get().toPlainString(), aaplBid.get().add(new BigDecimal("0.10")).toPlainString()));
+            }
+        };
+        books = new PortfolioAccountingService(db, CLOCK, observed);
+        var complete = books.createAccount("owner-a", account("Complete", "TAXABLE", 10_000_00L));
+        books.record("owner-a", complete.id(), trade("2026-01-02", 0L,
+                leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 10, 1, "100")));
+        var partial = books.createAccount("owner-b", account("Partial", "ROTH_IRA", 10_000_00L));
+        books.record("owner-b", partial.id(), trade("2026-01-02", 0L,
+                leg("STOCK", "BUY", "OPEN", "NVDA", null, null, null, 2, 1, "200")));
+
+        var first = books.recordCalculatedValuation("owner-a", complete.id(), Instant.parse("2026-07-13T15:00:00Z"));
+        aaplBid.set(new BigDecimal("119.90"));
+        var second = books.recordCalculatedValuation("owner-a", complete.id(), Instant.parse("2026-07-13T16:00:00Z"));
+        var partialValue = books.recordCalculatedValuation("owner-b", partial.id(), Instant.parse("2026-07-13T16:00:00Z"));
+
+        assertThat(first.source()).isEqualTo("CALCULATED");
+        assertThat(first.complete()).isTrue();
+        assertThat(first.totalValueCents()).isEqualTo(10_099_00L);
+        assertThat(second.totalValueCents()).isEqualTo(10_199_00L);
+        assertThat(books.performance("owner-a", complete.id()).valuations())
+                .hasSize(2).allMatch(v -> "CALCULATED".equals(v.source()) && v.complete());
+        assertThat(partialValue.complete()).isFalse();
+        assertThat(partialValue.missingMarks()).containsExactly("NVDA shares");
+        assertThat(partialValue.cashCents()).isEqualTo(9_600_00L);
+        assertThat(partialValue.securitiesValueCents()).isZero();
+        assertThat(partialValue.totalValueCents()).isEqualTo(9_600_00L);
+        assertThat(partialValue.notes()).contains("Known subtotal only").contains("NVDA shares");
+
+        var run = books.recordActiveCalculatedValuations();
+        assertThat(run.accounts()).isEqualTo(2);
+        assertThat(run.complete()).isEqualTo(1);
+        assertThat(run.partial()).isEqualTo(1);
+        assertThat(run.failed()).isZero();
+    }
+
+    @Test
     void futureActivityAndValuationsAreRejectedBeforeTheyCanDistortAccounting() {
         var account = books.createAccount("local", account("Taxable", "TAXABLE", null));
 

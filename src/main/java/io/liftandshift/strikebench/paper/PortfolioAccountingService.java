@@ -130,6 +130,8 @@ public final class PortfolioAccountingService {
     public record BenchmarkView(String symbol, Double returnValue, List<BenchmarkPoint> points,
                                 String source, String note) {}
 
+    public record CalculatedValuationRun(int accounts, int complete, int partial, int failed) {}
+
     public record PerformanceView(List<ValuationView> valuations, Long startingValueCents,
                                   Long endingValueCents, long netExternalFlowCents,
                                   Long investmentGainCents, Double modifiedDietzReturn,
@@ -204,6 +206,8 @@ public final class PortfolioAccountingService {
 
     private record BenchmarkBar(LocalDate date, BigDecimal close, String source,
                                 boolean adjusted, int qualityRank) {}
+
+    private record AccountKey(String ownerId, String accountId) {}
 
     private record SummaryLedgerSnapshot(AccountProfile account, List<LotView> openLots,
                                          long cashCents, long realizedCents, long feesCents,
@@ -453,6 +457,60 @@ public final class PortfolioAccountingService {
                     input.totalValueCents(), source, trim(input.externalRef(), 160), trim(input.notes(), 1000),
                     true, List.of());
         });
+    }
+
+    /** Records one observed-only, executable-side valuation without touching practice money. */
+    public ValuationView recordCalculatedValuation(String ownerId, String accountId) {
+        return recordCalculatedValuation(ownerId, accountId, clock.instant());
+    }
+
+    ValuationView recordCalculatedValuation(String ownerId, String accountId, Instant instant) {
+        if (instant == null || instant.isAfter(clock.instant())) {
+            throw new IllegalArgumentException("calculated valuation time must not be in the future");
+        }
+        String owner = owner(ownerId);
+        OffsetDateTime asOf = OffsetDateTime.ofInstant(instant, ZoneOffset.UTC);
+        return db.tx(c -> {
+            AccountProfile account = requireAccount(c, owner, accountId, true);
+            requireActive(account);
+            PortfolioSummary summary = assembleSummary(ledgerSnapshot(c, account));
+            long knownSecurities = 0;
+            for (PositionView position : summary.positions()) {
+                if (position.liquidationValueCents() != null) {
+                    knownSecurities = Math.addExact(knownSecurities, position.liquidationValueCents());
+                }
+            }
+            long knownTotal = Math.addExact(summary.bookCashCents(), knownSecurities);
+            String notes = summary.complete()
+                    ? "Observed executable-side account valuation."
+                    : "Known subtotal only; missing observed executable marks: " + String.join(", ", summary.missingMarks());
+            String id = Ids.newId("pval");
+            Db.execOn(c, "INSERT INTO portfolio_valuation(id,portfolio_account_id,as_of,cash_cents,securities_value_cents,total_value_cents,"
+                            + "source,external_ref,notes,complete,missing_marks) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+                            + "ON CONFLICT (portfolio_account_id,source,as_of) DO UPDATE SET cash_cents=EXCLUDED.cash_cents,"
+                            + "securities_value_cents=EXCLUDED.securities_value_cents,total_value_cents=EXCLUDED.total_value_cents,"
+                            + "notes=EXCLUDED.notes,complete=EXCLUDED.complete,missing_marks=EXCLUDED.missing_marks",
+                    id, account.id(), asOf, summary.bookCashCents(), knownSecurities, knownTotal,
+                    "CALCULATED", "observed-executable-nav", notes, summary.complete(), Json.write(summary.missingMarks()));
+            return Db.queryOn(c, "SELECT * FROM portfolio_valuation WHERE portfolio_account_id=? AND source='CALCULATED' AND as_of=?",
+                    PortfolioAccountingService::mapValuation, account.id(), asOf).getFirst();
+        });
+    }
+
+    /** One scheduler tick across all active owner-scoped books; one failure never drops the others. */
+    public CalculatedValuationRun recordActiveCalculatedValuations() {
+        List<AccountKey> accounts = db.query("SELECT owner_id,id FROM portfolio_account WHERE status='ACTIVE' ORDER BY owner_id,id",
+                r -> new AccountKey(r.str("owner_id"), r.str("id")));
+        int complete = 0, partial = 0, failed = 0;
+        for (AccountKey account : accounts) {
+            try {
+                if (recordCalculatedValuation(account.ownerId(), account.accountId()).complete()) complete++;
+                else partial++;
+            } catch (RuntimeException e) {
+                failed++;
+            }
+        }
+        return new CalculatedValuationRun(accounts.size(), complete, partial, failed);
     }
 
     public PerformanceView performance(String ownerId, String accountId) {
@@ -835,21 +893,26 @@ public final class PortfolioAccountingService {
      */
     public PortfolioSummary summary(String ownerId, String accountId) {
         String owner = owner(ownerId);
-        SummaryLedgerSnapshot ledger = db.tx(c -> {
-            AccountProfile account = requireAccount(c, owner, accountId, true);
-            List<LotView> openLots = Db.queryOn(c,
-                    "SELECT l.* FROM portfolio_lot l JOIN portfolio_transaction t ON t.id=l.opening_transaction_id "
-                            + "WHERE l.portfolio_account_id=? AND l.status='OPEN' "
-                            + "ORDER BY l.symbol,l.instrument_type,l.opened_at,t.record_seq,l.id",
-                    PortfolioAccountingService::mapLotView, account.id());
-            return new SummaryLedgerSnapshot(account, openLots,
-                    scalarOn(c, "SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?", account.id()),
-                    scalarOn(c, "SELECT COALESCE(SUM(realized_gain_cents),0) n FROM portfolio_lot_match WHERE portfolio_account_id=?", account.id()),
-                    scalarOn(c, "SELECT COALESCE(SUM(fees_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?", account.id()),
-                    scalarOn(c, "SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=? "
-                            + "AND event_type IN ('DEPOSIT','WITHDRAWAL','TRANSFER_IN','TRANSFER_OUT')", account.id()),
-                    incomeOn(c, account.id(), "INTEREST", null), incomeOn(c, account.id(), "DIVIDEND", null));
-        });
+        SummaryLedgerSnapshot ledger = db.tx(c -> ledgerSnapshot(c, requireAccount(c, owner, accountId, true)));
+        return assembleSummary(ledger);
+    }
+
+    private static SummaryLedgerSnapshot ledgerSnapshot(Connection c, AccountProfile account) throws SQLException {
+        List<LotView> openLots = Db.queryOn(c,
+                "SELECT l.* FROM portfolio_lot l JOIN portfolio_transaction t ON t.id=l.opening_transaction_id "
+                        + "WHERE l.portfolio_account_id=? AND l.status='OPEN' "
+                        + "ORDER BY l.symbol,l.instrument_type,l.opened_at,t.record_seq,l.id",
+                PortfolioAccountingService::mapLotView, account.id());
+        return new SummaryLedgerSnapshot(account, openLots,
+                scalarOn(c, "SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?", account.id()),
+                scalarOn(c, "SELECT COALESCE(SUM(realized_gain_cents),0) n FROM portfolio_lot_match WHERE portfolio_account_id=?", account.id()),
+                scalarOn(c, "SELECT COALESCE(SUM(fees_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?", account.id()),
+                scalarOn(c, "SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=? "
+                        + "AND event_type IN ('DEPOSIT','WITHDRAWAL','TRANSFER_IN','TRANSFER_OUT')", account.id()),
+                incomeOn(c, account.id(), "INTEREST", null), incomeOn(c, account.id(), "DIVIDEND", null));
+    }
+
+    private PortfolioSummary assembleSummary(SummaryLedgerSnapshot ledger) {
         AccountProfile account = ledger.account();
         List<LotView> open = ledger.openLots();
         Map<String, List<LotView>> groups = new LinkedHashMap<>();

@@ -5225,13 +5225,13 @@
             securitiesValueCents: securitiesValue == null ? null : Math.round(securitiesValue * 100),
             source: 'MANUAL', externalRef: reference.value || null, notes: notes.value || null
           });
-          UI.toast('Account-value snapshot recorded', 'ok'); await App.render();
+          UI.toast('Account-value reconciliation recorded', 'ok'); await App.render();
         } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
         finally { save.disabled = account.status === 'ARCHIVED'; save.removeAttribute('aria-busy'); }
-      } }, 'Record snapshot');
+      } }, 'Record reconciliation');
     return el('section', { class: 'card book-valuation-form' },
-      UI.cardHeader('Record account value', current),
-      el('p', { class: 'muted small' }, 'Periodic total-value snapshots make contribution-adjusted performance possible. Cash and securities are optional detail, but when both are entered they must add to the total exactly.'),
+      UI.cardHeader('Reconcile an account value', current),
+      el('p', { class: 'muted small' }, 'StrikeBench records observed executable-side values automatically at a fixed cadence. Add a broker or statement value here when you want an independent reconciliation point. Cash and securities are optional detail, but when both are entered they must add to the total exactly.'),
       el('div', { class: 'form-grid' }, UI.field('As of date and time', asOf), UI.field('Total account value $', total),
         UI.field('Cash $ (optional)', cash), UI.field('Securities $ (optional)', securities),
         UI.field('Statement reference', reference), UI.field('Notes', notes)),
@@ -5267,7 +5267,7 @@
         'Interest ' + fmtMoney(performance.interestIncomeCents || 0) + ' · dividends ' + fmtMoney(performance.dividendIncomeCents || 0) + '.')));
     var chartCard = el('section', { class: 'card book-performance-chart' }, UI.cardHeader(
       benchmark.points && benchmark.points.length >= 2 ? 'Account value vs ' + benchmark.symbol : 'Historical account value',
-      el('span', { class: 'badge badge-dim' }, values.length + ' snapshot' + (values.length === 1 ? '' : 's'))));
+      el('span', { class: 'badge badge-dim' }, values.length + ' valuation' + (values.length === 1 ? '' : 's'))));
     if (completeValues.length >= 2) {
       var chartValues;
       if (benchmark.points && benchmark.points.length >= 2) {

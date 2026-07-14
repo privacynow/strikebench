@@ -202,6 +202,15 @@ public final class AppConfig {
      *  chain sweep while the user's first screens are still warming (politeness first). */
     public int snapshotInitialDelaySeconds() { return getInt("SNAPSHOT_INITIAL_DELAY_SECONDS", 600); }
 
+    // ---- Tracked-portfolio valuation history ----
+    /** Observed mode records executable-side account valuations automatically. Demo mode defaults
+     *  off so generated teaching prices can never enter an external portfolio book. */
+    public boolean portfolioNavEnabled() { return getBool("PORTFOLIO_NAV_ENABLED", !fixturesOnly()); }
+    /** Give the observed quote engine time to warm before the first account valuation. */
+    public int portfolioNavInitialDelaySeconds() { return getInt("PORTFOLIO_NAV_INITIAL_DELAY_SECONDS", 30); }
+    /** Fixed cadence for the durable account-value curve. */
+    public int portfolioNavIntervalMinutes() { return getInt("PORTFOLIO_NAV_INTERVAL_MINUTES", 15); }
+
     // ---- In-memory market-data engine (warm cache + background refresh + streaming) ----
     /** When true (default), the engine warms the active universe on boot and refreshes in the background. */
     public boolean engineEnabled() { return getBool("ENGINE_ENABLED", true); }
