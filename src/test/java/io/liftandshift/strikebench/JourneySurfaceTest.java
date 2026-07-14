@@ -24,7 +24,8 @@ class JourneySurfaceTest {
         StringBuilder routes = new StringBuilder();
         for (String name : List.of("ApiServer", "CoreRoutes", "PlanRoutes", "DataRoutes",
                 "DataController", "ResearchRoutes", "WorldRoutes", "TradeRoutes", "TradeController",
-                "ResearchController", "PortfolioRoutes", "PortfolioController", "BrokerRoutes")) {
+                "ResearchController", "PortfolioRoutes", "PortfolioController", "BrokerRoutes",
+                "BrokerController")) {
             routes.append(Files.readString(Path.of(
                     "src/main/java/io/liftandshift/strikebench/api/" + name + ".java"))).append('\n');
         }
@@ -200,8 +201,7 @@ class JourneySurfaceTest {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
 
-        for (String owner : List.of("CoreRoutes", "PlanRoutes",
-                "WorldRoutes", "BrokerRoutes")) {
+        for (String owner : List.of("CoreRoutes", "PlanRoutes", "WorldRoutes")) {
             assertThat(api).contains(owner + ".register(c, new " + owner + ".Handlers(");
         }
         String portfolio = Files.readString(Path.of(
@@ -229,6 +229,13 @@ class JourneySurfaceTest {
         assertThat(api).doesNotContain("private void noteCreate(",
                 "private void expirations(Context", "private void history(Context",
                 "private void calibrationResolve(");
+        String broker = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/BrokerController.java"));
+        assertThat(api).contains("brokerController.register(c);");
+        assertThat(broker).contains("BrokerRoutes.register(config, new BrokerRoutes.Handlers(");
+        assertThat(api).doesNotContain("private void brokerVerify(",
+                "private void brokerPreview(", "private void brokerPlace(",
+                "private void brokerCancel(");
         assertThat(api).doesNotContain(
                 "c.routes.get(\"/api/metrics\"",
                 "c.routes.get(\"/api/research/",
