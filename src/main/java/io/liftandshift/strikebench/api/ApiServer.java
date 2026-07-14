@@ -125,6 +125,7 @@ public final class ApiServer {
     private java.util.concurrent.ScheduledExecutorService portfolioValuationScheduler;
     private final String startedAt = java.time.Instant.now().toString();
     private WorldTransitionService worldTransitions;
+    private TradeController tradeController;
 
     public ApiServer(AppConfig cfg, Clock clock, MarketDataService market, AuditLog audit,
                      AccountService accounts, TradeService trades, RecommendationEngine engine,
@@ -311,6 +312,9 @@ public final class ApiServer {
         accounts.getOrCreateDefault();
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
                 portfolioExports, positions, trades, this::ownerId, this::currentAccount);
+        tradeController = new TradeController(cfg, clock, db, market, eventCalendar, audit,
+                trades, positions, evaluations, snapshots, auth, this::currentAccount,
+                this::ownerId, this::activeWorld, this::analysisCtx, this::requireAdmin);
         app = Javalin.create(c -> {
             c.jetty.port = port;
             c.router.ignoreTrailingSlashes = true;
@@ -553,21 +557,7 @@ public final class ApiServer {
                     },
                     this::simMarketReport));
 
-            TradeRoutes.register(c, new TradeRoutes.Handlers(
-                    this::tradePreview,
-                    ctx -> {
-                        Account acct = currentAccount(ctx);
-                        TradeOpenRequest body = bodyOrNull(ctx, TradeOpenRequest.class);
-                        var req = toOpenRequest(body, acct);
-                        var meta = new io.liftandshift.strikebench.paper.TradeService.ExternalMeta(
-                                body.executedAt(), body.broker(), body.orderRef(),
-                                Boolean.TRUE.equals(body.historical()));
-                        ctx.status(201).json(trades.createExternal(req, meta));
-                    },
-                    this::tradeCreate, this::tradeList, this::tradeDetail, this::tradeRefresh,
-                    this::tradeUnwind, this::tradeSettle, this::tradeDelete, this::adminSnapshot,
-                    this::auditPage, this::positionsList, this::positionsPreview,
-                    this::positionsBuy, this::positionsSell));
+            tradeController.register(c);
 
             portfolioController.register(c);
 
@@ -756,14 +746,6 @@ public final class ApiServer {
         if (portfolioValuationScheduler != null) portfolioValuationScheduler.shutdownNow();
         if (app != null) app.stop();
         if (db != null) db.close();
-    }
-
-    /** Manually records a forward snapshot of the active universe. Returns per-run counts. */
-    private void adminSnapshot(Context ctx) {
-        requireAdmin(ctx);
-        SnapshotService.SnapshotResult r = snapshots.snapshotActiveUniverse();
-        ctx.json(new ApiResponses.Snapshot(r.asof().toString(), r.symbols(), r.underlyingRows(),
-                r.optionRows(), r.errors(), r.elapsedMs()));
     }
 
     /**
@@ -1348,18 +1330,6 @@ public final class ApiServer {
         ctx.json(new ApiResponses.Ok(true));
     }
 
-    /**
-     * Ownership guard for trade-by-id routes: a signed-in user may only touch trades in their own
-     * account. Missing OR another user's trade both surface as 404 (never leak existence). A no-op
-     * when auth is off, since every trade belongs to the single local account.
-     */
-    private void ensureOwnedTrade(Context ctx, String tradeId) {
-        TradeRecord t = trades.get(tradeId);
-        if (!t.accountId().equals(currentAccount(ctx).id())) {
-            throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such trade " + tradeId);
-        }
-    }
-
     // ---- Status / config ----
 
     private void status(Context ctx) {
@@ -1396,74 +1366,6 @@ public final class ApiServer {
      * rewritten under this running server — the classic "some screens fail to load" cause —
      * and the UI turns it into a restart banner instead of a mystery. Never 500s.
      */
-    // ---- Material-risk acknowledgment contract (R2/R4) ----
-    private final byte[] ackSecret = new byte[32];
-    { new java.security.SecureRandom().nextBytes(ackSecret); }
-
-    /** The server's list of risks the user MUST acknowledge for this package (id + label). */
-    private List<ApiResponses.RiskAcknowledgment> requiredAcksFor(
-            io.liftandshift.strikebench.paper.TradePreview p, long effectiveRiskBudgetCents) {
-        List<ApiResponses.RiskAcknowledgment> out = new ArrayList<>();
-        if (p == null || p.analytics() == null) return out;
-        Long marketEvAfterCosts = p.expectedValueCents() == null ? null
-                : p.expectedValueCents() - Math.multiplyExact(p.feesOpenCents(), 2L);
-        if (marketEvAfterCosts != null && marketEvAfterCosts < 0) {
-            out.add(new ApiResponses.RiskAcknowledgment("ack-ev", "The model expects this trade to LOSE "
-                    + io.liftandshift.strikebench.util.Money.fmt(-marketEvAfterCosts)
-                    + " on average at the market's own volatility."));
-        }
-        Object execO = p.analytics().get("executionQuality");
-        if (execO instanceof Map<?, ?> exec) {
-            Object pct = exec.get("concessionPctOfMid");
-            if (pct instanceof Double d && Math.abs(d) > 0.10) {
-                out.add(new ApiResponses.RiskAcknowledgment("ack-exec", "Entering surrenders "
-                        + Math.round(Math.abs(d) * 100) + "% of the package midpoint to the bid/ask spread."));
-            }
-        }
-        Object planO = p.analytics().get("managementPlan");
-        if (planO instanceof Map<?, ?> plan && String.valueOf(plan.get("regime")).contains("near-expiry")) {
-            out.add(new ApiResponses.RiskAcknowledgment("ack-dte", "Only " + plan.get("sessions")
-                    + " trading session(s) remain — gamma, weekend gaps and pin risk dominate."));
-        }
-        if (effectiveRiskBudgetCents > 0 && p.maxLossCents() > effectiveRiskBudgetCents) {
-            out.add(new ApiResponses.RiskAcknowledgment("ack-capital", "The theoretical worst case "
-                    + io.liftandshift.strikebench.util.Money.fmt(p.maxLossCents())
-                    + " exceeds your selected per-trade risk budget ("
-                    + io.liftandshift.strikebench.util.Money.fmt(effectiveRiskBudgetCents) + ")."));
-        }
-        return out;
-    }
-
-    /** Token = ts.hmac(package-identity + ts): proves a preview of THIS package was seen recently. */
-    private String ackToken(TradeService.OpenRequest req) {
-        long ts = clock.millis();
-        return ts + "." + ackHmac(req, ts);
-    }
-
-    private boolean verifyAckToken(String token, TradeService.OpenRequest req) {
-        if (token == null || !token.contains(".")) return false;
-        try {
-            long ts = Long.parseLong(token.substring(0, token.indexOf('.')));
-            if (Math.abs(clock.millis() - ts) > 15 * 60_000L) return false; // stale preview
-            String expect = ackHmac(req, ts);
-            return java.security.MessageDigest.isEqual(
-                    expect.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                    token.substring(token.indexOf('.') + 1).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        } catch (RuntimeException e) { return false; }
-    }
-
-    private String ackHmac(TradeService.OpenRequest req, long ts) {
-        try {
-            var mac = javax.crypto.Mac.getInstance("HmacSHA256");
-            mac.init(new javax.crypto.spec.SecretKeySpec(ackSecret, "HmacSHA256"));
-            String payload = req.symbol() + "|" + req.strategy() + "|" + req.qty() + "|"
-                    + io.liftandshift.strikebench.util.Json.canonical(req.legs()) + "|"
-                    + req.proposedNetCents() + "|" + req.feesOverrideCents() + "|"
-                    + req.accountId() + "|" + ts;
-            return java.util.HexFormat.of().formatHex(mac.doFinal(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-        } catch (Exception e) { throw new IllegalStateException(e); }
-    }
-
     // ---- Operational metrics + throttle ----
     private final java.util.concurrent.atomic.AtomicLong apiRequests = new java.util.concurrent.atomic.AtomicLong();
     /**
@@ -2167,9 +2069,9 @@ public final class ApiServer {
                 supplied.useHeldShares(), supplied.recommendationId(), supplied.proposedNetCents(),
                 supplied.feesOverrideCents(), "BUILDER", null, null, null, null, null, null);
         Account account = currentAccount(ctx);
-        TradeService.OpenRequest request = toOpenRequest(exactBody, account);
+        TradeService.OpenRequest request = tradeController.toOpenRequest(exactBody, account);
         var preview = trades.preview(request);
-        Candidate candidate = exactPreviewCandidate(request, preview);
+        Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
         ObjectNode candidateJson = Json.MAPPER.valueToTree(candidate);
         long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
         io.liftandshift.strikebench.eval.EconomicAssessment economics;
@@ -2613,13 +2515,13 @@ public final class ApiServer {
         requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = selectedPlanCandidate(ctx, plan);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
-        ApiResponses.TradePreviewResponse payload = tradePreviewPayload(ctx, order);
+        ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
         var first = payload.preview();
         if (order.proposedNetCents() == null) {
             body = new PlanDecisionRequest(body.expectedVersion(), body.qty(), first.entryNetPremiumCents(),
                     body.feesOverrideCents(), body.acknowledgedRisks(), body.ackToken(), body.note());
             order = planDecisionOrder(plan, candidate, body);
-            payload = tradePreviewPayload(ctx, order);
+            payload = tradeController.previewPayload(ctx, order);
         }
         ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.economics(),
                 payload.guardrails(), payload.requiredAcks(), payload.ackToken(), payload.accountFit(),
@@ -2634,10 +2536,10 @@ public final class ApiServer {
         requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = selectedPlanCandidate(ctx, plan);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
-        ApiResponses.TradePreviewResponse payload = tradePreviewPayload(ctx, order);
+        ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
         var decisionInput = planDecisionInput(ctx, plan, body, candidate, payload);
         var prepared = planDecisions.prepareTrade(decisionInput);
-        CreatedTrade created = executeTrade(ctx, order, prepared.hook());
+        TradeController.CreatedTrade created = tradeController.execute(ctx, order, prepared.hook());
         var updated = planSvc.get(ownerId(ctx), plan.id());
         ctx.status(201).json(new ApiResponses.PlanPlacedTrade<>(updated, TradeView.of(created.trade()),
                 planDecisions.latest(ownerId(ctx), plan.id()), created.verdict().warnings()));
@@ -2650,7 +2552,7 @@ public final class ApiServer {
         requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = selectedPlanCandidate(ctx, plan);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
-        ApiResponses.TradePreviewResponse payload = tradePreviewPayload(ctx, order);
+        ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
         ObjectNode decision = planDecisions.chooseCash(planDecisionInput(ctx, plan, body, candidate, payload));
         var updated = planSvc.get(ownerId(ctx), plan.id());
         ctx.status(201).json(new ApiResponses.PlanDecision<>(updated, decision));
@@ -2697,7 +2599,7 @@ public final class ApiServer {
         }
         ctx.json(new ApiResponses.PlanWorkspace<>(plan,
                 planDecisions.latest(ownerId(ctx), plan.id()), management,
-                tradeId == null ? null : tradeDetailData(tradeId)));
+                tradeId == null ? null : tradeController.detailData(tradeId)));
     }
 
     private void plansPortfolio(Context ctx) {
@@ -2746,8 +2648,9 @@ public final class ApiServer {
         var hook = planManagement.lifecycleHook(ownerId(ctx), plan.id(), body.expectedVersion(), kind, roll);
         TradeService.CloseResult result = "SETTLE".equals(kind)
                 ? trades.settle(tradeId, true, hook) : trades.unwind(tradeId, true, hook);
-        resolveRecommendationForTrade(tradeId, "SETTLE".equals(kind) ? "SETTLED" : "CLOSED",
-                decisionPnl(result.trade(), result.realizedPnlCents()));
+        tradeController.resolveRecommendation(tradeId,
+                "SETTLE".equals(kind) ? "SETTLED" : "CLOSED",
+                TradeController.decisionPnl(result.trade(), result.realizedPnlCents()));
         ctx.json(new ApiResponses.PlanClosedTrade<>(planSvc.get(ownerId(ctx), plan.id()),
                 TradeView.of(result.trade()), result.realizedPnlCents(),
                 planManagement.latest(ownerId(ctx), plan.id()),
@@ -4238,7 +4141,8 @@ public final class ApiServer {
         }
         // R4 via THE policy (review IC-1): the declared risk-capital line caps the engine's
         // per-trade budget — one translation shared by every recommending surface.
-        Long capGov = RiskBudgetPolicy.effectiveMaxLossCents(req.maxLossCents(), riskCapCents(ctx));
+        Long capGov = RiskBudgetPolicy.effectiveMaxLossCents(
+                req.maxLossCents(), tradeController.riskCapCents(ctx));
         if (!java.util.Objects.equals(capGov, req.maxLossCents())) {
             req = new RecommendationEngine.Request(req.symbol(), req.thesis(), req.horizon(), req.riskMode(),
                     capGov, req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
@@ -4763,7 +4667,8 @@ public final class ApiServer {
             } catch (io.liftandshift.strikebench.util.ResourceNotFoundException ignored) { /* buy-write ladder */ }
         }
         // R4 via THE policy: ladders obey the same declared-capital translation as every surface.
-        Long capLad = RiskBudgetPolicy.effectiveMaxLossCents(req.maxLossCents(), riskCapCents(ctx));
+        Long capLad = RiskBudgetPolicy.effectiveMaxLossCents(
+                req.maxLossCents(), tradeController.riskCapCents(ctx));
         if (!java.util.Objects.equals(capLad, req.maxLossCents())) {
             req = new RecommendationEngine.Request(req.symbol(), req.thesis(), req.horizon(), req.riskMode(),
                     capLad, req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
@@ -4829,7 +4734,8 @@ public final class ApiServer {
         Account acct = currentAccount(ctx);
         // THE policy applies to the scout too (review IC-1): auto and manual recommendations
         // must size under the identical declared-capital cap.
-        Long capAuto = RiskBudgetPolicy.effectiveMaxLossCents(req.maxLossCents(), riskCapCents(ctx));
+        Long capAuto = RiskBudgetPolicy.effectiveMaxLossCents(
+                req.maxLossCents(), tradeController.riskCapCents(ctx));
         if (!java.util.Objects.equals(capAuto, req.maxLossCents())) {
             req = new AutoRecommender.AutoRequest(req.universe(), req.horizons(), req.maxPicks(),
                     req.targetProfitCents(), capAuto, req.maxRiskPctOfAccount(), req.minConfidence(),
@@ -4841,504 +4747,6 @@ public final class ApiServer {
                         (int) Math.min(Integer.MAX_VALUE, p.freeShares()), p.avgCostCents()))
                 .toList();
         ctx.json(auto.run(req, acct.buyingPowerCents(), held, worldParam(world)));
-    }
-
-    // ---- Trades ----
-
-    public record TradeOpenRequest(String symbol, String strategy, Integer qty, List<LegView> legs,
-                                   String thesis, String horizon, String riskMode,
-                                   String intent, Boolean useHeldShares, String recommendationId,
-                                   Long proposedNetCents, Long feesOverrideCents, String source,
-                                   String executedAt, String broker, String orderRef, Boolean historical,
-                                   List<String> acknowledgedRisks, String ackToken) {}
-
-    public record ConfirmRequest(Boolean confirm) {}
-
-    private TradeService.OpenRequest toOpenRequest(TradeOpenRequest body, Account acct) {
-        if (body == null) throw new IllegalArgumentException("request body is required");
-        if (body.symbol() == null || body.symbol().isBlank()) throw new IllegalArgumentException("symbol is required");
-        if (body.legs() == null || body.legs().isEmpty()) throw new IllegalArgumentException("legs are required");
-        List<Leg> legs = body.legs().stream().map(LegView::toLeg).toList();
-        if (body.intent() != null && !body.intent().isBlank()) {
-            StrategyIntent.parse(body.intent()); // 400 on unknown intents before any money math
-        }
-        return new TradeService.OpenRequest(acct.id(), body.symbol().trim().toUpperCase(Locale.ROOT),
-                body.strategy() == null ? "CUSTOM" : body.strategy().trim().toUpperCase(Locale.ROOT),
-                body.qty() == null ? 1 : body.qty(), legs, body.thesis(), body.horizon(), body.riskMode(),
-                body.intent(), body.useHeldShares(),
-                body.proposedNetCents(), body.feesOverrideCents(),
-                body.source() == null || body.source().isBlank() ? "TICKET" : body.source());
-    }
-
-    /** The caller's declared per-trade risk capital (AccountRiskContext), or null when unset. */
-    private Long riskCapCents(Context ctx) {
-        var rc = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
-        return rc.riskCapitalCents() != null && rc.riskCapitalCents() > 0 ? rc.riskCapitalCents() : null;
-    }
-
-    private Verdict guardrailCheck(TradeService.OpenRequest req, Account acct, Long riskCapCents) {
-        StrategyFamily family = null;
-        try { family = StrategyFamily.valueOf(req.strategy()); } catch (IllegalArgumentException ignored) {}
-        List<OptionQuote> quotes = new ArrayList<>();
-        Freshness worst = Freshness.REALTIME;
-        String accountWorld = "DEMO".equals(acct.type()) ? "demo" : acct.worldId();
-        var lane = io.liftandshift.strikebench.market.MarketLane.of(accountWorld, cfg.fixturesOnly());
-        List<String> integrityBlocks = new ArrayList<>();
-        // Earnings proximity from the CALENDAR ESTIMATE (SEC filing cadence), never keywords —
-        // the MU incident's warning fired on stale results headlines two weeks AFTER earnings.
-        // Keyword hits become a separate, honestly-labeled advisory below. Ex-div still has no
-        // keyless source and stays false — documented limitation.
-        java.time.LocalDate latestExp = req.legs().stream()
-                .filter(l -> !l.isStock()).map(Leg::expiration).filter(java.util.Objects::nonNull)
-                .max(java.time.LocalDate::compareTo).orElse(null);
-        // A simulated world has NO earnings and NO news — real-company events attached to a
-        // generated market were phantom risks (review P2). Observed lane keeps both.
-        boolean inWorld = accountWorld != null;
-        boolean earningsSoon = !inWorld && latestExp != null
-                && eventCalendar.earningsLikelyBefore(req.symbol(), latestExp);
-        boolean eventLikeNews = !inWorld && market.news(req.symbol()).stream().anyMatch(n -> {
-            String h = n.headline() == null ? "" : n.headline().toLowerCase(Locale.ROOT);
-            return h.contains("earnings") || h.contains("guidance") || h.contains("results");
-        });
-        Quote underlyingQuote = market.quote(req.symbol(), accountWorld).orElse(null);
-        if (underlyingQuote != null && !underlyingQuote.evidence().usableIn(lane)) {
-            integrityBlocks.add("The " + lane + " market cannot use " + underlyingQuote.evidence().provenance()
-                    + " underlying data from " + underlyingQuote.evidence().source());
-        }
-        BigDecimal spot = underlyingQuote == null ? null : underlyingQuote.mark();
-        // Requests may omit entryPrice (the server fills at current mids) — price the legs
-        // here too, or premium-sign rules (e.g. multi-expiration credit) misfire on zeros.
-        List<Leg> priced = new ArrayList<>(req.legs().size());
-        for (Leg leg : req.legs()) {
-            if (leg.isStock()) {
-                quotes.add(null);
-                BigDecimal px = leg.entryPrice().signum() > 0 ? leg.entryPrice() : spot != null ? spot : BigDecimal.ZERO;
-                priced.add(new Leg(leg.action(), null, null, null, leg.ratio(), px));
-                continue;
-            }
-            OptionChain legChain = market.chain(req.symbol(), leg.expiration(), accountWorld).orElse(null);
-            if (legChain != null && !legChain.evidence().executableIn(lane)) {
-                integrityBlocks.add("The " + lane + " market cannot execute " + leg.strike() + " "
-                        + leg.type() + " " + leg.expiration() + " from "
-                        + legChain.evidence().provenance() + " data (" + legChain.evidence().source() + ")");
-            }
-            OptionQuote q = legChain == null ? null : legChain.find(leg.type(), leg.strike()).orElse(null);
-            quotes.add(q);
-            if (q != null) worst = Freshness.worse(worst, q.freshness());
-            BigDecimal mid = leg.entryPrice().signum() > 0 ? leg.entryPrice() : q != null && q.mid() != null ? q.mid() : BigDecimal.ZERO;
-            priced.add(new Leg(leg.action(), leg.type(), leg.strike(), leg.expiration(), leg.ratio(), mid));
-        }
-        // Held-share coverage: when the request writes against shares the account owns, the
-        // free lot count flows into the guardrails so a covered call is not misread as naked.
-        long lockedLots = 0;
-        String shareShortfall = null;
-        if (req.heldShares()) {
-            int lotsPerUnit = Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverLotsNeeded(priced));
-            long neededShares = Math.max((long) lotsPerUnit * 100 * req.qty(), 100L * req.qty());
-            long free = positions.freeShares(acct.id(), req.symbol());
-            if (free >= neededShares) {
-                lockedLots = (long) lotsPerUnit * req.qty();
-            } else {
-                // Tell the truth ("you need N free shares"), not "add a protective wing"
-                shareShortfall = "Needs " + neededShares + " free shares of " + req.symbol()
-                        + " but only " + Math.max(0, free) + " are free (held minus already locked)";
-            }
-        }
-        LocalDate laneToday = market.simInstant(accountWorld)
-                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
-        Verdict verdict = Guardrails.check(new Guardrails.Proposal(family, priced, req.qty(), quotes, spot,
-                worst, laneToday, acct.buyingPowerCents(), false, earningsSoon, false, lockedLots));
-        if (!integrityBlocks.isEmpty()) {
-            List<String> blocks = new ArrayList<>(verdict.blockReasons());
-            blocks.addAll(0, integrityBlocks);
-            verdict = Verdict.of(blocks, verdict.warnings());
-        }
-        if (shareShortfall != null) {
-            List<String> blocks = new ArrayList<>(verdict.blockReasons());
-            blocks.addFirst(shareShortfall);
-            verdict = Verdict.of(blocks, verdict.warnings());
-        }
-        if (earningsSoon) {
-            var est = eventCalendar.nextEarnings(req.symbol()).orElse(null);
-            if (est != null) {
-                List<String> warnings = new ArrayList<>(verdict.warnings());
-                warnings.add("Earnings ESTIMATED around " + est.estimated() + " \u00b1" + est.windowDays()
-                        + "d (" + est.basis() + ") \u2014 not a confirmed date, but it lands inside this trade");
-                verdict = Verdict.of(verdict.blockReasons(), warnings);
-            }
-        } else if (eventLikeNews) {
-            List<String> warnings = new ArrayList<>(verdict.warnings());
-            warnings.add("Event-like news in recent headlines (earnings/guidance keywords) \u2014 a news signal only; "
-                    + "no earnings event is ESTIMATED before this trade's expiration");
-            verdict = Verdict.of(verdict.blockReasons(), warnings);
-        }
-        // The manual ticket is not bound by risk-mode budgets (deliberate freedom), but an
-        // oversized trade deserves a loud flag against the mode the user chose in the header.
-        try {
-            // The guardrail judges the SAME repriced package the analytics show (R5/CP-3): a
-            // proposed net shifts max loss here exactly as it does in the preview (review P3).
-            Long gAdjust = null;
-            if (req.proposedNetCents() != null) {
-                long pricedNet = 0;
-                for (Leg l : priced) {
-                    long shares = (long) Leg.SHARES_PER_CONTRACT * l.ratio() * req.qty();
-                    long cents = io.liftandshift.strikebench.util.Money.centsFromPrice(l.entryPrice(), shares);
-                    pricedNet += l.action() == io.liftandshift.strikebench.model.LegAction.SELL ? cents : -cents;
-                }
-                gAdjust = req.proposedNetCents() - pricedNet;
-            }
-            io.liftandshift.strikebench.pricing.PayoffCurve curve =
-                    io.liftandshift.strikebench.pricing.PayoffCurve.of(priced, req.qty(), gAdjust);
-            if (!curve.maxLossUnbounded() && curve.maxLossCents() > 0) {
-                RecommendationEngine.RiskMode mode = RecommendationEngine.RiskMode.parse(req.riskMode());
-                // The SAME effective budget /api/risk-budget publishes — THE policy (review IC-1).
-                long budget = RiskBudgetPolicy.compute(mode, acct.buyingPowerCents(), riskCapCents)
-                        .effectiveBudgetCents();
-                if (curve.maxLossCents() > budget) {
-                    List<String> warnings = new ArrayList<>(verdict.warnings());
-                    warnings.add("Max loss " + io.liftandshift.strikebench.util.Money.fmt(curve.maxLossCents())
-                            + " exceeds your " + mode.name().toLowerCase(Locale.ROOT) + " risk budget of "
-                            + io.liftandshift.strikebench.util.Money.fmt(budget) + " per trade — allowed, but oversized for your chosen risk mode");
-                    verdict = Verdict.of(verdict.blockReasons(), warnings);
-                }
-            }
-        } catch (RuntimeException ignored) { /* advisory only */ }
-        return verdict;
-    }
-
-    private void tradePreview(Context ctx) {
-        ctx.json(tradePreviewPayload(ctx, bodyOrNull(ctx, TradeOpenRequest.class)));
-    }
-
-    private ApiResponses.TradePreviewResponse tradePreviewPayload(Context ctx, TradeOpenRequest body) {
-        Account acct = currentAccount(ctx);
-        TradeService.OpenRequest req = toOpenRequest(body, acct);
-        Verdict verdict = guardrailCheck(req, acct, riskCapCents(ctx));
-        var preview = trades.preview(req);
-        Candidate exact = exactPreviewCandidate(req, preview);
-        io.liftandshift.strikebench.eval.EconomicAssessment economics;
-        long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
-        try {
-            economics = evaluations.assessExact(req.symbol(), exact, acct.buyingPowerCents(),
-                    analysisCtx(ctx), worldParam(activeWorld(ctx)), preview.ok(), preview.blockReasons(),
-                    roundTripFees);
-        } catch (RuntimeException e) {
-            log.warn("Exact-ticket economics are unavailable for this preview");
-            log.debug("Exact-ticket economic-assessment failure", e);
-            var provenance = preview.evidence().provenance();
-            boolean observed = provenance == io.liftandshift.strikebench.model.DataProvenance.OBSERVED
-                    || provenance == io.liftandshift.strikebench.model.DataProvenance.BROKER;
-            economics = new io.liftandshift.strikebench.eval.EconomicAssessment(
-                    io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE,
-                    "MECHANICS_ONLY", "Economics unavailable",
-                    "The package was checked mechanically, but the available volatility/history inputs cannot support an economic verdict right now.",
-                    preview.expectedValueCents() == null ? null : preview.expectedValueCents() - roundTripFees,
-                    null, roundTripFees, null, observed,
-                    List.of("Exact economic comparison is unavailable; no favorable claim is made."));
-        }
-        ApiResponses.Guardrails guardrails = new ApiResponses.Guardrails(
-                verdict.level().name(), verdict.blockReasons(), verdict.warnings());
-        // The REAL denominators, when the user declared them: risk judged against paper cash was
-        // the MU lesson's sizing blind spot ('sane vs \$100k paper' was 6.5% of the real account).
-        var rc = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx));
-        // R2: material-risk acknowledgments are a SERVER contract, not a UI courtesy — the same
-        // list is recomputed at create and enforced with a signed token proving the user saw
-        // a preview of THIS exact package.
-        long effectiveRiskBudget = RiskBudgetPolicy.compute(
-                RecommendationEngine.RiskMode.parse(req.riskMode()), acct.buyingPowerCents(), riskCapCents(ctx))
-                .effectiveBudgetCents();
-        List<ApiResponses.RiskAcknowledgment> requiredAcks = requiredAcksFor(preview, effectiveRiskBudget);
-        String ackToken = requiredAcks.isEmpty() ? null : ackToken(req);
-        ApiResponses.AccountFit accountFit = null;
-        if (!rc.isEmpty() && preview.maxLossCents() > 0) {
-            Double pctOfNlv = rc.nlvCents() != null && rc.nlvCents() > 0
-                    ? Math.round(1000.0 * preview.maxLossCents() / rc.nlvCents()) / 10.0 : null;
-            Double pctOfCashBp = rc.cashBpCents() != null && rc.cashBpCents() > 0
-                    ? Math.round(1000.0 * preview.maxLossCents() / rc.cashBpCents()) / 10.0 : null;
-            Double pctOfMarginBp = rc.marginBpCents() != null && rc.marginBpCents() > 0
-                    ? Math.round(1000.0 * preview.maxLossCents() / rc.marginBpCents()) / 10.0 : null;
-            Double pctOfRiskCapital = null;
-            Boolean overRiskCapital = null;
-            if (rc.riskCapitalCents() != null && rc.riskCapitalCents() > 0) {
-                pctOfRiskCapital = Math.round(1000.0 * preview.maxLossCents() / rc.riskCapitalCents()) / 10.0;
-                overRiskCapital = preview.maxLossCents() > rc.riskCapitalCents() ? true : null;
-            }
-            accountFit = new ApiResponses.AccountFit(pctOfNlv, pctOfCashBp, pctOfMarginBp,
-                    pctOfRiskCapital, overRiskCapital);
-        }
-        return new ApiResponses.TradePreviewResponse(preview, economics, guardrails,
-                requiredAcks.isEmpty() ? null : requiredAcks, ackToken, accountFit);
-    }
-
-    /** Builds the evaluator's position contract from the SERVER-priced preview. Package entry,
-     * fills, fees and combined held-share risk all come from that exact snapshot; the client does
-     * not get to assert an economic verdict. */
-    private static Candidate exactPreviewCandidate(TradeService.OpenRequest req,
-                                                   io.liftandshift.strikebench.paper.TradePreview preview) {
-        StrategyFamily family = null;
-        try { family = StrategyFamily.valueOf(req.strategy().trim().toUpperCase(Locale.ROOT)); }
-        catch (RuntimeException ignored) { /* explicit custom package */ }
-        String display = family == null ? "Custom position" : family.display();
-        String group = family == null ? "custom" : family.structureGroup();
-        String intent = req.intent() == null || req.intent().isBlank()
-                ? family == null ? StrategyIntent.DIRECTIONAL.name() : family.primaryIntent().name()
-                : StrategyIntent.parse(req.intent()).name();
-        List<String> intents = family == null ? List.of(intent)
-                : family.intents().stream().map(Enum::name).sorted().toList();
-        List<LegView> legs = preview.legs().stream().map(m -> new LegView(
-                java.util.Objects.toString(m.get("action"), null),
-                java.util.Objects.toString(m.get("type"), null),
-                java.util.Objects.toString(m.get("strike"), null),
-                java.util.Objects.toString(m.get("expiration"), null),
-                m.get("ratio") instanceof Number n ? n.intValue() : 1,
-                java.util.Objects.toString(m.get("fill"), null))).toList();
-        boolean liquid = preview.legs().stream().filter(m -> !"STOCK".equals(m.get("type")))
-                .allMatch(m -> m.get("bid") != null && m.get("ask") != null);
-        Long combinedMaxLoss = preview.analytics().get("combinedMaxLossCents") instanceof Number n
-                ? n.longValue() : null;
-        Integer sharesNeeded = null;
-        if (req.heldShares()) {
-            int lots = Math.max(1,
-                    io.liftandshift.strikebench.strategy.CoverageCheck.callCoverLotsNeeded(req.legs()));
-            sharesNeeded = Math.multiplyExact(Math.multiplyExact(lots, Leg.SHARES_PER_CONTRACT), req.qty());
-        }
-        return new Candidate(req.strategy(), display, group, display, legs, req.qty(),
-                preview.entryNetPremiumCents(), preview.maxProfitCents(), preview.maxLossCents(),
-                preview.breakevens(), preview.popEntry(), preview.expectedValueCents(), liquid ? 1.0 : 0.0,
-                preview.freshness(), preview.warnings(), 0, 1, "Exact ticket", "", "", "", "",
-                intent, intents, preview.assignmentProb(), null, null, null,
-                req.heldShares() ? Boolean.TRUE : null, sharesNeeded, combinedMaxLoss);
-    }
-
-    private void tradeCreate(Context ctx) {
-        CreatedTrade created = executeTrade(ctx, bodyOrNull(ctx, TradeOpenRequest.class), null);
-        ctx.status(201).json(new ApiResponses.CreatedTrade<>(
-                TradeView.of(created.trade()), created.verdict().warnings()));
-    }
-
-    private record CreatedTrade(TradeRecord trade, Verdict verdict) {}
-
-    private CreatedTrade executeTrade(Context ctx, TradeOpenRequest body, TradeService.TransactionHook hook) {
-        Account acct = currentAccount(ctx);
-        TradeService.OpenRequest req = toOpenRequest(body, acct);
-        // Structural eligibility comes before discretionary risk acknowledgments. An impossible
-        // covered call, stale book, or undefined-risk package must say WHY it cannot be placed;
-        // asking the user to acknowledge EV on an order that can never pass is incoherent.
-        Verdict verdict = guardrailCheck(req, acct, riskCapCents(ctx));
-        if (verdict.blocked()) {
-            audit.log(acct.id(), null, "TRADE_REJECTED", "BLOCK",
-                    Map.of("symbol", req.symbol(), "strategy", req.strategy(), "reasons", verdict.blockReasons()));
-            throw new TradeRejectedException(verdict.blockReasons());
-        }
-        // R2: recompute the material risks for THIS package and enforce acknowledgment + the
-        // signed token — a raw API call can no longer skip what the Review made explicit.
-        long effectiveRiskBudget = RiskBudgetPolicy.compute(
-                RecommendationEngine.RiskMode.parse(req.riskMode()), acct.buyingPowerCents(), riskCapCents(ctx))
-                .effectiveBudgetCents();
-        List<ApiResponses.RiskAcknowledgment> required = requiredAcksFor(trades.preview(req), effectiveRiskBudget);
-        if (!required.isEmpty()) {
-            java.util.Set<String> acked = body.acknowledgedRisks() == null
-                    ? java.util.Set.of() : new java.util.HashSet<>(body.acknowledgedRisks());
-            List<String> missing = required.stream().map(ApiResponses.RiskAcknowledgment::id)
-                    .filter(id -> !acked.contains(id)).toList();
-            if (!missing.isEmpty()) {
-                throw new TradeRejectedException(List.of("This trade carries material risks that must be "
-                        + "acknowledged first: " + String.join(", ", missing) + " — preview it to see them"));
-            }
-            if (!verifyAckToken(body.ackToken(), req)) {
-                throw new TradeRejectedException(List.of("Acknowledgment token missing or stale — preview this exact package again"));
-            }
-        }
-        TradeRecord t = trades.create(req, hook);
-        // Close the calibration loop: link the placed trade to the recommendation it came from —
-        // REAL LANE ONLY: a simulated market's outcomes never feed 'Your record' (review P0).
-        if (body != null && body.recommendationId() != null && !body.recommendationId().isBlank()
-                && acct.worldId() == null) {
-            try { evaluations.linkTrade(body.recommendationId(), t.id()); }
-            catch (RuntimeException e) {
-                log.warn("The paper trade could not be linked to its recommendation record");
-                log.debug("Recommendation-link detail", e);
-            }
-        }
-        return new CreatedTrade(t, verdict);
-    }
-
-    private void tradeList(Context ctx) {
-        Account acct = currentAccount(ctx);
-        int page = intParam(ctx, "page", 0);
-        int size = Math.clamp(intParam(ctx, "size", 20), 1, 100);
-        TradeService.Page result = trades.list(acct.id(), ctx.queryParam("status"),
-                ctx.queryParam("symbol"), ctx.queryParam("intent"), page, size);
-        // ACTIVE rows carry a live unrealized P/L (a table without "how is it doing NOW" hides
-        // the one number a position holder wants). Best-effort per row: a mark that can't price
-        // just leaves the cell empty — never fails the list.
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (var t : result.trades()) {
-            Map<String, Object> row = new LinkedHashMap<>(Json.MAPPER.convertValue(TradeView.of(t),
-                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
-            if ("ACTIVE".equals(t.status())) {
-                try {
-                    var mark = trades.currentMark(t.id());
-                    if (mark != null && mark.unrealizedCents() != null) {
-                        row.put("unrealizedPnlCents", mark.unrealizedCents());
-                        row.put("decisionUnrealizedPnlCents",
-                                mark.decisionUnrealizedCents() != null
-                                        ? mark.decisionUnrealizedCents() : mark.unrealizedCents());
-                    }
-                } catch (Exception e) { /* leave blank */ }
-            }
-            rows.add(row);
-        }
-        ctx.json(new ApiResponses.TradePage<>(
-                rows, result.total(), result.page(), result.size()));
-    }
-
-    // ---- Equity positions ----
-
-    public record StockOrderRequest(String symbol, Long shares) {}
-    public record StockOrderPreviewRequest(String side, String symbol, Long shares) {}
-
-    private void positionsList(Context ctx) {
-        Account acct = currentAccount(ctx);
-        ctx.json(new ApiResponses.PositionBook<>(positions.list(acct.id()),
-                "Shares locked as covered-call coverage cannot be sold until the covering trade closes"));
-    }
-
-    private void positionsBuy(Context ctx) {
-        StockOrderRequest req = bodyOrNull(ctx, StockOrderRequest.class);
-        validateStockOrder(req);
-        Account acct = currentAccount(ctx);
-        ctx.status(201).json(positions.buy(acct.id(), req.symbol(), req.shares()));
-    }
-
-    private void positionsPreview(Context ctx) {
-        StockOrderPreviewRequest req = bodyOrNull(ctx, StockOrderPreviewRequest.class);
-        if (req == null) throw new IllegalArgumentException("request body is required");
-        validateStockOrder(new StockOrderRequest(req.symbol(), req.shares()));
-        if (req.side() == null || req.side().isBlank()) throw new IllegalArgumentException("side is required");
-        Account acct = currentAccount(ctx);
-        ctx.json(positions.preview(acct.id(), req.side(), req.symbol(), req.shares()));
-    }
-
-    private void positionsSell(Context ctx) {
-        StockOrderRequest req = bodyOrNull(ctx, StockOrderRequest.class);
-        validateStockOrder(req);
-        Account acct = currentAccount(ctx);
-        ctx.json(positions.sell(acct.id(), req.symbol(), req.shares()));
-    }
-
-    private static void validateStockOrder(StockOrderRequest req) {
-        if (req == null) throw new IllegalArgumentException("request body is required");
-        if (req.symbol() == null || req.symbol().isBlank()) throw new IllegalArgumentException("symbol is required");
-        if (req.shares() == null || req.shares() <= 0) throw new IllegalArgumentException("shares must be a positive number");
-    }
-
-    private void tradeDetail(Context ctx) {
-        String id = ctx.pathParam("id");
-        ensureOwnedTrade(ctx, id);
-        ctx.json(tradeDetailData(id));
-    }
-
-    private Map<String, Object> tradeDetailData(String id) {
-        TradeRecord t = trades.get(id);
-        TradeService.MarkView current = null;
-        if (TradeRecord.ACTIVE.equals(t.status())) {
-            try {
-                current = trades.currentMark(id);
-            } catch (Exception e) {
-                log.warn("Current paper-trade mark is unavailable for {}", id);
-                log.debug("Paper-trade mark detail for " + id, e);
-            }
-        }
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("trade", TradeView.of(t));
-        out.put("current", current);
-        out.put("marksHistory", trades.marksHistory(id, 50));
-        out.put("audit", audit.forTrade(id, 50));
-        out.put("payoff", payoffPoints(t));
-        return out;
-    }
-
-    /** Payoff table for charting: profit at expiration across a price grid (empty for calendars). */
-    private static List<Map<String, Object>> payoffPoints(TradeRecord t) {
-        boolean mixed = t.legs().stream().filter(l -> !l.isStock()).map(Leg::expiration).distinct().count() > 1;
-        if (mixed) return List.of();
-        BigDecimal spot = BigDecimal.valueOf(t.entryUnderlyingCents()).movePointLeft(2);
-        // Share-covered trades were risk-shaped WITH their held lot — chart the same combined
-        // position, or the graph shows a naked short call next to "max loss $0".
-        List<Leg> chartLegs = t.legs();
-        int lotsPerUnit = t.qty() > 0 ? (int) (t.sharesLocked() / (100L * t.qty())) : 0;
-        if (lotsPerUnit > 0) {
-            chartLegs = new ArrayList<>(t.legs());
-            chartLegs.add(Leg.stock(io.liftandshift.strikebench.model.LegAction.BUY, lotsPerUnit, spot));
-        }
-        long tradedLegEntry = PayoffCurve.of(t.legs(), t.qty()).entryNetPremiumCents();
-        long packageAdjustment = t.entryNetPremiumCents() - tradedLegEntry;
-        PayoffCurve curve = PayoffCurve.of(chartLegs, t.qty(), packageAdjustment);
-        List<Map<String, Object>> out = new ArrayList<>();
-        for (PayoffCurve.ChartPoint p : curve.chartPoints(spot)) {
-            out.add(Map.of("price", p.price().toPlainString(), "profitCents", p.profitCents()));
-        }
-        return out;
-    }
-
-    private void tradeRefresh(Context ctx) {
-        ensureOwnedTrade(ctx, ctx.pathParam("id"));
-        ctx.json(trades.refresh(ctx.pathParam("id")));
-    }
-
-    private void tradeUnwind(Context ctx) {
-        ensureOwnedTrade(ctx, ctx.pathParam("id"));
-        ConfirmRequest req = bodyOrNull(ctx, ConfirmRequest.class);
-        TradeService.CloseResult result = trades.unwind(ctx.pathParam("id"),
-                req != null && Boolean.TRUE.equals(req.confirm()));
-        long decisionPnl = decisionPnl(result.trade(), result.realizedPnlCents());
-        resolveRecommendationForTrade(ctx.pathParam("id"), "CLOSED", decisionPnl);
-        ctx.json(new ApiResponses.ClosedTrade<>(TradeView.of(result.trade()),
-                result.realizedPnlCents(), decisionPnl));
-    }
-
-    private void tradeSettle(Context ctx) {
-        ensureOwnedTrade(ctx, ctx.pathParam("id"));
-        ConfirmRequest req = bodyOrNull(ctx, ConfirmRequest.class);
-        TradeService.CloseResult result = trades.settle(ctx.pathParam("id"),
-                req != null && Boolean.TRUE.equals(req.confirm()));
-        long decisionPnl = decisionPnl(result.trade(), result.realizedPnlCents());
-        resolveRecommendationForTrade(ctx.pathParam("id"), "SETTLED", decisionPnl);
-        ctx.json(new ApiResponses.ClosedTrade<>(TradeView.of(result.trade()),
-                result.realizedPnlCents(), decisionPnl));
-    }
-
-    private static long decisionPnl(TradeRecord trade, long packagePnlCents) {
-        return trade.decisionPnlCents() != null ? trade.decisionPnlCents() : packagePnlCents;
-    }
-
-    /** Best-effort: only observed/broker outcomes enter recommendation calibration. Generated
-     *  Demo and simulated markets remain separate Plan-review and rehearsal evidence lanes. */
-    private void resolveRecommendationForTrade(String tradeId, String status, Long pnlCents) {
-        try {
-            var t = trades.get(tradeId);
-            record AccountLane(String type, String worldId) {}
-            var acctRows = db.query("SELECT type,world_id FROM accounts WHERE id=?",
-                    r -> new AccountLane(r.str("type"), r.str("world_id")), t.accountId());
-            if (acctRows.isEmpty()) return;
-            AccountLane lane = acctRows.getFirst();
-            if (lane.worldId() != null || "DEMO".equals(lane.type()) || "SIMULATION".equals(lane.type())) return;
-            if (!("OBSERVED".equals(t.dataProvenance()) || "BROKER".equals(t.dataProvenance()))) return;
-            evaluations.resolveByTrade(tradeId, status, pnlCents);
-        }
-        catch (RuntimeException e) {
-            log.warn("Recommendation context is unavailable for trade {}", tradeId);
-            log.debug("Recommendation-context detail for " + tradeId, e);
-        }
-    }
-
-    private void tradeDelete(Context ctx) {
-        ensureOwnedTrade(ctx, ctx.pathParam("id"));
-        boolean confirm = "true".equalsIgnoreCase(ctx.queryParam("confirm"));
-        TradeRecord t = trades.delete(ctx.pathParam("id"), confirm);
-        ctx.json(new ApiResponses.Trade<>(TradeView.of(t)));
     }
 
     // ---- Broker (live trading; heavily gated) ----
@@ -5374,17 +4782,6 @@ public final class ApiServer {
         broker.cancel(accountIdKey, ctx.pathParam("id"));
         ctx.json(new ApiResponses.CancelRequested(true,
                 "Cancels are asynchronous and can lose the race to a fill — confirm via the orders list"));
-    }
-
-    // ---- Audit ----
-
-    private void auditPage(Context ctx) {
-        int page = intParam(ctx, "page", 0);
-        // Per-user: show only the caller's account audit trail when auth is on; global when off.
-        var entries = auth.enabled()
-                ? audit.pageForAccount(currentAccount(ctx).id(), page, 50)
-                : audit.page(page, 50);
-        ctx.json(new ApiResponses.Entries<>(entries));
     }
 
     /**

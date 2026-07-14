@@ -23,7 +23,8 @@ class JourneySurfaceTest {
     private static String apiRouteSource() throws Exception {
         StringBuilder routes = new StringBuilder();
         for (String name : List.of("ApiServer", "CoreRoutes", "PlanRoutes", "DataRoutes",
-                "ResearchRoutes", "WorldRoutes", "TradeRoutes", "PortfolioRoutes", "BrokerRoutes")) {
+                "ResearchRoutes", "WorldRoutes", "TradeRoutes", "TradeController",
+                "PortfolioRoutes", "PortfolioController", "BrokerRoutes")) {
             routes.append(Files.readString(Path.of(
                     "src/main/java/io/liftandshift/strikebench/api/" + name + ".java"))).append('\n');
         }
@@ -200,13 +201,20 @@ class JourneySurfaceTest {
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
 
         for (String owner : List.of("CoreRoutes", "PlanRoutes", "DataRoutes", "ResearchRoutes",
-                "WorldRoutes", "TradeRoutes", "BrokerRoutes")) {
+                "WorldRoutes", "BrokerRoutes")) {
             assertThat(api).contains(owner + ".register(c, new " + owner + ".Handlers(");
         }
         String portfolio = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/PortfolioController.java"));
         assertThat(api).contains("portfolioController.register(c);");
         assertThat(portfolio).contains("PortfolioRoutes.register(config, new PortfolioRoutes.Handlers(");
+        String trade = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/TradeController.java"));
+        assertThat(api).contains("tradeController.register(c);");
+        assertThat(trade).contains("TradeRoutes.register(config, new TradeRoutes.Handlers(");
+        assertThat(api).doesNotContain("private void tradePreview(",
+                "private void tradeCreate(", "private void positionsList(",
+                "private void auditPage(", "private void adminSnapshot(");
         assertThat(api).doesNotContain(
                 "c.routes.get(\"/api/metrics\"",
                 "c.routes.get(\"/api/research/",
@@ -224,12 +232,15 @@ class JourneySurfaceTest {
                 "src/main/java/io/liftandshift/strikebench/api/ApiResponses.java"));
         String portfolio = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/PortfolioController.java"));
+        String trade = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/TradeController.java"));
 
         assertThat(api).doesNotContain("ctx.json(Map.of(", "ctx.json(body)",
                         "Map<String, Object> tradePreviewPayload")
-                .contains("new ApiResponses.TradePreviewResponse(",
-                        "new ApiResponses.ResearchDetail<>(");
+                .contains("new ApiResponses.ResearchDetail<>(");
         assertThat(portfolio).contains("new ApiResponses.PortfolioSummary(");
+        assertThat(trade).contains("new ApiResponses.TradePreviewResponse(",
+                "new ApiResponses.TradeDetail<>(");
         assertThat(contracts).contains("public record ErrorBody(",
                 "public record TradePreviewResponse(", "public record ResearchDetail<",
                 "public record DataSyncPlan<", "public record PortfolioSummary(");
