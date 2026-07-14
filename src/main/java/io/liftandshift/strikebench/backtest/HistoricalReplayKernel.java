@@ -16,6 +16,7 @@ import io.liftandshift.strikebench.util.Money;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.List;
 
 /** Shared no-look-ahead data, pricing and evidence rules for every historical replay mode. */
@@ -24,6 +25,14 @@ public final class HistoricalReplayKernel {
 
     public record Window(CandleSeries series, List<Candle> all, List<Candle> requested) {
         public boolean demo() { return series.isFixture(); }
+    }
+
+    /** One trading day together with the complete evidence visible as of that day. */
+    public record ReplayDay(Candle candle, List<Candle> known, int index) {}
+
+    @FunctionalInterface
+    public interface DayHandler<S> {
+        void accept(S state, ReplayDay day);
     }
 
     /** Mutable only within one replay invocation; never retained on a service singleton. */
@@ -49,14 +58,29 @@ public final class HistoricalReplayKernel {
     public Window window(String symbol, LocalDate from, LocalDate to, int warmupDays,
                          AnalysisContext analysis) {
         CandleSeries series = market.candleSeries(symbol, from.minusDays(warmupDays), to, analysis);
-        List<Candle> all = series.candles();
+        List<Candle> all = series.candles().stream()
+                .sorted(Comparator.comparing(Candle::date))
+                .toList();
         List<Candle> requested = all.stream()
                 .filter(c -> !c.date().isBefore(from) && !c.date().isAfter(to)).toList();
         return new Window(series, all, requested);
     }
 
-    public static List<Candle> known(List<Candle> all, LocalDate date) {
-        return all.stream().filter(c -> !c.date().isAfter(date)).toList();
+    /**
+     * The sole historical calendar traversal. The visibility cursor advances monotonically, so
+     * every consumer gets exactly the bars dated on or before the replay day and cannot look ahead.
+     */
+    public <S> S forEachDay(Window window, S state, DayHandler<S> handler) {
+        int visible = 0;
+        for (int index = 0; index < window.requested().size(); index++) {
+            Candle candle = window.requested().get(index);
+            while (visible < window.all().size()
+                    && !window.all().get(visible).date().isAfter(candle.date())) {
+                visible++;
+            }
+            handler.accept(state, new ReplayDay(candle, window.all().subList(0, visible), index));
+        }
+        return state;
     }
 
     public static double volatility(List<Candle> known, int window, double fallback) {

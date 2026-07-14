@@ -472,6 +472,23 @@ class JourneySurfaceTest {
                 "root.ownerId(ctx), world");
     }
 
+    @Test void everyHistoricalReplayUsesOneNoLookAheadTimeline() throws Exception {
+        String backtester = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/backtest/Backtester.java"));
+        String replay = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/backtest/HistoricalReplayKernel.java"));
+
+        assertThat(backtester).containsOnlyOnce("replay.forEachDay(replayWindow")
+                .containsOnlyOnce("replay.forEachDay(rw")
+                .doesNotContain("for (Candle day : window)",
+                        "allCandles.stream().filter(c -> !c.date().isAfter(date))",
+                        "HistoricalReplayKernel.known(");
+        assertThat(replay).contains("public <S> S forEachDay(",
+                        "while (visible < window.all().size()",
+                        "!window.all().get(visible).date().isAfter(candle.date())")
+                .doesNotContain("public static List<Candle> known(");
+    }
+
     @Test void marketTransitionsHaveOneBackendOwner() throws Exception {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
