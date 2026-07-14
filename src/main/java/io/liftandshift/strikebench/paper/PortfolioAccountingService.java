@@ -98,10 +98,14 @@ public final class PortfolioAccountingService {
                           long quantity, int multiplier, BigDecimal price,
                           long grossAmountCents, long allocatedFeeCents, boolean section1256) {}
 
+    public record RollView(String replacementLotId, long quantity,
+                           long closingPremiumCents, long openingPremiumCents,
+                           long premiumCarryoverCents, List<Long> realizedMatchIds) {}
+
     public record TransactionView(String id, String accountId, String occurredAt, String eventType,
                                   long cashEffectCents, long feesCents, String taxCategory,
                                   String source, String externalRef, String notes,
-                                  List<LegView> legs) {}
+                                  List<LegView> legs, RollView roll) {}
 
     public record LotView(String id, String instrumentType, String side, String symbol,
                           String optionType, BigDecimal strike, LocalDate expiration,
@@ -156,7 +160,7 @@ public final class PortfolioAccountingService {
                                int multiplier, long quantity, long openAmountCents,
                                BigDecimal liquidationPrice, Long liquidationValueCents,
                                Long unrealizedPnlCents, String provenance, String age,
-                               String source, boolean complete) {}
+                               String source, boolean complete, boolean section1256) {}
 
     public record AllocationView(String symbol, long knownMarketValueCents,
                                  long grossExposureCents, Double percentOfKnownGross) {}
@@ -195,6 +199,8 @@ public final class PortfolioAccountingService {
                             long realizedGainCents, long allocatedQuantity, long allocatedCents) {}
 
     private record WashAllocation(long quantity, String remainingReplacementLotId) {}
+
+    private record CloseResult(long openingAmountTransferred, List<Long> matchIds) {}
 
     private record YearEndMark(BigDecimal price, LocalDate asOf, String source) {}
 
@@ -397,6 +403,8 @@ public final class PortfolioAccountingService {
         }
         if ("ASSIGNMENT".equals(event) || "EXERCISE".equals(event)) {
             applyOptionConversion(c, account, txId, occurred, event, legs);
+        } else if ("ROLL".equals(event)) {
+            applyRoll(c, account, txId, occurred, legs);
         } else {
             for (PreparedLeg leg : legs) applyLeg(c, account, txId, occurred, leg, 0);
         }
@@ -961,7 +969,8 @@ public final class PortfolioAccountingService {
             positions.add(new PositionView(entry.getKey(), first.instrumentType(), first.side(), first.symbol(),
                     first.optionType(), first.strike(), first.expiration(), first.multiplier(), quantity,
                     openAmount, closePrice, value, unrealized,
-                    evidence.provenance().name(), evidence.age().name(), evidence.source(), rowComplete));
+                    evidence.provenance().name(), evidence.age().name(), evidence.source(), rowComplete,
+                    first.section1256()));
         }
 
         long cash = ledger.cashCents();
@@ -1134,15 +1143,66 @@ public final class PortfolioAccountingService {
     private void applyLeg(Connection c, AccountProfile account, String txId, OffsetDateTime occurred,
                           PreparedLeg leg, long amountAdjustment) throws SQLException {
         if ("OPEN".equals(leg.positionEffect())) {
-            long amount = openingAmount(leg) + amountAdjustment;
-            if (amount < 0) throw new IllegalArgumentException("opening basis/proceeds became negative after assignment adjustment");
-            String lotId = insertLot(c, account.id(), txId, occurred, leg, amount);
-            if (account.currentlyTaxable() && "BUY".equals(leg.action())) {
-                applyPriorLossesToReplacement(c, account, lotId);
-            }
+            openLot(c, account, txId, occurred, leg, amountAdjustment);
         } else {
             closeLots(c, account, txId, occurred, leg, closingAmount(leg) + amountAdjustment, false);
         }
+    }
+
+    private String openLot(Connection c, AccountProfile account, String txId, OffsetDateTime occurred,
+                           PreparedLeg leg, long amountAdjustment) throws SQLException {
+        long amount = Math.addExact(openingAmount(leg), amountAdjustment);
+        if (amount < 0) throw new IllegalArgumentException("opening basis/proceeds became negative after assignment adjustment");
+        String lotId = insertLot(c, account.id(), txId, occurred, leg, amount);
+        if (account.currentlyTaxable() && "BUY".equals(leg.action())) {
+            applyPriorLossesToReplacement(c, account, lotId);
+        }
+        return lotId;
+    }
+
+    private void applyRoll(Connection c, AccountProfile account, String txId,
+                           OffsetDateTime occurred, List<PreparedLeg> legs) throws SQLException {
+        if (legs.size() != 2 || legs.stream().anyMatch(l -> !"OPTION".equals(l.instrumentType()))) {
+            throw new IllegalArgumentException("A roll requires exactly one closing option leg and one replacement option leg.");
+        }
+        PreparedLeg close = legs.stream().filter(l -> "CLOSE".equals(l.positionEffect())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("A roll requires one closing option leg."));
+        PreparedLeg open = legs.stream().filter(l -> "OPEN".equals(l.positionEffect())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("A roll requires one replacement option leg."));
+        if (legs.stream().filter(l -> "CLOSE".equals(l.positionEffect())).count() != 1
+                || legs.stream().filter(l -> "OPEN".equals(l.positionEffect())).count() != 1) {
+            throw new IllegalArgumentException("A roll requires exactly one close and one replacement open.");
+        }
+        if (!close.symbol().equals(open.symbol()) || !close.optionType().equals(open.optionType())
+                || close.quantity() != open.quantity() || close.multiplier() != open.multiplier()
+                || close.section1256() != open.section1256()) {
+            throw new IllegalArgumentException("A roll must keep the same symbol, option type, quantity, and multiplier.");
+        }
+        String closingSide = "BUY".equals(close.action()) ? "SHORT" : "LONG";
+        String openingSide = "BUY".equals(open.action()) ? "LONG" : "SHORT";
+        if (!closingSide.equals(openingSide)) {
+            throw new IllegalArgumentException("A roll must replace the position on the same long or short side.");
+        }
+        if (close.strike().compareTo(open.strike()) == 0 && close.expiration().equals(open.expiration())) {
+            throw new IllegalArgumentException("A replacement contract must change the strike or expiration.");
+        }
+        CloseResult closed = closeLots(c, account, txId, occurred, close, closingAmount(close), false);
+        String replacementLotId = openLot(c, account, txId, occurred, open, 0);
+        long closingPremium = signedPremium(close);
+        long openingPremium = signedPremium(open);
+        long carryover = Math.addExact(closingPremium, openingPremium);
+        Db.execOn(c, "INSERT INTO portfolio_roll(transaction_id,portfolio_account_id,closing_leg_no,opening_leg_no,"
+                        + "replacement_lot_id,quantity,closing_premium_cents,opening_premium_cents,premium_carryover_cents) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?)",
+                txId, account.id(), close.legNo(), open.legNo(), replacementLotId, open.quantity(),
+                closingPremium, openingPremium, carryover);
+        for (long matchId : closed.matchIds()) {
+            Db.execOn(c, "INSERT INTO portfolio_roll_match(transaction_id,lot_match_id) VALUES (?,?)", txId, matchId);
+        }
+    }
+
+    private static long signedPremium(PreparedLeg leg) {
+        return "SELL".equals(leg.action()) ? leg.grossAmountCents() : Math.negateExact(leg.grossAmountCents());
     }
 
     private void applyOptionConversion(Connection c, AccountProfile account, String txId,
@@ -1166,7 +1226,7 @@ public final class PortfolioAccountingService {
         String expectedSide = "ASSIGNMENT".equals(event) ? "SHORT" : "LONG";
         String closingSide = "BUY".equals(option.action()) ? "SHORT" : "LONG";
         if (!expectedSide.equals(closingSide)) throw new IllegalArgumentException(event + " must close a " + expectedSide.toLowerCase(Locale.ROOT) + " option lot");
-        long transferred = closeLots(c, account, txId, occurred, option, 0, true);
+        long transferred = closeLots(c, account, txId, occurred, option, 0, true).openingAmountTransferred();
         boolean put = "PUT".equals(option.optionType());
         long adjustment;
         if (("SHORT".equals(expectedSide) && put) || ("LONG".equals(expectedSide) && !put)) {
@@ -1184,8 +1244,8 @@ public final class PortfolioAccountingService {
     }
 
     /** Returns opening basis/proceeds consumed. In roll mode the option itself realizes $0. */
-    private long closeLots(Connection c, AccountProfile account, String txId, OffsetDateTime occurred,
-                           PreparedLeg leg, long totalCloseAmount, boolean rolled) throws SQLException {
+    private CloseResult closeLots(Connection c, AccountProfile account, String txId, OffsetDateTime occurred,
+                                  PreparedLeg leg, long totalCloseAmount, boolean rolled) throws SQLException {
         String side = "BUY".equals(leg.action()) ? "SHORT" : "LONG";
         List<LotRow> candidates = matchingLots(c, account, leg, side);
         long available = 0;
@@ -1198,6 +1258,7 @@ public final class PortfolioAccountingService {
         long remainingQty = leg.quantity();
         long remainingClose = totalCloseAmount;
         long transferred = 0;
+        List<Long> matchIds = new ArrayList<>();
         for (LotRow lot : candidates) {
             if (remainingQty == 0) break;
             long qty = Math.min(remainingQty, lot.remainingQuantity());
@@ -1211,6 +1272,7 @@ public final class PortfolioAccountingService {
                             + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     account.id(), lot.id(), txId, leg.legNo(), qty, OffsetDateTime.parse(lot.openedAt()), occurred,
                     openPart, rolled ? openPart : closePart, realized, term, lot.section1256());
+            matchIds.add(matchId);
             long lotQtyAfter = Math.subtractExact(lot.remainingQuantity(), qty);
             long lotAmountAfter = Math.subtractExact(lot.remainingOpenAmount(), openPart);
             Db.execOn(c, "UPDATE portfolio_lot SET remaining_quantity=?,remaining_open_amount_cents=?,status=? WHERE id=?",
@@ -1222,7 +1284,7 @@ public final class PortfolioAccountingService {
             remainingClose = Math.subtractExact(remainingClose, closePart);
             transferred = Math.addExact(transferred, openPart);
         }
-        return transferred;
+        return new CloseResult(transferred, List.copyOf(matchIds));
     }
 
     private void applyExistingReplacementsToLoss(Connection c, AccountProfile account,
@@ -1497,8 +1559,21 @@ public final class PortfolioAccountingService {
         Object[] row = rows.getFirst();
         List<LegView> legs = Db.queryOn(c, "SELECT * FROM portfolio_transaction_leg WHERE transaction_id=? ORDER BY leg_no",
                 PortfolioAccountingService::mapLeg, txId);
+        RollView roll = roll(c, txId);
         return new TransactionView((String) row[0], (String) row[1], (String) row[2], (String) row[3],
-                (Long) row[4], (Long) row[5], (String) row[6], (String) row[7], (String) row[8], (String) row[9], legs);
+                (Long) row[4], (Long) row[5], (String) row[6], (String) row[7], (String) row[8], (String) row[9], legs, roll);
+    }
+
+    private static RollView roll(Connection c, String txId) throws SQLException {
+        var rows = Db.queryOn(c, "SELECT replacement_lot_id,quantity,closing_premium_cents,opening_premium_cents,"
+                        + "premium_carryover_cents FROM portfolio_roll WHERE transaction_id=?",
+                r -> new Object[]{r.str("replacement_lot_id"), r.lng("quantity"), r.lng("closing_premium_cents"),
+                        r.lng("opening_premium_cents"), r.lng("premium_carryover_cents")}, txId);
+        if (rows.isEmpty()) return null;
+        Object[] row = rows.getFirst();
+        List<Long> matches = Db.queryOn(c, "SELECT lot_match_id FROM portfolio_roll_match WHERE transaction_id=? ORDER BY lot_match_id",
+                r -> r.lng("lot_match_id"), txId);
+        return new RollView((String) row[0], (Long) row[1], (Long) row[2], (Long) row[3], (Long) row[4], matches);
     }
 
     private static AccountProfile requireAccount(Connection c, String owner, String id, boolean lock) throws SQLException {

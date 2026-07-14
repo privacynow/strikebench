@@ -139,6 +139,56 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void rollRealizesTheCloseAndLinksTheReplacementLotWithExactPremiumCarryover() {
+        var account = books.createAccount("local", account("Roll book", "TAXABLE", 100_000_00L));
+        books.record("local", account.id(), tx("2026-01-02", "TRADE", null, 100L, null,
+                "BROKER", "roll-open", List.of(
+                        leg("OPTION", "BUY", "OPEN", "AAPL", "CALL", "250", "2026-08-21", 1, 100, "5.00"))));
+
+        var rolled = books.record("local", account.id(), tx("2026-02-02", "ROLL", null, 200L, null,
+                "BROKER", "roll-forward", List.of(
+                        leg("OPTION", "SELL", "CLOSE", "AAPL", "CALL", "250", "2026-08-21", 1, 100, "7.00"),
+                        leg("OPTION", "BUY", "OPEN", "AAPL", "CALL", "260", "2026-09-18", 1, 100, "9.00"))));
+
+        assertThat(rolled.cashEffectCents()).isEqualTo(-20_200L);
+        assertThat(rolled.roll()).isNotNull();
+        assertThat(rolled.roll().quantity()).isEqualTo(1);
+        assertThat(rolled.roll().closingPremiumCents()).isEqualTo(70_000L);
+        assertThat(rolled.roll().openingPremiumCents()).isEqualTo(-90_000L);
+        assertThat(rolled.roll().premiumCarryoverCents()).isEqualTo(-20_000L);
+        assertThat(rolled.roll().realizedMatchIds()).singleElement();
+
+        assertThat(books.realizedLots("local", account.id(), 2026)).singleElement().satisfies(match -> {
+            assertThat(match.realizedGainCents()).isEqualTo(19_812L);
+            assertThat(match.holdingTerm()).isEqualTo("SHORT_TERM");
+        });
+        assertThat(books.lots("local", account.id(), false)).singleElement().satisfies(lot -> {
+            assertThat(lot.id()).isEqualTo(rolled.roll().replacementLotId());
+            assertThat(lot.strike()).isEqualByComparingTo("260.0000");
+            assertThat(lot.expiration()).isEqualTo(LocalDate.parse("2026-09-18"));
+            assertThat(lot.remainingOpenAmountCents()).isEqualTo(90_112L);
+        });
+        assertThat(db.query("SELECT COUNT(*) n FROM portfolio_roll_match", r -> r.lng("n")).getFirst()).isEqualTo(1);
+    }
+
+    @Test
+    void rollRejectsAReplacementThatChangesThePositionIdentityOrSide() {
+        var account = books.createAccount("local", account("Bad roll", "ROTH_IRA", null));
+        books.record("local", account.id(), trade("2026-01-02", 0L,
+                leg("OPTION", "SELL", "OPEN", "AAPL", "PUT", "200", "2026-08-21", 1, 100, "3.00")));
+
+        assertThatThrownBy(() -> books.record("local", account.id(), tx("2026-02-02", "ROLL", null, 0L,
+                null, "MANUAL", null, List.of(
+                        leg("OPTION", "BUY", "CLOSE", "AAPL", "PUT", "200", "2026-08-21", 1, 100, "2.00"),
+                        leg("OPTION", "BUY", "OPEN", "AAPL", "PUT", "190", "2026-09-18", 1, 100, "4.00")))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("same long or short side");
+        assertThat(books.transactions("local", account.id(), 0, 20)).hasSize(1);
+        assertThat(books.lots("local", account.id(), false)).singleElement()
+                .satisfies(lot -> assertThat(lot.remainingQuantity()).isEqualTo(1));
+    }
+
+    @Test
     void shortPutAssignmentTransfersPremiumIntoShareBasis() {
         var account = books.createAccount("local", account("Brokerage", "TAXABLE", null));
         books.record("local", account.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "put-open",
