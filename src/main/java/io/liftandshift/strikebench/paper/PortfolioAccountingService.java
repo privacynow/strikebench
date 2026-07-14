@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.market.Universes;
+import io.liftandshift.strikebench.model.BroadBasedIndexOptions;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
@@ -48,7 +49,6 @@ public final class PortfolioAccountingService {
             "OPENING_BALANCE", "DEPOSIT", "WITHDRAWAL", "TRANSFER_IN", "TRANSFER_OUT", "INTEREST", "DIVIDEND", "FEE", "ADJUSTMENT");
     private static final List<String> MARKET_EVENTS = List.of(
             "TRADE", "ROLL", "EXPIRATION", "ASSIGNMENT", "EXERCISE", "MARK_TO_MARKET");
-    private static final List<String> SECTION_1256_ROOTS = List.of("SPX", "NDX", "RUT");
 
     private final Db db;
     private final Clock clock;
@@ -1273,6 +1273,10 @@ public final class PortfolioAccountingService {
                 .orElseThrow(() -> new IllegalArgumentException(event + " requires an option leg"));
         PreparedLeg stock = legs.stream().filter(l -> "STOCK".equals(l.instrumentType())).findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(event + " requires a stock leg"));
+        if (option.section1256()) {
+            throw new IllegalArgumentException("Section 1256 broad-based index options are cash-settled and cannot deliver shares. "
+                    + "Record the exact cash settlement as a closing option transaction instead.");
+        }
         if (!"CLOSE".equals(option.positionEffect()) || option.price().signum() != 0) {
             throw new IllegalArgumentException(event + " option leg must CLOSE at $0; its premium transfers into stock basis/proceeds");
         }
@@ -1799,8 +1803,9 @@ public final class PortfolioAccountingService {
         if (Boolean.TRUE.equals(explicit) && !"OPTION".equals(instrumentType)) {
             throw new IllegalArgumentException("Section 1256 classification applies only to eligible contracts, not stock");
         }
-        if (explicit != null) return explicit;
-        return "OPTION".equals(instrumentType) && SECTION_1256_ROOTS.contains(symbol);
+        if (!"OPTION".equals(instrumentType)) return false;
+        if (BroadBasedIndexOptions.isKnownRoot(symbol)) return true;
+        return Boolean.TRUE.equals(explicit);
     }
 
     private static void validateRate(Integer bps, String label) {

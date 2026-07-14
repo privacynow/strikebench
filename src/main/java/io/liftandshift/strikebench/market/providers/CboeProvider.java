@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
+import io.liftandshift.strikebench.model.BroadBasedIndexOptions;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.OptionChain;
@@ -140,7 +141,15 @@ public final class CboeProvider implements MarketDataProvider {
         BigDecimal last = decimal(data, "current_price");
         if (last == null) last = decimal(data, "close");
         JsonNode options = data.path("options");
-        boolean optionable = options.isArray() && !options.isEmpty();
+        boolean optionable = false;
+        if (options.isArray()) {
+            for (JsonNode opt : options) {
+                if (parseOcc(opt.path("option").asText(null), sym) != null) {
+                    optionable = true;
+                    break;
+                }
+            }
+        }
 
         return Optional.of(new Quote(
                 sym,
@@ -181,11 +190,21 @@ public final class CboeProvider implements MarketDataProvider {
         JsonNode data = payload.data();
 
         long asOf = payload.asOf();
-        List<OptionQuote> calls = new ArrayList<>();
-        List<OptionQuote> puts = new ArrayList<>();
+        List<ParsedOption> matching = new ArrayList<>();
         for (JsonNode opt : data.path("options")) {
             ParsedOcc occ = parseOcc(opt.path("option").asText(null), sym);
-            if (occ == null || !occ.expiration().equals(expiration)) continue;
+            if (occ != null && occ.expiration().equals(expiration)) matching.add(new ParsedOption(opt, occ));
+        }
+        if (matching.isEmpty()) return Optional.empty();
+        String selectedSeries = matching.stream().anyMatch(x -> x.occ().root().equals(sym))
+                ? sym : matching.getFirst().occ().root();
+
+        List<OptionQuote> calls = new ArrayList<>();
+        List<OptionQuote> puts = new ArrayList<>();
+        for (ParsedOption parsed : matching) {
+            if (!parsed.occ().root().equals(selectedSeries)) continue;
+            JsonNode opt = parsed.node();
+            ParsedOcc occ = parsed.occ();
             OptionQuote q = new OptionQuote(
                     sym,
                     occ.raw(),
@@ -207,8 +226,6 @@ public final class CboeProvider implements MarketDataProvider {
                     Freshness.DELAYED);
             (occ.type() == OptionType.CALL ? calls : puts).add(q);
         }
-        if (calls.isEmpty() && puts.isEmpty()) return Optional.empty();
-
         calls.sort(Comparator.comparing(OptionQuote::strike));
         puts.sort(Comparator.comparing(OptionQuote::strike));
 
@@ -237,16 +254,18 @@ public final class CboeProvider implements MarketDataProvider {
         // Circuit breaker: while cooling down from a 429, make NO Cboe request (for any symbol) — this
         // is what stops the retry storm and the ongoing hammering. Callers fall through the chain.
         if (coolingDown()) return null;
-        Optional<CachedPayload> cached = payloadCache.get(symbol, this::fetchDataUncached);
+        String cacheKey = BroadBasedIndexOptions.canonicalRoot(symbol)
+                .orElseGet(() -> symbol == null ? "" : symbol.trim().toUpperCase(java.util.Locale.ROOT));
+        Optional<CachedPayload> cached = payloadCache.get(cacheKey, this::fetchDataUncached);
         return cached == null ? null : cached.orElse(null);
     }
 
-    /** Cboe serves index option chains under underscore roots (SPX -> _SPX etc.). */
-    private static final java.util.Set<String> INDEX_ROOTS = java.util.Set.of(
-            "SPX", "XSP", "NDX", "VIX", "RUT", "DJX", "OEX", "XEO");
-
     private Optional<CachedPayload> fetchDataUncached(String symbol) {
-        String cboeSymbol = INDEX_ROOTS.contains(symbol) ? "_" + symbol : symbol;
+        // Cboe serves these index chains under underscore roots. Series aliases such as SPXW
+        // share the canonical SPX payload, but retain their requested symbol everywhere else.
+        String cboeSymbol = BroadBasedIndexOptions.canonicalRoot(symbol)
+                .map(root -> "_" + root)
+                .orElse(symbol);
         String url = baseUrl + "/api/global/delayed_quotes/options/" + cboeSymbol + ".json";
         String body;
         boolean acquired = false;
@@ -305,6 +324,19 @@ public final class CboeProvider implements MarketDataProvider {
      */
     private static ParsedOcc parseOcc(String raw, String symbol) {
         if (raw == null) return null;
+        int rootEnd = raw.length() - 15;
+        if (rootEnd <= 0) return null;
+        String contractRoot = normalize(raw.substring(0, rootEnd));
+        Optional<String> requestedCanonical = BroadBasedIndexOptions.canonicalRoot(symbol);
+        if (requestedCanonical.isPresent()) {
+            String requested = normalize(symbol);
+            boolean canonicalRequest = requested.equals(requestedCanonical.get());
+            boolean sameSeries = canonicalRequest
+                    ? BroadBasedIndexOptions.canonicalRoot(contractRoot)
+                            .filter(requestedCanonical.get()::equals).isPresent()
+                    : requested.equals(contractRoot);
+            if (!sameSeries) return null;
+        }
         String tail;
         if (raw.startsWith(symbol) && raw.length() - symbol.length() >= 15) {
             tail = raw.substring(symbol.length());
@@ -326,7 +358,7 @@ public final class CboeProvider implements MarketDataProvider {
             String strikeDigits = tail.substring(7);
             if (!strikeDigits.chars().allMatch(Character::isDigit)) return null;
             BigDecimal strike = new BigDecimal(strikeDigits).movePointLeft(3);
-            return new ParsedOcc(raw, type, strike, expiration);
+            return new ParsedOcc(raw, contractRoot, type, strike, expiration);
         } catch (DateTimeParseException | NumberFormatException e) {
             return null;
         }
@@ -347,5 +379,6 @@ public final class CboeProvider implements MarketDataProvider {
         return v.isNumber() ? v.doubleValue() : null;
     }
 
-    private record ParsedOcc(String raw, OptionType type, BigDecimal strike, LocalDate expiration) {}
+    private record ParsedOcc(String raw, String root, OptionType type, BigDecimal strike, LocalDate expiration) {}
+    private record ParsedOption(JsonNode node, ParsedOcc occ) {}
 }

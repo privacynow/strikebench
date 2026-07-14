@@ -65,7 +65,8 @@ class MigrationImmutabilityTest {
             Map.entry("V42__portfolio_wash_sales.sql", "e061b98e4f99788280697a585fd44d8f49f66f3a286a578110f0fc5f5bacc9f9"),
             Map.entry("V43__portfolio_section_1256.sql", "93ef20adb3018e80a3009b68f3f44d257d0048a56057fcbd13eaff9106586115"),
             Map.entry("V44__portfolio_performance_series.sql", "2be44ca4ca5697ec4883a6d2bfff7552fbbe563300b7cae9d21d7f6e35453a0b"),
-            Map.entry("V45__portfolio_roll_links.sql", "ad8398ba8ab4e6aa3f4c43e33c09a798741001529bd21dcef51f009ab0e35e42")
+            Map.entry("V45__portfolio_roll_links.sql", "ad8398ba8ab4e6aa3f4c43e33c09a798741001529bd21dcef51f009ab0e35e42"),
+            Map.entry("V46__complete_broad_based_index_taxonomy.sql", "3316e8d64bd2bbd882053f21a823d3e0c9146d1b7ae26b86c2e1eaa3e606978f")
     );
 
     @Test

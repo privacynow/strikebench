@@ -191,8 +191,8 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
-    void rollPreservesAnExplicitNon1256IndexClassification() {
-        var account = books.createAccount("local", account("Explicit index classification", "TAXABLE", 100_000_00L));
+    void knownIndexRootCannotBeForcedOutOfSection1256AndRollKeepsItsClassification() {
+        var account = books.createAccount("local", account("Known index classification", "TAXABLE", 100_000_00L));
         var original = new PortfolioAccountingService.LegInput("OPTION", "BUY", "OPEN", "SPX", "CALL",
                 new BigDecimal("5000"), LocalDate.parse("2026-08-21"), 1L, 100,
                 new BigDecimal("5.00"), false);
@@ -209,9 +209,9 @@ class PortfolioAccountingServiceTest {
                 "BROKER", "explicit-non-1256-roll", List.of(close, replacement)));
 
         assertThat(rolled.roll()).isNotNull();
-        assertThat(rolled.legs()).allMatch(leg -> !leg.section1256());
+        assertThat(rolled.legs()).allMatch(PortfolioAccountingService.LegView::section1256);
         assertThat(books.lots("local", account.id(), false)).singleElement()
-                .satisfies(lot -> assertThat(lot.section1256()).isFalse());
+                .satisfies(lot -> assertThat(lot.section1256()).isTrue());
     }
 
     @Test
@@ -329,6 +329,64 @@ class PortfolioAccountingServiceTest {
             assertThat(tx.source()).isEqualTo("CALCULATED");
             assertThat(tx.cashEffectCents()).isZero();
         });
+    }
+
+    @Test
+    void xspVixAndSpxWeeklyAutoClassifyAndMarkAtYearEnd() {
+        var taxable = books.createAccount("local", account("Expanded 1256 roots", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2025-12-01", "TRADE", null, 0L, null,
+                "BROKER", "expanded-1256-open", List.of(
+                        leg("OPTION", "BUY", "OPEN", "XSP", "CALL", "600", "2026-03-20", 1, 100, "10"),
+                        leg("OPTION", "BUY", "OPEN", "VIX", "CALL", "25", "2026-03-20", 1, 100, "5"),
+                        leg("OPTION", "BUY", "OPEN", "SPXW", "PUT", "5000", "2026-03-20", 1, 100, "8"))));
+        db.exec("INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,mark,source,bid_ask_observed,dataset_id) VALUES "
+                + "('XSP','2025-12-31','2026-03-20',600,'CALL',11.9,12.1,12.0,'broker-year-end',1,'observed'),"
+                + "('VIX','2025-12-31','2026-03-20',25,'CALL',6.9,7.1,7.0,'broker-year-end',1,'observed'),"
+                + "('SPXW','2025-12-31','2026-03-20',5000,'PUT',9.9,10.1,10.0,'broker-year-end',1,'observed')");
+
+        assertThat(books.markSection1256YearEnd("local", taxable.id(), 2025)).isEqualTo(1);
+        var tax = books.taxReport("local", taxable.id(), 2025);
+
+        assertThat(tax.section1256GainCents()).isEqualTo(600_00L);
+        assertThat(tax.section1256ShortTermCents()).isEqualTo(240_00L);
+        assertThat(tax.section1256LongTermCents()).isEqualTo(360_00L);
+        assertThat(books.realizedLots("local", taxable.id(), 2025))
+                .extracting(PortfolioAccountingService.RealizedLotView::symbol)
+                .containsExactlyInAnyOrder("XSP", "VIX", "SPXW");
+        assertThat(books.realizedLots("local", taxable.id(), 2025))
+                .allMatch(PortfolioAccountingService.RealizedLotView::section1256);
+        assertThat(books.lots("local", taxable.id(), false))
+                .allMatch(PortfolioAccountingService.LotView::section1256);
+    }
+
+    @Test
+    void lookAlikeEtfIsNotAutoClassifiedAsSection1256() {
+        var taxable = books.createAccount("local", account("Look-alike root", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2026-01-02", "TRADE", null, 0L, null,
+                "BROKER", "vixy-open", List.of(
+                        leg("OPTION", "BUY", "OPEN", "VIXY", "CALL", "50", "2026-08-21", 1, 100, "2"))));
+
+        assertThat(books.lots("local", taxable.id(), false)).singleElement()
+                .satisfies(lot -> assertThat(lot.section1256()).isFalse());
+    }
+
+    @Test
+    void cashSettledIndexOptionCannotBeRecordedAsPhysicalShareDelivery() {
+        var taxable = books.createAccount("local", account("Cash settlement guard", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2026-01-02", "TRADE", null, 0L, null,
+                "BROKER", "xsp-short-put", List.of(
+                        leg("OPTION", "SELL", "OPEN", "XSP", "PUT", "600", "2026-02-20", 1, 100, "4"))));
+
+        assertThatThrownBy(() -> books.record("local", taxable.id(), tx("2026-02-20", "ASSIGNMENT", null,
+                0L, null, "BROKER", "bad-xsp-delivery", List.of(
+                        leg("OPTION", "BUY", "CLOSE", "XSP", "PUT", "600", "2026-02-20", 1, 100, "0"),
+                        leg("STOCK", "BUY", "OPEN", "XSP", null, null, null, 100, 1, "600")))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cash-settled")
+                .hasMessageContaining("closing option transaction");
+        assertThat(books.transactions("local", taxable.id(), 0, 20))
+                .extracting(PortfolioAccountingService.TransactionView::externalRef)
+                .containsExactly("xsp-short-put");
     }
 
     @Test
@@ -1089,11 +1147,17 @@ class PortfolioAccountingServiceTest {
         books.record("local", account.id(), tx("2025-01-02", "TRADE", null, 0L, null, "BROKER", "golden-leap-past",
                 List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "120"))));
 
-        books.record("local", account.id(), tx("2025-12-01", "TRADE", null, 0L, null, "BROKER", "golden-spx-open",
-                List.of(leg("OPTION", "BUY", "OPEN", "SPX", "CALL", "5000", "2026-12-18", 1, 100, "10"))));
+        books.record("local", account.id(), tx("2025-12-01", "TRADE", null, 0L, null, "BROKER", "golden-index-open",
+                List.of(
+                        leg("OPTION", "BUY", "OPEN", "SPX", "CALL", "5000", "2026-12-18", 1, 100, "10"),
+                        leg("OPTION", "BUY", "OPEN", "XSP", "CALL", "600", "2026-12-18", 1, 100, "10"))));
         db.exec("INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,mark,source,bid_ask_observed,dataset_id) "
-                + "VALUES ('SPX','2025-12-31','2026-12-18',5000,'CALL',11.9,12.1,12.0,'golden-observed',1,'observed')");
+                + "VALUES ('SPX','2025-12-31','2026-12-18',5000,'CALL',11.9,12.1,12.0,'golden-observed',1,'observed'),"
+                + "('XSP','2025-12-31','2026-12-18',600,'CALL',11.9,12.1,12.0,'golden-observed',1,'observed')");
         assertThat(books.markSection1256YearEnd("local", account.id(), 2025)).isEqualTo(1);
+
+        books.record("local", account.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "golden-xsp-close",
+                List.of(leg("OPTION", "SELL", "CLOSE", "XSP", "CALL", "600", "2026-12-18", 1, 100, "12"))));
 
         books.record("local", account.id(), tx("2026-01-10", "TRADE", null, 100L, null, "BROKER", "golden-roll-open",
                 List.of(leg("OPTION", "BUY", "OPEN", "QQQ", "CALL", "500", "2026-08-21", 1, 100, "5"))));
@@ -1140,9 +1204,12 @@ class PortfolioAccountingServiceTest {
                 + "('SPY','2026-07-01',110,'golden-observed',1,'observed',1,10)");
 
         var tax2025 = books.taxReport("local", account.id(), 2025);
-        assertThat(tax2025.shortTermGainCents()).isEqualTo(90_00L);
-        assertThat(tax2025.longTermGainCents()).isEqualTo(140_00L);
-        assertThat(tax2025.section1256GainCents()).isEqualTo(200_00L);
+        assertThat(tax2025.shortTermGainCents()).isEqualTo(170_00L);
+        assertThat(tax2025.longTermGainCents()).isEqualTo(260_00L);
+        assertThat(tax2025.section1256GainCents()).isEqualTo(400_00L);
+        assertThat(tax2025.realizedLots()).filteredOn(PortfolioAccountingService.RealizedLotView::section1256)
+                .extracting(PortfolioAccountingService.RealizedLotView::symbol)
+                .containsExactlyInAnyOrder("SPX", "XSP");
         var tax2026 = books.taxReport("local", account.id(), 2026);
         assertThat(tax2026.washSaleAdjustmentsCents()).isEqualTo(120_00L);
         assertThat(tax2026.shortTermGainCents()).isEqualTo(118_12L);
@@ -1155,13 +1222,13 @@ class PortfolioAccountingServiceTest {
 
         var summary = books.summary("local", account.id());
         assertThat(summary.complete()).isTrue();
-        assertThat(summary.bookCashCents()).isEqualTo(19_733_934L);
+        assertThat(summary.bookCashCents()).isEqualTo(19_753_934L);
         assertThat(summary.securitiesLiquidationValueCents()).isEqualTo(336_000L);
-        assertThat(summary.totalValueCents()).isEqualTo(20_069_934L);
-        assertThat(summary.allocation().longExposureCents()).isEqualTo(20_084_934L);
+        assertThat(summary.totalValueCents()).isEqualTo(20_089_934L);
+        assertThat(summary.allocation().longExposureCents()).isEqualTo(20_104_934L);
         assertThat(summary.allocation().shortExposureCents()).isEqualTo(15_000L);
-        assertThat(summary.allocation().grossExposureCents()).isEqualTo(20_099_934L);
-        assertThat(summary.allocation().netExposureCents()).isEqualTo(20_069_934L);
+        assertThat(summary.allocation().grossExposureCents()).isEqualTo(20_119_934L);
+        assertThat(summary.allocation().netExposureCents()).isEqualTo(20_089_934L);
         assertThat(summary.allocation().byAssetClass()).extracting(PortfolioAccountingService.ExposureRow::label)
                 .containsExactlyInAnyOrder("Cash", "Stocks", "Options");
         assertThat(summary.allocation().bySector()).extracting(PortfolioAccountingService.ExposureRow::label)
@@ -1171,7 +1238,7 @@ class PortfolioAccountingServiceTest {
         var calculated = books.recordCalculatedValuation("local", account.id(), Instant.parse("2026-07-13T15:00:00Z"));
         assertThat(calculated.source()).isEqualTo("CALCULATED");
         assertThat(calculated.complete()).isTrue();
-        assertThat(calculated.totalValueCents()).isEqualTo(20_069_934L);
+        assertThat(calculated.totalValueCents()).isEqualTo(20_089_934L);
     }
 
     private static MarksSource.LegMark mark(String bid, String ask) {

@@ -1623,6 +1623,7 @@ public final class ApiServer {
         out.put("feePerOrderCents", cfg.feePerOrderCents());
         out.put("defaultStartingCashCents", cfg.defaultStartingCashCents());
         out.put("brand", Map.of("name", cfg.brandName(), "tagline", cfg.brandTagline()));
+        out.put("broadBasedIndexOptionSymbols", io.liftandshift.strikebench.model.BroadBasedIndexOptions.AUTOMATIC_SYMBOLS);
         out.put("disclaimer", RecommendationEngine.DISCLAIMER);
         // Scenario mode is PERSONAL: the signal reflects the CALLER's active dataset.
         String active = datasets == null ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : datasets.activeId(ownerId(ctx));
