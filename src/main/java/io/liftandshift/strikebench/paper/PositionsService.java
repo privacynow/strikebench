@@ -100,7 +100,8 @@ public final class PositionsService {
     private String worldOf(String accountId) {
         var rows = db.query("SELECT world_id,type FROM accounts WHERE id=?",
                 r -> "DEMO".equals(r.str("type")) ? "demo" : r.str("world_id"), accountId);
-        return rows.isEmpty() ? null : rows.getFirst();
+        if (rows.isEmpty()) throw new IllegalArgumentException("no such account " + accountId);
+        return rows.getFirst();
     }
 
     private PositionView view(Position p) {

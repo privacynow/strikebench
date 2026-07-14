@@ -21,11 +21,27 @@ public final class RiskBudgetPolicy {
                          long policyBudgetCents, Long capCents, long effectiveBudgetCents, boolean capped) {}
 
     public static Budget compute(RecommendationEngine.RiskMode mode, long buyingPowerCents, Long riskCapitalCents) {
-        long policy = Math.round(buyingPowerCents * mode.defaultRiskPct());
+        long policy = policyBudgetCents(mode, buyingPowerCents, null);
         Long cap = riskCapitalCents != null && riskCapitalCents > 0 ? riskCapitalCents : null;
         long effective = cap != null ? Math.min(policy, cap) : policy;
         return new Budget(mode.name().toLowerCase(Locale.ROOT), labelOf(mode), mode.defaultRiskPct(),
                 buyingPowerCents, policy, cap, effective, cap != null && policy > cap);
+    }
+
+    /** Exact request budget used by both the ranked field and intent ladders. */
+    public static long requestBudgetCents(RecommendationEngine.RiskMode mode, long buyingPowerCents,
+                                          Double requestedPercent, Long maxLossCents) {
+        long policy = policyBudgetCents(mode, buyingPowerCents, requestedPercent);
+        Long cap = maxLossCents != null && maxLossCents > 0 ? maxLossCents : null;
+        return cap == null ? policy : Math.min(policy, cap);
+    }
+
+    private static long policyBudgetCents(RecommendationEngine.RiskMode mode, long buyingPowerCents,
+                                          Double requestedPercent) {
+        double percent = requestedPercent == null
+                ? mode.defaultRiskPct()
+                : Math.clamp(requestedPercent, 0.001, 0.5);
+        return Math.max(0, Math.round(Math.max(0, buyingPowerCents) * percent));
     }
 
     public static String labelOf(RecommendationEngine.RiskMode mode) {

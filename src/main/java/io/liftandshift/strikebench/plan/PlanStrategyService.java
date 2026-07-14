@@ -667,11 +667,7 @@ public final class PlanStrategyService {
         return value.stripTrailingZeros().toPlainString();
     }
     private static String horizonName(Integer days) {
-        if (days == null) return "month";
-        if (days <= 1) return "0DTE";
-        if (days <= 10) return "week";
-        if (days <= 45) return "month";
-        return "quarter";
+        return io.liftandshift.strikebench.model.Horizon.fromTradingSessions(days).key();
     }
     private static String normalizeScope(String raw) {
         String value = raw == null ? "PEERS" : raw.trim().toUpperCase(java.util.Locale.ROOT);

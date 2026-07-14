@@ -18,9 +18,7 @@
   var FORM_KEYS = ['dataScenarioForm', 'dataSyncForm'];
 
   function canonicalRoute(hash) {
-    hash = hash || '#/home';
-    return /^#\/(home(?:\/tour)?|research(?:\/[A-Z0-9._-]+)?|plan\/[^/?]+\/(?:understand|evidence|strategy|outcomes|decide|manage-review)|portfolio(?:\/(?:construct|positions|active|closed|activity|record|account|trade\/tr_[A-Za-z0-9_-]+))?|data\/(?:overview|datasets|simulation|sources|admin))(?:\?.*)?$/i.test(hash)
-      ? hash : '#/home';
+    return Product.Routes.canonical(hash);
   }
 
   var rev = 0;             // last backend revision seen (multi-tab adopt guard)

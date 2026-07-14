@@ -65,8 +65,7 @@
     var symbol = String(prefill.symbol || App.context.symbol() || '').trim().toUpperCase();
     if (!symbol) { App.navigate('#/research'); return Promise.resolve(null); }
     var horizon = prefill.horizon || App.context.horizon('month');
-    var days = horizon === '0DTE' ? 1 : horizon === 'week' ? 7 : horizon === 'quarter' ? 63
-      : /^\d+d$/.test(horizon || '') ? parseInt(horizon, 10) : 30;
+    var days = Product.Horizon.sessions(horizon);
     var risk = document.getElementById('risk-mode');
     var intent = prefill.intent || App.context.goal('DIRECTIONAL');
     var destination = stage || planIntentDestination(intent);
@@ -534,7 +533,7 @@
               el('span', { class: 'badge ' + (sameMarket ? 'badge-info' : 'badge-dim') }, planMarketLabel(plan)))),
           el('div', { class: 'home-plan-meta' },
             chip('Stage', stageName(plan)),
-            plan.context && plan.context.horizonDays ? chip('Horizon', plan.context.horizonDays + 'd') : null,
+            plan.context && plan.context.horizonDays ? chip('Horizon', plan.context.horizonDays + ' sessions') : null,
             plan.context && plan.context.thesis ? chip('View', plan.context.thesis) : null,
             planIdentity.updated ? el('span', { class: 'muted small plan-updated-at' }, planIdentity.updated) : null,
             live), actions);
@@ -1403,7 +1402,7 @@
             el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', onclick: async function () {
               this.disabled = true; this.setAttribute('aria-busy', 'true');
               try {
-                var days = horizon.value === '0DTE' ? 1 : horizon.value === 'week' ? 7 : horizon.value === 'quarter' ? 63 : 30;
+                var days = Product.Horizon.sessions(horizon.value);
                 var plan = await PlanStore.create({ symbol: pick.symbol, intent: pick.intent,
                   thesis: String(pick.signals.thesis || '').toLowerCase(), horizonDays: days,
                   riskMode: risk ? risk.value : 'conservative' });
@@ -2271,8 +2270,7 @@
     var horizon = App.context.horizon('month');
     var thesis = App.context.thesis('neutral');
     App.context.update({ symbol: symbol, goal: intent, horizon: horizon, thesis: thesis });
-    var days = horizon === '0DTE' ? 1 : horizon === 'week' ? 7 : horizon === 'quarter' ? 63
-      : /^\d+d$/.test(horizon || '') ? parseInt(horizon, 10) : 30;
+    var days = Product.Horizon.sessions(horizon);
     var plan = await PlanStore.create({ symbol: symbol, intent: intent, thesis: thesis,
       horizonDays: days, riskMode: riskMode() });
     var position = Object.assign({ symbol: symbol, strategy: c.strategy || 'CUSTOM', qty: c.qty || 1,
@@ -2604,11 +2602,6 @@
     return PLAN_STAGES.find(function (s) { return s.path === path; }) || PLAN_STAGES[0];
   }
 
-  function horizonDaysFromContext() {
-    var raw = App.context.horizon('month');
-    return { '0DTE': 1, day: 1, week: 7, month: 30, quarter: 90 }[raw] || 30;
-  }
-
   function replacePlanRoute(plan, stage) {
     var hash = PlanStore.path(plan, stage || 'UNDERSTAND');
     window.history.replaceState(null, '', hash);
@@ -2650,7 +2643,7 @@
         el('div', { class: 'plan-header-facts' },
           el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)),
           plan.intent ? intentBadge(plan.intent) : el('span', { class: 'badge badge-dim' }, 'Intent not chosen'),
-          context.horizonDays ? chip('Horizon', context.horizonDays + ' days') : null,
+          context.horizonDays ? chip('Horizon', context.horizonDays + ' trading sessions') : null,
           context.targetCents ? chip('Target', fmtMoney(context.targetCents)) : null),
         provisional ? null : el('div', { class: 'plan-header-receipt expert-only', 'aria-label': 'Plan identity receipt' },
           el('span', {}, 'Plan v' + plan.version),
@@ -2701,7 +2694,7 @@
       ['', 'bullish', 'bearish', 'neutral', 'volatile'].map(function (v) {
         return el('option', { value: v, selected: (c.thesis || '') === v ? 'selected' : null }, v || 'Not set');
       }));
-    var horizon = el('input', { id: 'plan-horizon-days', type: 'number', min: '1', max: '730', value: c.horizonDays || 30 });
+    var horizon = el('input', { id: 'plan-horizon-days', type: 'number', min: '1', max: '730', value: c.horizonDays || Product.Horizon.sessions('month') });
     var target = el('input', { id: 'plan-target-price', type: 'number', min: '0.01', step: '0.01',
       value: c.targetCents ? (c.targetCents / 100).toFixed(2) : '' });
     var risk = el('select', { id: 'plan-risk-mode' }, ['conservative', 'balanced', 'aggressive'].map(function (v) {
@@ -2788,7 +2781,7 @@
           ? '. You can change the goal and structure until you record a decision.'
           : '. Its decision is frozen; a linked revision preserves that history.'),
       el('div', { class: 'form-grid plan-context-fields' },
-        planField('View', thesis), planField('Horizon (days)', horizon),
+        planField('View', thesis), planField('Horizon (trading sessions)', horizon),
         planField('Target price', target), planField('Risk budget', risk)),
       el('div', { class: 'btn-row' }, save, changeGoal, changeStructure), goalChoices);
   }
@@ -2813,8 +2806,8 @@
         var destination = planIntentDestination(intent);
         decisionHost.appendChild(el('div', { class: 'alert alert-info plan-existing-match' },
           el('div', {}, el('b', {}, 'This inquiry already has a Plan'),
-            el('p', { class: 'muted small' }, existing.title + ' · ' + (existing.context && existing.context.horizonDays || 30)
-              + ' days. Resume it, or change an assumption first when you mean to investigate a different question.')),
+            el('p', { class: 'muted small' }, existing.title + ' · ' + (existing.context && existing.context.horizonDays || Product.Horizon.sessions('month'))
+              + ' trading sessions. Resume it, or change an assumption first when you mean to investigate a different question.')),
           el('div', { class: 'btn-row' },
             el('button', { type: 'button', class: 'btn', onclick: function () {
               focusPlanFrom(this, existing, destination);
@@ -2826,7 +2819,7 @@
         var risk = document.getElementById('risk-mode');
         var persisted = await PlanStore.promote({ symbol: symbol, intent: intent,
           thesis: plan.context && plan.context.thesis ? plan.context.thesis : null,
-          horizonDays: plan.context && plan.context.horizonDays ? plan.context.horizonDays : 30,
+          horizonDays: plan.context && plan.context.horizonDays ? plan.context.horizonDays : Product.Horizon.sessions('month'),
           riskMode: risk ? risk.value : 'conservative' });
         await replacePlanRoute(persisted, planIntentDestination(intent));
         UI.toast('Plan created — ' + symbol + (intent == null ? '' : ' · ' + planIntentLabel(intent)));
@@ -2917,7 +2910,7 @@
     var context = plan.context || {};
     var carried = [plan.symbol, plan.intent ? planIntentLabel(plan.intent) : 'goal not chosen',
       context.thesis ? context.thesis + ' view' : 'view not set',
-      context.horizonDays ? context.horizonDays + ' days' : null, planMarketLabel(plan)].filter(Boolean).join(' · ');
+      context.horizonDays ? context.horizonDays + ' trading sessions' : null, planMarketLabel(plan)].filter(Boolean).join(' · ');
     root.appendChild(el('section', { class: 'plan-stage-frame', id: 'plan-stage-' + stage.path,
       'aria-labelledby': headingId },
       el('div', { class: 'plan-stage-heading' },
@@ -4013,7 +4006,9 @@
       var engine = el('select', { id: 'plan-replay-engine' }, el('option', { value: 'single' }, 'One trade at a time'),
         el('option', { value: 'portfolio' }, 'A book of overlapping trades'));
       engine.value = form.engine || 'single';
-      var dte = el('input', { id: 'plan-replay-dte', type: 'number', min: '1', max: '365', value: form.targetDte || planRef.plan.context.horizonDays || 30 });
+      var planSessions = planRef.plan.context.horizonDays || Product.Horizon.sessions('month');
+      var defaultDte = Product.Horizon.expiryDays(Product.Horizon.keyForSessions(planSessions));
+      var dte = el('input', { id: 'plan-replay-dte', type: 'number', min: '1', max: '365', value: form.targetDte || defaultDte });
       var qty = el('input', { id: 'plan-replay-qty', type: 'number', min: '1', max: '100', value: form.qty || 1 });
       var every = el('input', { id: 'plan-replay-spacing', type: 'number', min: '1', max: '60', value: form.entryEveryDays || 5 });
       var cash = el('input', { id: 'plan-replay-cash', type: 'number', min: '1', step: '1000', value: form.startingCash || 100000 });
@@ -4460,8 +4455,8 @@
         class: 'plan-scope-strip', id: 'plan-understand-scope', 'aria-label': 'Saved Plan focus'
       }, el('span', { class: 'eyebrow' }, 'SAVED PLAN FOCUS'),
       el('b', {}, plan.symbol + ' · ' + (plan.intent ? planIntentLabel(plan.intent) : 'Goal not chosen')),
-      el('span', { class: 'muted' }, (plan.context && plan.context.horizonDays ? plan.context.horizonDays : 30)
-        + ' days · ' + planMarketLabel(plan))));
+      el('span', { class: 'muted' }, (plan.context && plan.context.horizonDays ? plan.context.horizonDays : 21)
+        + ' trading sessions · ' + planMarketLabel(plan))));
       await research(owned, ['__plan', plan.symbol, stage.path], { plan: plan, stage: stage.path });
       if (stage.key === 'UNDERSTAND') appendPlanStageNext(owned, plan, 'Test the view',
         'Use conditional history and possible futures before choosing a structure.',
@@ -4577,7 +4572,7 @@
     var symbol = String(evaluation.symbol || (evaluation.spec && evaluation.spec.symbol) || candidate.symbol || '').toUpperCase();
     var intent = candidate.intent || form.goal || 'DIRECTIONAL';
     var existing = await PlanStore.matching(symbol, intent);
-    var horizonDays = form.horizon === 'week' ? 7 : form.horizon === 'quarter' ? 90 : 30;
+    var horizonDays = Product.Horizon.sessions(form.horizon);
     var plan = await PlanStore.create({ originPlanId: existing.length ? existing[0].id : null,
       symbol: symbol, intent: intent, thesis: form.thesis,
       horizonDays: horizonDays, riskMode: form.riskMode });
@@ -5755,7 +5750,7 @@
           el('div', { class: 'plan-book-head' },
             el('div', {}, el('h3', {}, plan.symbol + ' · ' + identity.title),
               el('p', { class: 'muted' }, planMarketLabel(plan)
-                + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' days' : '')
+                + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' trading sessions' : '')
                 + (identity.updated ? ' · ' + identity.updated : ''))),
             el('div', { class: 'plan-book-badges' },
               identity.duplicate ? el('span', { class: 'badge badge-info' }, identity.duplicate) : null,
@@ -8663,12 +8658,11 @@
   }
 
   function contextHorizonDays(horizon) {
-    return horizon === '0DTE' ? 1 : horizon === 'week' ? 5
-      : horizon === 'quarter' ? 63 : 21;
+    return Product.Horizon.sessions(horizon);
   }
 
   function contextHorizonForDays(days) {
-    return days <= 1 ? '0DTE' : days <= 7 ? 'week' : days <= 35 ? 'month' : 'quarter';
+    return Product.Horizon.keyForSessions(days);
   }
 
   // A distribution histogram of forward returns — green bars for gaining outcomes, red for losing.
@@ -8807,7 +8801,7 @@
     delete th.direction;
     // Durable Plan context is authoritative, including explicit absence. A lane-level
     // or prior-render value must never invent a thesis/horizon for this Plan.
-    th.horizonDays = plan.context.horizonDays || 30;
+    th.horizonDays = plan.context.horizonDays || Product.Horizon.sessions('month');
     th.thesis = plan.context.thesis || '';
     var wrap = el('div', { class: 'card', id: 'test-your-view' });
     wrap.appendChild(UI.cardHeader('Test your view \u2014 ' + symbol));

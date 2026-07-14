@@ -527,7 +527,7 @@
     items.forEach(function (plan) {
       var planIdentity = identity(plan, items);
       var planLabel = planIdentity.title
-        + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' days' : '');
+        + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' trading sessions' : '');
       if (planIdentity.duplicate) planLabel += ' · ' + planIdentity.duplicate;
       var chip = UI.el('div', { class: 'plan-chip' + (plan.id === App.state.activePlanId ? ' active' : ''),
         'data-plan-id': plan.id },

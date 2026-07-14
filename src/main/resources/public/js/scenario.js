@@ -31,7 +31,12 @@
     { key: 'EVENT_JUMP', label: 'Big news shock', pts: '0,16 46,16 50,5 54,27 100,15', drift: 0.0, model: 'JUMP_DIFFUSION',
       blurb: 'Earnings-style: a violent move either way, then IV deflates.' }
   ];
-  var HORIZONS = [{ d: 5, label: '1 week' }, { d: 10, label: '2 weeks' }, { d: 21, label: '1 month' }, { d: 63, label: '3 months' }];
+  var HORIZONS = [
+    { d: Product.Horizon.sessions('week'), label: '1 week' },
+    { d: 10, label: '2 weeks' },
+    { d: Product.Horizon.sessions('month'), label: '1 month' },
+    { d: Product.Horizon.sessions('quarter'), label: '3 months' }
+  ];
   // Wildness is a MULTIPLIER of the symbol's own recent volatility (calibrated per ticker at
   // render time) — 'Typical' means typical FOR THIS STOCK, not a canned 30%.
   var MAGS = [{ key: 'calm', label: 'Calm', mult: 0.6 }, { key: 'typical', label: 'Typical', mult: 1.0 }, { key: 'wild', label: 'Wild', mult: 2.0 }];

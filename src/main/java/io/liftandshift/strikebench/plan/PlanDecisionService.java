@@ -161,7 +161,9 @@ public final class PlanDecisionService {
                 trade == null ? preview.popEntry() : trade.popEntry(), pMaxProfit, pMaxLoss,
                 economics.marketEvAfterCostsCents(), economics.realizedVolEvAfterCostsCents(), cvar,
                 economics.verdict().name(), preview.evidence().provenance().name(), MODEL_VERSION, references.studyKey(),
-                input.plan().context().horizonDays() == null ? 30 : input.plan().context().horizonDays(), now);
+                input.plan().context().horizonDays() == null
+                        ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
+                        : input.plan().context().horizonDays(), now);
         if (references.ensembleId() != null) {
             Db.execOn(connection, "UPDATE ensemble_artifact ea SET pinned=1 FROM plan_ensemble pe " +
                             "WHERE pe.id=? AND pe.fingerprint=ea.fingerprint",

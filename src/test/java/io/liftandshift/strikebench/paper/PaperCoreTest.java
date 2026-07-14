@@ -141,6 +141,13 @@ class PaperCoreTest {
     }
 
     @Test
+    void accountLaneResolutionFailsClosedWhenTheBindingCannotBeRead() {
+        assertThatThrownBy(() -> trades.worldOf("acct_missing"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no such account");
+    }
+
+    @Test
     void observedAccountsRejectDemoMarksForOptionsAndShares() {
         AppConfig live = new AppConfig(Map.of());
         AccountService liveAccounts = new AccountService(db, live, audit, CLOCK);

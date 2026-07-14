@@ -2913,7 +2913,9 @@ public final class ApiServer {
         }
         int qty = body.qty() == null ? candidate.path("qty").asInt(1) : body.qty();
         return new TradeOpenRequest(plan.symbol(), candidate.path("strategy").asText("CUSTOM"), qty, legs,
-                plan.context().thesis(), (plan.context().horizonDays() == null ? 30 : plan.context().horizonDays()) + "d",
+                plan.context().thesis(), (plan.context().horizonDays() == null
+                        ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
+                        : plan.context().horizonDays()) + "d",
                 plan.context().riskMode(),
                 plan.intent(), candidate.path("usesHeldShares").asBoolean(false),
                 candidate.path("recommendationId").asText(null), body.proposedNetCents(), body.feesOverrideCents(),
@@ -3197,7 +3199,9 @@ public final class ApiServer {
     private static io.liftandshift.strikebench.sim.ScenarioSpec planScenarioSpec(
             io.liftandshift.strikebench.plan.Plan.View plan,
             io.liftandshift.strikebench.sim.ScenarioSpec raw) {
-        int days = plan.context().horizonDays() == null ? 30 : plan.context().horizonDays();
+        int days = plan.context().horizonDays() == null
+                ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
+                : plan.context().horizonDays();
         var base = raw == null
                 ? io.liftandshift.strikebench.sim.ScenarioSpec.preset(
                     io.liftandshift.strikebench.sim.ScenarioSpec.Shape.CHOP, days, 0, 4242L, 500)
@@ -3218,11 +3222,7 @@ public final class ApiServer {
     }
 
     private static String planHorizon(Integer days) {
-        if (days == null) return "month";
-        if (days <= 1) return "0DTE";
-        if (days <= 10) return "week";
-        if (days <= 45) return "month";
-        return "quarter";
+        return io.liftandshift.strikebench.model.Horizon.fromTradingSessions(days).key();
     }
 
     // ---- Data Center ----
