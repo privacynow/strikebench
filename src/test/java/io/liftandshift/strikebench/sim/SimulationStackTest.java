@@ -12,7 +12,10 @@ import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.Leg;
+import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionChain;
+import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.support.TestDb;
@@ -23,6 +26,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -35,6 +39,7 @@ class SimulationStackTest {
 
     private Db db;
     private final Clock clock = Clock.fixed(Instant.parse("2026-07-06T14:00:00Z"), ZoneOffset.UTC);
+    private static final LocalDate PATH_DATE = LocalDate.parse("2026-07-06");
 
     @AfterEach void closeDb() { if (db != null) db.close(); }
 
@@ -44,12 +49,22 @@ class SimulationStackTest {
     }
 
     private ScenarioSimulator.SimResult run(ScenarioSimulator simulator, double spot,
-                                              List<ScenarioSimulator.SimLeg> legs, int qty,
+                                              PathPosition position, int qty,
                                               ScenarioSpec raw, IvSpec iv, double rate,
                                               double[] historicalReturns) {
         ScenarioSpec spec = raw.sane();
         double[][] paths = new PathGenerator().generate(spec, spot, historicalReturns);
-        return simulator.runOnPaths(paths, spot, legs, qty, spec, iv, rate, null, null, 0);
+        return simulator.runOnPaths(paths, position, qty, spec, iv, rate, null, null, 0);
+    }
+
+    private static PathPosition position(Leg... legs) {
+        return new PathPosition(PATH_DATE, List.of(legs));
+    }
+
+    private static Leg option(LegAction action, OptionType type, double strike, int expiryDay) {
+        return Leg.option(action, type, BigDecimal.valueOf(strike),
+                io.liftandshift.strikebench.market.MarketHours.tradingDateAfter(PATH_DATE, expiryDay),
+                1, BigDecimal.ZERO);
     }
 
     @Test
@@ -65,7 +80,7 @@ class SimulationStackTest {
     @Test
     void longCallWinsMoreInAGrindUpThanASelloff() {
         var sim = new ScenarioSimulator();
-        var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
+        var legs = position(option(LegAction.BUY, OptionType.CALL, 100, 20));
         var up = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.GRIND_UP, 0.6, 7), IvSpec.flat(0.25), 0.04, null);
         var down = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.SELLOFF_REBOUND, -0.6, 7), IvSpec.flat(0.25), 0.04, null);
         assertThat(up.winRatePct()).isGreaterThan(down.winRatePct());
@@ -84,8 +99,8 @@ class SimulationStackTest {
         var sim = new ScenarioSimulator();
         // Legs expire AFTER the 20-day horizon (day 45), so the exit is a BSM value at the then-current
         // IV — which is exactly where a crush bites. (At expiry, value is intrinsic and IV is moot.)
-        var straddle = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 45, 1),
-                new ScenarioSimulator.SimLeg("BUY", "PUT", 100, 45, 1));
+        var straddle = position(option(LegAction.BUY, OptionType.CALL, 100, 45),
+                option(LegAction.BUY, OptionType.PUT, 100, 45));
         var flatIv = run(sim, 100, straddle, 1, spec(ScenarioSpec.Shape.CHOP, 0, 9), IvSpec.flat(0.40), 0.04, null);
         var crushed = run(sim, 100, straddle, 1, spec(ScenarioSpec.Shape.CHOP, 0, 9),
                 new IvSpec(0.40, 0, 0, 0.40, 2, -0.5, 0.03, 4.0), 0.04, null);
@@ -99,7 +114,7 @@ class SimulationStackTest {
         // cash amount — the P&L fan must be FLAT after expiry (it used to keep re-valuing the
         // dead option against the post-expiration stock price).
         var sim = new ScenarioSimulator();
-        var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 5, 1));
+        var legs = position(option(LegAction.BUY, OptionType.CALL, 100, 5));
         var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP, 20, 1, 0, 0.4,
                 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.4), 77, 1); // ONE path -> bands ARE that path
         var r = run(sim, 100, legs, 1, spec, IvSpec.flat(0.4), 0.04, null);
@@ -112,7 +127,8 @@ class SimulationStackTest {
     @Test
     void zeroDteOptionKeepsTimeValueUntilTheFirstSimulatedClose() {
         var sim = new ScenarioSimulator();
-        var sameDay = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 0, 1));
+        var sameDay = position(option(LegAction.BUY, OptionType.CALL, 100, 0));
+        assertThat(sameDay.expiryDay(sameDay.legs().getFirst())).isZero();
         var oneSession = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
                 1, 4, 0, 0.25, 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.25), 88, 80);
 
@@ -126,7 +142,7 @@ class SimulationStackTest {
     @Test
     void seedReproducesTheExactDistribution() {
         var sim = new ScenarioSimulator();
-        var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
+        var legs = position(option(LegAction.BUY, OptionType.CALL, 100, 20));
         var a = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.CHOP, 0, 42), IvSpec.flat(0.3), 0.04, null);
         var b = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.CHOP, 0, 42), IvSpec.flat(0.3), 0.04, null);
         assertThat(a.p50Cents()).isEqualTo(b.p50Cents());
@@ -136,13 +152,13 @@ class SimulationStackTest {
     @Test
     void configuredRoundTripFeesShiftTheWholeOutcomeDistribution() {
         var simulator = new ScenarioSimulator();
-        var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
+        var legs = position(option(LegAction.BUY, OptionType.CALL, 100, 20));
         ScenarioSpec sane = spec(ScenarioSpec.Shape.CHOP, 0, 55).sane();
         double[][] paths = new PathGenerator().generate(sane, 100, null);
 
-        var gross = simulator.runOnPaths(paths, 100, legs, 1, sane, IvSpec.flat(0.3), 0.04,
+        var gross = simulator.runOnPaths(paths, legs, 1, sane, IvSpec.flat(0.3), 0.04,
                 null, null, 0);
-        var net = simulator.runOnPaths(paths, 100, legs, 1, sane, IvSpec.flat(0.3), 0.04,
+        var net = simulator.runOnPaths(paths, legs, 1, sane, IvSpec.flat(0.3), 0.04,
                 null, null, 500);
 
         assertThat(net.expectedPnlCents()).isEqualTo(gross.expectedPnlCents() - 500);
@@ -163,7 +179,7 @@ class SimulationStackTest {
                 new PathEnsembleService.Scope("AAPL", "demo",
                         io.liftandshift.strikebench.db.AnalysisContext.OBSERVED),
                 100, sane, paths, null, PathGenerator.MODEL_VERSION);
-        var call = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
+        var call = position(option(LegAction.BUY, OptionType.CALL, 100, 20));
 
         var compared = simulator.compare(ensemble, List.of(
                 new ScenarioSimulator.CompareItem("one", call, null, "stored entry", 0, 1),

@@ -489,6 +489,26 @@ class JourneySurfaceTest {
                 .doesNotContain("public static List<Candle> known(");
     }
 
+    @Test void everyPathOutcomeUsesTheCanonicalLegAndOneValuationKernel() throws Exception {
+        String simulator = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/sim/ScenarioSimulator.java"));
+        String position = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/sim/PathPosition.java"));
+        String valuation = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/sim/PathValuationKernel.java"));
+        String controller = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/OutcomeController.java"));
+
+        assertThat(simulator).contains("PathPosition position", "PathValuationKernel.value(")
+                .doesNotContain("record SimLeg", "portfolioValue(", "BlackScholes.price(");
+        assertThat(position).contains("List<Leg> legs", "MarketHours.tradingDaysBetween(");
+        assertThat(valuation).contains("for (Leg leg : position.legs())", "BlackScholes.price(",
+                "settlementSpot", "Leg.SHARES_PER_CONTRACT");
+        assertThat(controller).contains("toPathPosition(ctx, position.legs())",
+                        "new io.liftandshift.strikebench.sim.PathPosition(today, resolved)")
+                .doesNotContain("SimLeg", "toSimLegs");
+    }
+
     @Test void marketTransitionsHaveOneBackendOwner() throws Exception {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
