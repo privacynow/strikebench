@@ -101,7 +101,8 @@ class AuthServiceTest {
         // Two users, two accounts (the first claims the legacy one, the second gets a fresh one).
         accounts.getOrCreateDefault();
         db.exec("INSERT INTO users(id,email,provider,subject,name,created_at,updated_at) VALUES "
-                + "('google:a','a@x.com','google','a','A','t','t'),('google:b','b@x.com','google','b','B','t','t')");
+                + "('google:a','a@x.com','google','a','A','2026-07-08T15:30:00Z','2026-07-08T15:30:00Z'),"
+                + "('google:b','b@x.com','google','b','B','2026-07-08T15:30:00Z','2026-07-08T15:30:00Z')");
         Account a = accounts.getOrCreateDefaultForUser("google:a");
         Account b = accounts.getOrCreateDefaultForUser("google:b");
 
