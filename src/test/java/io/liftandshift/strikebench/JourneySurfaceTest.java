@@ -29,7 +29,7 @@ class JourneySurfaceTest {
                 "ResearchController", "PortfolioRoutes", "PortfolioController", "BrokerRoutes",
                 "BrokerController", "OutcomeRoutes", "OutcomeController", "WorldController",
                 "DiscoveryRoutes", "DiscoveryController", "PlanController",
-                "PlanStrategyController", "PlanOutcomeController")) {
+                "PlanStrategyController", "PlanOutcomeController", "PlanDecisionController")) {
             routes.append(Files.readString(Path.of(
                     "src/main/java/io/liftandshift/strikebench/api/" + name + ".java"))).append('\n');
         }
@@ -228,9 +228,19 @@ class JourneySurfaceTest {
         assertThat(plan).contains("PlanRoutes.register(config, new PlanRoutes.Handlers(");
         assertThat(plan).contains("strategyController::planStrategyRun",
                 "strategyController::planScoutRun", "planOutcomeController::planOutcomeRun",
-                "planOutcomeController::planDecisionTrade", "planOutcomeController::planManageReview")
+                "planDecisionController::planDecisionTrade", "planDecisionController::planManageReview")
                 .doesNotContain("private void planStrategyRun(", "private void planOutcomeRun(",
                         "private void planDecisionTrade(", "private void planManageReview(");
+        String planOutcomes = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/PlanOutcomeController.java"));
+        String planDecisions = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/PlanDecisionController.java"));
+        assertThat(planOutcomes).contains("void planOutcomeRun(", "void planBacktestRun(")
+                .doesNotContain("void planDecisionTrade(", "void planManageReview(",
+                        "void planRehearsalCreate(");
+        assertThat(planDecisions).contains("void planDecisionTrade(", "void planManageReview(",
+                "void planRehearsalCreate(")
+                .doesNotContain("void planOutcomeRun(", "void planBacktestRun(");
         assertThat(api).doesNotContain("private void planCreate(",
                 "private void planStrategyRun(", "private void planOutcomeRun(",
                 "private void planDecisionTrade(", "private void planManageReview(");
