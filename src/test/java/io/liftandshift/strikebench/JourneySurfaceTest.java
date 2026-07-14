@@ -22,7 +22,7 @@ class JourneySurfaceTest {
 
     private static String apiRouteSource() throws Exception {
         StringBuilder routes = new StringBuilder();
-        for (String name : List.of("ApiServer", "CoreRoutes", "PlanRoutes", "DataRoutes",
+        for (String name : List.of("ApiServer", "ApiTelemetry", "CoreRoutes", "PlanRoutes", "DataRoutes",
                 "DataController", "ResearchRoutes", "WorldRoutes", "TradeRoutes", "TradeController",
                 "ResearchController", "PortfolioRoutes", "PortfolioController", "BrokerRoutes",
                 "BrokerController", "OutcomeRoutes", "OutcomeController", "WorldController",
@@ -210,6 +210,12 @@ class JourneySurfaceTest {
         for (String owner : List.of("CoreRoutes")) {
             assertThat(api).contains(owner + ".register(c, new " + owner + ".Handlers(");
         }
+        String telemetry = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ApiTelemetry.java"));
+        assertThat(api).contains("telemetry.register(c);", "telemetry.recordError();")
+                .doesNotContain("class IpThrottle", "private void recordLatency(");
+        assertThat(telemetry).contains("final class ApiTelemetry", "static final class IpThrottle",
+                "void metrics(Context ctx)");
         String plan = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/PlanController.java"));
         assertThat(api).contains("planController.register(c);");

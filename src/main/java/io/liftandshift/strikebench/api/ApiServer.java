@@ -336,6 +336,7 @@ public final class ApiServer {
         ResearchController researchController = new ResearchController(db, clock, market,
                 evaluations, this::ownerId, this::activeWorld, this::analysisCtx,
                 this::research);
+        ApiTelemetry telemetry = new ApiTelemetry(cfg, marketEngine);
         BrokerController brokerController = new BrokerController(broker);
         WorldController worldController = new WorldController(cfg, clock, db, market, marketEngine,
                 simSessions, accounts, positions, trades, auth, events, worldTransitions,
@@ -403,37 +404,7 @@ public final class ApiServer {
             // (analysisCtx(ctx)) — no ambient per-request state, so virtual-thread fan-outs keep
             // the caller's world and background machinery always reads observed.
 
-            // LIVE-MODE per-IP throttle: this app fronts real third-party feeds, so one runaway
-            // client (a stuck retry loop, a scraper) must not translate into provider hammering.
-            // Token bucket per remote IP: 300 burst, ~50 req/s refill — invisible to humans and
-            // to the DOM suites (fixture mode never throttles), decisive against a loop. SSE
-            // streams and health stay exempt so monitoring keeps working while throttled.
-            c.routes.after("/api/*", ctx -> {
-                Object t0 = ctx.attribute("reqStartNanos");
-                if (t0 instanceof Long tl) recordLatency(ctx.path(), (System.nanoTime() - tl) / 1000);
-            });
-            c.routes.before("/api/*", ctx -> {
-                ctx.attribute("reqStartNanos", System.nanoTime());
-                apiRequests.incrementAndGet();
-                if (cfg.fixturesOnly()) return;
-                String path = ctx.path();
-                if (path.equals("/api/health") || path.equals("/api/metrics")
-                        || path.equals("/api/events") || path.equals("/api/market/stream")) return;
-                // X-Forwarded-For is client-controlled: honor it ONLY when the direct peer is a
-                // trusted proxy (loopback, i.e. our nginx on the same box, or TRUSTED_PROXY=true).
-                String remote = ctx.ip();
-                boolean trustedProxy = cfg.trustedProxy()
-                        || "127.0.0.1".equals(remote) || "0:0:0:0:0:0:0:1".equals(remote) || "::1".equals(remote);
-                String xff = ctx.header("X-Forwarded-For");
-                String ip = trustedProxy && xff != null ? xff.split(",")[0].trim() : remote;
-                if (!throttle.tryAcquire(ip)) {
-                    apiThrottled.incrementAndGet();
-                    ctx.status(429);
-                    ctx.json(new ApiResponses.ErrorBody("rate limited",
-                            "too many requests from this address — slow down and retry"));
-                    ctx.skipRemainingHandlers();
-                }
-            });
+            telemetry.register(c);
             // Prefetch governor: speculative requests (X-Priority: prefetch) are welcome only when
             // the heavy providers have spare budget. A denied prefetch is a quiet 204 — the client
             // simply doesn't warm its cache; the user never waits on (or behind) a guess.
@@ -446,7 +417,7 @@ public final class ApiServer {
             });
 
             CoreRoutes.register(c, new CoreRoutes.Handlers(
-                    this::metrics, this::status, this::config, this::health,
+                    telemetry::metrics, this::status, this::config, this::health,
                     ctx -> ctx.json(universeViewFor(worldParam(activeWorld(ctx)), ownerId(ctx))),
                     this::universeSelect, this::quotesBatch, this::sparklines,
                     ctx -> ctx.json(marketEngine.status()), this::marketStream, this::eventStream,
@@ -499,7 +470,7 @@ public final class ApiServer {
                     ctx.status(409).json(new ApiResponses.ErrorBody(
                             "conflict", String.valueOf(e.getMessage()))));
             c.routes.exception(Exception.class, (e, ctx) -> {
-                apiErrors.incrementAndGet();
+                telemetry.recordError();
                 boolean changed = !jarChangedHint().isEmpty();
                 log.error("Request failed on {} {}{}", ctx.method(), ctx.path(),
                         changed ? " because the running build changed; restart StrikeBench" : "");
@@ -779,112 +750,6 @@ public final class ApiServer {
      * rewritten under this running server — the classic "some screens fail to load" cause —
      * and the UI turns it into a restart banner instead of a mystery. Never 500s.
      */
-    // ---- Operational metrics + throttle ----
-    private final java.util.concurrent.atomic.AtomicLong apiRequests = new java.util.concurrent.atomic.AtomicLong();
-    /**
-     * Route-class latency rings (review P2 #8: one global ring let fast health calls hide slow
-     * chain/scan requests). Writes are synchronized per ring (cheap at these request rates and
-     * removes the incremented-slot-before-write race); percentiles computed on read.
-     */
-    static final class LatencyRing {
-        private final long[] ring = new long[1024];
-        private long count;
-        synchronized void record(long micros) { ring[(int) (count++ % ring.length)] = micros; }
-        synchronized Map<String, Object> percentiles() {
-            long n = Math.min(count, ring.length);
-            Map<String, Object> out = new LinkedHashMap<>();
-            out.put("samples", n);
-            if (n == 0) return out;
-            long[] copy = java.util.Arrays.copyOf(ring, (int) n);
-            java.util.Arrays.sort(copy);
-            out.put("p50Micros", copy[(int) (n / 2)]);
-            out.put("p95Micros", copy[(int) Math.min(n - 1, (long) Math.ceil(n * 0.95) - 1)]);
-            out.put("maxMicros", copy[(int) n - 1]);
-            return out;
-        }
-    }
-    private final java.util.Map<String, LatencyRing> latencyByClass = new java.util.concurrent.ConcurrentHashMap<>();
-    private static String latencyClass(String path) {
-        if (path == null) return "other";
-        if (path.contains("/chain")) return "chain";
-        if (path.startsWith("/api/sim/market")) return "world";
-        if (path.startsWith("/api/datasets") || path.startsWith("/api/data")) return "data-ops";
-        if (path.startsWith("/api/broker")) return "broker";
-        if (path.startsWith("/api/sparklines")) return "quotes";
-        if (path.startsWith("/api/research/scout") || path.contains("/intent-ladder")
-                || path.contains("/strategy/run") || path.contains("/strategy/fit")
-                || path.startsWith("/api/evaluate") || path.startsWith("/api/opportunities")
-                || path.startsWith("/api/optimize")) return "compute";
-        if (path.startsWith("/api/research")) return "research";
-        if (path.startsWith("/api/quotes") || path.startsWith("/api/market")) return "quotes";
-        if (path.startsWith("/api/sim")) return "compute";
-        if (path.startsWith("/api/trades") || path.startsWith("/api/portfolio")
-                || path.startsWith("/api/positions")) return "trading";
-        return "other";
-    }
-    private void recordLatency(String path, long micros) {
-        latencyByClass.computeIfAbsent(latencyClass(path), k -> new LatencyRing()).record(micros);
-    }
-    private Map<String, Object> latencyPercentiles() {
-        Map<String, Object> out = new LinkedHashMap<>();
-        latencyByClass.forEach((k, v) -> out.put(k, v.percentiles()));
-        return out;
-    }
-    private final java.util.concurrent.atomic.AtomicLong apiErrors = new java.util.concurrent.atomic.AtomicLong();
-    private final java.util.concurrent.atomic.AtomicLong apiThrottled = new java.util.concurrent.atomic.AtomicLong();
-    private final IpThrottle throttle = new IpThrottle(300, 50.0);
-
-    /** Per-IP token bucket with exact bounded LRU eviction; one attacker never resets every client. */
-    static final class IpThrottle {
-        private final int burst; private final double perSecond;
-        private final int maximumEntries;
-        private final java.util.LinkedHashMap<String, Bucket> buckets =
-                new java.util.LinkedHashMap<>(128, 0.75f, true);
-        IpThrottle(int burst, double perSecond) { this(burst, perSecond, 10_000); }
-        IpThrottle(int burst, double perSecond, int maximumEntries) {
-            this.burst = burst;
-            this.perSecond = perSecond;
-            this.maximumEntries = Math.max(1, maximumEntries);
-        }
-        boolean tryAcquire(String ip) {
-            if (ip == null || ip.isBlank()) return true;
-            synchronized (buckets) {
-                Bucket b = buckets.get(ip);
-                if (b == null) {
-                    while (buckets.size() >= maximumEntries) {
-                        var eldest = buckets.entrySet().iterator();
-                        if (!eldest.hasNext()) break;
-                        eldest.next();
-                        eldest.remove();
-                    }
-                    b = new Bucket(burst);
-                    buckets.put(ip, b);
-                }
-                long now = System.nanoTime();
-                b.tokens = Math.min(burst, b.tokens + (now - b.lastNs) / 1e9 * perSecond);
-                b.lastNs = now;
-                if (b.tokens < 1) return false;
-                b.tokens -= 1;
-                return true;
-            }
-        }
-        long activeBuckets() { synchronized (buckets) { return buckets.size(); } }
-        static final class Bucket { double tokens; long lastNs = System.nanoTime(); Bucket(int t) { tokens = t; } }
-    }
-
-    /** Operational counters — request volume, error volume, throttle hits, engine health. */
-    private void metrics(io.javalin.http.Context ctx) {
-        Object engineStatus;
-        try {
-            engineStatus = marketEngine.status();
-        } catch (Exception e) {
-            log.debug("Market-engine metrics failure detail", e);
-            engineStatus = new ApiResponses.ErrorOnly("Market engine status is temporarily unavailable");
-        }
-        ctx.json(new ApiResponses.Metrics<>(apiRequests.get(), latencyPercentiles(), apiErrors.get(),
-                apiThrottled.get(), !cfg.fixturesOnly(), engineStatus));
-    }
-
     private void health(Context ctx) {
         boolean changed;
         try {
