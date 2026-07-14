@@ -1554,7 +1554,10 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
     'Manage stays inside the Plan instead of linking to a standalone Trade detail');
   await page.click('#refresh-btn');
   await page.waitForSelector('#app[data-ready="true"]');
-  await page.waitForSelector('.plan-management-timeline');
+  await page.waitForFunction(() => {
+    const timeline = document.querySelector('.plan-management-timeline');
+    return timeline && /MARK/.test(timeline.textContent || '');
+  }, null, { timeout: 15000 });
   assert.match(await page.textContent('.plan-management-timeline'), /MARK/);
   await page.waitForTimeout(300); // real card-arrival motion, then inspect the settled frame
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -1599,7 +1602,10 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   await page.waitForSelector('[role="dialog"]');
   await page.getByRole('button', { name: 'Close position' }).click();
   await page.waitForFunction(id => location.hash === '#/plan/' + id + '/manage-review', plan.id);
-  await page.waitForSelector('.plan-review-results');
+  await page.waitForFunction(() => {
+    const stage = document.getElementById('plan-stage-manage-review');
+    return stage && /trade decision/i.test(stage.textContent || '');
+  }, null, { timeout: 15000 });
   assert.match(await page.textContent('#plan-stage-manage-review'), /trade decision/i);
   assert.match(await page.textContent('#plan-stage-manage-review'), /plan position/i);
 

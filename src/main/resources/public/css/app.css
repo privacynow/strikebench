@@ -364,7 +364,7 @@ body.lvl-expert .not-expert { display: none !important; }
 .table-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tbl tr.atm td { background: var(--accent-soft); font-weight: 650; }
 .tbl td.itm { background: color-mix(in srgb, var(--risk-ok-bg) 55%, transparent); }
-.tbl-wrap { overflow-x: auto; margin: 0 -6px; padding: 0 6px; }
+.tbl-wrap { min-width: 0; max-width: 100%; overflow-x: auto; margin: 0 -6px; padding: 0 6px; }
 
 /* ---------- Tabs & wizard ---------- */
 .tabs { display: flex; gap: 2px; margin-bottom: 14px; border-bottom: 2px solid var(--border);
@@ -2310,7 +2310,11 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-frozen-expectation p { margin: 3px 0 0; }
 .plan-management-timeline { margin-top: 2px; }
 .plan-timeline-list { display: grid; gap: 0; }
-.plan-timeline-list .status-item { min-width: 0; }
+.plan-timeline-list .status-item {
+  min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center;
+}
+.plan-timeline-note { min-width: 0; overflow-wrap: anywhere; }
+.plan-timeline-value, .plan-timeline-date { white-space: nowrap; }
 .plan-cash-benchmarks { margin: 4px 0 12px; }
 .plan-book-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
 .plan-book-card { display: grid; align-content: start; gap: 10px; }
@@ -2385,6 +2389,8 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .plan-tool { min-height: 58px; padding: 8px 9px; }
   .plan-next-action { align-items: flex-start; flex-direction: column; }
   .plan-scout-results { grid-template-columns: minmax(0, 1fr); }
+  .plan-timeline-list .status-item { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .plan-timeline-value, .plan-timeline-date { grid-column: 2; justify-self: start; }
   .plan-filter-expert .plan-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .plan-proposed-heading { align-items: flex-start; flex-direction: column; }
   .plan-budget-teaching-row { grid-template-columns: 64px minmax(0, 1fr); }
