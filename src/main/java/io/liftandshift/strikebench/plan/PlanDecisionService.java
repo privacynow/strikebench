@@ -211,7 +211,7 @@ public final class PlanDecisionService {
                         row.intv("active_context_rev"), row.str("user_id"), row.str("status")), planId);
         if (rows.isEmpty()) throw new ResourceNotFoundException("no such Plan: " + planId);
         PlanRow row = rows.getFirst();
-        if (!(userId == null ? row.userId() == null : userId.equals(row.userId()))) {
+        if (!io.liftandshift.strikebench.util.OwnerScope.id(userId).equals(row.userId())) {
             throw new ResourceNotFoundException("no such Plan: " + planId);
         }
         return row;

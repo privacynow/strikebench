@@ -601,7 +601,7 @@ public final class PlanStrategyService {
         List<CurrentPlan> rows = Db.queryOn(c, "SELECT symbol,active_context_rev,version FROM plans WHERE id=? AND " +
                         ownerClause("user_id") + (lock ? " FOR UPDATE" : ""),
                 r -> new CurrentPlan(r.str("symbol"), r.intv("active_context_rev"), r.lng("version")),
-                id, userId, userId);
+                id, io.liftandshift.strikebench.util.OwnerScope.id(userId));
         if (rows.isEmpty()) throw new ResourceNotFoundException("no such plan: " + id);
         return rows.getFirst();
     }
@@ -629,7 +629,7 @@ public final class PlanStrategyService {
     }
 
     private static String ownerClause(String column) {
-        return "(" + column + "=?::text OR (?::text IS NULL AND " + column + " IS NULL))";
+        return column + "=?::text";
     }
 
     private static String requiredText(JsonNode n, String key) {

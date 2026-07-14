@@ -60,7 +60,7 @@ public final class DataSyncScheduler implements AutoCloseable {
                 if (schedule.lastJobId() != null) {
                     var job = jobs.get(schedule.lastJobId()).job();
                     if (job != null && !job.status().equals(schedule.lastStatus())) {
-                        state.markScheduleRun(schedule.ownerKey(), completed, job.status(), job.id());
+                        state.markScheduleRun(schedule.userId(), completed, job.status(), job.id());
                     }
                 }
                 continue;
@@ -72,11 +72,11 @@ public final class DataSyncScheduler implements AutoCloseable {
             params.put("from", completed.minusYears(schedule.years()).toString());
             params.put("to", completed.toString());
             try {
-                var job = jobs.start("sync_underlying", params, DataSyncState.ownerId(schedule.ownerKey()));
-                state.markScheduleRun(schedule.ownerKey(), completed, "QUEUED", job.id());
+                var job = jobs.start("sync_underlying", params, schedule.userId());
+                state.markScheduleRun(schedule.userId(), completed, "QUEUED", job.id());
                 return; // serialize schedules; the next owner is considered after this job finishes
             } catch (RuntimeException e) {
-                state.markScheduleRun(schedule.ownerKey(), schedule.lastRunDate(), "FAILED_TO_QUEUE", null);
+                state.markScheduleRun(schedule.userId(), schedule.lastRunDate(), "FAILED_TO_QUEUE", null);
                 throw e;
             }
         }

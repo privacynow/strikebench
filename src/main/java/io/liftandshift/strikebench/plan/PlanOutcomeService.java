@@ -666,7 +666,8 @@ public final class PlanOutcomeService {
                         "cr.input_hash FROM plans p JOIN plan_context_revision cr ON cr.plan_id=p.id AND cr.rev=p.active_context_rev " +
                         "WHERE p.id=? AND " + ownerClause("p.user_id") + (lock ? " FOR UPDATE OF p" : ""),
                 r -> new CurrentPlan(r.str("symbol"), r.str("market_kind"), r.str("world_id"),
-                        r.intv("active_context_rev"), r.lng("version"), r.str("input_hash")), id, userId, userId);
+                        r.intv("active_context_rev"), r.lng("version"), r.str("input_hash")), id,
+                io.liftandshift.strikebench.util.OwnerScope.id(userId));
         if (rows.isEmpty()) throw new ResourceNotFoundException("no such Plan: " + id);
         return rows.getFirst();
     }
@@ -704,7 +705,7 @@ public final class PlanOutcomeService {
         return start == null || end == null ? null : end - start;
     }
     private static Long maxDrawdownCents(JsonNode r) { return null; }
-    private static String ownerClause(String column) { return "(" + column + "=?::text OR (?::text IS NULL AND " + column + " IS NULL))"; }
+    private static String ownerClause(String column) { return column + "=?::text"; }
     private static String text(JsonNode n, String k) { JsonNode v=n==null?null:n.get(k); return v==null||v.isNull()?null:v.asText(); }
     private static Long longOrNull(JsonNode n, String k) { JsonNode v=n==null?null:n.get(k); return v==null||v.isNull()?null:v.longValue(); }
     private static Integer integerOrNull(JsonNode n, String k) { JsonNode v=n==null?null:n.get(k); return v==null||v.isNull()?null:v.intValue(); }

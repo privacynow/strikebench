@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.auth;
 import io.javalin.http.Context;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.util.OwnerScope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,7 +35,7 @@ public final class AuthService {
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
     /** The implicit user when auth is disabled; owns the single legacy paper account. */
-    public static final String LOCAL_USER = "local";
+    public static final String LOCAL_USER = OwnerScope.LOCAL;
 
     private static final String SESSION_UID = "uid";
     private static final String SESSION_STATE = "oidc_state";

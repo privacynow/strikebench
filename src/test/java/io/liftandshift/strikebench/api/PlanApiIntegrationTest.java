@@ -46,11 +46,11 @@ class PlanApiIntegrationTest {
     @Test void invalidSavedWorldIsDurablyReconciledToTheAvailableBaseline() throws Exception {
         inspectDb.exec("INSERT INTO settings(k,v,updated_at) VALUES(?,?,now()) " +
                         "ON CONFLICT (k) DO UPDATE SET v=excluded.v,updated_at=excluded.updated_at",
-                "active_world:null", "observed");
+                "active_world:local", "observed");
         JsonNode world = json(get("/api/world"));
         assertThat(world.path("world").asText()).isEqualTo("demo");
         assertThat(inspectDb.query("SELECT v FROM settings WHERE k=?", row -> row.str("v"),
-                "active_world:null")).containsExactly("demo");
+                "active_world:local")).containsExactly("demo");
     }
 
     @Test void planCrudIsServerMarketOwnedVersionedAndIdempotent() throws Exception {

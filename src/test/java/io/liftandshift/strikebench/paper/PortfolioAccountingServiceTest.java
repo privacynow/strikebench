@@ -795,7 +795,7 @@ class PortfolioAccountingServiceTest {
                 "large-contribution", null));
         books.addValuation("local", account.id(), valuationAt("2026-04-01T16:00:00Z", 210_000_00L));
         books.addValuation("local", account.id(), valuationAt("2026-07-01T16:00:00Z", 189_000_00L));
-        db.exec("INSERT INTO dataset(id,name,kind) VALUES ('performance-demo','Generated control','FIXTURE_DEMO')");
+        db.exec("INSERT INTO dataset(id,name,kind,user_id) VALUES ('performance-demo','Generated control','FIXTURE_DEMO','local')");
         db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,dataset_id,adjusted,quality_rank) VALUES "
                 + "('SPY','2026-01-02',100,'observed-feed',1,'observed',1,10),"
                 + "('SPY','2026-04-01',105,'observed-feed',1,'observed',1,10),"

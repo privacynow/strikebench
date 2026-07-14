@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.paper;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.util.Ids;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -28,13 +29,15 @@ public final class AccountService {
 
     public Account getOrCreateDefault() {
         return db.tx(c -> {
-            List<Account> existing = Db.queryOn(c, "SELECT * FROM accounts WHERE type='PAPER' ORDER BY created_at LIMIT 1", AccountService::map);
+            OwnerScope.ensure(c, OwnerScope.LOCAL);
+            List<Account> existing = Db.queryOn(c, "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
+                    AccountService::map, OwnerScope.LOCAL);
             if (!existing.isEmpty()) return existing.getFirst();
             String id = Ids.account();
             long cash = cfg.defaultStartingCashCents();
             String now = now();
-            Db.execOn(c, "INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,0,?,?)",
-                    id, "Paper Account", "PAPER", cash, cash, 0, now, now);
+            Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
+                    id, OwnerScope.LOCAL, "Paper Account", "PAPER", cash, cash, 0, now, now);
             Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
                     id, null, now, "DEPOSIT", cash, cash, 0, "initial paper funding");
             return get(c, id);
@@ -45,7 +48,7 @@ public final class AccountService {
      * The paper account for a given signed-in user. When auth is off the userId is
      * {@link io.liftandshift.strikebench.auth.AuthService#LOCAL_USER} (or null) and this is exactly
      * {@link #getOrCreateDefault()} — the single shared account, unchanged. For a real user it
-     * returns their account; the FIRST real user to arrive claims the pre-auth (unclaimed) account
+     * returns their account; the FIRST real user to arrive claims the pre-auth local account
      * so the owner keeps their history; later users get a fresh funded account.
      */
     public Account getOrCreateDefaultForUser(String userId) {
@@ -53,6 +56,7 @@ public final class AccountService {
             return getOrCreateDefault();
         }
         return db.tx(c -> {
+            OwnerScope.ensure(c, userId);
             List<Account> mine = Db.queryOn(c,
                     "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
                     AccountService::map, userId);
@@ -60,14 +64,14 @@ public final class AccountService {
 
             String now = now();
             List<String> orphan = Db.queryOn(c,
-                    "SELECT id FROM accounts WHERE user_id IS NULL AND type='PAPER' ORDER BY created_at LIMIT 1",
-                    r -> r.str("id"));
+                    "SELECT id FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
+                    r -> r.str("id"), OwnerScope.LOCAL);
             if (!orphan.isEmpty()) {
-                // Claim atomically: the WHERE user_id IS NULL guard + rowcount makes a concurrent
+                // Claim atomically: the local-owner guard + rowcount makes a concurrent
                 // first sign-in (which blocks on the row lock, then sees it claimed) fall through
                 // rather than double-adopt the same account.
-                int claimed = Db.execOn(c, "UPDATE accounts SET user_id=?, updated_at=? WHERE id=? AND user_id IS NULL",
-                        userId, now, orphan.getFirst());
+                int claimed = Db.execOn(c, "UPDATE accounts SET user_id=?, updated_at=? WHERE id=? AND user_id=?",
+                        userId, now, orphan.getFirst(), OwnerScope.LOCAL);
                 if (claimed == 1) return get(c, orphan.getFirst());
                 List<Account> mineNow = Db.queryOn(c,
                         "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
@@ -86,14 +90,12 @@ public final class AccountService {
 
     /** A separate, owner-scoped account for the explicit built-in Demo market. */
     public Account getOrCreateDemoForUser(String userId) {
-        String owner = userId == null || io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(userId)
-                ? null : userId;
+        String owner = OwnerScope.id(userId);
         return db.tx(c -> {
-            List<Account> existing = owner == null
-                    ? Db.queryOn(c, "SELECT * FROM accounts WHERE user_id IS NULL AND type='DEMO' ORDER BY created_at LIMIT 1",
-                            AccountService::map)
-                    : Db.queryOn(c, "SELECT * FROM accounts WHERE user_id=? AND type='DEMO' ORDER BY created_at LIMIT 1",
-                            AccountService::map, owner);
+            OwnerScope.ensure(c, owner);
+            List<Account> existing = Db.queryOn(c,
+                    "SELECT * FROM accounts WHERE user_id=? AND type='DEMO' ORDER BY created_at LIMIT 1",
+                    AccountService::map, owner);
             if (!existing.isEmpty()) return existing.getFirst();
             String id = Ids.account();
             long cash = cfg.defaultStartingCashCents();
@@ -190,10 +192,11 @@ public final class AccountService {
     public String createForWorldOn(java.sql.Connection c, String worldId, String name) throws java.sql.SQLException {
         String id = io.liftandshift.strikebench.util.Ids.newId("acct");
         String now = java.time.Instant.now().toString();
-        Db.execOn(c, "INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at,world_id) "
-                        + "VALUES (?,?,?,?,?,?,0,?,?,?)",
+        int inserted = Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at,world_id) "
+                        + "SELECT ?,s.user_id,?,?,?,?,?,0,?,?,s.id FROM sim_session s WHERE s.id=?",
                 id, name == null ? "Simulation" : name, "SIMULATION",
                 10_000_000L, 10_000_000L, 0L, now, now, worldId);
+        if (inserted != 1) throw new IllegalStateException("No simulated session exists for account creation");
         return id;
     }
 
@@ -202,10 +205,12 @@ public final class AccountService {
         if (!rows.isEmpty()) return rows.getFirst();
         String id = io.liftandshift.strikebench.util.Ids.newId("acct");
         String now = java.time.Instant.now().toString();
-        db.exec("INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at,world_id) "
-                        + "VALUES (?,?,?,?,?,?,0,?,?,?)",
+        int inserted = db.with(c -> Db.execOn(c,
+                "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at,world_id) "
+                        + "SELECT ?,s.user_id,?,?,?,?,?,0,?,?,s.id FROM sim_session s WHERE s.id=?",
                 id, name == null ? "Simulation" : name, "SIMULATION",
-                10_000_000L, 10_000_000L, 0L, now, now, worldId);
+                10_000_000L, 10_000_000L, 0L, now, now, worldId));
+        if (inserted != 1) throw new IllegalStateException("No simulated session exists for account creation");
         return get(id);
     }
 

@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.sql.PreparedStatement;
 import java.util.LinkedHashMap;
@@ -33,7 +34,7 @@ public final class EvaluationStore {
     /** The bind values for one row, in INSERT_SQL column order. */
     private static Object[] params(StrategyEvaluation e, String userId) {
         return new Object[] {
-                e.id(), userId, e.symbol(), e.family(),
+                e.id(), OwnerScope.id(userId), e.symbol(), e.family(),
                 e.spec() == null ? null : e.spec().objective(),
                 e.decisionScore(), e.evCents(), e.roc(), e.annRoc(), e.pop(),
                 e.assignmentProb(), e.capitalIncrementalCents(), e.capitalEconomicCents(), e.maxLossCents(),
@@ -46,7 +47,11 @@ public final class EvaluationStore {
 
     /** Saves one evaluation for a user (userId may be null for the local/anonymous account). */
     public void save(StrategyEvaluation e, String userId) {
-        db.exec(INSERT_SQL, params(e, userId));
+        db.tx(c -> {
+            OwnerScope.ensure(c, userId);
+            Db.execOn(c, INSERT_SQL, params(e, userId));
+            return null;
+        });
     }
 
     /**
@@ -58,6 +63,7 @@ public final class EvaluationStore {
         if (evals == null || evals.isEmpty()) return;
         if (evals.size() == 1) { save(evals.getFirst(), userId); return; }
         db.tx(c -> {
+            OwnerScope.ensure(c, userId);
             try (PreparedStatement ps = c.prepareStatement(INSERT_SQL)) {
                 for (StrategyEvaluation e : evals) {
                     Object[] p = params(e, userId);
@@ -75,9 +81,9 @@ public final class EvaluationStore {
         return db.query("""
                 SELECT id, symbol, strategy, objective, score, evidence_level, max_loss_cents, asof
                 FROM strategy_evaluation
-                WHERE (user_id = ?::text OR (?::text IS NULL AND user_id IS NULL))
+                WHERE user_id=?::text
                 ORDER BY asof DESC LIMIT ?
-                """, EvaluationStore::summaryRow, userId, userId, limit);
+                """, EvaluationStore::summaryRow, OwnerScope.id(userId), limit);
     }
 
     private static Map<String, Object> summaryRow(Db.Row r) {

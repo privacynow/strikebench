@@ -38,7 +38,9 @@ class AuthServiceTest {
         return new AuthService(new AppConfig(new HashMap<>(conf)), db, CLOCK, stub);
     }
 
-    private long userCount() { return db.query("SELECT count(*) AS c FROM users", r -> r.lng("c")).getFirst(); }
+    private long userCount() {
+        return db.query("SELECT count(*) AS c FROM users WHERE id NOT IN ('local','system')", r -> r.lng("c")).getFirst();
+    }
 
     @Test void provisionsUsersIdempotently() {
         AuthService a = auth(Map.of());

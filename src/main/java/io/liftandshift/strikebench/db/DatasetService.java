@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.time.Clock;
 import java.util.ArrayList;
@@ -40,7 +41,7 @@ public final class DatasetService {
      * the read path of another user's world. The per-request candle read path resolves the CALLER'S
      * selection (see AnalysisContext); background machinery always reads observed.
      */
-    private static String owner(String userId) { return userId == null || userId.isBlank() ? "local" : userId; }
+    private static String owner(String userId) { return OwnerScope.id(userId); }
 
     /**
      * PER-USER active dataset: one user exploring a synthetic future must never flip anyone
@@ -100,7 +101,7 @@ public final class DatasetService {
     /** True when the dataset exists AND belongs to this caller ('observed' belongs to everyone). */
     public boolean ownedBy(String id, String userId) {
         if (OBSERVED.equals(id)) return true;
-        return db.query("SELECT 1 x FROM dataset WHERE id=? AND user_id IS NOT DISTINCT FROM ?",
+        return db.query("SELECT 1 x FROM dataset WHERE id=? AND user_id=?",
                 r -> 1, id, owner(userId)).size() > 0;
     }
 
@@ -109,7 +110,7 @@ public final class DatasetService {
         List<DatasetRow> out = new ArrayList<>();
         db.query("SELECT d.id, d.name, d.kind, d.symbol, d.seed, d.spec::text spec, d.created_at::text ca, "
               + "(SELECT count(*) FROM underlying_bar b WHERE b.dataset_id = d.id) bars "
-              + "FROM dataset d WHERE d.id='observed' OR d.user_id IS NOT DISTINCT FROM ? "
+              + "FROM dataset d WHERE d.id='observed' OR d.user_id=? "
               + "ORDER BY (d.id='observed') DESC, d.created_at DESC",
                 r -> out.add(new DatasetRow(r.str("id"), r.str("name"), r.str("kind"), r.str("symbol"),
                         r.lngOrNull("seed"), r.str("spec"), r.lng("bars"), r.str("ca"))), owner(userId));
@@ -119,8 +120,12 @@ public final class DatasetService {
     /** Registers a synthetic dataset row; bars are written by the caller under the returned id. */
     public String create(String name, String kind, String symbol, long seed, Object spec, String userId) {
         String id = Ids.newId("ds");
-        db.exec("INSERT INTO dataset (id, name, kind, symbol, seed, spec, user_id) VALUES (?,?,?,?,?,?::jsonb,?)",
-                id, name, kind, symbol, seed, Json.write(spec), owner(userId));
+        db.tx(c -> {
+            String owner = OwnerScope.ensure(c, userId);
+            Db.execOn(c, "INSERT INTO dataset (id, name, kind, symbol, seed, spec, user_id) VALUES (?,?,?,?,?,?::jsonb,?)",
+                    id, name, kind, symbol, seed, Json.write(spec), owner);
+            return null;
+        });
         prune(userId);
         return id;
     }
@@ -137,8 +142,8 @@ public final class DatasetService {
     private void prune(String userId) {
         // The globally active dataset is always retained: pruning the run the app is analyzing
         // would silently flip everyone back to observed mid-thought.
-        db.exec("DELETE FROM dataset WHERE id <> 'observed' AND user_id IS NOT DISTINCT FROM ? AND id <> ? AND id NOT IN "
-              + "(SELECT id FROM dataset WHERE id <> 'observed' AND user_id IS NOT DISTINCT FROM ? "
+        db.exec("DELETE FROM dataset WHERE id <> 'observed' AND user_id=? AND id <> ? AND id NOT IN "
+              + "(SELECT id FROM dataset WHERE id <> 'observed' AND user_id=? "
               + " ORDER BY created_at DESC LIMIT ?)", owner(userId), activeId(userId), owner(userId), KEEP_SYNTHETIC);
     }
 

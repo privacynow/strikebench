@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -280,7 +281,7 @@ public final class PortfolioAccountingService {
     // ---- Accounts ----
 
     public List<AccountProfile> accounts(String ownerId) {
-        return db.query("SELECT * FROM portfolio_account WHERE owner_id=? ORDER BY status, created_at, id",
+        return db.query("SELECT * FROM portfolio_account WHERE user_id=? ORDER BY status, created_at, id",
                 PortfolioAccountingService::mapAccount, owner(ownerId));
     }
 
@@ -305,7 +306,8 @@ public final class PortfolioAccountingService {
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String owner = owner(ownerId);
         return db.tx(c -> {
-            Db.execOn(c, "INSERT INTO portfolio_account(id,owner_id,name,account_type,broker,lot_method,"
+            OwnerScope.ensure(c, owner);
+            Db.execOn(c, "INSERT INTO portfolio_account(id,user_id,name,account_type,broker,lot_method,"
                             + "short_term_tax_rate_bps,long_term_tax_rate_bps,ordinary_tax_rate_bps,state_tax_rate_bps,"
                             + "status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?)",
                     id, owner, name, type, trim(input.broker(), 100), method,
@@ -569,8 +571,8 @@ public final class PortfolioAccountingService {
 
     /** One scheduler tick across all active owner-scoped books; one failure never drops the others. */
     public CalculatedValuationRun recordActiveCalculatedValuations() {
-        List<AccountKey> accounts = db.query("SELECT owner_id,id FROM portfolio_account WHERE status='ACTIVE' ORDER BY owner_id,id",
-                r -> new AccountKey(r.str("owner_id"), r.str("id")));
+        List<AccountKey> accounts = db.query("SELECT user_id,id FROM portfolio_account WHERE status='ACTIVE' ORDER BY user_id,id",
+                r -> new AccountKey(r.str("user_id"), r.str("id")));
         int complete = 0, partial = 0, failed = 0;
         for (AccountKey account : accounts) {
             try {
@@ -1879,14 +1881,14 @@ public final class PortfolioAccountingService {
 
     private static AccountProfile requireAccount(Connection c, String owner, String id, boolean lock) throws SQLException {
         if (id == null || id.isBlank()) throw new IllegalArgumentException("portfolio account id is required");
-        var rows = Db.queryOn(c, "SELECT * FROM portfolio_account WHERE id=? AND owner_id=?" + (lock ? " FOR UPDATE" : ""),
+        var rows = Db.queryOn(c, "SELECT * FROM portfolio_account WHERE id=? AND user_id=?" + (lock ? " FOR UPDATE" : ""),
                 PortfolioAccountingService::mapAccount, id, owner);
         if (rows.isEmpty()) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("No tracked portfolio account " + id);
         return rows.getFirst();
     }
 
     private static AccountProfile mapAccount(Db.Row r) {
-        return new AccountProfile(r.str("id"), r.str("owner_id"), r.str("name"), r.str("account_type"),
+        return new AccountProfile(r.str("id"), r.str("user_id"), r.str("name"), r.str("account_type"),
                 r.str("broker"), r.str("lot_method"), nullableInt(r, "short_term_tax_rate_bps"),
                 nullableInt(r, "long_term_tax_rate_bps"), nullableInt(r, "ordinary_tax_rate_bps"),
                 nullableInt(r, "state_tax_rate_bps"), r.str("status"), iso(r.odt("created_at")),
@@ -2116,7 +2118,7 @@ public final class PortfolioAccountingService {
         return value;
     }
 
-    private static String owner(String raw) { return raw == null || raw.isBlank() ? "local" : raw; }
+    private static String owner(String raw) { return OwnerScope.id(raw); }
     private static String iso(OffsetDateTime value) {
         return value == null ? null : value.withOffsetSameInstant(ZoneOffset.UTC).toString();
     }

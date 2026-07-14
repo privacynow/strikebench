@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.util.EventBus;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -59,13 +60,13 @@ public final class PlanService {
         String identityHash = activeIdentityHash(symbol, intent, market, resolvedWorld, origin, accountId,
                 raw.thesis(), raw.horizonDays(), raw.targetCents(), raw.holdingsShares(),
                 raw.costBasisCents(), raw.priceAssumptionCents());
-        String ownerKey = userId == null ? "__local__" : userId;
+        String ownerId = OwnerScope.id(userId);
 
         String createdId = db.tx(c -> {
-            lockCreateOn(c, ownerKey, "request:" + requestId);
+            lockCreateOn(c, ownerId, "request:" + requestId);
             List<ExistingRequest> existing = existingRequestOn(c, requestId, userId);
             if (!existing.isEmpty()) return requireSameRequest(existing.getFirst(), createHash);
-            lockCreateOn(c, ownerKey, "content:" + identityHash);
+            lockCreateOn(c, ownerId, "content:" + identityHash);
             List<String> equivalent = activeEquivalentOn(c, userId, symbol, intent, market, resolvedWorld,
                     origin, accountId, raw.thesis(), raw.horizonDays(), raw.targetCents(),
                     raw.holdingsShares(), raw.costBasisCents(), raw.priceAssumptionCents());
@@ -73,14 +74,14 @@ public final class PlanService {
                 String equivalentId = equivalent.getFirst();
                 Db.execOn(c, "UPDATE plans SET is_open=1,version=version+1,updated_at=? " +
                         "WHERE id=? AND is_open=0", now, equivalentId);
-                recordRequestOn(c, ownerKey, requestId, createHash, equivalentId, now);
+                recordRequestOn(c, ownerId, requestId, createHash, equivalentId, now);
                 return equivalentId;
             }
             if (origin != null) requireOwnedOn(c, origin, userId, false);
-            int inserted = Db.execOn(c, "INSERT INTO plans(id,user_id,client_request_id,create_input_hash,origin_plan_id,symbol,intent,market_kind," +
+            int inserted = Db.execOn(c, "INSERT INTO plans(id,user_id,origin_plan_id,symbol,intent,market_kind," +
                             "world_id,account_id,custom_title,status,active_stage,active_context_rev,version,is_open," +
-                            "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,1,1,?,?) ON CONFLICT DO NOTHING",
-                    id, userId, requestId, createHash, origin, symbol, intent, market.name(), resolvedWorld,
+                            "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,1,1,?,?) ON CONFLICT DO NOTHING",
+                    id, ownerId, origin, symbol, intent, market.name(), resolvedWorld,
                     accountId, title, Plan.Status.ACTIVE.name(), Plan.Stage.UNDERSTAND.name(), now, now);
             if (inserted == 0) {
                 List<ExistingRequest> raced = existingRequestOn(c, requestId, userId);
@@ -94,7 +95,7 @@ public final class PlanService {
                     normalizeRisk(raw.riskMode()), raw.holdingsShares(), raw.costBasisCents(),
                     raw.priceAssumptionCents(), hash, CONTEXT_ENGINE_VERSION, now);
             Db.execOn(c, "UPDATE plans SET active_context_rev=1 WHERE id=?", id);
-            recordRequestOn(c, ownerKey, requestId, createHash, id, now);
+            recordRequestOn(c, ownerId, requestId, createHash, id, now);
             return id;
         });
         Plan.View out = get(userId, createdId);
@@ -110,8 +111,7 @@ public final class PlanService {
         StringBuilder sql = new StringBuilder(viewSelect())
                 .append(" WHERE ").append(ownerClause("p.user_id"));
         List<Object> params = new ArrayList<>();
-        params.add(userId);
-        params.add(userId);
+        params.add(OwnerScope.id(userId));
         if (market != null) {
             sql.append(" AND p.market_kind=?"); params.add(market.name());
             if (market == Plan.MarketKind.SIMULATED) {
@@ -254,7 +254,7 @@ public final class PlanService {
             throws java.sql.SQLException {
         Db.execOn(c, "UPDATE plans SET is_open=0,version=version+1,updated_at=now() "
                         + "WHERE market_kind='SIMULATED' AND world_id=? AND is_open=1 AND "
-                        + ownerClause("user_id"), worldId, userId, userId);
+                        + ownerClause("user_id"), worldId, OwnerScope.id(userId));
     }
 
     public Plan.View archive(String userId, String planId, Plan.ArchiveRequest raw) {
@@ -326,7 +326,7 @@ public final class PlanService {
                                           boolean forUpdate) throws java.sql.SQLException {
         String sql = viewSelect() + " WHERE p.id=? AND " + ownerClause("p.user_id")
                 + (forUpdate ? " FOR UPDATE OF p" : "");
-        List<Plan.View> rows = Db.queryOn(c, sql, PlanService::mapView, planId, userId, userId);
+        List<Plan.View> rows = Db.queryOn(c, sql, PlanService::mapView, planId, OwnerScope.id(userId));
         if (rows.isEmpty()) throw new ResourceNotFoundException("no such plan: " + planId);
         return rows.getFirst();
     }
@@ -334,7 +334,7 @@ public final class PlanService {
     private static void requireOwnedOn(java.sql.Connection c, String planId, String userId,
                                        boolean forUpdate) throws java.sql.SQLException {
         String sql = "SELECT id FROM plans WHERE id=? AND " + ownerClause("user_id") + (forUpdate ? " FOR UPDATE" : "");
-        if (Db.queryOn(c, sql, r -> r.str("id"), planId, userId, userId).isEmpty()) {
+        if (Db.queryOn(c, sql, r -> r.str("id"), planId, OwnerScope.id(userId)).isEmpty()) {
             throw new ResourceNotFoundException("no such plan: " + planId);
         }
     }
@@ -375,8 +375,8 @@ public final class PlanService {
     private void announce(Plan.View view) {
         if (events == null || view == null) return;
         // Local identity is explicit because Map.of rejects null and SSE owner filters use the same token.
-        String owner = db.query("SELECT COALESCE(user_id,'local') owner_key FROM plans WHERE id=?",
-                r -> r.str("owner_key"), view.id()).stream().findFirst().orElse("local");
+        String owner = db.query("SELECT user_id FROM plans WHERE id=?",
+                r -> r.str("user_id"), view.id()).stream().findFirst().orElse(OwnerScope.LOCAL);
         events.publish("plan.updated", Map.of("id", view.id(), "version", view.version(),
                 "market", view.marketKind().name(), "world", view.worldId() == null ? "" : view.worldId(),
                 "user", owner));
@@ -386,7 +386,7 @@ public final class PlanService {
         if (events == null || plan == null) return;
         events.publish("plan.updated", Map.of("id", plan.id(), "version", 0,
                 "market", plan.market().name(), "world", plan.world() == null ? "" : plan.world(),
-                "user", userId == null ? "local" : userId, "deleted", true));
+                "user", OwnerScope.id(userId), "deleted", true));
     }
 
     private static boolean hasDurableHistoryOn(java.sql.Connection c, String planId)
@@ -456,16 +456,16 @@ public final class PlanService {
 
     private static List<ExistingRequest> existingRequestOn(java.sql.Connection c, String requestId,
                                                             String userId) throws java.sql.SQLException {
-        String ownerKey = userId == null ? "__local__" : userId;
+        String ownerId = OwnerScope.id(userId);
         return Db.queryOn(c, "SELECT plan_id,input_hash FROM plan_create_request " +
-                        "WHERE owner_key=? AND client_request_id=?",
-                r -> new ExistingRequest(r.str("plan_id"), r.str("input_hash")), ownerKey, requestId);
+                        "WHERE user_id=? AND client_request_id=?",
+                r -> new ExistingRequest(r.str("plan_id"), r.str("input_hash")), ownerId, requestId);
     }
 
-    private static void lockCreateOn(java.sql.Connection c, String ownerKey, String key)
+    private static void lockCreateOn(java.sql.Connection c, String ownerId, String key)
             throws java.sql.SQLException {
         Db.queryOn(c, "SELECT pg_advisory_xact_lock(hashtext(?),hashtext(?)),1 ok",
-                r -> r.intv("ok"), ownerKey, key);
+                r -> r.intv("ok"), ownerId, key);
     }
 
     private static List<String> activeEquivalentOn(java.sql.Connection c, String userId, String symbol,
@@ -482,15 +482,15 @@ public final class PlanService {
                         "AND c.cost_basis_cents IS NOT DISTINCT FROM ? " +
                         "AND c.price_assumption_cents IS NOT DISTINCT FROM ? " +
                         "ORDER BY p.updated_at DESC,p.created_at DESC LIMIT 1",
-                r -> r.str("id"), userId, userId, symbol, intent, market.name(), world, origin, accountId,
+                r -> r.str("id"), OwnerScope.id(userId), symbol, intent, market.name(), world, origin, accountId,
                 cleanThesis(thesis), horizon, target, shares, costBasis, assumption);
     }
 
-    private static void recordRequestOn(java.sql.Connection c, String ownerKey, String requestId,
+    private static void recordRequestOn(java.sql.Connection c, String ownerId, String requestId,
             String inputHash, String planId, OffsetDateTime now) throws java.sql.SQLException {
-        Db.execOn(c, "INSERT INTO plan_create_request(owner_key,client_request_id,input_hash,plan_id,created_at) " +
+        Db.execOn(c, "INSERT INTO plan_create_request(user_id,client_request_id,input_hash,plan_id,created_at) " +
                         "VALUES(?,?,?,?,?)",
-                ownerKey, requestId, inputHash, planId, now);
+                ownerId, requestId, inputHash, planId, now);
     }
 
     private static String requireSameRequest(ExistingRequest existing, String expectedHash) {
@@ -566,7 +566,7 @@ public final class PlanService {
     }
 
     private static String ownerClause(String column) {
-        return "(" + column + "=?::text OR (?::text IS NULL AND " + column + " IS NULL))";
+        return column + "=?::text";
     }
 
     private static String required(String raw, String name) {
