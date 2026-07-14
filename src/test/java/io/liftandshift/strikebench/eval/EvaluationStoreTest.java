@@ -13,7 +13,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Persistence of evaluations: typed rank columns + JSONB sub-profiles round-trip. */
+/** Persistence of evaluations: typed rank columns + one immutable JSONB receipt round-trip. */
 class EvaluationStoreTest {
 
     private Db db;
@@ -38,7 +38,7 @@ class EvaluationStoreTest {
                 ctx);
     }
 
-    @Test void savesTypedColumnsAndJsonbSubProfiles() {
+    @Test void savesTypedColumnsAndCanonicalJsonbReceipt() {
         db = TestDb.fresh();
         EvaluationStore store = new EvaluationStore(db);
         StrategyEvaluation e = anEvaluation();
@@ -47,7 +47,7 @@ class EvaluationStoreTest {
 
         var row = db.query("""
                 SELECT symbol, strategy, score, ev_cents, max_loss_cents, capital_economic_cents,
-                       evidence_level, risk_json, economics_json, explanation_json
+                       evidence_level, receipt::text receipt
                 FROM strategy_evaluation WHERE id=?""",
                 r -> Map.of(
                         "symbol", r.str("symbol"),
@@ -57,9 +57,7 @@ class EvaluationStoreTest {
                         "maxLoss", r.lng("max_loss_cents"),
                         "economic", r.lng("capital_economic_cents"),
                         "evidence", r.str("evidence_level"),
-                        "riskJson", r.str("risk_json"),
-                        "economicsJson", r.str("economics_json"),
-                        "explJson", r.str("explanation_json")),
+                        "receipt", r.str("receipt")),
                 e.id()).getFirst();
 
         assertThat(row.get("symbol")).isEqualTo("AAPL");
@@ -69,16 +67,18 @@ class EvaluationStoreTest {
         assertThat((long) row.get("economic")).isEqualTo(20_000L);
         assertThat(row.get("evidence")).isEqualTo(e.evidenceLevel().name());
 
-        // JSONB round-trips as real JSON with the producer detail inside.
+        // The one JSONB receipt round-trips with every producer detail under a named section.
         @SuppressWarnings("unchecked")
-        Map<String, Object> risk = Json.read((String) row.get("riskJson"), Map.class);
+        Map<String, Object> receipt = Json.read((String) row.get("receipt"), Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> risk = (Map<String, Object>) receipt.get("risk");
         assertThat(risk).containsKey("scenarios");
         assertThat((List<?>) risk.get("scenarios")).hasSize(7);
         @SuppressWarnings("unchecked")
-        Map<String, Object> economics = Json.read((String) row.get("economicsJson"), Map.class);
+        Map<String, Object> economics = (Map<String, Object>) receipt.get("economics");
         assertThat(economics).containsKeys("verdict", "marketEvAfterCostsCents", "realizedVolEvAfterCostsCents");
         @SuppressWarnings("unchecked")
-        Map<String, Object> expl = Json.read((String) row.get("explJson"), Map.class);
+        Map<String, Object> expl = (Map<String, Object>) receipt.get("explanation");
         assertThat(expl).containsKeys("assumptions", "failureModes");
     }
 

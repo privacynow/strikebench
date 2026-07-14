@@ -13,6 +13,56 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class MigrationsTest {
 
     @Test
+    void canonicalJsonMigrationPreservesReceiptsAndRemovesParallelProfiles() {
+        Map<String, String> cfg = TestDb.freshConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure().dataSource(db.dataSource()).locations("classpath:db/migrations")
+                    .target("52").load().migrate();
+            db.exec("INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,created_at,updated_at) "
+                    + "VALUES('acct_json','local','JSON','PAPER',100000,100000,0,now(),now())");
+            db.exec("INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,entry_underlying_cents," +
+                            "entry_net_premium_cents,max_loss_cents,breakevens_json,entry_snapshot_json,created_at,updated_at) " +
+                            "VALUES('trade_json','acct_json','AAPL','LONG_CALL','ACTIVE',1,?,10000,-100,100,?,?,now(),now())",
+                    "[{\"action\":\"BUY\"}]", "[101.25]", "{\"freshness\":\"DELAYED\"}");
+            db.exec("INSERT INTO strategy_evaluation(id,user_id,symbol,strategy,score,evidence_level,risk_json," +
+                            "economics_json,explanation_json) VALUES('eval_json','local','AAPL','LONG_CALL',42,'MODELED',?::jsonb,?::jsonb,?::jsonb)",
+                    "{\"scenarios\":[1,2]}", "{\"verdict\":\"MIXED\"}", "{\"assumptions\":[\"x\"]}");
+            db.exec("INSERT INTO plans(id,user_id,symbol,market_kind,status,active_stage) " +
+                    "VALUES('plan_json','local','AAPL','DEMO','ACTIVE','STRATEGY')");
+            db.exec("INSERT INTO plan_context_revision(id,plan_id,rev,horizon_days,input_hash,engine_version) " +
+                    "VALUES('pctx_json','plan_json',1,30,'ctx-hash','ctx-1')");
+            db.exec("UPDATE plans SET active_context_rev=1 WHERE id='plan_json'");
+            db.exec("INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,horizon,risk_mode,intent," +
+                    "input_hash,engine_version,state) VALUES('psr_json','plan_json',1,'COMPETITION','PLAN','month'," +
+                    "'balanced','DIRECTIONAL','run-hash','run-1','CURRENT')");
+            db.exec("INSERT INTO plan_strategy_param(run_id,param_key,value_text) VALUES('psr_json','filters.kind','calls')");
+            db.exec("INSERT INTO plan_strategy_param(run_id,param_key,value_boolean) VALUES('psr_json','allow0dte',1)");
+            db.exec("INSERT INTO plan_candidate(id,plan_id,context_rev,family,input_hash,state,run_id,evaluation_snapshot) " +
+                    "VALUES('pcand_json','plan_json',1,'LONG_CALL','candidate-hash','CURRENT','psr_json',?)",
+                    "{\"risk\":{\"maxLossCents\":100}}");
+
+            Migrations.run(db);
+
+            assertThat(db.query("SELECT jsonb_typeof(legs_json) || ':' || jsonb_typeof(entry_snapshot_json) AS shape " +
+                    "FROM trades WHERE id='trade_json'", r -> r.str("shape"))).containsExactly("array:object");
+            assertThat(db.query("SELECT receipt #>> '{risk,scenarios,1}' AS scenario,receipt #>> '{economics,verdict}' verdict " +
+                            "FROM strategy_evaluation WHERE id='eval_json'",
+                    r -> r.str("scenario") + ":" + r.str("verdict"))).containsExactly("2:MIXED");
+            assertThat(db.query("SELECT request_snapshot->>'filters.kind' kind," +
+                            "request_snapshot->>'allow0dte' allow0dte FROM plan_strategy_run WHERE id='psr_json'",
+                    r -> r.str("kind") + ":" + r.str("allow0dte"))).containsExactly("calls:true");
+            assertThat(db.query("SELECT evaluation_snapshot #>> '{risk,maxLossCents}' value FROM plan_candidate " +
+                    "WHERE id='pcand_json'", r -> r.str("value"))).containsExactly("100");
+            assertThat(db.query("SELECT table_name FROM information_schema.tables WHERE table_name='plan_strategy_param'",
+                    r -> r.str("table_name"))).isEmpty();
+            assertThat(db.query("SELECT column_name FROM information_schema.columns WHERE table_name='strategy_evaluation' " +
+                            "AND column_name LIKE '%_json'", r -> r.str("column_name"))).isEmpty();
+            assertThatThrownBy(() -> db.exec("UPDATE trades SET legs_json='{}'::jsonb WHERE id='trade_json'"))
+                    .hasMessageContaining("trades_legs_json_array");
+        }
+    }
+
+    @Test
     void structuredCollectionsMigrationPreservesOrderAndDropsJsonColumns() {
         Map<String, String> cfg = TestDb.freshConfig();
         try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {

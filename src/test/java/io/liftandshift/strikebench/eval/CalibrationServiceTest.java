@@ -23,7 +23,7 @@ class CalibrationServiceTest {
     @AfterEach void close() { if (db != null) db.close(); }
 
     private void insertEval(String id, double pop) {
-        db.exec("INSERT INTO strategy_evaluation(id, symbol, strategy, pop, score) VALUES (?,?,?,?,?)",
+        db.exec("INSERT INTO strategy_evaluation(id, symbol, strategy, pop, score,receipt) VALUES (?,?,?,?,?,'{}'::jsonb)",
                 id, "AAPL", "DEBIT_CALL_SPREAD", pop, 50.0);
     }
 

@@ -55,16 +55,15 @@ public final class PlanStrategyService {
             }
             Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
                             "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
-                            "unfavorable_count,unavailable_count,disclaimer,input_hash,engine_version,state,created_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "unfavorable_count,unavailable_count,disclaimer,request_snapshot,input_hash,engine_version,state,created_at) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?)",
                     runId, plan.id(), plan.context().rev(), "COMPETITION", "PLAN",
                     text(result, "thesis"), text(result, "horizon"),
                     text(result, "riskMode"), text(result, "intent"), longOrNull(result, "riskBudgetCents"),
                     text(result, "ranking"), text(result, "economicMessage"), integer(result, "favorableCount"),
                     integer(result, "mixedCount"), integer(result, "unfavorableCount"),
-                    integer(result, "unavailableCount"), text(result, "disclaimer"), inputHash,
+                    integer(result, "unavailableCount"), text(result, "disclaimer"), requestSnapshot(request), inputHash,
                     ENGINE_VERSION, runState, now);
-            persistParams(c, runId, "", request == null ? Json.MAPPER.createObjectNode() : request);
             persistNotes(c, runId, result.path("notes"));
             persistRejections(c, runId, result.path("rejected"));
             int rank = 0;
@@ -134,15 +133,14 @@ public final class PlanStrategyService {
             }
             Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
                             "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
-                            "unfavorable_count,unavailable_count,disclaimer,input_hash,engine_version,state,created_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "unfavorable_count,unavailable_count,disclaimer,request_snapshot,input_hash,engine_version,state,created_at) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?)",
                     runId, plan.id(), plan.context().rev(), "SCOUT", scope,
                     text(result, "thesis"), text(result, "horizon"), text(result, "riskMode"),
                     text(result, "intent"), longOrNull(result, "riskBudgetCents"), "SCOUT_OPPORTUNITY",
                     text(result, "economicMessage"), integer(result, "favorableCount"), integer(result, "mixedCount"),
                     integer(result, "unfavorableCount"), integer(result, "unavailableCount"),
-                    text(result, "disclaimer"), inputHash, ENGINE_VERSION, runState, now);
-            persistParams(c, runId, "", request == null ? Json.MAPPER.createObjectNode() : request);
+                    text(result, "disclaimer"), requestSnapshot(request), inputHash, ENGINE_VERSION, runState, now);
             persistNotes(c, runId, result.path("notes"));
             int rank = 0;
             for (JsonNode candidate : result.path("candidates")) {
@@ -253,13 +251,12 @@ public final class PlanStrategyService {
             markStrategyFieldDependentsStale(c, plan.id(), plan.context().rev());
             Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
                             "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
-                            "unfavorable_count,unavailable_count,disclaimer,input_hash,engine_version,state,created_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "unfavorable_count,unavailable_count,disclaimer,request_snapshot,input_hash,engine_version,state,created_at) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?)",
                     runId, plan.id(), plan.context().rev(), "CUSTOM", "PLAN",
                     plan.context().thesis(), horizonName(plan.context().horizonDays()), plan.context().riskMode(),
                     plan.intent(), null, "EXACT_PACKAGE", "Exact Builder package", 0, 0, 0, 0,
-                    "Server-priced exact contracts", inputHash, ENGINE_VERSION, "CURRENT", now);
-            persistParams(c, runId, "", request == null ? Json.MAPPER.createObjectNode() : request);
+                    "Server-priced exact contracts", requestSnapshot(request), inputHash, ENGINE_VERSION, "CURRENT", now);
             Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?",
                     plan.id(), plan.context().rev());
             String id = persistCandidate(c, runId, plan, candidate, 1, "CURRENT", now, "CUSTOM");
@@ -317,12 +314,13 @@ public final class PlanStrategyService {
             if (current.version() != plan.version()) throw new IllegalStateException("The sibling Plan changed before its structure was saved");
             Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
                             "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
-                            "unfavorable_count,unavailable_count,disclaimer,input_hash,engine_version,state,created_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "unfavorable_count,unavailable_count,disclaimer,request_snapshot,input_hash,engine_version,state,created_at) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?)",
                     runId, plan.id(), plan.context().rev(), "SCOUT", "PLAN", plan.context().thesis(),
                     horizonName(plan.context().horizonDays()), plan.context().riskMode(), plan.intent(), null,
                     "SCOUT_SELECTION", "Linked from " + text(candidate, "symbol"), 0, 0, 0, 0,
-                    "Exact package selected from a linked Scout run", sha256(candidate), ENGINE_VERSION, "CURRENT", now);
+                    "Exact package selected from a linked Scout run", linkedRequestSnapshot(candidate), sha256(candidate),
+                    ENGINE_VERSION, "CURRENT", now);
             String id = persistCandidate(c, runId, plan, candidate, 1, "CURRENT", now, "SCOUT");
             Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", id);
             Db.execOn(c, "UPDATE plans SET version=version+1,updated_at=now() WHERE id=?", plan.id());
@@ -490,34 +488,16 @@ public final class PlanStrategyService {
         return out;
     }
 
-    private static void persistParams(java.sql.Connection c, String runId, String prefix, JsonNode node)
-            throws java.sql.SQLException {
-        if (node == null || node.isNull()) return;
-        if (node.isObject()) {
-            node.fields().forEachRemaining(entry -> {
-                try { persistParams(c, runId, prefix.isEmpty() ? entry.getKey() : prefix + "." + entry.getKey(), entry.getValue()); }
-                catch (java.sql.SQLException e) { throw new SqlRuntimeException(e); }
-            });
-            return;
-        }
-        if (node.isArray()) {
-            for (int i = 0; i < node.size(); i++) persistParams(c, runId, prefix + "[" + i + "]", node.get(i));
-            return;
-        }
-        if (prefix.isBlank()) return;
-        if (node.isBoolean()) {
-            Db.execOn(c, "INSERT INTO plan_strategy_param(run_id,param_key,value_boolean) VALUES(?,?,?)",
-                    runId, prefix, node.asBoolean() ? 1 : 0);
-        } else if (node.isNumber() && prefix.toLowerCase().endsWith("cents")) {
-            Db.execOn(c, "INSERT INTO plan_strategy_param(run_id,param_key,value_cents) VALUES(?,?,?)",
-                    runId, prefix, node.longValue());
-        } else if (node.isNumber()) {
-            Db.execOn(c, "INSERT INTO plan_strategy_param(run_id,param_key,value_number) VALUES(?,?,?)",
-                    runId, prefix, node.doubleValue());
-        } else {
-            Db.execOn(c, "INSERT INTO plan_strategy_param(run_id,param_key,value_text) VALUES(?,?,?)",
-                    runId, prefix, node.asText());
-        }
+    private static String requestSnapshot(JsonNode request) {
+        return Json.write(request == null || request.isNull() ? Json.MAPPER.createObjectNode() : request);
+    }
+
+    private static String linkedRequestSnapshot(ObjectNode candidate) {
+        ObjectNode receipt = Json.MAPPER.createObjectNode();
+        put(receipt, "sourceCandidateId", text(candidate, "id"));
+        put(receipt, "sourceSymbol", text(candidate, "symbol"));
+        receipt.put("kind", "SCOUT_SELECTION");
+        return Json.write(receipt);
     }
 
     private static void persistNotes(java.sql.Connection c, String runId, JsonNode notes) throws java.sql.SQLException {
@@ -704,7 +684,4 @@ public final class PlanStrategyService {
                                 Long roundTripFees, Double marketEvPct, Boolean observed,
                                 String evaluationSnapshot, boolean selected) {}
 
-    private static final class SqlRuntimeException extends RuntimeException {
-        SqlRuntimeException(java.sql.SQLException cause) { super(cause); }
-    }
 }
