@@ -13,6 +13,58 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class MigrationsTest {
 
     @Test
+    void normalizedBacktestMigrationPreservesOrderedReportsAndDropsBlobs() {
+        Map<String, String> cfg = TestDb.freshConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure().dataSource(db.dataSource()).locations("classpath:db/migrations")
+                    .target("53").load().migrate();
+            String request = """
+                    {"symbol":"AAPL","strategy":"LONG_CALL","from":"2026-01-02","to":"2026-06-30",
+                     "targetDte":30,"entryEveryDays":5,"qty":1,"slippagePct":0.005,
+                     "startingCashCents":10000000}
+                    """;
+            String trade = """
+                    {"entryDate":"2026-01-02","exitDate":"2026-02-02","label":"BUY 250C",
+                     "entryNetPremiumCents":-50000,"exitValueCents":61000,"feesCents":1000,
+                     "pnlCents":10000,"maxLossCents":50000,"returnOnRisk":0.2,
+                     "exitReason":"EXPIRED","assigned":false,"entryUnderlyingCents":25500}
+                    """.strip();
+            String report = """
+                    {"id":"bt_normalize","symbol":"AAPL","strategy":"LONG_CALL",
+                     "from":"2026-01-02","to":"2026-06-30","pricingMode":"MODELED_FROM_UNDERLYING",
+                     "confidence":"medium","daysRequested":128,"daysCovered":124,"sampleSize":2,
+                     "winRate":1.0,"avgReturnOnRisk":0.2,"startingCents":10000000,
+                     "endingCents":10020000,"maxDrawdownPct":0.01,"worstTrade":%s,
+                     "trades":[%s,%s],"skipped":[{"date":"2026-03-02","reason":"no chain"}],
+                     "assumptions":{"slippagePct":0.005,"pricing":"executable"},
+                     "equityCurve":[{"date":"2026-01-02","equityCents":10000000},
+                                    {"date":"2026-06-30","equityCents":10020000}],
+                     "notes":["First","Second"],"assignments":0,"demoUnderlying":false,
+                     "disclaimer":"Educational"}
+                    """.formatted(trade, trade, trade);
+            db.exec("INSERT INTO backtests(id,user_id,created_at,request_json,report_json) VALUES(?,?,?,?,?)",
+                    "bt_normalize", "local", "2026-06-30T20:00:00Z", request, report);
+
+            Migrations.run(db);
+
+            assertThat(db.query("SELECT run_kind || ':' || symbol || ':' || target_dte || ':' || sample_size AS run "
+                    + "FROM backtests WHERE id='bt_normalize'", r -> r.str("run")))
+                    .containsExactly("SINGLE:AAPL:30:2");
+            assertThat(db.query("SELECT trade_index || ':' || pnl_cents || ':' || is_worst AS item FROM backtest_trade "
+                    + "WHERE backtest_id='bt_normalize' ORDER BY trade_index", r -> r.str("item")))
+                    .containsExactly("0:10000:1", "1:10000:0");
+            assertThat(db.query("SELECT point_index || ':' || equity_cents AS item FROM backtest_equity_point "
+                    + "WHERE backtest_id='bt_normalize' ORDER BY point_index", r -> r.str("item")))
+                    .containsExactly("0:10000000", "1:10020000");
+            assertThat(db.query("SELECT assumption_value #>> '{}' AS value FROM backtest_assumption "
+                    + "WHERE backtest_id='bt_normalize' AND assumption_key='pricing'", r -> r.str("value")))
+                    .containsExactly("executable");
+            assertThat(db.query("SELECT column_name FROM information_schema.columns WHERE table_name='backtests' "
+                    + "AND column_name IN ('request_json','report_json')", r -> r.str("column_name"))).isEmpty();
+        }
+    }
+
+    @Test
     void canonicalJsonMigrationPreservesReceiptsAndRemovesParallelProfiles() {
         Map<String, String> cfg = TestDb.freshConfig();
         try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {

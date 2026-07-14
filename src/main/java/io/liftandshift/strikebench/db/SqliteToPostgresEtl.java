@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.db;
 
+import io.liftandshift.strikebench.backtest.BacktestStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -72,6 +73,11 @@ public final class SqliteToPostgresEtl {
                         checks.add(table + ": absent in source (skipped)");
                         continue;
                     }
+                    if ("backtests".equals(table)) {
+                        int copied = copyLegacyBacktests(src, dst);
+                        results.add(new TableResult(table, copied));
+                        continue;
+                    }
                     Map<String, String> pgTypes = pgColumnTypes(dst, table);
                     List<String> cols = new ArrayList<>();
                     for (String c : sqliteColumns(src, table)) {
@@ -128,6 +134,22 @@ public final class SqliteToPostgresEtl {
             ins.executeBatch();
         }
         return n;
+    }
+
+    private static int copyLegacyBacktests(Connection src, Connection dst) throws SQLException {
+        List<String> sourceColumns = sqliteColumns(src, "backtests");
+        boolean hasOwner = sourceColumns.contains("user_id");
+        String select = "SELECT id," + (hasOwner ? "user_id" : "NULL AS user_id")
+                + ",created_at,request_json,report_json FROM backtests";
+        int copied = 0;
+        try (Statement statement = src.createStatement(); ResultSet rows = statement.executeQuery(select)) {
+            while (rows.next()) {
+                BacktestStore.importLegacy(dst, rows.getString("id"), rows.getString("user_id"),
+                        rows.getString("created_at"), rows.getString("request_json"), rows.getString("report_json"));
+                copied++;
+            }
+        }
+        return copied;
     }
 
     /** Coerces a SQLite value to the exact Postgres column type (SQLite is dynamically typed). */

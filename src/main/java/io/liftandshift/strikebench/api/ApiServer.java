@@ -2837,11 +2837,11 @@ public final class ApiServer {
             report = backtester.runPortfolio(new Backtester.PortfolioRequest(plan.symbol(), family, body.from(), body.to(),
                     body.targetDte() == null ? plan.context().horizonDays() : body.targetDte(), body.entryEveryDays(),
                     body.maxConcurrent(), body.qty(), body.shortDelta(), body.widthPct(), body.profitTargetPct(),
-                    body.stopFraction(), body.rollDte(), body.startingCashCents()), analysisCtx(ctx));
+                    body.stopFraction(), body.rollDte(), body.startingCashCents()), analysisCtx(ctx), ownerId(ctx));
         } else if ("single".equals(engineKind)) {
             report = backtester.run(new Backtester.BacktestRequest(plan.symbol(), family, body.from(), body.to(),
                     body.targetDte() == null ? plan.context().horizonDays() : body.targetDte(), body.entryEveryDays(),
-                    body.qty(), body.slippagePct(), body.startingCashCents()), analysisCtx(ctx));
+                    body.qty(), body.slippagePct(), body.startingCashCents()), analysisCtx(ctx), ownerId(ctx));
         } else throw new IllegalArgumentException("engine must be single or portfolio");
         JsonNode reportJson = Json.MAPPER.valueToTree(report);
         var saved = planOutcomes.saveBacktest(ownerId(ctx), plan, body.expectedVersion(),

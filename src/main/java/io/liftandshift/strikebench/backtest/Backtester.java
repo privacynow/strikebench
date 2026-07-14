@@ -18,14 +18,12 @@ import io.liftandshift.strikebench.pricing.VolSurface;
 import io.liftandshift.strikebench.strategy.StrategyBuilder;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
 import io.liftandshift.strikebench.util.Ids;
-import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.DayOfWeek;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -58,18 +56,16 @@ public final class Backtester {
     private final MarketDataService market;
     private final List<HistoricalOptionsProvider> historical;
     private final AppConfig cfg;
-    private final Db db;
-    private final Clock clock;
     private final HistoricalReplayKernel replay;
+    private final BacktestStore store;
 
     public Backtester(MarketDataService market, List<HistoricalOptionsProvider> historical,
                       AppConfig cfg, Db db, Clock clock) {
         this.market = market;
         this.historical = List.copyOf(historical);
         this.cfg = cfg;
-        this.db = db;
-        this.clock = clock;
         this.replay = new HistoricalReplayKernel(market, db);
+        this.store = new BacktestStore(db, clock);
     }
 
     public record BacktestRequest(
@@ -126,11 +122,16 @@ public final class Backtester {
             boolean demoUnderlying, String disclaimer) {}
 
     public BacktestReport run(BacktestRequest req) {
-        return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null);
     }
 
     /** Context-aware variant: the replay runs over the caller's analysis dataset. */
     public BacktestReport run(BacktestRequest req, io.liftandshift.strikebench.db.AnalysisContext actx) {
+        return run(req, actx, null);
+    }
+
+    public BacktestReport run(BacktestRequest req, io.liftandshift.strikebench.db.AnalysisContext actx,
+                              String userId) {
         String symbol = require(req.symbol(), "symbol").trim().toUpperCase(Locale.ROOT);
         StrategyFamily family = parseFamily(require(req.strategy(), "strategy"));
         LocalDate from = LocalDate.parse(require(req.from(), "from"));
@@ -174,7 +175,7 @@ public final class Backtester {
             notes.add("No underlying data available for " + symbol + " in the requested window");
             return persist(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                     "PAYOFF_ONLY", "none", daysRequested, 0, 0, null, null, startingCash, startingCash,
-                    0, null, trades, skipped, assumptions(slippage, notes, family), equityCurve, notes, 0, demoUnderlying, DISCLAIMER), req);
+                    0, null, trades, skipped, assumptions(slippage, notes, family), equityCurve, notes, 0, demoUnderlying, DISCLAIMER), req, userId);
         }
         // Weekday count includes market holidays (~10/yr); only flag a real shortfall.
         if (daysCovered < daysRequested * 0.9) {
@@ -295,7 +296,7 @@ public final class Backtester {
         return persist(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                 pricingMode, confidence, daysRequested, daysCovered, n, winRate, avgRoR,
                 startingCash, cash, HistoricalReplayKernel.maxDrawdownPct(equityCurve), worst, trades, skipped,
-                assumptions(slippage, notes, family), equityCurve, notes, assignments, demoUnderlying, DISCLAIMER), req);
+                assumptions(slippage, notes, family), equityCurve, notes, assignments, demoUnderlying, DISCLAIMER), req, userId);
     }
 
     // ---- Managed portfolio replay: same candles, pricing, evidence and expiry kernel ----
@@ -316,11 +317,16 @@ public final class Backtester {
     }
 
     public PortfolioReport runPortfolio(PortfolioRequest req) {
-        return runPortfolio(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        return runPortfolio(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null);
     }
 
     public PortfolioReport runPortfolio(PortfolioRequest req,
             io.liftandshift.strikebench.db.AnalysisContext analysis) {
+        return runPortfolio(req, analysis, null);
+    }
+
+    public PortfolioReport runPortfolio(PortfolioRequest req,
+            io.liftandshift.strikebench.db.AnalysisContext analysis, String userId) {
         String symbol = require(req.symbol(), "symbol").trim().toUpperCase(Locale.ROOT);
         ManagedFamily family = parseManagedFamily(req.strategy());
         LocalDate from = LocalDate.parse(require(req.from(), "from"));
@@ -352,7 +358,7 @@ public final class Backtester {
             notes.add("No underlying data for " + symbol + " in the requested window");
             return persistPortfolio(new PortfolioReport(Ids.backtest(), symbol, family.name(), from.toString(),
                     to.toString(), "PAYOFF_ONLY", "none", 0, 0, 0, null, null,
-                    startingCash, startingCash, 0, trades, equity, notes, rw.demo(), DISCLAIMER), req);
+                    startingCash, startingCash, 0, trades, equity, notes, rw.demo(), DISCLAIMER), req, userId);
         }
 
         List<ManagedPosition> open = new ArrayList<>();
@@ -452,7 +458,7 @@ public final class Backtester {
                 to.toString(), pricingMode, confidence, window.size(), sample, peakConcurrent,
                 winRate, avgRor, startingCash, startingCash + realized,
                 HistoricalReplayKernel.maxDrawdownPct(equity), trades, equity, notes,
-                rw.demo(), DISCLAIMER), req);
+                rw.demo(), DISCLAIMER), req, userId);
     }
 
     private ManagedPosition buildManagedPosition(String symbol, ManagedFamily family, double spot,
@@ -773,34 +779,21 @@ public final class Backtester {
 
     // ---- Persistence ----
 
-    private BacktestReport persist(BacktestReport report, BacktestRequest req) {
-        db.exec("INSERT INTO backtests(id, created_at, request_json, report_json) VALUES (?,?,?,?)",
-                report.id(), Instant.now(clock).toString(), Json.write(req), Json.write(report));
+    private BacktestReport persist(BacktestReport report, BacktestRequest req, String userId) {
+        store.save(report, req, userId);
         return report;
     }
 
-    private PortfolioReport persistPortfolio(PortfolioReport report, PortfolioRequest req) {
-        db.exec("INSERT INTO backtests(id, created_at, request_json, report_json) VALUES (?,?,?,?)",
-                report.id(), Instant.now(clock).toString(), Json.write(req), Json.write(report));
+    private PortfolioReport persistPortfolio(PortfolioReport report, PortfolioRequest req, String userId) {
+        store.save(report, req, userId);
         return report;
     }
 
     public List<Map<String, Object>> list() {
-        return db.query("SELECT id, created_at, request_json FROM backtests ORDER BY created_at DESC, id DESC", r -> {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", r.str("id"));
-            m.put("createdAt", r.str("created_at"));
-            m.put("request", Json.read(r.str("request_json"), Map.class));
-            return m;
-        });
+        return store.list(null);
     }
 
     public Map<String, Object> get(String id) {
-        List<Map<String, Object>> rows = db.query("SELECT report_json FROM backtests WHERE id=?",
-                r -> Json.read(r.str("report_json"), Map.class), id);
-        if (rows.isEmpty()) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such backtest " + id);
-        @SuppressWarnings("unchecked")
-        Map<String, Object> report = (Map<String, Object>) rows.getFirst();
-        return report;
+        return store.get(id);
     }
 }

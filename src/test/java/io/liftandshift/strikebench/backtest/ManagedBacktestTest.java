@@ -14,6 +14,7 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.support.TestDb;
+import io.liftandshift.strikebench.util.Json;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,6 +74,8 @@ class ManagedBacktestTest {
         assertThat(report.pricingMode()).isEqualTo("PAYOFF_ONLY");
         assertThat(report.demoUnderlying()).isTrue();
         assertThat(backtester.get(report.id()).get("strategy")).isEqualTo("CREDIT_PUT_SPREAD");
+        assertThat(Json.parse(Json.write(backtester.get(report.id()))))
+                .isEqualTo(Json.parse(Json.write(report)));
 
         for (var trade : report.trades()) {
             assertThat(trade.maxLossCents()).isGreaterThan(0);
