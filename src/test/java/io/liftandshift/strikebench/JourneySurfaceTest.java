@@ -144,16 +144,34 @@ class JourneySurfaceTest {
     @Test void legacyRecommendationAndBacktestRoutesAreNotRegistered() throws Exception {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
-        assertThat(api).doesNotContain(
+        String planRoutes = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/PlanRoutes.java"));
+        String surface = api + "\n" + planRoutes;
+        assertThat(surface).doesNotContain(
                 "routes.post(\"/api/recommend\"",
                 "routes.post(\"/api/recommend/auto\"",
                 "routes.post(\"/api/recommend/ladder\"",
                 "routes.get(\"/api/backtests/{id}\"");
-        assertThat(api).contains(
+        assertThat(surface).contains(
                 "routes.post(\"/api/research/scout\"",
                 "routes.post(\"/api/research/{symbol}/intent-ladder\"",
                 "routes.post(\"/api/plans/{id}/strategy/fit\"",
                 "routes.get(\"/api/plans/{id}/outcomes/backtests/{backtestId}\"");
+    }
+
+    @Test void planRoutesHaveOneRegistrationOwner() throws Exception {
+        String api = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
+        String routes = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/PlanRoutes.java"));
+
+        assertThat(api).contains("PlanRoutes.register(c, new PlanRoutes.Handlers(")
+                .doesNotContain("c.routes.get(\"/api/plans", "c.routes.post(\"/api/plans",
+                        "c.routes.put(\"/api/plans", "c.routes.delete(\"/api/plans");
+        assertThat(routes).contains("public record Handlers(",
+                "config.routes.get(\"/api/plans\"", "config.routes.post(\"/api/plans\"",
+                "config.routes.post(\"/api/plans/{id}/decision/trade\"",
+                "config.routes.post(\"/api/plans/{id}/manage/review\"");
     }
 
     @Test void supersededJourneyArtifactsStayDeletedWhileTheLiveChartDependencyRemains() throws Exception {
