@@ -26,7 +26,8 @@ class JourneySurfaceTest {
                 "DataController", "ResearchRoutes", "WorldRoutes", "TradeRoutes", "TradeController",
                 "ResearchController", "PortfolioRoutes", "PortfolioController", "BrokerRoutes",
                 "BrokerController", "OutcomeRoutes", "OutcomeController", "WorldController",
-                "DiscoveryRoutes", "DiscoveryController", "PlanController")) {
+                "DiscoveryRoutes", "DiscoveryController", "PlanController",
+                "PlanStrategyController", "PlanOutcomeController")) {
             routes.append(Files.readString(Path.of(
                     "src/main/java/io/liftandshift/strikebench/api/" + name + ".java"))).append('\n');
         }
@@ -213,6 +214,11 @@ class JourneySurfaceTest {
                 "src/main/java/io/liftandshift/strikebench/api/PlanController.java"));
         assertThat(api).contains("planController.register(c);");
         assertThat(plan).contains("PlanRoutes.register(config, new PlanRoutes.Handlers(");
+        assertThat(plan).contains("strategyController::planStrategyRun",
+                "strategyController::planScoutRun", "planOutcomeController::planOutcomeRun",
+                "planOutcomeController::planDecisionTrade", "planOutcomeController::planManageReview")
+                .doesNotContain("private void planStrategyRun(", "private void planOutcomeRun(",
+                        "private void planDecisionTrade(", "private void planManageReview(");
         assertThat(api).doesNotContain("private void planCreate(",
                 "private void planStrategyRun(", "private void planOutcomeRun(",
                 "private void planDecisionTrade(", "private void planManageReview(");

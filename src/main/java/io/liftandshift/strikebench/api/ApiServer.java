@@ -323,7 +323,7 @@ public final class ApiServer {
                 this::activeWorld, tradeController::riskCapCents);
         outcomeController = new OutcomeController(cfg, clock, market, simEngine, pathEnsembles,
                 this::activeWorld, this::ownerId, this::analysisCtx, this::decisionEvaluationResult);
-        planController = new PlanController(cfg, clock, db, market, simSessions,
+        planController = new PlanController(cfg, clock, db, market,
                 positions, trades, backtester, auto, evaluations, planSvc, planEvidence,
                 planStrategy, planOutcomes, planRehearsals, planDecisions, planManagement,
                 pathEnsembles, simEngine, discoveryController, outcomeController, tradeController,
