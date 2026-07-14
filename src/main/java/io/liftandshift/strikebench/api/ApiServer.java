@@ -41,7 +41,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -296,11 +295,13 @@ public final class ApiServer {
         tradeController = new TradeController(cfg, clock, db, market, eventCalendar, audit,
                 trades, positions, evaluations, snapshots, auth, this::currentAccount,
                 this::ownerId, this::activeWorld, this::analysisCtx, this::requireAdmin);
+        var marketVolatility = new io.liftandshift.strikebench.sim.MarketVolatilityResolver(market, clock);
         discoveryController = new DiscoveryController(db, market, evaluations, engine, auto,
-                positions, universe, simSessions, auth, this::currentAccount, this::ownerId,
+                positions, universe, simSessions, clock, marketVolatility, this::currentAccount, this::ownerId,
                 this::activeWorld, tradeController::riskCapCents);
         outcomeController = new OutcomeController(cfg, clock, market, simEngine, pathEnsembles,
-                this::activeWorld, this::ownerId, this::analysisCtx, this::decisionEvaluationResult);
+                marketVolatility, this::activeWorld, this::ownerId, this::analysisCtx,
+                discoveryController::decisionCompetition);
         planController = new PlanController(cfg, clock, db, market,
                 positions, trades, backtester, auto, evaluations, planSvc, planEvidence,
                 planStrategy, planOutcomes, planRehearsals, planDecisions, planManagement,
@@ -690,105 +691,6 @@ public final class ApiServer {
                 "Admin access required. On a public deployment, enable AUTH (+ AUTH_ADMIN_EMAILS), or set ADMIN_TOKEN and send it as X-Admin-Token.");
         }
     }
-
-
-    private Object decisionEvaluationResult(Context ctx, RecommendationEngine.Request decision) {
-        RecommendationEngine.Result result = discoveryController.resolveAndRecommend(ctx, decision);
-        Account acct = currentAccount(ctx);
-        String world = activeWorld(ctx);
-        boolean inWorld = !"observed".equals(world);
-        String uid = auth.currentUserId(ctx);
-        String ownerId = io.liftandshift.strikebench.util.OwnerScope.id(uid);
-        var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
-                result.riskMode(), result.candidates(), acct.buyingPowerCents(), ownerId, !inWorld,
-                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world));
-        // Record the surfaced pick as a calibration sample — REAL LANE ONLY: a simulated market's
-        // outcomes are self-graded homework and must never touch 'Your record' (review P0).
-        String recommendationId = null;
-        if (!evals.isEmpty() && !inWorld) {
-            try { recommendationId = evaluations.recordSurfaced(evals.getFirst().id(), ownerId); }
-            catch (RuntimeException e) {
-                log.warn("A recommendation could not be added to the learning record");
-                log.debug("Recommendation-record detail", e);
-            }
-        }
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("symbol", result.symbol());
-        out.put("intent", String.valueOf(result.intent()));
-        out.put("evaluations", evals);
-        out.put("rejected", result.rejected());
-        // R10: the alternatives are EVALUATED, not described — real capital, real tail numbers,
-        // the same horizon, so 'nothing here beats cash/shares' is a first-class ranked outcome.
-        List<Map<String, Object>> baselines = new ArrayList<>();
-        Map<String, Object> cash = new LinkedHashMap<>();
-        cash.put("key", "CASH");
-        cash.put("evCents", 0L); cash.put("maxLossCents", 0L); cash.put("cvar95Cents", 0L);
-        cash.put("capitalCents", 0L); cash.put("viable", true);
-        cash.put("note", "Do nothing: $0 expected, $0 at risk, zero costs — every idea above must beat this after fees and spreads.");
-        baselines.add(cash);
-        try {
-            var q = market.quote(result.symbol(), worldParam(world)).orElse(null);
-            if (q != null && q.mark() != null) {
-                double spot = q.mark().doubleValue();
-                long lot = Math.round(spot * 100) * 100; // 100 shares, cents
-                // The baseline is judged over the COMPETITION'S OWN horizon (front-expiration DTE),
-                // not a fixed month — a 7-DTE contest vs a 30-day tail was apples-to-oranges (P3).
-                int horizonDays = 30;
-                java.time.LocalDate frontExp = result.candidates().stream()
-                        .flatMap(c -> c.legs().stream())
-                        .map(l -> { try { return java.time.LocalDate.parse(l.expiration()); }
-                                    catch (RuntimeException e) { return null; } })
-                        .filter(java.util.Objects::nonNull)
-                        .min(java.time.LocalDate::compareTo).orElse(null);
-                String baselineWorld = worldParam(world);
-                java.time.LocalDate laneToday = market.simInstant(baselineWorld)
-                        .map(i -> java.time.LocalDate.ofInstant(i,
-                                io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                        .orElseGet(() -> java.time.LocalDate.now(clock));
-                if (frontExp != null) {
-                    horizonDays = (int) Math.max(1, java.time.temporal.ChronoUnit.DAYS.between(
-                            laneToday, frontExp));
-                }
-                Double iv = null;
-                try { iv = outcomeController.atmIv(result.symbol(), baselineWorld); }
-                catch (RuntimeException ignored) { }
-                var stockLeg = io.liftandshift.strikebench.model.Leg.stock(
-                        io.liftandshift.strikebench.model.LegAction.BUY, 1, q.mark());
-                var curve = io.liftandshift.strikebench.pricing.PayoffCurve.of(List.of(stockLeg), 1);
-                var rateQuote = market.riskFreeRateQuote(horizonDays, baselineWorld);
-                double rate = rateQuote.annualRate();
-                var map = io.liftandshift.strikebench.pricing.ProbabilityMap.of(curve, spot,
-                        iv != null ? iv : 0.3, horizonDays / 365.0, rate, List.of());
-                Map<String, Object> bh = new LinkedHashMap<>();
-                bh.put("key", "BUY_AND_HOLD");
-                bh.put("evCents", curve.riskNeutralExpectedValueCents(spot,
-                        iv != null ? iv : 0.3, horizonDays / 365.0, rate));
-                bh.put("capitalCents", lot);
-                bh.put("cvar95Cents", map.cvar95Cents());
-                bh.put("stressLossCents", map.stressLossCents());
-                bh.put("pAnyProfit", map.pAnyProfit());
-                bh.put("viable", true);
-                bh.put("marketLane", market.lane(baselineWorld).name());
-                bh.put("asOfDate", laneToday.toString());
-                bh.put("horizonDays", horizonDays);
-                bh.put("volatility", iv != null ? iv : 0.3);
-                bh.put("volatilityBasis", iv != null ? "same-market ATM IV" : "30% modeled fallback");
-                bh.put("rateEvidence", rateQuote.evidence());
-                bh.put("note", "Own 100 shares (" + io.liftandshift.strikebench.util.Money.fmt(lot)
-                        + "): present-value risk-neutral EV is approximately $0 before costs (r="
-                        + String.format(java.util.Locale.ROOT, "%.2f", rate * 100)
-                        + "%, q=0 assumed), with no expiry or option spread; the tail numbers are its modeled "
-                        + horizonDays + "-day downside at the chain's own vol.");
-                baselines.add(bh);
-            }
-        } catch (RuntimeException ignored) { /* baseline is advisory */ }
-        out.put("baselines", baselines);
-        if (recommendationId != null) out.put("recommendationId", recommendationId);
-        if (inWorld) out.put("calibrationNote",
-                "Simulated market — this competition is NOT recorded in your calibration record.");
-        return out;
-    }
-
 
 
     /**

@@ -284,10 +284,12 @@ class JourneySurfaceTest {
         String discovery = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/DiscoveryController.java"));
         assertThat(api).contains("discoveryController.register(c);");
-        assertThat(discovery).contains("DiscoveryRoutes.register(config, new DiscoveryRoutes.Handlers(");
+        assertThat(discovery).contains("DiscoveryRoutes.register(config, new DiscoveryRoutes.Handlers(",
+                "ApiResponses.DecisionCompetition decisionCompetition(");
         assertThat(api).doesNotContain("private void welcomeTeachingExample(",
                 "private void researchScout(", "private void researchIntentLadder(",
-                "private void opportunities(", "private void optimize(");
+                "private void opportunities(", "private void optimize(",
+                "decisionEvaluationResult(", "BUY_AND_HOLD");
         assertThat(api).doesNotContain(
                 "c.routes.get(\"/api/metrics\"",
                 "c.routes.get(\"/api/research/",
@@ -311,10 +313,14 @@ class JourneySurfaceTest {
                 "src/main/java/io/liftandshift/strikebench/api/DataController.java"));
         String research = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ResearchController.java"));
+        String discovery = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/DiscoveryController.java"));
 
         assertThat(api).doesNotContain("ctx.json(Map.of(", "ctx.json(body)",
                 "Map<String, Object> tradePreviewPayload");
         assertThat(research).contains("new ApiResponses.ResearchDetail<>(");
+        assertThat(discovery).contains("new ApiResponses.DecisionCompetition(",
+                "new ApiResponses.DecisionBaseline(");
         assertThat(portfolio).contains("new ApiResponses.PortfolioSummary(");
         assertThat(trade).contains("new ApiResponses.TradePreviewResponse(",
                 "new ApiResponses.TradeDetail<>(");
@@ -322,7 +328,26 @@ class JourneySurfaceTest {
                 "new ApiResponses.DataSyncPlan<>(");
         assertThat(contracts).contains("public record ErrorBody(",
                 "public record TradePreviewResponse(", "public record ResearchDetail<",
-                "public record DataSyncPlan<", "public record PortfolioSummary(");
+                "public record DataSyncPlan<", "public record PortfolioSummary(",
+                "public record DecisionCompetition(", "public record DecisionBaseline(");
+    }
+
+    @Test void scenarioAndDecisionVolatilityHaveOneResolver() throws Exception {
+        String resolver = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/sim/MarketVolatilityResolver.java"));
+        String outcome = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/OutcomeController.java"));
+        String discovery = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/DiscoveryController.java"));
+
+        assertThat(resolver).contains("MarketHours.tradingDateAfter(",
+                "public SimulationEngine.MarketVolInput resolve(",
+                "public Double atmIv(");
+        assertThat(outcome).contains("marketVolatility.resolve(", "marketVolatility.atmIv(")
+                .doesNotContain("new io.liftandshift.strikebench.sim.SimulationEngine.MarketVolInput(",
+                        "Scenario horizons are trading sessions. Resolve that date");
+        assertThat(discovery).contains("marketVolatility.atmIv(")
+                .doesNotContain("market.expirations(result.symbol()");
     }
 
     @Test void supersededJourneyArtifactsStayDeletedWhileTheLiveChartDependencyRemains() throws Exception {

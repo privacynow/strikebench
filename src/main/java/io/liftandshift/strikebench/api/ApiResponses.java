@@ -2,7 +2,10 @@ package io.liftandshift.strikebench.api;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.liftandshift.strikebench.eval.EconomicAssessment;
+import io.liftandshift.strikebench.eval.StrategyEvaluation;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.paper.TradePreview;
+import io.liftandshift.strikebench.recommend.Rejection;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -137,6 +140,18 @@ public final class ApiResponses {
     public record SymbolItems<T>(String symbol, T items, String evidence, String note) {}
     public record Opportunities<T, U>(T ranked, U notes, int scanned) {}
     public record Optimization<T, U>(T optimization, int scanned, U scanNotes) {}
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record DecisionBaseline(String key, Long evCents, Long maxLossCents,
+                                   Long cvar95Cents, Long stressLossCents, Long capitalCents,
+                                   Double pAnyProfit, boolean viable, String marketLane,
+                                   String asOfDate, Integer horizonDays, Double volatility,
+                                   String volatilityBasis, DataEvidence rateEvidence, String note) {}
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record DecisionCompetition(String symbol, String intent,
+                                      List<StrategyEvaluation> evaluations,
+                                      List<Rejection> rejected,
+                                      List<DecisionBaseline> baselines,
+                                      String recommendationId, String calibrationNote) {}
     public record CreatedTrade<T, U>(T trade, U warnings) {}
     public record Guardrails(String level, List<String> blockReasons, List<String> warnings) {}
     public record RiskAcknowledgment(String id, String label) {}

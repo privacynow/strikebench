@@ -30,6 +30,7 @@ final class OutcomeController {
     private final MarketDataService market;
     private final io.liftandshift.strikebench.sim.SimulationEngine simEngine;
     private final io.liftandshift.strikebench.sim.PathEnsembleService pathEnsembles;
+    private final io.liftandshift.strikebench.sim.MarketVolatilityResolver marketVolatility;
     private final Function<Context, String> activeWorld;
     private final Function<Context, String> ownerId;
     private final Function<Context, AnalysisContext> analysisContext;
@@ -38,6 +39,7 @@ final class OutcomeController {
     OutcomeController(AppConfig cfg, Clock clock, MarketDataService market,
                       io.liftandshift.strikebench.sim.SimulationEngine simEngine,
                       io.liftandshift.strikebench.sim.PathEnsembleService pathEnsembles,
+                      io.liftandshift.strikebench.sim.MarketVolatilityResolver marketVolatility,
                       Function<Context, String> activeWorld,
                       Function<Context, String> ownerId,
                       Function<Context, AnalysisContext> analysisContext,
@@ -47,6 +49,7 @@ final class OutcomeController {
         this.market = market;
         this.simEngine = simEngine;
         this.pathEnsembles = pathEnsembles;
+        this.marketVolatility = marketVolatility;
         this.activeWorld = activeWorld;
         this.ownerId = ownerId;
         this.analysisContext = analysisContext;
@@ -240,39 +243,12 @@ final class OutcomeController {
     }
 
     private Double atmIv(String symbol, String worldId, int horizonDays) {
-        var input = marketVol(symbol, worldId, horizonDays);
-        return input == null ? null : input.atmIv();
+        return marketVolatility.atmIv(symbol, worldId, horizonDays);
     }
 
     io.liftandshift.strikebench.sim.SimulationEngine.MarketVolInput marketVol(
             String symbol, String worldId, int horizonSessions) {
-        try {
-            var exps = market.expirations(symbol, worldId);
-            if (exps.isEmpty()) return null;
-            // Scenario horizons are trading sessions. Resolve that date through the same exchange
-            // calendar used by DTE and then choose the nearest listed expiry. Using plusDays here
-            // silently selected an earlier option week whenever a weekend sat inside the horizon.
-            java.time.LocalDate laneToday = market.simInstant(worldId)
-                    .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                    .orElseGet(() -> java.time.LocalDate.now(clock));
-            int sessions = Math.max(1, horizonSessions);
-            java.time.LocalDate target = io.liftandshift.strikebench.market.MarketHours
-                    .tradingDateAfter(laneToday, sessions);
-            java.time.LocalDate exp = exps.stream()
-                    .min(java.util.Comparator.comparingLong(e -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e, target))))
-                    .orElse(null);
-            var chain = exp == null ? null : market.chain(symbol, exp, worldId).orElse(null);
-            if (chain == null || chain.isEmpty() || chain.underlyingPrice() == null) return null;
-            final java.math.BigDecimal spot = chain.underlyingPrice();
-            Double iv = chain.calls().stream()
-                    .filter(o -> o.iv() != null && o.iv() > 0.01)
-                    .min(java.util.Comparator.comparingDouble(o -> Math.abs(o.strike().subtract(spot).doubleValue())))
-                    .map(io.liftandshift.strikebench.model.OptionQuote::iv).orElse(null);
-            if (iv == null) return null;
-            int calendarDays = Math.max(0, (int) java.time.temporal.ChronoUnit.DAYS.between(laneToday, exp));
-            return new io.liftandshift.strikebench.sim.SimulationEngine.MarketVolInput(
-                    iv, exp, calendarDays);
-        } catch (Exception e) { return null; }
+        return marketVolatility.resolve(symbol, worldId, horizonSessions);
     }
 
     void generateDataset(Context ctx) {
