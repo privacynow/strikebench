@@ -4831,7 +4831,7 @@
     var nextExpiry = el('input', { type: 'date' });
     var openPrice = el('input', { type: 'number', min: '0', step: '0.0001', placeholder: 'Exact replacement fill' });
     var fees = el('input', { type: 'number', min: '0', step: '0.01', value: '0.00' });
-    var occurred = el('input', { type: 'datetime-local', value: portfolioNowLocal() });
+    var occurred = el('input', { type: 'datetime-local', step: '1', value: portfolioNowLocal() });
     var source = portfolioSelect([['MANUAL', 'Entered manually'], ['BROKER', 'Copied from broker']], 'MANUAL');
     var reference = el('input', { type: 'text', maxlength: '160', placeholder: 'Optional order or statement reference' });
     var notes = el('textarea', { rows: '2', maxlength: '1000', placeholder: 'Why you rolled or what changed' });
@@ -4982,7 +4982,7 @@
 
   function portfolioNowLocal() {
     var now = new Date(), offset = now.getTimezoneOffset() * 60000;
-    return new Date(now.getTime() - offset).toISOString().slice(0, 16);
+    return new Date(now.getTime() - offset).toISOString().slice(0, 19);
   }
 
   function portfolioInstant(input, label) {
@@ -4999,6 +4999,16 @@
     var parsed = new Date(raw);
     if (isNaN(parsed.getTime())) return String(raw).slice(0, 10);
     return parsed.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function portfolioTaxDate(raw) {
+    var parsed = new Date(raw);
+    if (!raw || isNaN(parsed.getTime())) return String(raw || '').slice(0, 10);
+    var parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
+      year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(parsed);
+    var values = {};
+    parts.forEach(function (part) { if (part.type !== 'literal') values[part.type] = part.value; });
+    return values.year + '-' + values.month + '-' + values.day;
   }
 
   function portfolioLegLabel(leg) {
@@ -5079,7 +5089,7 @@
       ['TRANSFER_OUT', 'Transfer out'], ['INTEREST', 'Interest received'], ['DIVIDEND', 'Dividend received'],
       ['FEE', 'Account fee'], ['ADJUSTMENT', 'Cash adjustment']
     ], 'TRADE', { id: 'portfolio-book-event' });
-    var occurred = el('input', { type: 'datetime-local', value: portfolioNowLocal() });
+    var occurred = el('input', { type: 'datetime-local', step: '1', value: portfolioNowLocal() });
     var amount = el('input', { type: 'number', step: '0.01', value: '', placeholder: '0.00' });
     var fees = el('input', { type: 'number', min: '0', step: '0.01', value: '0.00' });
     var source = portfolioSelect([['MANUAL', 'Entered manually'], ['BROKER', 'Copied from broker']], 'MANUAL');
@@ -5342,7 +5352,7 @@
 
   function portfolioValuationForm(account, performance) {
     var last = (performance.valuations || []).length ? performance.valuations[performance.valuations.length - 1] : null;
-    var asOf = el('input', { type: 'datetime-local', value: portfolioNowLocal() });
+    var asOf = el('input', { type: 'datetime-local', step: '1', value: portfolioNowLocal() });
     var total = el('input', { type: 'number', min: '0', step: '0.01', value: '', placeholder: last ? (last.totalValueCents / 100).toFixed(2) : '100000.00' });
     var cash = el('input', { type: 'number', step: '0.01', value: '', placeholder: 'Optional' });
     var securities = el('input', { type: 'number', step: '0.01', value: '', placeholder: 'Optional' });
@@ -5531,8 +5541,22 @@
       el('span', { class: 'badge badge-dim' }, realized.length + ' match' + (realized.length === 1 ? '' : 'es'))));
     if (!realized.length) realizedCard.appendChild(UI.emptyState('No realized lots in ' + yearValue,
       'Closing stock or option lots, assignment, exercise, and expiration populate this ledger.'));
-    else realizedCard.appendChild(table(['Closed', 'Symbol', 'Instrument', 'Side', 'Qty', 'Opening basis / proceeds', 'Closing proceeds / cost', 'Raw realized', 'Wash deferred', 'Taxable realized', 'Character'],
-      realized.map(function (r) { return el('tr', {}, el('td', {}, String(r.closedAt).slice(0, 10)), el('td', {}, el('b', {}, r.symbol)),
+    else if (Learn.currentLevel() === 'beginner') {
+      realized.forEach(function (r) {
+        var character = r.section1256 ? 'Section 1256 · 60 / 40' : r.holdingTerm.replaceAll('_', ' ').toLowerCase();
+        realizedCard.appendChild(el('div', { class: 'book-realized-lot-row' },
+          el('div', {}, el('b', {}, r.symbol + ' · ' + r.instrumentType.toLowerCase()),
+            el('span', { class: 'muted small' }, 'Closed ' + portfolioTaxDate(r.closedAt) + ' ET · '
+              + r.side.toLowerCase() + ' · quantity ' + r.quantity)),
+          el('div', { class: 'chip-row' },
+            chip('Taxable gain / loss', pnlSpan((r.realizedGainCents || 0) + (r.washSaleAdjustmentCents || 0))),
+            chip('Wash deferred', fmtMoney(r.washSaleAdjustmentCents || 0)), chip('Character', character)),
+          el('p', { class: 'muted small book-realized-lot-detail' }, 'Opening basis / proceeds ',
+            el('b', {}, fmtMoney(r.openAmountCents)), ' · closing proceeds / cost ',
+            el('b', {}, fmtMoney(r.closeAmountCents)), ' · raw gain / loss ', pnlSpan(r.realizedGainCents))));
+      });
+    } else realizedCard.appendChild(table(['Closed (ET)', 'Symbol', 'Instrument', 'Side', 'Qty', 'Opening basis / proceeds', 'Closing proceeds / cost', 'Raw realized', 'Wash deferred', 'Taxable realized', 'Character'],
+      realized.map(function (r) { return el('tr', {}, el('td', {}, portfolioTaxDate(r.closedAt)), el('td', {}, el('b', {}, r.symbol)),
         el('td', {}, r.instrumentType.toLowerCase()), el('td', {}, r.side.toLowerCase()), el('td', {}, String(r.quantity)),
         el('td', {}, fmtMoney(r.openAmountCents)), el('td', {}, fmtMoney(r.closeAmountCents)),
         el('td', {}, pnlSpan(r.realizedGainCents)), el('td', {}, fmtMoney(r.washSaleAdjustmentCents || 0)),
