@@ -137,8 +137,17 @@ public final class SqliteToPostgresEtl {
             case "bigint" -> ((Number) num(v)).longValue();
             case "double precision", "real" -> ((Number) num(v)).doubleValue();
             case "numeric" -> v instanceof BigDecimal b ? b : new BigDecimal(v.toString());
+            case "timestamp with time zone" -> timestamp(v.toString());
             default -> v.toString(); // text / varchar / etc.
         };
+    }
+
+    private static java.time.OffsetDateTime timestamp(String raw) {
+        try {
+            return java.time.OffsetDateTime.parse(raw);
+        } catch (java.time.format.DateTimeParseException noOffset) {
+            return java.time.LocalDateTime.parse(raw).atOffset(java.time.ZoneOffset.UTC);
+        }
     }
 
     private static Number num(Object v) {

@@ -138,6 +138,9 @@ public final class Db implements AutoCloseable {
             // Boolean flags live in integer 0/1 columns (kept from the SQLite schema for
             // zero call-site churn); bind them as ints.
             if (p instanceof Boolean b) ps.setInt(i + 1, b ? 1 : 0);
+            // Let PostgreSQL resolve application strings against the target column. This keeps
+            // ISO-8601 values type-safe for TIMESTAMPTZ while preserving ordinary TEXT/JSON use.
+            else if (p instanceof String s) ps.setObject(i + 1, s, java.sql.Types.OTHER);
             else ps.setObject(i + 1, p);
         }
         return ps;
@@ -146,7 +149,12 @@ public final class Db implements AutoCloseable {
     /** Wraps a ResultSet with null-safe accessors. */
     public record Row(ResultSet rs) {
         public String str(String col) {
-            try { return rs.getString(col); } catch (SQLException e) { throw new DbException(e); }
+            try {
+                Object value = rs.getObject(col);
+                if (value instanceof java.time.OffsetDateTime time) return time.toInstant().toString();
+                if (value instanceof java.sql.Timestamp time) return time.toInstant().toString();
+                return rs.getString(col);
+            } catch (SQLException e) { throw new DbException(e); }
         }
         public long lng(String col) {
             try { return rs.getLong(col); } catch (SQLException e) { throw new DbException(e); }

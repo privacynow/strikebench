@@ -13,6 +13,47 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class MigrationsTest {
 
     @Test
+    void canonicalTimeAndPriceMigrationPreservesInstantsAndSixDecimalPrices() {
+        Map<String, String> cfg = TestDb.freshConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure().dataSource(db.dataSource()).locations("classpath:db/migrations")
+                    .target("50").load().migrate();
+            db.exec("INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents," +
+                            "created_at,updated_at) VALUES('acct_time','local','Time test','PAPER',10000,10000,0,?,?)",
+                    "2024-02-29T23:59:59.123456Z", "2024-03-01T00:00:00.123456Z");
+            db.exec("INSERT INTO market_snapshot(symbol,last,bid,ask,prev_close,as_of) " +
+                    "VALUES('PREC',1.2345,1.2300,1.2400,1.2200,1709251199123)");
+
+            Migrations.run(db);
+
+            assertThat(db.query("SELECT created_at FROM accounts WHERE id='acct_time'", r -> r.odt("created_at")))
+                    .containsExactly(java.time.OffsetDateTime.parse("2024-02-29T23:59:59.123456Z"));
+            assertThat(db.query("SELECT created_at FROM accounts WHERE id='acct_time'", r -> r.str("created_at")))
+                    .containsExactly("2024-02-29T23:59:59.123456Z");
+            db.exec("UPDATE market_snapshot SET last=1.234567 WHERE symbol='PREC'");
+            assertThat(db.query("SELECT last FROM market_snapshot WHERE symbol='PREC'", r -> r.bd("last")))
+                    .containsExactly(new java.math.BigDecimal("1.234567"));
+            assertThat(db.query("SELECT data_type FROM information_schema.columns " +
+                            "WHERE table_name='accounts' AND column_name='created_at'", r -> r.str("data_type")))
+                    .containsExactly("timestamp with time zone");
+            assertThat(db.query("SELECT numeric_precision || ':' || numeric_scale AS shape " +
+                            "FROM information_schema.columns WHERE table_name='option_bar' AND column_name='bid'",
+                    r -> r.str("shape"))).containsExactly("19:6");
+            assertThat(db.query("SELECT table_name || '.' || column_name AS column_name " +
+                            "FROM information_schema.columns WHERE table_schema='public' AND data_type='numeric' " +
+                            "AND numeric_scale <> 6",
+                    r -> r.str("column_name"))).isEmpty();
+            assertThat(db.query("SELECT as_of FROM market_snapshot WHERE symbol='PREC'", r -> r.odt("as_of")))
+                    .containsExactly(java.time.OffsetDateTime.parse("2024-02-29T23:59:59.123Z"));
+            assertThat(db.query("SELECT table_name || '.' || column_name AS column_name " +
+                            "FROM information_schema.columns WHERE table_schema='public' " +
+                            "AND data_type <> 'timestamp with time zone' " +
+                            "AND (column_name ~ '_at$' OR column_name IN ('as_of','ts'))",
+                    r -> r.str("column_name"))).isEmpty();
+        }
+    }
+
+    @Test
     void canonicalOwnerMigrationPreservesRowsAndEnforcesOneIdentityKey() {
         Map<String, String> cfg = TestDb.freshConfig();
         try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {

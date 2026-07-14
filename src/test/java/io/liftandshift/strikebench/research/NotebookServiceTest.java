@@ -44,7 +44,7 @@ class NotebookServiceTest {
     @Test void notesAreIsolatedPerUser() {
         db = TestDb.fresh();
         db.exec("INSERT INTO users(id,email,provider,subject,name,created_at,updated_at) VALUES "
-                + "('google:a','a@x.com','google','a','A','t','t')");
+                + "('google:a','a@x.com','google','a','A','2026-07-08T15:30:00Z','2026-07-08T15:30:00Z')");
         NotebookService nb = new NotebookService(db, CLOCK);
 
         var mine = nb.create("google:a", "Private idea", "body", null);

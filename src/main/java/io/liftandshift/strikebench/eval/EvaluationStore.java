@@ -45,7 +45,7 @@ public final class EvaluationStore {
                 Json.write(e.explanation()) };
     }
 
-    /** Saves one evaluation for a user (userId may be null for the local/anonymous account). */
+    /** Saves one evaluation for a canonical user; null callers resolve to the explicit local owner. */
     public void save(StrategyEvaluation e, String userId) {
         db.tx(c -> {
             OwnerScope.ensure(c, userId);

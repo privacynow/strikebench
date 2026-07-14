@@ -30,7 +30,8 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
               + "bid=excluded.bid, ask=excluded.ask, prev_close=excluded.prev_close, optionable=excluded.optionable, "
               + "source=excluded.source, freshness=excluded.freshness, as_of=excluded.as_of, captured_at=now()",
                 s.symbol(), s.description(), s.last(), s.bid(), s.ask(), s.prevClose(), s.optionable(),
-                s.source(), s.freshness() == null ? null : s.freshness().name(), s.asOfEpochMs());
+                s.source(), s.freshness() == null ? null : s.freshness().name(),
+                java.time.Instant.ofEpochMilli(s.asOfEpochMs()).atOffset(java.time.ZoneOffset.UTC));
     }
 
     /** Load every persisted last-known quote as a STALE snapshot to seed the engine on boot. */
@@ -43,7 +44,7 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
                     out.add(new MarketSnapshot(r.str("symbol"), r.str("description"), r.bd("last"), r.bd("bid"),
                             r.bd("ask"), r.bd("prev_close"), r.lng("optionable") == 1,
                             Freshness.STALE, r.str("source"),
-                            r.lng("as_of"), r.lng("as_of"), false, null));
+                            epochMillis(r), epochMillis(r), false, null));
                     return null;
                 });
         return out;
@@ -58,7 +59,12 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
                         + "AND coalesce(freshness,'') NOT IN ('FIXTURE','SIMULATED','MODELED')",
                 r -> new MarketSnapshot(r.str("symbol"), r.str("description"), r.bd("last"), r.bd("bid"),
                         r.bd("ask"), r.bd("prev_close"), r.lng("optionable") == 1,
-                        Freshness.STALE, r.str("source"), r.lng("as_of"), r.lng("as_of"), false, null),
+                        Freshness.STALE, r.str("source"), epochMillis(r), epochMillis(r), false, null),
                 symbol.trim().toUpperCase(java.util.Locale.ROOT)).stream().findFirst();
+    }
+
+    private static long epochMillis(Db.Row row) {
+        java.time.OffsetDateTime value = row.odt("as_of");
+        return value == null ? 0L : value.toInstant().toEpochMilli();
     }
 }

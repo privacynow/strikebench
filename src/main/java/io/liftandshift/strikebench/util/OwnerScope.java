@@ -26,7 +26,7 @@ public final class OwnerScope {
     public static String ensure(Connection connection, String raw) throws SQLException {
         String owner = id(raw);
         Db.execOn(connection, "INSERT INTO users(id,name,created_at,updated_at) "
-                        + "VALUES(?,?,now()::text,now()::text) ON CONFLICT(id) DO NOTHING",
+                        + "VALUES(?,?,now(),now()) ON CONFLICT(id) DO NOTHING",
                 owner, LOCAL.equals(owner) ? "Local user" : owner);
         return owner;
     }
