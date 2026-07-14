@@ -1,8 +1,5 @@
 package io.liftandshift.strikebench.api;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.http.staticfiles.Location;
@@ -29,45 +26,25 @@ import io.liftandshift.strikebench.market.providers.NewsRssProvider;
 import io.liftandshift.strikebench.market.providers.PolygonProvider;
 import io.liftandshift.strikebench.market.providers.StooqProvider;
 import io.liftandshift.strikebench.market.providers.TreasuryRatesProvider;
-import io.liftandshift.strikebench.model.Freshness;
-import io.liftandshift.strikebench.model.Leg;
-import io.liftandshift.strikebench.model.OptionChain;
-import io.liftandshift.strikebench.model.OptionQuote;
-import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountService;
 import io.liftandshift.strikebench.paper.AuditLog;
 import io.liftandshift.strikebench.paper.PositionsService;
-import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradeRejectedException;
 import io.liftandshift.strikebench.paper.TradeService;
-import io.liftandshift.strikebench.pricing.HistoricalVol;
-import io.liftandshift.strikebench.pricing.PayoffCurve;
 import io.liftandshift.strikebench.recommend.AutoRecommender;
-import io.liftandshift.strikebench.recommend.Candidate;
-import io.liftandshift.strikebench.recommend.LegView;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
-import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
 import io.liftandshift.strikebench.recommend.SignalEngine;
-import io.liftandshift.strikebench.strategy.Guardrails;
-import io.liftandshift.strikebench.strategy.StrategyFamily;
-import io.liftandshift.strikebench.strategy.StrategyIntent;
-import io.liftandshift.strikebench.strategy.Verdict;
 import io.liftandshift.strikebench.util.Json;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Clock;
-import java.time.Instant;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * HTTP surface. All routes are registered inside Javalin.create (Javalin 7 style).
@@ -341,9 +318,9 @@ public final class ApiServer {
                 datasets, cboe, simSessions, worldTransitions, audit, this::ownerId,
                 this::activeWorld, this::isAdmin, this::requireAdmin,
                 sparklineController::invalidate, outcomeController::generateDataset);
-        ResearchController researchController = new ResearchController(db, clock, market,
+        ResearchController researchController = new ResearchController(cfg, db, clock, market,
                 evaluations, this::ownerId, this::activeWorld, this::analysisCtx,
-                this::research);
+                planController::planSymbolEligibility);
         ApiTelemetry telemetry = new ApiTelemetry(cfg, marketEngine);
         BrokerController brokerController = new BrokerController(broker);
         WorldController worldController = new WorldController(cfg, clock, db, market, marketEngine,
@@ -712,146 +689,6 @@ public final class ApiServer {
             throw new io.liftandshift.strikebench.auth.UnauthorizedException(
                 "Admin access required. On a public deployment, enable AUTH (+ AUTH_ADMIN_EMAILS), or set ADMIN_TOKEN and send it as X-Admin-Token.");
         }
-    }
-
-    // ---- Research ----
-
-    private void research(Context ctx) {
-        String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
-        String world = activeWorld(ctx);
-        Optional<Quote> quote = market.quote(symbol, world);
-        if (quote.isEmpty()) {
-            ctx.attribute("apiErrorWritten", true);
-            ctx.status(404).json(new ApiResponses.ErrorBody(
-                    "unknown_symbol", "No data for " + symbol));
-            return;
-        }
-        Quote q = quote.get();
-        var lane = io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly(), analysisCtx(ctx));
-        if (!q.evidence().usableIn(lane == io.liftandshift.strikebench.market.MarketLane.SCENARIO
-                ? io.liftandshift.strikebench.market.MarketLane.OBSERVED : lane)) {
-            ctx.attribute("apiErrorWritten", true);
-            ctx.status(409).json(new ApiResponses.ErrorBody("market_lane_mismatch",
-                    "The " + lane + " workflow cannot use " + q.evidence().provenance()
-                            + " quote data from " + q.evidence().source()));
-            return;
-        }
-        // The chart window ends at the LANE's today: a fast-forwarded world's own rolled bars
-        // must render and feed HV — windowing on the real date silently hid the whole session.
-        LocalDate today = market.simInstant(worldParam(world))
-                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
-
-        // The three remaining pieces are independent provider calls — the old serial waterfall
-        // (expirations→chain→candles→SPY→QQQ) made the endpoint as slow as the SUM of them, which in
-        // live mode meant several multi-MB Cboe downloads back-to-back. Run them CONCURRENTLY on
-        // virtual threads so the endpoint costs the slowest ONE, not the sum.
-        record IvExp(List<LocalDate> exps, Double ivAtm,
-                     io.liftandshift.strikebench.model.DataEvidence evidence) {}
-        try (var exec = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
-            var ivExpF = exec.submit(() -> {
-                List<LocalDate> e = activeExpirations(symbol, world);
-                OptionChain ch = e.isEmpty() ? null : market.chain(symbol, e.getFirst(), world).orElse(null);
-                boolean allowed = ch != null && ch.evidence().usableIn(
-                        lane == io.liftandshift.strikebench.market.MarketLane.SCENARIO
-                                ? io.liftandshift.strikebench.market.MarketLane.OBSERVED : lane);
-                Double iv = allowed ? atmIv(ch).orElse(null) : null;
-                return new IvExp(e, iv, allowed ? ch.evidence()
-                        : io.liftandshift.strikebench.model.DataEvidence.missing("option chain"));
-            });
-            var actx = analysisCtx(ctx); // capture BEFORE the fan-out: explicit context survives vthreads
-            var candlesF = exec.submit(() -> market.candleSeries(symbol, today.minusDays(120), today, world, actx));
-            var benchF = exec.submit(() -> {
-                List<ApiResponses.Benchmark<BigDecimal, io.liftandshift.strikebench.model.DataEvidence>> b =
-                        new ArrayList<>();
-                for (String bench : List.of("SPY", "QQQ")) {
-                    if (bench.equals(symbol)) continue;
-                    // Benchmarks come from the SAME world as the symbol — inside a simulated
-                    // session there is no observed SPY, and mixing markets would be a quiet lie.
-                    market.quote(bench, world).filter(x -> x.evidence().usableIn(
-                            lane == io.liftandshift.strikebench.market.MarketLane.SCENARIO
-                                    ? io.liftandshift.strikebench.market.MarketLane.OBSERVED : lane)).ifPresent(x -> {
-                        b.add(new ApiResponses.Benchmark<>(x.symbol(), x.mark(),
-                                x.markFreshness().name(), x.evidence()));
-                    });
-                }
-                return b;
-            });
-
-            IvExp ie = ivExpF.get();
-            var candleSeries = candlesF.get();
-            double hv30 = HistoricalVol.annualized(candleSeries.candles(), 30);
-            Double realizedVol30 = Double.isNaN(hv30) ? null : hv30;
-            int volatilityHorizonDays = ie.exps().isEmpty() ? 30
-                    : Math.max(1, (int) java.time.temporal.ChronoUnit.DAYS.between(today, ie.exps().getFirst()));
-            var volatility = evaluations.volatilitySnapshot(symbol, ie.ivAtm(), realizedVol30,
-                    volatilityHorizonDays, worldParam(world));
-            boolean demoHistory = candleSeries.evidence().provenance()
-                    == io.liftandshift.strikebench.model.DataProvenance.DEMO;
-
-            // The event model: an ESTIMATED earnings window from the issuer's SEC filing cadence
-            // (never keywords), and an HONESTLY-ABSENT ex-div (no keyless source exists).
-            // A simulated world has NO earnings — a real company's calendar attached to a
-            // generated market would be a phantom event (review P2).
-            ApiResponses.ResearchEvent earningsEstimate;
-            if ("demo".equals(world)) {
-                earningsEstimate = new ApiResponses.ResearchEvent(false, null, null, null, null,
-                        "demo market — its companies and events are fabricated teaching data");
-            } else if (!"observed".equals(world)) {
-                earningsEstimate = new ApiResponses.ResearchEvent(false, null, null, null, null,
-                        "simulated market — no earnings exist in this world");
-            } else {
-                var next = eventCalendar.nextEarnings(symbol);
-                earningsEstimate = next.<ApiResponses.ResearchEvent>map(e ->
-                        new ApiResponses.ResearchEvent(null, e.estimated().toString(), e.windowDays(),
-                                e.basis(), e.confirmed(), null)).orElseGet(() ->
-                        new ApiResponses.ResearchEvent(false, null, null, null, null,
-                                "not enough SEC quarterly filings to project a cadence"));
-            }
-            Map<String, io.liftandshift.strikebench.model.DataEvidence> evidenceInputs = new LinkedHashMap<>();
-            evidenceInputs.put("quote", q.evidence());
-            evidenceInputs.put("history", candleSeries.isEmpty()
-                    ? io.liftandshift.strikebench.model.DataEvidence.missing("daily history")
-                    : candleSeries.evidence());
-            if (q.optionable()) evidenceInputs.put("options", ie.evidence());
-            var evidence = new ApiResponses.EvidenceSummary<>(
-                    io.liftandshift.strikebench.model.DataEvidence.aggregate(evidenceInputs.values()),
-                    evidenceInputs);
-            var planLane = io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly());
-            var planEligibility = planController.planSymbolEligibility(
-                    symbol, planLane, q, ie.exps(), ie.evidence());
-            ctx.json(new ApiResponses.ResearchDetail<>(symbol, q, q.mark(),
-                    q.usesPreviousCloseFallback(), lane.name(), q.optionable(), ie.ivAtm(),
-                    volatility.ivRankPct() != null, volatility.ivRankPct(), volatility.ivPercentilePct(),
-                    volatility.historyDays(), io.liftandshift.strikebench.eval.VolatilityProfiler.MIN_HISTORY,
-                    volatility.source(), earningsEstimate,
-                    new ApiResponses.ResearchEvent(false, null, null, null, null,
-                            "no keyless ex-dividend source \u2014 connect a licensed calendar for confirmed dates"),
-                    realizedVol30, candleSeries.candles().size(), HistoricalVol.MIN_OBSERVATIONS,
-                    demoHistory, candleSeries.barBasis(), candleSeries.priceBasis(), evidence,
-                    ie.exps().stream().map(LocalDate::toString).toList(), planEligibility.eligible(),
-                    planEligibility.detail(), benchF.get(), q.markFreshness().name(), today.toString()));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException(e);
-        } catch (java.util.concurrent.ExecutionException e) {
-            Throwable c = e.getCause();
-            if (c instanceof RuntimeException re) throw re;
-            throw new RuntimeException(c == null ? e : c);
-        }
-    }
-
-    private static Optional<Double> atmIv(OptionChain chain) {
-        BigDecimal spot = chain.underlyingPrice();
-        return chain.calls().stream()
-                .filter(c -> c.iv() != null)
-                .min(java.util.Comparator.comparingDouble(c -> Math.abs(c.strike().doubleValue() - spot.doubleValue())))
-                .map(OptionQuote::iv);
-    }
-
-    private List<LocalDate> activeExpirations(String symbol, String world) {
-        java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
-        return ResearchController.activeExpirations(market.expirations(symbol, world), now);
     }
 
 
