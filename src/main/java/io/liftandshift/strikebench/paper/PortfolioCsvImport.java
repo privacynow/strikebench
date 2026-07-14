@@ -5,22 +5,32 @@ import java.io.InputStream;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/** Atomic import of StrikeBench's normalized transaction-and-leg CSV. */
+/** Forgiving import of StrikeBench's normalized transaction-and-leg CSV. */
 public final class PortfolioCsvImport {
-    public static final String TEMPLATE_HEADER = "transaction_ref,occurred_at,event_type,cash_effect_cents,fees_cents,tax_category,notes,leg_no,instrument,action,position_effect,symbol,option_type,strike,expiration,quantity,multiplier,price";
+    public static final String TEMPLATE_HEADER = "transaction_ref,occurred_at,event_type,cash_effect_cents,fees_cents,tax_category,notes,leg_no,instrument,action,position_effect,symbol,option_type,strike,expiration,quantity,multiplier,price,section_1256";
     private static final int MAX_BYTES = 25 * 1024 * 1024;
     private static final int MAX_ROWS = 500_000;
 
     private PortfolioCsvImport() {}
 
+    public record RejectedRow(int line, String transactionRef, String reason) {}
+
     public record ImportResult(int rowsRead, int transactionsWritten, List<String> transactionIds,
-                               String note) {}
+                               int rejectedRows, List<RejectedRow> quarantine, String note) {}
+
+    private record NumberedRow(int line, List<String> cells) {}
+
+    private record ParsedGroup(String ref, List<NumberedRow> rows,
+                               PortfolioAccountingService.TransactionInput input,
+                               OffsetDateTime occurredAt) {}
 
     public static ImportResult run(InputStream input, String ownerId, String accountId,
                                    PortfolioAccountingService books) throws IOException {
@@ -37,24 +47,71 @@ public final class PortfolioCsvImport {
             if (!header.containsKey(required)) throw new IllegalArgumentException("CSV is missing required column " + required);
         }
 
-        Map<String, Group> groups = new LinkedHashMap<>();
+        Map<String, List<NumberedRow>> rawGroups = new LinkedHashMap<>();
+        List<RejectedRow> quarantine = new ArrayList<>();
+        int rowsRead = 0;
         for (int i = 1; i < rows.size(); i++) {
             List<String> row = rows.get(i);
             if (row.stream().allMatch(String::isBlank)) continue;
+            rowsRead++;
             int line = i + 1;
-            String ref = required(row, header, "transaction_ref", line);
-            Group group = groups.computeIfAbsent(ref, ignored -> Group.from(row, header, line));
-            group.checkMetadata(row, header, line);
-            String instrument = value(row, header, "instrument");
-            if (!instrument.isBlank()) group.addLeg(row, header, line);
+            try {
+                String ref = required(row, header, "transaction_ref", line);
+                rawGroups.computeIfAbsent(ref, ignored -> new ArrayList<>()).add(new NumberedRow(line, row));
+            } catch (RuntimeException e) {
+                quarantine.add(new RejectedRow(line, null, reason(e)));
+            }
         }
-        if (groups.isEmpty()) throw new IllegalArgumentException("CSV has no transaction rows");
-        List<PortfolioAccountingService.TransactionInput> inputs = groups.entrySet().stream()
-                .map(entry -> entry.getValue().toInput(entry.getKey())).toList();
-        List<PortfolioAccountingService.TransactionView> written = books.recordBatch(ownerId, accountId, inputs);
-        return new ImportResult(rows.size() - 1, written.size(), written.stream().map(
-                PortfolioAccountingService.TransactionView::id).toList(),
-                "Imported atomically: every transaction and lot was committed together. Duplicate references and partial closes are rejected.");
+        if (rowsRead == 0) throw new IllegalArgumentException("CSV has no transaction rows");
+
+        List<ParsedGroup> parsed = new ArrayList<>();
+        for (var entry : rawGroups.entrySet()) {
+            try {
+                List<NumberedRow> groupedRows = entry.getValue();
+                NumberedRow first = groupedRows.getFirst();
+                Group group = Group.from(first.cells(), header, first.line());
+                for (NumberedRow numbered : groupedRows) {
+                    group.checkMetadata(numbered.cells(), header, numbered.line());
+                    String instrument = value(numbered.cells(), header, "instrument");
+                    if (!instrument.isBlank()) group.addLeg(numbered.cells(), header, numbered.line());
+                }
+                var inputGroup = group.toInput(entry.getKey());
+                parsed.add(new ParsedGroup(entry.getKey(), List.copyOf(groupedRows), inputGroup,
+                        importTime(inputGroup.occurredAt())));
+            } catch (RuntimeException e) {
+                rejectGroup(quarantine, entry.getKey(), entry.getValue(), reason(e));
+            }
+        }
+        parsed.sort(java.util.Comparator.comparing(ParsedGroup::occurredAt));
+        List<String> writtenIds = new ArrayList<>();
+        for (ParsedGroup group : parsed) {
+            try {
+                writtenIds.add(books.record(ownerId, accountId, group.input()).id());
+            } catch (RuntimeException e) {
+                rejectGroup(quarantine, group.ref(), group.rows(), reason(e));
+            }
+        }
+        quarantine.sort(java.util.Comparator.comparingInt(RejectedRow::line));
+        return new ImportResult(rowsRead, writtenIds.size(), List.copyOf(writtenIds), quarantine.size(),
+                List.copyOf(quarantine), "Valid transaction groups were committed independently. Every rejected row is labeled; all legs sharing a transaction_ref remain atomic and no partial package is written.");
+    }
+
+    private static void rejectGroup(List<RejectedRow> quarantine, String ref,
+                                    List<NumberedRow> rows, String reason) {
+        for (NumberedRow row : rows) quarantine.add(new RejectedRow(row.line(), ref, reason));
+    }
+
+    private static String reason(RuntimeException error) {
+        String message = error.getMessage();
+        return message == null || message.isBlank() ? "Transaction could not be imported" : message;
+    }
+
+    private static OffsetDateTime importTime(String raw) {
+        try { return OffsetDateTime.parse(raw); }
+        catch (RuntimeException ignored) {
+            try { return LocalDate.parse(raw).atTime(12, 0).atOffset(ZoneOffset.UTC); }
+            catch (RuntimeException e) { throw new IllegalArgumentException("date/time must be ISO-8601"); }
+        }
     }
 
     private static final class Group {
@@ -98,7 +155,8 @@ public final class PortfolioCsvImport {
                     date(value(row, h, "expiration"), "expiration", line),
                     longValue(required(row, h, "quantity", line), "quantity", line),
                     nullableInteger(value(row, h, "multiplier"), "multiplier", line),
-                    decimalRequired(value(row, h, "price"), "price", line));
+                    decimalRequired(value(row, h, "price"), "price", line),
+                    nullableBoolean(value(row, h, "section_1256"), "section_1256", line));
             if (legs.putIfAbsent(legNo, leg) != null) throw new IllegalArgumentException("line " + line + ": duplicate leg_no " + legNo);
         }
 
@@ -150,6 +208,14 @@ public final class PortfolioCsvImport {
         if (raw.isBlank()) throw new IllegalArgumentException("line " + line + ": " + label + " is required");
         try { return new BigDecimal(raw); }
         catch (NumberFormatException e) { throw new IllegalArgumentException("line " + line + ": " + label + " must be a decimal"); }
+    }
+    private static Boolean nullableBoolean(String raw, String label, int line) {
+        if (raw.isBlank()) return null;
+        return switch (raw.trim().toLowerCase(Locale.ROOT)) {
+            case "true", "1", "yes", "y" -> true;
+            case "false", "0", "no", "n" -> false;
+            default -> throw new IllegalArgumentException("line " + line + ": " + label + " must be true or false");
+        };
     }
     private static LocalDate date(String raw, String label, int line) {
         if (raw.isBlank()) return null;
