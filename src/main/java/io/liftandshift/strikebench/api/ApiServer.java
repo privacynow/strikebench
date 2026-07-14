@@ -315,6 +315,11 @@ public final class ApiServer {
         tradeController = new TradeController(cfg, clock, db, market, eventCalendar, audit,
                 trades, positions, evaluations, snapshots, auth, this::currentAccount,
                 this::ownerId, this::activeWorld, this::analysisCtx, this::requireAdmin);
+        DataController dataController = new DataController(cfg, clock, db, market, marketEngine,
+                universe, dataJobs, dataCoverage, dataReset, dataConnectors, dataSyncState,
+                datasets, cboe, simSessions, worldTransitions, audit, this::ownerId,
+                this::activeWorld, this::isAdmin, this::requireAdmin,
+                this::invalidateHistoricalViews, this::simDataset);
         app = Javalin.create(c -> {
             c.jetty.port = port;
             c.router.ignoreTrailingSlashes = true;
@@ -443,17 +448,7 @@ public final class ApiServer {
                     this::planManageUnwind, this::planManageSettle, this::planManageRoll,
                     this::planManageVoid, this::planManageReview));
 
-            DataRoutes.register(c, new DataRoutes.Handlers(
-                    this::dataOverview, this::dataCoverageRoute, this::dataSources,
-                    this::dataSyncStatus, this::dataSyncPlan, this::dataSyncSchedulePut,
-                    this::dataUnderlyingImport, this::dataJobsList, this::dataJobGet,
-                    this::dataJobStart, this::dataJobCancel, this::dataJobRetry, this::dataResetRoute,
-                    ctx -> ctx.json(datasets.describe(ownerId(ctx))), this::datasetSetActive,
-                    ctx -> {
-                        datasets.delete(ctx.pathParam("id"), ownerId(ctx));
-                        ctx.json(new ApiResponses.Ok(true));
-                    },
-                    this::simDataset));
+            dataController.register(c);
 
             // Historical event studies live under Research. There is no legacy Lab destination:
             // every capability has one canonical owner and route.
@@ -2875,192 +2870,6 @@ public final class ApiServer {
         return io.liftandshift.strikebench.model.Horizon.fromTradingSessions(days).key();
     }
 
-    // ---- Data Center ----
-
-    /** One call for the Data Center header: engine health + coverage summary + mode. Never 500s. */
-    private void dataOverview(Context ctx) {
-        Object engineStatus;
-        Object coverage;
-        Object jobs;
-        try { engineStatus = marketEngine.status(); } catch (Exception e) { engineStatus = null; }
-        try { coverage = dataCoverage.summary(); } catch (Exception e) { coverage = null; }
-        try { jobs = dataJobs.recent(ownerId(ctx), isAdmin(ctx), 8); } catch (Exception e) { jobs = List.of(); }
-        ctx.json(new ApiResponses.DataOverview<>(engineStatus, coverage, jobs, cfg.fixturesOnly(),
-                io.liftandshift.strikebench.market.MarketLane.of(activeWorld(ctx), cfg.fixturesOnly()).name(),
-                io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()),
-                io.liftandshift.strikebench.db.DataJobService.KINDS, isAdmin(ctx)));
-    }
-
-    private void dataCoverageRoute(Context ctx) {
-        ctx.json(new ApiResponses.Coverage<>(dataCoverage.bySymbol(), dataCoverage.summary()));
-    }
-
-    /** Connector setup cards: what each source covers, whether it's on, and its license/use mode. */
-    private void dataSources(Context ctx) {
-        List<ApiResponses.DataSource> sources = new ArrayList<>();
-        boolean fx = cfg.fixturesOnly();
-        boolean cboeThrottled = cboe != null && cboe.coolingDown();
-        String cboeHint = "Keyless, HEAVY (each request is a full option-chain payload). Current chains with "
-                + "bid/ask/IV/greeks, 15-min delayed. Used for option workflows + a slow active-sector refresh.";
-        if (cboeThrottled) cboeHint = "THROTTLED — Cboe rate-limited us (429/1015); cooling down. Serving stale/other "
-                + "sources until it clears. " + cboeHint;
-        sources.add(source(cboeThrottled ? "Cboe (delayed chains) — THROTTLED" : "Cboe (delayed chains)",
-                "Option chains + greeks", !fx && !cboeThrottled, "keyless · delayed · display-only", cboeHint));
-        boolean edgarOn = !fx && cfg.edgarConfigured();
-        sources.add(source("SEC EDGAR", "Filings (10-K/10-Q/8-K)", edgarOn, "public · contact required",
-                edgarOn ? "Configured with this installation's contact User-Agent. Corporate filings feed Research."
-                        : "Set EDGAR_USER_AGENT to your app name and contact email, then restart. StrikeBench never sends another person's identity."));
-        sources.add(source("Google News RSS", "Headlines", !fx && !cfg.newsRssBaseUrl().isBlank(), "keyless · public", "Keyless per-symbol headlines."));
-        sources.add(source("Treasury / FRED", "Risk-free rates", !fx, "keyless / keyed", "Treasury is keyless; FRED needs FRED_API_KEY."));
-        sources.add(source("Historical options CSV", "Owned options history", true, "licensed · internal-use (no redistribution)",
-                "Import a licensed vendor CSV (ORATS / Cboe DataShop / Databento) via a backfill job — the 'own the past' path."));
-        ctx.json(new ApiResponses.DataSources<>(sources, dataConnectors.all(),
-                dataConnectors.recommendedSource(), fx));
-    }
-
-    public record DataSyncPlanRequest(List<String> symbols, String source, String from, String to, Integer years) {}
-    public record DataSyncScheduleRequest(Boolean enabled, String source, List<String> symbols,
-                                          Integer years) {}
-
-    private void dataSyncStatus(Context ctx) {
-        var schedule = dataSyncState.schedule(ownerId(ctx));
-        ctx.json(new ApiResponses.DataSync<>(dataConnectors.all(), dataConnectors.recommendedSource(),
-                dataSyncState.cursors(ownerId(ctx)), schedule,
-                dataSyncState.quarantineSummary(ownerId(ctx)),
-                io.liftandshift.strikebench.db.DataSyncScheduler.latestCompletedSession(clock).toString(),
-                "Daily price maintenance runs once after a completed market session. "
-                        + "Hourly daily-bar downloads are intentionally avoided."));
-    }
-
-    private void dataSyncPlan(Context ctx) {
-        DataSyncPlanRequest b = requireBody(bodyOrNull(ctx, DataSyncPlanRequest.class));
-        LocalDate to = b.to() == null || b.to().isBlank()
-                ? io.liftandshift.strikebench.db.DataSyncScheduler.latestCompletedSession(clock)
-                : LocalDate.parse(b.to());
-        LocalDate latestCompleted = io.liftandshift.strikebench.db.DataSyncScheduler.latestCompletedSession(clock);
-        boolean futureCapped = to.isAfter(latestCompleted);
-        if (futureCapped) to = latestCompleted;
-        int years = b.years() == null ? 5 : Math.max(1, Math.min(20, b.years()));
-        LocalDate from = b.from() == null || b.from().isBlank() ? to.minusYears(years) : LocalDate.parse(b.from());
-        String source = b.source() == null || b.source().isBlank() ? "auto" : b.source();
-        var connector = dataConnectors.requireAutomated(source);
-        LocalDate effectiveFrom = from;
-        String limitation = null;
-        if ("alphavantage".equals(connector.key()) && !cfg.alphaVantageFullHistoryEnabled()
-                && effectiveFrom.isBefore(to.minusDays(160))) {
-            effectiveFrom = to.minusDays(160);
-            limitation = "Compact Alpha Vantage access covers only the recent window. Use an entitled full-history plan or a user-owned CSV for older dates.";
-        }
-        List<String> symbols = normalizeSymbols(b.symbols());
-        if (symbols.isEmpty()) symbols = universe.active().symbols();
-        var planner = new io.liftandshift.strikebench.db.MissingRangePlanner(db);
-        List<ApiResponses.SyncSymbolPlan<?>> plans = new ArrayList<>();
-        int requests = 0, missing = 0;
-        for (String symbol : symbols.stream().distinct().limit(120).toList()) {
-            var plan = planner.plan(symbol, effectiveFrom, to, connector.key());
-            int symbolRequests = "alphavantage".equals(connector.key()) && !plan.complete()
-                    ? 1 : plan.ranges().size();
-            requests += symbolRequests; missing += plan.missingSessions();
-            plans.add(new ApiResponses.SyncSymbolPlan<>(symbol, plan.existingSessions(),
-                    plan.missingSessions(), symbolRequests, plan.complete(), plan.ranges()));
-        }
-        ctx.json(new ApiResponses.DataSyncPlan<>(connector, from.toString(), effectiveFrom.toString(),
-                to.toString(), symbols.size(), missing, requests, plans, limitation,
-                futureCapped ? "The end date was capped at the latest completed market session." : null));
-    }
-
-    private void dataSyncSchedulePut(Context ctx) {
-        requireAdmin(ctx); // schedules mutate the app-wide observed store and consume provider allowance
-        DataSyncScheduleRequest b = requireBody(bodyOrNull(ctx, DataSyncScheduleRequest.class));
-        boolean enabled = Boolean.TRUE.equals(b.enabled());
-        String source = b.source() == null ? "auto" : b.source();
-        if (enabled) dataConnectors.requireAutomated(source);
-        List<String> symbols = normalizeSymbols(b.symbols());
-        if (symbols.isEmpty()) symbols = universe.active().symbols();
-        ctx.json(dataSyncState.saveSchedule(ownerId(ctx), enabled, source, symbols,
-                b.years() == null ? 5 : b.years()));
-    }
-
-    private void dataUnderlyingImport(Context ctx) throws java.io.IOException {
-        requireAdmin(ctx); // observed history is app-wide; public users may not mutate it
-        ctx.multipartConfig().maxFileSize(25, io.javalin.config.SizeUnit.MB);
-        ctx.multipartConfig().maxTotalRequestSize(26, io.javalin.config.SizeUnit.MB);
-        io.javalin.http.UploadedFile file = ctx.uploadedFile("file");
-        if (file == null) throw new IllegalArgumentException("CSV file is required");
-        if (file.size() > 25L * 1024 * 1024) throw new IllegalArgumentException("CSV file exceeds 25 MB");
-        String basisRaw = ctx.formParam("basis");
-        io.liftandshift.strikebench.db.UnderlyingCsvIngest.Basis basis;
-        try { basis = io.liftandshift.strikebench.db.UnderlyingCsvIngest.Basis.valueOf(
-                basisRaw == null ? "AUTO" : basisRaw.trim().toUpperCase(Locale.ROOT)); }
-        catch (IllegalArgumentException e) { throw new IllegalArgumentException("basis must be AUTO, RAW, or ADJUSTED"); }
-        var result = io.liftandshift.strikebench.db.UnderlyingCsvIngest.run(file.content(), file.filename(),
-                ctx.formParam("symbol"), ctx.formParam("sourceLabel"), basis, db, dataSyncState, clock, ownerId(ctx));
-        invalidateHistoricalViews();
-        ctx.json(result);
-    }
-
-    private static List<String> normalizeSymbols(List<String> raw) {
-        if (raw == null) return List.of();
-        return raw.stream().filter(java.util.Objects::nonNull).map(String::trim)
-                .filter(s -> !s.isBlank()).map(s -> s.toUpperCase(Locale.ROOT))
-                .filter(s -> s.matches("[A-Z0-9.^_-]{1,20}"))
-                .distinct().limit(120).toList();
-    }
-
-    private static ApiResponses.DataSource source(String name, String covers, boolean enabled,
-                                                   String license, String hint) {
-        return new ApiResponses.DataSource(name, covers, enabled, license, hint);
-    }
-
-    private void dataJobsList(Context ctx) {
-        ctx.json(new ApiResponses.Jobs<>(dataJobs.recent(ownerId(ctx), isAdmin(ctx), 30)));
-    }
-
-    /** Admin, or the job's owner (null==null for the local/anonymous case). Otherwise 404 (no leak). */
-    private void requireJobAccess(Context ctx, String jobId) {
-        if (isAdmin(ctx)) return;
-        if (java.util.Objects.equals(dataJobs.ownerOf(jobId), ownerId(ctx))) return;
-        throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such job");
-    }
-
-    private void dataJobGet(Context ctx) {
-        String id = ctx.pathParam("id");
-        requireJobAccess(ctx, id);
-        var v = dataJobs.get(id);
-        if (v.job() == null) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such job");
-        ctx.json(new ApiResponses.Job<>(v.job(), v.items()));
-    }
-
-    public record JobRequest(String kind, Map<String, Object> params) {}
-
-    private void dataJobStart(Context ctx) {
-        JobRequest b = requireBody(bodyOrNull(ctx, JobRequest.class));
-        // Both jobs mutate app-wide observed history. The server-path import also reads a local file.
-        if (privilegedDataJobKind(b.kind())) requireAdmin(ctx);
-        ctx.json(dataJobs.start(b.kind(), b.params(), ownerId(ctx)));
-    }
-
-    private void dataJobCancel(Context ctx) {
-        String id = ctx.pathParam("id");
-        requireJobAccess(ctx, id);
-        if (privilegedDataJobKind(dataJobs.kindOf(id))) requireAdmin(ctx);
-        dataJobs.cancel(id);
-        ctx.json(new ApiResponses.Ok(true));
-    }
-
-    private void dataJobRetry(Context ctx) {
-        String id = ctx.pathParam("id");
-        requireJobAccess(ctx, id);
-        // Re-running a privileged CSV import is itself privileged, even for the job's owner.
-        if (privilegedDataJobKind(dataJobs.kindOf(id))) requireAdmin(ctx);
-        ctx.json(dataJobs.retry(id, ownerId(ctx)));
-    }
-
-    static boolean privilegedDataJobKind(String kind) {
-        return "import_options_csv".equalsIgnoreCase(kind)
-                || "sync_underlying".equalsIgnoreCase(kind);
-    }
-
     // ---- Datasets & scenario simulation ----
 
     public record ScenarioRequest(String symbol, io.liftandshift.strikebench.sim.ScenarioSpec spec,
@@ -3079,27 +2888,6 @@ public final class ApiServer {
                                      // Optional leg-aligned ISO expirations. When present, the
                                      // listed package is exact: no neighboring expiry/strike snap.
                                      java.util.List<String> contractExpirations) {}
-
-    public record ActiveDatasetRequest(String id) {}
-
-    private void datasetSetActive(Context ctx) {
-        // PER-USER selection: activating a dataset changes only the CALLER's read path, so no
-        // admin gate is needed anymore — ownership (yours or observed) is the whole rule.
-        ActiveDatasetRequest b = requireBody(bodyOrNull(ctx, ActiveDatasetRequest.class));
-        String owner = ownerId(ctx);
-        // ONE market mode at a time (holistic review P0): a saved scenario dataset and a live
-        // simulated world are different worlds — layering one on the other silently blends them.
-        String activeMarket = activeWorld(ctx);
-        if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(b.id())
-                && !"observed".equals(activeMarket) && !"demo".equals(activeMarket)) {
-            throw new IllegalStateException("You are inside a simulated market session — return to the "
-                    + "baseline market before activating a scenario dataset (they are separate worlds).");
-        }
-        datasets.setActive(b.id(), owner);
-        String nowActive = datasets.activeId(owner);
-        ctx.json(new ApiResponses.DatasetActivation(true, nowActive,
-                !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(nowActive)));
-    }
 
     public record CompareStructure(String key,
                                    List<io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg> legs,
@@ -3587,34 +3375,6 @@ public final class ApiServer {
         } catch (Exception e) {
             return null; // no market pricing available — model entry, honestly labeled
         }
-    }
-
-    public record DataResetRequest(String tier, Boolean confirm) {}
-
-    private void dataResetRoute(Context ctx) {
-        requireAdmin(ctx); // destructive: never reachable by an anonymous internet visitor
-        DataResetRequest b = requireBody(bodyOrNull(ctx, DataResetRequest.class));
-        if (b.confirm() == null || !b.confirm()) {
-            ctx.status(400).json(new ApiResponses.ErrorBody(
-                    "confirm_required", "Reset requires confirm:true"));
-            return;
-        }
-        var tier = io.liftandshift.strikebench.db.DataResetService.parseTier(b.tier());
-        var result = dataReset.reset(tier);
-        if (tier == io.liftandshift.strikebench.db.DataResetService.Tier.PAPER
-                || tier == io.liftandshift.strikebench.db.DataResetService.Tier.EVERYTHING) {
-            // The rows and simulation accounts are gone; cancel their resident loops and make
-            // every connected tab reconcile to the surviving baseline market immediately.
-            simSessions.clearResident();
-            worldTransitions.resetAfterDataReset(ownerId(ctx));
-        } else {
-            datasets.invalidateActiveCache(); // the settings row may be gone; memory must follow
-            market.invalidateAll();
-        }
-        invalidateHistoricalViews();
-        try { audit.log(null, null, "DATA_RESET", "WARN", Map.of("tier", result.tier(), "areas", result.areasCleared())); }
-        catch (Exception e) { /* best-effort; the reset itself succeeded */ }
-        ctx.json(result);
     }
 
     // ---- Account ----

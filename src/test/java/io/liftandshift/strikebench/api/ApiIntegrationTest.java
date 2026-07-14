@@ -421,9 +421,9 @@ class ApiIntegrationTest {
 
     @Test
     void appWideObservedDataJobsShareOneAuthorizationClassification() {
-        assertThat(ApiServer.privilegedDataJobKind("sync_underlying")).isTrue();
-        assertThat(ApiServer.privilegedDataJobKind("import_options_csv")).isTrue();
-        assertThat(ApiServer.privilegedDataJobKind("refresh_now")).isFalse();
+        assertThat(DataController.privilegedDataJobKind("sync_underlying")).isTrue();
+        assertThat(DataController.privilegedDataJobKind("import_options_csv")).isTrue();
+        assertThat(DataController.privilegedDataJobKind("refresh_now")).isFalse();
     }
 
     @Test
