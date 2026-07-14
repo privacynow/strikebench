@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.paper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.Universes;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
@@ -162,8 +163,14 @@ public final class PortfolioAccountingService {
                                Long unrealizedPnlCents, String provenance, String age,
                                String source, boolean complete, boolean section1256) {}
 
-    public record AllocationView(String symbol, long knownMarketValueCents,
-                                 long grossExposureCents, Double percentOfKnownGross) {}
+    public record ExposureRow(String key, String label, long longExposureCents,
+                              long shortExposureCents, long grossExposureCents,
+                              long netExposureCents, Double percentOfKnownGross) {}
+
+    public record AllocationView(long longExposureCents, long shortExposureCents,
+                                 long grossExposureCents, long netExposureCents,
+                                 List<ExposureRow> byAssetClass, List<ExposureRow> bySector,
+                                 List<ExposureRow> byDirection, List<ExposureRow> bySymbol) {}
 
     public record CollateralView(long knownBlockedCashCents, Long availableCashCents,
                                  long cashSecuredPutContracts, long definedRiskPutContracts,
@@ -177,7 +184,7 @@ public final class PortfolioAccountingService {
                                    long interestIncomeCents, long dividendIncomeCents,
                                    long feesCents, long netExternalFlowsCents,
                                    CollateralView collateral, List<PositionView> positions,
-                                   List<AllocationView> allocation, List<String> missingMarks,
+                                   AllocationView allocation, List<String> missingMarks,
                                    boolean complete, String valuationBasis) {}
 
     private record PreparedLeg(int legNo, String instrumentType, String action,
@@ -214,6 +221,23 @@ public final class PortfolioAccountingService {
                                 boolean adjusted, int qualityRank) {}
 
     private record AccountKey(String ownerId, String accountId) {}
+
+    private static final class ExposureBucket {
+        private final String key;
+        private final String label;
+        private long longCents;
+        private long shortCents;
+
+        private ExposureBucket(String key, String label) {
+            this.key = key;
+            this.label = label;
+        }
+
+        private void add(long signedCents) {
+            if (signedCents >= 0) longCents = Math.addExact(longCents, signedCents);
+            else shortCents = Math.addExact(shortCents, absolute(signedCents, "short exposure"));
+        }
+    }
 
     private record SummaryLedgerSnapshot(AccountProfile account, List<LotView> openLots,
                                          long cashCents, long realizedCents, long feesCents,
@@ -978,7 +1002,7 @@ public final class PortfolioAccountingService {
         long fees = ledger.feesCents();
         long flows = ledger.externalFlowsCents();
         CollateralView collateral = collateral(open, cash);
-        List<AllocationView> allocation = allocation(positions, cash);
+        AllocationView allocation = allocation(positions, cash);
         Long securities = complete ? knownSecurities : null;
         Long total = complete ? Math.addExact(cash, knownSecurities) : null;
         Long unrealized = complete ? knownUnrealized : null;
@@ -1081,19 +1105,55 @@ public final class PortfolioAccountingService {
                 .toList();
     }
 
-    private static List<AllocationView> allocation(List<PositionView> positions, long cash) {
-        Map<String, long[]> values = new LinkedHashMap<>();
-        if (cash != 0) values.put("CASH", new long[]{cash, absolute(cash, "cash exposure")});
-        for (PositionView p : positions) if (p.liquidationValueCents() != null) {
-            long[] row = values.computeIfAbsent(p.symbol(), ignored -> new long[2]);
-            row[0] = Math.addExact(row[0], p.liquidationValueCents());
-            row[1] = Math.addExact(row[1], absolute(p.liquidationValueCents(), "position exposure"));
+    private static AllocationView allocation(List<PositionView> positions, long cash) {
+        Map<String, ExposureBucket> assets = new LinkedHashMap<>();
+        Map<String, ExposureBucket> sectors = new LinkedHashMap<>();
+        Map<String, ExposureBucket> symbols = new LinkedHashMap<>();
+        long longExposure = 0;
+        long shortExposure = 0;
+        if (cash != 0) {
+            addExposure(assets, "CASH", "Cash", cash);
+            addExposure(sectors, "CASH", "Cash", cash);
+            addExposure(symbols, "CASH", "Cash", cash);
+            if (cash > 0) longExposure = Math.addExact(longExposure, cash);
+            else shortExposure = Math.addExact(shortExposure, absolute(cash, "cash exposure"));
         }
-        long gross = 0;
-        for (long[] value : values.values()) gross = Math.addExact(gross, value[1]);
-        long knownGross = gross;
-        return values.entrySet().stream().map(e -> new AllocationView(e.getKey(), e.getValue()[0], e.getValue()[1],
-                knownGross == 0 ? null : e.getValue()[1] / (double) knownGross)).toList();
+        for (PositionView p : positions) if (p.liquidationValueCents() != null) {
+            long value = p.liquidationValueCents();
+            addExposure(assets, p.instrumentType(), "STOCK".equals(p.instrumentType()) ? "Stocks" : "Options", value);
+            String sector = Universes.allocationSectorLabel(p.symbol());
+            addExposure(sectors, sector.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]+", "_"), sector, value);
+            addExposure(symbols, p.symbol(), p.symbol(), value);
+            if (value >= 0) longExposure = Math.addExact(longExposure, value);
+            else shortExposure = Math.addExact(shortExposure, absolute(value, "short exposure"));
+        }
+        long gross = Math.addExact(longExposure, shortExposure);
+        long net = Math.subtractExact(longExposure, shortExposure);
+        ExposureBucket longBucket = new ExposureBucket("LONG", "Long");
+        longBucket.add(longExposure);
+        ExposureBucket shortBucket = new ExposureBucket("SHORT", "Short");
+        shortBucket.add(Math.negateExact(shortExposure));
+        List<ExposureRow> directions = List.of(
+                exposureRow(longBucket, gross), exposureRow(shortBucket, gross));
+        return new AllocationView(longExposure, shortExposure, gross, net,
+                exposureRows(assets, gross), exposureRows(sectors, gross), directions, exposureRows(symbols, gross));
+    }
+
+    private static void addExposure(Map<String, ExposureBucket> groups, String key, String label, long signedCents) {
+        groups.computeIfAbsent(key, ignored -> new ExposureBucket(key, label)).add(signedCents);
+    }
+
+    private static List<ExposureRow> exposureRows(Map<String, ExposureBucket> groups, long knownGross) {
+        return groups.values().stream().map(bucket -> exposureRow(bucket, knownGross))
+                .sorted(Comparator.comparingLong(ExposureRow::grossExposureCents).reversed()
+                        .thenComparing(ExposureRow::label)).toList();
+    }
+
+    private static ExposureRow exposureRow(ExposureBucket bucket, long knownGross) {
+        long gross = Math.addExact(bucket.longCents, bucket.shortCents);
+        long net = Math.subtractExact(bucket.longCents, bucket.shortCents);
+        return new ExposureRow(bucket.key, bucket.label, bucket.longCents, bucket.shortCents, gross, net,
+                knownGross == 0 ? null : gross / (double) knownGross);
     }
 
     private static long scalarOn(Connection c, String sql, Object... args) throws SQLException {

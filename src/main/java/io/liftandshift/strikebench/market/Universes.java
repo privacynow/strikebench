@@ -19,6 +19,20 @@ public final class Universes {
 
     public static final Map<String, Sector> SECTORS = build();
 
+    private static final List<String> ALLOCATION_SECTOR_ORDER = List.of(
+            "SEMICONDUCTORS", "TECH", "HEALTHCARE", "DEFENSE", "STAPLES", "DISCRETIONARY",
+            "ENERGY", "FINANCIALS", "INDUSTRIALS", "COMMUNICATIONS", "UTILITIES", "ETFS");
+
+    /** One non-overlapping sector label for portfolio allocation; discovery lists remain overlapping. */
+    public static String allocationSectorLabel(String rawSymbol) {
+        String symbol = normalize(rawSymbol);
+        for (String key : ALLOCATION_SECTOR_ORDER) {
+            Sector sector = SECTORS.get(key);
+            if (sector != null && sector.symbols().contains(symbol)) return sector.label();
+        }
+        return "Other / unclassified";
+    }
+
     /** Same-sector discovery set, preserving the curated order and excluding the anchor. */
     public static List<String> peersOf(String rawSymbol) {
         String symbol = normalize(rawSymbol);

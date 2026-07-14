@@ -4939,16 +4939,38 @@
     }
     root.appendChild(posCard);
 
-    var allocation = summary.allocation || [];
+    var allocation = summary.allocation || { byAssetClass: [], bySector: [], byDirection: [], bySymbol: [] };
+    function allocationRows(rows) {
+      var box = el('div', { class: 'book-exposure-rows' });
+      (rows || []).forEach(function (a) {
+        box.appendChild(el('div', { class: 'allocation-row' },
+          el('div', { class: 'allocation-label' }, el('b', {}, a.label),
+            el('span', { class: 'muted small' }, fmtPct(a.percentOfKnownGross) + ' gross')),
+          el('div', { class: 'allocation-track', role: 'img',
+            'aria-label': a.label + ' ' + fmtPct(a.percentOfKnownGross) + ' of known gross exposure' },
+            el('span', { style: 'width:' + Math.max(1, Math.round((a.percentOfKnownGross || 0) * 100)) + '%' })),
+          el('div', { class: 'book-exposure-money' },
+            el('span', {}, 'Long ', fmtMoney(a.longExposureCents)),
+            el('span', {}, 'Short ', fmtMoney(a.shortExposureCents)),
+            el('b', { class: a.netExposureCents < 0 ? 'loss' : '' }, 'Net ', fmtMoney(a.netExposureCents, { plus: true })))))
+      });
+      return box;
+    }
     var allocCard = el('section', { class: 'card book-allocation' }, UI.cardHeader('Asset allocation'),
-      el('p', { class: 'muted small' }, 'Shares of known gross liquidation exposure. Short liabilities remain signed in the value label; missing marks are excluded rather than treated as zero.'));
-    allocation.forEach(function (a) {
-      allocCard.appendChild(el('div', { class: 'allocation-row' },
-        el('div', { class: 'allocation-label' }, el('b', {}, a.symbol), el('span', {}, fmtMoney(a.knownMarketValueCents))),
-        el('div', { class: 'allocation-track', role: 'img', 'aria-label': a.symbol + ' ' + fmtPct(a.percentOfKnownGross) + ' of known gross exposure' },
-          el('span', { style: 'width:' + Math.max(1, Math.round((a.percentOfKnownGross || 0) * 100)) + '%' })),
-        el('span', { class: 'muted small' }, fmtPct(a.percentOfKnownGross))));
-    });
+      el('p', { class: 'muted small' }, 'Exact known liquidation exposure. Long and short are positive magnitudes; gross adds them and net subtracts short from long. Missing marks are excluded, never treated as zero.'),
+      el('div', { class: 'chip-row book-exposure-totals' },
+        chip('Long exposure', fmtMoney(allocation.longExposureCents || 0)),
+        chip('Short exposure', fmtMoney(allocation.shortExposureCents || 0)),
+        chip('Gross exposure', fmtMoney(allocation.grossExposureCents || 0)),
+        chip('Net exposure', fmtMoney(allocation.netExposureCents || 0, { plus: true }))));
+    var allocationGroups = el('div', { class: 'book-allocation-groups' },
+      el('section', { class: 'book-allocation-group' }, el('h3', {}, 'By asset class'), allocationRows(allocation.byAssetClass)),
+      el('section', { class: 'book-allocation-group' }, el('h3', {}, 'By sector'), allocationRows(allocation.bySector)),
+      el('section', { class: 'book-allocation-group' }, el('h3', {}, 'Long and short'), allocationRows(allocation.byDirection)));
+    allocCard.appendChild(allocationGroups);
+    allocCard.appendChild(UI.expandable(
+      el('span', {}, 'By symbol · ', (allocation.bySymbol || []).length, ' rows'),
+      function () { return allocationRows(allocation.bySymbol); }));
     root.appendChild(allocCard);
   }
 
