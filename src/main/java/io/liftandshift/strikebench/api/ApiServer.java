@@ -433,46 +433,20 @@ public final class ApiServer {
             c.routes.put("/api/workspace", this::workspacePut);
 
             // ---- Plans: server-owned journey facts; workspace JSON keeps presentation only ----
-            c.routes.get("/api/plans", this::plansList);
-            c.routes.post("/api/plans", this::planCreate);
-            c.routes.get("/api/plans/portfolio", this::plansPortfolio);
-            c.routes.get("/api/plans/{id}", this::planGet);
-            c.routes.put("/api/plans/{id}/context", this::planContextPut);
-            c.routes.put("/api/plans/{id}/intent", this::planIntentPut);
-            c.routes.put("/api/plans/{id}/stage", this::planStagePut);
-            c.routes.put("/api/plans/{id}/open", this::planOpenPut);
-            c.routes.post("/api/plans/{id}/archive", this::planArchive);
-            c.routes.delete("/api/plans/{id}", this::planDelete);
-            c.routes.get("/api/plans/{id}/evidence/latest", this::planEvidenceLatest);
-            c.routes.post("/api/plans/{id}/evidence/study", this::planEvidenceStudy);
-            c.routes.get("/api/plans/{id}/strategy/latest", this::planStrategyLatest);
-            c.routes.post("/api/plans/{id}/strategy/run", this::planStrategyRun);
-            c.routes.post("/api/plans/{id}/strategy/fit", this::planStrategyFit);
-            c.routes.post("/api/plans/{id}/strategy/custom", this::planStrategyCustom);
-            c.routes.put("/api/plans/{id}/strategy/select", this::planStrategySelect);
-            c.routes.delete("/api/plans/{id}/strategy/selection", this::planStrategySelectionDelete);
-            c.routes.get("/api/plans/{id}/scout/latest", this::planScoutLatest);
-            c.routes.post("/api/plans/{id}/scout/run", this::planScoutRun);
-            c.routes.post("/api/plans/{id}/scout/spawn", this::planScoutSpawn);
-            c.routes.get("/api/plans/{id}/outcomes/latest", this::planOutcomesLatest);
-            c.routes.post("/api/plans/{id}/outcomes/ensemble", this::planEnsembleRun);
-            c.routes.post("/api/plans/{id}/outcomes/run", this::planOutcomeRun);
-            c.routes.post("/api/plans/{id}/outcomes/compare", this::planOutcomeCompare);
-            c.routes.post("/api/plans/{id}/outcomes/backtest", this::planBacktestRun);
-            c.routes.get("/api/plans/{id}/outcomes/backtests/{backtestId}", this::planBacktestGet);
-            c.routes.get("/api/plans/{id}/rehearsals", this::planRehearsalsList);
-            c.routes.post("/api/plans/{id}/rehearsals", this::planRehearsalCreate);
-            c.routes.get("/api/plans/{id}/decision/latest", this::planDecisionLatest);
-            c.routes.post("/api/plans/{id}/decision/preview", this::planDecisionPreview);
-            c.routes.post("/api/plans/{id}/decision/trade", this::planDecisionTrade);
-            c.routes.post("/api/plans/{id}/decision/cash", this::planDecisionCash);
-            c.routes.get("/api/plans/{id}/manage", this::planManageGet);
-            c.routes.post("/api/plans/{id}/manage/refresh", this::planManageRefresh);
-            c.routes.post("/api/plans/{id}/manage/unwind", this::planManageUnwind);
-            c.routes.post("/api/plans/{id}/manage/settle", this::planManageSettle);
-            c.routes.post("/api/plans/{id}/manage/roll", this::planManageRoll);
-            c.routes.post("/api/plans/{id}/manage/void", this::planManageVoid);
-            c.routes.post("/api/plans/{id}/manage/review", this::planManageReview);
+            PlanRoutes.register(c, new PlanRoutes.Handlers(
+                    this::plansList, this::planCreate, this::plansPortfolio, this::planGet,
+                    this::planContextPut, this::planIntentPut, this::planStagePut, this::planOpenPut,
+                    this::planArchive, this::planDelete, this::planEvidenceLatest,
+                    this::planEvidenceStudy, this::planStrategyLatest, this::planStrategyRun,
+                    this::planStrategyFit, this::planStrategyCustom, this::planStrategySelect,
+                    this::planStrategySelectionDelete, this::planScoutLatest, this::planScoutRun,
+                    this::planScoutSpawn, this::planOutcomesLatest, this::planEnsembleRun,
+                    this::planOutcomeRun, this::planOutcomeCompare, this::planBacktestRun,
+                    this::planBacktestGet, this::planRehearsalsList, this::planRehearsalCreate,
+                    this::planDecisionLatest, this::planDecisionPreview, this::planDecisionTrade,
+                    this::planDecisionCash, this::planManageGet, this::planManageRefresh,
+                    this::planManageUnwind, this::planManageSettle, this::planManageRoll,
+                    this::planManageVoid, this::planManageReview));
 
             // ---- Data Center ----
             c.routes.get("/api/data/overview", this::dataOverview);
