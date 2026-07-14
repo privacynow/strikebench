@@ -26,7 +26,7 @@ class JourneySurfaceTest {
                 "DataController", "ResearchRoutes", "WorldRoutes", "TradeRoutes", "TradeController",
                 "ResearchController", "PortfolioRoutes", "PortfolioController", "BrokerRoutes",
                 "BrokerController", "OutcomeRoutes", "OutcomeController", "WorldController",
-                "DiscoveryRoutes", "DiscoveryController")) {
+                "DiscoveryRoutes", "DiscoveryController", "PlanController")) {
             routes.append(Files.readString(Path.of(
                     "src/main/java/io/liftandshift/strikebench/api/" + name + ".java"))).append('\n');
         }
@@ -186,12 +186,16 @@ class JourneySurfaceTest {
     @Test void planRoutesHaveOneRegistrationOwner() throws Exception {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
+        String controller = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/PlanController.java"));
         String routes = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/PlanRoutes.java"));
 
-        assertThat(api).contains("PlanRoutes.register(c, new PlanRoutes.Handlers(")
-                .doesNotContain("c.routes.get(\"/api/plans", "c.routes.post(\"/api/plans",
-                        "c.routes.put(\"/api/plans", "c.routes.delete(\"/api/plans");
+        assertThat(api).contains("planController.register(c);")
+                .doesNotContain("PlanRoutes.register(", "c.routes.get(\"/api/plans",
+                        "c.routes.post(\"/api/plans", "c.routes.put(\"/api/plans",
+                        "c.routes.delete(\"/api/plans");
+        assertThat(controller).contains("PlanRoutes.register(config, new PlanRoutes.Handlers(");
         assertThat(routes).contains("public record Handlers(",
                 "config.routes.get(\"/api/plans\"", "config.routes.post(\"/api/plans\"",
                 "config.routes.post(\"/api/plans/{id}/decision/trade\"",
@@ -202,9 +206,16 @@ class JourneySurfaceTest {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
 
-        for (String owner : List.of("CoreRoutes", "PlanRoutes")) {
+        for (String owner : List.of("CoreRoutes")) {
             assertThat(api).contains(owner + ".register(c, new " + owner + ".Handlers(");
         }
+        String plan = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/PlanController.java"));
+        assertThat(api).contains("planController.register(c);");
+        assertThat(plan).contains("PlanRoutes.register(config, new PlanRoutes.Handlers(");
+        assertThat(api).doesNotContain("private void planCreate(",
+                "private void planStrategyRun(", "private void planOutcomeRun(",
+                "private void planDecisionTrade(", "private void planManageReview(");
         String portfolio = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/PortfolioController.java"));
         assertThat(api).contains("portfolioController.register(c);");
