@@ -112,6 +112,21 @@ class JourneySurfaceTest {
                 "window.ViewData = Object.freeze({ data: data })");
     }
 
+    @Test void browserAssetsAreBuildStampedAndRevalidated() throws Exception {
+        String sourceHtml = source("index.html");
+        String builtHtml = Files.readString(Path.of("target/classes/public/index.html"));
+        String server = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
+
+        assertThat(sourceHtml).contains("/css/app.css?v=@asset.version@",
+                "/js/app.js?v=@asset.version@");
+        assertThat(builtHtml).doesNotContain("@asset.version@")
+                .containsPattern("/css/app\\.css\\?v=\\d{14}")
+                .containsPattern("/js/app\\.js\\?v=\\d{14}");
+        assertThat(server).contains("public, max-age=0, must-revalidate")
+                .doesNotContain("sf.headers = Map.of(\"Cache-Control\", \"no-store\")");
+    }
+
     @Test void navigationAndRoutesHaveOnePlanCenteredOwnershipModel() throws Exception {
         String html = source("index.html");
         String views = viewSource();
