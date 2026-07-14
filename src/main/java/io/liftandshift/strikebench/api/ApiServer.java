@@ -762,6 +762,9 @@ public final class ApiServer {
             c.routes.get("/api/portfolio/accounts/{id}/tax", ctx ->
                     ctx.json(portfolioBooks.taxReport(ownerId(ctx), ctx.pathParam("id"),
                             intParam(ctx, "year", java.time.Year.now(clock).getValue()))));
+            c.routes.post("/api/portfolio/accounts/{id}/tax/{year}/mark-1256", ctx ->
+                    ctx.json(Map.of("transactionsWritten", portfolioBooks.markSection1256YearEnd(
+                            ownerId(ctx), ctx.pathParam("id"), Integer.parseInt(ctx.pathParam("year"))))));
             c.routes.get("/api/portfolio/accounts/{id}/export.csv", this::portfolioCsvExport);
             c.routes.get("/api/portfolio/accounts/{id}/export.xlsx", this::portfolioWorkbookExport);
             c.routes.get("/api/portfolio/import-template.csv", this::portfolioImportTemplate);

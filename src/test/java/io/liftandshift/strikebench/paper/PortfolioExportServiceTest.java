@@ -41,7 +41,7 @@ class PortfolioExportServiceTest {
                 "=HYPERLINK(\"https://invalid\",\"click\")", List.of()));
 
         String csv = new String(exports.transactionsCsv("local", account.id()), StandardCharsets.UTF_8);
-        assertThat(csv).contains("cash_effect_cents", "123", "interest-1");
+        assertThat(csv).contains("cash_effect_cents", "section_1256", "123", "interest-1");
         assertThat(csv).contains("\"'=HYPERLINK(\"\"https://invalid\"\",\"\"click\"\")\"");
         assertThat(csv).doesNotContain(",=HYPERLINK");
     }
@@ -98,6 +98,35 @@ class PortfolioExportServiceTest {
                 "Primary transaction row");
         assertThat(xml).contains("kept removed").doesNotContain("\u0001");
         assertThat(xml).doesNotContain("<f>");
+    }
+
+    @Test
+    void exportsSection1256ClassificationAndSixtyFortyTaxCharacter() throws Exception {
+        books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
+                "2025-12-15T15:00:00-05:00", "TRADE", null, 0L, null, "MANUAL", "spx-open", null,
+                List.of(new PortfolioAccountingService.LegInput("OPTION", "BUY", "OPEN", "SPX", "CALL",
+                        new java.math.BigDecimal("6000"), java.time.LocalDate.parse("2026-03-20"), 1L, 100,
+                        new java.math.BigDecimal("10.00"), null))));
+        db.exec("INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,mark,source,bid_ask_observed,dataset_id) "
+                        + "VALUES ('SPX','2025-12-31','2026-03-20',6000,'CALL',11.99,12.01,12.00,'vendor',1,'observed')");
+        books.markSection1256YearEnd("local", account.id(), 2025);
+
+        String csv = new String(exports.transactionsCsv("local", account.id()), StandardCharsets.UTF_8);
+        assertThat(csv).contains("section_1256", "\"true\"", "MARK_TO_MARKET");
+
+        String xml = workbookXml(exports.workbook("local", account.id(), 2025));
+        assertThat(xml).contains("Section 1256", "Section 1256 gain", "Section 1256 short-term 40%",
+                "Section 1256 long-term 60%", ">80.00<", ">120.00<");
+    }
+
+    private static String workbookXml(byte[] workbook) throws Exception {
+        StringBuilder xml = new StringBuilder();
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(workbook), StandardCharsets.UTF_8)) {
+            for (var entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {
+                if (entry.getName().endsWith(".xml")) xml.append(new String(zip.readAllBytes(), StandardCharsets.UTF_8));
+            }
+        }
+        return xml.toString();
     }
 
     private static PortfolioAccountingService.LegInput option(String action, String effect, String strike, String price) {

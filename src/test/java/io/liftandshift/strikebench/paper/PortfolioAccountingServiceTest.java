@@ -224,6 +224,64 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void section1256OpenIndexOptionMarksAtYearEndAndReceivesExactSixtyFortyCharacter() {
+        var taxable = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "1256", "TAXABLE", null, "FIFO", 3200, 1500, 2400, 0, null));
+        books.record("local", taxable.id(), tx("2025-12-01", "TRADE", null, 0L, null, "BROKER", "spx-open",
+                List.of(leg("OPTION", "BUY", "OPEN", "SPX", "CALL", "5000", "2026-03-20", 1, 100, "10"))));
+        db.exec("INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,mark,source,bid_ask_observed,dataset_id) "
+                        + "VALUES ('SPX','2025-12-31','2026-03-20',5000,'CALL',11.9,12.1,12.0,'broker-year-end',1,'observed')");
+
+        assertThat(books.markSection1256YearEnd("local", taxable.id(), 2025)).isEqualTo(1);
+        var tax = books.taxReport("local", taxable.id(), 2025);
+
+        assertThat(tax.section1256GainCents()).isEqualTo(200_00L);
+        assertThat(tax.section1256ShortTermCents()).isEqualTo(80_00L);
+        assertThat(tax.section1256LongTermCents()).isEqualTo(120_00L);
+        assertThat(tax.shortTermGainCents()).isEqualTo(80_00L);
+        assertThat(tax.longTermGainCents()).isEqualTo(120_00L);
+        assertThat(books.realizedLots("local", taxable.id(), 2025)).singleElement().satisfies(match -> {
+            assertThat(match.section1256()).isTrue();
+            assertThat(match.holdingTerm()).isEqualTo("SECTION_1256");
+        });
+        assertThat(books.lots("local", taxable.id(), false)).singleElement().satisfies(lot -> {
+            assertThat(lot.section1256()).isTrue();
+            assertThat(lot.remainingOpenAmountCents()).isEqualTo(1_200_00L);
+        });
+        assertThat(books.transactions("local", taxable.id(), 0, 20).getFirst()).satisfies(tx -> {
+            assertThat(tx.eventType()).isEqualTo("MARK_TO_MARKET");
+            assertThat(tx.source()).isEqualTo("CALCULATED");
+            assertThat(tx.cashEffectCents()).isZero();
+        });
+    }
+
+    @Test
+    void section1256YearEndRefusesToInventAMark() {
+        var taxable = books.createAccount("local", account("Missing 1256 mark", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2025-12-01", "TRADE", null, 0L, null, "BROKER", "rut-open",
+                List.of(leg("OPTION", "BUY", "OPEN", "RUT", "PUT", "2000", "2026-03-20", 1, 100, "8"))));
+
+        assertThatThrownBy(() -> books.markSection1256YearEnd("local", taxable.id(), 2025))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no observed year-end option mark")
+                .hasMessageContaining("Import the broker's year-end mark");
+        assertThat(books.transactions("local", taxable.id(), 0, 20))
+                .extracting(PortfolioAccountingService.TransactionView::eventType)
+                .containsExactly("TRADE");
+    }
+
+    @Test
+    void currentYearTaxReportDoesNotDemandAFutureSection1256Mark() {
+        var taxable = books.createAccount("local", account("Current 1256", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2026-07-01", "TRADE", null, 0L, null, "BROKER", "ndx-open",
+                List.of(leg("OPTION", "BUY", "OPEN", "NDX", "CALL", "20000", "2027-03-19", 1, 100, "12"))));
+
+        var tax = books.taxReport("local", taxable.id(), 2026);
+        assertThat(tax.section1256GainCents()).isZero();
+        assertThat(tax.realizedLots()).isEmpty();
+    }
+
+    @Test
     void taxYearAndHoldingPeriodUseTheNewYorkMarketCalendar() {
         var taxable = books.createAccount("local", new PortfolioAccountingService.AccountInput(
                 "Taxable", "TAXABLE", null, "FIFO", 3000, 1500, 2400, null, null));

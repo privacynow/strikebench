@@ -42,7 +42,9 @@ public final class PortfolioAccountingService {
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
     private static final List<String> CASH_EVENTS = List.of(
             "OPENING_BALANCE", "DEPOSIT", "WITHDRAWAL", "TRANSFER_IN", "TRANSFER_OUT", "INTEREST", "DIVIDEND", "FEE", "ADJUSTMENT");
-    private static final List<String> MARKET_EVENTS = List.of("TRADE", "EXPIRATION", "ASSIGNMENT", "EXERCISE");
+    private static final List<String> MARKET_EVENTS = List.of(
+            "TRADE", "ROLL", "EXPIRATION", "ASSIGNMENT", "EXERCISE", "MARK_TO_MARKET");
+    private static final List<String> SECTION_1256_ROOTS = List.of("SPX", "NDX", "RUT");
 
     private final Db db;
     private final Clock clock;
@@ -74,7 +76,15 @@ public final class PortfolioAccountingService {
     public record LegInput(String instrumentType, String action, String positionEffect,
                            String symbol, String optionType, BigDecimal strike,
                            LocalDate expiration, Long quantity, Integer multiplier,
-                           BigDecimal price) {}
+                           BigDecimal price, Boolean section1256) {
+        public LegInput(String instrumentType, String action, String positionEffect,
+                        String symbol, String optionType, BigDecimal strike,
+                        LocalDate expiration, Long quantity, Integer multiplier,
+                        BigDecimal price) {
+            this(instrumentType, action, positionEffect, symbol, optionType, strike, expiration,
+                    quantity, multiplier, price, null);
+        }
+    }
 
     public record TransactionInput(String occurredAt, String eventType, Long cashAmountCents,
                                    Long feesCents, String taxCategory, String source,
@@ -83,7 +93,7 @@ public final class PortfolioAccountingService {
     public record LegView(int legNo, String instrumentType, String action, String positionEffect,
                           String symbol, String optionType, BigDecimal strike, LocalDate expiration,
                           long quantity, int multiplier, BigDecimal price,
-                          long grossAmountCents, long allocatedFeeCents) {}
+                          long grossAmountCents, long allocatedFeeCents, boolean section1256) {}
 
     public record TransactionView(String id, String accountId, String occurredAt, String eventType,
                                   long cashEffectCents, long feesCents, String taxCategory,
@@ -94,13 +104,13 @@ public final class PortfolioAccountingService {
                           String optionType, BigDecimal strike, LocalDate expiration,
                           int multiplier, String openedAt, long originalQuantity, long remainingQuantity,
                           long originalOpenAmountCents, long remainingOpenAmountCents,
-                          String status) {}
+                          String status, boolean section1256) {}
 
     public record RealizedLotView(long id, String lotId, String symbol, String instrumentType,
                                   String side, long quantity, String openedAt, String closedAt,
                                   long openAmountCents, long closeAmountCents,
                                   long realizedGainCents, String holdingTerm,
-                                  long washSaleAdjustmentCents) {}
+                                  long washSaleAdjustmentCents, boolean section1256) {}
 
     public record ValuationInput(String asOf, Long cashCents, Long securitiesValueCents,
                                  Long totalValueCents, String source, String externalRef,
@@ -120,6 +130,8 @@ public final class PortfolioAccountingService {
                             long longTermGainCents, long ordinaryInterestCents,
                             long ordinaryDividendCents, long qualifiedDividendCents,
                             long capitalGainDistributionCents, long washSaleAdjustmentsCents,
+                            long section1256GainCents, long section1256ShortTermCents,
+                            long section1256LongTermCents,
                             Long estimatedFederalTaxCents, Long estimatedStateTaxCents,
                             Long estimatedTotalTaxCents, List<RealizedLotView> realizedLots,
                             String note) {}
@@ -153,13 +165,14 @@ public final class PortfolioAccountingService {
                                String positionEffect, String symbol, String optionType,
                                BigDecimal strike, LocalDate expiration, long quantity,
                                int multiplier, BigDecimal price, long grossAmountCents,
-                               long allocatedFeeCents) {}
+                               long allocatedFeeCents, boolean section1256) {}
 
     private record LotRow(String id, String accountId, String instrumentType, String side,
                           String symbol, String optionType, BigDecimal strike, LocalDate expiration,
                           int multiplier, String openedAt, String acquiredAt,
                           long originalQuantity, long remainingQuantity,
-                          long originalOpenAmount, long remainingOpenAmount, String status) {}
+                          long originalOpenAmount, long remainingOpenAmount, String status,
+                          boolean section1256) {}
 
     private record WashLoss(long matchId, String lossLotId, String instrumentType, String symbol,
                             String optionType, BigDecimal strike, LocalDate expiration, int multiplier,
@@ -167,6 +180,8 @@ public final class PortfolioAccountingService {
                             long realizedGainCents, long allocatedQuantity, long allocatedCents) {}
 
     private record WashAllocation(long quantity, String remainingReplacementLotId) {}
+
+    private record YearEndMark(BigDecimal price, LocalDate asOf, String source) {}
 
     private record SummaryLedgerSnapshot(AccountProfile account, List<LotView> openLots,
                                          long cashCents, long realizedCents, long feesCents,
@@ -304,7 +319,7 @@ public final class PortfolioAccountingService {
         long fees = input.feesCents() == null ? 0 : input.feesCents();
         if (fees < 0) throw new IllegalArgumentException("fees cannot be negative");
         String source = input.source() == null || input.source().isBlank() ? "MANUAL"
-                : enumValue(input.source(), List.of("MANUAL", "BROKER", "IMPORT"), "source");
+                : enumValue(input.source(), List.of("MANUAL", "BROKER", "IMPORT", "CALCULATED"), "source");
         String externalRef = trim(input.externalRef(), 160);
         if ("BROKER".equals(source) && externalRef == null) {
             throw new IllegalArgumentException("broker-sourced activity requires a stable order or statement reference");
@@ -319,6 +334,10 @@ public final class PortfolioAccountingService {
 
         List<PreparedLeg> legs = prepareLegs(input.legs(), fees, event,
                 occurred.atZoneSameInstant(MARKET_ZONE).toLocalDate());
+        if (account.currentlyTaxable() && MARKET_EVENTS.contains(event) && !"MARK_TO_MARKET".equals(event)) {
+            int completedYear = occurred.atZoneSameInstant(MARKET_ZONE).getYear() - 1;
+            ensureSection1256Through(c, account, completedYear);
+        }
         long computedCash = Math.negateExact(fees);
         for (PreparedLeg leg : legs) {
             long signed = "SELL".equals(leg.action()) ? leg.grossAmountCents()
@@ -458,15 +477,24 @@ public final class PortfolioAccountingService {
         String owner = owner(ownerId);
         return db.tx(c -> {
             AccountProfile account = requireAccount(c, owner, accountId, true);
+            requireSection1256YearComplete(c, account, year);
             List<RealizedLotView> realized = Db.queryOn(c,
                     "SELECT m.*,l.symbol,l.instrument_type,l.side FROM portfolio_lot_match m "
                             + "JOIN portfolio_lot l ON l.id=m.lot_id WHERE m.portfolio_account_id=? "
                             + "AND EXTRACT(YEAR FROM (m.closed_at AT TIME ZONE 'America/New_York'))=? ORDER BY m.closed_at,m.id",
                     PortfolioAccountingService::mapRealized, account.id(), year);
-            long st = exactSum(realized.stream().filter(r -> "SHORT_TERM".equals(r.holdingTerm()))
+            long ordinarySt = exactSum(realized.stream().filter(r -> "SHORT_TERM".equals(r.holdingTerm()))
                     .map(r -> Math.addExact(r.realizedGainCents(), r.washSaleAdjustmentCents())).toList(), "short-term gains");
-            long lt = exactSum(realized.stream().filter(r -> "LONG_TERM".equals(r.holdingTerm()))
+            long ordinaryLt = exactSum(realized.stream().filter(r -> "LONG_TERM".equals(r.holdingTerm()))
                     .map(r -> Math.addExact(r.realizedGainCents(), r.washSaleAdjustmentCents())).toList(), "long-term gains");
+            List<Long> sectionGains = realized.stream().filter(RealizedLotView::section1256)
+                    .map(RealizedLotView::realizedGainCents).toList();
+            long sectionTotal = exactSum(sectionGains, "Section 1256 gains");
+            long sectionLong = exactSum(sectionGains.stream().map(gain -> percentage(gain, 60)).toList(),
+                    "Section 1256 long-term character");
+            long sectionShort = Math.subtractExact(sectionTotal, sectionLong);
+            long st = Math.addExact(ordinarySt, sectionShort);
+            long lt = Math.addExact(ordinaryLt, sectionLong);
             long interest = incomeOn(c, account.id(), "INTEREST", year);
             long ordinaryDiv = incomeByCategoryOn(c, account.id(), year, "ORDINARY_DIVIDEND");
             long qualifiedDiv = incomeByCategoryOn(c, account.id(), year, "QUALIFIED_DIVIDEND");
@@ -495,8 +523,121 @@ public final class PortfolioAccountingService {
                 note = "Basis and holding periods are calculated, but a tax estimate needs the account's short-term, long-term, and ordinary-income rates. " + taxLimitNote();
             }
             return new TaxReport(year, account.accountType(), st, lt, interest, ordinaryDiv, qualifiedDiv,
-                    capDist, wash, federal, state, total, realized, note);
+                    capDist, wash, sectionTotal, sectionShort, sectionLong,
+                    federal, state, total, realized, note);
         });
+    }
+
+    public int markSection1256YearEnd(String ownerId, String accountId, int year) {
+        if (year < 1970 || year > 9999) throw new IllegalArgumentException("invalid tax year");
+        String owner = owner(ownerId);
+        return db.tx(c -> {
+            AccountProfile account = requireAccount(c, owner, accountId, true);
+            requireActive(account);
+            if (!account.currentlyTaxable()) return 0;
+            return ensureSection1256Through(c, account, year);
+        });
+    }
+
+    private int ensureSection1256Through(Connection c, AccountProfile account, int throughYear) throws SQLException {
+        int target = Math.min(throughYear, lastCompletedSection1256Year());
+        if (target < 1970) return 0;
+        List<Long> earliest = Db.queryOn(c,
+                "SELECT EXTRACT(YEAR FROM MIN(acquired_at AT TIME ZONE 'America/New_York')) y "
+                        + "FROM portfolio_lot WHERE portfolio_account_id=? AND status='OPEN' AND section_1256=1 "
+                        + "HAVING COUNT(*)>0",
+                r -> r.lng("y"), account.id());
+        if (earliest.isEmpty()) return 0;
+        int count = 0;
+        for (int year = Math.toIntExact(earliest.getFirst()); year <= target; year++) {
+            count += ensureSection1256Year(c, account, year);
+        }
+        return count;
+    }
+
+    private void requireSection1256YearComplete(Connection c, AccountProfile account,
+                                                int year) throws SQLException {
+        if (!account.currentlyTaxable() || year > lastCompletedSection1256Year()) return;
+        LocalDate yearEnd = LocalDate.of(year, 12, 31);
+        OffsetDateTime markTime = yearEnd.atTime(16, 0).atZone(MARKET_ZONE).toOffsetDateTime();
+        boolean hasOpen1256 = !Db.queryOn(c,
+                "SELECT 1 ok FROM portfolio_lot WHERE portfolio_account_id=? AND status='OPEN' "
+                        + "AND section_1256=1 AND acquired_at<=? AND expiration>? LIMIT 1",
+                r -> r.intv("ok"), account.id(), markTime, yearEnd).isEmpty();
+        boolean marked = !Db.queryOn(c,
+                "SELECT 1 ok FROM portfolio_transaction WHERE portfolio_account_id=? "
+                        + "AND source='CALCULATED' AND external_ref=? LIMIT 1",
+                r -> r.intv("ok"), account.id(), "section-1256-mtm-" + year).isEmpty();
+        if (hasOpen1256 && !marked) {
+            throw new IllegalStateException("Section 1256 positions still need their observed " + year
+                    + " year-end mark. Run the year-end mark command before using this tax report.");
+        }
+    }
+
+    private int lastCompletedSection1256Year() {
+        var now = clock.instant().atZone(MARKET_ZONE);
+        return now.isAfter(LocalDate.of(now.getYear(), 12, 31).atTime(16, 0).atZone(MARKET_ZONE))
+                ? now.getYear() : now.getYear() - 1;
+    }
+
+    private int ensureSection1256Year(Connection c, AccountProfile account, int year) throws SQLException {
+        String ref = "section-1256-mtm-" + year;
+        if (!Db.queryOn(c, "SELECT 1 ok FROM portfolio_transaction WHERE portfolio_account_id=? "
+                        + "AND source='CALCULATED' AND external_ref=?",
+                r -> r.intv("ok"), account.id(), ref).isEmpty()) return 0;
+        LocalDate yearEnd = LocalDate.of(year, 12, 31);
+        OffsetDateTime markTime = yearEnd.atTime(16, 0).atZone(MARKET_ZONE).toOffsetDateTime();
+        List<LotRow> open = Db.queryOn(c,
+                "SELECT * FROM portfolio_lot WHERE portfolio_account_id=? AND status='OPEN' "
+                        + "AND section_1256=1 AND acquired_at<=? AND expiration>? ORDER BY symbol,expiration,strike,side,id FOR UPDATE",
+                PortfolioAccountingService::mapLot, account.id(), markTime, yearEnd);
+        if (open.isEmpty()) return 0;
+
+        Map<String, List<LotRow>> groups = new LinkedHashMap<>();
+        for (LotRow lot : open) groups.computeIfAbsent(section1256Key(lot), ignored -> new ArrayList<>()).add(lot);
+        List<LegInput> closeLegs = new ArrayList<>();
+        List<LegInput> openLegs = new ArrayList<>();
+        List<String> receipts = new ArrayList<>();
+        for (List<LotRow> group : groups.values()) {
+            LotRow first = group.getFirst();
+            long quantity = exactSum(group.stream().map(LotRow::remainingQuantity).toList(),
+                    "Section 1256 contracts");
+            YearEndMark mark = observedSection1256Mark(c, first, yearEnd).orElseThrow(() ->
+                    new IllegalStateException("Cannot mark " + positionLabel(first) + " for " + year
+                            + ": no observed year-end option mark is stored. Import the broker's year-end mark before recording later market activity."));
+            String closeAction = "LONG".equals(first.side()) ? "SELL" : "BUY";
+            String openAction = "LONG".equals(first.side()) ? "BUY" : "SELL";
+            closeLegs.add(new LegInput("OPTION", closeAction, "CLOSE", first.symbol(), first.optionType(),
+                    first.strike(), first.expiration(), quantity, first.multiplier(), mark.price(), true));
+            openLegs.add(new LegInput("OPTION", openAction, "OPEN", first.symbol(), first.optionType(),
+                    first.strike(), first.expiration(), quantity, first.multiplier(), mark.price(), true));
+            receipts.add(first.symbol() + " " + first.expiration() + " @ "
+                    + mark.price().stripTrailingZeros().toPlainString() + " (" + mark.source() + " " + mark.asOf() + ")");
+        }
+        List<LegInput> legs = new ArrayList<>(closeLegs.size() + openLegs.size());
+        legs.addAll(closeLegs);
+        legs.addAll(openLegs);
+        recordOn(c, account, new TransactionInput(markTime.toString(), "MARK_TO_MARKET", 0L, 0L,
+                null, "CALCULATED", ref, "Section 1256 year-end mark-to-market: " + String.join("; ", receipts), legs));
+        return 1;
+    }
+
+    private static Optional<YearEndMark> observedSection1256Mark(Connection c, LotRow lot,
+                                                                  LocalDate yearEnd) throws SQLException {
+        return Db.queryOn(c,
+                "SELECT asof,mark,source FROM option_bar WHERE dataset_id='observed' AND symbol=? "
+                        + "AND expiration=? AND strike=? AND opt_type=? AND asof<=? AND asof>=? "
+                        + "AND bid_ask_observed=1 AND mark IS NOT NULL AND mark>0 "
+                        + "AND LOWER(source) NOT IN ('fixture','model','simulation','scenario') "
+                        + "ORDER BY asof DESC,created_at DESC,id DESC LIMIT 1",
+                r -> new YearEndMark(r.bd("mark"), r.date("asof"), r.str("source")),
+                lot.symbol(), lot.expiration(), lot.strike(), lot.optionType(), yearEnd, yearEnd.minusDays(7))
+                .stream().findFirst();
+    }
+
+    private static String section1256Key(LotRow lot) {
+        return String.join("|", lot.side(), lot.symbol(), lot.optionType(),
+                lot.strike().toPlainString(), lot.expiration().toString(), String.valueOf(lot.multiplier()));
     }
 
     /**
@@ -710,6 +851,12 @@ public final class PortfolioAccountingService {
                 + " " + lot.optionType().toLowerCase(Locale.ROOT);
     }
 
+    private static String positionLabel(LotRow lot) {
+        return lot.symbol() + " " + lot.expiration() + " "
+                + lot.strike().stripTrailingZeros().toPlainString() + " "
+                + lot.optionType().toLowerCase(Locale.ROOT);
+    }
+
     private static final class CollateralLot {
         private final String symbol;
         private final LocalDate expiration;
@@ -806,17 +953,17 @@ public final class PortfolioAccountingService {
             long closePart = remainingQty == qty ? remainingClose : allocate(remainingClose, qty, remainingQty);
             long realized = rolled ? 0 : "LONG".equals(side)
                     ? Math.subtractExact(closePart, openPart) : Math.subtractExact(openPart, closePart);
-            String term = rolled ? "ROLLED" : holdingTerm(lot, occurred);
+            String term = rolled ? "ROLLED" : lot.section1256() ? "SECTION_1256" : holdingTerm(lot, occurred);
             long matchId = Db.insertReturningId(c, "INSERT INTO portfolio_lot_match(portfolio_account_id,lot_id,closing_transaction_id,closing_leg_no,"
-                            + "quantity,opened_at,closed_at,open_amount_cents,close_amount_cents,realized_gain_cents,holding_term) "
-                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            + "quantity,opened_at,closed_at,open_amount_cents,close_amount_cents,realized_gain_cents,holding_term,section_1256) "
+                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     account.id(), lot.id(), txId, leg.legNo(), qty, OffsetDateTime.parse(lot.openedAt()), occurred,
-                    openPart, rolled ? openPart : closePart, realized, term);
+                    openPart, rolled ? openPart : closePart, realized, term, lot.section1256());
             long lotQtyAfter = Math.subtractExact(lot.remainingQuantity(), qty);
             long lotAmountAfter = Math.subtractExact(lot.remainingOpenAmount(), openPart);
             Db.execOn(c, "UPDATE portfolio_lot SET remaining_quantity=?,remaining_open_amount_cents=?,status=? WHERE id=?",
                     lotQtyAfter, lotAmountAfter, lotQtyAfter == 0 ? (rolled ? "ROLLED" : "CLOSED") : "OPEN", lot.id());
-            if (account.currentlyTaxable() && !rolled && "LONG".equals(side) && realized < 0) {
+            if (account.currentlyTaxable() && !lot.section1256() && !rolled && "LONG".equals(side) && realized < 0) {
                 applyExistingReplacementsToLoss(c, account, matchId);
             }
             remainingQty = Math.subtractExact(remainingQty, qty);
@@ -835,12 +982,12 @@ public final class PortfolioAccountingService {
                         + "WHERE l.portfolio_account_id=? AND l.side='LONG' AND l.remaining_quantity>0 "
                         + "AND l.id<>? AND l.instrument_type=? AND l.symbol=? "
                         + "AND l.option_type IS NOT DISTINCT FROM ? AND l.strike IS NOT DISTINCT FROM ? "
-                        + "AND l.expiration IS NOT DISTINCT FROM ? AND l.multiplier=? "
+                        + "AND l.expiration IS NOT DISTINCT FROM ? AND l.multiplier=? AND l.section_1256=? "
                         + "AND l.acquired_at>=? AND l.acquired_at<=? "
                         + "AND NOT EXISTS (SELECT 1 FROM portfolio_wash_sale_allocation w WHERE w.replacement_lot_id=l.id) "
                         + "ORDER BY l.acquired_at,t.record_seq,l.id FOR UPDATE OF l",
                 r -> r.str("id"), account.id(), loss.lossLotId(), loss.instrumentType(), loss.symbol(),
-                loss.optionType(), loss.strike(), loss.expiration(), loss.multiplier(),
+                loss.optionType(), loss.strike(), loss.expiration(), loss.multiplier(), false,
                 loss.closedAt().minusDays(30), loss.closedAt().plusDays(30));
         for (String replacementId : replacements) {
             loss = washLoss(c, matchId);
@@ -861,7 +1008,7 @@ public final class PortfolioAccountingService {
                         + "WHERE m.portfolio_account_id=? AND m.realized_gain_cents<0 AND l.side='LONG' "
                         + "AND l.instrument_type=? AND l.symbol=? "
                         + "AND l.option_type IS NOT DISTINCT FROM ? AND l.strike IS NOT DISTINCT FROM ? "
-                        + "AND l.expiration IS NOT DISTINCT FROM ? AND l.multiplier=? "
+                        + "AND l.expiration IS NOT DISTINCT FROM ? AND l.multiplier=? AND l.section_1256=0 "
                         + "AND m.closed_at>=? AND m.closed_at<=? "
                         + "AND COALESCE((SELECT SUM(w.quantity) FROM portfolio_wash_sale_allocation w "
                         + "WHERE w.loss_match_id=m.id),0)<m.quantity "
@@ -913,12 +1060,12 @@ public final class PortfolioAccountingService {
             Db.execOn(c, "INSERT INTO portfolio_lot(id,portfolio_account_id,opening_transaction_id,opening_leg_no,"
                             + "instrument_type,side,symbol,option_type,strike,expiration,opened_at,acquired_at,"
                             + "original_quantity,remaining_quantity,original_open_amount_cents,remaining_open_amount_cents,"
-                            + "multiplier,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN')",
+                            + "multiplier,section_1256,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN')",
                     adjustedLotId, replacement.accountId(), opening[0], opening[1], replacement.instrumentType(),
                     replacement.side(), replacement.symbol(), replacement.optionType(), replacement.strike(),
                     replacement.expiration(), OffsetDateTime.parse(replacement.openedAt()),
                     OffsetDateTime.parse(replacement.acquiredAt()), quantity, quantity, basisPart, basisPart,
-                    replacement.multiplier());
+                    replacement.multiplier(), replacement.section1256());
             if (sourceRemainingQuantity > 0) unallocatedLotId = replacement.id();
         }
 
@@ -969,9 +1116,10 @@ public final class PortfolioAccountingService {
         return Db.queryOn(c, "SELECT l.* FROM portfolio_lot l JOIN portfolio_transaction t ON t.id=l.opening_transaction_id "
                         + "WHERE l.portfolio_account_id=? AND l.status='OPEN' "
                         + "AND l.instrument_type=? AND l.side=? AND l.symbol=? AND l.option_type IS NOT DISTINCT FROM ? "
-                        + "AND l.strike IS NOT DISTINCT FROM ? AND l.expiration IS NOT DISTINCT FROM ? AND l.multiplier=? ORDER BY " + order + " FOR UPDATE OF l",
+                        + "AND l.strike IS NOT DISTINCT FROM ? AND l.expiration IS NOT DISTINCT FROM ? AND l.multiplier=? "
+                        + "AND l.section_1256=? ORDER BY " + order + " FOR UPDATE OF l",
                 PortfolioAccountingService::mapLot, account.id(), leg.instrumentType(), side, leg.symbol(),
-                leg.optionType(), leg.strike(), leg.expiration(), leg.multiplier());
+                leg.optionType(), leg.strike(), leg.expiration(), leg.multiplier(), leg.section1256());
     }
 
     private static String holdingTerm(LotRow lot, OffsetDateTime closed) {
@@ -999,11 +1147,11 @@ public final class PortfolioAccountingService {
         String id = Ids.newId("plot");
         Db.execOn(c, "INSERT INTO portfolio_lot(id,portfolio_account_id,opening_transaction_id,opening_leg_no,"
                         + "instrument_type,side,symbol,option_type,strike,expiration,opened_at,acquired_at,original_quantity,"
-                        + "remaining_quantity,original_open_amount_cents,remaining_open_amount_cents,multiplier,status) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN')",
+                        + "remaining_quantity,original_open_amount_cents,remaining_open_amount_cents,multiplier,section_1256,status) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN')",
                 id, accountId, txId, leg.legNo(), leg.instrumentType(), side,
                 leg.symbol(), leg.optionType(), leg.strike(), leg.expiration(), occurred, occurred,
-                leg.quantity(), leg.quantity(), amount, amount, leg.multiplier());
+                leg.quantity(), leg.quantity(), amount, amount, leg.multiplier(), leg.section1256());
         return id;
     }
 
@@ -1046,8 +1194,9 @@ public final class PortfolioAccountingService {
             }
             long units = Math.multiplyExact(quantity, (long) multiplier);
             long gross = Money.centsFromPrice(price, units);
+            boolean section1256 = section1256(in.section1256(), instrument, symbol);
             base.add(new PreparedLeg(i, instrument, action, effect, symbol, optionType, strike,
-                    expiration, quantity, multiplier, price, gross, 0));
+                    expiration, quantity, multiplier, price, gross, 0, section1256));
         }
         if (base.isEmpty() || fees == 0) return base;
         long totalGross = 0;
@@ -1067,7 +1216,7 @@ public final class PortfolioAccountingService {
             remaining -= fee;
             allocated.add(new PreparedLeg(leg.legNo(), leg.instrumentType(), leg.action(), leg.positionEffect(),
                     leg.symbol(), leg.optionType(), leg.strike(), leg.expiration(), leg.quantity(), leg.multiplier(),
-                    leg.price(), leg.grossAmountCents(), fee));
+                    leg.price(), leg.grossAmountCents(), fee, leg.section1256()));
         }
         return allocated;
     }
@@ -1080,11 +1229,11 @@ public final class PortfolioAccountingService {
 
     private static void insertLeg(Connection c, String txId, PreparedLeg leg) throws SQLException {
         Db.execOn(c, "INSERT INTO portfolio_transaction_leg(transaction_id,leg_no,instrument_type,action,position_effect,"
-                        + "symbol,option_type,strike,expiration,quantity,multiplier,price,gross_amount_cents,allocated_fee_cents) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        + "symbol,option_type,strike,expiration,quantity,multiplier,price,gross_amount_cents,allocated_fee_cents,section_1256) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 txId, leg.legNo(), leg.instrumentType(), leg.action(), leg.positionEffect(), leg.symbol(),
                 leg.optionType(), leg.strike(), leg.expiration(), leg.quantity(), leg.multiplier(), leg.price(),
-                leg.grossAmountCents(), leg.allocatedFeeCents());
+                leg.grossAmountCents(), leg.allocatedFeeCents(), leg.section1256());
     }
 
     private TransactionView transaction(Connection c, String accountId, String txId) throws SQLException {
@@ -1125,7 +1274,7 @@ public final class PortfolioAccountingService {
         return new LegView(r.intv("leg_no"), r.str("instrument_type"), r.str("action"), r.str("position_effect"),
                 r.str("symbol"), r.str("option_type"), r.bd("strike"), r.date("expiration"),
                 r.lng("quantity"), r.intv("multiplier"), r.bd("price"), r.lng("gross_amount_cents"),
-                r.lng("allocated_fee_cents"));
+                r.lng("allocated_fee_cents"), r.bool("section_1256"));
     }
 
     private static LotRow mapLot(Db.Row r) {
@@ -1133,21 +1282,22 @@ public final class PortfolioAccountingService {
                 r.str("symbol"), r.str("option_type"), r.bd("strike"), r.date("expiration"),
                 r.intv("multiplier"), iso(r.odt("opened_at")), iso(r.odt("acquired_at")),
                 r.lng("original_quantity"), r.lng("remaining_quantity"),
-                r.lng("original_open_amount_cents"), r.lng("remaining_open_amount_cents"), r.str("status"));
+                r.lng("original_open_amount_cents"), r.lng("remaining_open_amount_cents"), r.str("status"),
+                r.bool("section_1256"));
     }
 
     private static LotView mapLotView(Db.Row r) {
         LotRow x = mapLot(r);
         return new LotView(x.id(), x.instrumentType(), x.side(), x.symbol(), x.optionType(), x.strike(),
                 x.expiration(), x.multiplier(), x.openedAt(), x.originalQuantity(), x.remainingQuantity(),
-                x.originalOpenAmount(), x.remainingOpenAmount(), x.status());
+                x.originalOpenAmount(), x.remainingOpenAmount(), x.status(), x.section1256());
     }
 
     private static RealizedLotView mapRealized(Db.Row r) {
         return new RealizedLotView(r.lng("id"), r.str("lot_id"), r.str("symbol"), r.str("instrument_type"),
                 r.str("side"), r.lng("quantity"), iso(r.odt("opened_at")), iso(r.odt("closed_at")),
                 r.lng("open_amount_cents"), r.lng("close_amount_cents"), r.lng("realized_gain_cents"),
-                r.str("holding_term"), r.lng("wash_sale_adjustment_cents"));
+                r.str("holding_term"), r.lng("wash_sale_adjustment_cents"), r.bool("section_1256"));
     }
 
     private static ValuationView mapValuation(Db.Row r) {
@@ -1209,6 +1359,11 @@ public final class PortfolioAccountingService {
                 .divide(BigDecimal.valueOf(10_000), 0, RoundingMode.HALF_UP).longValueExact();
     }
 
+    private static long percentage(long cents, int percent) {
+        return BigDecimal.valueOf(cents).multiply(BigDecimal.valueOf(percent))
+                .divide(BigDecimal.valueOf(100), 0, RoundingMode.HALF_UP).longValueExact();
+    }
+
     private static long exactValuationTotal(long cash, long securities) {
         try { return Math.addExact(cash, securities); }
         catch (ArithmeticException e) { throw new IllegalArgumentException("valuation amounts exceed the supported range"); }
@@ -1239,7 +1394,7 @@ public final class PortfolioAccountingService {
                                                            OffsetDateTime occurred) throws SQLException {
         List<OffsetDateTime> latest = Db.queryOn(c,
                 "SELECT occurred_at FROM portfolio_transaction WHERE portfolio_account_id=? "
-                        + "AND event_type IN ('TRADE','EXPIRATION','ASSIGNMENT','EXERCISE') "
+                        + "AND event_type IN ('TRADE','ROLL','EXPIRATION','ASSIGNMENT','EXERCISE','MARK_TO_MARKET') "
                         + "ORDER BY occurred_at DESC,record_seq DESC LIMIT 1",
                 r -> r.odt("occurred_at"), accountId);
         if (!latest.isEmpty() && latest.getFirst().isAfter(occurred)) {
@@ -1249,7 +1404,15 @@ public final class PortfolioAccountingService {
     }
 
     private static String taxLimitNote() {
-        return "Estimate only: same-instrument wash-sale deferrals are applied from recorded activity; qualified-covered-call rules, Section 1256 treatment, straddle rules, loss limits or carryovers, state-specific rules, and filing elections still require reconciliation against broker tax forms.";
+        return "Estimate only: recorded same-instrument wash-sale deferrals and identified Section 1256 60/40 treatment are applied; qualified-covered-call rules, straddle rules, loss limits or carryovers, state-specific rules, and filing elections still require reconciliation against broker tax forms.";
+    }
+
+    private static boolean section1256(Boolean explicit, String instrumentType, String symbol) {
+        if (Boolean.TRUE.equals(explicit) && !"OPTION".equals(instrumentType)) {
+            throw new IllegalArgumentException("Section 1256 classification applies only to eligible contracts, not stock");
+        }
+        if (explicit != null) return explicit;
+        return "OPTION".equals(instrumentType) && SECTION_1256_ROOTS.contains(symbol);
     }
 
     private static void validateRate(Integer bps, String label) {

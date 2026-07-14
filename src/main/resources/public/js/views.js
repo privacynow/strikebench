@@ -4944,6 +4944,9 @@
     var quantity = el('input', { type: 'number', min: '1', max: '10000000', step: '1', value: defaults.quantity || '1' });
     var multiplier = el('input', { type: 'number', min: '1', max: '10000', step: '1', value: defaults.multiplier || '100' });
     var price = el('input', { type: 'number', min: '0', step: '0.0001', value: defaults.price == null ? '' : defaults.price, placeholder: '0.00' });
+    var section1256 = el('input', { type: 'checkbox', checked: defaults.section1256 ? 'checked' : null });
+    var section1256Field = el('label', { class: 'check-row book-1256-flag' }, section1256,
+      el('span', {}, 'Section 1256 contract', el('small', {}, 'SPX, NDX, and RUT are detected automatically; use this for another eligible broad-based index contract.')));
     var optionFields = [optionType, strike, expiration, multiplier];
     var row = el('fieldset', { class: 'book-leg-row' },
       el('legend', {}, defaults.legend || 'Security leg'),
@@ -4951,12 +4954,13 @@
         UI.field('Instrument', instrument), UI.field('Action', action), UI.field('Position', effect),
         UI.field('Symbol', symbol),
         UI.field('Option type', optionType), UI.field('Strike $', strike), UI.field('Expiration', expiration),
-        UI.field('Quantity', quantity), UI.field('Multiplier', multiplier), UI.field('Exact price $', price)),
+        UI.field('Quantity', quantity), UI.field('Multiplier', multiplier), UI.field('Exact price $', price), section1256Field),
       remove ? el('button', { type: 'button', class: 'btn btn-secondary btn-sm book-leg-remove',
         'aria-label': 'Remove this security leg', onclick: function () { row.remove(); } }, 'Remove leg') : null);
     function syncInstrument() {
       var isOption = instrument.value === 'OPTION';
       optionFields.forEach(function (node) { var field = node.closest('.field'); if (field) field.hidden = !isOption; });
+      section1256Field.hidden = !isOption;
       if (!isOption) multiplier.value = '1';
       else if (multiplier.value === '1') multiplier.value = '100';
     }
@@ -4974,11 +4978,12 @@
         symbol: symbol.value.trim().toUpperCase(), optionType: instrument.value === 'OPTION' ? optionType.value : null,
         strike: instrument.value === 'OPTION' ? strike.value : null,
         expiration: instrument.value === 'OPTION' ? expiration.value : null, quantity: qty,
-        multiplier: instrument.value === 'OPTION' ? mult : 1, price: px };
+        multiplier: instrument.value === 'OPTION' ? mult : 1, price: px,
+        section1256: instrument.value === 'OPTION' && section1256.checked ? true : null };
     };
     row.controls = { instrument: instrument, action: action, effect: effect, symbol: symbol,
       optionType: optionType, strike: strike, expiration: expiration, quantity: quantity,
-      multiplier: multiplier, price: price };
+      multiplier: multiplier, price: price, section1256: section1256 };
     return row;
   }
 
@@ -5268,6 +5273,9 @@
       stat('Long-term gains', pnlSpan(report.longTermGainCents), 'Matched long lots held more than one year.'),
       stat('Interest + dividends', fmtMoney((report.ordinaryInterestCents || 0) + (report.ordinaryDividendCents || 0)
         + (report.qualifiedDividendCents || 0) + (report.capitalGainDistributionCents || 0)), 'Recorded income categories for this year.'),
+      stat('Section 1256 (60 / 40)', pnlSpan(report.section1256GainCents || 0),
+        'Identified broad-based index contracts: ' + fmtMoney(report.section1256LongTermCents || 0)
+          + ' long-term and ' + fmtMoney(report.section1256ShortTermCents || 0) + ' short-term.'),
       stat('Estimated tax', report.estimatedTotalTaxCents == null ? 'Unavailable' : fmtMoney(report.estimatedTotalTaxCents),
         report.accountType !== 'TAXABLE' ? 'No current per-trade tax estimate for this retirement wrapper.'
           : report.estimatedTotalTaxCents == null ? report.note
@@ -5283,17 +5291,36 @@
       var parsed = Number(year.value); if (!Number.isInteger(parsed) || parsed < 1970 || parsed > 9999) return;
       App.state.portfolioTaxYear = parsed; App.render();
     });
-    var taxData = await Promise.all([
-      API.getFresh('/api/portfolio/accounts/' + account.id + '/tax?year=' + encodeURIComponent(yearValue)),
-      API.getFresh('/api/portfolio/accounts/' + account.id + '/lots?includeClosed=false')
-    ]);
-    var report = taxData[0], openLots = taxData[1].lots || [];
     root.appendChild(el('div', { class: 'book-tax-heading' },
       el('div', {}, el('h2', {}, 'Tax basis and estimate'),
         el('p', { class: 'muted' }, account.accountType === 'TAXABLE'
           ? 'A reconciliation aid for recorded lots and income, not a tax filing or broker 1099.'
           : 'Basis and performance remain tracked; current capital-gains tax is not assigned inside this retirement wrapper.')),
       UI.field('Tax year', year)));
+    var taxData;
+    try {
+      taxData = await Promise.all([
+        API.getFresh('/api/portfolio/accounts/' + account.id + '/tax?year=' + encodeURIComponent(yearValue)),
+        API.getFresh('/api/portfolio/accounts/' + account.id + '/lots?includeClosed=false')
+      ]);
+    } catch (e) {
+      if (!String(e.message || e).includes('year-end mark')) throw e;
+      var markMessage = el('div', { class: 'small', 'aria-live': 'polite' });
+      var markButton = el('button', { type: 'button', class: 'btn', onclick: async function () {
+        markButton.disabled = true; markButton.setAttribute('aria-busy', 'true'); markMessage.textContent = '';
+        try {
+          await API.post('/api/portfolio/accounts/' + account.id + '/tax/' + yearValue + '/mark-1256', {});
+          UI.toast('Observed year-end Section 1256 marks applied', 'ok'); await App.render();
+        } catch (markError) { markMessage.textContent = markError.message || String(markError); markMessage.className = 'small loss'; }
+        finally { markButton.disabled = false; markButton.removeAttribute('aria-busy'); }
+      } }, 'Apply observed year-end marks');
+      root.appendChild(alertBox('caution', 'Section 1256 year-end mark required', [e.message || String(e)]));
+      root.appendChild(el('section', { class: 'card card-slim' }, UI.cardHeader('Complete the tax-year close'),
+        el('p', { class: 'muted' }, 'This command uses only stored observed option marks, recognizes the year-end gain or loss at 60/40 character, and resets the open lot basis. It refuses missing or generated marks.'),
+        el('div', { class: 'btn-row' }, markButton), markMessage));
+      return;
+    }
+    var report = taxData[0], openLots = taxData[1].lots || [];
     root.appendChild(portfolioTaxFacts(report));
     root.appendChild(alertBox('caution', 'Use this as a reconciliation worksheet', [report.note]));
     var openCard = el('section', { class: 'card book-open-tax-lots' }, UI.cardHeader('Open tax lots',
@@ -5306,13 +5333,15 @@
           el('div', {}, el('b', {}, portfolioPositionLabel(lot)),
             el('span', { class: 'muted small' }, 'Opened ' + portfolioOccurredLabel(lot.openedAt))),
           el('div', { class: 'chip-row' }, chip(lot.side === 'LONG' ? 'Basis remaining' : 'Proceeds remaining', fmtMoney(lot.remainingOpenAmountCents)),
-            chip('Quantity open', String(lot.remainingQuantity)), chip('Side', lot.side.toLowerCase()))));
+            chip('Quantity open', String(lot.remainingQuantity)), chip('Side', lot.side.toLowerCase()),
+            lot.section1256 ? chip('Tax character', 'Section 1256 · 60 / 40') : null)));
       });
     } else {
-      openCard.appendChild(table(['Opened', 'Position', 'Side', 'Remaining qty', 'Multiplier', 'Remaining basis / proceeds'],
+      openCard.appendChild(table(['Opened', 'Position', 'Side', 'Remaining qty', 'Multiplier', 'Tax character', 'Remaining basis / proceeds'],
         openLots.map(function (lot) { return el('tr', {}, el('td', {}, portfolioOccurredLabel(lot.openedAt)),
           el('td', {}, el('b', {}, portfolioPositionLabel(lot))), el('td', {}, lot.side.toLowerCase()),
           el('td', {}, String(lot.remainingQuantity)), el('td', {}, String(lot.multiplier)),
+          el('td', {}, lot.section1256 ? 'Section 1256 · 60 / 40' : 'Holding period'),
           el('td', {}, fmtMoney(lot.remainingOpenAmountCents))); })));
     }
     root.appendChild(openCard);
@@ -5321,11 +5350,13 @@
       el('span', { class: 'badge badge-dim' }, realized.length + ' match' + (realized.length === 1 ? '' : 'es'))));
     if (!realized.length) realizedCard.appendChild(UI.emptyState('No realized lots in ' + yearValue,
       'Closing stock or option lots, assignment, exercise, and expiration populate this ledger.'));
-    else realizedCard.appendChild(table(['Closed', 'Symbol', 'Instrument', 'Side', 'Qty', 'Opening basis / proceeds', 'Closing proceeds / cost', 'Realized', 'Term'],
+    else realizedCard.appendChild(table(['Closed', 'Symbol', 'Instrument', 'Side', 'Qty', 'Opening basis / proceeds', 'Closing proceeds / cost', 'Raw realized', 'Wash deferred', 'Taxable realized', 'Character'],
       realized.map(function (r) { return el('tr', {}, el('td', {}, String(r.closedAt).slice(0, 10)), el('td', {}, el('b', {}, r.symbol)),
         el('td', {}, r.instrumentType.toLowerCase()), el('td', {}, r.side.toLowerCase()), el('td', {}, String(r.quantity)),
         el('td', {}, fmtMoney(r.openAmountCents)), el('td', {}, fmtMoney(r.closeAmountCents)),
-        el('td', {}, pnlSpan(r.realizedGainCents)), el('td', {}, r.holdingTerm.replaceAll('_', ' ').toLowerCase())); })));
+        el('td', {}, pnlSpan(r.realizedGainCents)), el('td', {}, fmtMoney(r.washSaleAdjustmentCents || 0)),
+        el('td', {}, pnlSpan((r.realizedGainCents || 0) + (r.washSaleAdjustmentCents || 0))),
+        el('td', {}, r.section1256 ? 'Section 1256 · 60 / 40' : r.holdingTerm.replaceAll('_', ' ').toLowerCase())); })));
     root.appendChild(realizedCard);
     root.appendChild(el('section', { class: 'card card-slim book-exports' }, UI.cardHeader('Export exact records'),
       el('p', { class: 'muted small' }, 'CSV exports every normalized transaction leg. The row marked as the primary transaction row carries net cash and total fees once, so summing a multi-leg package cannot double-count it. Excel includes Summary, Transactions, Lots, Realized, Performance, and Tax sheets with numeric cells and no executable formulas.'),
@@ -5366,7 +5397,7 @@
     root.appendChild(el('section', { class: 'card card-slim book-boundary' }, UI.cardHeader('Accounting boundary'),
       el('p', {}, 'Tracked accounts are an owner-scoped record of external activity. They never place an order, reserve practice buying power, or mutate the practice ledger.'),
       el('p', { class: 'muted small' }, 'Adjusted contracts are supported when the recorded multiplier is the complete share deliverable. Record cash or other non-share deliverables as separate statement adjustments so the book reconciles exactly.'),
-        el('p', { class: 'muted small' }, 'Recorded same-instrument wash-sale deferrals are included. Qualified-covered-call rules, Section 1256, straddles, loss limits and carryovers, state-specific rules, return-of-capital basis allocation, and filing elections still require reconciliation against broker tax forms and a qualified tax professional.')));
+        el('p', { class: 'muted small' }, 'Recorded same-instrument wash-sale deferrals and identified Section 1256 60/40 treatment are included. Qualified-covered-call rules, straddles, loss limits and carryovers, state-specific rules, return-of-capital basis allocation, and filing elections still require reconciliation against broker tax forms and a qualified tax professional.')));
   }
 
   async function portfolioBook(root, params) {

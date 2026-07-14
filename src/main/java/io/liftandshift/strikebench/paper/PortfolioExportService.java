@@ -24,20 +24,20 @@ public final class PortfolioExportService {
         StringBuilder out = new StringBuilder();
         row(out, "account", "transaction_id", "primary_transaction_row", "occurred_at", "event_type", "source", "external_ref",
                 "cash_effect_cents", "fees_cents", "tax_category", "leg_no", "instrument", "action",
-                "position_effect", "symbol", "option_type", "strike", "expiration", "quantity",
+                "position_effect", "symbol", "option_type", "strike", "expiration", "section_1256", "quantity",
                 "multiplier", "price", "gross_amount_cents", "allocated_fee_cents", "notes");
         for (var tx : allTransactions(ownerId, accountId)) {
             if (tx.legs().isEmpty()) {
                 row(out, text(account.name()), text(tx.id()), text("true"), text(tx.occurredAt()), text(tx.eventType()), text(tx.source()),
                         text(tx.externalRef()), number(tx.cashEffectCents()), number(tx.feesCents()), text(tx.taxCategory()),
-                        "", "", "", "", "", "", "", "", "", "", "", "", text(tx.notes()));
+                        "", "", "", "", "", "", "", "", "", "", "", "", "", text(tx.notes()));
             } else for (int i = 0; i < tx.legs().size(); i++) {
                 var leg = tx.legs().get(i);
                 row(out, text(account.name()), text(tx.id()), text(i == 0 ? "true" : "false"), text(tx.occurredAt()), text(tx.eventType()), text(tx.source()),
                         text(tx.externalRef()), i == 0 ? number(tx.cashEffectCents()) : "", i == 0 ? number(tx.feesCents()) : "", text(tx.taxCategory()),
                         number(leg.legNo()), text(leg.instrumentType()), text(leg.action()), text(leg.positionEffect()),
                         text(leg.symbol()), text(leg.optionType()), decimal(leg.strike()), text(leg.expiration()),
-                        number(leg.quantity()), number(leg.multiplier()), decimal(leg.price()),
+                        text(leg.section1256()), number(leg.quantity()), number(leg.multiplier()), decimal(leg.price()),
                         number(leg.grossAmountCents()), number(leg.allocatedFeeCents()), text(tx.notes()));
             }
         }
@@ -101,17 +101,17 @@ public final class PortfolioExportService {
         List<List<Cell>> rows = new ArrayList<>();
         rows.add(cells("Occurred", "Event", "Transaction", "Primary transaction row", "Source", "Reference", "Cash effect", "Fees",
                 "Leg", "Instrument", "Action", "Effect", "Symbol", "Type", "Strike", "Expiration",
-                "Quantity", "Multiplier", "Price", "Gross", "Allocated fee", "Notes"));
+                "Section 1256", "Quantity", "Multiplier", "Price", "Gross", "Allocated fee", "Notes"));
         for (var tx : txs) {
             if (tx.legs().isEmpty()) rows.add(List.of(s(tx.occurredAt()), s(tx.eventType()), s(tx.id()), s("true"), s(tx.source()),
                     s(tx.externalRef()), money(tx.cashEffectCents()), money(tx.feesCents()), blank(), blank(), blank(),
-                    blank(), blank(), blank(), blank(), blank(), blank(), blank(), blank(), blank(), blank(), s(tx.notes())));
+                    blank(), blank(), blank(), blank(), blank(), blank(), blank(), blank(), blank(), blank(), blank(), s(tx.notes())));
             else for (int i = 0; i < tx.legs().size(); i++) {
                 var leg = tx.legs().get(i);
                 rows.add(List.of(s(tx.occurredAt()), s(tx.eventType()), s(tx.id()), s(i == 0 ? "true" : "false"), s(tx.source()),
                     s(tx.externalRef()), i == 0 ? money(tx.cashEffectCents()) : blank(), i == 0 ? money(tx.feesCents()) : blank(), n(leg.legNo()),
                     s(leg.instrumentType()), s(leg.action()), s(leg.positionEffect()), s(leg.symbol()), s(leg.optionType()),
-                    decimalCell(leg.strike()), s(leg.expiration()), n(leg.quantity()), n(leg.multiplier()),
+                    decimalCell(leg.strike()), s(leg.expiration()), s(leg.section1256()), n(leg.quantity()), n(leg.multiplier()),
                     decimalCell(leg.price()), money(leg.grossAmountCents()), money(leg.allocatedFeeCents()), s(tx.notes())));
             }
         }
@@ -121,9 +121,9 @@ public final class PortfolioExportService {
     private static List<List<Cell>> lotRows(List<PortfolioAccountingService.LotView> lots) {
         List<List<Cell>> rows = new ArrayList<>();
         rows.add(cells("Opened", "Status", "Instrument", "Side", "Symbol", "Type", "Strike", "Expiration",
-                "Multiplier", "Original quantity", "Remaining quantity", "Original basis/proceeds", "Remaining basis/proceeds"));
+                "Section 1256", "Multiplier", "Original quantity", "Remaining quantity", "Original basis/proceeds", "Remaining basis/proceeds"));
         for (var lot : lots) rows.add(List.of(s(lot.openedAt()), s(lot.status()), s(lot.instrumentType()), s(lot.side()),
-                s(lot.symbol()), s(lot.optionType()), decimalCell(lot.strike()), s(lot.expiration()), n(lot.multiplier()),
+                s(lot.symbol()), s(lot.optionType()), decimalCell(lot.strike()), s(lot.expiration()), s(lot.section1256()), n(lot.multiplier()),
                 n(lot.originalQuantity()), n(lot.remainingQuantity()), money(lot.originalOpenAmountCents()),
                 money(lot.remainingOpenAmountCents())));
         return rows;
@@ -132,10 +132,12 @@ public final class PortfolioExportService {
     private static List<List<Cell>> realizedRows(List<PortfolioAccountingService.RealizedLotView> realized) {
         List<List<Cell>> rows = new ArrayList<>();
         rows.add(cells("Opened", "Closed", "Instrument", "Side", "Symbol", "Quantity", "Open basis/proceeds",
-                "Close proceeds/cost", "Realized gain", "Holding term", "Wash-sale adjustment"));
+                "Close proceeds/cost", "Realized gain", "Wash-sale adjustment", "Taxable gain", "Holding term", "Section 1256"));
         for (var r : realized) rows.add(List.of(s(r.openedAt()), s(r.closedAt()), s(r.instrumentType()), s(r.side()),
                 s(r.symbol()), n(r.quantity()), money(r.openAmountCents()), money(r.closeAmountCents()),
-                money(r.realizedGainCents()), s(r.holdingTerm()), money(r.washSaleAdjustmentCents())));
+                money(r.realizedGainCents()), money(r.washSaleAdjustmentCents()),
+                money(Math.addExact(r.realizedGainCents(), r.washSaleAdjustmentCents())),
+                s(r.holdingTerm()), s(r.section1256())));
         return rows;
     }
 
@@ -159,6 +161,10 @@ public final class PortfolioExportService {
                 moneyRow("Long-term gain", t.longTermGainCents()), moneyRow("Ordinary interest", t.ordinaryInterestCents()),
                 moneyRow("Ordinary dividends", t.ordinaryDividendCents()), moneyRow("Qualified dividends", t.qualifiedDividendCents()),
                 moneyRow("Capital-gain distributions", t.capitalGainDistributionCents()),
+                moneyRow("Wash-sale adjustments", t.washSaleAdjustmentsCents()),
+                moneyRow("Section 1256 gain", t.section1256GainCents()),
+                moneyRow("Section 1256 short-term 40%", t.section1256ShortTermCents()),
+                moneyRow("Section 1256 long-term 60%", t.section1256LongTermCents()),
                 moneyRow("Estimated federal tax", t.estimatedFederalTaxCents()),
                 moneyRow("Estimated state tax", t.estimatedStateTaxCents()),
                 moneyRow("Estimated total tax", t.estimatedTotalTaxCents()), cells("Limitations", t.note()));
