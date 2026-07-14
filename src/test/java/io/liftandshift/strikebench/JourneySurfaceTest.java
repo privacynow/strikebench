@@ -22,7 +22,9 @@ class JourneySurfaceTest {
 
     private static String apiRouteSource() throws Exception {
         StringBuilder routes = new StringBuilder();
-        for (String name : List.of("ApiServer", "ApiTelemetry", "CoreRoutes", "PlanRoutes", "DataRoutes",
+        for (String name : List.of("ApiServer", "ApiTelemetry", "CoreRoutes", "CoreController",
+                "MarketUniverseView", "MarketStreamController", "SparklineController",
+                "PlanRoutes", "DataRoutes",
                 "DataController", "ResearchRoutes", "WorldRoutes", "TradeRoutes", "TradeController",
                 "ResearchController", "PortfolioRoutes", "PortfolioController", "BrokerRoutes",
                 "BrokerController", "OutcomeRoutes", "OutcomeController", "WorldController",
@@ -207,9 +209,13 @@ class JourneySurfaceTest {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
 
-        for (String owner : List.of("CoreRoutes")) {
-            assertThat(api).contains(owner + ".register(c, new " + owner + ".Handlers(");
-        }
+        String core = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/CoreController.java"));
+        assertThat(api).contains("coreController.register(c, telemetry);")
+                .doesNotContain("CoreRoutes.register(c, new CoreRoutes.Handlers(",
+                        "private void quotesBatch(", "private void marketStream(",
+                        "private void sparklines(", "private void workspaceGet(");
+        assertThat(core).contains("CoreRoutes.register(config, new CoreRoutes.Handlers(");
         String telemetry = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiTelemetry.java"));
         assertThat(api).contains("telemetry.register(c);", "telemetry.recordError();")

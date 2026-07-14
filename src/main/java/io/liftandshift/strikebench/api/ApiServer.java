@@ -120,7 +120,6 @@ public final class ApiServer {
     private io.liftandshift.strikebench.db.DatasetService datasets;             // observed + synthetic dataset registry
     private io.liftandshift.strikebench.sim.SimulationEngine simEngine;         // scenario previews + dataset runs
     private io.liftandshift.strikebench.sim.PathEnsembleService pathEnsembles;   // one lane-aware path source
-    private java.util.concurrent.ScheduledExecutorService streamScheduler;     // pushes SSE market frames
     private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
     private java.util.concurrent.ScheduledExecutorService portfolioValuationScheduler;
     private final String startedAt = java.time.Instant.now().toString();
@@ -129,6 +128,8 @@ public final class ApiServer {
     private DiscoveryController discoveryController;
     private OutcomeController outcomeController;
     private PlanController planController;
+    private final MarketUniverseView universeViews;
+    private CoreController coreController;
 
     public ApiServer(AppConfig cfg, Clock clock, MarketDataService market, AuditLog audit,
                      AccountService accounts, TradeService trades, RecommendationEngine engine,
@@ -156,6 +157,7 @@ public final class ApiServer {
         this.broker = broker;
         this.backtester = backtester;
         this.marketEngine = new io.liftandshift.strikebench.market.MarketDataEngine(market, universe, cfg, clock);
+        this.universeViews = new MarketUniverseView(cfg, market, universe, simSessions);
     }
 
     /** Wires the whole app from config: DB + migrations + provider chain + services. */
@@ -258,7 +260,7 @@ public final class ApiServer {
                 market, datasetSvc, db, clock, server.pathEnsembles);
         server.worldTransitions = new WorldTransitionService(cfg, clock, db, datasetSvc, market,
                 server.simSessions, server.events,
-                (world, owner) -> server.universeViewFor(worldParam(world), owner),
+                (world, owner) -> server.universeViews.describe(worldParam(world), owner),
                 server.startedAt);
         // Workspace continuity + the event bus: services announce, /api/events streams to the browser.
         server.workspaceSvc = new io.liftandshift.strikebench.db.WorkspaceService(db, clock);
@@ -274,7 +276,6 @@ public final class ApiServer {
         server.planDecisions = new io.liftandshift.strikebench.plan.PlanDecisionService(db, clock);
         server.planManagement = new io.liftandshift.strikebench.plan.PlanManagementService(db, clock);
         server.dataJobs.setEvents(server.events);
-        server.dataJobs.setDataChangedHook(server::invalidateHistoricalViews);
         datasetSvc.setEvents(server.events);
         if (cboeRef[0] != null) cboeRef[0].setEvents(server.events);
         if (yahooRef[0] != null) yahooRef[0].setEvents(server.events);
@@ -328,11 +329,18 @@ public final class ApiServer {
                 planStrategy, planOutcomes, planRehearsals, planDecisions, planManagement,
                 pathEnsembles, simEngine, discoveryController, outcomeController, tradeController,
                 this::currentAccount, this::ownerId, this::activeWorld, this::analysisCtx);
+        SparklineController sparklineController = new SparklineController(clock, market, universe,
+                evaluations, this::activeWorld, this::analysisCtx);
+        dataJobs.setDataChangedHook(sparklineController::invalidate);
+        coreController = new CoreController(cfg, clock, market, marketEngine, universe,
+                universeViews, datasets, workspaceSvc, accounts, auth, cboe, sparklineController,
+                simSessions, events, this::ownerId, this::activeWorld, this::activeWorldFor,
+                this::currentAccount, this::requireAdmin, () -> !jarChangedHint().isEmpty(), startedAt);
         DataController dataController = new DataController(cfg, clock, db, market, marketEngine,
                 universe, dataJobs, dataCoverage, dataReset, dataConnectors, dataSyncState,
                 datasets, cboe, simSessions, worldTransitions, audit, this::ownerId,
                 this::activeWorld, this::isAdmin, this::requireAdmin,
-                this::invalidateHistoricalViews, outcomeController::generateDataset);
+                sparklineController::invalidate, outcomeController::generateDataset);
         ResearchController researchController = new ResearchController(db, clock, market,
                 evaluations, this::ownerId, this::activeWorld, this::analysisCtx,
                 this::research);
@@ -409,19 +417,14 @@ public final class ApiServer {
             // the heavy providers have spare budget. A denied prefetch is a quiet 204 — the client
             // simply doesn't warm its cache; the user never waits on (or behind) a guess.
             c.routes.before("/api/research/*", ctx -> {
-                if ("prefetch".equalsIgnoreCase(ctx.header("X-Priority")) && !prefetchBudget()) {
+                if ("prefetch".equalsIgnoreCase(ctx.header("X-Priority")) && !coreController.prefetchBudget()) {
                     ctx.status(204);
                     ctx.header("X-Prefetch", "denied");
                     ctx.skipRemainingHandlers();
                 }
             });
 
-            CoreRoutes.register(c, new CoreRoutes.Handlers(
-                    telemetry::metrics, this::status, this::config, this::health,
-                    ctx -> ctx.json(universeViewFor(worldParam(activeWorld(ctx)), ownerId(ctx))),
-                    this::universeSelect, this::quotesBatch, this::sparklines,
-                    ctx -> ctx.json(marketEngine.status()), this::marketStream, this::eventStream,
-                    this::workspaceGet, this::workspacePut, this::account, this::accountReset));
+            coreController.register(c, telemetry);
 
             planController.register(c);
 
@@ -489,9 +492,6 @@ public final class ApiServer {
         warmUpErrorPipeline(app.port());
         startSnapshotScheduler();
         startPortfolioValuationScheduler();
-        streamScheduler = java.util.concurrent.Executors.newScheduledThreadPool(2, r -> {
-            Thread t = new Thread(r, "market-stream"); t.setDaemon(true); return t;
-        });
         if (dataJobs != null) dataJobs.reconcileOnBoot(); // fail orphaned jobs from a prior run so they can retry
         if (marketEngine != null) marketEngine.start(); // warm the universe + background refresh
         if (dataSyncScheduler != null) dataSyncScheduler.start();
@@ -603,7 +603,7 @@ public final class ApiServer {
         if (dataSyncScheduler != null) dataSyncScheduler.close();
         if (dataJobs != null) dataJobs.shutdown();
         if (marketEngine != null) marketEngine.stop();
-        if (streamScheduler != null) streamScheduler.shutdownNow();
+        if (coreController != null) coreController.close();
         if (snapshotScheduler != null) snapshotScheduler.shutdownNow();
         if (portfolioValuationScheduler != null) portfolioValuationScheduler.shutdownNow();
         if (app != null) app.stop();
@@ -712,357 +712,6 @@ public final class ApiServer {
             throw new io.liftandshift.strikebench.auth.UnauthorizedException(
                 "Admin access required. On a public deployment, enable AUTH (+ AUTH_ADMIN_EMAILS), or set ADMIN_TOKEN and send it as X-Admin-Token.");
         }
-    }
-
-    // ---- Status / config ----
-
-    private void status(Context ctx) {
-        try {
-            ctx.json(new ApiResponses.Status<>(true, Instant.now(clock).toString(),
-                    cfg.fixturesOnly(), market.status(), null));
-        } catch (Exception e) {
-            log.warn("Market-data status is temporarily unavailable");
-            log.debug("Market-data status failure detail", e);
-            ctx.json(new ApiResponses.Status<>(false, null, null, null,
-                    "Market-data status is temporarily unavailable"));
-        }
-    }
-
-    private void config(Context ctx) {
-        // Scenario mode is PERSONAL: the signal reflects the CALLER's active dataset.
-        String active = datasets == null ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : datasets.activeId(ownerId(ctx));
-        String world = activeWorld(ctx);
-        String lane = !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(active)
-                && "observed".equals(world) ? "SCENARIO"
-                : io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly()).name();
-        ctx.json(new ApiResponses.Config<>(cfg.port(), cfg.fixturesOnly(),
-                io.liftandshift.strikebench.market.MarketHours.isRegularSession(clock.instant()), auth.enabled(),
-                cfg.feePerContractCents(), cfg.feePerOrderCents(), cfg.defaultStartingCashCents(),
-                new ApiResponses.Brand(cfg.brandName(), cfg.brandTagline()),
-                io.liftandshift.strikebench.model.BroadBasedIndexOptions.AUTOMATIC_SYMBOLS,
-                RecommendationEngine.DISCLAIMER, active,
-                datasets == null ? active : datasets.nameOf(active),
-                !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(active), world, lane));
-    }
-
-    /**
-     * Liveness + staleness beacon. jarChangedSinceBoot=true means the application jar was
-     * rewritten under this running server — the classic "some screens fail to load" cause —
-     * and the UI turns it into a restart banner instead of a mystery. Never 500s.
-     */
-    private void health(Context ctx) {
-        boolean changed;
-        try {
-            changed = !jarChangedHint().isEmpty();
-        } catch (RuntimeException e) {
-            changed = false;
-        }
-        ctx.json(new ApiResponses.Health(true, startedAt, changed));
-    }
-
-    public record UniverseSelectRequest(String sector, List<String> symbols) {}
-
-    private void universeSelect(Context ctx) {
-        if (!"observed".equals(activeWorld(ctx))) {
-            throw new IllegalStateException("This market owns its symbol list. Return to Observed market before changing sectors.");
-        }
-        // The universe is a documented APP-LEVEL setting (it drives the tape, the engine warm set,
-        // and scan defaults for everyone) — with auth on, only an admin changes it. Making it a
-        // true per-user preference means threading user context through the engine; that is the
-        // follow-up recorded in DEVELOPER.md, and this gate closes the cross-user yank until then.
-        if (auth.enabled()) requireAdmin(ctx);
-        UniverseSelectRequest req = requireBody(bodyOrNull(ctx, UniverseSelectRequest.class));
-        if (req.sector() != null && !req.sector().isBlank()) {
-            universe.selectSector(req.sector());
-        } else if (req.symbols() != null && !req.symbols().isEmpty()) {
-            universe.selectCustom(req.symbols());
-        } else {
-            throw new IllegalArgumentException("Provide either a sector key or a symbols list");
-        }
-        ctx.json(universe.describe());
-    }
-
-    /** Light batch quotes for the ticker tape and dashboards — no chains, no news. */
-    private void quotesBatch(Context ctx) {
-        String raw = ctx.queryParam("symbols");
-        String world = worldParam(activeWorld(ctx));
-        if (world != null) {
-            // ONE LANE PER SCREEN: inside a simulated session the dashboard tiles quote the
-            // WORLD's symbols from the world — observed AAPL under a SIMULATED band was the
-            // 'quiet lie' the honesty rules forbid (review P1).
-            List<String> syms = raw == null || raw.isBlank()
-                    ? market.worldSymbols(world).map(x -> List.copyOf(x)).orElse(List.of())
-                    : java.util.Arrays.stream(raw.split(",")).map(x -> x.trim().toUpperCase(Locale.ROOT))
-                        .filter(x -> !x.isBlank()).distinct().toList();
-            int requested = syms.size();
-            int limit = io.liftandshift.strikebench.market.sim.SimulationSessions.MAX_SYMBOLS;
-            List<String> bounded = syms.stream().limit(limit).toList();
-            List<Map<String, Object>> rows = new ArrayList<>();
-            // F7: world quotes are LOCAL memory — serve the whole world (<=120), not a 40-cap
-            // that made the tape and SSE disagree about which symbols exist.
-            for (String sym : bounded) {
-                market.quote(sym, world).ifPresent(q -> {
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    m.put("symbol", q.symbol());
-                    m.put("description", q.description());
-                    m.put("last", q.last());
-                    m.put("bid", q.bid());
-                    m.put("ask", q.ask());
-                    m.put("prevClose", q.prevClose());
-                    m.put("optionable", q.optionable());
-                    m.put("asOf", q.asOfEpochMs());
-                    m.put("freshness", q.markFreshness().name());
-                    m.put("source", q.source());
-                    m.put("evidence", q.evidence());
-                    rows.add(m);
-                });
-            }
-            ctx.json(new ApiResponses.WorldQuotes<>(rows, requested, bounded.size(), requested > limit,
-                    limit, world, market.lane(world).name()));
-            return;
-        }
-        List<String> symbols = raw == null || raw.isBlank()
-                ? universe.active().symbols()
-                : java.util.Arrays.stream(raw.split(",")).map(s -> s.trim().toUpperCase(Locale.ROOT))
-                    .filter(s -> !s.isBlank()).distinct().toList();
-        int requested = symbols.size();
-        int limit = io.liftandshift.strikebench.market.sim.SimulationSessions.MAX_SYMBOLS;
-        if (symbols.size() > limit) symbols = symbols.subList(0, limit);
-        // Served from the in-memory engine: warm symbols answer instantly, cold ones are fetched in
-        // parallel, and stale ones refresh in the background — no per-symbol sequential download.
-        List<Map<String, Object>> out = new ArrayList<>();
-        for (var snap : marketEngine.quotes(symbols)) {
-            out.add(io.liftandshift.strikebench.market.MarketDataEngine.toRow(snap));
-        }
-        ctx.json(new ApiResponses.Quotes<>(out, requested, symbols.size(), requested > limit,
-                limit, cfg.fixturesOnly() ? "DEMO" : "OBSERVED"));
-    }
-
-    /**
-     * Server-Sent Events stream of live-ish quote/freshness frames straight from engine memory —
-     * the tape and market-facing screens subscribe instead of polling. Each frame is the current
-     * snapshot of the requested symbols (default: active universe); the browser falls back to
-     * /api/quotes polling if EventSource fails. Cheap: reads warm memory, never a per-tick download.
-     */
-    private void marketStream(io.javalin.http.sse.SseClient client) {
-        String raw = client.ctx().queryParam("symbols");
-        final List<String> symbols = raw == null || raw.isBlank()
-                ? universe.active().symbols()
-                : java.util.Arrays.stream(raw.split(",")).map(s -> s.trim().toUpperCase(Locale.ROOT))
-                    .filter(s -> !s.isBlank()).distinct().limit(60).toList();
-        final String streamOwner = ownerId(client.ctx()); // captured at open; identity never changes mid-stream
-        client.keepAlive();
-        // The task ref lets the push cancel ITSELF when it notices the client died — onClose is
-        // the normal path, but a client that vanishes without firing it must not keep a scheduled
-        // write alive forever.
-        var taskRef = new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<?>>();
-        var seq = new java.util.concurrent.atomic.AtomicLong();
-        var lastFrameHash = new java.util.concurrent.atomic.AtomicInteger();
-        Runnable push = () -> {
-            if (client.terminated()) {
-                var t = taskRef.get();
-                if (t != null) t.cancel(false);
-                return;
-            }
-            try {
-                // LANE-AWARE (weekend-handoff M5): inside a simulated session this stream quotes the
-                // WORLD's symbols from the world — the same channel that drives the tape/live tiles
-                // in the real market drives them in the sim, with SIMULATED freshness disclosed.
-                // Re-resolved per frame so entering/leaving a world retargets without reconnecting.
-                String world = activeWorldFor(streamOwner);
-                List<Map<String, Object>> rows = new ArrayList<>();
-                long asOf = clock.millis();
-                if ("observed".equals(world)) {
-                    for (var snap : marketEngine.quotes(symbols)) {
-                        rows.add(io.liftandshift.strikebench.market.MarketDataEngine.toRow(snap));
-                    }
-                } else if ("demo".equals(world)) {
-                    List<String> demoSymbols = raw == null || raw.isBlank()
-                            ? market.worldSymbols("demo").map(List::copyOf).orElse(List.of())
-                            : symbols;
-                    for (String sym : demoSymbols) {
-                        market.quote(sym, "demo").ifPresent(q -> {
-                            Map<String, Object> row = new LinkedHashMap<>();
-                            row.put("symbol", q.symbol());
-                            row.put("description", q.description());
-                            row.put("last", q.last() == null ? null : q.last().toPlainString());
-                            row.put("bid", q.bid() == null ? null : q.bid().toPlainString());
-                            row.put("ask", q.ask() == null ? null : q.ask().toPlainString());
-                            row.put("prevClose", q.prevClose() == null ? null : q.prevClose().toPlainString());
-                            row.put("optionable", q.optionable());
-                            row.put("freshness", q.markFreshness().name());
-                            row.put("evidence", q.evidence());
-                            row.put("asOf", q.asOfEpochMs());
-                            row.put("refreshing", false);
-                            rows.add(row);
-                        });
-                    }
-                } else {
-                    var wOpt = simSessions.getOrRestore(world, streamOwner);
-                    if (wOpt.isPresent()) {
-                        var w = wOpt.get();
-                        for (String sym : w.config().symbolBetas().keySet()) {
-                            market.quote(sym, world).ifPresent(q -> {
-                                Map<String, Object> row = new LinkedHashMap<>();
-                                row.put("symbol", q.symbol());
-                                row.put("description", q.description());
-                                row.put("last", q.last() == null ? null : q.last().toPlainString());
-                                row.put("bid", q.bid() == null ? null : q.bid().toPlainString());
-                                row.put("ask", q.ask() == null ? null : q.ask().toPlainString());
-                                row.put("prevClose", q.prevClose() == null ? null : q.prevClose().toPlainString());
-                                row.put("optionable", q.optionable());
-                                row.put("freshness", q.markFreshness().name());
-                                row.put("evidence", q.evidence());
-                                row.put("asOf", q.asOfEpochMs());
-                                row.put("refreshing", false);
-                                rows.add(row);
-                            });
-                        }
-                    }
-                }
-                // Frame discipline (holistic review Phase 2): sequence-numbered MarketState
-                // frames; identical frames are skipped (a closed observed market streams nothing),
-                // and world frames carry the SIM clock so consumers can place them on the lane.
-                int hash = rows.hashCode();
-                if (hash == lastFrameHash.get() && seq.get() > 0) return;
-                lastFrameHash.set(hash);
-                Map<String, Object> frame = new LinkedHashMap<>();
-                frame.put("seq", seq.incrementAndGet());
-                frame.put("quotes", rows);
-                frame.put("asOf", asOf);
-                frame.put("world", world);
-                if (!"observed".equals(world)) {
-                    simSessions.getOrRestore(world, streamOwner)
-                            .ifPresent(w -> frame.put("simTime", w.simTime().toString()));
-                }
-                client.sendEvent("quotes", frame);
-            } catch (Exception e) { /* client gone or engine hiccup — the scheduled task keeps trying */ }
-        };
-        push.run(); // immediate first frame so the UI paints without waiting a full interval
-        int interval = Math.max(1, cfg.engineStreamIntervalSeconds());
-        var task = streamScheduler.scheduleWithFixedDelay(push, interval, interval, java.util.concurrent.TimeUnit.SECONDS);
-        taskRef.set(task);
-        client.onClose(() -> task.cancel(true));
-    }
-
-    // ---- Workspace continuity + the typed event stream ----
-
-    /**
-     * Whether heavy providers have budget for SPECULATIVE requests right now. Fixture mode is
-     * always yes (local deterministic data); live mode defers to the Cboe breaker/permits —
-     * a prefetch guess must never compete with something the user actually asked for.
-     */
-    private boolean prefetchBudget() {
-        if (cfg.fixturesOnly() || cboe == null) return true;
-        return cboe.prefetchBudget();
-    }
-
-    /**
-     * /api/events: one SSE stream of small typed hints (job.progress, job.complete,
-     * dataset.selected, provider.cooldown, workspace.updated). Events carry ids/versions,
-     * not payloads — the client refetches what it cares about; GETs stay the source of truth.
-     * Reconnects replay from Last-Event-ID via the bus's ring buffer.
-     */
-    private void eventStream(io.javalin.http.sse.SseClient client) {
-        client.keepAlive();
-        // No Last-Event-ID = a FRESH client: start from now (a history dump of up to 256 stale
-        // hints would trigger pointless refetch storms). A reconnect replays only what it missed.
-        long last = events.currentSeq();
-        String lastId = client.ctx().header("Last-Event-ID");
-        if (lastId != null) {
-            try { last = Long.parseLong(lastId.trim()); } catch (NumberFormatException ignore) { /* stay at now */ }
-        }
-        // Per-user scope: events carrying a "user" key (jobs, workspace revs) go only to their
-        // owner when auth is on. Global events (dataset.selected, provider.cooldown) go to all.
-        // Auth off = single local user = everything. Resolve the caller ONCE — ctx is not
-        // guaranteed usable from publisher threads later.
-        final String caller = auth.enabled() ? ownerId(client.ctx()) : null;
-        final boolean scoped = auth.enabled();
-        java.util.function.Predicate<io.liftandshift.strikebench.util.EventBus.Event> visible = e -> {
-            if (!scoped) return true;
-            Object owner = e.data().get("user");
-            return owner == null || owner.equals(caller);
-        };
-        // Subscribe FIRST, replay second: an event published in between is delivered live instead
-        // of lost (a duplicate frame is harmless — events are idempotent hints). The subscriber
-        // self-unsubscribes when the client is gone, so a death during replay can't leak it.
-        final java.util.concurrent.atomic.AtomicReference<Runnable> unsub = new java.util.concurrent.atomic.AtomicReference<>();
-        Runnable unsubscribe = events.subscribe(e -> {
-            if (client.terminated()) {
-                Runnable u = unsub.get();
-                if (u != null) u.run();
-                return;
-            }
-            if (visible.test(e)) sendEvent(client, e);
-        });
-        unsub.set(unsubscribe);
-        client.onClose(unsubscribe);
-        for (var e : events.since(last)) if (visible.test(e)) sendEvent(client, e);
-    }
-
-    /** Serialized per client: the bus pump and the replay loop must not interleave SSE frames. */
-    private void sendEvent(io.javalin.http.sse.SseClient client,
-                           io.liftandshift.strikebench.util.EventBus.Event e) {
-        try {
-            synchronized (client) { client.sendEvent(e.type(), e.data(), String.valueOf(e.seq())); }
-        } catch (Exception ignore) { /* client gone — onClose/self-unsubscribe cleans up */ }
-    }
-
-    private void workspaceGet(Context ctx) {
-        if (workspaceSvc == null) { ctx.json(new ApiResponses.Revision(0)); return; }
-        var ws = workspaceSvc.get(ownerId(ctx));
-        if (ws.isEmpty()) { ctx.json(new ApiResponses.Revision(0)); return; }
-        ctx.json(new ApiResponses.Workspace<>(ws.get().rev(), ws.get().updatedAt(),
-                Json.parse(ws.get().stateJson())));
-    }
-
-    /** Body IS the state object (client-owned shape). Validated as JSON, size-capped, last-write-wins. */
-    private void workspacePut(Context ctx) {
-        if (workspaceSvc == null) {
-            ctx.status(503).json(new ApiResponses.ErrorOnly("workspace store unavailable"));
-            return;
-        }
-        String body = ctx.body();
-        if (body == null || body.isBlank()) throw new IllegalArgumentException("state body required");
-        com.fasterxml.jackson.databind.JsonNode node;
-        try { node = Json.parse(body); } catch (Exception e) { throw new IllegalArgumentException("state must be JSON"); }
-        if (!node.isObject()) throw new IllegalArgumentException("state must be a JSON object");
-        long rev = workspaceSvc.put(ownerId(ctx), body);
-        ctx.json(new ApiResponses.SavedRevision(true, rev));
-    }
-
-    // ---- Plan-centered journey ----
-
-
-    private void account(Context ctx) {
-        Account acct = currentAccount(ctx);
-        ctx.json(new ApiResponses.AccountLedger<>(
-                accountView(acct), accounts.ledger(acct.id(), 0, 20)));
-    }
-
-    public record ResetRequest(Long startingCashCents, Boolean confirm, Boolean force) {}
-
-    private void accountReset(Context ctx) {
-        ResetRequest req = requireBody(bodyOrNull(ctx, ResetRequest.class));
-        long cash = req.startingCashCents() == null ? cfg.defaultStartingCashCents() : req.startingCashCents();
-        // Scope the reset to the CALLER's account so a user can never reset someone else's.
-        Account acct = accounts.resetAccount(currentAccount(ctx).id(), cash,
-                Boolean.TRUE.equals(req.confirm()), Boolean.TRUE.equals(req.force()));
-        ctx.json(new ApiResponses.Account<>(accountView(acct)));
-    }
-
-    private static Map<String, Object> accountView(Account acct) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", acct.id());
-        m.put("name", acct.name());
-        m.put("type", acct.type());
-        m.put("startingCashCents", acct.startingCashCents());
-        m.put("cashCents", acct.cashCents());
-        m.put("reservedCents", acct.reservedCents());
-        m.put("buyingPowerCents", acct.buyingPowerCents());
-        m.put("hasTraded", acct.hasTraded());
-        m.put("createdAt", acct.createdAt());
-        return m;
     }
 
     // ---- Research ----
@@ -1203,159 +852,6 @@ public final class ApiServer {
     private List<LocalDate> activeExpirations(String symbol, String world) {
         java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
         return ResearchController.activeExpirations(market.expirations(symbol, world), now);
-    }
-
-    /** ONE stable universe schema for every market mode (P0-1); world = null means observed. */
-    private Object universeViewFor(String worldOrNull, String owner) {
-        if (worldOrNull != null) {
-            var syms = market.worldSymbols(worldOrNull).map(x -> List.copyOf(x)).orElse(List.<String>of());
-            boolean demo = "demo".equals(worldOrNull);
-            String name = demo ? "Built-in demo market" : simSessions.getOrRestore(worldOrNull, owner)
-                    .map(x -> x.config().name() == null ? "Simulated session" : x.config().name())
-                    .orElse("Simulated session");
-            String qualifier = demo ? "fabricated demo data" : "simulated";
-            Map<String, Object> out = new LinkedHashMap<>();
-            out.put("active", Map.of("source", "world", "sectorKey", "world",
-                    "label", name + " (" + qualifier + ")", "symbols", syms));
-            out.put("sectors", List.of(Map.of("key", "world", "label", name + " (" + qualifier + ")",
-                    "symbols", syms)));
-            out.put("world", worldOrNull);
-            out.put("lane", demo ? "DEMO" : "SIMULATED");
-            return out;
-        }
-        Map<String, Object> observed = new LinkedHashMap<>(universe.describe());
-        observed.put("world", "observed");
-        observed.put("lane", cfg.fixturesOnly() ? "DEMO" : "OBSERVED");
-        return observed;
-    }
-
-    /**
-     * Batch sparkline closes for the Research/Home cards — ONE http call for the whole grid,
-     * served from the shared candles cache (store-first, then lane-eligible providers) or the
-     * simulated world's memory. Never a per-card provider fan-out from the client. A symbol with
-     * no candle source in live keyless mode answers available:false with an honest note (and a
-     * 15-minute negative memo so a dead symbol cannot re-trigger the provider chain per render).
-     */
-    private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> sparklineEmptyMemo =
-            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
-                    .expireAfterWrite(java.time.Duration.ofMinutes(15)).maximumSize(500).build();
-    private final java.util.concurrent.atomic.AtomicLong historicalDataVersion =
-            new java.util.concurrent.atomic.AtomicLong();
-
-    private void invalidateHistoricalViews() {
-        historicalDataVersion.incrementAndGet();
-        sparklineEmptyMemo.invalidateAll();
-        market.invalidateHistoricalData();
-        evaluations.invalidateHistoricalData();
-    }
-
-    private void sparklines(Context ctx) {
-        String raw = ctx.queryParam("symbols");
-        String requested = ctx.queryParam("range") == null ? "3m" : ctx.queryParam("range").toLowerCase(Locale.ROOT);
-        String range = switch (requested) {
-            case "1m", "3m", "6m", "ytd", "1y" -> requested;
-            default -> "3m";
-        };
-        String world = worldParam(activeWorld(ctx));
-        // EXACTLY history's window computation so the candlesCache key (dataset|sym|from|to) is
-        // shared between /history and /sparklines — one warms the other for free.
-        LocalDate today = market.simInstant(world)
-                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
-        int days = switch (range) {
-            case "1m" -> 30;
-            case "6m" -> 182;
-            case "ytd" -> today.getDayOfYear();
-            case "1y" -> 365;
-            default -> 91;
-        };
-        LocalDate from = today.minusDays(days);
-        List<String> symbols = raw == null || raw.isBlank()
-                ? (world != null
-                    ? market.worldSymbols(world).map(List::copyOf).orElse(List.of())
-                    : universe.active().symbols())
-                : java.util.Arrays.stream(raw.split(",")).map(x -> x.trim().toUpperCase(Locale.ROOT))
-                    .filter(x -> !x.isBlank()).distinct().toList();
-        int totalRequested = symbols.size();
-        if (totalRequested > 16) symbols = symbols.subList(0, 16);
-        var actx = analysisCtx(ctx);
-        String lane = world != null ? world : "observed";
-        long dataVersion = historicalDataVersion.get();
-        var rows = new java.util.concurrent.ConcurrentHashMap<String, Map<String, Object>>();
-        var gate = new java.util.concurrent.Semaphore(2); // optional screen decoration never fans out aggressively
-        List<Thread> workers = new ArrayList<>();
-        for (String sym : symbols) {
-            workers.add(Thread.startVirtualThread(() -> {
-                Map<String, Object> row = new LinkedHashMap<>();
-                row.put("symbol", sym);
-                String memoKey = dataVersion + "|" + lane + "|" + actx + "|" + sym + "|" + range;
-                // Simulated worlds advance under their own clock and are memory-cheap: never pin
-                // a temporary empty result while the world is creating its next candle.
-                if (world == null && sparklineEmptyMemo.getIfPresent(memoKey) != null) {
-                    row.put("available", false);
-                    row.put("closes", List.of());
-                    row.put("note", "No daily-candle source for this symbol right now \u2014 quotes still work.");
-                    row.put("evidence", io.liftandshift.strikebench.model.DataEvidence.missing("daily history unavailable"));
-                    rows.put(sym, row);
-                    return;
-                }
-                try {
-                    gate.acquire();
-                    try {
-                        var series = market.candleSeries(sym, from, today, world, actx);
-                        var candles = series == null ? List.<io.liftandshift.strikebench.model.Candle>of() : series.candles();
-                        if (candles.size() < 2) {
-                            if (world == null) sparklineEmptyMemo.put(memoKey, Boolean.TRUE);
-                            row.put("available", false);
-                            row.put("closes", List.of());
-                            row.put("note", "No daily-candle source for this symbol right now \u2014 quotes still work.");
-                            row.put("evidence", series == null
-                                    ? io.liftandshift.strikebench.model.DataEvidence.missing("daily history unavailable")
-                                    : series.evidence());
-                        } else {
-                            // Trim to <=64 points: a sparkline needs shape, not every bar.
-                            int stride = Math.max(1, (int) Math.ceil(candles.size() / 64.0));
-                            List<String> dates = new ArrayList<>();
-                            List<java.math.BigDecimal> closes = new ArrayList<>();
-                            for (int i = 0; i < candles.size(); i += stride) {
-                                var cnd = candles.get(i);
-                                dates.add(cnd.date().toString());
-                                closes.add(cnd.close());
-                            }
-                            var last = candles.getLast();
-                            if (!dates.getLast().equals(last.date().toString())) { // always end on the latest bar
-                                dates.add(last.date().toString());
-                                closes.add(last.close());
-                            }
-                            row.put("available", true);
-                            row.put("dates", dates);
-                            row.put("closes", closes);
-                            row.put("source", series.source());
-                            row.put("freshness", series.freshness().name());
-                            row.put("evidence", series.evidence());
-                        }
-                    } finally {
-                        gate.release();
-                    }
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    row.put("available", false);
-                    row.put("closes", List.of());
-                    row.put("note", "History lookup was interrupted \u2014 try again.");
-                    row.put("evidence", io.liftandshift.strikebench.model.DataEvidence.missing("history interrupted"));
-                } catch (RuntimeException e) {
-                    row.put("available", false);
-                    row.put("closes", List.of());
-                    row.put("note", "History lookup failed \u2014 try again or check Data source health.");
-                    row.put("evidence", io.liftandshift.strikebench.model.DataEvidence.missing("history lookup failed"));
-                }
-                rows.put(sym, row);
-            }));
-        }
-        for (Thread t : workers) { try { t.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }
-        List<Map<String, Object>> out = new ArrayList<>();
-        for (String sym : symbols) { var r = rows.get(sym); if (r != null) out.add(r); }
-        ctx.json(new ApiResponses.Sparklines<>(range, out, totalRequested, world));
     }
 
 
