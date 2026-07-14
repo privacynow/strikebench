@@ -157,9 +157,9 @@ public final class PortfolioAccountingService {
                             long capitalGainDistributionCents, long washSaleAdjustmentsCents,
                             long section1256GainCents, long section1256ShortTermCents,
                             long section1256LongTermCents,
-                            Long estimatedFederalTaxCents, Long estimatedStateTaxCents,
-                            Long estimatedTotalTaxCents, List<RealizedLotView> realizedLots,
-                            String note) {}
+                            Long scenarioFederalTaxCents, Long scenarioStateTaxCents,
+                            Long scenarioTotalTaxCents, List<RealizedLotView> realizedLots,
+                            TaxRules.View rules, String note) {}
 
     public record PositionView(String key, String instrumentType, String side, String symbol,
                                String optionType, BigDecimal strike, LocalDate expiration,
@@ -767,10 +767,11 @@ public final class PortfolioAccountingService {
 
     public TaxReport taxReport(String ownerId, String accountId, int year) {
         if (year < 1970 || year > 9999) throw new IllegalArgumentException("invalid tax year");
+        TaxRules.View rules = TaxRules.forYear(year);
         String owner = owner(ownerId);
         return db.tx(c -> {
             AccountProfile account = requireAccount(c, owner, accountId, true);
-            requireSection1256YearComplete(c, account, year);
+            if (rules.reviewed()) requireSection1256YearComplete(c, account, year);
             List<RealizedLotView> realized = Db.queryOn(c,
                     "SELECT m.*,l.symbol,l.instrument_type,l.side FROM portfolio_lot_match m "
                             + "JOIN portfolio_lot l ON l.id=m.lot_id WHERE m.portfolio_account_id=? "
@@ -797,11 +798,14 @@ public final class PortfolioAccountingService {
             Long federal = null, state = null, total = null;
             String note;
             if (!account.currentlyTaxable()) {
-                federal = state = total = 0L;
-                note = "This wrapper has no current per-trade capital-gains estimate. Contributions, withdrawals, conversions, penalties, and future distributions follow separate tax rules.";
+                note = "No user-rate scenario is calculated for this retirement wrapper. Contributions, withdrawals, conversions, penalties, required distributions, and future distributions follow separate rules. "
+                        + taxLimitNote(rules);
+            } else if (!rules.userRateScenarioAvailable()) {
+                note = "Recorded lots and income remain visible, but the user-rate scenario is withheld because the "
+                        + year + " ruleset is " + rules.status().name().toLowerCase() + ". " + taxLimitNote(rules);
             } else if (st < 0 || lt < 0) {
-                note = "Basis and realized losses are calculated, but a tax estimate is withheld because loss netting, carryovers, and the rest of the tax return are not recorded here. "
-                        + taxLimitNote();
+                note = "Basis and realized losses are calculated, but the user-rate scenario is withheld because loss netting, carryovers, and the rest of the tax return are not recorded here. "
+                        + taxLimitNote(rules);
             } else if (account.shortTermTaxRateBps() != null && account.longTermTaxRateBps() != null
                     && account.ordinaryTaxRateBps() != null) {
                 federal = Math.addExact(taxAt(st, account.shortTermTaxRateBps()),
@@ -811,18 +815,20 @@ public final class PortfolioAccountingService {
                         : taxAt(Math.addExact(Math.addExact(Math.addExact(st, lt), Math.addExact(interest, ordinaryDiv)),
                                 Math.addExact(qualifiedDiv, capDist)), account.stateTaxRateBps());
                 total = Math.addExact(federal, state == null ? 0 : state);
-                note = taxLimitNote();
+                note = taxLimitNote(rules);
             } else {
-                note = "Basis and holding periods are calculated, but a tax estimate needs the account's short-term, long-term, and ordinary-income rates. " + taxLimitNote();
+                note = "Basis and holding periods are calculated, but the user-rate scenario needs the account's short-term, long-term, and ordinary-income scenario rates. "
+                        + taxLimitNote(rules);
             }
             return new TaxReport(year, account.accountType(), st, lt, interest, ordinaryDiv, qualifiedDiv,
                     capDist, wash, sectionTotal, sectionShort, sectionLong,
-                    federal, state, total, realized, note);
+                    federal, state, total, realized, rules, note);
         });
     }
 
     public int markSection1256YearEnd(String ownerId, String accountId, int year) {
         if (year < 1970 || year > 9999) throw new IllegalArgumentException("invalid tax year");
+        TaxRules.requireAutomatedYear(year, "Automated Section 1256 year-end marking");
         String owner = owner(ownerId);
         return db.tx(c -> {
             AccountProfile account = requireAccount(c, owner, accountId, true);
@@ -843,6 +849,7 @@ public final class PortfolioAccountingService {
         if (earliest.isEmpty()) return 0;
         int count = 0;
         for (int year = Math.toIntExact(earliest.getFirst()); year <= target; year++) {
+            TaxRules.requireAutomatedYear(year, "Automated Section 1256 year-end marking");
             count += ensureSection1256Year(c, account, year);
         }
         return count;
@@ -1452,7 +1459,8 @@ public final class PortfolioAccountingService {
     private void applyExistingReplacementsToLoss(Connection c, AccountProfile account,
                                                   long matchId) throws SQLException {
         WashLoss loss = washLoss(c, matchId);
-        if (loss.realizedGainCents() >= 0 || loss.allocatedQuantity() >= loss.quantity()) return;
+        if (!reviewedWashLoss(loss) || loss.realizedGainCents() >= 0
+                || loss.allocatedQuantity() >= loss.quantity()) return;
         List<String> replacements = Db.queryOn(c,
                 "SELECT l.id FROM portfolio_lot l JOIN portfolio_transaction t ON t.id=l.opening_transaction_id "
                         + "WHERE l.portfolio_account_id=? AND l.side='LONG' AND l.remaining_quantity>0 "
@@ -1496,6 +1504,7 @@ public final class PortfolioAccountingService {
         for (Long matchId : losses) {
             if (availableLotId == null) break;
             WashLoss loss = washLoss(c, matchId);
+            if (!reviewedWashLoss(loss)) continue;
             LotRow available = lot(c, availableLotId, true);
             long needed = Math.subtractExact(loss.quantity(), loss.allocatedQuantity());
             WashAllocation allocation = allocateWash(c, account, loss, available,
@@ -1564,12 +1573,19 @@ public final class PortfolioAccountingService {
                 carriedOpen, Math.addExact(adjusted.originalOpenAmount(), adjustment),
                 Math.addExact(adjusted.remainingOpenAmount(), adjustment), adjustedLotId);
         Db.execOn(c, "INSERT INTO portfolio_wash_sale_allocation(portfolio_account_id,loss_match_id,"
-                        + "replacement_lot_id,quantity,adjustment_cents) VALUES (?,?,?,?,?)",
-                account.id(), loss.matchId(), adjustedLotId, quantity, adjustment);
+                        + "replacement_lot_id,quantity,adjustment_cents,ruleset_id,classification_status) "
+                        + "VALUES (?,?,?,?,?,?,?)",
+                account.id(), loss.matchId(), adjustedLotId, quantity, adjustment,
+                TaxRules.RULESET_ID, "MODELED_COMMON_CASE");
         Db.execOn(c, "UPDATE portfolio_lot_match SET wash_sale_adjustment_cents="
                         + "wash_sale_adjustment_cents+? WHERE id=?",
                 adjustment, loss.matchId());
         return new WashAllocation(quantity, unallocatedLotId);
+    }
+
+    private static boolean reviewedWashLoss(WashLoss loss) {
+        int year = loss.closedAt().atZoneSameInstant(MARKET_ZONE).getYear();
+        return TaxRules.forYear(year).reviewed();
     }
 
     private static WashLoss washLoss(Connection c, long matchId) throws SQLException {
@@ -1911,8 +1927,14 @@ public final class PortfolioAccountingService {
         }
     }
 
-    private static String taxLimitNote() {
-        return "Estimate only: recorded same-instrument wash-sale deferrals and identified Section 1256 60/40 treatment are applied; qualified-covered-call rules, straddle rules, loss limits or carryovers, state-specific rules, and filing elections still require reconciliation against broker tax forms.";
+    private static String taxLimitNote(TaxRules.View rules) {
+        return "Ruleset " + rules.id() + " is " + rules.status().name().toLowerCase()
+                + " for tax year " + rules.taxYear() + " and was reviewed through " + rules.reviewedThrough()
+                + ". Automated results cover only recorded same-account exact-instrument wash-sale candidates and "
+                + "identified broad-based-index Section 1256 treatment. They do not resolve cross-account, spouse, "
+                + "IRA, substantially-identical-security, or short-sale wash rules; qualified-covered-call or straddle "
+                + "rules; loss limits or carryovers; state-specific rules; filing elections; or the rest of the return. "
+                + "Reconcile every figure against broker forms and a qualified tax professional.";
     }
 
     private static boolean section1256(Boolean explicit, String instrumentType, String symbol) {

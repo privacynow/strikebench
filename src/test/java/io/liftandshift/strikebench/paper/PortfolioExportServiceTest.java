@@ -96,7 +96,7 @@ class PortfolioExportServiceTest {
                 "xl/worksheets/sheet1.xml", "xl/worksheets/sheet6.xml");
         assertThat(xml).contains("Summary", "Transactions", "Performance", "Tax 2026", "Modified Dietz",
                 "Time-weighted return", "Money-weighted return (XIRR)", "Maximum drawdown", "SPY benchmark return",
-                "Primary transaction row", "Not tax advice");
+                "Primary transaction row", "Not tax advice", "User-rate total scenario", "Ruleset status");
         assertThat(xml).contains("kept removed").doesNotContain("\u0001");
         assertThat(xml).doesNotContain("<f>");
     }
