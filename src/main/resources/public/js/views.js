@@ -5213,7 +5213,7 @@
       el('p', { class: 'muted' }, Learn.currentLevel() === 'beginner'
         ? 'Copy what actually happened at your broker. StrikeBench keeps exact share and option lots, cash, fees, and basis; it never guesses whether a leg opened or closed.'
         : 'Post normalized cash or market activity to the owner-scoped accounting book. Corrections use offsetting entries; recorded history is not rewritten.'),
-      el('p', { class: 'muted small' }, 'Enter market activity oldest to newest so every close can match the lots that existed at that time. CSV imports are sorted before their single atomic commit.'),
+      el('p', { class: 'muted small' }, 'Enter market activity oldest to newest so every close can match the lots that existed at that time. CSV imports sort transaction groups and keep every multi-leg package atomic.'),
       el('div', { class: 'form-grid book-transaction-meta' }, UI.field('What happened?', event), UI.field('Date and time', occurred),
         UI.field('Source', source), UI.field('Broker reference', reference,
           { hint: 'Required for broker-sourced activity so a repeated fill cannot be recorded twice.' }), cashField, feeField, taxField),
@@ -5225,21 +5225,55 @@
   function portfolioImportCard(account) {
     var file = el('input', { type: 'file', accept: '.csv,text/csv', 'aria-label': 'Portfolio activity CSV' });
     var result = el('div', { class: 'small', 'aria-live': 'polite' });
+    function renderImportResult(out) {
+      result.innerHTML = '';
+      if (!out) return;
+      result.className = 'book-import-result';
+      var importMessage = 'Imported ' + out.transactionsWritten + ' transaction' + (out.transactionsWritten === 1 ? '' : 's')
+        + ' from ' + out.rowsRead + ' row' + (out.rowsRead === 1 ? '' : 's') + '. '
+        + (out.rejectedRows ? out.rejectedRows + ' row' + (out.rejectedRows === 1 ? '' : 's') + ' quarantined.' : 'No rows were rejected.');
+      result.appendChild(el('p', { class: out.rejectedRows ? 'caution' : 'gain' }, importMessage));
+      if (out.rejectedRows) {
+        var rejects = out.quarantine || [];
+        result.appendChild(UI.expandable(
+          el('span', {}, 'Review quarantined rows · ', rejects.length),
+          function () { return el('div', { class: 'book-import-rejects' },
+            rejects.slice(0, 100).map(function (row) { return el('div', { class: 'book-import-reject-row' },
+              el('b', {}, 'Line ' + row.line),
+              el('span', { class: 'muted' }, row.transactionRef || 'No transaction reference'),
+              el('span', {}, row.reason)); }),
+            rejects.length > 100 ? el('p', { class: 'muted small' }, 'Showing 100 of ' + rejects.length + ' rows. Download the complete list below.') : null); }));
+        result.appendChild(el('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: function () {
+          var quote = function (value) { return '"' + String(value == null ? '' : value).replaceAll('"', '""') + '"'; };
+          var csv = 'line,transaction_ref,reason\r\n' + rejects.map(function (row) {
+            return [row.line, quote(row.transactionRef), quote(row.reason)].join(',');
+          }).join('\r\n');
+          var url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+          var link = el('a', { href: url, download: 'StrikeBench-portfolio-import-rejects.csv' });
+          document.body.appendChild(link); link.click(); link.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+        } }, 'Download all rejects'));
+      }
+      result.appendChild(el('p', { class: 'muted small' }, out.note));
+    }
+    renderImportResult((App.state.portfolioImportResults || {})[account.id]);
     var upload = el('button', { type: 'button', class: 'btn btn-secondary', disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
       onclick: async function () {
         if (!file.files || !file.files[0]) { result.textContent = 'Choose a CSV file first.'; result.className = 'small loss'; return; }
-        upload.disabled = true; upload.setAttribute('aria-busy', 'true'); result.textContent = 'Validating the entire file…';
+        upload.disabled = true; upload.setAttribute('aria-busy', 'true'); result.textContent = 'Validating transaction groups…';
         try {
           var fd = new FormData(); fd.append('file', file.files[0]);
           var out = await API.upload('/api/portfolio/accounts/' + account.id + '/import.csv', fd);
-          UI.toast('Imported ' + out.transactions + ' transaction' + (out.transactions === 1 ? '' : 's'), 'ok');
+          App.state.portfolioImportResults = App.state.portfolioImportResults || {};
+          App.state.portfolioImportResults[account.id] = out;
+          UI.toast('Imported ' + out.transactionsWritten + ' transaction' + (out.transactionsWritten === 1 ? '' : 's')
+            + (out.rejectedRows ? ' · ' + out.rejectedRows + ' rows need attention' : ''), out.rejectedRows ? 'warn' : 'ok');
           await App.render();
         } catch (e) { result.textContent = e.message || String(e); result.className = 'small loss'; }
         finally { upload.disabled = account.status === 'ARCHIVED'; upload.removeAttribute('aria-busy'); }
       } }, 'Import CSV');
     return el('section', { class: 'card card-slim book-import-card' },
       UI.cardHeader('Import a broker history'),
-      el('p', { class: 'muted small' }, 'The complete file is sorted chronologically and validated before anything is written. Stable references make duplicate imports fail visibly instead of duplicating lots. To add history older than activity already recorded here, import it into a new tracked account.'),
+      el('p', { class: 'muted small' }, 'Transactions are sorted chronologically. Every reference is atomic: all legs land together or every row in that package is quarantined with a reason. Other valid references still import, and stable references prevent duplicates. To add history older than activity already recorded here, use a new tracked account.'),
       el('div', { class: 'book-import-row' }, file, upload,
         el('a', { class: 'btn btn-secondary', href: '/api/portfolio/import-template.csv', download: 'StrikeBench-portfolio-import-template.csv' }, 'Download template')),
       result);

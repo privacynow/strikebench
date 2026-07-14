@@ -13,7 +13,6 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PortfolioCsvImportTest {
     private Db db;
@@ -39,6 +38,8 @@ class PortfolioCsvImportTest {
 
         var result = PortfolioCsvImport.run(stream(csv), "local", accountId, books);
         assertThat(result.transactionsWritten()).isEqualTo(2);
+        assertThat(result.rejectedRows()).isZero();
+        assertThat(result.quarantine()).isEmpty();
         assertThat(result.transactionIds()).hasSize(2);
         assertThat(books.transactions("local", accountId, 0, 20)).hasSize(2);
         assertThat(books.lots("local", accountId, false)).hasSize(2);
@@ -49,14 +50,27 @@ class PortfolioCsvImportTest {
     }
 
     @Test
-    void oneInvalidCloseRollsBackEveryTransactionInTheFile() {
+    void mixedFileCommitsValidGroupsAndQuarantinesEveryRowOfInvalidGroups() throws Exception {
         String csv = PortfolioCsvImport.TEMPLATE_HEADER + "\n"
                 + "interest-2,2026-07-02,INTEREST,500,0,ORDINARY_INTEREST,Would otherwise be valid,,,,,,,,,,,\n"
-                + "bad-close,2026-07-03,TRADE,,0,,,0,STOCK,SELL,CLOSE,NVDA,,,,1,1,200\n";
+                + "bad-spread,2026-07-03,TRADE,,0,,Invalid package,0,OPTION,BUY,OPEN,AAPL,CALL,250,2026-08-21,1,100,8.25\n"
+                + "bad-spread,2026-07-03,TRADE,,0,,Invalid package,1,OPTION,SELL,OPEN,AAPL,CALL,260,2026-08-21,not-a-number,100,3.10\n"
+                + "bad-close,2026-07-04,TRADE,,0,,,0,STOCK,SELL,CLOSE,NVDA,,,,1,1,200\n"
+                + "deposit-2,2026-07-05,DEPOSIT,10000,0,,Valid after rejects,,,,,,,,,,,\n";
 
-        assertThatThrownBy(() -> PortfolioCsvImport.run(stream(csv), "local", accountId, books))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("only 0 matching long units");
-        assertThat(books.transactions("local", accountId, 0, 20)).isEmpty();
+        var result = PortfolioCsvImport.run(stream(csv), "local", accountId, books);
+
+        assertThat(result.transactionsWritten()).isEqualTo(2);
+        assertThat(result.rejectedRows()).isEqualTo(3);
+        assertThat(result.quarantine()).extracting(PortfolioCsvImport.RejectedRow::line)
+                .containsExactly(3, 4, 5);
+        assertThat(result.quarantine()).filteredOn(r -> "bad-spread".equals(r.transactionRef()))
+                .hasSize(2).allSatisfy(r -> assertThat(r.reason()).contains("quantity must be an integer"));
+        assertThat(result.quarantine()).filteredOn(r -> "bad-close".equals(r.transactionRef()))
+                .singleElement().satisfies(r -> assertThat(r.reason()).contains("only 0 matching long units"));
+        assertThat(books.transactions("local", accountId, 0, 20))
+                .extracting(PortfolioAccountingService.TransactionView::externalRef)
+                .containsExactly("deposit-2", "interest-2");
         assertThat(books.lots("local", accountId, true)).isEmpty();
     }
 

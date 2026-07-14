@@ -1440,7 +1440,7 @@ class ApiIntegrationTest {
 
     @Test
     @Order(43)
-    void trackedPortfolioCsvImportIsAtomicAndIdempotencyProtected() throws Exception {
+    void trackedPortfolioCsvImportIsGroupAtomicForgivingAndIdempotencyProtected() throws Exception {
         String id = Json.parse(post("/api/portfolio/accounts", """
                 {"name":"Imported IRA","accountType":"ROTH_IRA","lotMethod":"FIFO"}
                 """).body()).get("id").asText();
@@ -1463,7 +1463,10 @@ class ApiIntegrationTest {
         assertThat(Json.parse(get("/api/portfolio/accounts/" + id + "/summary").body()).get("positions")).hasSize(1);
 
         HttpResponse<String> duplicate = http.send(request, HttpResponse.BodyHandlers.ofString());
-        assertThat(duplicate.statusCode()).isEqualTo(409);
+        assertThat(duplicate.statusCode()).isEqualTo(201);
+        assertThat(Json.parse(duplicate.body()).get("transactionsWritten").asInt()).isZero();
+        assertThat(Json.parse(duplicate.body()).get("rejectedRows").asInt()).isEqualTo(2);
+        assertThat(Json.parse(duplicate.body()).get("quarantine").toString()).contains("already recorded");
         assertThat(Json.parse(get("/api/portfolio/accounts/" + id + "/transactions?size=20").body())
                 .get("transactions")).hasSize(2);
     }
