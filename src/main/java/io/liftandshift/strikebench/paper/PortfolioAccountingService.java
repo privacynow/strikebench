@@ -157,8 +157,16 @@ public final class PortfolioAccountingService {
 
     private record LotRow(String id, String accountId, String instrumentType, String side,
                           String symbol, String optionType, BigDecimal strike, LocalDate expiration,
-                          int multiplier, String openedAt, long originalQuantity, long remainingQuantity,
+                          int multiplier, String openedAt, String acquiredAt,
+                          long originalQuantity, long remainingQuantity,
                           long originalOpenAmount, long remainingOpenAmount, String status) {}
+
+    private record WashLoss(long matchId, String lossLotId, String instrumentType, String symbol,
+                            String optionType, BigDecimal strike, LocalDate expiration, int multiplier,
+                            OffsetDateTime openedAt, OffsetDateTime closedAt, long quantity,
+                            long realizedGainCents, long allocatedQuantity, long allocatedCents) {}
+
+    private record WashAllocation(long quantity, String remainingReplacementLotId) {}
 
     private record SummaryLedgerSnapshot(AccountProfile account, List<LotView> openLots,
                                          long cashCents, long realizedCents, long feesCents,
@@ -456,9 +464,9 @@ public final class PortfolioAccountingService {
                             + "AND EXTRACT(YEAR FROM (m.closed_at AT TIME ZONE 'America/New_York'))=? ORDER BY m.closed_at,m.id",
                     PortfolioAccountingService::mapRealized, account.id(), year);
             long st = exactSum(realized.stream().filter(r -> "SHORT_TERM".equals(r.holdingTerm()))
-                    .map(RealizedLotView::realizedGainCents).toList(), "short-term gains");
+                    .map(r -> Math.addExact(r.realizedGainCents(), r.washSaleAdjustmentCents())).toList(), "short-term gains");
             long lt = exactSum(realized.stream().filter(r -> "LONG_TERM".equals(r.holdingTerm()))
-                    .map(RealizedLotView::realizedGainCents).toList(), "long-term gains");
+                    .map(r -> Math.addExact(r.realizedGainCents(), r.washSaleAdjustmentCents())).toList(), "long-term gains");
             long interest = incomeOn(c, account.id(), "INTEREST", year);
             long ordinaryDiv = incomeByCategoryOn(c, account.id(), year, "ORDINARY_DIVIDEND");
             long qualifiedDiv = incomeByCategoryOn(c, account.id(), year, "QUALIFIED_DIVIDEND");
@@ -729,7 +737,10 @@ public final class PortfolioAccountingService {
         if ("OPEN".equals(leg.positionEffect())) {
             long amount = openingAmount(leg) + amountAdjustment;
             if (amount < 0) throw new IllegalArgumentException("opening basis/proceeds became negative after assignment adjustment");
-            insertLot(c, account.id(), txId, occurred, leg, amount);
+            String lotId = insertLot(c, account.id(), txId, occurred, leg, amount);
+            if (account.currentlyTaxable() && "BUY".equals(leg.action())) {
+                applyPriorLossesToReplacement(c, account, lotId);
+            }
         } else {
             closeLots(c, account, txId, occurred, leg, closingAmount(leg) + amountAdjustment, false);
         }
@@ -796,7 +807,7 @@ public final class PortfolioAccountingService {
             long realized = rolled ? 0 : "LONG".equals(side)
                     ? Math.subtractExact(closePart, openPart) : Math.subtractExact(openPart, closePart);
             String term = rolled ? "ROLLED" : holdingTerm(lot, occurred);
-            Db.execOn(c, "INSERT INTO portfolio_lot_match(portfolio_account_id,lot_id,closing_transaction_id,closing_leg_no,"
+            long matchId = Db.insertReturningId(c, "INSERT INTO portfolio_lot_match(portfolio_account_id,lot_id,closing_transaction_id,closing_leg_no,"
                             + "quantity,opened_at,closed_at,open_amount_cents,close_amount_cents,realized_gain_cents,holding_term) "
                             + "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     account.id(), lot.id(), txId, leg.legNo(), qty, OffsetDateTime.parse(lot.openedAt()), occurred,
@@ -805,11 +816,147 @@ public final class PortfolioAccountingService {
             long lotAmountAfter = Math.subtractExact(lot.remainingOpenAmount(), openPart);
             Db.execOn(c, "UPDATE portfolio_lot SET remaining_quantity=?,remaining_open_amount_cents=?,status=? WHERE id=?",
                     lotQtyAfter, lotAmountAfter, lotQtyAfter == 0 ? (rolled ? "ROLLED" : "CLOSED") : "OPEN", lot.id());
+            if (account.currentlyTaxable() && !rolled && "LONG".equals(side) && realized < 0) {
+                applyExistingReplacementsToLoss(c, account, matchId);
+            }
             remainingQty = Math.subtractExact(remainingQty, qty);
             remainingClose = Math.subtractExact(remainingClose, closePart);
             transferred = Math.addExact(transferred, openPart);
         }
         return transferred;
+    }
+
+    private void applyExistingReplacementsToLoss(Connection c, AccountProfile account,
+                                                  long matchId) throws SQLException {
+        WashLoss loss = washLoss(c, matchId);
+        if (loss.realizedGainCents() >= 0 || loss.allocatedQuantity() >= loss.quantity()) return;
+        List<String> replacements = Db.queryOn(c,
+                "SELECT l.id FROM portfolio_lot l JOIN portfolio_transaction t ON t.id=l.opening_transaction_id "
+                        + "WHERE l.portfolio_account_id=? AND l.side='LONG' AND l.remaining_quantity>0 "
+                        + "AND l.id<>? AND l.instrument_type=? AND l.symbol=? "
+                        + "AND l.option_type IS NOT DISTINCT FROM ? AND l.strike IS NOT DISTINCT FROM ? "
+                        + "AND l.expiration IS NOT DISTINCT FROM ? AND l.multiplier=? "
+                        + "AND l.acquired_at>=? AND l.acquired_at<=? "
+                        + "AND NOT EXISTS (SELECT 1 FROM portfolio_wash_sale_allocation w WHERE w.replacement_lot_id=l.id) "
+                        + "ORDER BY l.acquired_at,t.record_seq,l.id FOR UPDATE OF l",
+                r -> r.str("id"), account.id(), loss.lossLotId(), loss.instrumentType(), loss.symbol(),
+                loss.optionType(), loss.strike(), loss.expiration(), loss.multiplier(),
+                loss.closedAt().minusDays(30), loss.closedAt().plusDays(30));
+        for (String replacementId : replacements) {
+            loss = washLoss(c, matchId);
+            long needed = Math.subtractExact(loss.quantity(), loss.allocatedQuantity());
+            if (needed == 0) break;
+            LotRow replacement = lot(c, replacementId, true);
+            allocateWash(c, account, loss, replacement, Math.min(needed, replacement.remainingQuantity()));
+        }
+    }
+
+    private void applyPriorLossesToReplacement(Connection c, AccountProfile account,
+                                                String replacementLotId) throws SQLException {
+        LotRow replacement = lot(c, replacementLotId, true);
+        if (!"LONG".equals(replacement.side())) return;
+        OffsetDateTime acquired = OffsetDateTime.parse(replacement.acquiredAt());
+        List<Long> losses = Db.queryOn(c,
+                "SELECT m.id FROM portfolio_lot_match m JOIN portfolio_lot l ON l.id=m.lot_id "
+                        + "WHERE m.portfolio_account_id=? AND m.realized_gain_cents<0 AND l.side='LONG' "
+                        + "AND l.instrument_type=? AND l.symbol=? "
+                        + "AND l.option_type IS NOT DISTINCT FROM ? AND l.strike IS NOT DISTINCT FROM ? "
+                        + "AND l.expiration IS NOT DISTINCT FROM ? AND l.multiplier=? "
+                        + "AND m.closed_at>=? AND m.closed_at<=? "
+                        + "AND COALESCE((SELECT SUM(w.quantity) FROM portfolio_wash_sale_allocation w "
+                        + "WHERE w.loss_match_id=m.id),0)<m.quantity "
+                        + "ORDER BY m.closed_at,m.id FOR UPDATE OF m",
+                r -> r.lng("id"), account.id(), replacement.instrumentType(), replacement.symbol(),
+                replacement.optionType(), replacement.strike(), replacement.expiration(), replacement.multiplier(),
+                acquired.minusDays(30), acquired);
+        String availableLotId = replacementLotId;
+        for (Long matchId : losses) {
+            if (availableLotId == null) break;
+            WashLoss loss = washLoss(c, matchId);
+            LotRow available = lot(c, availableLotId, true);
+            long needed = Math.subtractExact(loss.quantity(), loss.allocatedQuantity());
+            WashAllocation allocation = allocateWash(c, account, loss, available,
+                    Math.min(needed, available.remainingQuantity()));
+            availableLotId = allocation.remainingReplacementLotId();
+        }
+    }
+
+    private WashAllocation allocateWash(Connection c, AccountProfile account, WashLoss loss,
+                                         LotRow replacement, long quantity) throws SQLException {
+        if (!account.currentlyTaxable() || quantity <= 0) return new WashAllocation(0, replacement.id());
+        long remainingLossQuantity = Math.subtractExact(loss.quantity(), loss.allocatedQuantity());
+        long totalAdjustment = Math.negateExact(loss.realizedGainCents());
+        long remainingAdjustment = Math.subtractExact(totalAdjustment, loss.allocatedCents());
+        long adjustment = quantity == remainingLossQuantity ? remainingAdjustment
+                : allocate(remainingAdjustment, quantity, remainingLossQuantity);
+        if (adjustment <= 0) return new WashAllocation(0, replacement.id());
+
+        String adjustedLotId = replacement.id();
+        String unallocatedLotId = null;
+        boolean mustSplit = quantity < replacement.remainingQuantity()
+                || replacement.remainingQuantity() < replacement.originalQuantity();
+        if (mustSplit) {
+            long basisPart = allocate(replacement.remainingOpenAmount(), quantity, replacement.remainingQuantity());
+            long sourceOriginalQuantity = Math.subtractExact(replacement.originalQuantity(), quantity);
+            long sourceRemainingQuantity = Math.subtractExact(replacement.remainingQuantity(), quantity);
+            long sourceOriginalAmount = Math.subtractExact(replacement.originalOpenAmount(), basisPart);
+            long sourceRemainingAmount = Math.subtractExact(replacement.remainingOpenAmount(), basisPart);
+            Db.execOn(c, "UPDATE portfolio_lot SET original_quantity=?,remaining_quantity=?,"
+                            + "original_open_amount_cents=?,remaining_open_amount_cents=?,status=? WHERE id=?",
+                    sourceOriginalQuantity, sourceRemainingQuantity, sourceOriginalAmount, sourceRemainingAmount,
+                    sourceRemainingQuantity == 0 ? "CLOSED" : "OPEN", replacement.id());
+            Object[] opening = Db.queryOn(c,
+                    "SELECT opening_transaction_id,opening_leg_no FROM portfolio_lot WHERE id=?",
+                    r -> new Object[]{r.str("opening_transaction_id"), r.intv("opening_leg_no")},
+                    replacement.id()).getFirst();
+            adjustedLotId = Ids.newId("plot");
+            Db.execOn(c, "INSERT INTO portfolio_lot(id,portfolio_account_id,opening_transaction_id,opening_leg_no,"
+                            + "instrument_type,side,symbol,option_type,strike,expiration,opened_at,acquired_at,"
+                            + "original_quantity,remaining_quantity,original_open_amount_cents,remaining_open_amount_cents,"
+                            + "multiplier,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN')",
+                    adjustedLotId, replacement.accountId(), opening[0], opening[1], replacement.instrumentType(),
+                    replacement.side(), replacement.symbol(), replacement.optionType(), replacement.strike(),
+                    replacement.expiration(), OffsetDateTime.parse(replacement.openedAt()),
+                    OffsetDateTime.parse(replacement.acquiredAt()), quantity, quantity, basisPart, basisPart,
+                    replacement.multiplier());
+            if (sourceRemainingQuantity > 0) unallocatedLotId = replacement.id();
+        }
+
+        LotRow adjusted = lot(c, adjustedLotId, true);
+        OffsetDateTime carriedOpen = OffsetDateTime.parse(adjusted.openedAt()).isBefore(loss.openedAt())
+                ? OffsetDateTime.parse(adjusted.openedAt()) : loss.openedAt();
+        Db.execOn(c, "UPDATE portfolio_lot SET opened_at=?,original_open_amount_cents=?,"
+                        + "remaining_open_amount_cents=? WHERE id=?",
+                carriedOpen, Math.addExact(adjusted.originalOpenAmount(), adjustment),
+                Math.addExact(adjusted.remainingOpenAmount(), adjustment), adjustedLotId);
+        Db.execOn(c, "INSERT INTO portfolio_wash_sale_allocation(portfolio_account_id,loss_match_id,"
+                        + "replacement_lot_id,quantity,adjustment_cents) VALUES (?,?,?,?,?)",
+                account.id(), loss.matchId(), adjustedLotId, quantity, adjustment);
+        Db.execOn(c, "UPDATE portfolio_lot_match SET wash_sale_adjustment_cents="
+                        + "wash_sale_adjustment_cents+? WHERE id=?",
+                adjustment, loss.matchId());
+        return new WashAllocation(quantity, unallocatedLotId);
+    }
+
+    private static WashLoss washLoss(Connection c, long matchId) throws SQLException {
+        return Db.queryOn(c,
+                "SELECT m.id match_id,m.lot_id,l.instrument_type,l.symbol,l.option_type,l.strike,l.expiration,"
+                        + "l.multiplier,m.opened_at,m.closed_at,m.quantity,m.realized_gain_cents,"
+                        + "COALESCE((SELECT SUM(w.quantity) FROM portfolio_wash_sale_allocation w "
+                        + "WHERE w.loss_match_id=m.id),0) allocated_quantity,"
+                        + "COALESCE((SELECT SUM(w.adjustment_cents) FROM portfolio_wash_sale_allocation w "
+                        + "WHERE w.loss_match_id=m.id),0) allocated_cents "
+                        + "FROM portfolio_lot_match m JOIN portfolio_lot l ON l.id=m.lot_id WHERE m.id=?",
+                r -> new WashLoss(r.lng("match_id"), r.str("lot_id"), r.str("instrument_type"),
+                        r.str("symbol"), r.str("option_type"), r.bd("strike"), r.date("expiration"),
+                        r.intv("multiplier"), r.odt("opened_at"), r.odt("closed_at"), r.lng("quantity"),
+                        r.lng("realized_gain_cents"), r.lng("allocated_quantity"), r.lng("allocated_cents")),
+                matchId).getFirst();
+    }
+
+    private static LotRow lot(Connection c, String lotId, boolean lock) throws SQLException {
+        return Db.queryOn(c, "SELECT * FROM portfolio_lot WHERE id=?" + (lock ? " FOR UPDATE" : ""),
+                PortfolioAccountingService::mapLot, lotId).getFirst();
     }
 
     private List<LotRow> matchingLots(Connection c, AccountProfile account, PreparedLeg leg, String side) throws SQLException {
@@ -846,16 +993,18 @@ public final class PortfolioAccountingService {
                 : Math.addExact(leg.grossAmountCents(), leg.allocatedFeeCents());
     }
 
-    private void insertLot(Connection c, String accountId, String txId, OffsetDateTime occurred,
-                           PreparedLeg leg, long amount) throws SQLException {
+    private String insertLot(Connection c, String accountId, String txId, OffsetDateTime occurred,
+                             PreparedLeg leg, long amount) throws SQLException {
         String side = "BUY".equals(leg.action()) ? "LONG" : "SHORT";
+        String id = Ids.newId("plot");
         Db.execOn(c, "INSERT INTO portfolio_lot(id,portfolio_account_id,opening_transaction_id,opening_leg_no,"
-                        + "instrument_type,side,symbol,option_type,strike,expiration,opened_at,original_quantity,"
+                        + "instrument_type,side,symbol,option_type,strike,expiration,opened_at,acquired_at,original_quantity,"
                         + "remaining_quantity,original_open_amount_cents,remaining_open_amount_cents,multiplier,status) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN')",
-                Ids.newId("plot"), accountId, txId, leg.legNo(), leg.instrumentType(), side,
-                leg.symbol(), leg.optionType(), leg.strike(), leg.expiration(), occurred,
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN')",
+                id, accountId, txId, leg.legNo(), leg.instrumentType(), side,
+                leg.symbol(), leg.optionType(), leg.strike(), leg.expiration(), occurred, occurred,
                 leg.quantity(), leg.quantity(), amount, amount, leg.multiplier());
+        return id;
     }
 
     // ---- Mapping and validation ----
@@ -982,7 +1131,8 @@ public final class PortfolioAccountingService {
     private static LotRow mapLot(Db.Row r) {
         return new LotRow(r.str("id"), r.str("portfolio_account_id"), r.str("instrument_type"), r.str("side"),
                 r.str("symbol"), r.str("option_type"), r.bd("strike"), r.date("expiration"),
-                r.intv("multiplier"), iso(r.odt("opened_at")), r.lng("original_quantity"), r.lng("remaining_quantity"),
+                r.intv("multiplier"), iso(r.odt("opened_at")), iso(r.odt("acquired_at")),
+                r.lng("original_quantity"), r.lng("remaining_quantity"),
                 r.lng("original_open_amount_cents"), r.lng("remaining_open_amount_cents"), r.str("status"));
     }
 
@@ -1099,7 +1249,7 @@ public final class PortfolioAccountingService {
     }
 
     private static String taxLimitNote() {
-        return "Estimate only: this does not apply wash-sale deferrals automatically, qualified-covered-call rules, Section 1256 treatment, straddle rules, loss limits or carryovers, state-specific rules, or filing elections. Reconcile against broker tax forms.";
+        return "Estimate only: same-instrument wash-sale deferrals are applied from recorded activity; qualified-covered-call rules, Section 1256 treatment, straddle rules, loss limits or carryovers, state-specific rules, and filing elections still require reconciliation against broker tax forms.";
     }
 
     private static void validateRate(Integer bps, String label) {

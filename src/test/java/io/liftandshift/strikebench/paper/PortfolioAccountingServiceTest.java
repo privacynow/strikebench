@@ -283,6 +283,70 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void taxableWashSaleDisallowsLossProRataAndCarriesBasisAndHoldingPeriod() {
+        var taxable = books.createAccount("local", account("Wash sale", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "wash-open",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 10, 1, "100"))));
+        books.record("local", taxable.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "wash-loss",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 10, 1, "80"))));
+        books.record("local", taxable.id(), tx("2026-02-15", "TRADE", null, 0L, null, "BROKER", "wash-rebuy",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 6, 1, "90"))));
+        books.record("local", taxable.id(), tx("2026-03-10", "TRADE", null, 0L, null, "BROKER", "outside-window",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 4, 1, "90"))));
+
+        var realized = books.realizedLots("local", taxable.id(), 2026).getFirst();
+        assertThat(realized.realizedGainCents()).isEqualTo(-200_00L);
+        assertThat(realized.washSaleAdjustmentCents()).isEqualTo(120_00L);
+        var open = books.lots("local", taxable.id(), false);
+        assertThat(open).filteredOn(l -> l.remainingQuantity() == 6).singleElement().satisfies(lot -> {
+            assertThat(lot.remainingOpenAmountCents()).isEqualTo(660_00L);
+            assertThat(lot.openedAt()).startsWith("2026-01-02");
+        });
+        assertThat(open).filteredOn(l -> l.remainingQuantity() == 4).singleElement().satisfies(lot -> {
+            assertThat(lot.remainingOpenAmountCents()).isEqualTo(360_00L);
+            assertThat(lot.openedAt()).startsWith("2026-03-10");
+        });
+        var tax = books.taxReport("local", taxable.id(), 2026);
+        assertThat(tax.shortTermGainCents()).isEqualTo(-80_00L);
+        assertThat(tax.washSaleAdjustmentsCents()).isEqualTo(120_00L);
+    }
+
+    @Test
+    void retirementWrapperSuppressesWashSaleAdjustmentAndBasisCarry() {
+        var roth = books.createAccount("local", account("Roth wash", "ROTH_IRA", null));
+        books.record("local", roth.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "roth-open",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100"))));
+        books.record("local", roth.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "roth-loss",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "80"))));
+        books.record("local", roth.id(), tx("2026-02-15", "TRADE", null, 0L, null, "BROKER", "roth-rebuy",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "90"))));
+
+        assertThat(books.realizedLots("local", roth.id(), 2026).getFirst().washSaleAdjustmentCents()).isZero();
+        assertThat(books.lots("local", roth.id(), false)).singleElement().satisfies(lot -> {
+            assertThat(lot.remainingOpenAmountCents()).isEqualTo(90_00L);
+            assertThat(lot.openedAt()).startsWith("2026-02-15");
+        });
+        assertThat(books.taxReport("local", roth.id(), 2026).washSaleAdjustmentsCents()).isZero();
+    }
+
+    @Test
+    void optionWashReplacementRequiresTheSameRightStrikeAndExpiration() {
+        var taxable = books.createAccount("local", account("Option wash", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "option-open",
+                List.of(leg("OPTION", "BUY", "OPEN", "SPY", "CALL", "500", "2026-06-19", 1, 100, "10"))));
+        books.record("local", taxable.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "option-loss",
+                List.of(leg("OPTION", "SELL", "CLOSE", "SPY", "CALL", "500", "2026-06-19", 1, 100, "5"))));
+        books.record("local", taxable.id(), tx("2026-02-10", "TRADE", null, 0L, null, "BROKER", "different-strike",
+                List.of(leg("OPTION", "BUY", "OPEN", "SPY", "CALL", "505", "2026-06-19", 1, 100, "6"))));
+        assertThat(books.realizedLots("local", taxable.id(), 2026).getFirst().washSaleAdjustmentCents()).isZero();
+        books.record("local", taxable.id(), tx("2026-02-12", "TRADE", null, 0L, null, "BROKER", "exact-option",
+                List.of(leg("OPTION", "BUY", "OPEN", "SPY", "CALL", "500", "2026-06-19", 1, 100, "6"))));
+
+        assertThat(books.realizedLots("local", taxable.id(), 2026).getFirst().washSaleAdjustmentCents())
+                .isEqualTo(500_00L);
+    }
+
+    @Test
     void accountTaxWrapperCannotBeRewrittenAfterCreation() {
         var taxable = books.createAccount("local", account("Taxable", "TAXABLE", 10_000_00L));
 

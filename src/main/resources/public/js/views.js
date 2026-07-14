@@ -5366,7 +5366,7 @@
     root.appendChild(el('section', { class: 'card card-slim book-boundary' }, UI.cardHeader('Accounting boundary'),
       el('p', {}, 'Tracked accounts are an owner-scoped record of external activity. They never place an order, reserve practice buying power, or mutate the practice ledger.'),
       el('p', { class: 'muted small' }, 'Adjusted contracts are supported when the recorded multiplier is the complete share deliverable. Record cash or other non-share deliverables as separate statement adjustments so the book reconciles exactly.'),
-      el('p', { class: 'muted small' }, 'Tax estimates do not automatically apply wash-sale deferrals, qualified-covered-call rules, Section 1256, straddles, loss limits, state-specific rules, return-of-capital basis allocation, or filing elections. Reconcile exports against broker tax forms and a qualified tax professional.')));
+        el('p', { class: 'muted small' }, 'Recorded same-instrument wash-sale deferrals are included. Qualified-covered-call rules, Section 1256, straddles, loss limits and carryovers, state-specific rules, return-of-capital basis allocation, and filing elections still require reconciliation against broker tax forms and a qualified tax professional.')));
   }
 
   async function portfolioBook(root, params) {
