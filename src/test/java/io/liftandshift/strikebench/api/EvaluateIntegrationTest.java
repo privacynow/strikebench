@@ -299,9 +299,9 @@ class EvaluateIntegrationTest {
     @Test void currentExpirationContractFiltersAfterItsFinalBell() {
         var expirations = List.of(java.time.LocalDate.parse("2026-07-10"),
                 java.time.LocalDate.parse("2026-07-13"));
-        assertThat(ApiServer.activeExpirations(expirations, Instant.parse("2026-07-10T19:59:59Z")))
+        assertThat(ResearchController.activeExpirations(expirations, Instant.parse("2026-07-10T19:59:59Z")))
                 .containsExactly(java.time.LocalDate.parse("2026-07-10"), java.time.LocalDate.parse("2026-07-13"));
-        assertThat(ApiServer.activeExpirations(expirations, Instant.parse("2026-07-10T20:00:00Z")))
+        assertThat(ResearchController.activeExpirations(expirations, Instant.parse("2026-07-10T20:00:00Z")))
                 .containsExactly(java.time.LocalDate.parse("2026-07-13"));
     }
 

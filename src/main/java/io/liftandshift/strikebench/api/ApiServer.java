@@ -320,6 +320,10 @@ public final class ApiServer {
                 datasets, cboe, simSessions, worldTransitions, audit, this::ownerId,
                 this::activeWorld, this::isAdmin, this::requireAdmin,
                 this::invalidateHistoricalViews, this::simDataset);
+        ResearchController researchController = new ResearchController(db, clock, market,
+                evaluations, this::ownerId, this::activeWorld, this::analysisCtx,
+                this::research, this::welcomeTeachingExample, this::researchScout,
+                this::researchIntentLadder, this::evaluate, this::opportunities, this::optimize);
         app = Javalin.create(c -> {
             c.jetty.port = port;
             c.router.ignoreTrailingSlashes = true;
@@ -450,40 +454,7 @@ public final class ApiServer {
 
             dataController.register(c);
 
-            // Historical event studies live under Research. There is no legacy Lab destination:
-            // every capability has one canonical owner and route.
-            io.javalin.http.Handler questionsHandler = ctx ->
-                    ctx.json(new ApiResponses.Questions<>(
-                            new io.liftandshift.strikebench.research.ResearchQuestionEngine(market, clock)
-                                    .catalog()));
-            io.javalin.http.Handler studyHandler = ctx ->
-                    ctx.json(new io.liftandshift.strikebench.research.ResearchQuestionEngine(market, clock)
-                            .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest.class)),
-                                    analysisCtx(ctx), worldParam(activeWorld(ctx))));
-            ResearchRoutes.register(c, new ResearchRoutes.Handlers(
-                    questionsHandler, studyHandler, this::noteCreate, this::noteList,
-                    this::noteGet, this::noteUpdate, this::noteDelete, this::research,
-                    this::expirations, this::chain, this::history, this::news, this::lookup,
-                    ctx -> ctx.json(new ApiResponses.StrategyCatalog<>(
-                            java.util.Arrays.stream(io.liftandshift.strikebench.strategy.StrategyFamily.values())
-                                    .map(Enum::name).toList(),
-                            io.liftandshift.strikebench.strategy.StrategyCatalog.families(),
-                            io.liftandshift.strikebench.strategy.StrategyCatalog.templates())),
-                    this::welcomeTeachingExample, this::researchScout, this::researchIntentLadder,
-                    this::evaluate, this::opportunities, this::optimize,
-                    ctx -> ctx.json(new io.liftandshift.strikebench.strategy.ExposureSizer(market)
-                            .size(requireBody(bodyOrNull(ctx,
-                                            io.liftandshift.strikebench.strategy.ExposureSizer.Request.class)),
-                                    worldParam(activeWorld(ctx)))),
-                    ctx -> {
-                        String owner = io.liftandshift.strikebench.util.OwnerScope.id(auth.currentUserId(ctx));
-                        ctx.json(new ApiResponses.Evaluations<>(evaluations.recent(owner, 50)));
-                    },
-                    ctx -> {
-                        String owner = io.liftandshift.strikebench.util.OwnerScope.id(auth.currentUserId(ctx));
-                        ctx.json(evaluations.calibrationReport(owner));
-                    },
-                    this::calibrationResolve));
+            researchController.register(c);
 
             // ---- The simulated market (Block S): per-user runtime switch, never a boot flag ----
             WorldRoutes.register(c, new WorldRoutes.Handlers(
@@ -1295,34 +1266,6 @@ public final class ApiServer {
             throw new io.liftandshift.strikebench.auth.UnauthorizedException(
                 "Admin access required. On a public deployment, enable AUTH (+ AUTH_ADMIN_EMAILS), or set ADMIN_TOKEN and send it as X-Admin-Token.");
         }
-    }
-
-    public record NoteRequest(String title, String body, String tags) {}
-
-    private void noteCreate(Context ctx) {
-        NoteRequest b = requireBody(bodyOrNull(ctx, NoteRequest.class));
-        ctx.json(new io.liftandshift.strikebench.research.NotebookService(db, clock)
-                .create(ownerId(ctx), b.title(), b.body(), b.tags()));
-    }
-
-    private void noteList(Context ctx) {
-        ctx.json(new ApiResponses.Notes<>(
-                new io.liftandshift.strikebench.research.NotebookService(db, clock).list(ownerId(ctx))));
-    }
-
-    private void noteGet(Context ctx) {
-        ctx.json(new io.liftandshift.strikebench.research.NotebookService(db, clock).get(ownerId(ctx), ctx.pathParam("id")));
-    }
-
-    private void noteUpdate(Context ctx) {
-        NoteRequest b = requireBody(bodyOrNull(ctx, NoteRequest.class));
-        ctx.json(new io.liftandshift.strikebench.research.NotebookService(db, clock)
-                .update(ownerId(ctx), ctx.pathParam("id"), b.title(), b.body(), b.tags()));
-    }
-
-    private void noteDelete(Context ctx) {
-        new io.liftandshift.strikebench.research.NotebookService(db, clock).delete(ownerId(ctx), ctx.pathParam("id"));
-        ctx.json(new ApiResponses.Ok(true));
     }
 
     // ---- Status / config ----
@@ -3544,48 +3487,9 @@ public final class ApiServer {
                 .map(OptionQuote::iv);
     }
 
-    private void expirations(Context ctx) {
-        String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
-        String world = activeWorld(ctx);
-        java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
-        ctx.json(new ApiResponses.Expirations<>(symbol,
-                LocalDate.ofInstant(now, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString(),
-                activeExpirations(market.expirations(symbol, world), now).stream()
-                        .map(LocalDate::toString).toList()));
-    }
-
     private List<LocalDate> activeExpirations(String symbol, String world) {
         java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
-        return activeExpirations(market.expirations(symbol, world), now);
-    }
-
-    static List<LocalDate> activeExpirations(List<LocalDate> expirations, java.time.Instant now) {
-        if (expirations == null || expirations.isEmpty()) return List.of();
-        return expirations.stream()
-                .filter(exp -> !io.liftandshift.strikebench.market.MarketHours.contractDead(exp, now))
-                .sorted().toList();
-    }
-
-    private void chain(Context ctx) {
-        String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
-        String expStr = ctx.queryParam("expiration");
-        if (expStr == null || expStr.isBlank()) {
-            throw new IllegalArgumentException("expiration query parameter is required (YYYY-MM-DD)");
-        }
-        LocalDate exp = LocalDate.parse(expStr.trim());
-        String world = activeWorld(ctx);
-        java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
-        if (io.liftandshift.strikebench.market.MarketHours.contractDead(exp, now)) {
-            throw new IllegalArgumentException("expiration is no longer active: " + exp);
-        }
-        Optional<OptionChain> chain = market.chain(symbol, exp, world);
-        if (chain.isEmpty()) {
-            ctx.attribute("apiErrorWritten", true);
-            ctx.status(404).json(new ApiResponses.ErrorBody(
-                    "no_chain", "No option chain for " + symbol + " " + exp));
-            return;
-        }
-        ctx.json(chain.get());
+        return ResearchController.activeExpirations(market.expirations(symbol, world), now);
     }
 
     /** ONE stable universe schema for every market mode (P0-1); world = null means observed. */
@@ -3739,51 +3643,6 @@ public final class ApiServer {
         List<Map<String, Object>> out = new ArrayList<>();
         for (String sym : symbols) { var r = rows.get(sym); if (r != null) out.add(r); }
         ctx.json(new ApiResponses.Sparklines<>(range, out, totalRequested, world));
-    }
-
-    private void history(Context ctx) {
-        String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
-        String requested = ctx.queryParam("range") == null ? "1y" : ctx.queryParam("range").toLowerCase(Locale.ROOT);
-        String range = switch (requested) {
-            case "1m", "3m", "6m", "ytd", "1y", "2y", "5y", "max" -> requested;
-            default -> "1y";
-        };
-        // The lane's today: inside a world the chart must include the session's own rolled bars.
-        LocalDate today = market.simInstant(worldParam(activeWorld(ctx)))
-                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
-        int days = switch (range) {
-            case "1m" -> 30;
-            case "3m" -> 91;
-            case "6m" -> 182;
-            case "ytd" -> today.getDayOfYear();
-            case "2y" -> 730;
-            case "5y" -> 1826;
-            case "max" -> 7300; // providers return what they actually have
-            default -> 365;
-        };
-        LocalDate requestedFrom = today.minusDays(days);
-        var series = market.candleSeries(symbol, requestedFrom, today, activeWorld(ctx), analysisCtx(ctx));
-        ctx.json(new ApiResponses.History<>(symbol, range, series.candles(), series.source(),
-                series.freshness().name(), series.barBasis(), series.priceBasis(), series.evidence(),
-                io.liftandshift.strikebench.market.CandleCoverage.assess(series.candles(), requestedFrom, today)));
-    }
-
-    private void news(Context ctx) {
-        String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
-        String world = activeWorld(ctx);
-        if (!"observed".equals(world) && !"demo".equals(world)) {
-            ctx.json(new ApiResponses.SymbolItems<>(symbol, List.of(), null,
-                    "simulated market \u2014 there is no news in this world; headlines belong to the real market"));
-            return;
-        }
-        ctx.json(new ApiResponses.SymbolItems<>(symbol, market.news(symbol, world), null, null));
-    }
-
-    private void lookup(Context ctx) {
-        String q = ctx.queryParam("q");
-        ctx.json(new ApiResponses.Matches<>(
-                q == null ? List.of() : market.lookup(q, activeWorld(ctx))));
     }
 
     // ---- Product-owned strategy discovery ----
@@ -4384,18 +4243,6 @@ public final class ApiServer {
                         budget, req.maxPerPositionCents(), req.maxPositions(), req.maxSymbolPct(), req.objective(),
                         Boolean.TRUE.equals(req.diagnostic())));
         ctx.json(new ApiResponses.Optimization<>(result, scan.scanned(), scan.notes()));
-    }
-
-    public record ResolveRequest(String recommendationId, String status, Long pnlCents) {}
-
-    /** Records the realized outcome of a surfaced recommendation (feeds the calibration report). */
-    private void calibrationResolve(Context ctx) {
-        ResolveRequest req = requireBody(bodyOrNull(ctx, ResolveRequest.class));
-        if (req.recommendationId() == null || req.recommendationId().isBlank()) {
-            throw new IllegalArgumentException("recommendationId is required");
-        }
-        evaluations.resolveOutcome(req.recommendationId(), req.status(), req.pnlCents());
-        ctx.json(new ApiResponses.Ok(true));
     }
 
     private void researchIntentLadder(Context ctx) {
