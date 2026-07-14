@@ -200,9 +200,13 @@ class JourneySurfaceTest {
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
 
         for (String owner : List.of("CoreRoutes", "PlanRoutes", "DataRoutes", "ResearchRoutes",
-                "WorldRoutes", "TradeRoutes", "PortfolioRoutes", "BrokerRoutes")) {
+                "WorldRoutes", "TradeRoutes", "BrokerRoutes")) {
             assertThat(api).contains(owner + ".register(c, new " + owner + ".Handlers(");
         }
+        String portfolio = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/PortfolioController.java"));
+        assertThat(api).contains("portfolioController.register(c);");
+        assertThat(portfolio).contains("PortfolioRoutes.register(config, new PortfolioRoutes.Handlers(");
         assertThat(api).doesNotContain(
                 "c.routes.get(\"/api/metrics\"",
                 "c.routes.get(\"/api/research/",
@@ -218,12 +222,14 @@ class JourneySurfaceTest {
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
         String contracts = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiResponses.java"));
+        String portfolio = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/PortfolioController.java"));
 
         assertThat(api).doesNotContain("ctx.json(Map.of(", "ctx.json(body)",
                         "Map<String, Object> tradePreviewPayload")
                 .contains("new ApiResponses.TradePreviewResponse(",
-                        "new ApiResponses.ResearchDetail<>(",
-                        "new ApiResponses.PortfolioSummary(");
+                        "new ApiResponses.ResearchDetail<>(");
+        assertThat(portfolio).contains("new ApiResponses.PortfolioSummary(");
         assertThat(contracts).contains("public record ErrorBody(",
                 "public record TradePreviewResponse(", "public record ResearchDetail<",
                 "public record DataSyncPlan<", "public record PortfolioSummary(");

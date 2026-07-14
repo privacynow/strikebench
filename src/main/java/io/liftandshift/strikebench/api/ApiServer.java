@@ -309,6 +309,8 @@ public final class ApiServer {
 
     public Javalin start(int port) {
         accounts.getOrCreateDefault();
+        PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
+                portfolioExports, positions, trades, this::ownerId, this::currentAccount);
         app = Javalin.create(c -> {
             c.jetty.port = port;
             c.router.ignoreTrailingSlashes = true;
@@ -567,53 +569,7 @@ public final class ApiServer {
                     this::auditPage, this::positionsList, this::positionsPreview,
                     this::positionsBuy, this::positionsSell));
 
-            PortfolioRoutes.register(c, new PortfolioRoutes.Handlers(
-                    this::portfolioSummary,
-                    ctx -> ctx.json(trades.portfolioHeat(currentAccount(ctx).id())),
-                    ctx -> ctx.json(io.liftandshift.strikebench.paper.AccountRiskContext.load(
-                            db, ownerId(ctx))),
-                    ctx -> {
-                        var risk = requireBody(bodyOrNull(ctx,
-                                io.liftandshift.strikebench.paper.AccountRiskContext.class));
-                        io.liftandshift.strikebench.paper.AccountRiskContext.save(db, ownerId(ctx), risk);
-                        ctx.json(risk);
-                    },
-                    this::riskBudget,
-                    ctx -> ctx.json(trades.portfolioGreeks(currentAccount(ctx).id())),
-                    ctx -> ctx.json(new ApiResponses.Accounts<>(portfolioBooks.accounts(ownerId(ctx)))),
-                    this::portfolioAccountCreate,
-                    ctx -> ctx.json(portfolioBooks.account(ownerId(ctx), ctx.pathParam("id"))),
-                    this::portfolioAccountUpdate,
-                    ctx -> ctx.json(portfolioBooks.setArchived(
-                            ownerId(ctx), ctx.pathParam("id"), true)),
-                    ctx -> ctx.json(portfolioBooks.setArchived(
-                            ownerId(ctx), ctx.pathParam("id"), false)),
-                    ctx -> ctx.json(portfolioBooks.summary(ownerId(ctx), ctx.pathParam("id"))),
-                    this::portfolioTransactions, this::portfolioTransactionCreate,
-                    ctx -> ctx.json(new ApiResponses.Lots<>(portfolioBooks.lots(ownerId(ctx),
-                            ctx.pathParam("id"), Boolean.parseBoolean(ctx.queryParam("includeClosed"))))),
-                    ctx -> ctx.json(new ApiResponses.Realized<>(portfolioBooks.realizedLots(ownerId(ctx),
-                            ctx.pathParam("id"), intParam(ctx, "year",
-                                    java.time.Year.now(clock).getValue())))),
-                    this::portfolioValuationCreate,
-                    ctx -> ctx.json(portfolioBooks.performance(ownerId(ctx), ctx.pathParam("id"))),
-                    ctx -> ctx.json(portfolioBooks.taxReport(ownerId(ctx), ctx.pathParam("id"),
-                            intParam(ctx, "year", java.time.Year.now(clock).getValue()))),
-                    ctx -> ctx.json(portfolioBooks.saveTaxReconciliation(ownerId(ctx),
-                            ctx.pathParam("id"), Integer.parseInt(ctx.pathParam("year")),
-                            requireBody(bodyOrNull(ctx,
-                                    io.liftandshift.strikebench.paper.PortfolioAccountingService
-                                            .TaxReconciliationInput.class)))),
-                    ctx -> {
-                        portfolioBooks.clearTaxReconciliation(ownerId(ctx), ctx.pathParam("id"),
-                                Integer.parseInt(ctx.pathParam("year")));
-                        ctx.json(new ApiResponses.Ok(true));
-                    },
-                    ctx -> ctx.json(new ApiResponses.TransactionsWritten(
-                            portfolioBooks.markSection1256YearEnd(ownerId(ctx), ctx.pathParam("id"),
-                                    Integer.parseInt(ctx.pathParam("year"))))),
-                    this::portfolioCsvExport, this::portfolioWorkbookExport,
-                    this::portfolioImportTemplate, this::portfolioCsvImport));
+            portfolioController.register(c);
 
             // Historical replays are Plan-owned. The report id remains readable so a Plan can
             // restore its full normalized summary plus the existing detailed replay artifact.
@@ -4920,31 +4876,6 @@ public final class ApiServer {
         return rc.riskCapitalCents() != null && rc.riskCapitalCents() > 0 ? rc.riskCapitalCents() : null;
     }
 
-    /**
-     * ONE SOURCE OF TRUTH for the per-idea capital budget (review P0): the server computes it,
-     * the header, the ticket reconciliation, the guardrail advisory and the screening engine all
-     * speak these numbers. Basis is the CALLER'S CURRENT account's buying power (cash minus
-     * reserves — paper and simulation accounts are cash-only, so no margin figure can silently
-     * inflate the denominator), capped by the user's declared risk capital when set.
-     */
-    private void riskBudget(Context ctx) {
-        Account acct = currentAccount(ctx);
-        Long cap = riskCapCents(ctx);
-        java.util.List<ApiResponses.RiskModeBudget> modes = new ArrayList<>();
-        for (RecommendationEngine.RiskMode m : RecommendationEngine.RiskMode.values()) {
-            var b = RiskBudgetPolicy.compute(m, acct.buyingPowerCents(), cap);
-            modes.add(new ApiResponses.RiskModeBudget(b.mode(), b.label(), b.percent(),
-                    b.policyBudgetCents(), b.effectiveBudgetCents(), b.capped()));
-        }
-        ctx.json(new ApiResponses.RiskBudget<>("BUYING_POWER", acct.buyingPowerCents(), acct.type(), cap,
-                cap != null ? "RISK_CAPITAL" : null, modes,
-                "Per-idea budget = percent \u00d7 buying power (cash minus reserves; this practice "
-                        + "account is cash-only, no margin). Your declared risk capital, when set, caps every mode. "
-                        + "The screening engine enforces these same numbers server-side.",
-                "Buy-shares-at-a-discount ideas are capped by buying power instead \u2014 "
-                        + "a cash-secured put sets aside the full purchase price by design."));
-    }
-
     private Verdict guardrailCheck(TradeService.OpenRequest req, Account acct, Long riskCapCents) {
         StrategyFamily family = null;
         try { family = StrategyFamily.valueOf(req.strategy()); } catch (IllegalArgumentException ignored) {}
@@ -5350,100 +5281,6 @@ public final class ApiServer {
             out.add(Map.of("price", p.price().toPlainString(), "profitCents", p.profitCents()));
         }
         return out;
-    }
-
-    private void portfolioAccountCreate(Context ctx) {
-        var input = requireBody(bodyOrNull(ctx,
-                io.liftandshift.strikebench.paper.PortfolioAccountingService.AccountInput.class));
-        ctx.status(201).json(portfolioBooks.createAccount(ownerId(ctx), input));
-    }
-
-    private void portfolioAccountUpdate(Context ctx) {
-        var input = requireBody(bodyOrNull(ctx,
-                io.liftandshift.strikebench.paper.PortfolioAccountingService.AccountInput.class));
-        ctx.json(portfolioBooks.updateAccount(ownerId(ctx), ctx.pathParam("id"), input));
-    }
-
-    private void portfolioTransactions(Context ctx) {
-        ctx.json(new ApiResponses.Transactions<>(portfolioBooks.transactions(ownerId(ctx),
-                ctx.pathParam("id"), intParam(ctx, "page", 0),
-                Math.clamp(intParam(ctx, "size", 50), 1, 500))));
-    }
-
-    private void portfolioTransactionCreate(Context ctx) {
-        var input = requireBody(bodyOrNull(ctx,
-                io.liftandshift.strikebench.paper.PortfolioAccountingService.TransactionInput.class));
-        ctx.status(201).json(portfolioBooks.record(ownerId(ctx), ctx.pathParam("id"), input));
-    }
-
-    private void portfolioValuationCreate(Context ctx) {
-        var input = requireBody(bodyOrNull(ctx,
-                io.liftandshift.strikebench.paper.PortfolioAccountingService.ValuationInput.class));
-        ctx.status(201).json(portfolioBooks.addValuation(ownerId(ctx), ctx.pathParam("id"), input));
-    }
-
-    private void portfolioCsvExport(Context ctx) {
-        String id = ctx.pathParam("id");
-        portfolioBooks.account(ownerId(ctx), id); // owner fence before response headers
-        ctx.header("Content-Disposition", "attachment; filename=StrikeBench-transactions-" + id + ".csv");
-        ctx.header("Cache-Control", "no-store");
-        ctx.contentType("text/csv; charset=utf-8");
-        ctx.result(portfolioExports.transactionsCsv(ownerId(ctx), id));
-    }
-
-    private void portfolioWorkbookExport(Context ctx) {
-        String id = ctx.pathParam("id");
-        int year = intParam(ctx, "year", java.time.Year.now(clock).getValue());
-        portfolioBooks.account(ownerId(ctx), id); // owner fence before response headers
-        ctx.header("Content-Disposition", "attachment; filename=StrikeBench-portfolio-" + id + "-" + year + ".xlsx");
-        ctx.header("Cache-Control", "no-store");
-        ctx.contentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        ctx.result(portfolioExports.workbook(ownerId(ctx), id, year));
-    }
-
-    private void portfolioImportTemplate(Context ctx) {
-        ctx.header("Content-Disposition", "attachment; filename=StrikeBench-portfolio-import-template.csv");
-        ctx.header("Cache-Control", "no-store");
-        ctx.contentType("text/csv; charset=utf-8");
-        String h = io.liftandshift.strikebench.paper.PortfolioCsvImport.TEMPLATE_HEADER;
-        String examples = "\r\ntrade-001,2026-07-01,TRADE,,130,,Opening vertical,0,OPTION,BUY,OPEN,AAPL,CALL,250,2026-08-21,1,100,8.25"
-                + "\r\ntrade-001,2026-07-01,TRADE,,130,,Opening vertical,1,OPTION,SELL,OPEN,AAPL,CALL,260,2026-08-21,1,100,3.10"
-                + "\r\ninterest-001,2026-07-02,INTEREST,425,0,ORDINARY_INTEREST,Monthly interest,,,,,,,,,,,\r\n";
-        ctx.result((h + examples).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    }
-
-    private void portfolioCsvImport(Context ctx) throws java.io.IOException {
-        String id = ctx.pathParam("id");
-        portfolioBooks.account(ownerId(ctx), id); // owner fence before reading user content
-        ctx.multipartConfig().maxFileSize(25, io.javalin.config.SizeUnit.MB);
-        ctx.multipartConfig().maxTotalRequestSize(26, io.javalin.config.SizeUnit.MB);
-        io.javalin.http.UploadedFile file = ctx.uploadedFile("file");
-        if (file == null) throw new IllegalArgumentException("CSV file is required");
-        ctx.status(201).json(io.liftandshift.strikebench.paper.PortfolioCsvImport.run(
-                file.content(), ownerId(ctx), id, portfolioBooks));
-    }
-
-    /** One honest headline: cash + share value + what closing every open trade pays now.
-     *  Reserve is a lien INSIDE cash (never added twice); all marks pre-close-fee. */
-    private void portfolioSummary(Context ctx) {
-        var acct = currentAccount(ctx);
-        long sharesValue = 0;
-        int sharesCount = 0;
-        boolean complete = true;
-        for (var p : positions.list(acct.id())) {
-            sharesCount++;
-            if (p.marketValueCents() == null) { complete = false; continue; }
-            sharesValue += p.marketValueCents();
-        }
-        TradeService.OpenPositionsValue open = trades.openPositionsValue(acct.id());
-        long openValue = open.valueCents();
-        if (!open.complete()) complete = false;
-        long total = acct.cashCents() + sharesValue + openValue;
-        ctx.json(new ApiResponses.PortfolioSummary(acct.cashCents(), acct.reservedCents(),
-                acct.buyingPowerCents(), acct.startingCashCents(), sharesValue, sharesCount,
-                open.openTradesCount(), openValue, open.unrealizedCents(), total,
-                total - acct.startingCashCents(), complete, open.freshness(),
-                "Liquidation view at current marks: cash + shares + closing every open trade at executable prices, BEFORE close fees. Reserve is part of cash, never double-counted."));
     }
 
     private void tradeRefresh(Context ctx) {
