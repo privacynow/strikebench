@@ -23,7 +23,7 @@ class JourneySurfaceTest {
     private static String apiRouteSource() throws Exception {
         StringBuilder routes = new StringBuilder();
         for (String name : List.of("ApiServer", "CoreRoutes", "PlanRoutes", "DataRoutes",
-                "ResearchRoutes", "WorldRoutes", "TradeRoutes", "TradeController",
+                "DataController", "ResearchRoutes", "WorldRoutes", "TradeRoutes", "TradeController",
                 "PortfolioRoutes", "PortfolioController", "BrokerRoutes")) {
             routes.append(Files.readString(Path.of(
                     "src/main/java/io/liftandshift/strikebench/api/" + name + ".java"))).append('\n');
@@ -200,7 +200,7 @@ class JourneySurfaceTest {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
 
-        for (String owner : List.of("CoreRoutes", "PlanRoutes", "DataRoutes", "ResearchRoutes",
+        for (String owner : List.of("CoreRoutes", "PlanRoutes", "ResearchRoutes",
                 "WorldRoutes", "BrokerRoutes")) {
             assertThat(api).contains(owner + ".register(c, new " + owner + ".Handlers(");
         }
@@ -215,6 +215,13 @@ class JourneySurfaceTest {
         assertThat(api).doesNotContain("private void tradePreview(",
                 "private void tradeCreate(", "private void positionsList(",
                 "private void auditPage(", "private void adminSnapshot(");
+        String data = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/DataController.java"));
+        assertThat(api).contains("dataController.register(c);");
+        assertThat(data).contains("DataRoutes.register(config, new DataRoutes.Handlers(");
+        assertThat(api).doesNotContain("private void dataOverview(",
+                "private void dataSyncPlan(", "private void dataResetRoute(",
+                "private void datasetSetActive(");
         assertThat(api).doesNotContain(
                 "c.routes.get(\"/api/metrics\"",
                 "c.routes.get(\"/api/research/",
@@ -234,6 +241,8 @@ class JourneySurfaceTest {
                 "src/main/java/io/liftandshift/strikebench/api/PortfolioController.java"));
         String trade = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/TradeController.java"));
+        String data = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/DataController.java"));
 
         assertThat(api).doesNotContain("ctx.json(Map.of(", "ctx.json(body)",
                         "Map<String, Object> tradePreviewPayload")
@@ -241,6 +250,8 @@ class JourneySurfaceTest {
         assertThat(portfolio).contains("new ApiResponses.PortfolioSummary(");
         assertThat(trade).contains("new ApiResponses.TradePreviewResponse(",
                 "new ApiResponses.TradeDetail<>(");
+        assertThat(data).contains("new ApiResponses.DataOverview<>(",
+                "new ApiResponses.DataSyncPlan<>(");
         assertThat(contracts).contains("public record ErrorBody(",
                 "public record TradePreviewResponse(", "public record ResearchDetail<",
                 "public record DataSyncPlan<", "public record PortfolioSummary(");
@@ -285,14 +296,16 @@ class JourneySurfaceTest {
     @Test void marketTransitionsHaveOneBackendOwner() throws Exception {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
+        String data = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/DataController.java"));
         String transitions = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/WorldTransitionService.java"));
 
-        assertThat(api).contains(
+        assertThat(api + data).contains(
                 "worldTransitions.current(ownerId(ctx))",
                 "worldTransitions.transition(world, ownerId(ctx))",
                 "worldTransitions.afterFinish(wasActive, owner)",
-                "worldTransitions.resetAfterDataReset(ownerId(ctx))",
+                "worldTransitions.resetAfterDataReset(ownerId.apply(ctx))",
                 "return worldTransitions.active(owner);")
                 .doesNotContain("active_world:", "active_dataset:", "worldRevision");
         assertThat(transitions).contains(
