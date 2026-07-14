@@ -1635,7 +1635,7 @@ public final class TradeService {
 
     private TradeRecord requireStatusForUpdate(Connection c, String tradeId, String expected) throws SQLException {
         List<TradeRecord> rows = Db.queryOn(c, "SELECT * FROM trades WHERE id=? FOR UPDATE", TradeService::mapTrade, tradeId);
-        if (rows.isEmpty()) throw new java.util.NoSuchElementException("no such trade " + tradeId);
+        if (rows.isEmpty()) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such trade " + tradeId);
         TradeRecord t = rows.getFirst();
         if (!expected.equals(t.status())) {
             throw new IllegalStateException("trade " + tradeId + " is " + t.status() + ", expected " + expected);
@@ -1668,7 +1668,7 @@ public final class TradeService {
 
     static TradeRecord getOn(Connection c, String tradeId) throws SQLException {
         List<TradeRecord> rows = Db.queryOn(c, "SELECT * FROM trades WHERE id=?", TradeService::mapTrade, tradeId);
-        if (rows.isEmpty()) throw new java.util.NoSuchElementException("no such trade " + tradeId);
+        if (rows.isEmpty()) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such trade " + tradeId);
         return rows.getFirst();
     }
 

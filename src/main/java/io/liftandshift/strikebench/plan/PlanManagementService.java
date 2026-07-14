@@ -14,7 +14,7 @@ import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.NoSuchElementException;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import java.util.Set;
 
 /** Typed Plan ownership for marks, closes, rolls, voids, and separated review lanes. */
@@ -181,9 +181,9 @@ public final class PlanManagementService {
     private static PlanRow requireOwned(Connection c, String planId, String userId, boolean lock) throws SQLException {
         List<PlanRow> rows = Db.queryOn(c, "SELECT user_id,version,status FROM plans WHERE id=?" + (lock ? " FOR UPDATE" : ""),
                 r -> new PlanRow(r.str("user_id"), r.lng("version"), r.str("status")), planId);
-        if (rows.isEmpty()) throw new NoSuchElementException("no such Plan: " + planId);
+        if (rows.isEmpty()) throw new ResourceNotFoundException("no such Plan: " + planId);
         PlanRow row = rows.getFirst();
-        if (!(userId == null ? row.userId() == null : userId.equals(row.userId()))) throw new NoSuchElementException("no such Plan: " + planId);
+        if (!(userId == null ? row.userId() == null : userId.equals(row.userId()))) throw new ResourceNotFoundException("no such Plan: " + planId);
         return row;
     }
 

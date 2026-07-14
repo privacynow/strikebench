@@ -162,10 +162,10 @@ public final class SimulationEngine {
         String resolvedWorld = worldId == null || worldId.isBlank() ? "observed" : worldId;
         io.liftandshift.strikebench.db.AnalysisContext resolvedAnalysis = analysis == null
                 ? io.liftandshift.strikebench.db.AnalysisContext.OBSERVED : analysis;
-        var quote = market.quote(symbol, resolvedWorld).orElseThrow(() -> new java.util.NoSuchElementException(
+        var quote = market.quote(symbol, resolvedWorld).orElseThrow(() -> new io.liftandshift.strikebench.util.DataUnavailableException(
                 "No price for " + symbol + " — this analysis needs a price in the active market."));
         double anchor = java.util.Optional.ofNullable(quote.mark()).map(java.math.BigDecimal::doubleValue)
-                .filter(v -> v > 0).orElseThrow(() -> new java.util.NoSuchElementException(
+                .filter(v -> v > 0).orElseThrow(() -> new io.liftandshift.strikebench.util.DataUnavailableException(
                         "No price for " + symbol + " — this analysis needs a price in the active market."));
         PathEnsembleService.Ensemble generated;
         try (AutoCloseable permit = SimBudget.acquire()) {

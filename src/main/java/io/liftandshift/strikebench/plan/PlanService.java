@@ -17,7 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.NoSuchElementException;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import java.util.Objects;
 import java.util.Set;
 
@@ -327,7 +327,7 @@ public final class PlanService {
         String sql = viewSelect() + " WHERE p.id=? AND " + ownerClause("p.user_id")
                 + (forUpdate ? " FOR UPDATE OF p" : "");
         List<Plan.View> rows = Db.queryOn(c, sql, PlanService::mapView, planId, userId, userId);
-        if (rows.isEmpty()) throw new NoSuchElementException("no such plan: " + planId);
+        if (rows.isEmpty()) throw new ResourceNotFoundException("no such plan: " + planId);
         return rows.getFirst();
     }
 
@@ -335,7 +335,7 @@ public final class PlanService {
                                        boolean forUpdate) throws java.sql.SQLException {
         String sql = "SELECT id FROM plans WHERE id=? AND " + ownerClause("user_id") + (forUpdate ? " FOR UPDATE" : "");
         if (Db.queryOn(c, sql, r -> r.str("id"), planId, userId, userId).isEmpty()) {
-            throw new NoSuchElementException("no such plan: " + planId);
+            throw new ResourceNotFoundException("no such plan: " + planId);
         }
     }
 

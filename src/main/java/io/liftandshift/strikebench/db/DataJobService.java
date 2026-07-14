@@ -151,7 +151,7 @@ public final class DataJobService {
     /** Re-run a finished/failed job with the same kind + params (idempotent → effectively a resume). */
     public DataJob retry(String jobId, String userId) {
         JobView v = get(jobId);
-        if (v.job() == null) throw new java.util.NoSuchElementException("no such job: " + jobId);
+        if (v.job() == null) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such job: " + jobId);
         JsonNode params = v.paramsJson() == null ? Json.obj() : Json.parse(v.paramsJson());
         Map<String, Object> p = Json.read(params.toString(), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
         return start(v.job().kind(), p, userId);

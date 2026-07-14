@@ -5,7 +5,7 @@ import io.liftandshift.strikebench.db.Db;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.List;
-import java.util.NoSuchElementException;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /** Enforces the decision boundary for every service that persists Plan analysis. */
 final class PlanWriteGuard {
@@ -15,7 +15,7 @@ final class PlanWriteGuard {
         List<String> rows = Db.queryOn(connection,
                 "SELECT p.status FROM plans p WHERE p.id=? AND " + ownerClause("p.user_id") + " FOR UPDATE OF p",
                 row -> row.str("status"), planId, userId, userId);
-        if (rows.isEmpty()) throw new NoSuchElementException("no such Plan: " + planId);
+        if (rows.isEmpty()) throw new ResourceNotFoundException("no such Plan: " + planId);
         // A completed management action can reopen the Plan for a new decision cycle. Prior
         // receipts stay immutable; only the current ACTIVE cycle may create new analysis rows.
         String status = rows.getFirst();

@@ -22,7 +22,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
-import java.util.NoSuchElementException;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /** Freezes one Plan decision and links its execution atomically to the owning Plan. */
 public final class PlanDecisionService {
@@ -209,10 +209,10 @@ public final class PlanDecisionService {
         List<PlanRow> rows = Db.queryOn(connection, "SELECT version,active_context_rev,user_id,status FROM plans WHERE id=?" +
                         (lock ? " FOR UPDATE" : ""), row -> new PlanRow(row.lng("version"),
                         row.intv("active_context_rev"), row.str("user_id"), row.str("status")), planId);
-        if (rows.isEmpty()) throw new NoSuchElementException("no such Plan: " + planId);
+        if (rows.isEmpty()) throw new ResourceNotFoundException("no such Plan: " + planId);
         PlanRow row = rows.getFirst();
         if (!(userId == null ? row.userId() == null : userId.equals(row.userId()))) {
-            throw new NoSuchElementException("no such Plan: " + planId);
+            throw new ResourceNotFoundException("no such Plan: " + planId);
         }
         return row;
     }

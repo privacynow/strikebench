@@ -89,8 +89,10 @@ instantly.
 
 ## Market data
 
-Works with **zero keys** for delayed option chains and quotes from Cboe, SEC EDGAR filings,
-and US Treasury yields when those sources answer. Missing observed data stays unavailable.
+Works with **zero API keys** for delayed option chains and quotes from Cboe and US Treasury
+yields when those sources answer. SEC EDGAR additionally requires `EDGAR_USER_AGENT` with
+this installation's app name and contact email; StrikeBench has no compiled-in owner identity.
+Missing observed data stays unavailable.
 Built-in fabricated data exists only after you explicitly enter the isolated **Demo** market;
 it never fills a gap in Observed.
 

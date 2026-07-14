@@ -84,7 +84,7 @@ public final class PositionsService {
 
     public PositionView get(String accountId, String symbol) {
         Position p = db.with(c -> find(c, accountId, norm(symbol)));
-        if (p == null) throw new java.util.NoSuchElementException("no position in " + norm(symbol));
+        if (p == null) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no position in " + norm(symbol));
         return view(p);
     }
 

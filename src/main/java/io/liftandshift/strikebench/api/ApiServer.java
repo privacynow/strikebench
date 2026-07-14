@@ -185,7 +185,7 @@ public final class ApiServer {
             }
             if (cfg.stooqEnabled()) providers.add(new StooqProvider(cfg));
             if (!cfg.newsRssBaseUrl().isBlank()) newsProviders.add(new NewsRssProvider(cfg)); // keyless headlines
-            newsProviders.add(new EdgarProvider(cfg));                                          // SEC filings
+            if (cfg.edgarConfigured()) newsProviders.add(new EdgarProvider(cfg));                // SEC filings
             if (!cfg.fredApiKey().isBlank()) ratesProviders.add(new FredProvider(cfg));
             ratesProviders.add(new TreasuryRatesProvider(cfg));
         } else {
@@ -564,7 +564,7 @@ public final class ApiServer {
                 if (!"observed".equals(w) && !"demo".equals(w)) {
                     simSessions.ensureReady(w, owner);
                     simSessions.getOrRestore(w, owner)
-                            .orElseThrow(() -> new java.util.NoSuchElementException("no such simulated session: " + w));
+                            .orElseThrow(() -> new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + w));
                 }
                 // Resolve the full target before changing either server-side selector. If this
                 // cannot be built, the caller remains wholly in the old market.
@@ -807,8 +807,10 @@ public final class ApiServer {
                     ctx.status(400).json(Map.of("error", "bad_request", "detail", "Invalid date: " + e.getParsedString())));
             c.routes.exception(com.fasterxml.jackson.core.JacksonException.class, (e, ctx) ->
                     ctx.status(400).json(Map.of("error", "bad_request", "detail", "Malformed request body (expected JSON matching this endpoint's schema)")));
-            c.routes.exception(java.util.NoSuchElementException.class, (e, ctx) ->
+            c.routes.exception(io.liftandshift.strikebench.util.ResourceNotFoundException.class, (e, ctx) ->
                     ctx.status(404).json(Map.of("error", "not_found", "detail", String.valueOf(e.getMessage()))));
+            c.routes.exception(io.liftandshift.strikebench.util.DataUnavailableException.class, (e, ctx) ->
+                    ctx.status(422).json(Map.of("error", "data_unavailable", "detail", String.valueOf(e.getMessage()))));
             c.routes.exception(IllegalStateException.class, (e, ctx) ->
                     ctx.status(409).json(Map.of("error", "conflict", "detail", String.valueOf(e.getMessage()))));
             c.routes.exception(Exception.class, (e, ctx) -> {
@@ -1405,7 +1407,7 @@ public final class ApiServer {
     private void simMarketReport(Context ctx) {
         String worldId = ctx.pathParam("id");
         var w = simSessions.getOrRestore(worldId, ownerId(ctx))
-                .orElseThrow(() -> new java.util.NoSuchElementException("no such simulated session: " + worldId));
+                .orElseThrow(() -> new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + worldId));
         var acctRows = db.query("SELECT id FROM accounts WHERE world_id=?", r -> r.str("id"), worldId);
         List<Map<String, Object>> tradeRows = new ArrayList<>();
         long realized = 0; int wins = 0, resolved = 0;
@@ -1589,9 +1591,9 @@ public final class ApiServer {
      * when auth is off, since every trade belongs to the single local account.
      */
     private void ensureOwnedTrade(Context ctx, String tradeId) {
-        TradeRecord t = trades.get(tradeId); // NoSuchElementException -> 404 when absent
+        TradeRecord t = trades.get(tradeId);
         if (!t.accountId().equals(currentAccount(ctx).id())) {
-            throw new java.util.NoSuchElementException("no such trade " + tradeId);
+            throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such trade " + tradeId);
         }
     }
 
@@ -1770,16 +1772,32 @@ public final class ApiServer {
     private final java.util.concurrent.atomic.AtomicLong apiThrottled = new java.util.concurrent.atomic.AtomicLong();
     private final IpThrottle throttle = new IpThrottle(300, 50.0);
 
-    /** Simple per-IP token bucket. Buckets are pruned lazily past 10k addresses. */
+    /** Per-IP token bucket with exact bounded LRU eviction; one attacker never resets every client. */
     static final class IpThrottle {
         private final int burst; private final double perSecond;
-        private final java.util.concurrent.ConcurrentHashMap<String, Bucket> buckets = new java.util.concurrent.ConcurrentHashMap<>();
-        IpThrottle(int burst, double perSecond) { this.burst = burst; this.perSecond = perSecond; }
+        private final int maximumEntries;
+        private final java.util.LinkedHashMap<String, Bucket> buckets =
+                new java.util.LinkedHashMap<>(128, 0.75f, true);
+        IpThrottle(int burst, double perSecond) { this(burst, perSecond, 10_000); }
+        IpThrottle(int burst, double perSecond, int maximumEntries) {
+            this.burst = burst;
+            this.perSecond = perSecond;
+            this.maximumEntries = Math.max(1, maximumEntries);
+        }
         boolean tryAcquire(String ip) {
             if (ip == null || ip.isBlank()) return true;
-            if (buckets.size() > 10_000) buckets.clear(); // bounded memory beats per-entry bookkeeping here
-            Bucket b = buckets.computeIfAbsent(ip, k -> new Bucket(burst));
-            synchronized (b) {
+            synchronized (buckets) {
+                Bucket b = buckets.get(ip);
+                if (b == null) {
+                    while (buckets.size() >= maximumEntries) {
+                        var eldest = buckets.entrySet().iterator();
+                        if (!eldest.hasNext()) break;
+                        eldest.next();
+                        eldest.remove();
+                    }
+                    b = new Bucket(burst);
+                    buckets.put(ip, b);
+                }
                 long now = System.nanoTime();
                 b.tokens = Math.min(burst, b.tokens + (now - b.lastNs) / 1e9 * perSecond);
                 b.lastNs = now;
@@ -1788,6 +1806,7 @@ public final class ApiServer {
                 return true;
             }
         }
+        long activeBuckets() { synchronized (buckets) { return buckets.size(); } }
         static final class Bucket { double tokens; long lastNs = System.nanoTime(); Bucket(int t) { tokens = t; } }
     }
 
@@ -1855,11 +1874,13 @@ public final class ApiServer {
                     ? market.worldSymbols(world).map(x -> List.copyOf(x)).orElse(List.of())
                     : java.util.Arrays.stream(raw.split(",")).map(x -> x.trim().toUpperCase(Locale.ROOT))
                         .filter(x -> !x.isBlank()).distinct().toList();
+            int requested = syms.size();
+            int limit = io.liftandshift.strikebench.market.sim.SimulationSessions.MAX_SYMBOLS;
+            List<String> bounded = syms.stream().limit(limit).toList();
             List<Map<String, Object>> rows = new ArrayList<>();
             // F7: world quotes are LOCAL memory — serve the whole world (<=120), not a 40-cap
             // that made the tape and SSE disagree about which symbols exist.
-            for (String sym : syms.stream()
-                    .limit(io.liftandshift.strikebench.market.sim.SimulationSessions.MAX_SYMBOLS).toList()) {
+            for (String sym : bounded) {
                 market.quote(sym, world).ifPresent(q -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("symbol", q.symbol());
@@ -1876,7 +1897,8 @@ public final class ApiServer {
                     rows.add(m);
                 });
             }
-            ctx.json(Map.of("quotes", rows, "requested", syms.size(), "world", world,
+            ctx.json(Map.of("quotes", rows, "requested", requested, "considered", bounded.size(),
+                    "truncated", requested > limit, "limit", limit, "world", world,
                     "marketLane", market.lane(world).name()));
             return;
         }
@@ -1884,14 +1906,17 @@ public final class ApiServer {
                 ? universe.active().symbols()
                 : java.util.Arrays.stream(raw.split(",")).map(s -> s.trim().toUpperCase(Locale.ROOT))
                     .filter(s -> !s.isBlank()).distinct().toList();
-        if (symbols.size() > 40) symbols = symbols.subList(0, 40);
+        int requested = symbols.size();
+        int limit = io.liftandshift.strikebench.market.sim.SimulationSessions.MAX_SYMBOLS;
+        if (symbols.size() > limit) symbols = symbols.subList(0, limit);
         // Served from the in-memory engine: warm symbols answer instantly, cold ones are fetched in
         // parallel, and stale ones refresh in the background — no per-symbol sequential download.
         List<Map<String, Object>> out = new ArrayList<>();
         for (var snap : marketEngine.quotes(symbols)) {
             out.add(io.liftandshift.strikebench.market.MarketDataEngine.toRow(snap));
         }
-        ctx.json(Map.of("quotes", out, "requested", symbols.size(),
+        ctx.json(Map.of("quotes", out, "requested", requested, "considered", symbols.size(),
+                "truncated", requested > limit, "limit", limit,
                 "marketLane", cfg.fixturesOnly() ? "DEMO" : "OBSERVED"));
     }
 
@@ -3257,7 +3282,10 @@ public final class ApiServer {
                 + "sources until it clears. " + cboeHint;
         sources.add(source(cboeThrottled ? "Cboe (delayed chains) — THROTTLED" : "Cboe (delayed chains)",
                 "Option chains + greeks", !fx && !cboeThrottled, "keyless · delayed · display-only", cboeHint));
-        sources.add(source("SEC EDGAR", "Filings (10-K/10-Q/8-K)", !fx, "keyless · public", "Keyless with a contact User-Agent. Corporate filings for the news feed."));
+        boolean edgarOn = !fx && cfg.edgarConfigured();
+        sources.add(source("SEC EDGAR", "Filings (10-K/10-Q/8-K)", edgarOn, "public · contact required",
+                edgarOn ? "Configured with this installation's contact User-Agent. Corporate filings feed Research."
+                        : "Set EDGAR_USER_AGENT to your app name and contact email, then restart. StrikeBench never sends another person's identity."));
         sources.add(source("Google News RSS", "Headlines", !fx && !cfg.newsRssBaseUrl().isBlank(), "keyless · public", "Keyless per-symbol headlines."));
         sources.add(source("Treasury / FRED", "Risk-free rates", !fx, "keyless / keyed", "Treasury is keyless; FRED needs FRED_API_KEY."));
         sources.add(source("Historical options CSV", "Owned options history", true, "licensed · internal-use (no redistribution)",
@@ -3376,14 +3404,14 @@ public final class ApiServer {
     private void requireJobAccess(Context ctx, String jobId) {
         if (isAdmin(ctx)) return;
         if (java.util.Objects.equals(dataJobs.ownerOf(jobId), ownerId(ctx))) return;
-        throw new java.util.NoSuchElementException("no such job");
+        throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such job");
     }
 
     private void dataJobGet(Context ctx) {
         String id = ctx.pathParam("id");
         requireJobAccess(ctx, id);
         var v = dataJobs.get(id);
-        if (v.job() == null) throw new java.util.NoSuchElementException("no such job");
+        if (v.job() == null) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such job");
         ctx.json(Map.of("job", v.job(), "items", v.items()));
     }
 
@@ -3484,7 +3512,7 @@ public final class ApiServer {
         double spot = book.quote()
                 .map(q -> q.mark()).filter(java.util.Objects::nonNull)
                 .map(java.math.BigDecimal::doubleValue).filter(v -> v > 0)
-                .orElseThrow(() -> new java.util.NoSuchElementException(
+                .orElseThrow(() -> new io.liftandshift.strikebench.util.DataUnavailableException(
                         "No price for " + sym + " — a simulation needs a real (or demo) quote to anchor on."));
         int qty = b.qty() == null ? 1 : Math.clamp(b.qty(), 1, 100);
         double r = market.riskFreeRateQuote(Math.max(1, b.spec().sane().horizonDays()), world).annualRate();
@@ -3673,11 +3701,11 @@ public final class ApiServer {
         String world = worldParam(activeWorld(ctx));
         EntryBook entryBook = new EntryBook(sym, world);
         // Loud refusal on a missing quote — a strategy simulated against an invented $100 stock
-        // would be fixture-masquerade all over again (404 via the NoSuchElementException mapper).
+        // would be fixture-masquerade all over again.
         double spot = fixedEnsemble != null ? fixedEnsemble.spot() : entryBook.quote()
                     .map(q -> q.mark()).filter(java.util.Objects::nonNull)
                     .map(java.math.BigDecimal::doubleValue).filter(v -> v > 0)
-                    .orElseThrow(() -> new java.util.NoSuchElementException(
+                    .orElseThrow(() -> new io.liftandshift.strikebench.util.DataUnavailableException(
                             "No price for " + sym + " — a simulation needs a real (or demo) quote to anchor on. Check the ticker."));
         double r = market.riskFreeRateQuote(Math.max(1, b.spec().sane().horizonDays()), world).annualRate();
         // ACTIONABILITY: price the ENTRY from live market quotes (executable sides) when a chain
@@ -4526,7 +4554,7 @@ public final class ApiServer {
                         new RecommendationEngine.Holdings((int) Math.min(Integer.MAX_VALUE, pos.freeShares()),
                                 pos.avgCostCents(), null),
                         req.filters());
-            } catch (java.util.NoSuchElementException ignored) { /* no position — engine handles it */ }
+            } catch (io.liftandshift.strikebench.util.ResourceNotFoundException ignored) { /* no position — engine handles it */ }
         }
         // R4 via THE policy (review IC-1): the declared risk-capital line caps the engine's
         // per-trade budget — one translation shared by every recommending surface.
@@ -5052,7 +5080,7 @@ public final class ApiServer {
                         new RecommendationEngine.Holdings((int) Math.min(Integer.MAX_VALUE, pos.freeShares()),
                                 pos.avgCostCents(), null),
                         req.filters());
-            } catch (java.util.NoSuchElementException ignored) { /* buy-write ladder */ }
+            } catch (io.liftandshift.strikebench.util.ResourceNotFoundException ignored) { /* buy-write ladder */ }
         }
         // R4 via THE policy: ladders obey the same declared-capital translation as every surface.
         Long capLad = RiskBudgetPolicy.effectiveMaxLossCents(req.maxLossCents(), riskCapCents(ctx));

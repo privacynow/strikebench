@@ -131,7 +131,8 @@ public final class AppConfig {
     /** EDGAR submissions live on a different host than the ticker file. */
     public String edgarDataBaseUrl() { return get("EDGAR_DATA_BASE_URL", "https://data.sec.gov"); }
     /** Contact info EDGAR requires in the User-Agent header. */
-    public String edgarUserAgent() { return get("EDGAR_USER_AGENT", "StrikeBench/1.0 (babarahmedfaraz@gmail.com)"); }
+    public String edgarUserAgent() { return get("EDGAR_USER_AGENT", "").trim(); }
+    public boolean edgarConfigured() { return !edgarUserAgent().isBlank(); }
     public String treasuryBaseUrl() { return get("TREASURY_BASE_URL", "https://home.treasury.gov"); }
     public String fredBaseUrl() { return get("FRED_BASE_URL", "https://api.stlouisfed.org"); }
     public String polygonBaseUrl() { return get("POLYGON_BASE_URL", "https://api.polygon.io"); }
