@@ -177,13 +177,16 @@ public final class PortfolioExportService {
                 moneyRow("Long-term gain", t.longTermGainCents()), moneyRow("Ordinary interest", t.ordinaryInterestCents()),
                 moneyRow("Ordinary dividends", t.ordinaryDividendCents()), moneyRow("Qualified dividends", t.qualifiedDividendCents()),
                 moneyRow("Capital-gain distributions", t.capitalGainDistributionCents()),
-                moneyRow("Wash-sale adjustments", t.washSaleAdjustmentsCents()),
+                moneyRow("Modeled common-case wash adjustments", t.washSaleAdjustmentsCents()),
                 moneyRow("Section 1256 gain", t.section1256GainCents()),
                 moneyRow("Section 1256 short-term 40%", t.section1256ShortTermCents()),
                 moneyRow("Section 1256 long-term 60%", t.section1256LongTermCents()),
-                moneyRow("Estimated federal tax", t.estimatedFederalTaxCents()),
-                moneyRow("Estimated state tax", t.estimatedStateTaxCents()),
-                moneyRow("Estimated total tax", t.estimatedTotalTaxCents()), cells("Limitations", t.note()));
+                moneyRow("User-rate federal scenario", t.scenarioFederalTaxCents()),
+                moneyRow("User-rate state scenario", t.scenarioStateTaxCents()),
+                moneyRow("User-rate total scenario", t.scenarioTotalTaxCents()),
+                cells("Ruleset", t.rules().id()), cells("Ruleset status", t.rules().status()),
+                cells("Rules reviewed through", t.rules().reviewedThrough()),
+                cells("Ruleset scope", t.rules().scope()), cells("Limitations", t.note()));
     }
 
     private record Sheet(String name, List<List<Cell>> rows) {}

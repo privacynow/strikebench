@@ -278,7 +278,7 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
-    void taxableAndRetirementReportsNeverPretendToShareTaxTreatment() {
+    void provisionalYearsAndRetirementWrappersNeverPretendToCalculateTaxOwed() {
         var taxable = books.createAccount("local", new PortfolioAccountingService.AccountInput(
                 "Taxable", "TAXABLE", null, "FIFO", 3200, 1500, 2400, 500, null));
         books.record("local", taxable.id(), tx("2024-01-01", "TRADE", null, 0L, null, "MANUAL", "buy",
@@ -289,14 +289,52 @@ class PortfolioAccountingServiceTest {
         var tax = books.taxReport("local", taxable.id(), 2026);
         assertThat(tax.longTermGainCents()).isEqualTo(200_00L);
         assertThat(tax.ordinaryInterestCents()).isEqualTo(10_00L);
-        assertThat(tax.estimatedFederalTaxCents()).isEqualTo(32_40L);
-        assertThat(tax.estimatedStateTaxCents()).isEqualTo(10_50L);
+        assertThat(tax.scenarioFederalTaxCents()).isNull();
+        assertThat(tax.scenarioStateTaxCents()).isNull();
+        assertThat(tax.rules().status()).isEqualTo(TaxRules.Status.PROVISIONAL);
+        assertThat(tax.note()).contains("withheld").contains("provisional");
 
         var roth = books.createAccount("local", account("Roth", "ROTH_IRA", null));
         books.record("local", roth.id(), cash("2026-06-30", "INTEREST", 10_00L, "ri1", null));
         var rothTax = books.taxReport("local", roth.id(), 2026);
-        assertThat(rothTax.estimatedTotalTaxCents()).isZero();
-        assertThat(rothTax.note()).contains("no current per-trade");
+        assertThat(rothTax.scenarioTotalTaxCents()).isNull();
+        assertThat(rothTax.note()).contains("No user-rate scenario").contains("separate rules");
+    }
+
+    @Test
+    void reviewedYearUserRatesProduceAScenarioWithoutClaimingTaxOwed() {
+        var taxable = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Reviewed taxable", "TAXABLE", null, "FIFO", 3200, 1500, 2400, 500, null));
+        books.record("local", taxable.id(), tx("2024-01-01", "TRADE", null, 0L, null, "MANUAL", "buy",
+                List.of(leg("STOCK", "BUY", "OPEN", "MSFT", null, null, null, 10, 1, "100"))));
+        books.record("local", taxable.id(), tx("2025-01-02", "TRADE", null, 0L, null, "MANUAL", "sell",
+                List.of(leg("STOCK", "SELL", "CLOSE", "MSFT", null, null, null, 10, 1, "120"))));
+        books.record("local", taxable.id(), cash("2025-06-30", "INTEREST", 10_00L, "reviewed-i1", null));
+
+        var tax = books.taxReport("local", taxable.id(), 2025);
+        assertThat(tax.rules().status()).isEqualTo(TaxRules.Status.REVIEWED);
+        assertThat(tax.scenarioFederalTaxCents()).isEqualTo(32_40L);
+        assertThat(tax.scenarioStateTaxCents()).isEqualTo(10_50L);
+        assertThat(tax.scenarioTotalTaxCents()).isEqualTo(42_90L);
+        assertThat(tax.note()).contains(TaxRules.RULESET_ID).contains("Reconcile every figure");
+    }
+
+    @Test
+    void unsupportedYearsPreserveRecordedFactsButWithholdAutomation() {
+        var taxable = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Historical facts", "TAXABLE", null, "FIFO", 3200, 1500, 2400, 500, null));
+        books.record("local", taxable.id(), tx("2023-01-02", "TRADE", null, 0L, null, "MANUAL", "old-buy",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100"))));
+        books.record("local", taxable.id(), tx("2024-02-02", "TRADE", null, 0L, null, "MANUAL", "old-sell",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "120"))));
+
+        var tax = books.taxReport("local", taxable.id(), 2024);
+        assertThat(tax.longTermGainCents()).isEqualTo(20_00L);
+        assertThat(tax.rules().status()).isEqualTo(TaxRules.Status.UNSUPPORTED);
+        assertThat(tax.scenarioTotalTaxCents()).isNull();
+        assertThat(tax.note()).contains("Recorded lots and income remain visible").contains("unsupported");
+        assertThatThrownBy(() -> books.markSection1256YearEnd("local", taxable.id(), 2024))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("unavailable for 2024");
     }
 
     @Test
@@ -505,16 +543,16 @@ class PortfolioAccountingServiceTest {
     void realizedLossesDoNotBecomeAStandaloneTaxRefundEstimate() {
         var taxable = books.createAccount("local", new PortfolioAccountingService.AccountInput(
                 "Taxable loss", "TAXABLE", null, "FIFO", 3200, 1500, 2400, 500, null));
-        books.record("local", taxable.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "loss-buy",
+        books.record("local", taxable.id(), tx("2025-01-02", "TRADE", null, 0L, null, "BROKER", "loss-buy",
                 List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 10, 1, "100"))));
-        books.record("local", taxable.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "loss-sell",
+        books.record("local", taxable.id(), tx("2025-02-02", "TRADE", null, 0L, null, "BROKER", "loss-sell",
                 List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 10, 1, "80"))));
 
-        var tax = books.taxReport("local", taxable.id(), 2026);
+        var tax = books.taxReport("local", taxable.id(), 2025);
         assertThat(tax.shortTermGainCents()).isEqualTo(-200_00L);
-        assertThat(tax.estimatedFederalTaxCents()).isNull();
-        assertThat(tax.estimatedStateTaxCents()).isNull();
-        assertThat(tax.estimatedTotalTaxCents()).isNull();
+        assertThat(tax.scenarioFederalTaxCents()).isNull();
+        assertThat(tax.scenarioStateTaxCents()).isNull();
+        assertThat(tax.scenarioTotalTaxCents()).isNull();
         assertThat(tax.note()).contains("loss netting").contains("carryovers");
     }
 
@@ -527,16 +565,16 @@ class PortfolioAccountingServiceTest {
             }
         });
         var taxable = books.createAccount("local", account("Wash sale", "TAXABLE", null));
-        books.record("local", taxable.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "wash-open",
+        books.record("local", taxable.id(), tx("2025-01-02", "TRADE", null, 0L, null, "BROKER", "wash-open",
                 List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 10, 1, "100"))));
-        books.record("local", taxable.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "wash-loss",
+        books.record("local", taxable.id(), tx("2025-02-02", "TRADE", null, 0L, null, "BROKER", "wash-loss",
                 List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 10, 1, "80"))));
-        books.record("local", taxable.id(), tx("2026-02-15", "TRADE", null, 0L, null, "BROKER", "wash-rebuy",
+        books.record("local", taxable.id(), tx("2025-02-15", "TRADE", null, 0L, null, "BROKER", "wash-rebuy",
                 List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 6, 1, "90"))));
-        books.record("local", taxable.id(), tx("2026-03-10", "TRADE", null, 0L, null, "BROKER", "outside-window",
+        books.record("local", taxable.id(), tx("2025-03-10", "TRADE", null, 0L, null, "BROKER", "outside-window",
                 List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 4, 1, "90"))));
 
-        var realized = books.realizedLots("local", taxable.id(), 2026).getFirst();
+        var realized = books.realizedLots("local", taxable.id(), 2025).getFirst();
         assertThat(realized.realizedGainCents()).isEqualTo(-200_00L);
         assertThat(realized.economicRealizedGainCents()).isEqualTo(-200_00L);
         assertThat(realized.washSaleAdjustmentCents()).isEqualTo(120_00L);
@@ -544,14 +582,14 @@ class PortfolioAccountingServiceTest {
         assertThat(open).filteredOn(l -> l.remainingQuantity() == 6).singleElement().satisfies(lot -> {
             assertThat(lot.remainingOpenAmountCents()).isEqualTo(660_00L);
             assertThat(lot.economicRemainingOpenAmountCents()).isEqualTo(540_00L);
-            assertThat(lot.openedAt()).startsWith("2026-01-02");
+            assertThat(lot.openedAt()).startsWith("2025-01-02");
         });
         assertThat(open).filteredOn(l -> l.remainingQuantity() == 4).singleElement().satisfies(lot -> {
             assertThat(lot.remainingOpenAmountCents()).isEqualTo(360_00L);
             assertThat(lot.economicRemainingOpenAmountCents()).isEqualTo(360_00L);
-            assertThat(lot.openedAt()).startsWith("2026-03-10");
+            assertThat(lot.openedAt()).startsWith("2025-03-10");
         });
-        var tax = books.taxReport("local", taxable.id(), 2026);
+        var tax = books.taxReport("local", taxable.id(), 2025);
         assertThat(tax.shortTermGainCents()).isEqualTo(-80_00L);
         assertThat(tax.washSaleAdjustmentsCents()).isEqualTo(120_00L);
         var economic = books.summary("local", taxable.id());
@@ -562,36 +600,59 @@ class PortfolioAccountingServiceTest {
     @Test
     void retirementWrapperSuppressesWashSaleAdjustmentAndBasisCarry() {
         var roth = books.createAccount("local", account("Roth wash", "ROTH_IRA", null));
-        books.record("local", roth.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "roth-open",
+        books.record("local", roth.id(), tx("2025-01-02", "TRADE", null, 0L, null, "BROKER", "roth-open",
                 List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100"))));
-        books.record("local", roth.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "roth-loss",
+        books.record("local", roth.id(), tx("2025-02-02", "TRADE", null, 0L, null, "BROKER", "roth-loss",
                 List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "80"))));
-        books.record("local", roth.id(), tx("2026-02-15", "TRADE", null, 0L, null, "BROKER", "roth-rebuy",
+        books.record("local", roth.id(), tx("2025-02-15", "TRADE", null, 0L, null, "BROKER", "roth-rebuy",
                 List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "90"))));
 
-        assertThat(books.realizedLots("local", roth.id(), 2026).getFirst().washSaleAdjustmentCents()).isZero();
+        assertThat(books.realizedLots("local", roth.id(), 2025).getFirst().washSaleAdjustmentCents()).isZero();
         assertThat(books.lots("local", roth.id(), false)).singleElement().satisfies(lot -> {
             assertThat(lot.remainingOpenAmountCents()).isEqualTo(90_00L);
-            assertThat(lot.openedAt()).startsWith("2026-02-15");
+            assertThat(lot.openedAt()).startsWith("2025-02-15");
         });
-        assertThat(books.taxReport("local", roth.id(), 2026).washSaleAdjustmentsCents()).isZero();
+        assertThat(books.taxReport("local", roth.id(), 2025).washSaleAdjustmentsCents()).isZero();
     }
 
     @Test
     void optionWashReplacementRequiresTheSameRightStrikeAndExpiration() {
         var taxable = books.createAccount("local", account("Option wash", "TAXABLE", null));
-        books.record("local", taxable.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "option-open",
-                List.of(leg("OPTION", "BUY", "OPEN", "SPY", "CALL", "500", "2026-06-19", 1, 100, "10"))));
-        books.record("local", taxable.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "option-loss",
-                List.of(leg("OPTION", "SELL", "CLOSE", "SPY", "CALL", "500", "2026-06-19", 1, 100, "5"))));
-        books.record("local", taxable.id(), tx("2026-02-10", "TRADE", null, 0L, null, "BROKER", "different-strike",
-                List.of(leg("OPTION", "BUY", "OPEN", "SPY", "CALL", "505", "2026-06-19", 1, 100, "6"))));
-        assertThat(books.realizedLots("local", taxable.id(), 2026).getFirst().washSaleAdjustmentCents()).isZero();
-        books.record("local", taxable.id(), tx("2026-02-12", "TRADE", null, 0L, null, "BROKER", "exact-option",
-                List.of(leg("OPTION", "BUY", "OPEN", "SPY", "CALL", "500", "2026-06-19", 1, 100, "6"))));
+        books.record("local", taxable.id(), tx("2025-01-02", "TRADE", null, 0L, null, "BROKER", "option-open",
+                List.of(leg("OPTION", "BUY", "OPEN", "SPY", "CALL", "500", "2025-06-20", 1, 100, "10"))));
+        books.record("local", taxable.id(), tx("2025-02-02", "TRADE", null, 0L, null, "BROKER", "option-loss",
+                List.of(leg("OPTION", "SELL", "CLOSE", "SPY", "CALL", "500", "2025-06-20", 1, 100, "5"))));
+        books.record("local", taxable.id(), tx("2025-02-10", "TRADE", null, 0L, null, "BROKER", "different-strike",
+                List.of(leg("OPTION", "BUY", "OPEN", "SPY", "CALL", "505", "2025-06-20", 1, 100, "6"))));
+        assertThat(books.realizedLots("local", taxable.id(), 2025).getFirst().washSaleAdjustmentCents()).isZero();
+        books.record("local", taxable.id(), tx("2025-02-12", "TRADE", null, 0L, null, "BROKER", "exact-option",
+                List.of(leg("OPTION", "BUY", "OPEN", "SPY", "CALL", "500", "2025-06-20", 1, 100, "6"))));
 
-        assertThat(books.realizedLots("local", taxable.id(), 2026).getFirst().washSaleAdjustmentCents())
+        assertThat(books.realizedLots("local", taxable.id(), 2025).getFirst().washSaleAdjustmentCents())
                 .isEqualTo(500_00L);
+    }
+
+    @Test
+    void unreviewedYearKeepsEconomicFactsButDoesNotMutateTaxBasisFromAWashModel() {
+        var taxable = books.createAccount("local", account("Provisional wash", "TAXABLE", null));
+        books.record("local", taxable.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "provisional-open",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "100"))));
+        books.record("local", taxable.id(), tx("2026-02-02", "TRADE", null, 0L, null, "BROKER", "provisional-loss",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "80"))));
+        books.record("local", taxable.id(), tx("2026-02-15", "TRADE", null, 0L, null, "BROKER", "provisional-rebuy",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 1, 1, "90"))));
+
+        assertThat(books.realizedLots("local", taxable.id(), 2026)).singleElement().satisfies(match -> {
+            assertThat(match.economicRealizedGainCents()).isEqualTo(-20_00L);
+            assertThat(match.washSaleAdjustmentCents()).isZero();
+        });
+        assertThat(books.lots("local", taxable.id(), false)).singleElement().satisfies(lot -> {
+            assertThat(lot.remainingOpenAmountCents()).isEqualTo(90_00L);
+            assertThat(lot.economicRemainingOpenAmountCents()).isEqualTo(90_00L);
+            assertThat(lot.openedAt()).startsWith("2026-02-15");
+        });
+        assertThat(books.taxReport("local", taxable.id(), 2026).note())
+                .contains("ruleset is provisional").contains("user-rate scenario is withheld");
     }
 
     @Test
@@ -1185,6 +1246,15 @@ class PortfolioAccountingServiceTest {
         books.record("local", account.id(), tx("2025-01-02", "TRADE", null, 0L, null, "BROKER", "golden-leap-past",
                 List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 1, 1, "120"))));
 
+        books.record("local", account.id(), tx("2025-03-01", "TRADE", null, 0L, null, "BROKER", "golden-wash-open",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 10, 1, "100"))));
+        books.record("local", account.id(), tx("2025-04-01T12:00:00Z", "TRADE", null, 0L, null, "BROKER", "golden-wash-loss",
+                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 10, 1, "80"))));
+        books.record("local", account.id(), tx("2025-04-15", "TRADE", null, 0L, null, "BROKER", "golden-wash-rebuy",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 6, 1, "90"))));
+        books.record("local", account.id(), tx("2025-05-05", "TRADE", null, 0L, null, "BROKER", "golden-wash-outside",
+                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 4, 1, "90"))));
+
         books.record("local", account.id(), tx("2025-12-01", "TRADE", null, 0L, null, "BROKER", "golden-index-open",
                 List.of(
                         leg("OPTION", "BUY", "OPEN", "SPX", "CALL", "5000", "2026-12-18", 1, 100, "10"),
@@ -1205,15 +1275,6 @@ class PortfolioAccountingServiceTest {
                         leg("OPTION", "BUY", "OPEN", "QQQ", "CALL", "510", "2026-09-18", 1, 100, "9"))));
         assertThat(roll.roll().premiumCarryoverCents()).isEqualTo(-20_000L);
         assertThat(roll.roll().realizedMatchIds()).singleElement();
-
-        books.record("local", account.id(), tx("2026-03-01", "TRADE", null, 0L, null, "BROKER", "golden-wash-open",
-                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 10, 1, "100"))));
-        books.record("local", account.id(), tx("2026-04-01T12:00:00Z", "TRADE", null, 0L, null, "BROKER", "golden-wash-loss",
-                List.of(leg("STOCK", "SELL", "CLOSE", "AAPL", null, null, null, 10, 1, "80"))));
-        books.record("local", account.id(), tx("2026-04-15", "TRADE", null, 0L, null, "BROKER", "golden-wash-rebuy",
-                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 6, 1, "90"))));
-        books.record("local", account.id(), tx("2026-05-05", "TRADE", null, 0L, null, "BROKER", "golden-wash-outside",
-                List.of(leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 4, 1, "90"))));
 
         String csv = PortfolioCsvImport.TEMPLATE_HEADER + "\n"
                 + "golden-amzn,2026-06-01,TRADE,,0,,,0,STOCK,BUY,OPEN,AMZN,,,,2,1,50,false\n"
@@ -1242,15 +1303,16 @@ class PortfolioAccountingServiceTest {
                 + "('SPY','2026-07-01',110,'golden-observed',1,'observed',1,10)");
 
         var tax2025 = books.taxReport("local", account.id(), 2025);
-        assertThat(tax2025.shortTermGainCents()).isEqualTo(170_00L);
+        assertThat(tax2025.shortTermGainCents()).isEqualTo(90_00L);
         assertThat(tax2025.longTermGainCents()).isEqualTo(260_00L);
         assertThat(tax2025.section1256GainCents()).isEqualTo(400_00L);
+        assertThat(tax2025.washSaleAdjustmentsCents()).isEqualTo(120_00L);
         assertThat(tax2025.realizedLots()).filteredOn(PortfolioAccountingService.RealizedLotView::section1256)
                 .extracting(PortfolioAccountingService.RealizedLotView::symbol)
                 .containsExactlyInAnyOrder("SPX", "XSP");
         var tax2026 = books.taxReport("local", account.id(), 2026);
-        assertThat(tax2026.washSaleAdjustmentsCents()).isEqualTo(120_00L);
-        assertThat(tax2026.shortTermGainCents()).isEqualTo(118_12L);
+        assertThat(tax2026.washSaleAdjustmentsCents()).isZero();
+        assertThat(tax2026.shortTermGainCents()).isEqualTo(198_12L);
 
         var performance = books.performance("local", account.id());
         assertThat(performance.timeWeightedReturn()).isCloseTo(-0.01, within(0.000001));

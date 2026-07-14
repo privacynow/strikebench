@@ -4759,10 +4759,10 @@
     if (existing.id) type.disabled = true;
     if (archived) [name, broker, method, st, lt, ordinary, state].forEach(function (control) { control.disabled = true; });
     var taxFields = el('div', { class: 'form-grid portfolio-tax-rate-fields' },
-      UI.field('Short-term rate %', st), UI.field('Long-term rate %', lt),
-      UI.field('Ordinary-income rate %', ordinary), UI.field('State rate %', state));
+      UI.field('Short-term scenario rate %', st), UI.field('Long-term scenario rate %', lt),
+      UI.field('Ordinary-income scenario rate %', ordinary), UI.field('State scenario rate %', state));
     var taxNote = el('p', { class: 'muted small' },
-      'Not tax advice. These are worksheet rates for the tax year you inspect. Changing a rate changes only the estimate; it never rewrites lots, basis, or transactions.');
+      'Not tax advice. These user-supplied rates drive only a reviewed-year scenario. They never rewrite lots, basis, transactions, or claim to calculate tax owed.');
     function syncTax() { taxFields.hidden = taxNote.hidden = type.value !== 'TAXABLE'; }
     type.addEventListener('change', syncTax); syncTax();
     function bps(input) {
@@ -5464,11 +5464,11 @@
       stat('Section 1256 (60 / 40)', pnlSpan(report.section1256GainCents || 0),
         'Identified broad-based index contracts: ' + fmtMoney(report.section1256LongTermCents || 0)
           + ' long-term and ' + fmtMoney(report.section1256ShortTermCents || 0) + ' short-term.'),
-      stat('Estimated tax', report.estimatedTotalTaxCents == null ? 'Unavailable' : fmtMoney(report.estimatedTotalTaxCents),
-        report.accountType !== 'TAXABLE' ? 'No current per-trade tax estimate for this retirement wrapper.'
-          : report.estimatedTotalTaxCents == null ? report.note
-          : report.estimatedStateTaxCents == null ? 'Federal estimate only; no state rate is entered.'
-            : 'Federal plus state estimate from the rates in Settings.'));
+      stat('User-rate scenario', report.scenarioTotalTaxCents == null ? 'Not calculated' : fmtMoney(report.scenarioTotalTaxCents),
+        report.accountType !== 'TAXABLE' ? 'Not applicable to this retirement wrapper.'
+          : report.scenarioTotalTaxCents == null ? report.note
+          : report.scenarioStateTaxCents == null ? 'Federal scenario only; no state scenario rate is entered.'
+            : 'Federal plus state scenario using the rates in Settings. This is not tax owed.'));
   }
 
   async function renderPortfolioBookTax(root, account) {
@@ -5480,9 +5480,9 @@
       App.state.portfolioTaxYear = parsed; App.render();
     });
     root.appendChild(el('div', { class: 'book-tax-heading' },
-      el('div', {}, el('h2', {}, 'Tax basis and estimate'),
+      el('div', {}, el('h2', {}, 'Tax basis and reconciliation'),
         el('p', { class: 'muted' }, account.accountType === 'TAXABLE'
-          ? 'Not tax advice. A reconciliation aid for recorded lots and income, not a tax filing or broker 1099.'
+          ? 'Not tax advice. Recorded facts and a bounded user-rate scenario for reconciliation, not a tax filing, tax owed, or broker 1099.'
           : 'Not tax advice. Basis and performance remain tracked; current capital-gains tax is not assigned inside this retirement wrapper.')),
       UI.field('Tax year', year)));
     var taxData;
@@ -5510,7 +5510,14 @@
     }
     var report = taxData[0], openLots = taxData[1].lots || [];
     root.appendChild(portfolioTaxFacts(report));
-    root.appendChild(alertBox('caution', 'Use this as a reconciliation worksheet', [report.note]));
+    var rulesNotice = alertBox(report.rules.status === 'REVIEWED' ? 'caution' : 'danger',
+      report.rules.status === 'REVIEWED' ? 'Reviewed common-case worksheet' : 'Tax rules not reviewed for ' + yearValue,
+      [report.note]);
+    rulesNotice.appendChild(el('p', { class: 'small book-tax-sources' }, 'Primary references: ',
+      (report.rules.sources || []).map(function (source, index) {
+        return el('span', {}, index ? ' · ' : '', el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, source.title));
+      })));
+    root.appendChild(rulesNotice);
     var openCard = el('section', { class: 'card book-open-tax-lots' }, UI.cardHeader('Open tax lots',
       el('span', { class: 'badge badge-dim' }, openLots.length + ' lot' + (openLots.length === 1 ? '' : 's'))));
     if (!openLots.length) openCard.appendChild(UI.emptyState('No open tax lots',
@@ -5547,12 +5554,12 @@
               + r.side.toLowerCase() + ' · quantity ' + r.quantity)),
           el('div', { class: 'chip-row' },
             chip('Taxable gain / loss', pnlSpan((r.realizedGainCents || 0) + (r.washSaleAdjustmentCents || 0))),
-            chip('Wash deferred', fmtMoney(r.washSaleAdjustmentCents || 0)), chip('Character', character)),
+            chip('Modeled wash candidate', fmtMoney(r.washSaleAdjustmentCents || 0)), chip('Character', character)),
           el('p', { class: 'muted small book-realized-lot-detail' }, 'Opening basis / proceeds ',
             el('b', {}, fmtMoney(r.openAmountCents)), ' · closing proceeds / cost ',
             el('b', {}, fmtMoney(r.closeAmountCents)), ' · raw gain / loss ', pnlSpan(r.realizedGainCents))));
       });
-    } else realizedCard.appendChild(table(['Closed (ET)', 'Symbol', 'Instrument', 'Side', 'Qty', 'Opening basis / proceeds', 'Closing proceeds / cost', 'Raw realized', 'Wash deferred', 'Taxable realized', 'Character'],
+    } else realizedCard.appendChild(table(['Closed (ET)', 'Symbol', 'Instrument', 'Side', 'Qty', 'Opening basis / proceeds', 'Closing proceeds / cost', 'Raw realized', 'Modeled wash candidate', 'Worksheet realized', 'Character'],
       realized.map(function (r) { return el('tr', {}, el('td', {}, portfolioTaxDate(r.closedAt)), el('td', {}, el('b', {}, r.symbol)),
         el('td', {}, r.instrumentType.toLowerCase()), el('td', {}, r.side.toLowerCase()), el('td', {}, String(r.quantity)),
         el('td', {}, fmtMoney(r.openAmountCents)), el('td', {}, fmtMoney(r.closeAmountCents)),

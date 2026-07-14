@@ -2811,15 +2811,19 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await go('#/portfolio/book/settings');
   assert.match(await page.textContent('.portfolio-account-form'), /Not tax advice/,
     'the tax-rate settings carry the required tax-advice boundary');
-  await page.getByRole('spinbutton', { name: 'Short-term rate %', exact: true }).fill('32');
-  await page.getByRole('spinbutton', { name: 'Long-term rate %', exact: true }).fill('15');
-  await page.getByRole('spinbutton', { name: 'Ordinary-income rate %', exact: true }).fill('24');
-  await page.getByRole('spinbutton', { name: 'State rate %', exact: true }).fill('5');
+  await page.getByRole('spinbutton', { name: 'Short-term scenario rate %', exact: true }).fill('32');
+  await page.getByRole('spinbutton', { name: 'Long-term scenario rate %', exact: true }).fill('15');
+  await page.getByRole('spinbutton', { name: 'Ordinary-income scenario rate %', exact: true }).fill('24');
+  await page.getByRole('spinbutton', { name: 'State scenario rate %', exact: true }).fill('5');
   await page.getByRole('button', { name: 'Save settings', exact: true }).click();
   await page.waitForFunction(() => /Account settings saved/.test(document.getElementById('toast-region')?.textContent || ''));
   await go('#/portfolio/book/tax');
   assert.match(await page.textContent('.book-tax-heading'), /Not tax advice/,
-    'the tax report carries the required tax-advice boundary before any estimate');
+    'the tax report carries the required tax-advice boundary before any scenario');
+  assert.match(await page.textContent('#app'), /Tax basis and reconciliation[\s\S]*Tax rules not reviewed for 2026[\s\S]*user-rate scenario is withheld/,
+    'the current provisional year preserves recorded facts while withholding an unreviewed tax scenario');
+  assert.equal(await page.locator('.book-tax-sources a').count(), 4,
+    'the worksheet exposes the primary tax-rule sources instead of asking users to trust an opaque ruleset');
   assert.equal(await page.getByRole('link', { name: 'Download transactions CSV', exact: true }).count(), 1);
   assert.equal(await page.getByRole('link', { name: 'Download Excel workbook', exact: true }).count(), 1);
   assert.doesNotMatch(await page.textContent('#app'), /Rates needed/,
