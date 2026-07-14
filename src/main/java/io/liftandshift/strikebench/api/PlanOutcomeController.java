@@ -283,16 +283,19 @@ final class PlanOutcomeController {
             throw new IllegalArgumentException("Historical replay needs a named strategy rule; model futures still test the exact custom package.");
         }
         String engineKind = body.engine() == null ? "single" : body.engine().trim().toLowerCase(Locale.ROOT);
+        String world = PlanController.worldParam(root.activeWorld(ctx));
         Object report;
         if ("portfolio".equals(engineKind)) {
             report = backtester.runPortfolio(new Backtester.PortfolioRequest(plan.symbol(), family, body.from(), body.to(),
                     body.targetDte() == null ? plan.context().horizonDays() : body.targetDte(), body.entryEveryDays(),
                     body.maxConcurrent(), body.qty(), body.shortDelta(), body.widthPct(), body.profitTargetPct(),
-                    body.stopFraction(), body.rollDte(), body.startingCashCents()), root.analysisCtx(ctx), root.ownerId(ctx));
+                    body.stopFraction(), body.rollDte(), body.startingCashCents()), root.analysisCtx(ctx),
+                    root.ownerId(ctx), world);
         } else if ("single".equals(engineKind)) {
             report = backtester.run(new Backtester.BacktestRequest(plan.symbol(), family, body.from(), body.to(),
                     body.targetDte() == null ? plan.context().horizonDays() : body.targetDte(), body.entryEveryDays(),
-                    body.qty(), body.slippagePct(), body.startingCashCents()), root.analysisCtx(ctx), root.ownerId(ctx));
+                    body.qty(), body.slippagePct(), body.startingCashCents()), root.analysisCtx(ctx),
+                    root.ownerId(ctx), world);
         } else throw new IllegalArgumentException("engine must be single or portfolio");
         JsonNode reportJson = Json.MAPPER.valueToTree(report);
         var saved = planOutcomes.saveBacktest(root.ownerId(ctx), plan, body.expectedVersion(),

@@ -1132,6 +1132,23 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
     'the visual expiry preset drives the same exact DTE input');
   await page.getByRole('button', { name: 'Run historical replay' }).click();
   await page.waitForSelector('#plan-backtest-result .grid', { timeout: 30000 });
+  assert.match(await page.textContent('#plan-backtest-result'),
+    /Replay model inputs: .* annual rate from .*not a historical yield curve/i,
+    'historical replay discloses its lane-owned rate and constant-rate convention');
+  await captureSettled('plan-p4-backtest-desktop.png');
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
+    'the replay model disclosure and report stay inside the mobile viewport');
+  assert.equal(await page.locator('.plan-replay-trades tbody tr').first().evaluate(row => getComputedStyle(row).display), 'grid',
+    'mobile replay trades become readable labeled records rather than crushed table columns');
+  assert.deepEqual(await page.locator('.plan-replay-trades tbody tr').first().locator('td').evaluateAll(cells =>
+    cells.map(cell => cell.getAttribute('data-label'))),
+    ['Entry', 'Exit', 'Position', 'P/L', 'Worst case', 'Why closed'],
+    'each mobile replay trade labels dates, position, money, and close reason');
+  assert.match(await page.locator('.plan-replay-trades tbody tr').first().textContent(), /EXPIRED|WINDOW_END|TIME|STOP|PROFIT_TARGET/,
+    'the close reason remains visible in the mobile trade record');
+  await captureSettled('plan-p4-backtest-mobile.png');
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.reload();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
   await page.click('#plan-outcomes-basis-backtest');

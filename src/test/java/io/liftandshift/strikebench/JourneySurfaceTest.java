@@ -453,6 +453,25 @@ class JourneySurfaceTest {
         assertThat(replay).contains("ExecutablePrice.forAction(", "ExecutablePrice.midpoint(");
     }
 
+    @Test void everyReplayUsesExplicitLaneOwnedModelInputs() throws Exception {
+        String inputs = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/backtest/BacktestModelInputs.java"));
+        String backtester = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/backtest/Backtester.java"));
+        String replay = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/backtest/HistoricalReplayKernel.java"));
+        String controller = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/PlanOutcomeController.java"));
+
+        assertThat(inputs).contains("market.riskFreeRateQuote(", "not a historical yield curve");
+        assertThat(backtester).contains("BacktestModelInputs.resolve(", "modelInputs.annualRate()")
+                .doesNotContain("RISK_FREE", "FLAT_IV");
+        assertThat(replay).doesNotContain("private static final double RATE")
+                .contains("double annualRate");
+        assertThat(controller).contains("PlanController.worldParam(root.activeWorld(ctx))",
+                "root.ownerId(ctx), world");
+    }
+
     @Test void marketTransitionsHaveOneBackendOwner() throws Exception {
         String api = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));

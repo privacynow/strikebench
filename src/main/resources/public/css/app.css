@@ -2348,6 +2348,19 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .plan-proposal-card-grid { grid-template-columns: minmax(0, 1fr); }
   .plan-proposal-result-head { flex-direction: column; }
   .plan-proposal-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plan-replay-trades { overflow: visible; margin: 0; padding: 0; }
+  .plan-replay-trades table, .plan-replay-trades tbody { display: block; width: 100%; }
+  .plan-replay-trades thead { display: none; }
+  .plan-replay-trades tr {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px;
+    width: 100%; padding: 12px 0; border-top: 1px solid var(--border);
+  }
+  .plan-replay-trades td { display: block; min-width: 0; padding: 0; border: 0; overflow-wrap: anywhere; }
+  .plan-replay-trades .plan-replay-position { grid-column: 1 / -1; font-weight: 650; }
+  .plan-replay-trades td[data-label]::before {
+    content: attr(data-label); display: block; margin-bottom: 2px; color: var(--text-faint);
+    font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  }
   .external-trade-summary, .external-trade-meta { grid-template-columns: minmax(0, 1fr); }
   .ext-leg { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ext-leg-remove { grid-column: 1 / -1; justify-self: end; }

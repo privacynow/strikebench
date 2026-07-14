@@ -1572,6 +1572,14 @@
       [report.pricingMode === 'HISTORICAL_CHAIN'
         ? 'Historical option observations were available.'
         : 'At least some option prices were modeled from the underlying history; the result is not a record of executable historical fills.']));
+    var assumptions = report.assumptions || {};
+    if (assumptions.annualRate != null) {
+      host.appendChild(el('p', { class: 'muted small plan-replay-inputs' },
+        'Replay model inputs: ' + (Number(assumptions.annualRate) * 100).toFixed(2) + '% annual rate from '
+          + (assumptions.rateSource || 'an unavailable source') + ' (' + String(assumptions.rateProvenance || 'unknown').toLowerCase()
+          + ') · ' + (Number(assumptions.fallbackVolatility) * 100).toFixed(0)
+          + '% modeled volatility only when trailing history is unavailable. The rate is held constant; it is not a historical yield curve.'));
+    }
     host.appendChild(el('div', { class: 'grid grid-4' },
       stat('Completed trades', String(report.sampleSize || 0)),
       stat('Win rate', fmtPct(report.winRate)),
@@ -1586,15 +1594,17 @@
         }), { money: true })));
     }
     if (report.trades && report.trades.length) {
-      host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Trades (' + report.trades.length + ')'),
-        table(['Entry', 'Exit', 'Position', 'P/L', 'Worst case', 'Why closed'], report.trades.map(function (trade) {
-          return el('tr', {}, el('td', { class: 'muted' }, trade.entryDate),
-            el('td', { class: 'muted' }, trade.exitDate),
-            el('td', {}, trade.label || prettyStrategy(trade.strategy)),
-            el('td', {}, pnlSpan(trade.pnlCents)),
-            el('td', { class: 'loss' }, trade.maxLossCents != null ? fmtMoney(trade.maxLossCents) : '—'),
-            el('td', { class: 'muted' }, trade.exitReason));
-        }))));
+      var tradeTable = table(['Entry', 'Exit', 'Position', 'P/L', 'Worst case', 'Why closed'],
+        report.trades.map(function (trade) {
+          return el('tr', {}, el('td', { class: 'muted', 'data-label': 'Entry' }, trade.entryDate),
+            el('td', { class: 'muted', 'data-label': 'Exit' }, trade.exitDate),
+            el('td', { class: 'plan-replay-position', 'data-label': 'Position' }, trade.label || prettyStrategy(trade.strategy)),
+            el('td', { 'data-label': 'P/L' }, pnlSpan(trade.pnlCents)),
+            el('td', { class: 'loss', 'data-label': 'Worst case' }, trade.maxLossCents != null ? fmtMoney(trade.maxLossCents) : '—'),
+            el('td', { class: 'muted', 'data-label': 'Why closed' }, trade.exitReason));
+        }));
+      tradeTable.classList.add('plan-replay-trades');
+      host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Trades (' + report.trades.length + ')'), tradeTable));
     }
     (report.notes || []).forEach(function (note) { host.appendChild(alertBox('warn', note)); });
     if (report.disclaimer) host.appendChild(el('p', { class: 'muted small' }, report.disclaimer));

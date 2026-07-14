@@ -73,6 +73,8 @@ class ManagedBacktestTest {
         assertThat(report.concurrentPeak()).isGreaterThanOrEqualTo(1);
         assertThat(report.pricingMode()).isEqualTo("PAYOFF_ONLY");
         assertThat(report.demoUnderlying()).isTrue();
+        assertThat(report.assumptions()).containsKeys("annualRate", "rateSource", "rateProvenance",
+                "fallbackVolatility", "volatilityConvention");
         assertThat(backtester.get(report.id()).get("strategy")).isEqualTo("CREDIT_PUT_SPREAD");
         assertThat(Json.parse(Json.write(backtester.get(report.id()))))
                 .isEqualTo(Json.parse(Json.write(report)));
@@ -127,15 +129,15 @@ class ManagedBacktestTest {
         Leg shortCall = Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("250"),
                 expiration, 1, BigDecimal.ZERO);
 
-        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, asOf,
+        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, 0.04, asOf,
                 AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence)).isEqualTo(60_000);
-        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, asOf,
+        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, 0.04, asOf,
                 AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.EXIT, false, evidence)).isEqualTo(40_000);
-        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, asOf,
+        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, 0.04, asOf,
                 AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.MARK, false, evidence)).isEqualTo(50_000);
-        assertThat(kernel.valueCents("AAPL", List.of(shortCall), 1, 250, 0.30, asOf,
+        assertThat(kernel.valueCents("AAPL", List.of(shortCall), 1, 250, 0.30, 0.04, asOf,
                 AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence)).isEqualTo(-40_000);
-        assertThat(kernel.valueCents("AAPL", List.of(shortCall), 1, 250, 0.30, asOf,
+        assertThat(kernel.valueCents("AAPL", List.of(shortCall), 1, 250, 0.30, 0.04, asOf,
                 AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.EXIT, false, evidence)).isEqualTo(-60_000);
         assertThat(evidence.observedMarks()).isEqualTo(5);
         assertThat(evidence.totalMarks()).isEqualTo(5);
@@ -146,7 +148,7 @@ class ManagedBacktestTest {
                 null, new BigDecimal("6.00"), new BigDecimal("5.00"), "orats");
         Leg missingBidShort = Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("255"),
                 expiration, 1, BigDecimal.ZERO);
-        kernel.valueCents("AAPL", List.of(missingBidShort), 1, 250, 0.30, asOf,
+        kernel.valueCents("AAPL", List.of(missingBidShort), 1, 250, 0.30, 0.04, asOf,
                 AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence);
         assertThat(evidence.observedMarks()).isEqualTo(5);
         assertThat(evidence.totalMarks()).isEqualTo(6);
@@ -157,7 +159,7 @@ class ManagedBacktestTest {
                 new BigDecimal("7.00"), new BigDecimal("6.00"), new BigDecimal("6.50"), "orats");
         Leg crossedLong = Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("260"),
                 expiration, 1, BigDecimal.ZERO);
-        kernel.valueCents("AAPL", List.of(crossedLong), 1, 250, 0.30, asOf,
+        kernel.valueCents("AAPL", List.of(crossedLong), 1, 250, 0.30, 0.04, asOf,
                 AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence);
         assertThat(evidence.observedMarks()).isEqualTo(5); // crossed historical book fell to the model
         assertThat(evidence.totalMarks()).isEqualTo(7);
@@ -196,7 +198,7 @@ class ManagedBacktestTest {
         Leg call = Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("250"),
                 expiration, 1, BigDecimal.ZERO);
 
-        long modeled = kernel.valueCents("AAPL", List.of(call), 1, 250, 0.30, asOf,
+        long modeled = kernel.valueCents("AAPL", List.of(call), 1, 250, 0.30, 0.04, asOf,
                 scenario, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence);
 
         assertThat(modeled).isNotEqualTo(60_000L);
