@@ -403,8 +403,6 @@ public final class ApiServer {
                     ctx.skipRemainingHandlers();
                 }
             });
-            c.routes.get("/api/metrics", this::metrics);
-
             // Prefetch governor: speculative requests (X-Priority: prefetch) are welcome only when
             // the heavy providers have spare budget. A denied prefetch is a quiet 204 — the client
             // simply doesn't warm its cache; the user never waits on (or behind) a guess.
@@ -416,21 +414,12 @@ public final class ApiServer {
                 }
             });
 
-            c.routes.get("/api/status", this::status);
-            c.routes.get("/api/config", this::config);
-            c.routes.get("/api/health", this::health);
-            c.routes.get("/api/universe", ctx ->
-                ctx.json(universeViewFor(worldParam(activeWorld(ctx)), ownerId(ctx))));
-            c.routes.put("/api/universe", this::universeSelect);
-            c.routes.get("/api/quotes", this::quotesBatch);
-            c.routes.get("/api/sparklines", this::sparklines);
-            c.routes.get("/api/market/engine", ctx -> ctx.json(marketEngine.status())); // Data Center: engine health
-            c.routes.sse("/api/market/stream", this::marketStream);                     // live-ish quote deltas from memory
-            c.routes.sse("/api/events", this::eventStream);                             // typed workspace events (jobs/datasets/providers)
-
-            // ---- Workspace continuity: the client-owned UX state blob, versioned per user ----
-            c.routes.get("/api/workspace", this::workspaceGet);
-            c.routes.put("/api/workspace", this::workspacePut);
+            CoreRoutes.register(c, new CoreRoutes.Handlers(
+                    this::metrics, this::status, this::config, this::health,
+                    ctx -> ctx.json(universeViewFor(worldParam(activeWorld(ctx)), ownerId(ctx))),
+                    this::universeSelect, this::quotesBatch, this::sparklines,
+                    ctx -> ctx.json(marketEngine.status()), this::marketStream, this::eventStream,
+                    this::workspaceGet, this::workspacePut, this::account, this::accountReset));
 
             // ---- Plans: server-owned journey facts; workspace JSON keeps presentation only ----
             PlanRoutes.register(c, new PlanRoutes.Handlers(
@@ -448,34 +437,17 @@ public final class ApiServer {
                     this::planManageUnwind, this::planManageSettle, this::planManageRoll,
                     this::planManageVoid, this::planManageReview));
 
-            // ---- Data Center ----
-            c.routes.get("/api/data/overview", this::dataOverview);
-            c.routes.get("/api/data/coverage", this::dataCoverageRoute);
-            c.routes.get("/api/data/sources", this::dataSources);
-            c.routes.get("/api/data/sync", this::dataSyncStatus);
-            c.routes.post("/api/data/sync/plan", this::dataSyncPlan);
-            c.routes.put("/api/data/sync/schedule", this::dataSyncSchedulePut);
-            c.routes.post("/api/data/import/underlying", this::dataUnderlyingImport);
-            c.routes.get("/api/data/jobs", this::dataJobsList);
-            c.routes.get("/api/data/jobs/{id}", this::dataJobGet);
-            c.routes.post("/api/data/jobs", this::dataJobStart);
-            c.routes.post("/api/data/jobs/{id}/cancel", this::dataJobCancel);
-            c.routes.post("/api/data/jobs/{id}/retry", this::dataJobRetry);
-            c.routes.post("/api/data/reset", this::dataResetRoute);
-
-            // ---- Datasets & scenario simulation ----
-            c.routes.get("/api/datasets", ctx -> ctx.json(datasets.describe(ownerId(ctx))));
-            c.routes.put("/api/datasets/active", this::datasetSetActive);
-            c.routes.delete("/api/datasets/{id}", ctx -> {
-                datasets.delete(ctx.pathParam("id"), ownerId(ctx)); // ownership enforced in the service
-                ctx.json(Map.of("ok", true));
-            });
-            // Pure outcome work has ONE contract: POST /api/evaluate. Dataset generation is a
-            // separate command because it persists durable analysis material.
-            c.routes.post("/api/datasets/generate", this::simDataset);
-
-            c.routes.get("/api/account", this::account);
-            c.routes.post("/api/account/reset", this::accountReset);
+            DataRoutes.register(c, new DataRoutes.Handlers(
+                    this::dataOverview, this::dataCoverageRoute, this::dataSources,
+                    this::dataSyncStatus, this::dataSyncPlan, this::dataSyncSchedulePut,
+                    this::dataUnderlyingImport, this::dataJobsList, this::dataJobGet,
+                    this::dataJobStart, this::dataJobCancel, this::dataJobRetry, this::dataResetRoute,
+                    ctx -> ctx.json(datasets.describe(ownerId(ctx))), this::datasetSetActive,
+                    ctx -> {
+                        datasets.delete(ctx.pathParam("id"), ownerId(ctx));
+                        ctx.json(Map.of("ok", true));
+                    },
+                    this::simDataset));
 
             // Historical event studies live under Research. There is no legacy Lab destination:
             // every capability has one canonical owner and route.
@@ -485,214 +457,181 @@ public final class ApiServer {
                     ctx.json(new io.liftandshift.strikebench.research.ResearchQuestionEngine(market, clock)
                             .run(requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest.class)),
                                     analysisCtx(ctx), worldParam(activeWorld(ctx))));
-            c.routes.get("/api/research/questions", questionsHandler);
-            c.routes.post("/api/research/event-studies", studyHandler);
-            c.routes.post("/api/research/notes", this::noteCreate);
-            c.routes.get("/api/research/notes", this::noteList);
-            c.routes.get("/api/research/notes/{id}", this::noteGet);
-            c.routes.put("/api/research/notes/{id}", this::noteUpdate);
-            c.routes.delete("/api/research/notes/{id}", this::noteDelete);
-            c.routes.get("/api/research/{symbol}", this::research);
-            c.routes.get("/api/research/{symbol}/expirations", this::expirations);
-            c.routes.get("/api/research/{symbol}/chain", this::chain);
-            c.routes.get("/api/research/{symbol}/history", this::history);
-            c.routes.get("/api/research/{symbol}/news", this::news);
-            c.routes.get("/api/lookup", this::lookup);
-
-            // The single source of truth for strategy families and concrete constructions.
-            // Frontend surfaces retain only the functions that build legs; identity, wording,
-            // ordering and surface eligibility all come from this registry.
-            c.routes.get("/api/strategies", ctx -> ctx.json(Map.of(
-                    "families",
-                    java.util.Arrays.stream(io.liftandshift.strikebench.strategy.StrategyFamily.values())
-                            .map(Enum::name).toList(),
-                    "catalog", io.liftandshift.strikebench.strategy.StrategyCatalog.families(),
-                    "templates", io.liftandshift.strikebench.strategy.StrategyCatalog.templates())));
-            c.routes.get("/api/welcome/teaching-example", this::welcomeTeachingExample);
-            c.routes.post("/api/research/scout", this::researchScout);
-            c.routes.post("/api/research/{symbol}/intent-ladder", this::researchIntentLadder);
-            c.routes.post("/api/evaluate", this::evaluate);
-            c.routes.post("/api/opportunities", this::opportunities);
-            c.routes.post("/api/optimize", this::optimize);
-            c.routes.post("/api/builder/exposure", ctx ->
-                    ctx.json(new io.liftandshift.strikebench.strategy.ExposureSizer(market)
+            ResearchRoutes.register(c, new ResearchRoutes.Handlers(
+                    questionsHandler, studyHandler, this::noteCreate, this::noteList,
+                    this::noteGet, this::noteUpdate, this::noteDelete, this::research,
+                    this::expirations, this::chain, this::history, this::news, this::lookup,
+                    ctx -> ctx.json(Map.of(
+                            "families", java.util.Arrays.stream(
+                                            io.liftandshift.strikebench.strategy.StrategyFamily.values())
+                                    .map(Enum::name).toList(),
+                            "catalog", io.liftandshift.strikebench.strategy.StrategyCatalog.families(),
+                            "templates", io.liftandshift.strikebench.strategy.StrategyCatalog.templates())),
+                    this::welcomeTeachingExample, this::researchScout, this::researchIntentLadder,
+                    this::evaluate, this::opportunities, this::optimize,
+                    ctx -> ctx.json(new io.liftandshift.strikebench.strategy.ExposureSizer(market)
                             .size(requireBody(bodyOrNull(ctx,
-                                    io.liftandshift.strikebench.strategy.ExposureSizer.Request.class)),
-                                    worldParam(activeWorld(ctx)))));
-            c.routes.get("/api/evaluations", ctx -> {
-                String uid = auth.currentUserId(ctx);
-                String ownerId = io.liftandshift.strikebench.util.OwnerScope.id(uid);
-                ctx.json(Map.of("evaluations", evaluations.recent(ownerId, 50)));
-            });
-            c.routes.get("/api/calibration", ctx -> {
-                String uid = auth.currentUserId(ctx);
-                String ownerId = io.liftandshift.strikebench.util.OwnerScope.id(uid);
-                ctx.json(evaluations.calibrationReport(ownerId));
-            });
-            c.routes.post("/api/calibration/resolve", this::calibrationResolve);
+                                            io.liftandshift.strikebench.strategy.ExposureSizer.Request.class)),
+                                    worldParam(activeWorld(ctx)))),
+                    ctx -> {
+                        String owner = io.liftandshift.strikebench.util.OwnerScope.id(auth.currentUserId(ctx));
+                        ctx.json(Map.of("evaluations", evaluations.recent(owner, 50)));
+                    },
+                    ctx -> {
+                        String owner = io.liftandshift.strikebench.util.OwnerScope.id(auth.currentUserId(ctx));
+                        ctx.json(evaluations.calibrationReport(owner));
+                    },
+                    this::calibrationResolve));
 
             // ---- The simulated market (Block S): per-user runtime switch, never a boot flag ----
-            c.routes.get("/api/world", ctx -> ctx.json(worldTransitions.current(ownerId(ctx))));
-            c.routes.put("/api/world", ctx -> {
-                var body = requireBody(bodyOrNull(ctx, java.util.Map.class));
-                String w = String.valueOf(body.getOrDefault("world", "observed"));
-                ctx.json(worldTransitions.transition(w, ownerId(ctx)));
-            });
-            c.routes.get("/api/sim/market", ctx -> ctx.json(Map.of("sessions", simSessions.list(ownerId(ctx)))));
-            c.routes.get("/api/sim/market/{id}/anchors", ctx ->
-                    ctx.json(simSessions.anchors(ctx.pathParam("id"), ownerId(ctx)))); // F8: provenance detail
-            c.routes.post("/api/sim/market", this::simMarketCreate);
-            c.routes.post("/api/sim/market/{id}/start", ctx -> {
-                String id = ctx.pathParam("id");
-                String owner = ownerId(ctx);
-                simSessions.start(id, owner);
-                events.publish("world.control", Map.of("world", id,
-                        "user", owner == null ? "local" : owner, "running", true));
-                ctx.json(Map.of("ok", true, "running", true));
-            });
-            c.routes.post("/api/sim/market/{id}/pause", ctx -> {
-                String id = ctx.pathParam("id");
-                String owner = ownerId(ctx);
-                simSessions.pause(id, owner);
-                events.publish("world.control", Map.of("world", id,
-                        "user", owner == null ? "local" : owner, "running", false));
-                ctx.json(Map.of("ok", true, "running", false));
-            });
-            c.routes.post("/api/sim/market/{id}/step", ctx -> { simSessions.step(ctx.pathParam("id"), ownerId(ctx)); ctx.json(Map.of("ok", true)); });
-            c.routes.post("/api/sim/market/{id}/speed", ctx -> {
-                var b = requireBody(bodyOrNull(ctx, java.util.Map.class));
-                String id = ctx.pathParam("id");
-                String owner = ownerId(ctx);
-                double speed = Double.parseDouble(String.valueOf(b.get("speed")));
-                simSessions.setSpeed(id, owner, speed);
-                events.publish("world.control", Map.of("world", id,
-                        "user", owner == null ? "local" : owner, "speed", speed));
-                ctx.json(Map.of("ok", true, "speed", speed));
-            });
-            c.routes.post("/api/sim/market/{id}/event", ctx -> {
-                var b = requireBody(bodyOrNull(ctx, java.util.Map.class));
-                if (b.containsKey("movePct") && b.containsKey("symbol")) {
-                    simSessions.injectMove(ctx.pathParam("id"), ownerId(ctx),
-                            String.valueOf(b.get("symbol")), Double.parseDouble(String.valueOf(b.get("movePct"))));
-                }
-                if (b.containsKey("volShift")) {
-                    simSessions.injectVol(ctx.pathParam("id"), ownerId(ctx),
-                            Double.parseDouble(String.valueOf(b.get("volShift"))));
-                }
-                ctx.json(Map.of("ok", true));
-            });
-            c.routes.delete("/api/sim/market/{id}", ctx -> {
-                String id = ctx.pathParam("id");
-                String owner = ownerId(ctx);
-                boolean wasActive = id.equals(activeWorld(ctx));
-                var rehearsalFinish = planRehearsals.finishHook(owner, id);
-                simSessions.finish(id, owner, (conn, worldId, world) -> {
-                    if (rehearsalFinish != null) rehearsalFinish.beforeFinish(conn, worldId, world);
-                    planSvc.closeFinishedWorldPlansOn(conn, owner, worldId);
-                });
-                // Finishing an active session uses the exact transition contract as an explicit
-                // return: hydrate first, then commit selectors, revision, caches, and events.
-                ctx.json(worldTransitions.afterFinish(wasActive, owner));
-            });
-            c.routes.get("/api/sim/market/{id}/report", this::simMarketReport);
+            WorldRoutes.register(c, new WorldRoutes.Handlers(
+                    ctx -> ctx.json(worldTransitions.current(ownerId(ctx))),
+                    ctx -> {
+                        var body = requireBody(bodyOrNull(ctx, java.util.Map.class));
+                        String world = String.valueOf(body.getOrDefault("world", "observed"));
+                        ctx.json(worldTransitions.transition(world, ownerId(ctx)));
+                    },
+                    ctx -> ctx.json(Map.of("sessions", simSessions.list(ownerId(ctx)))),
+                    ctx -> ctx.json(simSessions.anchors(ctx.pathParam("id"), ownerId(ctx))),
+                    this::simMarketCreate,
+                    ctx -> {
+                        String id = ctx.pathParam("id");
+                        String owner = ownerId(ctx);
+                        simSessions.start(id, owner);
+                        events.publish("world.control", Map.of("world", id,
+                                "user", owner == null ? "local" : owner, "running", true));
+                        ctx.json(Map.of("ok", true, "running", true));
+                    },
+                    ctx -> {
+                        String id = ctx.pathParam("id");
+                        String owner = ownerId(ctx);
+                        simSessions.pause(id, owner);
+                        events.publish("world.control", Map.of("world", id,
+                                "user", owner == null ? "local" : owner, "running", false));
+                        ctx.json(Map.of("ok", true, "running", false));
+                    },
+                    ctx -> {
+                        simSessions.step(ctx.pathParam("id"), ownerId(ctx));
+                        ctx.json(Map.of("ok", true));
+                    },
+                    ctx -> {
+                        var body = requireBody(bodyOrNull(ctx, java.util.Map.class));
+                        String id = ctx.pathParam("id");
+                        String owner = ownerId(ctx);
+                        double speed = Double.parseDouble(String.valueOf(body.get("speed")));
+                        simSessions.setSpeed(id, owner, speed);
+                        events.publish("world.control", Map.of("world", id,
+                                "user", owner == null ? "local" : owner, "speed", speed));
+                        ctx.json(Map.of("ok", true, "speed", speed));
+                    },
+                    ctx -> {
+                        var body = requireBody(bodyOrNull(ctx, java.util.Map.class));
+                        if (body.containsKey("movePct") && body.containsKey("symbol")) {
+                            simSessions.injectMove(ctx.pathParam("id"), ownerId(ctx),
+                                    String.valueOf(body.get("symbol")),
+                                    Double.parseDouble(String.valueOf(body.get("movePct"))));
+                        }
+                        if (body.containsKey("volShift")) {
+                            simSessions.injectVol(ctx.pathParam("id"), ownerId(ctx),
+                                    Double.parseDouble(String.valueOf(body.get("volShift"))));
+                        }
+                        ctx.json(Map.of("ok", true));
+                    },
+                    ctx -> {
+                        String id = ctx.pathParam("id");
+                        String owner = ownerId(ctx);
+                        boolean wasActive = id.equals(activeWorld(ctx));
+                        var rehearsalFinish = planRehearsals.finishHook(owner, id);
+                        simSessions.finish(id, owner, (conn, worldId, world) -> {
+                            if (rehearsalFinish != null) rehearsalFinish.beforeFinish(conn, worldId, world);
+                            planSvc.closeFinishedWorldPlansOn(conn, owner, worldId);
+                        });
+                        ctx.json(worldTransitions.afterFinish(wasActive, owner));
+                    },
+                    this::simMarketReport));
 
-            c.routes.post("/api/trades/preview", this::tradePreview);
-            c.routes.post("/api/trades/external", ctx -> {
-                Account acct = currentAccount(ctx);
-                TradeOpenRequest body = bodyOrNull(ctx, TradeOpenRequest.class);
-                var req = toOpenRequest(body, acct);
-                var meta = new io.liftandshift.strikebench.paper.TradeService.ExternalMeta(
-                        body.executedAt(), body.broker(), body.orderRef(), Boolean.TRUE.equals(body.historical()));
-                ctx.status(201).json(trades.createExternal(req, meta));
-            });
-            c.routes.post("/api/trades", this::tradeCreate);
-            c.routes.get("/api/trades", this::tradeList);
-            c.routes.get("/api/trades/{id}", this::tradeDetail);
-            c.routes.post("/api/trades/{id}/refresh", this::tradeRefresh);
-            c.routes.post("/api/trades/{id}/unwind", this::tradeUnwind);
-            c.routes.post("/api/trades/{id}/settle", this::tradeSettle);
-            c.routes.delete("/api/trades/{id}", this::tradeDelete);
+            TradeRoutes.register(c, new TradeRoutes.Handlers(
+                    this::tradePreview,
+                    ctx -> {
+                        Account acct = currentAccount(ctx);
+                        TradeOpenRequest body = bodyOrNull(ctx, TradeOpenRequest.class);
+                        var req = toOpenRequest(body, acct);
+                        var meta = new io.liftandshift.strikebench.paper.TradeService.ExternalMeta(
+                                body.executedAt(), body.broker(), body.orderRef(),
+                                Boolean.TRUE.equals(body.historical()));
+                        ctx.status(201).json(trades.createExternal(req, meta));
+                    },
+                    this::tradeCreate, this::tradeList, this::tradeDetail, this::tradeRefresh,
+                    this::tradeUnwind, this::tradeSettle, this::tradeDelete, this::adminSnapshot,
+                    this::auditPage, this::positionsList, this::positionsPreview,
+                    this::positionsBuy, this::positionsSell));
 
-            c.routes.post("/api/admin/snapshot", this::adminSnapshot);
-
-            c.routes.get("/api/audit", this::auditPage);
-            c.routes.get("/api/positions", this::positionsList);
-            c.routes.post("/api/positions/preview", this::positionsPreview);
-            c.routes.post("/api/positions/buy", this::positionsBuy);
-            c.routes.post("/api/positions/sell", this::positionsSell);
-            c.routes.get("/api/portfolio/summary", this::portfolioSummary);
-            c.routes.get("/api/portfolio/heat", ctx ->
-                    ctx.json(trades.portfolioHeat(currentAccount(ctx).id())));
-            c.routes.get("/api/account/risk-context", ctx ->
-                    ctx.json(io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerId(ctx))));
-            c.routes.put("/api/account/risk-context", ctx -> {
-                var rc = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.paper.AccountRiskContext.class));
-                io.liftandshift.strikebench.paper.AccountRiskContext.save(db, ownerId(ctx), rc);
-                ctx.json(rc);
-            });
-            c.routes.get("/api/risk-budget", this::riskBudget);
-            c.routes.get("/api/portfolio/greeks", ctx ->
-                    ctx.json(trades.portfolioGreeks(currentAccount(ctx).id())));
-            c.routes.get("/api/portfolio/accounts", ctx ->
-                    ctx.json(Map.of("accounts", portfolioBooks.accounts(ownerId(ctx)))));
-            c.routes.post("/api/portfolio/accounts", this::portfolioAccountCreate);
-            c.routes.get("/api/portfolio/accounts/{id}", ctx ->
-                    ctx.json(portfolioBooks.account(ownerId(ctx), ctx.pathParam("id"))));
-            c.routes.put("/api/portfolio/accounts/{id}", this::portfolioAccountUpdate);
-            c.routes.delete("/api/portfolio/accounts/{id}", ctx ->
-                    ctx.json(portfolioBooks.setArchived(ownerId(ctx), ctx.pathParam("id"), true)));
-            c.routes.post("/api/portfolio/accounts/{id}/restore", ctx ->
-                    ctx.json(portfolioBooks.setArchived(ownerId(ctx), ctx.pathParam("id"), false)));
-            c.routes.get("/api/portfolio/accounts/{id}/summary", ctx ->
-                    ctx.json(portfolioBooks.summary(ownerId(ctx), ctx.pathParam("id"))));
-            c.routes.get("/api/portfolio/accounts/{id}/transactions", this::portfolioTransactions);
-            c.routes.post("/api/portfolio/accounts/{id}/transactions", this::portfolioTransactionCreate);
-            c.routes.get("/api/portfolio/accounts/{id}/lots", ctx ->
-                    ctx.json(Map.of("lots", portfolioBooks.lots(ownerId(ctx), ctx.pathParam("id"),
-                            Boolean.parseBoolean(ctx.queryParam("includeClosed"))))));
-            c.routes.get("/api/portfolio/accounts/{id}/realized", ctx ->
-                    ctx.json(Map.of("realized", portfolioBooks.realizedLots(ownerId(ctx), ctx.pathParam("id"),
-                            intParam(ctx, "year", java.time.Year.now(clock).getValue())))));
-            c.routes.post("/api/portfolio/accounts/{id}/valuations", this::portfolioValuationCreate);
-            c.routes.get("/api/portfolio/accounts/{id}/performance", ctx ->
-                    ctx.json(portfolioBooks.performance(ownerId(ctx), ctx.pathParam("id"))));
-            c.routes.get("/api/portfolio/accounts/{id}/tax", ctx ->
-                    ctx.json(portfolioBooks.taxReport(ownerId(ctx), ctx.pathParam("id"),
-                            intParam(ctx, "year", java.time.Year.now(clock).getValue()))));
-            c.routes.put("/api/portfolio/accounts/{id}/tax/{year}/reconciliation", ctx ->
-                    ctx.json(portfolioBooks.saveTaxReconciliation(ownerId(ctx), ctx.pathParam("id"),
-                            Integer.parseInt(ctx.pathParam("year")), requireBody(bodyOrNull(ctx,
-                                    io.liftandshift.strikebench.paper.PortfolioAccountingService.TaxReconciliationInput.class)))));
-            c.routes.delete("/api/portfolio/accounts/{id}/tax/{year}/reconciliation", ctx -> {
-                portfolioBooks.clearTaxReconciliation(ownerId(ctx), ctx.pathParam("id"),
-                        Integer.parseInt(ctx.pathParam("year")));
-                ctx.json(Map.of("ok", true));
-            });
-            c.routes.post("/api/portfolio/accounts/{id}/tax/{year}/mark-1256", ctx ->
-                    ctx.json(Map.of("transactionsWritten", portfolioBooks.markSection1256YearEnd(
-                            ownerId(ctx), ctx.pathParam("id"), Integer.parseInt(ctx.pathParam("year"))))));
-            c.routes.get("/api/portfolio/accounts/{id}/export.csv", this::portfolioCsvExport);
-            c.routes.get("/api/portfolio/accounts/{id}/export.xlsx", this::portfolioWorkbookExport);
-            c.routes.get("/api/portfolio/import-template.csv", this::portfolioImportTemplate);
-            c.routes.post("/api/portfolio/accounts/{id}/import.csv", this::portfolioCsvImport);
+            PortfolioRoutes.register(c, new PortfolioRoutes.Handlers(
+                    this::portfolioSummary,
+                    ctx -> ctx.json(trades.portfolioHeat(currentAccount(ctx).id())),
+                    ctx -> ctx.json(io.liftandshift.strikebench.paper.AccountRiskContext.load(
+                            db, ownerId(ctx))),
+                    ctx -> {
+                        var risk = requireBody(bodyOrNull(ctx,
+                                io.liftandshift.strikebench.paper.AccountRiskContext.class));
+                        io.liftandshift.strikebench.paper.AccountRiskContext.save(db, ownerId(ctx), risk);
+                        ctx.json(risk);
+                    },
+                    this::riskBudget,
+                    ctx -> ctx.json(trades.portfolioGreeks(currentAccount(ctx).id())),
+                    ctx -> ctx.json(Map.of("accounts", portfolioBooks.accounts(ownerId(ctx)))),
+                    this::portfolioAccountCreate,
+                    ctx -> ctx.json(portfolioBooks.account(ownerId(ctx), ctx.pathParam("id"))),
+                    this::portfolioAccountUpdate,
+                    ctx -> ctx.json(portfolioBooks.setArchived(
+                            ownerId(ctx), ctx.pathParam("id"), true)),
+                    ctx -> ctx.json(portfolioBooks.setArchived(
+                            ownerId(ctx), ctx.pathParam("id"), false)),
+                    ctx -> ctx.json(portfolioBooks.summary(ownerId(ctx), ctx.pathParam("id"))),
+                    this::portfolioTransactions, this::portfolioTransactionCreate,
+                    ctx -> ctx.json(Map.of("lots", portfolioBooks.lots(ownerId(ctx),
+                            ctx.pathParam("id"), Boolean.parseBoolean(ctx.queryParam("includeClosed"))))),
+                    ctx -> ctx.json(Map.of("realized", portfolioBooks.realizedLots(ownerId(ctx),
+                            ctx.pathParam("id"), intParam(ctx, "year",
+                                    java.time.Year.now(clock).getValue())))),
+                    this::portfolioValuationCreate,
+                    ctx -> ctx.json(portfolioBooks.performance(ownerId(ctx), ctx.pathParam("id"))),
+                    ctx -> ctx.json(portfolioBooks.taxReport(ownerId(ctx), ctx.pathParam("id"),
+                            intParam(ctx, "year", java.time.Year.now(clock).getValue()))),
+                    ctx -> ctx.json(portfolioBooks.saveTaxReconciliation(ownerId(ctx),
+                            ctx.pathParam("id"), Integer.parseInt(ctx.pathParam("year")),
+                            requireBody(bodyOrNull(ctx,
+                                    io.liftandshift.strikebench.paper.PortfolioAccountingService
+                                            .TaxReconciliationInput.class)))),
+                    ctx -> {
+                        portfolioBooks.clearTaxReconciliation(ownerId(ctx), ctx.pathParam("id"),
+                                Integer.parseInt(ctx.pathParam("year")));
+                        ctx.json(Map.of("ok", true));
+                    },
+                    ctx -> ctx.json(Map.of("transactionsWritten",
+                            portfolioBooks.markSection1256YearEnd(ownerId(ctx), ctx.pathParam("id"),
+                                    Integer.parseInt(ctx.pathParam("year"))))),
+                    this::portfolioCsvExport, this::portfolioWorkbookExport,
+                    this::portfolioImportTemplate, this::portfolioCsvImport));
 
             // Historical replays are Plan-owned. The report id remains readable so a Plan can
             // restore its full normalized summary plus the existing detailed replay artifact.
 
-            c.routes.get("/api/broker/status", ctx -> ctx.json(broker.status()));
-            c.routes.post("/api/broker/connect/start", ctx -> ctx.json(Map.of("authorizeUrl", broker.startConnect())));
-            c.routes.post("/api/broker/connect/verify", this::brokerVerify);
-            c.routes.get("/api/broker/accounts", ctx -> ctx.json(Map.of("accounts", broker.accounts())));
-            c.routes.get("/api/broker/accounts/{k}/balance", ctx -> ctx.json(broker.balance(ctx.pathParam("k"))));
-            c.routes.get("/api/broker/accounts/{k}/positions", ctx -> ctx.json(Map.of("positions", broker.positions(ctx.pathParam("k")))));
-            c.routes.get("/api/broker/orders", ctx -> {
-                String k = ctx.queryParam("accountIdKey");
-                if (k == null || k.isBlank()) throw new IllegalArgumentException("accountIdKey is required");
-                ctx.json(Map.of("orders", broker.orders(k)));
-            });
-            c.routes.post("/api/broker/orders/preview", this::brokerPreview);
-            c.routes.post("/api/broker/orders/place", this::brokerPlace);
-            c.routes.put("/api/broker/orders/{id}/cancel", this::brokerCancel);
+            BrokerRoutes.register(c, new BrokerRoutes.Handlers(
+                    ctx -> ctx.json(broker.status()),
+                    ctx -> ctx.json(Map.of("authorizeUrl", broker.startConnect())),
+                    this::brokerVerify,
+                    ctx -> ctx.json(Map.of("accounts", broker.accounts())),
+                    ctx -> ctx.json(broker.balance(ctx.pathParam("k"))),
+                    ctx -> ctx.json(Map.of("positions", broker.positions(ctx.pathParam("k")))),
+                    ctx -> {
+                        String k = ctx.queryParam("accountIdKey");
+                        if (k == null || k.isBlank()) {
+                            throw new IllegalArgumentException("accountIdKey is required");
+                        }
+                        ctx.json(Map.of("orders", broker.orders(k)));
+                    },
+                    this::brokerPreview, this::brokerPlace, this::brokerCancel));
 
             c.routes.exception(io.liftandshift.strikebench.auth.UnauthorizedException.class, (e, ctx) ->
                     ctx.status(401).json(Map.of("error", "auth_required", "detail", String.valueOf(e.getMessage()), "loginUrl", "/auth/login")));

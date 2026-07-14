@@ -20,6 +20,16 @@ class JourneySurfaceTest {
                 + "\n" + source("js/views-data.js");
     }
 
+    private static String apiRouteSource() throws Exception {
+        StringBuilder routes = new StringBuilder();
+        for (String name : List.of("ApiServer", "CoreRoutes", "PlanRoutes", "DataRoutes",
+                "ResearchRoutes", "WorldRoutes", "TradeRoutes", "PortfolioRoutes", "BrokerRoutes")) {
+            routes.append(Files.readString(Path.of(
+                    "src/main/java/io/liftandshift/strikebench/api/" + name + ".java"))).append('\n');
+        }
+        return routes.toString();
+    }
+
     @Test void researchHasAnExplicitViewModuleBoundary() throws Exception {
         String html = source("index.html");
         String views = source("js/views.js");
@@ -142,11 +152,7 @@ class JourneySurfaceTest {
     }
 
     @Test void legacyRecommendationAndBacktestRoutesAreNotRegistered() throws Exception {
-        String api = Files.readString(Path.of(
-                "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
-        String planRoutes = Files.readString(Path.of(
-                "src/main/java/io/liftandshift/strikebench/api/PlanRoutes.java"));
-        String surface = api + "\n" + planRoutes;
+        String surface = apiRouteSource();
         assertThat(surface).doesNotContain(
                 "routes.post(\"/api/recommend\"",
                 "routes.post(\"/api/recommend/auto\"",
@@ -172,6 +178,24 @@ class JourneySurfaceTest {
                 "config.routes.get(\"/api/plans\"", "config.routes.post(\"/api/plans\"",
                 "config.routes.post(\"/api/plans/{id}/decision/trade\"",
                 "config.routes.post(\"/api/plans/{id}/manage/review\"");
+    }
+
+    @Test void apiDomainsHaveExplicitRegistrationOwners() throws Exception {
+        String api = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
+
+        for (String owner : List.of("CoreRoutes", "PlanRoutes", "DataRoutes", "ResearchRoutes",
+                "WorldRoutes", "TradeRoutes", "PortfolioRoutes", "BrokerRoutes")) {
+            assertThat(api).contains(owner + ".register(c, new " + owner + ".Handlers(");
+        }
+        assertThat(api).doesNotContain(
+                "c.routes.get(\"/api/metrics\"",
+                "c.routes.get(\"/api/research/",
+                "c.routes.get(\"/api/world\"",
+                "c.routes.post(\"/api/trades",
+                "c.routes.get(\"/api/portfolio",
+                "c.routes.get(\"/api/data/",
+                "c.routes.get(\"/api/broker/");
     }
 
     @Test void supersededJourneyArtifactsStayDeletedWhileTheLiveChartDependencyRemains() throws Exception {
@@ -218,7 +242,7 @@ class JourneySurfaceTest {
 
         assertThat(api).contains(
                 "worldTransitions.current(ownerId(ctx))",
-                "worldTransitions.transition(w, ownerId(ctx))",
+                "worldTransitions.transition(world, ownerId(ctx))",
                 "worldTransitions.afterFinish(wasActive, owner)",
                 "worldTransitions.resetAfterDataReset(ownerId(ctx))",
                 "return worldTransitions.active(owner);")
