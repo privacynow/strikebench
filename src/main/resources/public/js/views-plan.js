@@ -2170,9 +2170,9 @@
           : action.unrealizedCents != null ? pnlSpan(action.unrealizedCents) : null;
         return el('div', { class: 'status-item' },
           el('span', { class: 'badge ' + (action.kind === 'CLOSE' || action.kind === 'SETTLE' ? 'badge-ok' : 'badge-dim') }, action.kind),
-          el('span', {}, action.note || 'Plan action'),
-          el('span', { class: 'spacer' }), value,
-          el('span', { class: 'muted' }, UI.fmtDate(action.at)));
+          el('span', { class: 'plan-timeline-note' }, action.note || 'Plan action'),
+          el('span', { class: 'plan-timeline-value' }, value),
+          el('span', { class: 'muted plan-timeline-date' }, UI.fmtDate(action.at)));
       }))));
     var reviews = includeReviews === false ? [] : management && management.reviews || [];
     if (reviews.length) host.appendChild(el('section', { class: 'card plan-review-results' },
