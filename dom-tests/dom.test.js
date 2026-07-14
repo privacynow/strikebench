@@ -337,7 +337,7 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   await page.locator('.plan-rail button').filter({ hasText: 'Understand' }).click();
   await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/understand$/.test(location.hash));
   await page.waitForSelector('#plan-understand-scope');
-  assert.match(await page.textContent('#plan-understand-scope'), /SAVED PLAN FOCUS.*AAPL.*Earn income.*30 days.*Demo market/s,
+  assert.match(await page.textContent('#plan-understand-scope'), /SAVED PLAN FOCUS.*AAPL.*Earn income.*21 trading sessions.*Demo market/s,
     'Understand leads with the saved Plan focus rather than an unframed copy of Research');
   await page.waitForSelector('#research-symbol');
   assert.equal(await page.locator('.plan-rail li').count(), 6, 'the full six-stage journey appears after Plan creation');
@@ -364,11 +364,11 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   await page.fill('#plan-horizon-days', '45');
   await page.selectOption('#plan-thesis', 'bearish');
   await page.click('#plan-save-context');
-  await page.waitForFunction(() => /45 days/.test(document.getElementById('plan-header')?.textContent || ''));
+  await page.waitForFunction(() => /45 trading sessions/.test(document.getElementById('plan-header')?.textContent || ''));
   await page.reload();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
   assert.equal(await page.evaluate(() => location.hash), planHash.replace('/strategy', '/understand'));
-  assert.match(await page.textContent('#plan-header'), /45 days/);
+  assert.match(await page.textContent('#plan-header'), /45 trading sessions/);
   assert.match(await page.textContent('#plan-header'), /AAPL.*Earn income/s);
 
   // Capture after the real entrance transition settles; production animations remain enabled.
@@ -397,7 +397,7 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   await page.click('#plan-edit-context');
   await page.fill('#plan-horizon-days', '10');
   await page.click('#plan-save-context');
-  await page.waitForFunction(() => /10 days/.test(document.getElementById('plan-header')?.textContent || ''));
+  await page.waitForFunction(() => /10 trading sessions/.test(document.getElementById('plan-header')?.textContent || ''));
 
   await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
   await page.waitForSelector('#test-your-view');
@@ -2169,7 +2169,7 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
   await page.fill('#plan-horizon-days', '63');
   await page.fill('#plan-target-price', '245');
   await page.click('#plan-save-context');
-  await page.waitForFunction(() => /63 days/.test(document.getElementById('plan-header')?.textContent || ''));
+  await page.waitForFunction(() => /63 trading sessions/.test(document.getElementById('plan-header')?.textContent || ''));
   // Persist presentation state now (the interval/pagehide path does this in normal use).
   const beforeSave = await page.evaluate(async id => ({
     plan: await API.getFresh('/api/plans/' + id), snapshot: Workspace.snapshot()

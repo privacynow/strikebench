@@ -13,9 +13,26 @@ class JourneySurfaceTest {
         return Files.readString(Path.of("src/main/resources/public").resolve(relative));
     }
 
-    @Test void navigationAndRoutesHaveOnePlanCenteredOwnershipModel() throws Exception {
+    private static String viewSource() throws Exception {
+        return source("js/views.js") + "\n" + source("js/views-data.js");
+    }
+
+    @Test void dataCenterHasAnExplicitViewModuleBoundary() throws Exception {
         String html = source("index.html");
         String views = source("js/views.js");
+        String data = source("js/views-data.js");
+
+        assertThat(html.indexOf("/js/views.js")).isLessThan(html.indexOf("/js/views-data.js"));
+        assertThat(html.indexOf("/js/views-data.js")).isLessThan(html.indexOf("/js/app.js"));
+        assertThat(views).contains("window.ViewShared = Object.freeze", "window.ViewData.data(root, params)")
+                .doesNotContain("async function data(root, params)", "var STATE_BADGE", "var JOB_BADGE");
+        assertThat(data).contains("var S = window.ViewShared", "async function data(root, params)",
+                "window.ViewData = Object.freeze({ data: data })");
+    }
+
+    @Test void navigationAndRoutesHaveOnePlanCenteredOwnershipModel() throws Exception {
+        String html = source("index.html");
+        String views = viewSource();
         String app = source("js/app.js");
         String workspace = source("js/workspace.js");
         String contracts = source("js/contracts.js");
@@ -42,7 +59,7 @@ class JourneySurfaceTest {
 
     @Test void namedHorizonsHaveOneFrontendOwner() throws Exception {
         String contracts = source("js/contracts.js");
-        String views = source("js/views.js");
+        String views = viewSource();
         String app = source("js/app.js");
         String scenario = source("js/scenario.js");
 
@@ -68,7 +85,7 @@ class JourneySurfaceTest {
     }
 
     @Test void supersededJourneyArtifactsStayDeletedWhileTheLiveChartDependencyRemains() throws Exception {
-        String views = source("js/views.js");
+        String views = viewSource();
         String client = source("js/api.js");
         String ui = source("js/ui.js");
         String html = source("index.html");
@@ -104,7 +121,7 @@ class JourneySurfaceTest {
     }
 
     @Test void canonicalOwnersRetainTheFullDecisionAndLearningToolset() throws Exception {
-        String views = source("js/views.js");
+        String views = viewSource();
         String builder = source("js/builder.js");
         String plans = source("js/plans.js");
 
