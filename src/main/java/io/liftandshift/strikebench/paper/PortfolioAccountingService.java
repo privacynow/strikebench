@@ -194,7 +194,7 @@ public final class PortfolioAccountingService {
 
     public record ExposureRow(String key, String label, long longExposureCents,
                               long shortExposureCents, long grossExposureCents,
-                              long netExposureCents, Double percentOfKnownGross) {}
+                              long netExposureCents, Double percentOfTotal) {}
 
     public record AllocationView(long longExposureCents, long shortExposureCents,
                                  long grossExposureCents, long netExposureCents,
@@ -1248,10 +1248,6 @@ public final class PortfolioAccountingService {
         long shortExposure = 0;
         if (cash != 0) {
             addExposure(assets, "CASH", "Cash", cash);
-            addExposure(sectors, "CASH", "Cash", cash);
-            addExposure(symbols, "CASH", "Cash", cash);
-            if (cash > 0) longExposure = Math.addExact(longExposure, cash);
-            else shortExposure = Math.addExact(shortExposure, absolute(cash, "cash exposure"));
         }
         for (PositionView p : positions) if (p.liquidationValueCents() != null) {
             long value = p.liquidationValueCents();
@@ -1270,8 +1266,10 @@ public final class PortfolioAccountingService {
         shortBucket.add(Math.negateExact(shortExposure));
         List<ExposureRow> directions = List.of(
                 exposureRow(longBucket, gross), exposureRow(shortBucket, gross));
+        long capitalTotal = Math.addExact(absolute(cash, "cash allocation"), gross);
         return new AllocationView(longExposure, shortExposure, gross, net,
-                exposureRows(assets, gross), exposureRows(sectors, gross), directions, exposureRows(symbols, gross));
+                exposureRows(assets, capitalTotal), exposureRows(sectors, gross), directions,
+                exposureRows(symbols, gross));
     }
 
     private static void addExposure(Map<String, ExposureBucket> groups, String key, String label, long signedCents) {

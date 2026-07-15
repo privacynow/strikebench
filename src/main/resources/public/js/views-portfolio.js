@@ -467,15 +467,15 @@
     root.appendChild(posCard);
 
     var allocation = summary.allocation || { byAssetClass: [], bySector: [], byDirection: [], bySymbol: [] };
-    function allocationRows(rows) {
+    function allocationRows(rows, basisLabel) {
       var box = el('div', { class: 'book-exposure-rows' });
       (rows || []).forEach(function (a) {
         box.appendChild(el('div', { class: 'allocation-row' },
           el('div', { class: 'allocation-label' }, el('b', {}, a.label),
-            el('span', { class: 'muted small' }, fmtPct(a.percentOfKnownGross) + ' gross')),
+            el('span', { class: 'muted small' }, fmtPct(a.percentOfTotal) + ' ' + basisLabel)),
           el('div', { class: 'allocation-track', role: 'img',
-            'aria-label': a.label + ' ' + fmtPct(a.percentOfKnownGross) + ' of known gross exposure' },
-            el('span', { style: 'width:' + Math.max(1, Math.round((a.percentOfKnownGross || 0) * 100)) + '%' })),
+            'aria-label': a.label + ' ' + fmtPct(a.percentOfTotal) + ' of ' + basisLabel },
+            el('span', { style: 'width:' + Math.max(1, Math.round((a.percentOfTotal || 0) * 100)) + '%' })),
           el('div', { class: 'book-exposure-money' },
             el('span', {}, 'Long ', fmtMoney(a.longExposureCents)),
             el('span', {}, 'Short ', fmtMoney(a.shortExposureCents)),
@@ -483,21 +483,21 @@
       });
       return box;
     }
-    var allocCard = el('section', { class: 'card book-allocation' }, UI.cardHeader('Asset allocation'),
-      el('p', { class: 'muted small' }, 'Exact known liquidation exposure. Long and short are positive magnitudes; gross adds them and net subtracts short from long. Missing marks are excluded, never treated as zero.'),
+    var allocCard = el('section', { class: 'card book-allocation' }, UI.cardHeader('Allocation & market exposure'),
+      el('p', { class: 'muted small' }, 'Cash stays in capital allocation but is not market exposure. Security long and short are positive magnitudes; gross adds them and net subtracts short from long. Missing marks are excluded, never treated as zero.'),
       el('div', { class: 'chip-row book-exposure-totals' },
-        chip('Long exposure', fmtMoney(allocation.longExposureCents || 0)),
-        chip('Short exposure', fmtMoney(allocation.shortExposureCents || 0)),
-        chip('Gross exposure', fmtMoney(allocation.grossExposureCents || 0)),
-        chip('Net exposure', fmtMoney(allocation.netExposureCents || 0, { plus: true }))));
+        chip('Security long', fmtMoney(allocation.longExposureCents || 0)),
+        chip('Security short', fmtMoney(allocation.shortExposureCents || 0)),
+        chip('Market gross', fmtMoney(allocation.grossExposureCents || 0)),
+        chip('Market net', fmtMoney(allocation.netExposureCents || 0, { plus: true }))));
     var allocationGroups = el('div', { class: 'book-allocation-groups' },
-      el('section', { class: 'book-allocation-group' }, el('h3', {}, 'By asset class'), allocationRows(allocation.byAssetClass)),
-      el('section', { class: 'book-allocation-group' }, el('h3', {}, 'By sector'), allocationRows(allocation.bySector)),
-      el('section', { class: 'book-allocation-group' }, el('h3', {}, 'Long and short'), allocationRows(allocation.byDirection)));
+      el('section', { class: 'book-allocation-group' }, el('h3', {}, 'By asset class'), allocationRows(allocation.byAssetClass, 'of known capital')),
+      el('section', { class: 'book-allocation-group' }, el('h3', {}, 'By sector'), allocationRows(allocation.bySector, 'of market gross')),
+      el('section', { class: 'book-allocation-group' }, el('h3', {}, 'Long and short'), allocationRows(allocation.byDirection, 'of market gross')));
     allocCard.appendChild(allocationGroups);
     allocCard.appendChild(UI.expandable(
       el('span', {}, 'By symbol · ', (allocation.bySymbol || []).length, ' rows'),
-      function () { return allocationRows(allocation.bySymbol); }));
+      function () { return allocationRows(allocation.bySymbol, 'of market gross'); }));
     root.appendChild(allocCard);
   }
 

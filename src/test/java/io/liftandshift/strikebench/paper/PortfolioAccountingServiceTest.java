@@ -959,6 +959,29 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void cashRemainsCapitalAllocationWithoutBecomingMarketExposure() {
+        var account = books.createAccount("local", account("Cash only", "TAXABLE", 10_000_000L));
+
+        var allocation = books.summary("local", account.id()).allocation();
+
+        assertThat(allocation.longExposureCents()).isZero();
+        assertThat(allocation.shortExposureCents()).isZero();
+        assertThat(allocation.grossExposureCents()).isZero();
+        assertThat(allocation.netExposureCents()).isZero();
+        assertThat(allocation.byAssetClass()).singleElement().satisfies(row -> {
+            assertThat(row.label()).isEqualTo("Cash");
+            assertThat(row.netExposureCents()).isEqualTo(10_000_000L);
+            assertThat(row.percentOfTotal()).isEqualTo(1.0);
+        });
+        assertThat(allocation.bySector()).isEmpty();
+        assertThat(allocation.bySymbol()).isEmpty();
+        assertThat(allocation.byDirection()).allSatisfy(row -> {
+            assertThat(row.grossExposureCents()).isZero();
+            assertThat(row.percentOfTotal()).isNull();
+        });
+    }
+
+    @Test
     void summaryUsesExecutableLiquidationSidesAndKeepsTrackedCashExact() {
         MarksSource marks = new MarksSource() {
             @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.empty(); }
@@ -984,10 +1007,10 @@ class PortfolioAccountingServiceTest {
         assertThat(summary.collateral().availableCashCents()).isEqualTo(5_420_000L);
         assertThat(summary.collateral().cashSecuredPutContracts()).isEqualTo(1);
         assertThat(summary.positions()).allMatch(PortfolioAccountingService.PositionView::complete);
-        assertThat(summary.allocation().longExposureCents()).isEqualTo(10_029_900L);
+        assertThat(summary.allocation().longExposureCents()).isEqualTo(109_900L);
         assertThat(summary.allocation().shortExposureCents()).isEqualTo(15_000L);
-        assertThat(summary.allocation().grossExposureCents()).isEqualTo(10_044_900L);
-        assertThat(summary.allocation().netExposureCents()).isEqualTo(10_014_900L);
+        assertThat(summary.allocation().grossExposureCents()).isEqualTo(124_900L);
+        assertThat(summary.allocation().netExposureCents()).isEqualTo(94_900L);
         assertThat(summary.allocation().byAssetClass())
                 .extracting(PortfolioAccountingService.ExposureRow::label,
                         PortfolioAccountingService.ExposureRow::longExposureCents,
@@ -1000,12 +1023,13 @@ class PortfolioAccountingServiceTest {
                 .extracting(PortfolioAccountingService.ExposureRow::label,
                         PortfolioAccountingService.ExposureRow::netExposureCents)
                 .contains(org.assertj.core.groups.Tuple.tuple("Technology", 109_900L),
-                        org.assertj.core.groups.Tuple.tuple("Index & macro ETFs", -15_000L));
+                        org.assertj.core.groups.Tuple.tuple("Index & macro ETFs", -15_000L))
+                .doesNotContain(org.assertj.core.groups.Tuple.tuple("Cash", 9_920_000L));
         assertThat(summary.allocation().byDirection())
                 .extracting(PortfolioAccountingService.ExposureRow::label,
                         PortfolioAccountingService.ExposureRow::grossExposureCents,
                         PortfolioAccountingService.ExposureRow::netExposureCents)
-                .containsExactly(org.assertj.core.groups.Tuple.tuple("Long", 10_029_900L, 10_029_900L),
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("Long", 109_900L, 109_900L),
                         org.assertj.core.groups.Tuple.tuple("Short", 15_000L, -15_000L));
         assertThat(summary.valuationBasis()).contains("executable closing sides");
     }
@@ -1399,10 +1423,10 @@ class PortfolioAccountingServiceTest {
         assertThat(summary.bookCashCents()).isEqualTo(19_753_934L);
         assertThat(summary.securitiesLiquidationValueCents()).isEqualTo(336_000L);
         assertThat(summary.totalValueCents()).isEqualTo(20_089_934L);
-        assertThat(summary.allocation().longExposureCents()).isEqualTo(20_104_934L);
+        assertThat(summary.allocation().longExposureCents()).isEqualTo(351_000L);
         assertThat(summary.allocation().shortExposureCents()).isEqualTo(15_000L);
-        assertThat(summary.allocation().grossExposureCents()).isEqualTo(20_119_934L);
-        assertThat(summary.allocation().netExposureCents()).isEqualTo(20_089_934L);
+        assertThat(summary.allocation().grossExposureCents()).isEqualTo(366_000L);
+        assertThat(summary.allocation().netExposureCents()).isEqualTo(336_000L);
         assertThat(summary.allocation().byAssetClass()).extracting(PortfolioAccountingService.ExposureRow::label)
                 .containsExactlyInAnyOrder("Cash", "Stocks", "Options");
         assertThat(summary.allocation().bySector()).extracting(PortfolioAccountingService.ExposureRow::label)
