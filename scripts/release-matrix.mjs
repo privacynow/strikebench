@@ -57,6 +57,9 @@ const rows = liveOnly
       ['Grown-state browser', browserResult('dom-seeded.tap')],
       ['Auth-on browser (signed-out + signed-in)', browserResult('dom-auth.tap')]
     ];
+if (!liveOnly && fs.existsSync(path.join(target, 'dom-live.tap'))) {
+  rows.push(['Live-provider browser', browserResult('dom-live.tap')]);
+}
 const failed = rows.reduce((sum, [, result]) => sum + result.failures, 0);
 const sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 const lines = [
