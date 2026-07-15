@@ -59,11 +59,15 @@ and the append-only practice ledger.
 **Portfolio → Tracked accounts** — maintain a separate owner-scoped record of external taxable,
 IRA, or 401(k) activity without placing orders or changing practice cash. Record normalized
 stock and multi-leg option fills, short positions, fees, interest, dividends, deposits,
-withdrawals, assignment, exercise, and expiration; import a chronological CSV atomically;
-reconcile exact FIFO/LIFO/HIFO lots and realized basis; inspect executable-side P/L, known cash
-obligations, allocation, and Modified Dietz performance; estimate taxes from explicit worksheet
-rates; and export exact CSV or a six-sheet Excel workbook. Generated Demo/simulated/model prices
-never mark an external account, and unavailable observed marks stay unavailable rather than zero.
+withdrawals, assignment, exercise, and expiration. A chronological CSV commits each valid
+transaction group independently and quarantines rejected rows without writing a partial multi-leg
+package. Reconcile exact FIFO/LIFO/HIFO lots and realized basis; inspect executable-side P/L,
+known cash obligations, allocation, TWR, XIRR, maximum drawdown, an observed SPY comparison, and
+Modified Dietz reconciliation; and export exact CSV or a six-sheet Excel workbook. Tax surfaces
+keep the recorded accounting facts separate from an optional reviewed-year common-case worksheet
+using rates you supply; they do not calculate an authoritative return or amount owed. Generated
+Demo/simulated/model prices never mark an external account, and unavailable observed marks stay
+unavailable rather than zero.
 
 **Data → Simulated market** — a practice market that *moves*, any day, at any speed. Pick a
 story (steady climb, sell-off then rebound, volatility event...), name your symbols, and
@@ -72,8 +76,8 @@ that honors sessions, so time decay and expirations behave correctly, and playba
 changes what happens, only how fast you watch it. It is a *model*, loudly labeled SIMULATED
 everywhere (no dividends, no real order book), a dedicated simulation account keeps your real
 practice account untouched, and the same seed plus the session's event log replays the
-identical market — reviews are reproducible. One click returns you to the real market
-instantly.
+identical market — reviews are reproducible. One click returns you to the prior base market
+(Observed or Demo) instantly.
 
 ## Honest numbers, by design
 
