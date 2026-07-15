@@ -20,8 +20,10 @@ import java.sql.SQLException;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import io.liftandshift.strikebench.util.OwnerScope;
 import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /** Freezes one Plan decision and links its execution atomically to the owning Plan. */
@@ -34,6 +36,7 @@ public final class PlanDecisionService {
                         List<String> acknowledgedRisks, String note, AnalysisContext analysis) {}
 
     public record PreparedTradeDecision(String id, TradeService.TransactionHook hook) {}
+    public record PortfolioDecision(ObjectNode decision, String activeTradeId) {}
 
     private final Db db;
     private final Clock clock;
@@ -119,6 +122,37 @@ public final class PlanDecisionService {
                         else if (metric.cents() != null) metrics.put(metric.key(), metric.cents());
                         else metrics.put(metric.key(), metric.text());
                     });
+            return out;
+        });
+    }
+
+    /**
+     * One owner-scoped read for the Plan library. The library needs only the latest decision
+     * summary and the currently active linked trade; loading the full frozen receipt once per
+     * Plan turned Home into an avoidable 2N+1 query path.
+     */
+    public Map<String, PortfolioDecision> portfolioLatest(String userId) {
+        return db.with(connection -> {
+            Map<String, PortfolioDecision> out = new LinkedHashMap<>();
+            Db.queryOn(connection, "SELECT DISTINCT ON (d.plan_id) d.plan_id,d.id,d.context_rev," +
+                            "d.action,d.economic_verdict,d.pop,d.created_at::text created_at," +
+                            "(SELECT l.trade_id FROM plan_link l JOIN trades t ON t.id=l.trade_id " +
+                            "WHERE l.plan_id=d.plan_id AND l.trade_id IS NOT NULL AND t.status='ACTIVE' " +
+                            "ORDER BY l.created_at DESC LIMIT 1) active_trade_id " +
+                            "FROM plan_decision d JOIN plans p ON p.id=d.plan_id " +
+                            "WHERE p.user_id=? AND p.status<>'ARCHIVED' " +
+                            "ORDER BY d.plan_id,d.decision_seq DESC",
+                    row -> {
+                        ObjectNode decision = Json.MAPPER.createObjectNode();
+                        put(decision, "id", row.str("id"));
+                        put(decision, "contextRev", row.intv("context_rev"));
+                        put(decision, "action", row.str("action"));
+                        put(decision, "economicVerdict", row.str("economic_verdict"));
+                        put(decision, "pop", row.dblOrNull("pop"));
+                        put(decision, "createdAt", row.str("created_at"));
+                        return Map.entry(row.str("plan_id"),
+                                new PortfolioDecision(decision, row.str("active_trade_id")));
+                    }, OwnerScope.id(userId)).forEach(entry -> out.put(entry.getKey(), entry.getValue()));
             return out;
         });
     }

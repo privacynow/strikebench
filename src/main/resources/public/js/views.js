@@ -481,7 +481,7 @@
         var symbols = Array.from(new Set(current.map(function (p) { return p.symbol; })));
         var fills = await Promise.all([
           symbols.length ? API.get('/api/quotes?symbols=' + symbols.join(',')) : Promise.resolve({ quotes: [] }),
-          API.getFresh('/api/plans/portfolio'),
+          API.get('/api/plans/portfolio'),
           plans.some(function (p) { return p.marketKind === 'SIMULATED'; })
             ? API.get('/api/sim/market') : Promise.resolve({ sessions: [] })
         ]);
