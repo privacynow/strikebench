@@ -327,6 +327,19 @@ test('live: Plan Decide places and Manage unwinds a paper trade at real marks', 
   await page.waitForSelector('#plan-decision-review .plan-decision-math', { timeout: 60000 });
   assert.match(await page.textContent('#plan-decision-review'), /Buying power after/);
   await page.$$eval('#plan-decision-review .ack-gate input', els => els.forEach(e => { if (!e.checked) e.click(); }));
+  if (!(await page.locator('#plan-place-trade').isEnabled())) {
+    const review = await page.textContent('#plan-decision-review');
+    assert.match(review, /This package cannot be opened/i,
+      'a non-executable observed package is refused explicitly instead of timing out or switching lanes');
+    assert.match(review, /OBSERVED|executable|STALE|market is closed/i,
+      'the refusal names the observed execution-data condition');
+    assert.doesNotMatch(review, /DEMO DATA|fabricated/i,
+      'an observed execution gap never substitutes teaching-market prices');
+    assert.ok(await page.locator('#plan-stay-cash').isEnabled(),
+      'staying in cash remains an actionable decision when execution is unavailable');
+    assertClean('ticket-non-executable');
+    return;
+  }
   await page.click('#plan-place-trade');
   await page.waitForSelector('#refresh-btn', { timeout: 60000 }); // detail landmark
   assert.match(await page.textContent('#app'), /ACTIVE/);
