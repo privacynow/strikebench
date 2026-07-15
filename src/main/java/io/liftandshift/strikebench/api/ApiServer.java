@@ -340,6 +340,7 @@ public final class ApiServer {
                     var sh = new org.eclipse.jetty.ee10.servlet.SessionHandler();
                     sh.setHttpOnly(true);
                     sh.setSameSite(org.eclipse.jetty.http.HttpCookie.SameSite.LAX);
+                    sh.setMaxInactiveInterval(cfg.authSessionIdleSeconds());
                     sh.getSessionCookieConfig().setHttpOnly(true);
                     sh.getSessionCookieConfig().setSecure(cfg.authCookieSecure());
                     h.setSessionHandler(sh);
@@ -430,6 +431,9 @@ public final class ApiServer {
             c.routes.exception(io.liftandshift.strikebench.auth.UnauthorizedException.class, (e, ctx) ->
                     ctx.status(401).json(new ApiResponses.AuthErrorBody("auth_required",
                             String.valueOf(e.getMessage()), "/auth/login")));
+            c.routes.exception(io.liftandshift.strikebench.auth.ForbiddenException.class, (e, ctx) ->
+                    ctx.status(403).json(new ApiResponses.ErrorBody("forbidden",
+                            String.valueOf(e.getMessage()))));
             c.routes.exception(TradeRejectedException.class, (e, ctx) ->
                     ctx.status(422).json(new ApiResponses.TradeRejectedBody("trade_rejected",
                             e.getMessage(), e.reasons())));
@@ -692,7 +696,7 @@ public final class ApiServer {
 
     private void requireAdmin(Context ctx) {
         if (!isAdmin(ctx)) {
-            throw new io.liftandshift.strikebench.auth.UnauthorizedException(
+            throw new io.liftandshift.strikebench.auth.ForbiddenException(
                 "Admin access required. On a public deployment, enable AUTH (+ AUTH_ADMIN_EMAILS), or set ADMIN_TOKEN and send it as X-Admin-Token.");
         }
     }
