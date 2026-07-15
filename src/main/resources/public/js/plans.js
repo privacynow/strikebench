@@ -495,7 +495,11 @@
     var inner = UI.el('div', { class: 'plan-bar-inner' });
     var desktop = UI.el('div', { class: 'plan-bar-desktop' },
       UI.el('span', { class: 'plan-bar-label' }, 'Plans'));
-    items.forEach(function (plan) {
+    var ordered = items.slice();
+    var activeIndex = ordered.findIndex(function (plan) { return plan.id === App.state.activePlanId; });
+    if (activeIndex > 0) ordered.unshift(ordered.splice(activeIndex, 1)[0]);
+    var shown = ordered.slice(0, 2);
+    shown.forEach(function (plan) {
       var planIdentity = identity(plan, items);
       var planLabel = planIdentity.title
         + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' trading sessions' : '');
@@ -512,6 +516,10 @@
           } }, '×'));
       desktop.appendChild(chip);
     });
+    if (items.length > shown.length) desktop.appendChild(UI.el('a', {
+      class: 'btn btn-sm btn-secondary plan-more-link', href: '#/plans',
+      'aria-label': 'Open all ' + items.length + ' Plans'
+    }, '+' + (items.length - shown.length) + ' more'));
     desktop.appendChild(UI.el('button', { type: 'button', class: 'plan-new-btn',
       onclick: function () { App.navigate('#/research'); } }, '+ New plan'));
     var picker = UI.el('select', { class: 'plan-picker', id: 'plan-picker', 'aria-label': 'Open Plan',

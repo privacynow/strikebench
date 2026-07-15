@@ -429,19 +429,37 @@
 
   async function home(root, params) {
     if (params && params[0] === 'tour') return welcome(root);
+    var needsWelcomeDecision = !welcomed();
     var accountPromise = API.get('/api/account').then(function (response) { return response.account; })
       .catch(function () { return null; });
-    // Reconcile durable Plan truth before deriving the hero/Continue state. A browser tab
-    // can survive a server restart; its in-memory collection must not outlive server state.
-    try { if (window.PlanStore) await PlanStore.load(true); }
-    catch (e) { /* the independent Plan-library card reports the unavailable service below */ }
-    var acct = await accountPromise;
+    // Only first contact must wait before painting: we need the durable account fact to
+    // choose Welcome vs Home without flashing the wrong page. Once onboarding is known,
+    // account data is an independent progressive fill and must not hold the route shell.
+    var acct = needsWelcomeDecision ? await accountPromise : null;
     // Decide first contact before any dashboard node is mounted. The previous implementation
     // painted Home and then replaced it with Welcome after /api/account answered, producing a
     // visible dashboard flash and briefly exposing controls the user had not chosen yet.
-    if (!welcomed()) {
+    if (needsWelcomeDecision) {
       if (!acct || !acct.hasTraded) return welcome(root);
       try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e2) { /* ignore */ }
+    }
+    // Reconcile durable Plan truth before deriving Continue, but keep a stable Home frame on
+    // screen while that independent service answers. First contact never waits on Plans unless
+    // the account decision says this user already belongs on Home.
+    var restoreShell = null;
+    if (window.PlanStore) {
+      restoreShell = heroBlock('dashboard', {
+        eyebrow: ['RESTORING YOUR DESK'],
+        title: el('h1', { class: 'home-hero-title' }, 'Your ', el('span', { class: 'grad' }, 'desk'), '.'),
+        sub: el('p', { class: 'home-hero-sub' },
+          'Reconciling your current Plans before showing a continuation action.'),
+        aside: UI.skeleton(), ctas: []
+      });
+      restoreShell.id = 'home-restore-shell';
+      root.appendChild(restoreShell);
+      try { await PlanStore.load(true); }
+      catch (e3) { /* the independent Plan-library card reports the unavailable service below */ }
+      restoreShell.remove();
     }
     // Paint the frame FIRST, fill every card as its data arrives: the screen must never
     // be a blank void while accounts and quotes load. Each section fills independently
@@ -483,14 +501,16 @@
       ctas: [heroCta]
     }));
 
-    if (acct) {
-      statsAnchor.appendChild(stat('Cash', fmtMoney(acct.cashCents), 'Practice money available. Nothing here is real dollars.'));
-      statsAnchor.appendChild(stat('Reserved', fmtMoney(acct.reservedCents), 'Held to cover the worst case of your open trades.'));
-      statsAnchor.appendChild(stat('Buying power', fmtMoney(acct.buyingPowerCents), 'Cash minus reserves — what you can still put at risk.'));
-      statsAnchor.appendChild(stat('Started with', fmtMoney(acct.startingCashCents)));
-    } else {
-      statsAnchor.appendChild(alertBox('warn', 'Account unavailable right now', ['Retry from the Account screen.']));
-    }
+    var accountFill = Promise.resolve(acct || accountPromise).then(function (account) {
+      if (account) {
+        statsAnchor.appendChild(stat('Cash', fmtMoney(account.cashCents), 'Practice money available. Nothing here is real dollars.'));
+        statsAnchor.appendChild(stat('Reserved', fmtMoney(account.reservedCents), 'Held to cover the worst case of your open trades.'));
+        statsAnchor.appendChild(stat('Buying power', fmtMoney(account.buyingPowerCents), 'Cash minus reserves — what you can still put at risk.'));
+        statsAnchor.appendChild(stat('Started with', fmtMoney(account.startingCashCents)));
+      } else {
+        statsAnchor.appendChild(alertBox('warn', 'Account unavailable right now', ['Retry from the Portfolio screen.']));
+      }
+    });
 
     // Home is a compact lens on the canonical Plans library. The hero already owns the
     // active Plan, so this lens shows only alternatives; management stays at #/plans.
@@ -677,7 +697,7 @@
         'About StrikeBench \u00b7 take the tour')));
 
     // Wait for the fills so data-ready means READY (tests and users agree on that).
-    await Promise.all([planLibraryFill, marketsFill, tradesFill]);
+    await Promise.all([accountFill, planLibraryFill, marketsFill, tradesFill]);
   }
 
   /** Under ~a day old — the window where the spread-cost note earns its keep. */
