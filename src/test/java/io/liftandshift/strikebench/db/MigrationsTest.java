@@ -2,8 +2,13 @@ package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.support.TestDb;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.exception.FlywayValidateException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -11,6 +16,52 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MigrationsTest {
+
+    @Test
+    void lateCollisionGuardBootsDatabaseAlreadyAtV56(@TempDir Path legacyMigrations) throws IOException {
+        Path source = Path.of("src/main/resources/db/migrations");
+        try (var files = Files.list(source)) {
+            for (Path migration : files.toList()) {
+                String name = migration.getFileName().toString();
+                if (!name.equals("V49_0_1__prepare_late_owner_collision_guard.sql")
+                        && !name.equals("V49_1__dedupe_canonical_owner_collisions.sql")
+                        && !name.equals("V49_2__remove_late_owner_collision_aliases.sql")) {
+                    Files.copy(migration, legacyMigrations.resolve(migration.getFileName()));
+                }
+            }
+        }
+
+        Map<String, String> cfg = TestDb.freshConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure().dataSource(db.dataSource())
+                    .locations("filesystem:" + legacyMigrations.toAbsolutePath())
+                    .target("56").load().migrate();
+
+            assertThat(db.query("SELECT version FROM flyway_schema_history WHERE success "
+                            + "ORDER BY installed_rank DESC LIMIT 1", r -> r.str("version")))
+                    .containsExactly("56");
+            assertThat(db.query("SELECT version FROM flyway_schema_history "
+                            + "WHERE version IN ('49.0.1','49.1','49.2') ORDER BY version",
+                    r -> r.str("version"))).isEmpty();
+            assertThatThrownBy(() -> Flyway.configure().dataSource(db.dataSource())
+                    .locations("classpath:db/migrations").load().migrate())
+                    .isInstanceOf(FlywayValidateException.class)
+                    .hasMessageContaining("resolved migration not applied");
+
+            Migrations.run(db);
+
+            assertThat(db.query("SELECT version FROM flyway_schema_history "
+                            + "WHERE version IN ('49.0.1','49.1','49.2') AND success ORDER BY installed_rank",
+                    r -> r.str("version"))).containsExactly("49.0.1", "49.1", "49.2");
+            assertThat(db.query("SELECT version FROM flyway_schema_history WHERE success "
+                            + "ORDER BY installed_rank DESC LIMIT 1",
+                    r -> r.str("version"))).containsExactly("49.2");
+            assertThat(db.query("SELECT table_name || '.' || column_name AS alias "
+                            + "FROM information_schema.columns WHERE table_schema='public' "
+                            + "AND table_name IN ('data_sync_schedule','data_sync_cursor','plan_create_request') "
+                            + "AND column_name='owner_key'", r -> r.str("alias"))).isEmpty();
+        }
+    }
 
     @Test
     void planProgressMigrationPreservesExistingSavedStage() {

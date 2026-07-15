@@ -19,6 +19,10 @@ public final class Migrations {
         var result = Flyway.configure()
                 .dataSource(db.dataSource())
                 .locations("classpath:db/migrations")
+                // A repair migration may need to land below the current schema head. This is
+                // required for V49.1: databases already at V50+ must be able to apply its
+                // collision guard without failing validation on boot.
+                .outOfOrder(true)
                 .load()
                 .migrate();
         if (result.targetSchemaVersion == null) {
