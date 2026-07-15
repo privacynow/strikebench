@@ -51,7 +51,17 @@ jobs:
 
       - name: Fixture, grown-state, responsive, and auth-on browser matrix
         working-directory: dom-tests
-        run: npm run test:ci
+        run: |
+          set -o pipefail
+          npm run test:fixture | tee ../target/dom-fixture.tap
+          npm run test:seeded | tee ../target/dom-seeded.tap
+          npm run test:audit | tee ../target/dom-audit.tap
+          npm run test:auth | tee ../target/dom-auth.tap
+
+      - name: Publish generated release matrix
+        run: |
+          node scripts/release-matrix.mjs
+          cat target/release-matrix.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Preserve failure evidence
         if: failure()
@@ -60,6 +70,7 @@ jobs:
           name: strikebench-failure-evidence
           path: |
             target/surefire-reports
+            target/dom-*.tap
+            target/release-matrix.md
             dom-tests/shots
           retention-days: 14
-

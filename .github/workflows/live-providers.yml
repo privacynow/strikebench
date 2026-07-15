@@ -53,12 +53,22 @@ jobs:
 
       - name: Exercise real keyless providers and observed fail-closed states
         working-directory: dom-tests
-        run: npm run test:live
+        run: |
+          set -o pipefail
+          npm run test:live | tee ../target/dom-live.tap
+
+      - name: Publish generated live-provider evidence
+        run: |
+          node scripts/release-matrix.mjs --live-only
+          cat target/live-release-matrix.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Preserve live-provider evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: live-provider-evidence-${{ github.run_id }}
-          path: dom-tests/shots
+          path: |
+            dom-tests/shots
+            target/dom-live.tap
+            target/live-release-matrix.md
           retention-days: 14
