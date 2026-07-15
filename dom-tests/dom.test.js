@@ -3071,6 +3071,18 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('spinbutton', { name: 'State scenario rate %', exact: true }).fill('5');
   await page.getByRole('button', { name: 'Save settings', exact: true }).click();
   await page.waitForFunction(() => /Account settings saved/.test(document.getElementById('toast-region')?.textContent || ''));
+  await page.evaluate(async id => {
+    const occurredAt = new Date().toISOString();
+    const record = (externalRef, action, effect, price) => API.post('/api/portfolio/accounts/' + id + '/transactions', {
+      occurredAt, eventType: 'TRADE', cashAmountCents: null, feesCents: 0, taxCategory: null,
+      source: 'MANUAL', externalRef, notes: 'Unreviewed-year wash disclosure control', legs: [{
+        instrumentType: 'STOCK', action, positionEffect: effect, symbol: 'MSFT', optionType: null,
+        strike: null, expiration: null, quantity: 1, multiplier: 1, price, section1256: false
+      }]
+    });
+    await record('dom-tax-loss-open', 'BUY', 'OPEN', 100);
+    await record('dom-tax-loss-close', 'SELL', 'CLOSE', 90);
+  }, trackedId);
   await go('#/portfolio/book/tax');
   assert.equal(await page.locator('#route-error').count(), 0,
     'the tracked-book tax route renders: ' + await page.textContent('#app'));
@@ -3095,8 +3107,10 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     'taxable rates unlock the explicit estimate without changing lot accounting');
   assert.match(await page.textContent('.book-open-tax-lots'), /AAPL shares[\s\S]*Basis remaining[\s\S]*\$1,001\.00/,
     'open tax lots expose their exact remaining basis in the product, not only in exports');
-  assert.equal(await page.locator('.book-realized-lot-row').count(), 1,
+  assert.equal(await page.locator('.book-realized-lot-row').count(), 2,
     'Beginner gets a readable exact realized-lot row instead of an eleven-column ledger');
+  assert.match(await page.textContent('.book-realized'), /MSFT[\s\S]*Wash rule not applied — 2026 rules unreviewed/,
+    'an unreviewed-year loss states that the wash rule was not applied instead of showing a decorative $0.00');
   assert.equal(await page.locator('.book-realized .tbl-wrap').count(), 0,
     'the dense realized-lot table is reserved for Expert');
   await captureSettled('p110-accounting-tax-desktop.png');
@@ -3105,6 +3119,8 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await go('#/portfolio/book/tax');
   assert.equal(await page.locator('.book-realized .tbl-wrap').count(), 1,
     'Expert retains every exact tax-lot column');
+  assert.match(await page.textContent('.book-realized'), /Wash review[\s\S]*Wash rule not applied — 2026 rules unreviewed/,
+    'the Expert ledger preserves the row-level unreviewed-rule disclosure');
   const expertTaxGeometry = await page.evaluate(() => {
     const wrap = document.querySelector('.book-realized .tbl-wrap');
     const box = wrap.getBoundingClientRect();

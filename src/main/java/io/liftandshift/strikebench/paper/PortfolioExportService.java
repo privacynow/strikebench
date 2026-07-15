@@ -54,7 +54,7 @@ public final class PortfolioExportService {
                 new Sheet("Summary", summaryRows(summary)),
                 new Sheet("Transactions", transactionRows(txs)),
                 new Sheet("Lots", lotRows(lots)),
-                new Sheet("Realized " + year, realizedRows(tax.realizedLots())),
+                new Sheet("Realized " + year, realizedRows(tax)),
                 new Sheet("Performance", performanceRows(performance)),
                 new Sheet("Tax " + year, taxRows(tax)));
         try {
@@ -129,16 +129,31 @@ public final class PortfolioExportService {
         return rows;
     }
 
-    private static List<List<Cell>> realizedRows(List<PortfolioAccountingService.RealizedLotView> realized) {
+    private static List<List<Cell>> realizedRows(PortfolioAccountingService.TaxReport tax) {
+        List<PortfolioAccountingService.RealizedLotView> realized = tax.realizedLots();
         List<List<Cell>> rows = new ArrayList<>();
         rows.add(cells("Opened", "Closed", "Instrument", "Side", "Symbol", "Quantity", "Open basis/proceeds",
-                "Close proceeds/cost", "Realized gain", "Wash-sale adjustment", "Taxable gain", "Holding term", "Section 1256"));
+                "Close proceeds/cost", "Realized gain", "Wash-sale adjustment", "Wash-rule application",
+                "Worksheet gain", "Holding term", "Section 1256"));
         for (var r : realized) rows.add(List.of(s(r.openedAt()), s(r.closedAt()), s(r.instrumentType()), s(r.side()),
                 s(r.symbol()), n(r.quantity()), money(r.openAmountCents()), money(r.closeAmountCents()),
-                money(r.realizedGainCents()), money(r.washSaleAdjustmentCents()),
+                money(r.realizedGainCents()), money(r.washSaleAdjustmentCents()), s(washRuleApplication(tax, r)),
                 money(Math.addExact(r.realizedGainCents(), r.washSaleAdjustmentCents())),
                 s(r.holdingTerm()), s(r.section1256())));
         return rows;
+    }
+
+    private static String washRuleApplication(PortfolioAccountingService.TaxReport tax,
+                                              PortfolioAccountingService.RealizedLotView row) {
+        if (row.section1256()) return "Not applied - Section 1256 uses its own character rules";
+        if (row.realizedGainCents() >= 0) return "Not applicable - no realized loss";
+        if (!"TAXABLE".equals(tax.accountType())) return "Not applied in this retirement wrapper";
+        if (!tax.rules().reviewed()) {
+            return "Wash rule not applied - " + tax.year() + " rules unreviewed";
+        }
+        return row.washSaleAdjustmentCents() != 0
+                ? "Modeled same-instrument adjustment recorded"
+                : "No modeled same-instrument candidate recorded";
     }
 
     private static List<List<Cell>> performanceRows(PortfolioAccountingService.PerformanceView p) {

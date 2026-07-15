@@ -2576,6 +2576,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .book-realized-lot-row + .book-realized-lot-row { border-top: 1px solid var(--border); }
 .book-realized-lot-row > div:first-child { display: grid; gap: 3px; }
 .book-realized-lot-row .chip-row { margin: 0; justify-content: flex-end; }
+.book-wash-review { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; }
 .book-realized-lot-detail { grid-column: 1 / -1; margin: 0; }
 .book-realized .tbl-wrap { max-width: 100%; scrollbar-gutter: stable; }
 .book-valuation-list { display: grid; gap: 0; margin-top: 12px; border-top: 1px solid var(--border); }
@@ -2621,6 +2622,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .book-open-lot-row .chip-row { justify-content: flex-start; }
   .book-realized-lot-row { grid-template-columns: minmax(0, 1fr); }
   .book-realized-lot-row .chip-row { justify-content: flex-start; }
+  .book-wash-review,
   .book-realized-lot-detail { grid-column: auto; }
   .book-valuation-form > .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .book-tax-heading { align-items: stretch; flex-direction: column; }

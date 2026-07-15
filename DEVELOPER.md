@@ -74,6 +74,29 @@ vendored for candlesticks; everything else is hand-rolled SVG. Local dev DB: `do
   and reconciliation guidance without manufacturing an amount owed. Do not expand this into return
   preparation or encode jurisdiction-specific rates.
 
+### Annual tax-rules review
+
+`paper/TaxRules` is the only switch that enables automated federal common-case characterization. Advancing
+`REVIEWED_TAX_YEAR` is a release task, not a calendar rollover:
+
+1. Keep the new year `PROVISIONAL` while reviewing that year's IRS Publication 550, Form 8949 instructions,
+   Form 6781, and Form 1099-B instructions. Update every title and URL in `TaxRules.SOURCES` to the material
+   actually reviewed.
+2. Re-check each encoded assumption against those sources: the calendar holding-period boundary, the bounded
+   same-account/exact-instrument wash-sale model and its exclusions, the broad-based-index taxonomy, Section
+   1256 60/40 character and year-end mark, and retirement-wrapper suppression. Do not infer rules that the
+   cited material does not support.
+3. Update `RULESET_ID`, `REVIEWED_TAX_YEAR`, `REVIEWED_THROUGH`, and `SCOPE` together. Never advance only the
+   year constant. A changed rule that affects stored basis or realized matches requires an explicit migration
+   or reconciliation path; do not silently rewrite historical accounting facts.
+4. Extend the tax service, export, and browser tests for the reviewed year and its next provisional year.
+   The gate must cover loss rows and wash disclosures, Section 1256 classification and year-end marks,
+   user-rate scenario availability, retirement-wrapper suppression, primary-source links, and the visible
+   `Not tax advice` boundary.
+5. Run the generated full release matrix and record the source-review evidence in the release notes. Only
+   after that evidence passes may `REVIEWED_TAX_YEAR` move forward. Years not reviewed remain fact-only and
+   must say on each affected row that the legal rule was not applied.
+
 ## Architecture
 
 ```
