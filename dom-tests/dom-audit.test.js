@@ -98,7 +98,7 @@ const ALLOWED_HEIGHTS = [38, 30, 42, 46]; // welcome hero uses a deliberate 42px
 const TOLERANCE = 1.5;
 
 function auditInPage() {
-  const out = { overflow: [], emoji: [], controls: [], numbers: [], tooltips: [], navigation: [], accessibility: [] };
+  const out = { overflow: [], emoji: [], controls: [], numbers: [], tooltips: [], navigation: [], accessibility: [], branding: [] };
   const doc = document.documentElement;
   if (doc.scrollWidth > doc.clientWidth + 2) {
     // Animated/local-scroll children can be thousands of pixels wide without widening the
@@ -127,6 +127,22 @@ function auditInPage() {
   }
   const badNumbers = (document.body.innerText || '').match(/\$?NaN(?:\.NaN)?|NaN%/g) || [];
   if (badNumbers.length) out.numbers.push(...badNumbers.slice(0, 8));
+  const brand = document.querySelector('.topbar .brand');
+  if (brand && brand.offsetParent) {
+    if (brand.scrollWidth > brand.clientWidth + .5) {
+      out.branding.push('brand-content-clipped:' + brand.clientWidth + '<' + brand.scrollWidth);
+    }
+    const br = brand.getBoundingClientRect();
+    document.querySelectorAll('.topbar-controls > *').forEach(control => {
+      if (!control.offsetParent) return;
+      const cr = control.getBoundingClientRect();
+      const verticalOverlap = Math.min(br.bottom, cr.bottom) - Math.max(br.top, cr.top);
+      const horizontalOverlap = Math.min(br.right, cr.right) - Math.max(br.left, cr.left);
+      if (verticalOverlap > .5 && horizontalOverlap > .5) {
+        out.branding.push('brand-overlap:' + (control.id || control.className || control.tagName));
+      }
+    });
+  }
   const norm = value => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
   document.querySelectorAll('[role="tab"]').forEach(tab => {
     if (!tab.offsetParent) return;
@@ -228,6 +244,7 @@ for (const width of WIDTHS) {
       for (const t of res.tooltips) failures.push(`${route}@${width}: DUPLICATE-TOOLTIP ${t}`);
       for (const n of res.navigation) failures.push(`${route}@${width}: CLIPPED-TAB ${n}`);
       for (const a of res.accessibility) failures.push(`${route}@${width}: A11Y ${a}`);
+      for (const b of res.branding) failures.push(`${route}@${width}: BRAND ${b}`);
     }
     assert.deepEqual(failures, [], failures.join('\n'));
   });

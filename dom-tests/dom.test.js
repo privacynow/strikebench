@@ -4304,15 +4304,35 @@ test('simulated market: product creator, loud live band, world-routed research, 
   assert.doesNotMatch(await page.locator('#tape-sector option:checked').textContent(), /demo/i,
     'the compact market selector commits with the simulated lane instead of retaining Demo state');
   await page.setViewportSize({ width: 390, height: 844 });
-  const mobileWorldChrome = await page.evaluate(() => ({
-    bandHeight: document.getElementById('world-band').getBoundingClientRect().height,
-    scrollWidth: document.documentElement.scrollWidth,
-    innerWidth: window.innerWidth
-  }));
+  const mobileWorldChrome = await page.evaluate(() => {
+    const brand = document.querySelector('.topbar .brand');
+    const brandRect = brand.getBoundingClientRect();
+    const overlaps = Array.from(document.querySelectorAll('.topbar-controls > *'))
+      .filter(control => control.offsetParent)
+      .filter(control => {
+        const rect = control.getBoundingClientRect();
+        return Math.min(brandRect.bottom, rect.bottom) - Math.max(brandRect.top, rect.top) > .5
+          && Math.min(brandRect.right, rect.right) - Math.max(brandRect.left, rect.left) > .5;
+      }).map(control => control.id || control.className || control.tagName);
+    return {
+      bandHeight: document.getElementById('world-band').getBoundingClientRect().height,
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+      brandText: brand.textContent.trim(),
+      brandClientWidth: brand.clientWidth,
+      brandScrollWidth: brand.scrollWidth,
+      brandOverlaps: overlaps
+    };
+  });
   assert.ok(mobileWorldChrome.bandHeight <= 76,
     'mobile simulated-market controls stay compact: ' + JSON.stringify(mobileWorldChrome));
   assert.ok(mobileWorldChrome.scrollWidth <= mobileWorldChrome.innerWidth,
     'simulated-market chrome never widens the phone viewport');
+  assert.equal(mobileWorldChrome.brandText, 'StrikeBench');
+  assert.ok(mobileWorldChrome.brandClientWidth + .5 >= mobileWorldChrome.brandScrollWidth,
+    'the active simulated-market controls never clip the mobile brand');
+  assert.deepEqual(mobileWorldChrome.brandOverlaps, [],
+    'the active simulated-market controls never paint over the mobile brand');
   await page.setViewportSize({ width: 1280, height: 900 });
   const created = await page.evaluate(async () => {
     const all = (await API.getFresh('/api/sim/market')).sessions || [];
