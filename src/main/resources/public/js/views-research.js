@@ -2091,7 +2091,7 @@
       wrap.appendChild(el('div', { class: 'grid grid-4', id: 'prob-map' },
         stat(el('span', {}, beginner ? 'Chance of making anything' : 'P(any profit)', UI.info('pop')), fmtPct(prob.pAnyProfit)),
         stat(el('span', {}, beginner ? 'Chance of the FULL theoretical win' : 'P(theoretical max profit)', UI.info('pmaxprofit')), fmtPct(prob.pMaxProfit)),
-        stat(el('span', {}, beginner ? 'Chance of the theoretical WORST case' : 'P(theoretical max loss)', UI.info('pmaxloss')),
+        stat(el('span', {}, beginner ? 'Chance of theoretical max loss' : 'P(theoretical max loss)', UI.info('pmaxloss')),
           el('span', { class: prob.pMaxLoss > 0.4 ? 'loss' : '' }, fmtPct(prob.pMaxLoss))),
         stat(el('span', {}, beginner ? 'A very bad run costs' : 'CVaR 95%', UI.info('cvar')),
           el('span', { class: 'loss' }, fmtMoney(prob.cvar95Cents)))));

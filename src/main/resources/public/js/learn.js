@@ -28,6 +28,51 @@
     expert: { label: 'Expert', hint: 'Dense, data-first screens with deeper analytics' }
   };
 
+  // Product vocabulary is a contract, not screen copy. A numeric concept keeps the
+  // same label everywhere; the level changes only the depth of its explanation.
+  var VOCABULARY = Object.freeze({
+    assignmentCapital: { label: 'Assignment capital', infoKey: 'assignmentcapital',
+      short: 'Cash or shares needed if an option is assigned; this is not the same as economic loss.',
+      beginner: 'This is what the broker may require to complete the stock purchase or delivery after assignment. A hedge can limit the eventual loss without eliminating this temporary funding need.',
+      expert: 'Gross settlement funding before protective-leg proceeds or reserve release. Report separately from max loss, scenario loss, and broker reserve.' },
+    brokerReserve: { label: 'Broker reserve', infoKey: 'brokerreserve',
+      short: 'Capital the account sets aside for an open obligation; it is not a loss forecast.',
+      beginner: 'The account holds this amount so the position can meet its obligations. It reduces buying power while the trade is open and is released or reconciled when the position changes.',
+      expert: 'Collateral encumbrance under the account model. Keep distinct from economic exposure and theoretical max loss, especially for credit structures.' },
+    economicExposure: { label: 'Economic exposure', infoKey: 'economicexposure',
+      short: 'The capital or asset value whose movement economically affects this position.',
+      beginner: 'This includes value already tied up in shares or cash, not only the new premium paid today. It answers how much of your book participates in the result.',
+      expert: 'Position-level exposure denominator including held assets and funded obligations; not a broker margin field and not a cross-lane net.' },
+    theoreticalMaxLoss: { label: 'Theoretical max loss', infoKey: 'theoreticalmaxloss',
+      short: 'The structural loss boundary across the full payoff curve, including extreme terminal prices.',
+      beginner: 'This is the mathematical boundary, even when reaching it would require an extreme move. Realistic modeled paths are shown separately as scenario loss.',
+      expert: 'Terminal payoff infimum for the exact package and quantity. Undefined-risk structures have no finite value; do not substitute a stress percentile.' },
+    scenarioLoss: { label: 'Scenario loss', infoKey: 'scenarioloss',
+      short: 'Loss on a named modeled or historical scenario; it never replaces the theoretical boundary.',
+      beginner: 'This answers what the position loses in a particular calm, up, down, choppy, or tail path. The scenario and its evidence stay attached to the number.',
+      expert: 'Path- or shock-conditioned P/L with basis, horizon, and provenance. Keep separate from CVaR and theoretical max loss.' },
+    hypothetical: { label: 'Hypothetical', infoKey: 'hypotheticalprovenance',
+      short: 'An analysis artifact only; it changes neither the practice account nor a tracked brokerage account.',
+      beginner: 'You can edit, compare, and test this position without pretending it was placed.',
+      expert: 'Execution lane NONE. Marks may be proposed or modeled and the coverage receipt must identify them.' },
+    practice: { label: 'Practice', infoKey: 'practiceprovenance',
+      short: 'A fill in StrikeBench’s isolated learning account, never a broker transaction.',
+      beginner: 'Practice trades use separate cash so you can rehearse decisions without changing a tracked real-money book.',
+      expert: 'Execution lane PRACTICE. Never numerically netted with tracked-account cash, exposure, or performance.' },
+    recordedAtBroker: { label: 'Recorded at broker', infoKey: 'brokerprovenance',
+      short: 'A factual external transaction entered from a broker record; StrikeBench did not place it.',
+      beginner: 'The fill belongs to a tracked account and must use the actual broker facts. Modeled prices cannot become its basis.',
+      expert: 'Execution lane REAL with factual source, account, time, quantity, multiplier, and fill provenance.' },
+    campaignEconomicBasis: { label: 'Campaign-adjusted economic basis', infoKey: 'campaignbasis',
+      short: 'Share cost adjusted by the campaign’s exact option cash, dividends, and fees; it is not tax basis.',
+      beginner: 'This helps judge the economics of the whole campaign after premiums, buybacks, dividends, and fees. Your broker’s tax basis can differ.',
+      expert: '(Share cash paid - net option cash - attributed dividends + fees) / shares currently held. Interpretation layer only.' },
+    trackedTaxBasis: { label: 'Tracked tax basis', infoKey: 'trackedtaxbasis',
+      short: 'The lot basis used by the tracked accounting book, including applicable recorded adjustments.',
+      beginner: 'This follows the lots and adjustments recorded in the tracked account. It is separate from campaign economics and must be reconciled with broker tax forms.',
+      expert: 'Authoritative tracked-lot basis for the common-case worksheet, including recorded wash adjustments where reviewed; never inferred from campaign allocation.' }
+  });
+
   // ---- Glossary: tap-to-define for terms of art ----
 
   /**
@@ -163,6 +208,11 @@
       beginner: 'For covered calls and cash-secured puts this is often the GOAL (your shares sell / you buy at your price). For other trades it is the chance of ending up with a stock position.',
       expert: 'Expire-in-the-money probability from N(d2)/N(\u2212d2) at per-leg smile IV. Same-expiry short puts/calls are combined as exact disjoint tails; different expirations are conservatively summed and capped at 1.' }
   };
+
+  Object.keys(VOCABULARY).forEach(function (key) {
+    var item = VOCABULARY[key];
+    INFO[item.infoKey] = { short: item.short, beginner: item.beginner, expert: item.expert };
+  });
 
   var GLOSSARY = {
     'premium': 'The price of an option, per share. One contract covers 100 shares, so a $1.50 premium costs $150.',
@@ -471,6 +521,7 @@
     INFO: INFO,
     LEVELS: LEVELS,
     LEVEL_META: LEVEL_META,
+    VOCABULARY: VOCABULARY,
     INTENTS: INTENTS,
     GLOSSARY: GLOSSARY,
     STRATEGY_GUIDE: STRATEGY_GUIDE,

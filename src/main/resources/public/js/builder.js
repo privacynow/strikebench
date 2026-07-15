@@ -167,7 +167,7 @@
             { label: 'It will rise a lot', blurb: 'Uncapped upside, pay a premium', tpl: 'LONG_CALL' },
             { label: 'It will rise somewhat', blurb: 'Cheaper, capped bullish bet', tpl: 'DEBIT_CALL_SPREAD' },
             { label: 'Paid unless it falls', blurb: 'Collect a credit, keep it above your strike', tpl: 'CREDIT_PUT_SPREAD' },
-            { label: 'Boldly — a put pays for the call', blurb: 'Risk reversal: big reserve if wrong', tpl: 'RISK_REVERSAL' },
+            { label: 'Boldly — a put pays for the call', blurb: 'Risk reversal: substantial broker reserve if wrong', tpl: 'RISK_REVERSAL' },
             { label: 'Paid, with nothing backing it', blurb: 'The naked put — walk through WHY it is refused', tpl: 'NAKED_PUT' }
           ] } },
         { label: 'Fall', blurb: 'Profit from a drop, three shapes', next: {
@@ -524,7 +524,7 @@
       if (v.maxLoss) {
         var cap = Math.round(parseFloat(v.maxLoss) * 100);
         var unbounded = !p.ok && (p.blockReasons || []).some(function (r) { return /undefined|unlimited/i.test(r); });
-        judge('Theoretical max loss ≤ ' + fmtMoney(cap), !unbounded && p.maxLossCents > 0 && p.maxLossCents <= cap,
+        judge(UI.vocabularyText('theoreticalMaxLoss') + ' ≤ ' + fmtMoney(cap), !unbounded && p.maxLossCents > 0 && p.maxLossCents <= cap,
           unbounded ? 'UNLIMITED' : fmtMoney(p.maxLossCents));
       }
       if (expertLimits && v.target) {
@@ -864,7 +864,7 @@
               }
               impact.appendChild(el('div', { class: 'chip-row' },
                 chip(p.entryNetPremiumCents >= 0 ? 'Collected so far' : 'Paid so far', fmtMoney(Math.abs(p.entryNetPremiumCents))),
-                impactChip('Theoretical worst case', b, p, function (x) {
+                impactChip(UI.vocabularyText('theoreticalMaxLoss'), b, p, function (x) {
                   if (!x.ok && (x.blockReasons || []).some(function (r) { return /undefined|unlimited/i.test(r); })) return 'UNLIMITED';
                   return fmtMoney(x.maxLossCents);
                 }, true),
@@ -978,7 +978,7 @@
               st.goal = lockedGoal || null; repaint();
             } }, 'Start over'),
             el('button', { class: 'btn', id: 'builder-review', onclick: handoff },
-              options.completeLabel || 'Review & place (paper) →'))));
+              options.completeLabel || 'Review & place (' + UI.vocabularyText('practice').toLowerCase() + ') →'))));
         (async function price() {
           var seq = ++walkSeq;
           var panel = document.getElementById('bw-panel');
@@ -1383,7 +1383,7 @@
       hostEl.appendChild(el('div', { class: 'grid grid-2 panel-stats' },
         stat(credit >= 0 ? 'You collect' : 'You pay', fmtMoney(Math.abs(credit)),
           beginnerWording ? (credit >= 0 ? 'Premium received now — yours to keep only if the position works out.' : 'Cash leaving your account now, before fees.') : null),
-        stat(beginnerWording ? 'Theoretical worst case' : 'Theoretical max loss',
+        stat(UI.vocabulary('theoreticalMaxLoss'),
           unlimited ? el('span', { class: 'loss' }, 'UNLIMITED')
             : p.ok || p.maxLossCents > 0 ? el('span', { class: 'loss' }, fmtMoney(p.maxLossCents))
             : el('span', { class: 'muted' }, '—'),
@@ -1406,16 +1406,16 @@
       }
       hostEl.appendChild(el('div', { class: 'chip-row' },
         chip('Buying power after', fmtMoney(p.buyingPowerAfterCents)),
-        p.reserveCents ? chip(UI.term('reserve', 'Set aside'), fmtMoney(p.reserveCents)) : null));
+        p.reserveCents ? chip(UI.vocabulary('brokerReserve'), fmtMoney(p.reserveCents)) : null));
       // One line kills the "three different risk numbers" confusion: everything here is a TOTAL.
       hostEl.appendChild(el('div', { class: 'muted small' },
-        'All figures are totals for this exact position and quantity. "Set aside" and "most you can lose" differ on credit trades because the set-aside is the gross width — the worst case lives inside it.'));
+        'All figures are totals for this exact position and quantity. Broker reserve and theoretical max loss differ on credit trades because the reserve is the gross width — the loss boundary lives inside it.'));
       var prob = an.probabilityMap;
       if (prob && prob.pAnyProfit !== undefined && p.ok) {
         hostEl.appendChild(el('div', { class: 'chip-row', id: 'builder-prob-chips' },
           chip(beginnerWording ? 'Any profit' : 'P(profit)', Math.round(prob.pAnyProfit * 100) + '%'),
           chip(beginnerWording ? 'Full win' : 'P(max profit)', Math.round(prob.pMaxProfit * 100) + '%'),
-          chip(beginnerWording ? 'Chance of theoretical worst case' : 'P(theoretical max loss)', Math.round(prob.pMaxLoss * 100) + '%'),
+          chip(beginnerWording ? 'Chance of theoretical max loss' : 'P(theoretical max loss)', Math.round(prob.pMaxLoss * 100) + '%'),
           prob.cvar95Cents !== undefined && prob.cvar95Cents !== null
             ? chip('CVaR95', UI.fmtMoneyCompact(prob.cvar95Cents)) : null));
       }

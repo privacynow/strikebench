@@ -59,6 +59,12 @@ async function captureSettled(name) {
   await page.screenshot({ path: path.join(__dirname, 'shots', name), fullPage: true });
 }
 
+async function ensureExpanded(head) {
+  if (await head.getAttribute('aria-expanded') !== 'true') await head.click();
+  assert.equal(await head.getAttribute('aria-expanded'), 'true',
+    'disclosure opens and exposes its controls');
+}
+
 async function assertNamedControls(scope = 'body') {
   const unnamed = await page.locator(scope).evaluate(root => {
     function visible(node) {
@@ -675,7 +681,8 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   await page.waitForSelector('#plan-stage-strategy:has-text("Limits changed — rerun the field")');
   assert.equal(await page.locator('#plan-strategy-results .candidate').count(), 0,
     'a changed request cannot leave the prior ranked field under new limits');
-  await page.locator('#plan-strategy-filters .xp-head').click();
+  assert.equal(await page.locator('#plan-strategy-filters .xp-head').getAttribute('aria-expanded'), 'true',
+    'the open filter disclosure survives the same-route repaint');
   await page.fill('#plan-f-pop', '');
   await page.locator('#plan-f-pop').blur();
   await page.click('#plan-run-strategy');
@@ -686,6 +693,9 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
     'Beginner retains the plain-language management capability from the decision analysis');
   await first.locator('button').filter({ hasText: 'Select this structure' }).click();
   await page.waitForSelector('#plan-strategy-results button:has-text("Selected for this Plan")');
+  assert.match(await page.textContent('#plan-strategy-results .inline-action-feedback'),
+    /selected.*carries into Outcomes/is,
+    'selection consequence is confirmed beside the chosen structure, not only in a corner toast');
   assert.ok(await first.evaluate(node => node.classList.contains('plan-selected-candidate')),
     'the chosen candidate is highlighted in place');
   await first.scrollIntoViewIfNeeded();
@@ -803,6 +813,8 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
     'a package already inside a Plan never offers a second Use-this-in-a-Plan path');
   await page.locator('#plan-intent-ladder .ladder-row .btn:has-text("Select this rung")').first().click();
   await page.waitForSelector('#plan-intent-ladder .ladder-row.selected');
+  assert.match(await page.textContent('#plan-intent-ladder .inline-action-feedback'), /Rung selected.*Outcomes/is,
+    'ladder selection reports its consequence inside the ladder');
   assert.equal(await page.locator('#plan-intent-ladder .ladder-row.selected').count(), 1,
     'a selected rung is highlighted in place instead of confirming below the fold');
   assert.ok(await page.locator('.plan-clear-structure').isVisible(),
@@ -858,6 +870,8 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   });
   await expertRows.first().locator('button').filter({ hasText: /^Select$/ }).click();
   await page.waitForSelector('#plan-strategy-results button:has-text("Selected")');
+  assert.match(await page.textContent('#plan-candidate-detail .inline-action-feedback'), /selected.*Outcomes/is,
+    'Expert selection reports its consequence beside the selected package');
   const plansAfterExpertSelect = await page.evaluate(async () => {
     const payload = await API.getFresh('/api/plans');
     return Array.isArray(payload) ? payload.length : (payload.plans || []).length;
@@ -885,11 +899,11 @@ test('Plan Builder preserves the Beginner walkthrough and Expert exact-contract 
   await page.waitForSelector('#builder-catalog .tpl[data-tpl="IRON_CONDOR"]');
   await page.click('#builder-catalog .tpl[data-tpl="IRON_CONDOR"]');
   await page.waitForSelector('#bw-walk');
-  await page.waitForFunction(() => /Theoretical worst case/.test(
+  await page.waitForFunction(() => /Theoretical max loss/.test(
     document.getElementById('bw-impact')?.textContent || ''), { timeout: 20000 });
   assert.match(await page.textContent('#bw-leg-story'), /Sell the \$\d+/,
     'the walkthrough explains what the current contract contributes');
-  assert.match(await page.textContent('#bw-impact'), /Theoretical worst case/);
+  assert.match(await page.textContent('#bw-impact'), /Theoretical max loss/);
   for (let leg = 2; leg <= 4; leg++) {
     await page.click('#bw-next');
     await page.waitForFunction(n => new RegExp('leg ' + n + ' of 4').test(
@@ -1404,6 +1418,8 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.reload();
   await page.waitForSelector('#plan-bar-root .plan-chip.active');
+  await page.waitForFunction(() => document.querySelectorAll('#plan-bar-root .plan-chip').length === 2,
+    null, { timeout: 20000 });
   assert.equal(await page.locator('#plan-bar-root .plan-chip.active').getAttribute('data-plan-id'), ids.simOne,
     'reload restores the active Plan for this market instead of a Plan from another lane');
   assert.equal(await page.locator('#plan-bar-root .plan-chip').count(), 2,
@@ -2925,7 +2941,7 @@ test('portfolio absorbs account: sections, ledger under Activity, guarded reset'
   assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'portfolio');
   await go('#/portfolio/activity');
   const ledger = await page.textContent('#app');
-  assert.match(ledger, /Ledger.*append-only.*Date.*Type.*Amount.*Cash after.*Reserved after.*DEPOSIT/s,
+  assert.match(ledger, /Ledger.*append-only.*Date.*Type.*Amount.*Cash after.*Broker reserve after.*DEPOSIT/s,
     'Activity owns the append-only account ledger even before a trade has been placed');
   await go('#/portfolio/account');
   await page.click('#reset-btn');
@@ -3121,7 +3137,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     'the tracked-book tax route renders: ' + await page.textContent('#app'));
   assert.match(await page.textContent('.book-tax-heading'), /Not tax advice/,
     'the tax report carries the required tax-advice boundary before any scenario');
-  assert.match(await page.textContent('#app'), /Tax basis and reconciliation[\s\S]*Tax rules not reviewed for 2026[\s\S]*user-rate scenario is withheld/,
+  assert.match(await page.textContent('#app'), /Tracked tax basis and reconciliation[\s\S]*Tax rules not reviewed for 2026[\s\S]*user-rate scenario is withheld/,
     'the current provisional year preserves recorded facts while withholding an unreviewed tax scenario');
   assert.equal(await page.locator('.book-tax-sources a').count(), 4,
     'the worksheet exposes the primary tax-rule sources instead of asking users to trust an opaque ruleset');
@@ -3183,7 +3199,8 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
       const tabs = document.querySelector('.portfolio-book-tabs');
       const boxes = Array.from(tabs.querySelectorAll('[role="tab"]')).map(tab => tab.getBoundingClientRect());
       return { body: document.documentElement.scrollWidth, viewport: innerWidth,
-        clipped: boxes.some(box => box.left < 0 || box.right > innerWidth || box.width < 90), rows: new Set(boxes.map(box => Math.round(box.top))).size };
+        clipped: boxes.some(box => box.left < 0 || box.right > innerWidth || box.width < 90),
+        rows: new Set(boxes.map(box => Math.round(box.top))).size };
     });
     assert.ok(geometry.body <= geometry.viewport, width + 'px tracked activity has no page overflow: ' + JSON.stringify(geometry));
     assert.equal(geometry.clipped, false, width + 'px account tabs remain fully visible');
@@ -3212,6 +3229,97 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   }
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.evaluate(() => Learn.setLevel('expert'));
+});
+
+test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disclosure state survive levels', async () => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  await go('#/portfolio/active');
+  const vocabulary = await page.evaluate(() => Object.fromEntries(
+    Object.entries(Learn.VOCABULARY).map(([key, value]) => [key, value.label])));
+  assert.deepEqual(vocabulary, {
+    assignmentCapital: 'Assignment capital', brokerReserve: 'Broker reserve',
+    economicExposure: 'Economic exposure', theoreticalMaxLoss: 'Theoretical max loss',
+    scenarioLoss: 'Scenario loss', hypothetical: 'Hypothetical', practice: 'Practice',
+    recordedAtBroker: 'Recorded at broker',
+    campaignEconomicBasis: 'Campaign-adjusted economic basis', trackedTaxBasis: 'Tracked tax basis'
+  }, 'one registry owns every capital, provenance, and basis term');
+  const vocabularyHelp = await page.evaluate(() => Object.entries(Learn.VOCABULARY).map(([key, item]) => ({
+    key, hasInfo: !!Learn.INFO[item.infoKey], short: Learn.INFO[item.infoKey]?.short || '',
+    beginner: Learn.INFO[item.infoKey]?.beginner || '', expert: Learn.INFO[item.infoKey]?.expert || ''
+  })));
+  assert.deepEqual(vocabularyHelp.filter(item => !item.hasInfo || item.short.length < 20
+    || item.beginner.length < 30 || item.expert.length < 30), [],
+  'every canonical product term owns useful level-specific help in the one explanation registry');
+  const disclosureIdentity = await page.evaluate(() => {
+    const makePair = () => {
+      const host = document.createElement('div');
+      host.append(UI.expandable('Repeated disclosure', () => document.createTextNode('first')),
+        UI.expandable('Repeated disclosure', () => document.createTextNode('second')));
+      document.body.appendChild(host);
+      return host;
+    };
+    UI.beginExpandableRender();
+    const before = makePair();
+    before.querySelectorAll('.xp-head')[0].click();
+    before.remove();
+    UI.beginExpandableRender();
+    const after = makePair();
+    const state = Array.from(after.querySelectorAll('.xp')).map(node => node.classList.contains('open'));
+    after.remove();
+    return state;
+  });
+  assert.deepEqual(disclosureIdentity, [true, false],
+    'identical disclosure headings retain independent state across a repaint');
+  await ensureExpanded(page.locator('#record-real-card .xp-head'));
+  assert.equal(await page.locator('#record-real-card .xp').first().getAttribute('class'), 'xp open');
+  await page.fill('#ext-qty', '2');
+  await page.fill('#ext-net', '350');
+  await page.fill('#ext-fees', '2');
+  await page.fill('#ext-legs .x-strike', '250');
+  await page.waitForSelector('#record-real-card .position-entry-visual svg.chart');
+  assert.equal(await page.getAttribute('.external-payoff-host', 'data-entry-cash-after-fees-cents'), '34800',
+    'the visual payoff starts from exact package cash after entered fees');
+  assert.doesNotMatch(await page.getAttribute('.external-payoff-host path.line', 'd'), /NaN/,
+    'strike-focused payoff trimming never writes invalid path coordinates');
+  assert.ok(await page.locator('#record-real-card [data-vocabulary="recordedAtBroker"]').isVisible(),
+    'record provenance uses the shared vocabulary component');
+  const beginnerColumns = await page.locator('.position-entry-workbench').evaluate(node =>
+    getComputedStyle(node).gridTemplateColumns.split(' ').length);
+  assert.equal(beginnerColumns, 1, 'Beginner keeps leg editing and its payoff in one visual sequence');
+  await captureSettled('trader-own-p2-record-beginner.png');
+
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#app[data-ready="true"] #record-real-card .xp.open');
+  assert.equal(await page.locator('#record-real-card .xp-head').getAttribute('aria-expanded'), 'true',
+    'an open disclosure remains open when the experience level changes');
+  const expertColumns = await page.locator('.position-entry-workbench').evaluate(node =>
+    getComputedStyle(node).gridTemplateColumns.split(' ').length);
+  assert.equal(expertColumns, 2, 'Expert places the payoff beside the exact legs');
+  await page.fill('#ext-qty', '2');
+  await page.fill('#ext-net', '350');
+  await page.fill('#ext-legs .x-strike', '250');
+  await page.waitForSelector('#record-real-card .position-entry-visual svg.chart');
+  await captureSettled('trader-own-p2-record-expert.png');
+
+  await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
+  await page.waitForSelector('#app[data-ready="true"] #record-real-card .xp.open');
+  assert.equal(await page.locator('#record-real-card .xp-head').getAttribute('aria-expanded'), 'true',
+    'disclosure state survives the round trip, not just one direction');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(100);
+  const mobile = await page.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    document: document.documentElement.scrollWidth,
+    columns: getComputedStyle(document.querySelector('.position-entry-workbench')).gridTemplateColumns.split(' ').length,
+    editorRight: Math.round(document.querySelector('.position-entry-workbench').getBoundingClientRect().right),
+    appRight: Math.round(document.getElementById('app').getBoundingClientRect().right)
+  }));
+  assert.ok(mobile.document <= mobile.viewport + 2 && mobile.editorRight <= mobile.appRight + 2,
+    'the shared editor stays inside the mobile page: ' + JSON.stringify(mobile));
+  assert.equal(mobile.columns, 1, 'mobile keeps the legs and visual in one readable sequence');
+  await captureSettled('trader-own-p2-record-mobile.png');
+  await page.setViewportSize({ width: 1280, height: 900 });
 });
 
 test('explanation system: visible triggers, registry-backed bubbles, both levels, no title dups', async () => {
@@ -3472,7 +3580,7 @@ test('non-admin Data access stays informative without dead app-wide mutation con
   assert.equal(await page.locator('#data-sync-preview, #data-csv-upload, #data-sync-schedule-save').count(), 0,
     'app-wide sync, import, and schedule controls are not rendered as dead actions');
   await page.waitForSelector('#dc-sources .xp-head:has-text("feed details")');
-  await page.click('#dc-sources .xp-head:has-text("feed details")');
+  await ensureExpanded(page.locator('#dc-sources .xp-head:has-text("feed details")'));
   await page.waitForSelector('#dc-sources .data-feed-row');
   assert.match(await page.textContent('#dc-sources'), /Other market-data feeds/,
     'distinct supporting feeds remain readable');
@@ -3973,7 +4081,7 @@ test('external broker fills remain a structured, cash-isolated learning-loop cap
   await page.evaluate(() => Learn.setLevel('beginner'));
   await go('#/portfolio/active');
   await page.waitForSelector('#record-real-card');
-  await page.locator('#record-real-card .xp-head').click();
+  await ensureExpanded(page.locator('#record-real-card .xp-head'));
   await page.fill('#ext-symbol', 'AAPL');
   await page.fill('#ext-qty', '1');
   await page.fill('#ext-net', '175.00');
@@ -4007,7 +4115,7 @@ test('external broker fills remain a structured, cash-isolated learning-loop cap
   assert.equal(recorded.entryNetPremiumCents, 17500);
   await page.evaluate(() => API.flushCache());
   await go('#/portfolio/active');
-  await page.waitForFunction(() => /EXTERNAL/.test(document.getElementById('trades-card')?.textContent || ''),
+  await page.waitForFunction(() => /Recorded at broker/.test(document.getElementById('trades-card')?.textContent || ''),
     null, { timeout: 15000 });
   const visible = await page.evaluate(async () => ({
     text: document.getElementById('trades-card')?.textContent || '',
@@ -4015,13 +4123,13 @@ test('external broker fills remain a structured, cash-isolated learning-loop cap
     filter: App.state.portfolioFilter || null,
     listed: await API.getFresh('/api/trades?status=ACTIVE&page=0&size=50')
   }));
-  assert.match(visible.text, /EXTERNAL/, 'recorded trade did not appear: ' + JSON.stringify(visible));
+  assert.match(visible.text, /Recorded at broker/, 'recorded trade did not appear: ' + JSON.stringify(visible));
   const after = await page.evaluate(async () => (await API.getFresh('/api/account')).account);
   assert.equal(after.cashCents, before.cashCents, 'recording a broker fill never changes practice cash');
   assert.equal(after.reservedCents, before.reservedCents, 'recording a broker fill never changes practice reserve');
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator('#record-real-card .xp-head').click();
+  await ensureExpanded(page.locator('#record-real-card .xp-head'));
   await page.waitForSelector('#ext-symbol');
   await page.waitForTimeout(300);
   const containment = await page.evaluate(() => ({

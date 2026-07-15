@@ -608,14 +608,40 @@ class JourneySurfaceTest {
                 "Your income picture", "One position, separate lenses", "Market odds", "Model futures",
                 "Past analogs", "Which proposal handles this evidence best?", "Rule replay",
                 "Previous Plan replays", "Price the decision now",
-                "Construct across ideas", "Record a real trade (from your broker)", "Your record",
+                "Construct across ideas", "Record a trade from your broker", "Your record",
                 "Possible futures", "Past evidence");
         assertThat(builder).contains(
                 "Every structure, with its payoff shape", "Fit to my limits", "Size this synthetic long by exposure",
-                "id: 'builder-add-leg'", "Theoretical max loss", "Theoretical max profit");
+                "id: 'builder-add-leg'", "UI.vocabulary('theoreticalMaxLoss')", "Theoretical max profit");
         assertThat(plans).contains(
                 "/strategy/run", "/strategy/fit", "/strategy/custom", "/scout/run", "/outcomes/run",
                 "/outcomes/compare",
                 "/outcomes/backtest", "/decision/preview", "/rehearsals");
+    }
+
+    @Test void traderOwnVocabularyAndDisclosureStateHaveOneOwner() throws Exception {
+        String learn = source("js/learn.js");
+        String ui = source("js/ui.js");
+        String app = source("js/app.js");
+        String productCopy = source("index.html") + "\n" + viewSource() + "\n" + source("js/builder.js");
+
+        assertThat(learn).contains("var VOCABULARY = Object.freeze({",
+                "assignmentCapital: { label: 'Assignment capital'",
+                "brokerReserve: { label: 'Broker reserve'",
+                "economicExposure: { label: 'Economic exposure'",
+                "theoreticalMaxLoss: { label: 'Theoretical max loss'",
+                "scenarioLoss: { label: 'Scenario loss'",
+                "hypothetical: { label: 'Hypothetical'",
+                "practice: { label: 'Practice'",
+                "recordedAtBroker: { label: 'Recorded at broker'",
+                "campaignEconomicBasis: { label: 'Campaign-adjusted economic basis'",
+                "trackedTaxBasis: { label: 'Tracked tax basis'");
+        assertThat(ui).contains("function vocabulary(key, display)",
+                "function beginExpandableRender()", "expandableOccurrences.get(baseKey)",
+                "beginExpandableRender: beginExpandableRender");
+        assertThat(app).contains("if (UI.beginExpandableRender) UI.beginExpandableRender();");
+        assertThat(productCopy).doesNotContain("Theoretical worst case", "theoretical worst case",
+                "paper trading by default", "paper money", "$100k paper account",
+                "Record a real trade (from your broker)", "Paper position opened");
     }
 }

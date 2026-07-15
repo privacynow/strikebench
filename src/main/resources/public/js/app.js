@@ -108,11 +108,16 @@
     restoreScroll: function (value) {
       var requested = Math.max(0, Number(value) || 0);
       App._restoreScrollOnRender = requested;
+      var attempts = 0;
       function apply() {
         if (App._restoreScrollOnRender !== requested) return;
         if (App._scrollOnRender) { requestAnimationFrame(apply); return; }
-        App._restoreScrollOnRender = null;
         window.scrollTo(0, requested);
+        if (Math.abs(window.scrollY - requested) > 1 && attempts++ < 12) {
+          requestAnimationFrame(apply);
+          return;
+        }
+        App._restoreScrollOnRender = null;
       }
       requestAnimationFrame(apply);
     },
@@ -251,6 +256,7 @@
       mo.observe(root, { childList: true });
 
       try {
+        if (UI.beginExpandableRender) UI.beginExpandableRender();
         await view(root, params);
       } catch (e) {
         root.innerHTML = '';
@@ -551,7 +557,7 @@
         UI.icon('warn', 15), UI.el('b', { class: 'wb-tag' }, 'DEMO MARKET'),
         UI.el('span', { class: 'wb-label', 'aria-label': demoTruth },
           UI.el('span', { class: 'wb-label-wide', 'aria-hidden': 'true' }, demoTruth),
-          UI.el('span', { class: 'wb-label-short', 'aria-hidden': 'true' }, 'FABRICATED DATA · NOT REAL')),
+          UI.el('span', { class: 'wb-label-short', 'aria-hidden': 'true' }, 'FABRICATED · NOT REAL')),
         UI.el('span', { class: 'spacer' }), demoActions);
       document.body.insertBefore(demoBand, document.getElementById('tape') || document.body.firstChild);
       syncWorldBandTop();

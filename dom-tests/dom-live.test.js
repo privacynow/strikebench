@@ -286,7 +286,7 @@ test('live: a single-symbol Plan returns ranked structures for a real chain', as
   const plan = await openPlan('AAPL', 'strategy');
   const completed = await runPlanField();
   const text = await page.textContent('#plan-strategy-body');
-  assert.ok(!completed || /Theoretical worst case|Theor\. max loss/.test(text)
+  assert.ok(!completed || /Theoretical max loss/.test(text)
       || /No structure passed this screen|No candidate passed/.test(text),
     'candidates preserve theoretical risk truth or render a graceful empty state');
   assert.match(await page.textContent('#plan-header'), new RegExp(plan.symbol));

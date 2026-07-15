@@ -1392,7 +1392,7 @@ class ApiIntegrationTest {
                 .filter(ack -> "ack-capital".equals(ack.path("id").asText()))
                 .findFirst().orElseThrow();
         assertThat(capitalAck.path("label").asText())
-                .contains("theoretical worst case")
+                .contains("theoretical max loss")
                 .contains("selected per-trade risk budget");
         assertThat(preview.path("ackToken").asText()).isNotBlank();
 
