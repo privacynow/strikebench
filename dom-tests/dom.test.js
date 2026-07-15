@@ -751,7 +751,17 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   });
   assert.match(await page.textContent('#plan-intent-ladder'), /Name your buy price.*Buy strike.*Discount after premium.*Chance you buy/s,
     'Buy-at-a-discount leads with a strike ladder rather than a generic strategy list');
-  assert.ok(await page.locator('#plan-intent-ladder .ladder-row').count() >= 2, 'multiple price rungs remain selectable');
+  const totalRungs = Number((await page.textContent('#plan-intent-ladder .card-head')).match(/(\d+) RUNGS/)[1]);
+  assert.ok(totalRungs > 3, 'fixture ladder exercises the compact-to-full disclosure');
+  assert.equal(await page.locator('#plan-intent-ladder .ladder-row').count(), 3,
+    'Beginner starts with three representative prices instead of a wall of full-width rows');
+  assert.equal(await page.locator('#plan-ladder-toggle').getAttribute('aria-expanded'), 'false');
+  await page.waitForTimeout(300); // observe the real card-arrival animation; never disable it for screenshots
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p11-ladder-beginner.png'), fullPage: true });
+  await page.click('#plan-ladder-toggle');
+  await page.waitForFunction(expected => document.querySelectorAll('#plan-intent-ladder .ladder-row').length === expected,
+    totalRungs);
+  assert.equal(await page.locator('#plan-ladder-toggle').getAttribute('aria-expanded'), 'true');
   const discountLabels = await page.locator('#plan-intent-ladder .ladder-row').evaluateAll(rows => rows.map(row => {
     const chip = Array.from(row.querySelectorAll('.chip')).find(item =>
       item.querySelector('.chip-label')?.textContent.trim() === 'Discount after premium');
@@ -759,8 +769,6 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   }));
   assert.ok(discountLabels.every(value => /^\d+(?:\.\d+)?% (?:below|above|at) now$/.test(value)),
     'every acquire rung discloses its effective discount or premium to the current price');
-  await page.waitForTimeout(300); // observe the real card-arrival animation; never disable it for screenshots
-  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p11-ladder-beginner.png'), fullPage: true });
   const firstLadderDetail = page.locator('#plan-intent-ladder .ladder-row').first();
   await firstLadderDetail.locator('.xp-head').click();
   assert.equal(await firstLadderDetail.locator('.candidate-workflow-actions').count(), 0,
@@ -974,6 +982,34 @@ test('Plan Builder retains synthetic exposure sizing at both experience levels',
   assert.match(await page.textContent('#builder-exposure-output'), /Contracts.*Delta exposure/s,
     'Expert receives the same sized exposure result in the dense terminal');
 
+  await page.evaluate(async id => {
+    const live = await PlanStore.get(id, true);
+    await API.post('/api/plans/' + id + '/archive', { expectedVersion: live.version });
+    await PlanStore.refresh();
+  }, plan.id);
+});
+
+test('Plan Outcomes gives an exact-contract prerequisite instead of a dead empty band', async () => {
+  await page.evaluate(() => {
+    Learn.setLevel('beginner');
+    App.context.update({ symbol: 'TSLA', goal: 'DIRECTIONAL', thesis: 'neutral', horizon: '58d' });
+  });
+  const plan = await openPlan('TSLA', 'outcomes', 'DIRECTIONAL', 'neutral', '58d');
+  await page.waitForSelector('#plan-outcomes-prerequisite');
+  assert.match(await page.textContent('#plan-outcomes-prerequisite'),
+    /Choose exact contracts.*Market-implied lens.*POP \+ after-cost EV.*Possible-futures lens.*p5.*median.*p95.*Historical lens.*No-look-ahead replay/s,
+    'the empty state explains which contract-dependent results are waiting');
+  assert.equal(await page.locator('#plan-outcomes-prerequisite .btn').count(), 1,
+    'the prerequisite presents one clear next action');
+  const geometry = await page.locator('#plan-outcomes-prerequisite').evaluate(card => {
+    const box = card.getBoundingClientRect();
+    return { height: box.height, pageWidth: document.documentElement.scrollWidth, viewport: innerWidth };
+  });
+  assert.ok(geometry.height < 360 && geometry.pageWidth <= geometry.viewport,
+    'the prerequisite is compact and cannot widen the page: ' + JSON.stringify(geometry));
+  await page.getByRole('button', { name: 'Choose contracts in Strategy', exact: true }).click();
+  await page.waitForFunction(id => location.hash === '#/plan/' + id + '/strategy', plan.id);
+  await page.waitForSelector('#plan-stage-strategy');
   await page.evaluate(async id => {
     const live = await PlanStore.get(id, true);
     await API.post('/api/plans/' + id + '/archive', { expectedVersion: live.version });
