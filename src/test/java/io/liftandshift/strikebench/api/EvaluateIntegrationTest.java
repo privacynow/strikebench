@@ -237,6 +237,25 @@ class EvaluateIntegrationTest {
                 .isEqualTo("data_unavailable");
     }
 
+    @Test void malformedExactContractIdentityFailsVisiblyInsteadOfBecomingAModeledEntry() throws Exception {
+        String body = """
+                {"operation":"POSITION","basis":"PARAMETRIC",
+                 "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+                 "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":2,
+                         "driftAnnual":0,"volAnnual":0.25,"jumpsPerYear":0,"jumpMean":0,
+                         "jumpVol":0,"tailNu":6,"seed":77,"paths":40},
+                 "position":{"key":"PUT_SPREAD","qty":1,"legs":[
+                   {"action":"SELL","type":"PUT","strike":255,"expiration":"not-a-date","ratio":1},
+                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1}]}}
+                """;
+        HttpResponse<String> response = post("/api/evaluate", body);
+        assertThat(response.statusCode()).isEqualTo(400);
+        JsonNode error = Json.MAPPER.readTree(response.body());
+        assertThat(error.get("error").asText()).isEqualTo("bad_request");
+        assertThat(error.get("detail").asText()).contains("Invalid date").contains("not-a-date");
+        assertThat(error.toString()).doesNotContain("modeled entry");
+    }
+
     @Test void beginnerEventScenarioAnchorsIvCrushToTheActiveMarket() throws Exception {
         String body = """
                 {"operation":"PATHS","basis":"PARAMETRIC",
