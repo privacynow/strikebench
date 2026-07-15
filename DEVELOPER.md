@@ -3,7 +3,7 @@
 User-facing overview lives in [README.md](README.md). This file is everything else: build,
 architecture, tests, configuration, and deployment.
 
-## Current product shape (2026-07-13)
+## Current product shape (2026-07-14)
 
 The Plan-centered journey is complete on `feature/journey_refactor` and is not deployed.
 
@@ -35,8 +35,8 @@ The Plan-centered journey is complete on `feature/journey_refactor` and is not d
   `/api/sim/{scenario,strategy,compare}` surfaces are gone. Do not restore internal aliases or DTO
   overloads for hypothetical API consumers. Database and model-version migrations remain because
   they protect actual persisted user data and deterministic model identity.
-- Current release evidence is **557 JUnit + 70 fixture DOM + 8 responsive widths + 4 grown-state +
-  9 live-provider DOM, all green**. Representative screenshots are under
+- Current release evidence is **699 JUnit + 75 fixture DOM + 8 responsive widths + 4 grown-state +
+  3 auth-on + 9 live-provider DOM, all green**. Representative screenshots are under
   `dom-tests/shots/final-*.png`.
 
 ## Build & run
@@ -68,6 +68,11 @@ vendored for candlesticks; everything else is hand-rolled SVG. Local dev DB: `do
   books refuse to fill. Marks value closes at the executable side too.
 - **Levels change presentation, never capability**: Beginner/Expert differ in language, density,
   and progressive disclosure, never catalog, controls, requests, math, or risk gates.
+- **Accounting facts outlive tax rules**: lots, basis, realized matches, flows, and performance stay
+  available for every year. Automated tax characterization and user-rate scenarios are source-cited,
+  ruleset-versioned, and enabled only for a reviewed year; provisional/unsupported years expose facts
+  and reconciliation guidance without manufacturing an amount owed. Do not expand this into return
+  preparation or encode jurisdiction-specific rates.
 
 ## Architecture
 
@@ -86,26 +91,29 @@ io.liftandshift.strikebench
 ├── outcomes    OutcomeContract (the versioned cross-engine request/response contract)
 ├── sim         PathEnsembleService, ScenarioSimulator, SimulationEngine, deterministic path models
 ├── research    PortfolioOptimizer, ResearchQuestionEngine, BootstrapSampler, NotebookService
-├── paper       AccountService, TradeService, PositionsService, AuditLog
+├── plan        Plan lifecycle, evidence, strategy, outcomes, decisions, rehearsals, retention
+├── paper       Practice trading plus tracked-account accounting, performance, tax facts, import/export
 ├── backtest    Backtester + HistoricalReplayKernel (single-position and portfolio modes)
-├── db          + DataJobService (Data Center jobs), DataCoverage, DataResetService, UnderlyingBackfill
 ├── broker      OAuth1, ETradeProvider, BrokerService (live-order gates)
-└── api         ApiServer (Javalin routes incl. /api/market/{engine,stream} + /api/data/*), Main
+└── api         Small ApiServer composition root; per-domain *Routes/*Controller classes,
+                typed ApiResponses, shared stream broadcaster, WorldTransitionService
 ```
 
-**Decision flow.** Research establishes the lane-owned symbol/thesis and can contribute a historical
-event-study ensemble. Context can scout or accept a stated view; Structure selects a server-catalog
-family/template or custom legs; Outcomes evaluates the exact position under one or more explicitly
-named bases; Decide assembles economics, probability map, execution quality, account sizing,
-guardrails, and management guidance. The same exact position then enters paper or broker preview.
-Beginner and Expert traverse this same state machine.
+**Decision flow.** Research establishes a lane-owned symbol and can open or resume a durable Plan.
+Understand records the question; Evidence keeps historical observations and modeled futures distinct;
+Strategy selects a server-catalog family, ranked proposal, intent ladder, or custom package; Outcomes
+evaluates those exact contracts under explicitly named bases; Decide assembles economics, probability
+map, execution quality, account sizing, guardrails, and management guidance; Manage & Review preserves
+the frozen comparison, paper action, and rehearsal record. Beginner and Expert traverse this same state
+machine with different composition and explanation, never different requests or math.
 
 **Canonical evaluation API.** `POST /api/evaluate` accepts a versioned `OutcomeContract.Request`
 containing operation, basis, market context, exact position(s), and optional scenario/study inputs.
-Pure outcome work must enter here. `POST /api/backtest` and `/api/backtest/portfolio` remain durable
-historical-job endpoints, but both delegate pricing and evidence accounting to
-`HistoricalReplayKernel`. Live simulated markets remain a market lane under `/api/sim/market/*`, not
-an alternate evaluation engine.
+Pure forward-outcome work must enter here. Historical replay is Plan-owned at
+`POST /api/plans/{id}/outcomes/backtest` and delegates pricing and evidence accounting to
+`HistoricalReplayKernel`; the retired standalone backtest endpoints are not compatibility aliases.
+Live simulated markets remain a market lane under `/api/sim/market/*`, not an alternate evaluation
+engine.
 
 For `operation=PATHS`, the response owns both the path receipt and the facts derived from it. The UI
 may visualize sample lines, but decisions use the quantiles/probabilities in the response. A price fan
@@ -125,11 +133,12 @@ CSV import), and a tiered, confirmation-gated reset. The Observed evidence ladde
 Modeled inputs are separately labeled assumptions; Demo, Simulated, and Scenario are explicit lanes,
 never fallbacks inside Observed.
 
-Provider priority per data domain: **E*TRADE → Cboe → AlphaVantage/Polygon → Stooq →
-unavailable**, per-domain health at `GET /api/status` (never 500s). `FixtureProvider` is mounted only
-behind the explicit Demo lane. Frontend:
-`src/main/resources/public` — `js/{learn,api,workspace,ui,scenario,builder,views,app}.js`,
-hash router, screens adapt structurally to the Beginner/Expert level.
+Provider priority is domain-specific: executable broker data when connected, keyless Cboe delayed
+quotes/chains, eligible keyed or explicitly authorized daily-history sources, then unavailable.
+Per-domain health is exposed at `GET /api/status` without laundering a failed domain through another
+one. `FixtureProvider` is mounted only behind the explicit Demo lane. Frontend:
+`src/main/resources/public/js` — shared `{api,contracts,learn,workspace,ui,plans,outcomes,scenario,builder}`
+modules, screen files `views-{research,plan,portfolio,data}.js`, a small shared `views.js`, and `app.js`.
 
 **Workspace continuity + events.** The app behaves like a trader's desk: it remembers what you
 were doing and quietly prepares the next step.
@@ -176,9 +185,10 @@ were doing and quietly prepares the next step.
 mvn test                                             # JUnit (unit + API integration)
 cd dom-tests
 JAVA_BIN=$JAVA_HOME/bin/java PORT=7101 node --test dom.test.js        # fixture UI suite
-JAVA_BIN=$JAVA_HOME/bin/java PORT=7102 node --test dom-audit.test.js  # overflow/emoji/control-height sweep
+JAVA_BIN=$JAVA_HOME/bin/java PORT=7102 node --test dom-audit.test.js  # 8-width responsive/geometry sweep
 JAVA_BIN=$JAVA_HOME/bin/java PORT=7103 node --test dom-seeded.test.js # grown-DB walk (both levels)
-JAVA_BIN=$JAVA_HOME/bin/java PORT=7104 node --test dom-live.test.js   # REAL Cboe/EDGAR, every screen
+JAVA_BIN=$JAVA_HOME/bin/java PORT=7104 node --test dom-auth.test.js   # auth-on isolation and redirects
+JAVA_BIN=$JAVA_HOME/bin/java PORT=7105 node --test dom-live.test.js   # REAL Cboe/EDGAR, every screen
 ```
 
 DOM suites use Playwright (`npm i` inside `dom-tests/` once) against the real jar on a fresh
@@ -186,9 +196,11 @@ temp database; each suite needs its own port. Page JS errors and 5xx responses a
 failures. Run all suites — fresh-DB suites miss grown-state bugs, fixture suites miss live
 ones. The responsive audit checks 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 pixels and
 fails on horizontal overflow, clipped controls, or inaccessible geometry. Current counts are
-488 JUnit, 77 fixture DOM, 8 responsive widths, 4 grown-state, and 8 live-provider cases.
+699 JUnit, 75 fixture DOM, 8 responsive widths, 4 grown-state, 3 auth-on, and 9 live-provider cases.
+`.github/workflows/ci.yml` runs the backend and non-network browser matrix on every push/PR;
+`live-providers.yml` runs the observed-lane suite on a weekday schedule and by manual dispatch.
 
-Released Flyway migrations are byte-immutable. `MigrationImmutabilityTest` pins every V1-V19
+Released Flyway migrations are byte-immutable. `MigrationImmutabilityTest` pins every V1-V56
 SHA-256 digest and requires each new migration to be added to the manifest. Never edit an applied
 migration, including comments or whitespace, and never use `repair` to legitimize a source edit;
 schema changes always receive a new versioned migration.
