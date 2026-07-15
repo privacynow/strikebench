@@ -254,6 +254,27 @@ class EvaluateIntegrationTest {
         assertThat(error.get("error").asText()).isEqualTo("bad_request");
         assertThat(error.get("detail").asText()).contains("Invalid date").contains("not-a-date");
         assertThat(error.toString()).doesNotContain("modeled entry");
+
+        String compare = body.replace("\"operation\":\"POSITION\"", "\"operation\":\"COMPARE\"")
+                .replace("\"position\":{", "\"positions\":[{")
+                .replace("]}}\n", "]}]}\n");
+        HttpResponse<String> compared = post("/api/evaluate", compare);
+        assertThat(compared.statusCode()).isEqualTo(400);
+        assertThat(Json.MAPPER.readTree(compared.body()).get("error").asText()).isEqualTo("bad_request");
+    }
+
+    @Test void riskNeutralMissingQuoteUsesTheDataUnavailableTaxonomy() throws Exception {
+        String body = """
+                {"operation":"POSITION","basis":"RISK_NEUTRAL",
+                 "context":{"symbol":"NVDA","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+                 "position":{"key":"LONG_CALL","qty":1,"legs":[
+                   {"action":"BUY","type":"CALL","strike":210,"expiration":"2026-08-21","ratio":1}]}}
+                """;
+        HttpResponse<String> response = post("/api/evaluate", body);
+        assertThat(response.statusCode()).isEqualTo(422);
+        JsonNode error = Json.MAPPER.readTree(response.body());
+        assertThat(error.get("error").asText()).isEqualTo("data_unavailable");
+        assertThat(error.get("detail").asText()).contains("No price for NVDA").contains("lane-owned quote");
     }
 
     @Test void beginnerEventScenarioAnchorsIvCrushToTheActiveMarket() throws Exception {

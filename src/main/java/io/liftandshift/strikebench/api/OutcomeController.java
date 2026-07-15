@@ -128,6 +128,7 @@ final class OutcomeController {
                 refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(), "reason", "no position"));
                 continue;
             }
+            validateContractExpirations(st.position(), st.contractExpirations());
             MarketEntry me = marketEntry(sym, st.position(), qty, world, book,
                     st.contractExpirations());
             if (st.contractExpirations() != null && me == null) {
@@ -273,14 +274,7 @@ final class OutcomeController {
         if (b.entryCostCents() != null && Math.abs(b.entryCostCents()) > 1_000_000_000L) {
             throw new IllegalArgumentException("entry cost is outside the supported range");
         }
-        if (b.contractExpirations() != null) {
-            if (b.contractExpirations().size() != b.position().legs().size()) {
-                throw new IllegalArgumentException("contract expirations must align with the legs");
-            }
-            for (String exp : b.contractExpirations()) {
-                if (exp != null && !exp.isBlank()) java.time.LocalDate.parse(exp);
-            }
-        }
+        validateContractExpirations(b.position(), b.contractExpirations());
         MarketEntry me = marketEntry(sym, b.position(), qty, world, entryBook,
                 b.contractExpirations());
         if (b.contractExpirations() != null && me == null) {
@@ -669,6 +663,7 @@ final class OutcomeController {
         if (distinct.size() != 1) {
             throw new IllegalArgumentException("risk-neutral terminal odds support one expiration; use path evaluation for calendars and diagonals");
         }
+        var underlying = requireOutcomeQuote(book.quote(), symbol);
         int qty = position.qty() == null ? 1 : position.qty();
         io.liftandshift.strikebench.sim.PathPosition pathPosition = toPathPosition(ctx, position.legs());
         MarketEntry entry = marketEntry(symbol, pathPosition, qty,
@@ -693,7 +688,7 @@ final class OutcomeController {
                 .filter(l -> !l.isStock() && l.action() == io.liftandshift.strikebench.model.LegAction.SELL)
                 .map(Leg::strike).toList();
         var analyzed = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
-                curve, book.quote().orElseThrow().mark().doubleValue(), iv, time.years(), rate, shorts);
+                curve, underlying.mark().doubleValue(), iv, time.years(), rate, shorts);
         long contracts = entry.pricedLegs().stream().filter(l -> !l.isStock())
                 .mapToLong(Leg::ratio).sum() * qty;
         long roundTripFees = contracts * cfg.feePerContractCents() * 2L
@@ -713,7 +708,7 @@ final class OutcomeController {
         out.put("maxProfitUnbounded", curve.maxProfitUnbounded());
         out.put("maxLossUnbounded", curve.maxLossUnbounded());
         out.put("breakevens", curve.breakevens());
-        out.put("payoff", curve.chartPoints(book.quote().orElseThrow().mark()));
+        out.put("payoff", curve.chartPoints(underlying.mark()));
         out.put("source", entry.source());
         out.put("freshness", entry.freshness());
         out.put("snapshotAt", book.snapshotAt);
@@ -796,6 +791,25 @@ final class OutcomeController {
         boolean any = legs.stream().anyMatch(l -> l != null && l.expiration() != null && !l.expiration().isBlank());
         if (!any) return null;
         return legs.stream().map(l -> l == null ? null : l.expiration()).toList();
+    }
+
+    static void validateContractExpirations(io.liftandshift.strikebench.sim.PathPosition position,
+                                            List<String> expirations) {
+        if (expirations == null) return;
+        if (position == null || expirations.size() != position.legs().size()) {
+            throw new IllegalArgumentException("contract expirations must align with the legs");
+        }
+        for (String expiration : expirations) {
+            if (expiration != null && !expiration.isBlank()) java.time.LocalDate.parse(expiration);
+        }
+    }
+
+    static io.liftandshift.strikebench.model.Quote requireOutcomeQuote(
+            java.util.Optional<io.liftandshift.strikebench.model.Quote> quote, String symbol) {
+        return quote.filter(q -> q.mark() != null && q.mark().signum() > 0)
+                .orElseThrow(() -> new io.liftandshift.strikebench.util.DataUnavailableException(
+                        "No price for " + symbol
+                                + " — market-implied evaluation needs a lane-owned quote. Refresh market data and try again."));
     }
 
     private Map<String, Object> resolveOutcomeContext(Context ctx,
