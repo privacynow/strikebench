@@ -314,7 +314,7 @@ public final class ApiServer {
         dataJobs.setDataChangedHook(sparklineController::invalidate);
         coreController = new CoreController(cfg, clock, market, marketEngine, universe,
                 universeViews, datasets, workspaceSvc, accounts, auth, cboe, sparklineController,
-                simSessions, events, this::ownerId, this::activeWorld, this::activeWorldFor,
+                simSessions, events, this::ownerId, this::activeWorld, this::cachedActiveWorldFor,
                 this::currentAccount, this::requireAdmin, () -> !jarChangedHint().isEmpty(), startedAt);
         DataController dataController = new DataController(cfg, clock, db, market, marketEngine,
                 universe, dataJobs, dataCoverage, dataReset, dataConnectors, dataSyncState,
@@ -630,6 +630,10 @@ public final class ApiServer {
 
     private String activeWorldFor(String owner) {
         return worldTransitions.active(owner);
+    }
+
+    private String cachedActiveWorldFor(String owner) {
+        return worldTransitions.activeCached(owner);
     }
 
 

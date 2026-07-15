@@ -79,8 +79,6 @@ public final class WorldTransitionService {
 
     public String active(String rawOwner) {
         String owner = OwnerScope.id(rawOwner);
-        String cached = activeByOwner.get(owner);
-        if (cached != null) return cached;
         String saved = read(owner);
         String fallback = baseline();
         if (saved == null || saved.isBlank()) {
@@ -96,6 +94,17 @@ public final class WorldTransitionService {
         }
         activeByOwner.put(owner, saved);
         return saved;
+    }
+
+    /**
+     * Hot-path view for the shared market broadcaster. Explicit transitions and every ordinary
+     * request reconcile this cache from durable state; frames can then avoid a settings query on
+     * every tick without making the cache authoritative for request handling.
+     */
+    public String activeCached(String rawOwner) {
+        String owner = OwnerScope.id(rawOwner);
+        String cached = activeByOwner.get(owner);
+        return cached == null ? active(owner) : cached;
     }
 
     public Result transition(String requestedWorld, String rawOwner) {

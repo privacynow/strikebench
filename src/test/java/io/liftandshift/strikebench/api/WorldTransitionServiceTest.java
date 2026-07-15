@@ -39,7 +39,7 @@ class WorldTransitionServiceTest {
 
         db.close();
         db = null;
-        assertThat(transitions.active("owner-a")).isEqualTo("demo");
+        assertThat(transitions.activeCached("owner-a")).isEqualTo("demo");
     }
 
     @Test
