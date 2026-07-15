@@ -257,6 +257,56 @@ class MigrationsTest {
     }
 
     @Test
+    void canonicalOwnerMigrationMergesGrownDatabaseIdentityCollisions() {
+        Map<String, String> cfg = TestDb.freshConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure().dataSource(db.dataSource()).locations("classpath:db/migrations")
+                    .target("49").load().migrate();
+
+            db.exec("INSERT INTO workspace(user_id,state,rev,updated_at) VALUES "
+                    + "('local','{\"snapshot\":\"old\"}',2,'2025-01-01T00:00:00Z'),"
+                    + "('__local__','{\"snapshot\":\"new\"}',3,'2025-02-01T00:00:00Z')");
+            db.exec("INSERT INTO data_sync_schedule(owner_key,enabled,source_key,symbols,years,updated_at) VALUES "
+                    + "('local',0,'csv','AAPL',2,'2025-01-01T00:00:00Z'),"
+                    + "('user:local',1,'yahoo','QQQ,SPY',5,'2025-02-01T00:00:00Z')");
+            db.exec("INSERT INTO data_sync_cursor(owner_key,source_key,symbol,status,requested_from,requested_to,"
+                    + "last_success_date,last_attempt_at,next_allowed_at,failure_count,rows_written,note,updated_at) VALUES "
+                    + "('local','yahoo','QQQ','COMPLETE','2024-02-01','2024-12-31','2024-12-31',"
+                    + "'2025-01-01T00:00:00Z',NULL,0,300,'older success','2025-01-01T00:00:00Z'),"
+                    + "('__local__','yahoo','QQQ','FAILED','2024-01-01','2025-01-31','2024-11-30',"
+                    + "'2025-02-01T00:00:00Z','2025-02-02T00:00:00Z',2,10,'latest failure','2025-02-01T00:00:00Z')");
+            db.exec("INSERT INTO plans(id,client_request_id,create_input_hash,symbol,market_kind,status,active_stage) VALUES "
+                    + "('plan_first','plan-first-request','plan-first-hash','AAPL','DEMO','ACTIVE','UNDERSTAND'),"
+                    + "('plan_later','plan-later-request','plan-later-hash','QQQ','DEMO','ACTIVE','UNDERSTAND')");
+            db.exec("INSERT INTO plan_create_request(owner_key,client_request_id,input_hash,plan_id,created_at) VALUES "
+                    + "('local','same-request','first-hash','plan_first','2025-01-01T00:00:00Z'),"
+                    + "('__local__','same-request','later-hash','plan_later','2025-02-01T00:00:00Z')");
+
+            Migrations.run(db);
+
+            assertThat(db.query("SELECT user_id,state->>'snapshot' snapshot,rev FROM workspace",
+                    r -> r.str("user_id") + ":" + r.str("snapshot") + ":" + r.lng("rev")))
+                    .containsExactly("local:new:3");
+            assertThat(db.query("SELECT user_id,enabled,source_key,symbols,years FROM data_sync_schedule",
+                    r -> r.str("user_id") + ":" + r.bool("enabled") + ":" + r.str("source_key")
+                            + ":" + r.str("symbols") + ":" + r.intv("years")))
+                    .containsExactly("local:true:yahoo:QQQ,SPY:5");
+            assertThat(db.query("SELECT user_id,status,requested_from::text rf,requested_to::text rt,"
+                            + "last_success_date::text ls,to_char(next_allowed_at AT TIME ZONE 'UTC',"
+                            + "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') na,rows_written,note "
+                            + "FROM data_sync_cursor",
+                    r -> List.of(r.str("user_id"), r.str("status"), r.str("rf"), r.str("rt"),
+                            r.str("ls"), r.str("na"), Long.toString(r.lng("rows_written")), r.str("note"))))
+                    .containsExactly(List.of("local", "FAILED", "2024-01-01", "2025-01-31",
+                            "2024-12-31", "2025-02-02T00:00:00Z", "300", "latest failure"));
+            assertThat(db.query("SELECT user_id,input_hash,plan_id FROM plan_create_request "
+                            + "WHERE client_request_id='same-request'",
+                    r -> r.str("user_id") + ":" + r.str("input_hash") + ":" + r.str("plan_id")))
+                    .containsExactly("local:first-hash:plan_first");
+        }
+    }
+
+    @Test
     void broadBasedIndexTaxonomyBackfillsExistingLotsAndRealizedMatches() {
         Map<String, String> cfg = TestDb.freshConfig();
         try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
