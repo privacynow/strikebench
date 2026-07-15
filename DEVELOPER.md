@@ -35,8 +35,9 @@ The Plan-centered journey is complete on `feature/journey_refactor` and is not d
   `/api/sim/{scenario,strategy,compare}` surfaces are gone. Do not restore internal aliases or DTO
   overloads for hypothetical API consumers. Database and model-version migrations remain because
   they protect actual persisted user data and deterministic model identity.
-- Current release evidence is **703 JUnit + 76 fixture DOM + 8 responsive widths + 4 grown-state +
-  3 auth-on + 9 live-provider DOM, all green**. Representative screenshots are under
+- Release evidence is generated from Surefire XML and per-suite browser TAP reports by
+  `scripts/release-matrix.mjs` on every CI run. The workflow summary is authoritative for that
+  exact commit; test counts are never transcribed here. Representative screenshots are under
   `dom-tests/shots/final-*.png`.
 
 ## Build & run
@@ -102,6 +103,7 @@ vendored for candlesticks; everything else is hand-rolled SVG. Local dev DB: `do
 ```
 io.liftandshift.strikebench
 ├── config      AppConfig (env > sysprops > strikebench.properties > defaults)
+├── auth        AuthService, GoogleOidcProvider, verified identity/session policy
 ├── db          Db (HikariCP-pooled Postgres), Migrations (Flyway; classpath:db/migrations)
 ├── model       Quote, Candle, OptionQuote, OptionChain, Leg, DataEvidence, provenance/age, ...
 ├── pricing     BlackScholes, ImpliedVol, PayoffCurve, VolSurface, HistoricalVol
@@ -210,7 +212,7 @@ cd dom-tests
 JAVA_BIN=$JAVA_HOME/bin/java PORT=7101 node --test dom.test.js        # fixture UI suite
 JAVA_BIN=$JAVA_HOME/bin/java PORT=7102 node --test dom-audit.test.js  # 8-width responsive/geometry sweep
 JAVA_BIN=$JAVA_HOME/bin/java PORT=7103 node --test dom-seeded.test.js # grown-DB walk (both levels)
-JAVA_BIN=$JAVA_HOME/bin/java PORT=7104 node --test dom-auth.test.js   # auth-on isolation and redirects
+JAVA_BIN=$JAVA_HOME/bin/java PORT=7104 node --test dom-auth.test.js   # auth-on signed-out + signed-in OIDC journey
 JAVA_BIN=$JAVA_HOME/bin/java PORT=7105 node --test dom-live.test.js   # REAL Cboe/EDGAR, every screen
 ```
 
@@ -218,9 +220,10 @@ DOM suites use Playwright (`npm i` inside `dom-tests/` once) against the real ja
 temp database; each suite needs its own port. Page JS errors and 5xx responses are hard
 failures. Run all suites — fresh-DB suites miss grown-state bugs, fixture suites miss live
 ones. The responsive audit checks 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 pixels and
-fails on horizontal overflow, clipped controls, or inaccessible geometry. Current counts are
-703 JUnit, 76 fixture DOM, 8 responsive widths, 4 grown-state, 3 auth-on, and 9 live-provider cases.
-`.github/workflows/ci.yml` runs the backend and non-network browser matrix on every push/PR;
+fails on horizontal overflow, clipped controls, or inaccessible geometry. CI retains one TAP report
+per browser suite and runs `node scripts/release-matrix.mjs`; that command sums the actual Surefire
+and TAP reports, fails on reported failures, writes `target/release-matrix.md`, and publishes it to
+the workflow summary. `.github/workflows/ci.yml` runs the backend and non-network browser matrix on every push/PR;
 `live-providers.yml` runs the observed-lane suite on a weekday schedule and by manual dispatch.
 
 Browser tabs share one origin-wide market/event stream pair through a short leader lease and
@@ -244,31 +247,40 @@ Environment variables, or the same keys lowercase-dotted in `./strikebench.prope
 |---|---|---|
 | `PORT` | `7070` | HTTP port |
 | `BRAND_NAME` / `BRAND_TAGLINE` | `StrikeBench` / built-in | Header, title, hero |
-| `DB_URL` / `DB_USER` / `DB_PASSWORD` | compose db | Postgres connection (`DB_PATH` is legacy, ETL-only) |
+| `DB_URL` / `DB_USER` / `DB_PASSWORD` / `DB_PATH` | compose db / legacy SQLite path | Postgres connection; `DB_PATH` is one-time legacy import only |
 | `FIXTURES_ONLY` | `false` | Demo data only, zero network |
-| `SNAPSHOT_ENABLED` | live-mode default on | Record eligible forward chain snapshots into observed history |
+| `TRUSTED_PROXY` | `false` | Trust forwarded client IPs only when every request comes through the owned proxy |
+| `HTTP_TIMEOUT_MS` | `10000` | Provider timeout |
+| `FEE_PER_CONTRACT_CENTS` / `FEE_PER_ORDER_CENTS` | `65` / `0` | Paper/execution commission assumptions |
+| `DEFAULT_STARTING_CASH_CENTS` | `10000000` | New paper account ($100k) |
+| `SNAPSHOT_ENABLED` / `SNAPSHOT_INTERVAL_HOURS` / `SNAPSHOT_INITIAL_DELAY_SECONDS` | live default on / `24` / `600` | Forward option-chain snapshot schedule |
+| `PORTFOLIO_NAV_ENABLED` / `PORTFOLIO_NAV_INITIAL_DELAY_SECONDS` / `PORTFOLIO_NAV_INTERVAL_MINUTES` | live default on / `30` / `15` | Calculated tracked-book valuation schedule |
+| `ARTIFACT_RETENTION_ENABLED` | `true` | Run computed-artifact cleanup |
+| `STALE_PLAN_ARTIFACT_RETENTION_DAYS` / `ORPHAN_ENSEMBLE_RETENTION_DAYS` | `30` / `90` | Retention windows for replaceable Plan artifacts and unreferenced ensembles |
+| `ARTIFACT_RETENTION_INITIAL_DELAY_SECONDS` / `ARTIFACT_RETENTION_INTERVAL_HOURS` | `300` / `24` | Cleanup startup delay and cadence |
 | `ENGINE_ENABLED` | `true` | In-memory market engine: warm the active universe on boot + refresh in the background |
 | `ENGINE_QUOTE_REFRESH_SECONDS` / `ENGINE_QUOTE_REFRESH_CLOSED_SECONDS` | `20` / `300` | Engine refresh cadence (RTH / market-closed) |
-| `ENGINE_MAX_TRACKED` / `ENGINE_STREAM_INTERVAL_SECONDS` | `220` / `3` | Warm-set cap (LRU) / SSE push interval on `/api/market/stream` |
+| `ENGINE_MAX_TRACKED` / `ENGINE_WARM_FULL_UNIVERSE` / `ENGINE_STREAM_INTERVAL_SECONDS` | `220` / `false` / `3` | Warm-set cap, explicit heavy-provider full warm, and stream interval |
+| `CBOE_BASE_URL` | Cboe CDN | Cboe endpoint override |
+| `CBOE_COOLDOWN_MINUTES` / `CBOE_MAX_CONCURRENCY` / `CBOE_MIN_SPACING_MS` | `15` / `2` / `1200` | Shared Cboe politeness and rate-limit controls |
 | `YAHOO_ENABLED` + `YAHOO_AUTOMATION_PERMISSION_CONFIRMED` | `false` / `false` | **PERSONAL / local-clone only** — both are required; automated Yahoo access remains permission-gated and is never a hosted default |
-| `YAHOO_DAILY_REQUEST_LIMIT` | `100` | Durable local safety cap; does not grant source rights |
-| `STOOQ_ENABLED` | `false` | Opt-in only; automated clients commonly receive an anti-bot response |
-| `AUTH_ENABLED` + `OIDC_*` + `AUTH_ALLOWED_EMAILS` + `AUTH_COOKIE_SECURE` | off | Google sign-in + per-user scoping |
-| `AUTH_ADMIN_EMAILS` / `ADMIN_TOKEN` | — | Who can run destructive ops (data reset, CSV import). With auth on: admin-email allowlist (else the entry allowlist). With auth off: `ADMIN_TOKEN` matched via `X-Admin-Token`, else LOCAL-only (blocked behind the TLS proxy) |
-| `FEE_PER_CONTRACT_CENTS` | `65` | Commission per contract per leg |
-| `FEE_PER_ORDER_CENTS` | `0` | Flat fee per order |
-| `DEFAULT_STARTING_CASH_CENTS` | `10000000` | New paper account ($100k) |
-| `HTTP_TIMEOUT_MS` | `10000` | Provider timeout |
+| `YAHOO_DAILY_REQUEST_LIMIT` / `YAHOO_BASE_URL` | `100` / Yahoo chart endpoint | Durable local safety cap and testable endpoint; neither grants source rights |
+| `STOOQ_ENABLED` / `STOOQ_BASE_URL` | `false` / Stooq | Opt-in source and endpoint override; automated clients commonly receive an anti-bot response |
+| `NEWS_RSS_BASE_URL` | Google News RSS | Keyless per-symbol headline source; blank disables it |
+| `AUTH_ENABLED` | `false` | Require an authenticated, owner-scoped session |
+| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_CALLBACK_URL` | Google / blank / blank / local callback | OIDC discovery, client credentials, and exact registered redirect |
+| `AUTH_POST_LOGIN_URL` / `AUTH_COOKIE_SECURE` | `/` / `false` | Post-login destination and HTTPS-only session cookie setting |
+| `AUTH_ALLOWED_EMAILS` / `AUTH_ADMIN_EMAILS` | blank | Sign-in and destructive-operation email allowlists |
+| `ADMIN_TOKEN` | blank | Auth-off destructive-operation token matched via `X-Admin-Token`; blank remains local-only behind the TLS proxy |
 | `AUTO_UNIVERSE` | — | Fallback scout universe (the in-app sector picker overrides) |
-| `POLYGON_API_KEY` / `POLYGON_DAILY_REQUEST_LIMIT` | — / `0` | Plan-governed historical candles + option chains; zero means no invented StrikeBench cap |
-| `ALPHAVANTAGE_API_KEY` | — | Compact adjusted daily candles through the official keyed API |
-| `ALPHAVANTAGE_FULL_HISTORY_ENABLED` | `false` | Use full daily history only when the key's plan is entitled |
-| `ALPHAVANTAGE_DAILY_REQUEST_LIMIT` | `25` | Durable daily request safety cap shared by screens and jobs |
-| `FRED_API_KEY` | — | Risk-free rates (else keyless Treasury XML) |
-| `EDGAR_USER_AGENT` | — | Required contact identity for SEC filings, for example `MyStrikeBench/1.0 (me@example.com)`; blank disables EDGAR |
-| `ETRADE_CONSUMER_KEY` / `ETRADE_CONSUMER_SECRET` | — | Enables the E*TRADE adapter |
-| `ETRADE_SANDBOX` | `true` | Sandbox vs live E*TRADE |
-| `*_BASE_URL` (Cboe/Stooq/EDGAR/Treasury/FRED/Polygon/AlphaVantage/ETrade) | real endpoints | Overridable for tests |
+| `POLYGON_API_KEY` / `POLYGON_BASE_URL` / `POLYGON_DAILY_REQUEST_LIMIT` | blank / Polygon / `0` | Plan-governed history/options source; zero means no invented StrikeBench cap |
+| `ALPHAVANTAGE_API_KEY` / `ALPHAVANTAGE_BASE_URL` | blank / Alpha Vantage | Official keyed daily-candle source and endpoint override |
+| `ALPHAVANTAGE_FULL_HISTORY_ENABLED` / `ALPHAVANTAGE_DAILY_REQUEST_LIMIT` | `false` / `25` | Entitlement-controlled full history and durable request cap |
+| `FRED_API_KEY` / `FRED_BASE_URL` | blank / FRED | Keyed rates source (else Treasury) and endpoint override |
+| `TREASURY_BASE_URL` | Treasury | Keyless Treasury rate endpoint override |
+| `EDGAR_BASE_URL` / `EDGAR_DATA_BASE_URL` | SEC endpoints | SEC ticker and submissions endpoint overrides |
+| `EDGAR_USER_AGENT` | blank | Required SEC contact identity, for example `MyStrikeBench/1.0 (me@example.com)`; blank disables EDGAR |
+| `ETRADE_CONSUMER_KEY` / `ETRADE_CONSUMER_SECRET` / `ETRADE_SANDBOX` / `ETRADE_BASE_URL` | blank / blank / `true` / derived | E*TRADE credentials, environment, and test endpoint override |
 
 Live trading requires, beyond keys: connection + successful preview + the exact typed
 confirmation *"I understand max loss and this is real money"* + an idempotent client order
