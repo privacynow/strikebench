@@ -174,10 +174,12 @@ public final class AppConfig {
     /** Mark the session cookie Secure (HTTPS-only). Set true in prod behind the TLS proxy;
      *  false for plain-http local dev so login still works. */
     public boolean authCookieSecure() { return getBool("AUTH_COOKIE_SECURE", false); }
+    /** Idle server-session lifetime. Short values are useful only for hermetic expiry tests. */
+    public int authSessionIdleSeconds() { return Math.max(1, getInt("AUTH_SESSION_IDLE_SECONDS", 1800)); }
     /** Comma-separated allowlist of permitted emails. Empty = any Google account with a verified email. */
     public java.util.List<String> authAllowedEmails() { return emailList("AUTH_ALLOWED_EMAILS"); }
 
-    /** Emails allowed to run destructive admin ops (data reset, CSV import). Empty = fall back to the entry allowlist. */
+    /** Emails allowed to run destructive admin ops (data reset, CSV import). Empty = nobody. */
     public java.util.List<String> authAdminEmails() { return emailList("AUTH_ADMIN_EMAILS"); }
 
     /** Shared secret gating destructive admin ops when auth is OFF (sent as X-Admin-Token). Empty = local-only. */

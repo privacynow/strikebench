@@ -18,7 +18,7 @@ const BASE = `http://localhost:${PORT}`;
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
-let server, browser, page, pg, oidcServer, oidcIssuer;
+let server, browser, page, adminContext, pg, oidcServer, oidcIssuer;
 const apiRequests = [];
 const pageErrors = [];
 const serverErrors = [];
@@ -28,6 +28,12 @@ const publicJwk = Object.assign(oidcKeys.publicKey.export({ format: 'jwk' }), {
   kid: 'strikebench-browser-test', use: 'sig', alg: 'RS256', key_ops: ['verify']
 });
 const loginCodes = new Map();
+const identities = Object.freeze({
+  learner: { subject: 'browser-learner', email: 'learner@example.com', name: 'Browser Learner' },
+  reviewer: { subject: 'browser-reviewer', email: 'reviewer@example.com', name: 'Browser Reviewer' },
+  intruder: { subject: 'browser-intruder', email: 'intruder@example.com', name: 'Browser Intruder' }
+});
+let nextIdentityKey = null;
 
 function json(res, value) {
   const body = JSON.stringify(value);
@@ -35,13 +41,13 @@ function json(res, value) {
   res.end(body);
 }
 
-function signedIdToken(nonce) {
+function signedIdToken(nonce, identity) {
   const now = Math.floor(Date.now() / 1000);
   const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
   const unsigned = `${encode({ alg: 'RS256', typ: 'JWT', kid: publicJwk.kid })}.${encode({
-    iss: oidcIssuer, sub: 'browser-learner', aud: 'browser-test-client',
+    iss: oidcIssuer, sub: identity.subject, aud: 'browser-test-client',
     iat: now, exp: now + 300, nonce,
-    email: 'learner@example.com', email_verified: true, name: 'Browser Learner'
+    email: identity.email, email_verified: true, name: identity.name
   })}`;
   return `${unsigned}.${crypto.sign('RSA-SHA256', Buffer.from(unsigned), oidcKeys.privateKey).toString('base64url')}`;
 }
@@ -70,8 +76,10 @@ async function startOidcIssuer() {
     }
     if (url.pathname === '/authorize') {
       assert.equal(url.searchParams.get('client_id'), 'browser-test-client');
+      assert.ok(identities[nextIdentityKey], 'the browser test must select an issuer identity before login');
       const code = crypto.randomBytes(18).toString('base64url');
-      loginCodes.set(code, url.searchParams.get('nonce'));
+      loginCodes.set(code, { nonce: url.searchParams.get('nonce'), identity: identities[nextIdentityKey] });
+      nextIdentityKey = null;
       const callback = new URL(url.searchParams.get('redirect_uri'));
       callback.searchParams.set('code', code);
       callback.searchParams.set('state', url.searchParams.get('state'));
@@ -86,11 +94,11 @@ async function startOidcIssuer() {
       req.on('data', chunk => { body += chunk; });
       req.on('end', () => {
         const code = new URLSearchParams(body).get('code');
-        const nonce = loginCodes.get(code);
-        assert.ok(nonce, 'authorization code is one-shot and issuer-owned');
+        const login = loginCodes.get(code);
+        assert.ok(login, 'authorization code is one-shot and issuer-owned');
         loginCodes.delete(code);
         json(res, { access_token: 'browser-access-token', token_type: 'Bearer', expires_in: 300,
-          id_token: signedIdToken(nonce) });
+          id_token: signedIdToken(login.nonce, login.identity) });
       });
       return;
     }
@@ -113,6 +121,30 @@ async function waitForServer(tries = 60) {
   throw new Error('auth-on server did not start');
 }
 
+function trackPage(candidate) {
+  candidate.on('request', request => {
+    const url = new URL(request.url());
+    if (url.origin === BASE && url.pathname.startsWith('/api/')) apiRequests.push(url.pathname);
+  });
+  candidate.on('response', response => {
+    const url = new URL(response.url());
+    if (url.origin === BASE && url.pathname.startsWith('/api/') && response.status() >= 500) {
+      serverErrors.push(`${response.status()} ${url.pathname}`);
+    }
+  });
+  candidate.on('pageerror', error => pageErrors.push(error.message));
+}
+
+async function loginAs(context, identityKey) {
+  nextIdentityKey = identityKey;
+  const candidate = await context.newPage();
+  trackPage(candidate);
+  await candidate.goto(`${BASE}/auth/login`);
+  await candidate.waitForURL(`${BASE}/#/plans`, { timeout: 15_000 });
+  await candidate.waitForSelector('#app[data-ready="true"] #plans-library');
+  return candidate;
+}
+
 before(async () => {
   await startOidcIssuer();
   pg = freshDb();
@@ -121,24 +153,17 @@ before(async () => {
       ...process.env, PORT, ...pg.env, FIXTURES_ONLY: 'true', AUTH_ENABLED: 'true',
       OIDC_CLIENT_ID: 'browser-test-client', OIDC_CLIENT_SECRET: 'browser-test-secret',
       OIDC_ISSUER: oidcIssuer, OIDC_CALLBACK_URL: `${BASE}/auth/callback`,
-      AUTH_POST_LOGIN_URL: '/#/plans', AUTH_ALLOWED_EMAILS: 'learner@example.com'
+      AUTH_POST_LOGIN_URL: '/#/plans',
+      AUTH_ALLOWED_EMAILS: 'learner@example.com,reviewer@example.com',
+      AUTH_ADMIN_EMAILS: 'learner@example.com', AUTH_SESSION_IDLE_SECONDS: '5'
     },
     stdio: 'ignore'
   });
   await waitForServer();
   browser = await chromium.launch();
-  page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  page.on('request', request => {
-    const url = new URL(request.url());
-    if (url.origin === BASE && url.pathname.startsWith('/api/')) apiRequests.push(url.pathname);
-  });
-  page.on('response', response => {
-    const url = new URL(response.url());
-    if (url.origin === BASE && url.pathname.startsWith('/api/') && response.status() >= 500) {
-      serverErrors.push(`${response.status()} ${url.pathname}`);
-    }
-  });
-  page.on('pageerror', error => pageErrors.push(error.message));
+  adminContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  page = await adminContext.newPage();
+  trackPage(page);
   await page.goto(BASE + '/#/plans');
   await page.waitForSelector('#app[data-ready="true"] .signin-card');
 });
@@ -181,6 +206,7 @@ test('login surface remains usable without overflow on a narrow phone', async ()
 
 test('verified OIDC sign-in reaches the owner-scoped application', async () => {
   await page.setViewportSize({ width: 1280, height: 800 });
+  nextIdentityKey = 'learner';
   await page.locator('.signin-card a').click();
   await page.waitForURL(`${BASE}/#/plans`, { timeout: 15_000 });
   await page.waitForSelector('#app[data-ready="true"] #plans-library');
@@ -206,6 +232,112 @@ test('verified OIDC sign-in reaches the owner-scoped application', async () => {
   assert.equal(session.plansStatus, 200);
   assert.equal(session.planCount, 0);
   assert.equal(await page.locator('#nav a[data-route="plans"].active').count(), 1);
+  assert.deepEqual(pageErrors, []);
+  assert.deepEqual(serverErrors, []);
+});
+
+test('two signed-in identities are isolated and non-admin routes fail with 403', async () => {
+  const ownerRecords = await page.evaluate(async () => {
+    const request = async (path, options = {}) => {
+      const response = await fetch(path, options);
+      const body = await response.json();
+      if (!response.ok) throw new Error(`${path} returned ${response.status}: ${JSON.stringify(body)}`);
+      return body;
+    };
+    const plan = await request('/api/plans', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientRequestId: 'auth-owner-plan', symbol: 'AAPL', intent: 'INCOME',
+        thesis: 'neutral', horizonDays: 30, riskMode: 'conservative', title: 'Owner A private Plan' })
+    });
+    await request('/api/workspace', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ route: 'plans', privateMarker: 'owner-a-only' })
+    });
+    const account = await request('/api/portfolio/accounts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Owner A private book', accountType: 'TAXABLE',
+        lotMethod: 'FIFO', openingCashCents: 2500000 })
+    });
+    return { planId: plan.id, accountId: account.id };
+  });
+
+  const memberContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const memberPage = await loginAs(memberContext, 'reviewer');
+  const isolation = await memberPage.evaluate(async ids => {
+    const read = async (path, options) => {
+      const response = await fetch(path, options);
+      let body = null;
+      try { body = await response.json(); } catch (e) { /* status is still the contract */ }
+      return { status: response.status, body };
+    };
+    return {
+      me: await read('/api/auth/me'),
+      plans: await read('/api/plans?scope=all&openOnly=false'),
+      planById: await read(`/api/plans/${ids.planId}`),
+      workspace: await read('/api/workspace'),
+      accounts: await read('/api/portfolio/accounts'),
+      accountById: await read(`/api/portfolio/accounts/${ids.accountId}`),
+      admin: await read('/api/data/reset', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tier: 'PAPER', confirm: false })
+      })
+    };
+  }, ownerRecords);
+
+  assert.equal(isolation.me.body.user.email, 'reviewer@example.com');
+  assert.equal(isolation.plans.status, 200);
+  assert.deepEqual(isolation.plans.body.plans, []);
+  assert.equal(isolation.planById.status, 404);
+  assert.equal(isolation.workspace.status, 200);
+  assert.equal(isolation.workspace.body.rev, 0);
+  assert.equal(isolation.workspace.body.state, undefined);
+  assert.equal(isolation.accounts.status, 200);
+  assert.deepEqual(isolation.accounts.body.accounts, []);
+  assert.equal(isolation.accountById.status, 404);
+  assert.equal(isolation.admin.status, 403);
+  assert.equal(isolation.admin.body.error, 'forbidden');
+
+  await memberPage.goto(`${BASE}/auth/logout`);
+  await memberPage.waitForURL(`${BASE}/#/plans`);
+  await memberPage.waitForSelector('#app[data-ready="true"] .signin-card');
+  const afterLogout = await memberPage.evaluate(async () => ({
+    me: await (await fetch('/api/auth/me')).json(),
+    protectedStatus: (await fetch('/api/account')).status
+  }));
+  assert.equal(afterLogout.me.authenticated, false);
+  assert.equal(afterLogout.protectedStatus, 401);
+  await memberContext.close();
+  assert.deepEqual(pageErrors, []);
+  assert.deepEqual(serverErrors, []);
+});
+
+test('an idle authenticated server session expires and loses protected access', async () => {
+  const expiryContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const expiryPage = await loginAs(expiryContext, 'reviewer');
+  assert.equal(await expiryPage.evaluate(async () => (await fetch('/api/account')).status), 200);
+
+  await expiryPage.waitForTimeout(7_000);
+  const expired = await expiryPage.evaluate(async () => ({
+    protectedStatus: (await fetch('/api/account')).status,
+    me: await (await fetch('/api/auth/me')).json()
+  }));
+  assert.equal(expired.protectedStatus, 401);
+  assert.equal(expired.me.authenticated, false);
+  await expiryContext.close();
+  assert.deepEqual(serverErrors, []);
+});
+
+test('the OIDC allowlist denies a verified but unapproved identity', async () => {
+  const deniedContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const deniedPage = await deniedContext.newPage();
+  trackPage(deniedPage);
+  nextIdentityKey = 'intruder';
+  const response = await deniedPage.goto(`${BASE}/auth/login`);
+  assert.equal(response.status(), 401);
+  assert.match(await deniedPage.locator('body').innerText(), /not permitted/i);
+  const me = await deniedPage.evaluate(async () => (await fetch('/api/auth/me')).json());
+  assert.equal(me.authenticated, false);
+  await deniedContext.close();
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(serverErrors, []);
 });

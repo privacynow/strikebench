@@ -269,8 +269,8 @@ Environment variables, or the same keys lowercase-dotted in `./strikebench.prope
 | `NEWS_RSS_BASE_URL` | Google News RSS | Keyless per-symbol headline source; blank disables it |
 | `AUTH_ENABLED` | `false` | Require an authenticated, owner-scoped session |
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_CALLBACK_URL` | Google / blank / blank / local callback | OIDC discovery, client credentials, and exact registered redirect |
-| `AUTH_POST_LOGIN_URL` / `AUTH_COOKIE_SECURE` | `/` / `false` | Post-login destination and HTTPS-only session cookie setting |
-| `AUTH_ALLOWED_EMAILS` / `AUTH_ADMIN_EMAILS` | blank | Sign-in and destructive-operation email allowlists |
+| `AUTH_POST_LOGIN_URL` / `AUTH_COOKIE_SECURE` / `AUTH_SESSION_IDLE_SECONDS` | `/` / `false` / `1800` | Post-login destination, HTTPS-only cookie setting, and server-side idle expiry |
+| `AUTH_ALLOWED_EMAILS` / `AUTH_ADMIN_EMAILS` | blank | Sign-in allowlist (blank permits verified identities) and explicit admin allowlist (blank permits no admins) |
 | `ADMIN_TOKEN` | blank | Auth-off destructive-operation token matched via `X-Admin-Token`; blank remains local-only behind the TLS proxy |
 | `AUTO_UNIVERSE` | — | Fallback scout universe (the in-app sector picker overrides) |
 | `POLYGON_API_KEY` / `POLYGON_BASE_URL` / `POLYGON_DAILY_REQUEST_LIMIT` | blank / Polygon / `0` | Plan-governed history/options source; zero means no invented StrikeBench cap |

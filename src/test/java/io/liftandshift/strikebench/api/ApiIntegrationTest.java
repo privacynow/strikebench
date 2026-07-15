@@ -840,22 +840,22 @@ class ApiIntegrationTest {
         assertThat(get("/api/data/coverage").statusCode()).isEqualTo(200);
         // Reset without confirm is refused.
         assertThat(post("/api/data/reset", "{\"tier\":\"MARKET_DATA\"}").statusCode()).isEqualTo(400);
-        // Admin gate: a PROXIED request (X-Forwarded-For present, auth off) can't wipe — 401, not 200.
+        // Admin gate: a PROXIED request (X-Forwarded-For present, auth off) can't wipe — 403, not 200.
         HttpResponse<String> proxied = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/reset"))
                         .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
                         .POST(HttpRequest.BodyPublishers.ofString("{\"tier\":\"EVERYTHING\",\"confirm\":true}")).build(),
                 HttpResponse.BodyHandlers.ofString());
-        assertThat(proxied.statusCode()).isEqualTo(401);
+        assertThat(proxied.statusCode()).isEqualTo(403);
         HttpResponse<String> proxiedSchedule = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/sync/schedule"))
                         .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
                         .PUT(HttpRequest.BodyPublishers.ofString("{\"enabled\":true,\"source\":\"auto\",\"symbols\":[\"AAPL\"],\"years\":1}"))
                         .build(), HttpResponse.BodyHandlers.ofString());
-        assertThat(proxiedSchedule.statusCode()).isEqualTo(401);
+        assertThat(proxiedSchedule.statusCode()).isEqualTo(403);
         HttpResponse<String> proxiedSync = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/jobs"))
                         .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
                         .POST(HttpRequest.BodyPublishers.ofString("{\"kind\":\"sync_underlying\",\"params\":{\"symbols\":[\"AAPL\"]}}"))
                         .build(), HttpResponse.BodyHandlers.ofString());
-        assertThat(proxiedSync.statusCode()).isEqualTo(401);
+        assertThat(proxiedSync.statusCode()).isEqualTo(403);
         // A backfill job can be started and is listed.
         HttpResponse<String> start = post("/api/data/jobs",
                 "{\"kind\":\"backfill_underlying\",\"params\":{\"symbols\":[\"AAPL\"],\"from\":\"2026-04-01\",\"to\":\"2026-06-30\"}}");
