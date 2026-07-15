@@ -297,7 +297,7 @@
         el('button', { class: 'btn btn-sm', id: 'plan-understand-next', onclick: async function () {
           try {
             if (embedded && embedded.onBeginEvidence) { await embedded.onBeginEvidence(); return; }
-            var moved = await PlanStore.setStage(embedded.plan, 'EVIDENCE');
+            var moved = await PlanStore.advance(embedded.plan, 'EVIDENCE');
             App.navigate(PlanStore.path(moved, 'EVIDENCE'));
           } catch (e) { UI.toast(e.message, 'error'); }
         } }, embedded && embedded.plan && embedded.plan.context && embedded.plan.context.thesis
@@ -1293,7 +1293,7 @@
       var action = el('button', { class: 'btn', id: 'whatif-act' }, labels[goal] || labels.DIRECTIONAL);
       action.addEventListener('click', async function () {
         try {
-          var moved = await PlanStore.setStage(plan, 'STRATEGY');
+          var moved = await PlanStore.advance(plan, 'STRATEGY');
           App.navigate(PlanStore.path(moved, 'STRATEGY'));
         } catch (e) { UI.toast(e.message, 'error'); }
       });
@@ -2167,7 +2167,7 @@
           };
           ownedState.analogSelection = selection;
           try {
-            var moved = await PlanStore.setStage(plan, 'STRATEGY');
+            var moved = await PlanStore.advance(plan, 'STRATEGY');
             App.navigate(PlanStore.path(moved, 'STRATEGY'));
           } catch (e) { UI.toast(e.message, 'error'); }
         } }, 'Use these ' + r.conditioned.sample + ' ' + occurrenceWord(r)

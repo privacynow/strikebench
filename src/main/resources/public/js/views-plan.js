@@ -531,13 +531,7 @@
             'aria-label': stage.label + '. ' + (locked ? 'Unlocks after a decision or rehearsal.' : stage.question),
             onclick: async function () {
               if (selected || provisional) return;
-              try {
-                // Other controls on the current stage may have advanced the durable Plan version.
-                // Navigation must use the current server-owned Plan, not the render-time snapshot.
-                var live = await PlanStore.get(plan.id, true);
-                var updated = await PlanStore.setStage(live, stage.key);
-                App.navigate(PlanStore.path(updated, stage.key));
-              } catch (e) { UI.toast(e.message, 'error'); }
+              App.navigate(PlanStore.path(plan, stage.key));
             } },
             el('span', { class: 'plan-stage-number' }, stage.n),
             el('span', { class: 'plan-stage-label' }, stage.label)));
@@ -791,7 +785,7 @@
         this.disabled = true;
         try {
           var live = await PlanStore.get(plan.id, true);
-          var moved = await PlanStore.setStage(live, stage);
+          var moved = await PlanStore.advance(live, stage);
           App.navigate(PlanStore.path(moved, stage));
         } catch (e) { this.disabled = false; UI.toast(e.message, 'error'); }
       } }, label)));
@@ -1628,9 +1622,7 @@
         button.disabled = true;
         try {
           ui.strategyView = 'compare'; ui.strategyFocusCandidate = item.candidateId;
-          var live = await PlanStore.get(planRef.plan.id, true);
-          var moved = await PlanStore.setStage(live, 'STRATEGY');
-          App.navigate(PlanStore.path(moved, 'STRATEGY'));
+          App.navigate(PlanStore.path(planRef.plan, 'STRATEGY'));
         } catch (e) { button.disabled = false; UI.toast(e.message, 'error'); }
       } }, Learn.currentLevel() === 'beginner' ? 'Review this trade' : 'Review in Strategy');
       return button;
@@ -2309,10 +2301,6 @@
     App.state.activePlanId = plan.id;
     PlanStore.renderBar();
     var stage = planStageByPath(rawStage);
-    if (plan.activeStage !== stage.key) {
-      try { plan = await PlanStore.setStage(plan, stage.key); }
-      catch (e) { if (e.status === 409) { UI.toast(e.message, 'error'); stage = planStageByPath(plan.activeStage.toLowerCase().replace('_', '-')); } else throw e; }
-    }
     root.appendChild(planHeader(plan, false));
     root.appendChild(planRail(plan, stage, false));
     root.appendChild(planContextEditor(plan));

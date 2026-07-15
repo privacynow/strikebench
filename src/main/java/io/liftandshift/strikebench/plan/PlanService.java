@@ -79,10 +79,11 @@ public final class PlanService {
             }
             if (origin != null) requireOwnedOn(c, origin, userId, false);
             int inserted = Db.execOn(c, "INSERT INTO plans(id,user_id,origin_plan_id,symbol,intent,market_kind," +
-                            "world_id,account_id,custom_title,status,active_stage,active_context_rev,version,is_open," +
+                            "world_id,account_id,custom_title,status,furthest_stage,active_context_rev,version,is_open," +
                             "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,1,1,?,?) ON CONFLICT DO NOTHING",
                     id, ownerId, origin, symbol, intent, market.name(), resolvedWorld,
-                    accountId, title, Plan.Status.ACTIVE.name(), Plan.Stage.UNDERSTAND.name(), now, now);
+                    accountId, title, Plan.Status.ACTIVE.name(),
+                    intent == null ? Plan.Stage.UNDERSTAND.name() : Plan.Stage.STRATEGY.name(), now, now);
             if (inserted == 0) {
                 List<ExistingRequest> raced = existingRequestOn(c, requestId, userId);
                 if (raced.isEmpty()) throw new IllegalStateException("The plan request conflicted with another record");
@@ -157,8 +158,9 @@ public final class PlanService {
                     Ids.newId("pctx"), planId, nextRev, thesis, horizon, target, risk, shares, basis,
                     assumption, hash, CONTEXT_ENGINE_VERSION, now);
             markDependentsStale(c, planId);
-            Db.execOn(c, "UPDATE plans SET active_context_rev=?, version=version+1, updated_at=? WHERE id=?",
-                    nextRev, now, planId);
+            Db.execOn(c, "UPDATE plans SET active_context_rev=?,furthest_stage=?,version=version+1,updated_at=? WHERE id=?",
+                    nextRev, current.intent() == null ? Plan.Stage.UNDERSTAND.name() : Plan.Stage.STRATEGY.name(),
+                    now, planId);
             return selectViewOn(c, planId, userId, false);
         });
         announce(changed);
@@ -193,7 +195,7 @@ public final class PlanService {
                     old.riskMode(), old.holdingsShares(), old.costBasisCents(), old.priceAssumptionCents(),
                     hash, CONTEXT_ENGINE_VERSION, now);
             markDependentsStale(c, planId);
-            Db.execOn(c, "UPDATE plans SET intent=?, active_stage='STRATEGY', active_context_rev=?, "
+            Db.execOn(c, "UPDATE plans SET intent=?, furthest_stage='STRATEGY', active_context_rev=?, "
                             + "version=version+1, updated_at=? WHERE id=?",
                     intent, nextRev, now, planId);
             return selectViewOn(c, planId, userId, false);
@@ -202,14 +204,13 @@ public final class PlanService {
         return changed;
     }
 
-    public Plan.View setStage(String userId, String planId, Plan.StageRequest raw) {
-        if (raw == null || raw.expectedVersion() == null) throw new IllegalArgumentException("expectedVersion is required");
+    public Plan.View advanceProgress(String userId, String planId, Plan.ProgressRequest raw) {
+        if (raw == null) throw new IllegalArgumentException("progress body is required");
         Plan.Stage stage = parseStage(raw.stage());
         Plan.View changed = db.tx(c -> {
             Plan.View current = selectViewOn(c, planId, userId, true);
-            requireVersion(current, raw.expectedVersion());
             if (current.status() == Plan.Status.ARCHIVED || current.status() == Plan.Status.ABANDONED) {
-                throw new IllegalStateException("Archived Plans are read-only. Review this Plan without changing its saved stage.");
+                throw new IllegalStateException("Archived Plans are read-only. Review this Plan without changing its saved progress.");
             }
             if (stage == Plan.Stage.MANAGE_REVIEW && current.status() != Plan.Status.DECIDED_CASH
                     && current.status() != Plan.Status.POSITION_OPEN && current.status() != Plan.Status.CLOSED
@@ -217,9 +218,11 @@ public final class PlanService {
                             r -> r.intv("ok"), planId).isEmpty()) {
                 throw new IllegalStateException("Manage & Review unlocks after a trade, cash decision, or rehearsal exists");
             }
-            if (stage == current.activeStage()) return current;
+            if (stage.ordinal() <= current.furthestStage().ordinal()) return current;
             OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
-            Db.execOn(c, "UPDATE plans SET active_stage=?, version=version+1, updated_at=? WHERE id=?",
+            // Progress is monotonic presentation metadata. It deliberately does not bump the
+            // optimistic Plan version used to protect assumptions, structures and decisions.
+            Db.execOn(c, "UPDATE plans SET furthest_stage=?, updated_at=? WHERE id=?",
                     stage.name(), now, planId);
             return selectViewOn(c, planId, userId, false);
         });
@@ -313,7 +316,7 @@ public final class PlanService {
 
     private static String viewSelect() {
         return "SELECT p.id,p.origin_plan_id,p.symbol,p.intent,p.market_kind,p.world_id,p.account_id," +
-                "p.custom_title,p.status,p.active_stage,p.version,p.is_open,p.created_at::text p_created," +
+                "p.custom_title,p.status,p.furthest_stage,p.version,p.is_open,p.created_at::text p_created," +
                 "p.updated_at::text p_updated,CASE WHEN p.status='ACTIVE' AND NOT EXISTS " +
                 "(SELECT 1 FROM plan_decision pd WHERE pd.plan_id=p.id) THEN 1 ELSE 0 END assumptions_editable," +
                 "c.id context_id,c.rev context_rev,c.thesis,c.horizon_days," +
@@ -349,7 +352,7 @@ public final class PlanService {
         return new Plan.View(r.str("id"), r.str("origin_plan_id"), r.str("symbol"), r.str("intent"),
                 Plan.MarketKind.valueOf(r.str("market_kind")), r.str("world_id"), r.str("account_id"),
                 custom == null ? derivedTitle(r.str("symbol"), r.str("intent"), context) : custom,
-                Plan.Status.valueOf(r.str("status")), Plan.Stage.valueOf(r.str("active_stage")),
+                Plan.Status.valueOf(r.str("status")), Plan.Stage.valueOf(r.str("furthest_stage")),
                 r.lng("version"), r.bool("is_open"), r.bool("assumptions_editable"), context,
                 r.str("p_created"), r.str("p_updated"));
     }

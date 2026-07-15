@@ -185,7 +185,7 @@ public final class PlanRehearsalService {
                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", Ids.newId("prev"), planId, decisionId,
                 "SIM_REHEARSAL", Math.max(1, horizon), "PLAN_POSITION", start, end, realized, pop,
                 realized == null ? null : realized > 0 ? 1 : 0, now, note, now);
-        Db.execOn(c, "UPDATE plans SET active_stage='MANAGE_REVIEW',version=version+1,updated_at=? WHERE id=?",
+        Db.execOn(c, "UPDATE plans SET furthest_stage='MANAGE_REVIEW',version=version+1,updated_at=? WHERE id=?",
                 now, planId);
     }
 

@@ -197,13 +197,13 @@ class PlanServiceTest {
                 new Plan.IntentRequest(claimed.version(), "HEDGE"));
         assertThat(changedGoal.intent()).isEqualTo("HEDGE");
         assertThat(changedGoal.context().rev()).isEqualTo(3);
-        assertThat(changedGoal.activeStage()).isEqualTo(Plan.Stage.STRATEGY);
+        assertThat(changedGoal.furthestStage()).isEqualTo(Plan.Stage.STRATEGY);
         assertThat(changedGoal.assumptionsEditable()).isTrue();
         assertThatThrownBy(() -> plans.updateContext(null, plan.id(), new Plan.ContextUpdateRequest(
                 plan.version(), "neutral", null, null, null, null, null, null, null)))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("another tab");
-        assertThatThrownBy(() -> plans.setStage(null, plan.id(),
-                new Plan.StageRequest(changedGoal.version(), "MANAGE_REVIEW")))
+        assertThatThrownBy(() -> plans.advanceProgress(null, plan.id(),
+                new Plan.ProgressRequest("MANAGE_REVIEW")))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("unlocks");
     }
 
@@ -249,8 +249,8 @@ class PlanServiceTest {
         assertThatThrownBy(() -> plans.claimIntent(null, plan.id(),
                 new Plan.IntentRequest(archived.version(), "ACQUIRE")))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("read-only");
-        assertThatThrownBy(() -> plans.setStage(null, plan.id(),
-                new Plan.StageRequest(archived.version(), "EVIDENCE")))
+        assertThatThrownBy(() -> plans.advanceProgress(null, plan.id(),
+                new Plan.ProgressRequest("EVIDENCE")))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("read-only");
 
         Plan.View unchanged = plans.get(null, plan.id());

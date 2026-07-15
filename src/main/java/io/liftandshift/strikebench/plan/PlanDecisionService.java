@@ -224,7 +224,7 @@ public final class PlanDecisionService {
             Db.execOn(connection, "INSERT INTO plan_link(id,plan_id,decision_id,role,trade_id,created_at) VALUES(?,?,?,?,?,?)",
                     Ids.newId("plink"), input.plan().id(), id, role, trade.id(), now);
         }
-        Db.execOn(connection, "UPDATE plans SET status=?,active_stage='MANAGE_REVIEW',version=version+1,updated_at=? WHERE id=?",
+        Db.execOn(connection, "UPDATE plans SET status=?,furthest_stage='MANAGE_REVIEW',version=version+1,updated_at=? WHERE id=?",
                 trade == null ? "DECIDED_CASH" : "POSITION_OPEN", now, input.plan().id());
     }
 

@@ -123,7 +123,7 @@ class ArtifactRetentionServiceTest {
     }
 
     private void plan(String id, String status) {
-        db.exec("INSERT INTO plans(id,user_id,symbol,market_kind,status,active_stage,created_at,updated_at) "
+        db.exec("INSERT INTO plans(id,user_id,symbol,market_kind,status,furthest_stage,created_at,updated_at) "
                 + "VALUES(?,'local','AAPL','DEMO',?,'UNDERSTAND',?,?)", id, status, OLD, OLD);
     }
 

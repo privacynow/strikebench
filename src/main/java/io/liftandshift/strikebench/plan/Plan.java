@@ -33,7 +33,7 @@ public final class Plan {
             String accountId,
             String title,
             Status status,
-            Stage activeStage,
+            Stage furthestStage,
             long version,
             boolean open,
             boolean assumptionsEditable,
@@ -73,7 +73,8 @@ public final class Plan {
 
     /** Intent is editable until a decision freezes the Plan's historical meaning. */
     public record IntentRequest(Long expectedVersion, String intent) {}
-    public record StageRequest(Long expectedVersion, String stage) {}
+    /** Monotonic workflow progress. Viewing a stage is URL state and never calls this. */
+    public record ProgressRequest(String stage) {}
     public record OpenRequest(Long expectedVersion, Boolean open) {}
     public record ArchiveRequest(Long expectedVersion) {}
 }
