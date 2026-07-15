@@ -486,7 +486,25 @@
           { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       else if (values('holdingsShares').size > 1) duplicate = context.holdingsShares == null
         ? 'Shares not set' : String(context.holdingsShares) + ' shares';
-      else duplicate = 'Plan ' + (index + 1) + ' of ' + cohort.length;
+      else if (values('costBasisCents').size > 1) duplicate = context.costBasisCents == null
+        ? 'Basis not set' : 'Basis $' + (Number(context.costBasisCents) / 100).toLocaleString(undefined,
+          { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      else if (values('priceAssumptionCents').size > 1) duplicate = context.priceAssumptionCents == null
+        ? 'Price not set' : 'Price $' + (Number(context.priceAssumptionCents) / 100).toLocaleString(undefined,
+          { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      else if (values('riskMode').size > 1) duplicate = context.riskMode
+        ? 'Risk ' + String(context.riskMode).toLowerCase() : 'Risk not set';
+      else {
+        var stages = new Set(cohort.map(function (candidate) { return String(candidate.furthestStage || 'UNDERSTAND'); }));
+        if (stages.size > 1) duplicate = 'At ' + String(plan.furthestStage || 'UNDERSTAND')
+          .replaceAll('_', ' ').toLowerCase();
+        else {
+          var started = new Date(plan.createdAt || '');
+          duplicate = isNaN(started.getTime()) ? 'Earlier saved work' : 'Started ' + started.toLocaleString([], {
+            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit'
+          });
+        }
+      }
     }
     var stamp = plan.updatedAt || plan.createdAt;
     var updated = null;

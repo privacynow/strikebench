@@ -1424,6 +1424,17 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
 test('equivalent Plan retries collapse while materially different Plans survive Home, mobile, and reload', async () => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
+  const legacyLabels = await page.evaluate(() => {
+    const first = { id: 'legacy-one', symbol: 'TSLA', intent: 'DIRECTIONAL',
+      title: 'TSLA · neutral view', marketKind: 'DEMO', worldId: 'demo', furthestStage: 'STRATEGY',
+      context: { thesis: 'neutral', horizonDays: 30, riskMode: 'conservative' },
+      createdAt: '2026-07-14T10:11:12Z' };
+    const second = { ...first, id: 'legacy-two', createdAt: '2026-07-14T10:11:13Z' };
+    return [PlanStore.identity(first, [first, second]).duplicate,
+      PlanStore.identity(second, [first, second]).duplicate];
+  });
+  assert.ok(legacyLabels.every(label => /^Started /.test(label)) && legacyLabels[0] !== legacyLabels[1],
+    'indistinguishable surviving drafts use stable creation times instead of arbitrary ordinals');
   const ids = await page.evaluate(async () => {
     const base = App.baseWorldId();
     if (App.state.world !== base) await App.switchWorld(base);
