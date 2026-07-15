@@ -152,6 +152,7 @@ final class WorldController {
     private void simMarketCreate(Context ctx) {
         SimMarketCreate b = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, SimMarketCreate.class));
         String owner = ownerId.apply(ctx);
+        String sourceWorld = activeWorld.apply(ctx);
         // F1: the ACTIVE-SESSION CAP is checked before ANY resolution work — a user at the cap
         // must hear "no" in milliseconds, not after seconds of provider traffic.
         simSessions.ensureCapacity(owner);
@@ -209,14 +210,20 @@ final class WorldController {
         java.util.Set<String> curated = new java.util.HashSet<>();
         io.liftandshift.strikebench.market.Universes.SECTORS.values()
                 .forEach(sec -> sec.symbols().forEach(x -> curated.add(x.toUpperCase(Locale.ROOT))));
-        boolean cheapData = cfg.fixturesOnly();
+        // A new session starts from the market the user is actually viewing. Demo and an
+        // already-entered simulated world are local, deterministic sources; consulting the
+        // Observed engine while the UI says Demo both delays creation and anchors to the wrong
+        // market. Only an Observed source can require governed background provider work.
+        boolean localData = cfg.fixturesOnly() || !"observed".equals(sourceWorld);
         java.util.Map<String, io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot> snaps
                 = new java.util.HashMap<>();
-        if (cheapData) {
-            // Local fixtures: one instant batch primes everything.
-            List<String> needQuote = all.keySet().stream().filter(sym -> !spots.containsKey(sym)).toList();
-            if (!needQuote.isEmpty()) {
-                for (var snap : marketEngine.quotes(needQuote)) snaps.put(snap.symbol(), snap);
+        if (localData) {
+            // The active generated lane is already resident. Read it directly and never wait on
+            // the unrelated Observed provider chain under a Demo/simulated Create button.
+            for (String sym : all.keySet()) {
+                if (spots.containsKey(sym)) continue;
+                market.quote(sym, sourceWorld).ifPresent(quote ->
+                        snaps.put(sym, snapshotOf(quote)));
             }
         } else {
             // Live: MEMORY ONLY on the request path — zero provider calls under the button.
@@ -242,15 +249,9 @@ final class WorldController {
             }
             var snap = snaps.get(sym);
             var mark = snap == null || snap.last() == null ? null : snap.last();
-            boolean realQuote = snap != null && switch (snap.freshness()) {
-                case REALTIME, DELAYED, EOD, STALE -> true;
-                default -> false;
-            };
             if (mark != null && mark.signum() > 0) {
                 spots.put(sym, mark.doubleValue());
-                String basis = realQuote
-                        ? "anchored to the real market's last " + snap.freshness().name().toLowerCase() + " price"
-                        : "anchored to a built-in DEMO quote — not a live price";
+                String basis = anchorBasis(snap.freshness(), sourceWorld, "");
                 spotBasis.put(sym, basis);
                 a.put("price", mark.doubleValue());
                 a.put("source", snap.source());
@@ -262,7 +263,7 @@ final class WorldController {
                 a.put("prevClose", snap.prevClose() == null ? null : snap.prevClose().toPlainString());
                 a.put("basis", basis);
                 anchors.add(a);
-            } else if (!cheapData && isActive && curated.contains(sym)) {
+            } else if (!localData && isActive && curated.contains(sym)) {
                 // Cold but real: the background resolver will fetch it (governed) and enrich the
                 // world before it starts. It is NOT in the initial world.
                 all.remove(sym);
@@ -300,8 +301,9 @@ final class WorldController {
                     + "sources on the Data screen, set explicit start prices, or allow made-up tickers.");
         }
         // ---- Calibration: inline only when data is LOCAL; live calibration is background work. ----
-        if (cheapData) {
-            calibrateInto(all, active, spots, spotBasis, symVols, symIvs, calibrationBasis, anchors, today);
+        if (localData) {
+            calibrateInto(all, active, spots, spotBasis, symVols, symIvs, calibrationBasis, anchors,
+                    today, sourceWorld);
         }
         java.util.Map<String, Double> spotsInWorld = new java.util.LinkedHashMap<>();
         all.keySet().forEach(sym -> { if (spots.containsKey(sym)) spotsInWorld.put(sym, spots.get(sym)); });
@@ -313,7 +315,7 @@ final class WorldController {
                 b.volAnnual() == null || b.volAnnual() <= 0 ? 0.3 : b.volAnnual(),
                 seed, start, b.speed() == null ? 1 : b.speed(),
                 symVols.isEmpty() ? null : symVols, symIvs.isEmpty() ? null : symIvs);
-        boolean needsResolution = !cheapData && (!pending.isEmpty() || !active.isEmpty());
+        boolean needsResolution = !localData && (!pending.isEmpty() || !active.isEmpty());
         Map<String, Object> anchorDoc = new LinkedHashMap<>();
         anchorDoc.put("anchors", anchors);
         anchorDoc.put("excluded", excluded);
@@ -355,19 +357,46 @@ final class WorldController {
         ctx.status(201).json(resp);
     }
 
+    private io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot snapshotOf(
+            io.liftandshift.strikebench.model.Quote quote) {
+        return new io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot(
+                quote.symbol(), quote.description(), quote.mark(), quote.bid(), quote.ask(),
+                quote.prevClose(), quote.optionable(), quote.markFreshness(), quote.source(),
+                quote.asOfEpochMs(), clock.millis(), false, null);
+    }
+
+    private static String anchorBasis(io.liftandshift.strikebench.model.Freshness freshness,
+                                      String sourceWorld, String suffix) {
+        String base;
+        if (freshness == io.liftandshift.strikebench.model.Freshness.REALTIME
+                || freshness == io.liftandshift.strikebench.model.Freshness.DELAYED
+                || freshness == io.liftandshift.strikebench.model.Freshness.EOD
+                || freshness == io.liftandshift.strikebench.model.Freshness.STALE) {
+            base = "anchored to the real market's last " + freshness.name().toLowerCase() + " price";
+        } else if (freshness == io.liftandshift.strikebench.model.Freshness.SIMULATED
+                || (sourceWorld != null && !"observed".equals(sourceWorld) && !"demo".equals(sourceWorld))) {
+            base = "anchored to the active simulated market's generated price";
+        } else {
+            base = "anchored to a built-in DEMO quote — not a live price";
+        }
+        return base + (suffix == null ? "" : suffix);
+    }
+
     /** Per-symbol HV30 + chain-ATM-IV calibration for the ACTIVE tier (capped, basis disclosed). */
     private void calibrateInto(java.util.Map<String, Double> all, java.util.Map<String, Double> active,
                                java.util.Map<String, Double> spots, java.util.Map<String, String> spotBasis,
                                java.util.Map<String, Double> symVols, java.util.Map<String, Double> symIvs,
                                java.util.Map<String, String> calibrationBasis,
-                               List<Map<String, Object>> anchors, java.time.LocalDate today) {
+                               List<Map<String, Object>> anchors, java.time.LocalDate today,
+                               String sourceWorld) {
         int calBudget = 12;
         for (String sym : active.keySet()) {
             if (!all.containsKey(sym) || !spots.containsKey(sym) || calBudget <= 0) continue;
             calBudget--;
             StringBuilder cal = new StringBuilder();
             try {
-                var series = market.candleSeries(sym, today.minusDays(90), today);
+                var series = market.candleSeries(sym, today.minusDays(90), today, sourceWorld,
+                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
                 if (series != null && series.candles() != null && series.candles().size() >= 20) {
                     double hv = io.liftandshift.strikebench.pricing.HistoricalVol.annualized(series.candles(), 30);
                     if (Double.isFinite(hv) && hv > 0 && hv <= 5.0) {
@@ -379,9 +408,9 @@ final class WorldController {
                 }
             } catch (RuntimeException ignored) { /* no candle source — session knob applies */ }
             try {
-                var exps = market.expirations(sym);
+                var exps = market.expirations(sym, sourceWorld);
                 if (!exps.isEmpty()) {
-                    var chain = market.chain(sym, exps.getFirst()).orElse(null);
+                    var chain = market.chain(sym, exps.getFirst(), sourceWorld).orElse(null);
                     if (chain != null && !chain.isEmpty()) {
                         var spotBd = java.math.BigDecimal.valueOf(spots.get(sym));
                         Double atm = chain.calls().stream()
@@ -426,13 +455,7 @@ final class WorldController {
                     String sym = snap.symbol();
                     all.put(sym, active.getOrDefault(sym, 1.0));
                     spots.put(sym, mark.doubleValue());
-                    boolean realQuote = switch (snap.freshness()) {
-                        case REALTIME, DELAYED, EOD, STALE -> true;
-                        default -> false;
-                    };
-                    String basis = (realQuote ? "anchored to the real market's last "
-                            + snap.freshness().name().toLowerCase() + " price"
-                            : "anchored to a built-in DEMO quote — not a live price") + " (resolved in background)";
+                    String basis = anchorBasis(snap.freshness(), "observed", " (resolved in background)");
                     spotBasis.put(sym, basis);
                     Map<String, Object> a = new LinkedHashMap<>();
                     a.put("symbol", sym);
@@ -460,7 +483,7 @@ final class WorldController {
             java.util.Map<String, Double> symIvs = new java.util.LinkedHashMap<>();
             java.util.Map<String, String> calibrationBasis = new java.util.LinkedHashMap<>();
             calibrateInto(all, active, spots, spotBasis, symVols, symIvs, calibrationBasis, anchors,
-                    java.time.LocalDate.now(clock));
+                    java.time.LocalDate.now(clock), "observed");
             java.util.Map<String, Double> spotsInWorld = new java.util.LinkedHashMap<>();
             all.keySet().forEach(sym -> { if (spots.containsKey(sym)) spotsInWorld.put(sym, spots.get(sym)); });
             var enriched = new io.liftandshift.strikebench.market.sim.SimulatedWorld.Config(worldId,
