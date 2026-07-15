@@ -8,8 +8,8 @@
   <artifactId>strikebench</artifactId>
   <version>1.0.0</version>
   <packaging>jar</packaging>
-  <name>Options Lab</name>
-  <description>Local-first options strategy education, paper trading, backtesting, and optional live trading via E*TRADE.</description>
+  <name>StrikeBench</name>
+  <description>Local-first options strategy education, planning, paper trading, backtesting, and optional live trading.</description>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -175,6 +175,10 @@
         <version>3.2.5</version>
         <configuration>
           <trimStackTrace>false</trimStackTrace>
+          <!-- Test classes own isolated databases. Two process forks reduce migration-bound
+               wall time without enabling unsafe same-JVM class concurrency. -->
+          <forkCount>2</forkCount>
+          <reuseForks>true</reuseForks>
         </configuration>
       </plugin>
       <plugin>

@@ -3,7 +3,13 @@
   "version": "1.0.0",
   "description": "Playwright DOM tests driving StrikeBench end-to-end",
   "scripts": {
-    "test": "node --test dom.test.js"
+    "test": "node --test dom.test.js",
+    "test:fixture": "node --test dom.test.js",
+    "test:seeded": "node --test dom-seeded.test.js",
+    "test:audit": "node --test dom-audit.test.js",
+    "test:auth": "node --test dom-auth.test.js",
+    "test:live": "node --test dom-live.test.js",
+    "test:ci": "npm run test:fixture && npm run test:seeded && npm run test:audit && npm run test:auth"
   },
   "type": "commonjs",
   "devDependencies": {

@@ -1416,6 +1416,9 @@ body.lvl-expert .not-expert { display: none !important; }
 /* Private-instance sign-in screen (only rendered when AUTH_ENABLED and signed out). */
 .signin-card { max-width: 420px; margin: 15vh auto; text-align: center; }
 .signin-card .btn-lg { margin-top: 12px; }
+body.auth-required #nav,
+body.auth-required #bottom-nav,
+body.auth-required .topbar-controls { display: none; }
 
 /* ---- Decision: recommendations-as-a-competition (Phase 3) ---- */
 .decision-pick { border-left: 3px solid var(--accent); }
@@ -2590,12 +2593,15 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .portfolio-mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
   .portfolio-book-context { align-items: stretch; flex-direction: column; gap: 12px; }
   .portfolio-book-picker { min-width: 0; width: 100%; }
-  .portfolio-book-tabs {
+  .portfolio-book-tabs,
+  .portfolio-paper-tabs {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible;
     border: 1px solid var(--border); border-radius: var(--radius); padding: 0;
   }
-  .portfolio-book-tabs button { min-width: 0; width: 100%; white-space: normal; min-height: 44px; border-bottom: 1px solid var(--border); }
-  .portfolio-book-tabs button:last-child { grid-column: 1 / -1; }
+  .portfolio-book-tabs button,
+  .portfolio-paper-tabs button { min-width: 0; width: 100%; white-space: normal; min-height: 44px; border-bottom: 1px solid var(--border); }
+  .portfolio-book-tabs button:last-child,
+  .portfolio-paper-tabs button:last-child { grid-column: 1 / -1; }
   .book-position-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .book-position-facts { grid-template-columns: minmax(0, 1fr); }
   .allocation-row { grid-template-columns: minmax(0, 1fr) 50px; }
