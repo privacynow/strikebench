@@ -32,7 +32,11 @@ public record AccountRiskContext(
             return new AccountRiskContext(null, null, null, null, null);
         }
         try { return Json.read(rows.getFirst(), AccountRiskContext.class); }
-        catch (RuntimeException e) { return new AccountRiskContext(null, null, null, null, null); }
+        catch (RuntimeException e) {
+            // A malformed stored limit must never become an empty context: that can turn a
+            // user-declared cap into the paper account's much larger buying-power allowance.
+            throw new IllegalStateException("Stored account risk limits are invalid; review and save them again before sizing a trade.", e);
+        }
     }
 
     public static void save(Db db, String owner, AccountRiskContext rc) {

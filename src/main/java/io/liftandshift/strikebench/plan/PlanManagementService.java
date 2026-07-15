@@ -49,7 +49,7 @@ public final class PlanManagementService {
             Db.execOn(c, "INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,kind,action_at," +
                             "underlying_cents,position_value_cents,unrealized_cents,pop,note,created_at) " +
                             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", Ids.newId("pmgt"), planId,
-                    latestDecisionId(c, planId), tradeId, "MARK", parseTime(mark.ts()), mark.underlyingCents(),
+                    latestDecisionId(c, planId), tradeId, "MARK", requireMarkTime(mark.ts()), mark.underlyingCents(),
                     mark.closeCostCents(), mark.decisionUnrealizedCents() != null ? mark.decisionUnrealizedCents() : mark.unrealizedCents(),
                     mark.popNow(), "Plan mark refreshed from executable closing sides", now());
             return null;
@@ -207,7 +207,15 @@ public final class PlanManagementService {
                 "CASH_DECISION", horizonDays, benchmark, start, end, realized, predictedPop, won ? 1 : 0, now, note, now);
     }
     private OffsetDateTime now() { return OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC); }
-    private OffsetDateTime parseTime(String raw) { try { return OffsetDateTime.parse(raw); } catch (Exception e) { return now(); } }
+    static OffsetDateTime requireMarkTime(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new IllegalStateException("The market mark has no timestamp; nothing was recorded.");
+        }
+        try { return OffsetDateTime.parse(raw); }
+        catch (RuntimeException e) {
+            throw new IllegalStateException("The market mark timestamp is invalid; nothing was recorded.", e);
+        }
+    }
     private static void put(ObjectNode node, String key, Object value) {
         if (value == null) return;
         if (value instanceof String s) node.put(key, s); else if (value instanceof Integer i) node.put(key, i);
