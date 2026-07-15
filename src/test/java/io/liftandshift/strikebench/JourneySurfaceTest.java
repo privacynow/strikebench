@@ -582,17 +582,19 @@ class JourneySurfaceTest {
                 .contains("customSymbols ? requestedSymbols : universe.active().symbols()")
                 .doesNotContain("scheduleWithFixedDelay(push", "newScheduledThreadPool(2");
         assertThat(broadcaster).contains("Map<Request, Group> groups", "newVirtualThreadPerTaskExecutor()",
-                "if (group.subscribers.isEmpty() || !group.computing.compareAndSet(false, true)) return;");
+                "if (group.subscribers.isEmpty() || !group.computing.compareAndSet(false, true)) return;",
+                "CLIENT_QUEUE_CAPACITY", "while (pending.size() >= CLIENT_QUEUE_CAPACITY) pending.removeFirst()");
         assertThat(app).contains("document.visibilityState === 'visible' && !marketStreamHealthy()",
                         "function marketStreamHealthy()", "closeRealtimeStreams();",
                         "App._eventsES.close()", "subscribeMarketStream();", "subscribeEvents();",
                         "new BroadcastChannel(REALTIME_CHANNEL)", "strikebench.realtime.leader.v1",
                         "relayRealtime('quotes', data)", "relayRealtime('event', data, type)",
                         "if (!App._marketES) subscribeMarketStream();",
-                        "if (!App._eventsES) subscribeEvents();", "App.eventsStreamHealthy")
+                        "if (!App._eventsES) subscribeEvents();", "App.eventsStreamHealthy",
+                        "App.marketStreamHealthy = marketStreamHealthy", "msg.kind === 'health'")
                 .doesNotContain("setInterval(refreshTape, 45 * 1000)");
         assertThat(workspace).contains("if (document.hidden) return;", "function reconcile()",
-                "return adoptRemote(remote, false);", "if (json === lastSavedJson) return;");
+                "return adoptRemote(remote, false);", "if (json === lastRemoteJson) return;");
     }
 
     @Test void canonicalOwnersRetainTheFullDecisionAndLearningToolset() throws Exception {

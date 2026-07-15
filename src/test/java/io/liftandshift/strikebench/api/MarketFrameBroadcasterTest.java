@@ -101,4 +101,51 @@ class MarketFrameBroadcasterTest {
         assertThat(received).hasSize(1);
         assertThat(received.getFirst().draft().world()).isEqualTo("sim-1");
     }
+
+    @Test
+    void slowClientDropsOldFramesWithoutBlockingOtherClientsOrFrameLoads() throws Exception {
+        AtomicInteger loads = new AtomicInteger();
+        CountDownLatch slowEntered = new CountDownLatch(1);
+        CountDownLatch releaseSlow = new CountDownLatch(1);
+        CountDownLatch slowCaughtUp = new CountDownLatch(1);
+        CountDownLatch fastCaughtUp = new CountDownLatch(1);
+        List<Long> slowSequences = new CopyOnWriteArrayList<>();
+        var request = new MarketFrameBroadcaster.Request("owner-a", List.of("AAPL"), false);
+
+        try (var broadcaster = new MarketFrameBroadcaster(3600, ignored -> {
+            int n = loads.incrementAndGet();
+            return frame("sim-1", "tick-" + n);
+        })) {
+            broadcaster.subscribe(request, value -> {
+                slowSequences.add(value.sequence());
+                if (value.sequence() == 1L) {
+                    slowEntered.countDown();
+                    try { releaseSlow.await(2, TimeUnit.SECONDS); }
+                    catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                }
+                if (value.sequence() == 10L) slowCaughtUp.countDown();
+            });
+            assertThat(slowEntered.await(1, TimeUnit.SECONDS)).isTrue();
+            broadcaster.subscribe(request, value -> {
+                if (value.sequence() == 10L) fastCaughtUp.countDown();
+            });
+
+            for (int target = 2; target <= 10; target++) {
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+                while (loads.get() < target && System.nanoTime() < deadline) {
+                    broadcaster.refreshNow();
+                    Thread.sleep(5);
+                }
+                assertThat(loads).hasValue(target);
+            }
+            assertThat(fastCaughtUp.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(loads).hasValue(10);
+
+            releaseSlow.countDown();
+            assertThat(slowCaughtUp.await(1, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            releaseSlow.countDown();
+        }
+        assertThat(slowSequences).containsExactly(1L, 9L, 10L);
+    }
 }

@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.api;
 
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -20,6 +21,8 @@ import java.util.function.Consumer;
  * stall another stream group.
  */
 final class MarketFrameBroadcaster implements AutoCloseable {
+    private static final int CLIENT_QUEUE_CAPACITY = 2;
+
     record Request(String owner, List<String> symbols, boolean customSymbols) {
         Request {
             owner = owner == null ? "" : owner;
@@ -53,16 +56,60 @@ final class MarketFrameBroadcaster implements AutoCloseable {
 
     private static final class Subscriber {
         private final Consumer<Frame> sink;
-        private final AtomicLong delivered = new AtomicLong();
-        private Subscriber(Consumer<Frame> sink) { this.sink = sink; }
+        private final ExecutorService workers;
+        private final AtomicLong accepted = new AtomicLong();
+        private final ArrayDeque<Frame> pending = new ArrayDeque<>(CLIENT_QUEUE_CAPACITY);
+        private boolean draining;
+        private boolean closed;
+
+        private Subscriber(Consumer<Frame> sink, ExecutorService workers) {
+            this.sink = sink;
+            this.workers = workers;
+        }
+
         private void send(Frame frame) {
             long seq = frame.sequence();
             long prior;
             do {
-                prior = delivered.get();
+                prior = accepted.get();
                 if (seq <= prior) return;
-            } while (!delivered.compareAndSet(prior, seq));
-            sink.accept(frame);
+            } while (!accepted.compareAndSet(prior, seq));
+            synchronized (this) {
+                if (closed) return;
+                while (pending.size() >= CLIENT_QUEUE_CAPACITY) pending.removeFirst();
+                pending.addLast(frame);
+                if (draining) return;
+                draining = true;
+            }
+            try {
+                workers.submit(this::drain);
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                close();
+            }
+        }
+
+        private void drain() {
+            while (true) {
+                Frame frame;
+                synchronized (this) {
+                    if (closed || pending.isEmpty()) {
+                        draining = false;
+                        return;
+                    }
+                    frame = pending.removeFirst();
+                }
+                try {
+                    sink.accept(frame);
+                } catch (RuntimeException e) {
+                    close();
+                    return;
+                }
+            }
+        }
+
+        private synchronized void close() {
+            closed = true;
+            pending.clear();
         }
     }
 
@@ -91,13 +138,14 @@ final class MarketFrameBroadcaster implements AutoCloseable {
 
     Runnable subscribe(Request request, Consumer<Frame> sink) {
         Group group = groups.computeIfAbsent(request, Group::new);
-        Subscriber subscriber = new Subscriber(sink);
+        Subscriber subscriber = new Subscriber(sink, workers);
         group.subscribers.add(subscriber);
         Frame cached = group.lastFrame;
         if (cached != null) deliver(subscriber, cached);
         else refresh(group);
         return () -> {
             group.subscribers.remove(subscriber);
+            subscriber.close();
             if (group.subscribers.isEmpty()) groups.remove(request, group);
         };
     }
@@ -155,7 +203,10 @@ final class MarketFrameBroadcaster implements AutoCloseable {
     }
 
     @Override public void close() {
-        groups.values().forEach(group -> group.subscribers.clear());
+        groups.values().forEach(group -> {
+            group.subscribers.forEach(Subscriber::close);
+            group.subscribers.clear();
+        });
         groups.clear();
         scheduler.shutdownNow();
         workers.shutdownNow();
