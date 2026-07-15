@@ -429,10 +429,20 @@
 
   async function home(root, params) {
     if (params && params[0] === 'tour') return welcome(root);
+    var accountPromise = API.get('/api/account').then(function (response) { return response.account; })
+      .catch(function () { return null; });
     // Reconcile durable Plan truth before deriving the hero/Continue state. A browser tab
     // can survive a server restart; its in-memory collection must not outlive server state.
     try { if (window.PlanStore) await PlanStore.load(true); }
     catch (e) { /* the independent Plan-library card reports the unavailable service below */ }
+    var acct = await accountPromise;
+    // Decide first contact before any dashboard node is mounted. The previous implementation
+    // painted Home and then replaced it with Welcome after /api/account answered, producing a
+    // visible dashboard flash and briefly exposing controls the user had not chosen yet.
+    if (!welcomed()) {
+      if (!acct || !acct.hasTraded) return welcome(root);
+      try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e2) { /* ignore */ }
+    }
     // Paint the frame FIRST, fill every card as its data arrives: the screen must never
     // be a blank void while accounts and quotes load. Each section fills independently
     // and fails visibly (empty state), never silently.
@@ -473,16 +483,6 @@
       ctas: [heroCta]
     }));
 
-    // First contact: a fresh account that hasn't dismissed the welcome gets the opening
-    // page instead — decided by the same account fetch that fills the stat row.
-    var acct = null;
-    try {
-      acct = (await API.get('/api/account')).account;
-    } catch (e) { /* dashboard still renders; stats show an honest note below */ }
-    if (!welcomed()) {
-      if (acct && !acct.hasTraded) { root.innerHTML = ''; return welcome(root); }
-      try { window.localStorage.setItem('strikebench.welcomed', '1'); } catch (e) { /* ignore */ }
-    }
     if (acct) {
       statsAnchor.appendChild(stat('Cash', fmtMoney(acct.cashCents), 'Practice money available. Nothing here is real dollars.'));
       statsAnchor.appendChild(stat('Reserved', fmtMoney(acct.reservedCents), 'Held to cover the worst case of your open trades.'));
@@ -492,12 +492,13 @@
       statsAnchor.appendChild(alertBox('warn', 'Account unavailable right now', ['Retry from the Account screen.']));
     }
 
-    // Home is a compact lens on the canonical Plans library. The shared renderer owns
-    // grouping, market transitions, archive/delete actions, and decision marks.
+    // Home is a compact lens on the canonical Plans library. The hero already owns the
+    // active Plan, so this lens shows only alternatives; management stays at #/plans.
     var planLibrary = el('section', { class: 'card home-plan-library', id: 'home-plan-library' });
     root.appendChild(planLibrary);
     var planLibraryFill = window.ViewPlan.renderLibrary(planLibrary, {
-      title: 'Plans', removeWhenEmpty: true
+      title: activePlan ? 'Other Plans' : 'Plans', removeWhenEmpty: true,
+      compact: true, excludePlanId: activePlan && activePlan.id
     });
 
     var colL = el('section', { class: 'home-col home-market-slot', 'aria-label': 'Market watch' });
@@ -611,15 +612,12 @@
       });
     })();
 
-    // Open positions (review #8): a 256px empty card was wasted real estate — with no trades
-    // the whole card stays OFF the page (Next up carries the one-line state + action instead);
-    // with trades, three USEFUL rows: live P/L, max loss, opened.
-    var hasOpenTrades = false;
+    // Open positions: with no trades the whole card stays off the page; the hero already owns
+    // the next action. With trades, three useful rows show live P/L, max loss, and opened date.
     var tradesFill = (async function fillTrades() {
       try {
         var open = await API.get('/api/trades?status=ACTIVE&size=3');
         if (!open.trades.length) { posAnchor.remove(); return; }
-        hasOpenTrades = true;
         var posCard = el('div', { class: 'card home-wide', id: 'open-trades-card' }, UI.cardHeader('Open practice trades',
           el('a', { href: '#/portfolio' }, 'All trades \u2192')));
         posCard.appendChild(table(['Symbol', 'Strategy', 'Now', 'Theor. max loss', 'Opened'],
@@ -639,38 +637,24 @@
       }
     })();
 
-    // NEXT UP (review #9): ONE contextual card replaces the journey card + continuity row +
-    // empty-trades CTA — the single most useful next action first, everything else quiet.
-    (function nextUp() {
-      // With no Plan there is nothing to continue. The hero already owns the one start
-      // command; rendering five stage buttons that all opened Research was duplicate
-      // navigation disguised as progress.
+    // The hero owns the only Continue command. This supporting card communicates progress
+    // without repeating Resume or turning every stage label into another navigation path.
+    (function planProgress() {
       if (!activePlan) return;
-      var card = el('div', { class: 'card card-slim', id: 'next-up' }, UI.cardHeader('Continue'));
-      var any = false;
-      // The beginner first-week path, folded in (retires itself after the first trade).
-      if (Learn.currentLevel() === 'beginner' && acct && !acct.hasTraded) {
-        var activeIndex = activePlan ? window.ViewPlan.stages.findIndex(function (stage) { return stage.key === activePlan.furthestStage; }) : -1;
-        var steps = window.ViewPlan.stages.slice(0, 5).map(function (stage, index) {
-          return { label: stage.label, done: activeIndex > index, stage: stage.key };
-        });
-        card.appendChild(el('div', { class: 'journey', id: 'journey-card' }, steps.map(function (st2, i) {
-          return el('button', { class: 'journey-step' + (st2.done ? ' done' : ''), type: 'button',
-            onclick: function () { if (activePlan) focusPlanFrom(this, activePlan, st2.stage); else App.navigate('#/research'); } },
-            el('span', { class: 'ck-mark' }, st2.done ? '' : String(i + 1)),
-            el('span', {}, st2.label));
-        })));
-        any = true;
-      }
-      var chips = [];
-      if (activePlan) {
-        chips.push(el('button', { class: 'sym-chip', 'data-continue': 'plan',
-          onclick: function () { focusPlanFrom(this, activePlan); } }, 'Resume: ' + activePlan.title + ' →'));
-      }
-      if (chips.length) {
-        card.appendChild(el('div', { class: 'chip-row', id: 'continue-row' }, chips));
-        any = true;
-      }
+      var activeIndex = window.ViewPlan.stages.findIndex(function (stage) {
+        return stage.key === activePlan.furthestStage;
+      });
+      var identity = PlanStore.identity(activePlan, PlanStore.all());
+      var card = el('div', { class: 'card card-slim', id: 'next-up' },
+        UI.cardHeader('Plan progress'),
+        el('p', { class: 'muted small plan-progress-context' }, activePlan.symbol + ' · ' + identity.full),
+        el('div', { class: 'plan-progress', id: 'journey-card', 'aria-label': 'Plan progress' },
+          window.ViewPlan.stages.map(function (stage, index) {
+            var state = index < activeIndex ? ' done' : index === activeIndex ? ' current' : '';
+            return el('div', { class: 'plan-progress-step' + state },
+              el('span', { class: 'ck-mark', 'aria-hidden': 'true' }, index < activeIndex ? '' : String(index + 1)),
+              el('span', {}, stage.label));
+          })));
       colR.appendChild(card);
     })();
 

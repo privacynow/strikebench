@@ -2336,15 +2336,16 @@
   async function renderPlanLibrary(host, options) {
     options = options || {};
     var full = options.full === true;
+    var compact = options.compact === true;
     host.innerHTML = '';
     var countLabel = el('span', { class: 'muted small plan-library-count' }, 'Loading…');
     host.appendChild(UI.cardHeader(options.title || 'Plans',
       el('div', { class: 'btn-row plan-library-commands' },
         countLabel,
         !full ? el('a', { class: 'btn btn-sm btn-secondary', href: '#/plans' }, 'View all') : null,
-        el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
+        !compact ? el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
           App.navigate('#/research');
-        } }, '+ New Plan'))));
+        } }, '+ New Plan') : null)));
     var loading = UI.spinner('Loading your Plans…');
     host.appendChild(loading);
 
@@ -2362,7 +2363,17 @@
     var archived = plans.filter(function (p) { return p.status === 'ARCHIVED'; });
     var current = working.filter(function (p) { return PlanStore.marketKey(p) === currentKey; });
     var elsewhere = working.filter(function (p) { return PlanStore.marketKey(p) !== currentKey; });
-    if (!working.length && !archived.length && !closedTabs.length) {
+    var compactWorking = compact ? working.filter(function (plan) {
+      return !options.excludePlanId || plan.id !== options.excludePlanId;
+    }) : working;
+    var compactOrdered = compact ? compactWorking.slice().sort(function (a, b) {
+      var aHere = PlanStore.marketKey(a) === currentKey ? 1 : 0;
+      var bHere = PlanStore.marketKey(b) === currentKey ? 1 : 0;
+      if (aHere !== bHere) return bHere - aHere;
+      return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+    }) : [];
+    var compactShown = compactOrdered.slice(0, 3);
+    if ((compact && !compactWorking.length) || (!compact && !working.length && !archived.length && !closedTabs.length)) {
       if (options.removeWhenEmpty) { host.remove(); return; }
       host.appendChild(UI.emptyState('No working Plans yet',
         'Choose a stock in Research, then carry one Plan through evidence, strategy, outcomes, and a decision.',
@@ -2374,11 +2385,14 @@
     var portfolioByPlan = {};
     var sessionById = {};
     try {
-      var symbols = Array.from(new Set(current.map(function (p) { return p.symbol; })));
+      var marketRows = compact ? compactShown : current;
+      var symbols = Array.from(new Set(marketRows.filter(function (p) {
+        return PlanStore.marketKey(p) === currentKey;
+      }).map(function (p) { return p.symbol; })));
       var fills = await Promise.all([
         symbols.length ? API.get('/api/quotes?symbols=' + symbols.join(',')) : Promise.resolve({ quotes: [] }),
-        API.get('/api/plans/portfolio'),
-        plans.some(function (p) { return p.marketKind === 'SIMULATED'; })
+        compact ? Promise.resolve({ plans: [] }) : API.get('/api/plans/portfolio'),
+        marketRows.some(function (p) { return p.marketKind === 'SIMULATED'; })
           ? API.get('/api/sim/market') : Promise.resolve({ sessions: [] })
       ]);
       (fills[0].quotes || []).forEach(function (q) { quoteBySymbol[q.symbol] = q; });
@@ -2441,6 +2455,43 @@
           full && decision.pop != null ? chip('POP at decision', fmtPct(decision.pop)) : null,
           planIdentity.updated ? el('span', { class: 'muted small plan-updated-at' }, planIdentity.updated) : null,
           live), actions);
+    }
+
+    if (compact) {
+      countLabel.textContent = compactOrdered.length + (options.excludePlanId ? ' other ' : ' working ')
+        + (compactOrdered.length === 1 ? 'Plan' : 'Plans');
+      host.appendChild(el('div', { class: 'home-plan-compact-list' }, compactShown.map(function (plan) {
+        var sameMarket = PlanStore.marketKey(plan) === currentKey;
+        var terminalSession = plan.marketKind === 'SIMULATED' && sessionById[plan.worldId]
+          && sessionById[plan.worldId].status === 'FINISHED';
+        var quote = sameMarket ? quoteBySymbol[plan.symbol] : null;
+        var identity = PlanStore.identity(plan, working);
+        var meta = [String(plan.furthestStage || 'UNDERSTAND').replaceAll('_', ' ').toLowerCase()];
+        if (plan.context && plan.context.horizonDays) meta.push(plan.context.horizonDays + ' sessions');
+        return el('article', { class: 'home-plan-compact-row', 'data-plan-id': plan.id },
+          el('div', { class: 'home-plan-compact-main' },
+            el('div', { class: 'home-plan-compact-title' },
+              el('b', {}, plan.symbol), el('span', {}, identity.title)),
+            el('div', { class: 'muted small home-plan-compact-meta' }, meta.join(' · '))),
+          el('div', { class: 'home-plan-compact-state' },
+            identity.duplicate ? el('span', { class: 'badge badge-info' }, identity.duplicate) : null,
+            el('span', { class: 'badge ' + (sameMarket ? 'badge-info' : 'badge-dim') }, planMarketLabel(plan)),
+            quote ? el('span', { class: 'home-plan-live' }, fmtNum(quote.last), ' ', UI.delta(quote.last, quote.prevClose)) : null),
+          el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+            if (terminalSession) {
+              App.state.focusSimControlRoom = plan.worldId;
+              App.navigate('#/data/simulation');
+              return;
+            }
+            focusPlanFrom(this, plan, plan.furthestStage);
+          } }, terminalSession ? 'Review session' : sameMarket ? 'Open' : 'Switch & open'));
+      })));
+      if (compactOrdered.length > compactShown.length) {
+        host.appendChild(el('p', { class: 'muted small home-plan-compact-note' },
+          (compactOrdered.length - compactShown.length) + ' more in ',
+          el('a', { href: '#/plans' }, 'the Plan library'), '.'));
+      }
+      return;
     }
 
     function group(title, rows, note) {
