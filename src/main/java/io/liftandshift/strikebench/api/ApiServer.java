@@ -638,12 +638,17 @@ public final class ApiServer {
 
 
     private io.liftandshift.strikebench.db.AnalysisContext analysisCtx(Context ctx) {
-        String owner = ownerId(ctx);
-        String ds = io.liftandshift.strikebench.db.DatasetService.OBSERVED;
-        if (datasets != null) {
-            try { ds = datasets.activeId(owner); } catch (RuntimeException ignored) { /* observed */ }
-        }
-        return new io.liftandshift.strikebench.db.AnalysisContext(owner, ds);
+        return resolveAnalysisContext(datasets, ownerId(ctx));
+    }
+
+    static io.liftandshift.strikebench.db.AnalysisContext resolveAnalysisContext(
+            io.liftandshift.strikebench.db.DatasetService datasets, String owner) {
+        // A dataset-resolution failure is not evidence that the caller selected Observed.
+        // Falling through here would splice real-market analysis into a scenario workspace.
+        String datasetId = datasets == null
+                ? io.liftandshift.strikebench.db.DatasetService.OBSERVED
+                : datasets.activeId(owner);
+        return new io.liftandshift.strikebench.db.AnalysisContext(owner, datasetId);
     }
 
     private String ownerId(Context ctx) {

@@ -46,4 +46,15 @@ class PlanManagementServiceTest {
                 .containsExactly(0L);
         assertThat(plans.get(null, plan.id()).version()).isEqualTo(archived.version());
     }
+
+    @Test void malformedMarketMarkTimeIsNeverRewrittenAsNow() {
+        assertThatThrownBy(() -> PlanManagementService.requireMarkTime("not-a-time"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("timestamp is invalid");
+        assertThatThrownBy(() -> PlanManagementService.requireMarkTime(" "))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no timestamp");
+        assertThat(PlanManagementService.requireMarkTime("2026-07-12T16:00:00Z"))
+                .isEqualTo(java.time.OffsetDateTime.parse("2026-07-12T16:00:00Z"));
+    }
 }

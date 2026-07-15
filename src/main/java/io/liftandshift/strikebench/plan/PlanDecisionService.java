@@ -234,8 +234,8 @@ public final class PlanDecisionService {
             Db.execOn(connection, "INSERT INTO plan_decision_leg(decision_id,leg_index,action,instrument_type," +
                             "strike_price,expiration,ratio,bid_price,ask_price,mid_price,fill_price,iv) " +
                             "VALUES(?,?,?,?,?,CAST(? AS DATE),?,?,?,?,?,?)", decisionId, index++, text(row.get("action")),
-                    text(row.get("type")), price(row.get("strike")), text(row.get("expiration")), integer(row.get("ratio"), 1),
-                    price(row.get("bid")), price(row.get("ask")), price(row.get("mid")), price(row.get("fill")), decimal(row.get("iv")));
+                    text(row.get("type")), decisionPrice(row.get("strike")), text(row.get("expiration")), decisionInteger(row.get("ratio"), 1),
+                    decisionPrice(row.get("bid")), decisionPrice(row.get("ask")), decisionPrice(row.get("mid")), decisionPrice(row.get("fill")), decisionDecimal(row.get("iv")));
         }
     }
 
@@ -321,13 +321,33 @@ public final class PlanDecisionService {
         return nested instanceof Map<?, ?> map && map.get(child) instanceof Number number ? number : null;
     }
 
-    private static BigDecimal price(Object value) {
+    static BigDecimal decisionPrice(Object value) {
         if (value == null || String.valueOf(value).isBlank() || "null".equals(String.valueOf(value))) return null;
         try { return new BigDecimal(String.valueOf(value)); }
-        catch (RuntimeException ignored) { return null; }
+        catch (RuntimeException e) {
+            throw new IllegalStateException("A frozen decision leg contains an invalid price; no receipt was written.", e);
+        }
     }
-    private static Double decimal(Object value) { try { return value == null ? null : Double.valueOf(String.valueOf(value)); } catch (RuntimeException e) { return null; } }
-    private static int integer(Object value, int fallback) { return value instanceof Number n ? n.intValue() : fallback; }
+    static Double decisionDecimal(Object value) {
+        if (value == null || String.valueOf(value).isBlank() || "null".equals(String.valueOf(value))) return null;
+        try {
+            double parsed = Double.parseDouble(String.valueOf(value));
+            if (!Double.isFinite(parsed)) throw new NumberFormatException("non-finite");
+            return parsed;
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("A frozen decision leg contains an invalid decimal; no receipt was written.", e);
+        }
+    }
+    static int decisionInteger(Object value, int fallback) {
+        if (value == null || String.valueOf(value).isBlank()) return fallback;
+        try {
+            int parsed = value instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(value));
+            if (parsed < 1) throw new NumberFormatException("non-positive");
+            return parsed;
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("A frozen decision leg contains an invalid ratio; no receipt was written.", e);
+        }
+    }
     private static String text(Object value) { return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value); }
     private static Integer intOrNull(Db.Row row, String key) { Long value = row.lngOrNull(key); return value == null ? null : value.intValue(); }
     private static void put(ObjectNode node, String key, Object value) {
