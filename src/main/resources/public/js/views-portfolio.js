@@ -256,7 +256,7 @@
       el('button', { type: 'button', role: 'tab', id: 'portfolio-mode-paper', 'aria-controls': 'portfolio-mode-panel',
         class: tracked ? '' : 'active', 'aria-selected': tracked ? 'false' : 'true',
         tabindex: tracked ? '-1' : '0',
-        onclick: function () { App.navigate('#/portfolio/positions'); } }, 'Paper account'),
+        onclick: function () { App.navigate('#/portfolio/positions'); } }, UI.vocabularyText('practice') + ' account'),
       el('button', { type: 'button', role: 'tab', id: 'portfolio-mode-tracked', 'aria-controls': 'portfolio-mode-panel',
         class: tracked ? 'active' : '', 'aria-selected': tracked ? 'true' : 'false',
         tabindex: tracked ? '0' : '-1',
@@ -369,7 +369,7 @@
       disabled: 'disabled' });
     var body = el('div', { class: 'book-roll-form' },
       el('p', {}, el('b', {}, portfolioPositionLabel(position)), ' · ', longSide ? 'long' : 'short', ' · ', position.quantity, ' open'),
-      el('p', { class: 'muted small' }, 'This records one linked transaction: the old contract closes and realizes its gain or loss; the replacement opens with its own exact basis. Net premium carryover is reported separately and never substituted into tax basis.'),
+      el('p', { class: 'muted small' }, 'This records one linked transaction: the old contract closes and realizes its gain or loss; the replacement opens with its own exact basis. Net premium carryover is reported separately and never substituted into tracked tax basis.'),
       el('div', { class: 'form-grid book-roll-grid' },
         UI.field('Contracts to roll', quantity), UI.field('Activity date and time', occurred),
         UI.field('Exact closing price $', closePrice), UI.field('Replacement strike $', nextStrike),
@@ -1102,7 +1102,7 @@
       App.state.portfolioTaxYear = parsed; App.render();
     });
     root.appendChild(el('div', { class: 'book-tax-heading' },
-      el('div', {}, el('h2', {}, 'Tax basis and reconciliation'),
+      el('div', {}, el('h2', {}, UI.vocabulary('trackedTaxBasis'), ' and reconciliation'),
         el('p', { class: 'muted' }, account.accountType === 'TAXABLE'
           ? 'Not tax advice. Recorded facts and a bounded user-rate scenario for reconciliation, not a tax filing, tax owed, or broker 1099.'
           : 'Not tax advice. Basis and performance remain tracked; current capital-gains tax is not assigned inside this retirement wrapper.')),
@@ -1338,16 +1338,16 @@
           fmtMoney(sum.totalPnlCents, { plus: true }) + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)'),
         'Everything measured against the ' + fmtMoney(sum.startingCashCents) + ' you started with.'));
       statsRow.appendChild(stat('Cash', fmtMoney(sum.cashCents),
-        fmtMoney(sum.reservedCents) + ' of it is reserved to cover open-trade worst cases.'));
+        fmtMoney(sum.reservedCents) + ' is held as broker reserve for open obligations.'));
       statsRow.appendChild(stat('Buying power', fmtMoney(sum.buyingPowerCents),
-        'Cash minus reserves — what you can still put at risk.'));
+        'Cash minus broker reserve — what you can still put at risk.'));
     } catch (e) {
       statsRow.appendChild(stat('Cash', fmtMoney(acct.cashCents)));
-      statsRow.appendChild(stat('Reserved', fmtMoney(acct.reservedCents)));
+      statsRow.appendChild(stat(UI.vocabulary('brokerReserve'), fmtMoney(acct.reservedCents)));
       statsRow.appendChild(stat('Buying power', fmtMoney(acct.buyingPowerCents)));
       statsRow.appendChild(stat('Started with', fmtMoney(acct.startingCashCents)));
     }
-    var paperTabs = el('div', { class: 'tabs portfolio-paper-tabs', role: 'tablist', 'aria-label': 'Paper account sections' },
+    var paperTabs = el('div', { class: 'tabs portfolio-paper-tabs', role: 'tablist', 'aria-label': 'Practice account sections' },
       el('button', { type: 'button', role: 'tab', 'aria-controls': 'portfolio-paper-panel', 'aria-selected': section === 'construct' ? 'true' : 'false', tabindex: section === 'construct' ? '0' : '-1', class: section === 'construct' ? 'active' : '', id: 'pf-sec-construct',
         onclick: function () { App.navigate('#/portfolio/construct'); } }, 'Construct'),
       el('button', { type: 'button', role: 'tab', 'aria-controls': 'portfolio-paper-panel', 'aria-selected': section === 'positions' ? 'true' : 'false', tabindex: section === 'positions' ? '0' : '-1', class: section === 'positions' ? 'active' : '', id: 'pf-sec-positions',
@@ -1424,8 +1424,8 @@
     if (section === 'activity') {
       root.appendChild(el('div', { class: 'card' },
         UI.cardHeader('Ledger'),
-        explain('Every cash or reserve movement, newest first. The ledger is append-only: nothing is ever erased.'),
-        table(['Date', 'Type', 'Amount', 'Cash after', 'Reserved after', 'Memo'],
+        explain('Every cash or broker-reserve movement, newest first. The ledger is append-only: nothing is ever erased.'),
+        table(['Date', 'Type', 'Amount', 'Cash after', 'Broker reserve after', 'Memo'],
           (acctData.ledger || []).map(function (r) {
             return el('tr', {},
               el('td', { class: 'muted' }, UI.fmtDate(r.ts)),
@@ -1497,7 +1497,7 @@
           el('button', {
             class: 'btn btn-danger', id: 'reset-btn', onclick: function () {
               var cents = Math.round(parseFloat(cashInput.value || '0') * 100);
-              UI.confirmModal('Reset paper account?',
+              UI.confirmModal('Reset practice account?',
                 el('div', {},
                   el('p', {}, 'Cash will be set to ' + fmtMoney(cents) + '. ' + (acct.hasTraded ? 'Your open practice trades will be voided.' : '')),
                   explain('This cannot be undone, but it never touches real money.')),
@@ -1545,7 +1545,7 @@
               chip('Short-vol trades', String(heat.shortVolTrades)),
               chip('Top-symbol share', heat.concentrationPct + '%',
                 'How much of the total worst case sits in ONE symbol.'),
-              heat.earlyAssignmentLiquidityCents > 0 ? chip('Early-assignment cash demand',
+              heat.earlyAssignmentLiquidityCents > 0 ? chip(UI.vocabulary('assignmentCapital'),
                 fmtMoney(heat.earlyAssignmentLiquidityCents),
                 'Temporary gross cash needed if every short put assigns before protective puts are exercised or sold. This is not max loss.') : null,
               heat.physicalAssignmentCashCents > 0 ? chip('Cash-secured shares delivered',
@@ -1668,9 +1668,11 @@
     // The learning loop's import path: record a trade you ACTUALLY placed at your broker.
     // Structured legs against live contracts — no free-form text, no paper-cash mutation.
     var extCard = el('div', { class: 'card', id: 'record-real-card' });
-    extCard.appendChild(UI.expandable('Record a real trade (from your broker)', (function () {
+    extCard.appendChild(UI.expandable('Record a trade from your broker', (function () {
       var box = el('div', {});
-      box.appendChild(explain('Enter the exact contracts and your ACTUAL net fill. The trade is tracked, marked and judged like any other — but your practice cash is never touched, and its outcome feeds Your record.'));
+      box.appendChild(el('div', { class: 'chip-row position-provenance-row' },
+        chip(UI.vocabulary('recordedAtBroker'), 'actual fills required')));
+      box.appendChild(explain('Enter the exact contracts and actual net fill from your broker. The tracked account records the facts; the isolated practice account is never changed.'));
       function externalField(label, input, hint) {
         return UI.field(label, input, { hint: hint });
       }
@@ -1683,26 +1685,77 @@
         externalField('Actual package net $', net, 'Total dollars: + credit / \u2212 debit'),
         externalField('Total fees $', fees, 'All opening commissions and fees')));
       var legsBox = el('div', { id: 'ext-legs' });
+      var payoffHost = el('div', { class: 'external-payoff-host' });
+      function renderExternalPayoff() {
+        payoffHost.innerHTML = '';
+        var rows = Array.prototype.slice.call(legsBox.querySelectorAll('.ext-leg'));
+        var strikes = rows.map(function (row) { return Number(row.querySelector('.x-strike').value); })
+          .filter(function (value) { return Number.isFinite(value) && value > 0; });
+        var netValue = Number(net.value), contracts = Number(qty.value);
+        var feeValue = fees.value === '' ? 0 : Number(fees.value);
+        if (!strikes.length || net.value === '' || !Number.isFinite(netValue)
+            || !Number.isFinite(feeValue) || feeValue < 0
+            || !Number.isFinite(contracts) || contracts < 1) {
+          payoffHost.appendChild(UI.emptyState('Payoff preview waiting',
+            'Enter quantity, package net, and at least one strike. This remains hypothetical until you record factual broker fills.'));
+          return;
+        }
+        var lo = Math.max(0.01, Math.min.apply(null, strikes) * 0.65);
+        var hi = Math.max.apply(null, strikes) * 1.35;
+        var prices = [];
+        for (var i = 0; i <= 64; i++) prices.push(lo + (hi - lo) * i / 64);
+        strikes.forEach(function (strike) { prices.push(strike); });
+        prices = Array.from(new Set(prices.map(function (price) { return Number(price.toFixed(6)); })))
+          .sort(function (a, b) { return a - b; });
+        var points = prices.map(function (price) {
+          var pnl = Math.round((netValue - feeValue) * 100);
+          rows.forEach(function (row) {
+            var strike = Number(row.querySelector('.x-strike').value);
+            if (!Number.isFinite(strike)) return;
+            var type = row.querySelector('.x-type').value;
+            var intrinsic = type === 'CALL' ? Math.max(0, price - strike) : Math.max(0, strike - price);
+            var sign = row.querySelector('.x-act').value === 'BUY' ? 1 : -1;
+            pnl += Math.round(sign * intrinsic * 100 * contracts);
+          });
+          return { price: price, profitCents: pnl };
+        });
+        payoffHost.dataset.entryCashAfterFeesCents = String(Math.round((netValue - feeValue) * 100));
+        payoffHost.appendChild(el('div', { class: 'position-payoff-heading' },
+          el('span', { class: 'eyebrow' }, UI.vocabularyText('hypothetical').toUpperCase()),
+          el('h4', {}, 'Payoff at expiration')));
+        payoffHost.appendChild(el('div', { class: 'chip-row' },
+          chip('Entry cash after fees', fmtMoney(Math.round((netValue - feeValue) * 100), { plus: true }))));
+        payoffHost.appendChild(UI.payoffChart(points, { breakevens: [] }));
+        payoffHost.appendChild(el('p', { class: 'muted small' },
+          'Preview uses the package net, fees, and legs on screen. Recording still requires the factual broker fields below.'));
+      }
+      function queuePayoff() { window.requestAnimationFrame(renderExternalPayoff); }
       function legRow() {
         var action = el('select', { class: 'x-act' }, el('option', {}, 'SELL'), el('option', {}, 'BUY'));
         var type = el('select', { class: 'x-type' }, el('option', {}, 'PUT'), el('option', {}, 'CALL'));
         var strike = el('input', { class: 'x-strike', type: 'number', step: '0.5', placeholder: '250' });
         var expiration = el('input', { class: 'x-exp', type: 'date' });
         var fill = el('input', { class: 'x-fill', type: 'number', step: '0.01', placeholder: '3.10' });
+        [action, type, strike].forEach(function (input) { input.addEventListener('input', queuePayoff); });
         return el('div', { class: 'ext-leg' },
           externalField('Action', action), externalField('Type', type), externalField('Strike', strike),
           externalField('Expiration', expiration), externalField('Your fill $/share', fill,
             'Required when the contract has expired'),
           el('button', { type: 'button', class: 'btn btn-sm btn-secondary ext-leg-remove',
-            'aria-label': 'Remove this leg', onclick: function (ev) { ev.target.closest('.ext-leg').remove(); } }, '\u00d7'));
+            'aria-label': 'Remove this leg', onclick: function (ev) {
+              ev.target.closest('.ext-leg').remove(); queuePayoff();
+            } }, '\u00d7'));
       }
       legsBox.appendChild(legRow());
-      box.appendChild(el('div', { class: 'plan-section-head external-legs-head' },
+      var legEditor = el('div', {}, el('div', { class: 'plan-section-head external-legs-head' },
         el('div', {}, el('h4', {}, 'Exact option legs'),
           el('p', { class: 'muted small' }, 'Leg fills are per share; package net above is total dollars.')),
         el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
-          onclick: function () { legsBox.appendChild(legRow()); } }, '+ Leg')));
-      box.appendChild(legsBox);
+          onclick: function () { legsBox.appendChild(legRow()); queuePayoff(); } }, '+ Leg')),
+        legsBox);
+      box.appendChild(UI.positionWorkbench(legEditor, payoffHost));
+      [qty, net, fees].forEach(function (input) { input.addEventListener('input', queuePayoff); });
+      renderExternalPayoff();
       var execDate = el('input', { type: 'date', id: 'ext-date' });
       var brokerIn = el('input', { type: 'text', id: 'ext-broker', placeholder: 'E*TRADE' });
       var refIn = el('input', { type: 'text', id: 'ext-ref', placeholder: 'Order number' });
@@ -1734,7 +1787,7 @@
             feesOverrideCents: feeValue === null ? null : Math.round(feeValue * 100),
             executedAt: execDate.value || null, broker: brokerIn.value || null, orderRef: refIn.value || null,
             historical: pastChk.checked, source: 'IMPORT' });
-          msg.textContent = 'Recorded ' + t.id + ' — it now appears below with an EXTERNAL badge.';
+          msg.textContent = 'Recorded ' + t.id + ' — it now appears below as Recorded at broker.';
           API.flushCache();
           await App.render();
         } catch (e) { msg.textContent = 'Refused: ' + (e.message || e); }
@@ -1748,7 +1801,7 @@
       box.appendChild(el('div', { class: 'btn-row' }, saveBtn));
       box.appendChild(msg);
       return box;
-    })(), false));
+    })(), { stateKey: 'portfolio-record-at-broker' }));
     root.appendChild(extCard);
 
     var tradesCard = el('div', { class: 'card', id: 'trades-card' },
@@ -1794,7 +1847,7 @@
       },
         el('td', {}, el('b', {}, t.symbol)),
         el('td', {}, prettyStrategy(t.strategy),
-          t.origin === 'EXTERNAL' ? el('span', { class: 'badge badge-warn', style: 'margin-left:6px', title: 'A real trade you recorded — tracked and judged here, but your practice cash was never touched.' }, 'EXTERNAL') : null,
+          t.origin === 'EXTERNAL' ? el('span', { class: 'badge badge-warn', style: 'margin-left:6px' }, UI.vocabulary('recordedAtBroker')) : null,
           t.intent && t.intent !== 'DIRECTIONAL' ? el('span', { style: 'margin-left:6px' }, intentBadge(t.intent)) : null),
         el('td', {}, 'x' + t.qty),
         el('td', {}, pnlSpan(t.entryNetPremiumCents)),
@@ -1863,7 +1916,7 @@
       el('div', { class: 'quote-hero' },
         el('span', { class: 'sym' }, t.symbol),
         el('span', { class: 'nm' }, prettyStrategy(t.strategy) + ' · x' + t.qty),
-        t.origin === 'EXTERNAL' ? el('span', { class: 'badge badge-warn', title: 'Real trade recorded from your broker — outcomes feed Your record; paper cash untouched.' }, 'EXTERNAL') : null,
+        t.origin === 'EXTERNAL' ? el('span', { class: 'badge badge-warn' }, UI.vocabulary('recordedAtBroker')) : null,
         intentBadge(t.intent),
         el('span', { class: 'badge ' + (active ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, t.status),
         el('span', { class: 'spacer' }),
@@ -1887,7 +1940,7 @@
         chip('Entry', fmtMoney(t.entryNetPremiumCents, { plus: true })),
         t.sharesLocked > 0 && t.maxLossCents === 0
           ? chip('New cash at risk', '$0 (covered)')
-          : chip('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(t.maxLossCents))),
+          : chip(UI.vocabulary('theoreticalMaxLoss'), el('span', { class: 'loss' }, fmtMoney(t.maxLossCents))),
         chip('Theoretical max profit', UI.maxProfitLabel(t.strategy, null, t.maxProfitCents,
           Learn.currentLevel() === 'beginner', t.legs)),
         chip('Breakeven', (t.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
@@ -1985,7 +2038,7 @@
                   + 'The header P/L uses those same closing sides and also includes the opening premium and opening fees, so it is not the same number as this close cash flow. ' : '';
               UI.confirmModal('Close (unwind) this trade?',
                 el('div', {},
-                  el('p', {}, est + 'The reserve of this trade is released and the result becomes final.'),
+                  el('p', {}, est + 'The broker reserve for this trade is released and the result becomes final.'),
                   explain('Unwinding = doing the opposite of every leg at current prices.')),
                 'Close position',
                 async function () {
@@ -2019,7 +2072,7 @@
             class: 'btn btn-secondary', id: 'roll-btn', onclick: function () {
               UI.confirmModal('Roll this position?',
                 el('div', {},
-                  el('p', {}, 'Rolling = two paper orders: close this position at market now, then reopen the same structure with every option leg moved ~1 month later. Both orders pay fees; the builder opens so you can adjust strikes before placing.'),
+                  el('p', {}, 'Rolling = two practice orders: close this position at market now, then reopen the same structure with every option leg moved ~1 month later. Both orders pay fees; the builder opens so you can adjust strikes before placing.'),
                   explain('Management plans often say "roll at 21 DTE" — this is that action, honestly priced at current quotes.')),
                 'Close & rebuild',
                 async function () {
@@ -2059,7 +2112,7 @@
             class: 'btn btn-danger', id: 'delete-btn', onclick: function () {
               UI.confirmModal('Void this trade?',
                 el('div', {},
-                  el('p', {}, 'This voids the trade as if it never happened: entry cash and fees are reversed, the reserve is released.'),
+                  el('p', {}, 'This voids the trade as if it never happened: entry cash and fees are reversed, and broker reserve is released.'),
                   UI.alertBox('warn', 'Practice-only affordance: real brokers have no undo — losses do not un-happen. Voiding a losing trade erases the lesson with it; prefer Unwind to practice honest exits.'),
                   explain('Everything stays visible in the ledger and audit log — nothing is hidden.')),
                 'Void trade',

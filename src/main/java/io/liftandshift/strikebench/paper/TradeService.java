@@ -148,7 +148,7 @@ public final class TradeService {
             p = planFromUserFills(req);
         } else {
             if (req.proposedNetCents() == null) {
-                throw new IllegalArgumentException("recording a real trade requires proposedNetCents — the actual net fill");
+                throw new IllegalArgumentException("recording a broker trade requires proposedNetCents — the actual net fill");
             }
             p = computePlan(req, true);
             // A real fill is a FACT to record, not an order to risk-screen (CP-9/R6): entry-quality

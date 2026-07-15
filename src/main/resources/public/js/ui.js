@@ -297,12 +297,28 @@
    * a detail block. detail can be a node or a lazy function () => node.
    */
   function expandable(summaryContent, detail, opts) {
-    opts = opts || {};
+    opts = typeof opts === 'boolean' ? { open: opts } : (opts || {});
+    if (!expandableOccurrenceResetQueued) {
+      expandableOccurrenceResetQueued = true;
+      Promise.resolve().then(function () {
+        expandableOccurrences.clear();
+        expandableOccurrenceResetQueued = false;
+      });
+    }
     var body = el('div', { class: 'xp-body' });
     var built = false;
     var chevron = el('span', { class: 'xp-chevron', 'aria-hidden': 'true' }, '\u203A');
     var head = el('button', { type: 'button', class: 'xp-head', 'aria-expanded': 'false' }, chevron, summaryContent);
-    var wrap = el('div', { class: 'xp' + (opts.open ? ' open' : '') }, head, body);
+    var route = (window.location && window.location.hash || '#/').split('?')[0];
+    var summaryKey = String(head.textContent || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    var baseKey = route + '::' + (opts.stateKey || summaryKey);
+    var occurrence = expandableOccurrences.get(baseKey) || 0;
+    expandableOccurrences.set(baseKey, occurrence + 1);
+    var stateKey = opts.persist === false ? null : baseKey + (opts.stateKey ? '' : '::' + occurrence);
+    var persisted = stateKey && expandableState.has(stateKey) ? expandableState.get(stateKey) : null;
+    var initiallyOpen = persisted === null ? !!opts.open : persisted;
+    var wrap = el('div', { class: 'xp' + (initiallyOpen ? ' open' : ''),
+      'data-expandable-key': stateKey || null }, head, body);
     function toggle(force) {
       var open = force !== undefined ? force : !wrap.classList.contains('open');
       if (open && !built) {
@@ -311,10 +327,58 @@
       }
       wrap.classList.toggle('open', open);
       head.setAttribute('aria-expanded', String(open));
+      if (stateKey) {
+        expandableState.set(stateKey, open);
+        if (expandableState.size > 300) expandableState.delete(expandableState.keys().next().value);
+      }
     }
     head.addEventListener('click', function () { toggle(); });
-    if (opts.open) toggle(true);
+    if (initiallyOpen) toggle(true);
     return wrap;
+  }
+
+  var expandableState = new Map();
+  var expandableOccurrences = new Map();
+  var expandableOccurrenceResetQueued = false;
+
+  function beginExpandableRender() {
+    expandableOccurrences.clear();
+  }
+
+  function vocabulary(key, display) {
+    var item = window.Learn && Learn.VOCABULARY && Learn.VOCABULARY[key];
+    if (!item) throw new Error('Unknown product vocabulary key: ' + key);
+    var node = term(item.infoKey, display || item.label);
+    node.setAttribute('data-vocabulary', key);
+    return node;
+  }
+
+  function vocabularyText(key) {
+    var item = window.Learn && Learn.VOCABULARY && Learn.VOCABULARY[key];
+    if (!item) throw new Error('Unknown product vocabulary key: ' + key);
+    return item.label;
+  }
+
+  function actionFeedback(kind, title, detail) {
+    return el('div', { class: 'inline-action-feedback ' + (kind || 'ok'), role: kind === 'danger' ? 'alert' : 'status',
+      'aria-live': kind === 'danger' ? 'assertive' : 'polite' },
+      icon(kind === 'danger' ? 'warn' : kind === 'caution' ? 'info' : 'check', 16),
+      el('div', {}, el('b', {}, title), detail ? el('span', {}, detail) : null));
+  }
+
+  function setActionFeedback(host, kind, title, detail) {
+    if (!host) return null;
+    var old = host.querySelector(':scope > .inline-action-feedback');
+    if (old) old.remove();
+    var next = actionFeedback(kind, title, detail);
+    host.appendChild(next);
+    return next;
+  }
+
+  function positionWorkbench(editor, visual) {
+    return el('div', { class: 'position-entry-workbench' },
+      el('section', { class: 'position-entry-legs' }, editor),
+      el('aside', { class: 'position-entry-visual', 'aria-live': 'polite' }, visual));
   }
 
   /** A term of art with tap-to-define glossary popover (Beginner level). */
@@ -772,7 +836,7 @@
     });
 
     var zeroY = Y(0);
-    var line = points.map(function (p, i) { return (i ? 'L' : 'M') + X(xs[i]).toFixed(1) + ' ' + Y(ys[i]).toFixed(1); }).join(' ');
+    var line = xs.map(function (x, i) { return (i ? 'L' : 'M') + X(x).toFixed(1) + ' ' + Y(ys[i]).toFixed(1); }).join(' ');
     // gain/loss shading against the zero line
     var closed = line + ' L' + X(xMax).toFixed(1) + ' ' + zeroY.toFixed(1) + ' L' + X(xMin).toFixed(1) + ' ' + zeroY.toFixed(1) + ' Z';
     var clipId = 'clip' + Math.floor(Math.random() * 1e9);
@@ -1461,6 +1525,12 @@
     lineChart: lineChart,
     candleChart: candleChart,
     expandable: expandable,
-    term: term
+    beginExpandableRender: beginExpandableRender,
+    term: term,
+    vocabulary: vocabulary,
+    vocabularyText: vocabularyText,
+    actionFeedback: actionFeedback,
+    setActionFeedback: setActionFeedback,
+    positionWorkbench: positionWorkbench
   };
 })();

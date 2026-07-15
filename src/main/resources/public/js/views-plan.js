@@ -210,7 +210,7 @@
     var assignGoal = c.intent === 'EXIT' || c.intent === 'ACQUIRE';
     var maxLossFact = c.usesHeldShares && c.maxLossCents === 0
         ? UI.fact('New cash at risk', '$0')
-        : UI.fact('Theoretical worst case', fmtMoney(c.maxLossCents), 'f-danger');
+        : UI.fact(UI.vocabulary('theoreticalMaxLoss'), fmtMoney(c.maxLossCents), 'f-danger');
     var profitFact = UI.fact('Chance of any profit', fmtPct(c.pop));
     var assignmentFact = assignGoal && c.assignmentProb !== null && c.assignmentProb !== undefined
       ? UI.fact(c.intent === 'EXIT' ? 'Chance you sell' : 'Chance you buy', fmtPct(c.assignmentProb), 'f-ok') : null;
@@ -272,9 +272,10 @@
       intentNoteBlock(c),
       el('div', { class: 'chip-row' },
         chip('Cost/credit', fmtMoney(c.entryNetPremiumCents, { plus: true })),
-        chip('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(c.maxLossCents))),
+        chip(UI.vocabulary('theoreticalMaxLoss'), el('span', { class: 'loss' }, fmtMoney(c.maxLossCents))),
         c.combinedMaxLossCents !== null && c.combinedMaxLossCents !== undefined
-          ? chip('Theoretical worst case w/ shares', el('span', { class: 'loss' }, fmtMoney(c.combinedMaxLossCents))) : null,
+          ? chip(el('span', {}, UI.vocabulary('theoreticalMaxLoss'), ' with shares'),
+            el('span', { class: 'loss' }, fmtMoney(c.combinedMaxLossCents))) : null,
         chip('Theoretical max profit', UI.maxProfitLabel(
           c.strategy, c.structureGroup, c.maxProfitCents, false, c.legs)),
         chip(el('span', {}, 'POP', UI.info('pop')), fmtPct(c.pop)),
@@ -768,40 +769,60 @@
   }
 
   function planCandidateActions(planRef, candidate, ui, repaint) {
-    async function choose(adjust) {
-      var livePlan = await PlanStore.get(planRef.plan.id, true);
-      var out = await PlanStore.selectCandidate(livePlan, candidate.id);
-      planRef.plan = out.plan;
-      if (planRef.result && planRef.result.candidates) {
-        planRef.result.candidates.forEach(function (c) { c.selected = c.id === candidate.id; });
+    var actions = el('div', { class: 'plan-candidate-action-block' });
+    var buttons = el('div', { class: 'btn-row plan-candidate-actions' });
+    async function choose(adjust, button) {
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      try {
+        var livePlan = await PlanStore.get(planRef.plan.id, true);
+        var out = await PlanStore.selectCandidate(livePlan, candidate.id);
+        planRef.plan = out.plan;
+        if (planRef.result && planRef.result.candidates) {
+          planRef.result.candidates.forEach(function (c) { c.selected = c.id === candidate.id; });
+        }
+        planRef.selected = candidate;
+        ui.selectedCandidate = candidate;
+        candidate.selected = true;
+        ui.strategyFocusCandidate = candidate.id;
+        ui.strategyAction = { kind: 'candidate', candidateId: candidate.id,
+          title: (candidate.displayName || candidate.strategy) + ' selected',
+          detail: adjust ? 'Opening the exact legs so you can change strikes, dates, or quantity.'
+            : 'This exact package now carries into Outcomes. You can still change or clear it here.' };
+        if (adjust) {
+          ui.buildState = ui.buildState || {};
+          Builder.adoptTicket({
+            world: App.state.world, symbol: planRef.plan.symbol, candidate: candidate,
+            qty: candidate.qty || 1, intent: planRef.plan.intent,
+            horizon: planHorizonName(planRef.plan),
+            thesis: planRef.plan.context && planRef.plan.context.thesis
+          }, ui.buildState, {
+            goal: planRef.plan.intent, horizon: planHorizonName(planRef.plan),
+            thesis: planRef.plan.context && planRef.plan.context.thesis
+          });
+          ui.strategyView = 'builder';
+        }
+        await repaint();
+        var selected = document.querySelector('[data-candidate-id="' + CSS.escape(candidate.id) + '"]')
+          || document.querySelector('.plan-selected-candidate');
+        if (selected) selected.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (e) {
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+        UI.setActionFeedback(actions, 'danger', 'Could not select this structure', e.message || String(e));
       }
-      planRef.selected = candidate;
-      ui.selectedCandidate = candidate;
-      candidate.selected = true;
-      ui.strategyFocusCandidate = candidate.id;
-      if (adjust) {
-        ui.buildState = ui.buildState || {};
-        Builder.adoptTicket({
-          world: App.state.world, symbol: planRef.plan.symbol, candidate: candidate,
-          qty: candidate.qty || 1, intent: planRef.plan.intent,
-          horizon: planHorizonName(planRef.plan),
-          thesis: planRef.plan.context && planRef.plan.context.thesis
-        }, ui.buildState, {
-          goal: planRef.plan.intent, horizon: planHorizonName(planRef.plan),
-          thesis: planRef.plan.context && planRef.plan.context.thesis
-        });
-        ui.strategyView = 'builder';
-      }
-      UI.toast('Structure selected for this Plan');
-      await repaint();
     }
-    return el('div', { class: 'btn-row plan-candidate-actions' },
-      el('button', { type: 'button', class: 'btn', disabled: candidate.selected ? '' : null,
-        onclick: function () { choose(false).catch(function (e) { UI.toast(e.message, 'error'); }); } },
-        candidate.selected ? 'Selected for this Plan' : 'Select this structure'),
-      el('button', { type: 'button', class: 'btn btn-secondary',
-        onclick: function () { choose(true).catch(function (e) { UI.toast(e.message, 'error'); }); } },
-        'Adjust exact contracts'));
+    buttons.appendChild(el('button', { type: 'button', class: 'btn', disabled: candidate.selected ? '' : null,
+      onclick: function () { choose(false, this); } },
+      candidate.selected ? 'Selected for this Plan' : 'Select this structure'));
+    buttons.appendChild(el('button', { type: 'button', class: 'btn btn-secondary',
+      onclick: function () { choose(true, this); } }, 'Adjust exact contracts'));
+    actions.appendChild(buttons);
+    if (ui.strategyAction && ui.strategyAction.kind === 'candidate'
+        && ui.strategyAction.candidateId === candidate.id) {
+      actions.appendChild(UI.actionFeedback('ok', ui.strategyAction.title, ui.strategyAction.detail));
+    }
+    return actions;
   }
 
   function candidatePackageKey(candidate) {
@@ -826,7 +847,8 @@
         if (planRef.result && planRef.result.candidates) {
           planRef.result.candidates.forEach(function (candidate) { candidate.selected = false; });
         }
-        UI.toast('Structure cleared; the comparison remains available');
+        ui.strategyAction = { kind: 'clear', title: 'Structure cleared',
+          detail: 'The ranked comparison remains available. Choose another package whenever you are ready.' };
         await repaint();
       } catch (e) {
         button.disabled = false;
@@ -949,6 +971,9 @@
     var wrap = el('section', { class: 'card plan-intent-ladder', id: 'plan-intent-ladder' },
       UI.cardHeader(copy[0], el('span', { class: 'badge badge-dim' }, rungs.length + ' RUNGS')),
       el('p', { class: 'muted' }, copy[1]));
+    if (ui.strategyAction && ui.strategyAction.kind === 'ladder') {
+      wrap.appendChild(UI.actionFeedback('ok', ui.strategyAction.title, ui.strategyAction.detail));
+    }
     if (!rungs.length) {
       wrap.appendChild(UI.emptyState('No listed rung fits right now', (result && result.notes || []).join(' ') || 'The active book and Plan limits produced no usable strike.'));
       return wrap;
@@ -979,11 +1004,15 @@
         planRef.selected = out.strategy && out.strategy.result && out.strategy.result.candidate;
         ui.selectedCandidate = planRef.selected;
         ui.selectedLadderKey = candidatePackageKey(planRef.selected || c);
-        UI.toast('Exact ladder package selected for this Plan');
+        ui.strategyAction = { kind: 'ladder', candidateKey: ui.selectedLadderKey,
+          title: 'Rung selected', detail: 'This exact strike, expiration, and quantity now carry into Outcomes.' };
         await repaint();
         var selectedRow = document.querySelector('#plan-intent-ladder .ladder-row.selected, #plan-intent-ladder tr.selected');
         if (selectedRow) selectedRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      } catch (e) { button.disabled = false; UI.toast(e.message, 'error'); }
+      } catch (e) {
+        button.disabled = false;
+        UI.setActionFeedback(wrap, 'danger', 'Could not select this rung', e.message || String(e));
+      }
     }
     function facts(c) {
       var leg = UI.firstOptionLeg(c.legs), strike = Number(leg.strike);
@@ -1114,9 +1143,14 @@
             planRef.selected = c;
             ui.selectedCandidate = c;
             ui.strategyFocusCandidate = c.id;
-            UI.toast('Structure selected for this Plan');
+            ui.strategyAction = { kind: 'candidate', candidateId: c.id,
+              title: (c.displayName || c.strategy) + ' selected',
+              detail: 'This exact package now carries into Outcomes. You can still change or clear it here.' };
             return repaint();
-          }).catch(function (e) { button.disabled = false; UI.toast(e.message, 'error'); });
+          }).catch(function (e) {
+            button.disabled = false;
+            UI.setActionFeedback(button.closest('.card') || host, 'danger', 'Could not select this structure', e.message || String(e));
+          });
         },
         onRow: function (c) {
           var detail = document.getElementById('plan-candidate-detail');
@@ -1458,6 +1492,9 @@
               await paint();
             } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
           } }, planRef.result ? 'Refresh proposed trades' : beginner ? 'Find proposed trades' : 'Run ranked field')));
+      if (ui.strategyAction && ui.strategyAction.kind === 'clear') {
+        controls.appendChild(UI.actionFeedback('ok', ui.strategyAction.title, ui.strategyAction.detail));
+      }
       body.appendChild(controls);
       var selectedInField = planRef.result && planRef.selected
         && (planRef.result.candidates || []).some(function (candidate) { return candidate.id === planRef.selected.id; });
@@ -1640,7 +1677,7 @@
               stat('Expected P/L after costs', item.expectedPnlCents == null ? '—' : pnlSpan(item.expectedPnlCents)),
               stat('Typical outcome', item.p50Cents == null ? '—' : pnlSpan(item.p50Cents)),
               stat('Bad 1-in-20 outcome', item.p5Cents == null ? '—' : pnlSpan(item.p5Cents)),
-              stat('Theoretical max loss', item.maxLossCents == null ? '—' : fmtMoney(item.maxLossCents))),
+              stat(UI.vocabulary('theoreticalMaxLoss'), item.maxLossCents == null ? '—' : fmtMoney(item.maxLossCents))),
         item.key === 'CASH'
           ? el('p', { class: 'muted small' }, 'Doing nothing stays at $0 with no modeled tail loss or transaction cost.')
           : el('p', { class: 'muted small' }, 'Quantity x' + item.qty + ' · captured entry '
@@ -1976,14 +2013,14 @@
     function label(value) { return String(value || '').replaceAll('_', ' ').toLowerCase(); }
     var traded = decision.action === 'TRADE';
     host.appendChild(alertBox(traded ? 'ok' : 'caution',
-      traded ? 'Paper position opened from this Plan' : 'Cash was the decision', [
-        traded ? 'The exact priced package and account snapshot are frozen beside the linked paper trade.'
+      traded ? 'Practice position opened from this Plan' : 'Cash was the decision', [
+        traded ? 'The exact priced package and account snapshot are frozen beside the linked practice trade.'
           : 'Doing nothing is a first-class decision. The rejected package remains frozen for review against cash.',
         'Decision time: ' + (decision.quoteAsOf || decision.createdAt || 'captured by the server')
       ]));
     host.appendChild(el('div', { class: 'grid grid-4 plan-decision-facts' },
       stat('Action', traded ? 'TRADE' : 'CASH'),
-      stat('Theoretical max loss', decision.maxLossCents == null ? '—' : fmtMoney(decision.maxLossCents)),
+      stat(UI.vocabulary('theoreticalMaxLoss'), decision.maxLossCents == null ? '—' : fmtMoney(decision.maxLossCents)),
       stat('Chance of any profit', decision.pop == null ? '—' : fmtPct(decision.pop)),
       stat('Market EV after costs', decision.evMarketCents == null ? '—' : pnlSpan(decision.evMarketCents)),
       stat('Realized-vol scenario EV', decision.evHistvolCents == null ? '—' : pnlSpan(decision.evHistvolCents)),
@@ -2110,7 +2147,7 @@
       if (warnings.length) review.appendChild(alertBox('caution', 'Review these conditions', warnings));
       review.appendChild(el('div', { class: 'grid grid-4 plan-decision-math' },
         stat('Cost / credit', fmtMoney(p.entryNetPremiumCents, { plus: true })),
-        stat('Theoretical max loss', el('span', { class: 'loss' }, fmtMoney(p.maxLossCents))),
+        stat(UI.vocabulary('theoreticalMaxLoss'), el('span', { class: 'loss' }, fmtMoney(p.maxLossCents))),
         stat('Theoretical max profit', UI.maxProfitLabel(selected.strategy, selected.structureGroup,
           p.maxProfitCents, Learn.currentLevel() === 'beginner', p.legs)),
         stat('Chance of any profit', fmtPct(p.popEntry)),
@@ -2125,7 +2162,7 @@
         }));
       var required = result.requiredAcks || [];
       state.acks = {};
-      var trade = el('button', { type: 'button', class: 'btn', id: 'plan-place-trade', disabled: 'disabled' }, 'Open paper position');
+      var trade = el('button', { type: 'button', class: 'btn', id: 'plan-place-trade', disabled: 'disabled' }, 'Open practice position');
       function refresh() {
         var complete = required.every(function (ack) { return state.acks[ack.id]; });
         trade.disabled = !p.ok || !complete;

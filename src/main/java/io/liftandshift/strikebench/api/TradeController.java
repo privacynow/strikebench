@@ -623,7 +623,7 @@ final class TradeController {
                     + " trading session(s) remain — gamma, weekend gaps and pin risk dominate."));
         }
         if (effectiveRiskBudgetCents > 0 && preview.maxLossCents() > effectiveRiskBudgetCents) {
-            out.add(new ApiResponses.RiskAcknowledgment("ack-capital", "The theoretical worst case "
+            out.add(new ApiResponses.RiskAcknowledgment("ack-capital", "The theoretical max loss "
                     + io.liftandshift.strikebench.util.Money.fmt(preview.maxLossCents())
                     + " exceeds your selected per-trade risk budget ("
                     + io.liftandshift.strikebench.util.Money.fmt(effectiveRiskBudgetCents) + ")."));

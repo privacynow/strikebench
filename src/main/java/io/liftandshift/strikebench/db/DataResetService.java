@@ -28,7 +28,7 @@ public final class DataResetService {
                 "Saved recommendations", "Evaluations", "Backtests", "Research notes"), false),
         PAPER(List.of("trade_marks", "ledger", "positions", "live_orders", "audit", "trades", "accounts", "sim_session",
                 "settings WHERE k LIKE 'active_world:%'"), List.of(
-                "Paper trades and marks", "Share positions", "Paper orders", "Practice ledger and account",
+                "Practice trades and marks", "Share positions", "Practice orders", "Practice ledger and account",
                 "Simulation practice sessions"), true),
         EVERYTHING(List.of("option_bar", "underlying_bar", "market_snapshot", "dataset WHERE id NOT IN ('observed','demo-fixture')",
                 "data_quarantine", "data_sync_cursor", "data_sync_schedule", "data_job_item", "data_job",

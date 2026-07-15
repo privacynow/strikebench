@@ -175,11 +175,11 @@
         id: 'welcome-hero',
         deco: deco,
         top: el('div', { class: 'hero-brandline' }, UI.brandMark(30),
-          el('span', { class: 'eyebrow' }, 'PAPER TRADING \u00B7 LOCAL-FIRST \u00B7 FREE')),
+          el('span', { class: 'eyebrow' }, 'PRACTICE TRADING \u00B7 LOCAL-FIRST \u00B7 FREE')),
         title: el('h1', { class: 'hero-title' }, 'Learn options by ', el('span', { class: 'grad' }, 'doing'), ',', el('br', {}),
           'with honest numbers.'),
         sub: el('p', { class: 'hero-sub' },
-          'Screen strategies against your goal, practice with \$100,000 in paper money, and verify honestly.'),
+          'Screen strategies against your goal, practice with \$100,000 in an isolated learning account, and verify honestly.'),
         ctas: [
           el('button', {
             class: 'btn btn-lg', onclick: function () {
@@ -235,7 +235,7 @@
       var economics = window.ViewPlan.economicAssessmentBlock(candidate);
       if (economics) card.appendChild(economics);
       card.appendChild(el('div', { class: 'fact-grid welcome-proof-facts' },
-        UI.fact('Theoretical max loss', fmtMoney(candidate.maxLossCents), 'f-danger'),
+        UI.fact(UI.vocabulary('theoreticalMaxLoss'), fmtMoney(candidate.maxLossCents), 'f-danger'),
         UI.fact('Chance of any profit', fmtPct(candidate.pop)),
         UI.fact('Theoretical max profit', UI.maxProfitLabel(
           candidate.strategy, candidate.structureGroup, candidate.maxProfitCents, true, candidate.legs))));
@@ -364,7 +364,7 @@
     var STEPS = [
       ['Pick a goal', 'or a ticker you care about'],
       ['Screen ideas', 'refusals explained, risk capped'],
-      ['Practice the trade', 'with the $100k paper account'],
+      ['Practice the trade', 'with the isolated $100k practice account'],
       ['Review honestly', 'marks, P/L, what changed']
     ];
     var stepper = el('div', { class: 'stepper' }, STEPS.map(function (st, i) {
@@ -504,8 +504,8 @@
     var accountFill = Promise.resolve(acct || accountPromise).then(function (account) {
       if (account) {
         statsAnchor.appendChild(stat('Cash', fmtMoney(account.cashCents), 'Practice money available. Nothing here is real dollars.'));
-        statsAnchor.appendChild(stat('Reserved', fmtMoney(account.reservedCents), 'Held to cover the worst case of your open trades.'));
-        statsAnchor.appendChild(stat('Buying power', fmtMoney(account.buyingPowerCents), 'Cash minus reserves — what you can still put at risk.'));
+        statsAnchor.appendChild(stat(UI.vocabulary('brokerReserve'), fmtMoney(account.reservedCents), 'Held to cover open obligations.'));
+        statsAnchor.appendChild(stat('Buying power', fmtMoney(account.buyingPowerCents), 'Cash minus broker reserve — what you can still put at risk.'));
         statsAnchor.appendChild(stat('Started with', fmtMoney(account.startingCashCents)));
       } else {
         statsAnchor.appendChild(alertBox('warn', 'Account unavailable right now', ['Retry from the Portfolio screen.']));
