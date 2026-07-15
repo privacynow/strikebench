@@ -335,6 +335,12 @@ body.lvl-expert .not-expert { display: none !important; }
 .alert-caution { background: var(--risk-caution-bg); color: var(--risk-caution); }
 .alert-ok { background: var(--risk-ok-bg); color: var(--risk-ok); }
 .alert ul { margin: 5px 0 0 18px; padding: 0; }
+.world-repair-notice {
+  width: calc(100% - 32px); max-width: 1028px; margin: 10px auto 0;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 14px;
+}
+.world-repair-copy { display: grid; gap: 2px; min-width: 0; }
+.world-repair-notice .icon-btn { flex: 0 0 auto; color: currentColor; }
 
 /* ---------- Forms ---------- */
 .form-grid { display: grid; gap: 12px; grid-template-columns: 1fr; }
@@ -587,6 +593,7 @@ body.lvl-expert .not-expert { display: none !important; }
 .bottom-nav { display: none; }
 
 @media (max-width: 640px) {
+  .world-repair-notice { width: calc(100% - 20px); }
   .sim-session-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .sim-session-actions { justify-content: flex-start; }
   .nav { display: none; }

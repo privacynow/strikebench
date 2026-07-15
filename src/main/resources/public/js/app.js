@@ -634,6 +634,24 @@
   App.refreshWorldBand = refreshWorldBand;
   App.baseWorldId = function () { return App.config && App.config.fixturesOnly ? 'demo' : 'observed'; };
 
+  function showWorldRepair(repair) {
+    if (!repair || !repair.message) return;
+    var repairId = repair.id || [repair.previousWorld, repair.world, repair.reason].join(':');
+    if (App.state.lastWorldRepairId === repairId) return;
+    App.state.lastWorldRepairId = repairId;
+    var old = document.getElementById('world-repair-notice');
+    if (old) old.remove();
+    var notice = UI.el('div', { id: 'world-repair-notice', class: 'alert alert-caution world-repair-notice',
+      role: 'status', 'aria-live': 'polite' },
+      UI.el('div', { class: 'world-repair-copy' }, UI.el('b', {}, 'Saved market unavailable'),
+        UI.el('span', {}, repair.message)),
+      UI.el('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Dismiss market repair notice',
+        onclick: function () { notice.remove(); } }, '×'));
+    var appRoot = document.getElementById('app');
+    if (appRoot) document.body.insertBefore(notice, appRoot);
+  }
+  App.showWorldRepair = showWorldRepair;
+
   /**
    * A tick landed: the market MOVED. Flush the world's cached GETs and let the current screen
    * refresh its visible numbers in place (views register via App.onEvent with their route token).
@@ -816,6 +834,7 @@
       // Verify the whole contract, not just the request: server selector, app state, market
       // store and universe must name the same lane before the click can report success.
       var authoritative = await API.getFresh('/api/world');
+      showWorldRepair(authoritative && authoritative.repair);
       if (!authoritative || authoritative.world !== target) {
         throw new Error('The server did not confirm the requested market.');
       }
@@ -1018,6 +1037,7 @@
     // transition committed/failed). Anything that derives market-context state on first paint
     // (the welcome proof cache, prefetch) awaits this instead of racing /api/world (review P2).
     App.worldReady = API.get('/api/world').then(function (w) {
+      showWorldRepair(w && w.repair);
       var boot = (w && w.world) || App.baseWorldId();
       // BOOT IS ALWAYS A FULL TRANSITION, even when the restored workspace already names
       // the server's lane. A same-lane reload still has a fresh DOM and empty MarketStore;
@@ -1039,6 +1059,7 @@
     // Multi-tab truth: another tab (same user) switched worlds — adopt it here too, band and all.
     App.onEvent('world.selected', function (type, data) {
       if (!data || data.world === undefined) return;
+      showWorldRepair(data.repair);
       App.transitionWorld(data.world, data.universe, data.revision, data.epoch)
         .catch(function () { /* banner shown */ }); // idempotent: same-target calls collapse
     });
@@ -1052,6 +1073,7 @@
         return;
       }
       API.getFresh('/api/world').then(function (w) {
+        showWorldRepair(w && w.repair);
         var srv = (w && w.world) || 'observed';
         var ownersDisagree = srv !== App.state.world
           || (App.Market && App.Market.world !== srv)
