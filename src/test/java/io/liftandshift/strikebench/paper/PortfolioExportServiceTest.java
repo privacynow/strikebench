@@ -106,6 +106,22 @@ class PortfolioExportServiceTest {
     }
 
     @Test
+    void provisionalYearExportDistinguishesAnUnreviewedWashRuleFromZeroAdjustment() throws Exception {
+        books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
+                "2026-06-01T10:00:00-04:00", "TRADE", null, 0L, null, "MANUAL", "loss-open", null,
+                List.of(new PortfolioAccountingService.LegInput("STOCK", "BUY", "OPEN", "MSFT", null,
+                        null, null, 1L, 1, new java.math.BigDecimal("100.00")))));
+        books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
+                "2026-06-02T10:00:00-04:00", "TRADE", null, 0L, null, "MANUAL", "loss-close", null,
+                List.of(new PortfolioAccountingService.LegInput("STOCK", "SELL", "CLOSE", "MSFT", null,
+                        null, null, 1L, 1, new java.math.BigDecimal("90.00")))));
+
+        String xml = workbookXml(exports.workbook("local", account.id(), 2026));
+        assertThat(xml).contains("Wash-rule application",
+                "Wash rule not applied - 2026 rules unreviewed");
+    }
+
+    @Test
     void exportsSection1256ClassificationAndSixtyFortyTaxCharacter() throws Exception {
         books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
                 "2025-12-15T15:00:00-05:00", "TRADE", null, 0L, null, "MANUAL", "spx-open", null,

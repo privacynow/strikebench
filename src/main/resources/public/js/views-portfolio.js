@@ -1131,6 +1131,17 @@
       return;
     }
     var report = taxData[0], openLots = taxData[1].lots || [];
+    function washReview(row) {
+      if (row.section1256) return 'Not applied · Section 1256 uses its own character rules';
+      if ((row.realizedGainCents || 0) >= 0) return 'Not applicable · no realized loss';
+      if (report.accountType !== 'TAXABLE') return 'Not applied in this retirement wrapper';
+      if (!report.rules || report.rules.status !== 'REVIEWED') {
+        return 'Wash rule not applied — ' + report.year + ' rules unreviewed';
+      }
+      return (row.washSaleAdjustmentCents || 0) !== 0
+        ? fmtMoney(row.washSaleAdjustmentCents) + ' modeled adjustment'
+        : 'No modeled same-instrument candidate recorded';
+    }
     root.appendChild(portfolioTaxFacts(report));
     var rulesNotice = alertBox(report.rules.status === 'REVIEWED' ? 'caution' : 'danger',
       report.rules.status === 'REVIEWED' ? 'Reviewed common-case worksheet' : 'Tax rules not reviewed for ' + yearValue,
@@ -1176,17 +1187,18 @@
             el('span', { class: 'muted small' }, 'Closed ' + portfolioTaxDate(r.closedAt) + ' ET · '
               + r.side.toLowerCase() + ' · quantity ' + r.quantity)),
           el('div', { class: 'chip-row' },
-            chip('Taxable gain / loss', pnlSpan((r.realizedGainCents || 0) + (r.washSaleAdjustmentCents || 0))),
-            chip('Modeled wash candidate', fmtMoney(r.washSaleAdjustmentCents || 0)), chip('Character', character)),
+            chip('Worksheet gain / loss', pnlSpan((r.realizedGainCents || 0) + (r.washSaleAdjustmentCents || 0))),
+            chip('Character', character)),
+          el('p', { class: 'small book-wash-review' }, el('b', {}, 'Wash review: '), washReview(r)),
           el('p', { class: 'muted small book-realized-lot-detail' }, 'Opening basis / proceeds ',
             el('b', {}, fmtMoney(r.openAmountCents)), ' · closing proceeds / cost ',
             el('b', {}, fmtMoney(r.closeAmountCents)), ' · raw gain / loss ', pnlSpan(r.realizedGainCents))));
       });
-    } else realizedCard.appendChild(table(['Closed (ET)', 'Symbol', 'Instrument', 'Side', 'Qty', 'Opening basis / proceeds', 'Closing proceeds / cost', 'Raw realized', 'Modeled wash candidate', 'Worksheet realized', 'Character'],
+    } else realizedCard.appendChild(table(['Closed (ET)', 'Symbol', 'Instrument', 'Side', 'Qty', 'Opening basis / proceeds', 'Closing proceeds / cost', 'Raw realized', 'Wash review', 'Worksheet realized', 'Character'],
       realized.map(function (r) { return el('tr', {}, el('td', {}, portfolioTaxDate(r.closedAt)), el('td', {}, el('b', {}, r.symbol)),
         el('td', {}, r.instrumentType.toLowerCase()), el('td', {}, r.side.toLowerCase()), el('td', {}, String(r.quantity)),
         el('td', {}, fmtMoney(r.openAmountCents)), el('td', {}, fmtMoney(r.closeAmountCents)),
-        el('td', {}, pnlSpan(r.realizedGainCents)), el('td', {}, fmtMoney(r.washSaleAdjustmentCents || 0)),
+        el('td', {}, pnlSpan(r.realizedGainCents)), el('td', {}, washReview(r)),
         el('td', {}, pnlSpan((r.realizedGainCents || 0) + (r.washSaleAdjustmentCents || 0))),
         el('td', {}, r.section1256 ? 'Section 1256 · 60 / 40' : r.holdingTerm.replaceAll('_', ' ').toLowerCase())); })));
     root.appendChild(realizedCard);
