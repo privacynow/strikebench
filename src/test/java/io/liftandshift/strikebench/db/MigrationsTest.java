@@ -53,9 +53,9 @@ class MigrationsTest {
             assertThat(db.query("SELECT version FROM flyway_schema_history "
                             + "WHERE version IN ('49.0.1','49.1','49.2') AND success ORDER BY installed_rank",
                     r -> r.str("version"))).containsExactly("49.0.1", "49.1", "49.2");
-            assertThat(db.query("SELECT version FROM flyway_schema_history WHERE success "
-                            + "ORDER BY installed_rank DESC LIMIT 1",
-                    r -> r.str("version"))).containsExactly("49.2");
+            assertThat(db.query("SELECT version FROM flyway_schema_history "
+                            + "WHERE version='57' AND success",
+                    r -> r.str("version"))).containsExactly("57");
             assertThat(db.query("SELECT table_name || '.' || column_name AS alias "
                             + "FROM information_schema.columns WHERE table_schema='public' "
                             + "AND table_name IN ('data_sync_schedule','data_sync_cursor','plan_create_request') "

@@ -8,6 +8,8 @@ import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.position.PositionDomain;
+import io.liftandshift.strikebench.position.RecordingPolicy;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
@@ -423,7 +425,7 @@ public final class PortfolioAccountingService {
         if (MARKET_EVENTS.contains(event)) requireChronologicalMarketActivity(c, account.id(), occurred);
 
         List<PreparedLeg> legs = prepareLegs(input.legs(), fees, event,
-                occurred.atZoneSameInstant(MARKET_ZONE).toLocalDate());
+                occurred.atZoneSameInstant(MARKET_ZONE).toLocalDate(), source);
         if (account.currentlyTaxable() && MARKET_EVENTS.contains(event) && !"MARK_TO_MARKET".equals(event)) {
             int completedYear = occurred.atZoneSameInstant(MARKET_ZONE).getYear() - 1;
             ensureSection1256Through(c, account, completedYear);
@@ -1774,7 +1776,8 @@ public final class PortfolioAccountingService {
 
     // ---- Mapping and validation ----
 
-    private List<PreparedLeg> prepareLegs(List<LegInput> raw, long fees, String event, LocalDate eventDate) {
+    private List<PreparedLeg> prepareLegs(List<LegInput> raw, long fees, String event, LocalDate eventDate,
+                                          String source) {
         List<LegInput> legs = raw == null ? List.of() : raw;
         List<PreparedLeg> base = new ArrayList<>();
         for (int i = 0; i < legs.size(); i++) {
@@ -1788,7 +1791,10 @@ public final class PortfolioAccountingService {
             if (quantity <= 0 || quantity > 10_000_000) throw new IllegalArgumentException("leg quantity must be 1..10,000,000");
             int multiplier = "STOCK".equals(instrument) ? 1 : in.multiplier() == null ? 100 : in.multiplier();
             if (multiplier <= 0 || multiplier > 10_000) throw new IllegalArgumentException("leg multiplier must be 1..10,000");
-            BigDecimal price = in.price() == null ? BigDecimal.ZERO : in.price().setScale(Money.PRICE_SCALE, RoundingMode.HALF_UP);
+            if (in.price() == null) {
+                throw new IllegalArgumentException("every recorded leg requires an exact price; use Analyze when a fill is unknown");
+            }
+            BigDecimal price = in.price().setScale(Money.PRICE_SCALE, RoundingMode.HALF_UP);
             if (price.signum() < 0) throw new IllegalArgumentException("leg price cannot be negative");
             String optionType = null;
             BigDecimal strike = null;
@@ -1814,6 +1820,17 @@ public final class PortfolioAccountingService {
             boolean section1256 = section1256(in.section1256(), instrument, symbol);
             base.add(new PreparedLeg(i, instrument, action, effect, symbol, optionType, strike,
                     expiration, quantity, multiplier, price, gross, 0, section1256));
+        }
+        if (!base.isEmpty() && MARKET_EVENTS.contains(event)) {
+            PositionDomain.PriceAuthority authority = switch (source) {
+                case "BROKER" -> PositionDomain.PriceAuthority.BROKER_REPORTED;
+                case "CALCULATED" -> PositionDomain.PriceAuthority.MODELED;
+                default -> PositionDomain.PriceAuthority.USER_REPORTED;
+            };
+            RecordingPolicy.validate(RecordingPolicy.EventType.valueOf(event), base.stream()
+                    .map(leg -> new RecordingPolicy.LegFact(leg.instrumentType(), leg.positionEffect(),
+                            leg.symbol(), leg.strike(), leg.price(), leg.quantity(), leg.multiplier(), authority))
+                    .toList());
         }
         if (base.isEmpty() || fees == 0) return base;
         long totalGross = 0;
