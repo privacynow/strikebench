@@ -892,7 +892,6 @@
         labelRiskOptions(rb);
       }).catch(function () { /* base labels stand; ticket falls back to server preview data */ });
     };
-    App.refreshRiskBudget();
     risk.addEventListener('change', function () {
       try { window.localStorage.setItem('strikebench.riskMode', risk.value); } catch (e) { /* ignore */ }
       // This is the default for NEW Plans. Existing Plans retain their normalized risk mode
@@ -910,6 +909,7 @@
   function renderSignIn(me) {
     var app = document.getElementById('app');
     if (!app) return;
+    document.body.classList.add('auth-required');
     app.innerHTML = '';
     app.appendChild(UI.el('div', { class: 'card signin-card' }, [
       UI.el('h1', {}, 'Sign in'),
@@ -948,16 +948,13 @@
     var app = document.getElementById('app');
     if (app && !app.firstChild) app.appendChild(UI.skeleton());
 
-    // ONE parallel round-trip for auth, config, workspace and the server-owned strategy catalog.
-    // Route data is never fetched before auth state is known: App.render() runs only AFTER this
-    // resolves, and an enabled-but-unauthenticated session swaps straight to the sign-in screen.
-    var pair = await Promise.all([
+    // Auth state is the first boundary. Never probe owner-scoped workspace, catalog, budget,
+    // market, or Plan routes before the server confirms the viewer is signed in.
+    var publicPair = await Promise.all([
       API.get('/api/auth/me').catch(function () { return null; }),
-      API.get('/api/config').catch(function () { return null; }),
-      API.get('/api/workspace').catch(function () { return null; }),
-      API.get('/api/strategies').catch(function () { return null; })
+      API.get('/api/config').catch(function () { return null; })
     ]);
-    var me = pair[0], cfg = pair[1], wsRemote = pair[2], strategyCatalog = pair[3];
+    var me = publicPair[0], cfg = publicPair[1];
     App._me = me;
     if (cfg && cfg.disclaimer) document.getElementById('disclaimer').textContent = cfg.disclaimer;
     if (cfg && cfg.brand && cfg.brand.name) applyBrand(cfg.brand);
@@ -968,8 +965,16 @@
     // protected route that would 401 into a route error.
     var authOn = (cfg && cfg.authEnabled) || (me && me.authEnabled);
     if (authOn && !(me && me.authenticated)) { renderSignIn(me); return; }
+    document.body.classList.remove('auth-required');
     App.authUser = (me && me.user) || null;
     addSignOut();
+
+    var privatePair = await Promise.all([
+      API.get('/api/workspace').catch(function () { return null; }),
+      API.get('/api/strategies').catch(function () { return null; })
+    ]);
+    var wsRemote = privatePair[0], strategyCatalog = privatePair[1];
+    if (App.refreshRiskBudget) App.refreshRiskBudget();
 
     // The app has one strategy identity contract. Do not silently resurrect a client-side
     // fallback catalog if the server contract is missing or a deployment mixed asset versions.

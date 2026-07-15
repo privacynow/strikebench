@@ -1323,7 +1323,7 @@
       statsRow.appendChild(stat('Buying power', fmtMoney(acct.buyingPowerCents)));
       statsRow.appendChild(stat('Started with', fmtMoney(acct.startingCashCents)));
     }
-    var paperTabs = el('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Paper account sections' },
+    var paperTabs = el('div', { class: 'tabs portfolio-paper-tabs', role: 'tablist', 'aria-label': 'Paper account sections' },
       el('button', { role: 'tab', 'aria-selected': section === 'construct' ? 'true' : 'false', tabindex: section === 'construct' ? '0' : '-1', class: section === 'construct' ? 'active' : '', id: 'pf-sec-construct',
         onclick: function () { App.navigate('#/portfolio/construct'); } }, 'Construct'),
       el('button', { role: 'tab', 'aria-selected': section === 'positions' ? 'true' : 'false', tabindex: section === 'positions' ? '0' : '-1', class: section === 'positions' ? 'active' : '', id: 'pf-sec-positions',
