@@ -77,6 +77,9 @@ public final class TradeService {
                            Long unrealizedCents, Long decisionUnrealizedCents, Double popNow, String freshness,
                            PositionGreeks greeks, List<Map<String, Object>> legGreeks) {}
 
+    /** Worst and best executable-mark excursions recorded while a trade was open. */
+    public record Excursion(Long adverseCents, Long favorableCents) {}
+
     public record Page(List<TradeRecord> trades, long total, int page, int size) {}
 
     public record CloseResult(TradeRecord trade, long realizedPnlCents) {}
@@ -956,6 +959,14 @@ public final class TradeService {
                 new MarkView(tradeId, r.str("ts"), r.lngOrNull("underlying_px_cents"), r.lngOrNull("close_cost_cents"),
                         r.lngOrNull("unrealized_cents"), r.lngOrNull("decision_unrealized_cents"),
                         r.dblOrNull("pop_now"), r.str("freshness"), null, List.of()), tradeId, limit);
+    }
+
+    public Excursion excursion(String tradeId) {
+        return db.query("SELECT MIN(COALESCE(decision_unrealized_cents, unrealized_cents)) adverse, "
+                        + "MAX(COALESCE(decision_unrealized_cents, unrealized_cents)) favorable "
+                        + "FROM trade_marks WHERE trade_id=?",
+                row -> new Excursion(row.lngOrNull("adverse"), row.lngOrNull("favorable")), tradeId)
+                .stream().findFirst().orElse(new Excursion(null, null));
     }
 
     // ---- Plan computation ----

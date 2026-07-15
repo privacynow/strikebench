@@ -462,6 +462,17 @@ public final class SimulationSessions {
                 "world", worldId, "user", owner(userId), "state", "failed"));
     }
 
+    /** Records a late preparation result without mutating the already-moving world's config. */
+    public void recordLateAnchors(String worldId, String userId, String anchorsJson) {
+        int updated = db.with(connection -> Db.execOn(connection,
+                "UPDATE sim_session SET anchors=?::jsonb WHERE id=? AND user_id=?",
+                anchorsJson, worldId, owner(userId)));
+        if (updated != 1) {
+            throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
+                    "no such simulated session: " + worldId);
+        }
+    }
+
     /** All of this owner's sessions — FINISHED rows included (the report must stay reachable). */
     public synchronized List<Map<String, Object>> list(String userId) {
         // A PREPARING row without a resolver in this process means the process restarted during

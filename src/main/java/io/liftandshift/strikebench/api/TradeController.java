@@ -19,6 +19,7 @@ import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountRiskContext;
+import io.liftandshift.strikebench.paper.AccountService;
 import io.liftandshift.strikebench.paper.AuditLog;
 import io.liftandshift.strikebench.paper.PositionsService;
 import io.liftandshift.strikebench.paper.TradeRecord;
@@ -57,6 +58,7 @@ final class TradeController {
     private final AppConfig cfg;
     private final Clock clock;
     private final Db db;
+    private final AccountService accounts;
     private final MarketDataService market;
     private final EventService eventCalendar;
     private final AuditLog audit;
@@ -72,7 +74,7 @@ final class TradeController {
     private final Consumer<Context> requireAdmin;
     private final byte[] acknowledgmentSecret = new byte[32];
 
-    TradeController(AppConfig cfg, Clock clock, Db db, MarketDataService market,
+    TradeController(AppConfig cfg, Clock clock, Db db, AccountService accounts, MarketDataService market,
                     EventService eventCalendar, AuditLog audit, TradeService trades,
                     PositionsService positions, EvaluationService evaluations,
                     SnapshotService snapshots,
@@ -85,6 +87,7 @@ final class TradeController {
         this.cfg = cfg;
         this.clock = clock;
         this.db = db;
+        this.accounts = accounts;
         this.market = market;
         this.eventCalendar = eventCalendar;
         this.audit = audit;
@@ -378,11 +381,7 @@ final class TradeController {
     void resolveRecommendation(String tradeId, String status, Long pnlCents) {
         try {
             TradeRecord trade = trades.get(tradeId);
-            record AccountLane(String type, String worldId) {}
-            List<AccountLane> rows = db.query("SELECT type,world_id FROM accounts WHERE id=?",
-                    r -> new AccountLane(r.str("type"), r.str("world_id")), trade.accountId());
-            if (rows.isEmpty()) return;
-            AccountLane lane = rows.getFirst();
+            Account lane = accounts.get(trade.accountId());
             if (lane.worldId() != null || "DEMO".equals(lane.type())
                     || "SIMULATION".equals(lane.type())) return;
             if (!("OBSERVED".equals(trade.dataProvenance())

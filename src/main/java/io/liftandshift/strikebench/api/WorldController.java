@@ -4,7 +4,6 @@ import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
 import io.liftandshift.strikebench.auth.AuthService;
 import io.liftandshift.strikebench.config.AppConfig;
-import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
@@ -32,7 +31,6 @@ final class WorldController {
 
     private final AppConfig cfg;
     private final Clock clock;
-    private final Db db;
     private final MarketDataService market;
     private final MarketDataEngine marketEngine;
     private final SimulationSessions simSessions;
@@ -47,7 +45,7 @@ final class WorldController {
     private final Function<Context, String> ownerId;
     private final Function<Context, String> activeWorld;
 
-    WorldController(AppConfig cfg, Clock clock, Db db, MarketDataService market,
+    WorldController(AppConfig cfg, Clock clock, MarketDataService market,
                     MarketDataEngine marketEngine, SimulationSessions simSessions,
                     AccountService accounts, PositionsService positions, TradeService trades,
                     AuthService auth, EventBus events, WorldTransitionService worldTransitions,
@@ -56,7 +54,6 @@ final class WorldController {
                     Function<Context, String> activeWorld) {
         this.cfg = cfg;
         this.clock = clock;
-        this.db = db;
         this.market = market;
         this.marketEngine = marketEngine;
         this.simSessions = simSessions;
@@ -503,7 +500,7 @@ final class WorldController {
                 // The world already moved: record the truth without touching its immutable config.
                 anchorDoc.put("note", "resolved AFTER the session started — not applied; finish and "
                         + "recreate to include the late symbols/calibration");
-                db.exec("UPDATE sim_session SET anchors=?::jsonb WHERE id=?", Json.write(anchorDoc), worldId);
+                simSessions.recordLateAnchors(worldId, owner, Json.write(anchorDoc));
                 events.publish("world.resolving", Map.of("world", worldId,
                         "user", owner == null ? "local" : owner, "state", "late"));
             }
@@ -540,14 +537,14 @@ final class WorldController {
         String worldId = ctx.pathParam("id");
         var w = simSessions.getOrRestore(worldId, ownerId.apply(ctx))
                 .orElseThrow(() -> new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + worldId));
-        var acctRows = db.query("SELECT id FROM accounts WHERE world_id=?", r -> r.str("id"), worldId);
+        var account = accounts.findForWorld(worldId);
         List<Map<String, Object>> tradeRows = new ArrayList<>();
         long realized = 0; int wins = 0, resolved = 0;
         // POP vs outcome: did higher-POP entries actually win more often? (decision quality,
         // separated from single-trade outcomes — one loss on a 70% trade is not a bad decision.)
         int hiPop = 0, hiPopWins = 0, loPop = 0, loPopWins = 0;
-        if (!acctRows.isEmpty()) {
-            var page = trades.list(acctRows.getFirst(), null, 0, 200);
+        if (account.isPresent()) {
+            var page = trades.list(account.get().id(), null, 0, 200);
             for (var t : page.trades()) {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id", t.id()); m.put("symbol", t.symbol()); m.put("strategy", t.strategy());
@@ -568,14 +565,10 @@ final class WorldController {
                 } catch (RuntimeException ignored) { /* legacy snapshot without lane time */ }
                 // MAE/MFE from the trade's own mark history: how far it went against/for the
                 // trader while open — the difference between a bad outcome and a bad decision.
-                var excursion = db.query(
-                        "SELECT MIN(COALESCE(decision_unrealized_cents, unrealized_cents)) mae, "
-                                + "MAX(COALESCE(decision_unrealized_cents, unrealized_cents)) mfe "
-                                + "FROM trade_marks WHERE trade_id=?",
-                        r -> new Long[]{r.lngOrNull("mae"), r.lngOrNull("mfe")}, t.id());
-                if (!excursion.isEmpty() && excursion.getFirst()[0] != null) {
-                    m.put("maeCents", excursion.getFirst()[0]);
-                    m.put("mfeCents", excursion.getFirst()[1]);
+                var excursion = trades.excursion(t.id());
+                if (excursion.adverseCents() != null) {
+                    m.put("maeCents", excursion.adverseCents());
+                    m.put("mfeCents", excursion.favorableCents());
                 }
                 tradeRows.add(m);
                 if (decisionPnl != null) {

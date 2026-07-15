@@ -64,6 +64,15 @@ public final class AuthService {
         return ctx.sessionAttribute(SESSION_UID);
     }
 
+    /** Destructive-operation authorization stays with the identity store, not HTTP routing. */
+    public boolean userIsAdmin(String uid) {
+        if (!enabled()) return false;
+        if (uid == null || LOCAL_USER.equals(uid)) return false;
+        String email = db.query("SELECT email FROM users WHERE id=?", row -> row.str("email"), uid)
+                .stream().findFirst().orElse(null);
+        return email != null && cfg.authAdminEmails().contains(email.toLowerCase(Locale.ROOT));
+    }
+
     /** Gate for protected routes: throws (-> 401) when auth is on and no user is signed in. */
     public void requireUser(Context ctx) {
         if (!enabled()) return;

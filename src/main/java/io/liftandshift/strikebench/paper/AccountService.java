@@ -11,6 +11,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** Single default paper account: creation, lookup, and confirmed resets. */
 public final class AccountService {
@@ -112,6 +113,13 @@ public final class AccountService {
 
     public Account get(String id) {
         return db.with(c -> get(c, id));
+    }
+
+    /** The isolated account bound to one simulated world, when that world owns one. */
+    public Optional<Account> findForWorld(String worldId) {
+        if (worldId == null || worldId.isBlank()) return Optional.empty();
+        return db.query("SELECT * FROM accounts WHERE world_id=? ORDER BY created_at LIMIT 1",
+                AccountService::map, worldId).stream().findFirst();
     }
 
     static Account get(Connection c, String id) throws SQLException {

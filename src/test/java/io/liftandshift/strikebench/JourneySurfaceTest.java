@@ -352,6 +352,22 @@ class JourneySurfaceTest {
                 "public record DecisionCompetition(", "public record DecisionBaseline(");
     }
 
+    @Test void httpControllersDoNotOwnDomainPersistence() throws Exception {
+        String server = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
+        String trades = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/TradeController.java"));
+        String worlds = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/WorldController.java"));
+        String transition = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/WorldTransitionService.java"));
+
+        assertThat(server).doesNotContain("db.query(", "db.exec(");
+        assertThat(trades).doesNotContain("Db.queryOn(", "db.query(", "db.exec(");
+        assertThat(worlds).doesNotContain("Db.queryOn(", "db.query(", "db.exec(");
+        assertThat(transition).contains("db.tx(", "Db.execOn(");
+    }
+
     @Test void scenarioAndDecisionVolatilityHaveOneResolver() throws Exception {
         String resolver = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/sim/MarketVolatilityResolver.java"));
