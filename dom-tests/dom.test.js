@@ -275,15 +275,12 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
     { timeout: 15000 });
   assert.equal(await page.evaluate(() => window.location.hash), '#/home', 'brand goes to the desk');
   assert.ok(await page.locator('.brand .brand-mark').count(), 'the SVG mark renders in the header');
-  await page.waitForSelector('#home-plan-library .home-plan-tile');
-  const singlePlanGeometry = await page.evaluate(() => {
-    const grid = document.querySelector('#home-plan-library .home-plan-grid').getBoundingClientRect();
-    const tile = document.querySelector('#home-plan-library .home-plan-tile').getBoundingClientRect();
-    return { grid: grid.width, tile: tile.width };
-  });
-  assert.ok(singlePlanGeometry.tile >= singlePlanGeometry.grid - 2,
-    'one Plan uses the complete panel instead of leaving a blank second column: ' + JSON.stringify(singlePlanGeometry));
-  assert.match(await page.textContent('#home-plan-library'), /1 working Plan[\s\S]*1 Plan/);
+  await page.waitForSelector('#next-up');
+  assert.equal(await page.locator('#home-plan-library').count(), 0,
+    'the active Plan belongs to the hero and is not repeated in a one-item library');
+  assert.match(await page.textContent('#next-up'), /Plan progress.*AAPL/s);
+  assert.equal(await page.locator('#next-up button').count(), 0,
+    'Plan progress supports the hero Continue command without duplicating it');
   await page.reload();
   await page.waitForSelector('#app[data-route="home"][data-ready="true"]');
   await page.waitForFunction(() => document.querySelectorAll('.home-market-grid .spark-svg').length >= 4,
@@ -303,6 +300,26 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   await page.click('#sector-pulse .sector-chip');
   await page.waitForSelector('#sector-explorer');
   await go('#/home'); // leave the suite on the dashboard for the next test
+});
+
+test('first contact resolves Welcome before any dashboard paint', async () => {
+  const account = await fetch(BASE + '/api/account').then(response => response.json());
+  let released = false;
+  await page.route('**/api/account', async route => {
+    await new Promise(resolve => setTimeout(resolve, 260));
+    released = true;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(account) });
+  });
+  await page.evaluate(() => localStorage.removeItem('strikebench.welcomed'));
+  await page.goto(BASE + '/?first-contact=' + Date.now() + '#/home');
+  await page.waitForTimeout(80);
+  assert.equal(released, false, 'the account decision is still pending during the paint probe');
+  assert.equal(await page.locator('.home-hero').count(), 0,
+    'Home is never mounted underneath an unresolved first-contact decision');
+  await page.waitForSelector('#welcome-hero');
+  await page.unroute('**/api/account');
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
+  await go('#/home');
 });
 
 test('plan foundation promotes once, survives reload, versions assumptions, and closes only the chip', async () => {
@@ -1299,30 +1316,33 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
 
   await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
   await go('#/home');
-  await page.waitForSelector('#home-plan-library .home-plan-grid', { timeout: 20000 }).catch(async error => {
+  await page.waitForSelector('#home-plan-library .home-plan-compact-list', { timeout: 20000 }).catch(async error => {
     throw new Error('Home Plan library did not settle: hash=' + await page.evaluate(() => location.hash)
       + ' routeError=' + await page.locator('#route-error').count()
       + ' text=' + (await page.locator('#app').textContent()).slice(0, 3000) + '\n' + error.message);
   });
-  const initialTiles = await page.locator('#home-plan-library .home-plan-tile').count();
-  const groups = await page.locator('#home-plan-library .home-plan-group').count();
-  assert.ok(initialTiles <= groups * 4, 'Home bounds each Plan market group before explicit expansion');
-  const otherToggle = page.locator('#home-plan-library [data-plan-group="other-markets"] .home-plan-group-toggle');
-  if (await otherToggle.count()) {
-    assert.match(await otherToggle.textContent(), /Show all \d+/);
-    await otherToggle.click();
-  }
+  assert.ok(await page.locator('#home-plan-library .home-plan-compact-row').count() <= 3,
+    'Home shows a bounded alternative-Plan lens');
+  assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.simTwo + '"]').count(), 0,
+    'the hero-owned active Plan is not repeated in the Home library');
+  assert.equal(await page.locator('#home-plan-library button[aria-label^="Archive"], #home-plan-library button[aria-label^="Delete"]').count(), 0,
+    'Home contains no destructive Plan-management commands');
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simOne + '"]').count(), 1);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simTwo + '"]').count(), 1);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.second + '"]').count(), 0,
     'the Plan bar shows only the current execution market');
-  await page.waitForSelector('#home-plan-library .xp-head:has-text("Closed Plan tabs")');
-  await page.locator('#home-plan-library .xp-head:has-text("Closed Plan tabs")').click();
-  const closedFirst = page.locator('.home-plan-closed-tabs .status-item').filter({ hasText: 'QQQ · Earn income' });
-  assert.equal(await closedFirst.count(), 1, 'the Home library retains a closed Plan outside the working count');
-  assert.match(await closedFirst.getByRole('button').first().textContent(), /Switch market & reopen/);
   await page.waitForTimeout(4200);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-library-desktop.png'), fullPage: true });
+
+  await go('#/plans');
+  await page.waitForSelector('#plans-library .home-plan-grid');
+  const otherToggle = page.locator('#plans-library [data-plan-group="other-markets"] .home-plan-group-toggle');
+  if (await otherToggle.count()) await otherToggle.click();
+  await page.waitForSelector('#plans-library .xp-head:has-text("Closed Plan tabs")');
+  await page.locator('#plans-library .xp-head:has-text("Closed Plan tabs")').click();
+  const closedFirst = page.locator('.home-plan-closed-tabs .status-item').filter({ hasText: 'QQQ · Earn income' });
+  assert.equal(await closedFirst.count(), 1, 'the Plan library retains a closed Plan outside the working count');
+  assert.match(await closedFirst.getByRole('button').first().textContent(), /Switch market & reopen/);
 
   await closedFirst.getByRole('button', { name: 'Switch market & reopen' }).click();
   await page.waitForSelector('[role="dialog"]');
@@ -1331,6 +1351,7 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   await page.getByRole('button', { name: 'Switch & open Plan' }).click();
   await page.waitForFunction(id => location.hash.includes('/plan/' + id + '/'), ids.first, { timeout: 20000 });
   await page.waitForFunction(base => App.state.world === base && App.Market.world === base, ids.base);
+  await page.waitForSelector('#plan-bar-root .plan-chip[data-plan-id="' + ids.first + '"]', { timeout: 20000 });
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.first + '"]').count(), 1,
     'opening a closed library Plan reopens its chip after the market commits');
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simOne + '"]').count(), 0,
@@ -1338,13 +1359,13 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
 
   await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.first + '"] .plan-chip-close').click();
   await page.waitForFunction(id => !document.querySelector('.plan-chip[data-plan-id="' + id + '"]'), ids.first);
-  await go('#/home');
-  await page.waitForSelector('#home-plan-library .xp-head:has-text("Closed Plan tabs")');
-  await page.locator('#home-plan-library .xp-head:has-text("Closed Plan tabs")').click();
+  await go('#/plans');
+  await page.waitForSelector('#plans-library .xp-head:has-text("Closed Plan tabs")');
+  await page.locator('#plans-library .xp-head:has-text("Closed Plan tabs")').click();
   assert.equal(await page.locator('.home-plan-closed-tabs .status-item').filter({ hasText: 'QQQ · Earn income' }).count(), 1,
     'the chip × removes only the open-tab state; the durable Plan remains under closed tabs');
 
-  await page.locator('#home-plan-library [data-plan-id="' + ids.simOne + '"] .home-plan-actions .btn:not(.btn-secondary)').click();
+  await page.locator('#plans-library [data-plan-id="' + ids.simOne + '"] .home-plan-actions .btn:not(.btn-secondary)').click();
   await page.waitForFunction(world => App.state.world === world && App.Market.world === world, ids.worldId,
     { timeout: 20000 });
   await page.waitForFunction(id => location.hash.includes('/plan/' + id + '/'), ids.simOne);
@@ -1414,6 +1435,8 @@ test('equivalent Plan retries collapse while materially different Plans survive 
   await page.waitForSelector('#home-plan-library [data-plan-id="' + ids.variant + '"]');
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.one + '"]').count(), 1);
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.variant + '"]').count(), 1);
+  assert.ok(await page.locator('#home-plan-library .home-plan-compact-row').count() <= 3,
+    'the desk caps alternative Plans without deleting or merging distinct assumptions');
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.one + '"]').count(), 1);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.variant + '"]').count(), 1);
 
@@ -1422,15 +1445,16 @@ test('equivalent Plan retries collapse while materially different Plans survive 
     'closing a Plan tab from Home does not navigate into another Plan');
   await page.waitForFunction(id => !document.querySelector('#home-plan-library [data-plan-id="' + id + '"]'),
     ids.disposable);
-  await page.waitForSelector('#home-plan-library .xp-head:has-text("Closed Plan tabs")');
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.disposable + '"]').count(), 0,
-    'a closed tab is not counted or rendered as a working Plan');
-  await page.locator('#home-plan-library .xp-head:has-text("Closed Plan tabs")').click();
+    'a closed tab is not rendered in the compact working lens');
+  await go('#/plans');
+  await page.waitForSelector('#plans-library .xp-head:has-text("Closed Plan tabs")');
+  await page.locator('#plans-library .xp-head:has-text("Closed Plan tabs")').click();
   await page.locator('.home-plan-closed-tabs .status-item').filter({ hasText: 'SPY · Disposable tab' })
     .getByRole('button', { name: 'Delete draft' }).click();
   await page.getByRole('button', { name: 'Delete draft' }).last().click();
   await page.waitForFunction(id => !PlanStore.allMarkets().some(p => p.id === id), ids.disposable);
-  assert.equal(await page.locator('#home-plan-library').getByText('SPY · Disposable tab').count(), 0,
+  assert.equal(await page.locator('#plans-library').getByText('SPY · Disposable tab').count(), 0,
     'permanent draft deletion removes the Plan from the all-market library');
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1443,16 +1467,16 @@ test('equivalent Plan retries collapse while materially different Plans survive 
   assert.equal(await page.locator('#plan-picker option[value="' + ids.variant + '"]').count(), 1,
     'the materially different Plan survives restart');
 
-  await go('#/home');
-  await page.locator('#home-plan-library [data-plan-id="' + ids.one + '"] button[aria-label^="Archive"]').click();
+  await go('#/plans');
+  await page.locator('#plans-library [data-plan-id="' + ids.one + '"] button[aria-label^="Archive"]').click();
   await page.waitForSelector('[role="dialog"]');
   await page.getByRole('button', { name: 'Archive Plan' }).click();
-  await page.waitForFunction(id => !document.querySelector('#home-plan-library [data-plan-id="' + id + '"]'), ids.one);
-  await page.waitForSelector('#home-plan-library .xp-head:has-text("Archived Plans")', { timeout: 15000 });
-  assert.match(await page.textContent('#home-plan-library'), /Archived Plans \(\d+\)/,
+  await page.waitForFunction(id => !document.querySelector('#plans-library [data-plan-id="' + id + '"]'), ids.one);
+  await page.waitForSelector('#plans-library .xp-head:has-text("Archived Plans")', { timeout: 15000 });
+  assert.match(await page.textContent('#plans-library'), /Archived Plans \(\d+\)/,
     'archiving removes clutter while retaining a read-only record');
-  await page.locator('#home-plan-library .xp-head:has-text("Archived Plans")').click();
-  assert.match(await page.textContent('#home-plan-library .home-plan-archive'), /AAPL.*Retry-safe audit/s,
+  await page.locator('#plans-library .xp-head:has-text("Archived Plans")').click();
+  assert.match(await page.textContent('#plans-library .home-plan-archive'), /AAPL.*Retry-safe audit/s,
     'the archived Plan remains inspectable by identity');
 
   await page.evaluate(async values => {
@@ -1489,21 +1513,19 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
   });
 
   await go('#/home');
-  const group = page.locator('#home-plan-library [data-plan-group="in-this-market"]');
-  await group.waitFor({ state: 'visible' });
-  assert.equal(await group.locator('.home-plan-tile').count(), 3,
-    'the desk starts with a scannable recent subset rather than an unbounded ledger');
-  assert.match(await group.locator('.home-plan-group-count').textContent(), /3 of \d+ Plans/);
-  const toggle = group.locator('.home-plan-group-toggle');
-  assert.match(await toggle.textContent(), /Show all \d+/);
-  await toggle.click();
+  const compact = page.locator('#home-plan-library .home-plan-compact-list');
+  await compact.waitFor({ state: 'visible' });
+  assert.equal(await compact.locator('.home-plan-compact-row').count(), 3,
+    'the desk shows at most three alternatives to the hero-owned active Plan');
+  assert.match(await page.locator('#home-plan-library .plan-library-count').textContent(), /\d+ other Plans/);
+  assert.equal(await page.locator('#home-plan-library [aria-label^="Archive"], #home-plan-library [aria-label^="Delete"]').count(), 0,
+    'Plan lifecycle management is absent from the desk lens');
+  await page.locator('#home-plan-library').getByRole('link', { name: 'View all' }).click();
+  await page.waitForSelector('#plans-library [data-plan-group="in-this-market"]');
+  const group = page.locator('#plans-library [data-plan-group="in-this-market"]');
   for (const id of ids) assert.equal(await group.locator('[data-plan-id="' + id + '"]').count(), 1,
-    'every Plan becomes reachable after explicit expansion');
-  assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+    'every Plan remains reachable in the canonical Plan library');
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-library-expanded-desktop.png'), fullPage: true });
-  await toggle.click();
-  assert.equal(await group.locator('.home-plan-tile').count(), 3);
-  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
 
   await page.evaluate(async planIds => {
     for (const id of planIds) {
@@ -4428,6 +4450,12 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
   await page.unroute('**/api/data/overview');
   // Home: exactly ONE 'Find an idea' doorway (review #9) and no marketing hero.
   await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1')); // dashboard, not the tour
+  const compositionPlanId = await page.evaluate(async () => {
+    await PlanStore.load(true);
+    const plan = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'neutral',
+      horizonDays: 62, riskMode: 'conservative', title: 'AAPL · Home composition audit' });
+    return plan.id;
+  });
   // Exercise the observed-size sector catalog even though this suite runs in explicit Demo.
   // The prior audit saw one Demo sector and therefore missed the full rail widening Home by 1,600px.
   await page.evaluate(() => {
@@ -4444,7 +4472,9 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
   const homeText = await page.textContent('#app');
   const findCount = (homeText.match(/Find an idea/g) || []).length;
   assert.ok(findCount <= 1, 'one contextual Find-an-idea, not ' + findCount);
-  assert.ok(await page.locator('#next-up').count(), 'one Continue area (journey + continuity merged)');
+  assert.ok(await page.locator('#next-up').count(), 'one static Plan-progress area supports the hero continuation');
+  assert.equal(await page.locator('#next-up button').count(), 0,
+    'the hero remains the only Continue command on Home');
   const cbText = await page.textContent('#command-bar');
   assert.ok(await page.locator('#command-bar .btn').count() === 3, 'command bar keeps only non-nav tools');
   assert.doesNotMatch(cbText, /Research|Ideas/, 'nav destinations are not repeated as commands');
@@ -4488,7 +4518,7 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
       'the two-card second row is visually centered: ' + JSON.stringify(centeredSecondRow));
   }
   assert.equal(await page.locator('.home-col-side .card-head').count(), 3,
-    'Continue, Tools, and Sector pulse are all explicitly headed');
+    'Plan progress, Tools, and Sector pulse are all explicitly headed');
   // Responsive chrome must recalculate its sticky anchor. It previously retained the 120px
   // mobile top after resizing to desktop and overlaid both the tape and the page.
   await page.setViewportSize({ width: 390, height: 844 });
@@ -4504,5 +4534,10 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
     'world band remains pinned below the resized header: ' + JSON.stringify(chromeGeo));
   assert.ok(chromeGeo.bandBottom <= chromeGeo.tapeTop + 2,
     'world band never overlays the tape after resize: ' + JSON.stringify(chromeGeo));
+  await page.evaluate(async id => {
+    const plan = await PlanStore.get(id, true);
+    if (plan.status !== 'ARCHIVED') await API.post('/api/plans/' + id + '/archive', { expectedVersion: plan.version });
+    await PlanStore.refresh();
+  }, compositionPlanId);
   await page.setViewportSize({ width: 1280, height: 900 });
 });
