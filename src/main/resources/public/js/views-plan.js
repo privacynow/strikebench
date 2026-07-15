@@ -1220,8 +1220,11 @@
       { key: 'chain', label: 'Chain', icon: 'grid', note: 'Inspect the book' },
       { key: 'scout', label: 'Scout', icon: 'compass', note: 'Similar setups · better fits · offsets' }
     ];
+    body.setAttribute('role', 'tabpanel');
+    body.setAttribute('aria-labelledby', 'plan-tool-' + ui.strategyView);
     modes.forEach(function (mode) {
       selector.appendChild(el('button', { type: 'button', role: 'tab',
+        id: 'plan-tool-' + mode.key, 'aria-controls': 'plan-strategy-body',
         class: 'plan-tool' + (ui.strategyView === mode.key ? ' active' : ''),
         'data-strategy-tool': mode.key,
         'aria-selected': ui.strategyView === mode.key ? 'true' : 'false',
@@ -1240,6 +1243,7 @@
         button.setAttribute('aria-selected', String(active));
       });
       selector.syncTabs();
+      body.setAttribute('aria-labelledby', 'plan-tool-' + ui.strategyView);
       body.innerHTML = '';
       if (ui.strategyView === 'builder') {
         body.appendChild(el('div', { class: 'plan-tool-intro' },
@@ -1304,6 +1308,7 @@
         var scopeRow = el('div', { class: 'segmented plan-scout-scopes', role: 'tablist', 'aria-label': 'Scout job' });
         scoutScopes.forEach(function (scope) {
           scopeRow.appendChild(el('button', { type: 'button', role: 'tab',
+            id: 'plan-scout-tab-' + scope.key.toLowerCase(), 'aria-controls': 'plan-scout-panel',
             'data-scout-scope': scope.key,
             class: ui.scoutScope === scope.key ? 'active' : '',
             'aria-selected': String(ui.scoutScope === scope.key), onclick: function () {
@@ -1318,11 +1323,13 @@
           }).catch(function (e) { UI.toast(e.message, 'error'); });
         });
         var scopeMeta = scoutScopes.find(function (scope) { return scope.key === ui.scoutScope; });
+        var scopePanel = el('div', { id: 'plan-scout-panel', role: 'tabpanel',
+          'aria-labelledby': 'plan-scout-tab-' + ui.scoutScope.toLowerCase() });
         var scoutHead = el('div', { class: 'card plan-scout-head' },
           UI.cardHeader('Scout around ' + planRef.plan.symbol),
-          el('p', { class: 'muted' }, scopeMeta.note + '. This keeps ' + planRef.plan.symbol
+          scopeRow, scopePanel);
+        scopePanel.append(el('p', { class: 'muted' }, scopeMeta.note + '. This keeps ' + planRef.plan.symbol
             + ' as the current Plan; a pick opens a separate linked Plan instead of mixing two stocks in one package.'),
-          scopeRow,
           el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', id: 'plan-run-scout',
             onclick: async function () {
               this.disabled = true; this.setAttribute('aria-busy', 'true');
@@ -1341,17 +1348,17 @@
         }
         var scoutResult = ui.scoutResults[ui.scoutScope];
         if (!scoutResult) {
-          body.appendChild(UI.emptyState('No ' + scopeMeta.label.toLowerCase() + ' scan yet',
+          scopePanel.appendChild(UI.emptyState('No ' + scopeMeta.label.toLowerCase() + ' scan yet',
             'Run this focused scan when you already care about ' + planRef.plan.symbol
               + '. Use the universe Scout on Research when you do not have a ticker yet.'));
           return;
         }
         if (!scoutResult.candidates || !scoutResult.candidates.length) {
-          body.appendChild(UI.emptyState('Nothing matched this Scout job',
+          scopePanel.appendChild(UI.emptyState('Nothing matched this Scout job',
             (scoutResult.economicMessage || 'No related symbol passed.')
               + ' Refreshing rechecks current prices and evidence; it does not change this Plan.'));
         } else {
-          body.appendChild(el('p', { class: 'muted' }, scoutResult.economicMessage));
+          scopePanel.appendChild(el('p', { class: 'muted' }, scoutResult.economicMessage));
           var scoutGrid = el('div', { class: 'plan-scout-results', id: 'plan-scout-results' });
           scoutResult.candidates.forEach(function (candidate) {
             var card = candidateCard(candidate, false, candidate.symbol);
@@ -1369,10 +1376,10 @@
               } }, 'Open as linked Plan')));
             scoutGrid.appendChild(card);
           });
-          body.appendChild(scoutGrid);
+          scopePanel.appendChild(scoutGrid);
         }
         if (scoutResult.notes && scoutResult.notes.length) {
-          body.appendChild(UI.expandable('Scout notes and skipped symbols', function () {
+          scopePanel.appendChild(UI.expandable('Scout notes and skipped symbols', function () {
             return el('ul', { class: 'rationale' }, scoutResult.notes.map(function (note) { return el('li', {}, note); }));
           }));
         }

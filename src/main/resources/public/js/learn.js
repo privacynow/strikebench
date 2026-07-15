@@ -65,7 +65,7 @@
       expert: 'Gate \u2192 economic band (unfavorable 1\u201325, unavailable 26\u201350, mixed 51\u201375, favorable 76\u2013100) \u2192 within-band risk score. The latter combines POP .10, R:R .08, after-cost EV .35, liquidity .12, capital .05, evidence .15 and thesis .15, then applies evidence/tail/DTE haircuts.' },
     evidence: { short: 'How REAL the data behind this number is.',
       beginner: 'Observed = a market quote or history. Modeled = a formula\u2019s output. Demo = built-in practice data. Demo never substitutes for Observed; within one result, the weakest permitted input labels the answer.',
-      expert: 'Per-dimension provenance (quotes/IV/greeks/history) rolled up worst-of. DEMO_FIXTURE never masquerades; UNKNOWN gates the decision score to non-viable.' },
+      expert: 'Per-dimension provenance (quotes/IV/greeks/history) rolled up worst-of. DEMO_FIXTURE never masquerades; UNKNOWN receives no evidence credit and a larger uncertainty haircut, but remains visible for comparison unless a genuine mechanical or account gate fails.' },
     ivrank: { short: 'Where today\u2019s option prices sit vs their own past year.',
       beginner: 'High rank = options are expensive by this stock\u2019s own standards (good for sellers); low = cheap (good for buyers).',
       expert: '(IV \u2212 52w min)/(52w max \u2212 min) over OUR observed snapshot history; null until \u226510 observations — never fabricated.' },

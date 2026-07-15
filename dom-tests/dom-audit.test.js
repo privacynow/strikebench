@@ -8,6 +8,8 @@
  *   3. Form controls come in exactly the sanctioned sizes (--ctl-h / --ctl-h-sm / --ctl-h-xs).
  *   4. Non-finite numeric sentinels never reach visible financial text.
  *   5. Every visible tab remains fully inside the viewport at every audited width.
+ *   6. Every visible form control and icon command has an accessible name.
+ *   7. Every tab list owns one real, labeled tab panel.
  *
  * Run:  node --test dom-audit.test.js
  */
@@ -84,6 +86,7 @@ after(async () => {
 });
 
 const ROUTES = ['#/home', '#/home/tour', '#/research', '#/research/AAPL',
+  '#/research/AAPL?view=evidence', '#/research/AAPL?view=options',
   '#/portfolio', '#/portfolio/construct', '#/portfolio/positions', '#/portfolio/activity',
   '#/portfolio/record', '#/portfolio/account', '#/data/overview',
   '#/data/simulation', '#/data/datasets', '#/data/sources', '#/data/admin'];
@@ -95,7 +98,7 @@ const ALLOWED_HEIGHTS = [38, 30, 42, 46]; // welcome hero uses a deliberate 42px
 const TOLERANCE = 1.5;
 
 function auditInPage() {
-  const out = { overflow: [], emoji: [], controls: [], numbers: [], tooltips: [], navigation: [] };
+  const out = { overflow: [], emoji: [], controls: [], numbers: [], tooltips: [], navigation: [], accessibility: [] };
   const doc = document.documentElement;
   if (doc.scrollWidth > doc.clientWidth + 2) {
     // Animated/local-scroll children can be thousands of pixels wide without widening the
@@ -124,6 +127,7 @@ function auditInPage() {
   }
   const badNumbers = (document.body.innerText || '').match(/\$?NaN(?:\.NaN)?|NaN%/g) || [];
   if (badNumbers.length) out.numbers.push(...badNumbers.slice(0, 8));
+  const norm = value => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
   document.querySelectorAll('[role="tab"]').forEach(tab => {
     if (!tab.offsetParent) return;
     const r = tab.getBoundingClientRect();
@@ -131,8 +135,37 @@ function auditInPage() {
       out.navigation.push((tab.textContent || tab.id || 'tab').trim().slice(0, 50)
         + '@' + r.left.toFixed(1) + '..' + r.right.toFixed(1));
     }
+    const controls = tab.getAttribute('aria-controls');
+    const panel = controls && document.getElementById(controls);
+    if (!tab.id || !controls || !panel || panel.getAttribute('role') !== 'tabpanel') {
+      out.navigation.push('tab-contract:' + (tab.textContent || tab.id || 'tab').trim().slice(0, 50));
+    } else if (tab.getAttribute('aria-selected') === 'true'
+        && panel.getAttribute('aria-labelledby') !== tab.id) {
+      out.navigation.push('tab-label:' + tab.id + '->' + controls);
+    }
   });
-  const norm = value => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  document.querySelectorAll('[role="tablist"]').forEach(list => {
+    if (!list.offsetParent) return;
+    const visible = Array.from(list.querySelectorAll(':scope > [role="tab"]')).filter(tab => tab.offsetParent);
+    if (!visible.length) return;
+    const selected = visible.filter(tab => tab.getAttribute('aria-selected') === 'true');
+    const tabbable = visible.filter(tab => tab.tabIndex === 0);
+    if (selected.length !== 1 || tabbable.length !== 1 || selected[0] !== tabbable[0]) {
+      out.navigation.push('tab-state:' + (list.getAttribute('aria-label') || list.id || 'tablist'));
+    }
+  });
+  document.querySelectorAll('#app input, #app select, #app textarea').forEach(control => {
+    if (!control.offsetParent || control.type === 'hidden') return;
+    const labelled = control.getAttribute('aria-label') || control.getAttribute('aria-labelledby')
+      || control.closest('label') || (control.id && document.querySelector('label[for="' + CSS.escape(control.id) + '"]'));
+    if (!labelled) out.accessibility.push('unnamed-control:' + (control.id || control.outerHTML.slice(0, 60)));
+  });
+  document.querySelectorAll('#app button, #app a[href]').forEach(command => {
+    if (!command.offsetParent) return;
+    const name = norm(command.getAttribute('aria-label') || command.getAttribute('aria-labelledby')
+      || command.innerText || command.textContent || command.getAttribute('title'));
+    if (!name) out.accessibility.push('unnamed-command:' + (command.id || command.className || command.tagName));
+  });
   document.querySelectorAll('[title]').forEach(el => {
     if (!el.offsetParent) return;
     const title = norm(el.getAttribute('title'));
@@ -194,6 +227,7 @@ for (const width of WIDTHS) {
       for (const n of res.numbers) failures.push(`${route}@${width}: NON-FINITE ${n}`);
       for (const t of res.tooltips) failures.push(`${route}@${width}: DUPLICATE-TOOLTIP ${t}`);
       for (const n of res.navigation) failures.push(`${route}@${width}: CLIPPED-TAB ${n}`);
+      for (const a of res.accessibility) failures.push(`${route}@${width}: A11Y ${a}`);
     }
     assert.deepEqual(failures, [], failures.join('\n'));
   });
