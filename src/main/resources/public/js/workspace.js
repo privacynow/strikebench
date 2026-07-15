@@ -24,6 +24,7 @@
   var rev = 0;             // last backend revision seen (multi-tab adopt guard)
   var started = false;
   var lastSavedJson = '';  // dirty check — the 4s tick only writes when something changed
+  var lastRemoteJson = ''; // last state the backend actually acknowledged
 
   function snapshot() {
     var s = {
@@ -87,11 +88,12 @@
       planPresentation: s.planPresentation, forms: s.forms });
   }
 
-  function pushRemote(s) {
+  function pushRemote(s, json) {
     clearTimeout(pushTimer);
     pushTimer = setTimeout(function () {
       API.put('/api/workspace', s).then(function (r) {
         if (r && r.rev) rev = r.rev;
+        lastRemoteJson = json;
       }).catch(function () { /* offline/backend down — localStorage still has it */ });
     }, 1500);
   }
@@ -107,7 +109,7 @@
     if (json === lastSavedJson) return;
     lastSavedJson = json;
     persistLocal(s);
-    pushRemote(s);
+    pushRemote(s, json);
   }
 
   /**
@@ -121,6 +123,7 @@
     var localState = local && local.state && local.state.v === 2 ? local.state : null;
     var remoteState = remote && remote.state && remote.state.v === 2 ? remote.state : null;
     if (remote && remote.rev) rev = remote.rev;
+    lastRemoteJson = remoteState ? stateJson(remoteState) : '';
     var chosen = null;
     if (localState && remoteState) chosen = (localState.savedAt || 0) >= (remoteState.savedAt || 0) ? localState : remoteState;
     else chosen = localState || remoteState;
@@ -149,10 +152,9 @@
       var s = snapshot();
       persistLocal(s);
       var json = stateJson(s);
-      // A tab that has not changed since its last save must not overwrite a newer workspace
-      // merely because it closes. This remains correct in browser shells that report every
-      // background tab as visible and therefore cannot support visibility-based adoption.
-      if (json === lastSavedJson) return;
+      // lastSavedJson includes a debounced local save that may not have reached the server yet.
+      // Compare against the last acknowledged remote state so pagehide flushes pending work.
+      if (json === lastRemoteJson) return;
       lastSavedJson = json;
       clearTimeout(pushTimer);
       if (window.App && App.state.serverStale) return;
@@ -175,6 +177,7 @@
     apply(remote.state);
     var s = snapshot();
     lastSavedJson = stateJson(s);
+    lastRemoteJson = lastSavedJson;
     persistLocal(s);
     adoptedWhileHidden = !!hidden;
     return true;

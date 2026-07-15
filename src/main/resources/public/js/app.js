@@ -1328,6 +1328,10 @@
   var realtimeSolo = false;
   var realtimeReady = false;
   var realtimeCoordinatedAt = 0;
+  var realtimeMarketOpened = false;
+  var realtimeLeaderHealthAt = 0;
+  var realtimeLeaderMarketHealthy = false;
+  var realtimeLeaderEventsHealthy = false;
 
   function readRealtimeLease() {
     try { return JSON.parse(localStorage.getItem(REALTIME_LEASE_KEY) || 'null'); }
@@ -1397,7 +1401,13 @@
     window.addEventListener('pagehide', releaseRealtimeLeadership);
     setInterval(function () {
       if (document.visibilityState === 'hidden') releaseRealtimeLeadership();
-      else claimRealtimeStreams();
+      else {
+        claimRealtimeStreams();
+        if (realtimeLeader) relayRealtime('health', {
+          market: !!App._marketES && App._marketES.readyState === 1,
+          events: !!App._eventsES && App._eventsES.readyState === 1
+        });
+      }
     }, 4000);
     if (!window.BroadcastChannel) {
       realtimeSolo = true;
@@ -1409,9 +1419,22 @@
     realtimeChannel.onmessage = function (ev) {
       var msg = ev && ev.data;
       if (!msg || msg.sender === realtimeTabId) return;
-      if (msg.kind === 'quotes') acceptMarketFrame(msg.payload);
+      if (msg.kind === 'quotes') {
+        realtimeLeaderHealthAt = Date.now();
+        realtimeLeaderMarketHealthy = true;
+        acceptMarketFrame(msg.payload);
+      }
       else if (msg.kind === 'event') acceptAppEvent(msg.eventType, msg.payload);
-      else if (msg.kind === 'released' && document.visibilityState !== 'hidden') claimRealtimeStreams();
+      else if (msg.kind === 'health') {
+        realtimeLeaderHealthAt = Date.now();
+        realtimeLeaderMarketHealthy = !!(msg.payload && msg.payload.market);
+        realtimeLeaderEventsHealthy = !!(msg.payload && msg.payload.events);
+      } else if (msg.kind === 'released' && document.visibilityState !== 'hidden') {
+        realtimeLeaderHealthAt = 0;
+        realtimeLeaderMarketHealthy = false;
+        realtimeLeaderEventsHealthy = false;
+        claimRealtimeStreams();
+      }
     };
     window.addEventListener('storage', function (ev) {
       if (ev.key === REALTIME_LEASE_KEY && document.visibilityState !== 'hidden') claimRealtimeStreams();
@@ -1434,7 +1457,7 @@
     App._marketES = es;
     App._marketESstartedAt = Date.now();
     App._marketESerrors = 0; // fresh error budget per subscription (universe change / reconnect)
-    es.onopen = function () { App._marketESerrors = 0; };
+    es.onopen = function () { App._marketESerrors = 0; realtimeMarketOpened = true; };
     es.addEventListener('quotes', function (ev) {
       try {
         var data = JSON.parse(ev.data);
@@ -1456,24 +1479,23 @@
     if (realtimeReady && !realtimeSolo && !realtimeLeader) {
       var lease = readRealtimeLease();
       var leaderAlive = lease && Number(lease.expires || 0) > Date.now();
-      // Before the first relayed frame, retain the ordinary poll fallback after the same 15s
-      // connection grace used by a direct EventSource. Once a frame lands, MarketStore.seq is
-      // the durable proof that this follower has a working relay.
-      return !!leaderAlive && (App.Market.seq > 0 || Date.now() - realtimeCoordinatedAt < 15000);
+      var recentHealth = Date.now() - realtimeLeaderHealthAt < 9000;
+      return !!leaderAlive && ((recentHealth && realtimeLeaderMarketHealthy)
+        || (!realtimeLeaderHealthAt && Date.now() - realtimeCoordinatedAt < 15000));
     }
     var es = App._marketES;
     if (!es) return false;
-    if (es.readyState === 1) {
-      return App.Market.seq > 0 || Date.now() - (App._marketESstartedAt || 0) < 15000;
-    }
-    return es.readyState === 0 && Date.now() - (App._marketESstartedAt || 0) < 15000;
+    if (es.readyState === 1) return true;
+    return !realtimeMarketOpened && Date.now() - realtimeCoordinatedAt < 15000;
   }
+  App.marketStreamHealthy = marketStreamHealthy;
   App.subscribeMarketStream = subscribeMarketStream;
   App.eventsStreamHealthy = function () {
     if (document.visibilityState === 'hidden') return true;
-    if (realtimeSolo || realtimeLeader) return !!App._eventsES;
+    if (realtimeSolo || realtimeLeader) return !!App._eventsES && App._eventsES.readyState === 1;
     var lease = readRealtimeLease();
-    return !!lease && Number(lease.expires || 0) > Date.now();
+    return !!lease && Number(lease.expires || 0) > Date.now()
+      && Date.now() - realtimeLeaderHealthAt < 9000 && realtimeLeaderEventsHealthy;
   };
 
   /**

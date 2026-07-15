@@ -4081,6 +4081,37 @@ test('smooth pipeline: GET cache and tape refresh preserve continuity', async ()
   assert.equal(stable, true, 'tape strip not rebuilt when symbols unchanged');
 });
 
+test('pagehide flushes workspace state that is saved locally but not acknowledged remotely', async () => {
+  const flushed = await page.evaluate(async () => {
+    const originalFetch = window.fetch;
+    const previous = App.state.dataScenarioForm;
+    const calls = [];
+    window.fetch = function (url, options) {
+      if (String(url) === '/api/workspace') {
+        calls.push({ method: options && options.method, keepalive: !!(options && options.keepalive) });
+        return Promise.resolve(new Response('{"rev":999}', {
+          status: 200, headers: { 'Content-Type': 'application/json' }
+        }));
+      }
+      return originalFetch.apply(this, arguments);
+    };
+    App.state.dataScenarioForm = { pagehideProbe: Date.now() };
+    Workspace.save(); // records locally and starts the 1.5s remote debounce
+    window.dispatchEvent(new Event('pagehide'));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    window.fetch = originalFetch;
+    App.state.dataScenarioForm = previous;
+    Workspace.save();
+    App.subscribeMarketStream();
+    return calls;
+  });
+  assert.deepEqual(flushed, [{ method: 'PUT', keepalive: true }],
+    'pagehide sends the still-unacknowledged workspace immediately');
+  await page.waitForTimeout(1700); // let the restored workspace reach the real backend
+  await page.reload();
+  await page.waitForSelector('#app[data-ready="true"]');
+});
+
 test('multiple tabs share one realtime stream pair without starving API reads', async () => {
   const extras = [];
   try {
@@ -4100,6 +4131,24 @@ test('multiple tabs share one realtime stream pair without starving API reads', 
       'all tabs agree on one realtime leader: ' + JSON.stringify(states));
     assert.equal(states.filter(x => x.market && x.events).length, 1,
       'exactly one tab owns both EventSource connections: ' + JSON.stringify(states));
+    const leaderIndex = states.findIndex(x => x.market && x.events);
+    const leader = pages[leaderIndex];
+    const follower = pages[leaderIndex === 0 ? 1 : 0];
+    await leader.evaluate(() => {
+      if (App._marketES) App._marketES.close();
+      // Keep the leader lease alive while representing a transport that can no longer relay.
+      App._marketES = { readyState: 2, close: function () {} };
+    });
+    await page.waitForTimeout(4500); // one lease renewal + health broadcast
+    const brokenRelay = await follower.evaluate(() => ({
+      healthy: App.marketStreamHealthy(),
+      lease: JSON.parse(localStorage.getItem('strikebench.realtime.leader.v1') || 'null')
+    }));
+    assert.equal(brokenRelay.healthy, false,
+      'a renewing leader with a broken SSE must not suppress follower polling');
+    assert.equal(brokenRelay.lease && brokenRelay.lease.id, states[leaderIndex].lease,
+      'the fallback is triggered by transport health, not only lease expiry');
+    await leader.evaluate(() => { App._marketES = null; App.subscribeMarketStream(); });
     const sessionStatus = await extras[extras.length - 1].evaluate(async () => {
       const result = await Promise.race([
         fetch('/api/sim/market').then(r => r.status),
