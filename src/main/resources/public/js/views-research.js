@@ -2215,8 +2215,8 @@
         r.holdout === 'held' ? 'Split-half consistency: the edge pointed the same way in both halves of the window.'
           : 'Split-half consistency: the edge lived in only ONE half of the window \u2014 possibly one regime\u2019s story.'));
     }
-    if (level === 'expert') {
-      out.appendChild(el('div', { class: 'chip-row' },
+    function exactStatistics() {
+      return el('div', { class: 'chip-row study-exact-statistics' },
         chip('Overlap z screen', String(r.zScore),
           'A conservative screening approximation: overlapping outcome windows reduce the effective sample. It is not an independent-observation test.'),
         chip(protocol.confidencePct + '% CI (avg)', r.ciLowPct + '% … ' + r.ciHighPct + '%'),
@@ -2228,7 +2228,17 @@
         chip('Clears z screen', r.significant ? 'yes' : 'no',
           protocol.multiplicity === 'CATALOG_BONFERRONI'
             ? 'Uses the catalog-adjusted critical z shown in the protocol.'
-            : 'Exploratory and unadjusted; repeated searching raises false-positive risk.')));
+            : 'Exploratory and unadjusted; repeated searching raises false-positive risk.'));
+    }
+    if (level === 'expert') {
+      out.appendChild(exactStatistics());
+    } else {
+      out.appendChild(UI.expandable('See the exact statistics', function () {
+        return el('div', {},
+          el('p', { class: 'muted small' },
+            'These are the same screening statistics used in Expert. They quantify uncertainty; they do not turn an in-sample pattern into a forecast.'),
+          exactStatistics());
+      }));
     }
     if (r.exampleDates && r.exampleDates.length) {
       out.appendChild(el('div', { class: 'muted small', style: 'margin-top:4px' }, 'Example signal dates: ' + r.exampleDates.join(', ')));

@@ -252,13 +252,14 @@
   }
 
   function portfolioModeNav(tracked) {
-    return el('div', { class: 'portfolio-mode seg', role: 'tablist', 'aria-label': 'Portfolio workspace' },
+    var list = el('div', { class: 'portfolio-mode seg', role: 'tablist', 'aria-label': 'Portfolio workspace' },
       el('button', { type: 'button', role: 'tab', class: tracked ? '' : 'active', 'aria-selected': tracked ? 'false' : 'true',
         tabindex: tracked ? '-1' : '0',
         onclick: function () { App.navigate('#/portfolio/positions'); } }, 'Paper account'),
       el('button', { type: 'button', role: 'tab', class: tracked ? 'active' : '', 'aria-selected': tracked ? 'true' : 'false',
         tabindex: tracked ? '0' : '-1',
         onclick: function () { App.navigate('#/portfolio/book/overview'); } }, 'Tracked accounts'));
+    return UI.bindTabList(list, function (tab) { tab.click(); });
   }
 
   var PORTFOLIO_ACCOUNT_TYPES = [
@@ -335,10 +336,11 @@
   function portfolioBookTabs(section) {
     var tabs = [['overview', 'Overview'], ['activity', 'Activity'], ['performance', 'Performance'],
       ['tax', 'Taxes & export'], ['settings', 'Settings']];
-    return el('div', { class: 'tabs portfolio-book-tabs', role: 'tablist', 'aria-label': 'Tracked account sections' },
+    var list = el('div', { class: 'tabs portfolio-book-tabs', role: 'tablist', 'aria-label': 'Tracked account sections' },
       tabs.map(function (tab) { return el('button', { type: 'button', role: 'tab', class: section === tab[0] ? 'active' : '',
         'aria-selected': section === tab[0] ? 'true' : 'false', tabindex: section === tab[0] ? '0' : '-1',
         onclick: function () { App.navigate('#/portfolio/book/' + tab[0]); } }, tab[1]); }));
+    return UI.bindTabList(list, function (tab) { tab.click(); });
   }
 
   function portfolioPositionLabel(p) {
@@ -1321,17 +1323,18 @@
       statsRow.appendChild(stat('Buying power', fmtMoney(acct.buyingPowerCents)));
       statsRow.appendChild(stat('Started with', fmtMoney(acct.startingCashCents)));
     }
-    root.appendChild(el('div', { class: 'tabs' },
-      el('button', { class: section === 'construct' ? 'active' : '', id: 'pf-sec-construct',
+    var paperTabs = el('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Paper account sections' },
+      el('button', { role: 'tab', 'aria-selected': section === 'construct' ? 'true' : 'false', tabindex: section === 'construct' ? '0' : '-1', class: section === 'construct' ? 'active' : '', id: 'pf-sec-construct',
         onclick: function () { App.navigate('#/portfolio/construct'); } }, 'Construct'),
-      el('button', { class: section === 'positions' ? 'active' : '', id: 'pf-sec-positions',
+      el('button', { role: 'tab', 'aria-selected': section === 'positions' ? 'true' : 'false', tabindex: section === 'positions' ? '0' : '-1', class: section === 'positions' ? 'active' : '', id: 'pf-sec-positions',
         onclick: function () { App.navigate('#/portfolio/positions'); } }, 'Positions'),
-      el('button', { class: section === 'activity' ? 'active' : '', id: 'pf-sec-activity',
+      el('button', { role: 'tab', 'aria-selected': section === 'activity' ? 'true' : 'false', tabindex: section === 'activity' ? '0' : '-1', class: section === 'activity' ? 'active' : '', id: 'pf-sec-activity',
         onclick: function () { App.navigate('#/portfolio/activity'); } }, 'Activity'),
-      el('button', { class: section === 'record' ? 'active' : '', id: 'pf-sec-record',
+      el('button', { role: 'tab', 'aria-selected': section === 'record' ? 'true' : 'false', tabindex: section === 'record' ? '0' : '-1', class: section === 'record' ? 'active' : '', id: 'pf-sec-record',
         onclick: function () { App.navigate('#/portfolio/record'); } }, 'Your record'),
-      el('button', { class: section === 'account' ? 'active' : '', id: 'pf-sec-account',
-        onclick: function () { App.navigate('#/portfolio/account'); } }, 'Account')));
+      el('button', { role: 'tab', 'aria-selected': section === 'account' ? 'true' : 'false', tabindex: section === 'account' ? '0' : '-1', class: section === 'account' ? 'active' : '', id: 'pf-sec-account',
+        onclick: function () { App.navigate('#/portfolio/account'); } }, 'Account'));
+    root.appendChild(UI.bindTabList(paperTabs, function (tabButton) { tabButton.click(); }));
 
     if (directTradeId) {
       root.appendChild(el('div', { class: 'btn-row' },
@@ -1489,7 +1492,7 @@
     var fqEarly = '';
     if (pff.symbol) fqEarly += '&symbol=' + encodeURIComponent(pff.symbol);
     if (pff.intent) fqEarly += '&intent=' + encodeURIComponent(pff.intent);
-    var greeksP = (Learn.currentLevel() === 'expert' && tab === 'active')
+    var greeksP = tab === 'active'
       ? API.get('/api/portfolio/greeks').catch(function () { return null; }) : null;
     var positionsP = API.get('/api/positions').catch(function (e) { return { error: e }; });
     var planBookP = API.get('/api/plans/portfolio').catch(function (e) { return { plans: [], error: e }; });
@@ -1504,35 +1507,49 @@
       try {
         var pg = await greeksP;
         if (pg && pg.positions && pg.positions.length) {
-          try {
-            var heat = await API.get('/api/portfolio/heat');
-            if (heat && heat.activeTrades > 0) {
-              root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-heat' },
-                el('div', { class: 'chip-row' },
-                  el('b', { style: 'margin-right:4px' }, 'Book heat'),
-                  chip('Total worst case', fmtMoney(heat.totalMaxLossCents)),
-                  chip('Short-vol trades', String(heat.shortVolTrades)),
-                  chip('Top-symbol share', heat.concentrationPct + '%',
-                    'How much of the total worst case sits in ONE symbol.'),
-                  heat.earlyAssignmentLiquidityCents > 0 ? chip('Early-assignment cash demand',
-                    fmtMoney(heat.earlyAssignmentLiquidityCents),
-                    'Temporary gross cash needed if every short put assigns before protective puts are exercised or sold. This is not max loss.') : null,
-                  heat.physicalAssignmentCashCents > 0 ? chip('Cash-secured shares delivered',
-                    fmtMoney(heat.physicalAssignmentCashCents),
-                    'Strike cash used when funded single short puts settle into shares.') : null,
-                  heat.physicalAssignmentCashCents > 0 ? chip('BP after funded assignment',
-                    fmtMoney(heat.postPhysicalAssignmentBuyingPowerCents),
-                    'Buying power after strike cash is paid and the matching cash-secured reserve is released.') : null)));
-            }
-          } catch (e) { /* heat is additive — the page never fails on it */ }
-          root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-greeks' },
-            el('div', { class: 'chip-row', style: 'align-items:center' },
+          var heat = null;
+          try { heat = await API.get('/api/portfolio/heat'); }
+          catch (e) { /* heat is additive — the page never fails on it */ }
+          function heatChips() {
+            return heat && heat.activeTrades > 0 ? el('div', { class: 'chip-row' },
+              el('b', { style: 'margin-right:4px' }, 'Book heat'),
+              chip('Total worst case', fmtMoney(heat.totalMaxLossCents)),
+              chip('Short-vol trades', String(heat.shortVolTrades)),
+              chip('Top-symbol share', heat.concentrationPct + '%',
+                'How much of the total worst case sits in ONE symbol.'),
+              heat.earlyAssignmentLiquidityCents > 0 ? chip('Early-assignment cash demand',
+                fmtMoney(heat.earlyAssignmentLiquidityCents),
+                'Temporary gross cash needed if every short put assigns before protective puts are exercised or sold. This is not max loss.') : null,
+              heat.physicalAssignmentCashCents > 0 ? chip('Cash-secured shares delivered',
+                fmtMoney(heat.physicalAssignmentCashCents),
+                'Strike cash used when funded single short puts settle into shares.') : null,
+              heat.physicalAssignmentCashCents > 0 ? chip('BP after funded assignment',
+                fmtMoney(heat.postPhysicalAssignmentBuyingPowerCents),
+                'Buying power after strike cash is paid and the matching cash-secured reserve is released.') : null) : null;
+          }
+          function greekChips() {
+            return el('div', { class: 'chip-row', style: 'align-items:center' },
               el('b', { style: 'margin-right:4px' }, 'Book greeks'),
               chip('Net \u0394', fmtNum(pg.deltaShares, 0) + ' sh'),
               chip('\u0393', fmtNum(pg.gammaShares, 2) + ' sh/$'),
               chip('\u0398/day', pnlSpan(pg.thetaPerDay * 100)),
               chip('Vega/pt', pnlSpan(pg.vegaPerPoint * 100)),
-              pg.complete ? null : el('span', { class: 'badge badge-caution' }, 'PARTIAL'))));
+              pg.complete ? null : el('span', { class: 'badge badge-caution' }, 'PARTIAL'));
+          }
+          if (Learn.currentLevel() === 'expert') {
+            if (heat && heat.activeTrades > 0) {
+              root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-heat' }, heatChips()));
+            }
+            root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-greeks' }, greekChips()));
+          } else {
+            root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-greeks' },
+              UI.cardHeader('How your open positions react'),
+              el('p', { class: 'muted small' },
+                'These sensitivities estimate how the whole practice book responds to price, time, and volatility. They use the same current marks and math shown in Expert.'),
+              UI.expandable('See exact portfolio sensitivity', function () {
+                return el('div', { class: 'portfolio-risk-detail' }, heatChips(), greekChips());
+              })));
+          }
         }
       } catch (e) { /* advisory only */ }
     }
@@ -1862,31 +1879,43 @@
       if (detailGuide) root.appendChild(el('div', { class: 'card' }, detailGuide));
     }
 
-    if (Learn.currentLevel() === 'expert' && d.current && d.current.greeks) {
+    if (d.current && d.current.greeks) {
       var gk = d.current.greeks;
       var greekCard = el('div', { class: 'card', id: 'greeks-card' },
-        UI.cardHeader('Position greeks', gk.complete ? null : el('span', { class: 'badge badge-caution' }, 'PARTIAL')),
-        el('div', { class: 'chip-row' },
+        UI.cardHeader(Learn.currentLevel() === 'expert' ? 'Position greeks' : 'How this position reacts',
+          gk.complete ? null : el('span', { class: 'badge badge-caution' }, 'PARTIAL')));
+      function positionGreekDetail() {
+        var detail = el('div', { class: 'position-greek-detail' },
+          el('div', { class: 'chip-row' },
           chip('Net \u0394', fmtNum(gk.deltaShares, 0) + ' sh'),
           chip('\u0393', fmtNum(gk.gammaShares, 2) + ' sh/$'),
           chip('\u0398/day', pnlSpan(gk.thetaPerDay * 100)),
           chip('Vega/pt', pnlSpan(gk.vegaPerPoint * 100))));
-      if (d.current.legGreeks && d.current.legGreeks.length) {
-        greekCard.appendChild(table(['Leg', 'Bid', 'Ask', '\u0394', '\u0393', '\u0398', 'Vega', 'IV'],
-          d.current.legGreeks.map(function (lg) {
-            return el('tr', {},
-              el('td', { class: 'mono' }, lg.leg),
-              el('td', {}, lg.bid || '\u2014'),
-              el('td', {}, lg.ask || '\u2014'),
-              el('td', {}, lg.delta === null || lg.delta === undefined ? '\u2014' : fmtNum(lg.delta, 2)),
-              el('td', {}, lg.gamma === null || lg.gamma === undefined ? '\u2014' : fmtNum(lg.gamma, 3)),
-              el('td', {}, lg.theta === null || lg.theta === undefined ? '\u2014' : fmtNum(lg.theta, 3)),
-              el('td', {}, lg.vega === null || lg.vega === undefined ? '\u2014' : fmtNum(lg.vega, 3)),
-              el('td', {}, lg.iv === null || lg.iv === undefined ? '\u2014' : fmtPct(lg.iv)));
-          })));
+        if (d.current.legGreeks && d.current.legGreeks.length) {
+          detail.appendChild(table(['Leg', 'Bid', 'Ask', '\u0394', '\u0393', '\u0398', 'Vega', 'IV'],
+            d.current.legGreeks.map(function (lg) {
+              return el('tr', {},
+                el('td', { class: 'mono' }, lg.leg),
+                el('td', {}, lg.bid || '\u2014'),
+                el('td', {}, lg.ask || '\u2014'),
+                el('td', {}, lg.delta === null || lg.delta === undefined ? '\u2014' : fmtNum(lg.delta, 2)),
+                el('td', {}, lg.gamma === null || lg.gamma === undefined ? '\u2014' : fmtNum(lg.gamma, 3)),
+                el('td', {}, lg.theta === null || lg.theta === undefined ? '\u2014' : fmtNum(lg.theta, 3)),
+                el('td', {}, lg.vega === null || lg.vega === undefined ? '\u2014' : fmtNum(lg.vega, 3)),
+                el('td', {}, lg.iv === null || lg.iv === undefined ? '\u2014' : fmtPct(lg.iv)));
+            })));
+        }
+        detail.appendChild(el('p', { class: 'muted' },
+          'Share-equivalent \u0394/\u0393; \u0398 and vega in dollars per day / per vol point. Model statistics from current marks.'));
+        return detail;
       }
-      greekCard.appendChild(el('p', { class: 'muted' },
-        'Share-equivalent \u0394/\u0393; \u0398 and vega in dollars per day / per vol point. Model statistics from current marks.'));
+      if (Learn.currentLevel() === 'expert') {
+        greekCard.appendChild(positionGreekDetail());
+      } else {
+        greekCard.appendChild(el('p', { class: 'muted small' },
+          'Price, time, and volatility can move an option position in different ways. The exact sensitivities use the same current marks shown in Expert.'));
+        greekCard.appendChild(UI.expandable('See exact position sensitivities', positionGreekDetail));
+      }
       root.appendChild(greekCard);
     }
 
