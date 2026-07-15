@@ -35,7 +35,7 @@ The Plan-centered journey is complete on `feature/journey_refactor` and is not d
   `/api/sim/{scenario,strategy,compare}` surfaces are gone. Do not restore internal aliases or DTO
   overloads for hypothetical API consumers. Database and model-version migrations remain because
   they protect actual persisted user data and deterministic model identity.
-- Current release evidence is **699 JUnit + 75 fixture DOM + 8 responsive widths + 4 grown-state +
+- Current release evidence is **703 JUnit + 75 fixture DOM + 8 responsive widths + 4 grown-state +
   3 auth-on + 9 live-provider DOM, all green**. Representative screenshots are under
   `dom-tests/shots/final-*.png`.
 
@@ -196,7 +196,7 @@ temp database; each suite needs its own port. Page JS errors and 5xx responses a
 failures. Run all suites — fresh-DB suites miss grown-state bugs, fixture suites miss live
 ones. The responsive audit checks 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 pixels and
 fails on horizontal overflow, clipped controls, or inaccessible geometry. Current counts are
-699 JUnit, 75 fixture DOM, 8 responsive widths, 4 grown-state, 3 auth-on, and 9 live-provider cases.
+703 JUnit, 75 fixture DOM, 8 responsive widths, 4 grown-state, 3 auth-on, and 9 live-provider cases.
 `.github/workflows/ci.yml` runs the backend and non-network browser matrix on every push/PR;
 `live-providers.yml` runs the observed-lane suite on a weekday schedule and by manual dispatch.
 
