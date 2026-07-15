@@ -85,11 +85,19 @@ async function assertTabContracts(scope = 'body') {
       const tabs = Array.from(list.querySelectorAll('[role="tab"]')).filter(visible);
       const selected = tabs.filter(tab => tab.getAttribute('aria-selected') === 'true');
       const named = list.getAttribute('aria-label') || list.getAttribute('aria-labelledby');
+      const panelProblems = tabs.filter(tab => {
+        const target = tab.getAttribute('aria-controls');
+        const panel = target && document.getElementById(target);
+        return !tab.id || !panel || panel.getAttribute('role') !== 'tabpanel'
+          || (tab.getAttribute('aria-selected') === 'true' && panel.getAttribute('aria-labelledby') !== tab.id);
+      });
       if (!named || selected.length !== 1 || selected[0].getAttribute('tabindex') !== '0'
-          || tabs.some(tab => tab !== selected[0] && tab.getAttribute('tabindex') !== '-1')) {
+          || tabs.some(tab => tab !== selected[0] && tab.getAttribute('tabindex') !== '-1')
+          || panelProblems.length) {
         return [{ list: list.id || list.className, named, selected: selected.length,
           tabs: tabs.map(tab => ({ text: tab.textContent.trim(), selected: tab.getAttribute('aria-selected'),
-            tabindex: tab.getAttribute('tabindex') })) }];
+            tabindex: tab.getAttribute('tabindex'), id: tab.id, controls: tab.getAttribute('aria-controls') })),
+          panelProblems: panelProblems.map(tab => tab.id || tab.textContent.trim()) }];
       }
       return [];
     });

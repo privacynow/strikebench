@@ -46,8 +46,10 @@
       'aria-label': 'Data center sections' },
       TABS.map(function (t) {
         return el('button', {
+          type: 'button', id: 'data-tab-' + t.key, 'aria-controls': 'data-tab-panel',
           class: t.key === tab ? 'active' : '', 'data-tab': t.key, role: 'tab',
           'aria-selected': t.key === tab ? 'true' : 'false',
+          tabindex: t.key === tab ? '0' : '-1',
           // Administration starts HIDDEN and appears only once authorization confirms — the
           // old version rendered it and hid it later (a flash), and stayed visible on error.
           style: t.key === 'admin' ? 'display:none' : null,
@@ -63,6 +65,10 @@
     dataTabs.addEventListener('scroll', syncDataTabsEdge, { passive: true });
     root.appendChild(dataTabsWrap);
     requestAnimationFrame(syncDataTabsEdge);
+    var dataPanel = el('section', { id: 'data-tab-panel', role: 'tabpanel',
+      'aria-labelledby': 'data-tab-' + tab });
+    root.appendChild(dataPanel);
+    root = dataPanel;
     function setTabBadge(key, text, cls) {
       var b = document.getElementById('data-tab-badge-' + key);
       if (!b) return;

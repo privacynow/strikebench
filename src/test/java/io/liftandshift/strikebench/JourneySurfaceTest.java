@@ -441,7 +441,8 @@ class JourneySurfaceTest {
         assertThat(discovery).contains("no alternate ranking was substituted")
                 .doesNotContain("showing the screened order", "partial evaluation: keep screen order");
         assertThat(views).doesNotContain("Screen score", "c.score");
-        assertThat(learn).doesNotContain("screenscore:");
+        assertThat(learn).contains("UNKNOWN receives no evidence credit")
+                .doesNotContain("screenscore:", "UNKNOWN gates the decision score to non-viable");
     }
 
     @Test void opportunityScanningIsOutsideTheEvaluationKernel() throws Exception {
@@ -458,6 +459,14 @@ class JourneySurfaceTest {
                 "evaluations.evaluate(", "evaluations.persist(");
         assertThat(discovery).contains("opportunityScanner.scan(")
                 .doesNotContain("evaluations.scan(");
+    }
+
+    @Test void trackedAccountTaxCopyPreservesTheReconciliationBoundary() throws Exception {
+        String portfolio = source("js/views-portfolio.js");
+        assertThat(portfolio).contains("always tracks lots, basis, income, and realized gains",
+                        "add a reconciliation scenario — never a claim about tax owed",
+                        "Not tax advice. Recorded facts and a bounded user-rate scenario")
+                .doesNotContain("estimates current capital-gains and income tax");
     }
 
     @Test void everyExecutableFillUsesOneBookRule() throws Exception {

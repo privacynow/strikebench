@@ -253,10 +253,12 @@
 
   function portfolioModeNav(tracked) {
     var list = el('div', { class: 'portfolio-mode seg', role: 'tablist', 'aria-label': 'Portfolio workspace' },
-      el('button', { type: 'button', role: 'tab', class: tracked ? '' : 'active', 'aria-selected': tracked ? 'false' : 'true',
+      el('button', { type: 'button', role: 'tab', id: 'portfolio-mode-paper', 'aria-controls': 'portfolio-mode-panel',
+        class: tracked ? '' : 'active', 'aria-selected': tracked ? 'false' : 'true',
         tabindex: tracked ? '-1' : '0',
         onclick: function () { App.navigate('#/portfolio/positions'); } }, 'Paper account'),
-      el('button', { type: 'button', role: 'tab', class: tracked ? 'active' : '', 'aria-selected': tracked ? 'true' : 'false',
+      el('button', { type: 'button', role: 'tab', id: 'portfolio-mode-tracked', 'aria-controls': 'portfolio-mode-panel',
+        class: tracked ? 'active' : '', 'aria-selected': tracked ? 'true' : 'false',
         tabindex: tracked ? '0' : '-1',
         onclick: function () { App.navigate('#/portfolio/book/overview'); } }, 'Tracked accounts'));
     return UI.bindTabList(list, function (tab) { tab.click(); });
@@ -329,7 +331,7 @@
         existing.id ? null : UI.field('Opening cash $', opening, { hint: 'Establishes this tracked book’s opening balance; it is not treated as an in-period contribution, and practice cash is untouched.' })),
       taxFields,
       taxNote,
-      Learn.currentLevel() === 'beginner' ? explain('A taxable account estimates current capital-gains and income tax from the rates you enter. IRA and 401(k) activity is tracked, but per-trade gains are not presented as currently taxable.') : null,
+      Learn.currentLevel() === 'beginner' ? explain('A taxable book always tracks lots, basis, income, and realized gains. For a reviewed tax year, your optional rates add a reconciliation scenario — never a claim about tax owed. IRA and 401(k) activity stays in its retirement wrapper.') : null,
       el('div', { class: 'btn-row' }, save), msg);
   }
 
@@ -337,7 +339,9 @@
     var tabs = [['overview', 'Overview'], ['activity', 'Activity'], ['performance', 'Performance'],
       ['tax', 'Taxes & export'], ['settings', 'Settings']];
     var list = el('div', { class: 'tabs portfolio-book-tabs', role: 'tablist', 'aria-label': 'Tracked account sections' },
-      tabs.map(function (tab) { return el('button', { type: 'button', role: 'tab', class: section === tab[0] ? 'active' : '',
+      tabs.map(function (tab) { return el('button', { type: 'button', role: 'tab',
+        id: 'portfolio-book-tab-' + tab[0], 'aria-controls': 'portfolio-book-panel',
+        class: section === tab[0] ? 'active' : '',
         'aria-selected': section === tab[0] ? 'true' : 'false', tabindex: section === tab[0] ? '0' : '-1',
         onclick: function () { App.navigate('#/portfolio/book/' + tab[0]); } }, tab[1]); }));
     return UI.bindTabList(list, function (tab) { tab.click(); });
@@ -1258,6 +1262,10 @@
           App.state.portfolioBookNew = true; App.navigate('#/portfolio/book/settings');
         } }, '+ Account'))));
     root.appendChild(portfolioBookTabs(section));
+    var bookPanel = el('section', { id: 'portfolio-book-panel', role: 'tabpanel',
+      'aria-labelledby': 'portfolio-book-tab-' + section });
+    root.appendChild(bookPanel);
+    root = bookPanel;
     if (account.status === 'ARCHIVED') root.appendChild(alertBox('caution', 'This tracked account is archived and read-only.', ['Restore it in Settings before recording new activity.']));
     var loading = el('div', { class: 'book-section-loading', 'aria-live': 'polite' },
       UI.spinner('Loading ' + section.replaceAll('_', ' ') + '…'));
@@ -1289,6 +1297,10 @@
     var page = parseInt(params[1] || '0', 10);
     root.appendChild(el('h1', {}, 'Portfolio'));
     root.appendChild(portfolioModeNav(trackedBook));
+    var modePanel = el('section', { id: 'portfolio-mode-panel', role: 'tabpanel',
+      'aria-labelledby': trackedBook ? 'portfolio-mode-tracked' : 'portfolio-mode-paper' });
+    root.appendChild(modePanel);
+    root = modePanel;
     if (trackedBook) {
       await portfolioBook(root, params.slice(1));
       return;
@@ -1324,17 +1336,21 @@
       statsRow.appendChild(stat('Started with', fmtMoney(acct.startingCashCents)));
     }
     var paperTabs = el('div', { class: 'tabs portfolio-paper-tabs', role: 'tablist', 'aria-label': 'Paper account sections' },
-      el('button', { role: 'tab', 'aria-selected': section === 'construct' ? 'true' : 'false', tabindex: section === 'construct' ? '0' : '-1', class: section === 'construct' ? 'active' : '', id: 'pf-sec-construct',
+      el('button', { type: 'button', role: 'tab', 'aria-controls': 'portfolio-paper-panel', 'aria-selected': section === 'construct' ? 'true' : 'false', tabindex: section === 'construct' ? '0' : '-1', class: section === 'construct' ? 'active' : '', id: 'pf-sec-construct',
         onclick: function () { App.navigate('#/portfolio/construct'); } }, 'Construct'),
-      el('button', { role: 'tab', 'aria-selected': section === 'positions' ? 'true' : 'false', tabindex: section === 'positions' ? '0' : '-1', class: section === 'positions' ? 'active' : '', id: 'pf-sec-positions',
+      el('button', { type: 'button', role: 'tab', 'aria-controls': 'portfolio-paper-panel', 'aria-selected': section === 'positions' ? 'true' : 'false', tabindex: section === 'positions' ? '0' : '-1', class: section === 'positions' ? 'active' : '', id: 'pf-sec-positions',
         onclick: function () { App.navigate('#/portfolio/positions'); } }, 'Positions'),
-      el('button', { role: 'tab', 'aria-selected': section === 'activity' ? 'true' : 'false', tabindex: section === 'activity' ? '0' : '-1', class: section === 'activity' ? 'active' : '', id: 'pf-sec-activity',
+      el('button', { type: 'button', role: 'tab', 'aria-controls': 'portfolio-paper-panel', 'aria-selected': section === 'activity' ? 'true' : 'false', tabindex: section === 'activity' ? '0' : '-1', class: section === 'activity' ? 'active' : '', id: 'pf-sec-activity',
         onclick: function () { App.navigate('#/portfolio/activity'); } }, 'Activity'),
-      el('button', { role: 'tab', 'aria-selected': section === 'record' ? 'true' : 'false', tabindex: section === 'record' ? '0' : '-1', class: section === 'record' ? 'active' : '', id: 'pf-sec-record',
+      el('button', { type: 'button', role: 'tab', 'aria-controls': 'portfolio-paper-panel', 'aria-selected': section === 'record' ? 'true' : 'false', tabindex: section === 'record' ? '0' : '-1', class: section === 'record' ? 'active' : '', id: 'pf-sec-record',
         onclick: function () { App.navigate('#/portfolio/record'); } }, 'Your record'),
-      el('button', { role: 'tab', 'aria-selected': section === 'account' ? 'true' : 'false', tabindex: section === 'account' ? '0' : '-1', class: section === 'account' ? 'active' : '', id: 'pf-sec-account',
+      el('button', { type: 'button', role: 'tab', 'aria-controls': 'portfolio-paper-panel', 'aria-selected': section === 'account' ? 'true' : 'false', tabindex: section === 'account' ? '0' : '-1', class: section === 'account' ? 'active' : '', id: 'pf-sec-account',
         onclick: function () { App.navigate('#/portfolio/account'); } }, 'Account'));
     root.appendChild(UI.bindTabList(paperTabs, function (tabButton) { tabButton.click(); }));
+    var paperPanel = el('section', { id: 'portfolio-paper-panel', role: 'tabpanel',
+      'aria-labelledby': 'pf-sec-' + section });
+    root.appendChild(paperPanel);
+    root = paperPanel;
 
     if (directTradeId) {
       root.appendChild(el('div', { class: 'btn-row' },

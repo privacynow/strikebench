@@ -34,6 +34,7 @@
     Object.keys(RESEARCH_VIEWS).forEach(function (key) {
       var meta = RESEARCH_VIEWS[key];
       tabs.appendChild(el('button', { type: 'button', role: 'tab',
+        id: 'research-tab-' + key, 'aria-controls': 'research-local-panel',
         class: active === key ? 'active' : '', 'data-research-view': key,
         'aria-selected': String(active === key), onclick: function () {
           App.navigate('#/research/' + encodeURIComponent(symbol) + (key === 'overview' ? '' : '?view=' + key));
@@ -106,7 +107,13 @@
     }
 
     var publicView = !inPlan && !provisionalResearch ? publicResearchView() : null;
-    if (publicView) root.appendChild(researchLocalNav(symbol, publicView));
+    if (publicView) {
+      root.appendChild(researchLocalNav(symbol, publicView));
+      var publicPanel = el('section', { id: 'research-local-panel', role: 'tabpanel',
+        'aria-labelledby': 'research-tab-' + publicView });
+      root.appendChild(publicPanel);
+      root = publicPanel;
+    }
     var section = embedded && embedded.stage
       || (publicView === 'options' ? 'strategy' : publicView === 'evidence' ? 'evidence' : 'understand');
     if (section === 'evidence') {
