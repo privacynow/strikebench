@@ -1492,6 +1492,7 @@
     var greeksP = (Learn.currentLevel() === 'expert' && tab === 'active')
       ? API.get('/api/portfolio/greeks').catch(function () { return null; }) : null;
     var positionsP = API.get('/api/positions').catch(function (e) { return { error: e }; });
+    var planBookP = API.get('/api/plans/portfolio').catch(function (e) { return { plans: [], error: e }; });
     var tradesP = API.get('/api/trades?status=' + statusParamEarly + '&page=' + page + '&size=15' + fqEarly);
     var tradesExtraP = (tab === 'closed' && page === 0)
       ? Promise.all([
@@ -1726,6 +1727,11 @@
         ? UI.emptyState('No open practice trades', 'Start a Plan, compare risk-screened structures, and decide with the worst case visible before you commit.', 'Start a Plan', function () { App.navigate('#/research'); })
         : UI.emptyState('Nothing closed yet', 'Closed, settled, and voided trades land here.'));
       return;
+    }
+    var planBook = await planBookP;
+    if (planBook.error) {
+      tradesCard.appendChild(alertBox('warn', 'Plan links are temporarily unavailable',
+        ['Your trades remain visible and usable. Refresh to restore their Manage & Review shortcuts.']));
     }
     var linkedPlans = {};
     ((planBook && planBook.plans) || []).forEach(function (row) {
