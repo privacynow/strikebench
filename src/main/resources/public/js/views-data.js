@@ -1452,7 +1452,7 @@
           'Open Sources & jobs, choose an eligible source, and preview exactly what will be downloaded.'));
         return;
       }
-      var rows = syms.slice(0, level === 'beginner' ? 12 : syms.length).map(function (s) {
+      function coverageRow(s, includeBasis) {
         return el('tr', {},
           el('td', {}, el('b', {}, s.symbol)),
           el('td', { class: 'muted' }, s.underlyingBars ? (s.underlyingFrom + ' → ' + s.underlyingTo) : '—'),
@@ -1460,12 +1460,21 @@
             ? el('span', { class: 'badge ' + (s.underlyingObserved ? 'badge-ok' : 'badge-dim') }, s.underlyingObserved ? 'observed' : 'demo')
             : el('span', { class: 'muted' }, '—')),
           el('td', { class: 'muted' }, String(s.underlyingBars || 0)),
-          level === 'expert' ? el('td', { class: 'muted small' }, (s.underlyingBasis || '—') + (s.underlyingSources ? ' · ' + s.underlyingSources : '')) : null,
+          includeBasis ? el('td', { class: 'muted small' }, (s.underlyingBasis || '—') + (s.underlyingSources ? ' · ' + s.underlyingSources : '')) : null,
           el('td', { class: 'muted' }, s.optionRows ? (s.optionDays + ' days / ' + s.optionRows + ' rows') : '—'));
+      }
+      var rows = syms.slice(0, level === 'beginner' ? 12 : syms.length).map(function (s) {
+        return coverageRow(s, level === 'expert');
       });
       coverageCard.appendChild(table(level === 'expert'
         ? ['Symbol', 'Underlying range', 'Evidence', 'Bars', 'Basis & sources', 'Options']
         : ['Symbol', 'Underlying range', 'Evidence', 'Bars', 'Options'], rows));
+      if (level === 'beginner') {
+        coverageCard.appendChild(UI.expandable('Review basis and sources for all ' + syms.length + ' symbols', function () {
+          return table(['Symbol', 'Underlying range', 'Evidence', 'Bars', 'Basis & sources', 'Options'],
+            syms.map(function (s) { return coverageRow(s, true); }));
+        }));
+      }
     })();
 
     // --- Daily-history acquisition: one guided workflow over every lawful connector. ---
@@ -1850,9 +1859,11 @@
           el('p', { class: 'muted small' },
             'Health is the latest source request. Stored historical coverage is separate and may remain available after the market closes or a source is temporarily empty.'),
           body);
-        // Observability for the operator (review P2 #9): p50/p95 by route class, live.
-        if (Learn.currentLevel() === 'expert') {
-          detail.appendChild(UI.expandable('API latency (p50/p95 by route class)', function () {
+        // Keep the operational evidence reachable at both levels; Beginner gets a
+        // plain-language collapsed entry instead of losing the capability.
+        detail.appendChild(UI.expandable(Learn.currentLevel() === 'beginner'
+          ? 'Technical performance (typical and slower requests)'
+          : 'API latency (p50/p95 by route class)', function () {
             var holder = el('div', {}, UI.spinner('Reading metrics\u2026'));
             API.getFresh('/api/metrics').then(function (m) {
               holder.innerHTML = '';
@@ -1877,7 +1888,6 @@
             });
             return holder;
           }));
-        }
         return detail;
       };
       if (document.getElementById('dc-detail')?.getAttribute('data-detail') === 'health') {
@@ -1910,7 +1920,7 @@
         { key: 'PAPER', label: 'Paper account & trades', blurb: 'Voids trades and positions and re-funds a fresh account.' },
         { key: 'EVERYTHING', label: 'Everything (fresh start)', blurb: 'Wipes ALL stored data and re-seeds a brand-new funded account.' }
       ];
-      var choices = level === 'beginner' ? TIERS.filter(function (t) { return t.key === 'PAPER' || t.key === 'EVERYTHING'; }) : TIERS;
+      var choices = TIERS;
       var sel = el('select', { id: 'dc-reset-tier' }, choices.map(function (t) { return el('option', { value: t.key }, t.label); }));
       var blurb = el('div', { class: 'muted small', id: 'dc-reset-blurb', style: 'margin-top:4px' });
       function syncBlurb() { var t = choices.find(function (x) { return x.key === sel.value; }); blurb.textContent = t ? t.blurb : ''; }

@@ -1600,6 +1600,15 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p6-manage-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
 
+  await page.waitForSelector('#greeks-card');
+  assert.match(await page.textContent('#greeks-card'), /How this position reacts/,
+    'Beginner receives a plain-language entry to the same position sensitivities');
+  await page.locator('#greeks-card .xp-head').click();
+  assert.match(await page.textContent('#greeks-card'), /Net Δ.*Θ\/day/s,
+    'Beginner can inspect exact aggregate Greeks');
+  assert.ok(await page.locator('#greeks-card tbody tr').count() >= 1,
+    'Beginner can inspect the same per-leg Greek rows');
+
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
   await page.waitForSelector('#greeks-card');
   assert.match(await page.textContent('#greeks-card'), /Net Δ.*Θ\/day/s,
@@ -2475,6 +2484,13 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   const outText = await page.textContent('#study-results');
   assert.match(outText, /Evidence/, 'evidence-strength label present');
   assert.match(outText, /raise or lower your confidence/, 'confidence guidance, never a prediction');
+  const beginnerStats = page.locator('#study-results .xp-head').filter({ hasText: 'See the exact statistics' });
+  assert.equal(await beginnerStats.count(), 1,
+    'Beginner keeps the exact statistical diagnostics behind progressive disclosure');
+  await beginnerStats.click();
+  assert.match(await page.textContent('#study-results .study-exact-statistics'),
+    /Overlap z screen.*CI \(avg\).*Effect size.*Baseline avg.*Clears z screen/s,
+    'Beginner can inspect the same exact diagnostics as Expert');
   // The handoff exists when enough analogs matched.
   const handoff = await page.locator('#tv-test-analogs').count();
   if (handoff) {
@@ -2648,6 +2664,7 @@ test('beginner help adds information instead of echoing visible labels', async (
 test('portfolio headline: total value + P/L at current marks', async () => {
   await go('#/portfolio/positions');
   await page.waitForSelector('#pf-stats .stat');
+  await assertTabContracts('#app');
   const stats = await page.textContent('#pf-stats');
   assert.match(stats, /Portfolio value/);
   assert.match(stats, /P\/L since start/);
@@ -2659,6 +2676,38 @@ test('portfolio headline: total value + P/L at current marks', async () => {
       && s.totalPnlCents === s.totalValueCents - s.startingCashCents;
   });
   assert.ok(ok, 'summary adds up');
+  await page.getByRole('tab', { name: 'Positions', exact: true }).focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForURL(/#\/portfolio\/activity$/);
+  assert.equal(await page.getByRole('tab', { name: 'Activity', exact: true }).getAttribute('aria-selected'), 'true',
+    'paper-account tabs use the shared roving keyboard contract');
+});
+
+test('Beginner keeps exact book sensitivity through progressive disclosure', async () => {
+  await page.route('**/api/portfolio/greeks', route => route.fulfill({ contentType: 'application/json',
+    body: JSON.stringify({ positions: [{ id: 'sensitivity-contract' }], deltaShares: 14.2,
+      gammaShares: 1.1, thetaPerDay: -3.25, vegaPerPoint: 7.5, complete: true }) }));
+  await page.route('**/api/portfolio/heat', route => route.fulfill({ contentType: 'application/json',
+    body: JSON.stringify({ activeTrades: 1, totalMaxLossCents: 125000, shortVolTrades: 1,
+      concentrationPct: 32, earlyAssignmentLiquidityCents: 0, physicalAssignmentCashCents: 0,
+      postPhysicalAssignmentBuyingPowerCents: 0 }) }));
+  await page.evaluate(() => {
+    Learn.setLevel('beginner');
+    API.invalidate(['/api/portfolio/greeks', '/api/portfolio/heat']);
+  });
+  await go('#/portfolio/positions');
+  await page.waitForSelector('#portfolio-greeks');
+  assert.match(await page.textContent('#portfolio-greeks'), /How your open positions react/);
+  await page.locator('#portfolio-greeks .xp-head').click();
+  assert.match(await page.textContent('#portfolio-greeks'), /Book heat.*Total worst case.*Book greeks.*Net Δ.*Vega\/pt/s,
+    'Beginner can inspect the same exact book heat and Greeks');
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#portfolio-greeks');
+  assert.match(await page.textContent('#portfolio-greeks'), /Book greeks.*Net Δ/s,
+    'Expert keeps the dense inline presentation');
+  await page.unroute('**/api/portfolio/greeks');
+  await page.unroute('**/api/portfolio/heat');
+  await page.evaluate(() => Learn.setLevel('beginner'));
 });
 
 test('share holdings remain a priced Plan input instead of an orphan portfolio action', async () => {
@@ -2740,8 +2789,11 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   assert.match(await page.textContent('#app'), /Cash in this book[\s\S]*\$100,000\.00/,
     'tracked opening cash is visible in its own book');
 
-  await page.getByRole('tab', { name: 'Activity', exact: true }).click();
+  await page.getByRole('tab', { name: 'Overview', exact: true }).focus();
+  await page.keyboard.press('ArrowRight');
   await page.waitForSelector('.book-record-card');
+  assert.equal(await page.getByRole('tab', { name: 'Activity', exact: true }).getAttribute('aria-selected'), 'true',
+    'tracked-account tabs use the shared roving keyboard contract');
   await assertNamedControls('#app');
   assert.match(await page.textContent('.book-record-card'),
     /Other Section 1256 contract[\s\S]*SPX, SPXW, SPXpm, XSP, NDX, NDXP, VIX, VIXW, RUT, RUTW, DJX, OEX, XEO/,
@@ -3191,23 +3243,34 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   await page.waitForSelector('#data-tabs button.active[data-tab="admin"]', { timeout: 15000 });
 });
 
-test('data center reset tiers are reduced for Beginner', async () => {
+test('data center keeps every reset scope available to Beginner with plain guidance', async () => {
   await go('#/data/admin');
   await page.click('#level-switch button[data-level="beginner"]');
-  // Wait for the BEGINNER re-render (2-tier select), not the lingering expert one mid-transition.
+  // Wait for the Beginner re-render, not the lingering Expert node mid-transition.
   await page.waitForFunction(() => {
     const s = document.getElementById('dc-reset-tier');
-    return s && s.options.length === 2;
+    return s && s.options.length === 4 && document.body.classList.contains('lvl-beginner');
   }, { timeout: 15000 });
   const tiers = await page.$$eval('#dc-reset-tier option', os => os.map(o => o.value));
-  assert.ok(!tiers.includes('MARKET_DATA'), 'beginner hides the granular market-data tier');
-  assert.ok(tiers.includes('PAPER') && tiers.includes('EVERYTHING'), 'beginner keeps the plain resets');
+  assert.deepEqual(tiers, ['MARKET_DATA', 'RESEARCH', 'PAPER', 'EVERYTHING'],
+    'Beginner keeps every reset capability instead of losing granular scopes');
   await go('#/data/sources');
   await page.waitForSelector('#dc-history-sync #data-csv-upload');
   assert.ok(await page.locator('#dc-history-sync .data-source-choice').count() >= 4, 'beginner keeps every connector');
   assert.ok(await page.locator('#data-sync-years').count(), 'beginner keeps history window control');
   assert.ok(await page.locator('#dc-history-sync .xp-head:has-text("Keep it current automatically")').count(),
     'beginner gets the same maintenance capability through progressive disclosure');
+  await go('#/data/datasets');
+  await page.waitForSelector('#dc-coverage .xp-head:has-text("Review basis and sources")', { timeout: 15000 });
+  await page.locator('#dc-coverage .xp-head').filter({ hasText: 'Review basis and sources' }).click();
+  assert.match(await page.textContent('#dc-coverage'), /Basis & sources/,
+    'Beginner can inspect provenance for every covered symbol');
+  await go('#/data/overview');
+  await page.waitForSelector('#dc-health .dc-detail-toggle', { timeout: 15000 });
+  await page.click('#dc-health .dc-detail-toggle');
+  await page.waitForSelector('#dc-detail .xp-head:has-text("Technical performance")', { timeout: 15000 });
+  assert.match(await page.textContent('#dc-detail'), /Technical performance/,
+    'Beginner keeps operator diagnostics behind plain-language disclosure');
   await page.click('#level-switch button[data-level="expert"]'); // restore for later tests
 });
 
