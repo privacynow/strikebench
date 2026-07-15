@@ -79,7 +79,8 @@ class MigrationImmutabilityTest {
             Map.entry("V53__canonical_json_receipts.sql", "592a6769093ac0bbb18acf0fd19422c09d1d1b0b6dc139b62b725685a08407d3"),
             Map.entry("V54__normalize_backtest_runs.sql", "8c83fc6aebb3cc37d93bf0691b362fce63b392b337011ac0415b93a567c67463"),
             Map.entry("V55__artifact_retention_indexes.sql", "56f421d9acb43886e16a373c0654cd3b2b4e263be5ce85320f768061c9688e15"),
-            Map.entry("V56__plan_progress_not_view_state.sql", "83a65dd5f1290d5f0bdf874388250f114ea31f82d9740cf0790c17c41f52a9b3")
+            Map.entry("V56__plan_progress_not_view_state.sql", "83a65dd5f1290d5f0bdf874388250f114ea31f82d9740cf0790c17c41f52a9b3"),
+            Map.entry("V57__trader_own_domain_contracts.sql", "014d7a3473fbb3b47f64d9389667bca74e74d02fb26a0d38d3bb003fe9f23442")
     );
 
     @Test
