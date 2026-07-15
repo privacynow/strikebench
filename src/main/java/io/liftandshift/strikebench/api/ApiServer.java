@@ -228,6 +228,7 @@ public final class ApiServer {
         server.dataCoverage = new io.liftandshift.strikebench.db.DataCoverage(db);
         server.dataReset = new io.liftandshift.strikebench.db.DataResetService(db, accounts);
         server.cboe = cboeRef[0];
+        var settingsStore = new io.liftandshift.strikebench.db.SettingsStore(db);
         var quoteSnapshots = new io.liftandshift.strikebench.db.MarketSnapshotStore(db);
         market.setQuoteSnapshotStore(quoteSnapshots);
         server.marketEngine.setSnapshotStore(quoteSnapshots);
@@ -260,15 +261,13 @@ public final class ApiServer {
         // forget an active ban and resume traffic straight back into the rate limiter).
         if (cboeRef[0] != null) {
             try {
-                var saved = db.query("SELECT v FROM settings WHERE k='cboe_cooldown_until'", r -> r.str("v"));
-                if (!saved.isEmpty() && saved.getFirst() != null) cboeRef[0].seedCooldown(Long.parseLong(saved.getFirst()));
+                settingsStore.get("cboe_cooldown_until")
+                        .ifPresent(value -> cboeRef[0].seedCooldown(Long.parseLong(value)));
             } catch (Exception e) { /* best effort */ }
             server.events.subscribe(e -> {
                 if ("provider.cooldown".equals(e.type()) && "cboe".equals(e.data().get("provider"))) {
                     try {
-                        db.exec("INSERT INTO settings(k,v,updated_at) VALUES ('cboe_cooldown_until',?,now()) "
-                              + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-                                String.valueOf(e.data().get("untilMs")));
+                        settingsStore.put("cboe_cooldown_until", String.valueOf(e.data().get("untilMs")));
                     } catch (Exception ex) { /* best effort */ }
                 }
             });
@@ -293,7 +292,7 @@ public final class ApiServer {
         accounts.getOrCreateDefault();
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
                 portfolioExports, positions, trades, this::ownerId, this::currentAccount);
-        tradeController = new TradeController(cfg, clock, db, market, eventCalendar, audit,
+        tradeController = new TradeController(cfg, clock, db, accounts, market, eventCalendar, audit,
                 trades, positions, evaluations, snapshots, auth, this::currentAccount,
                 this::ownerId, this::activeWorld, this::analysisCtx, this::requireAdmin);
         var marketVolatility = new io.liftandshift.strikebench.sim.MarketVolatilityResolver(market, clock);
@@ -326,7 +325,7 @@ public final class ApiServer {
                 planController::planSymbolEligibility);
         ApiTelemetry telemetry = new ApiTelemetry(cfg, marketEngine);
         BrokerController brokerController = new BrokerController(broker);
-        WorldController worldController = new WorldController(cfg, clock, db, market, marketEngine,
+        WorldController worldController = new WorldController(cfg, clock, market, marketEngine,
                 simSessions, accounts, positions, trades, auth, events, worldTransitions,
                 planRehearsals, planSvc, this::ownerId, this::activeWorld);
         app = Javalin.create(c -> {
@@ -664,15 +663,10 @@ public final class ApiServer {
      */
     private boolean isAdmin(Context ctx) {
         if (auth.enabled()) {
-            String uid = auth.currentUserId(ctx);
-            if (uid == null || io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(uid)) return false;
-            String email = db.query("SELECT email FROM users WHERE id=?", r -> r.str("email"), uid)
-                    .stream().findFirst().orElse(null);
-            if (email == null) return false;
             // FAIL CLOSED: admin requires an EXPLICIT AUTH_ADMIN_EMAILS entry. We do NOT fall back to
             // the entry allowlist (with the default "any verified Google account" that would make every
             // signed-in user an admin for destructive ops).
-            return cfg.authAdminEmails().contains(email.toLowerCase(Locale.ROOT));
+            return auth.userIsAdmin(auth.currentUserId(ctx));
         }
         String token = cfg.adminToken();
         if (!token.isBlank()) return token.equals(ctx.header("X-Admin-Token"));

@@ -69,6 +69,17 @@ class AuthServiceTest {
                 .isEqualTo("google:s2");
     }
 
+    @Test void resolvesExplicitAdminIdentityInsideTheAuthBoundary() {
+        AuthService a = auth(Map.of("AUTH_ENABLED", "true", "AUTH_ADMIN_EMAILS", "owner@x.com",
+                "OIDC_CLIENT_ID", "client", "OIDC_CLIENT_SECRET", "secret"));
+        String owner = a.provisionUser(new VerifiedIdentity("owner", "Owner@X.com", true, "Owner"));
+        String member = a.provisionUser(new VerifiedIdentity("member", "member@x.com", true, "Member"));
+
+        assertThat(a.userIsAdmin(owner)).isTrue();
+        assertThat(a.userIsAdmin(member)).isFalse();
+        assertThat(a.userIsAdmin(null)).isFalse();
+    }
+
     @Test void behavesAsLocalUserWhenDisabled() {
         AuthService a = auth(Map.of()); // AUTH_ENABLED defaults false
         assertThat(a.enabled()).isFalse();
