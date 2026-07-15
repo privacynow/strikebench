@@ -207,7 +207,7 @@ public final class PlanStrategyService {
             markSelectedPositionDependentsStale(c, planId, plan.contextRev());
             Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?", planId, plan.contextRev());
             Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", candidateId);
-            Db.execOn(c, "UPDATE plans SET version=version+1,updated_at=now() WHERE id=?", planId);
+            Db.execOn(c, "UPDATE plans SET furthest_stage='OUTCOMES',version=version+1,updated_at=now() WHERE id=?", planId);
             return new Selection(candidateId, plan.version() + 1);
         });
     }
@@ -227,7 +227,7 @@ public final class PlanStrategyService {
             markSelectedPositionDependentsStale(c, planId, plan.contextRev());
             Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?",
                     planId, plan.contextRev());
-            Db.execOn(c, "UPDATE plans SET version=version+1,updated_at=now() WHERE id=?", planId);
+            Db.execOn(c, "UPDATE plans SET furthest_stage='STRATEGY',version=version+1,updated_at=now() WHERE id=?", planId);
             return new Selection(null, plan.version() + 1);
         });
     }
@@ -261,7 +261,7 @@ public final class PlanStrategyService {
                     plan.id(), plan.context().rev());
             String id = persistCandidate(c, runId, plan, candidate, 1, "CURRENT", now, "CUSTOM");
             Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", id);
-            Db.execOn(c, "UPDATE plans SET version=version+1,updated_at=now() WHERE id=?", plan.id());
+            Db.execOn(c, "UPDATE plans SET furthest_stage='OUTCOMES',version=version+1,updated_at=now() WHERE id=?", plan.id());
             return id;
         });
         candidate.put("id", candidateId);
@@ -323,7 +323,7 @@ public final class PlanStrategyService {
                     ENGINE_VERSION, "CURRENT", now);
             String id = persistCandidate(c, runId, plan, candidate, 1, "CURRENT", now, "SCOUT");
             Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", id);
-            Db.execOn(c, "UPDATE plans SET version=version+1,updated_at=now() WHERE id=?", plan.id());
+            Db.execOn(c, "UPDATE plans SET furthest_stage='OUTCOMES',version=version+1,updated_at=now() WHERE id=?", plan.id());
             return id;
         });
         candidate.put("id", candidateId); candidate.put("selected", true);

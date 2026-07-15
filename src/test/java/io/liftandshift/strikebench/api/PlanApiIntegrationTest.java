@@ -107,9 +107,14 @@ class PlanApiIntegrationTest {
         assertThat(stale.statusCode()).isEqualTo(409);
         assertThat(Json.parse(stale.body()).get("detail").asText()).contains("another tab");
 
-        HttpResponse<String> locked = put("/api/plans/" + id + "/stage",
-                "{\"expectedVersion\":" + updated.get("version").asLong() + ",\"stage\":\"manage_review\"}");
+        HttpResponse<String> locked = post("/api/plans/" + id + "/progress",
+                "{\"stage\":\"manage_review\"}");
         assertThat(locked.statusCode()).isEqualTo(409);
+
+        long progressVersion = updated.get("version").asLong();
+        JsonNode progressed = json(post("/api/plans/" + id + "/progress", "{\"stage\":\"outcomes\"}"));
+        assertThat(progressed.get("furthestStage").asText()).isEqualTo("OUTCOMES");
+        assertThat(progressed.get("version").asLong()).isEqualTo(progressVersion);
 
         JsonNode closedChip = json(put("/api/plans/" + id + "/open",
                 "{\"expectedVersion\":" + updated.get("version").asLong() + ",\"open\":false}"));
@@ -551,7 +556,7 @@ class PlanApiIntegrationTest {
 
         assertThat(delete("/api/sim/market/" + worldId).statusCode()).isBetween(200, 299);
         JsonNode managed = json(get("/api/plans/" + planId + "/manage"));
-        assertThat(managed.at("/plan/activeStage").asText()).isEqualTo("MANAGE_REVIEW");
+        assertThat(managed.at("/plan/furthestStage").asText()).isEqualTo("MANAGE_REVIEW");
         assertThat(managed.at("/management/actions/0/kind").asText()).isEqualTo("REHEARSAL_RESULT");
         assertThat(managed.at("/management/reviews/0/category").asText()).isEqualTo("SIM_REHEARSAL");
     }
@@ -597,7 +602,7 @@ class PlanApiIntegrationTest {
         JsonNode archived = json(post("/api/plans/" + planId + "/archive",
                 "{\"expectedVersion\":" + created.at("/plan/version").asLong() + "}"));
         long frozenVersion = archived.get("version").asLong();
-        String frozenStage = archived.get("activeStage").asText();
+        String frozenStage = archived.get("furthestStage").asText();
 
         HttpResponse<String> rejected = delete("/api/sim/market/" + worldId);
         assertThat(rejected.statusCode()).isEqualTo(409);
@@ -605,7 +610,7 @@ class PlanApiIntegrationTest {
         JsonNode after = json(get("/api/plans/" + planId));
         assertThat(after.get("status").asText()).isEqualTo("ARCHIVED");
         assertThat(after.get("version").asLong()).isEqualTo(frozenVersion);
-        assertThat(after.get("activeStage").asText()).isEqualTo(frozenStage);
+        assertThat(after.get("furthestStage").asText()).isEqualTo(frozenStage);
         assertThat(inspectDb.query("SELECT id FROM plan_management_action WHERE plan_id=?",
                 row -> row.str("id"), planId)).isEmpty();
         assertThat(inspectDb.query("SELECT id FROM plan_review WHERE plan_id=?",
@@ -659,7 +664,7 @@ class PlanApiIntegrationTest {
         for (JsonNode ack : preview.withArray("requiredAcks")) acknowledgments.add(ack.get("id").asText());
         JsonNode opened = json(post("/api/plans/" + tradePlanId + "/decision/trade", tradeRequest.toString()));
         assertThat(opened.at("/plan/status").asText()).isEqualTo("POSITION_OPEN");
-        assertThat(opened.at("/plan/activeStage").asText()).isEqualTo("MANAGE_REVIEW");
+        assertThat(opened.at("/plan/furthestStage").asText()).isEqualTo("MANAGE_REVIEW");
         assertThat(opened.at("/plan/assumptionsEditable").asBoolean()).isFalse();
         assertThat(opened.at("/decision/action").asText()).isEqualTo("TRADE");
         assertThat(opened.at("/decision/tradeId").asText()).isEqualTo(opened.at("/trade/id").asText());
@@ -686,7 +691,7 @@ class PlanApiIntegrationTest {
         JsonNode closed = json(post("/api/plans/" + tradePlanId + "/manage/roll",
                 "{\"expectedVersion\":" + openVersion + ",\"confirm\":true}"));
         assertThat(closed.at("/plan/status").asText()).isEqualTo("ACTIVE");
-        assertThat(closed.at("/plan/activeStage").asText()).isEqualTo("STRATEGY");
+        assertThat(closed.at("/plan/furthestStage").asText()).isEqualTo("STRATEGY");
         assertThat(closed.at("/management/actions/0/kind").asText()).isEqualTo("ROLL");
         assertThat(closed.at("/management/links").toString()).contains("ENTRY").contains("ROLL");
         assertThat(closed.at("/management/reviews/0/category").asText()).isEqualTo("TRADE_DECISION");

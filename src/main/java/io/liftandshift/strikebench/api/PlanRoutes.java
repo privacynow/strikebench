@@ -12,7 +12,7 @@ public final class PlanRoutes {
             Handler get,
             Handler updateContext,
             Handler claimIntent,
-            Handler updateStage,
+            Handler advanceProgress,
             Handler updateOpen,
             Handler archive,
             Handler delete,
@@ -57,7 +57,7 @@ public final class PlanRoutes {
         config.routes.get("/api/plans/{id}", h.get());
         config.routes.put("/api/plans/{id}/context", h.updateContext());
         config.routes.put("/api/plans/{id}/intent", h.claimIntent());
-        config.routes.put("/api/plans/{id}/stage", h.updateStage());
+        config.routes.post("/api/plans/{id}/progress", h.advanceProgress());
         config.routes.put("/api/plans/{id}/open", h.updateOpen());
         config.routes.post("/api/plans/{id}/archive", h.archive());
         config.routes.delete("/api/plans/{id}", h.delete());

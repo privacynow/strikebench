@@ -1380,13 +1380,13 @@
               identity.duplicate ? el('span', { class: 'badge badge-info' }, identity.duplicate) : null,
               el('span', { class: 'badge ' + (row.tradeId ? 'badge-ok' : decision.action === 'CASH' ? 'badge-caution' : 'badge-dim') }, action))),
           el('div', { class: 'chip-row' },
-            chip('Stage', String(plan.activeStage).replaceAll('_', ' ').toLowerCase()),
+            chip('Stage', String(plan.furthestStage).replaceAll('_', ' ').toLowerCase()),
             decision.economicVerdict ? chip('Decision', String(decision.economicVerdict).toLowerCase()) : null,
             mark && mark.decisionUnrealizedCents != null ? chip('Now', pnlSpan(mark.decisionUnrealizedCents)) : null,
             decision.pop != null ? chip('POP at decision', fmtPct(decision.pop)) : null),
           el('div', { class: 'btn-row' },
             el('button', { type: 'button', class: 'btn', onclick: function () {
-              focusPlanFrom(this, plan, plan.activeStage);
+              focusPlanFrom(this, plan, plan.furthestStage);
             } }, row.tradeId ? 'Manage Plan' : plan.status === 'DECIDED_CASH' || plan.status === 'CLOSED' ? 'Review Plan' : 'Resume Plan')));
         planGrid.appendChild(card);
       });

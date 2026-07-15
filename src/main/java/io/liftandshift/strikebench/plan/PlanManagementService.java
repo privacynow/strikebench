@@ -174,7 +174,7 @@ public final class PlanManagementService {
                         now);
             }
         }
-        Db.execOn(c, "UPDATE plans SET status=?,active_stage=?,version=version+1,updated_at=? WHERE id=?",
+        Db.execOn(c, "UPDATE plans SET status=?,furthest_stage=?,version=version+1,updated_at=? WHERE id=?",
                 prepareRoll ? "ACTIVE" : "CLOSED", prepareRoll ? "STRATEGY" : "MANAGE_REVIEW", now, planId);
     }
 

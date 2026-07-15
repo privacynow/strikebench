@@ -13,6 +13,25 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class MigrationsTest {
 
     @Test
+    void planProgressMigrationPreservesExistingSavedStage() {
+        Map<String, String> cfg = TestDb.freshConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure().dataSource(db.dataSource()).locations("classpath:db/migrations")
+                    .target("55").load().migrate();
+            db.exec("INSERT INTO plans(id,user_id,symbol,market_kind,status,active_stage) "
+                    + "VALUES('plan_progress','local','AAPL','DEMO','ACTIVE','OUTCOMES')");
+
+            Migrations.run(db);
+
+            assertThat(db.query("SELECT furthest_stage FROM plans WHERE id='plan_progress'", r -> r.str("furthest_stage")))
+                    .containsExactly("OUTCOMES");
+            assertThat(db.query("SELECT column_name FROM information_schema.columns WHERE table_name='plans' "
+                            + "AND column_name='active_stage'", r -> r.str("column_name")))
+                    .isEmpty();
+        }
+    }
+
+    @Test
     void normalizedBacktestMigrationPreservesOrderedReportsAndDropsBlobs() {
         Map<String, String> cfg = TestDb.freshConfig();
         try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
@@ -231,7 +250,7 @@ class MigrationsTest {
                     r -> r.str("column_name"))).isEmpty();
             assertThatThrownBy(() -> db.exec("INSERT INTO workspace(user_id,state) VALUES('missing-owner','{}')"))
                     .hasMessageContaining("foreign key");
-            assertThatThrownBy(() -> db.exec("INSERT INTO plans(id,user_id,symbol,market_kind,world_id,status,active_stage) "
+            assertThatThrownBy(() -> db.exec("INSERT INTO plans(id,user_id,symbol,market_kind,world_id,status,furthest_stage) "
                             + "VALUES('bad-world','local','AAPL','SIMULATED','missing-world','ACTIVE','UNDERSTAND')"))
                     .hasMessageContaining("foreign key");
         }

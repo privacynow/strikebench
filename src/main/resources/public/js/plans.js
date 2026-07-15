@@ -199,7 +199,7 @@
   }
 
   function path(plan, stage) {
-    var key = String(stage || plan.activeStage || 'UNDERSTAND').toUpperCase().replace('-', '_');
+    var key = String(stage || plan.furthestStage || 'UNDERSTAND').toUpperCase().replace('-', '_');
     return '#/plan/' + plan.id + '/' + (STAGE_PATH[key] || 'understand');
   }
 
@@ -244,10 +244,8 @@
     return plan;
   }
 
-  async function setStage(plan, stage) {
-    var updated = replace(await API.put('/api/plans/' + plan.id + '/stage', {
-      expectedVersion: plan.version, stage: stage
-    }));
+  async function advance(plan, stage) {
+    var updated = replace(await API.post('/api/plans/' + plan.id + '/progress', { stage: stage }));
     rememberActive(updated);
     return updated;
   }
@@ -563,7 +561,7 @@
   window.PlanStore = {
     init: function () { return load(true); }, load: load, refresh: refresh, library: library,
     get: get, create: create, promote: promote,
-    provisional: provisional, currentDraft: currentDraft, active: active, focus: focus, path: path, setStage: setStage,
+    provisional: provisional, currentDraft: currentDraft, active: active, focus: focus, path: path, advance: advance,
     updateContext: updateContext, claimIntent: claimIntent, closeChip: closeChip,
     latestStrategy: latestStrategy, runStrategy: runStrategy, fitStrategy: fitStrategy,
     selectCandidate: selectCandidate, clearCandidate: clearCandidate, saveCustom: saveCustom,

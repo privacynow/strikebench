@@ -409,7 +409,7 @@
     var heroSub = el('p', { class: 'home-hero-sub', id: 'home-context-line' },
       activePlan
         ? activePlan.symbol + ' · ' + activeIdentity.full + ' is at '
-          + String(activePlan.activeStage || 'UNDERSTAND').replace('_', ' ').toLowerCase() + '.'
+          + String(activePlan.furthestStage || 'UNDERSTAND').replace('_', ' ').toLowerCase() + '.'
         : 'Screened ideas, honest odds, worst case always known before you commit.');
     var heroCta = activePlan
       ? el('button', { class: 'btn', onclick: function () { focusPlanFrom(this, activePlan); } },
@@ -491,7 +491,7 @@
       } catch (e2) { /* Plan navigation remains useful without decorative marks */ }
 
       function stageName(plan) {
-        return String(plan.activeStage || 'UNDERSTAND').replaceAll('_', ' ').toLowerCase();
+        return String(plan.furthestStage || 'UNDERSTAND').replaceAll('_', ' ').toLowerCase();
       }
       function planTile(plan) {
         var sameMarket = PlanStore.marketKey(plan) === currentKey;
@@ -513,7 +513,7 @@
             App.navigate('#/data/simulation');
             return;
           }
-          focusPlanFrom(this, plan, plan.activeStage);
+          focusPlanFrom(this, plan, plan.furthestStage);
         } }, terminalSession ? 'Review session' : sameMarket
           ? (plan.open === false ? 'Open Plan' : 'Resume Plan') : 'Switch market & open'));
         if (plan.status !== 'POSITION_OPEN') actions.appendChild(el('button', { type: 'button',
@@ -593,7 +593,7 @@
         return el('div', { class: 'home-plan-archive home-plan-closed-tabs' }, closedTabs.map(function (plan) {
           var actions = el('div', { class: 'btn-row' },
             el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
-              focusPlanFrom(this, plan, plan.activeStage);
+              focusPlanFrom(this, plan, plan.furthestStage);
             } }, PlanStore.marketKey(plan) === currentKey ? 'Reopen' : 'Switch market & reopen'));
           if (plan.assumptionsEditable === true) actions.appendChild(el('button', { type: 'button',
             class: 'btn btn-sm btn-secondary', onclick: function () { window.ViewPlan.confirmDelete(plan, false); } },
@@ -757,7 +757,7 @@
       var any = false;
       // The beginner first-week path, folded in (retires itself after the first trade).
       if (Learn.currentLevel() === 'beginner' && acct && !acct.hasTraded) {
-        var activeIndex = activePlan ? window.ViewPlan.stages.findIndex(function (stage) { return stage.key === activePlan.activeStage; }) : -1;
+        var activeIndex = activePlan ? window.ViewPlan.stages.findIndex(function (stage) { return stage.key === activePlan.furthestStage; }) : -1;
         var steps = window.ViewPlan.stages.slice(0, 5).map(function (stage, index) {
           return { label: stage.label, done: activeIndex > index, stage: stage.key };
         });

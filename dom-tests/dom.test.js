@@ -508,8 +508,14 @@ test('Plan stages orient both levels without hiding capabilities or stealing the
   assert.equal(await page.locator('.plan-next-action[data-recommended-next="EVIDENCE"]').count(), 1,
     'Beginner sees one highlighted forward action from Understand');
 
+  const beforeViewOnlyNavigation = await page.evaluate(id => API.getFresh('/api/plans/' + id), plan.id);
   await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
   await page.waitForSelector('#plan-stage-evidence');
+  const afterViewOnlyNavigation = await page.evaluate(id => API.getFresh('/api/plans/' + id), plan.id);
+  assert.equal(afterViewOnlyNavigation.version, beforeViewOnlyNavigation.version,
+    'viewing another stage never competes with assumption or decision writes');
+  assert.equal(afterViewOnlyNavigation.furthestStage, beforeViewOnlyNavigation.furthestStage,
+    'the rail changes URL state without rewriting durable progress');
   assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id),
     'plan-stage-title-evidence', 'a stage change moves focus to the destination heading');
   assert.equal(await page.locator('.plan-rail [aria-current="step"]').count(), 1);
@@ -1552,7 +1558,7 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   await page.waitForFunction(id => location.hash === '#/plan/' + id + '/manage-review', plan.id, { timeout: 30000 });
   const frozen = await page.evaluate(async id => API.getFresh('/api/plans/' + id + '/decision/latest'), plan.id);
   assert.equal(frozen.plan.status, 'POSITION_OPEN');
-  assert.equal(frozen.plan.activeStage, 'MANAGE_REVIEW');
+  assert.equal(frozen.plan.furthestStage, 'MANAGE_REVIEW');
   assert.equal(frozen.decision.action, 'TRADE');
   assert.ok(frozen.decision.tradeId, 'the paper trade is linked inside the frozen decision');
 

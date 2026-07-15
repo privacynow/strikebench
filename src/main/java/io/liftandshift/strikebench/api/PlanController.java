@@ -85,7 +85,7 @@ final class PlanController {
     void register(JavalinConfig config) {
         PlanRoutes.register(config, new PlanRoutes.Handlers(
                 this::plansList, this::planCreate, planDecisionController::plansPortfolio, this::planGet,
-                this::planContextPut, this::planIntentPut, this::planStagePut, this::planOpenPut,
+                this::planContextPut, this::planIntentPut, this::planProgressPost, this::planOpenPut,
                 this::planArchive, this::planDelete, this::planEvidenceLatest,
                 this::planEvidenceStudy, strategyController::planStrategyLatest,
                 strategyController::planStrategyRun, strategyController::planStrategyFit,
@@ -252,9 +252,9 @@ final class PlanController {
         ctx.json(planSvc.claimIntent(ownerId(ctx), ctx.pathParam("id"), request));
     }
 
-    private void planStagePut(Context ctx) {
-        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.StageRequest.class));
-        ctx.json(planSvc.setStage(ownerId(ctx), ctx.pathParam("id"), request));
+    private void planProgressPost(Context ctx) {
+        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.ProgressRequest.class));
+        ctx.json(planSvc.advanceProgress(ownerId(ctx), ctx.pathParam("id"), request));
     }
 
     private void planOpenPut(Context ctx) {
