@@ -2221,13 +2221,21 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   margin: 4px 0 8px; padding: 0 2px; }
 .plan-proposed-heading h3, .plan-other-ranked-title { margin: 2px 0 0; }
 .plan-other-ranked-title { padding-top: 8px; border-top: 1px solid var(--border); }
-.plan-intent-ladder .ladder-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.plan-intent-ladder .ladder-sentences { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.plan-intent-ladder .ladder-row { grid-template-columns: minmax(0, 1fr); align-content: start; align-items: center; height: 100%; }
 .plan-intent-ladder .ladder-row-badges, .plan-intent-ladder .ladder-row > .xp { grid-column: 1 / -1; }
-.plan-intent-ladder .ladder-row > .btn { white-space: nowrap; }
+.plan-intent-ladder .ladder-row > .btn { width: 100%; white-space: nowrap; }
 .plan-intent-ladder .ladder-row.selected, .plan-intent-ladder tr.selected td {
   border-color: var(--accent); background: var(--accent-soft);
 }
 .plan-intent-ladder .ladder-row.selected { box-shadow: inset 3px 0 0 var(--accent); }
+.plan-ladder-toggle-row { display: flex; justify-content: center; margin-top: 12px; }
+.plan-outcomes-prerequisite { max-width: 860px; }
+.plan-outcomes-prerequisite > p { max-width: 760px; }
+.plan-outcomes-prerequisite-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+@media (max-width: 1100px) and (min-width: 761px) {
+  .plan-intent-ladder .ladder-sentences { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .plan-selection-actions { display: flex; justify-content: flex-end; margin-top: -4px; }
 .plan-selected-candidate { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
 .plan-rejected-teaching { display: grid; gap: 10px; }
@@ -2414,6 +2422,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .plan-proposed-heading { align-items: flex-start; flex-direction: column; }
   .plan-budget-teaching-row { grid-template-columns: 64px minmax(0, 1fr); }
   .plan-budget-teaching-reason { grid-column: 1 / -1; align-items: flex-start; flex-direction: column; }
+  .plan-intent-ladder .ladder-sentences, .plan-outcomes-prerequisite-grid { grid-template-columns: minmax(0, 1fr); }
   .plan-intent-ladder .ladder-row { grid-template-columns: minmax(0, 1fr); }
   .plan-intent-ladder .ladder-row > .btn { width: 100%; }
   .portfolio-construct-primary, .portfolio-construct-advanced > .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

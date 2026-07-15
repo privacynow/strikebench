@@ -967,6 +967,7 @@
       var distance = target ? Math.abs(strike - target) : Math.abs(i - Math.floor(rungs.length / 2));
       if (distance < best) { best = distance; reference = i; }
     });
+    var selectedKey = ui.selectedLadderKey || candidatePackageKey(planRef.selected);
     async function choose(c, button) {
       button.disabled = true;
       try {
@@ -1005,9 +1006,28 @@
         chip('Premium at risk', fmtMoney(c.maxLossCents)), chip('Until', leg.expiration)];
     }
     if (Learn.currentLevel() === 'beginner') {
-      var list = el('div', { class: 'ladder-sentences' });
-      rungs.forEach(function (c, i) {
-        var selected = (ui.selectedLadderKey || candidatePackageKey(planRef.selected)) === candidatePackageKey(c);
+      var showAll = ui.expandedLadderIntent === intent;
+      var visibleIndexes = rungs.map(function (_, i) { return i; });
+      if (!showAll && rungs.length > 3) {
+        visibleIndexes = [reference];
+        for (var offset = 1; visibleIndexes.length < 3 && offset < rungs.length; offset++) {
+          if (reference - offset >= 0) visibleIndexes.push(reference - offset);
+          if (visibleIndexes.length < 3 && reference + offset < rungs.length) visibleIndexes.push(reference + offset);
+        }
+        var selectedIndex = rungs.findIndex(function (candidate) { return candidatePackageKey(candidate) === selectedKey; });
+        if (selectedIndex >= 0 && visibleIndexes.indexOf(selectedIndex) < 0) {
+          var replaceAt = visibleIndexes.reduce(function (pick, index, position) {
+            if (index === reference) return pick;
+            return pick < 0 || Math.abs(index - reference) > Math.abs(visibleIndexes[pick] - reference) ? position : pick;
+          }, -1);
+          visibleIndexes[replaceAt < 0 ? visibleIndexes.length - 1 : replaceAt] = selectedIndex;
+        }
+        visibleIndexes.sort(function (a, b) { return a - b; });
+      }
+      var list = el('div', { class: 'ladder-sentences', id: 'plan-ladder-rungs' });
+      visibleIndexes.forEach(function (i) {
+        var c = rungs[i];
+        var selected = selectedKey === candidatePackageKey(c);
         var button = el('button', { type: 'button', class: 'btn btn-sm', disabled: selected ? '' : null },
           selected ? 'Selected' : 'Select this rung');
         button.onclick = function () { choose(c, button); };
@@ -1020,6 +1040,16 @@
           UI.expandable('See exact contracts and risk', function () { return candidateCard(c, false, planRef.plan.symbol); })));
       });
       wrap.appendChild(list);
+      if (rungs.length > 3) {
+        wrap.appendChild(el('div', { class: 'plan-ladder-toggle-row' }, el('button', {
+          type: 'button', class: 'btn btn-secondary btn-sm', id: 'plan-ladder-toggle',
+          'aria-expanded': showAll ? 'true' : 'false', 'aria-controls': 'plan-ladder-rungs',
+          onclick: function () {
+            ui.expandedLadderIntent = showAll ? null : intent;
+            repaint().catch(function (e) { UI.toast(e.message, 'error'); });
+          }
+        }, showAll ? 'Show representative prices' : 'Show all ' + rungs.length + ' prices')));
+      }
     } else {
       var tbody = el('tbody', {});
       rungs.forEach(function (c, i) {
@@ -1669,9 +1699,17 @@
     var latest = await PlanStore.latestOutcomes(initialPlan.id, true);
     var selected = latest.selected;
     if (!selected) {
-      content.appendChild(UI.emptyState('Choose a structure first',
-        'Outcomes evaluates one exact package. Return to Strategy, select it, then every lens here uses those same contracts.',
-        'Open Strategy', function () { focusPlanFrom(this, planRef.plan, 'STRATEGY'); }));
+      content.appendChild(el('section', { class: 'card plan-outcomes-prerequisite', id: 'plan-outcomes-prerequisite' },
+        UI.cardHeader('Choose exact contracts before testing outcomes'),
+        el('p', { class: 'muted' },
+          'A stock view is not yet a position. Strike, expiration, side, and quantity determine the odds, expected value, worst case, and path-by-path P/L.'),
+        el('div', { class: 'plan-outcomes-prerequisite-grid' },
+          UI.fact('Market-implied lens', 'POP + after-cost EV'),
+          UI.fact('Possible-futures lens', 'p5 · median · p95'),
+          UI.fact('Historical lens', 'No-look-ahead replay')),
+        el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn',
+          onclick: function () { focusPlanFrom(this, planRef.plan, 'STRATEGY'); }
+        }, 'Choose contracts in Strategy'))));
       return;
     }
     (latest.outcomes || []).forEach(function (run) { ui.outcomeRuns[run.basis] = run; });
