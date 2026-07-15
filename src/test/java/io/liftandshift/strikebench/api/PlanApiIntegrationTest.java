@@ -669,6 +669,16 @@ class PlanApiIntegrationTest {
         assertThat(opened.at("/decision/accountNlvCents").asLong()).isEqualTo(1_930_000L);
         assertThat(opened.at("/decision/riskCapitalCents").asLong()).isEqualTo(193_000L);
 
+        JsonNode planBook = json(get("/api/plans/portfolio"));
+        JsonNode tradePlanRow = null;
+        for (JsonNode row : planBook.withArray("plans")) {
+            if (tradePlanId.equals(row.at("/plan/id").asText())) { tradePlanRow = row; break; }
+        }
+        assertThat(tradePlanRow).as("the Plan book includes the opened position").isNotNull();
+        assertThat(tradePlanRow.at("/decision/action").asText()).isEqualTo("TRADE");
+        assertThat(tradePlanRow.at("/tradeId").asText()).isEqualTo(opened.at("/trade/id").asText());
+        assertThat(tradePlanRow.at("/mark/tradeId").asText()).isEqualTo(opened.at("/trade/id").asText());
+
         long openVersion = opened.at("/plan/version").asLong();
         JsonNode marked = json(post("/api/plans/" + tradePlanId + "/manage/refresh",
                 "{\"expectedVersion\":" + openVersion + "}"));

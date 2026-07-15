@@ -1351,7 +1351,7 @@
     }
 
     var planBook = null;
-    try { planBook = await API.getFresh('/api/plans/portfolio'); }
+    try { planBook = await API.get('/api/plans/portfolio'); }
     catch (e) { if (section === 'plans') root.appendChild(alertBox('warn', 'Plan book unavailable', [e.message])); }
 
     if (section === 'plans') {

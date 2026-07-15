@@ -21,6 +21,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -174,19 +175,28 @@ final class PlanDecisionController {
     void plansPortfolio(Context ctx) {
         String world = PlanController.worldParam(root.activeWorld(ctx));
         var marketKind = root.activePlanMarket(ctx);
+        String ownerId = root.ownerId(ctx);
+        var plans = planSvc.list(ownerId, marketKind,
+                marketKind == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED ? world : null, false);
+        var portfolioDecisions = planDecisions.portfolioLatest(ownerId);
+        Map<String, Map<String, TradeService.MarkView>> marksByAccount = new HashMap<>();
+        for (var plan : plans) {
+            if (plan.accountId() == null || marksByAccount.containsKey(plan.accountId())) continue;
+            marksByAccount.put(plan.accountId(), trades.accountMarkSnapshot(plan.accountId()));
+        }
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (var plan : planSvc.list(root.ownerId(ctx), marketKind,
-                marketKind == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED ? world : null, false)) {
+        for (var plan : plans) {
             if (plan.status() == io.liftandshift.strikebench.plan.Plan.Status.ARCHIVED) continue;
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("plan", plan);
-            ObjectNode decision = planDecisions.latest(root.ownerId(ctx), plan.id());
-            if (decision != null) row.put("decision", decision);
-            String tradeId = planManagement.activeTradeId(root.ownerId(ctx), plan.id());
+            var portfolioDecision = portfolioDecisions.get(plan.id());
+            if (portfolioDecision != null) row.put("decision", portfolioDecision.decision());
+            String tradeId = portfolioDecision == null ? null : portfolioDecision.activeTradeId();
             if (tradeId != null) {
                 row.put("tradeId", tradeId);
-                try { row.put("mark", trades.currentMark(tradeId)); }
-                catch (RuntimeException e) { row.put("markUnavailable", true); }
+                var mark = marksByAccount.getOrDefault(plan.accountId(), Map.of()).get(tradeId);
+                if (mark != null) row.put("mark", mark);
+                else row.put("markUnavailable", true);
             }
             rows.add(row);
         }
