@@ -21,7 +21,7 @@ const BASE = `http://localhost:${PORT}`;
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
-let server, browser, page, pg;
+let server, browser, context, page, pg;
 let planSequence = 0;
 
 async function waitForServer(tries = 60) {
@@ -180,7 +180,8 @@ before(async () => {
   });
   await waitForServer();
   browser = await chromium.launch();
-  page = await browser.newPage();
+  context = await browser.newContext();
+  page = await context.newPage();
   page.on('pageerror', e => { throw new Error('page error: ' + e.message); });
 
   await page.goto(BASE + '/');
@@ -4078,6 +4079,38 @@ test('smooth pipeline: GET cache and tape refresh preserve continuity', async ()
     return strip.firstChild === before && strip.getAttribute('data-symbols').length > 0;
   });
   assert.equal(stable, true, 'tape strip not rebuilt when symbols unchanged');
+});
+
+test('multiple tabs share one realtime stream pair without starving API reads', async () => {
+  const extras = [];
+  try {
+    for (let i = 0; i < 4; i++) {
+      const extra = await page.context().newPage();
+      extras.push(extra);
+      await extra.goto(BASE + '/?stream-tab=' + i + '#/data/simulation');
+      await extra.waitForSelector('#app[data-ready="true"]');
+    }
+    await page.waitForTimeout(500);
+    const pages = [page, ...extras];
+    const states = await Promise.all(pages.map(p => p.evaluate(() => {
+      const lease = JSON.parse(localStorage.getItem('strikebench.realtime.leader.v1') || 'null');
+      return { lease: lease && lease.id, market: !!App._marketES, events: !!App._eventsES };
+    })));
+    assert.equal(new Set(states.map(x => x.lease).filter(Boolean)).size, 1,
+      'all tabs agree on one realtime leader: ' + JSON.stringify(states));
+    assert.equal(states.filter(x => x.market && x.events).length, 1,
+      'exactly one tab owns both EventSource connections: ' + JSON.stringify(states));
+    const sessionStatus = await extras[extras.length - 1].evaluate(async () => {
+      const result = await Promise.race([
+        fetch('/api/sim/market').then(r => r.status),
+        new Promise(resolve => setTimeout(() => resolve('timeout'), 3000))
+      ]);
+      return result;
+    });
+    assert.equal(sessionStatus, 200, 'ordinary API reads remain available with five tabs open');
+  } finally {
+    await Promise.all(extras.map(p => p.close()));
+  }
 });
 
 test('portfolio sizing and research tools live in their natural workflows', async () => {

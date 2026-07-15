@@ -1042,26 +1042,42 @@
       App.transitionWorld(data.world, data.universe, data.revision, data.epoch)
         .catch(function () { /* banner shown */ }); // idempotent: same-target calls collapse
     });
-    // Belt-and-braces for tabs whose SSE dropped: re-check the server's world on return.
+    // Hidden tabs release both long-lived streams. Besides saving work, this keeps a few
+    // background tabs from consuming every HTTP/1.1 connection and starving ordinary API
+    // reads in the tab the trader is actually using. On return, reconcile server-owned
+    // world/workspace truth BEFORE reopening either stream.
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState !== 'visible') return;
+      if (document.visibilityState !== 'visible') {
+        releaseRealtimeLeadership();
+        return;
+      }
       API.getFresh('/api/world').then(function (w) {
         var srv = (w && w.world) || 'observed';
         var ownersDisagree = srv !== App.state.world
           || (App.Market && App.Market.world !== srv)
           || !App.state.universe || !App.state.universe.active
           || App.state.transitionStatus === 'failed';
-        if (ownersDisagree) App.transitionWorld(srv, null, w && w.revision, w && w.epoch)
+        if (ownersDisagree) return App.transitionWorld(srv, null, w && w.revision, w && w.epoch)
           .catch(function () { /* banner shown */ });
-      }).catch(function () { /* offline — next visit retries */ });
+      }).then(function () {
+        return window.Workspace && Workspace.reconcile ? Workspace.reconcile() : false;
+      }).then(function (workspaceChanged) {
+        if (workspaceChanged) return App.render();
+      }).catch(function () { /* offline — next visit retries */ })
+        .then(function () {
+          if (document.visibilityState !== 'visible') return;
+          subscribeMarketStream();
+          subscribeEvents();
+        });
     });
     await App.worldReady;             // never paint restored work under an unconfirmed market lane
     if (window.PlanStore) await PlanStore.init();
     refreshUniverse();
+    initRealtimeCoordination();
     subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
     subscribeEvents();                // typed workspace events (jobs, datasets, provider cooldowns)
     setInterval(function () {
-      if (!marketStreamHealthy()) refreshTape();
+      if (document.visibilityState === 'visible' && !marketStreamHealthy()) refreshTape();
     }, 45 * 1000);
     window.addEventListener('hashchange', function () {
       // Native hash links (ticker cards, tabs and browser Back) do not pass through
@@ -1299,8 +1315,119 @@
     get: function (symbol) { return App.Market.quotes[(symbol || '').toUpperCase()]; }
   };
 
+  // One browser origin owns one pair of SSE connections. The leader relays frames over a
+  // BroadcastChannel; a short localStorage lease provides deterministic failover when a tab
+  // closes. Without this, three ordinary tabs can exhaust an HTTP/1.1 connection pool and
+  // strand normal API requests behind six permanent streams.
+  var REALTIME_LEASE_KEY = 'strikebench.realtime.leader.v1';
+  var REALTIME_CHANNEL = 'strikebench.realtime.v1';
+  var REALTIME_LEASE_MS = 10000;
+  var realtimeTabId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+  var realtimeChannel = null;
+  var realtimeLeader = false;
+  var realtimeSolo = false;
+  var realtimeReady = false;
+  var realtimeCoordinatedAt = 0;
+
+  function readRealtimeLease() {
+    try { return JSON.parse(localStorage.getItem(REALTIME_LEASE_KEY) || 'null'); }
+    catch (e) { return null; }
+  }
+
+  function ensureRealtimeLeadership() {
+    if (realtimeSolo) {
+      realtimeLeader = true;
+      return true;
+    }
+    if (!realtimeReady || document.visibilityState === 'hidden') return false;
+    var now = Date.now();
+    var current = readRealtimeLease();
+    if (current && current.id !== realtimeTabId && Number(current.expires || 0) > now) {
+      if (realtimeLeader) closeRealtimeStreams();
+      realtimeLeader = false;
+      return false;
+    }
+    try {
+      localStorage.setItem(REALTIME_LEASE_KEY, JSON.stringify({ id: realtimeTabId, expires: now + REALTIME_LEASE_MS }));
+      current = readRealtimeLease();
+      realtimeLeader = !!current && current.id === realtimeTabId;
+      return realtimeLeader;
+    } catch (e) {
+      // Storage may be disabled in a private profile. Preserve functionality in that case;
+      // the browser simply falls back to one stream pair per tab.
+      realtimeSolo = true;
+      realtimeLeader = true;
+      return true;
+    }
+  }
+
+  function claimRealtimeStreams() {
+    var isLeader = ensureRealtimeLeadership();
+    if (isLeader) {
+      // A live tab may still own the lease after EventSource exhausted its retry budget.
+      // Heal each transport independently instead of leaving every follower stranded behind
+      // a nominal leader that no longer has a source to relay.
+      if (!App._marketES) subscribeMarketStream();
+      if (!App._eventsES) subscribeEvents();
+    }
+  }
+
+  function relayRealtime(kind, payload, eventType) {
+    if (!realtimeChannel || !realtimeLeader) return;
+    try { realtimeChannel.postMessage({ sender: realtimeTabId, kind: kind, payload: payload, eventType: eventType }); }
+    catch (e) { /* a stream frame remains valid in the leader even if relay fails */ }
+  }
+
+  function releaseRealtimeLeadership() {
+    if (!realtimeSolo && realtimeLeader) {
+      var current = readRealtimeLease();
+      try { if (current && current.id === realtimeTabId) localStorage.removeItem(REALTIME_LEASE_KEY); }
+      catch (e) { /* lease expires naturally */ }
+      try { if (realtimeChannel) realtimeChannel.postMessage({ sender: realtimeTabId, kind: 'released' }); }
+      catch (e2) { /* followers also notice the expired lease */ }
+    }
+    realtimeLeader = false;
+    closeRealtimeStreams();
+  }
+
+  function initRealtimeCoordination() {
+    if (realtimeReady) return;
+    realtimeReady = true;
+    realtimeCoordinatedAt = Date.now();
+    window.addEventListener('pagehide', releaseRealtimeLeadership);
+    setInterval(function () {
+      if (document.visibilityState === 'hidden') releaseRealtimeLeadership();
+      else claimRealtimeStreams();
+    }, 4000);
+    if (!window.BroadcastChannel) {
+      realtimeSolo = true;
+      realtimeLeader = true;
+      return;
+    }
+    try { realtimeChannel = new BroadcastChannel(REALTIME_CHANNEL); }
+    catch (e) { realtimeSolo = true; realtimeLeader = true; return; }
+    realtimeChannel.onmessage = function (ev) {
+      var msg = ev && ev.data;
+      if (!msg || msg.sender === realtimeTabId) return;
+      if (msg.kind === 'quotes') acceptMarketFrame(msg.payload);
+      else if (msg.kind === 'event') acceptAppEvent(msg.eventType, msg.payload);
+      else if (msg.kind === 'released' && document.visibilityState !== 'hidden') claimRealtimeStreams();
+    };
+    window.addEventListener('storage', function (ev) {
+      if (ev.key === REALTIME_LEASE_KEY && document.visibilityState !== 'hidden') claimRealtimeStreams();
+    });
+    ensureRealtimeLeadership();
+  }
+
+  function acceptMarketFrame(data) {
+    if (!data || !data.quotes) return;
+    App.Market.onFrame(data);
+    updateTapePrices(data.quotes);
+  }
+
   function subscribeMarketStream() {
-    if (!window.EventSource) return; // older engines fall back to polling
+    initRealtimeCoordination();
+    if (!window.EventSource || !ensureRealtimeLeadership()) return;
     try { if (App._marketES) { App._marketES.close(); App._marketES = null; } } catch (e) { /* ignore */ }
     var es;
     try { es = new EventSource('/api/market/stream'); } catch (e) { return; }
@@ -1312,8 +1439,8 @@
       try {
         var data = JSON.parse(ev.data);
         if (data && data.quotes) {
-          App.Market.onFrame(data);      // the store first — heroes/tiles subscribe there
-          updateTapePrices(data.quotes); // then the tape's in-place update
+          acceptMarketFrame(data);       // the store first — heroes/tiles subscribe there
+          relayRealtime('quotes', data); // then sibling tabs, without another SSE connection
         }
       } catch (e) { /* ignore a malformed frame */ }
     });
@@ -1325,6 +1452,15 @@
   }
 
   function marketStreamHealthy() {
+    if (document.visibilityState === 'hidden') return true; // suppress the polling fallback while parked
+    if (realtimeReady && !realtimeSolo && !realtimeLeader) {
+      var lease = readRealtimeLease();
+      var leaderAlive = lease && Number(lease.expires || 0) > Date.now();
+      // Before the first relayed frame, retain the ordinary poll fallback after the same 15s
+      // connection grace used by a direct EventSource. Once a frame lands, MarketStore.seq is
+      // the durable proof that this follower has a working relay.
+      return !!leaderAlive && (App.Market.seq > 0 || Date.now() - realtimeCoordinatedAt < 15000);
+    }
     var es = App._marketES;
     if (!es) return false;
     if (es.readyState === 1) {
@@ -1333,6 +1469,12 @@
     return es.readyState === 0 && Date.now() - (App._marketESstartedAt || 0) < 15000;
   }
   App.subscribeMarketStream = subscribeMarketStream;
+  App.eventsStreamHealthy = function () {
+    if (document.visibilityState === 'hidden') return true;
+    if (realtimeSolo || realtimeLeader) return !!App._eventsES;
+    var lease = readRealtimeLease();
+    return !!lease && Number(lease.expires || 0) > Date.now();
+  };
 
   /**
    * The typed event stream (/api/events): small server hints — job progress, dataset switches,
@@ -1365,8 +1507,20 @@
   // for other tabs; duplicate delivery is intentionally harmless and collapses in each view.
   App.emitEvent = dispatchAppEvent;
 
+  function acceptAppEvent(type, data) {
+    if (type === 'dataset.selected') refreshScenarioBanner();
+    if (type === 'provider.cooldown' && data) showCooldownChip(data);
+    if (type === 'workspace.updated' && data && window.Workspace) Workspace.onRemoteRev(data.rev);
+    if (type === 'plan.updated' && window.PlanStore) {
+      PlanStore.refresh().catch(function () { /* next route retries */ });
+    }
+    dispatchAppEvent(type, data);
+  }
+
   function subscribeEvents() {
-    if (!window.EventSource) return;
+    initRealtimeCoordination();
+    if (!window.EventSource || !ensureRealtimeLeadership()) return;
+    try { if (App._eventsES) { App._eventsES.close(); App._eventsES = null; } } catch (e0) { /* ignore */ }
     var es;
     try { es = new EventSource('/api/events'); } catch (e) { return; }
     App._eventsES = es;
@@ -1376,16 +1530,18 @@
         es.addEventListener(type, function (ev) {
           var data = null;
           try { data = JSON.parse(ev.data); } catch (e) { /* hint only */ }
-          if (type === 'dataset.selected') refreshScenarioBanner();
-          if (type === 'provider.cooldown' && data) showCooldownChip(data);
-          if (type === 'workspace.updated' && data && window.Workspace) Workspace.onRemoteRev(data.rev);
-          if (type === 'plan.updated' && window.PlanStore) {
-            PlanStore.refresh().catch(function () { /* next route retries */ });
-          }
-          dispatchAppEvent(type, data);
+          acceptAppEvent(type, data);
+          relayRealtime('event', data, type);
         });
       });
     // EventSource reconnects itself; events are hints, so a gap costs nothing but freshness.
+  }
+
+  function closeRealtimeStreams() {
+    try { if (App._marketES) App._marketES.close(); } catch (e1) { /* ignore */ }
+    try { if (App._eventsES) App._eventsES.close(); } catch (e2) { /* ignore */ }
+    App._marketES = null;
+    App._eventsES = null;
   }
 
   /**

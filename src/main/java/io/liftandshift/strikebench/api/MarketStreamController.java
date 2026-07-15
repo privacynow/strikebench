@@ -92,7 +92,8 @@ final class MarketStreamController implements AutoCloseable {
                                                 List<String> requestedSymbols) {
         List<Map<String, Object>> rows = new ArrayList<>();
         if ("observed".equals(world)) {
-            for (var snapshot : engine.quotes(requestedSymbols)) {
+            List<String> symbols = customSymbols ? requestedSymbols : universe.active().symbols();
+            for (var snapshot : engine.quotes(symbols)) {
                 rows.add(MarketDataEngine.toRow(snapshot));
             }
             return rows;

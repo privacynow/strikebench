@@ -575,14 +575,24 @@ class JourneySurfaceTest {
                 "src/main/java/io/liftandshift/strikebench/api/MarketFrameBroadcaster.java"));
         String app = Files.readString(Path.of(
                 "src/main/resources/public/js/app.js"));
+        String workspace = Files.readString(Path.of(
+                "src/main/resources/public/js/workspace.js"));
 
         assertThat(controller).contains("broadcaster.subscribe(request", "broadcaster.invalidateOwner(")
+                .contains("customSymbols ? requestedSymbols : universe.active().symbols()")
                 .doesNotContain("scheduleWithFixedDelay(push", "newScheduledThreadPool(2");
         assertThat(broadcaster).contains("Map<Request, Group> groups", "newVirtualThreadPerTaskExecutor()",
                 "if (group.subscribers.isEmpty() || !group.computing.compareAndSet(false, true)) return;");
-        assertThat(app).contains("if (!marketStreamHealthy()) refreshTape();",
-                        "function marketStreamHealthy()")
+        assertThat(app).contains("document.visibilityState === 'visible' && !marketStreamHealthy()",
+                        "function marketStreamHealthy()", "closeRealtimeStreams();",
+                        "App._eventsES.close()", "subscribeMarketStream();", "subscribeEvents();",
+                        "new BroadcastChannel(REALTIME_CHANNEL)", "strikebench.realtime.leader.v1",
+                        "relayRealtime('quotes', data)", "relayRealtime('event', data, type)",
+                        "if (!App._marketES) subscribeMarketStream();",
+                        "if (!App._eventsES) subscribeEvents();", "App.eventsStreamHealthy")
                 .doesNotContain("setInterval(refreshTape, 45 * 1000)");
+        assertThat(workspace).contains("if (document.hidden) return;", "function reconcile()",
+                "return adoptRemote(remote, false);", "if (json === lastSavedJson) return;");
     }
 
     @Test void canonicalOwnersRetainTheFullDecisionAndLearningToolset() throws Exception {
