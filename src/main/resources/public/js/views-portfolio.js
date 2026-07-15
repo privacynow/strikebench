@@ -255,7 +255,7 @@
     return el('div', { class: 'portfolio-mode seg', role: 'tablist', 'aria-label': 'Portfolio workspace' },
       el('button', { type: 'button', role: 'tab', class: tracked ? '' : 'active', 'aria-selected': tracked ? 'false' : 'true',
         tabindex: tracked ? '-1' : '0',
-        onclick: function () { App.navigate('#/portfolio'); } }, 'Practice desk'),
+        onclick: function () { App.navigate('#/portfolio/positions'); } }, 'Paper account'),
       el('button', { type: 'button', role: 'tab', class: tracked ? 'active' : '', 'aria-selected': tracked ? 'true' : 'false',
         tabindex: tracked ? '0' : '-1',
         onclick: function () { App.navigate('#/portfolio/book/overview'); } }, 'Tracked accounts'));
@@ -1282,7 +1282,7 @@
     var directTradeId = params[0] === 'trade' ? params[1] : null;
     var section = directTradeId || params[0] === 'positions' || params[0] === 'active' || params[0] === 'closed' ? 'positions'
       : params[0] === 'activity' ? 'activity' : params[0] === 'account' ? 'account'
-        : params[0] === 'record' ? 'record' : params[0] === 'construct' ? 'construct' : 'plans';
+        : params[0] === 'record' ? 'record' : params[0] === 'construct' ? 'construct' : 'positions';
     var tab = params[0] === 'closed' ? 'closed' : 'active';
     var page = parseInt(params[1] || '0', 10);
     root.appendChild(el('h1', {}, 'Portfolio'));
@@ -1291,9 +1291,6 @@
       await portfolioBook(root, params.slice(1));
       return;
     }
-    if (section === 'plans') root.appendChild(el('p', { class: 'muted page-intro' },
-      'Each Plan keeps one stock, goal, market, evidence, structure and decision together. Resume it here without reconstructing the journey.'));
-
     // Account + summary are both needed on every section — fetch them together, not in series.
     var summaryP = API.get('/api/portfolio/summary').catch(function () { return null; });
     var acctData = await API.get('/api/account');
@@ -1325,8 +1322,6 @@
       statsRow.appendChild(stat('Started with', fmtMoney(acct.startingCashCents)));
     }
     root.appendChild(el('div', { class: 'tabs' },
-      el('button', { class: section === 'plans' ? 'active' : '', id: 'pf-sec-plans',
-        onclick: function () { App.navigate('#/portfolio'); } }, 'Plans'),
       el('button', { class: section === 'construct' ? 'active' : '', id: 'pf-sec-construct',
         onclick: function () { App.navigate('#/portfolio/construct'); } }, 'Construct'),
       el('button', { class: section === 'positions' ? 'active' : '', id: 'pf-sec-positions',
@@ -1347,50 +1342,6 @@
 
     if (section === 'construct') {
       root.appendChild(portfolioConstruct(acct));
-      return;
-    }
-
-    var planBook = null;
-    try { planBook = await API.get('/api/plans/portfolio'); }
-    catch (e) { if (section === 'plans') root.appendChild(alertBox('warn', 'Plan book unavailable', [e.message])); }
-
-    if (section === 'plans') {
-      var planRows = planBook && planBook.plans || [];
-      if (!planRows.length) {
-        root.appendChild(UI.emptyState('No Plans in this market',
-          'Research a symbol or run the universe Scout to open a durable plan.', 'Open Research', function () {
-            App.navigate('#/research');
-          }));
-        return;
-      }
-      var planGrid = el('div', { class: 'plan-book-grid', id: 'portfolio-plan-book' });
-      var planPool = planRows.map(function (row) { return row.plan; });
-      planRows.forEach(function (row) {
-        var plan = row.plan, decision = row.decision || {}, mark = row.mark;
-        var identity = PlanStore.identity(plan, planPool);
-        var action = decision.action === 'CASH' ? 'Cash decision'
-          : row.tradeId ? 'Position open' : plan.status === 'CLOSED' ? 'Reviewed' : 'Working plan';
-        var card = el('article', { class: 'card plan-book-card' },
-          el('div', { class: 'plan-book-head' },
-            el('div', {}, el('h3', {}, plan.symbol + ' · ' + identity.title),
-              el('p', { class: 'muted' }, planMarketLabel(plan)
-                + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' trading sessions' : '')
-                + (identity.updated ? ' · ' + identity.updated : ''))),
-            el('div', { class: 'plan-book-badges' },
-              identity.duplicate ? el('span', { class: 'badge badge-info' }, identity.duplicate) : null,
-              el('span', { class: 'badge ' + (row.tradeId ? 'badge-ok' : decision.action === 'CASH' ? 'badge-caution' : 'badge-dim') }, action))),
-          el('div', { class: 'chip-row' },
-            chip('Stage', String(plan.furthestStage).replaceAll('_', ' ').toLowerCase()),
-            decision.economicVerdict ? chip('Decision', String(decision.economicVerdict).toLowerCase()) : null,
-            mark && mark.decisionUnrealizedCents != null ? chip('Now', pnlSpan(mark.decisionUnrealizedCents)) : null,
-            decision.pop != null ? chip('POP at decision', fmtPct(decision.pop)) : null),
-          el('div', { class: 'btn-row' },
-            el('button', { type: 'button', class: 'btn', onclick: function () {
-              focusPlanFrom(this, plan, plan.furthestStage);
-            } }, row.tradeId ? 'Manage Plan' : plan.status === 'DECIDED_CASH' || plan.status === 'CLOSED' ? 'Review Plan' : 'Resume Plan')));
-        planGrid.appendChild(card);
-      });
-      root.appendChild(planGrid);
       return;
     }
 

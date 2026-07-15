@@ -39,6 +39,7 @@
       if (name === 'home') return !args.length || (args.length === 1 && args[0] === 'tour');
       if (name === 'research') return !args.length
         || (args.length === 1 && /^[A-Z0-9._-]+$/i.test(args[0]));
+      if (name === 'plans') return !args.length;
       if (name === 'plan') return args.length === 2
         && stagePaths.indexOf(String(args[1] || '').split('?')[0]) >= 0;
       if (name === 'portfolio') return !args.length
@@ -56,7 +57,7 @@
       return this.valid(parts[0] || 'home', parts.slice(1)) ? hash : '#/home';
     },
     navOwner: function (name, args) {
-      return name === 'plan' || (name === 'portfolio' && !(args || []).length) ? 'plans' : name;
+      return name === 'plan' || name === 'plans' ? 'plans' : name;
     }
   };
 

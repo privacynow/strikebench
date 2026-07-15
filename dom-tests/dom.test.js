@@ -1457,9 +1457,9 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
   await go('#/home');
   const group = page.locator('#home-plan-library [data-plan-group="in-this-market"]');
   await group.waitFor({ state: 'visible' });
-  assert.equal(await group.locator('.home-plan-tile').count(), 4,
+  assert.equal(await group.locator('.home-plan-tile').count(), 3,
     'the desk starts with a scannable recent subset rather than an unbounded ledger');
-  assert.match(await group.locator('.home-plan-group-count').textContent(), /4 of \d+ Plans/);
+  assert.match(await group.locator('.home-plan-group-count').textContent(), /3 of \d+ Plans/);
   const toggle = group.locator('.home-plan-group-toggle');
   assert.match(await toggle.textContent(), /Show all \d+/);
   await toggle.click();
@@ -1468,7 +1468,7 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
   assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-library-expanded-desktop.png'), fullPage: true });
   await toggle.click();
-  assert.equal(await group.locator('.home-plan-tile').count(), 4);
+  assert.equal(await group.locator('.home-plan-tile').count(), 3);
   assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
 
   await page.evaluate(async planIds => {
@@ -1632,19 +1632,23 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   assert.match(await page.textContent('#plan-stage-manage-review'), /trade decision/i);
   assert.match(await page.textContent('#plan-stage-manage-review'), /plan position/i);
 
-  await go('#/portfolio');
-  await page.waitForSelector('#portfolio-plan-book .plan-book-card');
-  assert.equal((await page.locator('#app > h1').textContent()).trim(), 'Portfolio',
-    'Plans and tracked accounts share one honest Portfolio destination');
-  assert.equal((await page.locator('#pf-sec-plans').textContent()).trim(), 'Plans',
-    'the Plan library still names and highlights its own subsection');
-  assert.equal(await page.locator('#pf-sec-plans').evaluate(node => node.classList.contains('active')), true,
-    'the Portfolio destination keeps the Plans subsection visibly selected');
-  assert.match(await page.textContent('#portfolio-plan-book'), /AAPL/);
-  assert.match(await page.textContent('#portfolio-plan-book'), /Review Plan/);
-  const libraryCardText = await page.locator('#portfolio-plan-book .plan-book-card').first().innerText();
+  await go('#/plans');
+  await page.waitForSelector('#plans-library .home-plan-tile');
+  assert.equal((await page.locator('#app h1').textContent()).trim(), 'Plans',
+    'Plans have one canonical product home instead of borrowing Portfolio');
+  assert.equal(await page.locator('#nav a[data-route="plans"]').evaluate(node => node.classList.contains('active')), true,
+    'the canonical Plans destination stays visibly selected');
+  assert.match(await page.textContent('#plans-library'), /AAPL/);
+  assert.match(await page.textContent('#plans-library'), /Review Plan/);
+  const libraryCardText = await page.locator('#plans-library .home-plan-tile').first().innerText();
   assert.equal((libraryCardText.match(/AAPL/g) || []).length, 1,
     'a Plan card names its symbol once instead of repeating the derived title');
+
+  await go('#/portfolio');
+  await page.waitForSelector('#pf-sec-positions.active');
+  assert.equal((await page.locator('#app > h1').textContent()).trim(), 'Portfolio');
+  assert.equal(await page.locator('#pf-sec-plans').count(), 0,
+    'Portfolio owns money and positions without a second Plan library');
 });
 
 test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {
