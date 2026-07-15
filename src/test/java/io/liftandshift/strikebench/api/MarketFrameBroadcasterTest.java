@@ -19,6 +19,18 @@ class MarketFrameBroadcasterTest {
     }
 
     @Test
+    void defaultScopesFollowTheActiveUniverseInsteadOfConnectionTimeSymbols() {
+        var first = new MarketFrameBroadcaster.Request("owner-a", List.of("AAPL"), false);
+        var changed = new MarketFrameBroadcaster.Request("owner-a", List.of("SPY", "QQQ"), false);
+        var explicit = new MarketFrameBroadcaster.Request("owner-a", List.of("SPY", "QQQ"), true);
+
+        assertThat(first).isEqualTo(changed);
+        assertThat(first.symbols()).isEmpty();
+        assertThat(explicit.symbols()).containsExactly("SPY", "QQQ");
+        assertThat(explicit).isNotEqualTo(first);
+    }
+
+    @Test
     void clientsWithTheSameScopeShareOneComputedFrame() throws Exception {
         AtomicInteger loads = new AtomicInteger();
         var request = new MarketFrameBroadcaster.Request("owner-a", List.of("AAPL"), true);

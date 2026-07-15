@@ -23,7 +23,10 @@ final class MarketFrameBroadcaster implements AutoCloseable {
     record Request(String owner, List<String> symbols, boolean customSymbols) {
         Request {
             owner = owner == null ? "" : owner;
-            symbols = symbols == null ? List.of() : List.copyOf(symbols);
+            // A default stream follows the owner's active universe dynamically. Keeping the
+            // symbols captured at connection time in the group key both forked equivalent
+            // subscribers and left a long-lived leader relaying an obsolete sector.
+            symbols = customSymbols && symbols != null ? List.copyOf(symbols) : List.of();
         }
     }
 

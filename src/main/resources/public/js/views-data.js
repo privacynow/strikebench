@@ -1316,7 +1316,7 @@
       });
       // Poll is the FALLBACK: with the event stream connected, job.progress events drive the
       // refresh and a slow 10s poll just catches anything missed; without it, 2s keeps it live.
-      var pollMs = App._eventsES ? 10000 : 2000;
+      var pollMs = App.eventsStreamHealthy && App.eventsStreamHealthy() ? 10000 : 2000;
       if (anyRunning && App.alive(token)) jobsTimer = setTimeout(loadJobs, pollMs);
     }
 

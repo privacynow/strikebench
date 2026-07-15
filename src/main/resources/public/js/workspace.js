@@ -3,8 +3,8 @@
  * Durable Plan facts stay server-owned. This module persists a small presentation subset
  * and per-market provisional Plan drafts — never results or priced artifacts — to localStorage
  * (instant, survives reload) and to the backend (debounced PUT /api/workspace, survives
- * devices/restarts when signed in). Boot hydrates whichever copy is newest; the /api/events
- * stream announces revisions so a second tab can adopt them while hidden.
+ * devices/restarts when signed in). Boot hydrates whichever copy is newest; a visible tab
+ * reconciles the remote revision after returning from the background.
  */
 (function () {
   'use strict';
@@ -81,6 +81,12 @@
   }
 
   var pushTimer = null;
+  function stateJson(s) {
+    return JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId,
+      activePlanByMarket: s.activePlanByMarket, provisionalPlansByMarket: s.provisionalPlansByMarket,
+      planPresentation: s.planPresentation, forms: s.forms });
+  }
+
   function pushRemote(s) {
     clearTimeout(pushTimer);
     pushTimer = setTimeout(function () {
@@ -93,10 +99,11 @@
   /** Saves if anything changed since the last save. Cheap: one small JSON stringify. */
   function saveIfDirty() {
     if (!started || !window.App || !window.API) return;
+    // A parked tab must never overwrite work completed in the visible tab. It reconciles
+    // before streams resume when the user returns.
+    if (document.hidden) return;
     var s = snapshot();
-    var json = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId,
-      activePlanByMarket: s.activePlanByMarket, provisionalPlansByMarket: s.provisionalPlansByMarket,
-      planPresentation: s.planPresentation, forms: s.forms });
+    var json = stateJson(s);
     if (json === lastSavedJson) return;
     lastSavedJson = json;
     persistLocal(s);
@@ -141,6 +148,13 @@
     window.addEventListener('pagehide', function () {
       var s = snapshot();
       persistLocal(s);
+      var json = stateJson(s);
+      // A tab that has not changed since its last save must not overwrite a newer workspace
+      // merely because it closes. This remains correct in browser shells that report every
+      // background tab as visible and therefore cannot support visibility-based adoption.
+      if (json === lastSavedJson) return;
+      lastSavedJson = json;
+      clearTimeout(pushTimer);
       if (window.App && App.state.serverStale) return;
       try {
         fetch('/api/workspace', {
@@ -154,24 +168,31 @@
 
   /** Another tab (or device) wrote rev N. Adopt only while hidden — never yank live work. */
   var adoptedWhileHidden = false;
+  function adoptRemote(remote, hidden) {
+    if (!remote || !remote.rev || remote.rev <= rev
+        || !remote.state || remote.state.v !== 2) return false;
+    rev = remote.rev;
+    apply(remote.state);
+    var s = snapshot();
+    lastSavedJson = stateJson(s);
+    persistLocal(s);
+    adoptedWhileHidden = !!hidden;
+    return true;
+  }
+
   function onRemoteRev(newRev) {
     if (!newRev || newRev <= rev) return;
-    rev = newRev;
     if (!document.hidden) return; // visible tab keeps its own state; it will overwrite on next save
     API.getFresh('/api/workspace').then(function (r) {
-      if (r && r.state && r.state.v === 2) {
-        apply(r.state);
-        // Rebase the dirty-check on the ADOPTED state: re-pushing what we just pulled would
-        // bump the rev and ping-pong forever between two hidden tabs. Only a genuine local
-        // change after this may write again.
-        var s = snapshot();
-        lastSavedJson = JSON.stringify({ route: s.route, world: s.world, activePlanId: s.activePlanId,
-          activePlanByMarket: s.activePlanByMarket, provisionalPlansByMarket: s.provisionalPlansByMarket,
-          planPresentation: s.planPresentation, forms: s.forms });
-        persistLocal(s);
-        adoptedWhileHidden = true; // the DOM still shows pre-adoption state — refresh on return
-      }
+      adoptRemote(r, true); // the DOM still shows pre-adoption state — refresh on return
     }).catch(function () { /* ignore */ });
+  }
+
+  function reconcile() {
+    if (!started || !window.API) return Promise.resolve(false);
+    return API.getFresh('/api/workspace').then(function (remote) {
+      return adoptRemote(remote, false);
+    }).catch(function () { return false; });
   }
 
   window.Workspace = {
@@ -179,6 +200,7 @@
     start: start,
     save: saveIfDirty,
     snapshot: snapshot,
-    onRemoteRev: onRemoteRev
+    onRemoteRev: onRemoteRev,
+    reconcile: reconcile
   };
 })();
