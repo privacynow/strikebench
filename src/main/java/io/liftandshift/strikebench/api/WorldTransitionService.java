@@ -23,7 +23,10 @@ import java.util.function.BiFunction;
  * interpreted as Observed on one request.
  */
 public final class WorldTransitionService {
-    public record Current(String world, long revision, String epoch) {}
+    public record RepairNotice(String id, String previousWorld, String world,
+                               String reason, String message) {}
+
+    public record Current(String world, long revision, String epoch, RepairNotice repair) {}
 
     public record Result(String world, boolean datasetReset, Object universe,
                          long revision, String epoch) {}
@@ -52,6 +55,9 @@ public final class WorldTransitionService {
     private final String epoch;
     private final AtomicLong revision = new AtomicLong();
     private final Map<String, String> activeByOwner = new ConcurrentHashMap<>();
+    private final Map<String, RepairNotice> pendingRepairs = new ConcurrentHashMap<>();
+
+    private record RepairContext(String previousWorld, String reason, String message) {}
 
     public WorldTransitionService(AppConfig config, Clock clock, Db db, DatasetService datasets,
                                   MarketDataService market, SimulationSessions sessions,
@@ -70,7 +76,9 @@ public final class WorldTransitionService {
     }
 
     public Current current(String rawOwner) {
-        return new Current(active(rawOwner), revision.get(), epoch);
+        String owner = OwnerScope.id(rawOwner);
+        String world = active(owner);
+        return new Current(world, revision.get(), epoch, pendingRepairs.remove(owner));
     }
 
     public String baseline() {
@@ -86,11 +94,11 @@ public final class WorldTransitionService {
             return fallback;
         }
         if (config.fixturesOnly() && "observed".equals(saved)) {
-            return repair(owner, saved, fallback);
+            return repair(owner, saved, fallback, "OBSERVED_UNAVAILABLE_IN_DEMO_BUILD");
         }
         if (!"observed".equals(saved) && !"demo".equals(saved)
                 && sessions.getOrRestore(saved, owner).isEmpty()) {
-            return repair(owner, saved, fallback);
+            return repair(owner, saved, fallback, "SAVED_SCENARIO_UNAVAILABLE");
         }
         activeByOwner.put(owner, saved);
         return saved;
@@ -132,10 +140,11 @@ public final class WorldTransitionService {
         boolean datasetReset = !DatasetService.OBSERVED.equals(datasets.activeId(owner));
         persist(owner, world, datasetReset, null);
         activeByOwner.put(owner, world);
-        return publish(owner, world, universe, datasetReset, forceDatasetEvent, globalEvent);
+        pendingRepairs.remove(owner);
+        return publish(owner, world, universe, datasetReset, forceDatasetEvent, globalEvent, null);
     }
 
-    private String repair(String owner, String expected, String fallback) {
+    private String repair(String owner, String expected, String fallback, String reason) {
         // Repair follows the same hydrate-before-commit and dataset-isolation rules as an explicit
         // transition. The compare-and-set prevents an old request from overwriting a newer choice.
         Object universe = universeResolver.apply(fallback, owner);
@@ -148,7 +157,13 @@ public final class WorldTransitionService {
             return resolved;
         }
         activeByOwner.put(owner, fallback);
-        publish(owner, fallback, universe, datasetReset, false, false);
+        String baselineLabel = "demo".equals(fallback) ? "Demo baseline" : "observed market";
+        String message = "SAVED_SCENARIO_UNAVAILABLE".equals(reason)
+                ? "Your saved simulated market " + expected + " is no longer available. StrikeBench returned "
+                    + "you to the " + baselineLabel + "; no Plan or accounting records were rewritten."
+                : "Observed market is unavailable in this explicit Demo build. StrikeBench opened the Demo baseline instead.";
+        publish(owner, fallback, universe, datasetReset, false, false,
+                new RepairContext(expected, reason, message));
         return fallback;
     }
 
@@ -195,7 +210,7 @@ public final class WorldTransitionService {
     }
 
     private Result publish(String owner, String world, Object universe, boolean datasetReset,
-                           boolean forceDatasetEvent, boolean globalEvent) {
+                           boolean forceDatasetEvent, boolean globalEvent, RepairContext repair) {
         if (datasetReset) datasets.invalidateActiveCache();
         market.invalidateAll();
         long next = revision.incrementAndGet();
@@ -211,6 +226,12 @@ public final class WorldTransitionService {
         event.put("revision", next);
         event.put("epoch", epoch);
         event.put("universe", universe);
+        if (repair != null) {
+            RepairNotice notice = new RepairNotice(epoch + ":" + next, repair.previousWorld(), world,
+                    repair.reason(), repair.message());
+            event.put("repair", notice);
+            pendingRepairs.put(owner, notice);
+        }
         events.publish("world.selected", event);
         return new Result(world, datasetReset, universe, next, epoch);
     }

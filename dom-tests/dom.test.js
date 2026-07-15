@@ -2459,6 +2459,39 @@ test('world transition: authoritative PUT bootstrap recovers a failed SSE-hint h
   assert.ok(recovered.symbols > 0, 'the authoritative bootstrap hydrated the lane');
 });
 
+test('missing saved scenario repairs to baseline with a visible explanation', async () => {
+  pg.sql("INSERT INTO settings(k,v,updated_at) VALUES('active_world:local','sim_missing_browser_session',now()) "
+    + "ON CONFLICT (k) DO UPDATE SET v=excluded.v,updated_at=excluded.updated_at");
+  await page.reload();
+  await page.waitForSelector('#app[data-ready="true"]');
+  const notice = page.locator('#world-repair-notice');
+  await notice.waitFor();
+  assert.match(await notice.textContent(),
+    /Saved market unavailable[\s\S]*sim_missing_browser_session[\s\S]*returned you to the Demo baseline[\s\S]*no Plan or accounting records were rewritten/,
+    'a repaired cold boot names the lost scenario and the baseline that replaced it');
+  const repaired = await page.evaluate(async () => ({
+    server: (await API.getFresh('/api/world')).world,
+    app: App.state.world,
+    market: App.Market.world,
+    simulated: document.body.classList.contains('in-sim-world')
+  }));
+  assert.deepEqual(repaired, { server: 'demo', app: 'demo', market: 'demo', simulated: false },
+    'server, app, market store, and chrome agree after repair');
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    const geometry = await notice.evaluate(node => {
+      const box = node.getBoundingClientRect();
+      return { page: document.documentElement.scrollWidth, viewport: innerWidth,
+        left: box.left, right: box.right, width: box.width };
+    });
+    assert.ok(geometry.page <= geometry.viewport && geometry.left >= 0 && geometry.right <= geometry.viewport,
+      width + 'px repair explanation stays fully on-screen: ' + JSON.stringify(geometry));
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.getByRole('button', { name: 'Dismiss market repair notice', exact: true }).click();
+  assert.equal(await notice.count(), 0, 'the persistent explanation is dismissible');
+});
+
 test('workspace hydration cannot select a market lane', async () => {
   const result = await page.evaluate(() => {
     const before = { app: App.state.world, market: App.Market.world };
