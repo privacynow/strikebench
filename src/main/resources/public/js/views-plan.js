@@ -2330,9 +2330,197 @@
     } else transitionalPlanStage(root, plan, stage);
   }
 
+  async function renderPlanLibrary(host, options) {
+    options = options || {};
+    var full = options.full === true;
+    host.innerHTML = '';
+    var countLabel = el('span', { class: 'muted small plan-library-count' }, 'Loading…');
+    host.appendChild(UI.cardHeader(options.title || 'Plans',
+      el('div', { class: 'btn-row plan-library-commands' },
+        countLabel,
+        !full ? el('a', { class: 'btn btn-sm btn-secondary', href: '#/plans' }, 'View all') : null,
+        el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
+          App.navigate('#/research');
+        } }, '+ New Plan'))));
+    var loading = UI.spinner('Loading your Plans…');
+    host.appendChild(loading);
+
+    var plans;
+    try { plans = await PlanStore.library(true); }
+    catch (e) {
+      loading.remove();
+      host.appendChild(alertBox('warn', 'Plan library unavailable', [e.message]));
+      return;
+    }
+    loading.remove();
+    var currentKey = PlanStore.currentMarketKey();
+    var working = plans.filter(function (p) { return p.status !== 'ARCHIVED' && p.open !== false; });
+    var closedTabs = plans.filter(function (p) { return p.status !== 'ARCHIVED' && p.open === false; });
+    var archived = plans.filter(function (p) { return p.status === 'ARCHIVED'; });
+    var current = working.filter(function (p) { return PlanStore.marketKey(p) === currentKey; });
+    var elsewhere = working.filter(function (p) { return PlanStore.marketKey(p) !== currentKey; });
+    if (!working.length && !archived.length && !closedTabs.length) {
+      if (options.removeWhenEmpty) { host.remove(); return; }
+      host.appendChild(UI.emptyState('No working Plans yet',
+        'Choose a stock in Research, then carry one Plan through evidence, strategy, outcomes, and a decision.',
+        'Open Research', function () { App.navigate('#/research'); }));
+      return;
+    }
+
+    var quoteBySymbol = {};
+    var portfolioByPlan = {};
+    var sessionById = {};
+    try {
+      var symbols = Array.from(new Set(current.map(function (p) { return p.symbol; })));
+      var fills = await Promise.all([
+        symbols.length ? API.get('/api/quotes?symbols=' + symbols.join(',')) : Promise.resolve({ quotes: [] }),
+        API.get('/api/plans/portfolio'),
+        plans.some(function (p) { return p.marketKind === 'SIMULATED'; })
+          ? API.get('/api/sim/market') : Promise.resolve({ sessions: [] })
+      ]);
+      (fills[0].quotes || []).forEach(function (q) { quoteBySymbol[q.symbol] = q; });
+      (fills[1].plans || []).forEach(function (row) { portfolioByPlan[row.plan.id] = row; });
+      (fills[2].sessions || []).forEach(function (session) { sessionById[session.id] = session; });
+    } catch (e2) { /* Navigation remains available without decorative marks. */ }
+
+    function stageName(plan) {
+      return String(plan.furthestStage || 'UNDERSTAND').replaceAll('_', ' ').toLowerCase();
+    }
+
+    function planTile(plan) {
+      var sameMarket = PlanStore.marketKey(plan) === currentKey;
+      var terminalSession = plan.marketKind === 'SIMULATED' && sessionById[plan.worldId]
+        && sessionById[plan.worldId].status === 'FINISHED';
+      var row = portfolioByPlan[plan.id] || {};
+      var decision = row.decision || {};
+      var mark = row.mark;
+      var quote = sameMarket ? quoteBySymbol[plan.symbol] : null;
+      var live = mark && mark.decisionUnrealizedCents != null
+        ? el('span', { class: 'home-plan-live' }, 'Now ', pnlSpan(mark.decisionUnrealizedCents))
+        : quote ? el('span', { class: 'home-plan-live' }, fmtNum(quote.last), ' ', UI.delta(quote.last, quote.prevClose))
+        : el('span', { class: 'muted small' }, terminalSession ? 'Session finished · review its report'
+          : sameMarket ? 'Market mark unavailable' : 'Switches market when opened');
+      var planIdentity = PlanStore.identity(plan, working);
+      var actions = el('div', { class: 'home-plan-actions' });
+      actions.appendChild(el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
+        if (terminalSession) {
+          App.state.focusSimControlRoom = plan.worldId;
+          App.navigate('#/data/simulation');
+          return;
+        }
+        focusPlanFrom(this, plan, plan.furthestStage);
+      } }, terminalSession ? 'Review session' : sameMarket
+        ? (plan.open === false ? 'Open Plan' : row.tradeId ? 'Manage Plan'
+          : plan.status === 'DECIDED_CASH' || plan.status === 'CLOSED' ? 'Review Plan' : 'Resume Plan')
+        : 'Switch market & open'));
+      if (plan.status !== 'POSITION_OPEN') actions.appendChild(el('button', { type: 'button',
+        class: 'btn btn-sm btn-secondary', 'aria-label': 'Archive ' + plan.title,
+        onclick: function () { confirmArchivePlan(plan, false); } }, icon('archive', 15), ' Archive'));
+      if (plan.assumptionsEditable === true) actions.appendChild(el('button', { type: 'button',
+        class: 'btn btn-sm btn-secondary', 'aria-label': 'Delete draft ' + plan.title,
+        onclick: function () { confirmDeletePlan(plan, false); } }, icon('trash', 15), ' Delete'));
+      var actionLabel = decision.action === 'CASH' ? 'Cash decision'
+        : row.tradeId ? 'Position open' : plan.status === 'CLOSED' ? 'Reviewed' : 'Working';
+      return el('article', { class: 'home-plan-tile' + (plan.id === App.state.activePlanId ? ' active' : ''),
+        'data-plan-id': plan.id },
+        el('div', { class: 'home-plan-tile-head' },
+          el('div', {}, el('div', { class: 'eyebrow' }, plan.symbol + ' · ' + planIntentLabel(plan.intent)),
+            el('h3', {}, planIdentity.title)),
+          el('div', { class: 'home-plan-badges' },
+            planIdentity.duplicate ? el('span', { class: 'badge badge-info plan-duplicate-badge' }, planIdentity.duplicate) : null,
+            full ? el('span', { class: 'badge ' + (row.tradeId ? 'badge-ok' : decision.action === 'CASH' ? 'badge-caution' : 'badge-dim') }, actionLabel) : null,
+            el('span', { class: 'badge ' + (sameMarket ? 'badge-info' : 'badge-dim') }, planMarketLabel(plan)))),
+        el('div', { class: 'home-plan-meta' },
+          chip('Stage', stageName(plan)),
+          plan.context && plan.context.horizonDays ? chip('Horizon', plan.context.horizonDays + ' sessions') : null,
+          plan.context && plan.context.thesis ? chip('View', plan.context.thesis) : null,
+          full && decision.economicVerdict ? chip('Decision', String(decision.economicVerdict).toLowerCase()) : null,
+          full && decision.pop != null ? chip('POP at decision', fmtPct(decision.pop)) : null,
+          planIdentity.updated ? el('span', { class: 'muted small plan-updated-at' }, planIdentity.updated) : null,
+          live), actions);
+    }
+
+    function group(title, rows, note) {
+      if (!rows.length) return null;
+      var limit = full ? 8 : 3;
+      var ordered = rows.slice().sort(function (a, b) {
+        if (a.id === App.state.activePlanId) return -1;
+        if (b.id === App.state.activePlanId) return 1;
+        return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+      });
+      var expanded = false;
+      var grid = el('div', { class: 'home-plan-grid' });
+      var count = el('span', { class: 'muted small home-plan-group-count' });
+      var toggle = ordered.length > limit ? el('button', { type: 'button',
+        class: 'btn btn-sm btn-secondary home-plan-group-toggle', 'aria-expanded': 'false' }) : null;
+      function paint() {
+        var shown = expanded ? ordered : ordered.slice(0, limit);
+        grid.replaceChildren.apply(grid, shown.map(planTile));
+        count.textContent = expanded || ordered.length <= limit
+          ? ordered.length + (ordered.length === 1 ? ' Plan' : ' Plans')
+          : limit + ' of ' + ordered.length + ' Plans';
+        if (toggle) {
+          toggle.textContent = expanded ? 'Show fewer' : 'Show all ' + ordered.length;
+          toggle.setAttribute('aria-expanded', String(expanded));
+        }
+      }
+      if (toggle) toggle.onclick = function () { expanded = !expanded; paint(); };
+      var heading = el('div', { class: 'home-plan-group-title' },
+        el('div', {}, el('h3', {}, title), note ? el('span', { class: 'muted small' }, note) : null), count);
+      paint();
+      return el('section', { class: 'home-plan-group', 'data-plan-group': title.toLowerCase().replaceAll(' ', '-') },
+        el('div', { class: 'home-plan-group-head' }, heading, toggle), grid);
+    }
+
+    countLabel.textContent = working.length + ' working ' + (working.length === 1 ? 'Plan' : 'Plans');
+    var here = group('In this market', current, 'These Plans use the prices and account on screen now.');
+    var there = group('Other markets', elsewhere, 'Opening one switches the full market first.');
+    if (here) host.appendChild(here);
+    if (there) host.appendChild(there);
+    if (archived.length) host.appendChild(UI.expandable('Archived Plans (' + archived.length + ')', function () {
+      return el('div', { class: 'home-plan-archive' }, archived.map(function (plan) {
+        return el('div', { class: 'status-item' }, el('b', {}, plan.symbol), el('span', {}, plan.title),
+          el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)),
+          el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+            focusPlanFrom(this, plan, plan.furthestStage);
+          } }, 'Review'));
+      }));
+    }));
+    if (closedTabs.length) host.appendChild(UI.expandable('Closed Plan tabs (' + closedTabs.length + ')', function () {
+      return el('div', { class: 'home-plan-archive home-plan-closed-tabs' }, closedTabs.map(function (plan) {
+        var actions = el('div', { class: 'btn-row' },
+          el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
+            focusPlanFrom(this, plan, plan.furthestStage);
+          } }, PlanStore.marketKey(plan) === currentKey ? 'Reopen' : 'Switch market & reopen'));
+        if (plan.assumptionsEditable === true) actions.appendChild(el('button', { type: 'button',
+          class: 'btn btn-sm btn-secondary', onclick: function () { confirmDeletePlan(plan, false); } },
+        icon('trash', 14), ' Delete draft'));
+        else if (plan.status !== 'POSITION_OPEN') actions.appendChild(el('button', { type: 'button',
+          class: 'btn btn-sm btn-secondary', onclick: function () { confirmArchivePlan(plan, false); } },
+        icon('archive', 14), ' Archive'));
+        return el('div', { class: 'status-item' }, el('b', {}, plan.symbol), el('span', {}, plan.title),
+          el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)), actions);
+      }));
+    }));
+  }
+
+  async function plansHome(root) {
+    try { await PlanStore.load(true); }
+    catch (e) { /* The library renders the visible failure. */ }
+    root.appendChild(el('div', { class: 'page-heading plan-library-heading' },
+      el('div', {}, el('div', { class: 'eyebrow' }, 'YOUR WORK'), el('h1', {}, 'Plans'),
+        el('p', { class: 'muted page-intro' },
+          'One place for every saved market view, structure, outcome test, decision, and review.'))));
+    var library = el('section', { class: 'card home-plan-library plan-library-page', id: 'plans-library' });
+    root.appendChild(library);
+    await renderPlanLibrary(library, { full: true, title: 'Plan library' });
+  }
+
   window.ViewPlan = Object.freeze({
     stages: PLAN_STAGES,
     planWorkspace: planWorkspace,
+    plansHome: plansHome,
+    renderLibrary: renderPlanLibrary,
     provisionalStage: provisionalPlanStage,
     outcomeWorkspace: planOutcomeWorkspace,
     intentLabel: planIntentLabel,
