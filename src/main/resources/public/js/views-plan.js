@@ -2309,12 +2309,6 @@
     root.appendChild(planContextEditor(plan));
     if (stage.key === 'UNDERSTAND' || stage.key === 'EVIDENCE') {
       var owned = planOwnedStage(root, plan, stage);
-      if (stage.key === 'UNDERSTAND') owned.appendChild(el('div', {
-        class: 'plan-scope-strip', id: 'plan-understand-scope', 'aria-label': 'Saved Plan focus'
-      }, el('span', { class: 'eyebrow' }, 'SAVED PLAN FOCUS'),
-      el('b', {}, plan.symbol + ' · ' + (plan.intent ? planIntentLabel(plan.intent) : 'Goal not chosen')),
-      el('span', { class: 'muted' }, (plan.context && plan.context.horizonDays ? plan.context.horizonDays : 21)
-        + ' trading sessions · ' + planMarketLabel(plan))));
       await research(owned, ['__plan', plan.symbol, stage.path], { plan: plan, stage: stage.path });
       if (stage.key === 'UNDERSTAND') appendPlanStageNext(owned, plan, 'Test the view',
         'Use conditional history and possible futures before choosing a structure.',

@@ -352,9 +352,11 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'an explicit goal has one canonical destination: Strategy');
   await page.locator('.plan-rail button').filter({ hasText: 'Understand' }).click();
   await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/understand$/.test(location.hash));
-  await page.waitForSelector('#plan-understand-scope');
-  assert.match(await page.textContent('#plan-understand-scope'), /SAVED PLAN FOCUS.*AAPL.*Earn income.*21 trading sessions.*Demo market/s,
-    'Understand leads with the saved Plan focus rather than an unframed copy of Research');
+  await page.waitForSelector('#plan-stage-understand .plan-stage-carry');
+  assert.match(await page.textContent('#plan-stage-understand .plan-stage-carry'), /AAPL.*Earn income.*21 trading sessions.*Demo market/s,
+    'Understand keeps the saved Plan context in the shared stage frame');
+  assert.equal(await page.locator('#plan-understand-scope').count(), 0,
+    'Understand does not repeat the same Plan context in a second scope card');
   await page.waitForSelector('#research-symbol');
   assert.equal(await page.locator('.plan-rail li').count(), 6, 'the full six-stage journey appears after Plan creation');
   assert.equal(await page.locator('.plan-rail li').last().locator('button').isDisabled(), true,
@@ -1437,8 +1439,12 @@ test('equivalent Plan retries collapse while materially different Plans survive 
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.variant + '"]').count(), 1);
   assert.ok(await page.locator('#home-plan-library .home-plan-compact-row').count() <= 3,
     'the desk caps alternative Plans without deleting or merging distinct assumptions');
-  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.one + '"]').count(), 1);
-  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.variant + '"]').count(), 1);
+  assert.ok(await page.locator('#plan-bar-root .plan-chip').count() <= 2,
+    'desktop bounds direct Plan tabs instead of clipping a grown collection');
+  assert.equal(await page.locator('#plan-bar-root .plan-more-link').count(), 1,
+    'the canonical Plan library remains one action away when tabs are condensed');
+  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.disposable + '"]').count(), 1,
+    'the active Plan remains directly reachable when the desktop bar is condensed');
 
   await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.disposable + '"] .plan-chip-close').click();
   assert.equal(await page.evaluate(() => location.hash), '#/home',
@@ -1517,6 +1523,10 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
   await compact.waitFor({ state: 'visible' });
   assert.equal(await compact.locator('.home-plan-compact-row').count(), 3,
     'the desk shows at most three alternatives to the hero-owned active Plan');
+  assert.equal(await page.locator('#plan-bar-root .plan-chip').count(), 2,
+    'a large desktop collection renders two stable Plan tabs rather than a clipped strip');
+  assert.match(await page.locator('#plan-bar-root .plan-more-link').textContent(), /^\+\d+ more$/,
+    'the condensed Plan bar names how many Plans remain in the library');
   assert.match(await page.locator('#home-plan-library .plan-library-count').textContent(), /\d+ other Plans/);
   assert.equal(await page.locator('#home-plan-library [aria-label^="Archive"], #home-plan-library [aria-label^="Delete"]').count(), 0,
     'Plan lifecycle management is absent from the desk lens');
@@ -2042,6 +2052,42 @@ test('progressive Home applies its route layout before slow market fills finish'
       delete window.__homeGate;
     });
     await page.waitForSelector('#app[data-route="home"][data-ready="true"]', { timeout: 10000 });
+  }
+});
+
+test('returning Home paints a stable desk while durable Plans reconcile', async () => {
+  await page.evaluate(() => { window.location.hash = '#/research'; });
+  await page.waitForSelector('#app[data-route="research"][data-ready="true"]');
+  await page.evaluate(async () => {
+    window.__homePlans = await API.getFresh('/api/plans');
+    window.__homeGetFresh = API.getFresh;
+    window.__homePlanGate = {};
+    API.getFresh = function (path) {
+      if (String(path) === '/api/plans') {
+        return new Promise(resolve => { window.__homePlanGate.release = resolve; });
+      }
+      return window.__homeGetFresh.apply(API, arguments);
+    };
+  });
+  try {
+    await page.evaluate(() => { window.location.hash = '#/home'; });
+    await page.waitForSelector('#app[data-route="home"] #home-restore-shell');
+    assert.equal(await page.getAttribute('#app', 'data-ready'), 'false');
+    assert.match(await page.textContent('#home-restore-shell'), /Your desk.*Reconciling your current Plans/s,
+      'the route shows a truthful Home frame instead of a blank page or stale continuation');
+  } finally {
+    await page.evaluate(() => {
+      if (window.__homePlanGate && window.__homePlanGate.release) {
+        window.__homePlanGate.release(window.__homePlans);
+      }
+      if (window.__homeGetFresh) API.getFresh = window.__homeGetFresh;
+      delete window.__homePlans;
+      delete window.__homeGetFresh;
+      delete window.__homePlanGate;
+    });
+    await page.waitForSelector('#app[data-route="home"][data-ready="true"]', { timeout: 10000 });
+    assert.equal(await page.locator('#home-restore-shell').count(), 0,
+      'the reconciliation frame leaves no duplicate hero behind');
   }
 });
 
