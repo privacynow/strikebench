@@ -431,95 +431,91 @@ final class OutcomeController {
 
     private MarketEntry marketEntry(String symbol, io.liftandshift.strikebench.sim.PathPosition position,
                                     int qty, String worldId, EntryBook book, List<String> contractExpirations) {
-        try {
-            List<java.time.LocalDate> exps = book != null ? book.expirations() : market.expirations(symbol, worldId);
-            if (exps.isEmpty()) return null;
-            java.time.LocalDate today = market.simInstant(worldId)
-                    .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                    .orElseGet(() -> java.time.LocalDate.now(clock));
-            double entryPerUnit = 0;
-            Double atmIv = null;
-            String source = null;
-            String freshness = null;
-            java.math.BigDecimal spotBd = null;
-            List<Leg> resolved = new ArrayList<>();
-            List<Double> marketIvs = new ArrayList<>();
-            List<String> snaps = new ArrayList<>();
-            for (int legIndex = 0; legIndex < position.legs().size(); legIndex++) {
-                var leg = position.legs().get(legIndex);
-                if (leg.isStock()) {
-                    var q = (book != null ? book.quote() : market.quote(symbol, worldId)).orElse(null);
-                    if (q == null || q.mark() == null) return null;
-                    double sign = leg.action() == io.liftandshift.strikebench.model.LegAction.SELL ? -1 : 1;
-                    entryPerUnit += sign * Math.max(1, leg.ratio()) * 100 * q.mark().doubleValue();
-                    resolved.add(Leg.stock(leg.action(), Math.max(1, leg.ratio()), q.mark()));
-                    continue;
-                }
-                String exactRaw = contractExpirations != null ? contractExpirations.get(legIndex) : null;
-                boolean exactContract = exactRaw != null && !exactRaw.isBlank();
-                java.time.LocalDate exp;
-                if (exactContract) {
-                    exp = java.time.LocalDate.parse(exactRaw);
-                    if (!exps.contains(exp)) return null;
-                } else {
-                    // Generic scenario: nearest listed expiration to the requested trading-session horizon.
-                    java.time.LocalDate target = io.liftandshift.strikebench.market.MarketHours
-                            .tradingDateAfter(today, position.expiryDay(leg));
-                    exp = exps.stream()
-                            .min(java.util.Comparator.comparingLong(e2 -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e2, target))))
-                            .orElse(null);
-                }
-                if (exp == null) return null;
-                var chain = (book != null ? book.chain(exp) : market.chain(symbol, exp, worldId)).orElse(null);
-                if (chain == null || chain.isEmpty()) return null;
-                if (spotBd == null) spotBd = chain.underlyingPrice();
-                boolean call = leg.type() == io.liftandshift.strikebench.model.OptionType.CALL;
-                var side = call ? chain.calls() : chain.puts();
-                var quote = side.stream()
-                        .min(java.util.Comparator.comparingDouble(o -> Math.abs(
-                                o.strike().doubleValue() - leg.strike().doubleValue())))
-                        .orElse(null);
-                // The nearest listed strike must be reasonably close, or this isn't the same trade.
-                double strikeGap = quote == null ? Double.POSITIVE_INFINITY
-                        : Math.abs(quote.strike().doubleValue() - leg.strike().doubleValue());
-                if (quote == null || (exactContract ? strikeGap > 1e-9
-                        : strikeGap > Math.max(2.5, leg.strike().doubleValue() * 0.03))) return null;
-                boolean buy = leg.action() == io.liftandshift.strikebench.model.LegAction.BUY;
-                java.math.BigDecimal px = buy ? quote.ask() : quote.bid(); // executable sides
-                if (px == null || px.signum() <= 0) return null;
-                if (source == null) source = chain.source();
-                if (freshness == null && chain.freshness() != null) freshness = chain.freshness().name();
-                if (quote.iv() != null && quote.iv() > 0.01) marketIvs.add(quote.iv());
-                // ATM IV = the quote closest to spot (first leg's chain is fine for a default).
-                if (atmIv == null && spotBd != null) {
-                    final java.math.BigDecimal spotF = spotBd;
-                    atmIv = side.stream()
-                            .filter(o -> o.iv() != null && o.iv() > 0.01)
-                            .min(java.util.Comparator.comparingDouble(o -> Math.abs(o.strike().subtract(spotF).doubleValue())))
-                            .map(io.liftandshift.strikebench.model.OptionQuote::iv).orElse(null);
-                }
-                entryPerUnit += (buy ? 1 : -1) * Math.max(1, leg.ratio()) * 100 * px.doubleValue();
-                // THE SIMULATED LEG IS THE PRICED LEG: exact listed strike + that expiration's
-                // trading-day horizon. Anything that moved is named in the snap note.
-                double listedStrike = quote.strike().doubleValue();
-                int listedDays = io.liftandshift.strikebench.market.MarketHours
-                        .tradingDaysBetween(today, exp);
-                resolved.add(Leg.option(leg.action(), leg.type(),
-                        quote.strike(), exp, Math.max(1, leg.ratio()), px));
-                if (Math.abs(listedStrike - leg.strike().doubleValue()) > 1e-9
-                        || Math.abs(listedDays - position.expiryDay(leg)) > 1) {
-                    snaps.add(leg.type() + " " + trimNum(leg.strike().doubleValue())
-                            + "\u2192" + trimNum(listedStrike) + " exp " + exp);
-                }
+        List<java.time.LocalDate> exps = book != null ? book.expirations() : market.expirations(symbol, worldId);
+        if (exps.isEmpty()) return null;
+        java.time.LocalDate today = market.simInstant(worldId)
+                .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                .orElseGet(() -> java.time.LocalDate.now(clock));
+        double entryPerUnit = 0;
+        Double atmIv = null;
+        String source = null;
+        String freshness = null;
+        java.math.BigDecimal spotBd = null;
+        List<Leg> resolved = new ArrayList<>();
+        List<Double> marketIvs = new ArrayList<>();
+        List<String> snaps = new ArrayList<>();
+        for (int legIndex = 0; legIndex < position.legs().size(); legIndex++) {
+            var leg = position.legs().get(legIndex);
+            if (leg.isStock()) {
+                var q = (book != null ? book.quote() : market.quote(symbol, worldId)).orElse(null);
+                if (q == null || q.mark() == null) return null;
+                double sign = leg.action() == io.liftandshift.strikebench.model.LegAction.SELL ? -1 : 1;
+                entryPerUnit += sign * Math.max(1, leg.ratio()) * 100 * q.mark().doubleValue();
+                resolved.add(Leg.stock(leg.action(), Math.max(1, leg.ratio()), q.mark()));
+                continue;
             }
-            Double averageIv = marketIvs.isEmpty() ? null
-                    : marketIvs.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN);
-            return new MarketEntry(Math.round(entryPerUnit * qty * 100), atmIv, averageIv,
-                    source == null ? "live" : source, freshness,
-                    new io.liftandshift.strikebench.sim.PathPosition(today, resolved), snaps);
-        } catch (Exception e) {
-            return null; // no market pricing available — model entry, honestly labeled
+            String exactRaw = contractExpirations != null ? contractExpirations.get(legIndex) : null;
+            boolean exactContract = exactRaw != null && !exactRaw.isBlank();
+            java.time.LocalDate exp;
+            if (exactContract) {
+                exp = java.time.LocalDate.parse(exactRaw);
+                if (!exps.contains(exp)) return null;
+            } else {
+                // Generic scenario: nearest listed expiration to the requested trading-session horizon.
+                java.time.LocalDate target = io.liftandshift.strikebench.market.MarketHours
+                        .tradingDateAfter(today, position.expiryDay(leg));
+                exp = exps.stream()
+                        .min(java.util.Comparator.comparingLong(e2 -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e2, target))))
+                        .orElse(null);
+            }
+            if (exp == null) return null;
+            var chain = (book != null ? book.chain(exp) : market.chain(symbol, exp, worldId)).orElse(null);
+            if (chain == null || chain.isEmpty()) return null;
+            if (spotBd == null) spotBd = chain.underlyingPrice();
+            boolean call = leg.type() == io.liftandshift.strikebench.model.OptionType.CALL;
+            var side = call ? chain.calls() : chain.puts();
+            var quote = side.stream()
+                    .min(java.util.Comparator.comparingDouble(o -> Math.abs(
+                            o.strike().doubleValue() - leg.strike().doubleValue())))
+                    .orElse(null);
+            // The nearest listed strike must be reasonably close, or this isn't the same trade.
+            double strikeGap = quote == null ? Double.POSITIVE_INFINITY
+                    : Math.abs(quote.strike().doubleValue() - leg.strike().doubleValue());
+            if (quote == null || (exactContract ? strikeGap > 1e-9
+                    : strikeGap > Math.max(2.5, leg.strike().doubleValue() * 0.03))) return null;
+            boolean buy = leg.action() == io.liftandshift.strikebench.model.LegAction.BUY;
+            java.math.BigDecimal px = buy ? quote.ask() : quote.bid(); // executable sides
+            if (px == null || px.signum() <= 0) return null;
+            if (source == null) source = chain.source();
+            if (freshness == null && chain.freshness() != null) freshness = chain.freshness().name();
+            if (quote.iv() != null && quote.iv() > 0.01) marketIvs.add(quote.iv());
+            // ATM IV = the quote closest to spot (first leg's chain is fine for a default).
+            if (atmIv == null && spotBd != null) {
+                final java.math.BigDecimal spotF = spotBd;
+                atmIv = side.stream()
+                        .filter(o -> o.iv() != null && o.iv() > 0.01)
+                        .min(java.util.Comparator.comparingDouble(o -> Math.abs(o.strike().subtract(spotF).doubleValue())))
+                        .map(io.liftandshift.strikebench.model.OptionQuote::iv).orElse(null);
+            }
+            entryPerUnit += (buy ? 1 : -1) * Math.max(1, leg.ratio()) * 100 * px.doubleValue();
+            // THE SIMULATED LEG IS THE PRICED LEG: exact listed strike + that expiration's
+            // trading-day horizon. Anything that moved is named in the snap note.
+            double listedStrike = quote.strike().doubleValue();
+            int listedDays = io.liftandshift.strikebench.market.MarketHours
+                    .tradingDaysBetween(today, exp);
+            resolved.add(Leg.option(leg.action(), leg.type(),
+                    quote.strike(), exp, Math.max(1, leg.ratio()), px));
+            if (Math.abs(listedStrike - leg.strike().doubleValue()) > 1e-9
+                    || Math.abs(listedDays - position.expiryDay(leg)) > 1) {
+                snaps.add(leg.type() + " " + trimNum(leg.strike().doubleValue())
+                        + "\u2192" + trimNum(listedStrike) + " exp " + exp);
+            }
         }
+        Double averageIv = marketIvs.isEmpty() ? null
+                : marketIvs.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN);
+        return new MarketEntry(Math.round(entryPerUnit * qty * 100), atmIv, averageIv,
+                source == null ? "live" : source, freshness,
+                new io.liftandshift.strikebench.sim.PathPosition(today, resolved), snaps);
     }
 
 
