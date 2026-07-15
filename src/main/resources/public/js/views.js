@@ -60,31 +60,79 @@
     return intent == null ? 'EVIDENCE' : 'STRATEGY';
   }
 
-  async function startPlan(prefill, stage) {
+  function toastWhenRouteReady(hash, message) {
+    var expected = String(hash || '').split('?')[0];
+    var frames = 0;
+    function show() {
+      var root = document.getElementById('app');
+      var settled = window.location.hash.split('?')[0] === expected
+        && App._lastRenderedRoute === expected
+        && root && root.getAttribute('data-ready') === 'true' && !App._rendering;
+      if (!settled && frames++ < 600) {
+        window.requestAnimationFrame(show);
+        return;
+      }
+      UI.toast(message);
+    }
+    window.requestAnimationFrame(show);
+  }
+
+  async function startPlan(prefill, stage, prepare) {
     prefill = Object.assign({}, prefill || {});
     var symbol = String(prefill.symbol || App.context.symbol() || '').trim().toUpperCase();
     if (!symbol) { App.navigate('#/research'); return Promise.resolve(null); }
+    var owns = function (key) { return Object.prototype.hasOwnProperty.call(prefill, key); };
     var horizon = prefill.horizon || App.context.horizon('month');
     var days = Product.Horizon.sessions(horizon);
     var risk = document.getElementById('risk-mode');
     var intent = prefill.intent || App.context.goal('DIRECTIONAL');
     var destination = stage || planIntentDestination(intent);
-    try {
-      var matches = await PlanStore.matching(symbol, intent);
-      if (matches.length) {
-        var existing = matches[0];
-        await PlanStore.focus(existing, destination);
-        UI.toast('Plan opened — ' + symbol + ' · ' + window.ViewPlan.intentLabel(intent));
-        return existing;
-      }
-      var plan = await PlanStore.create({
-        symbol: symbol, intent: intent,
-        thesis: prefill.thesis || App.context.thesis('neutral'), horizonDays: days,
-        targetCents: prefill.target ? Math.round(parseFloat(prefill.target) * 100) : null,
+    var explicitContext = owns('thesis') || owns('horizon') || owns('target');
+    var requestedThesis = owns('thesis') && String(prefill.thesis || '').trim()
+      ? String(prefill.thesis).trim().toLowerCase() : null;
+    var requestedTarget = owns('target') && isFinite(parseFloat(prefill.target))
+      ? Math.round(parseFloat(prefill.target) * 100) : null;
+    function sameContext(plan) {
+      var context = plan && plan.context || {};
+      var thesis = String(context.thesis || '').trim().toLowerCase() || null;
+      return (!owns('thesis') || thesis === requestedThesis)
+        && (!owns('horizon') || Number(context.horizonDays || 0) === days)
+        && (!owns('target') || Number(context.targetCents || 0) === Number(requestedTarget || 0));
+    }
+    async function createPlan(originPlan) {
+      var originContext = originPlan && originPlan.context || {};
+      return PlanStore.create({
+        symbol: symbol, intent: intent, originPlanId: originPlan ? originPlan.id : null,
+        thesis: owns('thesis') ? requestedThesis
+          : originPlan ? originContext.thesis : App.context.thesis('neutral'),
+        horizonDays: owns('horizon') ? days
+          : originPlan && originContext.horizonDays ? originContext.horizonDays : days,
+        targetCents: owns('target') ? requestedTarget
+          : originPlan ? originContext.targetCents : null,
         riskMode: risk ? risk.value : 'conservative'
       });
+    }
+    try {
+      var matches = await PlanStore.matching(symbol, intent);
+      var exact = explicitContext ? matches.find(sameContext) : matches[0];
+      if (exact && exact.assumptionsEditable !== false) {
+        var existing = exact;
+        if (prepare) await prepare(existing);
+        await PlanStore.focus(existing, destination);
+        toastWhenRouteReady(PlanStore.path(existing, destination),
+          'Plan opened — ' + symbol + ' · ' + window.ViewPlan.intentLabel(intent));
+        return existing;
+      }
+      // A completed Plan or a same-symbol inquiry with different explicit assumptions is
+      // historical evidence, not a mutable scratchpad. Preserve it and create one linked
+      // revision instead of silently replacing its context or discarding the new handoff.
+      var origin = exact || (explicitContext && matches.length ? matches[0] : null);
+      var plan = await createPlan(origin);
+      if (prepare) await prepare(plan);
       await PlanStore.focus(plan, destination);
-      UI.toast('Plan created — ' + symbol + ' · ' + window.ViewPlan.intentLabel(intent));
+      toastWhenRouteReady(PlanStore.path(plan, destination),
+        (origin ? 'Linked Plan created — ' : 'Plan created — ')
+          + symbol + ' · ' + window.ViewPlan.intentLabel(intent));
       return plan;
     } catch (e) {
       UI.toast(e.message, 'error');

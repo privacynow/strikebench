@@ -125,6 +125,25 @@ async function openPlan(symbol, stage = 'understand', intentOverride, thesisOver
 }
 
 async function openResearchTab(key) {
+  if (await page.locator('.research-local-tabs').count()) {
+    const view = key === 'view' ? 'evidence' : key === 'options' ? 'options' : 'overview';
+    const button = page.locator('.research-local-tabs [data-research-view="' + view + '"]');
+    assert.equal(await button.count(), 1, 'public Research tab ' + view + ' exists');
+    await button.click();
+    await page.waitForFunction(expected => {
+      const query = new URLSearchParams((location.hash.split('?')[1] || ''));
+      const active = query.get('view') || 'overview';
+      return active === expected
+        && document.getElementById('app').getAttribute('data-route') === 'research'
+        && document.getElementById('app').getAttribute('data-ready') === 'true';
+    }, view);
+    if (key === 'news') {
+      await page.waitForSelector('#open-news-tab');
+      await page.click('#open-news-tab');
+      await page.waitForSelector('#news-card:not([hidden])');
+    }
+    return;
+  }
   const stage = key === 'view' ? 'Evidence' : key === 'options' ? 'Strategy' : 'Understand';
   const stagePath = key === 'view' ? 'evidence' : key === 'options' ? 'strategy' : 'understand';
   const button = page.locator('.plan-rail button').filter({ hasText: stage });
@@ -143,27 +162,6 @@ async function openResearchTab(key) {
     await page.click('#open-news-tab');
     await page.waitForSelector('#news-card:not([hidden])');
   }
-}
-
-async function promoteEvidencePlan() {
-  await page.click('#plan-evidence-first');
-  const outcome = await page.waitForFunction(() => {
-    if (/^#\/plan\/plan_[^/]+\/evidence$/.test(location.hash)) return 'created';
-    const match = document.querySelector('.plan-existing-match');
-    if (match) return 'match';
-    const routeError = document.querySelector('#route-error, #plan-start .alert-danger');
-    return routeError ? 'error:' + routeError.textContent.trim() : null;
-  }, null, { timeout: 15000 });
-  const state = await outcome.jsonValue();
-  assert.doesNotMatch(state, /^error:/, 'promoting Research into a Plan failed visibly: ' + state);
-  if (state === 'match') {
-    assert.equal(await page.locator('.plan-existing-match button').filter({ hasText: 'Create separate Plan' }).count(), 0,
-      'an equivalent inquiry cannot manufacture a duplicate Plan from the client');
-    await page.locator('.plan-existing-match button').filter({ hasText: 'Open Evidence' }).click();
-  }
-  await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/evidence$/.test(location.hash), null,
-    { timeout: 15000 });
-  await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
 }
 
 before(async () => {
@@ -1701,6 +1699,32 @@ test('welcome proof treats no qualifying idea as a complete result', async () =>
 });
 
 test('provider-governed sparkline deferral resolves to an honest unavailable state', async () => {
+  let releaseOld;
+  let oldStarted;
+  const oldStartedP = new Promise(resolve => { oldStarted = resolve; });
+  const releaseOldP = new Promise(resolve => { releaseOld = resolve; });
+  let raceRequests = 0;
+  const raceUrl = '**/api/sparklines?symbols=CACHE_RACE&range=3m';
+  await page.route(raceUrl, async r => {
+    raceRequests++;
+    if (raceRequests === 1) {
+      oldStarted();
+      await releaseOldP;
+      await r.fulfill({ contentType: 'application/json', body: JSON.stringify({ sparklines: [{ symbol: 'CACHE_RACE' }] }) });
+      return;
+    }
+    await r.fulfill({ status: 204, body: '' });
+  });
+  const oldPrefetch = page.evaluate(() => API.prefetch('/api/sparklines?symbols=CACHE_RACE&range=3m'));
+  await oldStartedP;
+  await page.evaluate(() => API.flushCache());
+  releaseOld();
+  await oldPrefetch;
+  const afterFlush = await page.evaluate(() => API.prefetch('/api/sparklines?symbols=CACHE_RACE&range=3m'));
+  assert.equal(afterFlush, null, 'a pre-invalidation response cannot repopulate the current cache generation');
+  assert.equal(raceRequests, 2, 'the post-invalidation prefetch reaches the provider instead of reusing stale speculation');
+  await page.unroute(raceUrl);
+
   await page.route('**/api/sparklines?*', r => r.fulfill({ status: 204, body: '' }));
   try {
     await page.evaluate(() => {
@@ -1709,6 +1733,11 @@ test('provider-governed sparkline deferral resolves to an honest unavailable sta
       App.navigate('#/home');
     });
     await page.waitForSelector('#app[data-route="home"][data-ready="true"]');
+    await page.waitForSelector('.home-market-grid .sym-card');
+    const cardCount = await page.locator('.home-market-grid .sym-card').count();
+    for (let i = 0; i < cardCount; i++) {
+      await page.locator('.home-market-grid .sym-card').nth(i).scrollIntoViewIfNeeded();
+    }
     await page.waitForFunction(() => {
       const cards = document.querySelectorAll('.home-market-grid .sym-card');
       const settled = document.querySelectorAll('.home-market-grid .spark-slot-missing .spark-empty');
@@ -1731,17 +1760,17 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   await page.fill('#symbol-input', 'AAPL');
   await page.click('#symbol-go');
   await page.waitForSelector('#plan-start');
-  await promoteEvidencePlan();
+  const plansBefore = await page.evaluate(() => PlanStore.all().length);
   await openResearchTab('overview');
   await page.waitForSelector('#research-symbol');
   assert.match(await page.textContent('#research-symbol'), /AAPL/);
   // Coming up: expirations (and any earnings/filing signals) as dated chips
   await page.waitForSelector('#events-card .event-timeline-item');
   assert.match(await page.textContent('#events-card'), /OPTION EXPIRY/i);
-  assert.equal(await page.locator('#research-workspace-tabs').count(), 0,
-    'the old symbol-local tabs are deleted');
-  assert.equal(await page.locator('.plan-rail li').count(), 6,
-    'one Plan rail owns the whole journey');
+  assert.equal(await page.locator('.research-local-tabs [role="tab"]').count(), 3,
+    'read-only Research owns one compact Overview, Evidence and Options workspace');
+  assert.equal(await page.locator('.plan-rail').count(), 0,
+    'inspecting a symbol never mints a Plan or borrows the Plan journey rail');
   await page.waitForSelector('#news-overview-card .news-tile');
   assert.ok(await page.locator('#news-overview-card .news-tile').count() >= 1,
     'latest news remains part of the market overview');
@@ -1756,7 +1785,6 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   await page.waitForSelector('#research-evidence .evidence-badge:has-text("DEMO")');
   assert.equal(await page.locator('.quote-hero .badge:has-text("DEMO DATA")').count(), 0,
     'the hero does not repeat the page-level Demo evidence label');
-  await openPlan('AAPL', 'strategy', 'DIRECTIONAL');
   await openResearchTab('options');
   await page.waitForSelector('#expiration-select');
   await page.waitForSelector('.tbl tbody tr.atm'); // ATM row highlighted
@@ -1769,6 +1797,8 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   assert.ok(values.length === 8, 'eight expirations');
   await page.selectOption('#expiration-select', values[1]);
   await page.waitForSelector('.tbl tbody tr');
+  assert.equal(await page.evaluate(() => PlanStore.all().length), plansBefore,
+    'Overview, news and option-chain inspection remain read-only until an explicit Plan action');
 });
 
 test('research keeps non-optionable funds useful without inventing an options Plan or company catalyst', async () => {
@@ -1793,6 +1823,7 @@ test('research keeps non-optionable funds useful without inventing an options Pl
 
 test('Research entry and destination cards are purposeful, readable, and collision-free', async () => {
   await page.click('#level-switch button[data-level="beginner"]');
+  await page.evaluate(() => App.context.selectThesis(null));
   await go('#/research');
   await page.waitForSelector('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg', { timeout: 15000 });
   const geometry = await page.evaluate(() => {
@@ -1825,32 +1856,8 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   assert.doesNotMatch(await page.textContent('#research-hero'), /building history/i,
     'Research never presents an inert IV-rank progress placeholder');
   assert.match(await page.textContent('#plan-start'), /Turn this research into a Plan/);
-  await promoteEvidencePlan();
-  await page.waitForSelector('#plan-header');
-  assert.equal(await page.locator('#research-symbol-context').count(), 0,
-    'symbol identity is immutable in the Plan header rather than recaptured in the stage');
-  assert.match(await page.textContent('#plan-header'), /AAPL.*Intent not chosen/s);
-  await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
-  await page.waitForSelector('#tv-view');
-  assert.equal(await page.getByLabel('Your market view').count(), 1,
-    'the Plan view control is associated with its visible label');
-  assert.equal(await page.getByLabel('Historical condition to examine').count(), 1,
-    'the historical-condition control is associated with its visible label');
-  assert.equal(await page.getByLabel('Over how many trading days?').count(), 1,
-    'the Plan horizon control is associated with its visible label');
-  assert.equal(await page.inputValue('#tv-view'), '',
-    'a Plan without a thesis never displays an implicit bullish default');
-  assert.match(await page.textContent('#test-your-view'), /Choose the view you want to test/);
-  assert.equal(await page.locator('#research-outcomes').count(), 0,
-    'statistical lenses do not run under an assumption the Plan has not recorded');
-  await page.selectOption('#tv-view', 'bullish');
-  await page.waitForSelector('#research-outcomes');
-  assert.match(await page.textContent('.plan-stage-carry'), /bullish view/,
-    'the visible Evidence controls and durable carried context agree');
-  await page.locator('.plan-rail button').filter({ hasText: 'Strategy' }).click();
-  await page.waitForSelector('#plan-strategy-body .plan-intent-grid .choice-card');
   const intentChoices = await page.evaluate(() => {
-    const grid = document.querySelector('#plan-strategy-body .plan-intent-grid');
+    const grid = document.querySelector('#plan-start .plan-intent-grid');
     const cards = Array.from(grid.querySelectorAll('.choice-card'));
     const gridBox = grid.getBoundingClientRect();
     return {
@@ -1859,27 +1866,55 @@ test('Research entry and destination cards are purposeful, readable, and collisi
       cards: cards.map(card => {
         const css = getComputedStyle(card);
         const box = card.getBoundingClientRect();
-        return {
-          tag: card.tagName,
-          textAlign: css.textAlign,
+        return { tag: card.tagName, textAlign: css.textAlign,
           minHeight: parseFloat(css.minHeight),
           inside: box.left >= gridBox.left - 1 && box.right <= gridBox.right + 1,
-          visible: box.width > 120 && box.height >= 80
-        };
+          visible: box.width > 120 && box.height >= 80 };
       })
     };
   });
-  assert.equal(intentChoices.display, 'grid', 'the intent chooser uses the shared choice grid');
-  assert.equal(intentChoices.count, 5, 'every Plan intent remains available before commitment');
+  assert.equal(intentChoices.display, 'grid', 'the explicit Plan goal chooser uses the shared choice grid');
+  assert.equal(intentChoices.count, 5, 'every Plan goal remains available before commitment');
   assert.ok(intentChoices.cards.every(card => card.tag === 'BUTTON' && card.textAlign === 'left'
     && card.minHeight >= 80 && card.inside && card.visible),
-  'intent choices are full pressable cards with stable geometry: ' + JSON.stringify(intentChoices));
-  await page.locator('#plan-strategy-body .plan-intent-grid .choice-card').filter({ hasText: 'Buy at a discount' }).click();
+  'goal choices are full pressable cards with stable geometry: ' + JSON.stringify(intentChoices));
+
+  const plansBeforeEvidence = await page.evaluate(() => PlanStore.all().length);
+  await openResearchTab('view');
+  await page.waitForSelector('#tv-view');
+  assert.equal(await page.getByLabel('Your market view').count(), 1,
+    'the public Research view control is associated with its visible label');
+  assert.equal(await page.getByLabel('Historical condition to examine').count(), 1,
+    'the historical-condition control is associated with its visible label');
+  assert.equal(await page.getByLabel('Over how many trading days?').count(), 1,
+    'the public Research horizon control is associated with its visible label');
+  assert.equal(await page.inputValue('#tv-view'), '',
+    'read-only Research never displays an implicit bullish default');
+  assert.match(await page.textContent('#test-your-view'), /Choose the view you want to test/);
+  assert.equal(await page.locator('#research-outcomes').count(), 0,
+    'statistical lenses do not run under an assumption the user has not selected');
+  await page.selectOption('#tv-view', 'bullish');
+  await page.waitForSelector('#research-outcomes');
+  await page.fill('#tv-horizon', '20');
+  await page.dispatchEvent('#tv-horizon', 'change');
+  assert.equal(await page.evaluate(() => PlanStore.all().length), plansBeforeEvidence,
+    'selecting and testing a public view does not silently create a Plan');
+  await openResearchTab('overview');
+  await page.locator('#plan-start .plan-intent-grid .choice-card').filter({ hasText: 'Buy at a discount' }).click();
   await page.waitForFunction(() => document.querySelector('#plan-header')?.textContent.includes('Buy at a discount')
-    && location.hash.endsWith('/strategy'));
+    && location.hash.endsWith('/strategy'), null, { timeout: 15000 });
+  await page.waitForSelector('#plan-strategy-body');
   assert.equal(await page.locator('.modal-overlay').count(), 0,
-    'choosing the first goal commits directly; change confirmation is reserved for a previously chosen goal');
+    'an explicit first goal commits directly; change confirmation is reserved for an existing Plan goal');
   assert.match(await page.textContent('#plan-header'), /Buy at a discount/);
+  const carried = await page.evaluate(() => {
+    const plan = PlanStore.active();
+    return { intent: plan.intent, thesis: plan.context.thesis, horizonDays: plan.context.horizonDays };
+  });
+  assert.deepEqual(carried, { intent: 'ACQUIRE', thesis: 'bullish', horizonDays: 20 },
+    'the canonical handoff carries the selected Research view and horizon into the Plan');
+  assert.equal(await page.locator('#research-symbol-context').count(), 0,
+    'symbol identity is immutable in the Plan header rather than recaptured in the stage');
 });
 
 test('navigation is NEVER trapped behind a slow route (Research does not block moving away)', async () => {
@@ -3467,7 +3502,8 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
     'the chart area does not create a dead middle inside the destination card');
   await page.goBack();
   await page.waitForSelector('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg', { timeout: 15000 });
-  // Card click -> full Research; explicit promotion then creates a Plan. Back restores the explorer.
+  // Card click -> full Research; public analysis remains read-only, then one explicit goal
+  // carries the selected view into a Plan. Back walks that history to the same explorer.
   const savedExplorerY = await page.evaluate(() => {
     window.scrollTo(0, 200);
     return window.scrollY;
@@ -3478,7 +3514,15 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   const storedExplorerY = await page.evaluate(() => App.state.explorerScroll);
   assert.ok(storedExplorerY >= 50,
     'the destination card records the explorer position before navigation; got ' + storedExplorerY);
-  await promoteEvidencePlan();
+  await openResearchTab('view');
+  await page.waitForSelector('#tv-view');
+  await page.selectOption('#tv-view', 'bearish');
+  await page.waitForSelector('#research-outcomes');
+  await openResearchTab('overview');
+  await page.locator('#plan-start .choice-card').filter({ hasText: 'Trade a view' }).click();
+  await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/strategy$/.test(location.hash)
+    && document.getElementById('app').getAttribute('data-ready') === 'true', null, { timeout: 15000 });
+  await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
   await page.waitForSelector('#test-your-view', { timeout: 15000 });
   assert.match(await page.evaluate(() => window.location.hash), /^#\/plan\/plan_[^/]+\/evidence$/);
   assert.match(await page.textContent('#plan-header'), /AAPL/,
@@ -3487,12 +3531,12 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
     'the study names its Demo-history basis');
   assert.doesNotMatch(await page.textContent('#test-your-view'), /checks the REAL past/,
     'Demo research never promotes fabricated history to real');
-  await openResearchTab('overview'); // exercise the canonical stage rail
-  await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
-  await page.goBack(); // Understand -> Evidence
-  await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/evidence$/.test(location.hash)
-    && document.getElementById('app').getAttribute('data-ready') === 'true');
-  await page.goBack(); // promoted Plan -> Research explorer
+  assert.equal(await page.inputValue('#tv-view'), 'bearish',
+    'the Plan Evidence stage receives the exact view selected in public Research');
+  for (let i = 0; i < 6 && await page.evaluate(() => location.hash !== '#/research'); i++) {
+    await page.goBack();
+    await page.waitForFunction(() => document.getElementById('app').getAttribute('data-ready') === 'true');
+  }
   await page.waitForFunction(() => location.hash === '#/research'
     && document.getElementById('app').getAttribute('data-ready') === 'true');
   await page.waitForSelector('#sector-grid .sector-tile', { timeout: 15000 });
@@ -3717,6 +3761,8 @@ test('external broker fills remain a structured, cash-isolated learning-loop cap
   assert.equal(recorded.entryNetPremiumCents, 17500);
   await page.evaluate(() => API.flushCache());
   await go('#/portfolio/active');
+  await page.waitForFunction(() => /EXTERNAL/.test(document.getElementById('trades-card')?.textContent || ''),
+    null, { timeout: 15000 });
   const visible = await page.evaluate(async () => ({
     text: document.getElementById('trades-card')?.textContent || '',
     route: location.hash,

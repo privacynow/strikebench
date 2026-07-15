@@ -177,8 +177,10 @@
       : p === 'DEMO' ? 'badge-warn'
       : p === 'SIMULATED' ? 'badge-sim'
       : p === 'MODELED' || p === 'MIXED' ? 'badge-caution' : 'badge-dim';
-    return el('span', { class: 'badge evidence-badge ' + cls + (opts && opts.className ? ' ' + opts.className : ''),
-      title: evidence.source ? ('Source: ' + evidence.source) : null }, label);
+    // The badge already states the user-facing evidence contract. Provider ids belong in
+    // Data diagnostics; exposing them as native hover text leaks implementation detail and
+    // creates a second tooltip that merely competes with the visible label.
+    return el('span', { class: 'badge evidence-badge ' + cls + (opts && opts.className ? ' ' + opts.className : '') }, label);
   }
 
   function explain(text) {

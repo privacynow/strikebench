@@ -1028,14 +1028,15 @@ body.lvl-expert .not-expert { display: none !important; }
 .skel-card-short { height: 110px; }
 @keyframes skel-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
-/* Progressive arrival: cards fade-rise as views append them, so async fills read as
-   content arriving rather than the page snapping. */
+/* Progressive arrival: cards rise into place as views append them. Foreground opacity
+   stays at 1 throughout so ordinary use, screenshots, and assistive magnification never
+   catch a dim or blank card while async content is arriving. */
 #app .card, #app .candidate, #app .tile {
   animation: card-in .18s ease both;
 }
 @keyframes card-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: none; }
+  from { transform: translateY(4px); }
+  to { transform: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1928,7 +1929,7 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .research-local-nav-head { display: flex; align-items: baseline; gap: 10px; padding: 10px 12px 7px;
   border-bottom: 1px solid var(--border); }
 .research-local-nav-head > b { font-size: 13.5px; }
-.research-local-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.research-local-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .research-local-tabs > button { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center;
   gap: 8px; min-width: 0; min-height: 54px; padding: 8px 11px; border: 0; border-right: 1px solid var(--border);
   border-bottom: 3px solid transparent; border-radius: 0; background: transparent; color: var(--text-dim); text-align: left; }
@@ -2006,16 +2007,20 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .research-symbol-shell .symbol-context-purpose.symbol-context-no-status {
     grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
   .research-local-nav-head { display: none; }
-  .research-local-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .research-local-tabs > button { border-bottom: 1px solid var(--border); min-height: 50px; }
-  .research-local-tabs > button:nth-child(2n) { border-right: 0; }
-  .research-local-tabs > button.active { box-shadow: inset 3px 0 0 var(--accent); border-bottom-color: var(--border); }
+  .research-local-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .research-local-tabs > button { min-height: 50px; padding: 7px 8px; }
+  .research-local-tabs > button:nth-child(2n) { border-right: 1px solid var(--border); }
+  .research-local-tabs > button:last-child { border-right: 0; }
+  .research-local-tabs > button.active { box-shadow: inset 0 -3px 0 var(--accent); }
   .research-local-tabs small { display: none; }
   .news-grid, .news-grid-overview { grid-template-columns: minmax(0, 1fr); }
   .study-protocol-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .realistic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 480px) {
+  .research-local-tabs > button { grid-template-columns: minmax(0, 1fr); text-align: center; }
+  .research-local-tabs .icon { display: none; }
+  .research-local-tabs b { font-size: 12px; line-height: 1.2; overflow-wrap: anywhere; }
   .study-protocol-grid { grid-template-columns: minmax(0, 1fr); }
   .realistic-grid { grid-template-columns: minmax(0, 1fr); }
 }
@@ -2185,7 +2190,8 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-understand-grid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .plan-understand-grid #history-card,
 .plan-understand-grid #news-card { grid-column: 1 / -1; }
-.plan-strategy-market { min-width: 0; display: grid; gap: 12px; }
+.plan-strategy-market { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.plan-strategy-market > * { min-width: 0; }
 .plan-tool-selector { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
   background: var(--surface); }

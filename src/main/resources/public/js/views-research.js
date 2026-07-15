@@ -16,6 +16,37 @@
   var icon = UI.icon;
   var THESIS_BADGE = { BULLISH: 'badge-ok', BEARISH: 'badge-danger', NEUTRAL: 'badge-dim', VOLATILE: 'badge-warn' };
 
+  var RESEARCH_VIEWS = {
+    overview: { label: 'Overview', note: 'Price, movement, events and news', icon: 'scope' },
+    evidence: { label: 'Evidence & scenarios', note: 'Past conditions and possible futures', icon: 'chart' },
+    options: { label: 'Options', note: 'Expirations, strikes and market prices', icon: 'grid' }
+  };
+
+  function publicResearchView() {
+    var query = String(window.location.hash || '').split('?')[1] || '';
+    var view = new URLSearchParams(query).get('view') || 'overview';
+    return RESEARCH_VIEWS[view] ? view : 'overview';
+  }
+
+  function researchLocalNav(symbol, active) {
+    var tabs = el('div', { class: 'research-local-tabs', role: 'tablist',
+      'aria-label': symbol + ' research sections' });
+    Object.keys(RESEARCH_VIEWS).forEach(function (key) {
+      var meta = RESEARCH_VIEWS[key];
+      tabs.appendChild(el('button', { type: 'button', role: 'tab',
+        class: active === key ? 'active' : '', 'data-research-view': key,
+        'aria-selected': String(active === key), onclick: function () {
+          App.navigate('#/research/' + encodeURIComponent(symbol) + (key === 'overview' ? '' : '?view=' + key));
+        } }, icon(meta.icon), el('span', {}, el('b', {}, meta.label), el('small', {}, meta.note))));
+    });
+    UI.bindTabList(tabs, function (button) { button.click(); });
+    tabs.syncTabs();
+    return el('nav', { class: 'research-local-nav', 'aria-label': symbol + ' analysis workspace' },
+      el('div', { class: 'research-local-nav-head' }, el('b', {}, symbol + ' analysis'),
+        el('span', { class: 'muted small' }, 'Inspect freely. A Plan starts only when you choose to carry work forward.')),
+      tabs);
+  }
+
   // ---------- 2. Research ----------
 
   async function research(root, params, embedded) {
@@ -74,10 +105,13 @@
       return;
     }
 
-    var section = embedded && embedded.stage || 'understand';
+    var publicView = !inPlan && !provisionalResearch ? publicResearchView() : null;
+    if (publicView) root.appendChild(researchLocalNav(symbol, publicView));
+    var section = embedded && embedded.stage
+      || (publicView === 'options' ? 'strategy' : publicView === 'evidence' ? 'evidence' : 'understand');
     if (section === 'evidence') {
-      root.appendChild(planAnalysisSourceControl(embedded.plan));
-      root.appendChild(testYourViewSection(symbol, embedded.plan));
+      if (inPlan) root.appendChild(planAnalysisSourceControl(embedded.plan));
+      root.appendChild(testYourViewSection(symbol, inPlan ? embedded.plan : null));
       return;
     }
 
@@ -153,7 +187,8 @@
           n.url && !demoNews ? el('a', { class: 'news-headline', href: n.url, target: '_blank', rel: 'noopener' }, headline)
             : el('b', { class: 'news-headline' }, headline),
           el('p', { class: 'muted news-context' }, demoNews
-            ? 'A hypothetical stress prompt for this Plan. It is not a claim about ' + symbol + ' and never becomes evidence.'
+            ? 'A hypothetical stress prompt for ' + (inPlan ? 'this Plan' : 'this research')
+              + '. It is not a claim about ' + symbol + ' and never becomes evidence.'
             : newsContext(n)));
       }
       newsOverviewCard.innerHTML = '';
@@ -297,6 +332,10 @@
         el('button', { class: 'btn btn-sm', id: 'plan-understand-next', onclick: async function () {
           try {
             if (embedded && embedded.onBeginEvidence) { await embedded.onBeginEvidence(); return; }
+            if (!inPlan) {
+              App.navigate('#/research/' + encodeURIComponent(symbol) + '?view=evidence');
+              return;
+            }
             var moved = await PlanStore.advance(embedded.plan, 'EVIDENCE');
             App.navigate(PlanStore.path(moved, 'EVIDENCE'));
           } catch (e) { UI.toast(e.message, 'error'); }
@@ -389,10 +428,10 @@
               onclick: function () {
                 var button = this;
                 var seed = { symbol: symbol, qty: 1,
-                  goal: embedded.plan && embedded.plan.intent || 'BROWSE', templateKey: null,
+                  goal: embedded && embedded.plan && embedded.plan.intent || App.context.goal('DIRECTIONAL'), templateKey: null,
                   step: 4, legIdx: 0,
                   legs: [{ action: 'BUY', type: type, strike: String(k), expiration: select.value, ratio: 1 }], excluded: {} };
-                if (typeof embedded.onBuildLeg === 'function') embedded.onBuildLeg(seed);
+                if (embedded && typeof embedded.onBuildLeg === 'function') embedded.onBuildLeg(seed);
                 else {
                   visibleCommand(button, function () {
                     return startPlan({ symbol: symbol, intent: seed.goal }, 'STRATEGY').then(function (plan) {
@@ -1230,7 +1269,8 @@
     seedContext = seedContext || {};
     var ownedState = seedContext.state || null;
     var plan = seedContext.plan || null;
-    if (!plan || !ownedState) throw new Error('Possible futures must be owned by a Plan.');
+    if (!ownedState) throw new Error('Possible futures need an explicit workspace owner.');
+    var publicMode = !plan;
     var card = el('div', { class: 'card', id: 'whatif-card' });
     card.appendChild(UI.cardHeader('Possible futures — turn a view into a decision'));
     card.appendChild(explain(level === 'beginner'
@@ -1267,7 +1307,7 @@
         seen[value.toFixed(6)] = true; levels.push({ key: key, price: value });
       }
       add('target', target.value);
-      var candidate = PlanStore.ui(plan.id).selectedCandidate;
+      var candidate = plan ? PlanStore.ui(plan.id).selectedCandidate : null;
       (candidate && candidate.breakevens || []).forEach(function (x, i) { add('breakeven-' + (i + 1), x); });
       var putN = 0, callN = 0;
       (candidate && candidate.legs || []).forEach(function (leg) {
@@ -1280,7 +1320,7 @@
 
     function goalAction(p, spec) {
       var t = p.decisionMap.terminal;
-      var goal = plan.intent || 'DIRECTIONAL';
+      var goal = plan && plan.intent || ownedState.publicGoal || 'DIRECTIONAL';
       var chosen = Number(target.value);
       if (!(chosen > 0)) chosen = goal === 'EXIT' ? t.p84 : (goal === 'ACQUIRE' || goal === 'HEDGE') ? t.p16 : null;
       var labels = {
@@ -1290,21 +1330,40 @@
         INCOME: 'Find income strategies for this range',
         DIRECTIONAL: 'Find strategies for this view'
       };
-      var action = el('button', { class: 'btn', id: 'whatif-act' }, labels[goal] || labels.DIRECTIONAL);
+      var action = el('button', { class: 'btn', id: 'whatif-act' },
+        publicMode ? 'Use this view in a Plan' : (labels[goal] || labels.DIRECTIONAL));
       action.addEventListener('click', async function () {
+        if (publicMode) {
+          await visibleCommand(action, function () {
+            ownedState.publicGoal = goalSelect.value;
+            App.context.update({ symbol: symbol, goal: ownedState.publicGoal,
+              thesis: seedContext.thesis || null, horizon: String(spec.horizonDays) + 'd' });
+            return startPlan({ symbol: symbol, intent: ownedState.publicGoal,
+              thesis: seedContext.thesis || null, horizon: String(spec.horizonDays) + 'd',
+              target: target.value || null }, 'STRATEGY');
+          }, 'This view could not be carried into a Plan.');
+          return;
+        }
         try {
           var moved = await PlanStore.advance(plan, 'STRATEGY');
           App.navigate(PlanStore.path(moved, 'STRATEGY'));
         } catch (e) { UI.toast(e.message, 'error'); }
       });
+      var goalSelect = publicMode ? el('select', { id: 'whatif-plan-goal', 'aria-label': 'Plan goal' },
+        (Learn.INTENTS || []).map(function (meta) {
+          return el('option', { value: meta.key, selected: meta.key === goal ? 'selected' : null }, meta.label);
+        })) : null;
       return el('div', { class: 'scenario-next' },
         el('div', {}, el('b', {}, 'Use the result'),
           el('p', { class: 'muted small' },
-            'Keep the same symbol, goal, horizon and decision level as this Plan moves into Strategy.')),
-        el('div', { class: 'btn-row' }, action));
+            publicMode
+              ? 'Choose what you want the position to accomplish. Only this explicit action creates a durable Plan; the scenario itself remains read-only Research.'
+              : 'Keep the same symbol, goal, horizon and decision level as this Plan moves into Strategy.')),
+        el('div', { class: 'btn-row' }, goalSelect, action));
     }
 
     function practiceAction(p, spec) {
+        if (publicMode) return null;
         if (plan.marketKind === 'SIMULATED') return el('div', { class: 'scenario-practice' },
           el('div', {}, el('b', {}, 'This Plan is already inside one simulated path'),
             el('p', { class: 'muted small' },
@@ -1362,7 +1421,7 @@
 
     function scenarioFailure(error) {
       var payload = error && error.payload || {};
-      if (payload.error === 'plan_market_mismatch') {
+      if (plan && payload.error === 'plan_market_mismatch') {
         var market = window.ViewPlan.marketLabel(plan);
         var empty = UI.emptyState('Open this Plan’s ' + market.toLowerCase(),
           'This scenario is bound to the Plan’s ' + market.toLowerCase()
@@ -1377,7 +1436,7 @@
       }
       if (error && (error.status === 404 || error.status === 422)) {
         var unavailable = UI.emptyState('Scenario inputs are unavailable',
-          error.message || ('The active market cannot price ' + plan.symbol + ' right now.'),
+          error.message || ('The active market cannot price ' + symbol + ' right now.'),
           'Check market data', function () { App.navigate('#/data/overview'); });
         unavailable.id = 'plan-ensemble-input-unavailable';
         return unavailable;
@@ -1397,10 +1456,12 @@
         if (isSamplingCheck) f.reroll();
         var spec = f.getSpec();
         var payload = { over: spec, iv: f.getIv(), levels: decisionLevels() };
-        var planRun = await PlanStore.runEnsemble(plan, payload);
-        var p = planRun.preview;
-        ownedState.planEnsembleId = planRun.ensemble && planRun.ensemble.id;
-        ownedState.planEnsembleFingerprint = planRun.ensemble && planRun.ensemble.fingerprint;
+        var planRun = publicMode ? null : await PlanStore.runEnsemble(plan, payload);
+        var p = publicMode ? await App.evaluateOutcome('PATHS', 'PARAMETRIC', symbol, payload) : planRun.preview;
+        if (planRun) {
+          ownedState.planEnsembleId = planRun.ensemble && planRun.ensemble.id;
+          ownedState.planEnsembleFingerprint = planRun.ensemble && planRun.ensemble.fingerprint;
+        }
         if (seq !== previewSeq) return;
         latest = p;
         out.innerHTML = '';
@@ -1429,7 +1490,7 @@
         out.appendChild(chart);
         out.appendChild(goalAction(p, spec));
         var rehearsalActions = practiceAction(p, spec);
-        out.appendChild(rehearsalActions);
+        if (rehearsalActions) out.appendChild(rehearsalActions);
         reroll.style.display = '';
         if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
       } catch (e) {
@@ -1593,25 +1654,37 @@
   }
 
   function testYourViewSection(symbol, plan) {
-    if (!plan) throw new Error('Evidence must be owned by a Plan.');
+    var publicMode = !plan;
     var level = Learn.currentLevel();
-    var assumptionsEditable = plan.assumptionsEditable === true;
+    var assumptionsEditable = publicMode || plan.assumptionsEditable === true;
     var historyBasis = activeHistoryBasis();
-    var planUi = PlanStore.ui(plan.id);
+    App.state.researchEvidenceBySymbol = App.state.researchEvidenceBySymbol || {};
+    var planUi = publicMode
+      ? (App.state.researchEvidenceBySymbol[symbol] = App.state.researchEvidenceBySymbol[symbol] || {})
+      : PlanStore.ui(plan.id);
     var th = planUi.thesis = planUi.thesis || {};
     // Persisted-workspace migration only: the old field called a historical condition a
     // "direction", even though it was not the user's market direction.
     th.setup = th.setup || THESIS_QUESTION[th.direction] || 'pullback_rebound';
     delete th.direction;
-    // Durable Plan context is authoritative, including explicit absence. A lane-level
-    // or prior-render value must never invent a thesis/horizon for this Plan.
-    th.horizonDays = plan.context.horizonDays || Product.Horizon.sessions('month');
-    th.thesis = plan.context.thesis || '';
+    // Durable Plan context is authoritative. Public Research owns only ephemeral assumptions
+    // and creates no durable object until the user explicitly carries the result forward.
+    if (publicMode) {
+      if (!th.horizonDays) th.horizonDays = Product.Horizon.sessions(App.context.horizon('month'));
+      if (th.thesis === undefined) th.thesis = App.context.thesis('') || '';
+    } else {
+      th.horizonDays = plan.context.horizonDays || Product.Horizon.sessions('month');
+      th.thesis = plan.context.thesis || '';
+    }
     var wrap = el('div', { class: 'card', id: 'test-your-view' });
     wrap.appendChild(UI.cardHeader('Test your view \u2014 ' + symbol));
     wrap.appendChild(explain(level === 'beginner'
       ? 'State your view and horizon once. Past evidence asks what followed a named setup in ' + historyBasis.plain + '; possible futures turns your view into explicit model scenarios. They inform each other but never become one blended probability.'
-      : 'One Plan context seeds two labeled interpretations: a ' + historyBasis.expert + ' (conditional history, bootstrap CI) and a parametric Monte Carlo fan. The analog windows remain reusable as a distinct path source in this Plan’s Outcomes stage.'));
+      : (publicMode ? 'One read-only Research context seeds two labeled interpretations: a '
+        : 'One Plan context seeds two labeled interpretations: a ') + historyBasis.expert
+        + ' (conditional history, bootstrap CI) and a parametric Monte Carlo fan. '
+        + (publicMode ? 'Nothing is saved as a Plan until you choose to carry it forward.'
+          : 'The analog windows remain reusable as a distinct path source in this Plan’s Outcomes stage.')));
 
     var viewSel = el('select', { id: 'tv-view' },
       el('option', { value: '', disabled: 'disabled' }, level === 'beginner' ? 'Choose your market view' : 'Select thesis'),
@@ -1652,6 +1725,11 @@
     var outcomeWorkspace = null;
     if (assumptionsEditable) viewSel.addEventListener('change', async function () {
       th.thesis = viewSel.value;
+      if (publicMode) {
+        App.context.update({ thesis: th.thesis });
+        App.render();
+        return;
+      }
       try {
         plan = await PlanStore.updateContext(plan, { thesis: th.thesis });
         App.render();
@@ -1663,6 +1741,11 @@
     });
     if (assumptionsEditable) horIn.addEventListener('change', async function () {
       th.horizonDays = Math.max(1, Math.min(63, parseInt(horIn.value, 10) || 10));
+      if (publicMode) {
+        App.context.update({ horizon: String(th.horizonDays) + 'd' });
+        if (outcomeWorkspace) outcomeWorkspace.refresh();
+        return;
+      }
       try {
         plan = await PlanStore.updateContext(plan, { horizonDays: th.horizonDays });
         App.render();
@@ -1670,12 +1753,12 @@
     });
     if (!th.thesis) {
       wrap.appendChild(UI.emptyState('Choose the view you want to test',
-        'Past evidence and possible futures stay unavailable until this Plan records a direction or range view.'));
+        'Past evidence and possible futures become available after you choose a direction or range view.'));
       return wrap;
     }
 
     // ---- Two connected evidence bases through the shared Outcomes component ----
-    if (planUi && planUi.contextRev !== plan.context.rev) {
+    if (!publicMode && planUi && planUi.contextRev !== plan.context.rev) {
       var carriedMode = planUi.evidence && planUi.evidence.mode;
       planUi.contextRev = plan.context.rev;
       planUi.evidence = carriedMode ? { mode: carriedMode } : {};
@@ -1715,7 +1798,7 @@
 
   /** PAST EVIDENCE: the event study, inheriting page symbol and shared horizon. */
   function evidenceStage(symbol, thesis, level, ownedState, plan) {
-    if (!ownedState || !plan) throw new Error('Historical evidence must be owned by a Plan.');
+    if (!ownedState) throw new Error('Historical evidence needs an explicit workspace owner.');
     var f = ownedState;
     f.results = f.results || {};
     f.protocolBySymbol = f.protocolBySymbol || {};
@@ -2155,6 +2238,7 @@
     if (symbol && r.analogPaths && r.analogPaths.length >= 5) {
       out.appendChild(el('div', { class: 'btn-row', style: 'margin-top:8px' },
         el('button', { class: 'btn', id: 'tv-test-analogs', onclick: async function () {
+          var button = this;
           var selection = {
             symbol: symbol,
             source: 'HISTORICAL_ANALOGS',
@@ -2166,6 +2250,20 @@
             label: r.conditioned.sample + ' ' + occurrenceWord(r) + ' (' + r.from + ' to ' + r.to + ')'
           };
           ownedState.analogSelection = selection;
+          if (!plan) {
+            await visibleCommand(button, function () {
+              return startPlan({ symbol: symbol, intent: 'DIRECTIONAL', thesis: thesis.thesis,
+                horizon: String(r.forwardDays) + 'd' }, 'STRATEGY', async function (created) {
+                  await API.post('/api/plans/' + created.id + '/evidence/study', {
+                    key: r.key, symbol: symbol, from: r.from, to: r.to,
+                    params: selection.study.params
+                  });
+                  var planEvidence = PlanStore.ui(created.id).evidence = PlanStore.ui(created.id).evidence || {};
+                  planEvidence.analogSelection = selection;
+                });
+            }, 'This historical study could not be carried into a Plan.');
+            return;
+          }
           try {
             var moved = await PlanStore.advance(plan, 'STRATEGY');
             App.navigate(PlanStore.path(moved, 'STRATEGY'));
@@ -2251,7 +2349,15 @@
   async function researchRoute(root, params) {
     var symbol = params && params[0] ? decodeURIComponent(params[0]).toUpperCase() : null;
     if (symbol) {
-      await window.ViewPlan.provisionalStage(root, symbol);
+      await research(root, [symbol]);
+      if (publicResearchView() === 'overview') {
+        var planStart = el('div', { id: 'research-plan-start-host' }, UI.spinner('Checking Plan eligibility…'));
+        root.appendChild(planStart);
+        try { planStart.replaceWith(await window.ViewPlan.planStartCard(symbol)); }
+        catch (e) {
+          planStart.replaceWith(alertBox('warn', 'Plan actions are unavailable', [e.message]));
+        }
+      }
       return;
     }
     await research(root, params || []);

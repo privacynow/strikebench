@@ -40,6 +40,8 @@ class JourneySurfaceTest {
         String html = source("index.html");
         String views = source("js/views.js");
         String research = source("js/views-research.js");
+        String plan = source("js/views-plan.js");
+        String plans = source("js/plans.js");
 
         assertThat(html.indexOf("/js/views.js")).isLessThan(html.indexOf("/js/views-research.js"));
         assertThat(html.indexOf("/js/views-research.js")).isLessThan(html.indexOf("/js/views-plan.js"));
@@ -53,10 +55,18 @@ class JourneySurfaceTest {
         assertThat(research).contains("var S = window.ViewShared",
                 "async function research(root, params, embedded)",
                 "async function sectorExplorer(root, context)", "function verdictPanel(",
-                "var THESIS_BADGE", "window.ViewPlan.provisionalStage(root, symbol)",
+                "var THESIS_BADGE", "await research(root, [symbol])",
+                "window.ViewPlan.planStartCard(symbol)", "function researchLocalNav(symbol, active)",
+                "overview: { label: 'Overview'", "evidence: { label: 'Evidence & scenarios'",
+                "options: { label: 'Options'",
                 "missingSparkCopy: missingSparkCopy", "stripZeros = S.stripZeros",
                 "window.ViewResearch = Object.freeze({")
+                .doesNotContain("window.ViewPlan.provisionalStage(root, symbol)")
                 .doesNotContain("async function home(root, params)");
+        assertThat(plan).contains("startPlan = S.startPlan", "await startPlan(handoff, planIntentDestination(intent))")
+                .doesNotContain("PlanStore.promote", "function provisionalPlanStage(");
+        assertThat(plans).doesNotContain("function promote(fields)", "function provisional(symbol)",
+                "promote: promote", "provisional: provisional");
     }
 
     @Test void planJourneyHasAnExplicitViewModuleBoundary() throws Exception {

@@ -11,7 +11,7 @@
       legLabel = S.legLabel, fmtBreakeven = S.fmtBreakeven,
       prettyStrategy = S.prettyStrategy, intentBadge = S.intentBadge,
       riskMode = S.riskMode, prettyPricingMode = S.prettyPricingMode,
-      pressable = S.pressable;
+      pressable = S.pressable, startPlan = S.startPlan;
   var research = window.ViewResearch.research,
       verdictPanel = window.ViewResearch.verdictPanel;
   var icon = UI.icon;
@@ -459,13 +459,6 @@
     return PLAN_STAGES.find(function (s) { return s.path === path; }) || PLAN_STAGES[0];
   }
 
-  function replacePlanRoute(plan, stage) {
-    var hash = PlanStore.path(plan, stage || 'UNDERSTAND');
-    window.history.replaceState(null, '', hash);
-    App._scrollOnRender = true;
-    return App.render();
-  }
-
   function confirmArchivePlan(plan, leavePlan) {
     UI.confirmModal('Archive this Plan?', el('div', {},
       el('p', {}, el('b', {}, plan.title), ' leaves the working collection.'),
@@ -637,56 +630,35 @@
       el('div', { class: 'btn-row' }, save, changeGoal, changeStructure), goalChoices);
   }
 
-  async function provisionalPlanStage(root, symbol) {
+  async function planStartCard(symbol) {
     App.context.selectSymbol(symbol);
-    var draft = PlanStore.provisional(symbol);
     var market = App.state.world === 'demo' ? 'DEMO' : App.state.world === 'observed' ? 'OBSERVED' : 'SIMULATED';
     var eligibilityP = API.get('/api/research/' + encodeURIComponent(symbol)).then(function (data) {
       return { eligible: !!data.planEligible, detail: data.planEligibility || '' };
     }).catch(function (e) {
       return { eligible: false, detail: (e && e.message) || (symbol + ' is unavailable in this market.') };
     });
-    var plan = { symbol: symbol, marketKind: market,
-      worldId: market === 'SIMULATED' ? App.state.world : null, status: 'DRAFT', context: {}, title: symbol + ' · New plan' };
     var decisionHost = el('div', { class: 'plan-start-decision', id: 'plan-start-decision' });
-    async function promote(intent) {
+    async function begin(intent) {
       decisionHost.innerHTML = '';
-      var matches = await PlanStore.matching(symbol, intent);
-      if (matches.length) {
-        var existing = matches[0];
-        var destination = planIntentDestination(intent);
-        decisionHost.appendChild(el('div', { class: 'alert alert-info plan-existing-match' },
-          el('div', {}, el('b', {}, 'This inquiry already has a Plan'),
-            el('p', { class: 'muted small' }, existing.title + ' · ' + (existing.context && existing.context.horizonDays || Product.Horizon.sessions('month'))
-              + ' trading sessions. Resume it, or change an assumption first when you mean to investigate a different question.')),
-          el('div', { class: 'btn-row' },
-            el('button', { type: 'button', class: 'btn', onclick: function () {
-              focusPlanFrom(this, existing, destination);
-            } }, intent == null ? 'Open Evidence' : 'Open this Plan'))));
-        return;
-      }
       decisionHost.setAttribute('aria-busy', 'true');
-      try {
-        var risk = document.getElementById('risk-mode');
-        var persisted = await PlanStore.promote({ symbol: symbol, intent: intent,
-          thesis: plan.context && plan.context.thesis ? plan.context.thesis : null,
-          horizonDays: plan.context && plan.context.horizonDays ? plan.context.horizonDays : Product.Horizon.sessions('month'),
-          riskMode: risk ? risk.value : 'conservative' });
-        await replacePlanRoute(persisted, planIntentDestination(intent));
-        UI.toast('Plan created — ' + symbol + (intent == null ? '' : ' · ' + planIntentLabel(intent)));
-      } catch (e) {
+      var handoff = { symbol: symbol, intent: intent };
+      var thesis = App.context.thesis(null);
+      var horizon = App.context.horizon(null);
+      if (thesis) handoff.thesis = thesis;
+      if (horizon) handoff.horizon = horizon;
+      var opened = await startPlan(handoff, planIntentDestination(intent));
+      if (!opened) {
         decisionHost.removeAttribute('aria-busy');
         decisionHost.innerHTML = '';
-        decisionHost.appendChild(alertBox('warn', 'This Plan could not start', [String((e && e.message) || e)]));
+        decisionHost.appendChild(alertBox('warn', 'This Plan could not start',
+          ['The current market or selected assumptions could not open a Plan. Review the message above, then try again or choose another stock.']));
         decisionHost.appendChild(el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
           App.navigate('#/research');
         } }, 'Choose a stock in this market'));
       }
+      return opened;
     }
-    await research(root, ['__research', symbol, 'understand'], {
-      plan: plan, stage: 'understand', provisional: true,
-      onBeginEvidence: function () { return promote(null); }
-    });
     var eligibility = await eligibilityP;
     var card = el('section', { class: 'card plan-start-card research-plan-start', id: 'plan-start' },
       UI.cardHeader('Turn this research into a Plan'),
@@ -702,28 +674,18 @@
         'aria-describedby': eligibility.eligible ? null : reasonId,
         disabled: eligibility.eligible ? null : 'disabled', onclick: function () {
         var button = this;
-        button.disabled = true;
-        button.setAttribute('aria-busy', 'true');
-        promote(meta.key).catch(function (e) {
-          button.disabled = false;
-          button.removeAttribute('aria-busy');
-          UI.toast((e && e.message) || 'This goal could not be set.', 'error');
-        });
+        visibleCommand(button, function () { return begin(meta.key); }, 'This goal could not be set.');
       } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb || 'Build a plan around this goal.'),
       eligibility.eligible ? null : el('span', { class: 'choice-unavailable', id: reasonId },
         'Unavailable: ' + unavailableReason));
       choices.appendChild(eligibility.eligible ? pressable(intentButton, meta.label, 'button') : intentButton);
     });
     card.appendChild(choices);
-    var evidenceFirst = el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-evidence-first',
-      disabled: eligibility.eligible ? null : 'disabled',
-      onclick: function () { promote(null); } }, 'Set a view and test evidence first');
-    card.appendChild(el('div', { class: 'btn-row' }, evidenceFirst));
     if (!eligibility.eligible) card.appendChild(el('div', { class: 'btn-row' },
       el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () { App.navigate('#/research'); } },
         'Choose another stock')));
     card.appendChild(decisionHost);
-    root.appendChild(card);
+    return card;
   }
 
   function transitionalPlanStage(root, plan, stage) {
@@ -2298,7 +2260,10 @@
     var plan = await PlanStore.get(id);
     var targetWorld = plan.marketKind === 'SIMULATED' ? plan.worldId : plan.marketKind === 'DEMO' ? 'demo' : 'observed';
     if (App.state.world !== targetWorld) { await PlanStore.focus(plan, rawStage); return; }
+    App.state.activePlanByMarket = App.state.activePlanByMarket || {};
+    App.state.activePlanByMarket[PlanStore.marketKey(plan)] = plan.id;
     App.state.activePlanId = plan.id;
+    if (window.Workspace) Workspace.save();
     PlanStore.renderBar();
     var stage = planStageByPath(rawStage);
     root.appendChild(planHeader(plan, false));
@@ -2521,7 +2486,7 @@
     planWorkspace: planWorkspace,
     plansHome: plansHome,
     renderLibrary: renderPlanLibrary,
-    provisionalStage: provisionalPlanStage,
+    planStartCard: planStartCard,
     outcomeWorkspace: planOutcomeWorkspace,
     intentLabel: planIntentLabel,
     marketLabel: planMarketLabel,

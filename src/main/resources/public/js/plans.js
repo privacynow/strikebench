@@ -162,33 +162,6 @@
     return plan;
   }
 
-  async function promote(fields) {
-    var provisional = currentDraft() || {};
-    return create(Object.assign({}, provisional, fields || {}, {
-      symbol: (fields && fields.symbol) || provisional.symbol,
-      clientRequestId: provisional.clientRequestId || requestId()
-    }));
-  }
-
-  function currentDraft() {
-    return (App.state.provisionalPlansByMarket || {})[currentMarketKey()] || null;
-  }
-
-  function provisional(symbol) {
-    symbol = String(symbol || '').trim().toUpperCase();
-    var market = currentMarket();
-    App.state.provisionalPlansByMarket = App.state.provisionalPlansByMarket || {};
-    var key = currentMarketKey();
-    var existing = App.state.provisionalPlansByMarket[key];
-    if (!existing || existing.symbol !== symbol || existing.marketKind !== market.kind
-        || existing.worldId !== (market.kind === 'SIMULATED' ? market.world : null)) {
-      existing = Object.assign({}, existing || {}, { clientRequestId: requestId(), symbol: symbol,
-        marketKind: market.kind, worldId: market.kind === 'SIMULATED' ? market.world : null });
-      App.state.provisionalPlansByMarket[key] = existing;
-    }
-    return existing;
-  }
-
   function active() {
     return findKnown(App.state.activePlanId) || null;
   }
@@ -560,8 +533,8 @@
 
   window.PlanStore = {
     init: function () { return load(true); }, load: load, refresh: refresh, library: library,
-    get: get, create: create, promote: promote,
-    provisional: provisional, currentDraft: currentDraft, active: active, focus: focus, path: path, advance: advance,
+    get: get, create: create,
+    active: active, focus: focus, path: path, advance: advance,
     updateContext: updateContext, claimIntent: claimIntent, closeChip: closeChip,
     latestStrategy: latestStrategy, runStrategy: runStrategy, fitStrategy: fitStrategy,
     selectCandidate: selectCandidate, clearCandidate: clearCandidate, saveCustom: saveCustom,
