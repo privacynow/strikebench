@@ -17,19 +17,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
 /** Market-state and typed-hint SSE transports. */
 final class MarketStreamController implements AutoCloseable {
-    private final AppConfig cfg;
     private final Clock clock;
     private final MarketDataService market;
     private final MarketDataEngine engine;
@@ -39,14 +32,14 @@ final class MarketStreamController implements AutoCloseable {
     private final AuthService auth;
     private final Function<Context, String> ownerId;
     private final Function<String, String> activeWorldFor;
-    private final ScheduledExecutorService scheduler;
+    private final MarketFrameBroadcaster broadcaster;
+    private final Runnable unsubscribeWorldEvents;
 
     MarketStreamController(AppConfig cfg, Clock clock, MarketDataService market,
                            MarketDataEngine engine, UniverseService universe,
                            SimulationSessions sessions, EventBus events, AuthService auth,
                            Function<Context, String> ownerId,
                            Function<String, String> activeWorldFor) {
-        this.cfg = cfg;
         this.clock = clock;
         this.market = market;
         this.engine = engine;
@@ -56,10 +49,12 @@ final class MarketStreamController implements AutoCloseable {
         this.auth = auth;
         this.ownerId = ownerId;
         this.activeWorldFor = activeWorldFor;
-        this.scheduler = Executors.newScheduledThreadPool(2, runnable -> {
-            Thread thread = new Thread(runnable, "market-stream");
-            thread.setDaemon(true);
-            return thread;
+        this.broadcaster = new MarketFrameBroadcaster(
+                Math.max(1, cfg.engineStreamIntervalSeconds()), this::loadFrame);
+        this.unsubscribeWorldEvents = events.subscribe(event -> {
+            if (!"world.selected".equals(event.type())) return;
+            Object owner = event.data().get("user");
+            broadcaster.invalidateOwner(owner == null ? null : String.valueOf(owner));
         });
     }
 
@@ -72,43 +67,28 @@ final class MarketStreamController implements AutoCloseable {
                     .filter(symbol -> !symbol.isBlank()).distinct().limit(60).toList();
         String streamOwner = ownerId.apply(client.ctx());
         client.keepAlive();
-        AtomicReference<Future<?>> taskRef = new AtomicReference<>();
-        AtomicLong sequence = new AtomicLong();
-        AtomicInteger lastFrameHash = new AtomicInteger();
-        Runnable push = () -> {
-            if (client.terminated()) {
-                Future<?> task = taskRef.get();
-                if (task != null) task.cancel(false);
-                return;
-            }
-            try {
-                String world = activeWorldFor.apply(streamOwner);
-                List<Map<String, Object>> rows = quoteRows(world, streamOwner, raw, symbols);
-                int hash = rows.hashCode();
-                if (hash == lastFrameHash.get() && sequence.get() > 0) return;
-                lastFrameHash.set(hash);
-                Map<String, Object> frame = new LinkedHashMap<>();
-                frame.put("seq", sequence.incrementAndGet());
-                frame.put("quotes", rows);
-                frame.put("asOf", clock.millis());
-                frame.put("world", world);
-                if (!"observed".equals(world)) {
-                    sessions.getOrRestore(world, streamOwner)
-                            .ifPresent(session -> frame.put("simTime", session.simTime().toString()));
-                }
-                client.sendEvent("quotes", frame);
-            } catch (Exception ignored) {
-                // The scheduled task keeps trying; close detection removes abandoned clients.
-            }
-        };
-        push.run();
-        int interval = Math.max(1, cfg.engineStreamIntervalSeconds());
-        Future<?> task = scheduler.scheduleWithFixedDelay(push, interval, interval, TimeUnit.SECONDS);
-        taskRef.set(task);
-        client.onClose(() -> task.cancel(true));
+        var request = new MarketFrameBroadcaster.Request(streamOwner, symbols,
+                raw != null && !raw.isBlank());
+        Runnable unsubscribe = broadcaster.subscribe(request, frame -> {
+            if (client.terminated()) return;
+            synchronized (client) { client.sendEvent("quotes", frame.payload()); }
+        });
+        client.onClose(unsubscribe);
     }
 
-    private List<Map<String, Object>> quoteRows(String world, String owner, String raw,
+    private MarketFrameBroadcaster.Draft loadFrame(MarketFrameBroadcaster.Request request) {
+        String world = activeWorldFor.apply(request.owner());
+        List<Map<String, Object>> rows = quoteRows(world, request.owner(),
+                request.customSymbols(), request.symbols());
+        String simTime = null;
+        if (!"observed".equals(world)) {
+            simTime = sessions.getOrRestore(world, request.owner())
+                    .map(session -> session.simTime().toString()).orElse(null);
+        }
+        return new MarketFrameBroadcaster.Draft(world, rows, simTime, clock.millis());
+    }
+
+    private List<Map<String, Object>> quoteRows(String world, String owner, boolean customSymbols,
                                                 List<String> requestedSymbols) {
         List<Map<String, Object>> rows = new ArrayList<>();
         if ("observed".equals(world)) {
@@ -119,7 +99,7 @@ final class MarketStreamController implements AutoCloseable {
         }
         List<String> symbols;
         if ("demo".equals(world)) {
-            symbols = raw == null || raw.isBlank()
+            symbols = !customSymbols
                     ? market.worldSymbols("demo").map(List::copyOf).orElse(List.of())
                     : requestedSymbols;
         } else {
@@ -195,6 +175,7 @@ final class MarketStreamController implements AutoCloseable {
 
     @Override
     public void close() {
-        scheduler.shutdownNow();
+        unsubscribeWorldEvents.run();
+        broadcaster.close();
     }
 }
