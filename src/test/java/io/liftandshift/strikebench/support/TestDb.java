@@ -38,9 +38,15 @@ public final class TestDb {
 
     /** A fresh, migrated, isolated database. Caller closes the returned Db. */
     public static Db fresh() {
-        Db db = new Db(BASE + newDatabase(), USER, PASS);
-        Migrations.run(db);
-        return db;
+        String name = newDatabase();
+        Db db = new Db(BASE + name, USER, PASS, () -> drop(name));
+        try {
+            Migrations.run(db);
+            return db;
+        } catch (RuntimeException e) {
+            db.close();
+            throw e;
+        }
     }
 
     /** Overrides (DB_URL/DB_USER/DB_PASSWORD) for a fresh database — for AppConfig-driven tests. */
@@ -57,10 +63,21 @@ public final class TestDb {
 
     private static void dropAll() {
         for (String name : new HashSet<>(CREATED)) {
-            try { admin("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)"); }
+            try { drop(name); }
             catch (RuntimeException ignored) { /* best-effort cleanup */ }
         }
     }
+
+    private static void drop(String name) {
+        if (!CREATED.remove(name)) return;
+        try { admin("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)"); }
+        catch (RuntimeException e) {
+            CREATED.add(name);
+            throw e;
+        }
+    }
+
+    static int retainedCount() { return CREATED.size(); }
 
     private static void admin(String sql) {
         try (Connection c = DriverManager.getConnection(ADMIN_URL, USER, PASS);
