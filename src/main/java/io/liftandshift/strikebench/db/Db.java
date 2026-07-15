@@ -14,6 +14,8 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /**
@@ -30,8 +32,19 @@ public final class Db implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(Db.class);
     private final HikariDataSource ds;
+    private final Runnable afterClose;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     public Db(String jdbcUrl, String user, String password) {
+        this(jdbcUrl, user, password, () -> {});
+    }
+
+    /**
+     * Builds a database handle with an idempotent resource cleanup callback. Production callers
+     * use the ordinary constructor; isolated test databases use this overload to drop their
+     * physical database as soon as the pool closes instead of retaining hundreds until JVM exit.
+     */
+    public Db(String jdbcUrl, String user, String password, Runnable afterClose) {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(jdbcUrl);
         cfg.setUsername(user);
@@ -41,6 +54,7 @@ public final class Db implements AutoCloseable {
         cfg.setPoolName("strikebench");
         cfg.setConnectionTimeout(10_000);
         this.ds = new HikariDataSource(cfg);
+        this.afterClose = Objects.requireNonNull(afterClose);
         log.info("Local data store ready");
     }
 
@@ -52,7 +66,11 @@ public final class Db implements AutoCloseable {
     /** The underlying pool — used by {@link Migrations} (Flyway) and nothing else. */
     public DataSource dataSource() { return ds; }
 
-    @Override public void close() { ds.close(); }
+    @Override public void close() {
+        if (!closed.compareAndSet(false, true)) return;
+        try { ds.close(); }
+        finally { afterClose.run(); }
+    }
 
     public interface SqlFn<T> { T apply(Connection c) throws SQLException; }
     public interface SqlConsumer { void accept(Connection c) throws SQLException; }
