@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import java.time.Clock;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 
@@ -50,6 +51,7 @@ public final class WorldTransitionService {
     private final BiFunction<String, String, Object> universeResolver;
     private final String epoch;
     private final AtomicLong revision = new AtomicLong();
+    private final Map<String, String> activeByOwner = new ConcurrentHashMap<>();
 
     public WorldTransitionService(AppConfig config, Clock clock, Db db, DatasetService datasets,
                                   MarketDataService market, SimulationSessions sessions,
@@ -77,9 +79,14 @@ public final class WorldTransitionService {
 
     public String active(String rawOwner) {
         String owner = OwnerScope.id(rawOwner);
+        String cached = activeByOwner.get(owner);
+        if (cached != null) return cached;
         String saved = read(owner);
         String fallback = baseline();
-        if (saved == null || saved.isBlank()) return fallback;
+        if (saved == null || saved.isBlank()) {
+            activeByOwner.put(owner, fallback);
+            return fallback;
+        }
         if (config.fixturesOnly() && "observed".equals(saved)) {
             return repair(owner, saved, fallback);
         }
@@ -87,6 +94,7 @@ public final class WorldTransitionService {
                 && sessions.getOrRestore(saved, owner).isEmpty()) {
             return repair(owner, saved, fallback);
         }
+        activeByOwner.put(owner, saved);
         return saved;
     }
 
@@ -114,6 +122,7 @@ public final class WorldTransitionService {
         Object universe = universeResolver.apply(world, owner);
         boolean datasetReset = !DatasetService.OBSERVED.equals(datasets.activeId(owner));
         persist(owner, world, datasetReset, null);
+        activeByOwner.put(owner, world);
         return publish(owner, world, universe, datasetReset, forceDatasetEvent, globalEvent);
     }
 
@@ -125,8 +134,11 @@ public final class WorldTransitionService {
         boolean changed = persist(owner, fallback, datasetReset, expected);
         if (!changed) {
             String current = read(owner);
-            return current == null || current.isBlank() ? fallback : current;
+            String resolved = current == null || current.isBlank() ? fallback : current;
+            activeByOwner.put(owner, resolved);
+            return resolved;
         }
+        activeByOwner.put(owner, fallback);
         publish(owner, fallback, universe, datasetReset, false, false);
         return fallback;
     }

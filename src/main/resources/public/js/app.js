@@ -1055,7 +1055,9 @@
     refreshUniverse();
     subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
     subscribeEvents();                // typed workspace events (jobs, datasets, provider cooldowns)
-    setInterval(refreshTape, 45 * 1000);
+    setInterval(function () {
+      if (!marketStreamHealthy()) refreshTape();
+    }, 45 * 1000);
     window.addEventListener('hashchange', function () {
       // Native hash links (ticker cards, tabs and browser Back) do not pass through
       // App.navigate, so enforce the same destination contract here as well.
@@ -1255,8 +1257,8 @@
 
   /**
    * Subscribe to the backend market engine's SSE stream so the tape is live-ish (a few seconds)
-   * from server memory instead of a 45s poll. Pure enhancement: if EventSource is unavailable or
-   * the stream errors, the poll (below) keeps the tape fresh. Reconnects on universe change.
+   * from server memory instead of a 45s poll. A GET is used only while EventSource is unavailable,
+   * still connecting beyond its grace window, or closed after repeated errors.
    */
   /**
    * The frontend MARKET STORE: one home for streamed quote state. The SSE stream writes frames
@@ -1298,7 +1300,9 @@
     var es;
     try { es = new EventSource('/api/market/stream'); } catch (e) { return; }
     App._marketES = es;
+    App._marketESstartedAt = Date.now();
     App._marketESerrors = 0; // fresh error budget per subscription (universe change / reconnect)
+    es.onopen = function () { App._marketESerrors = 0; };
     es.addEventListener('quotes', function (ev) {
       try {
         var data = JSON.parse(ev.data);
@@ -1313,6 +1317,15 @@
       App._marketESerrors = (App._marketESerrors || 0) + 1;
       if (App._marketESerrors > 3) { try { es.close(); } catch (e) {} App._marketES = null; }
     };
+  }
+
+  function marketStreamHealthy() {
+    var es = App._marketES;
+    if (!es) return false;
+    if (es.readyState === 1) {
+      return App.Market.seq > 0 || Date.now() - (App._marketESstartedAt || 0) < 15000;
+    }
+    return es.readyState === 0 && Date.now() - (App._marketESstartedAt || 0) < 15000;
   }
   App.subscribeMarketStream = subscribeMarketStream;
 

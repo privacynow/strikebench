@@ -533,6 +533,23 @@ class JourneySurfaceTest {
                 "public record Result(", "public record FinishResult(");
     }
 
+    @Test void marketFramesAreSharedAndHttpPollingIsFallbackOnly() throws Exception {
+        String controller = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/MarketStreamController.java"));
+        String broadcaster = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/api/MarketFrameBroadcaster.java"));
+        String app = Files.readString(Path.of(
+                "src/main/resources/public/js/app.js"));
+
+        assertThat(controller).contains("broadcaster.subscribe(request", "broadcaster.invalidateOwner(")
+                .doesNotContain("scheduleWithFixedDelay(push", "newScheduledThreadPool(2");
+        assertThat(broadcaster).contains("Map<Request, Group> groups", "newVirtualThreadPerTaskExecutor()",
+                "if (group.subscribers.isEmpty() || !group.computing.compareAndSet(false, true)) return;");
+        assertThat(app).contains("if (!marketStreamHealthy()) refreshTape();",
+                        "function marketStreamHealthy()")
+                .doesNotContain("setInterval(refreshTape, 45 * 1000)");
+    }
+
     @Test void canonicalOwnersRetainTheFullDecisionAndLearningToolset() throws Exception {
         String views = viewSource();
         String builder = source("js/builder.js");
