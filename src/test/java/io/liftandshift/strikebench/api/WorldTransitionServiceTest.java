@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Clock;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -126,5 +127,54 @@ class WorldTransitionServiceTest {
         assertThat(selected("owner-a", "active_world")).isEqualTo("sim_missing_session");
         assertThat(selected("owner-a", "active_dataset")).isEqualTo(scenario);
         assertThat(events.since(0)).isEmpty();
+    }
+
+    @Test
+    void repairCompareAndSetFailureReturnsTheCompetingWinnerWithoutPublishing() {
+        AtomicBoolean chooseWinnerDuringHydration = new AtomicBoolean(true);
+        WorldTransitionService transitions = service((world, owner) -> {
+            if (chooseWinnerDuringHydration.compareAndSet(true, false)) {
+                select(owner, "active_world", "demo");
+            }
+            return Map.of("world", world);
+        });
+        String scenario = datasets.create("Temporary analysis", "SCENARIO", "SPY", 10L, Map.of(), "owner-a");
+        datasets.setActive(scenario, "owner-a");
+        select("owner-a", "active_world", "sim_missing_session");
+
+        WorldTransitionService.Current current = transitions.current("owner-a");
+
+        assertThat(current.world()).isEqualTo("demo");
+        assertThat(current.repair()).isNull();
+        assertThat(current.revision()).isZero();
+        assertThat(selected("owner-a", "active_world")).isEqualTo("demo");
+        assertThat(selected("owner-a", "active_dataset")).isEqualTo(scenario);
+        assertThat(events.since(0)).isEmpty();
+        assertThat(transitions.activeCached("owner-a")).isEqualTo("demo");
+    }
+
+    @Test
+    void dataResetForcesGlobalDatasetAndWorldEventsEvenWhenDatasetWasAlreadyObserved() {
+        WorldTransitionService transitions = service((world, owner) -> Map.of("world", world, "owner", owner));
+        select("owner-a", "active_world", "demo");
+
+        WorldTransitionService.Result result = transitions.resetAfterDataReset("owner-a");
+
+        assertThat(result.world()).isEqualTo("observed");
+        assertThat(result.datasetReset()).isFalse();
+        assertThat(selected("owner-a", "active_world")).isEqualTo("observed");
+        assertThat(datasets.activeId("owner-a")).isEqualTo(DatasetService.OBSERVED);
+        assertThat(events.since(0)).extracting(EventBus.Event::type)
+                .containsExactly("dataset.selected", "world.selected");
+        EventBus.Event datasetEvent = events.since(0).getFirst();
+        assertThat(datasetEvent.data()).containsEntry("active", DatasetService.OBSERVED)
+                .doesNotContainKey("user");
+        EventBus.Event worldEvent = events.since(0).getLast();
+        assertThat(worldEvent.data()).containsEntry("world", "observed")
+                .containsEntry("revision", result.revision())
+                .containsEntry("epoch", "test-epoch")
+                .containsEntry("universe", result.universe())
+                .doesNotContainKey("user")
+                .doesNotContainKey("repair");
     }
 }
