@@ -1424,8 +1424,8 @@ test('equivalent Plan retries collapse while materially different Plans survive 
       horizonDays: 30, targetCents: 27123, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
     const retry = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
       horizonDays: 30, targetCents: 27123, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
-    const variant = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
-      horizonDays: 45, targetCents: 27123, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
+    const variant = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bearish',
+      horizonDays: 30, targetCents: 27123, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
     const disposable = await PlanStore.create({ symbol: 'SPY', intent: 'INCOME', thesis: 'neutral',
       horizonDays: 19, riskMode: 'conservative', title: 'SPY · Disposable tab' });
     return { one: one.id, retry: retry.id, variant: variant.id, disposable: disposable.id };
@@ -1434,13 +1434,16 @@ test('equivalent Plan retries collapse while materially different Plans survive 
   assert.notEqual(ids.variant, ids.one, 'a materially different horizon remains a separate Plan');
 
   await go('#/home');
-  await page.waitForSelector('#home-plan-library [data-plan-id="' + ids.variant + '"]');
-  assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.one + '"]').count(), 1);
-  assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.variant + '"]').count(), 1);
+  await page.waitForSelector('#home-plan-library .home-plan-compact-list');
   assert.ok(await page.locator('#home-plan-library .home-plan-compact-row').count() <= 3,
-    'the desk caps alternative Plans without deleting or merging distinct assumptions');
+    'Home keeps a bounded lens even when earlier journeys left other working Plans');
+  assert.deepEqual(await page.evaluate(values => [values.one, values.variant].map(id =>
+    PlanStore.allMarkets().some(plan => plan.id === id)), ids), [true, true],
+    'both materially distinct Plans remain in the durable collection even when Home condenses them');
   assert.ok(await page.locator('#plan-bar-root .plan-chip').count() <= 2,
     'desktop bounds direct Plan tabs instead of clipping a grown collection');
+  assert.match((await page.locator('#plan-bar-root').textContent()), /View bullish|View bearish/,
+    'same-symbol Plans use their distinguishing assumption instead of an arbitrary ordinal');
   assert.equal(await page.locator('#plan-bar-root .plan-more-link').count(), 1,
     'the canonical Plan library remains one action away when tabs are condensed');
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.disposable + '"]').count(), 1,
@@ -1466,6 +1469,10 @@ test('equivalent Plan retries collapse while materially different Plans survive 
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.locator('#plan-picker option[value="' + ids.one + '"]').count(), 1);
   assert.equal(await page.locator('#plan-picker option[value="' + ids.variant + '"]').count(), 1);
+  assert.match(await page.locator('#plan-picker').textContent(), /View bullish/);
+  assert.match(await page.locator('#plan-picker').textContent(), /View bearish/);
+  assert.doesNotMatch(await page.locator('#plan-picker').textContent(), /Plan \d+ of \d+/,
+    'meaningful assumption labels replace arbitrary duplicate ordinals');
   await page.reload();
   await page.waitForSelector('#plan-picker');
   assert.equal(await page.locator('#plan-picker option[value="' + ids.one + '"]').count(), 1,
@@ -1523,6 +1530,9 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
   await compact.waitFor({ state: 'visible' });
   assert.equal(await compact.locator('.home-plan-compact-row').count(), 3,
     'the desk shows at most three alternatives to the hero-owned active Plan');
+  assert.ok((await compact.locator('.home-plan-compact-meta').allTextContents()).some(text =>
+    /View (?:bullish|bearish|neutral)/.test(text)),
+    'compact Plan rows expose the assumption that distinguishes otherwise similar Plans');
   assert.equal(await page.locator('#plan-bar-root .plan-chip').count(), 2,
     'a large desktop collection renders two stable Plan tabs rather than a clipped strip');
   assert.match(await page.locator('#plan-bar-root .plan-more-link').textContent(), /^\+\d+ more$/,
@@ -4098,6 +4108,12 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
     'expert construction keeps both EV lanes and economic placement visible');
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(300); // capture after the real card-in transition, never by disabling motion
+  const arrivalMotion = await page.locator('#portfolio-construct').evaluate(node => ({
+    opacity: getComputedStyle(node).opacity,
+    fillMode: getComputedStyle(node).animationFillMode
+  }));
+  assert.equal(arrivalMotion.opacity, '1', 'finished card motion never dims foreground content');
+  assert.notEqual(arrivalMotion.fillMode, 'both', 'finished card motion releases its composited layer');
   await page.screenshot({ path: path.join(__dirname, 'shots/portfolio-construct-expert.png'), fullPage: true });
 
   // Beginner keeps the same levers and result, but progressive disclosure and visual
@@ -4218,6 +4234,9 @@ test('simulated market: product creator, loud live band, world-routed research, 
   // Switch happened: the loud band appears with HUMAN wording + live controls.
   await page.waitForFunction(() => /SIMULATED MARKET/.test((document.getElementById('world-band') || {}).textContent || ''),
     { timeout: 20000 });
+  await page.waitForSelector('#sim-control-room #cr-symbols .sim-symbol-tile', { timeout: 20000 });
+  assert.equal(await page.locator('#world-exit').isEnabled(), true,
+    'Create & enter finishes with an immediately usable Return control');
   const band = await page.$eval('#world-band', el => el.textContent);
   assert.match(band, /SIMULATED MARKET/, 'band names the world loudly');
   assert.match(band, /Sell-off, then rebound/, 'band speaks human, not SELLOFF_REBOUND');

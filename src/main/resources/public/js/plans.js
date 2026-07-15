@@ -471,7 +471,23 @@
       return byTime || String(a.id).localeCompare(String(b.id));
     });
     var index = cohort.findIndex(function (candidate) { return candidate.id === plan.id; });
-    var duplicate = cohort.length > 1 && index >= 0 ? 'Plan ' + (index + 1) + ' of ' + cohort.length : null;
+    var duplicate = null;
+    if (cohort.length > 1 && index >= 0) {
+      var values = function (field) {
+        return new Set(cohort.map(function (candidate) {
+          var value = candidate.context && candidate.context[field];
+          return value == null || value === '' ? '__unset__' : String(value);
+        }));
+      };
+      var context = plan.context || {};
+      if (values('thesis').size > 1) duplicate = context.thesis ? 'View ' + context.thesis : 'View not set';
+      else if (values('targetCents').size > 1) duplicate = context.targetCents == null ? 'Target not set'
+        : 'Target $' + (Number(context.targetCents) / 100).toLocaleString(undefined,
+          { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      else if (values('holdingsShares').size > 1) duplicate = context.holdingsShares == null
+        ? 'Shares not set' : String(context.holdingsShares) + ' shares';
+      else duplicate = 'Plan ' + (index + 1) + ' of ' + cohort.length;
+    }
     var stamp = plan.updatedAt || plan.createdAt;
     var updated = null;
     if (stamp) {
@@ -481,7 +497,7 @@
       });
     }
     return { title: title, duplicate: duplicate, updated: updated,
-      full: title + (duplicate ? ' · ' + duplicate : '') };
+      full: (duplicate ? duplicate + ' · ' : '') + title };
   }
 
   function renderBar() {
@@ -501,9 +517,8 @@
     var shown = ordered.slice(0, 2);
     shown.forEach(function (plan) {
       var planIdentity = identity(plan, items);
-      var planLabel = planIdentity.title
+      var planLabel = (planIdentity.duplicate ? planIdentity.duplicate + ' · ' : '') + planIdentity.title
         + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' trading sessions' : '');
-      if (planIdentity.duplicate) planLabel += ' · ' + planIdentity.duplicate;
       var chip = UI.el('div', { class: 'plan-chip' + (plan.id === App.state.activePlanId ? ' active' : ''),
         'data-plan-id': plan.id },
         UI.el('button', { type: 'button', class: 'plan-chip-main', 'aria-label': 'Open ' + plan.symbol + ' · ' + planLabel,

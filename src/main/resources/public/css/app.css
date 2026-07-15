@@ -1032,7 +1032,10 @@ body.lvl-expert .not-expert { display: none !important; }
    stays at 1 throughout so ordinary use, screenshots, and assistive magnification never
    catch a dim or blank card while async content is arriving. */
 #app .card, #app .candidate, #app .tile {
-  animation: card-in .18s ease both;
+  /* Keep the entrance motion, but release the composited animation layer when it ends.
+     A forwards/both fill left finished dark-theme cards on retained layers that some
+     screenshot and magnification compositors captured as black foreground panels. */
+  animation: card-in .18s ease backwards;
 }
 @keyframes card-in {
   from { transform: translateY(4px); }

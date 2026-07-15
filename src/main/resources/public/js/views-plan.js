@@ -2438,13 +2438,17 @@
           el('div', {}, el('div', { class: 'eyebrow' }, plan.symbol + ' · ' + planIntentLabel(plan.intent)),
             el('h3', {}, planIdentity.title)),
           el('div', { class: 'home-plan-badges' },
-            planIdentity.duplicate ? el('span', { class: 'badge badge-info plan-duplicate-badge' }, planIdentity.duplicate) : null,
+            planIdentity.duplicate && /^Plan /.test(planIdentity.duplicate)
+              ? el('span', { class: 'badge badge-info plan-duplicate-badge' }, planIdentity.duplicate) : null,
             full ? el('span', { class: 'badge ' + (row.tradeId ? 'badge-ok' : decision.action === 'CASH' ? 'badge-caution' : 'badge-dim') }, actionLabel) : null,
             el('span', { class: 'badge ' + (sameMarket ? 'badge-info' : 'badge-dim') }, planMarketLabel(plan)))),
         el('div', { class: 'home-plan-meta' },
           chip('Stage', stageName(plan)),
           plan.context && plan.context.horizonDays ? chip('Horizon', plan.context.horizonDays + ' sessions') : null,
           plan.context && plan.context.thesis ? chip('View', plan.context.thesis) : null,
+          (!plan.context || !plan.context.thesis) && planIdentity.duplicate === 'View not set'
+            ? chip('View', 'not set') : null,
+          plan.context && plan.context.targetCents ? chip('Target', fmtMoney(plan.context.targetCents)) : null,
           full && decision.economicVerdict ? chip('Decision', String(decision.economicVerdict).toLowerCase()) : null,
           full && decision.pop != null ? chip('POP at decision', fmtPct(decision.pop)) : null,
           planIdentity.updated ? el('span', { class: 'muted small plan-updated-at' }, planIdentity.updated) : null,
@@ -2462,13 +2466,17 @@
         var identity = PlanStore.identity(plan, working);
         var meta = [String(plan.furthestStage || 'UNDERSTAND').replaceAll('_', ' ').toLowerCase()];
         if (plan.context && plan.context.horizonDays) meta.push(plan.context.horizonDays + ' sessions');
+        if (plan.context && plan.context.thesis) meta.push('View ' + plan.context.thesis);
+        else if (identity.duplicate === 'View not set') meta.push('View not set');
+        if (plan.context && plan.context.targetCents) meta.push('Target ' + fmtMoney(plan.context.targetCents));
         return el('article', { class: 'home-plan-compact-row', 'data-plan-id': plan.id },
           el('div', { class: 'home-plan-compact-main' },
             el('div', { class: 'home-plan-compact-title' },
               el('b', {}, plan.symbol), el('span', {}, identity.title)),
             el('div', { class: 'muted small home-plan-compact-meta' }, meta.join(' · '))),
           el('div', { class: 'home-plan-compact-state' },
-            identity.duplicate ? el('span', { class: 'badge badge-info' }, identity.duplicate) : null,
+            identity.duplicate && /^Plan /.test(identity.duplicate)
+              ? el('span', { class: 'badge badge-info' }, identity.duplicate) : null,
             el('span', { class: 'badge ' + (sameMarket ? 'badge-info' : 'badge-dim') }, planMarketLabel(plan)),
             quote ? el('span', { class: 'home-plan-live' }, fmtNum(quote.last), ' ', UI.delta(quote.last, quote.prevClose)) : null),
           el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
