@@ -86,6 +86,9 @@
    * short = the one-liner every bubble opens with; beginner/expert = the expanded detail.
    */
   var INFO = {
+    simulationLineage: { short: 'One simulation per Plan: every band quotes this same stored run, named by this fingerprint.',
+      beginner: 'When you declared your view, StrikeBench generated one set of possible futures for it. Every later step — evidence, outcomes on your exact trade, review — re-uses that same stored set, so numbers agree everywhere. The # code names that one simulation.',
+      expert: 'The plan-context ensemble is generated once, persisted, and fingerprint-pinned (SHA-256 over spec + path bytes). Evidence fans, structure repricing, comparisons, and rehearsals all consume the identical stored path matrix; the chip exposes EnsembleRef{id, fingerprint, basis}. A context revision that invalidates inputs mints a NEW ensemble and fingerprint — never a silent regeneration.' },
     pop: { short: 'This counts even a $1 gain; compare it with full-win, full-loss, costs and EV before judging quality.',
       beginner: 'Out of 100 futures the options market itself prices, roughly this many end with you making something — even $1. It is a model number, before commissions, not a promise.',
       expert: 'Risk-neutral P(profit) under a lognormal terminal distribution at the chain\u2019s own IV and the disclosed risk-free rate, with dividend yield q assumed zero. Calendar-time IV basis; not a physical forecast.' },
