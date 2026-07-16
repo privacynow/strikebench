@@ -709,7 +709,7 @@ final class TradeController {
         }
     }
 
-    private void ensureOwnedTrade(Context ctx, String tradeId) {
+    void ensureOwnedTrade(Context ctx, String tradeId) {
         TradeRecord trade = trades.get(tradeId);
         if (!trade.accountId().equals(currentAccount.apply(ctx).id())) {
             throw new ResourceNotFoundException("no such trade " + tradeId);

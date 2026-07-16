@@ -58,12 +58,17 @@ public final class PlanManagementService {
 
     public TradeService.LifecycleHook lifecycleHook(String userId, String planId, long expectedVersion,
                                                     String kind, boolean prepareRoll) {
+        return lifecycleHook(userId, planId, expectedVersion, kind, prepareRoll, null);
+    }
+
+    public TradeService.LifecycleHook lifecycleHook(String userId, String planId, long expectedVersion,
+                                                    String kind, boolean prepareRoll, String receiptId) {
         String normalized = kind == null ? "CLOSE" : kind.trim().toUpperCase();
         if (!Set.of("CLOSE", "SETTLE", "ROLL", "VOID").contains(normalized)) {
             throw new IllegalArgumentException("management kind must be CLOSE, SETTLE, ROLL, or VOID");
         }
         return (connection, trade, realized) -> saveLifecycleOn(connection, userId, planId,
-                expectedVersion, normalized, prepareRoll, trade, realized);
+                expectedVersion, normalized, prepareRoll, receiptId, trade, realized);
     }
 
     public ObjectNode recordCashReview(String userId, String planId, long expectedVersion, CashReview review) {
@@ -139,7 +144,8 @@ public final class PlanManagementService {
     }
 
     private void saveLifecycleOn(Connection c, String userId, String planId, long expectedVersion,
-                                 String kind, boolean prepareRoll, TradeRecord trade, Long realized) throws SQLException {
+                                 String kind, boolean prepareRoll, String receiptId,
+                                 TradeRecord trade, Long realized) throws SQLException {
         PlanRow plan = requireOwned(c, planId, userId, true);
         if (plan.version() != expectedVersion) throw new IllegalStateException("This Plan changed before the management action completed.");
         requireLinked(c, planId, trade.id());
@@ -150,9 +156,9 @@ public final class PlanManagementService {
             case "VOID" -> "VOID";
             default -> "CLOSE";
         };
-        Db.execOn(c, "INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,kind,action_at," +
-                        "realized_cents,note,created_at) VALUES(?,?,?,?,?,?,?,?,?)", Ids.newId("pmgt"), planId,
-                decisionId, trade.id(), actionKind, now, realized,
+        Db.execOn(c, "INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,receipt_id,kind,action_at," +
+                        "realized_cents,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)", Ids.newId("pmgt"), planId,
+                decisionId, trade.id(), receiptId, actionKind, now, realized,
                 "VOID".equals(kind) ? "Practice trade voided and cash entries reversed" :
                         prepareRoll ? "Position closed; exact package prepared for a roll in this Plan" :
                                 "SETTLE".equals(kind) ? "Position settled after expiration" : "Position unwound at executable closing sides", now);

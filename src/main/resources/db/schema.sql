@@ -1158,6 +1158,7 @@ CREATE TABLE public.plan_management_action (
     plan_id text NOT NULL,
     decision_id text,
     trade_id text,
+    receipt_id text,
     sim_session_id text,
     kind text NOT NULL,
     action_at timestamp with time zone NOT NULL,
@@ -1916,17 +1917,21 @@ CREATE TABLE public.position_receipt (
     practice_trade_id text,
     decision_id text,
     transaction_id text,
+    transformation_action text,
+    preview_fingerprint text,
     marks_as_of timestamp with time zone NOT NULL,
     evidence_level text NOT NULL,
     model_version text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT position_receipt_analysis_artifact_state_check CHECK ((analysis_artifact_state = 'FROZEN'::text)),
-    CONSTRAINT position_receipt_authority_check CHECK ((authority = ANY (ARRAY['SYSTEM_OBSERVED'::text, 'BROKER_REPORTED'::text, 'USER_ALLOCATED'::text]))),
+    CONSTRAINT position_receipt_authority_check CHECK ((authority = ANY (ARRAY['SYSTEM_ANALYSIS'::text, 'BROKER_REPORTED'::text, 'USER_ALLOCATED'::text]))),
     CONSTRAINT position_receipt_check CHECK ((((plan_id IS NULL) AND (plan_context_rev IS NULL)) OR ((plan_id IS NOT NULL) AND (plan_context_rev IS NOT NULL)))),
     CONSTRAINT position_receipt_evidence_level_check CHECK ((evidence_level = ANY (ARRAY['OBSERVED_LIVE'::text, 'OBSERVED_DELAYED'::text, 'OBSERVED_EOD'::text, 'MODELED'::text, 'SIMULATED'::text, 'DEMO_FIXTURE'::text, 'UNKNOWN'::text]))),
     CONSTRAINT position_receipt_execution_lane_check CHECK ((execution_lane = ANY (ARRAY['NONE'::text, 'PRACTICE'::text, 'REAL'::text]))),
     CONSTRAINT position_receipt_kind_check CHECK ((kind = ANY (ARRAY['DECISION'::text, 'ADOPTION'::text, 'TRANSFORMATION'::text, 'RESOLUTION'::text]))),
-    CONSTRAINT position_receipt_position_state_check CHECK ((position_state = ANY (ARRAY['PENDING'::text, 'OPEN'::text, 'PARTIALLY_CLOSED'::text, 'ASSIGNED'::text, 'EXERCISED'::text, 'EXPIRED'::text, 'CLOSED'::text])))
+    CONSTRAINT position_receipt_position_state_check CHECK ((position_state = ANY (ARRAY['PENDING'::text, 'OPEN'::text, 'PARTIALLY_CLOSED'::text, 'ASSIGNED'::text, 'EXERCISED'::text, 'EXPIRED'::text, 'CLOSED'::text]))),
+    CONSTRAINT position_receipt_transformation_action_check CHECK (((transformation_action IS NULL) OR (transformation_action = ANY (ARRAY['CLOSE'::text, 'PARTIAL_CLOSE'::text, 'LEG_CLOSE'::text, 'ROLL'::text, 'ADD_LEG'::text, 'REMOVE_LEG'::text, 'ADD_STOCK'::text, 'REMOVE_STOCK'::text, 'ASSIGNMENT'::text, 'EXERCISE'::text, 'EXPIRATION'::text])))),
+    CONSTRAINT position_receipt_transformation_identity_check CHECK ((((kind = 'TRANSFORMATION'::text) AND (transformation_action IS NOT NULL) AND (preview_fingerprint IS NOT NULL)) OR ((kind <> 'TRANSFORMATION'::text) AND (transformation_action IS NULL) AND (preview_fingerprint IS NULL))))
 );
 
 
@@ -1936,6 +1941,7 @@ CREATE TABLE public.position_receipt (
 
 CREATE TABLE public.position_receipt_leg (
     receipt_id text NOT NULL,
+    position_phase text NOT NULL,
     leg_no integer NOT NULL,
     instrument_type text NOT NULL,
     action text NOT NULL,
@@ -1956,6 +1962,7 @@ CREATE TABLE public.position_receipt_leg (
     CONSTRAINT position_receipt_leg_leg_no_check CHECK ((leg_no >= 0)),
     CONSTRAINT position_receipt_leg_multiplier_check CHECK ((multiplier > 0)),
     CONSTRAINT position_receipt_leg_option_type_check CHECK (((option_type IS NULL) OR (option_type = ANY (ARRAY['CALL'::text, 'PUT'::text])))),
+    CONSTRAINT position_receipt_leg_position_phase_check CHECK ((position_phase = ANY (ARRAY['BEFORE'::text, 'AFTER'::text]))),
     CONSTRAINT position_receipt_leg_price_authority_check CHECK ((price_authority = ANY (ARRAY['OBSERVED'::text, 'BROKER_REPORTED'::text, 'USER_REPORTED'::text, 'MODELED'::text]))),
     CONSTRAINT position_receipt_leg_quantity_check CHECK ((quantity > 0))
 );
@@ -3067,7 +3074,7 @@ ALTER TABLE ONLY public.portfolio_wash_sale_allocation
 --
 
 ALTER TABLE ONLY public.position_receipt_leg
-    ADD CONSTRAINT position_receipt_leg_pkey PRIMARY KEY (receipt_id, leg_no);
+    ADD CONSTRAINT position_receipt_leg_pkey PRIMARY KEY (receipt_id, position_phase, leg_no);
 
 
 --
@@ -4458,6 +4465,14 @@ ALTER TABLE ONLY public.plan_management_action
 
 ALTER TABLE ONLY public.plan_management_action
     ADD CONSTRAINT plan_management_action_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES public.plans(id) ON DELETE CASCADE;
+
+
+--
+-- Name: plan_management_action plan_management_action_receipt_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_management_action
+    ADD CONSTRAINT plan_management_action_receipt_id_fkey FOREIGN KEY (receipt_id) REFERENCES public.position_receipt(id) ON DELETE RESTRICT;
 
 
 --

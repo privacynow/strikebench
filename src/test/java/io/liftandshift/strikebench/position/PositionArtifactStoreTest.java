@@ -141,6 +141,44 @@ class PositionArtifactStoreTest {
                 r -> r.str("tax_basis_status"), "pending-resolution")).containsExactly("AUTHORITATIVE");
     }
 
+    @Test
+    void practiceMutationFreezesBothSidesAndItsComparatorMetricsInsideTheOwningTransaction() {
+        db.exec("INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,"
+                        + "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "practice-one", "local", "Practice", "PAPER", 10_000_000L, 10_000_000L, 100_000L, 1,
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"), OffsetDateTime.parse("2026-07-15T12:00:00Z"));
+        db.exec("INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,entry_underlying_cents,"
+                        + "entry_net_premium_cents,max_loss_cents,breakevens_json,entry_snapshot_json,created_at,updated_at) "
+                        + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "practice-trade", "practice-one", "MU", "CREDIT_PUT_SPREAD", "CLOSED", 1, "[]",
+                98_000L, 20_000L, 80_000L, "[]", "{}",
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"), OffsetDateTime.parse("2026-07-15T12:00:00Z"));
+        createPlan("plan-practice", "MU");
+        PositionPackage before = practicePackage();
+        PositionTransformation.Preview preview = PositionTransformation.preview(new PositionTransformation.Request(
+                PositionTransformation.Action.CLOSE, before, null,
+                new PositionTransformation.RiskSnapshot(80_000L, 100_000L, 20_000L, true, List.of(), "observed"),
+                null, 12_300L));
+        PositionArtifactStore store = new PositionArtifactStore(db);
+
+        db.tx(c -> {
+            store.recordPracticeTransformation(c, new PositionArtifactStore.PracticeTransformationAction(
+                    "local", "practice-receipt", "plan-practice", 1, "practice-trade",
+                    PositionDomain.PositionState.CLOSED, OffsetDateTime.parse("2026-07-15T12:00:00Z"),
+                    EvidenceLevel.OBSERVED_DELAYED, "position-transform-1", before, null, preview, 12_300L));
+            return null;
+        });
+
+        assertThat(db.query("SELECT transformation_action || ':' || preview_fingerprint v FROM position_receipt "
+                        + "WHERE id=?", r -> r.str("v"), "practice-receipt"))
+                .containsExactly("CLOSE:" + preview.fingerprint());
+        assertThat(db.query("SELECT position_phase || ':' || count(*) v FROM position_receipt_leg WHERE receipt_id=? "
+                        + "GROUP BY position_phase", r -> r.str("v"), "practice-receipt"))
+                .containsExactly("BEFORE:2");
+        assertThat(db.query("SELECT value_cents FROM position_receipt_metric WHERE receipt_id=? AND metric_key=?",
+                r -> r.lng("value_cents"), "practice-receipt", "realized_closing")).containsExactly(12_300L);
+    }
+
     private PositionArtifactStore.NewStructureAction action(String planId, String accountId,
                                                              String transactionId, String lotId, long quantity) {
         return new PositionArtifactStore.NewStructureAction("local", planId, 1, accountId, transactionId,
@@ -170,5 +208,17 @@ class PositionArtifactStoreTest {
                         + "symbol,option_type,strike,expiration,quantity,multiplier) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 id, 0, "OPTION", "SELL", "OPEN", "MU", "PUT", new BigDecimal("980"),
                 LocalDate.parse("2026-07-17"), 1L, 100);
+    }
+
+    private static PositionPackage practicePackage() {
+        return new PositionPackage("practice-trade", PositionDomain.PackageSource.PRACTICE_TRADE,
+                PositionDomain.ExecutionLane.PRACTICE, "MU", 1, null,
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"), List.of(
+                new PositionPackage.Leg(0, "SELL", "OPTION", "MU", "PUT", new BigDecimal("980"),
+                        LocalDate.parse("2026-08-21"), 1, 100, new BigDecimal("10.00"),
+                        PositionDomain.PriceAuthority.OBSERVED),
+                new PositionPackage.Leg(1, "BUY", "OPTION", "MU", "PUT", new BigDecimal("970"),
+                        LocalDate.parse("2026-08-21"), 1, 100, new BigDecimal("8.00"),
+                        PositionDomain.PriceAuthority.OBSERVED)));
     }
 }

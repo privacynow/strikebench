@@ -161,6 +161,57 @@ class PositionTransformationTest {
                 .hasMessageContaining("cannot switch symbol, execution lane, or package source");
     }
 
+    @Test
+    void fingerprintIgnoresArtifactIdentityAndAnalysisTimeButBindsPricesAndRisk() {
+        var before = pkg("before", 1,
+                option(0, "SELL", "PUT", "980", 1), option(1, "BUY", "PUT", "970", 1));
+        var after = pkg("after", 1, option(0, "SELL", "PUT", "980", 1));
+        var first = PositionTransformation.preview(new PositionTransformation.Request(
+                PositionTransformation.Action.REMOVE_LEG, before, after,
+                risk(80_000, 100_000, true), risk(9_500_000, 9_800_000, true), null));
+        var laterBefore = new PositionPackage("different-before-id", before.source(), before.lane(), before.symbol(),
+                before.packageQuantity(), before.exactPackageCashCents(),
+                OffsetDateTime.parse("2026-07-15T12:05:00Z"), before.legs());
+        var laterAfter = new PositionPackage("different-after-id", after.source(), after.lane(), after.symbol(),
+                after.packageQuantity(), after.exactPackageCashCents(),
+                OffsetDateTime.parse("2026-07-15T12:05:00Z"), after.legs());
+        var sameFactsLater = PositionTransformation.preview(new PositionTransformation.Request(
+                PositionTransformation.Action.REMOVE_LEG, laterBefore, laterAfter,
+                risk(80_000, 100_000, true), risk(9_500_000, 9_800_000, true), null));
+        assertThat(sameFactsLater.fingerprint()).isEqualTo(first.fingerprint());
+
+        var repricedLeg = new PositionPackage.Leg(0, "SELL", "OPTION", "MU", "PUT",
+                new BigDecimal("980"), EXPIRY, 1, 100, new BigDecimal("10.01"),
+                PositionDomain.PriceAuthority.OBSERVED);
+        var repricedAfter = pkg("after", 1, repricedLeg);
+        var repriced = PositionTransformation.preview(new PositionTransformation.Request(
+                PositionTransformation.Action.REMOVE_LEG, before, repricedAfter,
+                risk(80_000, 100_000, true), risk(9_500_000, 9_800_000, true), null));
+        assertThat(repriced.fingerprint()).isNotEqualTo(first.fingerprint());
+    }
+
+    @Test
+    void actionLabelCannotDisguiseAnArbitraryReplacement() {
+        var before = pkg("before", 1,
+                option(0, "SELL", "PUT", "980", 1), option(1, "BUY", "PUT", "970", 1));
+        var replacement = pkg("after", 1,
+                optionAt(0, "SELL", "PUT", "960", LocalDate.parse("2026-09-18"), 1),
+                optionAt(1, "BUY", "PUT", "950", LocalDate.parse("2026-09-18"), 1));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> PositionTransformation.preview(
+                        new PositionTransformation.Request(PositionTransformation.Action.REMOVE_LEG,
+                                before, replacement, risk(80_000, 100_000, true),
+                                risk(75_000, 100_000, true), null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot add contracts");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> PositionTransformation.preview(
+                        new PositionTransformation.Request(PositionTransformation.Action.CLOSE,
+                                before, replacement, risk(80_000, 100_000, true),
+                                risk(75_000, 100_000, true), null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot leave a surviving position");
+    }
+
     private static PositionPackage pkg(String id, long quantity, PositionPackage.Leg... legs) {
         return new PositionPackage(id, PositionDomain.PackageSource.PRACTICE_TRADE,
                 PositionDomain.ExecutionLane.PRACTICE, "MU", quantity, null,
