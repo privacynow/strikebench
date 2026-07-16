@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.position.PositionPackage;
+import io.liftandshift.strikebench.position.PositionTransformation;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
@@ -100,7 +101,8 @@ public final class TradeService {
     public record CloseResult(TradeRecord trade, long realizedPnlCents) {}
 
     /** Fresh-eyes assessment of the current exact Practice position through the existing pricing path. */
-    public record PositionAssessment(PositionPackage position, TradePreview preview) {}
+    public record PositionAssessment(PositionPackage position, TradePreview preview,
+                                     PositionTransformation.RiskSnapshot risk) {}
 
     /** Executable close cash and realized result paired with the same fresh-eyes position assessment. */
     public record UnwindAssessment(PositionAssessment current, long closingCashCents,
@@ -198,8 +200,13 @@ public final class TradeService {
         OpenRequest request = new OpenRequest(trade.accountId(), trade.symbol(), trade.strategy(), trade.qty(),
                 unpriced, trade.thesis(), trade.horizon(), trade.riskMode(), trade.intent(),
                 trade.sharesLocked() > 0, null, null, "POSITION_TRANSFORMATION", "PROPOSED");
-        return analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
+        PositionAssessment assessed = analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
                 PositionDomain.ExecutionLane.PRACTICE, request);
+        long outstandingReserve = db.with(c -> outstandingReserve(c, trade.id()));
+        PositionTransformation.RiskSnapshot bookRisk = new PositionTransformation.RiskSnapshot(
+                trade.maxLossCents(), outstandingReserve, trade.maxProfitCents(), true, List.of(),
+                assessed.risk().evidenceBasis());
+        return new PositionAssessment(assessed.position(), assessed.preview(), bookRisk);
     }
 
     /** Adapts an exact proposed package to the shared position contract through this service's one pricing path. */
@@ -235,7 +242,14 @@ public final class TradeService {
         }
         PositionPackage position = new PositionPackage(packageId, source, lane, request.symbol(), request.qty(), plan.entryNet(),
                 OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC), packageLegs);
-        return new PositionAssessment(position, preview);
+        return new PositionAssessment(position, preview, riskSnapshot(preview));
+    }
+
+    private static PositionTransformation.RiskSnapshot riskSnapshot(TradePreview preview) {
+        io.liftandshift.strikebench.eval.EvidenceLevel evidence =
+                io.liftandshift.strikebench.eval.EvidenceLevel.fromEvidence(preview.evidence());
+        return new PositionTransformation.RiskSnapshot(preview.maxLossCents(), preview.reserveCents(),
+                preview.maxProfitCents(), preview.ok(), preview.blockReasons(), evidence.name());
     }
 
     public UnwindAssessment previewUnwind(String tradeId) {

@@ -130,7 +130,7 @@ final class PositionTransformationController {
         }
         PositionTransformation.Preview preview = PositionTransformation.preview(new PositionTransformation.Request(
                 request.action(), before.position(), after == null ? null : after.position(),
-                risk(before.preview()), after == null ? null : risk(after.preview()),
+                before.risk(), after == null ? null : after.risk(),
                 unwind == null ? null : unwind.realizedPnlCents()));
         return new Prepared(trade, plan, before, after, unwind, preview);
     }
@@ -150,12 +150,6 @@ final class PositionTransformationController {
             throw new IllegalStateException("The Practice position is not the active position owned by this Plan.");
         }
         return plan;
-    }
-
-    private static PositionTransformation.RiskSnapshot risk(io.liftandshift.strikebench.paper.TradePreview preview) {
-        EvidenceLevel evidence = EvidenceLevel.fromEvidence(preview.evidence());
-        return new PositionTransformation.RiskSnapshot(preview.maxLossCents(), preview.reserveCents(),
-                preview.maxProfitCents(), preview.ok(), preview.blockReasons(), evidence.name());
     }
 
     private ApiResponses.PositionTransformationPreview<io.liftandshift.strikebench.paper.TradePreview> response(

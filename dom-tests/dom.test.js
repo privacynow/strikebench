@@ -1750,7 +1750,12 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
 
   await page.locator('.plan-rail button').filter({ hasText: 'Manage' }).click();
   await page.click('#unwind-btn');
-  await page.waitForSelector('[role="dialog"]');
+  await page.waitForSelector('#close-transformation-preview');
+  const closePreview = await page.textContent('#close-transformation-preview');
+  assert.match(closePreview, /Before.*After/s);
+  assert.match(closePreview, /Cash \/ no position/);
+  assert.match(closePreview, /Closing cash flow.*Close fees.*Final position P\/L/s);
+  assert.match(closePreview, /Broker reserve released.*Theoretical max loss after/s);
   await page.getByRole('button', { name: 'Close position' }).click();
   await page.waitForFunction(id => location.hash === '#/plan/' + id + '/manage-review', plan.id);
   await page.waitForFunction(() => {

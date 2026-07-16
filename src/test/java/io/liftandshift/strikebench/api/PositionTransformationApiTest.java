@@ -78,6 +78,10 @@ class PositionTransformationApiTest {
                 .isEqualTo("CREDIT_PUT_SPREAD");
         assertThat(preview.at("/transformation/afterIdentity/label").asText())
                 .isEqualTo("Cash / no position");
+        assertThat(preview.at("/transformation/beforeRisk/maxLossCents").asLong())
+                .isEqualTo(created.at("/trade/maxLossCents").asLong());
+        assertThat(preview.at("/transformation/beforeRisk/reserveCents").asLong())
+                .isEqualTo(accountBefore.at("/reservedCents").asLong());
         assertThat(preview.at("/previewToken").asText()).contains(".");
         long closingCash = preview.get("closingCashCents").asLong();
         long closingFees = preview.get("closingFeesCents").asLong();
