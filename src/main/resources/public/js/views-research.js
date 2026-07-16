@@ -1619,7 +1619,7 @@
           if (!row || row.id === 'observed') {
             detail.textContent = level === 'beginner'
               ? 'Changes charts, Past evidence and historical replays — never the market or account used to price this Plan.'
-              : 'Execution market unchanged · dataset observed · current Plan context retained.';
+              : 'Execution market unchanged · observed history retained · current Plan context retained.';
           } else {
             detail.textContent = level === 'beginner'
               ? (row.bars || 0) + ' generated daily bars for ' + row.symbol

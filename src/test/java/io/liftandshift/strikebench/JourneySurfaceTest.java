@@ -633,17 +633,21 @@ class JourneySurfaceTest {
                         "function normalizedForAnalysis(", "function recordPayload(",
                         "strategy: 'CUSTOM'", "analysisCurrent && lastAnalysis.identity",
                         "identified.summary",
-                        "Blank never means zero", "Similarity is advisory, never idempotency",
+                        "Blank never means zero", "StrikeBench will not merge them",
                         "Broker-sourced activity requires a stable order or statement reference",
                         "exact total fees from the broker", "one underlying per position package",
                         "adjusted contract", "function refreshVisual()", "Partial payoff only",
-                        "Last defensible curve kept on screen", "Record factual activity")
+                        "Last defensible curve kept on screen", "Record factual activity",
+                        "UI.vocabulary('hypothetical')",
+                        "API.post('/api/strategies/identify'", "scheduleIdentity()")
                 .doesNotContain("API.post('/api/trades/external'", "function identify(",
                         "PositionEditor.identify", "function paint()");
         assertThat(plan).contains("key: 'yourTrade'", "PositionEditor.render(body",
-                "Analyze and use in this Plan");
+                "Analyze and use in this Plan", "UI.vocabulary('economicExposure')",
+                "UI.vocabulary('scenarioLoss')", "UI.vocabulary('practice')");
         assertThat(portfolio).contains("PositionEditor.render(sharedTradeHost",
-                        "ensureSharedTradeEditor()", "recordPrimary: true")
+                        "ensureSharedTradeEditor()", "recordPrimary: true",
+                        "UI.vocabulary('campaignEconomicBasis')")
                 .doesNotContain("id: 'record-real-card'", "id: 'ext-symbol'", "/api/trades/external");
         assertThat(workspace).contains("'positionDrafts'");
     }

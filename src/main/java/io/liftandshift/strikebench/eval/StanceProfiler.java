@@ -124,7 +124,7 @@ final class StanceProfiler {
                         ? "short-call cap: upside participation falls above this price"
                         : "long-call threshold: upside participation rises above this price";
                 case PUT -> leg.action() == LegAction.SELL
-                        ? "short-put threshold: downside assignment exposure grows below this price"
+                        ? "short-put threshold: the share-purchase obligation grows below this price"
                         : "long-put threshold: downside protection grows below this price";
             };
             var point = new ParticipationProfile.RegimePoint(Money.toCents(leg.strike()), meaning);

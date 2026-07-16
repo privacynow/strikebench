@@ -11,10 +11,10 @@ package io.liftandshift.strikebench.eval;
 public record CapitalProfile(
         long incrementalCents,
         long economicCents,
-        Double returnOnCapitalPct,   // best-case return on the economic capital, null if uncapped/unknown
+        Double returnOnCapitalPct,   // best-case return on economic exposure, null if uncapped/unknown
         Double annualizedRocPct,     // returnOnCapitalPct scaled by 365/DTE — LABELED, never primary
         int daysToExpiry,
-        String basis,                // human note on what economic capital represents
+        String basis,                // human note on what economic exposure represents
         String annualizationNote
 ) {
     public CapitalProfile {

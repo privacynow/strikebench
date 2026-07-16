@@ -372,7 +372,8 @@
     var market = null, chainCache = {}, chainData = {}, chainErrors = {}, loadToken = 0, commandBusy = false;
     var headerHost = null, editorHost = null, chainPickerHost = null, visualHost = null, visualIdentityHost = null;
     var visualStatusHost = null, chartHost = null, commandHost = null, resultHost = null;
-    var modeButtons = {}, visualTimer = null, terminalTimer = null;
+    var modeButtons = {}, visualTimer = null, terminalTimer = null, identityTimer = null;
+    var liveIdentity = null, liveIdentityFingerprint = null, identityToken = 0;
 
     function markResultStale(reason) {
       if (!resultHost || !resultHost.hasChildNodes()) return;
@@ -418,6 +419,7 @@
       stores[key] = JSON.parse(JSON.stringify(draft));
       if (window.Workspace) Workspace.save();
       if (typeof options.onStateChange === 'function') options.onStateChange(draft);
+      scheduleIdentity();
     }
 
     function showInputError(error) {
@@ -480,6 +482,62 @@
     function scheduleVisual() {
       if (visualTimer) clearTimeout(visualTimer);
       visualTimer = setTimeout(refreshVisual, 120);
+    }
+
+    function identityRequest() {
+      if (draft.terminalDirty) return null;
+      try {
+        var analyzed = normalizedForAnalysis(draft);
+        var payload = { symbol: analyzed.symbol, qty: analyzed.qty, legs: analyzed.legs };
+        return { payload: payload, fingerprint: JSON.stringify(payload) };
+      } catch (ignored) { return null; }
+    }
+
+    function renderIdentity(currentFingerprint, analysisCurrent) {
+      if (!visualIdentityHost || !visualIdentityHost.isConnected) return;
+      var request = identityRequest();
+      var liveCurrent = request && liveIdentity && liveIdentityFingerprint === request.fingerprint;
+      var identified = analysisCurrent && lastAnalysis.identity || liveCurrent && liveIdentity || {
+        family: null, label: 'Your exact package', blockedByDefault: false,
+        summary: request
+          ? 'Matching the exact legs to the strategy catalog…'
+          : 'Complete each option strike and expiration to identify the structure. The payoff keeps using every defensible leg price already on screen.'
+      };
+      visualIdentityHost.innerHTML = '';
+      visualIdentityHost.appendChild(el('div', { class: 'position-identity' },
+        el('span', { class: 'eyebrow' }, UI.vocabulary('hypothetical'),
+          analysisCurrent || liveCurrent ? ' · STRUCTURE IDENTIFIED' : ' POSITION'),
+        el('h3', {}, identified.label),
+        identified.summary ? el('p', { class: 'muted small' }, identified.summary) : null,
+        identified.blockedByDefault ? UI.alertBox('caution', 'Shown for learning, blocked by default', [
+          'The exact structure remains analyzable. Practice placement keeps its existing safety block; recording an actual broker fact is never refused for being risky.'
+        ]) : null));
+    }
+
+    function scheduleIdentity() {
+      if (identityTimer) clearTimeout(identityTimer);
+      var request = identityRequest();
+      if (!request) {
+        identityToken++;
+        liveIdentity = null; liveIdentityFingerprint = null;
+        renderIdentity(draftFingerprint(draft), false);
+        return;
+      }
+      if (liveIdentity && liveIdentityFingerprint === request.fingerprint) return;
+      identityTimer = setTimeout(function () {
+        var token = ++identityToken;
+        API.post('/api/strategies/identify', request.payload).then(function (identity) {
+          if (token !== identityToken) return;
+          var current = identityRequest();
+          if (!current || current.fingerprint !== request.fingerprint) return;
+          liveIdentity = identity; liveIdentityFingerprint = request.fingerprint;
+          renderIdentity(draftFingerprint(draft), false);
+        }).catch(function () {
+          if (token !== identityToken) return;
+          liveIdentity = null; liveIdentityFingerprint = null;
+          renderIdentity(draftFingerprint(draft), false);
+        });
+      }, 250);
     }
 
     function bind(input, target, keyName, onChange) {
@@ -613,19 +671,8 @@
       if (!visualHost || !visualHost.isConnected || !visualIdentityHost || !chartHost) return;
       var currentFingerprint = draftFingerprint(draft);
       var analysisCurrent = !!lastAnalysis && lastAnalysisFingerprint === currentFingerprint && !draft.terminalDirty;
-      var identified = analysisCurrent && lastAnalysis.identity || {
-        family: null, label: 'Your exact package', blockedByDefault: false,
-        summary: 'The payoff updates from the legs and defensible prices on screen. Analyze to name the structure and use these exact contracts in this Plan.'
-      };
-      visualIdentityHost.innerHTML = '';
       var payoffUnavailable = localPayoffUnavailableReason(draft);
-      visualIdentityHost.appendChild(el('div', { class: 'position-identity' },
-        el('span', { class: 'eyebrow' }, analysisCurrent ? 'IDENTIFIED STRUCTURE' : 'YOUR TRADE'),
-        el('h3', {}, identified.label),
-        identified.summary ? el('p', { class: 'muted small' }, identified.summary) : null,
-        identified.blockedByDefault ? UI.alertBox('caution', 'Shown for learning, blocked by default', [
-          'The exact structure remains analyzable. Practice placement keeps its existing safety block; recording an actual broker fact is never refused for being risky.'
-        ]) : null));
+      renderIdentity(currentFingerprint, analysisCurrent);
       draft.legs.forEach(function (leg) {
         if (!market || leg.instrumentType !== 'OPTION' || !leg.expiration) return;
         var cacheKey = market.symbol + '|' + leg.expiration;
@@ -816,18 +863,24 @@
         response.maxProfitCents != null ? UI.stat('Theoretical max profit', fmtMoney(response.maxProfitCents)) : null,
         canonicalPop == null ? null : UI.stat('Chance of profit', UI.fmtPct(canonicalPop))));
       var evidence = response.evidence;
-      if (evidence) resultHost.appendChild(el('p', { class: 'muted small position-coverage' },
-        'Coverage receipt: ' + [evidence.provenance, evidence.age, evidence.source].filter(Boolean).join(' · ') + '.'));
-      if (economics) resultHost.appendChild(el('div', { class: 'chip-row' }, chip('Economic verdict', economics.verdict),
+      if (evidence) resultHost.appendChild(el('div', { class: 'position-coverage' },
+        el('span', { class: 'muted small' }, 'Pricing evidence '), UI.evidenceBadge(evidence)));
+      if (economics) resultHost.appendChild(el('div', { class: 'chip-row' }, chip('Economic view',
+        economics.label || UI.economicVerdictLabel(economics.verdict)),
         economics.marketEvAfterCostsCents == null ? null : chip('Market-implied EV after costs', fmtMoney(economics.marketEvAfterCostsCents, { plus: true }))));
       if (analysis && window.ViewPlan && window.ViewPlan.decisionMetricsReceipt) {
         resultHost.appendChild(window.ViewPlan.decisionMetricsReceipt(analysis, Learn.currentLevel() === 'beginner'));
       }
-      if (out && out.marketLane) resultHost.appendChild(el('p', { class: 'muted small position-account-basis' },
-        (out.accountName ? out.accountName + ' · ' : '') + out.marketLane + ' market · ' + (out.note || 'Account-specific read-only analysis.')));
+      if (out && out.marketLane) resultHost.appendChild(el('div', { class: 'position-account-basis' },
+        out.accountName ? el('span', { class: 'muted small' }, out.accountName + ' · ') : null,
+        UI.evidenceBadge({ provenance: out.marketLane }, { compact: true }),
+        el('span', { class: 'muted small' }, ' · ' + (out.note || 'Account-specific read-only analysis.'))));
       var fillBases = Array.from(new Set((response.legs || []).map(function (leg) { return leg.fillBasis; }).filter(Boolean)));
       if (fillBases.length) resultHost.appendChild(el('p', { class: 'muted small position-fill-basis' },
-        'Entry-price receipt: ' + fillBases.map(function (basis) { return String(basis).replaceAll('_', ' ').toLowerCase(); }).join(' + ') + '.'));
+        'Entry-price receipt: ' + fillBases.map(function (basis) { return ({
+          USER_EXECUTED: 'entered broker fill', USER_PROPOSED: 'entered proposed price',
+          EXECUTABLE_BOOK: 'current executable book', LABELED_MODEL_OR_MID: 'labeled model or midpoint'
+        })[String(basis).toUpperCase()] || 'labeled price input'; }).join(' + ') + '.'));
       if (options.planId && response.ok !== false && selected && selected.selected === true) resultHost.appendChild(el('button', { type: 'button', class: 'btn',
         onclick: function () { App.navigate('#/plan/' + options.planId + '/outcomes'); } }, 'Continue to Outcomes'));
       revealResult();
@@ -847,7 +900,7 @@
       var savedAnalysis = selected.evaluation;
       var savedEconomics = savedAnalysis && savedAnalysis.assessment && savedAnalysis.assessment.economics;
       if (savedEconomics) resultHost.appendChild(el('div', { class: 'chip-row' },
-        chip('Economic verdict', savedEconomics.verdict),
+        chip('Economic view', savedEconomics.label || UI.economicVerdictLabel(savedEconomics.verdict)),
         savedEconomics.marketEvAfterCostsCents == null ? null
           : chip('Market-implied EV after costs', fmtMoney(savedEconomics.marketEvAfterCostsCents, { plus: true }))));
       if (savedAnalysis && window.ViewPlan && window.ViewPlan.decisionMetricsReceipt) {
@@ -942,7 +995,7 @@
       resultHost.innerHTML = '';
       var first = similar[0];
       resultHost.appendChild(UI.actionFeedback('caution', 'A similar position already exists',
-        'Similarity is advisory, never idempotency. A second position may be an intentional scale-in.'));
+        'These records look alike, but StrikeBench will not merge them. A second position may be an intentional scale-in.'));
       resultHost.appendChild(el('p', {}, first.label || first.symbol || 'Existing position'));
       resultHost.appendChild(el('div', { class: 'btn-row' },
         el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () {
@@ -1022,8 +1075,7 @@
         el('div', {}, el('span', { class: 'eyebrow' }, 'YOUR TRADE'),
           el('h3', {}, options.title || 'Build, analyze, or record the exact package'),
           el('p', { class: 'muted' }, options.description || 'The edited legs are shared. Analyze may fill evidence gaps; Record accepts factual broker fills only.')),
-        el('div', {}, mode, Learn.currentLevel() === 'expert'
-          ? el('span', { class: 'muted small position-mode-key' }, 'Keyboard: Alt+V') : null)));
+        el('div', {}, mode)));
     }
 
     function refreshChainPicker() {
@@ -1171,6 +1223,7 @@
         root.insertBefore(rejected, root.children[1]); rejectedDraftReason = null;
       }
       refreshVisual();
+      scheduleIdentity();
       if (lastAnalysis && lastAnalysisFingerprint === draftFingerprint(draft)) renderAnalysis(lastAnalysis);
       else renderDurableSelection();
       ensureMarket();

@@ -75,7 +75,7 @@ public final class ScoreComposer {
         String capNote;
         if (cap.returnOnCapitalPct() != null) {
             capComp = clamp01(cap.returnOnCapitalPct() / (cap.returnOnCapitalPct() + 50.0));
-            capNote = String.format("%.0f%% best-case return on economic capital", cap.returnOnCapitalPct());
+            capNote = String.format("%.0f%% best-case return on economic exposure", cap.returnOnCapitalPct());
         } else { capComp = 0.4; capNote = "return on capital not defined"; }
         comps.add(comp("Capital efficiency", 0.05, capComp, capNote));
 

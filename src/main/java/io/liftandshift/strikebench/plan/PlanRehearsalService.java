@@ -87,12 +87,12 @@ public final class PlanRehearsalService {
                 Map.of(plan.symbol(), stored.ensemble().spec().volAnnual()), Map.of(plan.symbol(), ivPath[0]));
         Map<String, Object> anchor = new LinkedHashMap<>();
         anchor.put("symbol", plan.symbol()); anchor.put("price", spotPath[0]);
-        anchor.put("source", "Plan ensemble " + stored.id()); anchor.put("sourceTimestamp", stored.asOf());
+        anchor.put("source", "Plan's saved possible futures"); anchor.put("sourceTimestamp", stored.asOf());
         anchor.put("basis", stored.basis()); anchor.put("freshness", stored.anchorFreshness());
         Map<String, Object> anchorDoc = new LinkedHashMap<>();
         anchorDoc.put("anchors", List.of(anchor)); anchorDoc.put("excluded", List.of());
         anchorDoc.put("pending", List.of());
-        anchorDoc.put("note", "Exact Plan rehearsal · path " + index + " · receipt " + stored.fingerprint());
+        anchorDoc.put("note", "Exact Plan rehearsal · stored path " + (index + 1));
 
         SimulationSessions.SessionHook hook = (c, worldId, accountId) -> {
             PlanWriteGuard.requireMutable(c, plan.id(), userId);
@@ -170,8 +170,8 @@ public final class PlanRehearsalService {
                 .findFirst().orElse(new Long[]{null, null});
         long start = Math.round(replay.spotAt(0) * 100);
         long end = Math.round(replay.spotAt(replay.durationSeconds()) * 100);
-        String note = "Exact path " + (replay.pathIndex() + 1) + " (" + replay.selection().toLowerCase(Locale.ROOT)
-                + ") from Plan ensemble " + replay.ensembleId() + " · receipt " + replay.fingerprint();
+        String note = "Completed " + selectionLabel(Selection.valueOf(replay.selection())) + " "
+                + (replay.pathIndex() + 1) + " from this Plan's saved possible futures";
         Db.execOn(c, "INSERT INTO plan_management_action(id,plan_id,decision_id,sim_session_id,kind,action_at," +
                         "underlying_cents,realized_cents,mae_cents,mfe_cents,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 Ids.newId("pmgt"), planId, decisionId, worldId, "REHEARSAL_RESULT", now, end, realized,

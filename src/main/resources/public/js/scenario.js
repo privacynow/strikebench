@@ -521,8 +521,7 @@
 
     root.appendChild(el('div', { class: 'scenario-sampling muted small' },
       'Sampling check: ' + p.paths.toLocaleString() + ' paths · worst-case 95% probability margin about ±'
-      + (Number(d.maxProbabilityMargin95 || 0) * 100).toFixed(1) + ' percentage points · receipt '
-      + (p.receipt && p.receipt.fingerprint || 'unavailable') + '.'));
+      + (Number(d.maxProbabilityMargin95 || 0) * 100).toFixed(1) + ' percentage points · reproducible run saved.'));
 
     if (p.positionOutcome) {
       root.appendChild(el('div', { class: 'scenario-position-outcome' },

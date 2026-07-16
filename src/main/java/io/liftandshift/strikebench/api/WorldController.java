@@ -589,9 +589,9 @@ final class WorldController {
         String note;
         if (replay.get("rehearsal") instanceof Map<?, ?> source) {
             note = "This session replayed exact path " + (((Number) source.get("pathIndex")).intValue() + 1) + " ("
-                    + String.valueOf(source.get("selection")).toLowerCase(Locale.ROOT) + ") from Plan ensemble "
-                    + source.get("ensembleId") + " · receipt " + source.get("fingerprint")
-                    + ". Prices and IV follow that stored realization; outcomes measure management decisions, not a forecast.";
+                    + String.valueOf(source.get("selection")).toLowerCase(Locale.ROOT) + ") from this Plan's saved futures. "
+                    + "The exact source identity remains in the durable receipt. Prices and IV follow that stored realization; "
+                    + "outcomes measure management decisions, not a forecast.";
         } else {
             note = "Every price in this world was generated (model " + replay.getOrDefault("modelVersion", "sim-1")
                     + ", seed " + w.config().seed() + ", scenario " + w.config().scenario() + ")"

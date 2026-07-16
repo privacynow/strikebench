@@ -169,6 +169,26 @@ class ApiIntegrationTest {
     }
 
     @Test
+    @Order(4)
+    void exactLegIdentityUsesTheServerCatalogWithoutPricingOrPersistence() throws Exception {
+        HttpResponse<String> response = post("/api/strategies/identify", """
+                {"symbol":"AAPL","qty":1,"legs":[
+                  {"action":"BUY","type":"CALL","strike":"250","expiration":"2026-08-21",
+                   "ratio":1,"entryPrice":null,"multiplier":100,"positionEffect":"OPEN"},
+                  {"action":"SELL","type":"CALL","strike":"260","expiration":"2026-08-21",
+                   "ratio":1,"entryPrice":null,"multiplier":100,"positionEffect":"OPEN"}
+                ]}
+                """);
+        assertThat(response.statusCode()).isEqualTo(200);
+        JsonNode identity = Json.parse(response.body());
+        assertThat(identity.get("family").asText()).isEqualTo("DEBIT_CALL_SPREAD");
+        assertThat(identity.get("label").asText()).isEqualTo("Bull call (debit) spread");
+
+        assertThat(post("/api/strategies/identify", "{\"symbol\":\"AAPL\",\"qty\":1,\"legs\":[]}")
+                .statusCode()).isEqualTo(400);
+    }
+
+    @Test
     @Order(5)
     void recommendReturnsCandidatesAndRejectsNaked() throws Exception {
         HttpResponse<String> res = get("/api/welcome/teaching-example");

@@ -107,7 +107,7 @@
       expert: 'Caps the engine\u2019s per-trade budget when declared and adds a required server-side acknowledgment above it.' },
     filterloss: { short: 'This is an extra hard ceiling below the header budget; leave it blank to use the header setting.',
       beginner: 'Use it when this particular idea deserves a tighter dollar limit than your normal risk setting. Ideas above it are refused with the exact amount shown.',
-      expert: 'Absolute candidate max-loss cap. It composes with the server-owned risk-mode/declared-capital budget by taking the tighter eligible limit.' },
+      expert: 'Absolute candidate max-loss cap. It composes with the Plan’s saved risk mode and declared-capital budget by taking the tighter eligible limit.' },
     filterpop: { short: 'Raising this rejects more trades, but a high modeled chance alone does not make a trade good.',
       beginner: 'This is a minimum for making anything at expiration, even $1. Keep checking costs, full-loss odds and expected value; a high chance can hide a poor payoff.',
       expert: 'Hard minimum risk-neutral P(profit). Applied after executable-side construction; it does not supersede EV, tail risk, evidence or the Decision score.' },

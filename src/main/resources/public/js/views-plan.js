@@ -51,6 +51,25 @@
     return economics ? economics.verdict : null;
   }
 
+  function planActionLabel(value) {
+    return ({ ENTRY: 'Opened', MARK: 'Marked', ADJUST: 'Adjusted', ROLL: 'Rolled',
+      PARTIAL_CLOSE: 'Partially closed', CLOSE: 'Closed', SETTLE: 'Settled', VOID: 'Voided',
+      EXPIRATION: 'Expired', ASSIGNMENT: 'Assigned', EXERCISE: 'Exercised',
+      REHEARSAL: 'Rehearsed' })[String(value || '').toUpperCase()] || 'Plan update';
+  }
+
+  function reviewLabel(value) {
+    return ({ CASH_DECISION: 'Cash decision', TRADE_DECISION: 'Trade decision', SIM_REHEARSAL: 'Simulation rehearsal', CASH: 'Cash',
+      STOCK: 'Shares', REJECTED_STRATEGY: 'Rejected position', PLAN_POSITION: 'Plan position' })[
+      String(value || '').toUpperCase()] || 'Plan comparison';
+  }
+
+  function managementRuleLabel(value) {
+    return ({ TAKE_PROFIT: 'Take profit', STOP_LOSS: 'Limit loss', TIME_EXIT: 'Time-based exit',
+      ROLL: 'Consider rolling', ASSIGNMENT: 'Assignment plan', EXPIRATION: 'Expiration plan' })[
+      String(value || '').toUpperCase()] || 'Management rule';
+  }
+
   function candidateEconomics(c) {
     return c && c.evaluation && c.evaluation.assessment
       ? c.evaluation.assessment.economics : null;
@@ -88,7 +107,7 @@
       : v === 'UNAVAILABLE' ? 'economic-unavailable' : 'economic-mixed';
     var block = el('div', { class: 'economic-assessment ' + cls, 'data-economic-verdict': v },
       el('div', { class: 'economic-assessment-head' },
-        el('span', { class: 'badge' }, e.label || v)),
+        el('span', { class: 'badge' }, e.label || UI.economicVerdictLabel(v))),
       el('p', {}, e.summary || ''),
       el('div', { class: 'chip-row economic-ev-lanes' },
         chip(el('span', {}, 'Market-implied EV', UI.info('ev')),
@@ -125,7 +144,7 @@
       return el('div', { class: 'candidate-management-receipt' },
         management.summary ? el('p', {}, management.summary) : null,
         el('ul', { class: 'plan-rules' }, management.rules.map(function (rule) {
-          return el('li', {}, el('b', {}, String(rule.kind || 'Rule').replaceAll('_', ' ').toLowerCase() + ': '),
+          return el('li', {}, el('b', {}, managementRuleLabel(rule.kind) + ': '),
             rule.trigger, ' → ', el('span', { class: 'plan-action' }, rule.action));
         })));
     }, { open: !!open });
@@ -220,6 +239,15 @@
       el('div', { class: 'eyebrow' }, beginner ? 'WHAT THIS POSITION ACTUALLY EXPRESSES' : 'POSITION STANCE'),
       participation ? el('p', { class: 'participation-headline' }, participationSentence(participation)) : null,
       implied ? el('p', { class: 'muted' }, implied.summary) : null);
+    if (capital.economicCents != null || stance) wrap.appendChild(el('div', { class: 'chip-row decision-risk-strip' },
+      capital.economicCents == null ? null
+        : chip(UI.vocabulary('economicExposure'), fmtMoney(capital.economicCents)),
+      !stance || stance.downsideLossTwoSigmaCents == null
+        ? null : chip(el('span', {}, UI.vocabulary('scenarioLoss'), ' · down 2σ'),
+          fmtMoney(stance.downsideLossTwoSigmaCents)),
+      !stance || stance.upsideLossTwoSigmaCents == null
+        ? null : chip(el('span', {}, UI.vocabulary('scenarioLoss'), ' · up 2σ'),
+          fmtMoney(stance.upsideLossTwoSigmaCents))));
     if (iv && iv.entrySide === 'DEBIT') {
       if (iv.band === 'HIGH' || iv.band === 'VERY_HIGH') {
         wrap.appendChild(UI.actionFeedback('caution', 'Volatility is expensive for this debit', iv.message));
@@ -242,11 +270,7 @@
       chip('Dollar delta', fmtMoney(stance.dollarDeltaCents, { plus: true })),
       chip('\u0394 delta / 1% move', fmtMoney(stance.gammaDollarDeltaCentsPerOnePercentMove, { plus: true })),
       chip('Vega / vol point', fmtMoney(stance.vegaCentsPerVolPoint, { plus: true })),
-      chip('Theta / day', fmtMoney(stance.thetaCentsPerDay, { plus: true })),
-      stance.downsideLossTwoSigmaCents == null ? chip('Down 2\u03c3 loss', 'Path model required')
-        : chip('Down 2\u03c3 loss', fmtMoney(stance.downsideLossTwoSigmaCents)),
-      stance.upsideLossTwoSigmaCents == null ? chip('Up 2\u03c3 loss', 'Path model required')
-        : chip('Up 2\u03c3 loss', fmtMoney(stance.upsideLossTwoSigmaCents))));
+      chip('Theta / day', fmtMoney(stance.thetaCentsPerDay, { plus: true }))));
     if (participation) wrap.appendChild(UI.expandable('Participation definitions and regime points', function () {
       return el('div', {},
         el('p', {}, el('b', {}, 'Local: '), participation.localBasis),
@@ -512,7 +536,7 @@
     }
     var COLS = [
       { key: 'rank', label: '#', get: function (c) { return rankOf.get(c); }, render: function (c) { return el('span', { class: 'muted', title: 'Rank in the served ordering (best first)' }, '#' + rankOf.get(c)); } },
-      { key: 'economicVerdict', label: 'Economic view', get: economicRank, render: function (c) { var v = economicVerdict(c), e = candidateEconomics(c); return el('span', { class: 'badge economic-table-' + String(v || 'unknown').toLowerCase() }, (e && e.label) || v || '—'); } },
+      { key: 'economicVerdict', label: 'Economic view', get: economicRank, render: function (c) { var v = economicVerdict(c), e = candidateEconomics(c); return el('span', { class: 'badge economic-table-' + String(v || 'unknown').toLowerCase() }, (e && e.label) || UI.economicVerdictLabel(v)); } },
       { key: 'displayName', label: 'Strategy', get: function (c) { return c.displayName; }, render: function (c) { return el('b', {}, c.displayName); } },
       { key: 'entryNetPremiumCents', label: 'Cost/Credit', get: function (c) { return c.entryNetPremiumCents; }, render: function (c) { return pnlSpan(c.entryNetPremiumCents); } },
       { key: 'maxLossCents', label: 'Theor. max loss', get: function (c) { return c.usesHeldShares && c.combinedMaxLossCents ? c.combinedMaxLossCents : c.maxLossCents; }, render: function (c) { return c.usesHeldShares && c.maxLossCents === 0 ? el('span', {}, '$0*') : el('span', { class: 'loss' }, fmtMoney(c.maxLossCents)); } },
@@ -635,11 +659,7 @@
           el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)),
           plan.intent ? intentBadge(plan.intent) : el('span', { class: 'badge badge-dim' }, 'Intent not chosen'),
           context.horizonDays ? chip('Horizon', context.horizonDays + ' trading sessions') : null,
-          context.targetCents ? chip('Target', fmtMoney(context.targetCents)) : null),
-        provisional ? null : el('div', { class: 'plan-header-receipt expert-only', 'aria-label': 'Plan identity receipt' },
-          el('span', {}, 'Plan v' + plan.version),
-          el('span', {}, 'Context r' + ((context && context.rev) || 1)),
-          el('span', {}, String(plan.status || 'ACTIVE').replaceAll('_', ' ').toLowerCase()))),
+          context.targetCents ? chip('Target', fmtMoney(context.targetCents)) : null)),
       provisional ? null : el('div', { class: 'plan-header-actions' },
         el('button', { type: 'button', class: 'btn btn-sm btn-secondary', id: 'plan-edit-context',
           onclick: function () {
@@ -882,9 +902,7 @@
         el('p', { class: 'muted' }, copy.body),
         el('div', { class: 'plan-stage-carry', 'aria-label': 'Context carried into this stage' },
           el('span', { class: 'plan-stage-carry-label' }, 'Carried into this step'),
-          el('span', { class: 'plan-stage-carry-value' }, carried),
-          el('span', { class: 'plan-stage-carry-receipt expert-only' },
-            'context r' + (context.rev || 1) + ' · plan v' + plan.version))),
+          el('span', { class: 'plan-stage-carry-value' }, carried))),
       content));
     return content;
   }
@@ -1865,13 +1883,11 @@
   function planProposalComparisonView(comparison, planRef, ui) {
     if (!comparison) return null;
     var items = comparison.items || [];
-    var fingerprint = comparison.ensembleFingerprint || '';
     function economicsBadge(item) {
       if (item.key === 'CASH') return el('span', { class: 'badge badge-dim' }, 'CASH BASELINE');
       var verdict = item.economicVerdict || 'UNAVAILABLE';
-      var labels = { FAVORABLE: 'FAVORABLE', MIXED: 'MIXED', UNFAVORABLE: 'UNFAVORABLE', UNAVAILABLE: 'INCOMPLETE' };
       var classes = { FAVORABLE: 'badge-ok', MIXED: 'badge-caution', UNFAVORABLE: 'badge-danger', UNAVAILABLE: 'badge-dim' };
-      return el('span', { class: 'badge ' + classes[verdict] }, 'BOOK: ' + labels[verdict]);
+      return el('span', { class: 'badge ' + classes[verdict] }, 'MARKET VIEW: ' + UI.economicVerdictLabel(verdict));
     }
     function reviewAction(item) {
       if (!item.candidateId) return null;
@@ -1943,7 +1959,7 @@
       el('div', { class: 'plan-section-head' }, el('div', {}, el('span', { class: 'eyebrow' }, 'SAME PATHS · DIFFERENT STRUCTURES'),
         el('h3', {}, 'Which proposal handles this evidence best?'),
         el('p', { class: 'muted' }, comparison.interpretation || 'Every proposal used one exact path ensemble.')),
-        fingerprint ? el('span', { class: 'badge badge-dim mono' }, 'RECEIPT ' + fingerprint.slice(0, 12) + '…') : null),
+        comparison.ensembleFingerprint ? el('span', { class: 'badge badge-dim' }, 'STORED FUTURES VERIFIED') : null),
       el('p', { class: 'muted small' }, 'The BOOK badge preserves the option-market economic assessment. The figures below answer a separate question: how each package behaved on this one shared evidence set.'),
       leader && leader.key === 'CASH' ? alertBox('caution', 'Cash leads on this outcome lens', [
         'Every valued proposal ranked below the zero-risk, zero-cost baseline after estimated costs. The trades remain available to study; this lens does not endorse them.'
@@ -2094,7 +2110,7 @@
       var status = el('div', { class: 'plan-outcome-action-status', 'aria-live': 'polite' });
       host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Use the Evidence ensemble'),
         el('p', { class: 'muted' }, evidenceUi.planEnsembleFingerprint
-          ? 'Ready: exact stored receipt ' + evidenceUi.planEnsembleFingerprint.slice(0, 12) + '…'
+          ? 'Ready: the exact stored futures are verified and tied to this Plan.'
           : 'If Evidence already ran possible futures, the server restores that exact matrix. Otherwise open Evidence and set the scenario first.'),
         el('div', { class: 'btn-row' },
           el('button', { type: 'button', class: 'btn', onclick: async function () {
@@ -2264,22 +2280,21 @@
   }
 
   function renderFrozenPlanDecision(host, plan, decision, insideManage) {
-    function label(value) { return String(value || '').replaceAll('_', ' ').toLowerCase(); }
     var traded = decision.action === 'TRADE';
     host.appendChild(alertBox(traded ? 'ok' : 'caution',
-      traded ? 'Practice position opened from this Plan' : 'Cash was the decision', [
+      traded ? el('span', {}, UI.vocabulary('practice'), ' position opened from this Plan') : 'Cash was the decision', [
         traded ? 'The exact priced package and account snapshot are frozen beside the linked practice trade.'
           : 'Doing nothing is a first-class decision. The rejected package remains frozen for review against cash.',
         'Decision time: ' + (decision.quoteAsOf || decision.createdAt || 'captured by the server')
       ]));
     host.appendChild(el('div', { class: 'grid grid-4 plan-decision-facts' },
-      stat('Action', traded ? 'TRADE' : 'CASH'),
+      stat('Action', traded ? 'Practice trade' : 'Stayed in cash'),
       stat(UI.vocabulary('theoreticalMaxLoss'), decision.maxLossCents == null ? '—' : fmtMoney(decision.maxLossCents)),
       stat('Chance of any profit', decision.pop == null ? '—' : fmtPct(decision.pop)),
       stat('Market EV after costs', decision.evMarketCents == null ? '—' : pnlSpan(decision.evMarketCents)),
       stat('Realized-vol scenario EV', decision.evHistvolCents == null ? '—' : pnlSpan(decision.evHistvolCents)),
-      stat('Economic placement', label(decision.economicVerdict || 'UNAVAILABLE')),
-      stat('Evidence', label(decision.evidenceProvenance || 'UNKNOWN')),
+      stat('Economic view', UI.economicVerdictLabel(decision.economicVerdict)),
+      stat('Evidence', UI.evidenceBadge(decision.evidenceProvenance || 'MISSING', { compact: true })),
       stat('Buying power at decision', decision.buyingPowerCents == null ? '—' : fmtMoney(decision.buyingPowerCents))));
     if (decision.legs && decision.legs.length) host.appendChild(UI.expandable('Frozen listed contracts', function () {
       function exactPrice(value) { return value == null ? '—' : '$' + String(value); }
@@ -2486,7 +2501,7 @@
         var value = action.realizedCents != null ? pnlSpan(action.realizedCents)
           : action.unrealizedCents != null ? pnlSpan(action.unrealizedCents) : null;
         return el('div', { class: 'status-item' },
-          el('span', { class: 'badge ' + (action.kind === 'CLOSE' || action.kind === 'SETTLE' ? 'badge-ok' : 'badge-dim') }, action.kind),
+          el('span', { class: 'badge ' + (action.kind === 'CLOSE' || action.kind === 'SETTLE' ? 'badge-ok' : 'badge-dim') }, planActionLabel(action.kind)),
           el('span', { class: 'plan-timeline-note' }, action.note || 'Plan action'),
           el('span', { class: 'plan-timeline-value' }, value),
           el('span', { class: 'muted plan-timeline-date' }, UI.fmtDate(action.at)));
@@ -2497,8 +2512,8 @@
       el('p', { class: 'muted' }, 'Plan reviews stay separate from recommendation calibration unless the underlying trade carries observed or broker evidence.'),
       table(['Lane', 'Benchmark', 'Predicted', 'Result'], reviews.map(function (review) {
         return el('tr', {},
-          el('td', {}, String(review.category || '').replaceAll('_', ' ').toLowerCase()),
-          el('td', {}, String(review.benchmarkKind || '').replaceAll('_', ' ').toLowerCase()),
+          el('td', {}, reviewLabel(review.category)),
+          el('td', {}, reviewLabel(review.benchmarkKind)),
           el('td', {}, review.predictedPop == null ? '—' : fmtPct(review.predictedPop)),
           el('td', {}, review.realizedCents == null ? '—' : pnlSpan(review.realizedCents)));
       }))));
@@ -2596,9 +2611,9 @@
             'These are exact paths selected from this Plan’s stored ensemble. They practice decisions; they do not add probability evidence.'),
           rehearsals.map(function (item) {
             return el('div', { class: 'status-item' },
-              el('span', { class: 'badge ' + (item.status === 'FINISHED' ? 'badge-dim' : 'badge-info') }, item.status),
-              el('span', {}, el('b', {}, item.selection.toLowerCase() + ' path ' + (item.pathIndex + 1)),
-                el('span', { class: 'muted small' }, ' · receipt ' + item.fingerprint.slice(0, 12) + '…')),
+              el('span', { class: 'badge ' + (item.status === 'FINISHED' ? 'badge-dim' : 'badge-info') },
+                item.status === 'FINISHED' ? 'Completed' : 'In progress'),
+              el('span', {}, el('b', {}, UI.rehearsalSelectionLabel(item.selection) + ' path ' + (item.pathIndex + 1))),
               el('span', { class: 'spacer' }),
               item.status !== 'FINISHED' ? el('button', { type: 'button', class: 'btn btn-sm', onclick: async function () {
                 App.state.focusSimControlRoom = item.worldId;
@@ -2642,7 +2657,7 @@
       el('div', {}, el('b', {}, 'Frozen at Decide'), el('p', { class: 'muted' },
         'POP ' + (decision.pop == null ? '—' : fmtPct(decision.pop)) + ' · market EV '
           + (decision.evMarketCents == null ? '—' : fmtMoney(decision.evMarketCents, { plus: true }))
-          + ' · ' + String(decision.economicVerdict || 'unavailable').replaceAll('_', ' ').toLowerCase())),
+          + ' · ' + UI.economicVerdictLabel(decision.economicVerdict))),
       el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
         var box = document.getElementById('plan-frozen-decision-detail');
         box.hidden = !box.hidden;
@@ -2755,8 +2770,9 @@
       (fills[2].sessions || []).forEach(function (session) { sessionById[session.id] = session; });
     } catch (e2) { /* Navigation remains available without decorative marks. */ }
 
-    function stageName(plan) {
-      return String(plan.furthestStage || 'UNDERSTAND').replaceAll('_', ' ').toLowerCase();
+  function stageName(plan) {
+      var stage = PLAN_STAGES.find(function (item) { return item.key === (plan.furthestStage || 'UNDERSTAND'); });
+      return stage ? stage.label : 'Understand';
     }
 
     function planTile(plan) {
@@ -2810,7 +2826,7 @@
           (!plan.context || !plan.context.thesis) && planIdentity.duplicate === 'View not set'
             ? chip('View', 'not set') : null,
           plan.context && plan.context.targetCents ? chip('Target', fmtMoney(plan.context.targetCents)) : null,
-          full && decision.economicVerdict ? chip('Decision', String(decision.economicVerdict).toLowerCase()) : null,
+          full && decision.economicVerdict ? chip('Decision', UI.economicVerdictLabel(decision.economicVerdict)) : null,
           full && decision.pop != null ? chip('POP at decision', fmtPct(decision.pop)) : null,
           planIdentity.updated ? el('span', { class: 'muted small plan-updated-at' }, planIdentity.updated) : null,
           live), actions);
@@ -2825,7 +2841,7 @@
           && sessionById[plan.worldId].status === 'FINISHED';
         var quote = sameMarket ? quoteBySymbol[plan.symbol] : null;
         var identity = PlanStore.identity(plan, working);
-        var meta = [String(plan.furthestStage || 'UNDERSTAND').replaceAll('_', ' ').toLowerCase()];
+        var meta = [stageName(plan)];
         if (plan.context && plan.context.horizonDays) meta.push(plan.context.horizonDays + ' sessions');
         if (plan.context && plan.context.thesis) meta.push('View ' + plan.context.thesis);
         else if (identity.duplicate === 'View not set') meta.push('View not set');
