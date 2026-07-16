@@ -134,7 +134,9 @@ class PositionTransformationApiTest {
         request.put("source", "PRACTICE_TRADE");
         request.put("sourceId", tradeId);
         request.put("action", "CLOSE");
-        JsonNode preview = Json.parse(post("/api/position-transformations/preview", request.toString()).body());
+        HttpResponse<String> legPreviewResponse = post("/api/position-transformations/preview", request.toString());
+        assertThat(legPreviewResponse.statusCode()).withFailMessage(legPreviewResponse.body()).isEqualTo(200);
+        JsonNode preview = Json.parse(legPreviewResponse.body());
         request.put("previewToken", preview.get("previewToken").asText() + "00");
 
         HttpResponse<String> response = post("/api/position-transformations/apply", request.toString());
@@ -230,7 +232,9 @@ class PositionTransformationApiTest {
         request.put("sourceId", tradeId);
         request.put("action", "PARTIAL_CLOSE");
         request.put("closeQuantity", 2);
-        JsonNode preview = Json.parse(post("/api/position-transformations/preview", request.toString()).body());
+        HttpResponse<String> legPreviewResponse = post("/api/position-transformations/preview", request.toString());
+        assertThat(legPreviewResponse.statusCode()).withFailMessage(legPreviewResponse.body()).isEqualTo(200);
+        JsonNode preview = Json.parse(legPreviewResponse.body());
         assertThat(preview.at("/transformation/action").asText()).isEqualTo("PARTIAL_CLOSE");
         assertThat(preview.at("/transformation/warnings/0").asText())
                 .contains("2 of 5 packages close").contains("3 survive");
@@ -383,6 +387,200 @@ class PositionTransformationApiTest {
                 .containsExactly(receiptsBefore);
     }
 
+    @Test
+    void legCloseKeepsRetainedFillAndCommitsCashReserveAndReceiptTogether() throws Exception {
+        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
+                .at("/expirations/2").asText();
+        ObjectNode opening = (ObjectNode) Json.parse("""
+                {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","qty":2,
+                 "thesis":"bullish","horizon":"month","riskMode":"conservative",
+                 "source":"POSITION_TRANSFORMATION_LEG_CLOSE_TEST","fillNature":"PROPOSED",
+                 "legs":[
+                   {"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"},
+                   {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(expiration, expiration));
+        JsonNode created = Json.parse(createAcknowledged(opening.toString()).body());
+        String tradeId = created.at("/trade/id").asText();
+        String retainedFill = created.at("/trade/legs/0/entryPrice").asText();
+        JsonNode accountBefore = Json.parse(get("/api/account").body()).get("account");
+        long reserveBefore = outstandingReserve(tradeId);
+
+        ObjectNode request = adjustmentRequest(tradeId, "LEG_CLOSE", expiration,
+                """
+                [{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                  "multiplier":100,"positionEffect":"OPEN"}]
+                """.formatted(expiration), 2);
+        HttpResponse<String> legPreviewResponse = post("/api/position-transformations/preview", request.toString());
+        assertThat(legPreviewResponse.statusCode()).withFailMessage(legPreviewResponse.body()).isEqualTo(200);
+        JsonNode preview = Json.parse(legPreviewResponse.body());
+        assertThat(preview.at("/transformation/action").asText()).isEqualTo("LEG_CLOSE");
+        assertThat(preview.at("/transformation/afterIdentity/family").asText()).isEqualTo("LONG_CALL");
+        assertThat(preview.get("closingCashCents").asLong()).isNegative();
+        assertThat(preview.get("openingCashCents").asLong()).isZero();
+        assertThat(preview.at("/basisNotes/0").asText()).contains("Retained quantities").contains("stored fills");
+        acknowledgeAfter(request, preview);
+        request.put("previewToken", preview.get("previewToken").asText());
+
+        JsonNode applied = Json.parse(post("/api/position-transformations/apply", request.toString()).body());
+        assertThat(applied.at("/trade/id").asText()).isEqualTo(tradeId);
+        assertThat(applied.at("/trade/status").asText()).isEqualTo("ACTIVE");
+        assertThat(applied.at("/trade/legs").size()).isEqualTo(1);
+        assertThat(applied.at("/trade/legs/0/entryPrice").asText()).isEqualTo(retainedFill);
+        assertThat(applied.at("/transformation/action").asText()).isEqualTo("LEG_CLOSE");
+        JsonNode accountAfter = Json.parse(get("/api/account").body()).get("account");
+        assertThat(accountAfter.get("cashCents").asLong()).isEqualTo(accountBefore.get("cashCents").asLong()
+                + preview.get("closingCashCents").asLong() - preview.get("closingFeesCents").asLong());
+        assertThat(outstandingReserve(tradeId)).isEqualTo(preview.at("/transformation/afterRisk/reserveCents").asLong());
+        assertThat(db.query("SELECT transformation_action,position_state FROM position_receipt WHERE id=?",
+                row -> row.str("transformation_action") + "|" + row.str("position_state"),
+                applied.get("receiptId").asText())).containsExactly("LEG_CLOSE|PARTIALLY_CLOSED");
+        assertThat(db.query("SELECT type FROM ledger WHERE trade_id=? ORDER BY id", row -> row.str("type"), tradeId))
+                .contains("PREMIUM_CLOSE", "FEE");
+        assertThat(reserveBefore).isGreaterThanOrEqualTo(outstandingReserve(tradeId));
+    }
+
+    @Test
+    void addAndRemoveStockUseExecutableCashWithoutResettingTheOptionFill() throws Exception {
+        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
+                .at("/expirations/2").asText();
+        ObjectNode opening = (ObjectNode) Json.parse("""
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
+                 "thesis":"bullish","horizon":"month","riskMode":"conservative",
+                 "source":"POSITION_TRANSFORMATION_STOCK_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(expiration));
+        JsonNode created = Json.parse(createAcknowledged(opening.toString()).body());
+        String tradeId = created.at("/trade/id").asText();
+        String optionFill = created.at("/trade/legs/0/entryPrice").asText();
+
+        String withStock = """
+                [{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                  "multiplier":100,"positionEffect":"OPEN"},
+                 {"action":"BUY","type":"STOCK","ratio":100,"multiplier":1,"positionEffect":"OPEN"}]
+                """.formatted(expiration);
+        ObjectNode add = adjustmentRequest(tradeId, "ADD_STOCK", expiration, withStock, 1);
+        HttpResponse<String> addPreviewResponse = post("/api/position-transformations/preview", add.toString());
+        assertThat(addPreviewResponse.statusCode()).withFailMessage(addPreviewResponse.body()).isEqualTo(200);
+        JsonNode addPreview = Json.parse(addPreviewResponse.body());
+        assertThat(addPreview.get("openingCashCents").asLong()).isNegative();
+        acknowledgeAfter(add, addPreview);
+        add.put("previewToken", addPreview.get("previewToken").asText());
+        JsonNode added = Json.parse(post("/api/position-transformations/apply", add.toString()).body());
+        assertThat(added.at("/trade/legs").size()).isEqualTo(2);
+        assertThat(added.at("/trade/legs/0/entryPrice").asText()).isEqualTo(optionFill);
+        assertThat(db.query("SELECT type FROM ledger WHERE trade_id=? ORDER BY id", row -> row.str("type"), tradeId))
+                .contains("STOCK_BUY");
+
+        ObjectNode remove = adjustmentRequest(tradeId, "REMOVE_STOCK", expiration,
+                """
+                [{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                  "multiplier":100,"positionEffect":"OPEN"}]
+                """.formatted(expiration), 1);
+        JsonNode removePreview = Json.parse(post("/api/position-transformations/preview", remove.toString()).body());
+        assertThat(removePreview.get("closingCashCents").asLong()).isPositive();
+        acknowledgeAfter(remove, removePreview);
+        remove.put("previewToken", removePreview.get("previewToken").asText());
+        JsonNode removed = Json.parse(post("/api/position-transformations/apply", remove.toString()).body());
+        assertThat(removed.at("/trade/legs").size()).isEqualTo(1);
+        assertThat(removed.at("/trade/legs/0/entryPrice").asText()).isEqualTo(optionFill);
+        assertThat(db.query("SELECT transformation_action FROM position_receipt WHERE id=?",
+                row -> row.str("transformation_action"), removed.get("receiptId").asText()))
+                .containsExactly("REMOVE_STOCK");
+    }
+
+    @Test
+    void removingACallWingStaysVisibleButCannotApplyTheBlockedFamily() throws Exception {
+        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
+                .at("/expirations/2").asText();
+        String tradeId = Json.parse(createAcknowledged(
+                creditCallSpread(expiration, 1, "POSITION_TRANSFORMATION_HEDGE_TEST").toString()).body())
+                .at("/trade/id").asText();
+        ObjectNode request = adjustmentRequest(tradeId, "REMOVE_LEG", expiration,
+                """
+                [{"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,
+                  "multiplier":100,"positionEffect":"OPEN"}]
+                """.formatted(expiration), 1);
+        HttpResponse<String> hedgePreviewResponse = post("/api/position-transformations/preview", request.toString());
+        assertThat(hedgePreviewResponse.statusCode()).withFailMessage(hedgePreviewResponse.body()).isEqualTo(200);
+        JsonNode preview = Json.parse(hedgePreviewResponse.body());
+        assertThat(preview.at("/transformation/applicable").asBoolean()).isFalse();
+        assertThat(preview.at("/transformation/afterIdentity/family").asText()).isEqualTo("NAKED_CALL");
+        assertThat(preview.at("/transformation/warnings").toString().toLowerCase())
+                .contains("protects").contains("removing").contains("loss per $1 move");
+        request.put("previewToken", preview.get("previewToken").asText());
+        HttpResponse<String> response = post("/api/position-transformations/apply", request.toString());
+        assertThat(response.statusCode()).isEqualTo(422);
+        assertThat(Json.parse(get("/api/trades/" + tradeId).body()).at("/trade/legs").size()).isEqualTo(2);
+    }
+
+    @Test
+    void removingAPutWingCanBecomeAnExplicitlyFundedShortPutInsteadOfFalseUndefinedRisk() throws Exception {
+        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
+                .at("/expirations/2").asText();
+        String tradeId = Json.parse(createAcknowledged(
+                creditPutSpread(expiration, 1, "POSITION_TRANSFORMATION_FUNDED_PUT_TEST").toString()).body())
+                .at("/trade/id").asText();
+        long reserveBefore = outstandingReserve(tradeId);
+        ObjectNode request = adjustmentRequest(tradeId, "REMOVE_LEG", expiration,
+                """
+                [{"action":"SELL","type":"PUT","strike":"250","expiration":"%s","ratio":1,
+                  "multiplier":100,"positionEffect":"OPEN"}]
+                """.formatted(expiration), 1);
+
+        HttpResponse<String> response = post("/api/position-transformations/preview", request.toString());
+        assertThat(response.statusCode()).withFailMessage(response.body()).isEqualTo(200);
+        JsonNode preview = Json.parse(response.body());
+        assertThat(preview.at("/transformation/applicable").asBoolean()).isTrue();
+        assertThat(preview.at("/transformation/afterIdentity/label").asText()).isEqualTo("Short put");
+        assertThat(preview.at("/transformation/afterObligations/putAssignmentCashCents").asLong())
+                .isEqualTo(2_500_000L);
+        assertThat(preview.at("/transformation/afterRisk/reserveCents").asLong()).isGreaterThan(reserveBefore);
+        assertThat(preview.at("/transformation/warnings").toString().toLowerCase())
+                .contains("protects").contains("removing").contains("loss per $1 move");
+    }
+
+    @Test
+    void adjustmentPreviewTokenRejectsAChangedAfterPositionWithoutWritingAnything() throws Exception {
+        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
+                .at("/expirations/2").asText();
+        JsonNode created = Json.parse(createAcknowledged("""
+                {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","qty":2,
+                 "thesis":"bullish","horizon":"month","riskMode":"conservative",
+                 "source":"POSITION_TRANSFORMATION_BODY_TAMPER","fillNature":"PROPOSED",
+                 "legs":[
+                   {"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"},
+                   {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(expiration, expiration)).body());
+        String tradeId = created.at("/trade/id").asText();
+        ObjectNode request = adjustmentRequest(tradeId, "LEG_CLOSE", expiration, """
+                [{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                  "multiplier":100,"positionEffect":"OPEN"}]
+                """.formatted(expiration), 2);
+        JsonNode preview = Json.parse(post("/api/position-transformations/preview", request.toString()).body());
+        request.put("previewToken", preview.get("previewToken").asText());
+        request.withObject("/after").put("qty", 1);
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?",
+                row -> row.lng("n"), tradeId).getFirst();
+        long receiptsBefore = db.query("SELECT COUNT(*) n FROM position_receipt",
+                row -> row.lng("n")).getFirst();
+
+        HttpResponse<String> rejected = post("/api/position-transformations/apply", request.toString());
+
+        assertThat(rejected.statusCode()).isEqualTo(409);
+        assertThat(Json.parse(rejected.body()).path("detail").asText()).contains("stale");
+        assertThat(Json.parse(get("/api/trades/" + tradeId).body()).at("/trade/qty").asInt()).isEqualTo(2);
+        assertThat(Json.parse(get("/api/trades/" + tradeId).body()).at("/trade/legs").size()).isEqualTo(2);
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?",
+                row -> row.lng("n"), tradeId)).containsExactly(ledgerBefore);
+        assertThat(db.query("SELECT COUNT(*) n FROM position_receipt",
+                row -> row.lng("n"))).containsExactly(receiptsBefore);
+    }
+
     private static ObjectNode creditPutSpread(String expiration, int qty, String source) {
         return (ObjectNode) Json.parse("""
                 {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":%d,
@@ -394,6 +592,33 @@ class PositionTransformationApiTest {
                    {"action":"BUY","type":"PUT","strike":"245","expiration":"%s","ratio":1,
                     "multiplier":100,"positionEffect":"OPEN"}]}
                 """.formatted(qty, source, expiration, expiration));
+    }
+
+    private static ObjectNode creditCallSpread(String expiration, int qty, String source) {
+        return (ObjectNode) Json.parse("""
+                {"symbol":"AAPL","strategy":"CREDIT_CALL_SPREAD","qty":%d,
+                 "thesis":"bearish","horizon":"month","riskMode":"conservative",
+                 "source":"%s","fillNature":"PROPOSED",
+                 "legs":[
+                   {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"},
+                   {"action":"BUY","type":"CALL","strike":"265","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(qty, source, expiration, expiration));
+    }
+
+    private static ObjectNode adjustmentRequest(String tradeId, String action, String expiration,
+                                                String legsJson, int qty) {
+        ObjectNode request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("action", action);
+        request.set("after", Json.parse("""
+                {"symbol":"AAPL","strategy":"CUSTOM","qty":%d,
+                 "thesis":"bullish","horizon":"month","riskMode":"conservative",
+                 "source":"POSITION_TRANSFORMATION","fillNature":"PROPOSED","legs":%s}
+                """.formatted(qty, legsJson)));
+        return request;
     }
 
     private static long outstandingReserve(String tradeId) {

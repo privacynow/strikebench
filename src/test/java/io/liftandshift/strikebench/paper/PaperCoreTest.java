@@ -348,6 +348,101 @@ class PaperCoreTest {
     }
 
     @Test
+    void owningLifecycleHookRollsBackTheEntireLegAdjustment() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 1));
+        TradeService.OpenRequest desired = openRequest(account.id(), "AAPL", "CUSTOM", 1,
+                List.of(put(LegAction.SELL, "100", "0")), "bullish", "month", "balanced");
+        TradeService.AdjustmentAssessment preview = trades.previewAdjustment(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.REMOVE_LEG, desired);
+        Account before = accounts.get(account.id());
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+
+        assertThatThrownBy(() -> trades.adjustPosition(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.REMOVE_LEG,
+                preview.exactAfterRequest(), true,
+                (connection, survivor, actionRealized, realizedToDate) -> {
+                    throw new java.sql.SQLException("adjustment receipt failed");
+                }, expectedPosition(opened, preview.current()), expectedAdjustment(preview)))
+                .hasMessageContaining("adjustment receipt failed");
+
+        TradeRecord after = trades.get(opened.id());
+        assertThat(after.legs()).hasSize(2);
+        assertThat(after.entryNetPremiumCents()).isEqualTo(opened.entryNetPremiumCents());
+        assertThat(after.realizedPnlCents()).isNull();
+        assertThat(accounts.get(account.id()).cashCents()).isEqualTo(before.cashCents());
+        assertThat(accounts.get(account.id()).reservedCents()).isEqualTo(before.reservedCents());
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n"))).containsExactly(ledgerBefore);
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
+    void sameContractScaleInKeepsBothFillsAndFinalCloseReconcilesLifetimeRealizedPnl() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 1));
+        assertThat(opened.legs().get(1).entryPrice()).isEqualByComparingTo("1.20");
+        marks.exact.put("PUT95", new MarksSource.LegMark(new BigDecimal("1.30"),
+                new BigDecimal("1.40"), new BigDecimal("1.35"), 0.25, Freshness.FIXTURE));
+        TradeService.OpenRequest desired = openRequest(account.id(), "AAPL", "CUSTOM", 1,
+                List.of(put(LegAction.SELL, "100", "0"),
+                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), EXP, 2, BigDecimal.ZERO)),
+                "bullish", "month", "balanced");
+        TradeService.AdjustmentAssessment preview = trades.previewAdjustment(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ADD_LEG, desired);
+
+        TradeService.AdjustmentResult adjusted = trades.adjustPosition(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ADD_LEG,
+                preview.exactAfterRequest(), true, null,
+                expectedPosition(opened, preview.current()), expectedAdjustment(preview));
+
+        assertThat(adjusted.trade().id()).isEqualTo(opened.id());
+        assertThat(adjusted.trade().legs()).extracting(Leg::entryPrice)
+                .contains(new BigDecimal("1.20"), new BigDecimal("1.40"));
+        assertThat(adjusted.trade().legs().stream()
+                .filter(leg -> leg.type() == OptionType.PUT && leg.strike().compareTo(new BigDecimal("95")) == 0)
+                .mapToInt(Leg::ratio).sum()).isEqualTo(2);
+
+        TradeService.UnwindAssessment closePreview = trades.previewUnwind(opened.id());
+        TradeService.CloseResult closed = trades.unwind(opened.id(), true, null,
+                closePreview.closingCashCents(), closePreview.closingFeesCents());
+        assertThat(closed.actionRealizedPnlCents()).isEqualTo(closePreview.actionRealizedPnlCents());
+        assertThat(closed.realizedPnlCents()).isEqualTo(
+                adjusted.actionRealizedPnlCents() + closePreview.actionRealizedPnlCents());
+        assertThat(closed.trade().realizedPnlCents()).isEqualTo(closed.realizedPnlCents());
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
+    void addedQuantityIsRepricedAtApplyAndAChangedBookRejectsTheWholeAdjustment() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 1));
+        TradeService.OpenRequest desired = openRequest(account.id(), "AAPL", "CUSTOM", 1,
+                List.of(put(LegAction.SELL, "100", "0"),
+                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), EXP, 2, BigDecimal.ZERO)),
+                "bullish", "month", "balanced");
+        TradeService.AdjustmentAssessment preview = trades.previewAdjustment(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ADD_LEG, desired);
+        Account before = accounts.get(account.id());
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+        marks.exact.put("PUT95", new MarksSource.LegMark(new BigDecimal("1.30"),
+                new BigDecimal("1.55"), new BigDecimal("1.425"), 0.25, Freshness.FIXTURE));
+
+        assertThatThrownBy(() -> trades.adjustPosition(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ADD_LEG,
+                preview.exactAfterRequest(), true, null,
+                expectedPosition(opened, preview.current()), expectedAdjustment(preview)))
+                .hasMessageContaining("changed after preview");
+
+        TradeRecord unchanged = trades.get(opened.id());
+        assertThat(unchanged.legs()).hasSize(2);
+        assertThat(unchanged.entryNetPremiumCents()).isEqualTo(opened.entryNetPremiumCents());
+        assertThat(accounts.get(account.id()).cashCents()).isEqualTo(before.cashCents());
+        assertThat(accounts.get(account.id()).reservedCents()).isEqualTo(before.reservedCents());
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n"))).containsExactly(ledgerBefore);
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
     void packageAllocationPreservesEverySignedCentAcrossRepeatedPartialCloses() {
         long positiveFirst = TradeService.allocatedPrefix(10, 3, 1);
         long positiveSecond = TradeService.allocatedPrefix(
@@ -701,6 +796,23 @@ class PaperCoreTest {
         return openRequest(accountId, "AAPL", "CREDIT_PUT_SPREAD", qty,
                 List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
                 "bullish", "month", "balanced");
+    }
+
+    private static TradeService.ExpectedPositionState expectedPosition(
+            TradeRecord trade, TradeService.PositionAssessment current) {
+        return new TradeService.ExpectedPositionState(trade.qty(), trade.entryNetPremiumCents(),
+                trade.feesOpenCents(), trade.maxLossCents(), trade.maxProfitCents(), trade.sharesLocked(),
+                trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(), current.risk().reserveCents());
+    }
+
+    private static TradeService.ExpectedAdjustment expectedAdjustment(TradeService.AdjustmentAssessment preview) {
+        return new TradeService.ExpectedAdjustment(preview.closingCashCents(), preview.openingCashCents(),
+                preview.closingFeesCents(), preview.openingFeesCents(),
+                preview.survivor().preview().entryNetPremiumCents(),
+                preview.survivor().preview().feesOpenCents(), preview.reserveAfterCents(),
+                preview.survivor().preview().maxLossCents(),
+                preview.survivor().preview().maxProfitCents(), preview.sharesLockedAfter(),
+                TradeService.exactPositionFingerprint(preview.exactAfterRequest()));
     }
 
     /** Replays the full ledger and asserts running balances match every row and the account. */

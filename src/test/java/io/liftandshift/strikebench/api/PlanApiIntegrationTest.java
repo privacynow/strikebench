@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.javalin.Javalin;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
@@ -938,6 +939,82 @@ class PlanApiIntegrationTest {
         assertThat(inspectDb.query("SELECT SUM(realized_cents) n FROM plan_management_action "
                         + "WHERE plan_id=? AND kind IN ('PARTIAL_CLOSE','CLOSE')", row -> row.lng("n"), planId))
                 .containsExactly(lifetimeRealized);
+    }
+
+    @Test void planLegAdjustmentWritesOneReceiptActionLinkAndVersionAtomically() throws Exception {
+        assertThat(put("/api/account/risk-context", """
+                {"nlvCents":10000000,"cashBpCents":10000000,"riskCapitalCents":1000000}
+                """).statusCode()).isBetween(200, 299);
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"plan-leg-adjustment","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Leg adjustment lifecycle","thesis":"bullish","horizonDays":30,
+                 "riskMode":"conservative"}
+                """));
+        String planId = plan.get("id").asText();
+        String expiration = json(get("/api/research/AAPL/expirations")).at("/expirations/2").asText();
+        var custom = Json.MAPPER.createObjectNode();
+        custom.put("expectedVersion", plan.get("version").asLong());
+        custom.set("position", Json.parse("""
+                {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","qty":1,
+                 "fillNature":"PROPOSED","legs":[
+                   {"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"},
+                   {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(expiration, expiration)));
+        JsonNode selected = json(post("/api/plans/" + planId + "/strategy/custom", custom.toString()));
+        long selectedVersion = selected.at("/plan/version").asLong();
+        JsonNode decisionPreview = json(post("/api/plans/" + planId + "/decision/preview",
+                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":1}"));
+        var order = Json.MAPPER.createObjectNode();
+        order.put("expectedVersion", selectedVersion);
+        order.put("qty", 1);
+        order.put("proposedNetCents", decisionPreview.at("/order/proposedNetCents").asLong());
+        if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
+        var openingAcks = order.putArray("acknowledgedRisks");
+        decisionPreview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
+        JsonNode opened = json(post("/api/plans/" + planId + "/decision/trade", order.toString()));
+        String tradeId = opened.at("/trade/id").asText();
+        long openVersion = opened.at("/plan/version").asLong();
+
+        var request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("planId", planId);
+        request.put("expectedPlanVersion", openVersion);
+        request.put("action", "REMOVE_LEG");
+        request.set("after", Json.parse("""
+                {"symbol":"AAPL","strategy":"CUSTOM","qty":1,"thesis":"bullish",
+                 "horizon":"month","riskMode":"conservative","source":"POSITION_TRANSFORMATION",
+                 "fillNature":"PROPOSED","legs":[
+                   {"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(expiration)));
+        JsonNode adjustmentPreview = json(post("/api/position-transformations/preview", request.toString()));
+        if (!adjustmentPreview.at("/after/requiredAcks").isEmpty()) {
+            var after = (ObjectNode) request.get("after");
+            var acks = after.putArray("acknowledgedRisks");
+            adjustmentPreview.at("/after/requiredAcks").forEach(ack -> acks.add(ack.get("id").asText()));
+            after.put("ackToken", adjustmentPreview.at("/after/ackToken").asText());
+        }
+        request.put("previewToken", adjustmentPreview.get("previewToken").asText());
+        JsonNode applied = json(post("/api/position-transformations/apply", request.toString()));
+        String receiptId = applied.get("receiptId").asText();
+
+        assertThat(applied.at("/trade/id").asText()).isEqualTo(tradeId);
+        assertThat(applied.at("/trade/legs").size()).isEqualTo(1);
+        assertThat(applied.at("/plan/status").asText()).isEqualTo("POSITION_OPEN");
+        assertThat(applied.at("/plan/version").asLong()).isEqualTo(openVersion + 1);
+        assertThat(applied.at("/management/actions/0/kind").asText()).isEqualTo("ADJUST");
+        assertThat(inspectDb.query("SELECT COUNT(*) n FROM position_receipt WHERE id=? AND plan_id=? "
+                        + "AND transformation_action='REMOVE_LEG'", row -> row.lng("n"), receiptId, planId))
+                .containsExactly(1L);
+        assertThat(inspectDb.query("SELECT COUNT(*) n FROM plan_management_action WHERE plan_id=? "
+                        + "AND receipt_id=? AND kind='ADJUST'", row -> row.lng("n"), planId, receiptId))
+                .containsExactly(1L);
+        assertThat(inspectDb.query("SELECT COUNT(*) n FROM plan_link WHERE plan_id=? AND trade_id=? "
+                        + "AND role='ADJUST'", row -> row.lng("n"), planId, tradeId))
+                .containsExactly(1L);
     }
 
     @Test void voidingAPlanTradeIsRecordedAsVoidRatherThanAnOrdinaryClose() throws Exception {

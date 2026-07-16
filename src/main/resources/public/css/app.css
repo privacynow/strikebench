@@ -519,11 +519,12 @@ body.lvl-expert .not-expert { display: none !important; }
 .position-transformation-fact { min-width: 0; display: grid; gap: 2px; padding: 9px 7px; }
 .position-transformation-fact strong { font-size: 15px; overflow-wrap: anywhere; }
 .position-transformation-note { margin: 10px 0 0; }
-.position-roll-workbench, .position-partial-workbench { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);
+.position-roll-workbench, .position-partial-workbench, .position-adjust-workbench { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);
   scroll-margin-top: calc(var(--sticky-stack-h) + 12px); }
-.position-roll-editor { min-width: 0; }
-.position-roll-result, .position-partial-result { margin-top: 14px; scroll-margin-top: calc(var(--sticky-stack-h) + 12px); }
-.position-roll-review, .position-partial-review { display: grid; gap: 10px; }
+.position-roll-editor, .position-adjust-editor { min-width: 0; }
+.position-roll-result, .position-partial-result, .position-adjust-result { margin-top: 14px; scroll-margin-top: calc(var(--sticky-stack-h) + 12px); }
+.position-roll-review, .position-partial-review, .position-adjust-review { display: grid; gap: 10px; }
+.position-composition-note { margin: 2px 0 0; }
 .position-partial-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, .6fr);
   gap: 18px; align-items: end; }
 .position-partial-controls h3 { margin: 2px 0 5px; font-size: 16px; }

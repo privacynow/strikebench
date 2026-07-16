@@ -14,6 +14,8 @@ import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Clock;
@@ -22,6 +24,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -112,6 +115,34 @@ public final class TradeService {
 
     public record PartialCloseResult(TradeRecord trade, int closedQuantity,
                                      long actionRealizedPnlCents, long realizedPnlCents) {}
+
+    /**
+     * One exact leg/stock adjustment. Retained lots keep their persisted fills; removed lots use
+     * executable closing sides and added lots use executable opening sides from the existing
+     * pricing path. The package-level entry-price adjustment and opening fees are allocated as
+     * accounting basis only, never written back as fabricated per-leg fills.
+     */
+    public record AdjustmentAssessment(PositionAssessment current, PositionAssessment survivor,
+                                       OpenRequest exactAfterRequest,
+                                       long closingCashCents, long openingCashCents,
+                                       long closingFeesCents, long openingFeesCents,
+                                       long allocatedEntryBasisCents, long allocatedOpenFeesCents,
+                                       long actionRealizedPnlCents, long realizedPnlToDateCents,
+                                       long reserveBeforeCents, long reserveAfterCents,
+                                       long sharesLockedAfter,
+                                       long projectedCashAfterCents, long projectedReservedAfterCents,
+                                       long placementCashBeforeCents, long placementReservedBeforeCents,
+                                       List<String> basisNotes) {}
+
+    public record AdjustmentResult(TradeRecord trade, long actionRealizedPnlCents,
+                                   long realizedPnlCents) {}
+
+    public record ExpectedAdjustment(long closingCashCents, long openingCashCents,
+                                     long closingFeesCents, long openingFeesCents,
+                                     long entryNetCents, long feesOpenCents,
+                                     long reserveAfterCents, long maxLossCents,
+                                     Long maxProfitCents, long sharesLocked,
+                                     String legsFingerprint) {}
 
     public record RollResult(TradeRecord closedTrade, TradeRecord replacementTrade,
                              long realizedClosingCents, long actionRealizedClosingCents) {}
@@ -277,6 +308,12 @@ public final class TradeService {
         }
         Plan plan = computePlan(request, false);
         TradePreview preview = previewFromPlan(request, plan, cashBeforeCents, reservedBeforeCents, releasedShares);
+        return assessmentFromPlan(packageId, source, lane, request, plan, preview);
+    }
+
+    private PositionAssessment assessmentFromPlan(String packageId, PositionDomain.PackageSource source,
+                                                  PositionDomain.ExecutionLane lane, OpenRequest request,
+                                                  Plan plan, TradePreview preview) {
         List<Leg> assessedLegs = plan.filledLegs().isEmpty() ? request.legs() : plan.filledLegs();
         PositionDomain.PriceAuthority authority = switch (plan.freshness()) {
             case REALTIME, DELAYED, EOD -> PositionDomain.PriceAuthority.OBSERVED;
@@ -351,6 +388,101 @@ public final class TradeService {
         survivor = new PositionAssessment(survivor.position(), survivor.preview(), bookRisk);
         return new PartialCloseAssessment(current, survivor, closeQuantity, close.cashCents(),
                 close.feesCents(), reserveRelease, actionRealized);
+    }
+
+    /**
+     * Reviews one exact composition change without closing and reopening retained lots. This is the
+     * Practice implementation behind LEG_CLOSE/REMOVE_LEG/ADD_LEG/ADD_STOCK/REMOVE_STOCK.
+     */
+    public AdjustmentAssessment previewAdjustment(String tradeId, PositionTransformation.Action action,
+                                                  OpenRequest desiredAfter) {
+        TradeRecord trade = get(tradeId);
+        requirePracticeTransformation(trade);
+        if (!adjustmentAction(action)) {
+            throw new IllegalArgumentException("action is not a leg or stock adjustment");
+        }
+        if (!TradeRecord.ACTIVE.equals(trade.status())) {
+            throw new IllegalStateException("trade is " + trade.status() + "; only ACTIVE trades can be transformed");
+        }
+        if (desiredAfter == null || !trade.accountId().equals(desiredAfter.accountId())
+                || !trade.symbol().equalsIgnoreCase(desiredAfter.symbol())) {
+            throw new IllegalArgumentException("the surviving position must use the same Practice account and symbol");
+        }
+        if (desiredAfter.heldShares() != (trade.sharesLocked() > 0)) {
+            throw new IllegalArgumentException("leg editing cannot silently add or remove held-share coverage");
+        }
+
+        PositionAssessment current = analyzeActivePosition(tradeId);
+        ReconciledLots reconciled = reconcileLots(trade, desiredAfter);
+        if (reconciled.removed().isEmpty() && reconciled.added().isEmpty()) {
+            throw new IllegalArgumentException("the proposed action does not change the position");
+        }
+
+        List<LegLot> filledAdded = priceAddedLots(trade, reconciled.added());
+        List<LegLot> exactLots = new ArrayList<>(reconciled.retained());
+        exactLots.addAll(filledAdded);
+        if (exactLots.isEmpty()) {
+            throw new IllegalArgumentException("use CLOSE when no position survives");
+        }
+
+        long currentLegCash = cashForLots(lotsFromTrade(trade));
+        long packageAdjustment = Math.subtractExact(trade.entryNetPremiumCents(), currentLegCash);
+        long totalBasisUnits = basisUnits(lotsFromTrade(trade));
+        long removedBasisUnits = basisUnits(reconciled.removed());
+        long allocatedPackageAdjustment = allocatedPrefix(packageAdjustment, totalBasisUnits, removedBasisUnits);
+        long allocatedEntryBasis = Math.addExact(cashForLots(reconciled.removed()), allocatedPackageAdjustment);
+        long remainingPackageAdjustment = Math.subtractExact(packageAdjustment, allocatedPackageAdjustment);
+
+        long allocatedOpenFees = allocatedPrefix(trade.feesOpenCents(), totalBasisUnits, removedBasisUnits);
+        long openingFees = filledAdded.isEmpty() ? 0 : feesFor(canonicalLegs(filledAdded), canonicalQuantity(filledAdded));
+        long closingFees = reconciled.removed().isEmpty() ? 0 : closeFeesForLots(trade, reconciled.removed());
+        long closingCash = reconciled.removed().isEmpty() ? 0 : executableCloseLots(trade, reconciled.removed());
+        long openingCash = cashForLots(filledAdded);
+        long actionRealized = Math.subtractExact(Math.addExact(
+                Math.subtractExact(allocatedEntryBasis, allocatedOpenFees), closingCash), closingFees);
+        long realizedToDate = Math.addExact(trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(),
+                actionRealized);
+
+        int exactQuantity = canonicalQuantity(exactLots);
+        List<Leg> exactLegs = canonicalLegs(exactLots);
+        long exactEntry = Math.addExact(cashForLots(exactLots), remainingPackageAdjustment);
+        long exactOpenFees = Math.addExact(Math.subtractExact(trade.feesOpenCents(), allocatedOpenFees), openingFees);
+        OpenRequest exactAfter = new OpenRequest(trade.accountId(), trade.symbol(), desiredAfter.strategy(),
+                exactQuantity, exactLegs, trade.thesis(), trade.horizon(), trade.riskMode(), trade.intent(),
+                trade.sharesLocked() > 0, exactEntry, exactOpenFees,
+                "POSITION_TRANSFORMATION", "EXECUTED");
+
+        String world = worldOf(trade.accountId());
+        Plan exactPlan = computePlan(exactAfter, true, world, true, laneFor(world), true);
+        Account account = db.with(c -> AccountService.get(c, trade.accountId()));
+        long reserveBefore = db.with(c -> outstandingReserve(c, trade.id()));
+        long projectedCash = Math.subtractExact(Math.addExact(
+                Math.addExact(account.cashCents(), closingCash), openingCash),
+                Math.addExact(closingFees, openingFees));
+        long placementReservedBefore = Math.subtractExact(account.reservedCents(), reserveBefore);
+        long projectedReserved = Math.addExact(placementReservedBefore, exactPlan.reserve());
+        long placementCashBefore = Math.addExact(Math.subtractExact(projectedCash, exactPlan.entryNet()),
+                exactPlan.fees());
+        TradePreview exactPreview = previewFromPlan(exactAfter, exactPlan, placementCashBefore,
+                placementReservedBefore, trade.sharesLocked());
+        PositionAssessment survivor = assessmentFromPlan(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
+                PositionDomain.ExecutionLane.PRACTICE, exactAfter, exactPlan, exactPreview);
+
+        List<String> notes = new ArrayList<>();
+        notes.add("Retained quantities keep their exact stored fills; only changed quantities trade at current executable sides.");
+        if (allocatedPackageAdjustment != 0) {
+            notes.add("The package-level entry-price adjustment contributes " + Money.fmt(allocatedPackageAdjustment)
+                    + " to the removed basis by deterministic quantity allocation. It is accounting basis, not a fabricated leg fill.");
+        }
+        if (allocatedOpenFees != 0) {
+            notes.add(Money.fmt(allocatedOpenFees)
+                    + " of prior opening fees is assigned to the removed quantity; the remainder stays with the open position.");
+        }
+        return new AdjustmentAssessment(current, survivor, exactAfter, closingCash, openingCash,
+                closingFees, openingFees, allocatedEntryBasis, allocatedOpenFees,
+                actionRealized, realizedToDate, reserveBefore, exactPlan.reserve(), exactPlan.sharesToLock(),
+                projectedCash, projectedReserved, placementCashBefore, placementReservedBefore,
+                List.copyOf(notes));
     }
 
     private static OpenRequest activePositionRequest(TradeRecord trade, int quantity, long sharesLocked) {
@@ -745,6 +877,148 @@ public final class TradeService {
         auditSafe(result.trade().accountId(), result.trade().id(), "TRADE_PARTIALLY_CLOSED", "INFO",
                 Map.of("closedQuantity", result.closedQuantity(), "survivingQuantity", result.trade().qty(),
                         "actionRealizedPnlCents", result.actionRealizedPnlCents(),
+                        "realizedPnlToDateCents", result.realizedPnlCents()));
+        return result;
+    }
+
+    /** Applies a signed leg/stock adjustment while retaining the same Practice trade identity. */
+    public AdjustmentResult adjustPosition(String tradeId, PositionTransformation.Action action,
+                                           OpenRequest exactAfter, boolean confirm, LifecycleHook hook,
+                                           ExpectedPositionState expectedPosition,
+                                           ExpectedAdjustment expectedAdjustment) {
+        requireConfirm(confirm, "position adjustment");
+        if (!adjustmentAction(action) || exactAfter == null || expectedAdjustment == null) {
+            throw new IllegalArgumentException("a reviewed leg or stock adjustment is required");
+        }
+        markMemo.invalidate(tradeId);
+        accountSnapshot.invalidateAll();
+        AdjustmentResult result = db.tx(c -> {
+            LockedTrade locked = lockTradeAndAccount(c, tradeId, TradeRecord.ACTIVE);
+            TradeRecord trade = locked.trade();
+            requirePracticeTransformation(trade);
+            long reserveBefore = outstandingReserve(c, trade.id());
+            requireExpectedPosition(trade, reserveBefore, expectedPosition);
+            if (!trade.accountId().equals(exactAfter.accountId())
+                    || !trade.symbol().equalsIgnoreCase(exactAfter.symbol())) {
+                throw new TradeRejectedException(List.of("The reviewed adjustment no longer belongs to this Practice position."));
+            }
+
+            ReconciledLots reconciled = reconcileLots(trade, exactAfter);
+            List<LegLot> added = priceAddedLots(trade, reconciled.added());
+            long closingCash = reconciled.removed().isEmpty() ? 0 : executableCloseLots(trade, reconciled.removed());
+            long closingFees = reconciled.removed().isEmpty() ? 0 : closeFeesForLots(trade, reconciled.removed());
+            long openingCash = cashForLots(added);
+            long totalBasisUnits = basisUnits(lotsFromTrade(trade));
+            long removedBasisUnits = basisUnits(reconciled.removed());
+            long allocatedOpenFees = allocatedPrefix(trade.feesOpenCents(), totalBasisUnits, removedBasisUnits);
+            long openingFees = added.isEmpty() ? 0 : feesFor(canonicalLegs(added), canonicalQuantity(added));
+
+            long currentLegCash = cashForLots(lotsFromTrade(trade));
+            long packageAdjustment = Math.subtractExact(trade.entryNetPremiumCents(), currentLegCash);
+            long allocatedPackageAdjustment = allocatedPrefix(packageAdjustment, totalBasisUnits, removedBasisUnits);
+            long remainingPackageAdjustment = Math.subtractExact(packageAdjustment, allocatedPackageAdjustment);
+            List<LegLot> currentLots = new ArrayList<>(reconciled.retained());
+            currentLots.addAll(added);
+            int currentQuantity = canonicalQuantity(currentLots);
+            long currentEntry = Math.addExact(cashForLots(currentLots), remainingPackageAdjustment);
+            long currentOpenFees = Math.addExact(
+                    Math.subtractExact(trade.feesOpenCents(), allocatedOpenFees), openingFees);
+            OpenRequest currentAfter = new OpenRequest(trade.accountId(), trade.symbol(), exactAfter.strategy(),
+                    currentQuantity, canonicalLegs(currentLots), trade.thesis(), trade.horizon(), trade.riskMode(),
+                    trade.intent(), trade.sharesLocked() > 0, currentEntry, currentOpenFees,
+                    "POSITION_TRANSFORMATION", "EXECUTED");
+
+            String world = worldOf(trade.accountId());
+            Plan exactPlan = computePlan(currentAfter, true, world, true, laneFor(world), true);
+            if (!exactPlan.blocks().isEmpty()) {
+                throw new TradeRejectedException(exactPlan.blocks());
+            }
+            long sharesAfter = exactPlan.sharesToLock();
+            if (sharesAfter > 0) {
+                long freeIncludingCurrent = Math.addExact(
+                        PositionsService.heldShares(c, trade.accountId(), trade.symbol())
+                                - PositionsService.lockedShares(c, trade.accountId(), trade.symbol()),
+                        trade.sharesLocked());
+                if (freeIncludingCurrent < sharesAfter) {
+                    throw new TradeRejectedException(List.of("The adjusted position needs " + sharesAfter
+                            + " free shares of " + trade.symbol() + " but only "
+                            + Math.max(0, freeIncludingCurrent) + " are available."));
+                }
+            }
+            requireExpectedAdjustment(expectedAdjustment, closingCash, openingCash, closingFees,
+                    openingFees, exactPlan, sharesAfter, currentAfter);
+
+            long allocatedEntryBasis = Math.addExact(cashForLots(reconciled.removed()), allocatedPackageAdjustment);
+            long actionRealized = Math.subtractExact(Math.addExact(
+                    Math.subtractExact(allocatedEntryBasis, allocatedOpenFees), closingCash), closingFees);
+            long totalRealized = Math.addExact(trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(),
+                    actionRealized);
+
+            Account account = locked.account();
+            long cash = account.cashCents();
+            long reserved = account.reservedCents();
+            String at = now();
+            if (!reconciled.removed().isEmpty()) {
+                cash = Math.addExact(cash, closingCash);
+                ledgerRow(c, account.id(), trade.id(), at, adjustmentCloseRowType(action, reconciled.removed()),
+                        closingCash, cash, reserved, action + " executable close");
+            }
+            if (closingFees != 0) {
+                cash = Math.subtractExact(cash, closingFees);
+                ledgerRow(c, account.id(), trade.id(), at, "FEE", -closingFees, cash, reserved,
+                        action + " close commissions");
+            }
+            if (!added.isEmpty()) {
+                cash = Math.addExact(cash, openingCash);
+                ledgerRow(c, account.id(), trade.id(), at, adjustmentOpenRowType(action, added),
+                        openingCash, cash, reserved, action + " executable open");
+            }
+            if (openingFees != 0) {
+                cash = Math.subtractExact(cash, openingFees);
+                ledgerRow(c, account.id(), trade.id(), at, "FEE", -openingFees, cash, reserved,
+                        action + " open commissions");
+            }
+            long reserveDelta = Math.subtractExact(exactPlan.reserve(), reserveBefore);
+            if (reserveDelta < 0) {
+                reserved = Math.addExact(reserved, reserveDelta);
+                ledgerRow(c, account.id(), trade.id(), at, "RESERVE_RELEASE", reserveDelta, cash, reserved,
+                        action + " reserve reduction");
+            } else if (reserveDelta > 0) {
+                reserved = Math.addExact(reserved, reserveDelta);
+                ledgerRow(c, account.id(), trade.id(), at, "RESERVE_HOLD", reserveDelta, cash, reserved,
+                        action + " reserve increase");
+            }
+            if (cash - reserved < 0) {
+                throw new TradeRejectedException(List.of("The adjusted position exceeds current Practice buying power."));
+            }
+
+            long closeFeesToDate = Math.addExact(trade.feesCloseCents(), closingFees);
+            long decisionToDate = Math.addExact(trade.decisionPnlCents() == null ? 0 : trade.decisionPnlCents(),
+                    actionRealized);
+            String snapshot = adjustedEntrySnapshot(trade, exactPlan, action, at,
+                    allocatedPackageAdjustment, allocatedOpenFees);
+            Db.execOn(c, "UPDATE trades SET strategy=?,qty=?,legs_json=?::jsonb,entry_net_premium_cents=?," +
+                            "max_loss_cents=?,max_profit_cents=?,breakevens_json=?::jsonb,pop_entry=?," +
+                            "fees_open_cents=?,fees_close_cents=?,realized_pnl_cents=?,decision_pnl_cents=?," +
+                            "shares_locked=?,proposed_net_cents=?,entry_snapshot_json=?::jsonb," +
+                            "data_provenance=?,data_age=?,data_source=?,updated_at=? WHERE id=?",
+                    currentAfter.strategy(), currentAfter.qty(), Json.write(exactPlan.filledLegs()), exactPlan.entryNet(),
+                    exactPlan.maxLoss(), exactPlan.maxProfit(), Json.write(exactPlan.breakevens()), exactPlan.pop(),
+                    exactPlan.fees(), closeFeesToDate, totalRealized, decisionToDate, sharesAfter,
+                    exactPlan.entryNet(), snapshot, entryEvidence(trade.accountId(), exactPlan.freshness()).provenance().name(),
+                    entryEvidence(trade.accountId(), exactPlan.freshness()).age().name(),
+                    entryEvidence(trade.accountId(), exactPlan.freshness()).source(), at, trade.id());
+            Db.execOn(c, "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?",
+                    cash, reserved, at, account.id());
+            TradeRecord survivor = getOn(c, trade.id());
+            if (outstandingReserve(c, trade.id()) != exactPlan.reserve()) {
+                throw new IllegalStateException("Adjusted-position reserve did not reconcile.");
+            }
+            if (hook != null) hook.afterMutation(c, survivor, actionRealized, totalRealized);
+            return new AdjustmentResult(survivor, actionRealized, totalRealized);
+        });
+        auditSafe(result.trade().accountId(), result.trade().id(), "TRADE_POSITION_ADJUSTED", "INFO",
+                Map.of("action", action.name(), "actionRealizedPnlCents", result.actionRealizedPnlCents(),
                         "realizedPnlToDateCents", result.realizedPnlCents()));
         return result;
     }
@@ -2228,6 +2502,244 @@ public final class TradeService {
                     "Broker-recorded positions belong to the tracked book and cannot mutate Practice cash or collateral");
         }
     }
+
+    private static boolean adjustmentAction(PositionTransformation.Action action) {
+        return action == PositionTransformation.Action.LEG_CLOSE
+                || action == PositionTransformation.Action.REMOVE_LEG
+                || action == PositionTransformation.Action.ADD_LEG
+                || action == PositionTransformation.Action.ADD_STOCK
+                || action == PositionTransformation.Action.REMOVE_STOCK;
+    }
+
+    private List<LegLot> priceAddedLots(TradeRecord trade, List<LegLot> additions) {
+        if (additions.isEmpty()) return List.of();
+        List<LegLot> unpriced = additions.stream().map(lot -> new LegLot(new Leg(lot.leg().action(),
+                lot.leg().type(), lot.leg().strike(), lot.leg().expiration(), lot.leg().ratio(),
+                BigDecimal.ZERO, lot.leg().multiplier()), lot.quantity())).toList();
+        int quantity = canonicalQuantity(unpriced);
+        OpenRequest addedRequest = new OpenRequest(trade.accountId(), trade.symbol(), "CUSTOM", quantity,
+                canonicalLegs(unpriced), trade.thesis(), trade.horizon(), trade.riskMode(), trade.intent(),
+                false, null, null, "POSITION_TRANSFORMATION", "PROPOSED");
+        String world = worldOf(trade.accountId());
+        Plan priced = computePlan(addedRequest, false, world, true, laneFor(world), false);
+        if (priced.filledLegs().size() != addedRequest.legs().size()) {
+            List<String> reasons = priced.blocks().isEmpty()
+                    ? List.of("The added quantity has no executable market price.") : priced.blocks();
+            throw new TradeRejectedException(reasons);
+        }
+        return lotsFromLegs(priced.filledLegs(), addedRequest.qty());
+    }
+
+    private static ReconciledLots reconcileLots(TradeRecord trade, OpenRequest desiredAfter) {
+        List<LegLot> current = lotsFromTrade(trade);
+        List<LegLot> target = lotsFromLegs(desiredAfter.legs(), desiredAfter.qty());
+        Map<String, Long> currentAmounts = amounts(current);
+        Map<String, Long> targetAmounts = amounts(target);
+        Map<String, Long> removeNeeded = new LinkedHashMap<>();
+        for (Map.Entry<String, Long> entry : currentAmounts.entrySet()) {
+            removeNeeded.put(entry.getKey(), Math.max(0,
+                    Math.subtractExact(entry.getValue(), targetAmounts.getOrDefault(entry.getKey(), 0L))));
+        }
+        List<LegLot> retained = new ArrayList<>();
+        List<LegLot> removed = new ArrayList<>();
+        for (LegLot lot : current) {
+            String key = contractKey(lot.leg());
+            long remove = Math.min(lot.quantity(), removeNeeded.getOrDefault(key, 0L));
+            if (remove > 0) {
+                removed.add(new LegLot(lot.leg(), remove));
+                removeNeeded.put(key, Math.subtractExact(removeNeeded.get(key), remove));
+            }
+            long keep = Math.subtractExact(lot.quantity(), remove);
+            if (keep > 0) retained.add(new LegLot(lot.leg(), keep));
+        }
+        Map<String, Leg> targetTemplates = new LinkedHashMap<>();
+        for (LegLot lot : target) targetTemplates.putIfAbsent(contractKey(lot.leg()), lot.leg());
+        List<LegLot> added = new ArrayList<>();
+        for (Map.Entry<String, Long> entry : targetAmounts.entrySet()) {
+            long increase = Math.max(0,
+                    Math.subtractExact(entry.getValue(), currentAmounts.getOrDefault(entry.getKey(), 0L)));
+            if (increase > 0) added.add(new LegLot(targetTemplates.get(entry.getKey()), increase));
+        }
+        return new ReconciledLots(List.copyOf(retained), List.copyOf(removed), List.copyOf(added));
+    }
+
+    private static List<LegLot> lotsFromTrade(TradeRecord trade) {
+        return lotsFromLegs(trade.legs(), trade.qty());
+    }
+
+    private static List<LegLot> lotsFromLegs(List<Leg> legs, int packageQuantity) {
+        List<LegLot> out = new ArrayList<>();
+        for (Leg leg : legs) {
+            out.add(new LegLot(leg, Math.multiplyExact(packageQuantity, (long) leg.ratio())));
+        }
+        return List.copyOf(out);
+    }
+
+    private static Map<String, Long> amounts(List<LegLot> lots) {
+        Map<String, Long> out = new LinkedHashMap<>();
+        for (LegLot lot : lots) out.merge(contractKey(lot.leg()), lot.quantity(), Math::addExact);
+        return out;
+    }
+
+    private static String contractKey(Leg leg) {
+        return String.join("|", leg.action().name(), leg.isStock() ? "STOCK" : leg.type().name(),
+                leg.isStock() ? "" : leg.strike().stripTrailingZeros().toPlainString(),
+                leg.expiration() == null ? "" : leg.expiration().toString(), String.valueOf(leg.multiplier()));
+    }
+
+    private static long cashForLots(List<LegLot> lots) {
+        long out = 0;
+        for (LegLot lot : lots) {
+            long amount = Money.centsFromPrice(lot.leg().entryPrice(),
+                    Math.multiplyExact(lot.quantity(), (long) lot.leg().multiplier()));
+            out = Math.addExact(out, lot.leg().action() == LegAction.SELL ? amount : -amount);
+        }
+        return out;
+    }
+
+    private static long basisUnits(List<LegLot> lots) {
+        return lots.stream().mapToLong(LegLot::quantity).sum();
+    }
+
+    private static int canonicalQuantity(List<LegLot> lots) {
+        if (lots.isEmpty()) throw new IllegalArgumentException("a surviving position needs at least one leg");
+        long value = 0;
+        for (LegLot lot : lots) value = gcd(value, lot.quantity());
+        return Math.toIntExact(value);
+    }
+
+    private static List<Leg> canonicalLegs(List<LegLot> lots) {
+        int quantity = canonicalQuantity(lots);
+        return lots.stream().map(lot -> new Leg(lot.leg().action(), lot.leg().type(), lot.leg().strike(),
+                lot.leg().expiration(), Math.toIntExact(lot.quantity() / quantity), lot.leg().entryPrice(),
+                lot.leg().multiplier())).toList();
+    }
+
+    private static long gcd(long a, long b) {
+        a = Math.abs(a); b = Math.abs(b);
+        while (b != 0) { long next = a % b; a = b; b = next; }
+        return a == 0 ? 1 : a;
+    }
+
+    private long executableCloseLots(TradeRecord trade, List<LegLot> removed) {
+        long closeValue = 0;
+        String world = worldOf(trade.accountId());
+        var lane = laneFor(world);
+        for (LegLot lot : removed) {
+            Leg leg = lot.leg();
+            MarksSource.LegMark mark = marks.legMark(trade.symbol(), leg, world)
+                    .orElseThrow(() -> new TradeRejectedException(List.of(
+                            "No current mark for leg " + legDesc(leg) + "; cannot value the close")));
+            if (!mark.evidence().executableIn(lane)) {
+                throw new TradeRejectedException(List.of("Cannot close " + legDesc(leg) + " in the " + lane
+                        + " market using " + mark.evidence().provenance() + " data (" + mark.evidence().source()
+                        + ", " + mark.evidence().age() + "). Refresh an executable quote or switch markets."));
+            }
+            LegAction closingAction = leg.action().opposite();
+            BigDecimal px = mark.executable(closingAction);
+            if (px == null) {
+                throw new TradeRejectedException(List.of("No executable "
+                        + (closingAction == LegAction.BUY ? "ask" : "bid") + " to close " + legDesc(leg)));
+            }
+            long amount = Money.centsFromPrice(px,
+                    Math.multiplyExact(lot.quantity(), (long) leg.multiplier()));
+            closeValue = Math.addExact(closeValue, closeSign(leg) > 0 ? amount : -amount);
+        }
+        return closeValue;
+    }
+
+    private long closeFeesForLots(TradeRecord trade, List<LegLot> removed) {
+        Long override = entrySnapshotLong(trade, "feeOverridePerSideCents");
+        if (override != null) {
+            return Math.max(0, allocatedPrefix(override, basisUnits(lotsFromTrade(trade)), basisUnits(removed)));
+        }
+        return feesFor(canonicalLegs(removed), canonicalQuantity(removed));
+    }
+
+    private static String adjustmentCloseRowType(PositionTransformation.Action action, List<LegLot> removed) {
+        if (action != PositionTransformation.Action.REMOVE_STOCK) return "PREMIUM_CLOSE";
+        boolean positive = removed.stream().allMatch(lot -> lot.leg().action() == LegAction.BUY);
+        boolean negative = removed.stream().allMatch(lot -> lot.leg().action() == LegAction.SELL);
+        return positive ? "STOCK_SELL" : negative ? "STOCK_BUY" : "ADJUSTMENT";
+    }
+
+    private static String adjustmentOpenRowType(PositionTransformation.Action action, List<LegLot> added) {
+        if (action != PositionTransformation.Action.ADD_STOCK) return "PREMIUM_OPEN";
+        boolean debit = added.stream().allMatch(lot -> lot.leg().action() == LegAction.BUY);
+        boolean credit = added.stream().allMatch(lot -> lot.leg().action() == LegAction.SELL);
+        return debit ? "STOCK_BUY" : credit ? "STOCK_SELL" : "ADJUSTMENT";
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String adjustedEntrySnapshot(TradeRecord trade, Plan exactPlan,
+                                                PositionTransformation.Action action, String at,
+                                                long allocatedPackageAdjustment,
+                                                long allocatedOpenFees) {
+        Map<String, Object> snapshot = new LinkedHashMap<>(Json.read(exactPlan.snapshotJson(), Map.class));
+        Map<String, Object> prior = Json.read(trade.entrySnapshotJson(), Map.class);
+        List<Map<String, Object>> history = new ArrayList<>();
+        Object oldHistory = prior.get("transformationHistory");
+        if (oldHistory instanceof List<?> rows) {
+            for (Object row : rows) if (row instanceof Map<?, ?> map) history.add((Map<String, Object>) map);
+        }
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("action", action.name());
+        event.put("at", at);
+        event.put("priorQuantity", trade.qty());
+        event.put("allocatedPackageAdjustmentCents", allocatedPackageAdjustment);
+        event.put("allocatedOpenFeesCents", allocatedOpenFees);
+        history.add(event);
+        snapshot.put("transformationHistory", history);
+        snapshot.put("basis", "retained exact fills plus executable transformation fills");
+        snapshot.put("originalOpenedAt", prior.getOrDefault("originalOpenedAt", trade.createdAt()));
+        snapshot.remove("feeOverridePerSideCents");
+        return Json.write(snapshot);
+    }
+
+    public static String exactPositionFingerprint(OpenRequest request) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            Map<String, Object> stable = new LinkedHashMap<>();
+            stable.put("symbol", request.symbol());
+            stable.put("quantity", request.qty());
+            stable.put("legs", request.legs());
+            stable.put("entryNetCents", request.proposedNetCents());
+            stable.put("feesOpenCents", request.feesOverrideCents());
+            return HexFormat.of().formatHex(digest.digest(
+                    Json.canonical(stable).getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new IllegalStateException("cannot fingerprint exact position", e);
+        }
+    }
+
+    private static void requireExpectedAdjustment(ExpectedAdjustment expected,
+                                                  long closingCash, long openingCash,
+                                                  long closingFees, long openingFees,
+                                                  Plan plan, long sharesAfter,
+                                                  OpenRequest exactAfter) {
+        if (closingCash != expected.closingCashCents()
+                || openingCash != expected.openingCashCents()
+                || closingFees != expected.closingFeesCents()
+                || openingFees != expected.openingFeesCents()
+                || plan.entryNet() != expected.entryNetCents()
+                || plan.fees() != expected.feesOpenCents()
+                || plan.reserve() != expected.reserveAfterCents()
+                || plan.maxLoss() != expected.maxLossCents()
+                || !Objects.equals(plan.maxProfit(), expected.maxProfitCents())
+                || sharesAfter != expected.sharesLocked()
+                || !exactPositionFingerprint(exactAfter).equals(expected.legsFingerprint())) {
+            throw new TradeRejectedException(List.of(
+                    "The executable adjustment or surviving basis changed after preview. Review the exact before-and-after position again."));
+        }
+    }
+
+    private record LegLot(Leg leg, long quantity) {
+        LegLot {
+            if (leg == null || quantity <= 0) throw new IllegalArgumentException("leg lot quantity must be positive");
+        }
+    }
+
+    private record ReconciledLots(List<LegLot> retained, List<LegLot> removed, List<LegLot> added) {}
 
     /** Deterministic largest-remainder allocation to the first N identical packages. */
     static long allocatedPrefix(long total, long packageQuantity, long selectedQuantity) {

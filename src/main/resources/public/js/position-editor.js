@@ -466,13 +466,13 @@
         return section1256Field;
       }, { stateKey: 'position-tax-' + key + '-' + index }) : null;
       var grid = el('div', { class: 'position-leg-grid' }, field('Instrument', instrument), field('Action', action),
-        field('Position', effect, 'Open adds exposure; Close reduces an existing position.'), field('Symbol', symbol),
+        options.compositionOnly ? null : field('Position', effect, 'Open adds exposure; Close reduces an existing position.'), field('Symbol', symbol),
         leg.instrumentType === 'OPTION' ? field('Type', optionType) : null,
         leg.instrumentType === 'OPTION' ? field('Strike $', strike) : null,
         leg.instrumentType === 'OPTION' ? field('Expiration', expiration) : null,
         field(leg.instrumentType === 'STOCK' ? 'Shares' : 'Contracts', quantity),
         leg.instrumentType === 'OPTION' ? field('Multiplier', multiplier, '100 standard; adjusted contracts may differ.') : null,
-        field(options.allowRecord ? 'Exact fill $' : 'Fill or proposed price $', price,
+        options.compositionOnly ? null : field(options.allowRecord ? 'Exact fill $' : 'Fill or proposed price $', price,
           options.allowRecord ? 'Required by RECORD. ANALYZE may price a blank fill from available evidence.' : 'Optional; blank uses the available market/model evidence.'));
       return el('fieldset', { class: 'position-leg', 'data-leg-index': String(index) },
         el('legend', {}, 'Leg ' + (index + 1) + ' · ' + leg.action.toLowerCase() + ' ' + (leg.instrumentType === 'STOCK' ? 'shares' : String(leg.optionType || '').toLowerCase())),
@@ -864,7 +864,12 @@
       }
       var notes = bind(el('textarea', { rows: '2', maxlength: '1000', value: draft.notes, placeholder: 'Optional context' }), draft, 'notes', false);
       notes.value = draft.notes;
-      editor.append(meta, field('Notes', notes));
+      if (options.compositionOnly) {
+        editor.append(el('p', { class: 'muted small position-composition-note' },
+          'This editor describes what remains open. Stored fills stay attached to unchanged quantities; only added or removed quantities use current executable prices.'));
+      } else {
+        editor.append(meta, field('Notes', notes));
+      }
 
       visualHost = el('aside', { class: 'position-editor-visual' });
       root.appendChild(UI.positionWorkbench(editor, visualHost));
