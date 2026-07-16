@@ -316,7 +316,14 @@
     expandableOccurrences.set(baseKey, occurrence + 1);
     var stateKey = opts.persist === false ? null : baseKey + (opts.stateKey ? '' : '::' + occurrence);
     var persisted = stateKey && expandableState.has(stateKey) ? expandableState.get(stateKey) : null;
-    var initiallyOpen = persisted === null ? !!opts.open : persisted;
+    var defaultOpen = opts.open === 'desktop'
+      ? !!(window.matchMedia && window.matchMedia('(min-width: 900px)').matches)
+      : opts.open === 'mobile'
+        ? !!(window.matchMedia && window.matchMedia('(max-width: 899px)').matches)
+        : !!opts.open;
+    // Re-evaluate a viewport default on each mount until the user explicitly toggles
+    // this stable key. A deliberate user choice then wins for the session.
+    var initiallyOpen = persisted === null ? defaultOpen : persisted;
     var wrap = el('div', { class: 'xp' + (initiallyOpen ? ' open' : ''),
       'data-expandable-key': stateKey || null }, head, body);
     function toggle(force) {
