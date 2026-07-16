@@ -109,7 +109,7 @@ before(async () => {
   // A plain credit spread, then a second one that gets closed (CLOSED-tab data)
   const exps = (await api('GET', '/api/research/AAPL/expirations')).expirations;
   const spread = qty => ({
-    symbol: 'AAPL', strategy: 'CREDIT_PUT_SPREAD', qty,
+    symbol: 'AAPL', strategy: 'CREDIT_PUT_SPREAD', qty, intent: 'directional',
     legs: [
       { action: 'SELL', type: 'PUT', strike: '242.5', expiration: exps[3], ratio: 1 },
       { action: 'BUY', type: 'PUT', strike: '240', expiration: exps[3], ratio: 1 }
@@ -191,10 +191,16 @@ test('grown DB: locked shares and filters behave with real mixed data', async ()
   await page.selectOption('#pf-intent', 'EXIT');
   await page.waitForSelector('#app[data-ready="true"]');
   await page.waitForSelector('.tbl tbody tr.clickable');
+  assert.match(await page.textContent('#app'), /Covered call/,
+    'the exit filter retains the share-backed target-sale position');
+  assert.doesNotMatch(await page.textContent('#app'), /Credit put spread/,
+    'the exit filter does not blend directional positions');
   await page.selectOption('#pf-intent', 'DIRECTIONAL');
   await page.waitForSelector('#app[data-ready="true"]');
-  // NULL-intent legacy trades count as directional — they must not vanish from filters
-  assert.match(await page.textContent('#app'), /TSLA/);
+  assert.match(await page.textContent('#app'), /Credit put spread/,
+    'the directional filter retains current-contract directional positions');
+  assert.doesNotMatch(await page.textContent('#app'), /Covered call/,
+    'the directional filter does not blend target-sale positions');
   await page.selectOption('#pf-intent', '');
   await page.waitForSelector('#app[data-ready="true"]');
   assertClean('portfolio filters');
