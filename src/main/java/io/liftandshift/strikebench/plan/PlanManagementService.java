@@ -89,6 +89,22 @@ public final class PlanManagementService {
                 expectedVersion, receiptId, survivor, actionRealized);
     }
 
+    public TradeService.LifecycleHook adjustmentLifecycleHook(String userId, String planId,
+                                                              long expectedVersion,
+                                                              String transformationAction,
+                                                              String receiptId) {
+        if (receiptId == null || receiptId.isBlank()) {
+            throw new IllegalArgumentException("a Plan adjustment requires its transformation receipt");
+        }
+        String action = transformationAction == null ? "" : transformationAction.trim().toUpperCase();
+        if (!java.util.Set.of("LEG_CLOSE", "REMOVE_LEG", "ADD_LEG", "ADD_STOCK", "REMOVE_STOCK")
+                .contains(action)) {
+            throw new IllegalArgumentException("unsupported Plan position adjustment: " + transformationAction);
+        }
+        return (connection, survivor, actionRealized, realizedToDate) -> saveAdjustmentOn(connection,
+                userId, planId, expectedVersion, receiptId, action, survivor, actionRealized);
+    }
+
     public ObjectNode recordCashReview(String userId, String planId, long expectedVersion, CashReview review) {
         db.tx(c -> {
             PlanRow plan = requireOwned(c, planId, userId, true);
@@ -264,6 +280,34 @@ public final class PlanManagementService {
                 at);
         Db.execOn(c, "INSERT INTO plan_link(id,plan_id,decision_id,role,trade_id,created_at) " +
                         "VALUES(?,?,?,'PARTIAL_CLOSE',?,?)",
+                Ids.newId("plink"), planId, decisionId, survivor.id(), at);
+        Db.execOn(c, "UPDATE plans SET status='POSITION_OPEN',furthest_stage='MANAGE_REVIEW'," +
+                        "version=version+1,updated_at=? WHERE id=?", at, planId);
+    }
+
+    private void saveAdjustmentOn(Connection c, String userId, String planId, long expectedVersion,
+                                  String receiptId, String transformationAction,
+                                  TradeRecord survivor, long actionRealized) throws SQLException {
+        PlanRow plan = requireOwned(c, planId, userId, true);
+        if (plan.version() != expectedVersion) {
+            throw new IllegalStateException("This Plan changed before the position adjustment completed.");
+        }
+        if (!"POSITION_OPEN".equals(plan.status())) {
+            throw new IllegalStateException("Only a Plan with an open position can adjust its legs or stock.");
+        }
+        requireLinked(c, planId, survivor.id());
+        if (!TradeRecord.ACTIVE.equals(survivor.status())) {
+            throw new IllegalStateException("The adjustment did not leave an active position.");
+        }
+        OffsetDateTime at = now();
+        String decisionId = latestDecisionId(c, planId);
+        Db.execOn(c, "INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,receipt_id,kind,action_at," +
+                        "realized_cents,note,created_at) VALUES(?,?,?,?,?,'ADJUST',?,?,?,?)",
+                Ids.newId("pmgt"), planId, decisionId, survivor.id(), receiptId, at, actionRealized,
+                transformationAction + " changed the exact position composition; retained quantities kept their stored fills",
+                at);
+        Db.execOn(c, "INSERT INTO plan_link(id,plan_id,decision_id,role,trade_id,created_at) " +
+                        "VALUES(?,?,?,'ADJUST',?,?)",
                 Ids.newId("plink"), planId, decisionId, survivor.id(), at);
         Db.execOn(c, "UPDATE plans SET status='POSITION_OPEN',furthest_stage='MANAGE_REVIEW'," +
                         "version=version+1,updated_at=? WHERE id=?", at, planId);

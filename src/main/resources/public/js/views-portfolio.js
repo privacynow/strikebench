@@ -312,6 +312,215 @@
     host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
+  function adjustmentDraftFromTrade(trade) {
+    var legs = (trade.legs || []).map(function (leg) {
+      var stock = String(leg.type).toUpperCase() === 'STOCK';
+      return { instrumentType: stock ? 'STOCK' : 'OPTION', action: leg.action,
+        positionEffect: 'OPEN', symbol: trade.symbol,
+        optionType: stock ? null : leg.type, strike: stock ? '' : String(leg.strike),
+        expiration: stock ? '' : leg.expiration,
+        quantity: Number(leg.ratio || 1) * Number(trade.qty || 1),
+        multiplier: stock ? 1 : Number(leg.multiplier || 100), price: '', section1256: null };
+    });
+    return { symbol: trade.symbol, legs: legs, packageNet: '', fillNature: 'PROPOSED',
+      feeMode: 'DEFAULT', fees: '', chainExpiration: legs.find(function (leg) {
+        return leg.instrumentType === 'OPTION';
+      })?.expiration || '' };
+  }
+
+  function reviewedAdjustmentPayload(payload, trade) {
+    return Object.assign({}, payload, {
+      legs: (payload.legs || []).map(function (leg) {
+        return Object.assign({}, leg, { entryPrice: null, positionEffect: 'OPEN' });
+      }),
+      proposedNetCents: null, feesOverrideCents: null,
+      thesis: trade.thesis, horizon: trade.horizon, riskMode: trade.riskMode,
+      intent: trade.intent, useHeldShares: Number(trade.sharesLocked || 0) > 0,
+      source: 'POSITION_TRANSFORMATION', fillNature: 'PROPOSED'
+    });
+  }
+
+  function compositionKey(leg) {
+    var rawType = String(leg.type || leg.instrumentType || '').toUpperCase();
+    var stock = rawType === 'STOCK';
+    var optionType = stock ? 'STOCK' : String(leg.type || leg.optionType || '').toUpperCase();
+    var numericStrike = Number(leg.strike);
+    var strike = stock || leg.strike == null || leg.strike === '' ? ''
+      : Number.isFinite(numericStrike) ? String(numericStrike) : String(leg.strike).trim();
+    return [String(leg.action || '').toUpperCase(), optionType,
+      strike,
+      stock ? '' : String(leg.expiration || ''), String(stock ? 1 : Number(leg.multiplier || 100))].join('|');
+  }
+
+  function compositionAmounts(legs, packageQuantity, payloadShape) {
+    var out = {};
+    (legs || []).forEach(function (leg) {
+      var key = compositionKey(leg);
+      var rawType = String(leg.type || leg.instrumentType || '').toUpperCase();
+      var amount = payloadShape ? Number(packageQuantity) * Number(leg.ratio || 1)
+        : Number(leg.ratio || 1) * Number(packageQuantity);
+      if (!Number.isInteger(amount) || amount <= 0) throw new Error('Every surviving leg needs a positive whole quantity.');
+      if (!out[key]) out[key] = { amount: 0, stock: rawType === 'STOCK' };
+      out[key].amount += amount;
+    });
+    return out;
+  }
+
+  function deriveAdjustmentAction(trade, after) {
+    var before = compositionAmounts(trade.legs, trade.qty, false);
+    var next = compositionAmounts(after.legs, after.qty, true);
+    var keys = Array.from(new Set(Object.keys(before).concat(Object.keys(next))));
+    var addedOptions = [], removedOptions = [], addedStock = [], removedStock = [];
+    keys.forEach(function (key) {
+      var oldAmount = before[key] ? before[key].amount : 0;
+      var newAmount = next[key] ? next[key].amount : 0;
+      if (newAmount > oldAmount) (next[key].stock ? addedStock : addedOptions)
+        .push({ key: key, before: oldAmount, after: newAmount });
+      if (newAmount < oldAmount) (before[key].stock ? removedStock : removedOptions)
+        .push({ key: key, before: oldAmount, after: newAmount });
+    });
+    var optionChanged = addedOptions.length || removedOptions.length;
+    var stockChanged = addedStock.length || removedStock.length;
+    if (!optionChanged && !stockChanged) throw new Error('Change a contract quantity, add or remove a leg, or change the share quantity before reviewing.');
+    if (optionChanged && stockChanged) {
+      throw new Error('Review option and share changes separately so each cash flow and risk change stays explicit.');
+    }
+    if (addedOptions.length && removedOptions.length) {
+      throw new Error('Replacing one contract with another is a roll. Use Roll so the close result and replacement stay explicit.');
+    }
+    if (addedStock.length && removedStock.length) {
+      throw new Error('Change the share position in one direction at a time.');
+    }
+    if (Number(trade.qty) > 1 && Number(after.qty) < Number(trade.qty)
+        && Object.keys(before).length === Object.keys(next).length
+        && Object.keys(before).every(function (key) { return next[key] && next[key].amount > 0; })) {
+      var firstKey = Object.keys(before)[0];
+      var proportional = Object.keys(before).every(function (key) {
+        return next[key].amount * before[firstKey].amount === before[key].amount * next[firstKey].amount;
+      });
+      if (proportional) throw new Error('Reducing every leg together is a partial close. Use Partial close so package history stays explicit.');
+    }
+    if (addedOptions.length) return 'ADD_LEG';
+    if (removedOptions.length) return removedOptions.some(function (change) { return change.after > 0; })
+      ? 'LEG_CLOSE' : 'REMOVE_LEG';
+    if (addedStock.length) return 'ADD_STOCK';
+    return 'REMOVE_STOCK';
+  }
+
+  function adjustmentLabel(action) {
+    return ({ ADD_LEG: 'Add option quantity', LEG_CLOSE: 'Reduce option quantity',
+      REMOVE_LEG: 'Remove option leg', ADD_STOCK: 'Add shares',
+      REMOVE_STOCK: 'Remove shares' })[action] || 'Adjust position';
+  }
+
+  function renderAdjustmentReview(host, preview, afterPayload, action, trade, managedPlan, editor, stateKey) {
+    host.innerHTML = '';
+    var change = preview.transformation;
+    var afterReview = preview.after || {};
+    var after = afterReview.preview || {};
+    var required = afterReview.requiredAcks || [];
+    var guardrails = afterReview.guardrails || {};
+    var warnings = Array.from(new Set([].concat(change.warnings || [], guardrails.warnings || [], after.warnings || [])));
+    var hasRemoval = action === 'LEG_CLOSE' || action === 'REMOVE_LEG' || action === 'REMOVE_STOCK';
+    host.appendChild(el('div', { class: 'position-adjust-review' },
+      el('div', { class: 'position-transformation-route', 'aria-label': 'Position before and after adjustment' },
+        transformationState('Before', change.beforeIdentity, 'Current position'),
+        el('span', { class: 'position-transformation-arrow', 'aria-hidden': 'true' }, '→'),
+        transformationState('After', change.afterIdentity, 'Adjusted position')),
+      el('div', { class: 'position-transformation-facts' },
+        transformationFact('Action', adjustmentLabel(action)),
+        Number(preview.closingCashCents || 0) !== 0
+          ? transformationFact('Cash from removed quantity', fmtMoney(preview.closingCashCents, { plus: true })) : null,
+        Number(preview.openingCashCents || 0) !== 0
+          ? transformationFact('Cash from added quantity', fmtMoney(preview.openingCashCents, { plus: true })) : null,
+        transformationFact('Action fees', fmtMoney(Number(preview.closingFeesCents || 0) + Number(preview.openingFeesCents || 0))),
+        hasRemoval ? transformationFact('Realized by this action', fmtMoney(preview.actionRealizedPnlCents, { plus: true }),
+          Number(preview.actionRealizedPnlCents) >= 0 ? 'gain' : 'loss') : null,
+        hasRemoval ? transformationFact('Realized on position to date', fmtMoney(preview.realizedPnlToDateCents, { plus: true }),
+          Number(preview.realizedPnlToDateCents) >= 0 ? 'gain' : 'loss') : null,
+        transformationFact('Theoretical max loss before', fmtMoney(change.beforeRisk.maxLossCents)),
+        transformationFact('Theoretical max loss after', fmtMoney(change.afterRisk.maxLossCents)),
+        transformationFact('Broker reserve before', fmtMoney(change.beforeRisk.reserveCents || 0)),
+        transformationFact('Broker reserve after', fmtMoney(change.afterRisk.reserveCents || 0)),
+        transformationFact('Assignment cash after', fmtMoney(change.afterObligations.putAssignmentCashCents || 0)),
+        transformationFact('Shares deliverable after', String(change.afterObligations.callDeliveryShares || 0))),
+      warnings.length ? alertBox('warn', 'Review what changes', warnings) : null,
+      preview.basisNotes && preview.basisNotes.length ? alertBox('info', 'Basis treatment', preview.basisNotes) : null,
+      required.length ? alertBox('caution', 'Material risks to acknowledge', required.map(function (item) { return item.label; })) : null,
+      change.applicable ? null : alertBox('danger', 'This change is a teaching case, not an executable adjustment',
+        (change.afterRisk && change.afterRisk.blockReasons || guardrails.blockReasons || ['Review the resulting risk above.'])),
+      el('p', { class: 'muted small position-transformation-note' },
+        'Unchanged quantities keep their stored fills. Changed quantities use current executable sides; cash, reserve, Plan action, and transformation receipt commit together or nothing changes.'),
+      change.applicable ? el('button', { type: 'button', class: 'btn', id: 'apply-position-adjustment-btn',
+        onclick: async function (event) {
+          var current = reviewedAdjustmentPayload(editor.readAnalysis(), trade);
+          var currentAction = deriveAdjustmentAction(trade, current);
+          if (currentAction !== action || JSON.stringify(current) !== JSON.stringify(afterPayload)) {
+            host.innerHTML = '';
+            host.appendChild(UI.actionFeedback('caution', 'Review the edited position again',
+              'The surviving contracts changed after this receipt was created. No position was changed.'));
+            return;
+          }
+          var applyAfter = JSON.parse(JSON.stringify(afterPayload));
+          if (required.length) {
+            applyAfter.acknowledgedRisks = required.map(function (item) { return item.id; });
+            applyAfter.ackToken = afterReview.ackToken;
+          }
+          var request = practiceTransformationRequest(trade, managedPlan, action, preview.previewToken);
+          request.after = applyAfter;
+          var applied = await visibleCommand(event.currentTarget, function () {
+            return API.post('/api/position-transformations/apply', request);
+          }, 'The reviewed position adjustment could not be applied.');
+          if (!applied) return;
+          if (App.state.positionDrafts) delete App.state.positionDrafts[stateKey];
+          UI.toast(adjustmentLabel(action) + ' applied · position history preserved', 'ok');
+          if (managedPlan && applied.plan) await PlanStore.focus(applied.plan, 'MANAGE_REVIEW');
+          else await App.render();
+        } }, required.length ? 'Apply change & acknowledge risks' : 'Apply reviewed change') : null));
+    host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function openAdjustmentTransformation(trade, managedPlan, host) {
+    host.hidden = false;
+    host.innerHTML = '';
+    if (managedPlan) managedPlan = await PlanStore.get(managedPlan.id, true);
+    var stateKey = 'practice-adjust:' + trade.id + ':' + String(trade.updatedAt || trade.entryNetPremiumCents);
+    var editorHost = el('div', { class: 'position-adjust-editor' });
+    var reviewHost = el('div', { class: 'position-adjust-result', 'aria-live': 'polite' });
+    host.append(editorHost, reviewHost);
+    var reviewed = null;
+    var editor = PositionEditor.render(editorHost, {
+      stateKey: stateKey, lockedSymbol: trade.symbol, chain: true, compositionOnly: true,
+      title: 'Edit the position that will remain open',
+      description: 'Add or remove one kind of exposure at a time. Current quantities stay untouched while you edit; the review prices only the difference and shows the complete resulting risk.',
+      analyzeLabel: 'Review this exact change', initial: adjustmentDraftFromTrade(trade),
+      onStateChange: function (draft) {
+        if (!reviewed) return;
+        try {
+          var current = reviewedAdjustmentPayload(PositionEditor.analysisPayload(draft), trade);
+          if (JSON.stringify(current) === JSON.stringify(reviewed.after)) return;
+        } catch (ignored) {
+          // An incomplete composition also invalidates the reviewed receipt.
+        }
+        reviewed = null;
+        reviewHost.innerHTML = '';
+        reviewHost.appendChild(UI.actionFeedback('caution', 'Position changed',
+          'Review again before Apply. The current position remains untouched.'));
+      },
+      onAnalyze: async function (payload) {
+        var after = reviewedAdjustmentPayload(payload, trade);
+        var action = deriveAdjustmentAction(trade, after);
+        var request = practiceTransformationRequest(trade, managedPlan, action);
+        request.after = after;
+        var out = await API.post('/api/position-transformations/preview', request);
+        reviewed = { preview: out, after: after, action: action };
+        renderAdjustmentReview(reviewHost, out, after, action, trade, managedPlan, editor, stateKey);
+        return { preview: out.after.preview, evaluation: out.after.evaluation, identity: out.after.identity };
+      }
+    });
+    host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
   // ---- Shared position controls ----
 
   function stockOrderModal(side, symbol, maxShares) {
@@ -2262,6 +2471,7 @@
     if (active) {
       var rollHost = el('div', { class: 'position-roll-workbench', hidden: 'hidden' });
       var partialHost = el('div', { class: 'position-partial-workbench', hidden: 'hidden' });
+      var adjustHost = el('div', { class: 'position-adjust-workbench', hidden: 'hidden' });
       root.appendChild(el('div', { class: 'card' },
         UI.cardHeader('Actions'),
         el('div', { class: 'btn-row', style: 'margin-top:0' },
@@ -2291,6 +2501,7 @@
           Number(t.qty) > 1 ? el('button', {
             class: 'btn btn-secondary', id: 'partial-close-btn', onclick: function (event) {
               rollHost.hidden = true;
+              adjustHost.hidden = true;
               openPartialCloseTransformation(t, managedPlan, event.currentTarget, partialHost)
                 .catch(function (error) {
                   partialHost.hidden = false;
@@ -2300,6 +2511,24 @@
                 });
             }
           }, 'Partial close…', el('span', { class: 'btn-sub' }, 'reduce quantity, keep history')) : null,
+          el('button', {
+            class: 'btn btn-secondary', id: 'adjust-position-btn', onclick: async function (event) {
+              partialHost.hidden = true;
+              rollHost.hidden = true;
+              var button = event.currentTarget;
+              button.disabled = true;
+              try {
+                await openAdjustmentTransformation(t, managedPlan, adjustHost);
+              } catch (error) {
+                adjustHost.hidden = false;
+                adjustHost.innerHTML = '';
+                adjustHost.appendChild(UI.actionFeedback('danger', 'Could not start the position editor',
+                  error.message || String(error)));
+              } finally {
+                button.disabled = false;
+              }
+            }
+          }, 'Adjust position…', el('span', { class: 'btn-sub' }, 'add or remove legs / shares')),
           el('button', {
             class: 'btn btn-secondary', id: 'settle-btn', onclick: function () {
               UI.confirmModal('Settle at expiration value?',
@@ -2319,6 +2548,7 @@
           el('button', {
             class: 'btn btn-secondary', id: 'roll-btn', onclick: function (event) {
               partialHost.hidden = true;
+              adjustHost.hidden = true;
               openRollTransformation(t, managedPlan, event.currentTarget, rollHost)
                 .catch(function (error) {
                   rollHost.hidden = false;
@@ -2348,6 +2578,7 @@
             }
           }, 'Void…', el('span', { class: 'btn-sub' }, 'erase — practice only'))),
         partialHost,
+        adjustHost,
         rollHost));
     }
 

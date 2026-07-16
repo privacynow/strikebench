@@ -1964,6 +1964,96 @@ test('Practice partial close keeps survivor identity, exact history, and visible
   await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
 });
 
+test('Practice position adjustment reuses the shared editor and preserves exact history at both levels', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const created = await page.evaluate(async () => {
+    const expiration = (await API.getFresh('/api/research/AAPL/expirations')).expirations[2];
+    const order = { symbol: 'AAPL', strategy: 'DEBIT_CALL_SPREAD', qty: 1,
+      thesis: 'bullish', horizon: 'month', riskMode: 'balanced', intent: 'DIRECTIONAL',
+      source: 'DOM_POSITION_ADJUSTMENT', fillNature: 'PROPOSED', legs: [
+        { action: 'BUY', type: 'CALL', strike: '255', expiration: expiration,
+          ratio: 1, multiplier: 100, positionEffect: 'OPEN' },
+        { action: 'SELL', type: 'CALL', strike: '260', expiration: expiration,
+          ratio: 1, multiplier: 100, positionEffect: 'OPEN' }
+      ] };
+    const preview = await API.post('/api/trades/preview', order);
+    if (preview.requiredAcks && preview.requiredAcks.length) {
+      order.acknowledgedRisks = preview.requiredAcks.map(item => item.id);
+      order.ackToken = preview.ackToken;
+    }
+    return (await API.post('/api/trades', order)).trade;
+  });
+
+  await go('#/portfolio/trade/' + created.id);
+  await page.waitForSelector('#adjust-position-btn');
+  await page.click('#adjust-position-btn');
+  await page.waitForSelector('.position-adjust-workbench:not([hidden]) .position-editor');
+  assert.match(await page.textContent('.position-adjust-workbench'), /Edit the position that will remain open/);
+  assert.equal(await page.locator('.position-adjust-workbench label').filter({ hasText: /^Position$/ }).count(), 0,
+    'a surviving-composition editor never asks for an order open/close effect');
+  assert.equal(await page.locator('.position-adjust-workbench label').filter({ hasText: /Fill|Package net|Fee treatment/ }).count(), 0,
+    'the server owns retained fills and executable changed-quantity pricing');
+  await page.locator('.position-adjust-workbench .position-leg').nth(1)
+    .getByRole('button', { name: /Remove leg/ }).click();
+  await page.click('.position-adjust-workbench [data-position-command="analyze"]');
+  await page.waitForSelector('#apply-position-adjustment-btn', { timeout: 30000 });
+  const beginnerReview = await page.textContent('.position-adjust-result');
+  assert.match(beginnerReview, /Before.*After/s);
+  assert.match(beginnerReview, /Remove option leg.*Realized by this action/s);
+  assert.match(beginnerReview, /Theoretical max loss before.*Theoretical max loss after/s);
+  assert.match(beginnerReview, /Stored fills stay attached|Unchanged quantities keep their stored fills/i);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(300);
+  const mobile = await page.evaluate(() => ({ width: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    buttons: Array.from(document.querySelectorAll('.position-adjust-workbench .position-editor-mode button, '
+      + '.position-adjust-workbench .position-leg-remove, .position-adjust-workbench .position-editor-commands button, '
+      + '.position-adjust-workbench #apply-position-adjustment-btn')).map(node => {
+      const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, text: node.textContent.trim() };
+    }).filter(item => item.right > item.left),
+    chain: (() => { const node = document.querySelector('.position-adjust-workbench .position-chain-rail');
+      if (!node) return null; const r = node.getBoundingClientRect();
+      return { left: r.left, right: r.right, client: node.clientWidth, scroll: node.scrollWidth }; })() }));
+  assert.ok(mobile.scrollWidth <= mobile.width + 1,
+    'the shared adjustment editor and review fit mobile: ' + JSON.stringify(mobile));
+  assert.ok(mobile.buttons.every(item => item.left >= -1 && item.right <= mobile.width + 1),
+    'visible adjustment commands stay inside mobile: ' + JSON.stringify(mobile.buttons));
+  if (mobile.chain) assert.ok(mobile.chain.left >= -1 && mobile.chain.right <= mobile.width + 1,
+    'the deliberately scrollable strike rail stays contained inside the viewport: ' + JSON.stringify(mobile.chain));
+  await page.locator('.position-adjust-workbench').evaluate(node => node.scrollIntoView({ block: 'start' }));
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: path.join(__dirname, 'shots/trader-own-p5-adjust-beginner-mobile.png') });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#adjust-position-btn');
+  await page.click('#adjust-position-btn');
+  await page.waitForSelector('.position-adjust-workbench:not([hidden]) .position-editor');
+  assert.equal(await page.locator('.position-adjust-workbench .position-leg').count(), 1,
+    'the exact edited composition survives the presentation-level switch');
+  await page.click('.position-adjust-workbench [data-position-command="analyze"]');
+  await page.waitForSelector('#apply-position-adjustment-btn', { timeout: 30000 });
+  assert.match(await page.textContent('.position-adjust-result'), /Broker reserve before.*Broker reserve after/s,
+    'Expert receives the same reviewed action with dense accounting facts');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(__dirname, 'shots/trader-own-p5-adjust-expert.png'), fullPage: true });
+
+  const applyResponse = page.waitForResponse(response => response.url().endsWith('/api/position-transformations/apply')
+    && response.request().method() === 'POST');
+  await page.click('#apply-position-adjustment-btn');
+  const applied = await (await applyResponse).json();
+  assert.equal(applied.trade.id, created.id, 'a leg adjustment preserves the position identity');
+  assert.equal(applied.trade.status, 'ACTIVE');
+  assert.equal(applied.trade.legs.length, 1);
+  assert.equal(applied.transformation.action, 'REMOVE_LEG');
+  await page.waitForFunction(id => location.hash === '#/portfolio/trade/' + id
+    && /Realized from partial closes/.test(document.querySelector('#app')?.textContent || ''), created.id,
+  { timeout: 30000 });
+  await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
+});
+
 test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {
   const safety = await page.evaluate(() => ({
     money: UI.fmtMoney(Number.NaN), compact: UI.fmtMoneyCompact(Infinity),

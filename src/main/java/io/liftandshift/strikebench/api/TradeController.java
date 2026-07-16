@@ -273,10 +273,15 @@ final class TradeController {
     private ApiResponses.TradePreviewResponse previewPayload(Context ctx, TradeOpenRequest body,
                                                              PlacementProjection projection) {
         PlacementCheck check = placementCheck(ctx, body, projection);
-        Account account = check.account();
-        TradeService.OpenRequest request = check.request();
-        Verdict verdict = check.verdict();
-        io.liftandshift.strikebench.paper.TradePreview preview = check.preview();
+        return reviewPayload(ctx, check.account(), check.request(), check.preview(), check.verdict(),
+                check.requiredAcknowledgments(), projection == null ? null : projection.excludedTradeId());
+    }
+
+    private ApiResponses.TradePreviewResponse reviewPayload(Context ctx, Account account,
+            TradeService.OpenRequest request,
+            io.liftandshift.strikebench.paper.TradePreview preview,
+            Verdict verdict, List<ApiResponses.RiskAcknowledgment> required,
+            String excludedTradeId) {
         Candidate exact = exactPreviewCandidate(request, preview);
         io.liftandshift.strikebench.eval.StrategyEvaluation evaluation;
         long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
@@ -284,7 +289,7 @@ final class TradeController {
             evaluation = evaluations.assessExact(request.symbol(), exact, preview.buyingPowerBeforeCents(),
                     analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
                     preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol(),
-                            projection == null ? null : projection.excludedTradeId()));
+                            excludedTradeId));
         } catch (RuntimeException e) {
             log.warn("Exact-ticket assessment is unavailable for this preview", e);
             throw new io.liftandshift.strikebench.util.DataUnavailableException(
@@ -293,7 +298,6 @@ final class TradeController {
         ApiResponses.Guardrails guardrails = new ApiResponses.Guardrails(
                 verdict.level().name(), verdict.blockReasons(), verdict.warnings());
         AccountRiskContext riskContext = AccountRiskContext.load(db, ownerId.apply(ctx));
-        List<ApiResponses.RiskAcknowledgment> required = check.requiredAcknowledgments();
         String token = required.isEmpty() ? null : acknowledgmentToken(request);
         ApiResponses.AccountFit accountFit = null;
         if (!riskContext.isEmpty() && preview.maxLossCents() > 0) {
@@ -311,6 +315,40 @@ final class TradeController {
                 required.isEmpty() ? null : required, token, accountFit,
                 io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
                         request.symbol(), request.qty(), request.legs()));
+    }
+
+    ApiResponses.TradePreviewResponse transformationPayload(Context ctx, String expectedAccountId,
+            TradeService.OpenRequest exactRequest,
+            io.liftandshift.strikebench.paper.TradePreview exactPreview,
+            String excludedTradeId) {
+        Account account = currentAccount.apply(ctx);
+        if (!account.id().equals(expectedAccountId)) {
+            throw new IllegalStateException("Open the Practice account that owns this position before changing it.");
+        }
+        long effectiveRiskBudget = RiskBudgetPolicy.compute(
+                RecommendationEngine.RiskMode.parse(exactRequest.riskMode()),
+                exactPreview.buyingPowerBeforeCents(), riskCapCents(ctx)).effectiveBudgetCents();
+        List<ApiResponses.RiskAcknowledgment> required = requiredAcksFor(exactPreview, effectiveRiskBudget);
+        Verdict verdict = Verdict.of(exactPreview.blockReasons(), exactPreview.warnings());
+        return reviewPayload(ctx, account, exactRequest, exactPreview, verdict, required, excludedTradeId);
+    }
+
+    void requireTransformationApproval(Context ctx, TradeOpenRequest body,
+                                       TradeService.OpenRequest exactRequest,
+                                       io.liftandshift.strikebench.paper.TradePreview exactPreview) {
+        long effectiveRiskBudget = RiskBudgetPolicy.compute(
+                RecommendationEngine.RiskMode.parse(exactRequest.riskMode()),
+                exactPreview.buyingPowerBeforeCents(), riskCapCents(ctx)).effectiveBudgetCents();
+        List<ApiResponses.RiskAcknowledgment> required = requiredAcksFor(exactPreview, effectiveRiskBudget);
+        if (required.isEmpty()) return;
+        Set<String> acknowledged = body == null || body.acknowledgedRisks() == null
+                ? Set.of() : new HashSet<>(body.acknowledgedRisks());
+        List<String> missing = required.stream().map(ApiResponses.RiskAcknowledgment::id)
+                .filter(id -> !acknowledged.contains(id)).toList();
+        if (!missing.isEmpty() || body == null || !verifyAcknowledgmentToken(body.ackToken(), exactRequest)) {
+            throw new TradeRejectedException(List.of(
+                    "The adjusted position's material risks must be acknowledged from this exact preview."));
+        }
     }
 
     ApiResponses.TradePreviewResponse previewPayloadForAccount(Context ctx, TradeOpenRequest body,

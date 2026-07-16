@@ -75,7 +75,8 @@ final class PositionTransformationController {
         verifyToken(ctx, request, prepared.preview());
         if (request.action() != PositionTransformation.Action.CLOSE
                 && request.action() != PositionTransformation.Action.PARTIAL_CLOSE
-                && request.action() != PositionTransformation.Action.ROLL) {
+                && request.action() != PositionTransformation.Action.ROLL
+                && !adjustmentAction(request.action())) {
             throw new IllegalStateException("This transformation can be analyzed, but its atomic Practice apply path is not active yet.");
         }
 
@@ -116,6 +117,36 @@ final class PositionTransformationController {
             TradeService.PartialCloseResult result = trades.partialClose(request.sourceId(),
                     request.closeQuantity(), true, atomicArtifacts, prepared.partial().closingCashCents(),
                     prepared.partial().closingFeesCents(), expectedPosition(prepared));
+            responseTrade = result.trade();
+            actionRealized = result.actionRealizedPnlCents();
+            realizedToDate = result.realizedPnlCents();
+        } else if (adjustmentAction(request.action())) {
+            if (prepared.adjustment() == null || prepared.after() == null || request.after() == null) {
+                throw new IllegalArgumentException("a leg or stock adjustment requires the reviewed surviving position");
+            }
+            tradeController.requireTransformationApproval(ctx, request.after(),
+                    prepared.adjustment().exactAfterRequest(), prepared.adjustment().survivor().preview());
+            TradeService.LifecycleHook planHook = prepared.plan() == null ? null
+                    : management.adjustmentLifecycleHook(ownerId, prepared.plan().id(),
+                            request.expectedPlanVersion(), request.action().name(), receiptId);
+            PositionDomain.PositionState state = request.action() == PositionTransformation.Action.LEG_CLOSE
+                    || request.action() == PositionTransformation.Action.REMOVE_LEG
+                    || request.action() == PositionTransformation.Action.REMOVE_STOCK
+                    ? PositionDomain.PositionState.PARTIALLY_CLOSED : PositionDomain.PositionState.OPEN;
+            TradeService.LifecycleHook atomicArtifacts = (connection, survivor, actionDelta, lifetimeTotal) -> {
+                recordPracticeArtifact(connection, ownerId, receiptId, prepared, survivor.id(), state, actionDelta);
+                if (planHook != null) planHook.afterMutation(connection, survivor, actionDelta, lifetimeTotal);
+            };
+            TradeService.AdjustmentAssessment adjustment = prepared.adjustment();
+            TradeService.AdjustmentResult result = trades.adjustPosition(request.sourceId(), request.action(),
+                    adjustment.exactAfterRequest(), true, atomicArtifacts, expectedPosition(prepared),
+                    new TradeService.ExpectedAdjustment(adjustment.closingCashCents(),
+                            adjustment.openingCashCents(), adjustment.closingFeesCents(),
+                            adjustment.openingFeesCents(), adjustment.survivor().preview().entryNetPremiumCents(),
+                            adjustment.survivor().preview().feesOpenCents(), adjustment.reserveAfterCents(),
+                            adjustment.survivor().preview().maxLossCents(),
+                            adjustment.survivor().preview().maxProfitCents(), adjustment.sharesLockedAfter(),
+                            TradeService.exactPositionFingerprint(adjustment.exactAfterRequest())));
             responseTrade = result.trade();
             actionRealized = result.actionRealizedPnlCents();
             realizedToDate = result.realizedPnlCents();
@@ -215,27 +246,37 @@ final class PositionTransformationController {
         TradeService.PositionAssessment after = partial == null ? null : partial.survivor();
         TradeService.OpenRequest afterRequest = null;
         ApiResponses.TradePreviewResponse afterReview = null;
+        TradeService.AdjustmentAssessment adjustment = null;
         TradeController.PlacementProjection projection = request.action() == PositionTransformation.Action.ROLL
                 ? tradeController.projectionAfterClose(ctx, trade, unwind) : null;
         if (request.after() != null) {
             afterRequest = TradeController.toAnalysisOpenRequest(request.after(), trade.accountId());
-            afterReview = tradeController.previewPayloadForAccount(ctx, request.after(), trade.accountId(), projection);
-            if (projection == null) {
-                after = trades.analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
-                        PositionDomain.ExecutionLane.PRACTICE, afterRequest);
+            if (adjustmentAction(request.action())) {
+                adjustment = trades.previewAdjustment(trade.id(), request.action(), afterRequest);
+                before = adjustment.current();
+                after = adjustment.survivor();
+                afterRequest = adjustment.exactAfterRequest();
+                afterReview = tradeController.transformationPayload(ctx, trade.accountId(), afterRequest,
+                        after.preview(), trade.id());
             } else {
-                after = trades.analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
-                        PositionDomain.ExecutionLane.PRACTICE, afterRequest, projection.cashCents(),
-                        projection.reservedCents(), projection.releasedShares());
+                afterReview = tradeController.previewPayloadForAccount(ctx, request.after(), trade.accountId(), projection);
+                if (projection == null) {
+                    after = trades.analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
+                            PositionDomain.ExecutionLane.PRACTICE, afterRequest);
+                } else {
+                    after = trades.analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
+                            PositionDomain.ExecutionLane.PRACTICE, afterRequest, projection.cashCents(),
+                            projection.reservedCents(), projection.releasedShares());
+                }
+                List<String> reasons = new ArrayList<>(after.risk().blockReasons());
+                reasons.addAll(afterReview.guardrails().blockReasons());
+                boolean eligible = after.risk().mechanicallyEligible()
+                        && !"BLOCK".equals(afterReview.guardrails().level());
+                var risk = new PositionTransformation.RiskSnapshot(after.risk().maxLossCents(),
+                        after.risk().reserveCents(), after.risk().maxProfitCents(), eligible,
+                        reasons.stream().distinct().toList(), after.risk().evidenceBasis());
+                after = new TradeService.PositionAssessment(after.position(), after.preview(), risk);
             }
-            List<String> reasons = new ArrayList<>(after.risk().blockReasons());
-            reasons.addAll(afterReview.guardrails().blockReasons());
-            boolean eligible = after.risk().mechanicallyEligible()
-                    && !"BLOCK".equals(afterReview.guardrails().level());
-            var risk = new PositionTransformation.RiskSnapshot(after.risk().maxLossCents(),
-                    after.risk().reserveCents(), after.risk().maxProfitCents(), eligible,
-                    reasons.stream().distinct().toList(), after.risk().evidenceBasis());
-            after = new TradeService.PositionAssessment(after.position(), after.preview(), risk);
         }
         if (request.action() == PositionTransformation.Action.ASSIGNMENT
                 || request.action() == PositionTransformation.Action.EXERCISE
@@ -249,9 +290,10 @@ final class PositionTransformationController {
                         ? unwind.realizedPnlToDateCents()
                         : request.action() == PositionTransformation.Action.ROLL
                             ? unwind.actionRealizedPnlCents()
+                            : adjustment != null ? adjustment.actionRealizedPnlCents()
                             : partial == null ? null : partial.actionRealizedPnlCents()));
         return new Prepared(trade, plan, before, after, afterRequest, afterReview, projection, unwind,
-                partial, preview);
+                partial, adjustment, preview);
     }
 
     private Plan.View requirePlanContext(Context ctx, Request request, TradeRecord trade) {
@@ -274,23 +316,39 @@ final class PositionTransformationController {
     private ApiResponses.PositionTransformationPreview<io.liftandshift.strikebench.paper.TradePreview,
             ApiResponses.TradePreviewResponse> response(
             Prepared prepared, String token, String expiresAt) {
-        Long closingCash = prepared.partial() == null
-                ? prepared.unwind() == null ? null : prepared.unwind().closingCashCents()
-                : prepared.partial().closingCashCents();
-        Long closingFees = prepared.partial() == null
-                ? prepared.unwind() == null ? null : prepared.unwind().closingFeesCents()
-                : prepared.partial().closingFeesCents();
-        Long actionRealized = prepared.partial() == null
-                ? prepared.unwind() == null ? null : prepared.unwind().actionRealizedPnlCents()
-                : prepared.partial().actionRealizedPnlCents();
+        Long closingCash = null;
+        Long closingFees = null;
+        Long actionRealized = null;
+        if (prepared.adjustment() != null) {
+            closingCash = prepared.adjustment().closingCashCents();
+            closingFees = prepared.adjustment().closingFeesCents();
+            actionRealized = prepared.adjustment().actionRealizedPnlCents();
+        } else if (prepared.partial() != null) {
+            closingCash = prepared.partial().closingCashCents();
+            closingFees = prepared.partial().closingFeesCents();
+            actionRealized = prepared.partial().actionRealizedPnlCents();
+        } else if (prepared.unwind() != null) {
+            closingCash = prepared.unwind().closingCashCents();
+            closingFees = prepared.unwind().closingFeesCents();
+            actionRealized = prepared.unwind().actionRealizedPnlCents();
+        }
+        Long openingCash = prepared.adjustment() == null ? null : prepared.adjustment().openingCashCents();
+        Long openingFees = prepared.adjustment() == null ? null : prepared.adjustment().openingFeesCents();
+        Long allocatedEntryBasis = prepared.adjustment() == null
+                ? null : prepared.adjustment().allocatedEntryBasisCents();
+        Long allocatedOpenFees = prepared.adjustment() == null
+                ? null : prepared.adjustment().allocatedOpenFeesCents();
         Long realizedToDate = actionRealized == null ? null
+                : prepared.adjustment() != null ? prepared.adjustment().realizedPnlToDateCents()
                 : prepared.partial() == null
                     ? prepared.unwind().realizedPnlToDateCents()
                     : Math.addExact(prepared.trade().realizedPnlCents() == null
                             ? 0 : prepared.trade().realizedPnlCents(), actionRealized);
         return new ApiResponses.PositionTransformationPreview<>(prepared.preview(),
                 prepared.before().preview(), prepared.afterReview(),
-                closingCash, closingFees, actionRealized, realizedToDate, token, expiresAt);
+                closingCash, closingFees, openingCash, openingFees,
+                allocatedEntryBasis, allocatedOpenFees, actionRealized, realizedToDate,
+                prepared.adjustment() == null ? null : prepared.adjustment().basisNotes(), token, expiresAt);
     }
 
     private String token(Context ctx, Request request, PositionTransformation.Preview preview, long issuedAt) {
@@ -342,5 +400,14 @@ final class PositionTransformationController {
                             TradeController.PlacementProjection projection,
                             TradeService.UnwindAssessment unwind,
                             TradeService.PartialCloseAssessment partial,
+                            TradeService.AdjustmentAssessment adjustment,
                             PositionTransformation.Preview preview) {}
+
+    private static boolean adjustmentAction(PositionTransformation.Action action) {
+        return action == PositionTransformation.Action.LEG_CLOSE
+                || action == PositionTransformation.Action.REMOVE_LEG
+                || action == PositionTransformation.Action.ADD_LEG
+                || action == PositionTransformation.Action.ADD_STOCK
+                || action == PositionTransformation.Action.REMOVE_STOCK;
+    }
 }

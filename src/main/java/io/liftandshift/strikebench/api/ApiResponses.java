@@ -213,7 +213,10 @@ public final class ApiResponses {
     public record PositionTransformationPreview<T, U>(
             io.liftandshift.strikebench.position.PositionTransformation.Preview transformation,
             T before, U after, Long closingCashCents, Long closingFeesCents,
+            Long openingCashCents, Long openingFeesCents,
+            Long allocatedEntryBasisCents, Long allocatedOpenFeesCents,
             Long actionRealizedPnlCents, Long realizedPnlToDateCents,
+            List<String> basisNotes,
             String previewToken, String expiresAt) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PositionTransformationApplied<T, U, V>(
