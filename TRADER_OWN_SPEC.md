@@ -1,5 +1,10 @@
 # Program TRADER/OWN — definitive feature specification (consolidated handoff)
 
+> **2026-07-16 supersession notice:** §3 (domain contracts), §4 (formula appendix), and the
+> delivered phases 1–5 remain authoritative. **Phases 6–10 and every UI/UX prescription in this
+> document are superseded by `STRIKEBENCH_ONE_SPEC.md` (Program ONE)**, which folds them into
+> the re-architected product. Do not execute phases 6–10 from this document.
+
 *Self-contained. Supersedes every prior draft, including the pre-review draft and all three review rounds. This version integrates the full adversarial review: the one-Real-ledger architecture decision, the domain-contract layer, the formula appendix, the resequenced phases, the 16-scenario battery, and the fixtures policy. Every contract in §3 was verified against the current codebase; file anchors are given where an existing engine or precedent grounds the rule.*
 
 ---
