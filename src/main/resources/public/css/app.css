@@ -3009,11 +3009,24 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   background: none; border: 0; padding: 2px 0; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
 .flow-band-conclusion-body { flex: 1 1 auto; }
 .flow-band-revisit { font-size: .78em; white-space: nowrap; }
+/* Ready-but-unfocused: a one-line invitation naming what the band holds — never a second
+   open toolset stacked beneath the band the user is working in. */
+.flow-band[data-posture="ready"] { border-style: dashed; }
+.flow-band-invitation { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px;
+  background: none; border: 0; padding: 2px 0; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
+.flow-band-invitation-body { flex: 1 1 auto; }
+.flow-band-open { font-size: .78em; white-space: nowrap; }
 .flow-band-fold { background: none; border: 0; padding: 0 0 8px; font: inherit; font-size: .8em; cursor: pointer; color: var(--muted); }
 .flow-band-body { display: block; }
 
 /* Simulation lineage chip: names the ONE stored ensemble every band quotes. */
 .lineage-chip b { font-family: var(--mono, monospace); font-weight: 600; }
+
+/* Arrival ribbon: a handoff (e.g. Evidence → Strategy) names what it carried and why the
+   content below is already answering it. One-shot, quiet, never a toast. */
+.plan-arrival-ribbon { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 10px 14px; margin: 0 0 14px; border: 1px solid var(--accent);
+  border-left-width: 3px; border-radius: 8px; background: var(--accent-soft); font-size: .92em; }
 
 /* Program ONE R1.2: study-protocol control language */
 .study-protocol-controls { display: flex; flex-direction: column; gap: 14px; margin: 10px 0 4px; }

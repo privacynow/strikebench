@@ -40,8 +40,11 @@
       if (name === 'research') return !args.length
         || (args.length === 1 && /^[A-Z0-9._-]+$/i.test(args[0]));
       if (name === 'plans') return !args.length;
-      if (name === 'plan') return args.length === 2
-        && stagePaths.indexOf(String(args[1] || '').split('?')[0]) >= 0;
+      // '#/plan/<id>' is the workspace's default arrival (the flow decides which band is
+      // active); a stage suffix is a deep-link. Rejecting the bare form silently dumped
+      // users on Home with no cue — a navigation must never discard its destination.
+      if (name === 'plan') return (args.length === 1 && args[0].length > 0)
+        || (args.length === 2 && stagePaths.indexOf(String(args[1] || '').split('?')[0]) >= 0);
       if (name === 'portfolio') return !args.length
         || (args.length === 1 && portfolioTabs.indexOf(args[0]) >= 0)
         || (args[0] === 'book' && args.length === 2 && bookTabs.indexOf(args[1]) >= 0)

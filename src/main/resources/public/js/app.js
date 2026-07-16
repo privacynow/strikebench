@@ -12,9 +12,10 @@
   function workspaceRoute(hash) {
     var path = String(hash || '#/').split('?')[0];
     var plan = /^#\/plan\/([^/]+)(?:\/([^/]+))?/.exec(path);
-    // A Plan stage is a destination, not a local repaint. Preserve scroll while a stage
-    // updates its own controls, but orient the user when the six-step journey moves on.
-    if (plan) return 'plan:' + plan[1] + ':' + (plan[2] || 'understand');
+    // The Workspace is ONE flow document: a stage is a position inside it, never a new
+    // screen. Moving between stages of the same Plan preserves scroll — the flow itself
+    // choreographs the move to the target band (Program ONE §2.2).
+    if (plan) return 'plan:' + plan[1];
     var trade = /^#\/portfolio\/trade\/([^/]+)/.exec(path);
     if (trade) return 'trade:' + trade[1];
     var book = /^#\/portfolio\/book(?:\/([^/]+))?/.exec(path);
