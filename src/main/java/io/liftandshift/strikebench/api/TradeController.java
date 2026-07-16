@@ -264,23 +264,17 @@ final class TradeController {
         Verdict verdict = guardrailCheck(request, account, riskCapCents(ctx));
         io.liftandshift.strikebench.paper.TradePreview preview = trades.preview(request);
         Candidate exact = exactPreviewCandidate(request, preview);
-        EconomicAssessment economics;
+        io.liftandshift.strikebench.eval.StrategyEvaluation evaluation;
         long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
         try {
-            economics = evaluations.assessExact(request.symbol(), exact, account.buyingPowerCents(),
+            evaluation = evaluations.assessExact(request.symbol(), exact, account.buyingPowerCents(),
                     analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
                     preview.blockReasons(), roundTripFees);
         } catch (RuntimeException e) {
-            log.warn("Exact-ticket economics are unavailable for this preview");
-            log.debug("Exact-ticket economic-assessment failure", e);
-            DataProvenance provenance = preview.evidence().provenance();
-            boolean observed = provenance == DataProvenance.OBSERVED || provenance == DataProvenance.BROKER;
-            economics = new EconomicAssessment(EconomicAssessment.Verdict.UNAVAILABLE,
-                    "MECHANICS_ONLY", "Economics unavailable",
-                    "The package was checked mechanically, but the available volatility/history inputs cannot support an economic verdict right now.",
-                    preview.expectedValueCents() == null ? null : preview.expectedValueCents() - roundTripFees,
-                    null, roundTripFees, null, observed,
-                    List.of("Exact economic comparison is unavailable; no favorable claim is made."));
+            log.warn("Exact-ticket assessment is unavailable for this preview");
+            log.debug("Exact-ticket assessment failure", e);
+            throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                    "The exact package was checked mechanically, but its complete decision assessment is unavailable; no partial substitute was returned", e);
         }
         ApiResponses.Guardrails guardrails = new ApiResponses.Guardrails(
                 verdict.level().name(), verdict.blockReasons(), verdict.warnings());
@@ -302,7 +296,7 @@ final class TradeController {
             accountFit = new ApiResponses.AccountFit(pctOfNlv, pctOfCash, pctOfMargin,
                     pctOfRiskCapital, overRiskCapital);
         }
-        return new ApiResponses.TradePreviewResponse(preview, economics, guardrails,
+        return new ApiResponses.TradePreviewResponse(preview, evaluation, guardrails,
                 required.isEmpty() ? null : required, token, accountFit);
     }
 

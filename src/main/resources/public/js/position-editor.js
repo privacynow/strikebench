@@ -709,7 +709,9 @@
       resultHost.innerHTML = '';
       var response = out && (out.preview || out);
       var selected = out && out.strategy && out.strategy.result && out.strategy.result.candidate;
-      var economics = out && out.economics || selected && selected.economics;
+      var economics = out && out.evaluation && out.evaluation.economics
+        || selected && selected.evaluation && selected.evaluation.economics
+        || selected && selected.economics;
       if (!response) return;
       resultHost.appendChild(UI.actionFeedback(response.ok === false ? 'caution' : 'ok',
         response.ok === false ? 'Analyzed with constraints' : 'Analysis complete',

@@ -96,7 +96,7 @@ final class PlanDecisionController {
             order = planDecisionOrder(plan, candidate, body, false);
             payload = tradeController.previewPayload(ctx, order);
         }
-        ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.economics(),
+        ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.evaluation(),
                 payload.guardrails(), payload.requiredAcks(), payload.ackToken(), payload.accountFit(),
                 plan, candidate, new ApiResponses.OrderSummary(order.qty(), order.proposedNetCents(),
                 order.feesOverrideCents() == null ? 0L : order.feesOverrideCents())));
@@ -167,7 +167,7 @@ final class PlanDecisionController {
             Context ctx, io.liftandshift.strikebench.plan.Plan.View plan, PlanDecisionRequest body,
             ObjectNode candidate, ApiResponses.TradePreviewResponse payload) {
         return new PlanDecisionService.Input(root.ownerId(ctx), plan, body.expectedVersion(),
-                candidate.path("id").asText(), root.currentAccount(ctx), payload.preview(), payload.economics(),
+                candidate.path("id").asText(), root.currentAccount(ctx), payload.preview(), payload.evaluation().economics(),
                 io.liftandshift.strikebench.paper.AccountRiskContext.load(db, root.ownerId(ctx)),
                 body.qty() == null ? candidate.path("qty").asInt() : body.qty(),
                 body.acknowledgedRisks() == null ? List.of() : body.acknowledgedRisks(), body.note(), root.analysisCtx(ctx));

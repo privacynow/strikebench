@@ -177,29 +177,17 @@ final class PlanStrategyController {
         Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
         ObjectNode candidateJson = Json.MAPPER.valueToTree(candidate);
         long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
-        io.liftandshift.strikebench.eval.EconomicAssessment economics;
+        io.liftandshift.strikebench.eval.StrategyEvaluation evaluation;
         try {
-            economics = evaluations.assessExact(plan.symbol(), candidate, account.buyingPowerCents(),
+            evaluation = evaluations.assessExact(plan.symbol(), candidate, account.buyingPowerCents(),
                     root.analysisCtx(ctx), PlanController.worldParam(root.activeWorld(ctx)), preview.ok(), preview.blockReasons(),
                     roundTripFees);
         } catch (RuntimeException e) {
-            log.debug("Plan custom-package economic assessment is unavailable", e);
-            var provenance = preview.evidence().provenance();
-            boolean observed = provenance == io.liftandshift.strikebench.model.DataProvenance.OBSERVED
-                    || provenance == io.liftandshift.strikebench.model.DataProvenance.BROKER;
-            economics = new io.liftandshift.strikebench.eval.EconomicAssessment(
-                    io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE,
-                    "MECHANICS_ONLY", "Economics unavailable",
-                    "The exact package passed through the mechanical preview, but its evidence cannot support an economic verdict.",
-                    preview.expectedValueCents() == null ? null : preview.expectedValueCents() - roundTripFees,
-                    null, roundTripFees, null, observed,
-                    List.of("No favorable claim is made without complete economic evidence."));
+            log.debug("Plan custom-package assessment is unavailable", e);
+            throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                    "The exact package was checked mechanically, but its complete decision assessment is unavailable; no partial substitute was returned", e);
         }
-        candidateJson.set("economics", Json.MAPPER.valueToTree(economics));
-        candidateJson.put("economicVerdict", economics.verdict().name());
-        candidateJson.put("economicPlacement", economics.placement());
-        candidateJson.put("decisionViable", preview.ok());
-        candidateJson.put("structurallyEligible", preview.ok());
+        candidateJson.set("evaluation", Json.MAPPER.valueToTree(evaluation));
         JsonNode requestJson = Json.MAPPER.valueToTree(exactBody);
         var saved = planStrategy.saveCustom(root.ownerId(ctx), plan, requestJson, candidateJson,
                 body.expectedVersion(), preview.ok());

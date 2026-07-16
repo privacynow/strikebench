@@ -159,12 +159,12 @@ public final class ApiResponses {
     public record AccountFit(Double pctOfNlv, Double pctOfCashBp, Double pctOfMarginBp,
                              Double pctOfRiskCapital, Boolean overRiskCapital) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record TradePreviewResponse(TradePreview preview, EconomicAssessment economics,
+    public record TradePreviewResponse(TradePreview preview, io.liftandshift.strikebench.eval.StrategyEvaluation evaluation,
                                        Guardrails guardrails, List<RiskAcknowledgment> requiredAcks,
                                        String ackToken, AccountFit accountFit) {}
     public record OrderSummary(int qty, long proposedNetCents, long feesOverrideCents) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record PlanDecisionPreview<T, U>(TradePreview preview, EconomicAssessment economics,
+    public record PlanDecisionPreview<T, U>(TradePreview preview, io.liftandshift.strikebench.eval.StrategyEvaluation evaluation,
                                              Guardrails guardrails,
                                              List<RiskAcknowledgment> requiredAcks,
                                              String ackToken, AccountFit accountFit,

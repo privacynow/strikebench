@@ -37,14 +37,30 @@ public final class StrategyEvaluator {
         return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan, sb, economics, exp);
     }
 
-    /** Economic truth for one exact ticket; ranking gates are replaced by the preview's own
-     * mechanical verdict, while risk/evidence still use the shared producers. */
-    public EconomicAssessment assessExact(Candidate c, EvalContext ctx, boolean mechanicallyEligible,
+    /**
+     * Complete decision assessment for one exact ticket. The same producers used for proposals
+     * remain authoritative; the executable ticket preview contributes the final mechanical gate.
+     */
+    public StrategyEvaluation assessExact(Candidate c, StrategySpec spec, EvalContext ctx,
+                                          boolean mechanicallyEligible,
                                           List<String> mechanicalFailures, long roundTripFeesCents) {
+        CapitalProfile cap = capital.profile(c, ctx);
+        VolatilityProfile vol = volatility.profile(ctx);
         RiskProfile rsk = risk.profile(c, ctx);
         EvidenceProfile ev = evidence.assemble(c, ctx);
-        return EconomicAssessment.assessExact(c, rsk, ev, ctx, mechanicallyEligible,
-                mechanicalFailures, roundTripFeesCents);
+        ManagementPlan plan = management.plan(c, spec);
+        ScoreBreakdown rankedScore = score.compose(c, cap, rsk, ev, ctx);
+        java.util.LinkedHashSet<String> failures = new java.util.LinkedHashSet<>(rankedScore.gateFailures());
+        if (mechanicalFailures != null) failures.addAll(mechanicalFailures);
+        boolean exactGate = mechanicallyEligible && rankedScore.gatePassed() && failures.isEmpty();
+        ScoreBreakdown exactScore = new ScoreBreakdown(exactGate, List.copyOf(failures),
+                rankedScore.normalizedScore(), exactGate ? rankedScore.riskAdjustedScore() : 0,
+                rankedScore.components());
+        EconomicAssessment economics = EconomicAssessment.assessExact(c, rsk, ev, ctx, exactGate,
+                List.copyOf(failures), roundTripFeesCents);
+        Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev, ctx);
+        return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan,
+                exactScore, economics, exp);
     }
 
     /**
