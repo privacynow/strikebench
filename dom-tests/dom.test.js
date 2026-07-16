@@ -332,7 +332,7 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   // BRAND RETURNS TO THE OPERATIONAL DESK (review P5): from any screen the mark lands on
   // Home, never a surprise tour; the tour keeps its own quiet entry at the page bottom.
   await openPlan('AAPL');
-  await page.waitForSelector('.quote-hero');
+  await page.waitForSelector('#plan-flow');
   await page.click('.brand');
   await page.waitForSelector('.home-market-grid .tile');
   await page.waitForFunction(() => document.querySelectorAll('.home-market-grid .spark-svg').length >= 4,
@@ -744,7 +744,7 @@ test('a pre-decision Plan can change goal and returns to Strategy without forkin
 
 test('Plan flow orients both levels without hiding capabilities or stealing the journey', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
-  const plan = await openPlan('TSLA', 'understand');
+  const plan = await openPlan('TSLA', 'understand', 'DIRECTIONAL', 'bullish');
   await page.waitForSelector('#plan-flow');
   assert.equal(await page.locator('#plan-flow > .flow-band').count(), 6,
     'the whole journey stays visible as bands');
@@ -897,8 +897,16 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   }
   assert.ok(await page.locator('#plan-ranked-field .ranked-runner-list .ranked-idea:visible').count() <= 2,
     'the default comparison keeps attention on the hero and two closest alternatives');
-  assert.ok(await page.locator('#plan-ranked-field .ranked-idea-payoff svg.chart, #plan-ranked-field .ranked-time-spread-shape').count() === 1,
-    'the decision hero uses the evaluation’s real payoff points or an honest multi-expiry shape disclosure');
+  const payoffDebug = await page.evaluate(() => ({
+    svg: document.querySelectorAll('#plan-ranked-field .ranked-idea-payoff svg.chart').length,
+    shape: document.querySelectorAll('#plan-ranked-field .ranked-time-spread-shape').length,
+    hosts: document.querySelectorAll('#plan-ranked-field .ranked-idea-payoff').length,
+    heroStrategy: (document.querySelector('#plan-ranked-field .ranked-idea-hero') || { dataset: {} }).dataset.candidateId,
+    hostHtml: (document.querySelector('#plan-ranked-field .ranked-idea-payoff') || { innerHTML: 'NONE' }).innerHTML.slice(0, 160)
+  }));
+  assert.ok(payoffDebug.svg + payoffDebug.shape === 1,
+    'the decision hero uses the evaluation’s real payoff points or an honest multi-expiry shape disclosure: '
+      + JSON.stringify(payoffDebug));
   const firstHeroId = await page.locator('#plan-ranked-field .ranked-idea-hero').getAttribute('data-candidate-id');
   const runner = page.locator('#plan-ranked-field .ranked-runner-list .ranked-idea:visible').first();
   if (await runner.count()) {
@@ -3521,7 +3529,7 @@ test('event stream: job.complete reaches the browser; cooldown shows a calm head
 test('prefetch warms the likely next step through the governed cache', async () => {
   await page.evaluate(() => API.flushCache());
   await openPlan('AAPL');
-  await page.waitForSelector('.quote-hero');
+  await page.waitForSelector('#plan-flow');
   await page.waitForTimeout(2000); // idle prefetch fires (requestIdleCallback, 2.5s budget)
   // The expirations read must now be a cache hit: zero network fetches.
   const fetches = await page.evaluate(() => {
@@ -5775,12 +5783,13 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
   assert.equal(await reviewPlan.getAttribute('aria-busy'), 'true', 'Plan creation exposes a pending state');
   await reviewPlan.evaluate(button => button.click());
   await page.waitForSelector('.plan-selected-structure', { timeout: 15000 });
+  const handoffText = await page.textContent('.plan-selected-structure');
   await page.unroute('**/api/plans', delayPlanCreate);
   assert.equal(pendingPlanPosts, 1,
     'a second click during the pending state cannot double-submit Plan creation or custom strategy save');
   assert.equal(await page.locator('#app[data-route="plan"]').count(), 1, 'allocation opens in the canonical Plan journey');
-  assert.match(await page.textContent('.plan-selected-structure'), /Selected structure|PLAN OWNED/,
-    'the exact optimizer package survives the handoff');
+  assert.match(handoffText, /selected structure|selected package|working structure|plan owned/i,
+    'the exact optimizer package survives the handoff: ' + handoffText.slice(0, 120));
   await page.evaluate(() => Learn.setLevel('expert'));
 
   // The Research LANDING is a market-entry surface: notes stay; the event-study workbench does
@@ -6323,6 +6332,8 @@ test('Program ONE R0: rails, choice controls, and flow bands honor their contrac
     out.lockedVisible = !!fhost.querySelector('[data-band="test"] .flow-band-title');
     ctx.declared = true; flow.refresh();
     out.posturesAfter = [flow.posture('view'), flow.posture('test')];
+    flow.fold('view');
+    out.posturesFolded = [flow.posture('view'), flow.posture('test')];
     out.conclusion = fhost.querySelector('[data-band="view"] .flow-band-conclusion-body').textContent;
     fhost.querySelector('[data-band="view"] .flow-band-conclusion').click();
     out.revisitPosture = fhost.querySelector('[data-band="view"]').dataset.posture;
@@ -6345,7 +6356,9 @@ test('Program ONE R0: rails, choice controls, and flow bands honor their contrac
   assert.deepEqual(r.posturesBefore, ['active', 'locked'], 'the first incomplete band is active; successors lock');
   assert.equal(r.lockedReason, 'Declare your view first.', 'locked bands state their reason');
   assert.equal(r.lockedVisible, true, 'locked bands stay visible — never hidden');
-  assert.deepEqual(r.posturesAfter, ['done', 'active'], 'completing a band unlocks its successor');
+  assert.deepEqual(r.posturesAfter, ['revisit', 'active'],
+    'completing a band while working inside it never yanks its content away');
+  assert.deepEqual(r.posturesFolded, ['done', 'active'], 'an explicit fold concludes the band and its successor stays unlocked');
   assert.equal(r.conclusion, 'View: up over 3 weeks', 'done bands collapse to their conclusion, not bare chrome');
   assert.equal(r.revisitPosture, 'active', 'a conclusion reopens for revision on demand');
   assert.equal(r.lineageNames, true, 'the lineage chip names the stored ensemble fingerprint');

@@ -28,10 +28,17 @@
     var root = el('div', { class: 'flow', id: opts.id || null });
     var handles = {};
 
+    // Completing a band by acting INSIDE it never yanks its content away: a band that was
+    // active this session stays open through its completion (posture 'revisit'), and the
+    // conclusion-collapse applies on the next visit — or immediately via the fold control.
+    // The override map lives on the Rails surface, so it survives route re-renders and level
+    // flips but not a fresh session.
     function postureOf(section, index) {
       var priorComplete = sections.slice(0, index).every(function (s) { return !!s.complete(ctx); });
       var ready = section.ready ? !!section.ready(ctx) : priorComplete;
-      if (section.complete(ctx)) return openOverrides[section.key] === 'open' ? 'revisit' : 'done';
+      if (section.complete(ctx)) {
+        return openOverrides[section.key] === 'open' ? 'revisit' : 'done';
+      }
       return ready ? 'active' : 'locked';
     }
 
@@ -50,8 +57,10 @@
           || 'Unlocks after the step above is complete.';
         band.appendChild(el('p', { class: 'flow-band-locked muted' }, reason));
         head.setAttribute('aria-disabled', 'true');
+        delete openOverrides[section.key];
         return;
       }
+      if (posture === 'active') openOverrides[section.key] = 'open';
       if (posture === 'done') {
         var conclusion = section.conclusion ? section.conclusion(ctx) : null;
         var bar = el('button', { type: 'button', class: 'flow-band-conclusion',
@@ -93,6 +102,11 @@
         openOverrides[key] = 'open';
         api.refreshBand(key);
         api.scrollTo(key);
+      },
+      /** Deliberately conclude a band (an explicit save-and-advance action). */
+      fold: function (key) {
+        delete openOverrides[key];
+        api.refreshBand(key);
       },
       posture: function (key) {
         var index = sections.findIndex(function (s) { return s.key === key; });

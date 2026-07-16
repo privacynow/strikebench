@@ -1523,8 +1523,21 @@
         el('span', { class: 'muted small' }, 'Ranked, not guaranteed')));
       field.appendChild(rankingSeparation(candidates));
       field.appendChild(ideaPresentation(heroCandidate, { density: 'hero', rank: heroRank,
-        spot: planRef.result && planRef.result.spot,
+        spot: planRef.result && planRef.result.spotCents != null ? planRef.result.spotCents / 100 : null,
         action: planCandidateActions(planRef, heroCandidate, ui, repaint) }));
+      if (ui.strategyReturnFocus) {
+        // Cross-route arrival ("Review this trade" from Outcomes): same return-focus
+        // consequence the in-page review path applies — the ring lands on whichever hero
+        // renders (a standing selection outranks the reviewed alternative, by design).
+        ui.strategyReturnFocus = false;
+        var arrivedHero = field.querySelector('.ranked-idea-hero');
+        if (arrivedHero) {
+          arrivedHero.classList.add('plan-return-focus');
+          arrivedHero.setAttribute('tabindex', '-1');
+          arrivedHero.focus({ preventScroll: true });
+          arrivedHero.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }
+      }
 
       var alternatives = candidates.filter(function (candidate) { return candidate.id !== heroCandidate.id; });
       if (Learn.currentLevel() === 'expert') {
@@ -2099,7 +2112,11 @@
       var button = el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: async function () {
         button.disabled = true;
         try {
-          ui.strategyView = 'compare'; ui.strategyFocusCandidate = item.candidateId;
+          // Write through the plan's own UI rail: this handler's local ui belongs to the
+          // outcomes view and dies with it — the strategy arrival reads PlanStore.ui.
+          var planUi = PlanStore.ui(planRef.plan.id);
+          planUi.strategyView = 'compare'; planUi.strategyFocusCandidate = item.candidateId;
+          planUi.strategyReturnFocus = true; // one-shot: the arrival applies the highlight
           App.navigate(PlanStore.path(planRef.plan, 'STRATEGY'));
         } catch (e) { button.disabled = false; UI.toast(e.message, 'error'); }
       } }, Learn.currentLevel() === 'beginner' ? 'Review this trade' : 'Review in Strategy');
@@ -3025,7 +3042,7 @@
           thesis: updated.context.thesis, horizon: updated.context.horizonDays + 'd' });
         ctx.plan = updated;
         if (ctx.refreshHeader) ctx.refreshHeader();
-        api.refreshBand('view');
+        api.fold('view'); // declaring is an explicit save-and-advance: conclude the band
         api.scrollTo('evidence');
       } catch (e) { UI.toast(e.message, 'error'); save.disabled = false; }
     } }, viewDeclared(plan) ? 'Update the view' : 'Declare the view');
@@ -3048,6 +3065,8 @@
               ctx.plan = await PlanStore.claimIntent(live, meta.key);
               App.context.update({ symbol: ctx.plan.symbol, goal: ctx.plan.intent,
                 thesis: ctx.plan.context.thesis, horizon: ctx.plan.context.horizonDays + 'd' });
+              // A changed goal means choosing a NEW structure — land on the Builder, as promised.
+              PlanStore.ui(ctx.plan.id).strategyView = 'builder';
               await PlanStore.focus(ctx.plan, 'STRATEGY');
             } catch (e) { UI.toast((e && e.message) || 'The goal could not be changed.', 'error'); }
           });
@@ -3085,7 +3104,9 @@
   async function planWorkspace(root, params) {
     var id = params[0] || '';
     var rawStage = (params[1] || 'understand').split('?')[0];
-    var plan = await PlanStore.get(id);
+    // Band postures gate on plan status — they must never be computed from a stale cached
+    // copy (a background list refresh can hold a pre-decision snapshot of this very plan).
+    var plan = await PlanStore.get(id, true);
     var targetWorld = plan.marketKind === 'SIMULATED' ? plan.worldId : plan.marketKind === 'DEMO' ? 'demo' : 'observed';
     if (App.state.world !== targetWorld) { await PlanStore.focus(plan, rawStage); return; }
     App.state.activePlanByMarket = App.state.activePlanByMarket || {};
@@ -3157,7 +3178,17 @@
         lockedReason: function () { return 'Declare your view above — structures are ranked against it.'; },
         complete: function () { return structureReady(); },
         render: function (host) { planStrategyStage(host, ctx.plan, planStageByPath('strategy')); },
-        conclusion: function () { return 'Structure selected — open to compare or change it'; } },
+        conclusion: function () {
+          // The conclusion carries the RESULT: the exact selected structure, visible on any
+          // arrival without reopening the band.
+          if (ctx.selectedSummary) {
+            return el('span', { class: 'plan-selected-structure' },
+              'Selected structure: ', el('b', {}, ctx.selectedSummary.name),
+              ctx.selectedSummary.qty > 1 ? ' ×' + ctx.selectedSummary.qty : '',
+              el('span', { class: 'muted' }, ' — open to compare or change it'));
+          }
+          return 'Structure selected — open to compare or change it';
+        } },
       { key: 'outcomes', title: 'Outcomes on your structure',
         ready: function () { return structureReady(); },
         lockedReason: function () {
@@ -3176,18 +3207,29 @@
             : 'Decision frozen — the position is live below';
         } },
       { key: 'live', title: 'Live: manage & review',
-        ready: function () { return decisionDone(); },
-        lockedReason: function () { return 'Appears once you commit — trade it or deliberately stay in cash.'; },
+        // A frozen decision OR a managed rehearsal makes this band live — rehearsals are
+        // managed positions too (this also retires the old rail bug where the tooltip
+        // promised rehearsals unlock review but the button stayed disabled).
+        ready: function () {
+          return decisionDone() || (ctx.plan.furthestStage === 'MANAGE_REVIEW');
+        },
+        lockedReason: function () { return 'Appears once you commit — trade it, rehearse it, or deliberately stay in cash.'; },
         complete: function () { return false; },
         render: function (host) { planManageStage(host, ctx.plan, planStageByPath('manage-review')); } }
     ] });
     root.appendChild(flow.el);
     var focusBand = FLOW_BANDS_BY_STAGE[rawStage];
-    if (focusBand && rawStage !== 'understand') flow.scrollTo(focusBand);
+    if (focusBand && rawStage !== 'understand') {
+      // An explicit stage deep-link carries intent: arriving AT a concluded band reopens it
+      // (a reload must not greet a working screen with a one-line conclusion). Default
+      // arrivals still meet conclusions.
+      if (flow.posture(focusBand) === 'done') flow.reopen(focusBand);
+      else flow.scrollTo(focusBand);
+    }
     // Async posture refinement: a stale prior selection (context bump rolled progress back)
     // unlocks outcomes/commit so their reprice affordances are reachable. One fetch, no poll.
+    var _ft = App.navToken;
     if (!decisionDone() && !structureReady()) {
-      var _ft = App.navToken;
       PlanStore.latestOutcomes(plan.id).then(function (latest) {
         if (!App.alive(_ft) || !latest || !latest.selectionState) return;
         if (latest.selectionState !== 'NONE' && ctx.selectionState !== latest.selectionState) {
@@ -3195,6 +3237,16 @@
           flow.refreshBand('outcomes');
         }
       }).catch(function () { /* posture stays conservative on fetch failure */ });
+    }
+    // Conclusion enrichment: the concluded strategy band names the exact selected structure.
+    if (structureReady() && flow.posture('strategy') === 'done') {
+      PlanStore.latestStrategy(plan.id).then(function (latest) {
+        var selected = latest && latest.selected;
+        if (!App.alive(_ft) || !selected) return;
+        ctx.selectedSummary = { name: selected.displayName || selected.strategy || 'Selected package',
+          qty: Number(selected.qty) || 1 };
+        flow.refreshBand('strategy');
+      }).catch(function () { /* the generic conclusion stands */ });
     }
   }
 

@@ -112,6 +112,8 @@ public final class RecommendationEngine {
             String riskMode,
             String intent,
             long riskBudgetCents,
+            /** The underlying price every candidate was priced against, for payoff axes; null when no chain loaded. */
+            Long spotCents,
             List<Candidate> candidates,
             List<Rejection> rejected,
             List<String> notes,
@@ -186,36 +188,36 @@ public final class RecommendationEngine {
         Quote quote = market.quote(symbol, worldId).orElse(null);
         if (quote == null) {
             notes.add(missingMarketDataNote(lane, symbol));
-            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
+            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
         }
         if (!quote.evidence().usableIn(lane)) {
             notes.add("No " + lane + "-lane quote is available for " + symbol + "; refusing to substitute "
                     + quote.evidence().provenance() + " data from " + quote.evidence().source());
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget,
-                    List.of(), rejected, notes, DISCLAIMER);
+                    null, List.of(), rejected, notes, DISCLAIMER);
         }
         List<LocalDate> expirations = market.expirations(symbol, worldId);
         if (!quote.optionable() || expirations.isEmpty()) {
             notes.add(symbol + " has no listed options (mutual funds and some securities cannot be traded with options)");
-            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
+            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
         }
 
         LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
         LocalDate near = pickExpiration(expirations, req.horizon(), today, allow0dte, laneNow, notes);
         if (near == null) {
             notes.add("No expiration matches the requested horizon");
-            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
+            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
         }
         OptionChain chain = market.chain(symbol, near, worldId).orElse(null);
         if (chain == null || chain.isEmpty()) {
             notes.add("Option chain unavailable for " + symbol + " " + near);
-            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, List.of(), rejected, notes, DISCLAIMER);
+            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
         }
         if (!chain.evidence().executableIn(lane)) {
             notes.add("The " + lane + " market has no executable option chain for " + symbol + " " + near
                     + "; refusing " + chain.evidence().provenance() + " data from " + chain.evidence().source());
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget,
-                    List.of(), rejected, notes, DISCLAIMER);
+                    null, List.of(), rejected, notes, DISCLAIMER);
         }
         // Far expiration for calendars/diagonals: ~4 weekly slots beyond the near one
         int nearIdx = expirations.indexOf(near);
@@ -334,7 +336,8 @@ public final class RecommendationEngine {
         // Return the complete construction field. DecisionPolicy is the sole ranking owner;
         // structural diversity is a presentation concern with an explicit Show-all affordance.
         if (candidates.isEmpty()) notes.add("No strategy passed the risk screens for this combination — try a wider risk budget or different horizon");
-        return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, candidates, rejected, notes, DISCLAIMER);
+        return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget,
+                spot.movePointRight(2).setScale(0, java.math.RoundingMode.HALF_UP).longValue(), candidates, rejected, notes, DISCLAIMER);
     }
 
     /**
