@@ -2168,7 +2168,7 @@
     function paintPreview() {
       var result = state.preview;
       if (!result) return;
-      var p = result.preview, economics = result.economics;
+      var p = result.preview, evaluation = result.evaluation || {}, economics = evaluation.economics;
       review.innerHTML = '';
       review.appendChild(economicAssessmentBlock({ economics: economics, economicVerdict: economics && economics.verdict }));
       review.appendChild(verdictPanel(p, Learn.currentLevel() === 'beginner', true).node);

@@ -80,6 +80,39 @@ class StrategyEvaluatorTest {
                         && a.toLowerCase().contains("after costs"));
     }
 
+    @Test void exactPositionRetainsFullProposalAssessmentAndUsesTicketMechanicalGate() {
+        Candidate candidate = debitCallSpread("DELAYED", 0.6);
+        StrategySpec spec = new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL",
+                "month", "bullish", "balanced", "decision");
+        StrategyEvaluation proposal = evaluator.evaluate(candidate, spec, ctx());
+        StrategyEvaluation exact = evaluator.assessExact(candidate, spec, ctx(), true, List.of(), 260);
+
+        assertThat(exact.capital()).isEqualTo(proposal.capital());
+        assertThat(exact.volatility()).isEqualTo(proposal.volatility());
+        assertThat(exact.risk()).isEqualTo(proposal.risk());
+        assertThat(exact.evidence()).isEqualTo(proposal.evidence());
+        assertThat(exact.management()).isEqualTo(proposal.management());
+        assertThat(exact.score().components()).isEqualTo(proposal.score().components());
+        assertThat(exact.economics()).isEqualTo(proposal.economics());
+        assertThat(exact.decisionScore()).isEqualTo(proposal.decisionScore());
+
+        StrategyEvaluation refused = evaluator.assessExact(candidate, spec, ctx(), false,
+                List.of("executable quote unavailable"), 260);
+        assertThat(refused.viable()).isFalse();
+        assertThat(refused.decisionScore()).isZero();
+        assertThat(refused.score().gateFailures()).contains("executable quote unavailable");
+        assertThat(refused.economics().placement()).isEqualTo("MECHANICALLY_INELIGIBLE");
+        assertThat(refused.capital()).isEqualTo(proposal.capital());
+        assertThat(refused.risk()).isEqualTo(proposal.risk());
+
+        EvalContext noBuyingPower = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25,
+                ctx().ivHistory(), 100L, true, 65, 0, 0.04, ctx().rateEvidence());
+        StrategyEvaluation accountRefusal = evaluator.assessExact(candidate, spec, noBuyingPower,
+                true, List.of(), 260);
+        assertThat(accountRefusal.economics().reasons())
+                .anyMatch(reason -> reason.contains("buying power"));
+    }
+
     @Test void demoDataIsHaircutAndLabeled() {
         StrategyEvaluation live = evaluator.evaluate(debitCallSpread("DELAYED", 0.6), null, ctx());
         StrategyEvaluation demo = evaluator.evaluate(debitCallSpread("FIXTURE", 0.6), null, ctx());

@@ -732,9 +732,17 @@ class ApiIntegrationTest {
         JsonNode p = spreadResponse.get("preview");
         assertThat(p.get("ok").asBoolean()).isTrue();
         assertThat(p.get("underlyingCents").asLong()).isGreaterThan(0);
-        assertThat(spreadResponse.get("economics").get("verdict").asText()).isNotBlank();
-        assertThat(spreadResponse.get("economics").has("marketEvAfterCostsCents")).isTrue();
-        long afterCosts = spreadResponse.get("economics").get("marketEvAfterCostsCents").asLong();
+        JsonNode evaluation = spreadResponse.get("evaluation");
+        JsonNode economics = evaluation.get("economics");
+        assertThat(economics.get("verdict").asText()).isNotBlank();
+        assertThat(economics.has("marketEvAfterCostsCents")).isTrue();
+        assertThat(evaluation.get("capital").get("incrementalCents").asLong()).isPositive();
+        assertThat(evaluation.get("risk").get("scenarios").size()).isEqualTo(7);
+        assertThat(evaluation.get("evidence").get("perDimension").has("pricing")).isTrue();
+        assertThat(evaluation.get("management").get("rules").isArray()).isTrue();
+        assertThat(evaluation.get("score").has("riskAdjustedScore")).isTrue();
+        assertThat(evaluation.get("explanation").get("assumptions").isArray()).isTrue();
+        long afterCosts = economics.get("marketEvAfterCostsCents").asLong();
         if (afterCosts < 0) {
             String evAck = "";
             for (JsonNode ack : spreadResponse.path("requiredAcks")) {
@@ -803,8 +811,8 @@ class ApiIntegrationTest {
         JsonNode cal = calendarResponse.get("preview");
         assertThat(cal.get("payoff").size()).isZero();
         assertThat(cal.get("legs").size()).isEqualTo(2);
-        assertThat(calendarResponse.get("economics").get("verdict").asText()).isEqualTo("UNAVAILABLE");
-        assertThat(calendarResponse.get("economics").get("summary").asText())
+        assertThat(calendarResponse.get("evaluation").get("economics").get("verdict").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(calendarResponse.get("evaluation").get("economics").get("summary").asText())
                 .contains("cannot support an economic verdict");
     }
 

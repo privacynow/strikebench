@@ -125,13 +125,15 @@ public final class EvaluationService {
         return ranked;
     }
 
-    /** Reuses the same context/risk/evidence spine for the exact package on Ticket Review. */
-    public EconomicAssessment assessExact(String symbol, Candidate candidate, long buyingPowerCents,
+    /** Reuses the complete candidate pipeline for the exact package on Ticket Review. */
+    public StrategyEvaluation assessExact(String symbol, Candidate candidate, long buyingPowerCents,
                                           io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
                                           boolean mechanicallyEligible, List<String> mechanicalFailures,
                                           long roundTripFeesCents) {
         EvalContext ctx = buildContext(symbol, List.of(candidate), buyingPowerCents, actx, worldId);
-        return evaluator.assessExact(candidate, ctx, mechanicallyEligible, mechanicalFailures,
+        StrategySpec spec = new StrategySpec(symbol, candidate.strategy(), candidate.intent(),
+                ctx.daysToExpiry() + "d", null, null, "exact-position");
+        return evaluator.assessExact(candidate, spec, ctx, mechanicallyEligible, mechanicalFailures,
                 roundTripFeesCents);
     }
 
