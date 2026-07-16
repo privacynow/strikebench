@@ -93,9 +93,9 @@
       root.appendChild(idxBody);
       var _it = App.navToken;
       (async function fillIndex() {
+        idxBody.appendChild(universePlanScout());
         await sectorExplorer(idxBody, 'research');
         if (!App.alive(_it)) return;
-        idxBody.appendChild(universePlanScout());
         idxBody.appendChild(await studyToolsSection());
         if (App.state.explorerScroll != null) {
           var restoreY = App.state.explorerScroll;
@@ -127,6 +127,8 @@
     // the existing option-chain/action surface until the full strategy move in P3.
     var heroCard = el('div', { class: 'card', id: 'research-hero' }, UI.spinner('Loading ' + symbol + '…'));
     if (section === 'understand') root.appendChild(heroCard);
+    var actionsAnchor = el('div', { id: 'symbol-actions-anchor' });
+    if (!inPlan && section === 'understand') root.appendChild(actionsAnchor);
     var researchP = API.get('/api/research/' + symbol);
     var researchPanels = {
       overview: el('section', { class: 'plan-understand-grid', id: 'plan-understand-content' }),
@@ -138,7 +140,6 @@
     var newsOverviewCard = el('div', { class: 'card', id: 'news-overview-card' },
       UI.cardHeader('Latest news & filings'), UI.spinner('Loading headlines…'));
     if (section === 'understand') researchPanels.overview.appendChild(newsOverviewCard);
-    var actionsAnchor = el('div', { id: 'symbol-actions-anchor' }); // filled after r: the action cards, or the no-options warning
     if (section === 'strategy') researchPanels.options.appendChild(actionsAnchor);
 
     // Price history — its own endpoint, independent of /api/research.
@@ -563,8 +564,7 @@
           var h = (pick.horizons || []).find(function (item) { return item.horizon === horizon.value; })
             || (pick.horizons || [])[0];
           var top = h && h.candidates && h.candidates[0];
-          var candidate = top && top.evaluation
-            ? Object.assign({}, top.evaluation.candidate, { evaluation: top.evaluation }) : null;
+          var candidate = window.ViewPlan.candidateFromEvaluation(top);
           var card = el('article', { class: 'card universe-scout-pick' },
             el('div', { class: 'head' }, el('h3', {}, pick.symbol),
               el('span', { class: 'badge ' + (THESIS_BADGE[pick.signals.thesis] || 'badge-dim') }, pick.signals.thesis)),
@@ -579,13 +579,19 @@
             el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', onclick: async function () {
               this.disabled = true; this.setAttribute('aria-busy', 'true');
               try {
-                var days = Product.Horizon.sessions(horizon.value);
-                var plan = await PlanStore.create({ symbol: pick.symbol, intent: pick.intent,
-                  thesis: String(pick.signals.thesis || '').toLowerCase(), horizonDays: days,
-                  riskMode: risk ? risk.value : 'conservative' });
-                await PlanStore.focus(plan, 'UNDERSTAND');
+                var thesis = String(pick.signals.thesis || '').toLowerCase();
+                var opened;
+                if (candidate) {
+                  opened = await window.ViewPlan.openCandidateAsPlan(candidate, pick.symbol, {
+                    destination: 'STRATEGY', horizon: horizon.value, thesis: thesis
+                  });
+                } else {
+                  opened = await startPlan({ symbol: pick.symbol, intent: pick.intent,
+                    horizon: horizon.value, thesis: thesis }, 'STRATEGY');
+                }
+                if (!opened) throw new Error('This Scout pick could not be opened in a Plan.');
               } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
-            } }, 'Open ' + pick.symbol + ' Plan')));
+            } }, candidate ? 'Use this in a Plan' : 'Open ' + pick.symbol + ' in Strategy')));
           grid.appendChild(card);
         });
         results.appendChild(grid);
@@ -597,13 +603,61 @@
       } finally { run.disabled = false; run.removeAttribute('aria-busy'); }
     } }, 'Scout this universe');
     return el('section', { class: 'research-plan-scout', id: 'research-plan-scout' },
-      el('div', { class: 'section-heading' }, el('div', {}, el('h2', {}, 'Scout for a new Plan'),
+      el('div', { class: 'section-heading' }, el('div', {},
+        el('div', { class: 'heading-info-row' }, el('h2', {}, 'Scout for a new Plan'), UI.info('scout')),
         el('p', { class: 'muted' }, 'Scan the current sector when you do not already have a ticker. A pick starts the same six-stage Plan journey.'))),
       el('div', { class: 'card' },
         el('div', { class: 'form-grid grid-3' },
           el('div', { class: 'field' }, el('label', { for: 'universe-scout-intent' }, 'Goal'), intent),
           el('div', { class: 'field' }, el('label', { for: 'universe-scout-horizon' }, 'Horizon'), horizon),
           el('div', { class: 'field field-end' }, run))), results);
+  }
+
+  async function symbolProposedTradesCard(symbol) {
+    var research = await API.get('/api/research/' + encodeURIComponent(symbol));
+    var goal = el('select', { id: 'symbol-proposed-goal' }, (Learn.INTENTS || []).map(function (meta) {
+      return el('option', { value: meta.key }, meta.label);
+    }));
+    var feedback = el('div', { class: 'symbol-proposed-feedback', 'aria-live': 'polite' });
+    var detail = research.planEligibility || 'This market does not have the executable option inputs needed for a Plan.';
+    var action = el('button', { type: 'button', class: 'btn', id: 'symbol-find-proposed',
+      disabled: research.planEligible ? null : 'disabled',
+      'aria-describedby': research.planEligible ? null : 'symbol-proposed-unavailable', onclick: function () {
+        var button = this;
+        visibleCommand(button, async function () {
+          var handoff = { symbol: symbol, intent: goal.value };
+          var thesis = App.context.thesis(null);
+          var horizon = App.context.horizon(null);
+          if (thesis) handoff.thesis = thesis;
+          if (horizon) handoff.horizon = horizon;
+          var opened = await startPlan(handoff, 'STRATEGY', async function (plan) {
+            var out = await PlanStore.runStrategy(plan, { allow0dte: false, maxLossCents: null, filters: null });
+            var updated = out.plan || plan;
+            var result = out.strategy && out.strategy.result;
+            var top = result && result.candidates && result.candidates[0];
+            var ui = PlanStore.ui(updated.id);
+            ui.strategyView = 'compare';
+            ui.strategyDraftDirty = false;
+            if (top) ui.strategyFocusCandidate = top.id;
+            return updated;
+          });
+          if (!opened && feedback.isConnected) {
+            UI.setActionFeedback(feedback, 'danger', 'Proposed trades could not be opened',
+              'The Plan was not changed. Review the market message and try again.');
+          }
+          return opened;
+        }, 'Proposed trades could not be opened.');
+      } }, 'Find proposed trades for ' + symbol);
+    return el('section', { class: 'card symbol-proposed-trades', id: 'symbol-proposed-trades' },
+      el('div', { class: 'symbol-proposed-copy' },
+        el('div', { class: 'eyebrow' }, 'READY TO COMPARE'),
+        el('div', { class: 'heading-info-row' }, el('h2', {}, 'Find proposed trades for ' + symbol),
+          UI.info('proposedtrades')),
+        el('p', { class: 'muted' },
+          'Choose the job once. StrikeBench creates or reuses the Plan, runs the complete ranked field, and opens the results at Strategy.')),
+      el('div', { class: 'symbol-proposed-action' }, UI.field('Goal', goal), action,
+        research.planEligible ? null : el('p', { class: 'muted small', id: 'symbol-proposed-unavailable' }, detail)),
+      feedback);
   }
 
   var EARNINGS_RE = /earnings|quarterly results|guidance|earnings call/i;
@@ -877,6 +931,10 @@
       pending.clear();
       symbols.forEach(markQueued);
       startObserving();
+      // Warm exactly one provider-safe first batch. The rest stays viewport-driven. This keeps
+      // the first market screen useful even when another primary tool sits above the grid, and
+      // a keyboard/jump-to-end navigation cannot strand untouched middle rows as “queued”.
+      symbols.slice(0, 16).forEach(enqueue);
     }
     reload();
     return {
@@ -2371,11 +2429,15 @@
     if (symbol) {
       await research(root, [symbol]);
       if (publicResearchView() === 'overview') {
-        var planStart = el('div', { id: 'research-plan-start-host' }, UI.spinner('Checking Plan eligibility…'));
-        root.appendChild(planStart);
-        try { planStart.replaceWith(await window.ViewPlan.planStartCard(symbol)); }
+        var planStart = document.getElementById('symbol-actions-anchor');
+        try {
+          var proposed = await symbolProposedTradesCard(symbol);
+          if (planStart && planStart.isConnected) planStart.replaceWith(proposed);
+        }
         catch (e) {
-          planStart.replaceWith(alertBox('warn', 'Plan actions are unavailable', [e.message]));
+          if (planStart && planStart.isConnected) {
+            planStart.replaceWith(alertBox('warn', 'Proposed trades are unavailable', [e.message]));
+          }
         }
       }
       return;

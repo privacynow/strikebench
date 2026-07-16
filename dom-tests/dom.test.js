@@ -269,11 +269,23 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
     assert.match(await page.textContent('#welcome-proof-caption'), /counterexample, not an endorsement/i,
       'an adverse teaching case cannot sit under recommendation-shaped welcome framing');
   }
+  assert.equal(await page.locator('#moved-terms .moved-term').count(), 8,
+    'the tour anchors every familiar capability renamed by the Plan journey');
+  assert.match(await page.textContent('#moved-terms'), /Formerly Trade.*Formerly Ideas.*Formerly Scan/s,
+    'the mapping names the old nouns instead of making users rediscover them');
   // Skip to the dashboard; the choice persists
+  let automaticScoutPosts = 0;
+  const scoutProbe = request => {
+    if (request.method() === 'POST' && /\/api\/research\/scout$/.test(request.url())) automaticScoutPosts++;
+  };
+  page.on('request', scoutProbe);
   await page.click('#welcome-skip');
   await page.waitForSelector('.home-market-grid .tile');
   await page.waitForFunction(() => document.querySelectorAll('.home-market-grid .spark-svg').length >= 4,
     { timeout: 15000 });
+  page.off('request', scoutProbe);
+  assert.equal(automaticScoutPosts, 0,
+    'Home reads warm/cached discovery only; a universe Scout runs only after an explicit click');
   assert.equal(await page.locator('.home-market-grid .spark-slot .evidence-badge').count(), 0,
     'the Demo lane does not repeat the same fabricated label twice on every card');
   assert.equal(await page.evaluate(() => Array.from(document.querySelectorAll('.home-market-grid .sym-card')).some(card => {
@@ -293,12 +305,27 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
   assert.match(app, /Buying power/);
   assert.ok(await page.locator('#home-tour-link').isVisible(), 'the full tour is one visible click away');
   assert.ok((await page.locator('.home-market-grid .tile').count()) >= 4, 'market watch tiles');
+  assert.equal(await page.evaluate(() => document.querySelector('.home-hero').nextElementSibling.id),
+    'home-screened-ideas', 'screened ideas are first in reading order after the desk hero');
+  assert.ok(await page.locator('#home-first-steps').isVisible(),
+    'Beginner gets a concise first-steps strip without losing any discovery control');
+  assert.equal(await page.getByRole('button', { name: 'Find an idea', exact: true }).count(), 1,
+    'the cold desk leads with one explicit discovery action');
   assert.equal(await page.locator('#home-plan-library').count(), 0,
     'a fresh desk does not spend a full-width card repeating the hero and Continue start action');
   assert.equal(await page.locator('#next-up').count(), 0,
     'Continue is absent until there is a real Plan to resume');
   assert.equal(await page.getByRole('button', { name: 'Start a Plan' }).count(), 1,
     'the hero owns the one empty-desk Plan action');
+  await captureSettled('trader-own-p15-home-cold-desktop.png');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await captureSettled('trader-own-p15-home-cold-mobile.png');
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.click('#home-find-idea');
+  await page.waitForFunction(() => /Use in a Plan|Study in a Plan/.test(document.activeElement?.textContent || ''));
+  assert.match(await page.evaluate(() => document.activeElement.textContent), /Use in a Plan|Study in a Plan/,
+    'Find an idea moves focus to the actual package action, not a remote header control');
+  await page.evaluate(() => window.scrollTo(0, 0));
   const footer = await page.textContent('#disclaimer');
   assert.match(footer, /not financial advice/i);
   // The tour is a canonical Home subview.
@@ -362,9 +389,89 @@ test('first contact resolves Welcome before any dashboard paint', async () => {
   await go('#/home');
 });
 
+test('Home discovery is governed, distinct by ticker, and carries an exact package into Strategy', async () => {
+  await page.evaluate(() => {
+    Learn.setLevel('beginner');
+    localStorage.removeItem('strikebench.homeIdeas');
+  });
+  let scoutPosts = 0;
+  const observeScout = request => {
+    if (request.method() === 'POST' && /\/api\/research\/scout$/.test(request.url())) scoutPosts++;
+  };
+  page.on('request', observeScout);
+  await go('#/home');
+  await page.waitForSelector('#home-screened-ideas');
+  assert.equal(scoutPosts, 0, 'a Home render never spends the universe Scout provider budget');
+  assert.ok(await page.locator('#home-first-steps').isVisible(), 'Beginner gets first-step guidance');
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#home-screened-ideas');
+  assert.equal(await page.locator('#home-first-steps').count(), 0,
+    'Expert removes teaching chrome while retaining the same screened-idea controls');
+  assert.ok(await page.locator('#home-screened-ideas').isVisible(), 'Expert retains discovery capability');
+  await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
+  await page.waitForSelector('#home-first-steps');
+
+  await page.click('#home-screened-ideas button:has-text("Scout current market")');
+  await page.waitForFunction(() => /Universe screen refreshed|No ticker passed/.test(
+    document.querySelector('.home-ideas-feedback')?.textContent || ''), null, { timeout: 30000 });
+  page.off('request', observeScout);
+  assert.equal(scoutPosts, 1, 'the universe Scout runs exactly once after the explicit command');
+  const symbols = await page.locator('#home-screened-ideas .home-idea-row').evaluateAll(rows =>
+    rows.map(row => row.getAttribute('data-symbol')));
+  assert.ok(symbols.length >= 1, 'the governed screen yields at least one package in Demo');
+  assert.equal(new Set(symbols).size, symbols.length,
+    'Home shows one leading package per ticker, never repeated ticker cards: ' + JSON.stringify(symbols));
+
+  const first = page.locator('#home-screened-ideas .home-idea-row').first();
+  const symbol = await first.getAttribute('data-symbol');
+  await first.getByRole('button', { name: /Use in a Plan|Study in a Plan/ }).click();
+  await page.waitForSelector('#app[data-route="plan"][data-ready="true"]', { timeout: 30000 });
+  assert.match(await page.evaluate(() => location.hash), /\/strategy$/,
+    'the Home idea lands inside the Plan Strategy stage');
+  const selected = await page.evaluate(async () => {
+    const plan = PlanStore.active();
+    const latest = await API.getFresh('/api/plans/' + plan.id + '/strategy/latest');
+    return { symbol: plan.symbol, selected: latest.selected };
+  });
+  assert.equal(selected.symbol, symbol);
+  assert.ok(selected.selected && selected.selected.legs && selected.selected.legs.length,
+    'the exact screened contracts become the selected Plan package');
+});
+
+test('Research reaches a fresh ranked field in one goal choice and one command', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  await go('#/research/QQQ');
+  await page.waitForSelector('#symbol-proposed-trades');
+  assert.equal(await page.locator('#symbol-proposed-goal option').count(), 5,
+    'the compact Research front door retains every goal');
+  await captureSettled('trader-own-p15-research-symbol-desktop.png');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await captureSettled('trader-own-p15-research-symbol-mobile.png');
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.selectOption('#symbol-proposed-goal', 'INCOME');
+  await page.click('#symbol-find-proposed');
+  await page.waitForSelector('#app[data-route="plan"][data-ready="true"]', { timeout: 30000 });
+  assert.match(await page.evaluate(() => location.hash), /\/strategy$/);
+  const field = await page.evaluate(async () => {
+    const plan = PlanStore.active();
+    const latest = await API.getFresh('/api/plans/' + plan.id + '/strategy/latest');
+    return { id: plan.id, symbol: plan.symbol,
+      candidates: latest.strategy && latest.strategy.result && latest.strategy.result.candidates || [] };
+  });
+  assert.equal(field.symbol, 'QQQ');
+  assert.ok(field.candidates.length > 0, 'the destination already contains the ranked field');
+  assert.equal(await page.locator('.plan-tool[data-strategy-tool="compare"].active').count(), 1,
+    'the ranked comparison is the visible Strategy tool');
+
+  await go('#/home');
+  await page.waitForSelector('#home-context-line');
+  assert.match(await page.textContent('#home-context-line'), /QQQ.*ranked trades ready in Strategy/i,
+    'Home signs the warm one-click continuation instead of saying only “is at strategy”');
+});
+
 test('plan foundation promotes once, survives reload, versions assumptions, and closes only the chip', async () => {
   await go('#/research/AAPL');
-  await page.waitForSelector('#plan-start');
+  await page.waitForSelector('#symbol-proposed-trades');
   await page.waitForSelector('#research-hero .quote-hero');
   assert.equal(await page.locator('.plan-rail').count(), 0,
     'opening a stock is full Research; no Plan journey exists before the user chooses a goal');
@@ -373,7 +480,8 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'technical market facts carry visible explanations');
   assert.equal(await page.locator('#research-hero .xp.open').count(), 1,
     'desktop Research opens useful market detail instead of hiding it');
-  await page.locator('#plan-start .choice-card').filter({ hasText: 'Earn income' }).click();
+  await page.selectOption('#symbol-proposed-goal', 'INCOME');
+  await page.click('#symbol-find-proposed');
   await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/strategy$/.test(location.hash));
   await page.waitForSelector('#plan-header, #route-error');
   assert.equal(await page.locator('#route-error').count(), 0,
@@ -386,6 +494,7 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'the primary navigation names the Plan workspace while its journey is open');
   assert.match(await page.textContent('#lane-chip'), /DEMO/,
     'the active execution market remains visible inside every Plan stage');
+  await page.waitForSelector('#toast-region .toast-message');
   assert.match(await page.textContent('#toast-region'), /Plan created — AAPL · Earn income/,
     'creating a Plan is announced before the journey continues');
   assert.match(planHash, /\/strategy$/,
@@ -2370,7 +2479,7 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   await go('#/research');
   await page.fill('#symbol-input', 'AAPL');
   await page.click('#symbol-go');
-  await page.waitForSelector('#plan-start');
+  await page.waitForSelector('#symbol-proposed-trades');
   const plansBefore = await page.evaluate(() => PlanStore.all().length);
   await openResearchTab('overview');
   await page.waitForSelector('#research-symbol');
@@ -2414,17 +2523,17 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
 
 test('research keeps non-optionable funds useful without inventing an options Plan or company catalyst', async () => {
   await go('#/research/VTSAX');
-  await page.waitForSelector('#plan-start');
-  assert.match(await page.textContent('#plan-start'), /no listed options/i);
+  await page.waitForSelector('#symbol-proposed-trades');
+  assert.match(await page.textContent('#symbol-proposed-trades'), /no listed options/i);
   assert.ok(await page.locator('#history-card').count(), 'stock history remains available without an options Plan');
-  assert.equal(await page.locator('#plan-start .choice-card:not([disabled])').count(), 0,
-    'no goal can create an unpriceable options Plan');
-  assert.equal(await page.locator('#plan-start .choice-card .choice-unavailable').count(), 5,
-    'every unavailable goal carries its reason on the disabled control');
-  assert.ok((await page.locator('#plan-start .choice-card').evaluateAll(cards => cards.every(card => {
-    const id = card.getAttribute('aria-describedby');
-    return id && card.querySelector('#' + id) && /Unavailable:/.test(card.textContent || '');
-  }))), 'disabled goals expose the visible reason to assistive technology');
+  assert.equal(await page.locator('#symbol-proposed-goal option').count(), 5,
+    'all goals remain visible even when the market cannot price an option package');
+  assert.equal(await page.locator('#symbol-find-proposed').isDisabled(), true,
+    'one explicit command blocks creation of an unpriceable options Plan');
+  assert.equal(await page.getAttribute('#symbol-find-proposed', 'aria-describedby'), 'symbol-proposed-unavailable',
+    'the disabled command points assistive technology at its visible reason');
+  assert.ok(await page.locator('#symbol-proposed-unavailable').isVisible(),
+    'the data reason sits beside the disabled command rather than in a remote warning');
   await page.waitForSelector('#news-overview-card .news-tile');
   const prompts = await page.textContent('#news-overview-card');
   assert.match(prompts, /scenario prompts, not news about VTSAX/i);
@@ -2463,32 +2572,27 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   assert.ok(await page.locator('#sector-grid .destination-cue').count() >= 4,
     'destination cards use one explicit open affordance instead of hover underlines');
   await page.click('#sector-grid .sym-card[data-sym="AAPL"]');
-  await page.waitForSelector('#plan-start');
+  await page.waitForSelector('#symbol-proposed-trades');
   assert.doesNotMatch(await page.textContent('#research-hero'), /building history/i,
     'Research never presents an inert IV-rank progress placeholder');
-  assert.match(await page.textContent('#plan-start'), /Turn this research into a Plan/);
+  assert.match(await page.textContent('#symbol-proposed-trades'), /Find proposed trades for AAPL/);
   const intentChoices = await page.evaluate(() => {
-    const grid = document.querySelector('#plan-start .plan-intent-grid');
-    const cards = Array.from(grid.querySelectorAll('.choice-card'));
-    const gridBox = grid.getBoundingClientRect();
+    const card = document.querySelector('#symbol-proposed-trades');
+    const select = document.querySelector('#symbol-proposed-goal');
+    const action = document.querySelector('#symbol-find-proposed');
+    const cardBox = card.getBoundingClientRect();
     return {
-      count: cards.length,
-      display: getComputedStyle(grid).display,
-      cards: cards.map(card => {
-        const css = getComputedStyle(card);
-        const box = card.getBoundingClientRect();
-        return { tag: card.tagName, textAlign: css.textAlign,
-          minHeight: parseFloat(css.minHeight),
-          inside: box.left >= gridBox.left - 1 && box.right <= gridBox.right + 1,
-          visible: box.width > 120 && box.height >= 80 };
-      })
+      goals: select.options.length,
+      selectInside: select.getBoundingClientRect().left >= cardBox.left
+        && select.getBoundingClientRect().right <= cardBox.right,
+      actionInside: action.getBoundingClientRect().left >= cardBox.left
+        && action.getBoundingClientRect().right <= cardBox.right,
+      actionVisible: action.getBoundingClientRect().width > 120 && action.getBoundingClientRect().height > 30
     };
   });
-  assert.equal(intentChoices.display, 'grid', 'the explicit Plan goal chooser uses the shared choice grid');
-  assert.equal(intentChoices.count, 5, 'every Plan goal remains available before commitment');
-  assert.ok(intentChoices.cards.every(card => card.tag === 'BUTTON' && card.textAlign === 'left'
-    && card.minHeight >= 80 && card.inside && card.visible),
-  'goal choices are full pressable cards with stable geometry: ' + JSON.stringify(intentChoices));
+  assert.equal(intentChoices.goals, 5, 'every Plan goal remains available before commitment');
+  assert.ok(intentChoices.selectInside && intentChoices.actionInside && intentChoices.actionVisible,
+    'the compact goal and action remain fully visible inside the discovery card: ' + JSON.stringify(intentChoices));
 
   const plansBeforeEvidence = await page.evaluate(() => PlanStore.all().length);
   await openResearchTab('view');
@@ -2511,7 +2615,8 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   assert.equal(await page.evaluate(() => PlanStore.all().length), plansBeforeEvidence,
     'selecting and testing a public view does not silently create a Plan');
   await openResearchTab('overview');
-  await page.locator('#plan-start .plan-intent-grid .choice-card').filter({ hasText: 'Buy at a discount' }).click();
+  await page.selectOption('#symbol-proposed-goal', 'ACQUIRE');
+  await page.click('#symbol-find-proposed');
   await page.waitForFunction(() => document.querySelector('#plan-header')?.textContent.includes('Buy at a discount')
     && location.hash.endsWith('/strategy'), null, { timeout: 15000 });
   await page.waitForSelector('#plan-strategy-body');
@@ -3284,7 +3389,16 @@ test('universe Scout starts distinct Plans from the current Research market', as
   await page.evaluate(() => Learn.setLevel('beginner'));
   await go('#/research');
   await page.waitForSelector('#research-plan-scout');
+  assert.equal(await page.evaluate(() => {
+    const scout = document.getElementById('research-plan-scout');
+    const sectors = document.getElementById('sector-explorer');
+    return !!(scout.compareDocumentPosition(sectors) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }), true, 'Universe Scout appears before the ticker grid instead of below the entire Research index');
   assert.match(await page.textContent('#research-plan-scout'), /when you do not already have a ticker/i);
+  await captureSettled('trader-own-p15-research-scout-desktop.png');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await captureSettled('trader-own-p15-research-scout-mobile.png');
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.selectOption('#universe-scout-intent', 'DIRECTIONAL');
   await page.selectOption('#universe-scout-horizon', 'month');
   await page.click('#universe-scout-run');
@@ -3298,9 +3412,18 @@ test('universe Scout starts distinct Plans from the current Research market', as
     'universe Scout uses the same economic classification as single-symbol ranking');
   const first = page.locator('#universe-scout-results .universe-scout-pick').first();
   const symbol = (await first.locator('h3').textContent()).trim();
-  await first.getByRole('button', { name: new RegExp('Open ' + symbol + ' Plan') }).click();
+  await first.getByRole('button', { name: /Use this in a Plan|Open .* in Strategy/ }).click();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
+  assert.match(await page.evaluate(() => location.hash), /\/strategy$/,
+    'a leading expression lands at Strategy rather than dropping back at Understand');
   assert.match(await page.textContent('#plan-header'), new RegExp(symbol));
+  const linked = await page.evaluate(async () => {
+    const plan = PlanStore.active();
+    const latest = await API.getFresh('/api/plans/' + plan.id + '/strategy/latest');
+    return { selected: latest.selected, intent: plan.intent };
+  });
+  assert.ok(linked.selected && linked.selected.legs && linked.selected.legs.length,
+    'the Scout leading expression is the exact package selected in the destination Plan');
 });
 
 test('beginner help adds information instead of echoing visible labels', async () => {
@@ -4853,7 +4976,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
     'card is a native link into full Research without disclosure semantics');
   // Pointer movement/arrow keys explore; clicking anywhere opens full analysis before a Plan exists.
   await page.locator('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg').click();
-  await page.waitForSelector('#plan-start', { timeout: 15000 });
+  await page.waitForSelector('#symbol-proposed-trades', { timeout: 15000 });
   await page.waitForSelector('#research-hero .quote-hero', { timeout: 15000 });
   assert.match(await page.textContent('#research-hero'), /IV rank.*not available in a generated market/is,
     'IV rank stays visible and lane-honest when observed snapshot history cannot apply');
@@ -4869,7 +4992,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   });
   assert.ok(savedExplorerY >= 100, 'the explorer has enough real content to save a meaningful position');
   await page.locator('#sector-grid .sym-card[data-sym="AAPL"]').click();
-  await page.waitForSelector('#plan-start', { timeout: 15000 });
+  await page.waitForSelector('#symbol-proposed-trades', { timeout: 15000 });
   const storedExplorerY = await page.evaluate(() => App.state.explorerScroll);
   assert.ok(storedExplorerY >= 50,
     'the destination card records the explorer position before navigation; got ' + storedExplorerY);
@@ -4878,7 +5001,8 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.selectOption('#tv-view', 'bearish');
   await page.waitForSelector('#research-outcomes');
   await openResearchTab('overview');
-  await page.locator('#plan-start .choice-card').filter({ hasText: 'Trade a view' }).click();
+  await page.selectOption('#symbol-proposed-goal', 'DIRECTIONAL');
+  await page.click('#symbol-find-proposed');
   await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/strategy$/.test(location.hash)
     && document.getElementById('app').getAttribute('data-ready') === 'true', null, { timeout: 15000 });
   await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
@@ -4910,7 +5034,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   // unavailable state. Explicit Demo has no intentionally dead symbols.
   if (await page.locator('#sector-grid .tile-nodata').count()) {
     await page.locator('#sector-grid .tile-nodata').first().click();
-    await page.waitForSelector('#plan-start', { timeout: 15000 });
+    await page.waitForSelector('#symbol-proposed-trades', { timeout: 15000 });
     assert.match(await page.evaluate(() => window.location.hash), /^#\/research\//,
       'quote-less cards still open an honest analysis rather than becoming dead controls');
     await page.goBack();
@@ -4926,7 +5050,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.keyboard.press('/');
   await page.keyboard.type('AAPL');
   await page.keyboard.press('Enter');
-  await page.waitForSelector('#plan-start');
+  await page.waitForSelector('#symbol-proposed-trades');
   assert.equal(await page.evaluate(() => location.hash), '#/research/AAPL');
 
   // Tape click-through navigates to research (hovering pauses the marquee — same as a user)
@@ -4946,7 +5070,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   });
   assert.ok(tapeHit, 'the paused ticker exposes at least one unobstructed clickable quote');
   await page.mouse.click(tapeHit.x, tapeHit.y);
-  await page.waitForSelector('#plan-start');
+  await page.waitForSelector('#symbol-proposed-trades');
   assert.match(await page.evaluate(() => location.hash), /^#\/research\/[A-Z0-9._-]+$/,
     'the tape and cards share one direct full-analysis destination contract');
   // Explicit Demo owns this universe already; no hidden sector mutation is needed.

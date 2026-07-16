@@ -237,7 +237,7 @@ test('live: research a real symbol end to end', async () => {
       'missing charts release unused chart height without hiding the unavailable state');
   }
   await go('#/research/AAPL');
-  await page.waitForSelector('#plan-start', { timeout: 30000 });
+  await page.waitForSelector('#symbol-proposed-trades', { timeout: 30000 });
   await page.waitForSelector('#research-symbol', { timeout: 30000 });
   const quoteBadge = await page.textContent('.quote-hero .badge');
   assert.match(quoteBadge, /REALTIME|DELAYED|EOD|STALE/i, 'observed quote age is labeled');

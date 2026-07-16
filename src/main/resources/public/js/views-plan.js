@@ -75,6 +75,12 @@
       ? c.evaluation.assessment.economics : null;
   }
 
+  function candidateFromEvaluation(item) {
+    if (!item) return null;
+    return item.evaluation && item.evaluation.candidate
+      ? Object.assign({}, item.evaluation.candidate, { evaluation: item.evaluation }) : item;
+  }
+
   function candidateDecisionScore(c) {
     return c && c.evaluation ? c.evaluation.decisionScore : null;
   }
@@ -416,15 +422,13 @@
       ? intent : 'DIRECTIONAL';
   }
 
-  async function openCandidateAsPlan(c, rawSymbol, extra) {
+  async function openCandidateAsPlan(c, rawSymbol, options) {
+    options = options || {};
     var symbol = String(rawSymbol || App.context.symbol('AAPL')).toUpperCase();
     var intent = tradeIntent(c && c.intent || App.context.goal());
-    var horizon = App.context.horizon('month');
-    var thesis = App.context.thesis('neutral');
+    var horizon = options.horizon || App.context.horizon('month');
+    var thesis = options.thesis || App.context.thesis('neutral');
     App.context.update({ symbol: symbol, goal: intent, horizon: horizon, thesis: thesis });
-    var days = Product.Horizon.sessions(horizon);
-    var plan = await PlanStore.create({ symbol: symbol, intent: intent, thesis: thesis,
-      horizonDays: days, riskMode: riskMode() });
     var position = Object.assign({ symbol: symbol, strategy: c.strategy, qty: c.qty,
       legs: (c.legs || []).map(function (leg) { return {
         action: leg.action, type: leg.stock ? 'STOCK' : leg.type,
@@ -435,10 +439,22 @@
       }; }), thesis: thesis, horizon: horizon, riskMode: riskMode(), intent: intent,
       useHeldShares: !!c.usesHeldShares, recommendationId: c.recommendationId || null,
       source: 'PLAN', fillNature: 'PROPOSED'
-    }, extra || {});
-    var selected = await PlanStore.saveCustom(plan, position);
-    await PlanStore.focus(selected.plan, 'DECIDE');
-    return selected.plan;
+    }, options.position || {});
+    return startPlan({ symbol: symbol, intent: intent, horizon: horizon, thesis: thesis },
+      options.destination || 'DECIDE', async function (plan) {
+        var selected = await PlanStore.saveCustom(plan, position);
+        var candidate = selected.strategy && selected.strategy.result && selected.strategy.result.candidate;
+        if (!candidate || candidate.selected !== true) {
+          throw new Error((selected.preview && selected.preview.blockReasons || []).join(' ')
+            || 'This package was analyzed but could not become the Plan structure.');
+        }
+        var updated = selected.plan || plan;
+        var ui = PlanStore.ui(updated.id);
+        ui.strategyView = 'compare';
+        ui.selectedCandidate = candidate;
+        ui.strategyFocusCandidate = candidate.id;
+        return updated;
+      });
   }
 
   function candidateWorkflowActions(c, symbolForTicket, beginner) {
@@ -1785,7 +1801,8 @@
         }
       }
       var controls = el('div', { class: 'card plan-strategy-controls' },
-        UI.cardHeader(beginner ? 'Find proposed trades for this Plan' : 'Compare structures for this Plan',
+        UI.cardHeader(el('span', {}, beginner ? 'Find proposed trades for this Plan' : 'Compare structures for this Plan',
+          UI.info('proposedtrades')),
           el('span', { class: 'badge badge-dim' }, planRef.plan.symbol + ' · ' + planIntentLabel(planRef.plan.intent))),
         el('p', { class: 'muted' }, beginner
           ? 'StrikeBench compares the complete strategy catalog using this Plan’s goal, view, time, holdings, account and risk budget. Poor fits stay visible as refused or teaching cases.'
@@ -3039,7 +3056,8 @@
     try { await PlanStore.load(true); }
     catch (e) { /* The library renders the visible failure. */ }
     root.appendChild(el('div', { class: 'page-heading plan-library-heading' },
-      el('div', {}, el('div', { class: 'eyebrow' }, 'YOUR WORK'), el('h1', {}, 'Plans'),
+      el('div', {}, el('div', { class: 'eyebrow' }, 'YOUR WORK'),
+        el('div', { class: 'heading-info-row' }, el('h1', {}, 'Plans'), UI.info('plans')),
         el('p', { class: 'muted page-intro' },
           'One place for every saved market view, structure, outcome test, decision, and review.'))));
     var library = el('section', { class: 'card home-plan-library plan-library-page', id: 'plans-library' });
@@ -3062,6 +3080,8 @@
     economicVerdict: economicVerdict,
     marketEvAfterCosts: marketEvAfterCosts,
     economicAssessmentBlock: economicAssessmentBlock,
-    decisionMetricsReceipt: decisionMetricsReceipt
+    decisionMetricsReceipt: decisionMetricsReceipt,
+    openCandidateAsPlan: openCandidateAsPlan,
+    candidateFromEvaluation: candidateFromEvaluation
   });
 })();
