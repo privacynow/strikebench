@@ -177,17 +177,19 @@ final class PlanStrategyController {
         Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
         ObjectNode candidateJson = Json.MAPPER.valueToTree(candidate);
         long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
-        io.liftandshift.strikebench.eval.StrategyEvaluation evaluation;
+        ApiResponses.EvaluationReceipt evaluation;
         try {
-            evaluation = evaluations.assessExact(plan.symbol(), candidate, account.buyingPowerCents(),
-                    root.analysisCtx(ctx), PlanController.worldParam(root.activeWorld(ctx)), preview.ok(), preview.blockReasons(),
-                    roundTripFees, practiceExposure(account, plan.symbol()));
+            evaluation = ApiResponses.EvaluationReceipt.of(evaluations.assessExact(
+                    plan.symbol(), candidate, account.buyingPowerCents(),
+                    root.analysisCtx(ctx), PlanController.worldParam(root.activeWorld(ctx)), preview.ok(),
+                    preview.blockReasons(), roundTripFees, practiceExposure(account, plan.symbol())));
         } catch (RuntimeException e) {
             log.debug("Plan custom-package assessment is unavailable", e);
-            throw new io.liftandshift.strikebench.util.DataUnavailableException(
-                    "The exact package was checked mechanically, but its complete decision assessment is unavailable; no partial substitute was returned", e);
+            evaluation = ApiResponses.EvaluationReceipt.unavailable(
+                    "The package mechanics were checked, but the broader decision assessment is unavailable because one or more market inputs could not be observed. No score or economic claim was substituted.",
+                    preview.ok(), preview.blockReasons(), roundTripFees);
         }
-        candidateJson.set("evaluation", Json.MAPPER.valueToTree(ApiResponses.EvaluationReceipt.of(evaluation)));
+        candidateJson.set("evaluation", Json.MAPPER.valueToTree(evaluation));
         JsonNode requestJson = Json.MAPPER.valueToTree(exactBody);
         var saved = planStrategy.saveCustom(root.ownerId(ctx), plan, requestJson, candidateJson,
                 body.expectedVersion(), preview.ok());

@@ -601,20 +601,32 @@
       resultHost.innerHTML = '';
       var response = out && (out.preview || out);
       var selected = out && out.strategy && out.strategy.result && out.strategy.result.candidate;
+      var analysis = out && out.evaluation
+        ? out.evaluation : selected && selected.evaluation ? selected.evaluation : null;
+      var assessmentUnavailable = analysis && analysis.available === false;
       var economics = out && out.evaluation && out.evaluation.assessment
           ? out.evaluation.assessment.economics
           : selected && selected.evaluation && selected.evaluation.assessment
             ? selected.evaluation.assessment.economics : null;
       if (!response) return;
-      resultHost.appendChild(UI.actionFeedback(response.ok === false ? 'caution' : 'ok',
-        response.ok === false ? 'Analyzed with constraints' : 'Analysis complete',
-        response.ok === false ? (response.blockReasons || []).join(' ') : 'The exact edited package now drives these facts.'));
+      var notSelected = options.planId && (!selected || selected.selected !== true);
+      resultHost.appendChild(UI.actionFeedback(response.ok === false || assessmentUnavailable ? 'caution' : 'ok',
+        response.ok === false && options.planId ? 'Not selected in this Plan'
+          : response.ok === false ? 'Analyzed with constraints'
+            : assessmentUnavailable && selected && selected.selected === true ? 'Selected with limited assessment'
+              : assessmentUnavailable ? 'Mechanical preview ready' : 'Analysis complete',
+        response.ok === false
+          ? ((response.blockReasons || []).join(' ') + (notSelected
+            ? ' This package did not become the Plan structure.'
+              + (selected && selected.selectionCleared ? ' The prior selection was cleared.' : '') : '')).trim()
+          : assessmentUnavailable
+            ? ((selected && selected.selected === true
+              ? 'This mechanically valid package is now the Plan structure. ' : '') + analysis.unavailableReason)
+            : 'The exact edited package now drives these facts.'));
       if (isPast(draft.occurredAt)) {
         resultHost.appendChild(UI.actionFeedback('caution', 'Current fresh-eyes analysis',
           'The entry date is preserved, but this result uses the market evidence available now. Retrospective replay will use the dated historical path and label each modeled or observed leg-day separately.'));
       }
-      var analysis = out && out.evaluation
-        ? out.evaluation : selected && selected.evaluation ? selected.evaluation : null;
       var canonicalPop = analysis && analysis.risk ? analysis.risk.pop : null;
       resultHost.appendChild(el('div', { class: 'grid grid-4 position-analysis-stats' },
         response.entryNetPremiumCents == null ? null : UI.stat(response.entryNetPremiumCents >= 0 ? 'Credit' : 'Cost', fmtMoney(Math.abs(response.entryNetPremiumCents))),
@@ -638,7 +650,7 @@
       var fillBases = Array.from(new Set((response.legs || []).map(function (leg) { return leg.fillBasis; }).filter(Boolean)));
       if (fillBases.length) resultHost.appendChild(el('p', { class: 'muted small position-fill-basis' },
         'Entry-price receipt: ' + fillBases.map(function (basis) { return String(basis).replaceAll('_', ' ').toLowerCase(); }).join(' + ') + '.'));
-      if (options.planId && response.ok !== false) resultHost.appendChild(el('button', { type: 'button', class: 'btn',
+      if (options.planId && response.ok !== false && selected && selected.selected === true) resultHost.appendChild(el('button', { type: 'button', class: 'btn',
         onclick: function () { App.navigate('#/plan/' + options.planId + '/outcomes'); } }, 'Continue to Outcomes'));
     }
 
@@ -680,10 +692,15 @@
         if (response && response.ok !== false && selected && selected.id && selected.selected === true) {
           draft.selectedCandidateId = selected.id;
           draft.selectedFingerprint = lastAnalysisFingerprint;
+          options.initialSelection = selected;
+          remember();
+        } else if (options.planId && response) {
+          draft.selectedCandidateId = null;
+          draft.selectedFingerprint = null;
+          options.initialSelection = null;
           remember();
         }
         renderAnalysis(out);
-        UI.toast('Trade analyzed', 'ok');
         return out;
       } catch (error) {
         if (resultHost) { resultHost.innerHTML = ''; resultHost.appendChild(UI.actionFeedback('danger', 'Could not analyze', error.message || String(error))); }

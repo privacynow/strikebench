@@ -50,7 +50,7 @@ class PlanStrategyServiceTest {
                    "intent":"INCOME","intents":["INCOME","DIRECTIONAL"],"assignmentProb":0.28,
                    "annualizedYieldPct":18.2,"effectivePrice":"243.75","intentNote":"Earn inside a range",
                    "usesHeldShares":false,"sharesNeeded":0,"combinedMaxLossCents":37500,
-                   "evaluation":{"decisionScore":68.0,"viable":true,
+                   "evaluation":{"available":true,"decisionScore":68.0,"viable":true,
                      "capital":{},"volatility":{},"risk":{"pop":0.61},
                      "assessment":{"mechanics":{"eligible":true,"reasons":[]},
                        "economics":{"verdict":"FAVORABLE","placement":"WORTH_INVESTIGATING",
@@ -124,7 +124,7 @@ class PlanStrategyServiceTest {
                  "warnings":[],"confidence":1.0,"whyConsidered":"Exact ticket",
                  "bestUpside":"","biggestRisk":"","wouldInvalidate":"","beginnerExplanation":"",
                  "intent":"DIRECTIONAL","intents":["DIRECTIONAL"],"assignmentProb":0.22,
-                 "evaluation":{"decisionScore":44.0,"viable":true,
+	                 "evaluation":{"available":true,"decisionScore":44.0,"viable":true,
                    "capital":{},"volatility":{},"risk":{"pop":0.43},"evidence":{},"management":{},"score":{},
                    "assessment":{"mechanics":{"eligible":true,"reasons":[]},
                      "economics":{"verdict":"MIXED","placement":"LEARN_FROM",
@@ -163,10 +163,13 @@ class PlanStrategyServiceTest {
                 Json.parse("{\"source\":\"ANALYZE\"}"), constrained, selectedVersion, false);
 
         assertThat(analyzed.result().at("/candidate/selected").asBoolean()).isFalse();
-        assertThat(plans.get(null, plan.id()).version()).isEqualTo(selectedVersion);
-        assertThat(strategies.selectedCandidate(null, plan.id()).get("id").asText()).isEqualTo(selectedId);
+        Plan.View afterConstraint = plans.get(null, plan.id());
+        assertThat(afterConstraint.version()).isEqualTo(selectedVersion + 1);
+        assertThat(afterConstraint.furthestStage()).isEqualTo(Plan.Stage.STRATEGY);
+        assertThat(strategies.selectedCandidate(null, plan.id())).isNull();
         assertThat(db.query("SELECT COUNT(*) n FROM plan_candidate WHERE selected=1", r -> r.lng("n")))
-                .containsExactly(1L);
+                .containsExactly(0L);
+        assertThat(selectedId).isNotBlank();
     }
 
     @Test void obsoleteOrPartialEvaluationPayloadsAreRejectedInsteadOfAdapted() {
@@ -174,7 +177,7 @@ class PlanStrategyServiceTest {
                 new Plan.CreateRequest("strategy-current-receipt", "AAPL", "DIRECTIONAL", null, null,
                         "bullish", 30, null, "balanced", null, null, null));
         ObjectNode oldFullEvaluation = (ObjectNode) Json.parse("""
-                {"strategy":"CUSTOM","evaluation":{"id":"eval_old","decisionScore":50,"viable":true}}
+                {"strategy":"CUSTOM","evaluation":{"id":"eval_old","available":true,"decisionScore":50,"viable":true}}
                 """);
         assertThatThrownBy(() -> strategies.saveCustom(null, plan, Json.parse("{}"),
                 oldFullEvaluation, plan.version(), false))
@@ -182,7 +185,7 @@ class PlanStrategyServiceTest {
                 .hasMessageContaining("full StrategyEvaluation payloads are not accepted");
 
         ObjectNode partialReceipt = (ObjectNode) Json.parse("""
-                {"strategy":"CUSTOM","evaluation":{"decisionScore":50,"viable":true,"assessment":{}}}
+                {"strategy":"CUSTOM","evaluation":{"available":true,"decisionScore":50,"viable":true,"assessment":{}}}
                 """);
         assertThatThrownBy(() -> strategies.saveCustom(null, plan, Json.parse("{}"),
                 partialReceipt, plan.version(), false))
@@ -208,7 +211,7 @@ class PlanStrategyServiceTest {
                    "whyConsidered":"Bullish peer","bestUpside":"Capped gain","biggestRisk":"Stock falls",
                    "wouldInvalidate":"Trend reverses","beginnerExplanation":"A capped bullish trade",
                    "intent":"DIRECTIONAL","intents":["DIRECTIONAL"],
-                   "evaluation":{"decisionScore":41.0,"viable":true,
+                   "evaluation":{"available":true,"decisionScore":41.0,"viable":true,
                      "capital":{},"volatility":{},"risk":{"pop":0.47},"evidence":{},"management":{},"score":{},
                      "assessment":{"mechanics":{"eligible":true,"reasons":[]},
                        "economics":{"verdict":"MIXED","placement":"LEARN_FROM","label":"Mixed economics",

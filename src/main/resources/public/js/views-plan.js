@@ -655,14 +655,23 @@
   function planRail(plan, active, provisional) {
     var status = plan.status || 'DRAFT';
     var manageReady = ['DECIDED_CASH', 'POSITION_OPEN', 'CLOSED'].indexOf(status) >= 0;
+    var furthestIndex = PLAN_STAGES.findIndex(function (stage) {
+      return stage.key === (plan.furthestStage || 'UNDERSTAND');
+    });
+    var structureReady = furthestIndex >= PLAN_STAGES.findIndex(function (stage) { return stage.key === 'OUTCOMES'; });
     return el('nav', { class: 'plan-rail', 'aria-label': 'Plan journey' },
       el('ol', {}, PLAN_STAGES.map(function (stage) {
         var selected = stage.key === active.key;
-        var locked = provisional ? stage.key !== 'UNDERSTAND' : stage.key === 'MANAGE_REVIEW' && !manageReady;
+        var structureLocked = (stage.key === 'OUTCOMES' || stage.key === 'DECIDE') && !structureReady;
+        var manageLocked = stage.key === 'MANAGE_REVIEW' && !manageReady;
+        var locked = provisional ? stage.key !== 'UNDERSTAND' : structureLocked || manageLocked;
+        var lockedReason = structureLocked ? 'Unlocks after you select a structure in Strategy.'
+          : manageLocked ? 'Unlocks after a decision or rehearsal.' : '';
         return el('li', { class: (selected ? 'active ' : '') + (locked ? 'locked' : 'ready') },
           el('button', { type: 'button', disabled: locked ? 'disabled' : null,
             'aria-current': selected ? 'step' : null,
-            'aria-label': stage.label + '. ' + (locked ? 'Unlocks after a decision or rehearsal.' : stage.question),
+            title: locked ? lockedReason : null,
+            'aria-label': stage.label + '. ' + (locked ? lockedReason : stage.question),
             onclick: async function () {
               if (selected || provisional) return;
               App.navigate(PlanStore.path(plan, stage.key));
@@ -1451,6 +1460,9 @@
             if (analyzed && analyzed.selected === true) {
               planRef.selected = analyzed;
               ui.selectedCandidate = analyzed;
+            } else {
+              planRef.selected = null;
+              ui.selectedCandidate = null;
             }
             return out;
           }
@@ -1925,17 +1937,49 @@
     var latest = await PlanStore.latestOutcomes(initialPlan.id, true);
     var selected = latest.selected;
     if (!selected) {
+      var staleSelection = latest.selectionState === 'STALE' ? latest.priorSelection : null;
+      function openStrategyForSelection(button) {
+        if (staleSelection && window.PositionEditor && PositionEditor.draftFromCandidate) {
+          var draft = PositionEditor.draftFromCandidate(staleSelection,
+            { lockedSymbol: planRef.plan.symbol });
+          if (draft) {
+            draft.selectedCandidateId = null;
+            draft.selectedFingerprint = null;
+            App.state.positionDrafts = App.state.positionDrafts || {};
+            App.state.positionDrafts['plan:' + planRef.plan.id] = draft;
+            ui.strategyView = 'yourTrade';
+          }
+        }
+        focusPlanFrom(button || null, planRef.plan, 'STRATEGY');
+      }
       content.appendChild(el('section', { class: 'card plan-outcomes-prerequisite', id: 'plan-outcomes-prerequisite' },
-        UI.cardHeader('Choose exact contracts before testing outcomes'),
+        UI.cardHeader(staleSelection ? 'Reprice the prior structure' : 'Choose exact contracts before testing outcomes'),
         el('p', { class: 'muted' },
-          'A stock view is not yet a position. Strike, expiration, side, and quantity determine the odds, expected value, worst case, and path-by-path P/L.'),
+          staleSelection
+            ? 'The Plan assumptions changed after this package was selected. Its old results remain historical evidence, but they are not current. Reprice the same legs or choose a different structure before testing outcomes.'
+            : 'A stock view is not yet a position. Strike, expiration, side, and quantity determine the odds, expected value, worst case, and path-by-path P/L.'),
         el('div', { class: 'plan-outcomes-prerequisite-grid' },
           UI.fact('Market-implied lens', 'POP + after-cost EV'),
-          UI.fact('Possible-futures lens', 'p5 · median · p95'),
+          UI.fact('Possible futures (Monte Carlo)', 'p5 · median · p95'),
           UI.fact('Historical lens', 'No-look-ahead replay')),
         el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn',
-          onclick: function () { focusPlanFrom(this, planRef.plan, 'STRATEGY'); }
-        }, 'Choose contracts in Strategy'))));
+          onclick: function () { openStrategyForSelection(this); }
+        }, staleSelection ? 'Reprice the prior structure' : 'Choose contracts in Strategy'))));
+      content.appendChild(planOutcomeWorkspace({ id: 'plan-outcomes', state: ui.outcomes, label: 'Outcome basis',
+        modes: [
+          { key: 'market', label: 'Market odds', description: 'Implied by the option book', available: false,
+            unavailableReason: 'Select exact contracts in Strategy before calculating the package odds.',
+            setupLabel: staleSelection ? 'Reprice prior structure' : 'Choose exact contracts', setup: function () { openStrategyForSelection(null); } },
+          { key: 'model', label: 'Possible futures (Monte Carlo)', description: 'Position P/L across modeled paths', available: false,
+            unavailableReason: 'Select exact contracts first; Monte Carlo then prices that same package across the stored possible futures.',
+            setupLabel: staleSelection ? 'Reprice prior structure' : 'Choose exact contracts', setup: function () { openStrategyForSelection(null); } },
+          { key: 'analogs', label: 'Past analogs', description: 'Matching historical episodes', available: false,
+            unavailableReason: 'Select exact contracts before applying the package to matching historical episodes.',
+            setupLabel: staleSelection ? 'Reprice prior structure' : 'Choose exact contracts', setup: function () { openStrategyForSelection(null); } },
+          { key: 'backtest', label: 'Rule replay', description: 'Repeated historical entries', available: false,
+            unavailableReason: 'Select a structure before replaying its named entry and management rules.',
+            setupLabel: staleSelection ? 'Reprice prior structure' : 'Choose exact contracts', setup: function () { openStrategyForSelection(null); } }
+        ] }).el);
       return;
     }
     (latest.outcomes || []).forEach(function (run) { ui.outcomeRuns[run.basis] = run; });
@@ -1970,7 +2014,7 @@
         { key: 'market', label: 'Market odds', description: 'Implied by the option book',
           note: 'Risk-neutral odds and after-cost EV from the captured executable package; market pricing, not a forecast.',
           render: renderMarket },
-        { key: 'model', label: 'Model futures', description: 'The Evidence ensemble',
+        { key: 'model', label: 'Possible futures (Monte Carlo)', description: 'The Evidence ensemble',
           note: 'The exact position on the same stored path matrix and IV trajectory shown in Evidence.', render: renderModel },
         { key: 'analogs', label: 'Past analogs', description: 'Matching historical episodes',
           note: 'Direct analog occurrences or whole-path bootstrap resamples. Conditional history, never model odds.', render: renderAnalogs },
@@ -2241,9 +2285,25 @@
     }
     var selected = latest.selected;
     if (!selected) {
-      content.appendChild(UI.emptyState('Choose a structure before deciding',
-        'Decide never invents or recaptures a package. Select exact contracts in Strategy first.',
-        'Open Strategy', function () { focusPlanFrom(this, planRef.plan, 'STRATEGY'); }));
+      var staleSelection = latest.selectionState === 'STALE' ? latest.priorSelection : null;
+      content.appendChild(UI.emptyState(staleSelection ? 'Reprice the prior structure before deciding'
+        : 'Choose a structure before deciding', staleSelection
+          ? 'The Plan assumptions changed after the prior package was selected. Decide will not reuse its old price or evidence silently.'
+          : 'Decide never invents or recaptures a package. Select exact contracts in Strategy first.',
+        staleSelection ? 'Reprice prior structure' : 'Open Strategy', function () {
+          if (staleSelection && window.PositionEditor && PositionEditor.draftFromCandidate) {
+            var draft = PositionEditor.draftFromCandidate(staleSelection,
+              { lockedSymbol: planRef.plan.symbol });
+            if (draft) {
+              draft.selectedCandidateId = null;
+              draft.selectedFingerprint = null;
+              App.state.positionDrafts = App.state.positionDrafts || {};
+              App.state.positionDrafts['plan:' + planRef.plan.id] = draft;
+              ui.strategyView = 'yourTrade';
+            }
+          }
+          focusPlanFrom(this, planRef.plan, 'STRATEGY');
+        }));
       return;
     }
     var selectedPackageKey = selected.id || JSON.stringify({ strategy: selected.strategy,

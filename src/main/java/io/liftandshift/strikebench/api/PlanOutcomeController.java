@@ -73,8 +73,11 @@ final class PlanOutcomeController {
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         ObjectNode out = planOutcomes.latest(root.ownerId(ctx), plan, root.analysisCtx(ctx));
         JsonNode selected = planStrategy.selectedCandidate(root.ownerId(ctx), plan.id());
+        JsonNode prior = selected == null
+                ? planStrategy.priorSelectedCandidate(root.ownerId(ctx), plan.id()) : null;
         ctx.json(new ApiResponses.PlanOutcomesLatest<>(out.path("outcomes"), out.path("comparisons"),
-                out.path("backtests"), selected));
+                out.path("backtests"), selected, selected != null ? "CURRENT" : prior != null ? "STALE" : "NONE",
+                prior));
     }
 
     /** Evidence owns path generation; Outcomes later values the exact selected package on this artifact. */

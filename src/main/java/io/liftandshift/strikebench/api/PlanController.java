@@ -119,6 +119,9 @@ final class PlanController {
         if (required) throw new IllegalStateException("Select a structure in Strategy before continuing.");
         return null;
     }
+    JsonNode priorSelectedCandidate(Context ctx, io.liftandshift.strikebench.plan.Plan.View plan) {
+        return planStrategy.priorSelectedCandidate(ownerId(ctx), plan.id());
+    }
     private static <T> T bodyOrNull(Context ctx, Class<T> type) { return ApiRequest.bodyOrNull(ctx, type); }
     private static <T> T requireBody(T body) { return ApiRequest.requireBody(body); }
     static String worldParam(String world) {

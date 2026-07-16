@@ -164,7 +164,7 @@ class ArtifactRetentionServiceTest {
 
 	private static String currentEvaluationReceipt() {
 	    return """
-	            {"decisionScore":50,"viable":true,"capital":{},"volatility":{},"risk":{},"evidence":{},
+	            {"available":true,"decisionScore":50,"viable":true,"capital":{},"volatility":{},"risk":{},"evidence":{},
 	             "management":{},"score":{},"assessment":{},"stance":{},"participation":{},
 	             "impliedStance":{},"ivContext":{},"coverage":{},"explanation":{}}
 	            """;

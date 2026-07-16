@@ -79,7 +79,8 @@ public final class ApiResponses {
     public record PlanBacktest<T, U, V>(T plan, U backtest, V report) {}
     public record PlanRehearsal<T, U>(T rehearsal, U plan) {}
     public record PlanDecision<T, U>(T plan, U decision) {}
-    public record PlanDecisionState<T, U, V>(T plan, U selected, V decision) {}
+    public record PlanDecisionState<T, U, V, W>(T plan, U selected, V decision,
+                                                String selectionState, W priorSelection) {}
     public record PlanPlacedTrade<T, U, V, W>(T plan, U trade, V decision, W warnings) {}
     public record PlanManagement<T, U>(T plan, U management) {}
     public record PlanMark<T, U, V>(T plan, U mark, V management) {}
@@ -88,7 +89,8 @@ public final class ApiResponses {
     public record PlanWorkspace<T, U, V, W>(T plan, U decision, V management, W trade) {}
     public record PlanRows<T>(T plans, String market) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record PlanOutcomesLatest<T, U, V, W>(T outcomes, U comparisons, V backtests, W selected) {}
+    public record PlanOutcomesLatest<T, U, V, W, X>(T outcomes, U comparisons, V backtests, W selected,
+                                                    String selectionState, X priorSelection) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanClosedTrade<T, U, V, W>(T plan, U trade, long realizedPnlCents,
                                                V management, W rolledPosition) {}
@@ -153,10 +155,15 @@ public final class ApiResponses {
                                       List<Rejection> rejected,
                                       List<DecisionBaseline> baselines,
                                       String recommendationId, String calibrationNote) {}
-    /** Candidate is carried by its parent row; every decision fact has one canonical receipt. */
+    /** Candidate is carried by its parent row; every available decision fact has one canonical receipt.
+     * A mechanical preview can remain usable when the broader decision assessment cannot be assembled.
+     * In that case {@code available=false} and no score, verdict, or profile is fabricated. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record EvaluationReceipt(
-            double decisionScore,
-            boolean viable,
+            boolean available,
+            String unavailableReason,
+            Double decisionScore,
+            Boolean viable,
             io.liftandshift.strikebench.eval.CapitalProfile capital,
             io.liftandshift.strikebench.eval.VolatilityProfile volatility,
             io.liftandshift.strikebench.eval.RiskProfile risk,
@@ -173,11 +180,39 @@ public final class ApiResponses {
     ) {
         public static EvaluationReceipt of(StrategyEvaluation evaluation) {
             if (evaluation == null) throw new IllegalArgumentException("evaluation is required");
-            return new EvaluationReceipt(evaluation.decisionScore(), evaluation.viable(),
+            return new EvaluationReceipt(true, null, evaluation.decisionScore(), evaluation.viable(),
                     evaluation.capital(), evaluation.volatility(), evaluation.risk(), evaluation.evidence(),
                     evaluation.management(), evaluation.score(), evaluation.assessment(), evaluation.stance(),
                     evaluation.participation(), evaluation.impliedStance(), evaluation.ivContext(),
                     evaluation.coverage(), evaluation.explanation());
+        }
+
+        public static EvaluationReceipt unavailable(String reason, boolean mechanicallyEligible,
+                                                    List<String> mechanicalReasons,
+                                                    long estimatedRoundTripFeesCents) {
+            if (reason == null || reason.isBlank()) {
+                throw new IllegalArgumentException("an unavailable evaluation requires a reason");
+            }
+            List<String> reasons = mechanicalReasons == null
+                    ? List.of(reason) : java.util.stream.Stream.concat(mechanicalReasons.stream(),
+                            java.util.stream.Stream.of(reason)).distinct().toList();
+            var economics = new io.liftandshift.strikebench.eval.EconomicAssessment(
+                    io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE,
+                    mechanicallyEligible ? "MECHANICS_ONLY" : "MECHANICALLY_INELIGIBLE",
+                    mechanicallyEligible ? "Economics unavailable" : "Cannot assess as a trade",
+                    reason, null, null, Math.max(0, estimatedRoundTripFeesCents), null, false, reasons);
+            var assessment = new io.liftandshift.strikebench.eval.FourOutputAssessment(
+                    new io.liftandshift.strikebench.eval.FourOutputAssessment.MechanicalAssessment(
+                            mechanicallyEligible, mechanicalReasons),
+                    economics,
+                    new io.liftandshift.strikebench.eval.FourOutputAssessment.ObjectiveCoherence(
+                            io.liftandshift.strikebench.eval.FourOutputAssessment.Coherence.UNAVAILABLE,
+                            "Direction assessment unavailable", "Duration assessment unavailable",
+                            List.of("Objective fit was not inferred while the decision assessment was unavailable.")),
+                    new io.liftandshift.strikebench.eval.FourOutputAssessment.PortfolioImpacts(
+                            null, null, List.of("Portfolio impact was not inferred from incomplete assessment data.")));
+            return new EvaluationReceipt(false, reason, null, null,
+                    null, null, null, null, null, null, assessment, null, null, null, null, null, null);
         }
     }
     public record CreatedTrade<T, U>(T trade, U warnings) {}

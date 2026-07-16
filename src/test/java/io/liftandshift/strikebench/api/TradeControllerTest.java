@@ -46,4 +46,18 @@ class TradeControllerTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Practice placement");
     }
+
+    @Test
+    void unavailableDecisionAssessmentKeepsMechanicalTruthWithoutInventingAScore() {
+        ApiResponses.EvaluationReceipt receipt = ApiResponses.EvaluationReceipt.unavailable(
+                "Observed decision inputs are unavailable.", true, List.of(), 260L);
+
+        assertThat(receipt.available()).isFalse();
+        assertThat(receipt.decisionScore()).isNull();
+        assertThat(receipt.viable()).isNull();
+        assertThat(receipt.assessment().mechanics().eligible()).isTrue();
+        assertThat(receipt.assessment().economics().verdict())
+                .isEqualTo(io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE);
+        assertThat(receipt.assessment().economics().estimatedRoundTripFeesCents()).isEqualTo(260L);
+    }
 }

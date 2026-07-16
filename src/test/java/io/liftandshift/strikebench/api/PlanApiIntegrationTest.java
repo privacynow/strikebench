@@ -356,6 +356,12 @@ class PlanApiIntegrationTest {
                 "{\"expectedVersion\":" + selected.at("/plan/version").asLong() + ",\"horizonDays\":45}"));
         JsonNode afterRevision = json(get("/api/plans/" + id + "/strategy/latest"));
         assertThat(!afterRevision.has("strategy") || afterRevision.get("strategy").isNull()).isTrue();
+        JsonNode staleOutcomes = json(get("/api/plans/" + id + "/outcomes/latest"));
+        assertThat(staleOutcomes.at("/selectionState").asText()).isEqualTo("STALE");
+        assertThat(staleOutcomes.at("/priorSelection/id").asText()).isEqualTo(candidate.get("id").asText());
+        JsonNode staleDecision = json(get("/api/plans/" + id + "/decision/latest"));
+        assertThat(staleDecision.at("/selectionState").asText()).isEqualTo("STALE");
+        assertThat(staleDecision.at("/priorSelection/id").asText()).isEqualTo(candidate.get("id").asText());
     }
 
     @Test void builderFitUsesThePlanContextWithoutMutatingOrPersistingASecondWorkflow() throws Exception {
@@ -507,7 +513,6 @@ class PlanApiIntegrationTest {
         validPosition.put("fillNature", "PROPOSED");
         validPosition.set("legs", source.get("legs"));
         JsonNode valid = json(post("/api/plans/" + id + "/strategy/custom", validBody.toString()));
-        String selectedId = valid.at("/strategy/result/candidate/id").asText();
         long selectedVersion = valid.at("/plan/version").asLong();
 
         var constrainedBody = validBody.deepCopy();
@@ -517,9 +522,9 @@ class PlanApiIntegrationTest {
 
         assertThat(constrained.at("/preview/ok").asBoolean()).isFalse();
         assertThat(constrained.at("/strategy/result/candidate/selected").asBoolean()).isFalse();
-        assertThat(constrained.at("/plan/version").asLong()).isEqualTo(selectedVersion);
-        assertThat(json(get("/api/plans/" + id + "/strategy/latest")).at("/selected/id").asText())
-                .isEqualTo(selectedId);
+        assertThat(constrained.at("/plan/version").asLong()).isEqualTo(selectedVersion + 1);
+        assertThat(constrained.at("/plan/furthestStage").asText()).isEqualTo("STRATEGY");
+        assertThat(json(get("/api/plans/" + id + "/strategy/latest")).get("selected")).isNull();
     }
 
     @Test void outcomesReuseThePlanEvidenceEnsembleAndPersistSeparateInterpretations() throws Exception {
