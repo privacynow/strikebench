@@ -355,7 +355,7 @@
     var initiallyOpen = persisted === null ? defaultOpen : persisted;
     var wrap = el('div', { class: 'xp' + (initiallyOpen ? ' open' : ''),
       'data-expandable-key': stateKey || null }, head, body);
-    function toggle(force) {
+    function toggle(force, remember) {
       var open = force !== undefined ? force : !wrap.classList.contains('open');
       if (open && !built) {
         append(body, typeof detail === 'function' ? detail() : detail);
@@ -363,13 +363,13 @@
       }
       wrap.classList.toggle('open', open);
       head.setAttribute('aria-expanded', String(open));
-      if (stateKey) {
+      if (stateKey && remember !== false) {
         expandableState.set(stateKey, open);
         if (expandableState.size > 300) expandableState.delete(expandableState.keys().next().value);
       }
     }
-    head.addEventListener('click', function () { toggle(); });
-    if (initiallyOpen) toggle(true);
+    head.addEventListener('click', function () { toggle(undefined, true); });
+    if (initiallyOpen) toggle(true, false);
     return wrap;
   }
 

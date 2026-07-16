@@ -2127,10 +2127,9 @@
     }
     if (plan.rules && plan.rules.length) {
       var planBody = el('ul', { class: 'plan-rules' }, plan.rules.map(function (r) { return el('li', {}, r); }));
-      wrap.appendChild(beginner
-        ? el('div', { class: 'card card-slim', style: 'margin:8px 0' },
-            el('h3', { class: 'mt0' }, 'Your plan for this trade (' + (plan.regime || '') + ')'), planBody)
-        : UI.expandable('Management plan \u00b7 ' + (plan.regime || ''), planBody, false));
+      wrap.appendChild(el('div', { class: 'card card-slim research-management-plan', style: 'margin:8px 0' },
+        el('h3', { class: 'mt0' }, beginner ? 'Your plan for this trade (' + (plan.regime || '') + ')'
+          : 'Management plan · ' + (plan.regime || '')), planBody));
     }
     if (a.evaluatedAtEpochMs) {
       var evalMs = a.evaluatedAtEpochMs;

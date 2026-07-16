@@ -720,18 +720,142 @@
    * practical question: what does this exact package tend to do in plausible market shapes?
    * It calls the existing strategy simulator; there is no parallel risk or pricing engine.
    */
-  function realisticOutcomes(symbol, candidate) {
+  var realisticOutcomeCache = new Map();
+
+  function realisticOutcomeKey(symbol, candidate) {
+    var market = [App.state && App.state.world || '', App.state && App.state.dataset || ''];
+    var legs = (candidate.legs || []).map(function (leg) {
+      return [leg.action, leg.type, leg.stock === true, leg.strike, leg.expiration, leg.ratio, leg.multiplier];
+    });
+    return JSON.stringify([market, symbol, candidate.strategy, candidate.qty || 1,
+      candidate.entryNetPremiumCents, legs]);
+  }
+
+  function realisticOutcomeStateKey(key) {
+    var hash = 2166136261;
+    for (var i = 0; i < key.length; i++) {
+      hash ^= key.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return 'realistic-outcomes-' + (hash >>> 0).toString(36);
+  }
+
+  function realisticOutcomes(symbol, candidate, opts) {
+    opts = opts || {};
     symbol = String(symbol || '').toUpperCase();
+    candidate = candidate || {};
     var beginner = Learn.currentLevel() === 'beginner';
-    return UI.expandable(beginner ? 'What this trade could do in realistic markets'
-      : 'Scenario distributions — calm / up / down / choppy', function () {
-      var holder = el('div', { class: 'realistic-outcomes', 'data-realistic-outcomes': candidate.strategy },
-        UI.spinner('Running the exact contracts through shared scenarios…'));
-      if (!symbol || !(candidate.legs || []).length) {
-        holder.innerHTML = '';
-        holder.appendChild(UI.alertBox('warn', 'A symbol and exact contracts are needed for scenario outcomes.'));
-        return holder;
+    var key = realisticOutcomeKey(symbol, candidate);
+    var entry = realisticOutcomeCache.get(key);
+    if (!entry) {
+      entry = { status: 'idle', rows: [], evidence: null, usedHistory: false, views: new Set() };
+      realisticOutcomeCache.set(key, entry);
+      if (realisticOutcomeCache.size > 48) realisticOutcomeCache.delete(realisticOutcomeCache.keys().next().value);
+    }
+
+    var strip = el('div', { class: 'realistic-outcome-strip', 'aria-live': 'polite' });
+    var detail = null;
+    var wrap = el('section', { class: 'realistic-outcome-summary', 'data-realistic-outcomes': candidate.strategy || 'position' },
+      el('div', { class: 'realistic-outcome-heading' },
+        el('div', {}, el('span', { class: 'eyebrow' }, 'SCENARIO CHECK'),
+          el('h4', {}, beginner ? 'What this trade could do' : 'Calm / up / down / choppy'))),
+      strip);
+    var view = { wrap: wrap, strip: strip, detail: null, connected: false };
+    entry.views.add(view);
+
+    function activeViews() {
+      var active = false;
+      entry.views.forEach(function (item) {
+        if (item.wrap.isConnected) { item.connected = true; active = true; }
+        else if (item.connected) entry.views.delete(item);
+      });
+      return active;
+    }
+
+    function detailContent() {
+      var holder = el('div', { class: 'realistic-outcomes' });
+      view.detail = holder;
+      paintView(view);
+      if (entry.status === 'idle' || entry.status === 'error') startRun();
+      return holder;
+    }
+
+    wrap.appendChild(UI.expandable('Full scenario distribution and assumptions', detailContent,
+      { stateKey: realisticOutcomeStateKey(key) }));
+
+    function paintStrip(host) {
+      host.replaceChildren();
+      if (entry.status === 'running') {
+        host.appendChild(UI.spinner('Running the exact package once…'));
+        return;
       }
+      if (entry.status === 'done') {
+        entry.rows.forEach(function (row) {
+          host.appendChild(el('div', { class: 'realistic-strip-case', title: row.error
+            ? row.error : row.def.label + ': ' + Math.round(row.result.winRatePct) + '% profitable' },
+          el('span', { class: 'muted small' }, row.def.label),
+          row.error ? el('strong', { class: 'muted' }, 'Unavailable') : UI.pnlSpan(row.result.p50Cents)));
+        });
+        return;
+      }
+      var message = entry.status === 'error' ? entry.error : 'Run once for this exact package; repaints reuse the stored result.';
+      host.appendChild(el('span', { class: entry.status === 'error' ? 'loss small' : 'muted small' }, message));
+      host.appendChild(el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: startRun },
+        entry.status === 'error' ? 'Try scenarios again' : 'Run scenarios'));
+    }
+
+    function paintDetail(host) {
+      host.replaceChildren();
+      if (entry.status === 'running') { host.appendChild(UI.spinner('Running the exact contracts through shared scenarios…')); return; }
+      if (entry.status !== 'done') {
+        host.appendChild(el('p', { class: entry.status === 'error' ? 'loss' : 'muted' },
+          entry.status === 'error' ? entry.error : 'Run the scenario check to fill this distribution.'));
+        return;
+      }
+      var provenance = String(entry.evidence && entry.evidence.provenance || '').toUpperCase();
+      var historyBasis = provenance === 'DEMO' ? 'fabricated Demo history'
+        : provenance === 'SIMULATED' ? 'the simulated session’s generated history'
+        : provenance === 'MODELED' ? 'modeled history'
+        : provenance === 'OBSERVED' || provenance === 'BROKER' ? 'observed recent history'
+        : 'eligible recent history from this lane';
+      host.appendChild(el('p', { class: 'muted small' },
+        'The theoretical payoff limits remain the structural truth. These distributions model the exact listed package and its displayed opening price. '
+        + (entry.usedHistory ? 'Volatility is scaled from ' + historyBasis + ' for ' + symbol + '.'
+          : 'No usable candle history was available, so the server calibrated from the option market.')
+        + ' They complement those limits; they never replace them.'));
+      var grid = el('div', { class: 'realistic-grid' });
+      entry.rows.forEach(function (row) {
+        if (row.error) {
+          grid.appendChild(el('div', { class: 'realistic-case' }, el('b', {}, row.def.label),
+            el('div', { class: 'muted small' }, row.error)));
+          return;
+        }
+        var result = row.result;
+        grid.appendChild(el('div', { class: 'realistic-case' }, el('b', {}, row.def.label),
+          el('div', { class: 'realistic-typical' }, UI.pnlSpan(result.p50Cents)),
+          el('div', { class: 'muted small' }, Math.round(result.winRatePct) + '% profitable'),
+          el('div', { class: 'muted small' }, '1-in-20 range ' + UI.fmtMoneyCompact(result.p5Cents)
+            + ' to ' + UI.fmtMoneyCompact(result.p95Cents))));
+      });
+      host.appendChild(grid);
+    }
+
+    function paintView(item) {
+      paintStrip(item.strip);
+      if (item.detail) paintDetail(item.detail);
+    }
+
+    function paintAll() {
+      entry.views.forEach(function (item) { paintView(item); });
+    }
+
+    function startRun() {
+      if (entry.status === 'running' || entry.status === 'done') return;
+      if (!symbol || !(candidate.legs || []).length) {
+        entry.status = 'error'; entry.error = 'A symbol and exact contracts are needed for scenario outcomes.';
+        paintAll(); return;
+      }
+      entry.status = 'running'; entry.error = null; paintAll();
       var sourceLegs = candidate.legs || [];
       var legs = candidateLegs(candidate);
       var exactExpirations = sourceLegs.map(function (leg) {
@@ -741,7 +865,7 @@
         var leg = sourceLegs[idx] || {};
         return leg.stock || String(leg.type || '').toUpperCase() === 'STOCK' || !!exp;
       });
-      var optionDays = legs.filter(function (l) { return l.type !== 'STOCK'; }).map(function (l) { return l.expiryDay; });
+      var optionDays = legs.filter(function (leg) { return leg.type !== 'STOCK'; }).map(function (leg) { return leg.expiryDay; });
       var days = optionDays.length ? Math.max(1, Math.min.apply(Math, optionDays)) : 21;
       var cases = [
         { key: 'calm', label: 'Calm / narrow', shape: 'CHOP', drift: 0, mult: 0.6, seed: 41101 },
@@ -749,65 +873,41 @@
         { key: 'down', label: 'Steady decline', shape: 'GRIND_DOWN', drift: -0.15, mult: 1.0, seed: 41103 },
         { key: 'chop', label: 'Wide / choppy', shape: 'CHOP', drift: 0, mult: 1.35, seed: 41104 }
       ];
-      historicalVol(symbol).then(async function (calibration) {
+      entry.promise = historicalVol(symbol).then(async function (calibration) {
         var hv = calibration && calibration.vol;
-        var evidence = calibration && calibration.evidence;
+        entry.evidence = calibration && calibration.evidence;
+        entry.usedHistory = !!hv;
         var rows = [];
         for (var i = 0; i < cases.length; i++) {
-          // Expandables are lazy, but their async work can outlive the card after navigation
-          // or a level switch. Do not keep feeding the shared simulation budget for a result
-          // nobody can see; an in-flight request may finish, then the remaining cases stop.
-          if (!holder.isConnected) return;
-          var c = cases[i];
-          var vol = hv ? hv * c.mult : 0; // 0 asks the server to use the chain's ATM IV
-          var spec = { model: 'GBM', shape: c.shape, horizonDays: days, stepsPerDay: 4,
-            driftAnnual: c.drift, volAnnual: vol, jumpsPerYear: 0, jumpMean: 0, jumpVol: 0,
-            tailNu: 6, heston: null, seed: c.seed, paths: 180 };
+          if (!activeViews()) { entry.status = 'idle'; entry.rows = []; return; }
+          var scenario = cases[i];
+          var vol = hv ? hv * scenario.mult : 0;
+          var spec = { model: 'GBM', shape: scenario.shape, horizonDays: days, stepsPerDay: 4,
+            driftAnnual: scenario.drift, volAnnual: vol, jumpsPerYear: 0, jumpMean: 0, jumpVol: 0,
+            tailNu: 6, heston: null, seed: scenario.seed, paths: 180 };
           try {
             var position = App.outcomePosition(candidate.strategy, legs, candidate.qty,
               typeof candidate.entryNetPremiumCents === 'number' ? -candidate.entryNetPremiumCents : null,
               hasExactContracts ? exactExpirations : null);
             var result = await App.evaluateOutcome('POSITION', 'PARAMETRIC', symbol,
               { position: position, over: spec, iv: null });
-            if (!holder.isConnected) return;
-            rows.push({ def: c, result: result });
+            rows.push({ def: scenario, result: result });
           } catch (e) {
-            if (!holder.isConnected) return;
-            rows.push({ def: c, error: e.message || 'Unavailable' });
+            rows.push({ def: scenario, error: e.message || 'Unavailable' });
           }
+          paintAll();
         }
-        if (!holder.isConnected) return;
-        holder.innerHTML = '';
-        var provenance = String(evidence && evidence.provenance || '').toUpperCase();
-        var historyBasis = provenance === 'DEMO' ? 'fabricated Demo history'
-          : provenance === 'SIMULATED' ? 'the simulated session’s generated history'
-          : provenance === 'MODELED' ? 'modeled history'
-          : provenance === 'OBSERVED' || provenance === 'BROKER' ? 'observed recent history'
-          : 'eligible recent history from this lane';
-        holder.appendChild(el('p', { class: 'muted small' },
-          'The theoretical payoff limits above remain the structural truth. These distributions model the exact listed package and its displayed opening price. '
-          + (hv ? 'Volatility is scaled from ' + historyBasis + ' for ' + symbol + '.'
-                : 'No usable candle history was available, so the server calibrated from the option market.')
-          + ' They complement those limits; they never replace them.'));
-        var grid = el('div', { class: 'realistic-grid' });
-        rows.forEach(function (row) {
-          if (row.error) {
-            grid.appendChild(el('div', { class: 'realistic-case' }, el('b', {}, row.def.label),
-              el('div', { class: 'muted small' }, row.error)));
-            return;
-          }
-          var r = row.result;
-          grid.appendChild(el('div', { class: 'realistic-case' },
-            el('b', {}, row.def.label),
-            el('div', { class: 'realistic-typical' }, UI.pnlSpan(r.p50Cents)),
-            el('div', { class: 'muted small' }, Math.round(r.winRatePct) + '% profitable'),
-            el('div', { class: 'muted small' }, '1-in-20 range ' + UI.fmtMoneyCompact(r.p5Cents)
-              + ' to ' + UI.fmtMoneyCompact(r.p95Cents))));
-        });
-        holder.appendChild(grid);
+        entry.rows = rows; entry.status = 'done'; paintAll();
+      }).catch(function (error) {
+        entry.status = 'error'; entry.error = error.message || 'Scenario outcomes are unavailable.'; paintAll();
       });
-      return holder;
-    });
+    }
+
+    paintView(view);
+    if (opts.autoRun === true || candidate.selected === true) setTimeout(function () {
+      if (wrap.isConnected) startRun();
+    }, 0);
+    return wrap;
   }
 
   window.Scenario = {

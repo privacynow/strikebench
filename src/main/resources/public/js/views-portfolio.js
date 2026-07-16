@@ -926,7 +926,8 @@
         ? 'Ask how several ideas could fit together without placing anything. StrikeBench keeps cash as the baseline and opens each allocation through its own Plan.'
         : 'Allocate a research budget across economically eligible evaluations with explicit concentration, objective and evidence constraints. No trade or reserve is created.'),
       primary,
-      Learn.currentLevel() === 'beginner' ? UI.expandable('More construction controls', function () { return advancedBody; }) : advancedBody,
+      UI.expandable('More construction controls', function () { return advancedBody; },
+        { open: 'desktop', stateKey: 'portfolio-construction-controls' }),
       el('div', { class: 'btn-row' }, run), output);
     if (state.result) renderPortfolioConstructionResult(output, state.result, form);
     return card;
@@ -1143,7 +1144,6 @@
       return box;
     }
     var allocCard = el('section', { class: 'card book-allocation' }, UI.cardHeader('Allocation & market exposure'),
-      el('p', { class: 'muted small' }, 'Cash stays in capital allocation but is not market exposure. Security long and short are positive magnitudes; gross adds them and net subtracts short from long. Missing marks are excluded, never treated as zero.'),
       el('div', { class: 'chip-row book-exposure-totals' },
         chip('Security long', fmtMoney(allocation.longExposureCents || 0)),
         chip('Security short', fmtMoney(allocation.shortExposureCents || 0)),
@@ -1156,7 +1156,11 @@
     allocCard.appendChild(allocationGroups);
     allocCard.appendChild(UI.expandable(
       el('span', {}, 'By symbol · ', (allocation.bySymbol || []).length, ' rows'),
-      function () { return allocationRows(allocation.bySymbol, 'of market gross'); }));
+      function () { return allocationRows(allocation.bySymbol, 'of market gross'); },
+      { stateKey: 'portfolio-allocation-by-symbol' }));
+    allocCard.appendChild(UI.expandable('How exposure is calculated', function () {
+      return el('p', { class: 'muted small' }, 'Cash stays in capital allocation but is not market exposure. Security long and short are positive magnitudes; gross adds them and net subtracts short from long. Missing marks are excluded, never treated as zero.');
+    }, { stateKey: 'portfolio-allocation-method' }));
     root.appendChild(allocCard);
   }
 
@@ -1354,8 +1358,8 @@
               stat('Realized P/L', pnlSpan(summary.realizedPnlCents)),
               stat('Unrealized P/L', summary.unrealizedPnlCents == null ? 'Unavailable' : pnlSpan(summary.unrealizedPnlCents)),
               stat('Cash in this book', fmtMoney(summary.bookCashCents))),
-            el('p', { class: 'muted small' }, 'The Activity journal will include transaction '
-              + ((out && out.id) || 'just recorded') + ' the next time this section is opened.'));
+            el('p', { class: 'muted small' },
+              'This transaction is now in Activity history. Open History to review its exact legs and cash effect.'));
         },
         findSimilar: async function (payload) {
           if (payload.externalRef) {
@@ -1363,8 +1367,7 @@
               + encodeURIComponent(payload.source) + '&externalRef=' + encodeURIComponent(payload.externalRef));
             if ((identity.transactions || []).length) {
               throw new Error('That ' + String(payload.source).toLowerCase()
-                + ' reference is already recorded as ' + identity.transactions[0].id
-                + '. Stable references identify the same broker fact; contract similarity is a separate advisory.');
+                + ' reference is already recorded. Stable references identify the same broker fact; contract similarity is a separate advisory.');
             }
           }
           var summary = await API.getFresh('/api/portfolio/accounts/' + account.id + '/summary');
@@ -1665,17 +1668,22 @@
       } }, 'Import CSV');
     return el('section', { class: 'card card-slim book-import-card' },
       UI.cardHeader('Import a broker history'),
-      el('p', { class: 'muted small' }, 'Transactions are sorted chronologically. Every reference is atomic: all legs land together or every row in that package is quarantined with a reason. Other valid references still import, and stable references prevent duplicates. To add history older than activity already recorded here, use a new tracked account.'),
+      el('p', { class: 'muted small' }, 'Valid transaction groups are recorded; rows that need attention come back with a reason.'),
       el('div', { class: 'book-import-row' }, file, upload,
         el('a', { class: 'btn btn-secondary', href: '/api/portfolio/import-template.csv', download: 'StrikeBench-portfolio-import-template.csv' }, 'Download template')),
+      UI.expandable('How imports stay safe', function () {
+        return el('p', { class: 'muted small' }, 'Transactions are sorted chronologically. Every reference is atomic: all legs land together or every row in that package is quarantined with a reason. Other valid references still import, and stable references prevent duplicates. To add history older than activity already recorded here, use a new tracked account.');
+      }, { stateKey: 'portfolio-import-safety' }),
       result);
   }
 
   function portfolioTransactionRow(tx) {
     var cashClass = tx.cashEffectCents > 0 ? 'gain' : tx.cashEffectCents < 0 ? 'loss' : '';
+    var inlineLegs = (tx.legs || []).map(portfolioLegLabel).join(' · ');
     var summary = el('div', { class: 'book-transaction-summary' },
-      el('div', {}, el('b', {}, transactionTypeLabel(tx.eventType)),
-        el('span', { class: 'muted small' }, portfolioOccurredLabel(tx.occurredAt))),
+      el('div', { class: 'book-transaction-summary-main' }, el('b', {}, transactionTypeLabel(tx.eventType)),
+        el('span', { class: 'muted small' }, portfolioOccurredLabel(tx.occurredAt)),
+        inlineLegs ? el('span', { class: 'book-transaction-inline-legs', title: inlineLegs }, inlineLegs) : null),
       el('div', { class: cashClass }, fmtMoney(tx.cashEffectCents, { plus: true })));
     var row = UI.expandable(summary, function () {
       return el('div', { class: 'book-transaction-detail' },
@@ -1695,16 +1703,17 @@
             chip('Replacement premium', fmtMoney(tx.roll.openingPremiumCents, { plus: true })),
             chip('Net premium before fees', fmtMoney(tx.roll.premiumCarryoverCents, { plus: true }))),
           el('p', { class: 'muted small' }, 'The close realized normally across ' + tx.roll.realizedMatchIds.length
-            + ' matched lot' + (tx.roll.realizedMatchIds.length === 1 ? '' : 's') + '; replacement lot ' + tx.roll.replacementLotId + ' keeps its own exact basis.')) : null,
-        el('div', { class: 'muted small' }, 'Transaction ' + tx.id + ' · recorded history is append-only.'));
-    });
+            + ' matched lot' + (tx.roll.realizedMatchIds.length === 1 ? '' : 's')
+            + '; the replacement keeps its own exact basis.')) : null,
+        el('div', { class: 'muted small' }, 'Recorded history is append-only.'));
+    }, { stateKey: 'portfolio-transaction-' + tx.id });
     row.dataset.transactionId = tx.id;
     return row;
   }
 
   async function renderPortfolioBookActivity(root, account) {
-    root.appendChild(portfolioTransactionForm(account));
-    root.appendChild(portfolioImportCard(account));
+    var recordForm = portfolioTransactionForm(account);
+    var importCard = portfolioImportCard(account);
     var pageSize = 25, pageIndex = 0;
     var data = await API.getFresh('/api/portfolio/accounts/' + account.id + '/transactions?page=0&size=' + pageSize);
     var transactions = data.transactions || [];
@@ -1732,7 +1741,41 @@
       var loadRow = el('div', { class: 'book-journal-more' }, older, olderMessage);
       journal.appendChild(loadRow);
     }
-    root.appendChild(journal);
+    App.state.portfolioActivityViews = App.state.portfolioActivityViews || {};
+    var rollTarget = App.state.portfolioBookRollTarget;
+    var activeView = rollTarget && rollTarget.accountId === account.id
+      ? 'record' : (App.state.portfolioActivityViews[account.id] || 'history');
+    if (App.state.portfolioBookFocusTransaction) activeView = 'history';
+    var views = { history: journal, record: recordForm, import: importCard };
+    if (!views[activeView]) activeView = 'history';
+    var panel = el('section', { class: 'book-activity-panel', id: 'book-activity-panel', role: 'tabpanel' });
+    var definitions = [['history', 'History'], ['record', 'Record activity'], ['import', 'Import history']];
+    var tabs = el('div', { class: 'seg book-activity-tabs', role: 'tablist', 'aria-label': 'Tracked activity workspace' },
+      definitions.map(function (definition) {
+        return el('button', { type: 'button', role: 'tab', id: 'book-activity-tab-' + definition[0],
+          'aria-controls': 'book-activity-panel', 'aria-selected': activeView === definition[0] ? 'true' : 'false',
+          tabindex: activeView === definition[0] ? '0' : '-1', class: activeView === definition[0] ? 'active' : '',
+          'data-activity-view': definition[0] }, definition[1]);
+      }));
+    function show(view) {
+      activeView = view;
+      App.state.portfolioActivityViews[account.id] = view;
+      tabs.querySelectorAll('[role="tab"]').forEach(function (tab) {
+        var selected = tab.dataset.activityView === view;
+        tab.classList.toggle('active', selected);
+        tab.setAttribute('aria-selected', String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+      });
+      panel.setAttribute('aria-labelledby', 'book-activity-tab-' + view);
+      panel.replaceChildren(views[view]);
+    }
+    tabs.querySelectorAll('[role="tab"]').forEach(function (tab) {
+      tab.addEventListener('click', function () { show(tab.dataset.activityView); });
+    });
+    UI.bindTabList(tabs, function (tab) { show(tab.dataset.activityView); });
+    root.appendChild(tabs);
+    root.appendChild(panel);
+    show(activeView);
     if (App.state.portfolioBookFocusTransaction) {
       var focused = journal.querySelector('[data-transaction-id="'
         + CSS.escape(App.state.portfolioBookFocusTransaction) + '"]');
@@ -2482,12 +2525,12 @@
             root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-greeks' }, greekChips()));
           } else {
             root.appendChild(el('div', { class: 'card card-slim', id: 'portfolio-greeks' },
-              UI.cardHeader('How your open positions react'),
-              el('p', { class: 'muted small' },
-                'These sensitivities estimate how the whole practice book responds to price, time, and volatility. They use the same current marks and math shown in Expert.'),
-              UI.expandable('See exact portfolio sensitivity', function () {
-                return el('div', { class: 'portfolio-risk-detail' }, heatChips(), greekChips());
-              })));
+              UI.cardHeader('How your open positions react'), greekChips(),
+              UI.expandable('How to read these sensitivities', function () {
+                return el('div', { class: 'portfolio-risk-detail' },
+                  el('p', { class: 'muted small' }, 'These estimates show how the whole practice book responds to price, time, and volatility. They use the same current marks and math shown in Expert.'),
+                  heatChips());
+              }, { stateKey: 'portfolio-sensitivity-guide' })));
           }
         }
       } catch (e) { /* advisory only */ }
@@ -2734,9 +2777,9 @@
           + 'If the short call finishes in the money at expiration, those shares are called away at the strike (that is the plan for a sell-at-target trade).')));
     }
 
-    if (Learn.currentLevel() !== 'expert') {
-      var detailGuide = guideBlock(t.strategy);
-      if (detailGuide) root.appendChild(el('div', { class: 'card' }, detailGuide));
+    var detailGuide = Learn.currentLevel() !== 'expert' ? guideBlock(t.strategy) : null;
+    if (detailGuide && !(d.current && d.current.greeks)) {
+      root.appendChild(el('div', { class: 'card' }, detailGuide));
     }
 
     if (d.current && d.current.greeks) {
@@ -2772,9 +2815,13 @@
       if (Learn.currentLevel() === 'expert') {
         greekCard.appendChild(positionGreekDetail());
       } else {
-        greekCard.appendChild(el('p', { class: 'muted small' },
-          'Price, time, and volatility can move an option position in different ways. The exact sensitivities use the same current marks shown in Expert.'));
-        greekCard.appendChild(UI.expandable('See exact position sensitivities', positionGreekDetail));
+        greekCard.appendChild(el('div', { class: 'chip-row position-greek-headline' },
+          chip('Net Δ', fmtNum(gk.deltaShares, 0) + ' sh'),
+          chip('Θ/day', pnlSpan(gk.thetaPerDay * 100)),
+          chip('Vega/pt', pnlSpan(gk.vegaPerPoint * 100))));
+        if (detailGuide) greekCard.appendChild(detailGuide);
+        greekCard.appendChild(UI.expandable('Exact sensitivities by leg', positionGreekDetail,
+          { stateKey: 'position-greek-detail-' + id }));
       }
       root.appendChild(greekCard);
     }

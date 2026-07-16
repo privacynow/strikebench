@@ -782,7 +782,7 @@
         if (st.step === 2) {
           if (st.goal === 'BROWSE') {
             host.appendChild(el('div', { class: 'card' },
-              el('h3', { class: 'mt0' }, 'Every structure, with its payoff shape'),
+              el('h3', { class: 'mt0' }, 'Every strategy, shown by payoff shape'),
               explain('The little chart on each card is the SHAPE of profit (up) vs the stock price (right) at expiration. Red-badged structures carry unlimited risk — you can walk through one to see exactly why it gets refused.'),
               catalogGrid(function (t) { pickTemplate(t); }),
               lockedGoal ? null : el('div', { class: 'btn-row' },
@@ -1442,7 +1442,7 @@
         hostEl.appendChild(Scenario.realisticOutcomes(st.symbol, {
           strategy: familyLabel(), legs: p.legs, qty: st.qty || 1,
           entryNetPremiumCents: p.entryNetPremiumCents
-        }));
+        }, { autoRun: true }));
       }
       if (p.ok && p.warnings && p.warnings.length) {
         hostEl.appendChild(alertBox('warn', 'Heads up', p.warnings));
