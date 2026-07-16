@@ -709,9 +709,10 @@
       resultHost.innerHTML = '';
       var response = out && (out.preview || out);
       var selected = out && out.strategy && out.strategy.result && out.strategy.result.candidate;
-      var economics = out && out.evaluation && out.evaluation.economics
-        || selected && selected.evaluation && selected.evaluation.economics
-        || selected && selected.economics;
+      var economics = out && out.evaluation && out.evaluation.assessment
+          ? out.evaluation.assessment.economics
+          : selected && selected.evaluation && selected.evaluation.assessment
+            ? selected.evaluation.assessment.economics : null;
       if (!response) return;
       resultHost.appendChild(UI.actionFeedback(response.ok === false ? 'caution' : 'ok',
         response.ok === false ? 'Analyzed with constraints' : 'Analysis complete',
@@ -720,6 +721,9 @@
         resultHost.appendChild(UI.actionFeedback('caution', 'Current fresh-eyes analysis',
           'The entry date is preserved, but this result uses the market evidence available now. Retrospective replay will use the dated historical path and label each modeled or observed leg-day separately.'));
       }
+      var analysis = out && out.evaluation
+        ? out.evaluation : selected && selected.evaluation ? selected.evaluation : null;
+      var canonicalPop = analysis && analysis.risk ? analysis.risk.pop : null;
       resultHost.appendChild(el('div', { class: 'grid grid-4 position-analysis-stats' },
         response.entryNetPremiumCents == null ? null : UI.stat(response.entryNetPremiumCents >= 0 ? 'Credit' : 'Cost', fmtMoney(Math.abs(response.entryNetPremiumCents))),
         response.maxLossCents == null ? null : UI.stat(UI.vocabulary('theoreticalMaxLoss'), fmtMoney(response.maxLossCents)),
@@ -728,12 +732,15 @@
             ? 'Model-dependent' : 'Requires resulting position')
           : 'Unlimited in theory') : null,
         response.maxProfitCents != null ? UI.stat('Theoretical max profit', fmtMoney(response.maxProfitCents)) : null,
-        response.popEntry == null ? null : UI.stat('Chance of profit', UI.fmtPct(response.popEntry))));
+        canonicalPop == null ? null : UI.stat('Chance of profit', UI.fmtPct(canonicalPop))));
       var evidence = response.evidence;
       if (evidence) resultHost.appendChild(el('p', { class: 'muted small position-coverage' },
         'Coverage receipt: ' + [evidence.provenance, evidence.age, evidence.source].filter(Boolean).join(' · ') + '.'));
       if (economics) resultHost.appendChild(el('div', { class: 'chip-row' }, chip('Economic verdict', economics.verdict),
         economics.marketEvAfterCostsCents == null ? null : chip('Market-implied EV after costs', fmtMoney(economics.marketEvAfterCostsCents, { plus: true }))));
+      if (analysis && window.ViewPlan && window.ViewPlan.decisionMetricsReceipt) {
+        resultHost.appendChild(window.ViewPlan.decisionMetricsReceipt(analysis, Learn.currentLevel() === 'beginner'));
+      }
       if (out && out.marketLane) resultHost.appendChild(el('p', { class: 'muted small position-account-basis' },
         (out.accountName ? out.accountName + ' · ' : '') + out.marketLane + ' market · ' + (out.note || 'Account-specific read-only analysis.')));
       var fillBases = Array.from(new Set((response.legs || []).map(function (leg) { return leg.fillBasis; }).filter(Boolean)));
@@ -752,7 +759,18 @@
       resultHost.appendChild(el('div', { class: 'grid grid-4 position-analysis-stats' },
         selected.entryNetPremiumCents == null ? null : UI.stat(selected.entryNetPremiumCents >= 0 ? 'Credit' : 'Cost', fmtMoney(Math.abs(selected.entryNetPremiumCents))),
         selected.maxLossCents == null ? null : UI.stat(UI.vocabulary('theoreticalMaxLoss'), fmtMoney(selected.maxLossCents)),
-        selected.pop == null ? null : UI.stat('Chance of profit', UI.fmtPct(selected.pop))));
+        selected.evaluation && selected.evaluation.risk && selected.evaluation.risk.pop != null
+          ? UI.stat('Chance of profit', UI.fmtPct(selected.evaluation.risk.pop)) : null));
+      var savedAnalysis = selected.evaluation;
+      var savedEconomics = savedAnalysis && savedAnalysis.assessment && savedAnalysis.assessment.economics;
+      if (savedEconomics) resultHost.appendChild(el('div', { class: 'chip-row' },
+        chip('Economic verdict', savedEconomics.verdict),
+        savedEconomics.marketEvAfterCostsCents == null ? null
+          : chip('Market-implied EV after costs', fmtMoney(savedEconomics.marketEvAfterCostsCents, { plus: true }))));
+      if (savedAnalysis && window.ViewPlan && window.ViewPlan.decisionMetricsReceipt) {
+        resultHost.appendChild(window.ViewPlan.decisionMetricsReceipt(
+          savedAnalysis, Learn.currentLevel() === 'beginner'));
+      }
       resultHost.appendChild(el('button', { type: 'button', class: 'btn',
         onclick: function () { App.navigate('#/plan/' + options.planId + '/outcomes'); } }, 'Continue to Outcomes'));
     }

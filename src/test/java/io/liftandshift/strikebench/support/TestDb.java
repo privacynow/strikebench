@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.support;
 
 import io.liftandshift.strikebench.db.Db;
-import io.liftandshift.strikebench.db.Migrations;
+import io.liftandshift.strikebench.db.Schema;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -14,10 +14,11 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Per-test isolated Postgres databases for the JUnit suite. Each call creates a FRESH,
- * Flyway-migrated database inside the local dev/CI Postgres and hands back a Db bound to it,
- * so tests never see each other's data. Callers close the returned Db (its pool) in teardown;
- * the created databases are dropped at JVM exit.
+ * Per-test isolated Postgres databases for the JUnit suite. Each fork builds one template from
+ * then PostgreSQL clones that template for normal tests. Tests still own separate databases,
+ * without rebuilding the schema hundreds of times. Schema tests explicitly ask for an empty
+ * database. Callers close the returned Db in teardown; databases are dropped
+ * at JVM exit.
  *
  * Requires a running Postgres — the docker-compose 'db' service by default:
  *   docker compose up -d db
@@ -31,41 +32,74 @@ public final class TestDb {
     private static final String BASE = ADMIN_URL.substring(0, ADMIN_URL.lastIndexOf('/') + 1);
     private static final AtomicInteger SEQ = new AtomicInteger();
     private static final Set<String> CREATED = Collections.synchronizedSet(new HashSet<>());
+	private static volatile String templateName;
 
     static { Runtime.getRuntime().addShutdownHook(new Thread(TestDb::dropAll)); }
 
     private TestDb() {}
 
-    /** A fresh, migrated, isolated database. Caller closes the returned Db. */
+    /** A fresh, current-schema, isolated database. Caller closes the returned Db. */
     public static Db fresh() {
-        String name = newDatabase();
-        Db db = new Db(BASE + name, USER, PASS, () -> drop(name));
-        try {
-            Migrations.run(db);
-            return db;
-        } catch (RuntimeException e) {
-            db.close();
-            throw e;
-        }
+	    String name = newDatabase(true);
+	    Db db = new Db(BASE + name, USER, PASS, () -> drop(name));
+	    return db;
     }
 
-    /** Overrides (DB_URL/DB_USER/DB_PASSWORD) for a fresh database — for AppConfig-driven tests. */
+    /** Overrides for a current-schema clone. App startup still validates the schema fingerprint. */
     public static Map<String, String> freshConfig() {
-        return Map.of("DB_URL", BASE + newDatabase(), "DB_USER", USER, "DB_PASSWORD", PASS);
+	    return config(newDatabase(true));
     }
 
-    private static String newDatabase() {
-        String name = "sbtest_" + SEQ.incrementAndGet() + "_" + Long.toHexString(System.nanoTime());
-        admin("CREATE DATABASE " + name);
-        CREATED.add(name);
-        return name;
+	/** A genuinely empty database reserved for tests of baseline initialization and rejection. */
+	public static Map<String, String> emptyConfig() {
+	    return config(newDatabase(false));
+	}
+
+	private static Map<String, String> config(String name) {
+	    return Map.of("DB_URL", BASE + name, "DB_USER", USER, "DB_PASSWORD", PASS);
+	}
+
+	private static String newDatabase(boolean currentSchema) {
+	    String name = "sbtest_" + SEQ.incrementAndGet() + "_" + Long.toHexString(System.nanoTime());
+	    if (currentSchema) {
+	        admin("CREATE DATABASE " + name + " TEMPLATE " + template());
+	    } else {
+	        admin("CREATE DATABASE " + name);
+	    }
+	    CREATED.add(name);
+	    return name;
     }
+
+	private static String template() {
+	    String ready = templateName;
+	    if (ready != null) return ready;
+	    synchronized (TestDb.class) {
+	        if (templateName != null) return templateName;
+	        String name = "sbtest_template_" + ProcessHandle.current().pid() + "_"
+	                + Long.toHexString(System.nanoTime());
+	        admin("CREATE DATABASE " + name);
+	        try (Db db = new Db(BASE + name, USER, PASS)) {
+	            Schema.initialize(db);
+	        } catch (RuntimeException e) {
+	            try { admin("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)"); }
+	            catch (RuntimeException ignored) { }
+	            throw e;
+	        }
+	        templateName = name;
+	        return name;
+	    }
+	}
 
     private static void dropAll() {
-        for (String name : new HashSet<>(CREATED)) {
-            try { drop(name); }
-            catch (RuntimeException ignored) { /* best-effort cleanup */ }
-        }
+	    for (String name : new HashSet<>(CREATED)) {
+	        try { drop(name); }
+	        catch (RuntimeException ignored) { /* best-effort cleanup */ }
+	    }
+	    String template = templateName;
+	    if (template != null) {
+	        try { admin("DROP DATABASE IF EXISTS " + template + " WITH (FORCE)"); }
+	        catch (RuntimeException ignored) { /* best-effort cleanup */ }
+	    }
     }
 
     private static void drop(String name) {

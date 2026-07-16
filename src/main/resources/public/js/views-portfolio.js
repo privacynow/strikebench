@@ -146,7 +146,7 @@
       host.appendChild(table(['Symbol', 'Structure', 'Verdict', 'Units', 'Capital', 'Score', 'Market EV', 'History EV', ''], allocations.map(function (allocation) {
         var evaluation = allocation.eval || {}, candidate = evaluation.candidate || {};
         var symbol = evaluation.symbol || (evaluation.spec && evaluation.spec.symbol) || candidate.symbol || '\u2014';
-        var economics = evaluation.economics || {};
+        var economics = evaluation.assessment && evaluation.assessment.economics || {};
         var button = el('button', { type: 'button', class: 'btn btn-sm' }, 'Review in Plan');
         button.onclick = function () {
           visibleCommand(button, function () { return openOptimizationPlan(allocation, form); },
@@ -156,15 +156,15 @@
           el('td', {}, candidate.displayName || evaluation.family || '\u2014'),
           el('td', {}, economics.label || economics.verdict || 'Unavailable'), el('td', {}, String(allocation.units)),
           el('td', {}, fmtMoney(allocation.capitalCents)), el('td', {}, UI.scoreBar(evaluation.decisionScore || 0, 'Decision score')),
-          el('td', {}, evaluation.economics && evaluation.economics.marketEvAfterCostsCents != null ? pnlSpan(evaluation.economics.marketEvAfterCostsCents) : '\u2014'),
-          el('td', {}, evaluation.economics && evaluation.economics.realizedVolEvAfterCostsCents != null ? pnlSpan(evaluation.economics.realizedVolEvAfterCostsCents) : '\u2014'),
+          el('td', {}, economics.marketEvAfterCostsCents != null ? pnlSpan(economics.marketEvAfterCostsCents) : '\u2014'),
+          el('td', {}, economics.realizedVolEvAfterCostsCents != null ? pnlSpan(economics.realizedVolEvAfterCostsCents) : '\u2014'),
           el('td', {}, button));
       })));
     } else {
       host.appendChild(el('div', { class: 'portfolio-allocation-grid' }, allocations.map(function (allocation) {
         var evaluation = allocation.eval || {}, candidate = evaluation.candidate || {};
         var symbol = evaluation.symbol || (evaluation.spec && evaluation.spec.symbol) || candidate.symbol || '\u2014';
-        var economics = evaluation.economics || {};
+        var economics = evaluation.assessment && evaluation.assessment.economics || {};
         var button = el('button', { type: 'button', class: 'btn btn-sm' }, 'Review in a new Plan');
         button.onclick = function () {
           visibleCommand(button, function () { return openOptimizationPlan(allocation, form); },
@@ -178,10 +178,10 @@
           el('div', { class: 'chip-row' }, chip('Capital', fmtMoney(allocation.capitalCents)),
             chip('Units', String(allocation.units)),
             chip('Decision score', String(Math.round(evaluation.decisionScore || 0))),
-            chip('Market EV', evaluation.economics && evaluation.economics.marketEvAfterCostsCents != null
-              ? pnlSpan(evaluation.economics.marketEvAfterCostsCents) : '\u2014'),
-            chip('History EV', evaluation.economics && evaluation.economics.realizedVolEvAfterCostsCents != null
-              ? pnlSpan(evaluation.economics.realizedVolEvAfterCostsCents) : '\u2014')), button);
+            chip('Market EV', economics.marketEvAfterCostsCents != null
+              ? pnlSpan(economics.marketEvAfterCostsCents) : '\u2014'),
+            chip('History EV', economics.realizedVolEvAfterCostsCents != null
+              ? pnlSpan(economics.realizedVolEvAfterCostsCents) : '\u2014')), button);
       })));
     }
     (result.notes || []).forEach(function (note) { host.appendChild(el('p', { class: 'muted small' }, note)); });

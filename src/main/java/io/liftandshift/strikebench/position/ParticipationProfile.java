@@ -2,18 +2,25 @@ package io.liftandshift.strikebench.position;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.List;
 
 /** Three participation meanings; basis points avoid vague floating-point percentages. */
 public record ParticipationProfile(
         int localParticipationBps,
-        int terminalUpsideCaptureBps,
+        Integer terminalUpsideCaptureBps,
         long intervalStartCents,
         long intervalEndCents,
+        LocalDate terminalDate,
+        String localBasis,
+        String terminalBasis,
         List<RegimePoint> regimePoints
 ) {
     public ParticipationProfile {
         if (intervalEndCents <= intervalStartCents) throw new IllegalArgumentException("participation interval must rise");
+        if (localBasis == null || localBasis.isBlank() || terminalBasis == null || terminalBasis.isBlank()) {
+            throw new IllegalArgumentException("participation definitions must be named");
+        }
         regimePoints = regimePoints == null ? List.of() : List.copyOf(regimePoints);
     }
 
@@ -32,6 +39,8 @@ public record ParticipationProfile(
                                                         long equivalentShares,
                                                         long intervalStartCents,
                                                         long intervalEndCents,
+                                                        LocalDate terminalDate,
+                                                        String terminalBasis,
                                                         List<RegimePoint> regimePoints) {
         if (equivalentShareExposureCents <= 0 || equivalentShares <= 0) {
             throw new IllegalArgumentException("participation needs a positive equivalent-share position");
@@ -41,7 +50,9 @@ public record ParticipationProfile(
         if (underlyingMove <= 0) throw new IllegalArgumentException("participation interval must rise");
         int local = ratioBps(positionDollarDeltaCents, equivalentShareExposureCents);
         int terminal = ratioBps(Math.subtractExact(positionValueAtEndCents, positionValueAtStartCents), underlyingMove);
-        return new ParticipationProfile(local, terminal, intervalStartCents, intervalEndCents, regimePoints);
+        return new ParticipationProfile(local, terminal, intervalStartCents, intervalEndCents,
+                terminalDate, "current dollar delta versus the equivalent-share holding",
+                terminalBasis, regimePoints);
     }
 
     private static int ratioBps(long numerator, long denominator) {

@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.PositionsService;
+import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.recommend.AutoRecommender;
 import io.liftandshift.strikebench.recommend.Candidate;
 import io.liftandshift.strikebench.recommend.OpportunityScanner;
@@ -40,6 +41,7 @@ final class DiscoveryController {
     private final RecommendationEngine engine;
     private final AutoRecommender auto;
     private final PositionsService positions;
+    private final TradeService trades;
     private final UniverseService universe;
     private final SimulationSessions simSessions;
     private final Clock clock;
@@ -52,7 +54,7 @@ final class DiscoveryController {
     DiscoveryController(Db db, MarketDataService market, EvaluationService evaluations,
                         OpportunityScanner opportunityScanner,
                         RecommendationEngine engine, AutoRecommender auto,
-                        PositionsService positions, UniverseService universe,
+                        PositionsService positions, TradeService trades, UniverseService universe,
                         SimulationSessions simSessions, Clock clock,
                         io.liftandshift.strikebench.sim.MarketVolatilityResolver marketVolatility,
                         Function<Context, Account> accountResolver,
@@ -66,6 +68,7 @@ final class DiscoveryController {
         this.engine = engine;
         this.auto = auto;
         this.positions = positions;
+        this.trades = trades;
         this.universe = universe;
         this.simSessions = simSessions;
         this.clock = clock;
@@ -108,7 +111,8 @@ final class DiscoveryController {
             // inside a simulated session that is the world's spot/IV/vol, never observed (review P0).
             var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
                     result.riskMode(), result.candidates(), acct.buyingPowerCents(), null, false,
-                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world));
+                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
+                    practiceExposure(acct, result.symbol()));
             if (evals.size() != result.candidates().size()) {
                 throw new DataUnavailableException("Decision ranking did not evaluate every candidate");
             }
@@ -119,25 +123,17 @@ final class DiscoveryController {
             for (var e : evals) { // evaluateAndRank order is exactly the monotonic Decision score
                 com.fasterxml.jackson.databind.node.ObjectNode m =
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(e.candidate());
-                m.put("decisionScore", e.decisionScore());
-                m.put("decisionViable", e.viable());
-                m.put("structurallyEligible", e.viable());
-                if (e.economics() != null) {
-                    m.set("economics", Json.MAPPER.valueToTree(e.economics()));
-                    m.put("economicVerdict", e.economics().verdict().name());
-                    m.put("economicPlacement", e.economics().placement());
-                    switch (e.economics().verdict()) {
+                var economics = e.assessment().economics();
+                if (economics != null) {
+                    switch (economics.verdict()) {
                         case FAVORABLE -> {
                             favorable++;
-                            if (e.economics().actionableFavorable()) actionableFavorable++;
+                            if (economics.actionableFavorable()) actionableFavorable++;
                         }
                         case MIXED -> mixed++;
                         case UNFAVORABLE -> unfavorable++;
                         case UNAVAILABLE -> unavailable++;
                     }
-                }
-                if (e.evCents() != null && e.evCents() < 0) {
-                    m.put("negativeEv", true); // never an unlabeled recommendation
                 }
                 attachEvaluationReceipt(m, e);
                 cands.add(m);
@@ -168,13 +164,7 @@ final class DiscoveryController {
 
     private static void attachEvaluationReceipt(ObjectNode candidate,
                                                  io.liftandshift.strikebench.eval.StrategyEvaluation evaluation) {
-        ObjectNode receipt = candidate.putObject("evaluation");
-        if (evaluation.capital() != null) receipt.set("capital", Json.MAPPER.valueToTree(evaluation.capital()));
-        if (evaluation.risk() != null) receipt.set("risk", Json.MAPPER.valueToTree(evaluation.risk()));
-        if (evaluation.evidence() != null) receipt.set("evidence", Json.MAPPER.valueToTree(evaluation.evidence()));
-        if (evaluation.management() != null) receipt.set("management", Json.MAPPER.valueToTree(evaluation.management()));
-        if (evaluation.score() != null) receipt.set("score", Json.MAPPER.valueToTree(evaluation.score()));
-        if (evaluation.explanation() != null) receipt.set("explanation", Json.MAPPER.valueToTree(evaluation.explanation()));
+        candidate.set("evaluation", Json.MAPPER.valueToTree(ApiResponses.EvaluationReceipt.of(evaluation)));
     }
 
     /** Builds the one ranked Decision competition, including explicit cash and share-owning baselines. */
@@ -186,7 +176,8 @@ final class DiscoveryController {
         String owner = ownerResolver.apply(ctx);
         var ranked = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
                 result.riskMode(), result.candidates(), account.buyingPowerCents(), owner, !generatedWorld,
-                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world));
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
+                practiceExposure(account, result.symbol()));
 
         String recommendationId = null;
         if (!ranked.isEmpty() && !generatedWorld) {
@@ -402,7 +393,8 @@ final class DiscoveryController {
         try {
             var rungEvals = evaluations.evaluate(req.symbol(), req.intent(), req.thesis(), req.horizon(),
                     req.riskMode(), ladder.rungs(), acct.buyingPowerCents(), null, false,
-                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(activeWorldResolver.apply(ctx)));
+                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(activeWorldResolver.apply(ctx)),
+                    practiceExposure(acct, req.symbol()));
             if (rungEvals.size() == ladder.rungs().size()) {
                 com.fasterxml.jackson.databind.node.ObjectNode out =
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(ladder);
@@ -415,14 +407,6 @@ final class DiscoveryController {
                             (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(c);
                     var e = byCand.get(c);
                     if (e != null) {
-                        m.put("decisionScore", e.decisionScore());
-                        m.put("decisionViable", e.viable());
-                        m.put("structurallyEligible", e.viable());
-                        if (e.economics() != null) {
-                            m.set("economics", Json.MAPPER.valueToTree(e.economics()));
-                            m.put("economicVerdict", e.economics().verdict().name());
-                            m.put("economicPlacement", e.economics().placement());
-                        }
                         attachEvaluationReceipt(m, e);
                     }
                     arr.add(m);
@@ -438,6 +422,15 @@ final class DiscoveryController {
                     "The strike ladder cannot be compared until its decision analysis is available", e);
         }
         throw new DataUnavailableException("The strike ladder did not evaluate every rung");
+    }
+
+    private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
+            Account account, String symbol) {
+        var current = trades.portfolioDollarDelta(account.id(), symbol);
+        return new io.liftandshift.strikebench.eval.PortfolioExposureContext(
+                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE,
+                current.grossCents(), current.netCents(), current.focusSymbolGrossCents(),
+                current.complete(), current.basis());
     }
 
     private void researchScout(Context ctx) {

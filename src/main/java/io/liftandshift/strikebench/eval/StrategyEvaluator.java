@@ -24,6 +24,7 @@ public final class StrategyEvaluator {
     private final ManagementPlanner management = new ManagementPlanner();
     private final ScoreComposer score = new ScoreComposer();
     private final Explainer explainer = new Explainer();
+    private final StanceProfiler stance = new StanceProfiler();
 
     public StrategyEvaluation evaluate(Candidate c, StrategySpec spec, EvalContext ctx) {
         CapitalProfile cap = capital.profile(c, ctx);
@@ -34,7 +35,12 @@ public final class StrategyEvaluator {
         ScoreBreakdown sb = score.compose(c, cap, rsk, ev, ctx);
         EconomicAssessment economics = EconomicAssessment.assess(c, rsk, ev, sb, ctx);
         Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev, ctx);
-        return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan, sb, economics, exp);
+        StanceProfiler.Result metrics = stance.profile(c, ctx, ev, vol);
+        FourOutputAssessment assessment = assessment(sb, economics, metrics.impliedStance(),
+                metrics.stance(), ctx.portfolioExposure());
+        return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan, sb,
+                assessment, metrics.stance(), metrics.participation(), metrics.impliedStance(),
+                IvContext.from(c.entryNetPremiumCents(), vol), metrics.coverage(), exp);
     }
 
     /**
@@ -59,8 +65,75 @@ public final class StrategyEvaluator {
         EconomicAssessment economics = EconomicAssessment.assessExact(c, rsk, ev, ctx, exactGate,
                 List.copyOf(failures), roundTripFeesCents);
         Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev, ctx);
+        StanceProfiler.Result metrics = stance.profile(c, ctx, ev, vol);
+        FourOutputAssessment assessment = assessment(exactScore, economics, metrics.impliedStance(),
+                metrics.stance(), ctx.portfolioExposure());
         return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan,
-                exactScore, economics, exp);
+                exactScore, assessment, metrics.stance(), metrics.participation(), metrics.impliedStance(),
+                IvContext.from(c.entryNetPremiumCents(), vol), metrics.coverage(), exp);
+    }
+
+    private static FourOutputAssessment assessment(ScoreBreakdown score, EconomicAssessment economics,
+                                                    ImpliedStance impliedStance, StanceVector stance,
+                                                    PortfolioExposureContext exposure) {
+        var mechanics = new FourOutputAssessment.MechanicalAssessment(
+                score != null && score.gatePassed(), score == null ? List.of("Mechanical assessment unavailable")
+                : score.gateFailures());
+        var coherence = new FourOutputAssessment.ObjectiveCoherence(
+                FourOutputAssessment.Coherence.UNDECLARED,
+                impliedStance == null ? "Implied direction unavailable" : impliedStance.summary(),
+                "No versioned objective is attached to this assessment.",
+                List.of("Declare an objective to compare the position's stance and duration; economics are unchanged."));
+        var impacts = portfolioImpacts(exposure, stance);
+        return new FourOutputAssessment(mechanics, economics, coherence, impacts);
+    }
+
+    private static FourOutputAssessment.PortfolioImpacts portfolioImpacts(
+            PortfolioExposureContext exposure, StanceVector stance) {
+        if (exposure == null || stance == null) {
+            return new FourOutputAssessment.PortfolioImpacts(null, null, List.of(
+                    "No destination portfolio was selected, so before/after exposure is unavailable.",
+                    "Practice and Real impacts are always reported separately and are never netted."));
+        }
+        long added = stance.dollarDeltaCents();
+        long addedGross = absolute(added);
+        long grossAfter = Math.addExact(exposure.grossDollarDeltaCents(), addedGross);
+        long netAfter = Math.addExact(exposure.netDollarDeltaCents(), added);
+        long symbolAfter = Math.addExact(exposure.symbolGrossDollarDeltaCents(), addedGross);
+        Double beforePct = percent(exposure.symbolGrossDollarDeltaCents(), exposure.grossDollarDeltaCents());
+        Double afterPct = percent(symbolAfter, grossAfter);
+        var impact = new FourOutputAssessment.PortfolioImpact(exposure.lane(),
+                exposure.grossDollarDeltaCents(), grossAfter,
+                exposure.netDollarDeltaCents(), netAfter, beforePct, afterPct,
+                List.of("This package adds " + signedDollars(added)
+                        + " of modeled dollar delta to the selected lane.",
+                        "Focused-symbol gross concentration moves from " + percentLabel(beforePct)
+                                + " to " + percentLabel(afterPct) + "."),
+                exposure.basis());
+        List<String> notes = exposure.complete() ? List.of(
+                "Practice and Real impacts are always reported separately and are never netted.") : List.of(
+                "Existing exposure is partial because one or more current positions lacked a complete mark or delta.",
+                "Practice and Real impacts are always reported separately and are never netted.");
+        return exposure.lane() == io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE
+                ? new FourOutputAssessment.PortfolioImpacts(impact, null, notes)
+                : new FourOutputAssessment.PortfolioImpacts(null, impact, notes);
+    }
+
+    private static long absolute(long value) {
+        if (value == Long.MIN_VALUE) throw new ArithmeticException("dollar delta overflow");
+        return Math.abs(value);
+    }
+
+    private static Double percent(long part, long total) {
+        return total <= 0 ? null : Math.round(part * 10_000.0 / total) / 100.0;
+    }
+
+    private static String percentLabel(Double value) {
+        return value == null ? "not measurable on an empty book" : String.format(java.util.Locale.ROOT, "%.2f%%", value);
+    }
+
+    private static String signedDollars(long cents) {
+        return (cents >= 0 ? "+" : "-") + io.liftandshift.strikebench.util.Money.fmt(absolute(cents));
     }
 
     /**

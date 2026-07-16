@@ -1103,6 +1103,31 @@ class PaperCoreTest {
     }
 
     @Test
+    void accountWideAggregatesNeverStopAtTheTradeListPageSize() {
+        Account acct = accounts.getOrCreateDefault();
+        marks.exact.put("PUT100", new MarksSource.LegMark(new BigDecimal("3.00"), new BigDecimal("3.00"),
+                new BigDecimal("3.00"), 0.25, Freshness.FIXTURE, -0.30, 0.02, -0.05, 0.10,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        marks.exact.put("PUT95", new MarksSource.LegMark(new BigDecimal("1.20"), new BigDecimal("1.20"),
+                new BigDecimal("1.20"), 0.25, Freshness.FIXTURE, -0.10, 0.01, -0.02, 0.05,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+
+        for (int i = 0; i < 201; i++) {
+            trades.create(creditPutSpread(acct.id(), 1));
+        }
+
+        assertThat(trades.accountMarkSnapshot(acct.id())).hasSize(201);
+        assertThat(trades.openPositionsValue(acct.id()).openTradesCount()).isEqualTo(201);
+        assertThat(trades.portfolioHeat(acct.id()).get("activeTrades")).isEqualTo(201);
+        assertThat(trades.portfolioGreeks(acct.id()).get("positions"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST).hasSize(201);
+        TradeService.DollarDeltaExposure exposure = trades.portfolioDollarDelta(acct.id(), "AAPL");
+        assertThat(exposure.complete()).isTrue();
+        assertThat(exposure.grossCents()).isPositive();
+        assertThat(exposure.focusSymbolGrossCents()).isEqualTo(exposure.grossCents());
+    }
+
+    @Test
     void resetBlockedAfterTradingUnlessForced() {
         Account acct = accounts.getOrCreateDefault();
         trades.create(creditPutSpread(acct.id(), 1));

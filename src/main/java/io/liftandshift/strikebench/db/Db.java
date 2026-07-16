@@ -6,7 +6,6 @@ import io.liftandshift.strikebench.config.AppConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -62,9 +61,6 @@ public final class Db implements AutoCloseable {
     public static Db forConfig(AppConfig cfg) {
         return new Db(cfg.dbUrl(), cfg.dbUser(), cfg.dbPassword());
     }
-
-    /** The underlying pool — used by {@link Migrations} (Flyway) and nothing else. */
-    public DataSource dataSource() { return ds; }
 
     @Override public void close() {
         if (!closed.compareAndSet(false, true)) return;

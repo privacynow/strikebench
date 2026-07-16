@@ -22,8 +22,8 @@ class EconomicAssessmentTest {
     }
 
     private EvalContext ctx() {
-        return new EvalContext("AAPL", 10_000, 30, 0.30, 0.25, List.of(), 1_000_000, true, 65,
-                0, 0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD));
+        return new EvalContext("AAPL", 10_000, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(), 1_000_000, true, 65,
+                0, 0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
     }
 
     private EvidenceProfile observed() {
@@ -47,10 +47,10 @@ class EconomicAssessmentTest {
     }
 
     @Test void economicVerdictIncludesFlatOrderFeesAsWellAsContractFees() {
-        EvalContext withOrderFee = new EvalContext("AAPL", 10_000, 30, 0.30, 0.25, List.of(),
+        EvalContext withOrderFee = new EvalContext("AAPL", 10_000, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(),
                 1_000_000, true, 65, 100, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of(
-                        "treasury", io.liftandshift.strikebench.model.Freshness.EOD));
+                        "treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
         RiskProfile risk = new RiskProfile(20_000, 30_000L, 0.50, 1_000L,
                 20_000, 0.20, List.of(), 1_000L, "test");
 

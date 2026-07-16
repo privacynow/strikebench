@@ -197,7 +197,9 @@ class ApiIntegrationTest {
         JsonNode candidates = pick.get("horizons").get(0).get("candidates");
         if (candidates.size() > 0) {
             assertThat(candidates.get(0).get("targetFit").asText()).isNotBlank();
-            assertThat(candidates.get(0).at("/candidate/maxLossCents").asLong()).isPositive();
+            assertThat(candidates.get(0).at("/evaluation/candidate/maxLossCents").asLong()).isPositive();
+            assertThat(candidates.get(0).has("candidate")).isFalse();
+            assertThat(candidates.get(0).has("decisionScore")).isFalse();
         }
         assertThat(json.get("disclaimer").asText()).containsIgnoringCase("not predictions");
         // Empty body works with defaults too
@@ -733,7 +735,7 @@ class ApiIntegrationTest {
         assertThat(p.get("ok").asBoolean()).isTrue();
         assertThat(p.get("underlyingCents").asLong()).isGreaterThan(0);
         JsonNode evaluation = spreadResponse.get("evaluation");
-        JsonNode economics = evaluation.get("economics");
+        JsonNode economics = evaluation.at("/assessment/economics");
         assertThat(economics.get("verdict").asText()).isNotBlank();
         assertThat(economics.has("marketEvAfterCostsCents")).isTrue();
         assertThat(evaluation.get("capital").get("incrementalCents").asLong()).isPositive();
@@ -741,6 +743,12 @@ class ApiIntegrationTest {
         assertThat(evaluation.get("evidence").get("perDimension").has("pricing")).isTrue();
         assertThat(evaluation.get("management").get("rules").isArray()).isTrue();
         assertThat(evaluation.get("score").has("riskAdjustedScore")).isTrue();
+        assertThat(evaluation.get("stance").has("dollarDeltaCents")).isTrue();
+        assertThat(evaluation.get("participation").has("localParticipationBps")).isTrue();
+        assertThat(evaluation.get("impliedStance").get("label").asText()).isNotBlank();
+        assertThat(evaluation.get("ivContext").get("message").asText()).isNotBlank();
+        assertThat(evaluation.get("coverage").get("inputs").has("pricing")).isTrue();
+        assertThat(evaluation.has("economics")).isFalse();
         assertThat(evaluation.get("explanation").get("assumptions").isArray()).isTrue();
         long afterCosts = economics.get("marketEvAfterCostsCents").asLong();
         if (afterCosts < 0) {
@@ -811,8 +819,8 @@ class ApiIntegrationTest {
         JsonNode cal = calendarResponse.get("preview");
         assertThat(cal.get("payoff").size()).isZero();
         assertThat(cal.get("legs").size()).isEqualTo(2);
-        assertThat(calendarResponse.get("evaluation").get("economics").get("verdict").asText()).isEqualTo("UNAVAILABLE");
-        assertThat(calendarResponse.get("evaluation").get("economics").get("summary").asText())
+        assertThat(calendarResponse.at("/evaluation/assessment/economics/verdict").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(calendarResponse.at("/evaluation/assessment/economics/summary").asText())
                 .contains("cannot support an economic verdict");
     }
 
@@ -1240,7 +1248,7 @@ class ApiIntegrationTest {
         for (JsonNode pick : auto.get("picks")) {
             for (JsonNode hz : pick.get("horizons")) {
                 for (JsonNode c : hz.get("candidates")) {
-                    assertThat(c.get("candidate").get("maxLossCents").asLong())
+                    assertThat(c.at("/evaluation/candidate/maxLossCents").asLong())
                             .as("every scouted candidate sized under the declared capital")
                             .isLessThanOrEqualTo(cap);
                 }
@@ -1294,18 +1302,24 @@ class ApiIntegrationTest {
         boolean favorableTeachingCase = false;
         double previousDecisionScore = Double.MAX_VALUE;
         for (JsonNode c : r.get("candidates")) {
-            assertThat(c.has("structurallyEligible")).isTrue();
-            assertThat(c.has("economicVerdict")).isTrue();
-            assertThat(c.has("economics")).isTrue();
-            double decisionScore = c.get("decisionScore").asDouble();
+            JsonNode evaluation = c.get("evaluation");
+            JsonNode economics = evaluation.at("/assessment/economics");
+            assertThat(evaluation.has("viable")).isTrue();
+            assertThat(economics.get("verdict").asText()).isNotBlank();
+            assertThat(c.has("economics")).isFalse();
+            assertThat(c.has("decisionScore")).isFalse();
+            assertThat(evaluation.at("/assessment/portfolioImpacts/practice/lane").asText())
+                    .isEqualTo("PRACTICE");
+            assertThat(evaluation.at("/assessment/portfolioImpacts/real").isMissingNode()).isTrue();
+            double decisionScore = evaluation.get("decisionScore").asDouble();
             assertThat(decisionScore).isLessThanOrEqualTo(previousDecisionScore);
             previousDecisionScore = decisionScore;
-            if ("FAVORABLE".equals(c.get("economicVerdict").asText())) {
-                assertThat(c.get("economics").get("observedEvidence").asBoolean()).isFalse();
-                assertThat(c.get("economics").get("label").asText()).containsIgnoringCase("teaching market");
+            if ("FAVORABLE".equals(economics.get("verdict").asText())) {
+                assertThat(economics.get("observedEvidence").asBoolean()).isFalse();
+                assertThat(economics.get("label").asText()).containsIgnoringCase("teaching market");
                 favorableTeachingCase = true;
             }
-            teachingCase |= "UNFAVORABLE".equals(c.get("economicVerdict").asText());
+            teachingCase |= "UNFAVORABLE".equals(economics.get("verdict").asText());
         }
         assertThat(favorableTeachingCase)
                 .as("the deterministic teaching world demonstrates a favorable case without rigging every result positive")
@@ -1320,8 +1334,10 @@ class ApiIntegrationTest {
         for (JsonNode pick : auto.get("picks")) {
             for (JsonNode horizon : pick.get("horizons")) {
                 for (JsonNode c : horizon.get("candidates")) {
-                    assertThat(c.has("economics")).isTrue();
-                    assertThat(c.has("decisionScore")).isTrue();
+                    assertThat(c.at("/evaluation/assessment/economics/verdict").asText()).isNotBlank();
+                    assertThat(c.at("/evaluation/decisionScore").isNumber()).isTrue();
+                    assertThat(c.has("economics")).isFalse();
+                    assertThat(c.has("decisionScore")).isFalse();
                 }
             }
         }
@@ -1427,6 +1443,24 @@ class ApiIntegrationTest {
                 """);
         assertThat(created.statusCode()).isEqualTo(201);
         String id = Json.parse(created.body()).get("id").asText();
+
+        String expiration = Json.parse(get("/api/research/AAPL").body())
+                .withArray("expirations").get(2).asText();
+        HttpResponse<String> analyzedResponse = post("/api/portfolio/accounts/" + id + "/analyze", """
+                {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","qty":1,"source":"API_TEST","fillNature":"PROPOSED","legs":[
+                  {"action":"BUY","type":"CALL","strike":"250","expiration":"%s","ratio":1,"multiplier":100,"positionEffect":"OPEN"},
+                  {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,"multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(expiration, expiration));
+        assertThat(analyzedResponse.statusCode()).as(analyzedResponse.body()).isEqualTo(200);
+        JsonNode analyzed = Json.parse(analyzedResponse.body());
+        assertThat(analyzed.get("marketLane").asText()).isEqualTo("DEMO");
+        assertThat(analyzed.get("note").asText()).contains("demo evidence").contains("never changes tracked lots");
+        assertThat(analyzed.at("/evaluation/participation/localParticipationBps").isNumber()).isTrue();
+        assertThat(analyzed.at("/evaluation/assessment/portfolioImpacts/real/lane").asText()).isEqualTo("REAL");
+        assertThat(analyzed.at("/evaluation/assessment/portfolioImpacts/practice").isMissingNode()).isTrue();
+        assertThat(analyzed.at("/evaluation/assessment/portfolioImpacts/real/grossExposureBeforeCents").asLong())
+                .isZero();
+        assertThat(analyzed.at("/evaluation/coverage/inputs/pricing/level").asText()).isNotBlank();
 
         HttpResponse<String> recorded = post("/api/portfolio/accounts/" + id + "/transactions", """
                 {"occurredAt":"2026-07-01","eventType":"TRADE","fillNature":"EXECUTED","feesCents":0,"source":"BROKER",

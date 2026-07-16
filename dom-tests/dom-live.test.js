@@ -96,7 +96,8 @@ async function runAndSelectListedCandidate(plan) {
     const candidate = candidates.find(item => {
       const expirations = new Set((item.legs || []).filter(leg => leg.type !== 'STOCK')
         .map(leg => leg.expiration));
-      return expirations.size === 1 && item.structurallyEligible !== false;
+      return expirations.size === 1
+        && item.evaluation?.assessment?.mechanics?.eligible !== false;
     });
     if (!candidate) return false;
     const live = await PlanStore.get(planId, true);

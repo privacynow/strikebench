@@ -50,8 +50,13 @@ public final class AutoRecommender {
     /** A held equity position, injected by the API layer for EXIT/HEDGE/INCOME scans. */
     public record HoldingInfo(String symbol, int freeShares, long avgCostCents) {}
 
-    public record ScoredCandidate(Candidate candidate, double decisionScore, String targetFit,
-                                  EconomicAssessment economics) {}
+    public record ScoredCandidate(String targetFit, StrategyEvaluation evaluation) {
+        public ScoredCandidate {
+            if (evaluation == null || evaluation.candidate() == null) {
+                throw new IllegalArgumentException("a scored candidate requires its exact evaluation");
+            }
+        }
+    }
 
     public record HorizonIdeas(String horizon, List<ScoredCandidate> candidates, List<String> notes) {}
 
@@ -227,17 +232,17 @@ public final class AutoRecommender {
             if (!pool.isEmpty()) {
                 List<StrategyEvaluation> evals = evaluations.evaluate(s.symbol(), intent.name(), thesis, horizon,
                         req.riskMode(), pool, buyingPowerCents, null, false,
-                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId);
-                assessed = evals.stream().map(e -> new ScoredCandidate(e.candidate(),
-                                e.decisionScore(),
-                                targetFit(e.candidate(), req.targetProfitCents()), e.economics()))
-                        .sorted(Comparator.comparingDouble(ScoredCandidate::decisionScore).reversed())
+                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId, null);
+                assessed = evals.stream().map(e -> new ScoredCandidate(
+                                targetFit(e.candidate(), req.targetProfitCents()), e))
+                        .sorted(Comparator.comparingDouble(
+                                (ScoredCandidate candidate) -> candidate.evaluation().decisionScore()).reversed())
                         .toList();
             } else {
                 assessed = List.of();
             }
-            boolean anyFavorable = assessed.stream().anyMatch(x -> x.economics() != null
-                    && x.economics().verdict() == EconomicAssessment.Verdict.FAVORABLE);
+            boolean anyFavorable = assessed.stream().anyMatch(x -> economics(x) != null
+                    && economics(x).verdict() == EconomicAssessment.Verdict.FAVORABLE);
             if (!anyFavorable && !assessed.isEmpty()) {
                 hNotes.add(noFavorableNote(assessed, worldId == null));
             }
@@ -245,9 +250,9 @@ public final class AutoRecommender {
             // unfavorable counterexample when present so it teaches why the stronger ideas rank
             // ahead, without flooding the scan with every family (manual Ideas still exposes all).
             List<ScoredCandidate> selected = new ArrayList<>(assessed.stream()
-                    .filter(x -> x.economics() == null || !x.economics().teachingCase())
+                    .filter(x -> economics(x) == null || !economics(x).teachingCase())
                     .limit(CANDIDATES_PER_HORIZON).toList());
-            assessed.stream().filter(x -> x.economics() != null && x.economics().teachingCase())
+            assessed.stream().filter(x -> economics(x) != null && economics(x).teachingCase())
                     .findFirst().filter(x -> selected.size() < CANDIDATES_PER_HORIZON + 1).ifPresent(selected::add);
             List<ScoredCandidate> ranked = List.copyOf(selected);
             if (ranked.isEmpty()) hNotes.addAll(result.notes());
@@ -264,14 +269,14 @@ public final class AutoRecommender {
     }
 
     static String noFavorableNote(List<ScoredCandidate> assessed, boolean observedLane) {
-        boolean hasAssessment = assessed.stream().anyMatch(x -> x.economics() != null);
-        boolean hasComparableAssessment = assessed.stream().anyMatch(x -> x.economics() != null
-                && !"MECHANICALLY_INELIGIBLE".equals(x.economics().placement()));
+        boolean hasAssessment = assessed.stream().anyMatch(x -> economics(x) != null);
+        boolean hasComparableAssessment = assessed.stream().anyMatch(x -> economics(x) != null
+                && !"MECHANICALLY_INELIGIBLE".equals(economics(x).placement()));
         if (hasAssessment && !hasComparableAssessment) {
             return "No structure reached economic comparison because every candidate failed a mechanical or account check. Review each refusal reason; this is not an economic verdict on the market.";
         }
-        boolean needsDailyHistory = assessed.stream().anyMatch(x -> x.economics() != null
-                && x.economics().needsDailyHistory());
+        boolean needsDailyHistory = assessed.stream().anyMatch(x -> economics(x) != null
+                && economics(x).needsDailyHistory());
         if (hasAssessment && needsDailyHistory) {
             return observedLane
                     ? "A favorable observed verdict cannot be formed yet: this market has fewer than "
@@ -280,6 +285,11 @@ public final class AutoRecommender {
                     : "A favorable verdict cannot be formed yet because this generated market has too little daily path history for realized-volatility EV. These structures remain useful comparisons, not endorsements.";
         }
         return "No favorable setup was found after the available after-cost economic checks. The structures below remain useful comparisons, not endorsements.";
+    }
+
+    private static EconomicAssessment economics(ScoredCandidate candidate) {
+        return candidate == null || candidate.evaluation() == null || candidate.evaluation().assessment() == null
+                ? null : candidate.evaluation().assessment().economics();
     }
 
     private static List<StrategyIntent> normalizeIntents(List<String> requested) {

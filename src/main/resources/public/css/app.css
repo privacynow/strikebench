@@ -2334,6 +2334,24 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .portfolio-allocation-card { display: grid; align-content: start; gap: 8px; }
 .portfolio-allocation-card p { margin: 0; }
 .candidate-evaluation-receipt { display: grid; gap: 6px; margin-top: 10px; }
+.decision-metrics-receipt { display: grid; gap: 8px; min-width: 0; padding: 12px 0;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.decision-metrics-receipt .eyebrow { margin: 0; }
+.participation-headline { margin: 0; font-size: 15px; font-weight: 720; line-height: 1.45; }
+.decision-metrics-receipt > p { margin: 0; }
+.stance-vector { margin: 2px 0; }
+.decision-metrics-receipt .evidence-row { display: grid;
+  grid-template-columns: minmax(90px, .55fr) minmax(110px, auto) minmax(180px, 1.6fr);
+  justify-content: initial; align-items: start; }
+.decision-metrics-receipt .coverage-limit { grid-column: 1 / -1; margin: 2px 0; }
+.portfolio-impact-receipt { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
+.portfolio-impact-receipt h4 { margin: 0 0 8px; }
+.portfolio-impact-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; }
+.portfolio-impact-lane { min-width: 0; padding: 2px 12px; }
+.portfolio-impact-lane + .portfolio-impact-lane { border-left: 1px solid var(--border); }
+.portfolio-impact-lane.unavailable { color: var(--muted); }
+.portfolio-impact-lane p:last-child { margin-bottom: 0; }
+.portfolio-impact-stats { margin-top: 8px; }
 .candidate-management-receipt > p { margin: 0 0 8px; }
 .plan-backtest-preset-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .plan-backtest-preset-row > div { display: grid; gap: 5px; }
@@ -2690,6 +2708,11 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   .position-chain-rail { display: flex; overflow-x: auto; scroll-snap-type: x proximity; padding-bottom: 4px; }
   .position-chain-contract { flex: 0 0 112px; scroll-snap-align: start; }
   .position-editor-commands .btn { flex: 1 1 100%; }
+  .decision-metrics-receipt .evidence-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .decision-metrics-receipt .evidence-row > .muted { grid-column: 1 / -1; }
+  .portfolio-impact-grid { grid-template-columns: minmax(0, 1fr); }
+  .portfolio-impact-lane { padding: 8px 0; }
+  .portfolio-impact-lane + .portfolio-impact-lane { border-left: 0; border-top: 1px solid var(--border); }
 }
 @media (max-width: 360px) {
   .position-leg-grid, .position-chain-controls { grid-template-columns: minmax(0, 1fr); }

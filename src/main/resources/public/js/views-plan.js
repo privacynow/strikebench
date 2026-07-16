@@ -47,7 +47,21 @@
   }
 
   function economicVerdict(c) {
-    return (c && (c.economicVerdict || (c.economics && c.economics.verdict))) || null;
+    var economics = candidateEconomics(c);
+    return economics ? economics.verdict : null;
+  }
+
+  function candidateEconomics(c) {
+    return c && c.evaluation && c.evaluation.assessment
+      ? c.evaluation.assessment.economics : null;
+  }
+
+  function candidateDecisionScore(c) {
+    return c && c.evaluation ? c.evaluation.decisionScore : null;
+  }
+
+  function candidatePop(c) {
+    return c && c.evaluation && c.evaluation.risk ? c.evaluation.risk.pop : null;
   }
 
   function economicRank(c) {
@@ -56,15 +70,17 @@
   }
 
   function marketEvAfterCosts(c) {
-    return c && c.economics && c.economics.marketEvAfterCostsCents;
+    var economics = candidateEconomics(c);
+    return economics && economics.marketEvAfterCostsCents;
   }
 
   function historyEvAfterCosts(c) {
-    return c && c.economics && c.economics.realizedVolEvAfterCostsCents;
+    var economics = candidateEconomics(c);
+    return economics && economics.realizedVolEvAfterCostsCents;
   }
 
   function economicAssessmentBlock(c) {
-    var e = c && c.economics;
+    var e = candidateEconomics(c);
     if (!e) return null;
     var v = economicVerdict(c);
     var cls = v === 'FAVORABLE' ? 'economic-favorable'
@@ -115,10 +131,144 @@
     }, { open: !!open });
   }
 
+  function participationSentence(participation) {
+    if (!participation) return null;
+    var localCents = Math.round(Math.abs(Number(participation.localParticipationBps || 0)) / 100);
+    var local = Number(participation.localParticipationBps || 0) < 0
+      ? 'Right now, this position loses about ' + localCents + '\u00a2 when the equivalent shares gain $1.'
+      : 'Right now, this position keeps about ' + localCents + '\u00a2 of each $1 gained by the equivalent shares.';
+    if (participation.terminalUpsideCaptureBps === null || participation.terminalUpsideCaptureBps === undefined) {
+      return local + ' Terminal capture needs path valuation because the expirations differ.';
+    }
+    var terminalCents = Math.round(Number(participation.terminalUpsideCaptureBps) / 100);
+    var terminal = terminalCents < 0
+      ? 'it loses about ' + Math.abs(terminalCents) + '\u00a2 for each $1 of upside'
+      : 'it captures about ' + terminalCents + '\u00a2 per $1 of upside';
+    return local + ' From ' + fmtMoney(participation.intervalStartCents) + ' to '
+      + fmtMoney(participation.intervalEndCents) + ' by ' + (participation.terminalDate || 'expiry')
+      + ', ' + terminal + '.';
+  }
+
+  function dataCoverageReceipt(coverage) {
+    coverage = coverage || {};
+    var inputs = coverage.inputs || {};
+    if (!Object.keys(inputs).length && !(coverage.limitations || []).length) return null;
+    return UI.expandable('Data coverage for this analysis', function () {
+      return el('div', { class: 'evidence-grid' }, Object.keys(inputs).map(function (name) {
+        var input = inputs[name] || {};
+        return el('div', { class: 'evidence-row' },
+          el('span', { class: 'ev-dim' }, name), evaluationLevelBadge(input.level),
+          el('span', { class: 'muted small' }, input.detail || ''));
+      }).concat((coverage.limitations || []).map(function (limit) {
+        return el('p', { class: 'muted small coverage-limit' }, limit);
+      })));
+    });
+  }
+
+  function portfolioImpactReceipt(impacts, beginner) {
+    if (!impacts) return null;
+    var lanes = [
+      { key: 'practice', label: 'Practice', value: impacts.practice,
+        empty: 'No Practice destination was selected for this analysis.' },
+      { key: 'real', label: 'Recorded at broker', value: impacts.real,
+        empty: 'No tracked account was selected for this analysis.' }
+    ];
+    if (impacts.real && !impacts.practice) lanes.reverse();
+    var grid = el('div', { class: 'portfolio-impact-grid' });
+    lanes.forEach(function (lane) {
+      var value = lane.value;
+      if (!value) {
+        grid.appendChild(el('section', { class: 'portfolio-impact-lane unavailable', 'data-impact-lane': lane.key },
+          el('b', {}, lane.label), el('p', { class: 'muted small' }, lane.empty)));
+        return;
+      }
+      var before = value.symbolConcentrationBeforePct;
+      var after = value.symbolConcentrationAfterPct;
+      var body = el('section', { class: 'portfolio-impact-lane', 'data-impact-lane': lane.key },
+        el('b', {}, lane.label + ' impact'),
+        beginner
+          ? el('p', {}, 'Net directional exposure changes from '
+              + fmtMoney(value.netExposureBeforeCents, { plus: true }) + ' to '
+              + fmtMoney(value.netExposureAfterCents, { plus: true }) + '. '
+              + (before == null || after == null ? 'This starts a new concentration.'
+                : 'Focused-symbol concentration moves from ' + Number(before).toFixed(1)
+                  + '% to ' + Number(after).toFixed(1) + '%.'))
+          : el('div', { class: 'grid grid-2 portfolio-impact-stats' },
+              UI.stat('Gross delta before', fmtMoney(value.grossExposureBeforeCents)),
+              UI.stat('Gross delta after', fmtMoney(value.grossExposureAfterCents)),
+              UI.stat('Net delta before', fmtMoney(value.netExposureBeforeCents, { plus: true })),
+              UI.stat('Net delta after', fmtMoney(value.netExposureAfterCents, { plus: true })),
+              UI.stat('Symbol concentration before', before == null ? 'Empty book' : Number(before).toFixed(2) + '%'),
+              UI.stat('Symbol concentration after', after == null ? 'Empty book' : Number(after).toFixed(2) + '%')),
+        el('p', { class: 'muted small' }, value.basis));
+      (value.concentrationChanges || []).forEach(function (change) {
+        body.appendChild(el('p', { class: 'muted small' }, change));
+      });
+      grid.appendChild(body);
+    });
+    return el('section', { class: 'portfolio-impact-receipt', 'aria-label': 'Portfolio impact by lane' },
+      el('h4', {}, 'Portfolio impact'), grid,
+      (impacts.notes || []).map(function (note) { return el('p', { class: 'muted small' }, note); }));
+  }
+
+  function decisionMetricsReceipt(analysis, beginner) {
+    if (!analysis) return null;
+    var participation = analysis.participation, stance = analysis.stance,
+        implied = analysis.impliedStance, iv = analysis.ivContext,
+        coverage = analysis.coverage || {}, capital = analysis.capital || {};
+    var wrap = el('section', { class: 'decision-metrics-receipt', 'aria-label': 'Position behavior' },
+      el('div', { class: 'eyebrow' }, beginner ? 'WHAT THIS POSITION ACTUALLY EXPRESSES' : 'POSITION STANCE'),
+      participation ? el('p', { class: 'participation-headline' }, participationSentence(participation)) : null,
+      implied ? el('p', { class: 'muted' }, implied.summary) : null);
+    if (iv && iv.entrySide === 'DEBIT') {
+      if (iv.band === 'HIGH' || iv.band === 'VERY_HIGH') {
+        wrap.appendChild(UI.actionFeedback('caution', 'Volatility is expensive for this debit', iv.message));
+      } else {
+        wrap.appendChild(el('p', { class: 'muted small' }, iv.message));
+      }
+    }
+    if (beginner) {
+      var regimes = participation && participation.regimePoints || [];
+      if (regimes.length) wrap.appendChild(el('p', { class: 'muted small' },
+        regimes.map(function (point) { return fmtMoney(point.priceCents) + ': ' + point.meaning; }).join('  ')));
+      if (capital.annualizationNote) wrap.appendChild(el('p', { class: 'muted small' }, capital.annualizationNote));
+      var beginnerCoverage = dataCoverageReceipt(coverage);
+      if (beginnerCoverage) wrap.appendChild(beginnerCoverage);
+      var beginnerImpacts = analysis.assessment && analysis.assessment.portfolioImpacts;
+      if (beginnerImpacts) wrap.appendChild(portfolioImpactReceipt(beginnerImpacts, true));
+      return wrap;
+    }
+    if (stance) wrap.appendChild(el('div', { class: 'chip-row stance-vector' },
+      chip('Dollar delta', fmtMoney(stance.dollarDeltaCents, { plus: true })),
+      chip('\u0394 delta / 1% move', fmtMoney(stance.gammaDollarDeltaCentsPerOnePercentMove, { plus: true })),
+      chip('Vega / vol point', fmtMoney(stance.vegaCentsPerVolPoint, { plus: true })),
+      chip('Theta / day', fmtMoney(stance.thetaCentsPerDay, { plus: true })),
+      stance.downsideLossTwoSigmaCents == null ? chip('Down 2\u03c3 loss', 'Path model required')
+        : chip('Down 2\u03c3 loss', fmtMoney(stance.downsideLossTwoSigmaCents)),
+      stance.upsideLossTwoSigmaCents == null ? chip('Up 2\u03c3 loss', 'Path model required')
+        : chip('Up 2\u03c3 loss', fmtMoney(stance.upsideLossTwoSigmaCents))));
+    if (participation) wrap.appendChild(UI.expandable('Participation definitions and regime points', function () {
+      return el('div', {},
+        el('p', {}, el('b', {}, 'Local: '), participation.localBasis),
+        el('p', {}, el('b', {}, 'Terminal: '), participation.terminalBasis),
+        (participation.regimePoints || []).length ? el('ul', {}, participation.regimePoints.map(function (point) {
+          return el('li', {}, fmtMoney(point.priceCents) + ' \u2014 ' + point.meaning);
+        })) : el('p', { class: 'muted' }, 'No strike changes the participation regime.'));
+    }));
+    var expertCoverage = dataCoverageReceipt(coverage);
+    if (expertCoverage) wrap.appendChild(expertCoverage);
+    if (capital.annualizationNote) wrap.appendChild(el('p', { class: 'muted small' }, capital.annualizationNote));
+    var impacts = analysis.assessment && analysis.assessment.portfolioImpacts;
+    if (impacts) wrap.appendChild(portfolioImpactReceipt(impacts, false));
+    return wrap;
+  }
+
   function candidateEvaluationReceipt(c, beginner) {
     var analysis = c && c.evaluation;
     if (!analysis) return null;
     var wrap = el('div', { class: 'candidate-evaluation-receipt' });
+    var metrics = decisionMetricsReceipt(analysis, beginner);
+    if (metrics) wrap.appendChild(metrics);
     var management = managementReceipt(analysis.management, beginner, beginner && !!c.selected);
     if (management) wrap.appendChild(management);
     if (beginner) {
@@ -128,15 +278,6 @@
       }));
       return wrap.hasChildNodes() ? wrap : null;
     }
-    var evidence = analysis.evidence || {};
-    var dimensions = evidence.perDimension || {};
-    if (Object.keys(dimensions).length) wrap.appendChild(UI.expandable('Evidence by input', function () {
-      var rows = Object.keys(dimensions).map(function (name) {
-        return el('div', { class: 'evidence-row' }, el('span', { class: 'ev-dim' }, name), evaluationLevelBadge(dimensions[name]));
-      });
-      if (evidence.note) rows.push(el('p', { class: 'muted small' }, evidence.note));
-      return el('div', { class: 'evidence-grid' }, rows);
-    }));
     var score = analysis.score || {};
     if ((score.components || []).length) wrap.appendChild(UI.expandable('How the Decision score was built', function () {
       var body = el('div', {});
@@ -150,7 +291,7 @@
       body.appendChild(el('p', { class: 'muted small' },
         'Normalized ' + Math.round(Number(score.normalizedScore || 0)) + ' → risk-adjusted '
         + Math.round(Number(score.riskAdjustedScore || 0)) + ' inside the economic tier → Decision score '
-        + Math.round(Number(c.decisionScore || 0)) + '.'));
+        + Math.round(Number(candidateDecisionScore(c) || 0)) + '.'));
       return body;
     }));
     var explanation = analysis.explanation || {};
@@ -213,7 +354,7 @@
     var maxLossFact = c.usesHeldShares && c.maxLossCents === 0
         ? UI.fact('New cash at risk', '$0')
         : UI.fact(UI.vocabulary('theoreticalMaxLoss'), fmtMoney(c.maxLossCents), 'f-danger');
-    var profitFact = UI.fact('Chance of any profit', fmtPct(c.pop));
+    var profitFact = UI.fact('Chance of any profit', fmtPct(candidatePop(c)));
     var assignmentFact = assignGoal && c.assignmentProb !== null && c.assignmentProb !== undefined
       ? UI.fact(c.intent === 'EXIT' ? 'Chance you sell' : 'Chance you buy', fmtPct(c.assignmentProb), 'f-ok') : null;
     var card = el('div', { class: 'candidate', 'data-strategy': c.strategy,
@@ -268,8 +409,8 @@
         intentBadge(c.intent),
         heldSharesBadge(c),
         badge(c.freshness),
-        c.decisionScore !== null && c.decisionScore !== undefined
-          ? UI.scoreBar(c.decisionScore, 'Decision score — the shared economic, risk and evidence ranking') : null),
+        candidateDecisionScore(c) !== null && candidateDecisionScore(c) !== undefined
+          ? UI.scoreBar(candidateDecisionScore(c), 'Decision score — the shared economic, risk and evidence ranking') : null),
       el('div', { class: 'label-line' }, c.label + '  ·  qty ' + c.qty),
       intentNoteBlock(c),
       el('div', { class: 'chip-row' },
@@ -280,7 +421,7 @@
             el('span', { class: 'loss' }, fmtMoney(c.combinedMaxLossCents))) : null,
         chip('Theoretical max profit', UI.maxProfitLabel(
           c.strategy, c.structureGroup, c.maxProfitCents, false, c.legs)),
-        chip(el('span', {}, 'POP', UI.info('pop')), fmtPct(c.pop)),
+        chip(el('span', {}, 'POP', UI.info('pop')), fmtPct(candidatePop(c))),
         c.assignmentProb !== null && c.assignmentProb !== undefined
           ? chip(el('span', {}, 'Assignment', UI.info('assignment')), fmtPct(c.assignmentProb)) : null,
         c.annualizedYieldPct !== null && c.annualizedYieldPct !== undefined ? chip('Net premium yield/yr', fmtNum(c.annualizedYieldPct, 1) + '%') : null,
@@ -291,9 +432,6 @@
     var econ = economicAssessmentBlock(c);
     if (econ) card.insertBefore(econ, card.querySelector('.chip-row'));
     card.appendChild(el('div', { class: 'chip-row expert-only' },
-      !c.economics && c.expectedValueCents !== null && c.expectedValueCents !== undefined
-        ? chip(el('span', {}, 'Market EV (pre-fee)', UI.info('ev')), fmtMoney(c.expectedValueCents, { plus: true })) : null,
-      !c.economics ? chip(el('span', {}, 'History EV', UI.info('evhistvol')), 'Unavailable') : null,
       chip('Liquidity', fmtNum(c.liquidityScore, 2))));
     if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.context.symbol(), c));
     var expertReceipt = candidateEvaluationReceipt(c, false);
@@ -374,20 +512,20 @@
     }
     var COLS = [
       { key: 'rank', label: '#', get: function (c) { return rankOf.get(c); }, render: function (c) { return el('span', { class: 'muted', title: 'Rank in the served ordering (best first)' }, '#' + rankOf.get(c)); } },
-      { key: 'economicVerdict', label: 'Economic view', get: economicRank, render: function (c) { var v = economicVerdict(c); return el('span', { class: 'badge economic-table-' + String(v || 'unknown').toLowerCase() }, (c.economics && c.economics.label) || v || '—'); } },
+      { key: 'economicVerdict', label: 'Economic view', get: economicRank, render: function (c) { var v = economicVerdict(c), e = candidateEconomics(c); return el('span', { class: 'badge economic-table-' + String(v || 'unknown').toLowerCase() }, (e && e.label) || v || '—'); } },
       { key: 'displayName', label: 'Strategy', get: function (c) { return c.displayName; }, render: function (c) { return el('b', {}, c.displayName); } },
       { key: 'entryNetPremiumCents', label: 'Cost/Credit', get: function (c) { return c.entryNetPremiumCents; }, render: function (c) { return pnlSpan(c.entryNetPremiumCents); } },
       { key: 'maxLossCents', label: 'Theor. max loss', get: function (c) { return c.usesHeldShares && c.combinedMaxLossCents ? c.combinedMaxLossCents : c.maxLossCents; }, render: function (c) { return c.usesHeldShares && c.maxLossCents === 0 ? el('span', {}, '$0*') : el('span', { class: 'loss' }, fmtMoney(c.maxLossCents)); } },
       { key: 'maxProfitCents', label: 'Theor. max profit', get: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'uncapped' ? Infinity : k === 'model-dependent' ? -Infinity : c.maxProfitCents; }, render: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'model-dependent' ? el('span', { class: 'muted' }, 'model-dependent') : k === 'uncapped' ? el('span', { class: 'gain' }, '\u221E') : el('span', { class: 'gain' }, fmtMoney(c.maxProfitCents)); } },
       { key: 'rr', label: 'R:R', get: rrValue, render: function (c) { var v = rrValue(c); return el('span', {}, v === -1 ? '\u2014' : v === Infinity ? '\u221E' : fmtNum(v, 2)); } },
-      { key: 'pop', label: 'POP', get: function (c) { return c.pop === null || c.pop === undefined ? -1 : c.pop; }, render: function (c) { return el('span', {}, fmtPct(c.pop)); } },
-      { key: 'marketEv', label: 'Market EV', get: function (c) { var v = marketEvAfterCosts(c); return v === null || v === undefined ? (c.expectedValueCents == null ? -Infinity : c.expectedValueCents) : v; }, render: function (c) { var v = marketEvAfterCosts(c); return v !== null && v !== undefined ? pnlSpan(v) : c.expectedValueCents !== null && c.expectedValueCents !== undefined ? el('span', {}, pnlSpan(c.expectedValueCents), el('small', { class: 'muted' }, ' pre-fee')) : '—'; } },
+      { key: 'pop', label: 'POP', get: function (c) { var v = candidatePop(c); return v === null || v === undefined ? -1 : v; }, render: function (c) { return el('span', {}, fmtPct(candidatePop(c))); } },
+      { key: 'marketEv', label: 'Market EV', get: function (c) { var v = marketEvAfterCosts(c); return v === null || v === undefined ? -Infinity : v; }, render: function (c) { var v = marketEvAfterCosts(c); return v !== null && v !== undefined ? pnlSpan(v) : '—'; } },
       { key: 'historyEv', label: 'History EV', get: function (c) { var v = historyEvAfterCosts(c); return v === null || v === undefined ? -Infinity : v; }, render: function (c) { var v = historyEvAfterCosts(c); return v === null || v === undefined ? '—' : pnlSpan(v); } },
       { key: 'breakevens', label: 'Breakevens', get: function (c) { return (c.breakevens || []).length ? parseFloat(c.breakevens[0]) : 0; }, render: function (c) { return el('span', { class: 'mono' }, (c.breakevens || []).map(fmtBreakeven).join(' / ') || '\u2014'); } },
       { key: 'assignmentProb', label: 'Assign%', get: function (c) { return c.assignmentProb === null || c.assignmentProb === undefined ? -1 : c.assignmentProb; }, render: function (c) { return el('span', {}, c.assignmentProb === null || c.assignmentProb === undefined ? '\u2014' : fmtPct(c.assignmentProb)); } },
       { key: 'annualizedYieldPct', label: 'Net premium yield/yr', get: function (c) { return c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? -1 : c.annualizedYieldPct; }, render: function (c) { return el('span', {}, c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? '\u2014' : fmtNum(c.annualizedYieldPct, 1) + '%'); } },
       { key: 'liquidityScore', label: 'Liq', get: function (c) { return c.liquidityScore; }, render: function (c) { return el('span', {}, fmtNum(c.liquidityScore, 2)); } },
-      { key: 'decisionScore', label: 'Decision score', get: function (c) { return c.decisionScore; }, render: function (c) { return c.decisionScore === null || c.decisionScore === undefined ? '\u2014' : el('b', {}, fmtNum(c.decisionScore, 0)); } }
+      { key: 'decisionScore', label: 'Decision score', get: candidateDecisionScore, render: function (c) { var score = candidateDecisionScore(c); return score === null || score === undefined ? '\u2014' : el('b', {}, fmtNum(score, 0)); } }
     ];
     var wrap = el('div', { class: 'card', id: 'compare-table' });
     function render() {
@@ -2168,9 +2306,11 @@
     function paintPreview() {
       var result = state.preview;
       if (!result) return;
-      var p = result.preview, evaluation = result.evaluation || {}, economics = evaluation.economics;
+      var p = result.preview, evaluation = result.evaluation || {};
+      var economics = evaluation.assessment && evaluation.assessment.economics;
       review.innerHTML = '';
-      review.appendChild(economicAssessmentBlock({ economics: economics, economicVerdict: economics && economics.verdict }));
+      review.appendChild(economicAssessmentBlock({ evaluation: evaluation }));
+      review.appendChild(decisionMetricsReceipt(evaluation, Learn.currentLevel() === 'beginner'));
       review.appendChild(verdictPanel(p, Learn.currentLevel() === 'beginner', true).node);
       var blocks = (p.blockReasons || []).concat(result.guardrails && result.guardrails.blockReasons || []);
       var warnings = (p.warnings || []).concat(result.guardrails && result.guardrails.warnings || []);
@@ -2674,6 +2814,7 @@
     guideBlock: guideBlock,
     economicVerdict: economicVerdict,
     marketEvAfterCosts: marketEvAfterCosts,
-    economicAssessmentBlock: economicAssessmentBlock
+    economicAssessmentBlock: economicAssessmentBlock,
+    decisionMetricsReceipt: decisionMetricsReceipt
   });
 })();

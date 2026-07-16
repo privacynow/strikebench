@@ -29,10 +29,10 @@ class EvaluationStoreTest {
                 0.45, 2_000L, 0.70, "DELAYED", List.of(), 0.6,
                 "why", "up", "down", "inval", "plain", "DIRECTIONAL", List.of("DIRECTIONAL"),
                 0.30, null, null, null, false, null, null);
-        EvalContext ctx = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25,
+        EvalContext ctx = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
                 List.of(0.2, 0.25, 0.3, 0.35, 0.4, 0.28, 0.31, 0.27, 0.33, 0.29, 0.26, 0.32),
                 10_000_000L, true, 65, 0, 0.04,
-                io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD));
+                io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
         return new StrategyEvaluator().evaluate(c,
                 new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL", "month", "bullish", "balanced", "decision"),
                 ctx);
@@ -75,8 +75,11 @@ class EvaluationStoreTest {
         assertThat(risk).containsKey("scenarios");
         assertThat((List<?>) risk.get("scenarios")).hasSize(7);
         @SuppressWarnings("unchecked")
-        Map<String, Object> economics = (Map<String, Object>) receipt.get("economics");
+        Map<String, Object> assessment = (Map<String, Object>) receipt.get("assessment");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> economics = (Map<String, Object>) assessment.get("economics");
         assertThat(economics).containsKeys("verdict", "marketEvAfterCostsCents", "realizedVolEvAfterCostsCents");
+        assertThat(receipt).doesNotContainKey("economics");
         @SuppressWarnings("unchecked")
         Map<String, Object> expl = (Map<String, Object>) receipt.get("explanation");
         assertThat(expl).containsKeys("assumptions", "failureModes");

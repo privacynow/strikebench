@@ -33,8 +33,8 @@ The Plan-centered journey is complete on `feature/journey_refactor` and is not d
   modeled fallbacks remain `MIXED` until end-to-end evidence supports a stronger verdict.
 - The old Lab, standalone Decision, ETF-replicator, old Trade-stage, and
   `/api/sim/{scenario,strategy,compare}` surfaces are gone. Do not restore internal aliases or DTO
-  overloads for hypothetical API consumers. Database and model-version migrations remain because
-  they protect actual persisted user data and deterministic model identity.
+  overloads for hypothetical API consumers. The pre-release database has one current schema and no
+  historical translation path; model-version receipts remain because deterministic identity is a fact.
 - Release evidence is generated from Surefire XML and per-suite browser TAP reports by
   `scripts/release-matrix.mjs` on every CI run. The workflow summary is authoritative for that
   exact commit; test counts are never transcribed here. Representative screenshots are under
@@ -55,7 +55,7 @@ development and what most test suites use.
 
 ## Stack & principles
 
-Java 25 + Javalin 7 (Jetty 12) + PostgreSQL (HikariCP pool, Flyway migrations) + Caffeine
+Java 25 + Javalin 7 (Jetty 12) + PostgreSQL (HikariCP pool, one fingerprinted current schema) + Caffeine
 caches; plain HTML/CSS/JS frontend served from the jar — **no frontend build step**. D3 v7 is
 vendored for candlesticks; everything else is hand-rolled SVG. Local dev DB: `docker compose up -d db`.
 
@@ -88,8 +88,8 @@ vendored for candlesticks; everything else is hand-rolled SVG. Local dev DB: `do
    1256 60/40 character and year-end mark, and retirement-wrapper suppression. Do not infer rules that the
    cited material does not support.
 3. Update `RULESET_ID`, `REVIEWED_TAX_YEAR`, `REVIEWED_THROUGH`, and `SCOPE` together. Never advance only the
-   year constant. A changed rule that affects stored basis or realized matches requires an explicit migration
-   or reconciliation path; do not silently rewrite historical accounting facts.
+   year constant. A changed rule that affects stored basis or realized matches requires an explicit,
+   user-visible reconciliation receipt; do not silently rewrite historical accounting facts.
 4. Extend the tax service, export, and browser tests for the reviewed year and its next provisional year.
    The gate must cover loss rows and wash disclosures, Section 1256 classification and year-end marks,
    user-rate scenario availability, retirement-wrapper suppression, primary-source links, and the visible
@@ -104,7 +104,7 @@ vendored for candlesticks; everything else is hand-rolled SVG. Local dev DB: `do
 io.liftandshift.strikebench
 ├── config      AppConfig (env > sysprops > strikebench.properties > defaults)
 ├── auth        AuthService, GoogleOidcProvider, verified identity/session policy
-├── db          Db (HikariCP-pooled Postgres), Migrations (Flyway; classpath:db/migrations)
+├── db          Db (HikariCP-pooled Postgres), Schema (single classpath:db/schema.sql baseline)
 ├── model       Quote, Candle, OptionQuote, OptionChain, Leg, DataEvidence, provenance/age, ...
 ├── pricing     BlackScholes, ImpliedVol, PayoffCurve, VolSurface, HistoricalVol
 ├── market      MarketDataService (provider chain + caches + status), MarketDataEngine (in-memory
@@ -141,8 +141,8 @@ Live simulated markets remain a market lane under `/api/sim/market/*`, not an al
 engine.
 
 **Compatibility boundary.** Pre-release StrikeBench contracts have no compatibility burden: retired
-HTTP routes, request fields, browser-storage shapes, and parallel internal records are deleted after
-their facts are migrated. That rule does not apply to formats owned by brokers or data providers.
+HTTP routes, request fields, browser-storage shapes, and parallel internal records are deleted, not
+translated or adapted. That rule does not apply to formats owned by brokers or data providers.
 E*TRADE and other broker CSV/text/paste adapters are deliberately one-way and forgiving: they parse
 what they can into an editable draft or pending-import record, identify every uncertain or missing
 field, quarantine malformed rows, and never submit authoritative ledger activity until the user has
@@ -242,10 +242,10 @@ and default observed frames resolve the current universe on every computation ra
 the sector present when the connection opened. The five-tab fixture regression must remain green:
 long-lived streams may never exhaust the browser connection pool and starve ordinary API reads.
 
-Released Flyway migrations are byte-immutable. `MigrationImmutabilityTest` pins every V1-V56
-SHA-256 digest and requires each new migration to be added to the manifest. Never edit an applied
-migration, including comments or whitespace, and never use `repair` to legitimize a source edit;
-schema changes always receive a new versioned migration.
+`db/schema.sql` is the only database definition. An empty database initializes from it; every later
+boot verifies its SHA-256 fingerprint. A different or unmarked schema fails loud with a recreate
+instruction. During pre-release development, edit the baseline and recreate local/test databases;
+never add a translation migration, compatibility column, or historical record shape.
 
 ## Configuration
 
@@ -325,13 +325,9 @@ production runs a bare Postgres on the app box. To cut a running SQLite deployme
 2. **Set the password** in `/opt/strikebench/strikebench.properties`: `db.password=…` (chmod 600).
 3. **Deploy the Postgres-aware unit**: `scripts/deploy.sh --install` writes a systemd unit that
    passes `DB_URL`/`DB_USER` (password stays in the properties file). Don't start it yet.
-4. **Migrate the data** into the *empty* Postgres before the first app boot:
-   `cd /opt/strikebench && DB_URL=jdbc:postgresql://localhost:5432/strikebench DB_USER=strikebench \
-     DB_PASSWORD='…' java -jar strikebench.jar etl /path/to/options-lab.db`
-   — introspective column-intersection copy in one transaction; verifies row counts + the ledger
-   invariant and exits non-zero on any problem. Rehearse it against a copy of the prod SQLite first.
-5. **Start**: `sudo systemctl restart strikebench` (Flyway migrates the schema on boot).
-6. **Backups**: `scripts/backup-postgres.sh --setup-timer` installs a nightly `pg_dump → gzip → S3`
+4. **Start against an empty database**: `sudo systemctl restart strikebench`. The app installs the
+   one current schema and records its fingerprint; a different schema is refused rather than adapted.
+5. **Backups**: `scripts/backup-postgres.sh --setup-timer` installs a nightly `pg_dump → gzip → S3`
    timer (`BACKUP_BUCKET=s3://…` in `/opt/strikebench/backup.env`; keeps the last 14 locally).
 
 ### Optional: require Google sign-in

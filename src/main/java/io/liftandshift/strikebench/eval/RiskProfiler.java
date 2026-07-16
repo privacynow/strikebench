@@ -29,8 +29,7 @@ public final class RiskProfiler {
         long worstPnl = 0;
         boolean have = false;
         try {
-            CurveInput input = curveInput(c, ctx);
-            PayoffCurve pc = PayoffCurve.of(input.legs(), Math.max(1, c.qty()), input.entryAdjustmentCents());
+            PayoffCurve pc = payoffCurve(c, ctx);
             BigDecimal spot = cents(ctx.underlyingCents());
             for (double m : MOVES) {
                 BigDecimal s = spot.multiply(BigDecimal.valueOf(1.0 + m));
@@ -57,8 +56,7 @@ public final class RiskProfiler {
                 && ctx.realizedVol30() != null && ctx.realizedVol30() > 0 && ctx.underlyingCents() > 0
                 && ctx.daysToExpiry() > 0 && c.legs() != null && !c.legs().isEmpty()) {
             try {
-                CurveInput input = curveInput(c, ctx);
-                PayoffCurve ppc = PayoffCurve.of(input.legs(), Math.max(1, c.qty()), input.entryAdjustmentCents());
+                PayoffCurve ppc = payoffCurve(c, ctx);
                 double t = ctx.daysToExpiry() / 365.0;
                 evHistVol = ppc.expectedValueCents(ctx.underlyingCents() / 100.0, ctx.realizedVol30(), t, 0);
                 basisNote += "; history EV = realized-vol " + Math.round(ctx.realizedVol30() * 100)
@@ -77,6 +75,15 @@ public final class RiskProfiler {
      * held-share candidates add one stock lot PER package unit. {@code sharesNeeded} is the total
      * across quantity, so using it directly as a leg ratio would multiply quantity twice.
      */
+    static PayoffCurve payoffCurve(Candidate c, EvalContext ctx) {
+        CurveInput input = curveInput(c, ctx);
+        return PayoffCurve.of(input.legs(), Math.max(1, c.qty()), input.entryAdjustmentCents());
+    }
+
+    static List<Leg> combinedLegs(Candidate c, EvalContext ctx) {
+        return curveInput(c, ctx).legs();
+    }
+
     private static CurveInput curveInput(Candidate c, EvalContext ctx) {
         int qty = Math.max(1, c.qty());
         List<Leg> optionPackage = new ArrayList<>(c.legs().stream().map(LegView::toLeg).toList());

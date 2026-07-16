@@ -50,9 +50,9 @@ Where a rule below seems oddly specific, it is a scar. Treat every MUST as non-n
    boundary via a `Money` util (`toCents(BigDecimal)`, `centsFromPrice(perShare, shares)` with
    HALF_UP, `PRICE_SCALE=4`).
 3. Stack (pin these versions unless newer are verified): Javalin 7.2.2 (Jetty 12), Jackson 2.19.0,
-   sqlite-jdbc 3.49.1.0, Caffeine 3.2.0, SLF4J 2.0.17 / Logback 1.5.18, JUnit 5.11.4, AssertJ 3.27.3,
-   MockWebServer 4.12.0 (NOT WireMock — Jetty classpath clash), Shade 3.6.0. Hand-rolled migration
-   runner, not Flyway.
+   PostgreSQL JDBC 42.7.4, HikariCP 6.2.1, Caffeine 3.2.0, SLF4J 2.0.17 / Logback 1.5.18,
+   JUnit 5.11.4, AssertJ 3.27.3, MockWebServer 4.12.0 (NOT WireMock — Jetty classpath clash),
+   Shade 3.6.0, and one fingerprinted current-schema initializer.
 4. Frontend: plain HTML/CSS/JS SPA, **no build step**, served from the jar (`/public` on classpath).
    No secrets in the frontend. All JS attached to `window` (no runtime ESM) so a jsdom harness can
    drive it.

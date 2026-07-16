@@ -181,18 +181,27 @@ final class PlanStrategyController {
         try {
             evaluation = evaluations.assessExact(plan.symbol(), candidate, account.buyingPowerCents(),
                     root.analysisCtx(ctx), PlanController.worldParam(root.activeWorld(ctx)), preview.ok(), preview.blockReasons(),
-                    roundTripFees);
+                    roundTripFees, practiceExposure(account, plan.symbol()));
         } catch (RuntimeException e) {
             log.debug("Plan custom-package assessment is unavailable", e);
             throw new io.liftandshift.strikebench.util.DataUnavailableException(
                     "The exact package was checked mechanically, but its complete decision assessment is unavailable; no partial substitute was returned", e);
         }
-        candidateJson.set("evaluation", Json.MAPPER.valueToTree(evaluation));
+        candidateJson.set("evaluation", Json.MAPPER.valueToTree(ApiResponses.EvaluationReceipt.of(evaluation)));
         JsonNode requestJson = Json.MAPPER.valueToTree(exactBody);
         var saved = planStrategy.saveCustom(root.ownerId(ctx), plan, requestJson, candidateJson,
                 body.expectedVersion(), preview.ok());
         ctx.json(new ApiResponses.PlanStrategyPreview<>(
                 planSvc.get(root.ownerId(ctx), plan.id()), saved, preview));
+    }
+
+    private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
+            Account account, String symbol) {
+        var exposure = trades.portfolioDollarDelta(account.id(), symbol);
+        return new io.liftandshift.strikebench.eval.PortfolioExposureContext(
+                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE,
+                exposure.grossCents(), exposure.netCents(), exposure.focusSymbolGrossCents(),
+                exposure.complete(), exposure.basis());
     }
 
     void planScoutLatest(Context ctx) {
@@ -267,25 +276,24 @@ final class PlanStrategyController {
             for (AutoRecommender.HorizonIdeas horizon : pick.horizons()) {
                 for (String note : horizon.notes()) if (!collectedNotes.contains(note)) collectedNotes.add(note);
                 for (AutoRecommender.ScoredCandidate scored : horizon.candidates()) {
-                    ObjectNode candidate = Json.MAPPER.valueToTree(scored.candidate());
+                    var evaluation = scored.evaluation();
+                    var economics = evaluation.assessment().economics();
+                    ObjectNode candidate = Json.MAPPER.valueToTree(evaluation.candidate());
                     candidate.put("symbol", pick.symbol());
                     candidate.put("scoutThesis", !"HEDGES".equals(scope) && wantedThesis != null
                             ? wantedThesis : pick.signals().thesis());
                     candidate.put("scoutScope", scope); candidate.put("scoutHorizon", horizon.horizon());
                     candidate.put("opportunityScore", pick.opportunityScore());
                     if (scored.targetFit() != null) candidate.put("targetFit", scored.targetFit());
-                    candidate.put("decisionScore", scored.decisionScore());
-                    if (scored.economics() != null) {
+                    candidate.set("evaluation", Json.MAPPER.valueToTree(ApiResponses.EvaluationReceipt.of(evaluation)));
+                    if (economics != null) {
                         anyEconomicAssessment = true;
-                        if (!"MECHANICALLY_INELIGIBLE".equals(scored.economics().placement())) {
+                        if (!"MECHANICALLY_INELIGIBLE".equals(economics.placement())) {
                             anyComparableAssessment = true;
                         }
-                        if (scored.economics().realizedVolEvAfterCostsCents() != null) anyRealizedVolLane = true;
-                        if (scored.economics().needsDailyHistory()) needsDailyHistory = true;
-                        candidate.set("economics", Json.MAPPER.valueToTree(scored.economics()));
-                        candidate.put("economicVerdict", scored.economics().verdict().name());
-                        candidate.put("economicPlacement", scored.economics().placement());
-                        switch (scored.economics().verdict()) {
+                        if (economics.realizedVolEvAfterCostsCents() != null) anyRealizedVolLane = true;
+                        if (economics.needsDailyHistory()) needsDailyHistory = true;
+                        switch (economics.verdict()) {
                             case FAVORABLE -> favorable++;
                             case MIXED -> mixed++;
                             case UNFAVORABLE -> unfavorable++;
