@@ -37,8 +37,8 @@ class DataCenterTest {
 
     private Ctx wire() {
         db = TestDb.fresh();
-        AppConfig cfg = new AppConfig(Map.of("ENGINE_ENABLED", "false"));
-        MarketDataProvider provider = new ObservedFixtureProvider(clock);
+        AppConfig cfg = new AppConfig(Map.of("ENGINE_ENABLED", "false", "STOOQ_ENABLED", "true"));
+        MarketDataProvider provider = new ObservedFixtureProvider(clock, "stooq");
         MarketDataService market = new MarketDataService(
                 List.of(provider), List.of(), List.of());
         UniverseService universe = new UniverseService(db, cfg, clock);
@@ -68,12 +68,13 @@ class DataCenterTest {
     }
 
     @Test
-    void backfillJobRunsWritesBarsAndReportsDone() throws Exception {
+    void historySyncJobRunsWritesBarsAndReportsDone() throws Exception {
         Ctx c = wire();
         var invalidations = new java.util.concurrent.atomic.AtomicInteger();
         c.jobs().setDataChangedHook(invalidations::incrementAndGet);
-        var job = c.jobs().start("backfill_underlying",
-                Map.of("symbols", List.of("AAPL"), "from", "2026-04-01", "to", "2026-06-30"), null);
+        var job = c.jobs().start("sync_underlying",
+                Map.of("symbols", List.of("AAPL"), "from", "2026-04-01", "to", "2026-06-30",
+                        "source", "stooq"), null);
         var done = await(c.jobs(), job.id());
         assertThat(done.status()).isEqualTo("DONE");
         assertThat(done.rowsWritten()).isGreaterThan(0);

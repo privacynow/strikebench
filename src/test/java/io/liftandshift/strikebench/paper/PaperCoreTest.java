@@ -49,7 +49,7 @@ class PaperCoreTest {
                                                         int qty, List<Leg> legs, String thesis,
                                                         String horizon, String riskMode) {
         return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
-                riskMode, null, null, null, null, null);
+                riskMode, null, null, null, null, null, "PROPOSED");
     }
 
     private static TradeService.OpenRequest openRequest(String accountId, String symbol, String strategy,
@@ -57,7 +57,7 @@ class PaperCoreTest {
                                                         String horizon, String riskMode, String intent,
                                                         Boolean useHeldShares) {
         return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
-                riskMode, intent, useHeldShares, null, null, null);
+                riskMode, intent, useHeldShares, null, null, null, "PROPOSED");
     }
 
     private static TradeService.OpenRequest openRequest(String accountId, String symbol, String strategy,
@@ -66,7 +66,8 @@ class PaperCoreTest {
                                                         Boolean useHeldShares, Long proposedNetCents,
                                                         Long feesOverrideCents, String source) {
         return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
-                riskMode, intent, useHeldShares, proposedNetCents, feesOverrideCents, source);
+                riskMode, intent, useHeldShares, proposedNetCents, feesOverrideCents, source,
+                "IMPORT".equals(source) || "BROKER".equals(source) ? "EXECUTED" : "PROPOSED");
     }
 
     /**
@@ -242,6 +243,40 @@ class PaperCoreTest {
         assertThat(trades.currentMark(opened.id()).popNow())
                 .as("an unchanged market must not drop the package-level fill adjustment after entry")
                 .isCloseTo(atMine.popEntry(), org.assertj.core.data.Offset.offset(1e-9));
+    }
+
+    @Test
+    void analysisPreservesEnteredLegPricesAndLabelsBlankLegEvidenceIndependently() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeService.OpenRequest mixed = new TradeService.OpenRequest(acct.id(), "AAPL",
+                "CREDIT_PUT_SPREAD", 1,
+                List.of(put(LegAction.SELL, "100", "4.25"), put(LegAction.BUY, "95", "0")),
+                "bullish", "month", "balanced", null, null, null, null,
+                "ANALYZE", "PROPOSED");
+
+        TradePreview preview = trades.analyze(mixed);
+        assertThat(preview.ok()).isTrue();
+        assertThat(preview.entryNetPremiumCents()).isEqualTo(305_00L);
+        assertThat(preview.legs()).extracting(row -> row.get("fillBasis"))
+                .containsExactly("USER_PROPOSED", "EXECUTABLE_BOOK");
+        assertThat(preview.warnings()).anySatisfy(message ->
+                assertThat(message).contains("entered leg price").contains("blank legs"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> execution = (Map<String, Object>) preview.analytics().get("executionQuality");
+        assertThat(execution.get("executableNetCents")).isEqualTo(180_00L);
+
+        TradePreview tracked = trades.previewTracked(mixed, 1_000_00L);
+        assertThat(tracked.cashBeforeCents()).isEqualTo(1_000_00L);
+        assertThat(tracked.evidence().source()).contains("tracked-account");
+        assertThat(tracked.warnings()).anySatisfy(message ->
+                assertThat(message).contains("ANALYZE").contains("not a fill claim"));
+
+        marks.freshness = Freshness.STALE;
+        marks.evidenceOverride = io.liftandshift.strikebench.model.DataEvidence.of("cboe", Freshness.STALE);
+        assertThat(trades.analyze(mixed).ok()).isTrue();
+        TradePreview executablePreview = trades.preview(mixed);
+        assertThat(executablePreview.ok()).isFalse();
+        assertThat(executablePreview.blockReasons()).anySatisfy(reason -> assertThat(reason).contains("STALE"));
     }
 
     @Test
@@ -608,6 +643,21 @@ class PaperCoreTest {
     }
 
     @Test
+    void analysisLabelsLargePositionWithoutApplyingThePracticePlacementCap() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeService.OpenRequest request = openRequest(acct.id(), "AAPL", "LONG_CALL", 101,
+                List.of(Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), EXP,
+                        1, BigDecimal.ZERO)), "bullish", "month", "balanced");
+
+        assertThat(trades.preview(request).blockReasons())
+                .anyMatch(reason -> reason.contains("100-contract practice cap"));
+        var analysis = trades.analyze(request);
+        assertThat(analysis.blockReasons())
+                .noneMatch(reason -> reason.contains("100-contract practice cap"));
+        assertThat(analysis.payoff()).isNotEmpty();
+    }
+
+    @Test
     void settleAtIntrinsicAfterExpiry() {
         Account acct = accounts.getOrCreateDefault();
         TradeRecord t = trades.create(creditPutSpread(acct.id(), 1));
@@ -626,6 +676,29 @@ class PaperCoreTest {
         Account after = accounts.get(acct.id());
         assertThat(after.cashCents()).isEqualTo(START - 32130);
         assertThat(after.reservedCents()).isZero();
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void settlementUsesEachContractsExactDeliverableMultiplier() {
+        Account acct = accounts.getOrCreateDefault();
+        List<Leg> adjustedSpread = List.of(
+                Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"), EXP,
+                        1, BigDecimal.ZERO, 10),
+                Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), EXP,
+                        1, BigDecimal.ZERO, 10));
+        TradeRecord opened = trades.create(openRequest(acct.id(), "AAPL", "CUSTOM", 1,
+                adjustedSpread, "bullish", "month", "balanced"));
+
+        marks.underlying = new BigDecimal("92.00");
+        Clock later = Clock.fixed(Instant.parse("2026-08-24T15:30:00Z"), ZoneId.of("America/New_York"));
+        TradeService.CloseResult result = new TradeService(db, cfg, marks, audit, later)
+                .settle(opened.id(), true);
+
+        assertThat(result.trade().status()).isEqualTo("EXPIRED");
+        assertThat(db.query("SELECT amount_cents FROM ledger WHERE trade_id=? AND type='SETTLEMENT'",
+                r -> r.lng("amount_cents"), opened.id())).containsExactly(-5_000L);
+        assertThat(result.realizedPnlCents()).isEqualTo(-3_330L);
         assertLedgerInvariants(acct.id());
     }
 
@@ -1359,6 +1432,16 @@ class PaperCoreTest {
         assertThat(new BigDecimal(preview.breakevens().getFirst())).isGreaterThan(new BigDecimal("100"));
         TradeRecord t = trades.create(pp);
         assertThat(t.sharesLocked()).isZero(); // long options never lock shares
+
+        marks.exact.put("PUT95", new MarksSource.LegMark(new BigDecimal("1.20"), new BigDecimal("1.20"),
+                new BigDecimal("1.20"), 0.25, Freshness.FIXTURE, -0.50, 0.01, -0.02, 0.05,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        TradeService.MarkView combined = trades.currentMark(t.id());
+        assertThat(combined.greeks().deltaShares()).isEqualTo(50.0); // 100 held shares - 50 put delta
+        assertThat(combined.legGreeks()).anySatisfy(row -> {
+            assertThat(row.get("leg")).isEqualTo("100 held shares");
+            assertThat(row.get("delta")).isEqualTo(1.0);
+        });
 
         // Without the shares, the same request is refused — the combined framing needs them
         TradeService.OpenRequest noShares = openRequest(acct.id(), "SPY", "PROTECTIVE_PUT", 1,

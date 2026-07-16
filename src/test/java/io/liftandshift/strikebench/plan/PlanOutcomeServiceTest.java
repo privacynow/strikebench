@@ -90,10 +90,10 @@ class PlanOutcomeServiceTest {
                    "label":"Mixed","summary":"Costs matter","marketEvAfterCostsCents":-900,
                    "estimatedRoundTripFeesCents":520,"observedEvidence":false,"reasons":["Costs"]},
                  "legs":[
-                   {"action":"BUY","type":"CALL","strike":"250","expiration":"2026-08-21","ratio":1,"entryPrice":"7"},
-                   {"action":"SELL","type":"CALL","strike":"260","expiration":"2026-08-21","ratio":1,"entryPrice":"4"}]}
+                   {"action":"BUY","type":"CALL","strike":"250","expiration":"2026-08-21","ratio":1,"multiplier":100,"entryPrice":"7","positionEffect":"OPEN"},
+                   {"action":"SELL","type":"CALL","strike":"260","expiration":"2026-08-21","ratio":1,"multiplier":100,"entryPrice":"4","positionEffect":"OPEN"}]}
                 """);
-        strategies.saveCustom(null, plan, Json.parse("{\"source\":\"BUILDER\"}"), candidate, plan.version());
+        strategies.saveCustom(null, plan, Json.parse("{\"source\":\"BUILDER\"}"), candidate, plan.version(), true);
         plan = plans.get(null, plan.id());
         String candidateId = strategies.selectedCandidate(null, plan.id()).path("id").asText();
 
@@ -240,14 +240,16 @@ class PlanOutcomeServiceTest {
                 "acct-decision", "Decision account", "DEMO", 10_000_000L, 10_000_000L, 0L,
                 "2026-07-12T16:00:00Z", "2026-07-12T16:00:00Z");
         Account account = new Account("acct-decision", "Decision account", "DEMO", 10_000_000L,
-                10_000_000L, 0L, false, "2026-07-12T16:00:00Z", "2026-07-12T16:00:00Z");
+                10_000_000L, 0L, false, "2026-07-12T16:00:00Z", "2026-07-12T16:00:00Z", null);
         TradePreview preview = new TradePreview(true, List.of(), List.of(), -30_000L, 65L,
                 30_000L, 70_000L, List.of("253"), 0.45, -900L, 0L,
                 10_000_000L, 9_969_935L, 0L, 0L, 10_000_000L, 9_969_935L,
                 "FIXTURE", DataEvidence.of("fixture", Freshness.FIXTURE), 25_000L, null,
-                List.of(Map.of("action", "BUY", "type", "CALL", "strike", "250",
-                        "expiration", "2026-08-21", "ratio", 1, "bid", "6.9123", "ask", "7.0456",
-                        "mid", "6.97895", "fill", "7.0456", "iv", 0.3)), List.of(),
+                List.of(Map.ofEntries(Map.entry("action", "BUY"), Map.entry("type", "CALL"),
+                        Map.entry("strike", "250"), Map.entry("expiration", "2026-08-21"),
+                        Map.entry("ratio", 1), Map.entry("multiplier", 100), Map.entry("bid", "6.9123"),
+                        Map.entry("ask", "7.0456"), Map.entry("mid", "6.97895"),
+                        Map.entry("fill", "7.0456"), Map.entry("iv", 0.3))), List.of(),
                 Map.of("probabilityMap", Map.of("pMaxProfit", 0.2, "pMaxLoss", 0.3,
                         "cvar95Cents", -28_000L)));
         EconomicAssessment economics = new EconomicAssessment(EconomicAssessment.Verdict.MIXED,

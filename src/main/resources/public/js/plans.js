@@ -268,6 +268,16 @@
   }
 
   async function saveCustom(plan, position) {
+    if (!position || !position.strategy || !Number.isInteger(Number(position.qty)) || Number(position.qty) < 1
+        || !position.source || !['PROPOSED', 'EXECUTED'].includes(position.fillNature)
+        || !Array.isArray(position.legs) || !position.legs.length
+        || position.legs.some(function (leg) {
+          return !leg || !leg.action || !leg.type || !leg.positionEffect
+            || !Number.isInteger(Number(leg.ratio)) || Number(leg.ratio) < 1
+            || !Number.isInteger(Number(leg.multiplier)) || Number(leg.multiplier) < 1;
+        })) {
+      throw new Error('Plan structures must use the current exact-position contract.');
+    }
     var out = await API.post('/api/plans/' + plan.id + '/strategy/custom', {
       expectedVersion: plan.version, position: position
     });

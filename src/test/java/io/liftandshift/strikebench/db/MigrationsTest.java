@@ -18,6 +18,75 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class MigrationsTest {
 
     @Test
+    void exactMultiplierMigrationPreservesRetainedPositionsAndRemovesImplicitDeliverables() {
+        Map<String, String> cfg = TestDb.freshConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure().dataSource(db.dataSource()).locations("classpath:db/migrations")
+                    .target("57").load().migrate();
+            db.exec("INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents," +
+                            "created_at,updated_at) VALUES('acct_multiplier','local','Multiplier','PAPER',100000,100000,0,now(),now())");
+            db.exec("INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,entry_underlying_cents," +
+                            "entry_net_premium_cents,max_loss_cents,breakevens_json,entry_snapshot_json,created_at,updated_at) " +
+                            "VALUES('trade_multiplier','acct_multiplier','AAPL','LONG_CALL','ACTIVE',1,?::jsonb,10000,-2500,2500," +
+                            "'[]'::jsonb,?::jsonb,now(),now())",
+                    "[{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":100,\"expiration\":\"2026-08-21\",\"ratio\":1,\"entryPrice\":2.5}]",
+                    "{\"heldShareContextLots\":3,\"legs\":[{\"type\":\"CALL\",\"ratio\":1}]}");
+            db.exec("INSERT INTO plans(id,user_id,symbol,market_kind,status,furthest_stage) " +
+                    "VALUES('plan_multiplier','local','AAPL','DEMO','ACTIVE','DECIDE')");
+            db.exec("INSERT INTO plan_context_revision(id,plan_id,rev,input_hash,engine_version) " +
+                    "VALUES('ctx_multiplier','plan_multiplier',1,'ctx-hash','ctx-1')");
+            db.exec("UPDATE plans SET active_context_rev=1 WHERE id='plan_multiplier'");
+            db.exec("INSERT INTO plan_candidate(id,plan_id,context_rev,family,input_hash,state) " +
+                    "VALUES('candidate_multiplier','plan_multiplier',1,'LONG_CALL','candidate-hash','CURRENT')");
+            db.exec("INSERT INTO plan_candidate_leg(candidate_id,leg_index,action,instrument_type,strike_price," +
+                    "expiration,ratio,entry_price) VALUES('candidate_multiplier',0,'BUY','CALL',100,'2026-08-21',1,2.5)");
+            db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,qty,quote_as_of,economic_verdict," +
+                            "evidence_provenance,model_version,review_horizon_days,decision_seq) " +
+                            "VALUES('decision_multiplier','plan_multiplier',1,'TRADE',1,now(),'MIXED','DEMO','test-1',30,1)");
+            db.exec("INSERT INTO plan_decision_leg(decision_id,leg_index,action,instrument_type,strike_price," +
+                    "expiration,ratio,fill_price) VALUES('decision_multiplier',0,'BUY','CALL',100,'2026-08-21',1,2.5)");
+
+            Migrations.run(db);
+
+            assertThat(db.query("SELECT multiplier FROM plan_candidate_leg WHERE candidate_id='candidate_multiplier'",
+                    r -> r.intv("multiplier"))).containsExactly(100);
+            assertThat(db.query("SELECT multiplier FROM plan_decision_leg WHERE decision_id='decision_multiplier'",
+                    r -> r.intv("multiplier"))).containsExactly(100);
+            assertThat(db.query("SELECT legs_json->0->>'multiplier' AS multiplier FROM trades " +
+                    "WHERE id='trade_multiplier'", r -> r.str("multiplier"))).containsExactly("100");
+            assertThat(db.query("SELECT (entry_snapshot_json->>'heldShareContextShares') || ':' || " +
+                            "(entry_snapshot_json->'legs'->0->>'multiplier') || ':' || " +
+                            "jsonb_exists(entry_snapshot_json,'heldShareContextLots') AS normalized FROM trades " +
+                            "WHERE id='trade_multiplier'", r -> r.str("normalized")))
+                    .containsExactly("300:100:false");
+            assertThatThrownBy(() -> db.exec("INSERT INTO plan_candidate_leg(candidate_id,leg_index,action," +
+                            "instrument_type,ratio,multiplier) VALUES('candidate_multiplier',1,'BUY','STOCK',1,NULL)"))
+                    .hasMessageContaining("not-null");
+        }
+    }
+
+    @Test
+    void canonicalRuntimeStateNormalizesRetainedFactsAndLeavesNoRuntimeAlias() {
+        Map<String, String> cfg = TestDb.freshConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure().dataSource(db.dataSource()).locations("classpath:db/migrations")
+                    .target("58").load().migrate();
+            db.exec("INSERT INTO settings(k,v,updated_at) VALUES('active_dataset','observed','2026-07-15T12:00:00Z')");
+            db.exec("INSERT INTO data_job(id,kind,status,params,total,done,rows_written,user_id) "
+                            + "VALUES('job_current_contract','backfill_underlying','DONE',?::jsonb,1,1,20,'local')",
+                    "{\"symbols\":[\"AAPL\"]}");
+
+            Migrations.run(db);
+
+            assertThat(db.query("SELECT k || '=' || v AS setting FROM settings WHERE k LIKE 'active_dataset%'",
+                    r -> r.str("setting"))).containsExactly("active_dataset:local=observed");
+            assertThat(db.query("SELECT kind || ':' || (params->>'source') AS job FROM data_job "
+                            + "WHERE id='job_current_contract'", r -> r.str("job")))
+                    .containsExactly("sync_underlying:auto");
+        }
+    }
+
+    @Test
     void lateCollisionGuardBootsDatabaseAlreadyAtV56(@TempDir Path legacyMigrations) throws IOException {
         Path source = Path.of("src/main/resources/db/migrations");
         try (var files = Files.list(source)) {

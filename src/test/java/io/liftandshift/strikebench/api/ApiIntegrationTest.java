@@ -209,8 +209,9 @@ class ApiIntegrationTest {
     void unsafeNakedCallIs422AndAccountUnchanged() throws Exception {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         HttpResponse<String> res = post("/api/trades", """
-                {"symbol":"AAPL","strategy":"NAKED_CALL","qty":1,
-                 "legs":[{"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1}]}""".formatted(exp));
+                {"symbol":"AAPL","strategy":"NAKED_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp));
         assertThat(res.statusCode()).isEqualTo(422);
         JsonNode json = Json.parse(res.body());
         assertThat(json.get("error").asText()).isEqualTo("trade_rejected");
@@ -228,8 +229,11 @@ class ApiIntegrationTest {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         String spreadBody = """
                 {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,"thesis":"bullish","horizon":"month","riskMode":"conservative",
-                 "legs":[{"action":"SELL","type":"PUT","strike":"250","expiration":"%s","ratio":1},
-                         {"action":"BUY","type":"PUT","strike":"245","expiration":"%s","ratio":1}]}""".formatted(exp, exp);
+                 "source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"SELL","type":"PUT","strike":"250","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"},
+                         {"action":"BUY","type":"PUT","strike":"245","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp, exp);
         HttpResponse<String> previewRes = post("/api/trades/preview", spreadBody);
         assertThat(previewRes.statusCode()).isEqualTo(200);
         JsonNode preview = Json.parse(previewRes.body());
@@ -282,8 +286,9 @@ class ApiIntegrationTest {
     void deleteRequiresConfirmAndVoidsTrade() throws Exception {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         String body = """
-                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
-                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp);
         String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
         assertThat(delete("/api/trades/" + tradeId).statusCode()).isEqualTo(400); // no confirm
@@ -297,8 +302,9 @@ class ApiIntegrationTest {
     void settleRequiresExplicitConfirmAndBadDatesAre400() throws Exception {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         String body = """
-                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
-                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp);
         String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
         // No/empty body or missing confirm flag must NOT settle (was auto-confirming)
@@ -317,8 +323,9 @@ class ApiIntegrationTest {
     void portfolioGreeksAggregateActivePositions() throws Exception {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         String body = """
-                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
-                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp);
         String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
         JsonNode greeks = Json.parse(get("/api/portfolio/greeks").body());
@@ -385,8 +392,9 @@ class ApiIntegrationTest {
         assertThat(get("/api/research/AAPL/chain?expiration=2026-07-09").statusCode()).isEqualTo(404);
         // expired contracts cannot be opened
         HttpResponse<String> past = createAcknowledged("""
-                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
-                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"2020-01-17","ratio":1}]}""");
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"2020-01-17","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""");
         assertThat(past.statusCode()).isEqualTo(422);
         assertThat(past.body()).contains("expired");
     }
@@ -398,9 +406,11 @@ class ApiIntegrationTest {
         String near = exps.get(2).asText();
         String far = exps.get(6).asText();
         String body = """
-                {"symbol":"AAPL","strategy":"DIAGONAL_CALL","qty":1,
-                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1},
-                         {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1}]}""".formatted(far, near);
+                {"symbol":"AAPL","strategy":"DIAGONAL_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"},
+                         {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(far, near);
         JsonNode preview = Json.parse(post("/api/trades/preview", body).body());
         assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
         HttpResponse<String> created = createAcknowledged(body);
@@ -474,10 +484,11 @@ class ApiIntegrationTest {
                 .append("\",\"type\":\"").append(l.get("type").asText())
                 .append("\",\"strike\":\"").append(l.get("strike").asText())
                 .append("\",\"expiration\":\"").append(l.get("expiration").asText())
-                .append("\",\"ratio\":1}");
+                .append("\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}");
         }
         legs.append(']');
         String body = "{\"symbol\":\"AAPL\",\"strategy\":\"COVERED_CALL\",\"qty\":1,\"intent\":\"exit\","
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\","
                 + "\"useHeldShares\":true,\"legs\":" + legs + "}";
         JsonNode preview = Json.parse(post("/api/trades/preview", body).body());
         assertThat(preview.at("/preview/ok").asBoolean()).as(preview.toString()).isTrue();
@@ -545,8 +556,10 @@ class ApiIntegrationTest {
         JsonNode exps = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations");
         String exp = exps.get(2).asText();
         HttpResponse<String> noShares = post("/api/trades",
-                "{\"symbol\":\"AAPL\",\"strategy\":\"COVERED_CALL\",\"useHeldShares\":true,"
-                + "\"legs\":[{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"265\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}");
+                "{\"symbol\":\"AAPL\",\"strategy\":\"COVERED_CALL\",\"qty\":1,\"useHeldShares\":true,"
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\","
+                + "\"legs\":[{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"265\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}]}");
         assertThat(noShares.statusCode()).isEqualTo(422);
         assertThat(noShares.body()).contains("free shares");
     }
@@ -709,9 +722,12 @@ class ApiIntegrationTest {
         JsonNode research = Json.parse(get("/api/research/AAPL").body());
         String exp = research.get("expirations").get(3).asText();
 
-        String spread = "{\"symbol\":\"AAPL\",\"strategy\":\"CREDIT_PUT_SPREAD\",\"qty\":1,\"legs\":["
-                + "{\"action\":\"SELL\",\"type\":\"PUT\",\"strike\":\"250\",\"expiration\":\"" + exp + "\",\"ratio\":1},"
-                + "{\"action\":\"BUY\",\"type\":\"PUT\",\"strike\":\"245\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}";
+        String spread = "{\"symbol\":\"AAPL\",\"strategy\":\"CREDIT_PUT_SPREAD\",\"qty\":1,"
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\",\"legs\":["
+                + "{\"action\":\"SELL\",\"type\":\"PUT\",\"strike\":\"250\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"},"
+                + "{\"action\":\"BUY\",\"type\":\"PUT\",\"strike\":\"245\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}]}";
         JsonNode spreadResponse = Json.parse(post("/api/trades/preview", spread).body());
         JsonNode p = spreadResponse.get("preview");
         assertThat(p.get("ok").asBoolean()).isTrue();
@@ -756,15 +772,19 @@ class ApiIntegrationTest {
         }
 
         // A long call has no short strike: assignmentProb is null, upside uncapped
-        String longCall = "{\"symbol\":\"AAPL\",\"strategy\":\"LONG_CALL\",\"qty\":1,\"legs\":["
-                + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}";
+        String longCall = "{\"symbol\":\"AAPL\",\"strategy\":\"LONG_CALL\",\"qty\":1,"
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\",\"legs\":["
+                + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}]}";
         JsonNode lc = Json.parse(post("/api/trades/preview", longCall).body()).get("preview");
         assertThat(lc.has("assignmentProb")).isFalse(); // NON_NULL mapper: no shorts -> field absent
         assertThat(lc.get("payoff").size()).isGreaterThan(30);
 
         // Undefined risk is BLOCKED but the payoff still charts the cliff (education, not a dead end)
-        String naked = "{\"symbol\":\"AAPL\",\"strategy\":\"CUSTOM\",\"qty\":1,\"legs\":["
-                + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"260\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}";
+        String naked = "{\"symbol\":\"AAPL\",\"strategy\":\"CUSTOM\",\"qty\":1,"
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\",\"legs\":["
+                + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"260\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}]}";
         JsonNode nk = Json.parse(post("/api/trades/preview", naked).body()).get("preview");
         assertThat(nk.get("ok").asBoolean()).isFalse();
         assertThat(nk.get("blockReasons").toString()).contains("Undefined");
@@ -773,9 +793,12 @@ class ApiIntegrationTest {
 
         // Calendars: no expiration payoff curve (model-dependent), honestly empty
         String exp2 = research.get("expirations").get(5).asText();
-        String calendar = "{\"symbol\":\"AAPL\",\"strategy\":\"CALENDAR_CALL\",\"qty\":1,\"legs\":["
-                + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp + "\",\"ratio\":1},"
-                + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp2 + "\",\"ratio\":1}]}";
+        String calendar = "{\"symbol\":\"AAPL\",\"strategy\":\"CALENDAR_CALL\",\"qty\":1,"
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\",\"legs\":["
+                + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"},"
+                + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp2
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}]}";
         JsonNode calendarResponse = Json.parse(post("/api/trades/preview", calendar).body());
         JsonNode cal = calendarResponse.get("preview");
         assertThat(cal.get("payoff").size()).isZero();
@@ -812,7 +835,7 @@ class ApiIntegrationTest {
         assertThat(ov.statusCode()).isEqualTo(200);
         JsonNode j = Json.parse(ov.body());
         assertThat(j.has("engine")).isTrue();
-        assertThat(j.get("jobKinds").toString()).contains("backfill_underlying");
+        assertThat(j.get("jobKinds").toString()).contains("sync_underlying").doesNotContain("backfill_underlying");
         // Daily-history connectors have one authoritative catalog; supporting feeds are distinct.
         JsonNode sourceDoc = Json.parse(get("/api/data/sources").body());
         assertThat(sourceDoc.get("connectors").toString())
@@ -856,13 +879,15 @@ class ApiIntegrationTest {
                         .POST(HttpRequest.BodyPublishers.ofString("{\"kind\":\"sync_underlying\",\"params\":{\"symbols\":[\"AAPL\"]}}"))
                         .build(), HttpResponse.BodyHandlers.ofString());
         assertThat(proxiedSync.statusCode()).isEqualTo(403);
-        // A backfill job can be started and is listed.
+        // A current data job can be started and is listed; retired job payloads are rejected.
         HttpResponse<String> start = post("/api/data/jobs",
-                "{\"kind\":\"backfill_underlying\",\"params\":{\"symbols\":[\"AAPL\"],\"from\":\"2026-04-01\",\"to\":\"2026-06-30\"}}");
+                "{\"kind\":\"warm_universe\",\"params\":{\"symbols\":[\"AAPL\"]}}");
         assertThat(start.statusCode()).isEqualTo(200);
         String jobId = Json.parse(start.body()).get("id").asText();
         assertThat(jobId).isNotBlank();
         assertThat(get("/api/data/jobs").body()).contains(jobId);
+        assertThat(post("/api/data/jobs", "{\"kind\":\"backfill_underlying\",\"params\":{}}")
+                .statusCode()).isEqualTo(400);
     }
 
     @Test
@@ -938,9 +963,11 @@ class ApiIntegrationTest {
 
         // A preview now judges size against MY denominators, not the paper account's.
         var prev = post("/api/trades/preview", """
-                {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,"legs":[
-                  {"action":"SELL","type":"PUT","strike":"250","expiration":"2026-08-21","ratio":1},
-                  {"action":"BUY","type":"PUT","strike":"245","expiration":"2026-08-21","ratio":1}]}""");
+                {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,"source":"API_TEST","fillNature":"PROPOSED","legs":[
+                  {"action":"SELL","type":"PUT","strike":"250","expiration":"2026-08-21","ratio":1,
+                   "multiplier":100,"positionEffect":"OPEN"},
+                  {"action":"BUY","type":"PUT","strike":"245","expiration":"2026-08-21","ratio":1,
+                   "multiplier":100,"positionEffect":"OPEN"}]}""");
         assertThat(prev.statusCode()).isEqualTo(200);
         var body = io.liftandshift.strikebench.util.Json.parse(prev.body());
         assertThat(body.has("accountFit")).isTrue();
@@ -996,7 +1023,8 @@ class ApiIntegrationTest {
                 {"operation":"POSITION","basis":"HISTORICAL_ANALOGS",
                   "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
                   "position":{"key":"BUY_AND_HOLD","qty":1,"entryCostCents":12345,
-                    "legs":[{"action":"BUY","type":"STOCK","strike":0,"expiryDay":0,"ratio":1}]},
+                    "legs":[{"action":"BUY","type":"STOCK","strike":0,"expiryDay":0,"ratio":1,
+                              "multiplier":1,"positionEffect":"OPEN"}]},
                   "over":{"model":"GBM","shape":"CHOP","horizonDays":10,"stepsPerDay":1,
                           "driftAnnual":0,"volAnnual":0.3,"jumpsPerYear":0,"jumpMean":0,
                           "jumpVol":0,"tailNu":0,"seed":7,"paths":100},
@@ -1026,7 +1054,8 @@ class ApiIntegrationTest {
             {"operation":"POSITION","basis":"PARAMETRIC",
               "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
               "position":{"key":"LONG_CALL","qty":1,"entryCostCents":1000,
-                "legs":[{"action":"BUY","type":"CALL","strike":255,"expiration":"2026-08-21","expiryDay":5,"ratio":1}]},
+                "legs":[{"action":"BUY","type":"CALL","strike":255,"expiration":"2026-08-21","expiryDay":5,"ratio":1,
+                          "multiplier":100,"positionEffect":"OPEN"}]},
               "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":1,
                       "driftAnnual":0,"volAnnual":0.3,"jumpsPerYear":0,"jumpMean":0,
                       "jumpVol":0,"tailNu":6,"seed":17,"paths":40}}""";
@@ -1324,31 +1353,8 @@ class ApiIntegrationTest {
 
     @Test
     @Order(39)
-    void externalTradeOriginAndBrokerReceiptSurviveThePublicTradeView() throws Exception {
-        JsonNode before = Json.parse(get("/api/account").body()).get("account");
-        JsonNode recorded = Json.parse(post("/api/trades/external", """
-                {"symbol":"AAPL","strategy":"CUSTOM","qty":1,"proposedNetCents":17500,
-                 "feesOverrideCents":200,"historical":true,"executedAt":"2026-07-01",
-                 "broker":"Review broker","orderRef":"API-EXT-001","source":"IMPORT","legs":[
-                   {"action":"SELL","type":"PUT","strike":100,"expiration":"2026-07-02","ratio":1,"entryPrice":3.10},
-                   {"action":"BUY","type":"PUT","strike":95,"expiration":"2026-07-02","ratio":1,"entryPrice":1.35}]}
-                """).body());
-        assertThat(recorded.get("origin").asText()).isEqualTo("EXTERNAL");
-        assertThat(recorded.get("broker").asText()).isEqualTo("Review broker");
-        assertThat(recorded.get("orderRef").asText()).isEqualTo("API-EXT-001");
-        assertThat(recorded.get("dataProvenance").asText()).isEqualTo("BROKER");
-
-        JsonNode listed = Json.parse(get("/api/trades?status=ACTIVE&page=0&size=50").body()).get("trades");
-        JsonNode row = java.util.stream.StreamSupport.stream(listed.spliterator(), false)
-                .filter(item -> "API-EXT-001".equals(item.path("orderRef").asText()))
-                .findFirst().orElseThrow();
-        assertThat(row.get("origin").asText()).isEqualTo("EXTERNAL");
-        assertThat(row.get("executedAt").asText()).startsWith("2026-07-01");
-        JsonNode after = Json.parse(get("/api/account").body()).get("account");
-        assertThat(after.get("cashCents")).isEqualTo(before.get("cashCents"));
-        assertThat(after.get("reservedCents")).isEqualTo(before.get("reservedCents"));
-        assertThat(delete("/api/trades/" + recorded.get("id").asText() + "?confirm=true").statusCode())
-                .isEqualTo(200);
+    void obsoleteExternalTradeRouteDoesNotExist() throws Exception {
+        assertThat(post("/api/trades/external", "{}").statusCode()).isEqualTo(404);
     }
 
     @Test
@@ -1381,8 +1387,10 @@ class ApiIntegrationTest {
         JsonNode research = Json.parse(get("/api/research/AAPL").body());
         String exp = research.get("expirations").get(3).asText();
         String cashSecuredPut = """
-                {"symbol":"AAPL","strategy":"CASH_SECURED_PUT","qty":1,"riskMode":"conservative","legs":[
-                  {"action":"SELL","type":"PUT","strike":"250","expiration":"%s","ratio":1}]}
+                {"symbol":"AAPL","strategy":"CASH_SECURED_PUT","qty":1,"riskMode":"conservative",
+                 "source":"API_TEST","fillNature":"PROPOSED","legs":[
+                  {"action":"SELL","type":"PUT","strike":"250","expiration":"%s","ratio":1,
+                   "multiplier":100,"positionEffect":"OPEN"}]}
                 """.formatted(exp);
 
         JsonNode preview = Json.parse(post("/api/trades/preview", cashSecuredPut).body());
@@ -1413,7 +1421,7 @@ class ApiIntegrationTest {
         String id = Json.parse(created.body()).get("id").asText();
 
         HttpResponse<String> recorded = post("/api/portfolio/accounts/" + id + "/transactions", """
-                {"occurredAt":"2026-07-01","eventType":"TRADE","feesCents":0,"source":"BROKER",
+                {"occurredAt":"2026-07-01","eventType":"TRADE","fillNature":"EXECUTED","feesCents":0,"source":"BROKER",
                  "externalRef":"BROKER-FILL-1","notes":"Recorded external fill","legs":[
                    {"instrumentType":"STOCK","action":"BUY","positionEffect":"OPEN","symbol":"AAPL",
                     "quantity":10,"multiplier":1,"price":250.00}]}

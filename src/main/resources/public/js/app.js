@@ -30,7 +30,7 @@
       },
       goal: function (fallback) {
         var source = App.context.source();
-        return source.intent || source.goal || fallback || null;
+        return source.intent || fallback || null;
       },
       horizon: function (fallback) {
         var source = App.context.source();
@@ -135,16 +135,24 @@
     },
 
     outcomePosition: function (key, legs, qty, entryCostCents, expirations) {
+      if (!Number.isInteger(Number(qty)) || Number(qty) < 1) {
+        throw new Error('Outcome position requires an explicit positive quantity.');
+      }
       return {
-        key: key || 'POSITION', qty: qty || 1,
+        key: key || 'POSITION', qty: Number(qty),
         entryCostCents: typeof entryCostCents === 'number' ? entryCostCents : null,
         legs: (legs || []).map(function (leg, i) {
+          if (!Number.isInteger(Number(leg.ratio)) || Number(leg.ratio) < 1
+              || !Number.isInteger(Number(leg.multiplier)) || Number(leg.multiplier) < 1) {
+            throw new Error('Every outcome leg requires an explicit positive ratio and multiplier.');
+          }
           return {
             action: leg.action, type: leg.type || (leg.stock ? 'STOCK' : null),
             strike: leg.strike == null ? null : leg.strike,
             expiration: expirations && expirations[i] || leg.expiration || null,
             expiryDay: leg.expiryDay == null ? null : leg.expiryDay,
-            ratio: leg.ratio || 1
+            ratio: Number(leg.ratio),
+            multiplier: Number(leg.multiplier)
           };
         })
       };
@@ -884,11 +892,10 @@
     var risk = document.getElementById('risk-mode');
     var storedRisk = null;
     try { storedRisk = window.localStorage.getItem('strikebench.riskMode'); } catch (e) { /* ignore */ }
-    // RISK IS A BUDGET, not an experience level: 'learning' left the selector (the Beginner
-    // experience level owns guidance); stored legacy values migrate to Cautious.
-    if (storedRisk === 'learning') { storedRisk = 'conservative';
-      try { window.localStorage.setItem('strikebench.riskMode', 'conservative'); } catch (e) { /* ignore */ } }
-    if (storedRisk) risk.value = storedRisk;
+    // RISK IS A BUDGET, not an experience level. Only the current public values are accepted.
+    if (storedRisk && Array.from(risk.options).some(function (option) { return option.value === storedRisk; })) {
+      risk.value = storedRisk;
+    }
     // ONE SOURCE OF TRUTH (review P0): the SERVER computes every mode's dollar budget
     // (percent x buying power, capped by declared risk capital). The header only displays it —
     // no client percentage arithmetic anywhere. Refreshed via the GET cache: every mutation

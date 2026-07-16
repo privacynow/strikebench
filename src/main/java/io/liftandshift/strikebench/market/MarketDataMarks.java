@@ -83,6 +83,11 @@ public final class MarketDataMarks implements MarksSource {
             return market.quote(symbol, worldId).map(MarketDataMarks::stockMark)
                     .filter(m -> m.mid() != null);
         }
+        // The public chain identifies standard listed contracts only. Multiplier alone cannot
+        // identify an adjusted deliverable, so using the same strike's x100 quote for an x10 lot
+        // would falsely label the tracked value OBSERVED. Keep it unavailable until a broker or
+        // vendor supplies the adjusted contract identity and quote.
+        if (leg.multiplier() != Leg.SHARES_PER_CONTRACT) return Optional.empty();
         return market.chain(symbol, leg.expiration(), worldId)
                 .flatMap(chain -> chain.find(leg.type(), leg.strike())
                         .filter(io.liftandshift.strikebench.model.OptionQuote::hasMark)
@@ -123,6 +128,7 @@ public final class MarketDataMarks implements MarksSource {
             return observedQuote(symbol).map(MarketDataMarks::stockMark)
                     .filter(m -> m.mid() != null);
         }
+        if (leg.multiplier() != Leg.SHARES_PER_CONTRACT) return Optional.empty();
         return market.chain(symbol, leg.expiration())
                 .flatMap(chain -> chain.find(leg.type(), leg.strike())
                         .filter(OptionQuote::hasMark)

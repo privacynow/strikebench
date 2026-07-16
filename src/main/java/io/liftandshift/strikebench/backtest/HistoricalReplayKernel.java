@@ -115,7 +115,7 @@ public final class HistoricalReplayKernel {
                 }
             }
             double sign = leg.action() == LegAction.BUY ? 1 : -1;
-            total += sign * value * Leg.SHARES_PER_CONTRACT * leg.ratio() * qty;
+            total += sign * value * leg.multiplier() * leg.ratio() * qty;
         }
         return Money.toCents(BigDecimal.valueOf(total));
     }
@@ -125,7 +125,7 @@ public final class HistoricalReplayKernel {
         for (Leg leg : legs) {
             long sign = leg.action() == LegAction.BUY ? 1 : -1;
             total += sign * Money.centsFromPrice(leg.intrinsicPerShare(spot),
-                    (long) Leg.SHARES_PER_CONTRACT * leg.ratio() * qty);
+                    (long) leg.multiplier() * leg.ratio() * qty);
         }
         return total;
     }

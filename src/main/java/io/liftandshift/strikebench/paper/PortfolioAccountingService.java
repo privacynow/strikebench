@@ -83,20 +83,13 @@ public final class PortfolioAccountingService {
 
     public record LegInput(String instrumentType, String action, String positionEffect,
                            String symbol, String optionType, BigDecimal strike,
-                           LocalDate expiration, Long quantity, Integer multiplier,
-                           BigDecimal price, Boolean section1256) {
-        public LegInput(String instrumentType, String action, String positionEffect,
-                        String symbol, String optionType, BigDecimal strike,
-                        LocalDate expiration, Long quantity, Integer multiplier,
-                        BigDecimal price) {
-            this(instrumentType, action, positionEffect, symbol, optionType, strike, expiration,
-                    quantity, multiplier, price, null);
-        }
-    }
+                           LocalDate expiration, Long quantity, int multiplier,
+                           BigDecimal price, Boolean section1256) {}
 
     public record TransactionInput(String occurredAt, String eventType, Long cashAmountCents,
                                    Long feesCents, String taxCategory, String source,
-                                   String externalRef, String notes, List<LegInput> legs) {}
+                                   String externalRef, String notes, List<LegInput> legs,
+                                   String fillNature) {}
 
     public record LegView(int legNo, String instrumentType, String action, String positionEffect,
                           String symbol, String optionType, BigDecimal strike, LocalDate expiration,
@@ -316,7 +309,8 @@ public final class PortfolioAccountingService {
                     input.stateTaxRateBps(), now, now);
             if (input.openingCashCents() != null && input.openingCashCents() > 0) {
                 recordOn(c, requireAccount(c, owner, id, true), new TransactionInput(now.toString(), "OPENING_BALANCE",
-                        input.openingCashCents(), 0L, null, "MANUAL", "opening-balance", "Opening cash", List.of()), true);
+                        input.openingCashCents(), 0L, null, "MANUAL", "opening-balance", "Opening cash", List.of(),
+                        "NOT_APPLICABLE"), true);
             }
             return requireAccount(c, owner, id, false);
         });
@@ -408,10 +402,20 @@ public final class PortfolioAccountingService {
         }
         OffsetDateTime occurred = parseTime(input.occurredAt());
         requireNotFuture(input.occurredAt(), occurred, "transaction");
+        String fillNature = enumValue(input.fillNature(), List.of("EXECUTED", "MODELED", "NOT_APPLICABLE"), "fill nature");
+        if (MARKET_EVENTS.contains(event) && !"MARK_TO_MARKET".equals(event)
+                && !"EXECUTED".equals(fillNature)) {
+            throw new IllegalArgumentException("tracked market activity requires fillNature=EXECUTED; proposals and model marks belong in ANALYZE, not the factual ledger");
+        }
+        if ("MARK_TO_MARKET".equals(event) && !"MODELED".equals(fillNature)) {
+            throw new IllegalArgumentException("mark-to-market activity requires fillNature=MODELED");
+        }
+        if (CASH_EVENTS.contains(event) && !"NOT_APPLICABLE".equals(fillNature)) {
+            throw new IllegalArgumentException("cash activity requires fillNature=NOT_APPLICABLE");
+        }
         long fees = input.feesCents() == null ? 0 : input.feesCents();
         if (fees < 0) throw new IllegalArgumentException("fees cannot be negative");
-        String source = input.source() == null || input.source().isBlank() ? "MANUAL"
-                : enumValue(input.source(), List.of("MANUAL", "BROKER", "IMPORT", "CALCULATED"), "source");
+        String source = enumValue(input.source(), List.of("MANUAL", "BROKER", "IMPORT", "CALCULATED"), "source");
         String externalRef = trim(input.externalRef(), 160);
         if ("BROKER".equals(source) && externalRef == null) {
             throw new IllegalArgumentException("broker-sourced activity requires a stable order or statement reference");
@@ -483,6 +487,21 @@ public final class PortfolioAccountingService {
         return db.with(c -> Db.queryOn(c, "SELECT id FROM portfolio_transaction WHERE portfolio_account_id=? "
                         + "ORDER BY occurred_at DESC,record_seq DESC LIMIT ? OFFSET ?", r -> r.str("id"),
                 account.id(), bounded, offset).stream().map(id -> {
+                    try { return transaction(c, account.id(), id); }
+                    catch (SQLException e) { throw new Db.DbException(e); }
+                }).toList());
+    }
+
+    public List<TransactionView> transactionsByReference(String ownerId, String accountId,
+                                                         String sourceValue, String externalRefValue) {
+        AccountProfile account = account(ownerId, accountId);
+        String source = enumValue(sourceValue,
+                List.of("MANUAL", "BROKER", "IMPORT", "CALCULATED"), "source");
+        String externalRef = trim(externalRefValue, 160);
+        if (externalRef == null) throw new IllegalArgumentException("external reference is required");
+        return db.with(c -> Db.queryOn(c, "SELECT id FROM portfolio_transaction "
+                        + "WHERE portfolio_account_id=? AND source=? AND external_ref=? ORDER BY record_seq",
+                r -> r.str("id"), account.id(), source, externalRef).stream().map(id -> {
                     try { return transaction(c, account.id(), id); }
                     catch (SQLException e) { throw new Db.DbException(e); }
                 }).toList());
@@ -1034,7 +1053,8 @@ public final class PortfolioAccountingService {
         legs.addAll(closeLegs);
         legs.addAll(openLegs);
         recordOn(c, account, new TransactionInput(markTime.toString(), "MARK_TO_MARKET", 0L, 0L,
-                null, "CALCULATED", ref, "Section 1256 year-end mark-to-market: " + String.join("; ", receipts), legs));
+                null, "CALCULATED", ref, "Section 1256 year-end mark-to-market: " + String.join("; ", receipts), legs,
+                "MODELED"));
         return 1;
     }
 
@@ -1156,7 +1176,7 @@ public final class PortfolioAccountingService {
             leg = Leg.stock(LegAction.BUY, 1, BigDecimal.ZERO);
         } else {
             leg = Leg.option(LegAction.BUY, OptionType.valueOf(lot.optionType()), lot.strike(),
-                    lot.expiration(), 1, BigDecimal.ZERO);
+                    lot.expiration(), 1, BigDecimal.ZERO, lot.multiplier());
         }
         return marks.legMark(lot.symbol(), leg).filter(mark -> {
             DataEvidence evidence = mark.evidence() == null
@@ -1789,7 +1809,10 @@ public final class PortfolioAccountingService {
             String symbol = symbol(in.symbol());
             long quantity = in.quantity() == null ? 0 : in.quantity();
             if (quantity <= 0 || quantity > 10_000_000) throw new IllegalArgumentException("leg quantity must be 1..10,000,000");
-            int multiplier = "STOCK".equals(instrument) ? 1 : in.multiplier() == null ? 100 : in.multiplier();
+            int multiplier = in.multiplier();
+            if ("STOCK".equals(instrument) && multiplier != 1) {
+                throw new IllegalArgumentException("stock legs require multiplier=1");
+            }
             if (multiplier <= 0 || multiplier > 10_000) throw new IllegalArgumentException("leg multiplier must be 1..10,000");
             if (in.price() == null) {
                 throw new IllegalArgumentException("every recorded leg requires an exact price; use Analyze when a fill is unknown");

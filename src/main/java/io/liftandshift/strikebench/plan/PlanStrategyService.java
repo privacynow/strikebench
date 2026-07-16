@@ -232,9 +232,9 @@ public final class PlanStrategyService {
         });
     }
 
-    /** Persist one exact, server-priced Builder package and make it the Plan's selected structure. */
+    /** Persist an exact analysis; only a mechanically valid package may replace the selected structure. */
     public SavedRun saveCustom(String userId, Plan.View plan, JsonNode request, ObjectNode candidate,
-                               long expectedVersion) {
+                               long expectedVersion, boolean select) {
         if (candidate == null) throw new IllegalArgumentException("custom candidate is required");
         String runId = Ids.newId("psr");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
@@ -248,7 +248,7 @@ public final class PlanStrategyService {
             if (current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This plan's assumptions changed. Reprice the structure before saving it.");
             }
-            markStrategyFieldDependentsStale(c, plan.id(), plan.context().rev());
+            if (select) markStrategyFieldDependentsStale(c, plan.id(), plan.context().rev());
             Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
                             "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
                             "unfavorable_count,unavailable_count,disclaimer,request_snapshot,input_hash,engine_version,state,created_at) " +
@@ -257,15 +257,19 @@ public final class PlanStrategyService {
                     plan.context().thesis(), horizonName(plan.context().horizonDays()), plan.context().riskMode(),
                     plan.intent(), null, "EXACT_PACKAGE", "Exact Builder package", 0, 0, 0, 0,
                     "Server-priced exact contracts", requestSnapshot(request), inputHash, ENGINE_VERSION, "CURRENT", now);
-            Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?",
-                    plan.id(), plan.context().rev());
+            if (select) {
+                Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?",
+                        plan.id(), plan.context().rev());
+            }
             String id = persistCandidate(c, runId, plan, candidate, 1, "CURRENT", now, "CUSTOM");
-            Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", id);
-            Db.execOn(c, "UPDATE plans SET furthest_stage='OUTCOMES',version=version+1,updated_at=now() WHERE id=?", plan.id());
+            if (select) {
+                Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", id);
+                Db.execOn(c, "UPDATE plans SET furthest_stage='OUTCOMES',version=version+1,updated_at=now() WHERE id=?", plan.id());
+            }
             return id;
         });
         candidate.put("id", candidateId);
-        candidate.put("selected", true);
+        candidate.put("selected", select);
         ObjectNode result = Json.MAPPER.createObjectNode();
         result.set("candidate", candidate);
         result.put("strategyRunId", runId);
@@ -465,24 +469,30 @@ public final class PlanStrategyService {
         int index = 0;
         for (JsonNode leg : legs) {
             String type = leg.path("stock").asBoolean(false) ? "STOCK" : requiredText(leg, "type").toUpperCase();
+            if (!"OPEN".equalsIgnoreCase(requiredText(leg, "positionEffect"))) {
+                throw new IllegalArgumentException("Plan Strategy candidates require positionEffect=OPEN");
+            }
             Db.execOn(c, "INSERT INTO plan_candidate_leg(candidate_id,leg_index,action,instrument_type,strike_price," +
-                            "expiration,ratio,entry_price) VALUES(?,?,?,?,?,?,?,?)", id, index++, requiredText(leg, "action").toUpperCase(),
+                            "expiration,ratio,multiplier,entry_price) VALUES(?,?,?,?,?,?,?,?,?)", id, index++, requiredText(leg, "action").toUpperCase(),
                     type, "STOCK".equals(type) ? null : priceDecimal(leg.get("strike")),
                     "STOCK".equals(type) || text(leg, "expiration") == null ? null : java.time.LocalDate.parse(text(leg, "expiration")),
-                    Math.max(1, leg.path("ratio").asInt(1)), priceDecimal(leg.get("entryPrice")));
+                    requiredPositiveInteger(leg, "ratio"),
+                    requiredPositiveInteger(leg, "multiplier"), priceDecimal(leg.get("entryPrice")));
         }
     }
 
     private static ArrayNode loadLegs(java.sql.Connection c, String id) throws java.sql.SQLException {
         ArrayNode out = Json.MAPPER.createArrayNode();
-        Db.queryOn(c, "SELECT action,instrument_type,strike_price,expiration::text expiration,ratio,entry_price FROM " +
+        Db.queryOn(c, "SELECT action,instrument_type,strike_price,expiration::text expiration,ratio,multiplier,entry_price FROM " +
                         "plan_candidate_leg WHERE candidate_id=? ORDER BY leg_index",
                 r -> new LegRow(r.str("action"), r.str("instrument_type"), r.bd("strike_price"),
-                        r.str("expiration"), r.intv("ratio"), r.bd("entry_price")), id).forEach(leg -> {
+                        r.str("expiration"), r.intv("ratio"), r.intv("multiplier"), r.bd("entry_price")), id).forEach(leg -> {
             ObjectNode n = out.addObject(); n.put("action", leg.action()); n.put("type", leg.type());
             if (leg.strikePrice() != null) n.put("strike", decimalString(leg.strikePrice()));
             if (leg.expiration() != null) n.put("expiration", leg.expiration());
             n.put("ratio", leg.ratio());
+            n.put("multiplier", leg.multiplier());
+            n.put("positionEffect", "OPEN");
             if (leg.entryPrice() != null) n.put("entryPrice", decimalString(leg.entryPrice()));
         });
         return out;
@@ -616,6 +626,13 @@ public final class PlanStrategyService {
         String value = text(n, key); if (value == null || value.isBlank()) throw new IllegalArgumentException(key + " is required");
         return value;
     }
+    private static int requiredPositiveInteger(JsonNode n, String key) {
+        JsonNode value = n == null ? null : n.get(key);
+        if (value == null || !value.isIntegralNumber() || value.intValue() < 1) {
+            throw new IllegalArgumentException(key + " must be a positive integer");
+        }
+        return value.intValue();
+    }
     private static String text(JsonNode n, String key) {
         JsonNode value = n == null ? null : n.get(key); return value == null || value.isNull() ? null : value.asText();
     }
@@ -670,6 +687,7 @@ public final class PlanStrategyService {
                           int mixed, int unfavorable, int unavailable, String disclaimer, String state,
                           String createdAt) {}
     private record LegRow(String action, String type, BigDecimal strikePrice, String expiration, int ratio,
+                          int multiplier,
                           BigDecimal entryPrice) {}
     private record CandidateRow(String id, String symbol, String scoutThesis, String sourceKind,
                                 String family, String displayName, String structureGroup, String label,

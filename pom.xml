@@ -21,7 +21,6 @@
 
     <javalin.version>7.2.2</javalin.version>
     <jackson.version>2.19.0</jackson.version>
-    <sqlite.version>3.49.1.0</sqlite.version>
     <postgresql.version>42.7.4</postgresql.version>
     <hikaricp.version>6.2.1</hikaricp.version>
     <flyway.version>11.1.0</flyway.version>
@@ -54,8 +53,7 @@
       <version>${jackson.version}</version>
     </dependency>
 
-    <!-- Persistence: Postgres (primary) + HikariCP pool + Flyway migrations.
-         sqlite-jdbc is retained only for the one-time SQLite->Postgres migration tool. -->
+    <!-- Persistence: Postgres + HikariCP pool + Flyway migrations. -->
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
@@ -76,12 +74,6 @@
       <artifactId>flyway-database-postgresql</artifactId>
       <version>${flyway.version}</version>
     </dependency>
-    <dependency>
-      <groupId>org.xerial</groupId>
-      <artifactId>sqlite-jdbc</artifactId>
-      <version>${sqlite.version}</version>
-    </dependency>
-
     <!-- Cache -->
     <dependency>
       <groupId>com.github.ben-manes.caffeine</groupId>

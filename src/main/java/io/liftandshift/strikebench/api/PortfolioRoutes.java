@@ -19,6 +19,7 @@ public final class PortfolioRoutes {
             Handler archiveAccount,
             Handler restoreAccount,
             Handler accountSummary,
+            Handler analyzePackage,
             Handler transactions,
             Handler createTransaction,
             Handler lots,
@@ -51,6 +52,7 @@ public final class PortfolioRoutes {
         config.routes.delete("/api/portfolio/accounts/{id}", h.archiveAccount());
         config.routes.post("/api/portfolio/accounts/{id}/restore", h.restoreAccount());
         config.routes.get("/api/portfolio/accounts/{id}/summary", h.accountSummary());
+        config.routes.post("/api/portfolio/accounts/{id}/analyze", h.analyzePackage());
         config.routes.get("/api/portfolio/accounts/{id}/transactions", h.transactions());
         config.routes.post("/api/portfolio/accounts/{id}/transactions", h.createTransaction());
         config.routes.get("/api/portfolio/accounts/{id}/lots", h.lots());

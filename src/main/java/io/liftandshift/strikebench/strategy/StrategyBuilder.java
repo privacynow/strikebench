@@ -141,7 +141,8 @@ public final class StrategyBuilder {
         OptionQuote middle = at(chain, type, atm);
         OptionQuote upper = stepAway(chain, type, atm, +2);
         if (lower == null || middle == null || upper == null) return null;
-        Leg mid = new Leg(LegAction.SELL, type, middle.strike(), chain.expiration(), 2, mid(middle));
+        Leg mid = new Leg(LegAction.SELL, type, middle.strike(), chain.expiration(), 2, mid(middle),
+                Leg.SHARES_PER_CONTRACT);
         return new Built(List.of(leg(LegAction.BUY, lower), mid, leg(LegAction.BUY, upper)),
                 List.of(lower, middle, upper),
                 "BUY " + strikeLabel(lower) + " / SELL 2x " + strikeLabel(middle) + " / BUY " + strikeLabel(upper) + " " + chain.expiration());

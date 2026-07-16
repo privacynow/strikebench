@@ -69,7 +69,9 @@
       .filter(function (l) { return l.type === 'STOCK' || (l.strike && l.expiration); })
       .map(function (l) {
         return { action: l.action, type: l.type, strike: l.type === 'STOCK' ? null : String(l.strike),
-                 expiration: l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1 };
+                 expiration: l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1,
+                 entryPrice: l.entryPrice || null, multiplier: Number(l.multiplier || 100),
+                 positionEffect: 'OPEN' };
       });
   }
 
@@ -405,7 +407,8 @@
       var wired = wireLegs(legs);
       if (!wired.length) return null;
       return API.post('/api/trades/preview', {
-        symbol: st.symbol, strategy: familyLabel(), qty: st.qty, legs: wired
+        symbol: st.symbol, strategy: familyLabel(), qty: st.qty, legs: wired,
+        source: 'BUILDER', fillNature: 'PROPOSED'
       });
     }
     function activeLegs() {

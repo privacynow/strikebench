@@ -19,10 +19,7 @@ public record TradeOpenRequest(
         Long proposedNetCents,
         Long feesOverrideCents,
         String source,
-        String executedAt,
-        String broker,
-        String orderRef,
-        Boolean historical,
         List<String> acknowledgedRisks,
-        String ackToken
+        String ackToken,
+        String fillNature
 ) {}

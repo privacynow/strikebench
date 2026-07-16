@@ -99,12 +99,13 @@ public final class PlanDecisionService {
             String id = out.path("id").asText();
             ArrayNode legs = out.putArray("legs");
             Db.queryOn(connection, "SELECT leg_index,action,instrument_type,strike_price,expiration::text expiration," +
-                            "ratio,bid_price,ask_price,mid_price,fill_price,iv FROM plan_decision_leg " +
+                            "ratio,multiplier,bid_price,ask_price,mid_price,fill_price,iv FROM plan_decision_leg " +
                             "WHERE decision_id=? ORDER BY leg_index", row -> {
                         ObjectNode leg = Json.MAPPER.createObjectNode();
                         put(leg, "index", row.intv("leg_index")); put(leg, "action", row.str("action"));
                         put(leg, "type", row.str("instrument_type")); putDecimal(leg, "strikePrice", row.bd("strike_price"));
                         put(leg, "expiration", row.str("expiration")); put(leg, "ratio", row.intv("ratio"));
+                        put(leg, "multiplier", row.intv("multiplier"));
                         putDecimal(leg, "bidPrice", row.bd("bid_price")); putDecimal(leg, "askPrice", row.bd("ask_price"));
                         putDecimal(leg, "midPrice", row.bd("mid_price")); putDecimal(leg, "fillPrice", row.bd("fill_price"));
                         put(leg, "iv", row.dblOrNull("iv"));
@@ -232,9 +233,10 @@ public final class PlanDecisionService {
         int index = 0;
         for (Map<String, Object> row : legs == null ? List.<Map<String, Object>>of() : legs) {
             Db.execOn(connection, "INSERT INTO plan_decision_leg(decision_id,leg_index,action,instrument_type," +
-                            "strike_price,expiration,ratio,bid_price,ask_price,mid_price,fill_price,iv) " +
-                            "VALUES(?,?,?,?,?,CAST(? AS DATE),?,?,?,?,?,?)", decisionId, index++, text(row.get("action")),
-                    text(row.get("type")), decisionPrice(row.get("strike")), text(row.get("expiration")), decisionInteger(row.get("ratio"), 1),
+                            "strike_price,expiration,ratio,multiplier,bid_price,ask_price,mid_price,fill_price,iv) " +
+                            "VALUES(?,?,?,?,?,CAST(? AS DATE),?,?,?,?,?,?,?)", decisionId, index++, text(row.get("action")),
+                    text(row.get("type")), decisionPrice(row.get("strike")), text(row.get("expiration")), decisionInteger(row.get("ratio"), "ratio"),
+                    decisionInteger(row.get("multiplier"), "multiplier"),
                     decisionPrice(row.get("bid")), decisionPrice(row.get("ask")), decisionPrice(row.get("mid")), decisionPrice(row.get("fill")), decisionDecimal(row.get("iv")));
         }
     }
@@ -338,14 +340,16 @@ public final class PlanDecisionService {
             throw new IllegalStateException("A frozen decision leg contains an invalid decimal; no receipt was written.", e);
         }
     }
-    static int decisionInteger(Object value, int fallback) {
-        if (value == null || String.valueOf(value).isBlank()) return fallback;
+    static int decisionInteger(Object value, String field) {
+        if (value == null || String.valueOf(value).isBlank()) {
+            throw new IllegalStateException("A frozen decision leg is missing its " + field + "; no receipt was written.");
+        }
         try {
             int parsed = value instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(value));
             if (parsed < 1) throw new NumberFormatException("non-positive");
             return parsed;
         } catch (RuntimeException e) {
-            throw new IllegalStateException("A frozen decision leg contains an invalid ratio; no receipt was written.", e);
+            throw new IllegalStateException("A frozen decision leg contains an invalid " + field + "; no receipt was written.", e);
         }
     }
     private static String text(Object value) { return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value); }

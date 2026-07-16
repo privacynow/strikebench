@@ -38,7 +38,7 @@ class PortfolioExportServiceTest {
     void csvKeepsExactCentsAndNeutralizesSpreadsheetFormulas() {
         books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
                 "2026-07-10", "INTEREST", 1_23L, 0L, null, "MANUAL", "interest-1",
-                "=HYPERLINK(\"https://invalid\",\"click\")", List.of()));
+                "=HYPERLINK(\"https://invalid\",\"click\")", List.of(), "NOT_APPLICABLE"));
 
         String csv = new String(exports.transactionsCsv("local", account.id()), StandardCharsets.UTF_8);
         assertThat(csv).contains("cash_effect_cents", "section_1256", "123", "interest-1");
@@ -50,7 +50,8 @@ class PortfolioExportServiceTest {
     void multiLegExportEmitsTransactionCashAndFeesOnce() {
         books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
                 "2026-07-10", "TRADE", null, 1_30L, null, "MANUAL", "spread-1", null,
-                List.of(option("BUY", "OPEN", "250", "8.25"), option("SELL", "OPEN", "260", "3.10"))));
+                List.of(option("BUY", "OPEN", "250", "8.25"), option("SELL", "OPEN", "260", "3.10")),
+                "EXECUTED"));
 
         String csv = new String(exports.transactionsCsv("local", account.id()), StandardCharsets.UTF_8);
         String[] lines = csv.split("\\r?\\n");
@@ -71,7 +72,7 @@ class PortfolioExportServiceTest {
     void xlsxIsARealOpenXmlWorkbookWithAccountingSheetsAndNoFormulas() throws Exception {
         books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
                 "2026-01-01", "INTEREST", 1_00L, 0L, null, "MANUAL", "xml-control",
-                "kept\u0001 removed", List.of()));
+                "kept\u0001 removed", List.of(), "NOT_APPLICABLE"));
         books.addValuation("local", account.id(), new PortfolioAccountingService.ValuationInput(
                 "2026-01-01", 1_000_000L, 0L, 1_000_000L, "MANUAL", null, "start"));
         books.addValuation("local", account.id(), new PortfolioAccountingService.ValuationInput(
@@ -110,11 +111,11 @@ class PortfolioExportServiceTest {
         books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
                 "2026-06-01T10:00:00-04:00", "TRADE", null, 0L, null, "MANUAL", "loss-open", null,
                 List.of(new PortfolioAccountingService.LegInput("STOCK", "BUY", "OPEN", "MSFT", null,
-                        null, null, 1L, 1, new java.math.BigDecimal("100.00")))));
+                        null, null, 1L, 1, new java.math.BigDecimal("100.00"), null)), "EXECUTED"));
         books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
                 "2026-06-02T10:00:00-04:00", "TRADE", null, 0L, null, "MANUAL", "loss-close", null,
                 List.of(new PortfolioAccountingService.LegInput("STOCK", "SELL", "CLOSE", "MSFT", null,
-                        null, null, 1L, 1, new java.math.BigDecimal("90.00")))));
+                        null, null, 1L, 1, new java.math.BigDecimal("90.00"), null)), "EXECUTED"));
 
         String xml = workbookXml(exports.workbook("local", account.id(), 2026));
         assertThat(xml).contains("Wash-rule application",
@@ -127,7 +128,7 @@ class PortfolioExportServiceTest {
                 "2025-12-15T15:00:00-05:00", "TRADE", null, 0L, null, "MANUAL", "spx-open", null,
                 List.of(new PortfolioAccountingService.LegInput("OPTION", "BUY", "OPEN", "SPX", "CALL",
                         new java.math.BigDecimal("6000"), java.time.LocalDate.parse("2026-03-20"), 1L, 100,
-                        new java.math.BigDecimal("10.00"), null))));
+                        new java.math.BigDecimal("10.00"), null)), "EXECUTED"));
         db.exec("INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,mark,source,bid_ask_observed,dataset_id) "
                         + "VALUES ('SPX','2025-12-31','2026-03-20',6000,'CALL',11.99,12.01,12.00,'vendor',1,'observed')");
         books.markSection1256YearEnd("local", account.id(), 2025);
@@ -153,6 +154,6 @@ class PortfolioExportServiceTest {
     private static PortfolioAccountingService.LegInput option(String action, String effect, String strike, String price) {
         return new PortfolioAccountingService.LegInput("OPTION", action, effect, "AAPL", "CALL",
                 new java.math.BigDecimal(strike), java.time.LocalDate.parse("2026-08-21"), 1L, 100,
-                new java.math.BigDecimal(price));
+                new java.math.BigDecimal(price), null);
     }
 }

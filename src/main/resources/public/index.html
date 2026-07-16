@@ -9,7 +9,7 @@
     // Modes: system (follow OS), light, dark. Stored under strikebench.theme.
     (function () {
       try {
-        var mode = localStorage.getItem('strikebench.theme') || localStorage.getItem('optionslab.theme') || 'system';
+        var mode = localStorage.getItem('strikebench.theme') || 'system';
         var dark = mode === 'dark' || (mode === 'system'
           && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
         document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
@@ -101,6 +101,7 @@
   <script src="/js/scenario.js?v=@asset.version@"></script>
   <script src="/js/outcomes.js?v=@asset.version@"></script>
   <script src="/js/builder.js?v=@asset.version@"></script>
+  <script src="/js/position-editor.js?v=@asset.version@"></script>
   <script src="/js/views.js?v=@asset.version@"></script>
   <script src="/js/views-research.js?v=@asset.version@"></script>
   <script src="/js/views-plan.js?v=@asset.version@"></script>

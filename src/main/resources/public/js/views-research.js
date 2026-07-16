@@ -1670,10 +1670,7 @@
       ? (App.state.researchEvidenceBySymbol[symbol] = App.state.researchEvidenceBySymbol[symbol] || {})
       : PlanStore.ui(plan.id);
     var th = planUi.thesis = planUi.thesis || {};
-    // Persisted-workspace migration only: the old field called a historical condition a
-    // "direction", even though it was not the user's market direction.
-    th.setup = th.setup || THESIS_QUESTION[th.direction] || 'pullback_rebound';
-    delete th.direction;
+    th.setup = th.setup || 'pullback_rebound';
     // Durable Plan context is authoritative. Public Research owns only ephemeral assumptions
     // and creates no durable object until the user explicitly carries the result forward.
     if (publicMode) {

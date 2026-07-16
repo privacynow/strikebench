@@ -388,7 +388,8 @@ class PlanApiIntegrationTest {
         customBody.put("expectedVersion", customPlan.get("version").asLong());
         var position = customBody.putObject("position");
         position.put("symbol", "AAPL"); position.put("strategy", source.get("strategy").asText());
-        position.put("qty", source.get("qty").asInt()); position.set("legs", source.get("legs"));
+        position.put("qty", source.get("qty").asInt()); position.put("fillNature", "PROPOSED");
+        position.set("legs", source.get("legs"));
         JsonNode custom = json(post("/api/plans/" + customId + "/strategy/custom", customBody.toString()));
         assertThat(custom.at("/strategy/result/candidate/selected").asBoolean()).isTrue();
         assertThat(custom.at("/strategy/result/candidate/legs")).isEqualTo(source.get("legs"));
@@ -414,6 +415,108 @@ class PlanApiIntegrationTest {
         assertThat(child.at("/plan/symbol").asText()).isEqualTo(pick.get("symbol").asText());
         assertThat(json(get("/api/plans/" + child.at("/plan/id").asText() + "/strategy/latest"))
                 .at("/selected/legs")).isEqualTo(pick.get("legs"));
+    }
+
+    @Test void customPlanAnalysisPreservesAdjustedContractMultipliersEndToEnd() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"adjusted-custom-plan","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Adjusted contract plan","thesis":"bullish","horizonDays":30,
+                 "riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        JsonNode field = json(post("/api/plans/" + id + "/strategy/run", "{}"));
+        JsonNode source = null;
+        for (JsonNode item : field.at("/strategy/result/candidates")) {
+            java.util.Set<String> expirations = new java.util.LinkedHashSet<>();
+            for (JsonNode leg : item.path("legs")) {
+                if (leg.hasNonNull("expiration")) expirations.add(leg.path("expiration").asText());
+            }
+            if (item.path("legs").size() == 2 && expirations.size() == 1
+                    && item.path("maxLossCents").asLong() > 0) {
+                source = item;
+                break;
+            }
+        }
+        assertThat(source).as("fixture strategy field contains a two-leg defined-risk structure").isNotNull();
+
+        var request = Json.MAPPER.createObjectNode();
+        request.put("expectedVersion", plan.get("version").asLong());
+        var position = request.putObject("position");
+        position.put("symbol", "AAPL");
+        position.put("strategy", source.get("strategy").asText());
+        position.put("qty", 3);
+        position.put("fillNature", "PROPOSED");
+        var adjustedLegs = position.putArray("legs");
+        for (JsonNode leg : source.withArray("legs")) {
+            var adjusted = (com.fasterxml.jackson.databind.node.ObjectNode) leg.deepCopy();
+            adjusted.put("multiplier", 10);
+            adjustedLegs.add(adjusted);
+        }
+
+        JsonNode analyzed = json(post("/api/plans/" + id + "/strategy/custom", request.toString()));
+        JsonNode candidate = analyzed.at("/strategy/result/candidate");
+        assertThat(candidate.path("qty").asInt()).isEqualTo(3);
+        for (JsonNode leg : candidate.withArray("legs")) {
+            assertThat(leg.path("multiplier").asInt()).isEqualTo(10);
+        }
+        long sourceQty = source.path("qty").asLong(1);
+        assertThat(candidate.path("entryNetPremiumCents").asLong() * 10 * sourceQty)
+                .isEqualTo(source.path("entryNetPremiumCents").asLong() * 3);
+        assertThat(candidate.path("maxLossCents").asLong() * 10 * sourceQty)
+                .isEqualTo(source.path("maxLossCents").asLong() * 3);
+        assertThat(json(get("/api/plans/" + id + "/strategy/latest"))
+                .at("/selected/legs/0/multiplier").asInt()).isEqualTo(10);
+
+        JsonNode marketOutcome = json(post("/api/plans/" + id + "/outcomes/run",
+                "{\"expectedVersion\":" + analyzed.at("/plan/version").asLong()
+                        + ",\"basis\":\"RISK_NEUTRAL\"}"));
+        assertThat(marketOutcome.at("/outcome/result/theoreticalMaxLossCents").asLong())
+                .isEqualTo(candidate.path("maxLossCents").asLong());
+
+        JsonNode decided = json(post("/api/plans/" + id + "/decision/cash",
+                "{\"expectedVersion\":" + analyzed.at("/plan/version").asLong()
+                        + ",\"note\":\"Preserve the adjusted-contract receipt\"}"));
+        assertThat(decided.at("/decision/legs/0/multiplier").asInt())
+                .as(decided.toPrettyString()).isEqualTo(10);
+        assertThat(decided.at("/decision/metrics/decisionQty").asInt()).isEqualTo(3);
+        assertThat(decided.at("/decision/metrics/entryNetPremiumCents").asLong())
+                .isEqualTo(candidate.path("entryNetPremiumCents").asLong());
+        assertThat(decided.at("/decision/maxLossCents").asLong())
+                .isEqualTo(candidate.path("maxLossCents").asLong());
+    }
+
+    @Test void constrainedCustomAnalysisCannotReplaceTheSelectedPlanStructure() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"constrained-custom-plan","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Constrained custom analysis","thesis":"bullish","horizonDays":30,
+                 "riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        JsonNode field = json(post("/api/plans/" + id + "/strategy/run", "{}"));
+        JsonNode source = field.at("/strategy/result/candidates/0");
+
+        var validBody = Json.MAPPER.createObjectNode();
+        validBody.put("expectedVersion", plan.get("version").asLong());
+        var validPosition = validBody.putObject("position");
+        validPosition.put("symbol", "AAPL");
+        validPosition.put("strategy", source.get("strategy").asText());
+        validPosition.put("qty", source.path("qty").asInt(1));
+        validPosition.put("fillNature", "PROPOSED");
+        validPosition.set("legs", source.get("legs"));
+        JsonNode valid = json(post("/api/plans/" + id + "/strategy/custom", validBody.toString()));
+        String selectedId = valid.at("/strategy/result/candidate/id").asText();
+        long selectedVersion = valid.at("/plan/version").asLong();
+
+        var constrainedBody = validBody.deepCopy();
+        constrainedBody.put("expectedVersion", selectedVersion);
+        constrainedBody.withObject("/position").put("proposedNetCents", 99_999_00L);
+        JsonNode constrained = json(post("/api/plans/" + id + "/strategy/custom", constrainedBody.toString()));
+
+        assertThat(constrained.at("/preview/ok").asBoolean()).isFalse();
+        assertThat(constrained.at("/strategy/result/candidate/selected").asBoolean()).isFalse();
+        assertThat(constrained.at("/plan/version").asLong()).isEqualTo(selectedVersion);
+        assertThat(json(get("/api/plans/" + id + "/strategy/latest")).at("/selected/id").asText())
+                .isEqualTo(selectedId);
     }
 
     @Test void outcomesReuseThePlanEvidenceEnsembleAndPersistSeparateInterpretations() throws Exception {
@@ -747,7 +850,7 @@ class PlanApiIntegrationTest {
     @Test void voidingAPlanTradeIsRecordedAsVoidRatherThanAnOrdinaryClose() throws Exception {
         JsonNode plan = json(post("/api/plans", """
                 {"clientRequestId":"decision-void-plan","symbol":"AAPL","intent":"DIRECTIONAL",
-                 "title":"Void semantics plan","thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                 "title":"Void semantics plan","thesis":"bearish","horizonDays":21,"riskMode":"conservative"}
                 """));
         String planId = plan.get("id").asText();
         JsonNode field = json(post("/api/plans/" + planId + "/strategy/run", "{}"));

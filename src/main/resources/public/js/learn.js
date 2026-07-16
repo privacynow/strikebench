@@ -3,24 +3,6 @@
 (function () {
   'use strict';
 
-  // One-time migration of pre-rebrand storage keys (optionslab.* -> strikebench.*) so a
-  // returning user keeps their level, risk mode, and theme. Safe to run every load.
-  try {
-    ['level', 'riskMode', 'theme'].forEach(function (k) {
-      var oldKey = 'optionslab.' + k, newKey = 'strikebench.' + k;
-      var legacy = window.localStorage.getItem(oldKey);
-      if (legacy !== null && window.localStorage.getItem(newKey) === null) {
-        window.localStorage.setItem(newKey, legacy);
-      }
-      if (legacy !== null) window.localStorage.removeItem(oldKey);
-    });
-    // 2026-07: the three-tier ladder collapsed to two. Returning users map onto the new
-    // names; 'confident' lands on beginner (education-first default — expert is one click).
-    var LEVEL_RENAME = { learning: 'beginner', confident: 'beginner', pro: 'expert' };
-    var storedLevel = window.localStorage.getItem('strikebench.level');
-    if (LEVEL_RENAME[storedLevel]) window.localStorage.setItem('strikebench.level', LEVEL_RENAME[storedLevel]);
-  } catch (e) { /* storage unavailable — defaults apply */ }
-
   // ---- The experience ladder: exactly TWO shapes, never a middle tier ----
   var LEVELS = ['beginner', 'expert'];
   var LEVEL_META = {

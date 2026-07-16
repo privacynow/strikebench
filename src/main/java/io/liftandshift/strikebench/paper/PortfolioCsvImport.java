@@ -162,7 +162,12 @@ public final class PortfolioCsvImport {
 
         private PortfolioAccountingService.TransactionInput toInput(String ref) {
             return new PortfolioAccountingService.TransactionInput(occurred, event, cash, fees, category,
-                    "IMPORT", ref, notes, List.copyOf(legs.values()));
+                    "IMPORT", ref, notes, List.copyOf(legs.values()),
+                    switch (event) {
+                        case "TRADE", "ROLL", "EXPIRATION", "ASSIGNMENT", "EXERCISE" -> "EXECUTED";
+                        case "MARK_TO_MARKET" -> "MODELED";
+                        default -> "NOT_APPLICABLE";
+                    });
         }
     }
 

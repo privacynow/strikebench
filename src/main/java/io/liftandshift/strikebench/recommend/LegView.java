@@ -14,8 +14,23 @@ public record LegView(
         String strike,       // decimal string, null for stock
         String expiration,   // ISO date, null for stock
         int ratio,
-        String entryPrice    // decimal string per share, may be null on requests
+        String entryPrice,   // decimal string per share, may be null on requests
+        int multiplier,      // required deliverable units per ratio unit
+        String positionEffect // OPEN | CLOSE; pricing consumes OPEN, transformation preview consumes both
 ) {
+    public LegView {
+        if (action == null || action.isBlank()) throw new IllegalArgumentException("leg action required");
+        if (type == null || type.isBlank()) throw new IllegalArgumentException("leg type required");
+        if (ratio < 1) throw new IllegalArgumentException("leg ratio must be >= 1");
+        if (multiplier < 1 || multiplier > 10_000) {
+            throw new IllegalArgumentException("leg multiplier must be 1..10,000");
+        }
+        if (positionEffect == null || !("OPEN".equalsIgnoreCase(positionEffect)
+                || "CLOSE".equalsIgnoreCase(positionEffect))) {
+            throw new IllegalArgumentException("leg positionEffect must be OPEN or CLOSE");
+        }
+    }
+
     public static LegView of(Leg leg) {
         return new LegView(
                 leg.action().name(),
@@ -23,16 +38,18 @@ public record LegView(
                 leg.isStock() ? null : leg.strike().toPlainString(),
                 leg.isStock() ? null : leg.expiration().toString(),
                 leg.ratio(),
-                leg.entryPrice().toPlainString());
+                leg.entryPrice().toPlainString(),
+                leg.multiplier(),
+                "OPEN");
     }
 
     public Leg toLeg() {
         LegAction a = LegAction.valueOf(action.toUpperCase(java.util.Locale.ROOT));
         BigDecimal price = entryPrice == null ? BigDecimal.ZERO : new BigDecimal(entryPrice);
         if ("STOCK".equalsIgnoreCase(type)) {
-            return Leg.stock(a, ratio, price);
+            return new Leg(a, null, null, null, ratio, price, multiplier);
         }
         return Leg.option(a, OptionType.valueOf(type.toUpperCase(java.util.Locale.ROOT)),
-                new BigDecimal(strike), LocalDate.parse(expiration), ratio, price);
+                new BigDecimal(strike), LocalDate.parse(expiration), ratio, price, multiplier);
     }
 }

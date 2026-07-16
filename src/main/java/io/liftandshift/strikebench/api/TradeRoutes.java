@@ -7,7 +7,6 @@ import io.javalin.http.Handler;
 public final class TradeRoutes {
     public record Handlers(
             Handler preview,
-            Handler recordExternal,
             Handler create,
             Handler list,
             Handler detail,
@@ -27,7 +26,6 @@ public final class TradeRoutes {
 
     public static void register(JavalinConfig config, Handlers h) {
         config.routes.post("/api/trades/preview", h.preview());
-        config.routes.post("/api/trades/external", h.recordExternal());
         config.routes.post("/api/trades", h.create());
         config.routes.get("/api/trades", h.list());
         config.routes.get("/api/trades/{id}", h.detail());

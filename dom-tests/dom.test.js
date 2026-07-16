@@ -564,8 +564,8 @@ test('Plan stages orient both levels without hiding capabilities or stealing the
 
   await page.locator('.plan-rail button').filter({ hasText: 'Strategy' }).click();
   await page.waitForSelector('#plan-strategy-body');
-  assert.equal(await page.locator('.plan-tool').count(), 4,
-    'Compare, Build, Chain, and Scout stay reachable from the Plan');
+  assert.equal(await page.locator('.plan-tool').count(), 5,
+    'Compare, Build, Your trade, Chain, and Scout stay reachable from the Plan');
   assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id),
     'plan-stage-title-strategy');
 });
@@ -634,7 +634,7 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
     throw new Error('Strategy stage did not compose: ' + (await page.locator('#app').textContent())
       + '\n' + error.message);
   });
-  assert.equal(await page.locator('.plan-tool').count(), 4, 'one in-stage selector owns all Strategy tools');
+  assert.equal(await page.locator('.plan-tool').count(), 5, 'one in-stage selector owns all Strategy tools');
   await assertNamedControls('#plan-stage-strategy');
   await assertTabContracts('#plan-stage-strategy');
   await page.locator('.plan-tool[aria-selected="true"]').focus();
@@ -644,7 +644,7 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
     'arrow keys activate and focus the next Strategy tool');
   await page.keyboard.press('ArrowLeft');
   await page.waitForSelector('.plan-tool[data-strategy-tool="compare"][aria-selected="true"]');
-  assert.match(await page.textContent('.plan-tool-selector'), /Proposed trades.*All strategies.*Option prices.*Scout/s,
+  assert.match(await page.textContent('.plan-tool-selector'), /Proposed trades.*All strategies.*Your trade.*Option prices.*Scout/s,
     'Beginner gets plain, capability-oriented Strategy labels');
   assert.ok(await page.locator('#plan-strategy-filters .xp-head:has-text("Only show proposed trades")').count(),
     'Beginner keeps all five limits behind progressive disclosure');
@@ -900,7 +900,10 @@ test('Plan Builder preserves the Beginner walkthrough and Expert exact-contract 
   await page.click('#builder-catalog .tpl[data-tpl="IRON_CONDOR"]');
   await page.waitForSelector('#bw-walk');
   await page.waitForFunction(() => /Theoretical max loss/.test(
-    document.getElementById('bw-impact')?.textContent || ''), { timeout: 20000 });
+    document.getElementById('bw-impact')?.textContent || ''), { timeout: 20000 }).catch(async error => {
+      throw new Error('Builder leg impact did not price: '
+        + (await page.locator('#bw-impact').textContent().catch(() => '<missing>')) + '\n' + error.message);
+    });
   assert.match(await page.textContent('#bw-leg-story'), /Sell the \$\d+/,
     'the walkthrough explains what the current contract contributes');
   assert.match(await page.textContent('#bw-impact'), /Theoretical max loss/);
@@ -2978,6 +2981,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   assert.equal(await page.getByRole('tab', { name: 'Activity', exact: true }).getAttribute('aria-selected'), 'true',
     'tracked-account tabs use the shared roving keyboard contract');
   await assertNamedControls('#app');
+  await page.getByRole('button', { name: 'Tax contract classification', exact: true }).click();
   assert.match(await page.textContent('.book-record-card'),
     /Other Section 1256 contract[\s\S]*SPX, SPXW, SPXpm, XSP, NDX, NDXP, VIX, VIXW, RUT, RUTW, DJX, OEX, XEO/,
     'manual entry names the complete automatic broad-based index taxonomy');
@@ -2986,21 +2990,43 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     /broad-based Section 1256 index options are cash-settled[\s\S]*closing option transaction/i,
     'physical-delivery entry tells users how to record an index cash settlement instead');
   await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('TRADE');
-  const leg = page.getByRole('group', { name: 'Security leg', exact: true });
+  await page.waitForSelector('.book-shared-position-editor .position-editor');
+  await page.locator('.book-shared-position-editor input[type="datetime-local"]').fill('2026-07-15T10:30');
+  await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
+  await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("RECORD requires")');
+  assert.match(await page.textContent('.book-shared-position-editor .position-editor-result'),
+    /RECORD requires every factual symbol, quantity, multiplier, contract, and positive fill price/,
+    'the shared editor refuses to manufacture missing tracked-book facts');
+  const leg = page.locator('.book-shared-position-editor .position-leg').first();
   await leg.getByRole('combobox', { name: 'Instrument', exact: true }).selectOption('STOCK');
-  await leg.getByRole('combobox', { name: 'Symbol', exact: true }).fill('AAPL');
-  await leg.getByRole('spinbutton', { name: 'Quantity', exact: true }).fill('10');
-  await leg.getByRole('spinbutton', { name: 'Exact price $', exact: true }).fill('100');
+  await leg.getByRole('textbox', { name: 'Symbol', exact: true }).fill('AAPL');
+  await leg.getByRole('spinbutton', { name: 'Shares', exact: true }).fill('10');
+  await leg.getByRole('spinbutton', { name: 'Exact fill $', exact: true }).fill('100');
   await page.getByRole('spinbutton', { name: 'Total fees $', exact: true }).fill('1');
-  await page.getByRole('textbox', { name: 'Broker reference', exact: true }).fill('dom-stock-open-1');
-  await page.getByRole('button', { name: 'Record activity', exact: true }).click();
-  await page.waitForFunction(() => /2 shown/.test(document.querySelector('.book-journal')?.textContent || ''));
+  await page.getByRole('combobox', { name: 'Record source', exact: true }).selectOption('BROKER');
+  await page.getByRole('textbox', { name: 'Stable broker reference', exact: true }).fill('dom-stock-open-1');
+  await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
+  await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("Recorded in")');
+  await page.getByRole('button', { name: 'Refresh account activity', exact: true }).click();
+  await page.waitForFunction(() => /2 shown/.test(document.querySelector('.book-journal')?.textContent || ''))
+    .catch(async error => {
+      throw new Error('Recorded stock did not reconcile into the journal: '
+        + (await page.locator('.book-shared-position-editor').textContent().catch(() => '<editor missing>'))
+        + '\nJOURNAL: ' + (await page.locator('.book-journal').textContent().catch(() => '<journal missing>'))
+        + '\n' + error.message);
+    });
 
   await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('INTEREST');
   await page.getByRole('spinbutton', { name: 'Amount $', exact: true }).fill('5');
   await page.getByRole('textbox', { name: 'Broker reference', exact: true }).fill('dom-interest-1');
   await page.getByRole('button', { name: 'Record activity', exact: true }).click();
-  await page.waitForFunction(() => /3 shown/.test(document.querySelector('.book-journal')?.textContent || ''));
+  await page.waitForFunction(() => /3 shown/.test(document.querySelector('.book-journal')?.textContent || ''))
+    .catch(async error => {
+      throw new Error('Interest did not reconcile into the journal: '
+        + (await page.locator('.book-record-card').textContent().catch(() => '<record card missing>'))
+        + '\nJOURNAL: ' + (await page.locator('.book-journal').textContent().catch(() => '<journal missing>'))
+        + '\n' + error.message);
+    });
   assert.match(await page.textContent('.book-journal'), /interest[\s\S]*\+\$5\.00/i,
     'cash income is a visible normalized transaction');
 
@@ -3021,7 +3047,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await captureSettled('p110-accounting-overview-desktop.png');
 
   const rollOpen = await page.evaluate(async id => API.post('/api/portfolio/accounts/' + id + '/transactions', {
-    occurredAt: new Date(Date.now() - 250).toISOString(), eventType: 'TRADE', cashAmountCents: null,
+    occurredAt: new Date(Date.now() - 250).toISOString(), eventType: 'TRADE', fillNature: 'EXECUTED', cashAmountCents: null,
     feesCents: 100, taxCategory: null, source: 'MANUAL', externalRef: 'dom-roll-open-1',
     notes: 'Position to exercise the linked roll control', legs: [{
       instrumentType: 'OPTION', action: 'BUY', positionEffect: 'OPEN', symbol: 'QQQ', optionType: 'CALL',
@@ -3123,7 +3149,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.evaluate(async id => {
     const occurredAt = new Date().toISOString();
     const record = (externalRef, action, effect, price) => API.post('/api/portfolio/accounts/' + id + '/transactions', {
-      occurredAt, eventType: 'TRADE', cashAmountCents: null, feesCents: 0, taxCategory: null,
+      occurredAt, eventType: 'TRADE', fillNature: 'EXECUTED', cashAmountCents: null, feesCents: 0, taxCategory: null,
       source: 'MANUAL', externalRef, notes: 'Unreviewed-year wash disclosure control', legs: [{
         instrumentType: 'STOCK', action, positionEffect: effect, symbol: 'MSFT', optionType: null,
         strike: null, expiration: null, quantity: 1, multiplier: 1, price, section1256: false
@@ -3186,8 +3212,10 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('button', { name: 'Archive account', exact: true }).click();
   await page.waitForSelector('.book-account-status:has-text("ARCHIVED")');
   await go('#/portfolio/book/activity');
-  assert.equal(await page.getByRole('button', { name: 'Record activity', exact: true }).isDisabled(), true,
+  assert.equal(await page.getByRole('button', { name: 'Record factual activity', exact: true }).isDisabled(), true,
     'archived tracked accounts are read-only in the UI as well as the service');
+  assert.match(await page.textContent('.book-shared-position-editor'), /archived.*Restore it before recording/i,
+    'the disabled command names the action that restores recording');
   await go('#/portfolio/book/settings');
   await page.getByRole('button', { name: 'Restore account', exact: true }).click();
   await page.waitForSelector('.book-account-status:has-text("ACTIVE")');
@@ -3251,6 +3279,79 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   assert.deepEqual(vocabularyHelp.filter(item => !item.hasInfo || item.short.length < 20
     || item.beginner.length < 30 || item.expert.length < 30), [],
   'every canonical product term owns useful level-specific help in the one explanation registry');
+  const editorContracts = await page.evaluate(() => {
+    const text = '-2 XSP 13Jul27 500P x10 @12.34 CLOSE 1256\n+10 XSP @499.50 CLOSE';
+    const parsed = PositionEditor.parseTerminal(text);
+    const roundTrip = PositionEditor.parseTerminal(PositionEditor.terminalText(parsed));
+    const restored = PositionEditor.cleanDraft({ occurredAt: '', legs: [{ instrumentType: 'OPTION',
+      action: 'BUY', positionEffect: 'OPEN', symbol: 'XSP', optionType: 'CALL', strike: '500',
+      expiration: '2027-07-13', quantity: '', multiplier: '', price: '' }] }, {});
+    const analysis = PositionEditor.analysisPayload(PositionEditor.cleanDraft({ legs: [{ instrumentType: 'OPTION',
+      action: 'BUY', positionEffect: 'OPEN', symbol: 'XSP', optionType: 'CALL', strike: '500',
+      expiration: '2027-07-13', quantity: 1, multiplier: 100, price: '' }] }, {}));
+    let blankFeeError = null;
+    try {
+      PositionEditor.recordPayload(PositionEditor.cleanDraft({ fillNature: 'EXECUTED', occurredAt: '2026-07-13T12:00:00Z',
+        source: 'MANUAL', legs: [{ instrumentType: 'OPTION', action: 'BUY', positionEffect: 'OPEN',
+          symbol: 'XSP', optionType: 'CALL', strike: '500', expiration: '2027-07-13', quantity: 1,
+          multiplier: 100, price: '12.34' }] }, { allowRecord: true }));
+    } catch (error) { blankFeeError = error.message; }
+    let multiSymbolError = null;
+    try {
+      PositionEditor.analysisPayload(PositionEditor.cleanDraft({ legs: [
+        { instrumentType: 'STOCK', action: 'BUY', positionEffect: 'OPEN', symbol: 'AAPL', quantity: 100, multiplier: 1, price: '250' },
+        { instrumentType: 'OPTION', action: 'SELL', positionEffect: 'OPEN', symbol: 'MSFT', optionType: 'CALL',
+          strike: '500', expiration: '2027-07-13', quantity: 1, multiplier: 100, price: '12.34' }
+      ] }, {}));
+    } catch (error) { multiSymbolError = error.message; }
+    return {
+      effects: roundTrip.map(leg => leg.positionEffect), section1256: roundTrip[0].section1256,
+      multipliers: roundTrip.map(leg => leg.multiplier), occurredAt: restored.occurredAt,
+      quantity: restored.legs[0].quantity, multiplier: restored.legs[0].multiplier,
+      analysisKeys: Object.keys(analysis).sort(), blankFeeError, multiSymbolError,
+      closeReason: PositionEditor.localPayoffUnavailableReason({ legs: parsed }),
+      calendarReason: PositionEditor.localPayoffUnavailableReason({ legs: [
+        { instrumentType: 'OPTION', positionEffect: 'OPEN', expiration: '2027-07-13' },
+        { instrumentType: 'OPTION', positionEffect: 'OPEN', expiration: '2027-08-13' }
+      ] })
+    };
+  });
+  assert.deepEqual(editorContracts.effects, ['CLOSE', 'CLOSE'], 'Terminal preserves OPEN/CLOSE authority');
+  assert.equal(editorContracts.section1256, true, 'Terminal preserves explicit Section 1256 authority');
+  assert.deepEqual(editorContracts.multipliers, [10, 1], 'Terminal preserves option and stock multipliers');
+  assert.deepEqual([editorContracts.occurredAt, editorContracts.quantity, editorContracts.multiplier], ['', '', ''],
+    'restoring a draft never manufactures time, quantity, or multiplier facts');
+  assert.deepEqual(editorContracts.analysisKeys,
+    ['feesOverrideCents', 'fillNature', 'legs', 'proposedNetCents', 'qty', 'source', 'strategy', 'symbol'],
+    'the editor emits only the current StrikeBench analysis contract');
+  assert.match(editorContracts.blankFeeError, /exact total fees[\s\S]*explicit 0\.00/i,
+    'Record never turns an unknown fee into a fabricated zero');
+  assert.match(editorContracts.multiSymbolError, /one underlying per position package/i,
+    'Analyze never silently prices another symbol against the first symbol quote');
+  assert.match(editorContracts.closeReason, /existing position/i,
+    'closing activity cannot receive a misleading standalone terminal-payoff chart');
+  assert.match(editorContracts.calendarReason, /Calendars and diagonals/i,
+    'mixed expirations cannot receive a misleading single-expiry payoff chart');
+  const excessiveMultiplier = await page.evaluate(() => {
+    try {
+      PositionEditor.analysisPayload(PositionEditor.cleanDraft({ legs: [{ instrumentType: 'OPTION',
+        action: 'BUY', positionEffect: 'OPEN', symbol: 'XSP', optionType: 'CALL', strike: '500',
+        expiration: '2027-07-13', quantity: 1, multiplier: 10001, price: '' }] }, {}));
+      return null;
+    } catch (error) { return error.message; }
+  });
+  assert.match(excessiveMultiplier, /Complete the symbol, quantity/i,
+    'the client rejects a multiplier beyond the same 10,000 bound as the server');
+  const stockMultiplierError = await page.evaluate(() => {
+    try {
+      PositionEditor.analysisPayload(PositionEditor.cleanDraft({ legs: [{ instrumentType: 'STOCK',
+        action: 'BUY', positionEffect: 'OPEN', symbol: 'AAPL', quantity: 500, multiplier: 100,
+        price: '250' }] }, {}));
+      return null;
+    } catch (error) { return error.message; }
+  });
+  assert.match(stockMultiplierError, /Complete the symbol, quantity/i,
+    'the shared editor represents stock as exact shares with multiplier one, never as an ambiguous lot');
   const disclosureIdentity = await page.evaluate(() => {
     const makePair = () => {
       const host = document.createElement('div');
@@ -3271,41 +3372,161 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   });
   assert.deepEqual(disclosureIdentity, [true, false],
     'identical disclosure headings retain independent state across a repaint');
-  await ensureExpanded(page.locator('#record-real-card .xp-head'));
-  assert.equal(await page.locator('#record-real-card .xp').first().getAttribute('class'), 'xp open');
-  await page.fill('#ext-qty', '2');
-  await page.fill('#ext-net', '350');
-  await page.fill('#ext-fees', '2');
-  await page.fill('#ext-legs .x-strike', '250');
-  await page.waitForSelector('#record-real-card .position-entry-visual svg.chart');
-  assert.equal(await page.getAttribute('.external-payoff-host', 'data-entry-cash-after-fees-cents'), '34800',
-    'the visual payoff starts from exact package cash after entered fees');
-  assert.doesNotMatch(await page.getAttribute('.external-payoff-host path.line', 'd'), /NaN/,
-    'strike-focused payoff trimming never writes invalid path coordinates');
-  assert.ok(await page.locator('#record-real-card [data-vocabulary="recordedAtBroker"]').isVisible(),
-    'record provenance uses the shared vocabulary component');
+  const editorPlan = await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'bullish');
+  await page.click('#plan-tool-yourTrade');
+  await page.waitForSelector('#plan-strategy-body .position-editor');
+  await page.waitForSelector('#plan-strategy-body .position-chain-contract');
+  await page.locator('#plan-strategy-body .position-chain-contract').first().click();
+  await page.waitForSelector('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]:not([value=""])');
+  await page.waitForSelector('#plan-strategy-body .strike-grip');
+  const strikeBeforeKeyboardDrag = await page.locator('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]').first().inputValue();
+  const strikeHandle = page.locator('#plan-strategy-body .strike-grip').first();
+  await strikeHandle.focus();
+  await strikeHandle.press('ArrowRight');
+  await strikeHandle.press('Enter');
+  await page.waitForFunction(before => {
+    const input = document.querySelector('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]');
+    return input && input.value !== before;
+  }, strikeBeforeKeyboardDrag);
+  const strikeAfterKeyboardDrag = await page.locator('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]').first().inputValue();
+  assert.notEqual(strikeAfterKeyboardDrag, strikeBeforeKeyboardDrag,
+    'the accessible strike handle commits a neighboring listed strike into the shared leg state');
+  await page.locator('#plan-strategy-body textarea[placeholder="Optional context"]').fill('Phase 3 draft survives reload and tabs');
+  await page.evaluate(() => Workspace.save());
+  await page.waitForTimeout(1800);
+  const remoteDraft = await page.evaluate(async planId => {
+    const workspace = await API.getFresh('/api/workspace');
+    const state = workspace && workspace.state || {};
+    return state.forms && state.forms.positionDrafts && state.forms.positionDrafts['plan:' + planId];
+  }, editorPlan.id);
+  assert.equal(remoteDraft && remoteDraft.notes, 'Phase 3 draft survives reload and tabs',
+    'the current draft reaches durable workspace state instead of depending on an unload race');
+  await page.reload();
+  await page.waitForSelector('#app[data-ready="true"] #plan-strategy-body .position-editor');
+  assert.equal(await page.locator('#plan-strategy-body textarea[placeholder="Optional context"]').inputValue(),
+    'Phase 3 draft survives reload and tabs', 'reload restores the exact shared editor draft');
+  assert.equal(await page.locator('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]').first().inputValue(),
+    strikeAfterKeyboardDrag, 'reload restores the chain-selected and handle-adjusted strike');
+  assert.equal(await page.locator('#plan-tool-yourTrade').getAttribute('aria-selected'), 'true',
+    'reload returns to the editor rather than hiding the restored draft behind another Strategy tool');
+  const listed = await page.evaluate(async () => {
+    const research = await API.getFresh('/api/research/AAPL');
+    const expiration = research.expirations[Math.min(2, research.expirations.length - 1)];
+    const chain = await API.getFresh('/api/research/AAPL/chain?expiration=' + encodeURIComponent(expiration));
+    const puts = (chain.puts || []).filter(row => Number.isFinite(Number(row.strike)))
+      .sort((a, b) => Number(a.strike) - Number(b.strike));
+    const highIndex = Math.max(1, Math.floor(puts.length / 2));
+    const low = puts[highIndex - 1], high = puts[highIndex];
+    return { expiration, low: Number(low.strike), high: Number(high.strike),
+      lowAsk: Number(low.ask), highBid: Number(high.bid) };
+  });
+  assert.ok(listed.expiration && Number.isFinite(listed.low) && Number.isFinite(listed.high)
+    && listed.lowAsk > 0 && listed.highBid > listed.lowAsk,
+  'fixture chain supplies an executable two-contract credit package for the shared editor');
+  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  const terminal = '-20 AAPL ' + listed.expiration + ' ' + listed.high + 'P @' + listed.highBid.toFixed(2) + '\n'
+    + '+20 AAPL ' + listed.expiration + ' ' + listed.low + 'P @' + listed.lowAsk.toFixed(2);
+  await page.locator('#plan-strategy-body .position-terminal').fill(terminal);
+  await page.getByRole('button', { name: 'Apply lines', exact: true }).click();
+  await page.waitForSelector('#plan-strategy-body .position-editor-visual svg.chart');
+  assert.equal(await page.evaluate(() => PositionEditor.identify(
+    App.state.positionDrafts['plan:' + PlanStore.active().id].legs).family), 'CREDIT_PUT_SPREAD',
+  'the live catalog identifies the exact terminal package instead of inventing a label');
+  assert.doesNotMatch(await page.getAttribute('#plan-strategy-body .position-editor-visual path.line', 'd'), /NaN/,
+    'the exact 20-lot payoff never writes invalid path coordinates');
+  await page.getByRole('button', { name: 'Visual', exact: true }).click();
+  assert.equal(await page.locator('#plan-strategy-body .position-leg').count(), 2,
+    'the visual view receives the same two edited legs');
+  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  assert.equal((await page.locator('#plan-strategy-body .position-terminal').inputValue()).trim(), terminal,
+    'visual and terminal entry preserve one shared draft');
+  const beforeConstraint = await page.evaluate(async planId => {
+    const plan = await PlanStore.get(planId, true);
+    const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
+    return { version: plan.version, selected: latest.selected && latest.selected.id };
+  }, editorPlan.id);
+  await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).fill('99999');
+  const [optimisticResponse] = await Promise.all([
+    page.waitForResponse(response => response.url().includes('/api/plans/' + editorPlan.id + '/strategy/custom')
+      && response.request().method() === 'POST'),
+    page.getByRole('button', { name: 'Analyze and use in this Plan', exact: true }).click()
+  ]);
+  assert.equal(optimisticResponse.status(), 200, 'an optimistic proposed limit still receives a complete analysis');
+  await page.waitForSelector('#plan-strategy-body .position-editor-result:has-text("Analyzed with constraints")');
+  assert.match(await page.locator('#plan-strategy-body .position-editor-result').innerText(),
+    /does not model resting limit orders|cannot claim this paper order filled/i,
+  'an impossible limit remains visible as a proposal and is never presented as an executable fill');
+  assert.equal(await page.getByRole('button', { name: 'Continue to Outcomes', exact: true }).count(), 0,
+    'a constrained proposed limit cannot advance as though it were selected');
+  const afterConstraint = await page.evaluate(async planId => {
+    const plan = await PlanStore.get(planId, true);
+    const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
+    return { version: plan.version, selected: latest.selected && latest.selected.id };
+  }, editorPlan.id);
+  assert.deepEqual(afterConstraint, beforeConstraint,
+    'a constrained analysis neither selects a structure nor mutates the Plan version');
+  await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).fill('');
+  const [analysisResponse] = await Promise.all([
+    page.waitForResponse(response => response.url().includes('/api/plans/' + editorPlan.id + '/strategy/custom')
+      && response.request().method() === 'POST'),
+    page.getByRole('button', { name: 'Analyze and use in this Plan', exact: true }).click()
+  ]);
+  assert.equal(analysisResponse.status(), 200, 'the shared Plan editor reaches the real exact-package endpoint');
+  await page.waitForSelector('#plan-strategy-body .position-editor-result .inline-action-feedback');
+  assert.match(await page.locator('#plan-strategy-body .position-editor-result').innerText(),
+    /Analysis complete[\s\S]*Theoretical max loss[\s\S]*Market-implied EV after costs[\s\S]*Entry-price receipt[\s\S]*Continue to Outcomes/i,
+  'Analyze reports exact-package economics, price provenance, and an in-view next action');
+  const selectedExactPackage = await page.evaluate(async planId => {
+    const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
+    return {
+      id: latest.selected && latest.selected.id,
+      family: latest.selected && latest.selected.strategy,
+      legs: latest.selected && latest.selected.legs && latest.selected.legs.length
+    };
+  }, editorPlan.id);
+  assert.ok(selectedExactPackage.id && selectedExactPackage.family === 'CREDIT_PUT_SPREAD'
+    && selectedExactPackage.legs === 2,
+  'the exact edited package becomes the durable Plan selection: ' + JSON.stringify(selectedExactPackage));
+  await page.evaluate(id => { delete App.state.positionDrafts['plan:' + id]; }, editorPlan.id);
+  await page.evaluate(() => App.render());
+  await page.waitForSelector('#app[data-ready="true"] #plan-strategy-body .position-editor');
+  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  assert.match(await page.locator('#plan-strategy-body .position-terminal').inputValue(), /-20 AAPL/,
+    'a selected package seeds the shared editor after its local draft is cleared');
+  await page.getByRole('button', { name: 'Visual', exact: true }).click();
+  await page.waitForSelector('#plan-strategy-body .position-editor-visual svg.chart');
   const beginnerColumns = await page.locator('.position-entry-workbench').evaluate(node =>
     getComputedStyle(node).gridTemplateColumns.split(' ').length);
   assert.equal(beginnerColumns, 1, 'Beginner keeps leg editing and its payoff in one visual sequence');
-  await captureSettled('trader-own-p2-record-beginner.png');
+  await captureSettled('trader-own-p3-editor-beginner.png');
 
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
-  await page.waitForSelector('#app[data-ready="true"] #record-real-card .xp.open');
-  assert.equal(await page.locator('#record-real-card .xp-head').getAttribute('aria-expanded'), 'true',
-    'an open disclosure remains open when the experience level changes');
+  await page.waitForSelector('#app[data-ready="true"] #plan-strategy-body .position-editor');
+  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  assert.match(await page.locator('#plan-strategy-body .position-terminal').inputValue(), /-20 AAPL/,
+    'the edited package survives a full level-driven repaint');
   const expertColumns = await page.locator('.position-entry-workbench').evaluate(node =>
     getComputedStyle(node).gridTemplateColumns.split(' ').length);
   assert.equal(expertColumns, 2, 'Expert places the payoff beside the exact legs');
-  await page.fill('#ext-qty', '2');
-  await page.fill('#ext-net', '350');
-  await page.fill('#ext-legs .x-strike', '250');
-  await page.waitForSelector('#record-real-card .position-entry-visual svg.chart');
-  await captureSettled('trader-own-p2-record-expert.png');
+  await page.waitForSelector('#plan-strategy-body .position-editor-visual svg.chart');
+  await captureSettled('trader-own-p3-editor-expert.png');
 
   await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
-  await page.waitForSelector('#app[data-ready="true"] #record-real-card .xp.open');
-  assert.equal(await page.locator('#record-real-card .xp-head').getAttribute('aria-expanded'), 'true',
-    'disclosure state survives the round trip, not just one direction');
+  await page.waitForSelector('#app[data-ready="true"] #plan-strategy-body .position-editor');
+  assert.match(await page.locator('#plan-strategy-body .position-terminal').inputValue(), /\+20 AAPL/,
+    'the shared draft survives the complete Beginner/Expert round trip');
+  assert.match(await page.locator('#plan-strategy-body .position-editor-result').innerText(),
+    /Selected in this Plan[\s\S]*Continue to Outcomes/i,
+  'the selected exact package keeps its local confirmation and next action after a level repaint');
+  const selectedPackageNet = await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).inputValue();
+  await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).fill('0.01');
+  assert.equal(await page.locator('#plan-strategy-body .position-editor-result:has-text("Selected in this Plan")').count(), 0,
+    'editing an input immediately clears a stale selected-package confirmation');
+  await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).fill(selectedPackageNet);
+  await page.evaluate(() => App.render());
+  await page.waitForSelector('#app[data-ready="true"] #plan-strategy-body .position-editor-result:has-text("Selected in this Plan")');
+  await page.getByRole('button', { name: 'Visual', exact: true }).click();
+  await page.waitForSelector('#plan-strategy-body .position-editor-visual svg.chart');
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(100);
   const mobile = await page.evaluate(() => ({
@@ -3318,8 +3539,39 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   assert.ok(mobile.document <= mobile.viewport + 2 && mobile.editorRight <= mobile.appRight + 2,
     'the shared editor stays inside the mobile page: ' + JSON.stringify(mobile));
   assert.equal(mobile.columns, 1, 'mobile keeps the legs and visual in one readable sequence');
-  await captureSettled('trader-own-p2-record-mobile.png');
+  await captureSettled('trader-own-p3-editor-mobile.png');
   await page.setViewportSize({ width: 1280, height: 900 });
+
+  const adjustedTerminal = '-1 AAPL ' + listed.expiration + ' ' + listed.high + 'P x10 @' + listed.highBid.toFixed(2) + '\n'
+    + '+1 AAPL ' + listed.expiration + ' ' + listed.low + 'P x10 @' + listed.lowAsk.toFixed(2);
+  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).fill('');
+  await page.locator('#plan-strategy-body .position-terminal').fill(adjustedTerminal);
+  const [adjustedResponse] = await Promise.all([
+    page.waitForResponse(response => response.url().includes('/api/plans/' + editorPlan.id + '/strategy/custom')
+      && response.request().method() === 'POST'),
+    page.getByRole('button', { name: 'Analyze and use in this Plan', exact: true }).click()
+  ]);
+  assert.equal(adjustedResponse.status(), 200,
+    'an adjusted x10 package reaches the same exact-package analysis endpoint');
+  await page.waitForSelector('#plan-strategy-body .position-editor-result:has-text("Analysis complete")');
+  const adjustedSelection = await page.evaluate(async planId => {
+    const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
+    return {
+      multipliers: (latest.selected && latest.selected.legs || []).map(leg => leg.multiplier),
+      maxLossCents: latest.selected && latest.selected.maxLossCents,
+      entryNetCents: latest.selected && latest.selected.entryNetPremiumCents
+    };
+  }, editorPlan.id);
+  assert.deepEqual(adjustedSelection.multipliers, [10, 10],
+    'normalized Plan storage preserves adjusted deliverables after the response/reload boundary');
+  assert.ok(adjustedSelection.maxLossCents > 0 && Number.isInteger(adjustedSelection.entryNetCents),
+    'the adjusted package returns exact decision money, not a visual-only approximation');
+  await page.evaluate(() => App.render());
+  await page.waitForSelector('#app[data-ready="true"] #plan-strategy-body .position-editor-result:has-text("Selected in this Plan")');
+  assert.match(await page.locator('#plan-strategy-body .position-terminal').inputValue(), /x10/,
+    'the adjusted draft and durable selected confirmation survive a full app repaint');
+  await page.evaluate(id => { delete App.state.positionDrafts['plan:' + id]; }, editorPlan.id);
 });
 
 test('explanation system: visible triggers, registry-backed bubbles, both levels, no title dups', async () => {
@@ -3334,14 +3586,17 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   assert.ok(preTerms.includes('scenario'), 'sim workbench wires info(scenario)');
   assert.ok(preTerms.includes('speed'), 'sim workbench wires info(speed)');
   const plan = await openPlan('AAPL', 'strategy');
+  await page.locator('.plan-tool[data-strategy-tool="compare"]').click();
+  await page.waitForSelector('#plan-run-strategy');
   await page.click('#plan-run-strategy');
   await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
   await page.evaluate(async planId => {
     const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
-    const candidate = latest.strategy.result.candidates.find(item => {
+    const candidate = latest.strategy.result.candidates.find(item => item.id && (() => {
       const expirations = new Set((item.legs || []).filter(leg => leg.type !== 'STOCK').map(leg => leg.expiration));
       return expirations.size === 1;
-    });
+    })());
+    if (!candidate) throw new Error('The explanation audit needs one persisted single-expiration candidate.');
     const live = await PlanStore.get(planId, true);
     await PlanStore.selectCandidate(live, candidate.id);
   }, plan.id);
@@ -3552,10 +3807,19 @@ test('data center keeps every reset scope available to Beginner with plain guida
   assert.ok(await page.locator('#dc-history-sync .xp-head:has-text("Keep it current automatically")').count(),
     'beginner gets the same maintenance capability through progressive disclosure');
   await go('#/data/datasets');
-  await page.waitForSelector('#dc-coverage .xp-head:has-text("Review basis and sources")', { timeout: 15000 });
-  await page.locator('#dc-coverage .xp-head').filter({ hasText: 'Review basis and sources' }).click();
-  assert.match(await page.textContent('#dc-coverage'), /Basis & sources/,
-    'Beginner can inspect provenance for every covered symbol');
+  await page.waitForFunction(() => !/Loading coverage/.test(document.getElementById('dc-coverage')?.textContent || ''),
+    { timeout: 15000 });
+  const coverageText = await page.textContent('#dc-coverage');
+  if (/No stored history yet/.test(coverageText)) {
+    assert.match(coverageText, /Open Sources & jobs.*eligible source.*preview exactly what will be downloaded/s,
+      'an empty Beginner inventory names the acquisition path instead of offering a meaningless row detail');
+    assert.ok(await page.locator('#dc-backfill').count(), 'the empty inventory keeps its history action');
+  } else {
+    await page.waitForSelector('#dc-coverage .xp-head:has-text("Review basis and sources")', { timeout: 15000 });
+    await page.locator('#dc-coverage .xp-head').filter({ hasText: 'Review basis and sources' }).click();
+    assert.match(await page.textContent('#dc-coverage'), /Basis & sources/,
+      'Beginner can inspect provenance for every covered symbol');
+  }
   await go('#/data/overview');
   await page.waitForSelector('#dc-health .dc-detail-toggle', { timeout: 15000 });
   await page.click('#dc-health .dc-detail-toggle');
@@ -4077,81 +4341,113 @@ test('large Research markets progressively load every sparkline in governed batc
   await page.setViewportSize({ width: 1280, height: 900 });
 });
 
-test('external broker fills remain a structured, cash-isolated learning-loop capability', async () => {
+test('shared editor records exact broker facts in the tracked book without touching practice cash', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
-  await go('#/portfolio/active');
-  await page.waitForSelector('#record-real-card');
-  await ensureExpanded(page.locator('#record-real-card .xp-head'));
-  await page.fill('#ext-symbol', 'AAPL');
-  await page.fill('#ext-qty', '1');
-  await page.fill('#ext-net', '175.00');
-  await page.fill('#ext-fees', '2.00');
-  const first = page.locator('#ext-legs .ext-leg').first();
-  await first.locator('.x-strike').fill('100');
-  await first.locator('.x-exp').fill('2026-07-02');
-  await first.locator('.x-fill').fill('3.10');
-  await page.locator('#record-real-card button').filter({ hasText: '+ Leg' }).click();
-  const second = page.locator('#ext-legs .ext-leg').nth(1);
-  await second.locator('.x-act').selectOption({ label: 'BUY' });
-  await second.locator('.x-strike').fill('95');
-  await second.locator('.x-exp').fill('2026-07-02');
-  await second.locator('.x-fill').fill('1.35');
-  await page.fill('#ext-date', '2026-07-01');
-  await page.fill('#ext-broker', 'Weekend review broker');
-  await page.fill('#ext-ref', 'REVIEW-001');
-  await page.check('#ext-past');
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForTimeout(500);
-  await page.screenshot({ path: path.join(__dirname, 'shots/portfolio-external-desktop.png'), fullPage: true });
-  const before = await page.evaluate(async () => (await API.getFresh('/api/account')).account);
-  const createResponse = page.waitForResponse(response => response.url().endsWith('/api/trades/external')
-    && response.request().method() === 'POST');
-  await page.click('#ext-save');
+  const account = await page.evaluate(async () => {
+    const created = await API.post('/api/portfolio/accounts', {
+      name: 'Shared editor broker book', accountType: 'TAXABLE', broker: 'Fixture broker', lotMethod: 'FIFO',
+      openingCashCents: 10000000, shortTermTaxRateBps: null, longTermTaxRateBps: null,
+      ordinaryTaxRateBps: null, stateTaxRateBps: null
+    });
+    App.state.portfolioBookAccountId = created.id;
+    localStorage.setItem('strikebench.portfolioBookAccount', created.id);
+    return created;
+  });
+  await go('#/portfolio/book/activity');
+  await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('TRADE');
+  await page.waitForSelector('.book-shared-position-editor .position-editor');
+  const listed = await page.evaluate(async () => {
+    const research = await API.getFresh('/api/research/AAPL');
+    const expiration = research.expirations[Math.min(2, research.expirations.length - 1)];
+    const chain = await API.getFresh('/api/research/AAPL/chain?expiration=' + encodeURIComponent(expiration));
+    const puts = (chain.puts || []).map(row => Number(row.strike)).filter(Number.isFinite).sort((a, b) => a - b);
+    const highIndex = Math.max(1, Math.floor(puts.length / 2));
+    return { expiration, low: puts[highIndex - 1], high: puts[highIndex] };
+  });
+  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  await page.locator('.book-shared-position-editor .position-terminal').fill(
+    '-1 AAPL ' + listed.expiration + ' ' + listed.high + 'P @3.10\n'
+      + '+1 AAPL ' + listed.expiration + ' ' + listed.low + 'P @1.35');
+  await page.getByRole('textbox', { name: 'Executed / analyzed at', exact: true }).fill('2026-07-13T12:00');
+  await page.getByRole('spinbutton', { name: 'Total fees $', exact: true }).fill('2.00');
+  await page.getByRole('combobox', { name: 'Record source', exact: true }).selectOption('BROKER');
+  await page.getByRole('textbox', { name: 'Stable broker reference', exact: true }).fill('DOM-SHARED-EDITOR-001');
+  await page.getByRole('combobox', { name: 'Price meaning', exact: true }).selectOption('PROPOSED');
+  await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
+  await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("executed broker facts only")');
+  assert.match(await page.textContent('.book-shared-position-editor .position-editor-result'), /use ANALYZE for a proposal/i,
+    'the Record command refuses a proposed draft before it can reach the factual ledger');
+  await page.getByRole('combobox', { name: 'Price meaning', exact: true }).selectOption('EXECUTED');
+  const analysisResponsePromise = page.waitForResponse(response => response.url().endsWith(
+    '/api/portfolio/accounts/' + account.id + '/analyze') && response.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Analyze this trade', exact: true }).click();
+  const trackedAnalysis = await (await analysisResponsePromise).json();
+  assert.equal(trackedAnalysis.accountId, account.id, 'tracked Analyze uses the selected tracked account');
+  assert.equal(trackedAnalysis.availableCashCents, 10000000, 'tracked Analyze uses tracked cash, not Practice buying power');
+  assert.equal(trackedAnalysis.marketLane, 'OBSERVED', 'tracked Analyze never inherits a Demo/Simulated Practice lane');
+  assert.match(await page.textContent('.book-shared-position-editor .position-editor-result'), /observed market/i,
+    'the account and lane basis are visible beside the analysis');
+  const practiceBefore = await page.evaluate(async () => (await API.getFresh('/api/account')).account);
+  const createResponse = page.waitForResponse(response => response.url().endsWith(
+    '/api/portfolio/accounts/' + account.id + '/transactions') && response.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
   const response = await createResponse;
   const responseText = await response.text();
-  assert.equal(response.status(), 201, 'external fill was refused: ' + responseText);
-  const recorded = JSON.parse(responseText);
-  assert.equal(recorded.origin, 'EXTERNAL');
-  assert.equal(recorded.entryNetPremiumCents, 17500);
-  await page.evaluate(() => API.flushCache());
-  await go('#/portfolio/active');
-  await page.waitForFunction(() => /Recorded at broker/.test(document.getElementById('trades-card')?.textContent || ''),
+  assert.equal(response.status(), 201, 'tracked broker package was refused: ' + responseText);
+  await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("Recorded in")');
+  await page.getByRole('button', { name: 'Refresh account activity', exact: true }).click();
+  await page.waitForFunction(() => /2 shown/.test(document.querySelector('.book-journal')?.textContent || ''),
     null, { timeout: 15000 });
-  const visible = await page.evaluate(async () => ({
-    text: document.getElementById('trades-card')?.textContent || '',
-    route: location.hash,
-    filter: App.state.portfolioFilter || null,
-    listed: await API.getFresh('/api/trades?status=ACTIVE&page=0&size=50')
-  }));
-  assert.match(visible.text, /Recorded at broker/, 'recorded trade did not appear: ' + JSON.stringify(visible));
-  const after = await page.evaluate(async () => (await API.getFresh('/api/account')).account);
-  assert.equal(after.cashCents, before.cashCents, 'recording a broker fill never changes practice cash');
-  assert.equal(after.reservedCents, before.reservedCents, 'recording a broker fill never changes practice reserve');
+  assert.equal(await page.locator('.book-journal [data-transaction-id].plan-return-focus').count(), 1,
+    'refreshing after Record focuses the exact new ledger consequence in view');
+  const tradeDisclosure = page.locator('.book-journal .xp-head').filter({ hasText: /trade/i }).first();
+  await ensureExpanded(tradeDisclosure);
+  const tradeDetail = await tradeDisclosure.locator('..').textContent();
+  assert.match(tradeDetail, /AAPL[\s\S]*put/i,
+    'the tracked transaction disclosure preserves both exact option legs');
+  assert.match(tradeDetail, /ReferenceDOM-SHARED-EDITOR-001/i,
+    'the tracked transaction disclosure preserves both exact option legs and the broker reference');
+  const summary = await page.evaluate(async id => API.getFresh('/api/portfolio/accounts/' + id + '/summary'), account.id);
+  assert.equal(summary.bookCashCents, 10017300,
+    'the tracked book receives the exact $175 package credit less $2 fees');
+  assert.equal(summary.positions.length, 2, 'both exact option lots are present in the tracked book');
+  const practiceAfter = await page.evaluate(async () => (await API.getFresh('/api/account')).account);
+  assert.equal(practiceAfter.cashCents, practiceBefore.cashCents,
+    'recording real broker facts never changes practice cash');
+  assert.equal(practiceAfter.reservedCents, practiceBefore.reservedCents,
+    'recording real broker facts never changes practice reserve');
+  await page.waitForSelector('.book-shared-position-editor .position-editor');
+  await page.getByRole('button', { name: 'Visual', exact: true }).click();
+  await page.waitForSelector('.book-shared-position-editor .position-editor-visual svg.chart');
+  await captureSettled('trader-own-p3-record-desktop.png');
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await ensureExpanded(page.locator('#record-real-card .xp-head'));
-  await page.waitForSelector('#ext-symbol');
-  await page.waitForTimeout(300);
-  const containment = await page.evaluate(() => ({
-    viewport: document.documentElement.clientWidth,
-    document: document.documentElement.scrollWidth,
-    card: document.getElementById('record-real-card').scrollWidth,
-    cardClient: document.getElementById('record-real-card').clientWidth
-  }));
-  assert.ok(containment.document <= containment.viewport + 1 && containment.card <= containment.cardClient + 1,
-    'the structured external-fill editor remains contained on mobile: ' + JSON.stringify(containment));
-  await page.locator('#record-real-card').evaluate(node => {
-    node.scrollIntoView({ block: 'start' });
-    window.scrollBy(0, -150);
+  await page.waitForTimeout(150);
+  const containment = await page.evaluate(() => {
+    const editor = document.querySelector('.book-shared-position-editor .position-editor');
+    return { viewport: document.documentElement.clientWidth, document: document.documentElement.scrollWidth,
+      editor: editor.scrollWidth, editorClient: editor.clientWidth };
   });
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: path.join(__dirname, 'shots/portfolio-external-mobile.png') });
+  assert.ok(containment.document <= containment.viewport + 1 && containment.editor <= containment.editorClient + 1,
+    'the shared tracked-book editor remains contained on mobile: ' + JSON.stringify(containment));
+  await captureSettled('trader-own-p3-record-mobile.png');
   await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
+  await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("already recorded as")');
+  const duplicateMessage = await page.textContent('.book-shared-position-editor .position-editor-result');
+  assert.match(duplicateMessage, /Stable references identify the same broker fact/i,
+    'a stable-reference retry is identified before the softer contract-similarity advisory');
+  assert.doesNotMatch(duplicateMessage, /Add as a new lot/i,
+    'idempotent identity is never presented as an intentional scale-in choice');
+  const transactionsAfterRetry = await page.evaluate(async id =>
+    (await API.getFresh('/api/portfolio/accounts/' + id + '/transactions?page=0&size=500')).transactions,
+  account.id);
+  assert.equal(transactionsAfterRetry.filter(tx => tx.externalRef === 'DOM-SHARED-EDITOR-001').length, 1,
+    'the stable-reference retry leaves one authoritative ledger fact');
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
-  await page.waitForSelector('#record-real-card');
-  assert.equal(await page.locator('#record-real-card .xp-head').count(), 1,
-    'Expert retains the same structured import capability');
-  await page.evaluate(async id => { await API.del('/api/trades/' + id + '?confirm=true'); }, recorded.id);
+  await page.waitForSelector('.book-shared-position-editor .position-editor');
+  assert.equal(await page.locator('.book-shared-position-editor .position-editor').count(), 1,
+    'Expert uses the same tracked-book editor rather than a second implementation');
 });
 
 test('levels share ONE geometry: toggling Beginner/Expert never reflows spacing', async () => {

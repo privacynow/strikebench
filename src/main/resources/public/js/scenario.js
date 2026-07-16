@@ -677,13 +677,15 @@
     var base = App.Market && App.Market.simTime ? new Date(App.Market.simTime) : new Date();
     for (var i = 0; i < legs.length; i++) {
       var lg = legs[i];
-      if (lg.stock || lg.type === 'STOCK') { out.push({ action: lg.action, type: 'STOCK', strike: 0, expiryDay: 0, ratio: lg.ratio || 1 }); continue; }
+      if (lg.stock || lg.type === 'STOCK') { out.push({ action: lg.action, type: 'STOCK', strike: 0, expiryDay: 0,
+        ratio: lg.ratio, multiplier: lg.multiplier }); continue; }
       var days = 30;
       if (lg.expiration) {
         var ms = new Date(lg.expiration + 'T16:00:00-04:00') - base;
         days = Math.max(1, Math.round(ms / 86400000 * 5 / 7)); // calendar → ~trading days
       }
-      out.push({ action: lg.action, type: lg.type, strike: parseFloat(lg.strike), expiryDay: days, ratio: lg.ratio || 1 });
+      out.push({ action: lg.action, type: lg.type, strike: parseFloat(lg.strike), expiryDay: days,
+        ratio: lg.ratio, multiplier: lg.multiplier });
     }
     return out;
   }
@@ -697,19 +699,20 @@
     if (!sourceLegs || !sourceLegs.length) return null;
     var entryNet = candidate && typeof candidate.entryNetPremiumCents === 'number'
       ? candidate.entryNetPremiumCents : null;
-    return App.outcomePosition(candidate && candidate.strategy || 'WORKING', sourceLegs,
-      candidate && candidate.qty || 1, entryNet == null ? null : -entryNet);
+    return App.outcomePosition(candidate.strategy, sourceLegs,
+      candidate.qty, entryNet == null ? null : -entryNet);
   }
 
   function candidateLegs(candidate) {
     var base = App.Market && App.Market.simTime ? new Date(App.Market.simTime) : new Date();
     return (candidate.legs || []).map(function (lg) {
       if (lg.stock || lg.type === 'STOCK') {
-        return { action: lg.action, type: 'STOCK', strike: 0, expiryDay: 0, ratio: lg.ratio || 1 };
+        return { action: lg.action, type: 'STOCK', strike: 0, expiryDay: 0,
+          ratio: lg.ratio, multiplier: lg.multiplier };
       }
       var calDays = lg.expiration ? Math.max(1, Math.ceil((new Date(lg.expiration + 'T16:00:00-04:00') - base) / 86400000)) : 30;
       return { action: lg.action, type: lg.type, strike: parseFloat(lg.strike),
-        expiryDay: Math.max(1, Math.round(calDays * 5 / 7)), ratio: lg.ratio || 1 };
+        expiryDay: Math.max(1, Math.round(calDays * 5 / 7)), ratio: lg.ratio, multiplier: lg.multiplier };
     });
   }
 
@@ -762,7 +765,7 @@
             driftAnnual: c.drift, volAnnual: vol, jumpsPerYear: 0, jumpMean: 0, jumpVol: 0,
             tailNu: 6, heston: null, seed: c.seed, paths: 180 };
           try {
-            var position = App.outcomePosition(candidate.strategy, legs, candidate.qty || 1,
+            var position = App.outcomePosition(candidate.strategy, legs, candidate.qty,
               typeof candidate.entryNetPremiumCents === 'number' ? -candidate.entryNetPremiumCents : null,
               hasExactContracts ? exactExpirations : null);
             var result = await App.evaluateOutcome('POSITION', 'PARAMETRIC', symbol,

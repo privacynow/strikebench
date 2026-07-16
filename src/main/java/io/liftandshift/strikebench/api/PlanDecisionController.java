@@ -87,13 +87,13 @@ final class PlanDecisionController {
         root.requireActivePlanMarket(ctx, plan);
         PlanController.requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
-        TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
+        TradeOpenRequest order = planDecisionOrder(plan, candidate, body, false);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
         var first = payload.preview();
         if (order.proposedNetCents() == null) {
             body = new PlanDecisionRequest(body.expectedVersion(), body.qty(), first.entryNetPremiumCents(),
                     body.feesOverrideCents(), body.acknowledgedRisks(), body.ackToken(), body.note());
-            order = planDecisionOrder(plan, candidate, body);
+            order = planDecisionOrder(plan, candidate, body, false);
             payload = tradeController.previewPayload(ctx, order);
         }
         ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.economics(),
@@ -108,7 +108,7 @@ final class PlanDecisionController {
         root.requireActivePlanMarket(ctx, plan);
         PlanController.requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
-        TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
+        TradeOpenRequest order = planDecisionOrder(plan, candidate, body, false);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
         var prepared = planDecisions.prepareTrade(planDecisionInput(ctx, plan, body, candidate, payload));
         TradeController.CreatedTrade created = tradeController.execute(ctx, order, prepared.hook());
@@ -123,7 +123,9 @@ final class PlanDecisionController {
         root.requireActivePlanMarket(ctx, plan);
         PlanController.requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
-        TradeOpenRequest order = planDecisionOrder(plan, candidate, body);
+        // CASH freezes the selected package as analyzed. It is not an order and therefore may
+        // preserve proposed per-leg prices without claiming that those prices were executable.
+        TradeOpenRequest order = planDecisionOrder(plan, candidate, body, true);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
         ObjectNode decision = planDecisions.chooseCash(planDecisionInput(ctx, plan, body, candidate, payload));
         var updated = planSvc.get(root.ownerId(ctx), plan.id());
@@ -131,22 +133,34 @@ final class PlanDecisionController {
     }
 
     private TradeOpenRequest planDecisionOrder(io.liftandshift.strikebench.plan.Plan.View plan,
-                                               ObjectNode candidate, PlanDecisionRequest body) {
+                                               ObjectNode candidate, PlanDecisionRequest body,
+                                               boolean freezeAnalyzedPackage) {
+        String strategy = requiredCandidateText(candidate, "strategy");
         List<LegView> legs = new ArrayList<>();
         for (JsonNode leg : candidate.withArray("legs")) {
             legs.add(new LegView(leg.path("action").asText(), leg.path("type").asText(),
                     leg.path("strike").isMissingNode() || leg.path("strike").isNull() ? null : leg.path("strike").asText(),
                     leg.path("expiration").isMissingNode() || leg.path("expiration").isNull() ? null : leg.path("expiration").asText(),
-                    leg.path("ratio").asInt(1), leg.path("entryPrice").isMissingNode() ? null : leg.path("entryPrice").asText(null)));
+                    leg.path("ratio").asInt(), leg.path("entryPrice").isMissingNode() ? null : leg.path("entryPrice").asText(null),
+                    leg.path("multiplier").asInt(), leg.path("positionEffect").asText()));
         }
-        int qty = body.qty() == null ? candidate.path("qty").asInt(1) : body.qty();
-        return new TradeOpenRequest(plan.symbol(), candidate.path("strategy").asText("CUSTOM"), qty, legs,
+        int candidateQty = candidate.path("qty").asInt();
+        if (candidateQty < 1) throw new IllegalStateException("selected candidate qty must be positive");
+        int qty = body.qty() == null ? candidateQty : body.qty();
+        return new TradeOpenRequest(plan.symbol(), strategy, qty, legs,
                 plan.context().thesis(), (plan.context().horizonDays() == null
                         ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
                         : plan.context().horizonDays()) + "d",
                 plan.context().riskMode(), plan.intent(), candidate.path("usesHeldShares").asBoolean(false),
                 candidate.path("recommendationId").asText(null), body.proposedNetCents(), body.feesOverrideCents(),
-                "PLAN", null, null, null, false, body.acknowledgedRisks(), body.ackToken());
+                freezeAnalyzedPackage ? "ANALYZE" : "PLAN",
+                body.acknowledgedRisks(), body.ackToken(), "PROPOSED");
+    }
+
+    private static String requiredCandidateText(ObjectNode candidate, String field) {
+        String value = candidate.path(field).asText();
+        if (value.isBlank()) throw new IllegalStateException("selected candidate " + field + " is required");
+        return value;
     }
 
     private PlanDecisionService.Input planDecisionInput(
@@ -154,7 +168,8 @@ final class PlanDecisionController {
             ObjectNode candidate, ApiResponses.TradePreviewResponse payload) {
         return new PlanDecisionService.Input(root.ownerId(ctx), plan, body.expectedVersion(),
                 candidate.path("id").asText(), root.currentAccount(ctx), payload.preview(), payload.economics(),
-                io.liftandshift.strikebench.paper.AccountRiskContext.load(db, root.ownerId(ctx)), body.qty(),
+                io.liftandshift.strikebench.paper.AccountRiskContext.load(db, root.ownerId(ctx)),
+                body.qty() == null ? candidate.path("qty").asInt() : body.qty(),
                 body.acknowledgedRisks() == null ? List.of() : body.acknowledgedRisks(), body.note(), root.analysisCtx(ctx));
     }
 
@@ -300,8 +315,13 @@ final class PlanDecisionController {
                                                      double rate, int qty) {
         long value = 0;
         for (JsonNode leg : legs) {
-            int ratio = Math.max(1, leg.path("ratio").asInt(1));
-            long units = Math.multiplyExact(100L, Math.multiplyExact((long) ratio, qty));
+            int ratio = leg.path("ratio").asInt();
+            if (ratio < 1) throw new IllegalStateException("The frozen decision has an invalid leg ratio.");
+            int multiplier = leg.path("multiplier").asInt();
+            if (multiplier < 1 || multiplier > 10_000) {
+                throw new IllegalStateException("The frozen decision has an invalid contract multiplier.");
+            }
+            long units = Math.multiplyExact((long) multiplier, Math.multiplyExact((long) ratio, qty));
             double price;
             if ("STOCK".equals(leg.path("type").asText())) {
                 price = spot.doubleValue();
@@ -336,6 +356,8 @@ final class PlanDecisionController {
             row.put("action", leg.action().name());
             row.put("type", leg.isStock() ? "STOCK" : leg.type().name());
             row.put("ratio", leg.ratio());
+            row.put("multiplier", leg.multiplier());
+            row.put("positionEffect", "OPEN");
             if (!leg.isStock()) {
                 LocalDate target = leg.expiration().plusDays(28);
                 LocalDate next = listed.stream().filter(date -> !date.isBefore(target)).findFirst()
@@ -355,7 +377,10 @@ final class PlanDecisionController {
             }
             legs.add(row);
         }
+        if (trade.intent() == null || trade.intent().isBlank()) {
+            throw new IllegalStateException("The current trade record has no strategy intent.");
+        }
         return Map.of("symbol", trade.symbol(), "strategy", trade.strategy(), "qty", trade.qty(), "legs", legs,
-                "intent", trade.intent() == null ? "DIRECTIONAL" : trade.intent(), "source", "PLAN");
+                "intent", trade.intent(), "source", "PLAN", "fillNature", "PROPOSED");
     }
 }

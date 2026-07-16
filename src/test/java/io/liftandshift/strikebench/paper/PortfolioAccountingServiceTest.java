@@ -942,9 +942,39 @@ class PortfolioAccountingServiceTest {
         books.record("local", account.id(), open);
         assertThatThrownBy(() -> books.record("local", account.id(), open))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("already recorded");
+        assertThat(books.transactionsByReference("local", account.id(), "BROKER", "ORDER-7"))
+                .singleElement().satisfies(tx -> {
+                    assertThat(tx.externalRef()).isEqualTo("ORDER-7");
+                    assertThat(tx.source()).isEqualTo("BROKER");
+                });
         assertThat(books.transactions("local", account.id(), 0, 20)).hasSize(1);
         assertThat(books.lots("local", account.id(), false)).singleElement()
                 .satisfies(lot -> assertThat(lot.remainingQuantity()).isEqualTo(5));
+    }
+
+    @Test
+    void proposedOrUnclassifiedMarketActivityCannotEnterTheTrackedLedger() {
+        var account = books.createAccount("local", account("Brokerage", "TAXABLE", null));
+        var factualLegs = List.of(leg("STOCK", "BUY", "OPEN", "AMD", null,
+                null, null, 5, 1, "100"));
+        var proposed = new PortfolioAccountingService.TransactionInput("2026-01-02", "TRADE",
+                null, 0L, null, "MANUAL", null, null, factualLegs, "PROPOSED");
+        var missing = new PortfolioAccountingService.TransactionInput("2026-01-02", "TRADE",
+                null, 0L, null, "MANUAL", null, null, factualLegs, null);
+        var modeled = new PortfolioAccountingService.TransactionInput("2026-01-02", "TRADE",
+                null, 0L, null, "MANUAL", null, null, factualLegs, "MODELED");
+
+        assertThatThrownBy(() -> books.record("local", account.id(), proposed))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("fill nature must be one of EXECUTED, MODELED, NOT_APPLICABLE");
+        assertThatThrownBy(() -> books.record("local", account.id(), missing))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("fill nature is required");
+        assertThatThrownBy(() -> books.record("local", account.id(), modeled))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("fillNature=EXECUTED");
+        assertThat(books.transactions("local", account.id(), 0, 20)).isEmpty();
+        assertThat(books.lots("local", account.id(), false)).isEmpty();
     }
 
     @Test
@@ -1468,7 +1498,13 @@ class PortfolioAccountingServiceTest {
     private static PortfolioAccountingService.TransactionInput tx(String date, String event, Long cash,
                                                                    Long fees, String category, String source,
                                                                    String ref, List<PortfolioAccountingService.LegInput> legs) {
-        return new PortfolioAccountingService.TransactionInput(date, event, cash, fees, category, source, ref, null, legs);
+        String fillNature = switch (event) {
+            case "TRADE", "ROLL", "EXPIRATION", "ASSIGNMENT", "EXERCISE" -> "EXECUTED";
+            case "MARK_TO_MARKET" -> "MODELED";
+            default -> "NOT_APPLICABLE";
+        };
+        return new PortfolioAccountingService.TransactionInput(date, event, cash, fees, category, source, ref, null,
+                legs, fillNature);
     }
 
     private static PortfolioAccountingService.LegInput leg(String instrument, String action, String effect,
@@ -1477,7 +1513,7 @@ class PortfolioAccountingServiceTest {
                                                             String price) {
         return new PortfolioAccountingService.LegInput(instrument, action, effect, symbol, optionType,
                 strike == null ? null : new BigDecimal(strike), expiration == null ? null : LocalDate.parse(expiration),
-                quantity, multiplier, new BigDecimal(price));
+                quantity, multiplier, new BigDecimal(price), null);
     }
 
     private static PortfolioAccountingService.ValuationInput valuation(String date, long total) {

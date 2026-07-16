@@ -35,7 +35,7 @@ class PortfolioOptimizerTest {
                 null,
                 new CapitalProfile(capital, capital, null, null, 30, "test"),
                 null,
-                new RiskProfile(capital, capital, 0.5, marketEv, tail, 0.2, List.of()),
+                new RiskProfile(capital, capital, 0.5, marketEv, tail, 0.2, List.of(), historyEv, "test"),
                 null, null,
                 new ScoreBreakdown(gate, List.of(), score, score, List.of()),
                 economics, null);

@@ -44,17 +44,6 @@ public final class BacktestStore {
         });
     }
 
-    /** Used only by the one-time SQLite cutover; it writes through the same typed schema. */
-    public static void importLegacy(Connection c, String id, String userId, String createdAt,
-                                    String requestJson, String reportJson) throws SQLException {
-        JsonNode request = Json.parse(requestJson);
-        ObjectNode report = ((ObjectNode) Json.parse(reportJson)).deepCopy();
-        report.put("id", id);
-        String kind = request.has("maxConcurrent") ? "PORTFOLIO" : "SINGLE";
-        String owner = OwnerScope.ensure(c, userId);
-        persist(c, kind, request, report, owner, parseCreatedAt(createdAt));
-    }
-
     private static void persist(Connection c, String kind, JsonNode request, JsonNode report,
                                 String owner, OffsetDateTime createdAt) throws SQLException {
         LinkedHashMap<String, Object> values = new LinkedHashMap<>();
@@ -274,13 +263,6 @@ public final class BacktestStore {
     private static Integer boolIntOrNull(JsonNode n,String key){JsonNode v=n.get(key);return v==null||v.isNull()?null:v.asBoolean()?1:0;}
     private static Integer intOrNull(Db.Row r,String key){return r.lngOrNull(key)==null?null:r.intv(key);}
     private static Boolean boolOrNull(Db.Row r,String key){return r.lngOrNull(key)==null?null:r.bool(key);}
-
-    private static OffsetDateTime parseCreatedAt(String value) {
-        try { return OffsetDateTime.parse(value); }
-        catch (java.time.format.DateTimeParseException noOffset) {
-            return java.time.LocalDateTime.parse(value).atOffset(ZoneOffset.UTC);
-        }
-    }
 
     private static void put(ObjectNode n, String key, Object value) {
         if (value == null) { n.putNull(key); return; }

@@ -169,10 +169,11 @@ final class PlanStrategyController {
         TradeOpenRequest exactBody = new TradeOpenRequest(plan.symbol(), supplied.strategy(), supplied.qty(),
                 supplied.legs(), c.thesis(), PlanController.planHorizon(c.horizonDays()), c.riskMode(), plan.intent(),
                 supplied.useHeldShares(), supplied.recommendationId(), supplied.proposedNetCents(),
-                supplied.feesOverrideCents(), "BUILDER", null, null, null, null, null, null);
+                supplied.feesOverrideCents(), "BUILDER", null, null,
+                supplied.fillNature());
         Account account = root.currentAccount(ctx);
-        TradeService.OpenRequest request = tradeController.toOpenRequest(exactBody, account);
-        var preview = trades.preview(request);
+        TradeService.OpenRequest request = TradeController.toAnalysisOpenRequest(exactBody, account.id());
+        var preview = trades.analyze(request);
         Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
         ObjectNode candidateJson = Json.MAPPER.valueToTree(candidate);
         long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
@@ -200,7 +201,8 @@ final class PlanStrategyController {
         candidateJson.put("decisionViable", preview.ok());
         candidateJson.put("structurallyEligible", preview.ok());
         JsonNode requestJson = Json.MAPPER.valueToTree(exactBody);
-        var saved = planStrategy.saveCustom(root.ownerId(ctx), plan, requestJson, candidateJson, body.expectedVersion());
+        var saved = planStrategy.saveCustom(root.ownerId(ctx), plan, requestJson, candidateJson,
+                body.expectedVersion(), preview.ok());
         ctx.json(new ApiResponses.PlanStrategyPreview<>(
                 planSvc.get(root.ownerId(ctx), plan.id()), saved, preview));
     }

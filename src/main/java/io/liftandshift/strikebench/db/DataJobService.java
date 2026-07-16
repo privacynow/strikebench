@@ -24,7 +24,7 @@ import java.util.concurrent.Executors;
 /**
  * The Data Center's background-job engine: cancellable, resumable, idempotent jobs with per-item
  * progress. Each kind's per-item work is idempotent (engine warm, snapshot upsert, underlying
- * backfill upsert, CSV ingest upsert), so retrying a failed job re-does only what's missing.
+ * history-sync upsert, CSV ingest upsert), so retrying a failed job re-does only what's missing.
  * Jobs run on a small daemon pool; orphaned RUNNING jobs (server restarted mid-run) are marked
  * FAILED on boot so they can be retried.
  */
@@ -34,7 +34,7 @@ public final class DataJobService {
 
     public static final List<String> KINDS = List.of(
             "warm_universe", "refresh_now", "snapshot_now", "sync_underlying",
-            "backfill_underlying", "import_options_csv");
+            "import_options_csv");
 
     private final Db db;
     private final Clock clock;
@@ -323,19 +323,17 @@ public final class DataJobService {
                         + " underlying + " + r.optionRows() + " option bars"
                         + (r.errors().isEmpty() ? "" : " (" + r.errors().size() + " errors)"));
             }
-            case "backfill_underlying", "sync_underlying" -> {
+            case "sync_underlying" -> {
                 LocalDate to = dateParam(params, "to", LocalDate.now(clock));
                 LocalDate completed = DataSyncScheduler.latestCompletedSession(clock);
                 if (to.isAfter(completed)) to = completed;
                 LocalDate from = dateParam(params, "from", to.minusYears(yearsParam(params)));
                 String source = strParam(params, "source", "auto").trim().toLowerCase(Locale.ROOT);
-                if ("sync_underlying".equals(kind)) {
-                    source = connectors.requireAutomated(source).key();
-                    // Compact Alpha access intentionally fetches only the recent window. Do not
-                    // pretend a five-year request can be fulfilled without the entitled full endpoint.
-                    if ("alphavantage".equals(source) && !cfg.alphaVantageFullHistoryEnabled()) {
-                        from = from.isBefore(to.minusDays(160)) ? to.minusDays(160) : from;
-                    }
+                source = connectors.requireAutomated(source).key();
+                // Compact Alpha access intentionally fetches only the recent window. Do not
+                // pretend a five-year request can be fulfilled without the entitled full endpoint.
+                if ("alphavantage".equals(source) && !cfg.alphaVantageFullHistoryEnabled()) {
+                    from = from.isBefore(to.minusDays(160)) ? to.minusDays(160) : from;
                 }
                 var r = backfill.backfill(label, from, to, source, userId, jobId);
                 return new ItemResult(r.rows(), r.complete(), r.note());
@@ -359,7 +357,7 @@ public final class DataJobService {
 
     private List<String> itemsFor(String kind, Map<String, Object> params) {
         return switch (kind) {
-            case "warm_universe", "refresh_now", "backfill_underlying", "sync_underlying" -> symbolsParam(params);
+            case "warm_universe", "refresh_now", "sync_underlying" -> symbolsParam(params);
             case "snapshot_now" -> List.of("active universe");
             case "import_options_csv" -> List.of(strParam(params, "path", ""));
             default -> List.of();

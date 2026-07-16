@@ -668,7 +668,8 @@ public final class Backtester {
             if (side == null) {
                 return new EntryAttempt(null, mode, "no executable book side for a leg");
             }
-            sided.add(new Leg(leg.action(), leg.type(), leg.strike(), leg.expiration(), leg.ratio(), side));
+            sided.add(new Leg(leg.action(), leg.type(), leg.strike(), leg.expiration(),
+                    leg.ratio(), side, leg.multiplier()));
         }
         List<Leg> legs = applySlippage(sided, slippage);
         PayoffCurve curve = PayoffCurve.of(legs, qty);
@@ -695,7 +696,8 @@ public final class Backtester {
         for (Leg leg : legs) {
             BigDecimal factor = BigDecimal.valueOf(leg.action() == LegAction.BUY ? 1 + slippage : 1 - slippage);
             BigDecimal price = leg.entryPrice().multiply(factor).setScale(Money.PRICE_SCALE, RoundingMode.HALF_UP);
-            out.add(new Leg(leg.action(), leg.type(), leg.strike(), leg.expiration(), leg.ratio(), price.max(BigDecimal.ZERO)));
+            out.add(new Leg(leg.action(), leg.type(), leg.strike(), leg.expiration(),
+                    leg.ratio(), price.max(BigDecimal.ZERO), leg.multiplier()));
         }
         return out;
     }

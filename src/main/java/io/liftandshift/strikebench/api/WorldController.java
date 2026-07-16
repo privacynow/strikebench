@@ -557,12 +557,8 @@ final class WorldController {
                 m.put("closeReason", t.closeReason());
                 m.put("openedAt", t.createdAt()); m.put("closedAt", t.closedAt());
                 // DUAL CLOCKS: wall time above; the SIMULATED time the decision was made below.
-                try {
-                    var snap = io.liftandshift.strikebench.util.Json.read(t.entrySnapshotJson(),
-                            new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-                    Object lane = snap == null ? null : snap.get("laneTime");
-                    if (lane != null) m.put("laneEntryTime", lane.toString());
-                } catch (RuntimeException ignored) { /* legacy snapshot without lane time */ }
+                var snap = io.liftandshift.strikebench.util.Json.parse(t.entrySnapshotJson());
+                if (snap.hasNonNull("laneTime")) m.put("laneEntryTime", snap.get("laneTime").asText());
                 // MAE/MFE from the trade's own mark history: how far it went against/for the
                 // trader while open — the difference between a bad outcome and a bad decision.
                 var excursion = trades.excursion(t.id());

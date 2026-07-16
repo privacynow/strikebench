@@ -144,7 +144,7 @@ public final class AccountService {
      * account has traded unless force. Ledger stays append-only: open trades are voided with
      * reserve releases, then a single RESET row absorbs the cash difference.
      */
-    /** Resets the single default account (legacy/no-scope entry — used when auth is off). */
+    /** Resets the single local account used while authentication is disabled. */
     public Account reset(long startingCashCents, boolean confirm, boolean force) {
         return resetAccount(getOrCreateDefault().id(), startingCashCents, confirm, force);
     }

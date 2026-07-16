@@ -285,12 +285,12 @@ public final class RecommendationEngine {
                 }
             }
 
-            int coverLotsPerUnit = builtOnHeldShares
-                    ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverLotsNeeded(built.legs()))
+            long coverSharesPerUnit = builtOnHeldShares
+                    ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(built.legs()))
                     : 0;
             Verdict verdict = Guardrails.check(new Guardrails.Proposal(
                     family, built.legs(), 1, built.quotes(), spot, chain.freshness(), today,
-                    buyingPowerCents, false, avoidEarnings && earningsSoon, false, coverLotsPerUnit));
+                    buyingPowerCents, false, avoidEarnings && earningsSoon, false, coverSharesPerUnit));
             if (verdict.blocked()) {
                 rejected.add(new Rejection(family.name(), family.display(), verdict.blockReasons()));
                 continue;
@@ -299,7 +299,7 @@ public final class RecommendationEngine {
             CandidateProbe probe = new CandidateProbe();
             Candidate candidate = toCandidate(family, built, verdict, spot, today, budget, buyingPowerCents,
                     chain.freshness(), avoidEarnings, thesis, intent, holdings,
-                    builtOnHeldShares ? coverLotsPerUnit : 0, builtOnHeldShares ? freeShares : 0,
+                    builtOnHeldShares ? coverSharesPerUnit : 0, builtOnHeldShares ? freeShares : 0,
                     quote, riskFreeRate, probe);
             if (candidate == null) {
                 rejected.add(new Rejection(family.name(), family.display(),
@@ -427,10 +427,11 @@ public final class RecommendationEngine {
             // Only accept the rung whose short/long strike is EXACTLY k (target snapping can dedupe)
             boolean exact = built.legs().stream().anyMatch(l -> !l.isStock() && l.strike().compareTo(k) == 0);
             if (!exact) continue;
-            int coverLots = sharesHeld ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverLotsNeeded(built.legs())) : 0;
+            long coverShares = sharesHeld
+                    ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(built.legs())) : 0;
             Candidate c = toCandidate(family, built, Verdict.of(List.of(), List.of()), spot, today, budget,
                     buyingPowerCents, chain.freshness(), true, StrategyFamily.Thesis.NEUTRAL,
-                    intent, holdings, sharesHeld ? coverLots : 0, sharesHeld ? freeShares : 0,
+                    intent, holdings, sharesHeld ? coverShares : 0, sharesHeld ? freeShares : 0,
                     quote, riskFreeRate, new CandidateProbe());
             if (c == null) continue;
             String filterReason = failsFilter(c, filters);
@@ -476,7 +477,7 @@ public final class RecommendationEngine {
     private Candidate toCandidate(StrategyFamily family, StrategyBuilder.Built built, Verdict verdict, BigDecimal spot,
                                   LocalDate today, long budget, long buyingPowerCents, Freshness freshness, boolean avoidEarnings,
                                   StrategyFamily.Thesis thesis, StrategyIntent intent, Holdings holdings,
-                                  int coverLotsPerUnit, int freeShares, Quote underlyingQuote,
+                                  long coverSharesPerUnit, int freeShares, Quote underlyingQuote,
                                   double riskFreeRate, CandidateProbe probe) {
         // Re-price legs at the EXECUTABLE side (buys pay the ask, sells receive the bid) so
         // the numbers a learner sees here match what a fill would actually cost. Structures
@@ -500,7 +501,7 @@ public final class RecommendationEngine {
                 return candidateFailure(probe, "An option leg has no executable two-sided quote");
             }
             executableLegs.add(new io.liftandshift.strikebench.model.Leg(leg.action(), leg.type(), leg.strike(),
-                    leg.expiration(), leg.ratio(), side));
+                    leg.expiration(), leg.ratio(), side, leg.multiplier()));
         }
         built = new StrategyBuilder.Built(executableLegs, built.quotes(), built.label());
         PayoffCurve unitCurve = PayoffCurve.of(built.legs(), 1);
@@ -511,11 +512,19 @@ public final class RecommendationEngine {
         // COMBINED position (legs + the held lot at today's price), while budget/reserve math
         // uses the trade's INCREMENTAL cash risk (a covered call adds none; a hedge costs its debit).
         boolean onHeldShares = freeShares > 0 && family.needsStock();
-        int displayLotsPerUnit = onHeldShares ? Math.max(coverLotsPerUnit, 1) : 0;
+        long displaySharesPerUnit = onHeldShares
+                ? Math.max(coverSharesPerUnit,
+                        io.liftandshift.strikebench.strategy.CoverageCheck.shareContextUnitsNeeded(built.legs()))
+                : 0;
+        if (onHeldShares && displaySharesPerUnit <= 0) displaySharesPerUnit = 1;
+        if (onHeldShares && (displaySharesPerUnit > Integer.MAX_VALUE || freeShares < displaySharesPerUnit)) {
+            return candidateFailure(probe, "One package needs " + displaySharesPerUnit
+                    + " free shares, but this account has " + freeShares);
+        }
         List<Leg> unitDisplayLegs = built.legs();
         if (onHeldShares) {
             unitDisplayLegs = new ArrayList<>(built.legs());
-            unitDisplayLegs.add(Leg.stock(LegAction.BUY, displayLotsPerUnit, spot));
+            unitDisplayLegs.add(Leg.stockShares(LegAction.BUY, Math.toIntExact(displaySharesPerUnit), spot));
         }
         PayoffCurve unitDisplayCurve = onHeldShares ? PayoffCurve.of(unitDisplayLegs, 1) : unitCurve;
 
@@ -543,9 +552,9 @@ public final class RecommendationEngine {
             if (unitMaxLoss > budget) return candidateFailure(probe,
                     "One lot requires " + Money.fmt(unitMaxLoss) + " of incremental risk, above this Plan's "
                             + Money.fmt(budget) + " budget");
-            int lotsAvailable = Math.max(1, freeShares / (100 * displayLotsPerUnit));
-            long byBudget = unitMaxLoss > 0 ? Math.max(1, budget / unitMaxLoss) : lotsAvailable;
-            qty = (int) Math.clamp(Math.min((long) lotsAvailable, byBudget), 1, MAX_QTY);
+            int packagesAvailable = (int) (freeShares / displaySharesPerUnit);
+            long byBudget = unitMaxLoss > 0 ? Math.max(1, budget / unitMaxLoss) : packagesAvailable;
+            qty = (int) Math.clamp(Math.min((long) packagesAvailable, byBudget), 1, MAX_QTY);
         } else {
             if (unitMaxLoss <= 0 || unitMaxLoss > budget) {
                 if (unitMaxLoss > budget) return candidateFailure(probe,
@@ -623,6 +632,13 @@ public final class RecommendationEngine {
                 .filter(l -> !l.isStock() && l.action() == LegAction.BUY && l.type() == OptionType.PUT)
                 .map(Leg::strike).findFirst().orElse(null);
         List<Leg> optionLegs = built.legs().stream().filter(l -> !l.isStock()).toList();
+        long packageShareUnitsPerUnit = built.legs().stream().filter(Leg::isStock)
+                .mapToLong(leg -> Math.multiplyExact((long) leg.ratio(), leg.multiplier())).sum();
+        if (packageShareUnitsPerUnit <= 0) {
+            packageShareUnitsPerUnit = io.liftandshift.strikebench.strategy.CoverageCheck
+                    .shareContextUnitsNeeded(built.legs());
+        }
+        if (packageShareUnitsPerUnit <= 0) packageShareUnitsPerUnit = Leg.SHARES_PER_CONTRACT;
         long optionNetCents = PayoffCurve.of(optionLegs, qty).entryNetPremiumCents();
         long optionContracts = 0;
         for (Leg optionLeg : optionLegs) optionContracts += (long) optionLeg.ratio() * qty;
@@ -640,8 +656,8 @@ public final class RecommendationEngine {
         Long yieldCollateral = null;
         if (netOptionIncomeCents > 0 && shareBacked) {
             yieldCollateral = family == StrategyFamily.CASH_SECURED_PUT && shortPutStrike != null
-                    ? Money.centsFromPrice(shortPutStrike, 100L * qty)             // full strike cash obligation
-                    : Money.centsFromPrice(spot, 100L * displayLotsPerUnit * qty); // share capital, held or bought
+                    ? Money.centsFromPrice(shortPutStrike, Math.multiplyExact(packageShareUnitsPerUnit, (long) qty))
+                    : Money.centsFromPrice(spot, Math.multiplyExact(packageShareUnitsPerUnit, (long) qty));
         }
         Double annualYieldPct = null;
         if (yieldCollateral != null && yieldCollateral > 0) {
@@ -651,7 +667,8 @@ public final class RecommendationEngine {
         // Effective share prices are strike +/- NET option premium per share after opening fees —
         // a buy-write's stock purchase must not leak into it (it made "effective sell $10/sh" nonsense once).
         BigDecimal perShareNet = BigDecimal.valueOf(netOptionIncomeCents)
-                .divide(BigDecimal.valueOf(100L * qty), 2, java.math.RoundingMode.HALF_UP)
+                .divide(BigDecimal.valueOf(Math.multiplyExact(packageShareUnitsPerUnit, (long) qty)),
+                        2, java.math.RoundingMode.HALF_UP)
                 .movePointLeft(2); // cents -> dollars per share
         String effectivePrice = null;
         if ((family == StrategyFamily.COVERED_CALL || family == StrategyFamily.PROTECTIVE_COLLAR)
@@ -679,10 +696,10 @@ public final class RecommendationEngine {
                              : "Uncapped upside past " + (breakevens.isEmpty() ? "the breakeven" : "$" + breakevens.getFirst()));
         String risk = onHeldShares
                 ? (maxLoss > 0
-                    ? "Costs " + Money.fmt(maxLoss) + " in premium; your " + (100 * displayLotsPerUnit * qty)
+                    ? "Costs " + Money.fmt(maxLoss) + " in premium; your " + (displaySharesPerUnit * qty)
                         + " shares keep their own downside" + (combinedMaxLoss != null
                             ? " — worst case incl. shares from today's price: " + Money.fmt(combinedMaxLoss) : "") + ". Fees come on top."
-                    : "No new cash at risk — but your " + (100 * displayLotsPerUnit * qty)
+                    : "No new cash at risk — but your " + (displaySharesPerUnit * qty)
                         + " shares keep their downside, and gains above the short strike go to the call buyer. Fees come on top.")
                 : "Max loss " + Money.fmt(maxLoss) + " (" + qty + "x) if the underlying "
                 + switch (thesis) {
@@ -708,7 +725,7 @@ public final class RecommendationEngine {
         String beginner = beginnerText(family, entryNet);
         String intentNote = intentNote(intent, family, holdings, spot, qty, netOptionIncomeCents, minDte,
                 effectivePrice, assignProb, annualYieldPct, shortCallStrike, shortPutStrike, longPutStrike,
-                onHeldShares, displayLotsPerUnit);
+                onHeldShares, packageShareUnitsPerUnit);
 
         List<String> candidateWarnings = new ArrayList<>(verdict.warnings());
         if (ivMissing && !multiExp) {
@@ -723,7 +740,7 @@ public final class RecommendationEngine {
                 assignProb,
                 annualYieldPct, effectivePrice, intentNote,
                 onHeldShares ? Boolean.TRUE : null,
-                onHeldShares ? coverLotsPerUnit * 100 * qty : null,
+                onHeldShares ? Math.toIntExact(Math.multiplyExact(displaySharesPerUnit, (long) qty)) : null,
                 combinedMaxLoss);
     }
 
@@ -817,8 +834,8 @@ public final class RecommendationEngine {
                                      BigDecimal spot, int qty, long netOptionPremium, int minDte,
                                      String effectivePrice, Double assignProb, Double annualYieldPct,
                                      BigDecimal shortCallStrike, BigDecimal shortPutStrike, BigDecimal longPutStrike,
-                                     boolean onHeldShares, int displayLotsPerUnit) {
-        int shares = 100 * Math.max(displayLotsPerUnit, 1) * qty;
+                                     boolean onHeldShares, long displaySharesPerUnit) {
+        long shares = Math.multiplyExact(Math.max(displaySharesPerUnit, 1), (long) qty);
         String assignPct = assignProb == null ? null : String.format("~%.0f%%", assignProb * 100);
         Long basis = holdings == null ? null : holdings.costBasisCents();
         switch (intent) {
