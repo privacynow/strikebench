@@ -2540,11 +2540,11 @@
           }
           function greekChips() {
             return el('div', { class: 'chip-row', style: 'align-items:center' },
-              el('b', { style: 'margin-right:4px' }, 'Book greeks'),
-              chip('Net \u0394', fmtNum(pg.deltaShares, 0) + ' sh'),
-              chip('\u0393', fmtNum(pg.gammaShares, 2) + ' sh/$'),
-              chip('\u0398/day', pnlSpan(pg.thetaPerDay * 100)),
-              chip('Vega/pt', pnlSpan(pg.vegaPerPoint * 100)),
+              el('b', { style: 'margin-right:4px' }, 'Book greeks', UI.info('bookGreeks')),
+              chip('Net delta', fmtNum(pg.deltaShares, 0) + ' sh'),
+              chip('Gamma', fmtNum(pg.gammaShares, 2) + ' sh/$'),
+              chip('Theta / day', pnlSpan(pg.thetaPerDay * 100)),
+              chip('Vega / vol pt', pnlSpan(pg.vegaPerPoint * 100)),
               pg.complete ? null : el('span', { class: 'badge badge-caution' }, 'PARTIAL'));
           }
           if (Learn.currentLevel() === 'expert') {
@@ -2819,10 +2819,10 @@
       function positionGreekDetail() {
         var detail = el('div', { class: 'position-greek-detail' },
           el('div', { class: 'chip-row' },
-          chip('Net \u0394', fmtNum(gk.deltaShares, 0) + ' sh'),
-          chip('\u0393', fmtNum(gk.gammaShares, 2) + ' sh/$'),
-          chip('\u0398/day', pnlSpan(gk.thetaPerDay * 100)),
-          chip('Vega/pt', pnlSpan(gk.vegaPerPoint * 100))));
+          chip(el('span', {}, 'Net delta', UI.info('bookGreeks')), fmtNum(gk.deltaShares, 0) + ' sh'),
+          chip('Gamma', fmtNum(gk.gammaShares, 2) + ' sh/$'),
+          chip('Theta / day', pnlSpan(gk.thetaPerDay * 100)),
+          chip('Vega / vol pt', pnlSpan(gk.vegaPerPoint * 100))));
         if (d.current.legGreeks && d.current.legGreeks.length) {
           detail.appendChild(table(['Leg', 'Bid', 'Ask', '\u0394', '\u0393', '\u0398', 'Vega', 'IV'],
             d.current.legGreeks.map(function (lg) {
@@ -2845,9 +2845,9 @@
         greekCard.appendChild(positionGreekDetail());
       } else {
         greekCard.appendChild(el('div', { class: 'chip-row position-greek-headline' },
-          chip('Net Δ', fmtNum(gk.deltaShares, 0) + ' sh'),
-          chip('Θ/day', pnlSpan(gk.thetaPerDay * 100)),
-          chip('Vega/pt', pnlSpan(gk.vegaPerPoint * 100))));
+          chip(el('span', {}, 'Net delta', UI.info('bookGreeks')), fmtNum(gk.deltaShares, 0) + ' sh'),
+          chip('Theta / day', pnlSpan(gk.thetaPerDay * 100)),
+          chip('Vega / vol pt', pnlSpan(gk.vegaPerPoint * 100))));
         if (detailGuide) greekCard.appendChild(detailGuide);
         greekCard.appendChild(UI.expandable('Exact sensitivities by leg', positionGreekDetail,
           { stateKey: 'position-greek-detail-' + id }));

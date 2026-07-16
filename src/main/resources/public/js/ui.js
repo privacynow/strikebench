@@ -1602,7 +1602,7 @@
     var labelNode = cfg.label
       ? el('div', { class: 'field-label' }, cfg.label, cfg.info ? UI.info(cfg.info) : null)
       : null;
-    var wrap = el('div', { class: 'field choice-field' }, labelNode, group, consequenceHost);
+    var wrap = el('div', { class: 'field choice-field', id: cfg.id || null }, labelNode, group, consequenceHost);
     paintButtons();
     paintConsequence();
     wrap.value = function () { return current; };
