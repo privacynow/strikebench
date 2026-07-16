@@ -94,13 +94,13 @@ class TraderOwnDomainTest {
 
     @Test
     void stanceAggregationUsesFixedMoneyUnitsAndFailsOnOverflow() {
-        var a = new StanceVector(1_000, -20, 50, 30, 10, 20, 30, 40, 20);
-        var b = new StanceVector(-250, 5, -10, 15, 1, 2, 3, 4, 45);
+        var a = new StanceVector(1_000, -20, 50, 30, 10L, 20L, 30L, 40L, 20);
+        var b = new StanceVector(-250, 5, -10, 15, 1L, 2L, 3L, 4L, 45);
         assertThat(StanceVector.aggregate(List.of(a, b))).isEqualTo(
-                new StanceVector(750, -15, 40, 45, 11, 22, 33, 44, 45));
+                new StanceVector(750, -15, 40, 45, 11L, 22L, 33L, 44L, 45));
         assertThatThrownBy(() -> StanceVector.aggregate(Arrays.asList(
-                new StanceVector(Long.MAX_VALUE, 0, 0, 0, 0, 0, 0, 0, 1),
-                new StanceVector(1, 0, 0, 0, 0, 0, 0, 0, 1))))
+                new StanceVector(Long.MAX_VALUE, 0, 0, 0, 0L, 0L, 0L, 0L, 1),
+                new StanceVector(1, 0, 0, 0, 0L, 0L, 0L, 0L, 1))))
                 .isInstanceOf(ArithmeticException.class);
     }
 
@@ -108,6 +108,7 @@ class TraderOwnDomainTest {
     void participationSeparatesLocalDeltaFromTerminalCaptureAndRegimePoints() {
         var profile = ParticipationProfile.fromExactValues(150_000, 1_000_000,
                 50_000, 50_000, 100, 10_000, 12_000,
+                LocalDate.parse("2026-08-21"), "terminal payoff over the named interval",
                 List.of(new ParticipationProfile.RegimePoint(11_000, "upside participation ends")));
         assertThat(profile.localParticipationBps()).isEqualTo(1_500);
         assertThat(profile.terminalUpsideCaptureBps()).isZero();
@@ -117,11 +118,11 @@ class TraderOwnDomainTest {
     @Test
     void practiceAndRealImpactsCannotBePutInEachOthersSlot() {
         var practice = new FourOutputAssessment.PortfolioImpact(PositionDomain.ExecutionLane.PRACTICE,
-                1, 2, 3, 4, List.of());
+                1, 2, 3, 4, 10.0, 20.0, List.of(), "dollar delta");
         var real = new FourOutputAssessment.PortfolioImpact(PositionDomain.ExecutionLane.REAL,
-                5, 6, 7, 8, List.of());
-        assertThat(new FourOutputAssessment.PortfolioImpacts(practice, real).practice()).isSameAs(practice);
-        assertThatThrownBy(() -> new FourOutputAssessment.PortfolioImpacts(real, practice))
+                5, 6, 7, 8, 30.0, 40.0, List.of(), "dollar delta");
+        assertThat(new FourOutputAssessment.PortfolioImpacts(practice, real, List.of()).practice()).isSameAs(practice);
+        assertThatThrownBy(() -> new FourOutputAssessment.PortfolioImpacts(real, practice, List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

@@ -563,7 +563,8 @@
           var h = (pick.horizons || []).find(function (item) { return item.horizon === horizon.value; })
             || (pick.horizons || [])[0];
           var top = h && h.candidates && h.candidates[0];
-          var candidate = top && top.candidate;
+          var candidate = top && top.evaluation
+            ? Object.assign({}, top.evaluation.candidate, { evaluation: top.evaluation }) : null;
           var card = el('article', { class: 'card universe-scout-pick' },
             el('div', { class: 'head' }, el('h3', {}, pick.symbol),
               el('span', { class: 'badge ' + (THESIS_BADGE[pick.signals.thesis] || 'badge-dim') }, pick.signals.thesis)),
@@ -574,7 +575,7 @@
               candidate ? chip('Leading expression', candidate.displayName) : null),
             el('p', { class: 'muted' }, (pick.signals.rationale || []).slice(0, 2).join(' ')),
             h && h.notes && h.notes.length ? alertBox('caution', h.notes[0], h.notes.slice(1)) : null,
-            candidate && top.economics ? window.ViewPlan.economicAssessmentBlock(Object.assign({}, candidate, { economics: top.economics })) : null,
+            candidate ? window.ViewPlan.economicAssessmentBlock(candidate) : null,
             el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', onclick: async function () {
               this.disabled = true; this.setAttribute('aria-busy', 'true');
               try {

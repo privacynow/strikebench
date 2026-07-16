@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.recommend.Candidate;
 import io.liftandshift.strikebench.recommend.LegView;
+import io.liftandshift.strikebench.position.PositionDomain;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -30,10 +31,10 @@ class StrategyEvaluatorTest {
     }
 
     private EvalContext ctx() {
-        return new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25,
+        return new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
                 List.of(0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.29),
                 10_000_000L, true, 65, 0, 0.04,
-                io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD));
+                io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
     }
 
     @Test void assemblesEveryDimensionCoherently() {
@@ -93,7 +94,11 @@ class StrategyEvaluatorTest {
         assertThat(exact.evidence()).isEqualTo(proposal.evidence());
         assertThat(exact.management()).isEqualTo(proposal.management());
         assertThat(exact.score().components()).isEqualTo(proposal.score().components());
-        assertThat(exact.economics()).isEqualTo(proposal.economics());
+        assertThat(exact.assessment().economics()).isEqualTo(proposal.assessment().economics());
+        assertThat(exact.stance()).isEqualTo(proposal.stance());
+        assertThat(exact.participation()).isEqualTo(proposal.participation());
+        assertThat(exact.impliedStance()).isEqualTo(proposal.impliedStance());
+        assertThat(exact.coverage()).isEqualTo(proposal.coverage());
         assertThat(exact.decisionScore()).isEqualTo(proposal.decisionScore());
 
         StrategyEvaluation refused = evaluator.assessExact(candidate, spec, ctx(), false,
@@ -101,15 +106,15 @@ class StrategyEvaluatorTest {
         assertThat(refused.viable()).isFalse();
         assertThat(refused.decisionScore()).isZero();
         assertThat(refused.score().gateFailures()).contains("executable quote unavailable");
-        assertThat(refused.economics().placement()).isEqualTo("MECHANICALLY_INELIGIBLE");
+        assertThat(refused.assessment().economics().placement()).isEqualTo("MECHANICALLY_INELIGIBLE");
         assertThat(refused.capital()).isEqualTo(proposal.capital());
         assertThat(refused.risk()).isEqualTo(proposal.risk());
 
-        EvalContext noBuyingPower = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25,
-                ctx().ivHistory(), 100L, true, 65, 0, 0.04, ctx().rateEvidence());
+        EvalContext noBuyingPower = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
+                ctx().ivHistory(), 100L, true, 65, 0, 0.04, ctx().rateEvidence(), null);
         StrategyEvaluation accountRefusal = evaluator.assessExact(candidate, spec, noBuyingPower,
                 true, List.of(), 260);
-        assertThat(accountRefusal.economics().reasons())
+        assertThat(accountRefusal.assessment().economics().reasons())
                 .anyMatch(reason -> reason.contains("buying power"));
     }
 
@@ -126,10 +131,10 @@ class StrategyEvaluatorTest {
     }
 
     @Test void generatedPricingCannotBeSoftenedByModeledVolatilityOrRates() {
-        EvalContext generated = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25, List.of(),
+        EvalContext generated = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(),
                 10_000_000L, true, 65, 0, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of(
-                        "simulated rate", io.liftandshift.strikebench.model.Freshness.SIMULATED));
+                        "simulated rate", io.liftandshift.strikebench.model.Freshness.SIMULATED), null);
         StrategyEvaluation simulated = evaluator.evaluate(debitCallSpread("SIMULATED", 0.6), null, generated);
 
         assertThat(simulated.evidence().perDimension().get("pricing")).isEqualTo(EvidenceLevel.SIMULATED);
@@ -139,8 +144,8 @@ class StrategyEvaluatorTest {
     }
 
     @Test void gateBlocksInsufficientBuyingPower() {
-        EvalContext broke = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25, List.of(), 100L, true, 65,
-                0, 0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD));
+        EvalContext broke = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(), 100L, true, 65,
+                0, 0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
         StrategyEvaluation e = evaluator.evaluate(debitCallSpread("DELAYED", 0.6), null, broke);
         assertThat(e.viable()).isFalse();
         assertThat(e.score().gateFailures()).anyMatch(f -> f.contains("buying power"));
@@ -149,11 +154,11 @@ class StrategyEvaluatorTest {
     }
 
     @Test void missingDailyHistoryIsAnEvidenceLimitationNotAMechanicalFailure() {
-        EvalContext candleStarved = new EvalContext("AAPL", 25_200L, 30, 0.30, null,
+        EvalContext candleStarved = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, null,
                 List.of(0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.29),
                 10_000_000L, true, 65, 0, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of(
-                        "treasury", io.liftandshift.strikebench.model.Freshness.EOD));
+                        "treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
 
         StrategyEvaluation e = evaluator.evaluate(debitCallSpread("DELAYED", 0.6),
                 new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL", "month",
@@ -167,13 +172,89 @@ class StrategyEvaluatorTest {
                 .singleElement().satisfies(c -> assertThat(c.value()).isZero());
         assertThat(e.viable()).isTrue();
         assertThat(e.decisionScore()).isPositive();
-        assertThat(e.economics().placement()).isNotEqualTo("MECHANICALLY_INELIGIBLE");
-        assertThat(e.economics().verdict())
+        assertThat(e.assessment().economics().placement()).isNotEqualTo("MECHANICALLY_INELIGIBLE");
+        assertThat(e.assessment().economics().verdict())
                 .isIn(EconomicAssessment.Verdict.MIXED, EconomicAssessment.Verdict.UNFAVORABLE);
-        assertThat(e.economics().marketEvAfterCostsCents()).isNotNull();
-        assertThat(e.economics().realizedVolEvAfterCostsCents()).isNull();
-        assertThat(e.economics().needsDailyHistory()).isTrue();
-        assertThat(e.economics().actionableFavorable()).isFalse();
+        assertThat(e.assessment().economics().marketEvAfterCostsCents()).isNotNull();
+        assertThat(e.assessment().economics().realizedVolEvAfterCostsCents()).isNull();
+        assertThat(e.assessment().economics().needsDailyHistory()).isTrue();
+        assertThat(e.assessment().economics().actionableFavorable()).isFalse();
+    }
+
+    @Test void shortPremiumParticipationAndRegimePointsDoNotMasqueradeAsUpsideOwnership() {
+        Candidate shortPut = candidate("CASH_SECURED_PUT", List.of(
+                new LegView("SELL", "PUT", "240", "2026-08-21", 1, "3.00", 100, "OPEN")),
+                30_000L, 30_000L, 2_370_000L);
+        StrategyEvaluation put = evaluator.evaluate(shortPut, null, ctx());
+
+        assertThat(put.participation().localParticipationBps()).isPositive();
+        assertThat(put.participation().terminalUpsideCaptureBps()).isZero();
+        assertThat(put.participation().terminalDate()).isEqualTo(java.time.LocalDate.parse("2026-08-21"));
+        assertThat(put.participation().regimePoints()).singleElement()
+                .satisfies(point -> {
+                    assertThat(point.priceCents()).isEqualTo(24_000L);
+                    assertThat(point.meaning()).contains("assignment exposure");
+                });
+
+        Candidate coveredCall = candidate("COVERED_CALL", List.of(
+                new LegView("BUY", "STOCK", null, null, 100, "252.00", 1, "OPEN"),
+                new LegView("SELL", "CALL", "255", "2026-08-21", 1, "2.00", 100, "OPEN")),
+                -2_500_000L, 50_000L, 2_500_000L);
+        StrategyEvaluation call = evaluator.evaluate(coveredCall, null, ctx());
+        assertThat(call.participation().terminalUpsideCaptureBps()).isBetween(0, 10_000);
+        assertThat(call.participation().regimePoints()).anySatisfy(point -> {
+            assertThat(point.priceCents()).isEqualTo(25_500L);
+            assertThat(point.meaning()).contains("cap");
+        });
+    }
+
+    @Test void multiExpirationMetricsStayUnknownRatherThanInventingATerminalPayoff() {
+        Candidate calendar = candidate("CALENDAR_CALL", List.of(
+                new LegView("SELL", "CALL", "255", "2026-08-21", 1, "2.00", 100, "OPEN"),
+                new LegView("BUY", "CALL", "255", "2026-09-18", 1, "4.00", 100, "OPEN")),
+                -20_000L, null, 20_000L);
+        StrategyEvaluation evaluation = evaluator.evaluate(calendar, null, ctx());
+
+        assertThat(evaluation.participation().terminalUpsideCaptureBps()).isNull();
+        assertThat(evaluation.stance().downsideLossTwoSigmaCents()).isNull();
+        assertThat(evaluation.stance().upsideLossTwoSigmaCents()).isNull();
+        assertThat(evaluation.coverage().limitations()).anyMatch(note -> note.contains("multiple expirations"));
+        assertThat(evaluation.stance().durationCalendarDays()).isEqualTo(58);
+    }
+
+    @Test void debitIvWarningAndAnnualizationCarryTheirEvidenceLimits() {
+        EvalContext expensiveVol = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"),
+                30, 0.90, 0.25, ctx().ivHistory(), 10_000_000L, true, 65, 0, 0.04,
+                ctx().rateEvidence(), null);
+        StrategyEvaluation evaluation = evaluator.evaluate(debitCallSpread("DELAYED", 0.6), null, expensiveVol);
+
+        assertThat(evaluation.ivContext().entrySide()).isEqualTo(IvContext.EntrySide.DEBIT);
+        assertThat(evaluation.ivContext().band()).isIn(IvContext.Band.HIGH, IvContext.Band.VERY_HIGH);
+        assertThat(evaluation.ivContext().message()).containsIgnoringCase("crush");
+        assertThat(evaluation.capital().annualizationNote())
+                .contains("theoretical max profit divided by")
+                .contains("economic capital")
+                .contains("calendar days")
+                .contains("repeatable")
+                .contains("not assumed");
+    }
+
+    @Test void portfolioImpactIsLaneSeparatedAndUsesBeforeAfterDollarDelta() {
+        var exposure = new PortfolioExposureContext(PositionDomain.ExecutionLane.PRACTICE,
+                2_000_000L, 500_000L, 1_000_000L, true, "test Practice marks");
+        EvalContext withBook = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"),
+                30, 0.30, 0.25, ctx().ivHistory(), 10_000_000L, true, 65, 0, 0.04,
+                ctx().rateEvidence(), exposure);
+        StrategyEvaluation evaluation = evaluator.evaluate(debitCallSpread("DELAYED", 0.6), null, withBook);
+        var impacts = evaluation.assessment().portfolioImpacts();
+
+        assertThat(impacts.practice()).isNotNull();
+        assertThat(impacts.real()).isNull();
+        assertThat(impacts.practice().grossExposureAfterCents())
+                .isEqualTo(2_000_000L + Math.abs(evaluation.stance().dollarDeltaCents()));
+        assertThat(impacts.practice().netExposureAfterCents())
+                .isEqualTo(500_000L + evaluation.stance().dollarDeltaCents());
+        assertThat(impacts.notes()).allMatch(note -> !note.contains("netted total"));
     }
 
     @Test void ranksViableFirstThenByScore() {
@@ -190,10 +271,8 @@ class StrategyEvaluatorTest {
                 "Economics unavailable", "No economic basis", null, null, 0, null, true, List.of());
         var unfavorable = new EconomicAssessment(EconomicAssessment.Verdict.UNFAVORABLE, "LEARN_FROM",
                 "Unfavorable", "Known adverse economics", -100L, -100L, 0, -1.0, true, List.of());
-        var unknownEval = new StrategyEvaluation("unknown", null, null, null, null, null, null, null,
-                scoreLow, unavailable, null);
-        var adverseEval = new StrategyEvaluation("adverse", null, null, null, null, null, null, null,
-                scoreHigh, unfavorable, null);
+        var unknownEval = evaluationForRanking("unknown", scoreLow, unavailable);
+        var adverseEval = evaluationForRanking("adverse", scoreHigh, unfavorable);
 
         assertThat(java.util.stream.Stream.of(adverseEval, unknownEval)
                 .sorted(StrategyEvaluator.RANKING).map(StrategyEvaluation::id).toList())
@@ -201,5 +280,25 @@ class StrategyEvaluatorTest {
         assertThat(unknownEval.decisionScore()).isGreaterThan(adverseEval.decisionScore());
         assertThat(unknownEval.decisionScore()).isBetween(26.0, 50.0);
         assertThat(adverseEval.decisionScore()).isBetween(1.0, 25.0);
+    }
+
+    private static StrategyEvaluation evaluationForRanking(String id, ScoreBreakdown score,
+                                                            EconomicAssessment economics) {
+        var assessment = new FourOutputAssessment(
+                new FourOutputAssessment.MechanicalAssessment(score.gatePassed(), score.gateFailures()),
+                economics,
+                new FourOutputAssessment.ObjectiveCoherence(FourOutputAssessment.Coherence.UNDECLARED,
+                        "test", "test", List.of()),
+                new FourOutputAssessment.PortfolioImpacts(null, null, List.of("not selected")));
+        return new StrategyEvaluation(id, null, null, null, null, null, null, null, score, assessment,
+                null, null, null, null, null, null);
+    }
+
+    private static Candidate candidate(String strategy, List<LegView> legs, long entryNet,
+                                       Long maxProfit, Long maxLoss) {
+        return new Candidate(strategy, strategy.replace('_', ' '), "test", strategy, legs, 1,
+                entryNet, maxProfit, maxLoss, List.of(), 0.50, 0L, 0.8, "DELAYED", List.of(),
+                0.7, "test", "test", "test", "test", "test", "DIRECTIONAL",
+                List.of("DIRECTIONAL"), null, null, null, null, false, null, maxLoss);
     }
 }

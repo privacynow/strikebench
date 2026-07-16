@@ -37,7 +37,7 @@ public final class Main {
         String source = args.length >= 3 ? args[2] : "vendor";
         AppConfig cfg = new AppConfig();
         try (io.liftandshift.strikebench.db.Db db = io.liftandshift.strikebench.db.Db.forConfig(cfg)) {
-            io.liftandshift.strikebench.db.Migrations.run(db);
+            io.liftandshift.strikebench.db.Schema.initialize(db);
             var result = io.liftandshift.strikebench.db.HistoricalOptionsIngest.runFromFile(args[1], source, db);
             result.problems().forEach(p -> log.warn("  {}", p));
             log.info("ingested {} option bars + {} underlying bars ({} skipped) from {} as source '{}'",

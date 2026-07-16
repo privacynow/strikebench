@@ -1,7 +1,7 @@
 'use strict';
 // Per-suite isolated Postgres databases for the browser suites. Each spawned jar gets a fresh,
-// empty database in the running dev Postgres (the docker-compose 'db' container) and migrates
-// it on boot via Flyway. Requires `docker compose up -d db`. Override with TEST_DB_* env.
+// empty database in the running dev Postgres (the docker-compose 'db' container) and initializes
+// it on boot from the one current schema. Requires `docker compose up -d db`. Override with TEST_DB_* env.
 const { spawnSync } = require('node:child_process');
 
 const CONTAINER = process.env.TEST_DB_CONTAINER || 'strikebench-db';

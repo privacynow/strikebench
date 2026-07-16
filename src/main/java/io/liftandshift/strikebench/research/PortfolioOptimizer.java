@@ -108,7 +108,7 @@ public final class PortfolioOptimizer {
             notes.add("DIAGNOSTIC set: this is a comparison allocation, not a recommendation; one or both after-cost EV lanes may be adverse or unavailable.");
         }
         boolean teachingAllocation = allocations.stream().anyMatch(a ->
-                a.eval().economics() == null || !a.eval().economics().actionableFavorable());
+                economics(a.eval()) == null || !economics(a.eval()).actionableFavorable());
         if (!allocations.isEmpty() && teachingAllocation && !diagnostic) {
             notes.add("TEACHING set: at least one funded case uses generated rather than end-to-end observed evidence. It is a practice allocation, not a live-market recommendation.");
         }
@@ -140,15 +140,19 @@ public final class PortfolioOptimizer {
     }
 
     private static boolean hasFavorableEconomics(StrategyEvaluation e) {
-        return e.economics() != null && e.economics().verdict() == io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.FAVORABLE;
+        return economics(e) != null && economics(e).verdict() == io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.FAVORABLE;
     }
 
     private static Long marketEv(StrategyEvaluation e) {
-        return e.economics() == null ? null : e.economics().marketEvAfterCostsCents();
+        return economics(e) == null ? null : economics(e).marketEvAfterCostsCents();
     }
 
     private static Long historyEv(StrategyEvaluation e) {
-        return e.economics() == null ? null : e.economics().realizedVolEvAfterCostsCents();
+        return economics(e) == null ? null : economics(e).realizedVolEvAfterCostsCents();
+    }
+
+    private static io.liftandshift.strikebench.eval.EconomicAssessment economics(StrategyEvaluation e) {
+        return e == null || e.assessment() == null ? null : e.assessment().economics();
     }
 
     /** Objective value per cent of capital — the greedy ranking key. */

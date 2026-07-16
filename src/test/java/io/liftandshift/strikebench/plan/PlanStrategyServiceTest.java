@@ -45,22 +45,24 @@ class PlanStrategyServiceTest {
                    "entryNetPremiumCents":12500,"maxProfitCents":12500,"maxLossCents":37500,
                    "breakevens":[243.75,266.25],"pop":0.61,"expectedValueCents":-1200,
                    "liquidityScore":0.82,"freshness":"FIXTURE","warnings":["Teaching data"],
-                   "score":72.0,"confidence":0.7,"whyConsidered":"Range view","bestUpside":"Time decay",
+                   "confidence":0.7,"whyConsidered":"Range view","bestUpside":"Time decay",
                    "biggestRisk":"Large move","wouldInvalidate":"Breakout","beginnerExplanation":"A range trade",
                    "intent":"INCOME","intents":["INCOME","DIRECTIONAL"],"assignmentProb":0.28,
                    "annualizedYieldPct":18.2,"effectivePrice":"243.75","intentNote":"Earn inside a range",
                    "usesHeldShares":false,"sharesNeeded":0,"combinedMaxLossCents":37500,
-                   "decisionScore":68.0,"decisionViable":true,"structurallyEligible":true,
-                   "economicVerdict":"FAVORABLE","economicPlacement":"WORTH_INVESTIGATING",
-                   "economics":{"verdict":"FAVORABLE","placement":"WORTH_INVESTIGATING",
-                     "label":"Favorable in this teaching market","summary":"Positive scenario after costs",
-                     "marketEvAfterCostsCents":-1200,"realizedVolEvAfterCostsCents":2400,
-                     "estimatedRoundTripFeesCents":520,"marketEvPctOfRisk":-3.2,
-                     "observedEvidence":false,"reasons":["Scenario positive"]},
-                   "evaluation":{"evidence":{"rollup":"DEMO_FIXTURE","perDimension":{"pricing":"DEMO_FIXTURE"},"note":"Teaching data"},
+                   "evaluation":{"decisionScore":68.0,"viable":true,
+                     "capital":{},"volatility":{},"risk":{"pop":0.61},
+                     "assessment":{"mechanics":{"eligible":true,"reasons":[]},
+                       "economics":{"verdict":"FAVORABLE","placement":"WORTH_INVESTIGATING",
+                         "label":"Favorable in this teaching market","summary":"Positive scenario after costs",
+                         "marketEvAfterCostsCents":-1200,"realizedVolEvAfterCostsCents":2400,
+                         "estimatedRoundTripFeesCents":520,"marketEvPctOfRisk":-3.2,
+                         "observedEvidence":false,"reasons":["Scenario positive"]}},
+                     "evidence":{"rollup":"DEMO_FIXTURE","perDimension":{"pricing":"DEMO_FIXTURE"},"note":"Teaching data"},
                      "score":{"gatePassed":true,"gateFailures":[],"normalizedScore":74,"riskAdjustedScore":68,
                        "components":[{"name":"expected value","weight":0.35,"value":0.55,"contribution":0.1925,"note":"after costs"}]},
                      "management":{"summary":"Take profits mechanically","rules":[{"kind":"profit","trigger":"50% captured","action":"close"}]},
+                     "stance":{},"participation":{},"impliedStance":{},"ivContext":{},"coverage":{},
                      "explanation":{"assumptions":["No dividend yield"],"failureModes":["Move beyond a short strike"]}},
                    "legs":[
                      {"action":"SELL","type":"PUT","strike":"245","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"2.4007","positionEffect":"OPEN"},
@@ -79,15 +81,18 @@ class PlanStrategyServiceTest {
         PlanStrategyService.SavedRun restored = strategies.latestCompetition(null, plan.id());
         assertThat(restored.result().at("/candidates/0/legs")).isEqualTo(saved.result().at("/candidates/0/legs"));
         assertThat(restored.result().at("/candidates/0/breakevens")).isEqualTo(saved.result().at("/candidates/0/breakevens"));
-        assertThat(restored.result().at("/candidates/0/economics/reasons/0").asText()).isEqualTo("Scenario positive");
+        assertThat(restored.result().at("/candidates/0/evaluation/assessment/economics/reasons/0").asText())
+                .isEqualTo("Scenario positive");
+        assertThat(restored.result().at("/candidates/0/economics").isMissingNode()).isTrue();
+        assertThat(restored.result().at("/candidates/0/decisionScore").isMissingNode()).isTrue();
         assertThat(restored.result().at("/candidates/0/evaluation/score/components/0/name").asText())
                 .isEqualTo("expected value");
         assertThat(restored.result().at("/candidates/0/evaluation/management/rules/0/action").asText())
                 .isEqualTo("close");
         assertThat(restored.result().at("/candidates/0/legs/0/entryPrice").asText()).isEqualTo("2.4007");
         assertThat(restored.result().at("/candidates/0/legs/0/positionEffect").asText()).isEqualTo("OPEN");
-        assertThat(db.query("SELECT evidence_provenance FROM plan_candidate WHERE id=?",
-                r -> r.str("evidence_provenance"), candidateId)).containsExactly("DEMO_FIXTURE");
+        assertThat(db.query("SELECT evaluation_snapshot->'evidence'->>'rollup' evidence FROM plan_candidate WHERE id=?",
+                r -> r.str("evidence"), candidateId)).containsExactly("DEMO_FIXTURE");
         assertThat(restored.result().at("/candidates/0/sourceKind").asText()).isEqualTo("RANKED");
         assertThat(db.query("SELECT COUNT(*) n FROM plan_candidate_leg", r -> r.lng("n"))).containsExactly(4L);
 
@@ -116,14 +121,17 @@ class PlanStrategyServiceTest {
                  "label":"BUY 250C / SELL 265C","qty":2,"entryNetPremiumCents":-85000,
                  "maxProfitCents":215000,"maxLossCents":85000,"breakevens":[254.25],"pop":0.43,
                  "expectedValueCents":-3200,"liquidityScore":1.0,"freshness":"FIXTURE",
-                 "warnings":[],"score":0.0,"confidence":1.0,"whyConsidered":"Exact ticket",
+                 "warnings":[],"confidence":1.0,"whyConsidered":"Exact ticket",
                  "bestUpside":"","biggestRisk":"","wouldInvalidate":"","beginnerExplanation":"",
                  "intent":"DIRECTIONAL","intents":["DIRECTIONAL"],"assignmentProb":0.22,
-                 "decisionViable":true,"structurallyEligible":true,"economicVerdict":"MIXED",
-                 "economicPlacement":"LEARN_FROM","economics":{"verdict":"MIXED","placement":"LEARN_FROM",
-                   "label":"Mixed economics","summary":"Exact package after costs","marketEvAfterCostsCents":-3200,
-                   "realizedVolEvAfterCostsCents":1400,"estimatedRoundTripFeesCents":1040,
-                   "observedEvidence":false,"reasons":["Costs matter"]},
+                 "evaluation":{"decisionScore":44.0,"viable":true,
+                   "capital":{},"volatility":{},"risk":{"pop":0.43},"evidence":{},"management":{},"score":{},
+                   "assessment":{"mechanics":{"eligible":true,"reasons":[]},
+                     "economics":{"verdict":"MIXED","placement":"LEARN_FROM",
+                       "label":"Mixed economics","summary":"Exact package after costs","marketEvAfterCostsCents":-3200,
+                       "realizedVolEvAfterCostsCents":1400,"estimatedRoundTripFeesCents":1040,
+                       "observedEvidence":false,"reasons":["Costs matter"]}},
+                   "stance":{},"participation":{},"impliedStance":{},"ivContext":{},"coverage":{},"explanation":{}},
                  "legs":[
                    {"action":"BUY","type":"CALL","strike":"250","expiration":"2026-08-28","ratio":1,"multiplier":100,"entryPrice":"12.25","positionEffect":"OPEN"},
                    {"action":"SELL","type":"CALL","strike":"265","expiration":"2026-08-28","ratio":1,"multiplier":100,"entryPrice":"8.00","positionEffect":"OPEN"}
@@ -138,7 +146,10 @@ class PlanStrategyServiceTest {
         assertThat(selected.at("/legs/0/strike").asText()).isEqualTo("250");
         assertThat(selected.at("/legs/0/entryPrice").asText()).isEqualTo("12.25");
         assertThat(selected.at("/legs/1/entryPrice").asText()).isEqualTo("8");
-        assertThat(selected.at("/economics/realizedVolEvAfterCostsCents").asLong()).isEqualTo(1400);
+        assertThat(selected.at("/evaluation/assessment/economics/realizedVolEvAfterCostsCents").asLong())
+                .isEqualTo(1400);
+        assertThat(selected.has("pop")).as("POP comes only from evaluation.risk").isFalse();
+        assertThat(selected.has("expectedValueCents")).as("EV comes only from evaluation assessment/risk").isFalse();
         assertThat(db.query("SELECT source_kind FROM plan_candidate WHERE selected=1", r -> r.str("source_kind")))
                 .containsExactly("CUSTOM");
 
@@ -158,6 +169,27 @@ class PlanStrategyServiceTest {
                 .containsExactly(1L);
     }
 
+    @Test void obsoleteOrPartialEvaluationPayloadsAreRejectedInsteadOfAdapted() {
+        Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                new Plan.CreateRequest("strategy-current-receipt", "AAPL", "DIRECTIONAL", null, null,
+                        "bullish", 30, null, "balanced", null, null, null));
+        ObjectNode oldFullEvaluation = (ObjectNode) Json.parse("""
+                {"strategy":"CUSTOM","evaluation":{"id":"eval_old","decisionScore":50,"viable":true}}
+                """);
+        assertThatThrownBy(() -> strategies.saveCustom(null, plan, Json.parse("{}"),
+                oldFullEvaluation, plan.version(), false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("full StrategyEvaluation payloads are not accepted");
+
+        ObjectNode partialReceipt = (ObjectNode) Json.parse("""
+                {"strategy":"CUSTOM","evaluation":{"decisionScore":50,"viable":true,"assessment":{}}}
+                """);
+        assertThatThrownBy(() -> strategies.saveCustom(null, plan, Json.parse("{}"),
+                partialReceipt, plan.version(), false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("evaluation receipt requires object field");
+    }
+
     @Test void scoutResultRestoresAndCopiesAnExactPackageIntoALinkedSiblingPlan() {
         Plan.View origin = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("strategy-scout-origin", "AAPL", "DIRECTIONAL", null, null,
@@ -172,15 +204,18 @@ class PlanStrategyServiceTest {
                    "displayName":"Bull call spread","structureGroup":"DIRECTIONAL","label":"BUY 560C / SELL 570C",
                    "qty":1,"entryNetPremiumCents":-34000,"maxProfitCents":66000,"maxLossCents":34000,
                    "breakevens":[563.4],"pop":0.47,"expectedValueCents":-900,"liquidityScore":0.92,
-                   "freshness":"FIXTURE","warnings":[],"score":70,"confidence":0.72,
+                   "freshness":"FIXTURE","warnings":[],"confidence":0.72,
                    "whyConsidered":"Bullish peer","bestUpside":"Capped gain","biggestRisk":"Stock falls",
                    "wouldInvalidate":"Trend reverses","beginnerExplanation":"A capped bullish trade",
-                   "intent":"DIRECTIONAL","intents":["DIRECTIONAL"],"decisionViable":true,
-                   "structurallyEligible":true,"economicVerdict":"MIXED","economicPlacement":"LEARN_FROM",
-                   "economics":{"verdict":"MIXED","placement":"LEARN_FROM","label":"Mixed economics",
-                     "summary":"Costs reduce the edge","marketEvAfterCostsCents":-900,
-                     "realizedVolEvAfterCostsCents":400,"estimatedRoundTripFeesCents":520,
-                     "observedEvidence":false,"reasons":["Compare costs"]},
+                   "intent":"DIRECTIONAL","intents":["DIRECTIONAL"],
+                   "evaluation":{"decisionScore":41.0,"viable":true,
+                     "capital":{},"volatility":{},"risk":{"pop":0.47},"evidence":{},"management":{},"score":{},
+                     "assessment":{"mechanics":{"eligible":true,"reasons":[]},
+                       "economics":{"verdict":"MIXED","placement":"LEARN_FROM","label":"Mixed economics",
+                         "summary":"Costs reduce the edge","marketEvAfterCostsCents":-900,
+                         "realizedVolEvAfterCostsCents":400,"estimatedRoundTripFeesCents":520,
+                         "observedEvidence":false,"reasons":["Compare costs"]}},
+                     "stance":{},"participation":{},"impliedStance":{},"ivContext":{},"coverage":{},"explanation":{}},
                    "legs":[
                      {"action":"BUY","type":"CALL","strike":"560","expiration":"2026-08-21","ratio":1,"multiplier":100,"entryPrice":"8.4","positionEffect":"OPEN"},
                      {"action":"SELL","type":"CALL","strike":"570","expiration":"2026-08-21","ratio":1,"multiplier":100,"entryPrice":"5.0","positionEffect":"OPEN"}

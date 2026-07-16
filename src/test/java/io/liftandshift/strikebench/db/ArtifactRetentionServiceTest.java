@@ -157,10 +157,18 @@ class ArtifactRetentionServiceTest {
     }
 
     private void candidate(String id, String planId, String runId, boolean selected) {
-        db.exec("INSERT INTO plan_candidate(id,plan_id,context_rev,family,input_hash,state,selected,run_id,created_at) "
-                        + "VALUES(?,?,1,'LONG_CALL',?,'STALE',?,?,?)",
-                id, planId, "input_" + id, selected, runId, OLD);
+	        db.exec("INSERT INTO plan_candidate(id,plan_id,context_rev,family,input_hash,state,selected,run_id,"
+	                        + "evaluation_snapshot,created_at) VALUES(?,?,1,'LONG_CALL',?,'STALE',?,?,?::jsonb,?)",
+	                id, planId, "input_" + id, selected, runId, currentEvaluationReceipt(), OLD);
     }
+
+	private static String currentEvaluationReceipt() {
+	    return """
+	            {"decisionScore":50,"viable":true,"capital":{},"volatility":{},"risk":{},"evidence":{},
+	             "management":{},"score":{},"assessment":{},"stance":{},"participation":{},
+	             "impliedStance":{},"ivContext":{},"coverage":{},"explanation":{}}
+	            """;
+	}
 
     private void backtest(String id) {
         db.exec("INSERT INTO backtests(id,user_id,created_at,run_kind,symbol,strategy,from_date,to_date,pricing_mode,"

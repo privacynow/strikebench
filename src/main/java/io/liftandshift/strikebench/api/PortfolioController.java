@@ -27,12 +27,14 @@ final class PortfolioController {
     private final PortfolioExportService exports;
     private final PositionsService positions;
     private final TradeService trades;
+    private final io.liftandshift.strikebench.eval.EvaluationService evaluations;
     private final Function<Context, String> ownerId;
     private final Function<Context, Account> currentAccount;
 
     PortfolioController(Db db, Clock clock, PortfolioAccountingService books,
                         PortfolioExportService exports, PositionsService positions,
-                        TradeService trades, Function<Context, String> ownerId,
+                        TradeService trades, io.liftandshift.strikebench.eval.EvaluationService evaluations,
+                        Function<Context, String> ownerId,
                         Function<Context, Account> currentAccount) {
         this.db = db;
         this.clock = clock;
@@ -40,6 +42,7 @@ final class PortfolioController {
         this.exports = exports;
         this.positions = positions;
         this.trades = trades;
+        this.evaluations = evaluations;
         this.ownerId = ownerId;
         this.currentAccount = currentAccount;
     }
@@ -121,10 +124,33 @@ final class PortfolioController {
                 ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class));
         TradeService.OpenRequest request = TradeController.toAnalysisOpenRequest(body, id);
         var preview = trades.previewTracked(request, summary.bookCashCents());
-        ctx.json(new ApiResponses.TrackedPackageAnalysis(preview, id, account.name(),
-                summary.bookCashCents(), "OBSERVED",
-                "Read-only analysis uses observed market evidence and this tracked account's cash. "
-                        + "It never borrows the Practice account or a Demo/Simulated world."));
+        var candidate = TradeController.exactPreviewCandidate(request, preview);
+        var current = books.portfolioDollarDelta(ownerId.apply(ctx), id, request.symbol());
+        var exposure = new io.liftandshift.strikebench.eval.PortfolioExposureContext(
+                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.REAL,
+                current.grossCents(), current.netCents(), current.focusSymbolGrossCents(),
+                current.complete(), current.basis());
+        var evaluation = evaluations.assessExact(request.symbol(), candidate, summary.bookCashCents(),
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null,
+                preview.ok(), preview.blockReasons(), Math.multiplyExact(preview.feesOpenCents(), 2L), exposure);
+        String analysisLane = analysisLane(evaluation.evidence().perDimension().get("pricing"));
+        ctx.json(new ApiResponses.TrackedPackageAnalysis(preview,
+                ApiResponses.EvaluationReceipt.of(evaluation), id, account.name(),
+                summary.bookCashCents(), analysisLane,
+                "Read-only analysis uses " + analysisLane.toLowerCase(java.util.Locale.ROOT)
+                        + " evidence and this tracked account's cash. It never changes tracked lots, tax basis,"
+                        + " or the Practice account."));
+    }
+
+    private static String analysisLane(io.liftandshift.strikebench.eval.EvidenceLevel pricing) {
+        if (pricing == null) return "UNKNOWN";
+        return switch (pricing) {
+            case OBSERVED_LIVE, OBSERVED_DELAYED, OBSERVED_EOD -> "OBSERVED";
+            case DEMO_FIXTURE -> "DEMO";
+            case SIMULATED -> "SIMULATED";
+            case MODELED -> "MODELED";
+            case UNKNOWN -> "UNKNOWN";
+        };
     }
 
     private void createTransaction(Context ctx) {

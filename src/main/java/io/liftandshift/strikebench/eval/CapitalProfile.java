@@ -14,5 +14,13 @@ public record CapitalProfile(
         Double returnOnCapitalPct,   // best-case return on the economic capital, null if uncapped/unknown
         Double annualizedRocPct,     // returnOnCapitalPct scaled by 365/DTE — LABELED, never primary
         int daysToExpiry,
-        String basis                 // human note on what economic capital represents
-) {}
+        String basis,                // human note on what economic capital represents
+        String annualizationNote
+) {
+    public CapitalProfile {
+        if (basis == null || basis.isBlank()) throw new IllegalArgumentException("capital basis is required");
+        if (annualizedRocPct != null && (annualizationNote == null || annualizationNote.isBlank())) {
+            throw new IllegalArgumentException("annualized return requires its repeatability disclosure");
+        }
+    }
+}

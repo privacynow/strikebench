@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.liftandshift.strikebench.db.Db;
-import io.liftandshift.strikebench.eval.EvidenceLevel;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 
@@ -345,28 +344,25 @@ public final class PlanStrategyService {
                                            int rank, String state, OffsetDateTime now, String sourceKind)
             throws java.sql.SQLException {
         String id = Ids.newId("pcand");
-        JsonNode economics = n.path("economics");
+        JsonNode evaluation = n.path("evaluation");
+        requireCurrentEvaluationReceipt(n, evaluation);
         String family = requiredText(n, "strategy");
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("id", id); values.put("plan_id", plan.id()); values.put("context_rev", plan.context().rev());
         values.put("underlying_symbol", text(n, "symbol") == null ? plan.symbol() : text(n, "symbol"));
         values.put("scout_thesis", text(n, "scoutThesis"));
         values.put("recommendation_id", text(n, "recommendationId"));
-        values.put("evaluation_id", text(n, "evaluationId")); values.put("family", family);
+        values.put("family", family);
         values.put("structure_group", text(n, "structureGroup")); values.put("rank_number", rank);
-        values.put("decision_score", doubleOrNull(n, "decisionScore"));
-        values.put("ev_market_cents", economicsLong(economics, "marketEvAfterCostsCents", longOrNull(n, "expectedValueCents")));
-        values.put("ev_histvol_cents", longOrNull(economics, "realizedVolEvAfterCostsCents"));
-        values.put("pop", doubleOrNull(n, "pop")); values.put("assignment_probability", doubleOrNull(n, "assignmentProb"));
+        values.put("assignment_probability", doubleOrNull(n, "assignmentProb"));
         values.put("entry_net_cents", longOrNull(n, "entryNetPremiumCents"));
         values.put("max_loss_cents", longOrNull(n, "maxLossCents")); values.put("max_profit_cents", longOrNull(n, "maxProfitCents"));
-        values.put("cvar_cents", longOrNull(n, "cvarCents")); values.put("economic_verdict", text(n, "economicVerdict"));
-        values.put("evidence_provenance", candidateEvidence(n)); values.put("input_hash", sha256(n));
+        values.put("input_hash", sha256(n));
         values.put("state", state); values.put("selected", 0); values.put("run_id", runId); values.put("source_kind", sourceKind);
         values.put("display_name", text(n, "displayName")); values.put("position_label", text(n, "label"));
-        values.put("qty", integerOrNull(n, "qty")); values.put("expected_value_cents", longOrNull(n, "expectedValueCents"));
+        values.put("qty", integerOrNull(n, "qty"));
         values.put("liquidity_score", doubleOrNull(n, "liquidityScore")); values.put("freshness", text(n, "freshness"));
-        values.put("screen_score", doubleOrNull(n, "score")); values.put("confidence", doubleOrNull(n, "confidence"));
+        values.put("confidence", doubleOrNull(n, "confidence"));
         values.put("why_considered", text(n, "whyConsidered")); values.put("best_upside", text(n, "bestUpside"));
         values.put("biggest_risk", text(n, "biggestRisk")); values.put("would_invalidate", text(n, "wouldInvalidate"));
         values.put("beginner_explanation", text(n, "beginnerExplanation"));
@@ -374,14 +370,7 @@ public final class PlanStrategyService {
         values.put("effective_price", text(n, "effectivePrice")); values.put("intent_note", text(n, "intentNote"));
         values.put("uses_held_shares", boolInt(n, "usesHeldShares")); values.put("shares_needed", integerOrNull(n, "sharesNeeded"));
         values.put("combined_max_loss_cents", longOrNull(n, "combinedMaxLossCents"));
-        values.put("decision_viable", boolInt(n, "decisionViable"));
-        values.put("structurally_eligible", boolInt(n, "structurallyEligible"));
-        values.put("economic_placement", text(n, "economicPlacement")); values.put("economic_label", text(economics, "label"));
-        values.put("economic_summary", text(economics, "summary"));
-        values.put("estimated_roundtrip_fees_cents", longOrNull(economics, "estimatedRoundTripFeesCents"));
-        values.put("market_ev_pct_of_risk", doubleOrNull(economics, "marketEvPctOfRisk"));
-        values.put("observed_evidence", boolInt(economics, "observedEvidence"));
-        values.put("evaluation_snapshot", n.hasNonNull("evaluation") ? Json.write(n.get("evaluation")) : null);
+        values.put("evaluation_snapshot", Json.write(evaluation));
         values.put("created_at", now);
         String columns = String.join(",", values.keySet());
         String placeholders = String.join(",", java.util.Collections.nCopies(values.size(), "?"));
@@ -389,80 +378,83 @@ public final class PlanStrategyService {
         persistLegs(c, id, n.path("legs"));
         persistIndexedNumbers(c, "plan_candidate_breakeven", "breakeven_index", "price", id, n.path("breakevens"));
         persistIndexedStrings(c, "plan_candidate_intent", "intent_index", "intent", id, n.path("intents"));
-        persistMessages(c, id, "WARNING", n.path("warnings"));
-        persistMessages(c, id, "ECONOMIC_REASON", economics.path("reasons"));
+        persistWarnings(c, id, n.path("warnings"));
         return id;
+    }
+
+    private static void requireCurrentEvaluationReceipt(JsonNode candidate, JsonNode evaluation) {
+        if (!evaluation.isObject()) {
+            throw new IllegalArgumentException("candidate evaluation receipt is required");
+        }
+        for (String obsolete : List.of("score", "economics", "economicVerdict", "economicPlacement",
+                "decisionScore", "evaluationId")) {
+            if (candidate.has(obsolete)) {
+                throw new IllegalArgumentException("obsolete candidate field is not accepted: " + obsolete);
+            }
+        }
+        if (evaluation.has("id") || evaluation.has("candidate") || evaluation.has("spec")) {
+            throw new IllegalArgumentException("full StrategyEvaluation payloads are not accepted; send the current evaluation receipt");
+        }
+        if (!evaluation.path("decisionScore").isNumber() || !evaluation.path("viable").isBoolean()) {
+            throw new IllegalArgumentException("evaluation receipt requires decisionScore and viable");
+        }
+        for (String field : List.of("capital", "volatility", "risk", "evidence", "management", "score",
+                "assessment", "stance", "participation", "impliedStance", "ivContext", "coverage", "explanation")) {
+            if (!evaluation.path(field).isObject()) {
+                throw new IllegalArgumentException("evaluation receipt requires object field " + field);
+            }
+        }
     }
 
     private static ObjectNode loadCandidate(java.sql.Connection c, CandidateRow r) throws java.sql.SQLException {
         ObjectNode n = Json.MAPPER.createObjectNode();
         put(n, "id", r.id()); put(n, "symbol", r.symbol()); put(n, "scoutThesis", r.scoutThesis());
+        put(n, "recommendationId", r.recommendationId());
         put(n, "sourceKind", r.sourceKind());
         put(n, "strategy", r.family()); put(n, "displayName", r.displayName());
         put(n, "structureGroup", r.structureGroup()); put(n, "label", r.label()); put(n, "qty", r.qty());
         put(n, "entryNetPremiumCents", r.entryNet()); put(n, "maxProfitCents", r.maxProfit());
-        put(n, "maxLossCents", r.maxLoss()); put(n, "pop", r.pop()); put(n, "expectedValueCents", r.expectedValue());
-        put(n, "liquidityScore", r.liquidity()); put(n, "freshness", r.freshness()); put(n, "score", r.screenScore());
+        put(n, "maxLossCents", r.maxLoss());
+        put(n, "liquidityScore", r.liquidity()); put(n, "freshness", r.freshness());
         put(n, "confidence", r.confidence()); put(n, "whyConsidered", r.why()); put(n, "bestUpside", r.upside());
         put(n, "biggestRisk", r.risk()); put(n, "wouldInvalidate", r.invalidate());
         put(n, "beginnerExplanation", r.beginner()); put(n, "intent", r.intent());
         put(n, "assignmentProb", r.assignment()); put(n, "annualizedYieldPct", r.annualized());
         put(n, "effectivePrice", r.effectivePrice()); put(n, "intentNote", r.intentNote());
         put(n, "usesHeldShares", r.usesHeld()); put(n, "sharesNeeded", r.sharesNeeded());
-        put(n, "combinedMaxLossCents", r.combinedMaxLoss()); put(n, "decisionScore", r.decisionScore());
-        put(n, "decisionViable", r.decisionViable()); put(n, "structurallyEligible", r.structurallyEligible());
-        put(n, "economicVerdict", r.economicVerdict()); put(n, "economicPlacement", r.economicPlacement());
-        if (r.evaluationSnapshot() != null && !r.evaluationSnapshot().isBlank()) {
-            n.set("evaluation", Json.parse(r.evaluationSnapshot()));
-        }
+        put(n, "combinedMaxLossCents", r.combinedMaxLoss());
+        n.set("evaluation", Json.parse(r.evaluationSnapshot()));
         n.put("selected", r.selected());
         n.set("legs", loadLegs(c, r.id()));
         n.set("breakevens", loadNumbers(c, "plan_candidate_breakeven", "breakeven_index", "price", r.id()));
         n.set("intents", loadStrings(c, "plan_candidate_intent", "intent_index", "intent", "candidate_id", r.id()));
-        n.set("warnings", loadMessages(c, r.id(), "WARNING"));
-        if (r.economicVerdict() != null || r.economicSummary() != null) {
-            ObjectNode economics = n.putObject("economics");
-            put(economics, "verdict", r.economicVerdict()); put(economics, "placement", r.economicPlacement());
-            put(economics, "label", r.economicLabel()); put(economics, "summary", r.economicSummary());
-            put(economics, "marketEvAfterCostsCents", r.evMarket());
-            put(economics, "realizedVolEvAfterCostsCents", r.evHist());
-            put(economics, "estimatedRoundTripFeesCents", r.roundTripFees());
-            put(economics, "marketEvPctOfRisk", r.marketEvPct()); put(economics, "observedEvidence", r.observed());
-            economics.set("reasons", loadMessages(c, r.id(), "ECONOMIC_REASON"));
-        }
+        n.set("warnings", loadWarnings(c, r.id()));
         return n;
     }
 
     private static String candidateSelect() {
-        return "SELECT pc.id,pc.underlying_symbol,pc.scout_thesis,pc.source_kind,pc.family,pc.display_name,pc.structure_group,pc.position_label,pc.qty," +
-                "pc.entry_net_cents,pc.max_profit_cents,pc.max_loss_cents,pc.pop,pc.expected_value_cents," +
-                "pc.liquidity_score,pc.freshness,pc.screen_score,pc.confidence,pc.why_considered,pc.best_upside," +
+        return "SELECT pc.id,pc.underlying_symbol,pc.scout_thesis,pc.recommendation_id,pc.source_kind,pc.family,pc.display_name,pc.structure_group,pc.position_label,pc.qty," +
+                "pc.entry_net_cents,pc.max_profit_cents,pc.max_loss_cents," +
+                "pc.liquidity_score,pc.freshness,pc.confidence,pc.why_considered,pc.best_upside," +
                 "pc.biggest_risk,pc.would_invalidate,pc.beginner_explanation,pc.assignment_probability," +
                 "pc.annualized_yield_pct,pc.effective_price,pc.intent_note,pc.uses_held_shares,pc.shares_needed," +
-                "pc.combined_max_loss_cents,pc.decision_score,pc.decision_viable,pc.structurally_eligible," +
-                "pc.economic_verdict,pc.economic_placement,pc.economic_label,pc.economic_summary," +
-                "pc.ev_market_cents,pc.ev_histvol_cents,pc.estimated_roundtrip_fees_cents,pc.market_ev_pct_of_risk," +
-                "pc.observed_evidence,pc.evaluation_snapshot,pc.selected,psr.intent FROM plan_candidate pc " +
+                "pc.combined_max_loss_cents,pc.evaluation_snapshot,pc.selected,psr.intent FROM plan_candidate pc " +
                 "JOIN plan_strategy_run psr ON psr.id=pc.run_id";
     }
 
     private static CandidateRow candidateRow(Db.Row r) {
-        return new CandidateRow(r.str("id"), r.str("underlying_symbol"), r.str("scout_thesis"), r.str("source_kind"),
+        return new CandidateRow(r.str("id"), r.str("underlying_symbol"), r.str("scout_thesis"),
+                r.str("recommendation_id"), r.str("source_kind"),
                 r.str("family"), r.str("display_name"), r.str("structure_group"),
                 r.str("position_label"), integerOrNull(r, "qty"), r.lngOrNull("entry_net_cents"),
-                r.lngOrNull("max_profit_cents"), r.lngOrNull("max_loss_cents"), r.dblOrNull("pop"),
-                r.lngOrNull("expected_value_cents"), r.dblOrNull("liquidity_score"), r.str("freshness"),
-                r.dblOrNull("screen_score"), r.dblOrNull("confidence"), r.str("why_considered"),
+                r.lngOrNull("max_profit_cents"), r.lngOrNull("max_loss_cents"),
+                r.dblOrNull("liquidity_score"), r.str("freshness"),
+                r.dblOrNull("confidence"), r.str("why_considered"),
                 r.str("best_upside"), r.str("biggest_risk"), r.str("would_invalidate"),
                 r.str("beginner_explanation"), r.str("intent"), r.dblOrNull("assignment_probability"),
                 r.dblOrNull("annualized_yield_pct"), r.str("effective_price"), r.str("intent_note"),
                 boolOrNull(r, "uses_held_shares"), integerOrNull(r, "shares_needed"),
-                r.lngOrNull("combined_max_loss_cents"), r.dblOrNull("decision_score"),
-                boolOrNull(r, "decision_viable"), boolOrNull(r, "structurally_eligible"),
-                r.str("economic_verdict"), r.str("economic_placement"), r.str("economic_label"),
-                r.str("economic_summary"), r.lngOrNull("ev_market_cents"), r.lngOrNull("ev_histvol_cents"),
-                r.lngOrNull("estimated_roundtrip_fees_cents"), r.dblOrNull("market_ev_pct_of_risk"),
-                boolOrNull(r, "observed_evidence"), r.str("evaluation_snapshot"), r.bool("selected"));
+                r.lngOrNull("combined_max_loss_cents"), r.str("evaluation_snapshot"), r.bool("selected"));
     }
 
     private static void persistLegs(java.sql.Connection c, String id, JsonNode legs) throws java.sql.SQLException {
@@ -557,16 +549,16 @@ public final class PlanStrategyService {
                         "(candidate_id," + indexCol + "," + valueCol + ") VALUES(?,?,?)", id, i++, value.decimalValue());
     }
 
-    private static void persistMessages(java.sql.Connection c, String id, String kind, JsonNode values)
+    private static void persistWarnings(java.sql.Connection c, String id, JsonNode values)
             throws java.sql.SQLException {
-        int i = 0; for (JsonNode value : values) Db.execOn(c, "INSERT INTO plan_candidate_message(candidate_id," +
-                        "message_kind,message_index,message) VALUES(?,?,?,?)", id, kind, i++, value.asText());
+        int i = 0; for (JsonNode value : values) Db.execOn(c, "INSERT INTO plan_candidate_warning(candidate_id," +
+                        "warning_index,message) VALUES(?,?,?)", id, i++, value.asText());
     }
 
-    private static ArrayNode loadMessages(java.sql.Connection c, String id, String kind) throws java.sql.SQLException {
+    private static ArrayNode loadWarnings(java.sql.Connection c, String id) throws java.sql.SQLException {
         ArrayNode out = Json.MAPPER.createArrayNode();
-        Db.queryOn(c, "SELECT message FROM plan_candidate_message WHERE candidate_id=? AND message_kind=? " +
-                        "ORDER BY message_index", r -> r.str("message"), id, kind).forEach(out::add);
+        Db.queryOn(c, "SELECT message FROM plan_candidate_warning WHERE candidate_id=? " +
+                        "ORDER BY warning_index", r -> r.str("message"), id).forEach(out::add);
         return out;
     }
 
@@ -639,16 +631,8 @@ public final class PlanStrategyService {
     private static Long longOrNull(JsonNode n, String key) {
         JsonNode value = n == null ? null : n.get(key); return value == null || value.isNull() ? null : value.longValue();
     }
-    private static Long economicsLong(JsonNode n, String key, Long fallback) {
-        Long value = longOrNull(n, key); return value == null ? fallback : value;
-    }
     private static Double doubleOrNull(JsonNode n, String key) {
         JsonNode value = n == null ? null : n.get(key); return value == null || value.isNull() ? null : value.doubleValue();
-    }
-
-    private static String candidateEvidence(JsonNode candidate) {
-        String receipt = text(candidate.path("evaluation").path("evidence"), "rollup");
-        return receipt == null ? EvidenceLevel.fromFreshness(text(candidate, "freshness")).name() : receipt;
     }
     private static Integer integerOrNull(JsonNode n, String key) {
         JsonNode value = n == null ? null : n.get(key); return value == null || value.isNull() ? null : value.intValue();
@@ -689,17 +673,14 @@ public final class PlanStrategyService {
     private record LegRow(String action, String type, BigDecimal strikePrice, String expiration, int ratio,
                           int multiplier,
                           BigDecimal entryPrice) {}
-    private record CandidateRow(String id, String symbol, String scoutThesis, String sourceKind,
+    private record CandidateRow(String id, String symbol, String scoutThesis, String recommendationId,
+                                String sourceKind,
                                 String family, String displayName, String structureGroup, String label,
-                                Integer qty, Long entryNet, Long maxProfit, Long maxLoss, Double pop,
-                                Long expectedValue, Double liquidity, String freshness, Double screenScore,
-                                Double confidence, String why, String upside, String risk, String invalidate,
+                                Integer qty, Long entryNet, Long maxProfit, Long maxLoss,
+                                Double liquidity, String freshness, Double confidence,
+                                String why, String upside, String risk, String invalidate,
                                 String beginner, String intent, Double assignment, Double annualized,
                                 String effectivePrice, String intentNote, Boolean usesHeld, Integer sharesNeeded,
-                                Long combinedMaxLoss, Double decisionScore, Boolean decisionViable,
-                                Boolean structurallyEligible, String economicVerdict, String economicPlacement,
-                                String economicLabel, String economicSummary, Long evMarket, Long evHist,
-                                Long roundTripFees, Double marketEvPct, Boolean observed,
-                                String evaluationSnapshot, boolean selected) {}
+                                Long combinedMaxLoss, String evaluationSnapshot, boolean selected) {}
 
 }

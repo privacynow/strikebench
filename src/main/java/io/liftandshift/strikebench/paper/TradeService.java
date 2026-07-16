@@ -80,6 +80,10 @@ public final class TradeService {
     /** Position greeks: share-equivalent delta/gamma, $ per day theta, $ per vol-point vega. Model stats, not money. */
     public record PositionGreeks(Double deltaShares, Double gammaShares, Double thetaPerDay, Double vegaPerPoint, boolean complete) {}
 
+    /** Dollar-delta exposure for a lane-aware before/after assessment. */
+    public record DollarDeltaExposure(long grossCents, long netCents, long focusSymbolGrossCents,
+                                      boolean complete, String basis) {}
+
     public record MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
                            Long unrealizedCents, Long decisionUnrealizedCents, Double popNow, String freshness,
                            PositionGreeks greeks, List<Map<String, Object>> legGreeks) {}
@@ -408,6 +412,7 @@ public final class TradeService {
                 if (hook != null) hook.afterTradeCreated(c, created);
                 return created;
             });
+            accountSnapshot.invalidate(req.accountId());
             auditSafe(req.accountId(), tradeId, "TRADE_OPENED", "INFO", Map.of(
                     "symbol", req.symbol(), "strategy", req.strategy(), "qty", req.qty(),
                     "entryNetPremiumCents", p.entryNet, "maxLossCents", p.maxLoss, "feesCents", p.fees));
@@ -748,7 +753,7 @@ public final class TradeService {
     public Map<String, MarkView> accountMarkSnapshot(String accountId) {
         return accountSnapshot.get(accountId, id -> {
             Map<String, MarkView> out = new LinkedHashMap<>();
-            for (TradeRecord t : list(id, TradeRecord.ACTIVE, 0, 200).trades()) {
+            for (TradeRecord t : activeTrades(id)) {
                 try { out.put(t.id(), memoizedMark(t)); } catch (RuntimeException ignored) { /* partial */ }
             }
             return out;
@@ -763,7 +768,7 @@ public final class TradeService {
      * loss or becoming a stock position in StrikeBench's settlement model.
      */
     public Map<String, Object> portfolioHeat(String accountId) {
-        List<TradeRecord> all = list(accountId, TradeRecord.ACTIVE, 0, 200).trades();
+        List<TradeRecord> all = activeTrades(accountId);
         // EXTERNAL trades are excluded from paper-CASH arithmetic (their money lives at the
         // broker — same identity as openPositionsValue); they are counted separately so the
         // strip can label them instead of silently bending paper buying power (review P2).
@@ -947,7 +952,7 @@ public final class TradeService {
     public OpenPositionsValue openPositionsValue(String accountId) {
         // EXTERNAL trades are excluded from paper-money math: their cash lives at the broker,
         // so including their close value would break totalValue = cash + shares + open closes.
-        List<TradeRecord> active = list(accountId, TradeRecord.ACTIVE, 0, 200).trades().stream()
+        List<TradeRecord> active = activeTrades(accountId).stream()
                 .filter(t -> !t.external()).toList();
         Map<String, MarkView> snap = accountMarkSnapshot(accountId); // ONE atomic snapshot for all consumers
         long value = 0, unrealized = 0;
@@ -966,9 +971,9 @@ public final class TradeService {
         return new OpenPositionsValue(active.size(), counted, value, unrealized, complete, worst.name());
     }
 
-    /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Never touches money. */    /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Never touches money. */
+    /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Never touches money. */
     public Map<String, Object> portfolioGreeks(String accountId) {
-        List<TradeRecord> active = list(accountId, TradeRecord.ACTIVE, 0, 200).trades();
+        List<TradeRecord> active = activeTrades(accountId);
         Map<String, MarkView> snap = accountMarkSnapshot(accountId); // same atomic snapshot as the summary
         double delta = 0, gamma = 0, theta = 0, vega = 0;
         boolean complete = true;
@@ -1006,6 +1011,42 @@ public final class TradeService {
         return out;
     }
 
+    public DollarDeltaExposure portfolioDollarDelta(String accountId, String focusSymbol) {
+        List<TradeRecord> active = activeTrades(accountId).stream()
+                .filter(trade -> !trade.external()).toList();
+        Map<String, MarkView> marksByTrade = accountMarkSnapshot(accountId);
+        long gross = 0, net = 0, focusGross = 0;
+        boolean complete = true;
+        for (TradeRecord trade : active) {
+            MarkView mark = marksByTrade.get(trade.id());
+            if (mark == null || mark.underlyingCents() == null || mark.greeks() == null
+                    || mark.greeks().deltaShares() == null || !mark.greeks().complete()) {
+                complete = false;
+                continue;
+            }
+            double raw = mark.greeks().deltaShares() * mark.underlyingCents();
+            if (!Double.isFinite(raw) || raw > Long.MAX_VALUE || raw < Long.MIN_VALUE) {
+                complete = false;
+                continue;
+            }
+            long delta = Math.round(raw);
+            long magnitude = safeAbsolute(delta);
+            gross = Math.addExact(gross, magnitude);
+            net = Math.addExact(net, delta);
+            if (trade.symbol().equalsIgnoreCase(focusSymbol)) {
+                focusGross = Math.addExact(focusGross, magnitude);
+            }
+        }
+        return new DollarDeltaExposure(gross, net, focusGross, complete,
+                "Current executable Practice marks in this account's market; dollar delta uses the disclosed option model."
+                        + " This is exposure, not P&L or broker reserve.");
+    }
+
+    private static long safeAbsolute(long value) {
+        if (value == Long.MIN_VALUE) throw new ArithmeticException("dollar delta overflow");
+        return Math.abs(value);
+    }
+
     // ---- Reads ----
 
     public TradeRecord get(String tradeId) {
@@ -1014,6 +1055,12 @@ public final class TradeService {
 
     public Page list(String accountId, String status, int page, int size) {
         return list(accountId, status, null, null, page, size);
+    }
+
+    private List<TradeRecord> activeTrades(String accountId) {
+        return db.query("SELECT * FROM trades WHERE account_id=? AND status=? "
+                        + "ORDER BY created_at DESC,id DESC",
+                TradeService::mapTrade, accountId, TradeRecord.ACTIVE);
     }
 
     public Page list(String accountId, String status, String symbol, String intent, int page, int size) {

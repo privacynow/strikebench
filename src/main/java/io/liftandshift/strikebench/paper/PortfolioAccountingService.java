@@ -196,6 +196,10 @@ public final class PortfolioAccountingService {
                                  List<ExposureRow> byAssetClass, List<ExposureRow> bySector,
                                  List<ExposureRow> byDirection, List<ExposureRow> bySymbol) {}
 
+    /** Observed tracked-book dollar delta for one account; never combined with Practice. */
+    public record DollarDeltaExposure(long grossCents, long netCents, long focusSymbolGrossCents,
+                                      boolean complete, String basis) {}
+
     public record CollateralView(long knownBlockedCashCents, Long availableCashCents,
                                  long cashSecuredPutContracts, long definedRiskPutContracts,
                                  long coveredCallContracts, long definedRiskCallContracts,
@@ -1084,6 +1088,51 @@ public final class PortfolioAccountingService {
         String owner = owner(ownerId);
         SummaryLedgerSnapshot ledger = db.tx(c -> ledgerSnapshot(c, requireAccount(c, owner, accountId, true)));
         return assembleSummary(ledger);
+    }
+
+    public DollarDeltaExposure portfolioDollarDelta(String ownerId, String accountId, String focusSymbol) {
+        PortfolioSummary summary = summary(ownerId, accountId);
+        Map<String, BigDecimal> underlyings = marks == null ? Map.of() : marks.underlyingMarks(
+                summary.positions().stream().map(PositionView::symbol).distinct().toList(), null);
+        long gross = 0, net = 0, focusGross = 0;
+        boolean complete = summary.complete();
+        for (PositionView position : summary.positions()) {
+            BigDecimal underlying = underlyings.get(position.symbol());
+            if (underlying == null) {
+                complete = false;
+                continue;
+            }
+            double deltaPerUnit;
+            if ("STOCK".equals(position.instrumentType())) {
+                deltaPerUnit = 1.0;
+            } else {
+                Leg option = Leg.option(LegAction.BUY, OptionType.valueOf(position.optionType()),
+                        position.strike(), position.expiration(), 1, BigDecimal.ZERO, position.multiplier());
+                MarksSource.LegMark mark = marks.legMark(position.symbol(), option, null).orElse(null);
+                if (mark == null || mark.delta() == null) {
+                    complete = false;
+                    continue;
+                }
+                deltaPerUnit = mark.delta() * position.multiplier();
+            }
+            double signedUnits = "SHORT".equals(position.side()) ? -position.quantity() : position.quantity();
+            double rawCents = signedUnits * deltaPerUnit * Money.toCents(underlying);
+            if (!Double.isFinite(rawCents) || rawCents > Long.MAX_VALUE || rawCents < Long.MIN_VALUE) {
+                complete = false;
+                continue;
+            }
+            long delta = Math.round(rawCents);
+            long magnitude = absolute(delta, "dollar delta exposure");
+            gross = Math.addExact(gross, magnitude);
+            net = Math.addExact(net, delta);
+            if (position.symbol().equalsIgnoreCase(focusSymbol)) {
+                focusGross = Math.addExact(focusGross, magnitude);
+            }
+        }
+        return new DollarDeltaExposure(gross, net, focusGross, complete,
+                "Current tracked-account liquidation marks; each position retains its own provenance in the account summary."
+                        + " Option dollar delta uses the disclosed model. This hypothetical overlay is not recorded P&L,"
+                        + " cash, or tracked tax basis.");
     }
 
     private static SummaryLedgerSnapshot ledgerSnapshot(Connection c, AccountProfile account) throws SQLException {

@@ -689,6 +689,9 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
   const first = page.locator('#plan-strategy-results .candidate').first();
   assert.match(await first.textContent(), /Theoretical|Chance of any profit/);
+  assert.match(await first.textContent(),
+    /WHAT THIS POSITION ACTUALLY EXPRESSES[\s\S]*Data coverage for this analysis[\s\S]*Portfolio impact/i,
+    'Beginner proposals retain the same behavior, coverage, and Practice-impact assessment as an exact trade');
   assert.match(await first.textContent(), /How you would manage this trade/,
     'Beginner retains the plain-language management capability from the decision analysis');
   await first.locator('button').filter({ hasText: 'Select this structure' }).click();
@@ -858,7 +861,8 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   await expertRows.first().click();
   await page.waitForSelector('#plan-candidate-detail .candidate-evaluation-receipt');
   const expertDetail = await page.textContent('#plan-candidate-detail');
-  assert.match(expertDetail, /Evidence by input/, 'Expert retains per-input evidence behind the ranking');
+  assert.match(expertDetail, /Data coverage for this analysis/,
+    'Expert retains one detailed per-input coverage receipt behind the ranking');
   assert.match(expertDetail, /How the Decision score was built/, 'Expert retains the score construction');
   assert.match(expertDetail, /Mechanical management plan/, 'Expert retains the management receipt');
   await page.locator('#plan-candidate-detail').scrollIntoViewIfNeeded();
@@ -3474,8 +3478,8 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   assert.equal(analysisResponse.status(), 200, 'the shared Plan editor reaches the real exact-package endpoint');
   await page.waitForSelector('#plan-strategy-body .position-editor-result .inline-action-feedback');
   assert.match(await page.locator('#plan-strategy-body .position-editor-result').innerText(),
-    /Analysis complete[\s\S]*Theoretical max loss[\s\S]*Market-implied EV after costs[\s\S]*Entry-price receipt[\s\S]*Continue to Outcomes/i,
-  'Analyze reports exact-package economics, price provenance, and an in-view next action');
+    /Analysis complete[\s\S]*Theoretical max loss[\s\S]*Market-implied EV after costs[\s\S]*WHAT THIS POSITION ACTUALLY EXPRESSES[\s\S]*Data coverage for this analysis[\s\S]*Portfolio impact[\s\S]*Entry-price receipt[\s\S]*Continue to Outcomes/i,
+  'Analyze reports exact-package economics, behavior, coverage, portfolio impact, price provenance, and an in-view next action');
   const selectedExactPackage = await page.evaluate(async planId => {
     const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
     return {
@@ -3509,6 +3513,9 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
     getComputedStyle(node).gridTemplateColumns.split(' ').length);
   assert.equal(expertColumns, 2, 'Expert places the payoff beside the exact legs');
   await page.waitForSelector('#plan-strategy-body .position-editor-visual svg.chart');
+  assert.match(await page.locator('#plan-strategy-body .position-editor-result').innerText(),
+    /POSITION STANCE[\s\S]*Dollar delta[\s\S]*Vega \/ vol point[\s\S]*Data coverage for this analysis[\s\S]*Portfolio impact/i,
+    'Expert reloads the same exact assessment with dense stance, coverage, and lane impact detail');
   await captureSettled('trader-own-p3-editor-expert.png');
 
   await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
@@ -3516,8 +3523,8 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   assert.match(await page.locator('#plan-strategy-body .position-terminal').inputValue(), /\+20 AAPL/,
     'the shared draft survives the complete Beginner/Expert round trip');
   assert.match(await page.locator('#plan-strategy-body .position-editor-result').innerText(),
-    /Selected in this Plan[\s\S]*Continue to Outcomes/i,
-  'the selected exact package keeps its local confirmation and next action after a level repaint');
+    /Selected in this Plan[\s\S]*Market-implied EV after costs[\s\S]*WHAT THIS POSITION ACTUALLY EXPRESSES[\s\S]*Data coverage for this analysis[\s\S]*Continue to Outcomes/i,
+  'the selected exact package keeps its complete assessment and next action after a level repaint');
   const selectedPackageNet = await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).inputValue();
   await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).fill('0.01');
   assert.equal(await page.locator('#plan-strategy-body .position-editor-result:has-text("Selected in this Plan")').count(), 0,
@@ -4384,9 +4391,26 @@ test('shared editor records exact broker facts in the tracked book without touch
   const trackedAnalysis = await (await analysisResponsePromise).json();
   assert.equal(trackedAnalysis.accountId, account.id, 'tracked Analyze uses the selected tracked account');
   assert.equal(trackedAnalysis.availableCashCents, 10000000, 'tracked Analyze uses tracked cash, not Practice buying power');
-  assert.equal(trackedAnalysis.marketLane, 'OBSERVED', 'tracked Analyze never inherits a Demo/Simulated Practice lane');
-  assert.match(await page.textContent('.book-shared-position-editor .position-editor-result'), /observed market/i,
-    'the account and lane basis are visible beside the analysis');
+  assert.equal(trackedAnalysis.marketLane, 'DEMO',
+    'the fixture journey names its actual Demo analysis evidence instead of claiming Observed');
+  assert.equal(trackedAnalysis.evaluation.assessment.portfolioImpacts.real.lane, 'REAL',
+    'tracked Analyze carries a lane-labeled Real before/after impact');
+  assert.equal(trackedAnalysis.evaluation.assessment.portfolioImpacts.practice, null,
+    'tracked Analyze never nets a Practice impact into the Real account');
+  assert.ok(Number.isFinite(trackedAnalysis.evaluation.participation.localParticipationBps),
+    'tracked Analyze returns the same participation metric as a proposed Plan trade');
+  assert.match(await page.textContent('.book-shared-position-editor .position-editor-result'), /demo market/i,
+    'the account and actual evidence lane are visible beside the analysis');
+  assert.match(await page.textContent('.book-shared-position-editor .position-editor-result'),
+    /Portfolio impact[\s\S]*Recorded at broker impact[\s\S]*Practice[\s\S]*No Practice destination/i,
+    'the visible receipt separates the selected Real account from the unavailable Practice lane');
+  const coverageDisclosure = page.locator('.book-shared-position-editor .position-editor-result .xp-head')
+    .filter({ hasText: 'Data coverage for this analysis' }).first();
+  assert.equal(await coverageDisclosure.count(), 1,
+    'Beginner keeps the complete per-input coverage receipt behind progressive disclosure');
+  await ensureExpanded(coverageDisclosure);
+  assert.match(await coverageDisclosure.locator('..').textContent(), /pricing[\s\S]*(demo|observed|modeled)/i,
+    'the coverage receipt names the pricing basis rather than hiding it at Beginner');
   const practiceBefore = await page.evaluate(async () => (await API.getFresh('/api/account')).account);
   const createResponse = page.waitForResponse(response => response.url().endsWith(
     '/api/portfolio/accounts/' + account.id + '/transactions') && response.request().method() === 'POST');

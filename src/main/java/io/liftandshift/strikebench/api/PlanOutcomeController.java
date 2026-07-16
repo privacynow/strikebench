@@ -183,8 +183,11 @@ final class PlanOutcomeController {
             String id = candidate.path("id").asText();
             int qty = Math.clamp(candidate.path("qty").asInt(1), 1, 100);
             var position = planOutcomePosition(candidate);
-            long fees = candidate.path("economics").path("estimatedRoundTripFeesCents").isNumber()
-                    ? candidate.path("economics").path("estimatedRoundTripFeesCents").longValue()
+            JsonNode evaluation = candidate.path("evaluation");
+            JsonNode assessment = evaluation.path("assessment");
+            JsonNode economics = assessment.path("economics");
+            long fees = economics.path("estimatedRoundTripFeesCents").isNumber()
+                    ? economics.path("estimatedRoundTripFeesCents").longValue()
                     : position.legs().stream().filter(leg -> !"STOCK".equalsIgnoreCase(leg.type()))
                     .mapToLong(leg -> Math.max(1, leg.ratio())).sum() * qty * cfg.feePerContractCents() * 2L
                     + (position.legs().isEmpty() ? 0 : cfg.feePerOrderCents() * 2L);
@@ -219,16 +222,20 @@ final class PlanOutcomeController {
             Double tailScore = expected == null || p5 == null ? null
                     : expected.doubleValue() / Math.max(100.0, Math.max(0.0, -p5.doubleValue()));
             String display = candidate.path("displayName").asText(candidate.path("strategy").asText("Structure"));
+            JsonNode evaluation = candidate.path("evaluation");
+            JsonNode assessment = evaluation.path("assessment");
+            JsonNode economics = assessment.path("economics");
+            JsonNode mechanics = assessment.path("mechanics");
             items.add(new io.liftandshift.strikebench.plan.PlanOutcomeService.ComparisonItem(
                     id, id, 0, candidate.path("strategy").asText("CUSTOM"), display, meta.qty(),
                     meta.position().entryCostCents(), candidate.hasNonNull("maxLossCents")
                             ? candidate.path("maxLossCents").longValue() : null,
                     result == null ? null : result.winRatePct(), expected, p5,
                     result == null ? null : result.p50Cents(), result == null ? null : result.p95Cents(),
-                    tailScore, meta.roundTripFees(), candidate.path("economicVerdict").asText(null),
-                    candidate.path("economicPlacement").asText(null),
-                    candidate.hasNonNull("structurallyEligible") ? candidate.path("structurallyEligible").asBoolean() : null,
-                    candidate.hasNonNull("decisionScore") ? candidate.path("decisionScore").doubleValue() : null,
+                    tailScore, meta.roundTripFees(), economics.path("verdict").asText(null),
+                    economics.path("placement").asText(null),
+                    mechanics.hasNonNull("eligible") ? mechanics.path("eligible").asBoolean() : null,
+                    evaluation.hasNonNull("decisionScore") ? evaluation.path("decisionScore").doubleValue() : null,
                     candidate.path("selected").asBoolean(false), refusals.get(id)));
         }
         items.add(new io.liftandshift.strikebench.plan.PlanOutcomeService.ComparisonItem(

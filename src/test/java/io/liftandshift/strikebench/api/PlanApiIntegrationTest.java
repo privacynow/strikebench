@@ -69,7 +69,7 @@ class PlanApiIntegrationTest {
 
         String body = """
                 {"clientRequestId":"browser-create-1","symbol":"AAPL","intent":"INCOME","title":"API CRUD plan",
-                 "thesis":"neutral","horizonDays":30,"riskMode":"conservative",
+                 "thesis":"neutral","horizonDays":30,"targetCents":27123,"riskMode":"conservative",
                  "marketKind":"OBSERVED","worldId":"foreign"}
                 """;
         HttpResponse<String> createdResponse = post("/api/plans", body);
@@ -317,7 +317,8 @@ class PlanApiIntegrationTest {
         JsonNode candidate = result.get("candidates").get(0);
         assertThat(candidate.get("id").asText()).startsWith("pcand_");
         assertThat(candidate.get("legs").size()).isGreaterThan(0);
-        assertThat(candidate.has("economics")).isTrue();
+        assertThat(candidate.at("/evaluation/assessment/economics/verdict").asText()).isNotBlank();
+        assertThat(candidate.has("economics")).isFalse();
         assertThat(candidate.at("/evaluation/score/components").isArray()).isTrue();
         assertThat(candidate.at("/evaluation/evidence/perDimension").isObject()).isTrue();
         assertThat(candidate.at("/evaluation/management/rules").isArray()).isTrue();
@@ -337,10 +338,11 @@ class PlanApiIntegrationTest {
             assertThat(new java.math.BigDecimal(after.get("entryPrice").asText()))
                     .isEqualByComparingTo(new java.math.BigDecimal(before.get("entryPrice").asText()));
         }
-        assertThat(latest.at("/result/candidates/0/economics/verdict").asText())
-                .isEqualTo(candidate.at("/economics/verdict").asText());
-        assertThat(latest.at("/result/candidates/0/evaluation"))
-                .isEqualTo(candidate.at("/evaluation"));
+        assertThat(latest.at("/result/candidates/0/evaluation/assessment/economics/verdict").asText())
+                .isEqualTo(candidate.at("/evaluation/assessment/economics/verdict").asText());
+        assertThat(candidate.at("/evaluation/assessment/portfolioImpacts/practice/lane").asText())
+                .isEqualTo("PRACTICE");
+        assertJsonEquivalent(latest.at("/result/candidates/0/evaluation"), candidate.at("/evaluation"));
 
         JsonNode selected = json(put("/api/plans/" + id + "/strategy/select",
                 "{\"candidateId\":\"" + candidate.get("id").asText() + "\",\"expectedVersion\":"
@@ -910,5 +912,36 @@ class PlanApiIntegrationTest {
     private static JsonNode json(HttpResponse<String> response) {
         assertThat(response.statusCode()).withFailMessage(response.body()).isBetween(200, 299);
         return Json.parse(response.body());
+    }
+
+    private static void assertJsonEquivalent(JsonNode actual, JsonNode expected) {
+        assertJsonEquivalent(actual, expected, "$ ");
+    }
+
+    private static void assertJsonEquivalent(JsonNode actual, JsonNode expected, String path) {
+        assertThat(actual.getNodeType()).as(path + "node type").isEqualTo(expected.getNodeType());
+        if (expected.isNumber()) {
+            assertThat(actual.decimalValue()).as(path).isEqualByComparingTo(expected.decimalValue());
+            return;
+        }
+        if (expected.isObject()) {
+            java.util.Set<String> actualFields = new java.util.TreeSet<>();
+            actual.fieldNames().forEachRemaining(actualFields::add);
+            java.util.Set<String> expectedFields = new java.util.TreeSet<>();
+            expected.fieldNames().forEachRemaining(expectedFields::add);
+            assertThat(actualFields).as(path + "fields").isEqualTo(expectedFields);
+            for (String field : expectedFields) {
+                assertJsonEquivalent(actual.get(field), expected.get(field), path + "." + field);
+            }
+            return;
+        }
+        if (expected.isArray()) {
+            assertThat(actual.size()).as(path + "array size").isEqualTo(expected.size());
+            for (int i = 0; i < expected.size(); i++) {
+                assertJsonEquivalent(actual.get(i), expected.get(i), path + "[" + i + "]");
+            }
+            return;
+        }
+        assertThat(actual).as(path).isEqualTo(expected);
     }
 }

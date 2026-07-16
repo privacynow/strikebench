@@ -10,7 +10,7 @@ import io.liftandshift.strikebench.broker.ETradeProvider;
 import io.liftandshift.strikebench.broker.SecretsStore;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
-import io.liftandshift.strikebench.db.Migrations;
+import io.liftandshift.strikebench.db.Schema;
 import io.liftandshift.strikebench.market.MarketDataMarks;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.SnapshotService;
@@ -136,10 +136,10 @@ public final class ApiServer {
         this.universeViews = new MarketUniverseView(cfg, market, universe, simSessions);
     }
 
-    /** Wires the whole app from config: DB + migrations + provider chain + services. */
+    /** Wires the whole app from config: current schema + provider chain + services. */
     public static ApiServer create(AppConfig cfg, Clock clock) {
         Db db = Db.forConfig(cfg);
-        Migrations.run(db);
+        Schema.initialize(db);
         FixtureProvider fixture = new FixtureProvider(clock);
         List<MarketDataProvider> providers = new ArrayList<>();
         List<NewsFilingsProvider> newsProviders = new ArrayList<>();
@@ -291,14 +291,14 @@ public final class ApiServer {
     public Javalin start(int port) {
         accounts.getOrCreateDefault();
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
-                portfolioExports, positions, trades, this::ownerId, this::currentAccount);
+                portfolioExports, positions, trades, evaluations, this::ownerId, this::currentAccount);
         tradeController = new TradeController(cfg, clock, db, accounts, market, eventCalendar, audit,
                 trades, positions, evaluations, snapshots, auth, this::currentAccount,
                 this::ownerId, this::activeWorld, this::analysisCtx, this::requireAdmin);
         var marketVolatility = new io.liftandshift.strikebench.sim.MarketVolatilityResolver(market, clock);
         var opportunityScanner = new io.liftandshift.strikebench.recommend.OpportunityScanner(engine, evaluations);
         discoveryController = new DiscoveryController(db, market, evaluations, opportunityScanner, engine, auto,
-                positions, universe, simSessions, clock, marketVolatility, this::currentAccount, this::ownerId,
+                positions, trades, universe, simSessions, clock, marketVolatility, this::currentAccount, this::ownerId,
                 this::activeWorld, tradeController::riskCapCents);
         outcomeController = new OutcomeController(cfg, clock, market, simEngine, pathEnsembles,
                 marketVolatility, this::activeWorld, this::ownerId, this::analysisCtx,

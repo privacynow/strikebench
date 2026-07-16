@@ -93,23 +93,6 @@ public final class EvaluationService {
         return new VolatilityProfiler().profile(atmIv, realizedVol30, history, daysToExpiry);
     }
 
-    /** Evaluates + ranks the candidates for one request, and (optionally) persists them. */
-    public List<StrategyEvaluation> evaluate(String symbol, String intent, String thesis, String horizon,
-                                             String riskMode, List<Candidate> candidates,
-                                             long buyingPowerCents, String userId, boolean persist) {
-        return evaluate(symbol, intent, thesis, horizon, riskMode, candidates, buyingPowerCents, userId, persist,
-                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
-    }
-
-    /** Context-aware variant: realized-vol history follows the caller's analysis dataset. */
-    public List<StrategyEvaluation> evaluate(String symbol, String intent, String thesis, String horizon,
-                                             String riskMode, List<Candidate> candidates,
-                                             long buyingPowerCents, String userId, boolean persist,
-                                             io.liftandshift.strikebench.db.AnalysisContext actx) {
-        return evaluate(symbol, intent, thesis, horizon, riskMode, candidates, buyingPowerCents,
-                userId, persist, actx, null);
-    }
-
     /**
      * WORLD-AWARE variant (review P0): the decision score must be computed from the SAME market
      * that priced the candidates — inside a simulated session the spot, ATM IV, realized vol and
@@ -118,9 +101,10 @@ public final class EvaluationService {
     public List<StrategyEvaluation> evaluate(String symbol, String intent, String thesis, String horizon,
                                              String riskMode, List<Candidate> candidates,
                                              long buyingPowerCents, String userId, boolean persist,
-                                             io.liftandshift.strikebench.db.AnalysisContext actx, String worldId) {
+                                             io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
+                                             PortfolioExposureContext portfolioExposure) {
         List<StrategyEvaluation> ranked = rank(symbol, intent, thesis, horizon, riskMode, candidates,
-                buyingPowerCents, actx, worldId);
+                buyingPowerCents, actx, worldId, portfolioExposure);
         if (persist && !ranked.isEmpty()) store.saveAll(ranked, userId);
         return ranked;
     }
@@ -129,8 +113,10 @@ public final class EvaluationService {
     public StrategyEvaluation assessExact(String symbol, Candidate candidate, long buyingPowerCents,
                                           io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
                                           boolean mechanicallyEligible, List<String> mechanicalFailures,
-                                          long roundTripFeesCents) {
-        EvalContext ctx = buildContext(symbol, List.of(candidate), buyingPowerCents, actx, worldId);
+                                          long roundTripFeesCents,
+                                          PortfolioExposureContext portfolioExposure) {
+        EvalContext ctx = buildContext(symbol, List.of(candidate), buyingPowerCents, actx, worldId,
+                portfolioExposure);
         StrategySpec spec = new StrategySpec(symbol, candidate.strategy(), candidate.intent(),
                 ctx.daysToExpiry() + "d", null, null, "exact-position");
         return evaluator.assessExact(candidate, spec, ctx, mechanicallyEligible, mechanicalFailures,
@@ -144,8 +130,9 @@ public final class EvaluationService {
 
     private List<StrategyEvaluation> rank(String symbol, String intent, String thesis, String horizon,
                                           String riskMode, List<Candidate> candidates, long buyingPowerCents,
-                                          io.liftandshift.strikebench.db.AnalysisContext actx, String worldId) {
-        EvalContext ctx = buildContext(symbol, candidates, buyingPowerCents, actx, worldId);
+                                          io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
+                                          PortfolioExposureContext portfolioExposure) {
+        EvalContext ctx = buildContext(symbol, candidates, buyingPowerCents, actx, worldId, portfolioExposure);
         String family = candidates.isEmpty() ? null : candidates.getFirst().strategy();
         StrategySpec spec = new StrategySpec(symbol, family, intent, horizon, thesis, riskMode, "decision");
         return evaluator.evaluateAndRank(candidates, spec, ctx);
@@ -156,7 +143,8 @@ public final class EvaluationService {
     }
 
     private EvalContext buildContext(String symbol, List<Candidate> candidates, long buyingPowerCents,
-                                     io.liftandshift.strikebench.db.AnalysisContext actx, String worldId) {
+                                     io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
+                                     PortfolioExposureContext portfolioExposure) {
         // ONE LANE: spot, DTE clock, ATM IV and realized vol all come from the market that priced
         // the candidates — a sim world's numbers never blend with observed ones (review P0).
         Instant laneNow = market.simInstant(worldId).orElseGet(() -> Instant.now(clock));
@@ -176,8 +164,8 @@ public final class EvaluationService {
 
         var rate = market.riskFreeRateQuote(Math.max(1, dte), worldId);
 
-        return new EvalContext(symbol, underlyingCents, dte, atmIv, realizedVol, ivHistory, buyingPowerCents, open,
-                feePerContractCents, feePerOrderCents, rate.annualRate(), rate.evidence());
+        return new EvalContext(symbol, underlyingCents, today, dte, atmIv, realizedVol, ivHistory, buyingPowerCents, open,
+                feePerContractCents, feePerOrderCents, rate.annualRate(), rate.evidence(), portfolioExposure);
     }
 
     private static LocalDate frontExpiration(List<Candidate> candidates) {

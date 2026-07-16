@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.eval;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.liftandshift.strikebench.position.ParticipationProfile;
 import io.liftandshift.strikebench.recommend.Candidate;
 
 /**
@@ -19,14 +20,20 @@ public record StrategyEvaluation(
         EvidenceProfile evidence,
         ManagementPlan management,
         ScoreBreakdown score,
-        EconomicAssessment economics,
+        FourOutputAssessment assessment,
+        StanceVector stance,
+        ParticipationProfile participation,
+        ImpliedStance impliedStance,
+        IvContext ivContext,
+        DataCoverageReceipt coverage,
         Explanation explanation
 ) {
     /** Quality within one economic tier: weighted factors after evidence/tail/DTE haircuts. */
     public double rankScore() { return score == null ? 0.0 : score.riskAdjustedScore(); }
     public boolean viable() { return score != null && score.gatePassed(); }
     public EconomicAssessment.Verdict economicVerdict() {
-        return economics == null ? EconomicAssessment.Verdict.UNAVAILABLE : economics.verdict();
+        return assessment == null || assessment.economics() == null
+                ? EconomicAssessment.Verdict.UNAVAILABLE : assessment.economics().verdict();
     }
 
     /**

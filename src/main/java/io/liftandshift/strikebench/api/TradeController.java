@@ -269,10 +269,9 @@ final class TradeController {
         try {
             evaluation = evaluations.assessExact(request.symbol(), exact, account.buyingPowerCents(),
                     analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
-                    preview.blockReasons(), roundTripFees);
+                    preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol()));
         } catch (RuntimeException e) {
-            log.warn("Exact-ticket assessment is unavailable for this preview");
-            log.debug("Exact-ticket assessment failure", e);
+            log.warn("Exact-ticket assessment is unavailable for this preview", e);
             throw new io.liftandshift.strikebench.util.DataUnavailableException(
                     "The exact package was checked mechanically, but its complete decision assessment is unavailable; no partial substitute was returned", e);
         }
@@ -296,8 +295,17 @@ final class TradeController {
             accountFit = new ApiResponses.AccountFit(pctOfNlv, pctOfCash, pctOfMargin,
                     pctOfRiskCapital, overRiskCapital);
         }
-        return new ApiResponses.TradePreviewResponse(preview, evaluation, guardrails,
+        return new ApiResponses.TradePreviewResponse(preview, ApiResponses.EvaluationReceipt.of(evaluation), guardrails,
                 required.isEmpty() ? null : required, token, accountFit);
+    }
+
+    private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
+            Account account, String symbol) {
+        var exposure = trades.portfolioDollarDelta(account.id(), symbol);
+        return new io.liftandshift.strikebench.eval.PortfolioExposureContext(
+                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE,
+                exposure.grossCents(), exposure.netCents(), exposure.focusSymbolGrossCents(),
+                exposure.complete(), exposure.basis());
     }
 
     CreatedTrade execute(Context ctx, TradeOpenRequest body, TradeService.TransactionHook hook) {
@@ -591,15 +599,20 @@ final class TradeController {
                 : StrategyIntent.parse(request.intent()).name();
         List<String> intents = family == null ? List.of(intent)
                 : family.intents().stream().map(Enum::name).sorted().toList();
-        List<LegView> legs = preview.legs().stream().map(mark -> new LegView(
-                Objects.toString(mark.get("action"), null),
-                Objects.toString(mark.get("type"), null),
-                Objects.toString(mark.get("strike"), null),
-                Objects.toString(mark.get("expiration"), null),
-                requiredPositiveInteger(mark, "ratio"),
-                Objects.toString(mark.get("fill"), null),
-                requiredPositiveInteger(mark, "multiplier"),
-                "OPEN")).toList();
+        // A mechanically refused package can have no executable leg-detail rows (for example an
+        // impossible user price). Its entered geometry still needs a complete assessment: use the
+        // request facts and let the authoritative package net carry the price constraint.
+        List<LegView> legs = preview.legs().isEmpty()
+                ? request.legs().stream().map(LegView::of).toList()
+                : preview.legs().stream().map(mark -> new LegView(
+                    Objects.toString(mark.get("action"), null),
+                    Objects.toString(mark.get("type"), null),
+                    Objects.toString(mark.get("strike"), null),
+                    Objects.toString(mark.get("expiration"), null),
+                    requiredPositiveInteger(mark, "ratio"),
+                    Objects.toString(mark.get("fill"), null),
+                    requiredPositiveInteger(mark, "multiplier"),
+                    "OPEN")).toList();
         boolean liquid = preview.legs().stream().filter(mark -> !"STOCK".equals(mark.get("type")))
                 .allMatch(mark -> mark.get("bid") != null && mark.get("ask") != null);
         Long combinedMaxLoss = preview.analytics().get("combinedMaxLossCents") instanceof Number number

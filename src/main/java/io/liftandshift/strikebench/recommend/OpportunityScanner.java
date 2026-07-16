@@ -54,7 +54,7 @@ public final class OpportunityScanner {
                         }
                         StrategyEvaluation best = evaluations.evaluate(symbol, field.intent(), field.thesis(),
                                         field.horizon(), field.riskMode(), field.candidates(), buyingPowerCents,
-                                        null, false, AnalysisContext.OBSERVED, worldId).stream()
+                                        null, false, AnalysisContext.OBSERVED, worldId, null).stream()
                                 .filter(StrategyEvaluation::viable)
                                 .findFirst().orElse(null);
                         return new PerSymbol(best, null);

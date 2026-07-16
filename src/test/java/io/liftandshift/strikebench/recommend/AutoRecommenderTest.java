@@ -86,9 +86,9 @@ class AutoRecommenderTest {
                 // Two curated ideas plus at most one explicitly labeled teaching counterexample.
                 assertThat(h.candidates()).hasSizeLessThanOrEqualTo(3);
                 for (AutoRecommender.ScoredCandidate sc : h.candidates()) {
-                    assertThat(sc.candidate().maxLossCents()).isPositive();
+                    assertThat(sc.evaluation().candidate().maxLossCents()).isPositive();
                     io.liftandshift.strikebench.strategy.StrategyFamily family =
-                            io.liftandshift.strikebench.strategy.StrategyFamily.valueOf(sc.candidate().strategy());
+                            io.liftandshift.strikebench.strategy.StrategyFamily.valueOf(sc.evaluation().candidate().strategy());
                     assertThat(family.blockedByDefault()).isFalse();
                 }
             }
@@ -116,7 +116,7 @@ class AutoRecommenderTest {
                 assertThat(pick.horizons()).allSatisfy(horizon ->
                         assertThat(horizon.candidates()).allSatisfy(scored ->
                                 assertThat(io.liftandshift.strikebench.strategy.StrategyFamily
-                                        .valueOf(scored.candidate().strategy())
+                                        .valueOf(scored.evaluation().candidate().strategy())
                                         .fits(io.liftandshift.strikebench.strategy.StrategyFamily.Thesis
                                                 .valueOf(override.toUpperCase()))).isTrue())));
     }
@@ -128,7 +128,7 @@ class AutoRecommenderTest {
                 "COMPARE_CAREFULLY", "Economics incomplete", "history missing",
                 -100L, null, 260L, -0.5, false,
                 List.of(io.liftandshift.strikebench.eval.EconomicAssessment.DAILY_HISTORY_REASON));
-        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, incomplete));
+        var rows = List.of(scored(incomplete));
 
         assertThat(AutoRecommender.noFavorableNote(rows, true))
                 .contains("cannot be formed yet")
@@ -144,7 +144,7 @@ class AutoRecommenderTest {
                 "COMPARE_CAREFULLY", "Economics incomplete", "model unsupported",
                 -100L, null, 260L, -0.5, false,
                 List.of("The realized-volatility EV lane is unavailable for this multi-expiration structure."));
-        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, unsupported));
+        var rows = List.of(scored(unsupported));
 
         assertThat(AutoRecommender.noFavorableNote(rows, true))
                 .contains("available after-cost economic checks")
@@ -157,7 +157,7 @@ class AutoRecommenderTest {
                 io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE,
                 "MECHANICALLY_INELIGIBLE", "Cannot assess as a trade", "mechanical failure",
                 -100L, null, 260L, -0.5, true, List.of("book is not executable"));
-        var rows = List.of(new AutoRecommender.ScoredCandidate(null, 50, null, blocked));
+        var rows = List.of(scored(blocked));
 
         assertThat(AutoRecommender.noFavorableNote(rows, true))
                 .contains("every candidate failed a mechanical or account check")
@@ -193,7 +193,7 @@ class AutoRecommenderTest {
         assertThat(zeroDte.horizon()).isEqualTo("0DTE");
         assertThat(zeroDte.candidates()).isNotEmpty();
         for (AutoRecommender.ScoredCandidate sc : zeroDte.candidates()) {
-            for (LegView leg : sc.candidate().legs()) {
+            for (LegView leg : sc.evaluation().candidate().legs()) {
                 if (leg.expiration() != null) assertThat(LocalDate.parse(leg.expiration())).isEqualTo(TODAY);
             }
         }
@@ -226,10 +226,10 @@ class AutoRecommenderTest {
                 double previous = Double.POSITIVE_INFINITY;
                 for (AutoRecommender.ScoredCandidate sc : h.candidates()) {
                     sawCandidate = true;
-                    assertThat(sc.economics()).isNotNull();
-                    assertThat(sc.decisionScore()).isBetween(0.0, 100.0)
+                    assertThat(sc.evaluation().assessment().economics()).isNotNull();
+                    assertThat(sc.evaluation().decisionScore()).isBetween(0.0, 100.0)
                             .isLessThanOrEqualTo(previous);
-                    previous = sc.decisionScore();
+                    previous = sc.evaluation().decisionScore();
                 }
             }
         }
@@ -245,7 +245,7 @@ class AutoRecommenderTest {
         for (AutoRecommender.Pick p : result.picks()) {
             for (AutoRecommender.HorizonIdeas h : p.horizons()) {
                 for (AutoRecommender.ScoredCandidate sc : h.candidates()) {
-                    assertThat(sc.candidate().maxLossCents()).isLessThanOrEqualTo(50_000L);
+                    assertThat(sc.evaluation().candidate().maxLossCents()).isLessThanOrEqualTo(50_000L);
                 }
             }
         }
@@ -263,7 +263,7 @@ class AutoRecommenderTest {
             assertThat(p.symbol()).isEqualTo("AAPL"); // what you HOLD, not the scanned universe
         }
         Candidate cc = res.picks().getFirst().horizons().getFirst().candidates().stream()
-                .map(AutoRecommender.ScoredCandidate::candidate)
+                .map(scored -> scored.evaluation().candidate())
                 .filter(c -> c.strategy().equals("COVERED_CALL")).findFirst().orElseThrow();
         assertThat(cc.usesHeldShares()).isTrue();
         assertThat(cc.qty()).isEqualTo(2); // both free lots covered
@@ -288,11 +288,31 @@ class AutoRecommenderTest {
             assertThat(p.intent()).isEqualTo("INCOME");
             for (AutoRecommender.HorizonIdeas h : p.horizons()) {
                 for (AutoRecommender.ScoredCandidate sc : h.candidates()) {
-                    assertThat(io.liftandshift.strikebench.strategy.StrategyFamily.valueOf(sc.candidate().strategy())
+                    assertThat(io.liftandshift.strikebench.strategy.StrategyFamily.valueOf(sc.evaluation().candidate().strategy())
                             .servesIntent(io.liftandshift.strikebench.strategy.StrategyIntent.INCOME)).isTrue();
                 }
             }
         }
+    }
+
+    private static AutoRecommender.ScoredCandidate scored(
+            io.liftandshift.strikebench.eval.EconomicAssessment economics) {
+        Candidate candidate = new Candidate("TEST", "Test", "test", "test", List.of(), 1,
+                0, null, 1, List.of(), null, null, 1.0, "DELAYED", List.of(), 1.0,
+                "test", "test", "test", "test", "test", "DIRECTIONAL", List.of("DIRECTIONAL"),
+                null, null, null, null, false, null, null);
+        var score = new io.liftandshift.strikebench.eval.ScoreBreakdown(true, List.of(), 50, 50, List.of());
+        var assessment = new io.liftandshift.strikebench.eval.FourOutputAssessment(
+                new io.liftandshift.strikebench.eval.FourOutputAssessment.MechanicalAssessment(true, List.of()),
+                economics,
+                new io.liftandshift.strikebench.eval.FourOutputAssessment.ObjectiveCoherence(
+                        io.liftandshift.strikebench.eval.FourOutputAssessment.Coherence.UNDECLARED,
+                        "test", "test", List.of()),
+                new io.liftandshift.strikebench.eval.FourOutputAssessment.PortfolioImpacts(
+                        null, null, List.of("test")));
+        var evaluation = new io.liftandshift.strikebench.eval.StrategyEvaluation("test", null, candidate,
+                null, null, null, null, null, score, assessment, null, null, null, null, null, null);
+        return new AutoRecommender.ScoredCandidate(null, evaluation);
     }
 
 }

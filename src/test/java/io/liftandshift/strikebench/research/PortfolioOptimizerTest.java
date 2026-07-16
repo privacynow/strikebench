@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.research;
 
 import io.liftandshift.strikebench.eval.CapitalProfile;
 import io.liftandshift.strikebench.eval.EconomicAssessment;
+import io.liftandshift.strikebench.eval.FourOutputAssessment;
 import io.liftandshift.strikebench.eval.RiskProfile;
 import io.liftandshift.strikebench.eval.ScoreBreakdown;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
@@ -33,12 +34,17 @@ class PortfolioOptimizerTest {
         return new StrategyEvaluation("id-" + symbol + "-" + (int) score,
                 new StrategySpec(symbol, family, null, null, null, null, null),
                 null,
-                new CapitalProfile(capital, capital, null, null, 30, "test"),
+                new CapitalProfile(capital, capital, null, null, 30, "test", null),
                 null,
                 new RiskProfile(capital, capital, 0.5, marketEv, tail, 0.2, List.of(), historyEv, "test"),
                 null, null,
                 new ScoreBreakdown(gate, List.of(), score, score, List.of()),
-                economics, null);
+                new FourOutputAssessment(
+                        new FourOutputAssessment.MechanicalAssessment(gate, List.of()), economics,
+                        new FourOutputAssessment.ObjectiveCoherence(FourOutputAssessment.Coherence.UNDECLARED,
+                                "test", "test", List.of()),
+                        new FourOutputAssessment.PortfolioImpacts(null, null, List.of("test"))),
+                null, null, null, null, null, null);
     }
 
     @Test void generatedFavorableAllocationStaysAvailableButIsAutomaticallyDiagnostic() {

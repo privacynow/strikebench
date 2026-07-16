@@ -7,7 +7,6 @@
   <logger name="org.eclipse.jetty" level="WARN"/>
   <!-- Product logs describe product state; framework/version/classpath chatter is implementation detail. -->
   <logger name="io.javalin" level="WARN"/>
-  <logger name="org.flywaydb" level="WARN"/>
   <logger name="com.zaxxer.hikari" level="WARN"/>
   <root level="INFO">
     <appender-ref ref="STDOUT"/>

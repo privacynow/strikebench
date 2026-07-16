@@ -11,7 +11,8 @@ import java.util.Map;
 public record EvidenceProfile(EvidenceLevel rollup, Map<String, EvidenceLevel> perDimension, String note) {
 
     public EvidenceProfile {
-        perDimension = perDimension == null ? Map.of() : Map.copyOf(perDimension);
+        perDimension = perDimension == null ? Map.of()
+                : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(perDimension));
     }
 
     /** Builds a profile whose rollup is the worst of the given dimensions. */

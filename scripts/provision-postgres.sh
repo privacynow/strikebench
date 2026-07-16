@@ -62,4 +62,4 @@ echo
 echo "Postgres ready: jdbc:postgresql://localhost:5432/${DB_NAME} (user ${DB_ROLE})"
 echo "Next:"
 echo "  1) put the password in /opt/strikebench/strikebench.properties:  db.password=${DB_PASSWORD}"
-echo "  2) sudo systemctl restart strikebench   (the app migrates its schema via Flyway on boot)"
+echo "  2) sudo systemctl restart strikebench   (the app initializes an empty database from its current schema)"

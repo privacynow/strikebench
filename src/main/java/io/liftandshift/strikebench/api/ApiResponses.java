@@ -152,6 +152,33 @@ public final class ApiResponses {
                                       List<Rejection> rejected,
                                       List<DecisionBaseline> baselines,
                                       String recommendationId, String calibrationNote) {}
+    /** Candidate is carried by its parent row; every decision fact has one canonical receipt. */
+    public record EvaluationReceipt(
+            double decisionScore,
+            boolean viable,
+            io.liftandshift.strikebench.eval.CapitalProfile capital,
+            io.liftandshift.strikebench.eval.VolatilityProfile volatility,
+            io.liftandshift.strikebench.eval.RiskProfile risk,
+            io.liftandshift.strikebench.eval.EvidenceProfile evidence,
+            io.liftandshift.strikebench.eval.ManagementPlan management,
+            io.liftandshift.strikebench.eval.ScoreBreakdown score,
+            io.liftandshift.strikebench.eval.FourOutputAssessment assessment,
+            io.liftandshift.strikebench.eval.StanceVector stance,
+            io.liftandshift.strikebench.position.ParticipationProfile participation,
+            io.liftandshift.strikebench.eval.ImpliedStance impliedStance,
+            io.liftandshift.strikebench.eval.IvContext ivContext,
+            io.liftandshift.strikebench.eval.DataCoverageReceipt coverage,
+            io.liftandshift.strikebench.eval.Explanation explanation
+    ) {
+        public static EvaluationReceipt of(StrategyEvaluation evaluation) {
+            if (evaluation == null) throw new IllegalArgumentException("evaluation is required");
+            return new EvaluationReceipt(evaluation.decisionScore(), evaluation.viable(),
+                    evaluation.capital(), evaluation.volatility(), evaluation.risk(), evaluation.evidence(),
+                    evaluation.management(), evaluation.score(), evaluation.assessment(), evaluation.stance(),
+                    evaluation.participation(), evaluation.impliedStance(), evaluation.ivContext(),
+                    evaluation.coverage(), evaluation.explanation());
+        }
+    }
     public record CreatedTrade<T, U>(T trade, U warnings) {}
     public record Guardrails(String level, List<String> blockReasons, List<String> warnings) {}
     public record RiskAcknowledgment(String id, String label) {}
@@ -159,19 +186,19 @@ public final class ApiResponses {
     public record AccountFit(Double pctOfNlv, Double pctOfCashBp, Double pctOfMarginBp,
                              Double pctOfRiskCapital, Boolean overRiskCapital) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record TradePreviewResponse(TradePreview preview, io.liftandshift.strikebench.eval.StrategyEvaluation evaluation,
+    public record TradePreviewResponse(TradePreview preview, EvaluationReceipt evaluation,
                                        Guardrails guardrails, List<RiskAcknowledgment> requiredAcks,
                                        String ackToken, AccountFit accountFit) {}
     public record OrderSummary(int qty, long proposedNetCents, long feesOverrideCents) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record PlanDecisionPreview<T, U>(TradePreview preview, io.liftandshift.strikebench.eval.StrategyEvaluation evaluation,
+    public record PlanDecisionPreview<T, U>(TradePreview preview, EvaluationReceipt evaluation,
                                              Guardrails guardrails,
                                              List<RiskAcknowledgment> requiredAcks,
                                              String ackToken, AccountFit accountFit,
                                              T plan, U selected, OrderSummary order) {}
     public record TradePage<T>(T trades, long total, int page, int size) {}
     public record PositionBook<T>(T positions, String note) {}
-    public record TrackedPackageAnalysis(TradePreview preview, String accountId,
+    public record TrackedPackageAnalysis(TradePreview preview, EvaluationReceipt evaluation, String accountId,
                                          String accountName, long availableCashCents,
                                          String marketLane, String note) {}
     public record PayoffPoint(String price, long profitCents) {}

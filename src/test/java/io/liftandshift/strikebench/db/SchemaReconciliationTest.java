@@ -55,6 +55,20 @@ class SchemaReconciliationTest {
             assertThat(db.query("SELECT table_name value FROM information_schema.tables "
                             + "WHERE table_schema='public' AND table_name IN ('plan_strategy_param')",
                     r -> r.str("value"))).isEmpty();
+            assertThat(db.query("SELECT column_name value FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='plan_candidate' AND column_name IN "
+                            + "('pop','expected_value_cents','evaluation_id','decision_score','ev_market_cents','ev_histvol_cents','cvar_cents',"
+                            + "'economic_verdict','evidence_provenance','screen_score','decision_viable',"
+                            + "'structurally_eligible','economic_placement','economic_label','economic_summary',"
+                            + "'estimated_roundtrip_fees_cents','market_ev_pct_of_risk','observed_evidence')",
+                    r -> r.str("value"))).as("copied Plan candidate assessment columns").isEmpty();
+            assertThat(db.query("SELECT is_nullable value FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='plan_candidate' "
+                            + "AND column_name='evaluation_snapshot'", r -> r.str("value")))
+                    .containsExactly("NO");
+            assertThat(db.query("SELECT table_name value FROM information_schema.tables "
+                            + "WHERE table_schema='public' AND table_name='plan_candidate_message'",
+                    r -> r.str("value"))).isEmpty();
             assertThat(db.query("SELECT table_name || '.' || column_name value "
                             + "FROM information_schema.columns WHERE table_schema='public' AND "
                             + "((table_name='backtests' AND column_name IN ('request_json','report_json')) OR "
