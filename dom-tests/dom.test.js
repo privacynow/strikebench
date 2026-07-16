@@ -3433,9 +3433,9 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   await page.locator('#plan-strategy-body .position-terminal').fill(terminal);
   await page.getByRole('button', { name: 'Apply lines', exact: true }).click();
   await page.waitForSelector('#plan-strategy-body .position-editor-visual svg.chart');
-  assert.equal(await page.evaluate(() => PositionEditor.identify(
-    App.state.positionDrafts['plan:' + PlanStore.active().id].legs).family), 'CREDIT_PUT_SPREAD',
-  'the live catalog identifies the exact terminal package instead of inventing a label');
+  assert.match(await page.locator('#plan-strategy-body .position-identity').innerText(),
+    /Exact position package[\s\S]*Analyze once to match these exact legs/i,
+  'the editor does not invent a catalog identity before the server analyzes the exact package');
   assert.doesNotMatch(await page.getAttribute('#plan-strategy-body .position-editor-visual path.line', 'd'), /NaN/,
     'the exact 20-lot payoff never writes invalid path coordinates');
   await page.getByRole('button', { name: 'Visual', exact: true }).click();
@@ -3476,6 +3476,10 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
     page.getByRole('button', { name: 'Analyze and use in this Plan', exact: true }).click()
   ]);
   assert.equal(analysisResponse.status(), 200, 'the shared Plan editor reaches the real exact-package endpoint');
+  const analysisBody = await analysisResponse.json();
+  assert.equal(analysisBody.identity && analysisBody.identity.family, 'CREDIT_PUT_SPREAD',
+    'the server-owned catalog identifies the exact terminal package');
+  await page.waitForSelector('#plan-strategy-body .position-identity:has-text("Bull put (credit) spread")');
   await page.waitForSelector('#plan-strategy-body .position-editor-result .inline-action-feedback');
   assert.match(await page.locator('#plan-strategy-body .position-editor-result').innerText(),
     /Analysis complete[\s\S]*Theoretical max loss[\s\S]*Market-implied EV after costs[\s\S]*WHAT THIS POSITION ACTUALLY EXPRESSES[\s\S]*Data coverage for this analysis[\s\S]*Portfolio impact[\s\S]*Entry-price receipt[\s\S]*Continue to Outcomes/i,

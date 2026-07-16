@@ -61,7 +61,8 @@ public final class ApiResponses {
     public record Plans<T>(T plans, String market, String world) {}
     public record PlanSymbolError(String error, String detail, String market) {}
     public record PlanStrategy<T, U>(T plan, U strategy) {}
-    public record PlanStrategyPreview<T, U, V>(T plan, U strategy, V preview) {}
+    public record PlanStrategyPreview<T, U, V>(T plan, U strategy, V preview,
+                                                io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity) {}
     public record StrategyState<T, U>(T strategy, U selected) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanStrategyFit<T, U, V>(T plan, U result, V candidate) {}
@@ -188,7 +189,8 @@ public final class ApiResponses {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record TradePreviewResponse(TradePreview preview, EvaluationReceipt evaluation,
                                        Guardrails guardrails, List<RiskAcknowledgment> requiredAcks,
-                                       String ackToken, AccountFit accountFit) {}
+                                       String ackToken, AccountFit accountFit,
+                                       io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity) {}
     public record OrderSummary(int qty, long proposedNetCents, long feesOverrideCents) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanDecisionPreview<T, U>(TradePreview preview, EvaluationReceipt evaluation,
@@ -198,7 +200,9 @@ public final class ApiResponses {
                                              T plan, U selected, OrderSummary order) {}
     public record TradePage<T>(T trades, long total, int page, int size) {}
     public record PositionBook<T>(T positions, String note) {}
-    public record TrackedPackageAnalysis(TradePreview preview, EvaluationReceipt evaluation, String accountId,
+    public record TrackedPackageAnalysis(TradePreview preview, EvaluationReceipt evaluation,
+                                         io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity,
+                                         String accountId,
                                          String accountName, long availableCashCents,
                                          String marketLane, String note) {}
     public record PayoffPoint(String price, long profitCents) {}

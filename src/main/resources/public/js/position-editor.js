@@ -118,9 +118,8 @@
     if (draft.packageNet !== '' && !Number.isFinite(Number(draft.packageNet))) throw new Error('Package net must be a number.');
     var feeValue = draft.feeMode === 'EXACT' && draft.fees !== '' ? Number(draft.fees) : null;
     if (feeValue !== null && (!Number.isFinite(feeValue) || feeValue < 0)) throw new Error('Fees must be zero or more.');
-    var identified = identify(draft.legs);
     return { symbol: draft.symbol || draft.legs[0].symbol,
-      strategy: identified.family || identified.key || 'CUSTOM', qty: packageQty, legs: legs,
+      strategy: 'CUSTOM', qty: packageQty, legs: legs,
       proposedNetCents: packageNet, feesOverrideCents: feeValue === null ? null : Math.round(feeValue * 100),
       source: draft.fillNature === 'EXECUTED' ? 'BROKER' : 'ANALYZE',
       fillNature: draft.fillNature };
@@ -224,95 +223,6 @@
     }).join('\n');
   }
 
-  function identify(rawLegs) {
-    var legs = (rawLegs || []).filter(function (leg) { return validLeg(leg, false); });
-    if (!legs.length || legs.some(function (leg) { return leg.positionEffect === 'CLOSE'; })) {
-      return catalogResult(null, null, 'Custom transaction', 'Closing and mixed-effect activity is identified from the resulting position, not the transaction by itself.');
-    }
-    var stock = legs.filter(function (leg) { return leg.instrumentType === 'STOCK'; });
-    var opt = legs.filter(function (leg) { return leg.instrumentType === 'OPTION'; });
-    function one(action, type) { return opt.length === 1 && opt[0].action === action && opt[0].optionType === type; }
-    if (stock.length === 1 && stock[0].action === 'BUY') {
-      var stockShares = Number(stock[0].quantity);
-      if (one('SELL', 'CALL') && stockShares >= Number(opt[0].quantity) * Number(opt[0].multiplier)) return catalogResult('COVERED_CALL', 'BUY_WRITE');
-      if (one('BUY', 'PUT') && stockShares >= Number(opt[0].quantity) * Number(opt[0].multiplier)) return catalogResult('PROTECTIVE_PUT', 'MARRIED_PUT');
-      if (opt.length === 2 && oneEach(opt, 'BUY', 'PUT', 'SELL', 'CALL')
-          && stockShares >= Math.max.apply(null, opt.map(function (leg) { return Number(leg.quantity) * Number(leg.multiplier); }))) {
-        return catalogResult('PROTECTIVE_COLLAR', 'COLLAR');
-      }
-    }
-    if (stock.length) return catalogResult(null, null, 'Custom stock-and-option package');
-    if (opt.length === 1) {
-      if (one('BUY', 'CALL')) return catalogResult('LONG_CALL');
-      if (one('BUY', 'PUT')) return catalogResult('LONG_PUT');
-      if (one('SELL', 'CALL')) return catalogResult('NAKED_CALL');
-      return catalogResult(null, null, 'Short put', 'Cash and protective context determine whether this is cash-secured or naked; the analysis names that distinction.');
-    }
-    if (opt.length === 2) {
-      var a = opt[0], b = opt[1], sameExp = a.expiration === b.expiration;
-      if (a.optionType !== b.optionType && sameExp) {
-        var call = a.optionType === 'CALL' ? a : b, put = a.optionType === 'PUT' ? a : b;
-        if (call.action === 'BUY' && put.action === 'BUY') return catalogResult(
-          Number(call.strike) === Number(put.strike) ? 'LONG_STRADDLE' : 'LONG_STRANGLE');
-        if (call.action === 'SELL' && put.action === 'SELL') return catalogResult(
-          Number(call.strike) === Number(put.strike) ? 'SHORT_STRADDLE' : 'SHORT_STRANGLE');
-        if (call.action === 'BUY' && put.action === 'SELL' && Number(call.strike) === Number(put.strike)) {
-          return catalogResult(null, 'SYNTHETIC_LONG', 'Synthetic long');
-        }
-        if (call.action === 'SELL' && put.action === 'BUY' && Number(call.strike) === Number(put.strike)) {
-          return catalogResult(null, 'SYNTHETIC_SHORT', 'Synthetic short');
-        }
-        if (call.action === 'BUY' && put.action === 'SELL') {
-          return catalogResult(null, 'RISK_REVERSAL', 'Risk reversal');
-        }
-      }
-      if (a.optionType === b.optionType && !sameExp) {
-        var near = a.expiration < b.expiration ? a : b, far = near === a ? b : a;
-        if (near.action === 'SELL' && far.action === 'BUY') {
-          var calendar = Number(near.strike) === Number(far.strike);
-          return catalogResult((calendar ? 'CALENDAR_' : 'DIAGONAL_') + a.optionType);
-        }
-      }
-      if (a.optionType === b.optionType && sameExp) {
-        var low = Number(a.strike) < Number(b.strike) ? a : b, high = low === a ? b : a;
-        if (a.action !== b.action && Number(a.quantity) !== Number(b.quantity)) {
-          var sold = a.action === 'SELL' ? a : b, bought = sold === a ? b : a;
-          if (Number(bought.quantity) === Number(sold.quantity) * 2) {
-            if (a.optionType === 'CALL' && Number(bought.strike) > Number(sold.strike)) {
-              return catalogResult(null, 'CALL_BACKSPREAD', 'Call ratio backspread');
-            }
-            if (a.optionType === 'PUT' && Number(bought.strike) < Number(sold.strike)) {
-              return catalogResult(null, 'PUT_BACKSPREAD', 'Put ratio backspread');
-            }
-          }
-        }
-        if (a.optionType === 'CALL') {
-          if (low.action === 'BUY' && high.action === 'SELL') return catalogResult('DEBIT_CALL_SPREAD');
-          if (low.action === 'SELL' && high.action === 'BUY') return catalogResult('CREDIT_CALL_SPREAD');
-        } else {
-          if (low.action === 'SELL' && high.action === 'BUY') return catalogResult('DEBIT_PUT_SPREAD');
-          if (low.action === 'BUY' && high.action === 'SELL') return catalogResult('CREDIT_PUT_SPREAD');
-        }
-      }
-    }
-    if (opt.length === 3 && sameKindAndExpiration(opt)) {
-      var sorted3 = opt.slice().sort(byStrike), q0 = Number(sorted3[0].quantity), q1 = Number(sorted3[1].quantity), q2 = Number(sorted3[2].quantity);
-      if (sorted3[0].action === 'BUY' && sorted3[1].action === 'SELL' && sorted3[2].action === 'BUY'
-          && q1 === q0 * 2 && q2 === q0) {
-        return catalogResult(opt[0].optionType === 'CALL' ? 'LONG_CALL_BUTTERFLY' : 'LONG_PUT_BUTTERFLY');
-      }
-    }
-    if (opt.length === 4 && allSameExpiration(opt)) {
-      var puts = opt.filter(function (leg) { return leg.optionType === 'PUT'; }).sort(byStrike);
-      var calls = opt.filter(function (leg) { return leg.optionType === 'CALL'; }).sort(byStrike);
-      if (puts.length === 2 && calls.length === 2 && puts[0].action === 'BUY' && puts[1].action === 'SELL'
-          && calls[0].action === 'SELL' && calls[1].action === 'BUY') {
-        return catalogResult(Number(puts[1].strike) === Number(calls[0].strike) ? 'IRON_BUTTERFLY' : 'IRON_CONDOR');
-      }
-    }
-    return catalogResult(null, null, 'Custom structure', 'The exact legs still receive the same payoff, risk, and outcomes analysis; no catalog name is being invented.');
-  }
-
   function draftFromCandidate(candidate, options) {
     if (!candidate || !Array.isArray(candidate.legs) || !candidate.legs.length) return null;
     if (!Number.isInteger(Number(candidate.qty)) || Number(candidate.qty) < 1) {
@@ -348,28 +258,6 @@
       })
     };
     return raw;
-  }
-
-  function oneEach(legs, a1, t1, a2, t2) {
-    return legs.some(function (l) { return l.action === a1 && l.optionType === t1; })
-      && legs.some(function (l) { return l.action === a2 && l.optionType === t2; });
-  }
-  function byStrike(a, b) { return Number(a.strike) - Number(b.strike); }
-  function allSameExpiration(legs) { return legs.every(function (l) { return l.expiration === legs[0].expiration; }); }
-  function sameKindAndExpiration(legs) {
-    return allSameExpiration(legs) && legs.every(function (l) { return l.optionType === legs[0].optionType; });
-  }
-  function catalogResult(family, key, fallback, note) {
-    var templates = window.Builder && Builder.TEMPLATES || [];
-    var meta = templates.find(function (t) { return key ? t.key === key : t.family === family; });
-    if (!meta && (family || key)) {
-      return { family: null, key: null, label: fallback || 'Custom structure', blocked: false,
-        note: 'No current server-catalog identity is claimed. The exact legs still receive the same analysis.' };
-    }
-    return { family: family || null, key: key || family || null,
-      label: meta ? meta.name : fallback || String(family || 'Custom structure').replaceAll('_', ' ').toLowerCase(),
-      blocked: meta ? !!meta.risky : ['NAKED_CALL', 'NAKED_PUT', 'SHORT_STRADDLE', 'SHORT_STRANGLE'].includes(family),
-      note: note || (meta && meta.blurb) || '' };
   }
 
   function localPayoff(draft, spot) {
@@ -597,12 +485,16 @@
     function refreshVisual() {
       if (!visualHost || !visualHost.isConnected) return;
       visualHost.innerHTML = '';
-      var identified = identify(draft.legs), payoffUnavailable = localPayoffUnavailableReason(draft);
+      var identified = lastAnalysis && lastAnalysis.identity || {
+        family: null, label: 'Exact position package', blockedByDefault: false,
+        summary: 'Analyze once to match these exact legs to the server-owned strategy catalog.'
+      };
+      var payoffUnavailable = localPayoffUnavailableReason(draft);
       visualHost.appendChild(el('div', { class: 'position-identity' },
         el('span', { class: 'eyebrow' }, 'CATALOG MATCH'),
         el('h3', {}, identified.label),
-        identified.note ? el('p', { class: 'muted small' }, identified.note) : null,
-        identified.blocked ? UI.alertBox('caution', 'Shown for learning, blocked by default', [
+        identified.summary ? el('p', { class: 'muted small' }, identified.summary) : null,
+        identified.blockedByDefault ? UI.alertBox('caution', 'Shown for learning, blocked by default', [
           'The exact structure remains analyzable. Practice placement keeps its existing safety block; recording an actual broker fact is never refused for being risky.'
         ]) : null));
       var response = lastAnalysis && (lastAnalysis.preview || lastAnalysis);
@@ -1014,6 +906,6 @@
   }
 
   window.PositionEditor = { render: render, cleanDraft: cleanDraft, parseTerminal: parseTerminal,
-    terminalText: terminalText, identify: identify, localPayoffUnavailableReason: localPayoffUnavailableReason,
+    terminalText: terminalText, localPayoffUnavailableReason: localPayoffUnavailableReason,
     analysisPayload: normalizedForAnalysis, recordPayload: recordPayload, draftFromCandidate: draftFromCandidate };
 })();
