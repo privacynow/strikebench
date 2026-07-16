@@ -283,17 +283,19 @@ final class TradeController {
             Verdict verdict, List<ApiResponses.RiskAcknowledgment> required,
             String excludedTradeId) {
         Candidate exact = exactPreviewCandidate(request, preview);
-        io.liftandshift.strikebench.eval.StrategyEvaluation evaluation;
+        ApiResponses.EvaluationReceipt evaluation;
         long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
         try {
-            evaluation = evaluations.assessExact(request.symbol(), exact, preview.buyingPowerBeforeCents(),
+            evaluation = ApiResponses.EvaluationReceipt.of(evaluations.assessExact(
+                    request.symbol(), exact, preview.buyingPowerBeforeCents(),
                     analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
                     preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol(),
-                            excludedTradeId));
+                            excludedTradeId)));
         } catch (RuntimeException e) {
             log.warn("Exact-ticket assessment is unavailable for this preview", e);
-            throw new io.liftandshift.strikebench.util.DataUnavailableException(
-                    "The exact package was checked mechanically, but its complete decision assessment is unavailable; no partial substitute was returned", e);
+            evaluation = ApiResponses.EvaluationReceipt.unavailable(
+                    "The package mechanics were checked, but the broader decision assessment is unavailable because one or more market inputs could not be observed. No score or economic claim was substituted.",
+                    preview.ok(), preview.blockReasons(), roundTripFees);
         }
         ApiResponses.Guardrails guardrails = new ApiResponses.Guardrails(
                 verdict.level().name(), verdict.blockReasons(), verdict.warnings());
@@ -311,7 +313,7 @@ final class TradeController {
             accountFit = new ApiResponses.AccountFit(pctOfNlv, pctOfCash, pctOfMargin,
                     pctOfRiskCapital, overRiskCapital);
         }
-        return new ApiResponses.TradePreviewResponse(preview, ApiResponses.EvaluationReceipt.of(evaluation), guardrails,
+        return new ApiResponses.TradePreviewResponse(preview, evaluation, guardrails,
                 required.isEmpty() ? null : required, token, accountFit,
                 io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
                         request.symbol(), request.qty(), request.legs()));

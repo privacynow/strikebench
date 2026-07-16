@@ -1046,7 +1046,7 @@ test('Plan Outcomes gives an exact-contract prerequisite instead of a dead empty
   const plan = await openPlan('TSLA', 'outcomes', 'DIRECTIONAL', 'neutral', '58d');
   await page.waitForSelector('#plan-outcomes-prerequisite');
   assert.match(await page.textContent('#plan-outcomes-prerequisite'),
-    /Choose exact contracts.*Market-implied lens.*POP \+ after-cost EV.*Possible-futures lens.*p5.*median.*p95.*Historical lens.*No-look-ahead replay/s,
+    /Choose exact contracts.*Market-implied lens.*POP \+ after-cost EV.*Possible futures \(Monte Carlo\).*p5.*median.*p95.*Historical lens.*No-look-ahead replay/s,
     'the empty state explains which contract-dependent results are waiting');
   assert.equal(await page.locator('#plan-outcomes-prerequisite .btn').count(), 1,
     'the prerequisite presents one clear next action');
@@ -1056,6 +1056,14 @@ test('Plan Outcomes gives an exact-contract prerequisite instead of a dead empty
   });
   assert.ok(geometry.height < 360 && geometry.pageWidth <= geometry.viewport,
     'the prerequisite is compact and cannot widen the page: ' + JSON.stringify(geometry));
+  assert.equal(await page.locator('#plan-outcomes-nav [role="tab"]').count(), 4,
+    'all four outcome lenses remain visible while setup is missing');
+  assert.match(await page.textContent('#plan-outcomes-nav'), /Possible futures \(Monte Carlo\)/,
+    'the modeled path lens uses the discoverable Monte Carlo name');
+  assert.equal(await page.locator('.plan-rail button[aria-label^="Outcomes"]').isDisabled(), true,
+    'the rail names Outcomes as locked until a structure is selected');
+  assert.equal(await page.locator('.plan-rail button[aria-label^="Decide"]').isDisabled(), true,
+    'the rail names Decide as locked until a structure is selected');
   await page.getByRole('button', { name: 'Choose contracts in Strategy', exact: true }).click();
   await page.waitForFunction(id => location.hash === '#/plan/' + id + '/strategy', plan.id);
   await page.waitForSelector('#plan-stage-strategy');
@@ -3884,10 +3892,10 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
     page.getByRole('button', { name: 'Analyze and use in this Plan', exact: true }).click()
   ]);
   assert.equal(optimisticResponse.status(), 200, 'an optimistic proposed limit still receives a complete analysis');
-  await page.waitForSelector('#plan-strategy-body .position-editor-result:has-text("Analyzed with constraints")');
+  await page.waitForSelector('#plan-strategy-body .position-editor-result:has-text("Not selected in this Plan")');
   assert.match(await page.locator('#plan-strategy-body .position-editor-result').innerText(),
-    /does not model resting limit orders|cannot claim this paper order filled/i,
-  'an impossible limit remains visible as a proposal and is never presented as an executable fill');
+    /(?:does not model resting limit orders|cannot claim this paper order filled)[\s\S]*did not become the Plan structure/i,
+  'an impossible limit stays visible and plainly names non-selection');
   assert.equal(await page.getByRole('button', { name: 'Continue to Outcomes', exact: true }).count(), 0,
     'a constrained proposed limit cannot advance as though it were selected');
   const afterConstraint = await page.evaluate(async planId => {
@@ -3895,8 +3903,10 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
     const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
     return { version: plan.version, selected: latest.selected && latest.selected.id };
   }, editorPlan.id);
-  assert.deepEqual(afterConstraint, beforeConstraint,
-    'a constrained analysis neither selects a structure nor mutates the Plan version');
+  assert.equal(afterConstraint.version, beforeConstraint.version,
+    'a constrained analysis with no prior selection does not rewrite Plan state');
+  assert.equal(afterConstraint.selected, null,
+    'a constrained analysis cannot leave an older, unseen package selected');
   await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).fill('');
   const [analysisResponse] = await Promise.all([
     page.waitForResponse(response => response.url().includes('/api/plans/' + editorPlan.id + '/strategy/custom')
@@ -3923,6 +3933,30 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   assert.ok(selectedExactPackage.id && selectedExactPackage.family === 'CREDIT_PUT_SPREAD'
     && selectedExactPackage.legs === 2,
   'the exact edited package becomes the durable Plan selection: ' + JSON.stringify(selectedExactPackage));
+  const versionBeforeRejectedReplacement = await page.evaluate(async planId =>
+    (await PlanStore.get(planId, true)).version, editorPlan.id);
+  await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).fill('99999');
+  await Promise.all([
+    page.waitForResponse(response => response.url().includes('/api/plans/' + editorPlan.id + '/strategy/custom')
+      && response.request().method() === 'POST'),
+    page.getByRole('button', { name: 'Analyze and use in this Plan', exact: true }).click()
+  ]);
+  await page.waitForSelector('#plan-strategy-body .position-editor-result:has-text("The prior selection was cleared")');
+  const rejectedReplacement = await page.evaluate(async planId => ({
+    plan: await PlanStore.get(planId, true),
+    latest: await API.getFresh('/api/plans/' + planId + '/strategy/latest')
+  }), editorPlan.id);
+  assert.equal(rejectedReplacement.plan.version, versionBeforeRejectedReplacement + 1,
+    'rejecting a replacement clears the old structure in one versioned write');
+  assert.equal(rejectedReplacement.latest.selected, null,
+    'the Plan never evaluates an older hidden structure after a replacement fails');
+  await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).fill('');
+  await Promise.all([
+    page.waitForResponse(response => response.url().includes('/api/plans/' + editorPlan.id + '/strategy/custom')
+      && response.request().method() === 'POST'),
+    page.getByRole('button', { name: 'Analyze and use in this Plan', exact: true }).click()
+  ]);
+  await page.waitForSelector('#plan-strategy-body .position-editor-result:has-text("Analysis complete")');
   await page.evaluate(id => { delete App.state.positionDrafts['plan:' + id]; }, editorPlan.id);
   await page.evaluate(() => App.render());
   await page.waitForSelector('#app[data-ready="true"] #plan-strategy-body .position-editor');

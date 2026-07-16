@@ -85,7 +85,7 @@ class PlanOutcomeServiceTest {
 	                 "maxProfitCents":70000,"maxLossCents":30000,"breakevens":[253],
 	                 "liquidityScore":0.9,"freshness":"FIXTURE","warnings":[],
 	                 "confidence":0.8,"intent":"DIRECTIONAL","intents":["DIRECTIONAL"],
-	                 "evaluation":{"decisionScore":42.0,"viable":true,
+	                 "evaluation":{"available":true,"decisionScore":42.0,"viable":true,
 	                   "capital":{},"volatility":{},"risk":{"pop":0.45},"evidence":{},
 	                   "management":{},"score":{},
 	                   "assessment":{"mechanics":{"eligible":true,"reasons":[]},

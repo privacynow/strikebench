@@ -77,8 +77,12 @@ final class PlanDecisionController {
     void planDecisionLatest(Context ctx) {
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         root.requireActivePlanMarket(ctx, plan);
-        ctx.json(new ApiResponses.PlanDecisionState<>(plan, root.selectedCandidate(ctx, plan, false),
-                planDecisions.latest(root.ownerId(ctx), plan.id())));
+        JsonNode selected = root.selectedCandidate(ctx, plan, false);
+        JsonNode prior = selected == null
+                ? root.priorSelectedCandidate(ctx, plan) : null;
+        ctx.json(new ApiResponses.PlanDecisionState<>(plan, selected,
+                planDecisions.latest(root.ownerId(ctx), plan.id()),
+                selected != null ? "CURRENT" : prior != null ? "STALE" : "NONE", prior));
     }
 
     void planDecisionPreview(Context ctx) {

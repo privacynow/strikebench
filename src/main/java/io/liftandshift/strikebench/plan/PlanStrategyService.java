@@ -238,7 +238,8 @@ public final class PlanStrategyService {
         String runId = Ids.newId("psr");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String inputHash = sha256(request == null ? Json.MAPPER.createObjectNode() : request);
-        String candidateId = db.tx(c -> {
+        record PersistedCustom(String candidateId, boolean clearedSelection) {}
+        PersistedCustom persisted = db.tx(c -> {
             PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != expectedVersion) {
@@ -247,7 +248,11 @@ public final class PlanStrategyService {
             if (current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("This plan's assumptions changed. Reprice the structure before saving it.");
             }
-            if (select) markStrategyFieldDependentsStale(c, plan.id(), plan.context().rev());
+            boolean hadSelection = !Db.queryOn(c,
+                    "SELECT id FROM plan_candidate WHERE plan_id=? AND context_rev=? " +
+                            "AND state='CURRENT' AND selected=1 LIMIT 1",
+                    r -> r.str("id"), plan.id(), plan.context().rev()).isEmpty();
+            if (select || hadSelection) markStrategyFieldDependentsStale(c, plan.id(), plan.context().rev());
             Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
                             "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
                             "unfavorable_count,unavailable_count,disclaimer,request_snapshot,input_hash,engine_version,state,created_at) " +
@@ -256,7 +261,7 @@ public final class PlanStrategyService {
                     plan.context().thesis(), horizonName(plan.context().horizonDays()), plan.context().riskMode(),
                     plan.intent(), null, "EXACT_PACKAGE", "Exact Builder package", 0, 0, 0, 0,
                     "Server-priced exact contracts", requestSnapshot(request), inputHash, ENGINE_VERSION, "CURRENT", now);
-            if (select) {
+            if (select || hadSelection) {
                 Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?",
                         plan.id(), plan.context().rev());
             }
@@ -264,11 +269,14 @@ public final class PlanStrategyService {
             if (select) {
                 Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", id);
                 Db.execOn(c, "UPDATE plans SET furthest_stage='OUTCOMES',version=version+1,updated_at=now() WHERE id=?", plan.id());
+            } else if (hadSelection) {
+                Db.execOn(c, "UPDATE plans SET furthest_stage='STRATEGY',version=version+1,updated_at=now() WHERE id=?", plan.id());
             }
-            return id;
+            return new PersistedCustom(id, hadSelection && !select);
         });
-        candidate.put("id", candidateId);
+        candidate.put("id", persisted.candidateId());
         candidate.put("selected", select);
+        candidate.put("selectionCleared", persisted.clearedSelection());
         ObjectNode result = Json.MAPPER.createObjectNode();
         result.set("candidate", candidate);
         result.put("strategyRunId", runId);
@@ -283,6 +291,19 @@ public final class PlanStrategyService {
                             " WHERE pc.plan_id=? AND pc.context_rev=? AND pc.state='CURRENT' AND pc.selected=1 " +
                             "AND pc.underlying_symbol=? " +
                             "ORDER BY pc.created_at DESC LIMIT 1",
+                    PlanStrategyService::candidateRow, planId, plan.contextRev(), plan.symbol());
+            return rows.isEmpty() ? null : loadCandidate(c, rows.getFirst());
+        });
+    }
+
+    /** Most recent selected package from an earlier context revision. It is returned only as a
+     * reprice seed; callers must never treat it as the current Plan structure. */
+    public JsonNode priorSelectedCandidate(String userId, String planId) {
+        return db.with(c -> {
+            CurrentPlan plan = ownedPlanOn(c, planId, userId, false);
+            List<CandidateRow> rows = Db.queryOn(c, candidateSelect() +
+                            " WHERE pc.plan_id=? AND pc.context_rev<>? AND pc.state='STALE' AND pc.selected=1 " +
+                            "AND pc.underlying_symbol=? ORDER BY pc.context_rev DESC,pc.created_at DESC LIMIT 1",
                     PlanStrategyService::candidateRow, planId, plan.contextRev(), plan.symbol());
             return rows.isEmpty() ? null : loadCandidate(c, rows.getFirst());
         });
@@ -395,8 +416,17 @@ public final class PlanStrategyService {
         if (evaluation.has("id") || evaluation.has("candidate") || evaluation.has("spec")) {
             throw new IllegalArgumentException("full StrategyEvaluation payloads are not accepted; send the current evaluation receipt");
         }
+        if (!evaluation.path("available").isBoolean()) {
+            throw new IllegalArgumentException("evaluation receipt requires an availability flag");
+        }
+        if (!evaluation.path("available").asBoolean()) {
+            if (text(evaluation, "unavailableReason") == null) {
+                throw new IllegalArgumentException("unavailable evaluation receipt requires a reason");
+            }
+            return;
+        }
         if (!evaluation.path("decisionScore").isNumber() || !evaluation.path("viable").isBoolean()) {
-            throw new IllegalArgumentException("evaluation receipt requires decisionScore and viable");
+            throw new IllegalArgumentException("available evaluation receipt requires decisionScore and viable");
         }
         for (String field : List.of("capital", "volatility", "risk", "evidence", "management", "score",
                 "assessment", "stance", "participation", "impliedStance", "ivContext", "coverage", "explanation")) {

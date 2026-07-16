@@ -1766,10 +1766,16 @@
     if (!publicMode && planUi && planUi.contextRev !== plan.context.rev) {
       var carriedMode = planUi.evidence && planUi.evidence.mode;
       planUi.contextRev = plan.context.rev;
-      planUi.evidence = carriedMode ? { mode: carriedMode } : {};
+      planUi.evidence = { mode: carriedMode || 'past', assumptionsChanged: true };
     }
     var tvState = planUi.evidence = planUi.evidence || {};
     tvState.mode = tvState.mode || 'past';
+    if (tvState.assumptionsChanged) {
+      wrap.appendChild(alertBox('info', 'Evidence setup kept; prior results need a fresh run', [
+        'Your selected evidence lens is still open. The Plan assumptions changed, so old study and scenario results are not shown as current.'
+      ]));
+      tvState.assumptionsChanged = false;
+    }
     outcomeWorkspace = window.ViewPlan.outcomeWorkspace({
       id: 'research-outcomes', state: tvState, label: symbol + ' evidence basis',
       onChange: function () { if (window.Workspace) Workspace.save(); },
