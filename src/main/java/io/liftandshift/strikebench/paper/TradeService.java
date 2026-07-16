@@ -100,6 +100,12 @@ public final class TradeService {
 
     public record CloseResult(TradeRecord trade, long realizedPnlCents) {}
 
+    public record RollResult(TradeRecord closedTrade, TradeRecord replacementTrade,
+                             long realizedClosingCents) {}
+
+    public record ExpectedOpen(long entryNetCents, long feesCents, long reserveCents,
+                               long maxLossCents, Long maxProfitCents) {}
+
     /** Fresh-eyes assessment of the current exact Practice position through the existing pricing path. */
     public record PositionAssessment(PositionPackage position, TradePreview preview,
                                      PositionTransformation.RiskSnapshot risk) {}
@@ -119,20 +125,47 @@ public final class TradeService {
         void afterMutation(Connection connection, TradeRecord trade, Long realizedPnlCents) throws SQLException;
     }
 
+    @FunctionalInterface
+    public interface RollHook {
+        void afterRoll(Connection connection, TradeRecord closedTrade, TradeRecord replacementTrade,
+                       long realizedClosingCents) throws SQLException;
+    }
+
     // ---- Preview / create ----
 
     public TradePreview preview(OpenRequest req) {
         Account acct = db.with(c -> AccountService.get(c, req.accountId()));
+        return preview(req, acct.cashCents(), acct.reservedCents(), 0);
+    }
+
+    /**
+     * Prices the same executable order against a projected Practice balance. Transformations use
+     * this after valuing the close so the replacement is judged with the cash, reserve, and held
+     * shares that the atomic close will actually release.
+     */
+    public TradePreview preview(OpenRequest req, long cashBeforeCents, long reservedBeforeCents,
+                                long releasedShares) {
         // Import/broker previews describe an actual fill that already happened. Ordinary ticket
         // previews describe a paper order and therefore cannot claim a favorable resting limit filled.
         Plan p = computePlan(req, req.executedFill());
-        long cashAfter = acct.cashCents() + p.entryNet - p.fees;
-        long reservedAfter = acct.reservedCents() + p.reserve;
+        return previewFromPlan(req, p, cashBeforeCents, reservedBeforeCents, releasedShares);
+    }
+
+    private TradePreview previewFromPlan(OpenRequest req, Plan p, long cashBeforeCents,
+                                         long reservedBeforeCents, long releasedShares) {
+        if (cashBeforeCents < 0 || reservedBeforeCents < 0 || releasedShares < 0) {
+            throw new IllegalArgumentException("projected Practice balances cannot be negative");
+        }
+        long buyingPowerBefore = Math.subtractExact(cashBeforeCents, reservedBeforeCents);
+        long cashAfter = Math.subtractExact(Math.addExact(cashBeforeCents, p.entryNet), p.fees);
+        long reservedAfter = Math.addExact(reservedBeforeCents, p.reserve);
         List<String> blocks = new ArrayList<>(p.blocks);
         if (p.blocks.isEmpty() && req.heldShares()) {
             long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
-            long free = db.with(c -> PositionsService.heldShares(c, req.accountId(), req.symbol().toUpperCase(java.util.Locale.ROOT))
-                    - PositionsService.lockedShares(c, req.accountId(), req.symbol().toUpperCase(java.util.Locale.ROOT)));
+            long free = Math.addExact(db.with(c -> PositionsService.heldShares(c, req.accountId(),
+                            req.symbol().toUpperCase(java.util.Locale.ROOT))
+                    - PositionsService.lockedShares(c, req.accountId(),
+                            req.symbol().toUpperCase(java.util.Locale.ROOT))), releasedShares);
             if (free < needed) {
                 blocks.add("Needs " + needed + " free shares of " + req.symbol().toUpperCase(java.util.Locale.ROOT)
                         + " but only " + Math.max(0, free) + " are free (held minus already locked)");
@@ -140,13 +173,13 @@ public final class TradeService {
         }
         if (p.blocks.isEmpty() && blocks.isEmpty() && cashAfter - reservedAfter < 0) {
             blocks.add("Insufficient buying power: needs " + Money.fmt(p.maxLoss + p.fees)
-                    + " but only " + Money.fmt(acct.buyingPowerCents()) + " is available");
+                    + " but only " + Money.fmt(buyingPowerBefore) + " is available");
         }
         return new TradePreview(blocks.isEmpty(), blocks, p.warnings,
                 p.entryNet, p.fees, p.maxLoss, p.maxProfit, p.breakevens, p.pop, p.ev, p.reserve,
-                acct.cashCents(), blocks.isEmpty() ? cashAfter : acct.cashCents(),
-                acct.reservedCents(), blocks.isEmpty() ? reservedAfter : acct.reservedCents(),
-                acct.buyingPowerCents(), blocks.isEmpty() ? cashAfter - reservedAfter : acct.buyingPowerCents(),
+                cashBeforeCents, blocks.isEmpty() ? cashAfter : cashBeforeCents,
+                reservedBeforeCents, blocks.isEmpty() ? reservedAfter : reservedBeforeCents,
+                buyingPowerBefore, blocks.isEmpty() ? cashAfter - reservedAfter : buyingPowerBefore,
                 p.freshness.name(), entryEvidence(req.accountId(), p.freshness), p.underlyingCents,
                 p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics());
     }
@@ -212,6 +245,15 @@ public final class TradeService {
     /** Adapts an exact proposed package to the shared position contract through this service's one pricing path. */
     public PositionAssessment analyzePositionPackage(String packageId, PositionDomain.PackageSource source,
                                                      PositionDomain.ExecutionLane lane, OpenRequest request) {
+        Account account = db.with(c -> AccountService.get(c, request.accountId()));
+        return analyzePositionPackage(packageId, source, lane, request, account.cashCents(),
+                account.reservedCents(), 0);
+    }
+
+    public PositionAssessment analyzePositionPackage(String packageId, PositionDomain.PackageSource source,
+                                                     PositionDomain.ExecutionLane lane, OpenRequest request,
+                                                     long cashBeforeCents, long reservedBeforeCents,
+                                                     long releasedShares) {
         if (lane != PositionDomain.ExecutionLane.PRACTICE) {
             throw new IllegalArgumentException("TradeService position analysis owns the Practice lane only");
         }
@@ -219,15 +261,7 @@ public final class TradeService {
             throw new IllegalArgumentException("complete position-package identity is required");
         }
         Plan plan = computePlan(request, false);
-        Account account = db.with(c -> AccountService.get(c, request.accountId()));
-        long cashAfter = account.cashCents() + plan.entryNet - plan.fees;
-        long reservedAfter = account.reservedCents() + plan.reserve;
-        TradePreview preview = new TradePreview(plan.blocks().isEmpty(), plan.blocks(), plan.warnings(),
-                plan.entryNet(), plan.fees(), plan.maxLoss(), plan.maxProfit(), plan.breakevens(), plan.pop(),
-                plan.ev(), plan.reserve(), account.cashCents(), cashAfter, account.reservedCents(), reservedAfter,
-                account.buyingPowerCents(), cashAfter - reservedAfter, plan.freshness().name(),
-                entryEvidence(request.accountId(), plan.freshness()), plan.underlyingCents(), plan.assignmentProb(),
-                plan.legDetails(), plan.payoff(), plan.analytics());
+        TradePreview preview = previewFromPlan(request, plan, cashBeforeCents, reservedBeforeCents, releasedShares);
         List<Leg> assessedLegs = plan.filledLegs().isEmpty() ? request.legs() : plan.filledLegs();
         PositionDomain.PriceAuthority authority = switch (plan.freshness()) {
             case REALTIME, DELAYED, EOD -> PositionDomain.PriceAuthority.OBSERVED;
@@ -255,15 +289,12 @@ public final class TradeService {
     public UnwindAssessment previewUnwind(String tradeId) {
         PositionAssessment current = analyzeActivePosition(tradeId);
         TradeRecord trade = get(tradeId);
-        MarkView mark = currentMark(tradeId);
-        if (mark.closeCostCents() == null) {
-            throw new TradeRejectedException(List.of("The current position has no complete executable closing book."));
-        }
-        long closingFees = closeFeesFor(trade);
+        ExecutableClose close = executableClose(trade);
+        long closingFees = close.feesCents();
         long realized = Math.subtractExact(Math.addExact(
-                Math.subtractExact(trade.entryNetPremiumCents(), trade.feesOpenCents()), mark.closeCostCents()),
+                Math.subtractExact(trade.entryNetPremiumCents(), trade.feesOpenCents()), close.cashCents()),
                 closingFees);
-        return new UnwindAssessment(current, mark.closeCostCents(), closingFees, realized);
+        return new UnwindAssessment(current, close.cashCents(), closingFees, realized);
     }
 
     /**
@@ -448,64 +479,8 @@ public final class TradeService {
         }
         String tradeId = Ids.trade();
         try {
-            TradeRecord out = db.tx(c -> {
-                Account acct = AccountService.getForUpdate(c, req.accountId());
-                long cashAfter = acct.cashCents() + p.entryNet - p.fees;
-                long reservedAfter = acct.reservedCents() + p.reserve;
-                if (cashAfter - reservedAfter < 0) {
-                    throw new TradeRejectedException(List.of("Insufficient buying power: needs "
-                            + Money.fmt(p.maxLoss + p.fees) + " but only " + Money.fmt(acct.buyingPowerCents()) + " is available"));
-                }
-                String symbol = req.symbol().toUpperCase(java.util.Locale.ROOT);
-                if (req.heldShares()) {
-                    // Verified INSIDE the transaction so two covered trades cannot both claim
-                    // the same lot; the lock lives on the trade row and dies with ACTIVE status.
-                    long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
-                    long free = PositionsService.heldShares(c, acct.id(), symbol)
-                            - PositionsService.lockedShares(c, acct.id(), symbol);
-                    if (free < needed) {
-                        throw new TradeRejectedException(List.of("Needs " + needed + " free shares of "
-                                + symbol + " but only " + Math.max(0, free) + " are free"));
-                    }
-                }
-                String now = now();
-                long cash = acct.cashCents(), reserved = acct.reservedCents();
-
-                cash += p.entryNet;
-                ledgerRow(c, acct.id(), tradeId, now, "PREMIUM_OPEN", p.entryNet, cash, reserved,
-                        req.strategy() + " x" + req.qty() + " open");
-                if (p.fees != 0) {
-                    cash -= p.fees;
-                    ledgerRow(c, acct.id(), tradeId, now, "FEE", -p.fees, cash, reserved, "open commissions");
-                }
-                if (p.reserve != 0) {
-                    reserved += p.reserve;
-                    ledgerRow(c, acct.id(), tradeId, now, "RESERVE_HOLD", p.reserve, cash, reserved, "max-loss reserve");
-                }
-
-                Db.execOn(c, """
-                        INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
-                          entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,
-                          pop_entry,fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,
-                          is_live,created_at,closed_at,updated_at,intent,shares_locked,proposed_net_cents,
-                          data_provenance,data_age,data_source)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,?,?,?,?,?)""",
-                        tradeId, acct.id(), symbol, req.strategy(), TradeRecord.ACTIVE,
-                        req.qty(), Json.write(p.filledLegs), req.thesis(), req.horizon(), req.riskMode(),
-                        p.underlyingCents, p.entryNet, p.maxLoss, p.maxProfit, Json.write(p.breakevens),
-                        p.pop, p.fees, p.snapshotJson, now, now,
-                        req.intent() == null || req.intent().isBlank() ? null
-                                : io.liftandshift.strikebench.strategy.StrategyIntent.parse(req.intent()).name(),
-                        p.sharesToLock(), req.proposedNetCents(),
-                        entryEvidence(acct.id(), p.freshness()).provenance().name(),
-                        entryEvidence(acct.id(), p.freshness()).age().name(),
-                        entryEvidence(acct.id(), p.freshness()).source());
-                Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, has_traded=1, updated_at=? WHERE id=?",
-                        cash, reserved, now, acct.id());
-                TradeRecord created = getOn(c, tradeId);
-                if (hook != null) hook.afterTradeCreated(c, created);
-                return created;
-            });
+            TradeRecord out = db.tx(c -> openOn(c, AccountService.getForUpdate(c, req.accountId()),
+                    tradeId, req, p, hook));
             accountSnapshot.invalidate(req.accountId());
             auditSafe(req.accountId(), tradeId, "TRADE_OPENED", "INFO", Map.of(
                     "symbol", req.symbol(), "strategy", req.strategy(), "qty", req.qty(),
@@ -515,6 +490,60 @@ public final class TradeService {
             reject(req, e.reasons());
             throw e; // unreachable; reject throws
         }
+    }
+
+    private TradeRecord openOn(Connection c, Account acct, String tradeId, OpenRequest req, Plan p,
+                               TransactionHook hook) throws SQLException {
+        long cashAfter = acct.cashCents() + p.entryNet - p.fees;
+        long reservedAfter = acct.reservedCents() + p.reserve;
+        if (cashAfter - reservedAfter < 0) {
+            throw new TradeRejectedException(List.of("Insufficient buying power: needs "
+                    + Money.fmt(p.maxLoss + p.fees) + " but only " + Money.fmt(acct.buyingPowerCents()) + " is available"));
+        }
+        String symbol = req.symbol().toUpperCase(java.util.Locale.ROOT);
+        if (req.heldShares()) {
+            long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
+            long free = PositionsService.heldShares(c, acct.id(), symbol)
+                    - PositionsService.lockedShares(c, acct.id(), symbol);
+            if (free < needed) {
+                throw new TradeRejectedException(List.of("Needs " + needed + " free shares of "
+                        + symbol + " but only " + Math.max(0, free) + " are free"));
+            }
+        }
+        String now = now();
+        long cash = acct.cashCents(), reserved = acct.reservedCents();
+        cash += p.entryNet;
+        ledgerRow(c, acct.id(), tradeId, now, "PREMIUM_OPEN", p.entryNet, cash, reserved,
+                req.strategy() + " x" + req.qty() + " open");
+        if (p.fees != 0) {
+            cash -= p.fees;
+            ledgerRow(c, acct.id(), tradeId, now, "FEE", -p.fees, cash, reserved, "open commissions");
+        }
+        if (p.reserve != 0) {
+            reserved += p.reserve;
+            ledgerRow(c, acct.id(), tradeId, now, "RESERVE_HOLD", p.reserve, cash, reserved, "max-loss reserve");
+        }
+        var evidence = entryEvidence(acct.id(), p.freshness());
+        Db.execOn(c, """
+                INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
+                  entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,
+                  pop_entry,fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,
+                  is_live,created_at,closed_at,updated_at,intent,shares_locked,proposed_net_cents,
+                  data_provenance,data_age,data_source)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,?,?,?,?,?)""",
+                tradeId, acct.id(), symbol, req.strategy(), TradeRecord.ACTIVE,
+                req.qty(), Json.write(p.filledLegs), req.thesis(), req.horizon(), req.riskMode(),
+                p.underlyingCents, p.entryNet, p.maxLoss, p.maxProfit, Json.write(p.breakevens),
+                p.pop, p.fees, p.snapshotJson, now, now,
+                req.intent() == null || req.intent().isBlank() ? null
+                        : io.liftandshift.strikebench.strategy.StrategyIntent.parse(req.intent()).name(),
+                p.sharesToLock(), req.proposedNetCents(), evidence.provenance().name(), evidence.age().name(),
+                evidence.source());
+        Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, has_traded=1, updated_at=? WHERE id=?",
+                cash, reserved, now, acct.id());
+        TradeRecord created = getOn(c, tradeId);
+        if (hook != null) hook.afterTradeCreated(c, created);
+        return created;
     }
 
     private void reject(OpenRequest req, List<String> reasons) {
@@ -547,41 +576,62 @@ public final class TradeService {
             LockedTrade locked = lockTradeAndAccount(c, tradeId, TradeRecord.ACTIVE);
             TradeRecord t = locked.trade();
             Account acct = locked.account();
-            long closeValue = 0;
-            Freshness worst = Freshness.REALTIME;
-            var lane = laneFor(worldOf(t.accountId()));
-            for (Leg leg : t.legs()) {
-                MarksSource.LegMark mark = marks.legMark(t.symbol(), leg, worldOf(t.accountId()))
-                        .orElseThrow(() -> new TradeRejectedException(List.of("No current mark for leg " + legDesc(leg) + "; cannot value the close")));
-                if (!mark.evidence().executableIn(lane)) {
-                    throw new TradeRejectedException(List.of("Cannot close " + legDesc(leg) + " in the " + lane
-                            + " market using " + mark.evidence().provenance() + " data (" + mark.evidence().source()
-                            + ", " + mark.evidence().age() + "). Refresh an executable quote or switch to the market that owns this data."));
-                }
-                worst = worse(worst, mark.freshness());
-                LegAction closingAction = leg.action().opposite();
-                BigDecimal px = mark.executable(closingAction);
-                if (px == null) {
-                    throw new TradeRejectedException(List.of("No executable " + (closingAction == LegAction.BUY ? "ask" : "bid")
-                            + " to close " + legDesc(leg) + " — the book is one-sided or empty; try during market hours"));
-                }
-                closeValue += closeSign(leg) * Money.centsFromPrice(px, (long) leg.multiplier() * leg.ratio() * t.qty());
-            }
-            long feesClose = closeFeesFor(t);
-            if (expectedCloseValueCents != null && closeValue != expectedCloseValueCents
-                    || expectedCloseFeesCents != null && feesClose != expectedCloseFeesCents) {
-                throw new TradeRejectedException(List.of(
-                        "The executable closing book changed after the transformation preview. Review the updated before-and-after position before applying it."));
-            }
+            ExecutableClose close = executableClose(t);
+            requireExpectedClose(close, expectedCloseValueCents, expectedCloseFeesCents);
             Long decisionUnderlying = marks.underlyingMark(t.symbol(), worldOf(t.accountId()))
                     .map(Money::toCents).orElse(null);
-            CloseResult closed = closeOut(c, t, acct, "PREMIUM_CLOSE", closeValue, feesClose,
+            CloseResult closed = closeOut(c, t, acct, "PREMIUM_CLOSE", close.cashCents(), close.feesCents(),
                     TradeRecord.CLOSED, "UNWIND", decisionUnderlying);
             if (hook != null) hook.afterMutation(c, closed.trade(), closed.realizedPnlCents());
             return closed;
         });
         auditSafe(result.trade().accountId(), tradeId, "TRADE_UNWOUND", "INFO",
                 Map.of("realizedPnlCents", result.realizedPnlCents()));
+        return result;
+    }
+
+    /**
+     * One exact Practice roll: close the existing package and open its replacement under the
+     * same account lock and database transaction. The existing close/open kernels remain the
+     * only money paths; this method composes them and adds no pricing formula of its own.
+     */
+    public RollResult roll(String tradeId, OpenRequest replacement, boolean confirm, RollHook hook,
+                           Long expectedCloseValueCents, Long expectedCloseFeesCents,
+                           ExpectedOpen expectedOpen) {
+        requireConfirm(confirm, "roll");
+        if (replacement == null) throw new IllegalArgumentException("a roll requires the replacement position");
+        Plan replacementPlan = computePlan(replacement);
+        if (!replacementPlan.blocks().isEmpty()) reject(replacement, replacementPlan.blocks());
+        requireExpectedOpen(replacementPlan, expectedOpen);
+        String replacementTradeId = Ids.trade();
+        markMemo.invalidate(tradeId);
+        accountSnapshot.invalidateAll();
+        RollResult result = db.tx(c -> {
+            LockedTrade locked = lockTradeAndAccount(c, tradeId, TradeRecord.ACTIVE);
+            TradeRecord current = locked.trade();
+            if (!current.accountId().equals(replacement.accountId())) {
+                throw new IllegalArgumentException("a roll cannot switch Practice accounts");
+            }
+            if (!current.symbol().equalsIgnoreCase(replacement.symbol())) {
+                throw new IllegalArgumentException("a roll cannot switch the underlying symbol");
+            }
+            ExecutableClose close = executableClose(current);
+            requireExpectedClose(close, expectedCloseValueCents, expectedCloseFeesCents);
+            Long decisionUnderlying = marks.underlyingMark(current.symbol(), worldOf(current.accountId()))
+                    .map(Money::toCents).orElse(null);
+            CloseResult closed = closeOut(c, current, locked.account(), "PREMIUM_CLOSE",
+                    close.cashCents(), close.feesCents(), TradeRecord.CLOSED, "ROLL_CLOSE", decisionUnderlying);
+            Account afterClose = AccountService.getForUpdate(c, current.accountId());
+            TradeRecord opened = openOn(c, afterClose, replacementTradeId, replacement, replacementPlan, null);
+            if (hook != null) hook.afterRoll(c, closed.trade(), opened, closed.realizedPnlCents());
+            return new RollResult(closed.trade(), opened, closed.realizedPnlCents());
+        });
+        auditSafe(result.closedTrade().accountId(), result.closedTrade().id(), "TRADE_ROLLED_CLOSE", "INFO",
+                Map.of("realizedPnlCents", result.realizedClosingCents(),
+                        "replacementTradeId", result.replacementTrade().id()));
+        auditSafe(result.replacementTrade().accountId(), result.replacementTrade().id(), "TRADE_ROLLED_OPEN", "INFO",
+                Map.of("priorTradeId", result.closedTrade().id(),
+                        "entryNetPremiumCents", result.replacementTrade().entryNetPremiumCents()));
         return result;
     }
 
@@ -1120,7 +1170,14 @@ public final class TradeService {
     }
 
     public DollarDeltaExposure portfolioDollarDelta(String accountId, String focusSymbol) {
+        return portfolioDollarDelta(accountId, focusSymbol, null);
+    }
+
+    /** Current Practice exposure with one position omitted, used for before/after transformations. */
+    public DollarDeltaExposure portfolioDollarDelta(String accountId, String focusSymbol,
+                                                     String excludedTradeId) {
         List<TradeRecord> active = activeTrades(accountId).stream()
+                .filter(trade -> excludedTradeId == null || !excludedTradeId.equals(trade.id()))
                 .filter(trade -> !trade.external()).toList();
         Map<String, MarkView> marksByTrade = accountMarkSnapshot(accountId);
         long gross = 0, net = 0, focusGross = 0;
@@ -1939,6 +1996,51 @@ public final class TradeService {
         }
         return feesFor(t.legs(), t.qty());
     }
+
+    private ExecutableClose executableClose(TradeRecord trade) {
+        long closeValue = 0;
+        var lane = laneFor(worldOf(trade.accountId()));
+        for (Leg leg : trade.legs()) {
+            MarksSource.LegMark mark = marks.legMark(trade.symbol(), leg, worldOf(trade.accountId()))
+                    .orElseThrow(() -> new TradeRejectedException(List.of(
+                            "No current mark for leg " + legDesc(leg) + "; cannot value the close")));
+            if (!mark.evidence().executableIn(lane)) {
+                throw new TradeRejectedException(List.of("Cannot close " + legDesc(leg) + " in the " + lane
+                        + " market using " + mark.evidence().provenance() + " data (" + mark.evidence().source()
+                        + ", " + mark.evidence().age() + "). Refresh an executable quote or switch to the market that owns this data."));
+            }
+            LegAction closingAction = leg.action().opposite();
+            BigDecimal px = mark.executable(closingAction);
+            if (px == null) {
+                throw new TradeRejectedException(List.of("No executable "
+                        + (closingAction == LegAction.BUY ? "ask" : "bid") + " to close " + legDesc(leg)
+                        + " — the book is one-sided or empty; try during market hours"));
+            }
+            closeValue = Math.addExact(closeValue, Math.multiplyExact(closeSign(leg),
+                    Money.centsFromPrice(px, (long) leg.multiplier() * leg.ratio() * trade.qty())));
+        }
+        return new ExecutableClose(closeValue, closeFeesFor(trade));
+    }
+
+    private static void requireExpectedClose(ExecutableClose actual, Long expectedCash, Long expectedFees) {
+        if (expectedCash != null && actual.cashCents() != expectedCash
+                || expectedFees != null && actual.feesCents() != expectedFees) {
+            throw new TradeRejectedException(List.of(
+                    "The executable closing book changed after the transformation preview. Review the updated before-and-after position before applying it."));
+        }
+    }
+
+    private static void requireExpectedOpen(Plan actual, ExpectedOpen expected) {
+        if (expected == null) return;
+        if (actual.entryNet() != expected.entryNetCents() || actual.fees() != expected.feesCents()
+                || actual.reserve() != expected.reserveCents() || actual.maxLoss() != expected.maxLossCents()
+                || !Objects.equals(actual.maxProfit(), expected.maxProfitCents())) {
+            throw new TradeRejectedException(List.of(
+                    "The executable replacement book changed after the transformation preview. Review the updated roll before applying it."));
+        }
+    }
+
+    private record ExecutableClose(long cashCents, long feesCents) {}
 
     private static Long entrySnapshotLong(TradeRecord t, String key) {
         if (t == null || t.entrySnapshotJson() == null || t.entrySnapshotJson().isBlank()) return null;

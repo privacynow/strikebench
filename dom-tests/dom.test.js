@@ -1749,6 +1749,23 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   assert.match(await page.textContent('.plan-frozen-context'), /linked revision.*without rewriting/i);
 
   await page.locator('.plan-rail button').filter({ hasText: 'Manage' }).click();
+  await page.click('#roll-btn');
+  await page.waitForSelector('.position-roll-workbench:not([hidden]) .position-editor');
+  await page.click('.position-roll-workbench [data-position-command="analyze"]');
+  await page.waitForSelector('#apply-roll-btn', { timeout: 30000 });
+  const rollApplyResponse = page.waitForResponse(response => response.url().endsWith('/api/position-transformations/apply')
+    && response.request().method() === 'POST');
+  await page.click('#apply-roll-btn');
+  const rolledPlan = await (await rollApplyResponse).json();
+  assert.equal(rolledPlan.plan.status, 'POSITION_OPEN');
+  assert.notEqual(rolledPlan.trade.id, frozen.decision.tradeId,
+    'the roll keeps a newly linked replacement open instead of reusing the closed trade');
+  await page.waitForFunction(() => {
+    const timeline = document.querySelector('.plan-management-timeline');
+    return timeline && /ROLL/.test(timeline.textContent || '') && document.querySelector('#unwind-btn');
+  }, null, { timeout: 30000 });
+  assert.match(await page.textContent('.plan-management-timeline'), /ROLL/,
+    'the Plan records one atomic roll and keeps the replacement under Manage & Review');
   await page.click('#unwind-btn');
   await page.waitForSelector('#close-transformation-preview');
   const closePreview = await page.textContent('#close-transformation-preview');
@@ -1756,11 +1773,14 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   assert.match(closePreview, /Cash \/ no position/);
   assert.match(closePreview, /Closing cash flow.*Close fees.*Final position P\/L/s);
   assert.match(closePreview, /Broker reserve released.*Theoretical max loss after/s);
+  const closeApplyResponse = page.waitForResponse(response => response.url().endsWith('/api/position-transformations/apply')
+    && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Close position' }).click();
-  await page.waitForFunction(id => location.hash === '#/plan/' + id + '/manage-review', plan.id);
+  const closedPlan = await (await closeApplyResponse).json();
+  assert.equal(closedPlan.plan.status, 'CLOSED');
   await page.waitForFunction(() => {
     const stage = document.getElementById('plan-stage-manage-review');
-    return stage && /trade decision/i.test(stage.textContent || '');
+    return stage && /trade decision/i.test(stage.textContent || '') && !document.querySelector('#unwind-btn');
   }, null, { timeout: 15000 });
   assert.match(await page.textContent('#plan-stage-manage-review'), /trade decision/i);
   assert.match(await page.textContent('#plan-stage-manage-review'), /plan position/i);
@@ -1782,6 +1802,85 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   assert.equal((await page.locator('#app > h1').textContent()).trim(), 'Portfolio');
   assert.equal(await page.locator('#pf-sec-plans').count(), 0,
     'Portfolio owns money and positions without a second Plan library');
+});
+
+test('Practice roll edits, reviews, and applies one atomic before-after transformation at both levels', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const created = await page.evaluate(async () => {
+    const expirations = (await API.getFresh('/api/research/AAPL/expirations')).expirations;
+    const expiration = expirations[2];
+    const order = { symbol: 'AAPL', strategy: 'DEBIT_CALL_SPREAD', qty: 1,
+      thesis: 'bullish', horizon: 'month', riskMode: 'balanced', intent: 'DIRECTIONAL',
+      source: 'DOM_ATOMIC_ROLL', fillNature: 'PROPOSED', legs: [
+        { action: 'BUY', type: 'CALL', strike: '255', expiration: expiration,
+          ratio: 1, multiplier: 100, positionEffect: 'OPEN' },
+        { action: 'SELL', type: 'CALL', strike: '260', expiration: expiration,
+          ratio: 1, multiplier: 100, positionEffect: 'OPEN' }
+      ] };
+    const preview = await API.post('/api/trades/preview', order);
+    if (preview.requiredAcks && preview.requiredAcks.length) {
+      order.acknowledgedRisks = preview.requiredAcks.map(item => item.id);
+      order.ackToken = preview.ackToken;
+    }
+    const out = await API.post('/api/trades', order);
+    return { id: out.trade.id, expiration: expiration };
+  });
+
+  await go('#/portfolio/trade/' + created.id);
+  await page.waitForSelector('#roll-btn');
+  await page.click('#roll-btn');
+  await page.waitForSelector('.position-roll-workbench:not([hidden]) .position-editor');
+  assert.match(await page.textContent('.position-roll-workbench'), /Build the replacement/);
+  assert.equal(await page.evaluate(async id => (await API.getFresh('/api/trades/' + id)).trade.status, created.id),
+    'ACTIVE', 'opening the editor never closes the current position');
+  await page.click('.position-roll-workbench [data-position-command="analyze"]');
+  await page.waitForSelector('#apply-roll-btn', { timeout: 30000 });
+  const beginnerReview = await page.textContent('.position-roll-result');
+  assert.match(beginnerReview, /Before.*After/s);
+  assert.match(beginnerReview, /Realized on closing leg.*Replacement (credit|cost)/s);
+  assert.match(beginnerReview, /Theoretical max loss before.*Theoretical max loss after/s);
+  assert.match(beginnerReview, /commit together or nothing changes/i);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(300);
+  await page.locator('.toast-message').waitFor({ state: 'detached', timeout: 6000 }).catch(() => {});
+  const mobile = await page.evaluate(() => ({ width: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth }));
+  assert.ok(mobile.scrollWidth <= mobile.width + 1,
+    'the shared roll editor and review fit the mobile viewport: ' + JSON.stringify(mobile));
+  await page.screenshot({ path: path.join(__dirname, 'shots/trader-own-p5-roll-beginner-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#roll-btn');
+  await page.click('#roll-btn');
+  await page.waitForSelector('.position-roll-workbench:not([hidden]) .position-editor');
+  await page.click('.position-roll-workbench [data-position-command="analyze"]');
+  await page.waitForSelector('#apply-roll-btn', { timeout: 30000 });
+  assert.match(await page.textContent('.position-roll-result'), /Broker reserve before.*Broker reserve after/s,
+    'Expert receives the same reviewed action with dense risk facts');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.locator('.toast-message').waitFor({ state: 'detached', timeout: 6000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(__dirname, 'shots/trader-own-p5-roll-expert.png'), fullPage: true });
+
+  await page.click('#apply-roll-btn');
+  await page.waitForFunction(id => location.hash.startsWith('#/portfolio/trade/')
+    && location.hash !== '#/portfolio/trade/' + id, created.id, { timeout: 30000 });
+  const result = await page.evaluate(async oldId => {
+    const oldTrade = (await API.getFresh('/api/trades/' + oldId)).trade;
+    const newId = location.hash.split('/').pop();
+    const replacement = (await API.getFresh('/api/trades/' + newId)).trade;
+    return { oldStatus: oldTrade.status, newId: newId, newStatus: replacement.status,
+      oldExpirations: oldTrade.legs.map(leg => leg.expiration).filter(Boolean),
+      newExpirations: replacement.legs.map(leg => leg.expiration).filter(Boolean) };
+  }, created.id);
+  assert.equal(result.oldStatus, 'CLOSED');
+  assert.equal(result.newStatus, 'ACTIVE');
+  assert.notEqual(result.newId, created.id);
+  assert.ok(result.newExpirations.every(value => value > created.expiration),
+    'the replacement uses later listed expirations instead of a calendar guess');
+  await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
 });
 
 test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {
@@ -2953,8 +3052,10 @@ test('portfolio absorbs account: sections, ledger under Activity, guarded reset'
   assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'portfolio');
   await go('#/portfolio/activity');
   const ledger = await page.textContent('#app');
-  assert.match(ledger, /Ledger.*append-only.*Date.*Type.*Amount.*Cash after.*Broker reserve after.*DEPOSIT/s,
-    'Activity owns the append-only account ledger even before a trade has been placed');
+  assert.match(ledger, /Ledger.*append-only.*Date.*Type.*Amount.*Cash after.*Broker reserve after/s,
+    'Activity owns the append-only account ledger and its accounting columns');
+  assert.ok(await page.locator('#app table tbody tr').count() > 0,
+    'Activity shows durable ledger entries without depending on which oldest event fits on page one');
   await go('#/portfolio/account');
   await page.click('#reset-btn');
   await page.waitForSelector('#modal-confirm');

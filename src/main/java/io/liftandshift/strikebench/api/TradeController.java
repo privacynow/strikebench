@@ -123,6 +123,14 @@ final class TradeController {
     }
 
     record CreatedTrade(TradeRecord trade, Verdict verdict) {}
+    record PlacementCheck(Account account, TradeService.OpenRequest request, Verdict verdict,
+                          io.liftandshift.strikebench.paper.TradePreview preview,
+                          long effectiveRiskBudgetCents,
+                          List<ApiResponses.RiskAcknowledgment> requiredAcknowledgments) {}
+    record PlacementProjection(long cashCents, long reservedCents, long releasedShares,
+                               String excludedTradeId) {
+        long buyingPowerCents() { return Math.subtractExact(cashCents, reservedCents); }
+    }
     private record ConfirmRequest(Boolean confirm) {}
     private record StockOrderRequest(String symbol, Long shares) {}
     private record StockOrderPreviewRequest(String side, String symbol, Long shares) {}
@@ -259,17 +267,24 @@ final class TradeController {
     }
 
     ApiResponses.TradePreviewResponse previewPayload(Context ctx, TradeOpenRequest body) {
-        Account account = currentAccount.apply(ctx);
-        TradeService.OpenRequest request = toOpenRequest(body, account);
-        Verdict verdict = guardrailCheck(request, account, riskCapCents(ctx));
-        io.liftandshift.strikebench.paper.TradePreview preview = trades.preview(request);
+        return previewPayload(ctx, body, null);
+    }
+
+    private ApiResponses.TradePreviewResponse previewPayload(Context ctx, TradeOpenRequest body,
+                                                             PlacementProjection projection) {
+        PlacementCheck check = placementCheck(ctx, body, projection);
+        Account account = check.account();
+        TradeService.OpenRequest request = check.request();
+        Verdict verdict = check.verdict();
+        io.liftandshift.strikebench.paper.TradePreview preview = check.preview();
         Candidate exact = exactPreviewCandidate(request, preview);
         io.liftandshift.strikebench.eval.StrategyEvaluation evaluation;
         long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
         try {
-            evaluation = evaluations.assessExact(request.symbol(), exact, account.buyingPowerCents(),
+            evaluation = evaluations.assessExact(request.symbol(), exact, preview.buyingPowerBeforeCents(),
                     analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
-                    preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol()));
+                    preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol(),
+                            projection == null ? null : projection.excludedTradeId()));
         } catch (RuntimeException e) {
             log.warn("Exact-ticket assessment is unavailable for this preview", e);
             throw new io.liftandshift.strikebench.util.DataUnavailableException(
@@ -278,10 +293,7 @@ final class TradeController {
         ApiResponses.Guardrails guardrails = new ApiResponses.Guardrails(
                 verdict.level().name(), verdict.blockReasons(), verdict.warnings());
         AccountRiskContext riskContext = AccountRiskContext.load(db, ownerId.apply(ctx));
-        long effectiveRiskBudget = RiskBudgetPolicy.compute(
-                RecommendationEngine.RiskMode.parse(request.riskMode()),
-                account.buyingPowerCents(), riskCapCents(ctx)).effectiveBudgetCents();
-        List<ApiResponses.RiskAcknowledgment> required = requiredAcksFor(preview, effectiveRiskBudget);
+        List<ApiResponses.RiskAcknowledgment> required = check.requiredAcknowledgments();
         String token = required.isEmpty() ? null : acknowledgmentToken(request);
         ApiResponses.AccountFit accountFit = null;
         if (!riskContext.isEmpty() && preview.maxLossCents() > 0) {
@@ -301,9 +313,18 @@ final class TradeController {
                         request.symbol(), request.qty(), request.legs()));
     }
 
+    ApiResponses.TradePreviewResponse previewPayloadForAccount(Context ctx, TradeOpenRequest body,
+                                                                String expectedAccountId,
+                                                                PlacementProjection projection) {
+        if (!currentAccount.apply(ctx).id().equals(expectedAccountId)) {
+            throw new IllegalStateException("Open the Practice account that owns this position before changing it.");
+        }
+        return previewPayload(ctx, body, projection);
+    }
+
     private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
-            Account account, String symbol) {
-        var exposure = trades.portfolioDollarDelta(account.id(), symbol);
+            Account account, String symbol, String excludedTradeId) {
+        var exposure = trades.portfolioDollarDelta(account.id(), symbol, excludedTradeId);
         return new io.liftandshift.strikebench.eval.PortfolioExposureContext(
                 io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE,
                 exposure.grossCents(), exposure.netCents(), exposure.focusSymbolGrossCents(),
@@ -311,35 +332,11 @@ final class TradeController {
     }
 
     CreatedTrade execute(Context ctx, TradeOpenRequest body, TradeService.TransactionHook hook) {
-        Account account = currentAccount.apply(ctx);
-        TradeService.OpenRequest request = toOpenRequest(body, account);
-        Verdict verdict = guardrailCheck(request, account, riskCapCents(ctx));
-        if (verdict.blocked()) {
-            audit.log(account.id(), null, "TRADE_REJECTED", "BLOCK",
-                    Map.of("symbol", request.symbol(), "strategy", request.strategy(),
-                            "reasons", verdict.blockReasons()));
-            throw new TradeRejectedException(verdict.blockReasons());
-        }
-        long effectiveRiskBudget = RiskBudgetPolicy.compute(
-                RecommendationEngine.RiskMode.parse(request.riskMode()),
-                account.buyingPowerCents(), riskCapCents(ctx)).effectiveBudgetCents();
-        List<ApiResponses.RiskAcknowledgment> required =
-                requiredAcksFor(trades.preview(request), effectiveRiskBudget);
-        if (!required.isEmpty()) {
-            Set<String> acknowledged = body.acknowledgedRisks() == null
-                    ? Set.of() : new HashSet<>(body.acknowledgedRisks());
-            List<String> missing = required.stream().map(ApiResponses.RiskAcknowledgment::id)
-                    .filter(id -> !acknowledged.contains(id)).toList();
-            if (!missing.isEmpty()) {
-                throw new TradeRejectedException(List.of("This trade carries material risks that must be "
-                        + "acknowledged first: " + String.join(", ", missing)
-                        + " — preview it to see them"));
-            }
-            if (!verifyAcknowledgmentToken(body.ackToken(), request)) {
-                throw new TradeRejectedException(List.of(
-                        "Acknowledgment token missing or stale — preview this exact package again"));
-            }
-        }
+        PlacementCheck check = placementCheck(ctx, body, null);
+        Account account = check.account();
+        TradeService.OpenRequest request = check.request();
+        Verdict verdict = check.verdict();
+        requirePlacementApproval(body, check);
         TradeRecord trade = trades.create(request, hook);
         if (body.recommendationId() != null && !body.recommendationId().isBlank()
                 && account.worldId() == null) {
@@ -351,6 +348,72 @@ final class TradeController {
             }
         }
         return new CreatedTrade(trade, verdict);
+    }
+
+    TradeService.OpenRequest approvedTransformationRequest(Context ctx, TradeOpenRequest body,
+                                                           String expectedAccountId,
+                                                           PlacementProjection projection) {
+        PlacementCheck check = placementCheck(ctx, body, projection);
+        if (!check.account().id().equals(expectedAccountId)) {
+            throw new IllegalStateException("The replacement must use the same active Practice account.");
+        }
+        requirePlacementApproval(body, check);
+        return check.request();
+    }
+
+    PlacementProjection projectionAfterClose(Context ctx, TradeRecord trade,
+                                             TradeService.UnwindAssessment unwind) {
+        Account account = currentAccount.apply(ctx);
+        if (!account.id().equals(trade.accountId())) {
+            throw new IllegalStateException("Open the Practice account that owns this position before changing it.");
+        }
+        long cash = Math.subtractExact(Math.addExact(account.cashCents(), unwind.closingCashCents()),
+                unwind.closingFeesCents());
+        long reserved = Math.subtractExact(account.reservedCents(), unwind.current().risk().reserveCents());
+        if (reserved < 0) {
+            throw new IllegalStateException("The current position reserve does not reconcile with its Practice account.");
+        }
+        return new PlacementProjection(cash, reserved, trade.sharesLocked(), trade.id());
+    }
+
+    private PlacementCheck placementCheck(Context ctx, TradeOpenRequest body,
+                                          PlacementProjection projection) {
+        Account account = currentAccount.apply(ctx);
+        TradeService.OpenRequest request = toOpenRequest(body, account);
+        long cash = projection == null ? account.cashCents() : projection.cashCents();
+        long reserved = projection == null ? account.reservedCents() : projection.reservedCents();
+        long releasedShares = projection == null ? 0 : projection.releasedShares();
+        long buyingPower = Math.subtractExact(cash, reserved);
+        Verdict verdict = guardrailCheck(request, account, riskCapCents(ctx), buyingPower, releasedShares);
+        io.liftandshift.strikebench.paper.TradePreview preview = trades.preview(request, cash, reserved, releasedShares);
+        long effectiveRiskBudget = RiskBudgetPolicy.compute(
+                RecommendationEngine.RiskMode.parse(request.riskMode()),
+                buyingPower, riskCapCents(ctx)).effectiveBudgetCents();
+        return new PlacementCheck(account, request, verdict, preview, effectiveRiskBudget,
+                requiredAcksFor(preview, effectiveRiskBudget));
+    }
+
+    private void requirePlacementApproval(TradeOpenRequest body, PlacementCheck check) {
+        if (check.verdict().blocked()) {
+            audit.log(check.account().id(), null, "TRADE_REJECTED", "BLOCK",
+                    Map.of("symbol", check.request().symbol(), "strategy", check.request().strategy(),
+                            "reasons", check.verdict().blockReasons()));
+            throw new TradeRejectedException(check.verdict().blockReasons());
+        }
+        if (check.requiredAcknowledgments().isEmpty()) return;
+        Set<String> acknowledged = body.acknowledgedRisks() == null
+                ? Set.of() : new HashSet<>(body.acknowledgedRisks());
+        List<String> missing = check.requiredAcknowledgments().stream().map(ApiResponses.RiskAcknowledgment::id)
+                .filter(id -> !acknowledged.contains(id)).toList();
+        if (!missing.isEmpty()) {
+            throw new TradeRejectedException(List.of("This trade carries material risks that must be "
+                    + "acknowledged first: " + String.join(", ", missing)
+                    + " — preview it to see them"));
+        }
+        if (!verifyAcknowledgmentToken(body.ackToken(), check.request())) {
+            throw new TradeRejectedException(List.of(
+                    "Acknowledgment token missing or stale — preview this exact package again"));
+        }
     }
 
     ApiResponses.TradeDetail<TradeView, TradeService.MarkView, Object, Object> detailData(String id) {
@@ -453,7 +516,8 @@ final class TradeController {
     }
 
     private Verdict guardrailCheck(TradeService.OpenRequest request, Account account,
-                                   Long riskCapCents) {
+                                   Long riskCapCents, long buyingPowerCents,
+                                   long releasedShares) {
         StrategyFamily family = null;
         try {
             family = StrategyFamily.valueOf(request.strategy());
@@ -513,7 +577,8 @@ final class TradeController {
             long contextSharesPerUnit = Math.max(coverSharesPerUnit,
                     io.liftandshift.strikebench.strategy.CoverageCheck.shareContextUnitsNeeded(priced));
             long neededShares = Math.multiplyExact(contextSharesPerUnit, request.qty());
-            long freeShares = positions.freeShares(account.id(), request.symbol());
+            long freeShares = Math.addExact(positions.freeShares(account.id(), request.symbol()),
+                    releasedShares);
             if (freeShares >= neededShares) {
                 lockedShares = Math.multiplyExact(coverSharesPerUnit, request.qty());
             } else {
@@ -527,7 +592,7 @@ final class TradeController {
                         io.liftandshift.strikebench.market.MarketHours.EASTERN))
                 .orElseGet(() -> LocalDate.now(clock));
         Verdict verdict = Guardrails.check(new Guardrails.Proposal(family, priced, request.qty(),
-                quotes, spot, worst, laneToday, account.buyingPowerCents(), false,
+                quotes, spot, worst, laneToday, buyingPowerCents, false,
                 earningsSoon, false, lockedShares));
         if (!integrityBlocks.isEmpty()) {
             List<String> blocks = new ArrayList<>(verdict.blockReasons());
@@ -571,7 +636,7 @@ final class TradeController {
             if (!curve.maxLossUnbounded() && curve.maxLossCents() > 0) {
                 RecommendationEngine.RiskMode mode =
                         RecommendationEngine.RiskMode.parse(request.riskMode());
-                long budget = RiskBudgetPolicy.compute(mode, account.buyingPowerCents(), riskCapCents)
+                long budget = RiskBudgetPolicy.compute(mode, buyingPowerCents, riskCapCents)
                         .effectiveBudgetCents();
                 if (curve.maxLossCents() > budget) {
                     List<String> warnings = new ArrayList<>(verdict.warnings());

@@ -210,9 +210,9 @@ public final class ApiResponses {
                                            List<PayoffPoint> payoff) {}
     public record ClosedTrade<T>(T trade, long realizedPnlCents, long decisionPnlCents) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record PositionTransformationPreview<T>(
+    public record PositionTransformationPreview<T, U>(
             io.liftandshift.strikebench.position.PositionTransformation.Preview transformation,
-            T before, T after, Long closingCashCents, Long closingFeesCents,
+            T before, U after, Long closingCashCents, Long closingFeesCents,
             String previewToken, String expiresAt) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PositionTransformationApplied<T, U, V>(

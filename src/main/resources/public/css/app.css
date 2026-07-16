@@ -519,6 +519,10 @@ body.lvl-expert .not-expert { display: none !important; }
 .position-transformation-fact { min-width: 0; display: grid; gap: 2px; padding: 9px 7px; }
 .position-transformation-fact strong { font-size: 15px; overflow-wrap: anywhere; }
 .position-transformation-note { margin: 10px 0 0; }
+.position-roll-workbench { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.position-roll-editor { min-width: 0; }
+.position-roll-result { margin-top: 14px; scroll-margin-top: calc(var(--sticky-stack-h) + 12px); }
+.position-roll-review { display: grid; gap: 10px; }
 @media (max-width: 480px) {
   .position-transformation-route { grid-template-columns: minmax(0, 1fr); }
   .position-transformation-arrow { justify-self: center; transform: rotate(90deg); }
