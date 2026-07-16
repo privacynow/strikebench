@@ -213,12 +213,14 @@ public final class ApiResponses {
     public record PositionTransformationPreview<T, U>(
             io.liftandshift.strikebench.position.PositionTransformation.Preview transformation,
             T before, U after, Long closingCashCents, Long closingFeesCents,
+            Long actionRealizedPnlCents, Long realizedPnlToDateCents,
             String previewToken, String expiresAt) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PositionTransformationApplied<T, U, V>(
             String receiptId,
             io.liftandshift.strikebench.position.PositionTransformation.Preview transformation,
-            T trade, U plan, V management, long realizedPnlCents) {}
+            T trade, U plan, V management, long actionRealizedPnlCents,
+            long realizedPnlToDateCents) {}
     public record Trade<T>(T trade) {}
     public record BrokerPreview<T>(String localId, T preview, String confirmTextRequired) {}
     public record CancelRequested(boolean cancelRequested, String note) {}

@@ -25,6 +25,7 @@ class PositionTransformationTest {
         assertThat(preview.afterIdentity().family()).isEqualTo("CREDIT_PUT_SPREAD");
         assertThat(preview.delta().maxLossCents()).isEqualTo(-5_000L);
         assertThat(preview.warnings()).anyMatch(s -> s.contains("5 of 20") && s.contains("15 survive"));
+        assertThat(preview.warnings()).noneMatch(s -> s.contains("protects the short"));
         assertThat(preview.identityChanged()).isTrue();
     }
 

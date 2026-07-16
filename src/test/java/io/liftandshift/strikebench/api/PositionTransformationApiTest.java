@@ -213,6 +213,138 @@ class PositionTransformationApiTest {
     }
 
     @Test
+    void partialCloseKeepsTheSameTradeAndExactResidualBasisThroughTheFinalClose() throws Exception {
+        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
+                .at("/expirations/2").asText();
+        JsonNode created = Json.parse(createAcknowledged(
+                creditPutSpread(expiration, 5, "POSITION_TRANSFORMATION_PARTIAL_TEST").toString()).body());
+        String tradeId = created.at("/trade/id").asText();
+        long openingEntry = created.at("/trade/entryNetPremiumCents").asLong();
+        long openingFees = created.at("/trade/feesOpenCents").asLong();
+        long openingMaxLoss = created.at("/trade/maxLossCents").asLong();
+        long reserveBefore = outstandingReserve(tradeId);
+        JsonNode accountBefore = Json.parse(get("/api/account").body()).get("account");
+
+        ObjectNode request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("action", "PARTIAL_CLOSE");
+        request.put("closeQuantity", 2);
+        JsonNode preview = Json.parse(post("/api/position-transformations/preview", request.toString()).body());
+        assertThat(preview.at("/transformation/action").asText()).isEqualTo("PARTIAL_CLOSE");
+        assertThat(preview.at("/transformation/warnings/0").asText())
+                .contains("2 of 5 packages close").contains("3 survive");
+        assertThat(preview.at("/transformation/afterRisk/reserveCents").asLong())
+                .isEqualTo(remainingAllocation(reserveBefore, 5, 2));
+        assertThat(preview.at("/transformation/afterRisk/maxLossCents").asLong())
+                .isEqualTo(remainingAllocation(openingMaxLoss, 5, 2));
+        long closingCash = preview.get("closingCashCents").asLong();
+        long closingFees = preview.get("closingFeesCents").asLong();
+        long actionRealized = preview.at("/transformation/realizedClosingCents").asLong();
+
+        request.put("previewToken", preview.get("previewToken").asText());
+        HttpResponse<String> appliedResponse = post("/api/position-transformations/apply", request.toString());
+        assertThat(appliedResponse.statusCode()).isEqualTo(200);
+        JsonNode applied = Json.parse(appliedResponse.body());
+        String receiptId = applied.get("receiptId").asText();
+        assertThat(applied.at("/trade/id").asText()).isEqualTo(tradeId);
+        assertThat(applied.at("/trade/status").asText()).isEqualTo("ACTIVE");
+        assertThat(applied.at("/trade/qty").asInt()).isEqualTo(3);
+        assertThat(applied.get("actionRealizedPnlCents").asLong()).isEqualTo(actionRealized);
+        assertThat(applied.get("realizedPnlToDateCents").asLong()).isEqualTo(actionRealized);
+        assertThat(applied.at("/trade/entryNetPremiumCents").asLong())
+                .isEqualTo(remainingAllocation(openingEntry, 5, 2));
+        assertThat(applied.at("/trade/feesOpenCents").asLong())
+                .isEqualTo(remainingAllocation(openingFees, 5, 2));
+        assertThat(applied.at("/trade/maxLossCents").asLong())
+                .isEqualTo(remainingAllocation(openingMaxLoss, 5, 2));
+
+        JsonNode accountAfterPartial = Json.parse(get("/api/account").body()).get("account");
+        assertThat(accountAfterPartial.get("cashCents").asLong())
+                .isEqualTo(accountBefore.get("cashCents").asLong() + closingCash - closingFees);
+        assertThat(outstandingReserve(tradeId)).isEqualTo(remainingAllocation(reserveBefore, 5, 2));
+        assertThat(db.query("SELECT position_state,transformation_action,practice_trade_id FROM position_receipt WHERE id=?",
+                row -> row.str("position_state") + "|" + row.str("transformation_action") + "|"
+                        + row.str("practice_trade_id"), receiptId))
+                .containsExactly("PARTIALLY_CLOSED|PARTIAL_CLOSE|" + tradeId);
+        assertThat(db.query("SELECT position_phase || ':' || SUM(quantity) v FROM position_receipt_leg "
+                        + "WHERE receipt_id=? GROUP BY position_phase ORDER BY position_phase",
+                row -> row.str("v"), receiptId)).containsExactly("AFTER:6", "BEFORE:10");
+
+        ObjectNode close = Json.MAPPER.createObjectNode();
+        close.put("source", "PRACTICE_TRADE");
+        close.put("sourceId", tradeId);
+        close.put("action", "CLOSE");
+        JsonNode closePreview = Json.parse(post("/api/position-transformations/preview", close.toString()).body());
+        long remainingAction = closePreview.get("actionRealizedPnlCents").asLong();
+        assertThat(closePreview.get("realizedPnlToDateCents").asLong())
+                .isEqualTo(actionRealized + remainingAction);
+        assertThat(closePreview.at("/transformation/realizedClosingCents").asLong())
+                .isEqualTo(actionRealized + remainingAction);
+        close.put("previewToken", closePreview.get("previewToken").asText());
+        JsonNode closed = Json.parse(post("/api/position-transformations/apply", close.toString()).body());
+        assertThat(closed.at("/trade/status").asText()).isEqualTo("CLOSED");
+        assertThat(closed.get("actionRealizedPnlCents").asLong()).isEqualTo(remainingAction);
+        assertThat(closed.get("realizedPnlToDateCents").asLong())
+                .isEqualTo(actionRealized + remainingAction);
+        assertThat(closed.at("/trade/realizedPnlCents").asLong())
+                .isEqualTo(actionRealized + remainingAction);
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=? AND type='PREMIUM_CLOSE'",
+                row -> row.lng("n"), tradeId)).containsExactly(2L);
+        assertThat(outstandingReserve(tradeId)).isZero();
+    }
+
+    @Test
+    void partialCloseTokenBindsTheServerDerivedSurvivingQuantity() throws Exception {
+        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
+                .at("/expirations/2").asText();
+        String tradeId = Json.parse(createAcknowledged(
+                creditPutSpread(expiration, 4, "POSITION_TRANSFORMATION_PARTIAL_TAMPER_TEST").toString()).body())
+                .at("/trade/id").asText();
+        ObjectNode request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("action", "PARTIAL_CLOSE");
+        request.put("closeQuantity", 1);
+        JsonNode preview = Json.parse(post("/api/position-transformations/preview", request.toString()).body());
+        request.put("previewToken", preview.get("previewToken").asText());
+        request.put("closeQuantity", 2);
+
+        HttpResponse<String> response = post("/api/position-transformations/apply", request.toString());
+        assertThat(response.statusCode()).isEqualTo(409);
+        assertThat(Json.parse(response.body()).get("detail").asText()).contains("stale");
+        assertThat(Json.parse(get("/api/trades/" + tradeId).body()).at("/trade/qty").asInt()).isEqualTo(4);
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=? AND type='PREMIUM_CLOSE'",
+                row -> row.lng("n"), tradeId)).containsExactly(0L);
+    }
+
+    @Test
+    void callerCannotRelabelABrokerRecordAsAPracticeTransformation() throws Exception {
+        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
+                .at("/expirations/2").asText();
+        String tradeId = Json.parse(createAcknowledged(
+                creditPutSpread(expiration, 3, "POSITION_TRANSFORMATION_ORIGIN_TEST").toString()).body())
+                .at("/trade/id").asText();
+        db.exec("UPDATE trades SET origin='EXTERNAL',data_provenance='BROKER' WHERE id=?", tradeId);
+        long ledgerRows = db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?",
+                row -> row.lng("n"), tradeId).getFirst();
+
+        ObjectNode request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("action", "PARTIAL_CLOSE");
+        request.put("closeQuantity", 1);
+        HttpResponse<String> response = post("/api/position-transformations/preview", request.toString());
+
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(response.body()).get("detail").asText())
+                .contains("tracked-account").contains("Practice");
+        assertThat(Json.parse(get("/api/trades/" + tradeId).body()).at("/trade/qty").asInt()).isEqualTo(3);
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?",
+                row -> row.lng("n"), tradeId)).containsExactly(ledgerRows);
+    }
+
+    @Test
     void blockedRollReplacementLeavesTheOpenPositionAndLedgerUntouched() throws Exception {
         JsonNode expirations = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations");
         String near = expirations.get(2).asText();
@@ -268,6 +400,14 @@ class PositionTransformationApiTest {
         return db.query("SELECT COALESCE(SUM(amount_cents),0) n FROM ledger WHERE trade_id=? "
                         + "AND type IN ('RESERVE_HOLD','RESERVE_RELEASE')",
                 row -> row.lng("n"), tradeId).getFirst();
+    }
+
+    private static long remainingAllocation(long total, long packageQuantity, long removedQuantity) {
+        long base = total / packageQuantity;
+        long remainder = total % packageQuantity;
+        long extraUnits = Math.min(removedQuantity, Math.abs(remainder));
+        long removed = base * removedQuantity + (remainder < 0 ? -extraUnits : extraUnits);
+        return total - removed;
     }
 
     private static void acknowledgeAfter(ObjectNode request, JsonNode preview) {

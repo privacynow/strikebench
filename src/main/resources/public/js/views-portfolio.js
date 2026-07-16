@@ -80,6 +80,91 @@
     });
   }
 
+  function renderPartialCloseReview(host, preview, trade, managedPlan, closeQuantity) {
+    host.innerHTML = '';
+    var change = preview.transformation;
+    var remaining = Number(trade.qty) - closeQuantity;
+    var beforeRisk = change.beforeRisk || {};
+    var afterRisk = change.afterRisk || {};
+    host.appendChild(el('div', { class: 'position-partial-review' },
+      el('div', { class: 'position-transformation-route', 'aria-label': 'Position before and after partial close' },
+        transformationState('Before', change.beforeIdentity, 'x' + trade.qty + ' open'),
+        el('span', { class: 'position-transformation-arrow', 'aria-hidden': 'true' }, '→'),
+        transformationState('After', change.afterIdentity, 'x' + remaining + ' remain open')),
+      el('div', { class: 'position-transformation-facts' },
+        transformationFact('Closing now', closeQuantity + ' of ' + trade.qty),
+        transformationFact('Still open', remaining + ' package' + (remaining === 1 ? '' : 's')),
+        transformationFact('Closing cash flow', fmtMoney(preview.closingCashCents, { plus: true })),
+        transformationFact('Close fees', fmtMoney(preview.closingFeesCents)),
+        transformationFact('Realized by this close', fmtMoney(preview.actionRealizedPnlCents, { plus: true }),
+          Number(preview.actionRealizedPnlCents) >= 0 ? 'gain' : 'loss'),
+        transformationFact('Realized on this position to date', fmtMoney(preview.realizedPnlToDateCents, { plus: true }),
+          Number(preview.realizedPnlToDateCents) >= 0 ? 'gain' : 'loss'),
+        transformationFact('Broker reserve before', fmtMoney(beforeRisk.reserveCents || 0)),
+        transformationFact('Broker reserve after', fmtMoney(afterRisk.reserveCents || 0)),
+        transformationFact('Theoretical max loss before', fmtMoney(beforeRisk.maxLossCents)),
+        transformationFact('Theoretical max loss after', fmtMoney(afterRisk.maxLossCents))),
+      change.warnings && change.warnings.length
+        ? alertBox('warn', 'Review what changes', change.warnings) : null,
+      el('p', { class: 'muted small position-transformation-note' },
+        'The surviving packages keep their original fills, opening-fee basis, and trade identity. Only the selected quantity closes; ledger, reserve, Plan action, and receipt commit together.'),
+      change.applicable ? el('button', {
+        type: 'button', class: 'btn', id: 'apply-partial-close-btn', onclick: async function (event) {
+          var request = practiceTransformationRequest(trade, managedPlan, 'PARTIAL_CLOSE', preview.previewToken);
+          request.closeQuantity = closeQuantity;
+          var applied = await visibleCommand(event.currentTarget, function () {
+            return API.post('/api/position-transformations/apply', request);
+          }, 'The reviewed partial close could not be applied.');
+          if (!applied) return;
+          UI.toast('Closed ' + closeQuantity + ' · ' + applied.trade.qty + ' remain open', 'ok');
+          if (managedPlan && applied.plan) await PlanStore.focus(applied.plan, 'MANAGE_REVIEW');
+          else await App.render();
+        }
+      }, 'Apply partial close') : alertBox('danger', 'This partial close cannot be applied',
+        change.afterRisk && change.afterRisk.blockReasons || ['Review the resulting position.'])));
+    host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function openPartialCloseTransformation(trade, managedPlan, button, host) {
+    host.hidden = false;
+    host.innerHTML = '';
+    if (managedPlan) managedPlan = await PlanStore.get(managedPlan.id, true);
+    var quantity = el('input', { type: 'number', id: 'partial-close-quantity', min: '1',
+      max: String(Number(trade.qty) - 1), step: '1', value: '1', inputmode: 'numeric' });
+    var summary = el('strong', { id: 'partial-close-summary' });
+    var review = el('div', { class: 'position-partial-result', 'aria-live': 'polite' });
+    function sync() {
+      var closeQuantity = Number(quantity.value);
+      var valid = Number.isInteger(closeQuantity) && closeQuantity > 0 && closeQuantity < Number(trade.qty);
+      summary.textContent = valid
+        ? 'Close ' + closeQuantity + ' · ' + (Number(trade.qty) - closeQuantity) + ' remain'
+        : 'Choose 1 to ' + (Number(trade.qty) - 1);
+      analyze.disabled = !valid;
+      review.innerHTML = '';
+    }
+    var analyze = el('button', { type: 'button', class: 'btn', id: 'review-partial-close-btn',
+      onclick: async function (event) {
+        var closeQuantity = Number(quantity.value);
+        var request = practiceTransformationRequest(trade, managedPlan, 'PARTIAL_CLOSE');
+        request.closeQuantity = closeQuantity;
+        var preview = await visibleCommand(event.currentTarget, function () {
+          return API.post('/api/position-transformations/preview', request);
+        }, 'The selected quantity could not be priced for a partial close.');
+        if (preview) renderPartialCloseReview(review, preview, trade, managedPlan, closeQuantity);
+      } }, 'Review partial close');
+    quantity.addEventListener('input', sync);
+    host.append(
+      el('div', { class: 'position-partial-controls' },
+        el('div', {}, el('span', { class: 'eyebrow' }, 'Partial close'),
+          el('h3', {}, 'Reduce this position without resetting its history'),
+          el('p', { class: 'muted small' }, 'Close whole packages; the remainder keeps the same entry basis and trade identity.')),
+        el('div', { class: 'position-partial-command' },
+          UI.field('Packages to close', quantity), summary, analyze)),
+      review);
+    sync();
+    host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   function nextRollExpiration(current, expirations) {
     if (!current) return '';
     var date = new Date(current + 'T00:00:00Z');
@@ -2075,6 +2160,7 @@
           ? d.current.decisionUnrealizedCents : optionPnl)
       : closedDecisionPnl(t);
     var combinedOutcome = t.sharesLocked > 0 && pnl !== null && pnl !== undefined;
+    var partiallyRealized = active && t.realizedPnlCents !== null && t.realizedPnlCents !== undefined;
 
     root.appendChild(el('div', { class: 'card' },
       el('div', { class: 'quote-hero' },
@@ -2101,7 +2187,8 @@
         : null,
       el('div', { class: 'chip-row' }, t.legs.map(function (l, i) { return chip('Leg ' + (i + 1), legLabel(l)); })),
       el('div', { class: 'chip-row' },
-        chip('Entry', fmtMoney(t.entryNetPremiumCents, { plus: true })),
+        chip(partiallyRealized ? 'Remaining entry basis' : 'Entry', fmtMoney(t.entryNetPremiumCents, { plus: true })),
+        partiallyRealized ? chip('Realized from partial closes', pnlSpan(t.realizedPnlCents)) : null,
         t.sharesLocked > 0 && t.maxLossCents === 0
           ? chip('New cash at risk', '$0 (covered)')
           : chip(UI.vocabulary('theoreticalMaxLoss'), el('span', { class: 'loss' }, fmtMoney(t.maxLossCents))),
@@ -2174,6 +2261,7 @@
 
     if (active) {
       var rollHost = el('div', { class: 'position-roll-workbench', hidden: 'hidden' });
+      var partialHost = el('div', { class: 'position-partial-workbench', hidden: 'hidden' });
       root.appendChild(el('div', { class: 'card' },
         UI.cardHeader('Actions'),
         el('div', { class: 'btn-row', style: 'margin-top:0' },
@@ -2200,6 +2288,18 @@
               openCloseTransformation(t, managedPlan, ev.currentTarget);
             }
           }, 'Unwind…', el('span', { class: 'btn-sub' }, 'close now at market')),
+          Number(t.qty) > 1 ? el('button', {
+            class: 'btn btn-secondary', id: 'partial-close-btn', onclick: function (event) {
+              rollHost.hidden = true;
+              openPartialCloseTransformation(t, managedPlan, event.currentTarget, partialHost)
+                .catch(function (error) {
+                  partialHost.hidden = false;
+                  partialHost.innerHTML = '';
+                  partialHost.appendChild(UI.actionFeedback('danger', 'Could not start the partial close',
+                    error.message || String(error)));
+                });
+            }
+          }, 'Partial close…', el('span', { class: 'btn-sub' }, 'reduce quantity, keep history')) : null,
           el('button', {
             class: 'btn btn-secondary', id: 'settle-btn', onclick: function () {
               UI.confirmModal('Settle at expiration value?',
@@ -2218,6 +2318,7 @@
           }, 'Settle…', el('span', { class: 'btn-sub' }, 'after expiration')),
           el('button', {
             class: 'btn btn-secondary', id: 'roll-btn', onclick: function (event) {
+              partialHost.hidden = true;
               openRollTransformation(t, managedPlan, event.currentTarget, rollHost)
                 .catch(function (error) {
                   rollHost.hidden = false;
@@ -2246,6 +2347,7 @@
                 }, true);
             }
           }, 'Void…', el('span', { class: 'btn-sub' }, 'erase — practice only'))),
+        partialHost,
         rollHost));
     }
 

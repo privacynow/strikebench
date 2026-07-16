@@ -98,13 +98,30 @@ public final class TradeService {
 
     public record Page(List<TradeRecord> trades, long total, int page, int size) {}
 
-    public record CloseResult(TradeRecord trade, long realizedPnlCents) {}
+    public record CloseResult(TradeRecord trade, long realizedPnlCents,
+                              long actionRealizedPnlCents) {
+        public CloseResult(TradeRecord trade, long realizedPnlCents) {
+            this(trade, realizedPnlCents, realizedPnlCents);
+        }
+    }
+
+    public record PartialCloseAssessment(PositionAssessment current, PositionAssessment survivor,
+                                         int closeQuantity, long closingCashCents,
+                                         long closingFeesCents, long reserveReleaseCents,
+                                         long actionRealizedPnlCents) {}
+
+    public record PartialCloseResult(TradeRecord trade, int closedQuantity,
+                                     long actionRealizedPnlCents, long realizedPnlCents) {}
 
     public record RollResult(TradeRecord closedTrade, TradeRecord replacementTrade,
-                             long realizedClosingCents) {}
+                             long realizedClosingCents, long actionRealizedClosingCents) {}
 
     public record ExpectedOpen(long entryNetCents, long feesCents, long reserveCents,
                                long maxLossCents, Long maxProfitCents) {}
+
+    public record ExpectedPositionState(int quantity, long entryNetCents, long feesOpenCents,
+                                        long maxLossCents, Long maxProfitCents, long sharesLocked,
+                                        long realizedPnlCents, long reserveCents) {}
 
     /** Fresh-eyes assessment of the current exact Practice position through the existing pricing path. */
     public record PositionAssessment(PositionPackage position, TradePreview preview,
@@ -112,7 +129,8 @@ public final class TradeService {
 
     /** Executable close cash and realized result paired with the same fresh-eyes position assessment. */
     public record UnwindAssessment(PositionAssessment current, long closingCashCents,
-                                   long closingFeesCents, long realizedPnlCents) {}
+                                   long closingFeesCents, long actionRealizedPnlCents,
+                                   long realizedPnlToDateCents) {}
 
     /** Optional owner hook for workflows that must commit their identity beside the paper trade. */
     @FunctionalInterface
@@ -122,13 +140,14 @@ public final class TradeService {
 
     @FunctionalInterface
     public interface LifecycleHook {
-        void afterMutation(Connection connection, TradeRecord trade, Long realizedPnlCents) throws SQLException;
+        void afterMutation(Connection connection, TradeRecord trade, Long actionRealizedPnlCents,
+                           Long realizedPnlToDateCents) throws SQLException;
     }
 
     @FunctionalInterface
     public interface RollHook {
         void afterRoll(Connection connection, TradeRecord closedTrade, TradeRecord replacementTrade,
-                       long realizedClosingCents) throws SQLException;
+                       long actionRealizedClosingCents, long realizedClosingToDateCents) throws SQLException;
     }
 
     // ---- Preview / create ----
@@ -228,11 +247,7 @@ public final class TradeService {
         if (!TradeRecord.ACTIVE.equals(trade.status())) {
             throw new IllegalStateException("trade is " + trade.status() + "; only ACTIVE trades can be transformed");
         }
-        List<Leg> unpriced = trade.legs().stream().map(leg -> new Leg(leg.action(), leg.type(), leg.strike(),
-                leg.expiration(), leg.ratio(), BigDecimal.ZERO, leg.multiplier())).toList();
-        OpenRequest request = new OpenRequest(trade.accountId(), trade.symbol(), trade.strategy(), trade.qty(),
-                unpriced, trade.thesis(), trade.horizon(), trade.riskMode(), trade.intent(),
-                trade.sharesLocked() > 0, null, null, "POSITION_TRANSFORMATION", "PROPOSED");
+        OpenRequest request = activePositionRequest(trade, trade.qty(), trade.sharesLocked());
         PositionAssessment assessed = analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
                 PositionDomain.ExecutionLane.PRACTICE, request);
         long outstandingReserve = db.with(c -> outstandingReserve(c, trade.id()));
@@ -291,10 +306,59 @@ public final class TradeService {
         TradeRecord trade = get(tradeId);
         ExecutableClose close = executableClose(trade);
         long closingFees = close.feesCents();
-        long realized = Math.subtractExact(Math.addExact(
+        long actionRealized = Math.subtractExact(Math.addExact(
                 Math.subtractExact(trade.entryNetPremiumCents(), trade.feesOpenCents()), close.cashCents()),
                 closingFees);
-        return new UnwindAssessment(current, close.cashCents(), closingFees, realized);
+        long realizedToDate = Math.addExact(trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(),
+                actionRealized);
+        return new UnwindAssessment(current, close.cashCents(), closingFees, actionRealized, realizedToDate);
+    }
+
+    /**
+     * Reviews closing whole packages while retaining the exact original basis of every survivor.
+     * The after-position is repriced fresh-eyes, but no survivor is treated as a new fill.
+     */
+    public PartialCloseAssessment previewPartialClose(String tradeId, int closeQuantity) {
+        TradeRecord trade = get(tradeId);
+        requirePracticeTransformation(trade);
+        requirePartialQuantity(trade, closeQuantity);
+        PositionAssessment current = analyzeActivePosition(tradeId);
+        ExecutableClose close = executableClose(trade, closeQuantity);
+        long actionEntry = allocatedPrefix(trade.entryNetPremiumCents(), trade.qty(), closeQuantity);
+        long actionOpenFees = allocatedPrefix(trade.feesOpenCents(), trade.qty(), closeQuantity);
+        long actionRealized = Math.subtractExact(Math.addExact(
+                Math.subtractExact(actionEntry, actionOpenFees), close.cashCents()), close.feesCents());
+        int survivingQuantity = trade.qty() - closeQuantity;
+        long outstanding = db.with(c -> outstandingReserve(c, trade.id()));
+        long reserveRelease = allocatedPrefix(outstanding, trade.qty(), closeQuantity);
+        long survivingReserve = Math.subtractExact(outstanding, reserveRelease);
+        long survivingShares = Math.subtractExact(trade.sharesLocked(),
+                allocatedPrefix(trade.sharesLocked(), trade.qty(), closeQuantity));
+        Account account = db.with(c -> AccountService.get(c, trade.accountId()));
+        long projectedCash = Math.subtractExact(Math.addExact(account.cashCents(), close.cashCents()),
+                close.feesCents());
+        long projectedReservedWithoutPosition = Math.subtractExact(account.reservedCents(), outstanding);
+        OpenRequest survivorRequest = activePositionRequest(trade, survivingQuantity, survivingShares);
+        PositionAssessment survivor = analyzePositionPackage(trade.id(),
+                PositionDomain.PackageSource.PRACTICE_TRADE, PositionDomain.ExecutionLane.PRACTICE,
+                survivorRequest, projectedCash, projectedReservedWithoutPosition, trade.sharesLocked());
+        PositionTransformation.RiskSnapshot fresh = survivor.risk();
+        PositionTransformation.RiskSnapshot bookRisk = new PositionTransformation.RiskSnapshot(
+                remainingAllocation(trade.maxLossCents(), trade.qty(), closeQuantity), survivingReserve,
+                trade.maxProfitCents() == null ? null
+                        : remainingAllocation(trade.maxProfitCents(), trade.qty(), closeQuantity),
+                fresh.mechanicallyEligible(), fresh.blockReasons(), fresh.evidenceBasis());
+        survivor = new PositionAssessment(survivor.position(), survivor.preview(), bookRisk);
+        return new PartialCloseAssessment(current, survivor, closeQuantity, close.cashCents(),
+                close.feesCents(), reserveRelease, actionRealized);
+    }
+
+    private static OpenRequest activePositionRequest(TradeRecord trade, int quantity, long sharesLocked) {
+        List<Leg> unpriced = trade.legs().stream().map(leg -> new Leg(leg.action(), leg.type(), leg.strike(),
+                leg.expiration(), leg.ratio(), BigDecimal.ZERO, leg.multiplier())).toList();
+        return new OpenRequest(trade.accountId(), trade.symbol(), trade.strategy(), quantity,
+                unpriced, trade.thesis(), trade.horizon(), trade.riskMode(), trade.intent(),
+                sharesLocked > 0, null, null, "POSITION_TRANSFORMATION", "PROPOSED");
     }
 
     /**
@@ -582,11 +646,106 @@ public final class TradeService {
                     .map(Money::toCents).orElse(null);
             CloseResult closed = closeOut(c, t, acct, "PREMIUM_CLOSE", close.cashCents(), close.feesCents(),
                     TradeRecord.CLOSED, "UNWIND", decisionUnderlying);
-            if (hook != null) hook.afterMutation(c, closed.trade(), closed.realizedPnlCents());
+            if (hook != null) hook.afterMutation(c, closed.trade(),
+                    closed.actionRealizedPnlCents(), closed.realizedPnlCents());
             return closed;
         });
         auditSafe(result.trade().accountId(), tradeId, "TRADE_UNWOUND", "INFO",
                 Map.of("realizedPnlCents", result.realizedPnlCents()));
+        return result;
+    }
+
+    /**
+     * Closes whole packages without selling and rebuying the survivors. Original entry basis,
+     * fills, and open-fee basis remain on the surviving quantity; only the closed allocation is
+     * realized. Ledger rows, reserve release, the survivor row, and the owning receipt hook share
+     * one transaction.
+     */
+    public PartialCloseResult partialClose(String tradeId, int closeQuantity, boolean confirm,
+                                           LifecycleHook hook, Long expectedCloseValueCents,
+                                           Long expectedCloseFeesCents,
+                                           ExpectedPositionState expectedPosition) {
+        requireConfirm(confirm, "partial close");
+        markMemo.invalidate(tradeId);
+        accountSnapshot.invalidateAll();
+        PartialCloseResult result = db.tx(c -> {
+            LockedTrade locked = lockTradeAndAccount(c, tradeId, TradeRecord.ACTIVE);
+            TradeRecord trade = locked.trade();
+            requirePracticeTransformation(trade);
+            requirePartialQuantity(trade, closeQuantity);
+            long outstanding = outstandingReserve(c, trade.id());
+            requireExpectedPosition(trade, outstanding, expectedPosition);
+            ExecutableClose close = executableClose(trade, closeQuantity);
+            requireExpectedClose(close, expectedCloseValueCents, expectedCloseFeesCents);
+
+            long actionEntry = allocatedPrefix(trade.entryNetPremiumCents(), trade.qty(), closeQuantity);
+            long actionOpenFees = allocatedPrefix(trade.feesOpenCents(), trade.qty(), closeQuantity);
+            long actionRealized = Math.subtractExact(Math.addExact(
+                    Math.subtractExact(actionEntry, actionOpenFees), close.cashCents()), close.feesCents());
+            long totalRealized = Math.addExact(trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(),
+                    actionRealized);
+            int survivingQuantity = trade.qty() - closeQuantity;
+            long reserveRelease = allocatedPrefix(outstanding, trade.qty(), closeQuantity);
+            long survivingReserve = Math.subtractExact(outstanding, reserveRelease);
+            long survivingShares = remainingAllocation(trade.sharesLocked(), trade.qty(), closeQuantity);
+
+            Account account = locked.account();
+            String at = now();
+            long cash = Math.addExact(account.cashCents(), close.cashCents());
+            ledgerRow(c, account.id(), trade.id(), at, "PREMIUM_CLOSE", close.cashCents(), cash,
+                    account.reservedCents(), trade.strategy() + " x" + closeQuantity + " partial close");
+            if (close.feesCents() != 0) {
+                cash = Math.subtractExact(cash, close.feesCents());
+                ledgerRow(c, account.id(), trade.id(), at, "FEE", -close.feesCents(), cash,
+                        account.reservedCents(), "partial-close commissions");
+            }
+            long reserved = account.reservedCents();
+            if (reserveRelease != 0) {
+                reserved = Math.subtractExact(reserved, reserveRelease);
+                ledgerRow(c, account.id(), trade.id(), at, "RESERVE_RELEASE", -reserveRelease, cash,
+                        reserved, "reserve released for " + closeQuantity + " closed package"
+                                + (closeQuantity == 1 ? "" : "s"));
+            }
+
+            Long underlying = marks.underlyingMark(trade.symbol(), worldOf(trade.accountId()))
+                    .map(Money::toCents).orElse(null);
+            long closedContextShares = allocatedPrefix(heldShareContextShares(trade), trade.qty(), closeQuantity);
+            long actionDecision = actionRealized;
+            if (closedContextShares > 0 && underlying != null && trade.entryUnderlyingCents() > 0) {
+                actionDecision = Math.addExact(actionDecision,
+                        Math.multiplyExact(underlying - trade.entryUnderlyingCents(), closedContextShares));
+            }
+            long totalDecision = Math.addExact(trade.decisionPnlCents() == null ? 0 : trade.decisionPnlCents(),
+                    actionDecision);
+            long survivingEntry = remainingAllocation(trade.entryNetPremiumCents(), trade.qty(), closeQuantity);
+            long survivingOpenFees = remainingAllocation(trade.feesOpenCents(), trade.qty(), closeQuantity);
+            long survivingMaxLoss = remainingAllocation(trade.maxLossCents(), trade.qty(), closeQuantity);
+            Long survivingMaxProfit = trade.maxProfitCents() == null ? null
+                    : remainingAllocation(trade.maxProfitCents(), trade.qty(), closeQuantity);
+            Long survivingProposed = trade.proposedNetCents() == null ? null
+                    : remainingAllocation(trade.proposedNetCents(), trade.qty(), closeQuantity);
+            long closeFeesToDate = Math.addExact(trade.feesCloseCents(), close.feesCents());
+            String snapshot = survivorEntrySnapshot(trade, survivingQuantity, survivingShares);
+            Db.execOn(c, "UPDATE trades SET qty=?,entry_net_premium_cents=?,max_loss_cents=?," +
+                            "max_profit_cents=?,fees_open_cents=?,fees_close_cents=?,realized_pnl_cents=?," +
+                            "decision_pnl_cents=?,shares_locked=?,proposed_net_cents=?,entry_snapshot_json=?::jsonb," +
+                            "updated_at=? WHERE id=?",
+                    survivingQuantity, survivingEntry, survivingMaxLoss, survivingMaxProfit,
+                    survivingOpenFees, closeFeesToDate, totalRealized, totalDecision, survivingShares,
+                    survivingProposed, snapshot, at, trade.id());
+            Db.execOn(c, "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?",
+                    cash, reserved, at, account.id());
+            TradeRecord survivor = getOn(c, trade.id());
+            if (outstandingReserve(c, trade.id()) != survivingReserve) {
+                throw new IllegalStateException("Partial-close reserve allocation did not reconcile.");
+            }
+            if (hook != null) hook.afterMutation(c, survivor, actionRealized, totalRealized);
+            return new PartialCloseResult(survivor, closeQuantity, actionRealized, totalRealized);
+        });
+        auditSafe(result.trade().accountId(), result.trade().id(), "TRADE_PARTIALLY_CLOSED", "INFO",
+                Map.of("closedQuantity", result.closedQuantity(), "survivingQuantity", result.trade().qty(),
+                        "actionRealizedPnlCents", result.actionRealizedPnlCents(),
+                        "realizedPnlToDateCents", result.realizedPnlCents()));
         return result;
     }
 
@@ -623,8 +782,10 @@ public final class TradeService {
                     close.cashCents(), close.feesCents(), TradeRecord.CLOSED, "ROLL_CLOSE", decisionUnderlying);
             Account afterClose = AccountService.getForUpdate(c, current.accountId());
             TradeRecord opened = openOn(c, afterClose, replacementTradeId, replacement, replacementPlan, null);
-            if (hook != null) hook.afterRoll(c, closed.trade(), opened, closed.realizedPnlCents());
-            return new RollResult(closed.trade(), opened, closed.realizedPnlCents());
+            if (hook != null) hook.afterRoll(c, closed.trade(), opened,
+                    closed.actionRealizedPnlCents(), closed.realizedPnlCents());
+            return new RollResult(closed.trade(), opened, closed.realizedPnlCents(),
+                    closed.actionRealizedPnlCents());
         });
         auditSafe(result.closedTrade().accountId(), result.closedTrade().id(), "TRADE_ROLLED_CLOSE", "INFO",
                 Map.of("realizedPnlCents", result.realizedClosingCents(),
@@ -740,11 +901,18 @@ public final class TradeService {
             if (t.external()) {
                 // Real-trade lane: cash-settle the OUTCOME onto the trade row only — the paper
                 // ledger never held this money, and physical assignment belongs to the broker.
-                long realizedX = t.entryNetPremiumCents() - t.feesOpenCents() + settleValue;
-                Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=0, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
-                        TradeRecord.EXPIRED, "SETTLED (external)" + memoSuffix, realizedX, realizedX, nowTs, nowTs, t.id());
-                CloseResult closed = new CloseResult(getOn(c, t.id()), realizedX);
-                if (hook != null) hook.afterMutation(c, closed.trade(), closed.realizedPnlCents());
+                long actionRealized = Math.addExact(
+                        Math.subtractExact(t.entryNetPremiumCents(), t.feesOpenCents()), settleValue);
+                long realizedToDate = Math.addExact(t.realizedPnlCents() == null ? 0 : t.realizedPnlCents(),
+                        actionRealized);
+                long decisionToDate = Math.addExact(t.decisionPnlCents() == null ? 0 : t.decisionPnlCents(),
+                        actionRealized);
+                Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
+                        TradeRecord.EXPIRED, "SETTLED (external)" + memoSuffix, realizedToDate,
+                        decisionToDate, nowTs, nowTs, t.id());
+                CloseResult closed = new CloseResult(getOn(c, t.id()), realizedToDate, actionRealized);
+                if (hook != null) hook.afterMutation(c, closed.trade(),
+                        closed.actionRealizedPnlCents(), closed.realizedPnlCents());
                 return closed;
             }
             long cash = acct.cashCents(), reserved = acct.reservedCents();
@@ -780,14 +948,20 @@ public final class TradeService {
                 reserved -= reserve;
                 ledgerRow(c, acct.id(), t.id(), nowTs, "RESERVE_RELEASE", -reserve, cash, reserved, "reserve released on settle");
             }
-            long realized = t.entryNetPremiumCents() - t.feesOpenCents() + settleValue;
-            long decisionPnl = decisionPnlAtSettlement(t, closes.get(lastExpiry), realized);
+            long actionRealized = Math.addExact(
+                    Math.subtractExact(t.entryNetPremiumCents(), t.feesOpenCents()), settleValue);
+            long realizedToDate = Math.addExact(t.realizedPnlCents() == null ? 0 : t.realizedPnlCents(),
+                    actionRealized);
+            long actionDecisionPnl = decisionPnlAtSettlement(t, closes.get(lastExpiry), actionRealized);
+            long decisionPnlToDate = Math.addExact(t.decisionPnlCents() == null ? 0 : t.decisionPnlCents(),
+                    actionDecisionPnl);
             String closeReason = "SETTLED" + assignNote + memoSuffix;
-            Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=0, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
-                    TradeRecord.EXPIRED, closeReason, realized, decisionPnl, nowTs, nowTs, t.id());
+            Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
+                    TradeRecord.EXPIRED, closeReason, realizedToDate, decisionPnlToDate, nowTs, nowTs, t.id());
             Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, updated_at=? WHERE id=?", cash, reserved, nowTs, acct.id());
-            CloseResult closed = new CloseResult(getOn(c, t.id()), realized);
-            if (hook != null) hook.afterMutation(c, closed.trade(), closed.realizedPnlCents());
+            CloseResult closed = new CloseResult(getOn(c, t.id()), realizedToDate, actionRealized);
+            if (hook != null) hook.afterMutation(c, closed.trade(),
+                    closed.actionRealizedPnlCents(), closed.realizedPnlCents());
             return closed;
         });
         if (result.trade().closeReason() != null && result.trade().closeReason().contains("CURRENT market price")) {
@@ -835,7 +1009,7 @@ public final class TradeService {
                     TradeRecord.DELETED, now, now, tradeId);
             Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, updated_at=? WHERE id=?", cash, reserved, now, acct.id());
             TradeRecord deleted = getOn(c, tradeId);
-            if (hook != null) hook.afterMutation(c, deleted, null);
+            if (hook != null) hook.afterMutation(c, deleted, null, null);
             return deleted;
         });
         auditSafe(out.accountId(), tradeId, "TRADE_DELETED", "WARN", Map.of("note", "trade voided; entry cash reversed"));
@@ -1921,13 +2095,20 @@ public final class TradeService {
                                  long closeValue, long feesClose, String newStatus, String closeReason,
                                  Long decisionUnderlyingCents) throws SQLException {
         String now = now();
+        long actionRealized = Math.subtractExact(Math.addExact(
+                Math.subtractExact(t.entryNetPremiumCents(), t.feesOpenCents()), closeValue), feesClose);
+        long realizedToDate = Math.addExact(t.realizedPnlCents() == null ? 0 : t.realizedPnlCents(),
+                actionRealized);
+        long actionDecisionPnl = decisionPnlAtMark(t, actionRealized, decisionUnderlyingCents);
+        long decisionPnlToDate = Math.addExact(t.decisionPnlCents() == null ? 0 : t.decisionPnlCents(),
+                actionDecisionPnl);
+        long closeFeesToDate = Math.addExact(t.feesCloseCents(), feesClose);
         if (t.external()) {
             // A REAL trade recorded for the learning loop: the paper account never held its cash,
             // so closing writes the outcome to the trade row ONLY — no ledger, no reserve, no cash.
-            long realizedX = t.entryNetPremiumCents() - t.feesOpenCents() + closeValue - feesClose;
             Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=?, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
-                    newStatus, closeReason, feesClose, realizedX, realizedX, now, now, t.id());
-            return new CloseResult(getOn(c, t.id()), realizedX);
+                    newStatus, closeReason, closeFeesToDate, realizedToDate, decisionPnlToDate, now, now, t.id());
+            return new CloseResult(getOn(c, t.id()), realizedToDate, actionRealized);
         }
         long cash = acct.cashCents(), reserved = acct.reservedCents();
 
@@ -1943,12 +2124,10 @@ public final class TradeService {
             reserved -= reserve;
             ledgerRow(c, acct.id(), t.id(), now, "RESERVE_RELEASE", -reserve, cash, reserved, "reserve released on close");
         }
-        long realized = t.entryNetPremiumCents() - t.feesOpenCents() + closeValue - feesClose;
-        long decisionPnl = decisionPnlAtMark(t, realized, decisionUnderlyingCents);
         Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=?, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
-                newStatus, closeReason, feesClose, realized, decisionPnl, now, now, t.id());
+                newStatus, closeReason, closeFeesToDate, realizedToDate, decisionPnlToDate, now, now, t.id());
         Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, updated_at=? WHERE id=?", cash, reserved, now, acct.id());
-        return new CloseResult(getOn(c, t.id()), realized);
+        return new CloseResult(getOn(c, t.id()), realizedToDate, actionRealized);
     }
 
     private static long decisionPnlAtMark(TradeRecord t, long incrementalPnl, Long underlyingCents) {
@@ -1990,14 +2169,25 @@ public final class TradeService {
 
     /** Paper what-if fees are explicitly per side; broker-import fees remain entry facts only. */
     private long closeFeesFor(TradeRecord t) {
+        return closeFeesFor(t, t.qty());
+    }
+
+    private long closeFeesFor(TradeRecord t, int quantity) {
         if (!t.external()) {
             Long override = entrySnapshotLong(t, "feeOverridePerSideCents");
-            if (override != null) return Math.max(0, override);
+            if (override != null) return Math.max(0, allocatedPrefix(override, t.qty(), quantity));
         }
-        return feesFor(t.legs(), t.qty());
+        return feesFor(t.legs(), quantity);
     }
 
     private ExecutableClose executableClose(TradeRecord trade) {
+        return executableClose(trade, trade.qty());
+    }
+
+    private ExecutableClose executableClose(TradeRecord trade, int quantity) {
+        if (quantity <= 0 || quantity > trade.qty()) {
+            throw new IllegalArgumentException("closing quantity must be between 1 and " + trade.qty());
+        }
         long closeValue = 0;
         var lane = laneFor(worldOf(trade.accountId()));
         for (Leg leg : trade.legs()) {
@@ -2017,9 +2207,65 @@ public final class TradeService {
                         + " — the book is one-sided or empty; try during market hours"));
             }
             closeValue = Math.addExact(closeValue, Math.multiplyExact(closeSign(leg),
-                    Money.centsFromPrice(px, (long) leg.multiplier() * leg.ratio() * trade.qty())));
+                    Money.centsFromPrice(px, (long) leg.multiplier() * leg.ratio() * quantity)));
         }
-        return new ExecutableClose(closeValue, closeFeesFor(trade));
+        return new ExecutableClose(closeValue, closeFeesFor(trade, quantity));
+    }
+
+    private static void requirePartialQuantity(TradeRecord trade, int closeQuantity) {
+        if (!TradeRecord.ACTIVE.equals(trade.status())) {
+            throw new IllegalStateException("trade is " + trade.status() + "; only ACTIVE trades can be transformed");
+        }
+        if (closeQuantity <= 0 || closeQuantity >= trade.qty()) {
+            throw new IllegalArgumentException("partial close quantity must be between 1 and "
+                    + (trade.qty() - 1));
+        }
+    }
+
+    private static void requirePracticeTransformation(TradeRecord trade) {
+        if (trade.external()) {
+            throw new IllegalArgumentException(
+                    "Broker-recorded positions belong to the tracked book and cannot mutate Practice cash or collateral");
+        }
+    }
+
+    /** Deterministic largest-remainder allocation to the first N identical packages. */
+    static long allocatedPrefix(long total, long packageQuantity, long selectedQuantity) {
+        if (packageQuantity <= 0 || selectedQuantity < 0 || selectedQuantity > packageQuantity) {
+            throw new IllegalArgumentException("invalid package allocation");
+        }
+        long base = total / packageQuantity;
+        long remainder = total % packageQuantity;
+        long extraUnits = Math.min(selectedQuantity, Math.abs(remainder));
+        long extra = remainder < 0 ? -extraUnits : extraUnits;
+        return Math.addExact(Math.multiplyExact(base, selectedQuantity), extra);
+    }
+
+    static long remainingAllocation(long total, long packageQuantity, long removedQuantity) {
+        return Math.subtractExact(total, allocatedPrefix(total, packageQuantity, removedQuantity));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String survivorEntrySnapshot(TradeRecord trade, int survivingQuantity,
+                                                long survivingShares) {
+        Map<String, Object> snapshot = new LinkedHashMap<>(Json.read(trade.entrySnapshotJson(), Map.class));
+        long removed = trade.qty() - survivingQuantity;
+        snapshot.put("positionQuantity", survivingQuantity);
+        if (snapshot.containsKey("coveredByHeldShares")) {
+            if (survivingShares > 0) snapshot.put("coveredByHeldShares", survivingShares);
+            else snapshot.remove("coveredByHeldShares");
+        }
+        Long contextShares = entrySnapshotLong(trade, "heldShareContextShares");
+        if (contextShares != null) {
+            long remaining = remainingAllocation(contextShares, trade.qty(), removed);
+            if (remaining > 0) snapshot.put("heldShareContextShares", remaining);
+            else snapshot.remove("heldShareContextShares");
+        }
+        Long override = entrySnapshotLong(trade, "feeOverridePerSideCents");
+        if (override != null) {
+            snapshot.put("feeOverridePerSideCents", remainingAllocation(override, trade.qty(), removed));
+        }
+        return Json.write(snapshot);
     }
 
     private static void requireExpectedClose(ExecutableClose actual, Long expectedCash, Long expectedFees) {
@@ -2037,6 +2283,25 @@ public final class TradeService {
                 || !Objects.equals(actual.maxProfit(), expected.maxProfitCents())) {
             throw new TradeRejectedException(List.of(
                     "The executable replacement book changed after the transformation preview. Review the updated roll before applying it."));
+        }
+    }
+
+    private static void requireExpectedPosition(TradeRecord actual, long actualReserve,
+                                                ExpectedPositionState expected) {
+        if (expected == null) {
+            throw new IllegalArgumentException("the reviewed current-position state is required");
+        }
+        long realized = actual.realizedPnlCents() == null ? 0 : actual.realizedPnlCents();
+        if (actual.qty() != expected.quantity()
+                || actual.entryNetPremiumCents() != expected.entryNetCents()
+                || actual.feesOpenCents() != expected.feesOpenCents()
+                || actual.maxLossCents() != expected.maxLossCents()
+                || !Objects.equals(actual.maxProfitCents(), expected.maxProfitCents())
+                || actual.sharesLocked() != expected.sharesLocked()
+                || realized != expected.realizedPnlCents()
+                || actualReserve != expected.reserveCents()) {
+            throw new TradeRejectedException(List.of(
+                    "The position changed after the transformation preview. Review its current quantity, basis, and collateral before applying it."));
         }
     }
 

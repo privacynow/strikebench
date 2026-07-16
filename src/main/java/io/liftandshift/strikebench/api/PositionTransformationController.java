@@ -74,6 +74,7 @@ final class PositionTransformationController {
         Prepared prepared = prepare(ctx, request);
         verifyToken(ctx, request, prepared.preview());
         if (request.action() != PositionTransformation.Action.CLOSE
+                && request.action() != PositionTransformation.Action.PARTIAL_CLOSE
                 && request.action() != PositionTransformation.Action.ROLL) {
             throw new IllegalStateException("This transformation can be analyzed, but its atomic Practice apply path is not active yet.");
         }
@@ -81,22 +82,43 @@ final class PositionTransformationController {
         String ownerId = planController.ownerId(ctx);
         String receiptId = Ids.newId("prec");
         TradeRecord responseTrade;
-        long realized;
-        String resolvedTradeId;
+        TradeRecord resolvedTrade = null;
+        long actionRealized;
+        long realizedToDate;
         if (request.action() == PositionTransformation.Action.CLOSE) {
             TradeService.LifecycleHook planHook = prepared.plan() == null ? null
                     : management.lifecycleHook(ownerId, prepared.plan().id(), request.expectedPlanVersion(),
                             "CLOSE", false, receiptId);
-            TradeService.LifecycleHook atomicArtifacts = (connection, closed, closingRealized) -> {
+            TradeService.LifecycleHook atomicArtifacts = (connection, closed, actionDelta, lifetimeTotal) -> {
                 recordPracticeArtifact(connection, ownerId, receiptId, prepared, closed.id(),
-                        PositionDomain.PositionState.CLOSED, closingRealized);
-                if (planHook != null) planHook.afterMutation(connection, closed, closingRealized);
+                        PositionDomain.PositionState.CLOSED, prepared.unwind().actionRealizedPnlCents());
+                if (planHook != null) {
+                    planHook.afterMutation(connection, closed, actionDelta, lifetimeTotal);
+                }
             };
             TradeService.CloseResult result = trades.unwind(request.sourceId(), true, atomicArtifacts,
                     prepared.unwind().closingCashCents(), prepared.unwind().closingFeesCents());
             responseTrade = result.trade();
-            realized = result.realizedPnlCents();
-            resolvedTradeId = result.trade().id();
+            resolvedTrade = result.trade();
+            actionRealized = result.actionRealizedPnlCents();
+            realizedToDate = result.realizedPnlCents();
+        } else if (request.action() == PositionTransformation.Action.PARTIAL_CLOSE) {
+            TradeService.LifecycleHook planHook = prepared.plan() == null ? null
+                    : management.partialCloseLifecycleHook(ownerId, prepared.plan().id(),
+                            request.expectedPlanVersion(), receiptId);
+            TradeService.LifecycleHook atomicArtifacts = (connection, survivor, actionDelta, lifetimeTotal) -> {
+                recordPracticeArtifact(connection, ownerId, receiptId, prepared, survivor.id(),
+                        PositionDomain.PositionState.PARTIALLY_CLOSED, actionDelta);
+                if (planHook != null) {
+                    planHook.afterMutation(connection, survivor, actionDelta, lifetimeTotal);
+                }
+            };
+            TradeService.PartialCloseResult result = trades.partialClose(request.sourceId(),
+                    request.closeQuantity(), true, atomicArtifacts, prepared.partial().closingCashCents(),
+                    prepared.partial().closingFeesCents(), expectedPosition(prepared));
+            responseTrade = result.trade();
+            actionRealized = result.actionRealizedPnlCents();
+            realizedToDate = result.realizedPnlCents();
         } else {
             if (prepared.after() == null || prepared.afterRequest() == null) {
                 throw new IllegalArgumentException("a roll requires the reviewed replacement position");
@@ -105,10 +127,13 @@ final class PositionTransformationController {
                     ctx, request.after(), prepared.trade().accountId(), prepared.projection());
             TradeService.RollHook planHook = prepared.plan() == null ? null
                     : management.rollLifecycleHook(ownerId, prepared.plan().id(), request.expectedPlanVersion(), receiptId);
-            TradeService.RollHook atomicArtifacts = (connection, closed, replacement, closingRealized) -> {
+            TradeService.RollHook atomicArtifacts = (connection, closed, replacement,
+                                                     actionDelta, lifetimeTotal) -> {
                 recordPracticeArtifact(connection, ownerId, receiptId, prepared, replacement.id(),
-                        PositionDomain.PositionState.OPEN, closingRealized);
-                if (planHook != null) planHook.afterRoll(connection, closed, replacement, closingRealized);
+                        PositionDomain.PositionState.OPEN, prepared.unwind().actionRealizedPnlCents());
+                if (planHook != null) {
+                    planHook.afterRoll(connection, closed, replacement, actionDelta, lifetimeTotal);
+                }
             };
             var afterPreview = prepared.after().preview();
             TradeService.RollResult result = trades.roll(request.sourceId(), approvedAfter, true,
@@ -116,15 +141,18 @@ final class PositionTransformationController {
                     new TradeService.ExpectedOpen(afterPreview.entryNetPremiumCents(), afterPreview.feesOpenCents(),
                             afterPreview.reserveCents(), afterPreview.maxLossCents(), afterPreview.maxProfitCents()));
             responseTrade = result.replacementTrade();
-            realized = result.realizedClosingCents();
-            resolvedTradeId = result.closedTrade().id();
+            resolvedTrade = result.closedTrade();
+            actionRealized = result.actionRealizedClosingCents();
+            realizedToDate = result.realizedClosingCents();
         }
-        long decisionPnl = TradeController.decisionPnl(prepared.trade(), realized);
-        tradeController.resolveRecommendation(resolvedTradeId, "CLOSED", decisionPnl);
+        if (resolvedTrade != null) {
+            tradeController.resolveRecommendation(resolvedTrade.id(), "CLOSED",
+                    TradeController.decisionPnl(resolvedTrade, realizedToDate));
+        }
         Plan.View currentPlan = prepared.plan() == null ? null : plans.get(ownerId, prepared.plan().id());
         Object currentManagement = currentPlan == null ? null : management.latest(ownerId, currentPlan.id());
         ctx.json(new ApiResponses.PositionTransformationApplied<>(receiptId, prepared.preview(),
-                TradeView.of(responseTrade), currentPlan, currentManagement, realized));
+                TradeView.of(responseTrade), currentPlan, currentManagement, actionRealized, realizedToDate));
     }
 
     private void recordPracticeArtifact(java.sql.Connection connection, String ownerId, String receiptId,
@@ -144,6 +172,14 @@ final class PositionTransformationController {
                         prepared.preview(), realized));
     }
 
+    private static TradeService.ExpectedPositionState expectedPosition(Prepared prepared) {
+        TradeRecord trade = prepared.trade();
+        return new TradeService.ExpectedPositionState(trade.qty(), trade.entryNetPremiumCents(),
+                trade.feesOpenCents(), trade.maxLossCents(), trade.maxProfitCents(), trade.sharesLocked(),
+                trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(),
+                prepared.before().risk().reserveCents());
+    }
+
     private Prepared prepare(Context ctx, Request request) {
         if (request.source() != PositionDomain.PackageSource.PRACTICE_TRADE) {
             throw new IllegalArgumentException("source must be PRACTICE_TRADE for this Practice transformation path");
@@ -153,13 +189,30 @@ final class PositionTransformationController {
         }
         tradeController.ensureOwnedTrade(ctx, request.sourceId());
         TradeRecord trade = trades.get(request.sourceId());
+        if (trade.external()) {
+            throw new IllegalArgumentException(
+                    "This endpoint transforms Practice positions only; use the tracked-account position workflow for broker records");
+        }
         Plan.View plan = requirePlanContext(ctx, request, trade);
-        TradeService.PositionAssessment before = trades.analyzeActivePosition(trade.id());
+        if (request.action() == PositionTransformation.Action.PARTIAL_CLOSE) {
+            if (request.closeQuantity() == null) {
+                throw new IllegalArgumentException("closeQuantity is required for a partial close");
+            }
+            if (request.after() != null) {
+                throw new IllegalArgumentException("the server derives the surviving position from closeQuantity");
+            }
+        } else if (request.closeQuantity() != null) {
+            throw new IllegalArgumentException("closeQuantity applies only to a partial close");
+        }
+        TradeService.PartialCloseAssessment partial = request.action() == PositionTransformation.Action.PARTIAL_CLOSE
+                ? trades.previewPartialClose(trade.id(), request.closeQuantity()) : null;
+        TradeService.PositionAssessment before = partial == null
+                ? trades.analyzeActivePosition(trade.id()) : partial.current();
         TradeService.UnwindAssessment unwind = switch (request.action()) {
             case CLOSE, ROLL -> trades.previewUnwind(trade.id());
             default -> null;
         };
-        TradeService.PositionAssessment after = null;
+        TradeService.PositionAssessment after = partial == null ? null : partial.survivor();
         TradeService.OpenRequest afterRequest = null;
         ApiResponses.TradePreviewResponse afterReview = null;
         TradeController.PlacementProjection projection = request.action() == PositionTransformation.Action.ROLL
@@ -192,8 +245,13 @@ final class PositionTransformationController {
         PositionTransformation.Preview preview = PositionTransformation.preview(new PositionTransformation.Request(
                 request.action(), before.position(), after == null ? null : after.position(),
                 before.risk(), after == null ? null : after.risk(),
-                unwind == null ? null : unwind.realizedPnlCents()));
-        return new Prepared(trade, plan, before, after, afterRequest, afterReview, projection, unwind, preview);
+                request.action() == PositionTransformation.Action.CLOSE
+                        ? unwind.realizedPnlToDateCents()
+                        : request.action() == PositionTransformation.Action.ROLL
+                            ? unwind.actionRealizedPnlCents()
+                            : partial == null ? null : partial.actionRealizedPnlCents()));
+        return new Prepared(trade, plan, before, after, afterRequest, afterReview, projection, unwind,
+                partial, preview);
     }
 
     private Plan.View requirePlanContext(Context ctx, Request request, TradeRecord trade) {
@@ -216,10 +274,23 @@ final class PositionTransformationController {
     private ApiResponses.PositionTransformationPreview<io.liftandshift.strikebench.paper.TradePreview,
             ApiResponses.TradePreviewResponse> response(
             Prepared prepared, String token, String expiresAt) {
+        Long closingCash = prepared.partial() == null
+                ? prepared.unwind() == null ? null : prepared.unwind().closingCashCents()
+                : prepared.partial().closingCashCents();
+        Long closingFees = prepared.partial() == null
+                ? prepared.unwind() == null ? null : prepared.unwind().closingFeesCents()
+                : prepared.partial().closingFeesCents();
+        Long actionRealized = prepared.partial() == null
+                ? prepared.unwind() == null ? null : prepared.unwind().actionRealizedPnlCents()
+                : prepared.partial().actionRealizedPnlCents();
+        Long realizedToDate = actionRealized == null ? null
+                : prepared.partial() == null
+                    ? prepared.unwind().realizedPnlToDateCents()
+                    : Math.addExact(prepared.trade().realizedPnlCents() == null
+                            ? 0 : prepared.trade().realizedPnlCents(), actionRealized);
         return new ApiResponses.PositionTransformationPreview<>(prepared.preview(),
                 prepared.before().preview(), prepared.afterReview(),
-                prepared.unwind() == null ? null : prepared.unwind().closingCashCents(),
-                prepared.unwind() == null ? null : prepared.unwind().closingFeesCents(), token, expiresAt);
+                closingCash, closingFees, actionRealized, realizedToDate, token, expiresAt);
     }
 
     private String token(Context ctx, Request request, PositionTransformation.Preview preview, long issuedAt) {
@@ -252,7 +323,7 @@ final class PositionTransformationController {
             mac.init(new SecretKeySpec(previewSecret, "HmacSHA256"));
             String payload = ownerId + "|" + request.source() + "|" + request.sourceId() + "|"
                     + request.planId() + "|" + request.expectedPlanVersion() + "|" + request.action() + "|"
-                    + fingerprint + "|" + issuedAt;
+                    + request.closeQuantity() + "|" + fingerprint + "|" + issuedAt;
             return HexFormat.of().formatHex(mac.doFinal(payload.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("cannot sign transformation preview", e);
@@ -261,7 +332,7 @@ final class PositionTransformationController {
 
     record Request(PositionDomain.PackageSource source, String sourceId, String planId,
                    Long expectedPlanVersion, PositionTransformation.Action action,
-                   TradeOpenRequest after, String previewToken) {}
+                   Integer closeQuantity, TradeOpenRequest after, String previewToken) {}
 
     private record Prepared(TradeRecord trade, Plan.View plan,
                             TradeService.PositionAssessment before,
@@ -270,5 +341,6 @@ final class PositionTransformationController {
                             ApiResponses.TradePreviewResponse afterReview,
                             TradeController.PlacementProjection projection,
                             TradeService.UnwindAssessment unwind,
+                            TradeService.PartialCloseAssessment partial,
                             PositionTransformation.Preview preview) {}
 }
