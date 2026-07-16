@@ -955,6 +955,25 @@
     return match ? match[1] : String(value || '').replaceAll('_', ' ').toLowerCase();
   }
 
+  function accountStatusLabel(value) {
+    return String(value || '').toUpperCase() === 'ARCHIVED' ? 'Archived' : 'Open';
+  }
+
+  function transactionTypeLabel(value) {
+    return ({ TRADE: 'Trade', ROLL: 'Roll', ASSIGNMENT: 'Assignment', EXERCISE: 'Exercise',
+      EXPIRATION: 'Expiration', DIVIDEND: 'Dividend', INTEREST: 'Interest', FEE: 'Fee',
+      CASH_FLOW: 'Cash transfer', MARK_TO_MARKET: 'Year-end mark', CAPITAL_GAIN_DISTRIBUTION: 'Capital-gain distribution' })[
+      String(value || '').toUpperCase()] || 'Recorded activity';
+  }
+
+  function transactionSourceLabel(value) {
+    return String(value || '').toUpperCase() === 'BROKER' ? 'Broker record' : 'Entered here';
+  }
+
+  function positionSideLabel(value) {
+    return String(value || '').toUpperCase() === 'SHORT' ? 'Short' : 'Long';
+  }
+
   function portfolioAccountForm(existing, onSaved) {
     existing = existing || {};
     var archived = existing.status === 'ARCHIVED';
@@ -1129,9 +1148,11 @@
             chip(p.side === 'LONG' ? 'Cost basis' : 'Opening proceeds', fmtMoney(p.openAmountCents)),
             chip('Close value now', p.liquidationValueCents == null ? 'Unavailable' : fmtMoney(p.liquidationValueCents)),
             chip('Gain / loss now', p.unrealizedPnlCents == null ? 'Unavailable' : pnlSpan(p.unrealizedPnlCents))),
-          el('div', { class: 'muted small' }, p.complete
-            ? [p.provenance, p.age === 'NOT_APPLICABLE' ? null : p.age, p.source].filter(Boolean).join(' · ')
-            : 'No executable closing price is available.'),
+          p.complete
+            ? el('div', { class: 'book-position-evidence' }, UI.evidenceBadge({
+                provenance: p.provenance, age: p.age
+              }, { compact: true }))
+            : el('div', { class: 'muted small' }, 'No executable closing price is available.'),
           p.instrumentType === 'OPTION' ? el('div', { class: 'btn-row' },
             el('button', { type: 'button', class: 'btn btn-secondary btn-sm', disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
               onclick: function () { portfolioRollPosition(account, p); } }, 'Roll position')) : null));
@@ -1140,12 +1161,11 @@
     } else {
       posCard.appendChild(table(['Position', 'Side', 'Qty', 'Basis / proceeds', 'Close price', 'Liquidation value', 'Unrealized', 'Evidence', 'Action'],
         positions.map(function (p) { return el('tr', {}, el('td', {}, el('b', {}, portfolioPositionLabel(p))),
-          el('td', {}, p.side), el('td', {}, String(p.quantity) + (p.multiplier !== 1 ? ' ×' + p.multiplier : '')),
+          el('td', {}, positionSideLabel(p.side)), el('td', {}, String(p.quantity) + (p.multiplier !== 1 ? ' ×' + p.multiplier : '')),
           el('td', {}, fmtMoney(p.openAmountCents)), el('td', {}, p.liquidationPrice == null ? '—' : '$' + Number(p.liquidationPrice).toFixed(4)),
           el('td', {}, p.liquidationValueCents == null ? '—' : fmtMoney(p.liquidationValueCents)),
           el('td', {}, p.unrealizedPnlCents == null ? '—' : pnlSpan(p.unrealizedPnlCents)),
-          el('td', {}, badge(p.provenance), p.age === 'NOT_APPLICABLE' ? null
-            : (p.age && p.age !== p.provenance ? el('span', { class: 'muted small' }, ' ' + p.age) : null)),
+        el('td', {}, UI.evidenceBadge({ provenance: p.provenance, age: p.age }, { compact: true })),
           el('td', {}, p.instrumentType === 'OPTION' ? el('button', { type: 'button', class: 'btn btn-secondary btn-sm',
             disabled: account.status === 'ARCHIVED' ? 'disabled' : null, onclick: function () { portfolioRollPosition(account, p); } }, 'Roll') : '—')); })));
     }
@@ -1615,12 +1635,12 @@
   function portfolioTransactionRow(tx) {
     var cashClass = tx.cashEffectCents > 0 ? 'gain' : tx.cashEffectCents < 0 ? 'loss' : '';
     var summary = el('div', { class: 'book-transaction-summary' },
-      el('div', {}, el('b', {}, tx.eventType.replaceAll('_', ' ').toLowerCase()),
+      el('div', {}, el('b', {}, transactionTypeLabel(tx.eventType)),
         el('span', { class: 'muted small' }, portfolioOccurredLabel(tx.occurredAt))),
       el('div', { class: cashClass }, fmtMoney(tx.cashEffectCents, { plus: true })));
     var row = UI.expandable(summary, function () {
       return el('div', { class: 'book-transaction-detail' },
-        el('div', { class: 'chip-row' }, chip('Source', tx.source), chip('Fees', fmtMoney(tx.feesCents)),
+        el('div', { class: 'chip-row' }, chip('Source', transactionSourceLabel(tx.source)), chip('Fees', fmtMoney(tx.feesCents)),
           tx.taxCategory ? chip('Tax category', tx.taxCategory.replaceAll('_', ' ').toLowerCase()) : null,
           tx.externalRef ? chip('Reference', tx.externalRef) : null),
         (tx.legs || []).length ? el('div', { class: 'book-transaction-legs' }, (tx.legs || []).map(function (leg) {
@@ -1913,7 +1933,9 @@
       el('div', {}, el('h2', {}, UI.vocabulary('trackedTaxBasis'), ' and reconciliation'),
         el('p', { class: 'muted' }, account.accountType === 'TAXABLE'
           ? 'Not tax advice. Recorded facts and a bounded user-rate scenario for reconciliation, not a tax filing, tax owed, or broker 1099.'
-          : 'Not tax advice. Basis and performance remain tracked; current capital-gains tax is not assigned inside this retirement wrapper.')),
+          : 'Not tax advice. Basis and performance remain tracked; current capital-gains tax is not assigned inside this retirement wrapper.'),
+        el('p', { class: 'muted small' }, 'This stays separate from ',
+          UI.vocabulary('campaignEconomicBasis'), ', which interprets a multi-action campaign rather than changing tracked lots.')),
       UI.field('Tax year', year)));
     var taxData;
     try {
@@ -2041,7 +2063,7 @@
       finally { toggle.disabled = false; toggle.removeAttribute('aria-busy'); }
     } }, account.status === 'ARCHIVED' ? 'Restore account' : 'Archive account');
     root.appendChild(el('section', { class: 'card card-slim book-account-status' },
-      UI.cardHeader('Record status', el('span', { class: 'badge ' + (account.status === 'ARCHIVED' ? 'badge-caution' : 'badge-ok') }, account.status)),
+      UI.cardHeader('Record status', el('span', { class: 'badge ' + (account.status === 'ARCHIVED' ? 'badge-caution' : 'badge-ok') }, accountStatusLabel(account.status))),
       el('p', { class: 'muted' }, account.status === 'ARCHIVED'
         ? 'The full transaction, lot, valuation, performance, and tax history remains readable. Restore the account to add records.'
         : 'Archiving makes this account read-only without erasing its accounting history or exports.'),
@@ -2349,10 +2371,10 @@
           function heatChips() {
             return heat && heat.activeTrades > 0 ? el('div', { class: 'chip-row' },
               el('b', { style: 'margin-right:4px' }, 'Book heat'),
-              chip('Total worst case', fmtMoney(heat.totalMaxLossCents)),
+              chip(UI.vocabulary('theoreticalMaxLoss'), fmtMoney(heat.totalMaxLossCents)),
               chip('Short-vol trades', String(heat.shortVolTrades)),
               chip('Top-symbol share', heat.concentrationPct + '%',
-                'How much of the total worst case sits in ONE symbol.'),
+                'How much of the book’s theoretical max loss sits in one symbol.'),
               heat.earlyAssignmentLiquidityCents > 0 ? chip(UI.vocabulary('assignmentCapital'),
                 fmtMoney(heat.earlyAssignmentLiquidityCents),
                 'Temporary gross cash needed if every short put assigns before protective puts are exercised or sold. This is not max loss.') : null,
@@ -2527,7 +2549,7 @@
                 ? pnlSpan(activeDecisionPnl(t)) : el('span', { class: 'muted' }, '—'))
           : null,
         el('td', {}, tab === 'active' ? el('span', { class: 'muted' }, UI.fmtDate(t.createdAt)) : pnlSpan(closedDecisionPnl(t))),
-        el('td', {}, el('span', { class: 'badge ' + (t.status === 'ACTIVE' ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, t.status))),
+        el('td', {}, el('span', { class: 'badge ' + (t.status === 'ACTIVE' ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, UI.positionStatusLabel(t.status)))),
         'Open ' + t.symbol + ' ' + prettyStrategy(t.strategy), 'link');
     });
     tradesCard.appendChild(table(
@@ -2593,7 +2615,7 @@
         el('span', { class: 'nm' }, prettyStrategy(t.strategy) + ' · x' + t.qty),
         t.origin === 'EXTERNAL' ? el('span', { class: 'badge badge-warn' }, UI.vocabulary('recordedAtBroker')) : null,
         intentBadge(t.intent),
-        el('span', { class: 'badge ' + (active ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, t.status),
+        el('span', { class: 'badge ' + (active ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, UI.positionStatusLabel(t.status)),
         el('span', { class: 'spacer' }),
         pnl !== null && pnl !== undefined
           ? el('span', { class: 'px ' + (pnl >= 0 ? 'gain' : 'loss') }, fmtMoney(pnl, { plus: true }))

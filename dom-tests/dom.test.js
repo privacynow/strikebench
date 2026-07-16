@@ -119,6 +119,20 @@ async function assertTabContracts(scope = 'body') {
     + JSON.stringify(violations));
 }
 
+async function assertNoInternalChrome(scope = '#app') {
+  const text = await page.locator(scope).innerText();
+  const forbidden = [
+    /\bPlan v\d+\b/i,
+    /\bContext r\d+\b/i,
+    /\bEconomic verdict\s+(?:FAVORABLE|MIXED|UNFAVORABLE|UNAVAILABLE|MECHANICALLY_INELIGIBLE)\b/i,
+    /\breceipt\s+[a-f0-9]{12,}\b/i,
+    /\bAlt\+V\b/i,
+    /\bidempotency\b/i
+  ];
+  const found = forbidden.filter(pattern => pattern.test(text)).map(String);
+  assert.deepEqual(found, [], 'visible chrome must not expose transport internals: ' + found.join(', '));
+}
+
 async function openPlan(symbol, stage = 'understand', intentOverride, thesisOverride, horizonOverride) {
   const context = await page.evaluate(() => ({
     goal: App.context.goal('DIRECTIONAL'),
@@ -565,10 +579,11 @@ test('Plan stages orient both levels without hiding capabilities or stealing the
 
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
   await page.waitForSelector('#plan-stage-evidence');
-  assert.equal(await page.locator('.plan-header-receipt:visible').count(), 1,
-    'Expert sees the compact Plan and context receipt');
-  assert.match(await page.textContent('.plan-header-receipt'), /Plan v\d+.*Context r\d+/s);
-  assert.match(await page.textContent('.plan-stage-carry-receipt'), /context r\d+.*plan v\d+/s);
+  assert.equal(await page.locator('.plan-header-receipt, .plan-stage-carry-receipt').count(), 0,
+    'transport versions never appear in Plan chrome');
+  assert.doesNotMatch(await page.textContent('#plan-header'), /Plan v\d+|Context r\d+/i,
+    'the Plan header speaks in user decisions rather than revision counters');
+  await assertNoInternalChrome('#app');
   assert.equal(await page.locator('.plan-rail button').count(), 6,
     'Expert and Beginner have the same stage reachability');
 
@@ -1176,8 +1191,8 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
   await page.click('#plan-outcomes-basis-model');
   await page.waitForSelector('.plan-proposal-comparison-result', { timeout: 20000 });
-  assert.match(await page.textContent('.plan-proposal-comparison-result'), new RegExp(receipt.fingerprint.slice(0, 12)),
-    'the normalized comparison restores after reload with the same receipt');
+  assert.match(await page.textContent('.plan-proposal-comparison-result'), /STORED FUTURES VERIFIED/,
+    'the normalized comparison restores after reload with its durable receipt without exposing an internal token');
 
   const reviewTrade = page.locator('.plan-proposal-comparison-result button').filter({ hasText: 'Review this trade' }).first();
   assert.equal(await reviewTrade.count(), 1, 'an alternative has an explicit return path to the owning Strategy step');
@@ -1288,7 +1303,8 @@ test('a selected Plan future becomes one exact managed rehearsal with a durable 
     'selecting a visible sample makes that exact path actionable');
   await page.click('#whatif-rehearse-selected');
   await page.waitForSelector('#sim-control-room', { timeout: 20000 });
-  assert.match(await page.textContent('#sim-control-room'), /Exact Plan rehearsal.*path 1.*receipt/is);
+  assert.match(await page.textContent('#sim-control-room'), /Exact Plan rehearsal.*path 1.*reproducibility receipt is preserved/is);
+  await assertNoInternalChrome('#sim-control-room');
   assert.equal(await page.locator('#sim-control-room button:has-text("Inject event")').count(), 0,
     'event injection is absent because it would break the stored path identity');
   const live = await page.evaluate(async () => {
@@ -1333,7 +1349,7 @@ test('a selected Plan future becomes one exact managed rehearsal with a durable 
   await page.waitForSelector('#plan-stage-manage-review .plan-rehearsal-review, #plan-stage-manage-review .plan-management-timeline',
     { timeout: 20000 });
   assert.match(await page.textContent('#plan-stage-manage-review'), /Management rehearsals|exact path/i);
-  assert.match(await page.textContent('#plan-stage-manage-review'), /sim rehearsal|rehearsal result/i,
+  assert.match(await page.textContent('#plan-stage-manage-review'), /simulation rehearsal|rehearsal result/i,
     'finish writes the rehearsal review into the owning Plan');
 });
 
@@ -2628,7 +2644,7 @@ test('scenario studio: beginner view → decision facts → same-receipt strateg
   assert.match(decisionText, /touch it/);
   assert.match(decisionText, /OPTIONS MARKET IMPLIED/);
   assert.match(decisionText, /2,000 paths/);
-  assert.match(decisionText, /receipt [a-f0-9]{24}/);
+  assert.match(decisionText, /reproducible run saved/i);
   assert.match(await page.textContent('#whatif-out'), /never a forecast/i);   // honesty note
   assert.ok(await page.locator('#whatif-reroll:visible').count(), 'sampling check replaces seed-shopping language');
   await page.click('#whatif-reroll');
@@ -3333,7 +3349,7 @@ test('Beginner keeps exact book sensitivity through progressive disclosure', asy
   await page.waitForSelector('#portfolio-greeks');
   assert.match(await page.textContent('#portfolio-greeks'), /How your open positions react/);
   await page.locator('#portfolio-greeks .xp-head').click();
-  assert.match(await page.textContent('#portfolio-greeks'), /Book heat.*Total worst case.*Book greeks.*Net Δ.*Vega\/pt/s,
+  assert.match(await page.textContent('#portfolio-greeks'), /Book heat.*Theoretical max loss.*Book greeks.*Net Δ.*Vega\/pt/s,
     'Beginner can inspect the same exact book heat and Greeks');
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
   await page.waitForSelector('#portfolio-greeks');
@@ -3987,9 +4003,11 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   await page.locator('#plan-strategy-body .position-terminal').fill(terminal);
   await page.getByRole('button', { name: 'Apply lines', exact: true }).click();
   await page.waitForSelector('#plan-strategy-body .position-editor-visual svg.chart');
+  await page.waitForFunction(() => /Bull put \(credit\) spread/i.test(
+    document.querySelector('#plan-strategy-body .position-identity')?.textContent || ''));
   assert.match(await page.locator('#plan-strategy-body .position-identity').innerText(),
-    /Your exact package[\s\S]*payoff updates[\s\S]*Analyze to name the structure[\s\S]*use these exact contracts in this Plan/i,
-  'the editor does not invent a catalog identity before the server analyzes the exact package');
+    /Hypothetical[\s\S]*structure identified[\s\S]*Bull put \(credit\) spread/i,
+  'leg edits are debounced into the one server-owned catalog before a pricing analysis');
   assert.doesNotMatch(await page.getAttribute('#plan-strategy-body .position-editor-visual path.line', 'd'), /NaN/,
     'the exact 20-lot payoff never writes invalid path coordinates');
   await page.getByRole('button', { name: 'Visual', exact: true }).click();
@@ -4040,6 +4058,11 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   assert.match(await page.locator('#plan-strategy-body .position-editor-result').innerText(),
     /Analysis complete[\s\S]*Theoretical max loss[\s\S]*Market-implied EV after costs[\s\S]*WHAT THIS POSITION ACTUALLY EXPRESSES[\s\S]*Data coverage for this analysis[\s\S]*Portfolio impact[\s\S]*Entry-price receipt[\s\S]*Continue to Outcomes/i,
   'Analyze reports exact-package economics, behavior, coverage, portfolio impact, price provenance, and an in-view next action');
+  for (const key of ['hypothetical', 'economicExposure', 'scenarioLoss']) {
+    assert.ok(await page.locator('#plan-strategy-body [data-vocabulary="' + key + '"]').count() > 0,
+      key + ' is wired to a visible registry-backed label in the shared editor');
+  }
+  await assertNoInternalChrome('#plan-strategy-body');
   const selectedExactPackage = await page.evaluate(async planId => {
     const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
     return {

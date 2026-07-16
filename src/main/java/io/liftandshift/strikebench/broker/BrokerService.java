@@ -92,7 +92,7 @@ public final class BrokerService {
             throw new IllegalArgumentException("A successful preview is required before placing a live order");
         }
         if (clientOrderId == null || clientOrderId.isBlank()) {
-            throw new IllegalArgumentException("clientOrderId is required (idempotency key)");
+            throw new IllegalArgumentException("clientOrderId is required to prevent a duplicate order submission");
         }
         if (!CONFIRM_TEXT.equals(confirmText)) {
             throw new IllegalArgumentException("Type the exact confirmation to place a live order: \"" + CONFIRM_TEXT + "\"");

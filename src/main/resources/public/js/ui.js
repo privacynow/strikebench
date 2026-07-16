@@ -161,6 +161,7 @@
     if (!evidence) return null;
     if (typeof evidence === 'string') evidence = { provenance: evidence };
     var p = String(evidence.provenance || 'MISSING').toUpperCase();
+    if (p === 'UNKNOWN') p = 'MISSING';
     var age = String(evidence.age || '').toUpperCase();
     var compact = !!(opts && opts.compact);
     var label = p === 'DEMO' ? (compact ? 'DEMO' : 'DEMO · FABRICATED')
@@ -181,6 +182,34 @@
     // Data diagnostics; exposing them as native hover text leaks implementation detail and
     // creates a second tooltip that merely competes with the visible label.
     return el('span', { class: 'badge evidence-badge ' + cls + (opts && opts.className ? ' ' + opts.className : '') }, label);
+  }
+
+  function economicVerdictLabel(value) {
+    var verdict = String(value || 'UNAVAILABLE').toUpperCase();
+    return ({
+      FAVORABLE: 'Worth investigating',
+      MIXED: 'Promising, incomplete',
+      UNFAVORABLE: 'Not supported',
+      UNAVAILABLE: 'Incomplete evidence',
+      MECHANICALLY_INELIGIBLE: 'Not tradable as entered'
+    })[verdict] || 'Not assessed';
+  }
+
+  function rehearsalSelectionLabel(value) {
+    return ({ RANDOM: 'Random', TYPICAL: 'Typical', FAVORABLE: 'Favorable', ADVERSE: 'Adverse',
+      STRESS: 'Stress', SAMPLE: 'Selected sample' })[String(value || '').toUpperCase()] || 'Selected';
+  }
+
+  function positionStatusLabel(value) {
+    return ({ ACTIVE: 'Open', CLOSED: 'Closed', EXPIRED: 'Expired', DELETED: 'Voided',
+      CANCELLED: 'Cancelled' })[String(value || '').toUpperCase()] || 'Complete';
+  }
+
+  function statusLabel(value) {
+    return ({ RUNNING: 'Running', PAUSED: 'Paused', READY: 'Ready', PREPARING: 'Preparing',
+      FINISHED: 'Finished', FAILED: 'Failed', PENDING: 'Pending', QUEUED: 'Queued', DONE: 'Complete',
+      CANCELLED: 'Cancelled', ACTIVE: 'Active', DISABLED: 'Off', SKIPPED: 'Skipped' })[
+      String(value || '').toUpperCase()] || 'Unknown';
   }
 
   function explain(text) {
@@ -1518,6 +1547,10 @@
     delta: delta,
     freshnessBadge: freshnessBadge,
     evidenceBadge: evidenceBadge,
+    economicVerdictLabel: economicVerdictLabel,
+    rehearsalSelectionLabel: rehearsalSelectionLabel,
+    positionStatusLabel: positionStatusLabel,
+    statusLabel: statusLabel,
     explain: explain,
     alertBox: alertBox,
     toast: toast,

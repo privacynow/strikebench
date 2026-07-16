@@ -282,14 +282,13 @@
           style: 'margin:6px 0; padding:12px' },
           UI.cardHeader((rehearsal ? 'Plan rehearsal \u2014 ' : 'Control room \u2014 ') + (sx.name || sx.id),
             el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : 'badge-warn'), id: 'cr-status' },
-              sx.running ? 'RUNNING' : 'PAUSED')),
+              UI.statusLabel(sx.running ? 'RUNNING' : 'PAUSED'))),
           el('div', { class: 'chip-row' },
             chip('Sim clock', el('span', { id: 'cr-clock' }, String(sx.simTime || '').replace('T', ' '))),
-            rehearsal ? chip('Exact path', String(rehearsal.pathIndex + 1) + ' · ' + rehearsal.selection.toLowerCase())
+            rehearsal ? chip('Exact path', String(rehearsal.pathIndex + 1) + ' · ' + UI.rehearsalSelectionLabel(rehearsal.selection))
               : chip('Scenario', App.scenarioLabel(cfg.scenario)),
             chip('Speed', el('span', { id: 'cr-speed' }, (sx.speed || cfg.speed || 1) + '\u00d7')),
-            rehearsal ? chip('Receipt', String(rehearsal.fingerprint).slice(0, 12) + '…') : chip('Seed', String(cfg.seed)),
-            sx.modelVersion ? chip('Model', sx.modelVersion) : null),
+            rehearsal ? chip('Stored path', 'Verified') : chip('Scenario seed', String(cfg.seed))),
           el('div', { class: 'sim-market-overview' },
             el('div', { class: 'sim-overview-head' },
               el('div', {}, el('b', {}, 'Market overview'),
@@ -315,8 +314,8 @@
             el('button', { class: 'btn btn-sm', onclick: function () { App.navigate('#/portfolio'); } }, 'Simulated portfolio'),
             el('button', { class: 'btn btn-sm btn-danger', onclick: function () { finishModal(sx); } }, 'Finish')));
         if (rehearsal) room.insertBefore(alertBox('caution', 'Exact Plan rehearsal', [
-          'Spot and implied volatility replay stored path ' + (rehearsal.pathIndex + 1) + ' from ensemble ' + rehearsal.ensembleId + '.',
-          'The receipt is ' + rehearsal.fingerprint + '. Shocks are disabled because they would break that identity.'
+          'Spot and implied volatility replay stored path ' + (rehearsal.pathIndex + 1) + ' from the Plan’s saved possible futures.',
+          'A reproducibility receipt is preserved. Shocks are disabled because they would change this exact rehearsal.'
         ]), room.children[2]);
         // ---- The CONSOLE parts (F9): breadth, anchor coverage, focus chart, live P/L, heat,
         // event timeline. Everything below reuses existing primitives — no duplicate engines.
@@ -392,8 +391,8 @@
             try {
               var heat = await API.get('/api/portfolio/heat');
               if (heat && heat.totalWorstCaseCents !== undefined && heat.totalWorstCaseCents !== null) {
-                pl.appendChild(chip('Book heat', UI.fmtMoney(heat.totalWorstCaseCents),
-                  'Total worst case across open simulated positions.'));
+                pl.appendChild(chip(UI.vocabulary('theoreticalMaxLoss'), UI.fmtMoney(heat.totalWorstCaseCents),
+                  'Sum of the theoretical max loss across open simulated positions.'));
               }
             } catch (e2) { /* heat is optional decoration here */ }
           } catch (e) {
@@ -446,10 +445,11 @@
             slot.innerHTML = '';
             if (rep.rehearsal) {
               slot.appendChild(el('div', { class: 'chip-row' },
-                chip('Plan', rep.rehearsal.planId), chip('Ensemble', rep.rehearsal.ensembleId),
-                chip('Path', String(Number(rep.rehearsal.pathIndex) + 1) + ' · ' + rep.rehearsal.selection.toLowerCase()),
-                chip('Source model', rep.rehearsal.modelVersion), chip('Stored rate', fmtPct(rep.rehearsal.rateAnnual))));
-              slot.appendChild(el('p', { class: 'muted small rehearsal-receipt' }, 'Receipt ' + rep.rehearsal.fingerprint));
+                chip('Plan rehearsal', 'Linked'),
+                chip('Stored path', String(Number(rep.rehearsal.pathIndex) + 1) + ' · ' + UI.rehearsalSelectionLabel(rep.rehearsal.selection)),
+                chip('Stored rate assumption', fmtPct(rep.rehearsal.rateAnnual))));
+              slot.appendChild(el('p', { class: 'muted small rehearsal-receipt' },
+                'The exact source path and model identity remain preserved in the durable receipt.'));
               return;
             }
             var evs = rep.events || [];
@@ -490,10 +490,9 @@
           el('b', { id: titleId }, sx.name || sx.id),
           rehearsal ? el('span', { class: 'badge badge-info' }, 'PLAN REHEARSAL') : null,
           el('span', { class: 'badge ' + (sx.running ? 'badge-ok' : failed ? 'badge-danger' : preparing ? 'badge-caution' : finished ? 'badge-dim' : 'badge-warn') },
-            finished ? 'FINISHED' : failed ? 'FAILED' : preparing ? 'PREPARING' : sx.running ? 'RUNNING' : 'READY'),
+            UI.statusLabel(finished ? 'FINISHED' : failed ? 'FAILED' : preparing ? 'PREPARING' : sx.running ? 'RUNNING' : 'READY')),
           el('span', { class: 'muted small sim-session-meta' }, (rehearsal
-            ? rehearsal.symbol + ' · path ' + (rehearsal.pathIndex + 1) + ' · ' + rehearsal.selection.toLowerCase()
-              + ' · receipt ' + String(rehearsal.fingerprint).slice(0, 12) + '…'
+            ? rehearsal.symbol + ' · path ' + (rehearsal.pathIndex + 1) + ' · ' + UI.rehearsalSelectionLabel(rehearsal.selection)
             : App.scenarioLabel(cfg.scenario) + ' \u00b7 seed ' + cfg.seed)
             + (sx.eventCount ? ' \u00b7 ' + sx.eventCount + ' injected event' + (sx.eventCount === 1 ? '' : 's') : '')
             + (sx.simTime ? ' \u00b7 ' + String(sx.simTime).replace('T', ' ') : '')));
@@ -611,7 +610,7 @@
                   el('td', {}, t.maeCents == null ? '\u2014'
                     : el('span', {}, pnlSpan(t.maeCents), ' / ', pnlSpan(t.mfeCents))),
                   el('td', {}, t.decisionPnlCents == null && t.realizedPnlCents == null
-                    ? el('span', { class: 'badge badge-dim' }, t.status)
+                    ? el('span', { class: 'badge badge-dim' }, UI.positionStatusLabel(t.status))
                     : pnlSpan(t.decisionPnlCents != null ? t.decisionPnlCents : t.realizedPnlCents)),
                   el('td', { class: 'muted small' }, t.closeReason || '\u2014'));
               })))));
@@ -927,7 +926,7 @@
         if (typeof data.running === 'boolean') {
           var status = activeRoom.querySelector('#cr-status');
           if (status) {
-            status.textContent = data.running ? 'RUNNING' : 'PAUSED';
+            status.textContent = UI.statusLabel(data.running ? 'RUNNING' : 'PAUSED');
             status.className = 'badge ' + (data.running ? 'badge-ok' : 'badge-warn');
           }
           var toggle = activeRoom.querySelector('#cr-toggle');
@@ -1276,7 +1275,7 @@
         if (j.status === 'RUNNING' || j.status === 'QUEUED') anyRunning = true;
         var row = el('div', { class: 'dc-job' },
           el('div', { class: 'chip-row', style: 'align-items:center;margin:0' },
-            el('span', { class: 'badge ' + (JOB_BADGE[j.status] || 'badge-dim') }, j.status),
+            el('span', { class: 'badge ' + (JOB_BADGE[j.status] || 'badge-dim') }, UI.statusLabel(j.status)),
             el('b', {}, jobName(j.kind)),
             el('span', { class: 'muted' }, j.done + '/' + j.total + ' · ' + j.rowsWritten + ' rows'),
             el('span', { class: 'spacer' }),
@@ -1306,7 +1305,7 @@
               detail.appendChild(table(['Item', 'State', 'Rows', 'Result'], items.map(function (x) {
                 return el('tr', {}, el('td', {}, el('b', {}, x.label)),
                   el('td', {}, el('span', { class: 'badge ' + (x.status === 'DONE' ? 'badge-ok'
-                    : x.status === 'FAILED' ? 'badge-danger' : x.status === 'PENDING' ? 'badge-caution' : 'badge-dim') }, x.status)),
+                    : x.status === 'FAILED' ? 'badge-danger' : x.status === 'PENDING' ? 'badge-caution' : 'badge-dim') }, UI.statusLabel(x.status))),
                   el('td', {}, String(x.rowsWritten || 0)), el('td', { class: 'muted small' }, x.note || ''));
               })));
             }).catch(function (e) { detail.innerHTML = ''; detail.appendChild(alertBox('warn', e.message)); });
@@ -1769,7 +1768,7 @@
       var cursorRows = (doc.cursors || []).map(function (c) { return el('tr', {},
         el('td', {}, el('b', {}, c.symbol)), el('td', {}, c.source),
         el('td', {}, el('span', { class: 'badge ' + (c.status === 'COMPLETE' ? 'badge-ok'
-          : c.status === 'FAILED' ? 'badge-danger' : c.status === 'RUNNING' ? 'badge-caution' : 'badge-dim') }, c.status)),
+          : c.status === 'FAILED' ? 'badge-danger' : c.status === 'RUNNING' ? 'badge-caution' : 'badge-dim') }, UI.statusLabel(c.status))),
         el('td', { class: 'muted' }, c.lastSuccessDate || '—'), el('td', { class: 'muted' }, String(c.rowsWritten || 0)),
         el('td', { class: 'muted small' }, c.note || '')); });
       var diagnostics = el('div', {},

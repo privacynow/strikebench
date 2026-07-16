@@ -193,7 +193,7 @@ class StrategyEvaluatorTest {
         assertThat(put.participation().regimePoints()).singleElement()
                 .satisfies(point -> {
                     assertThat(point.priceCents()).isEqualTo(24_000L);
-                    assertThat(point.meaning()).contains("assignment exposure");
+                    assertThat(point.meaning()).contains("share-purchase obligation");
                 });
 
         Candidate coveredCall = candidate("COVERED_CALL", List.of(
@@ -233,7 +233,7 @@ class StrategyEvaluatorTest {
         assertThat(evaluation.ivContext().message()).containsIgnoringCase("crush");
         assertThat(evaluation.capital().annualizationNote())
                 .contains("theoretical max profit divided by")
-                .contains("economic capital")
+                .contains("economic exposure")
                 .contains("calendar days")
                 .contains("repeatable")
                 .contains("not assumed");

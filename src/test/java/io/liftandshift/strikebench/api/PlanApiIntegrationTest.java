@@ -663,7 +663,8 @@ class PlanApiIntegrationTest {
 
         JsonNode report = json(get("/api/sim/market/" + worldId + "/report"));
         assertThat(report.at("/rehearsal/fingerprint").asText()).isEqualTo(fingerprint);
-        assertThat(report.get("note").asText()).contains("exact path 1").contains(fingerprint);
+        assertThat(report.get("note").asText()).contains("exact path 1").contains("durable receipt")
+                .doesNotContain(fingerprint);
 
         assertThat(delete("/api/sim/market/" + worldId).statusCode()).isBetween(200, 299);
         JsonNode managed = json(get("/api/plans/" + planId + "/manage"));

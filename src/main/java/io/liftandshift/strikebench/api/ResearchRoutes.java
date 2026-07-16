@@ -20,6 +20,7 @@ public final class ResearchRoutes {
             Handler news,
             Handler lookup,
             Handler strategies,
+            Handler identifyStrategy,
             Handler exposure,
             Handler evaluations,
             Handler calibration,
@@ -43,6 +44,7 @@ public final class ResearchRoutes {
         config.routes.get("/api/research/{symbol}/news", h.news());
         config.routes.get("/api/lookup", h.lookup());
         config.routes.get("/api/strategies", h.strategies());
+        config.routes.post("/api/strategies/identify", h.identifyStrategy());
         config.routes.post("/api/builder/exposure", h.exposure());
         config.routes.get("/api/evaluations", h.evaluations());
         config.routes.get("/api/calibration", h.calibration());
