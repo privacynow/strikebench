@@ -859,7 +859,7 @@
     });
   }
 
-  function planHeader(plan, provisional) {
+  function planHeader(plan, provisional, onEditView) {
     var context = plan.context || {};
     var title = plan.title || (plan.symbol + ' · New plan');
     return el('header', { class: 'plan-header', id: 'plan-header' },
@@ -870,13 +870,15 @@
           el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)),
           plan.intent ? intentBadge(plan.intent) : el('span', { class: 'badge badge-dim' }, 'Intent not chosen'),
           context.horizonDays ? chip('Horizon', context.horizonDays + ' trading sessions') : null,
-          context.targetCents ? chip('Target', fmtMoney(context.targetCents)) : null)),
+          context.targetCents ? chip('Target', fmtMoney(context.targetCents)) : null,
+          // Live market presence inside the journey: fed by the MarketStore SSE stream in
+          // world lanes (the simulation is the spine — its motion stays visible while planning).
+          el('span', { class: 'plan-live-quote', id: 'plan-live-quote', hidden: '' },
+            el('span', { class: 'px', id: 'plan-live-px' })))),
       provisional ? null : el('div', { class: 'plan-header-actions' },
         el('button', { type: 'button', class: 'btn btn-sm btn-secondary', id: 'plan-edit-context',
-          onclick: function () {
-            var editor = document.getElementById('plan-context-editor');
-            if (editor) { editor.hidden = !editor.hidden; if (!editor.hidden) editor.querySelector('input,select').focus(); }
-          } }, plan.assumptionsEditable === true ? 'Edit view & limits' : 'Revise this Plan'),
+          onclick: function () { if (onEditView) onEditView(); } },
+          plan.assumptionsEditable === true ? 'Edit view & limits' : 'Revise this Plan'),
         plan.assumptionsEditable === true ? el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
           id: 'plan-delete', onclick: function () { confirmDeletePlan(plan, true); } }, icon('trash', 15), ' Delete draft') : null,
         plan.status === 'POSITION_OPEN' ? null : el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
@@ -2907,13 +2909,21 @@
     var match = THESIS_CHOICES.find(function (t) { return t.value === value; });
     return match ? match.label : 'Not declared';
   }
+  function directionOptional(plan) {
+    // Income and hedging are declared objectives that can be genuinely shares-agnostic —
+    // the objective IS the view; a direction is welcome but never demanded (nor imposed).
+    return plan.intent === 'INCOME' || plan.intent === 'HEDGE';
+  }
   function viewDeclared(plan) {
-    return !!(plan.intent && plan.context && plan.context.thesis && plan.context.horizonDays);
+    if (!plan.intent || !plan.context || !plan.context.horizonDays) return false;
+    return !!plan.context.thesis || directionOptional(plan);
   }
   function viewConclusion(plan) {
     var c = plan.context || {};
+    var direction = c.thesis ? thesisLabel(c.thesis)
+      : directionOptional(plan) ? 'No directional view' : 'Not declared';
     return el('span', { class: 'view-conclusion' },
-      el('b', {}, plan.symbol), ' · ', thesisLabel(c.thesis),
+      el('b', {}, plan.symbol), ' · ', direction,
       ' over ', String(c.horizonDays), ' sessions · ', planIntentLabel(plan.intent),
       c.targetCents ? el('span', { class: 'muted' }, ' · target ' + fmtMoney(c.targetCents)) : null);
   }
@@ -2944,6 +2954,7 @@
             var live = await PlanStore.get(plan.id, true);
             ctx.plan = await PlanStore.claimIntent(live, meta.key);
             draft.intent = meta.key;
+            if (ctx.refreshHeader) ctx.refreshHeader();
             api.refreshBand('view');
           } catch (e) { UI.toast(e.message, 'error'); }
         } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb)));
@@ -2953,6 +2964,7 @@
     }
 
     var thesisControl = UI.chipSet({
+      id: 'plan-thesis',
       label: 'Your view on ' + plan.symbol, info: 'thesis',
       options: THESIS_CHOICES, value: draft.thesis,
       onChange: function (v) { draft.thesis = v; },
@@ -2980,11 +2992,11 @@
         return days ? 'Studies and expirations will focus on roughly ' + days + ' trading sessions out.' : '';
       }
     });
-    var customInput = el('input', { type: 'number', min: '1', max: '730',
+    var customInput = el('input', { id: 'plan-horizon-days', type: 'number', min: '1', max: '730',
       value: draft.horizonDays || '', oninput: function () { draft.horizonDays = Number(this.value) || null; } });
     var customHorizon = el('div', { class: 'field', hidden: [10, 21, 63].indexOf(draft.horizonDays) >= 0 || !draft.horizonDays ? '' : null },
-      el('label', {}, 'Trading sessions'), customInput);
-    var target = el('input', { type: 'number', min: '0.01', step: '0.01',
+      el('label', { for: 'plan-horizon-days' }, 'Trading sessions'), customInput);
+    var target = el('input', { id: 'plan-target-price', type: 'number', min: '0.01', step: '0.01',
       value: draft.targetCents ? (draft.targetCents / 100).toFixed(2) : '',
       oninput: function () { draft.targetCents = this.value ? Math.round(Number(this.value) * 100) : null; } });
     var risk = UI.chipSet({
@@ -2997,18 +3009,21 @@
       onChange: function (v) { draft.riskMode = v; }
     });
     var save = el('button', { type: 'button', class: 'btn', id: 'plan-declare-view', onclick: async function () {
-      if (!draft.thesis) { UI.toast('Declare a direction first — up, down, sideways, or big move.', 'error'); return; }
+      if (!draft.thesis && !directionOptional(plan)) {
+        UI.toast('Declare a direction first — up, down, sideways, or big move.', 'error'); return;
+      }
       if (!draft.horizonDays) { UI.toast('Pick a horizon — how long does this view get to play out?', 'error'); return; }
       save.disabled = true;
       try {
         var updated = await PlanStore.updateContext(plan, {
           thesis: draft.thesis, horizonDays: draft.horizonDays,
           targetCents: draft.targetCents, riskMode: draft.riskMode,
-          clear: draft.targetCents ? [] : ['targetCents']
+          clear: (draft.targetCents ? [] : ['targetCents']).concat(draft.thesis ? [] : ['thesis'])
         });
         App.context.update({ symbol: updated.symbol, goal: updated.intent,
           thesis: updated.context.thesis, horizon: updated.context.horizonDays + 'd' });
         ctx.plan = updated;
+        if (ctx.refreshHeader) ctx.refreshHeader();
         api.refreshBand('view');
         api.scrollTo('evidence');
       } catch (e) { UI.toast(e.message, 'error'); save.disabled = false; }
@@ -3016,7 +3031,41 @@
     host.appendChild(el('div', { class: 'declaration-grid' },
       thesisControl, horizonControl, customHorizon,
       UI.field('Price you care about (optional)', target), risk));
-    host.appendChild(el('div', { class: 'btn-row' }, save));
+
+    // Goal and structure remain changeable until a decision freezes them — the affordances
+    // the old context editor carried live here now, with the same confirmation semantics.
+    var goalChoices = el('div', { class: 'choice-grid plan-intent-grid plan-fork-intents', hidden: '' });
+    (Learn.INTENTS || []).filter(function (meta) { return meta.key !== plan.intent; }).forEach(function (meta) {
+      goalChoices.appendChild(el('button', { type: 'button', class: 'choice-card', onclick: function () {
+        UI.confirmModal('Change this Plan to ' + meta.label + '?',
+          el('div', {},
+            el('p', {}, 'The ticker and assumptions stay. Evidence, proposed trades and outcome runs that depend on the old goal become stale.'),
+            el('p', { class: 'muted' }, 'You return to Strategy to choose a new structure or option type.')),
+          'Change goal', async function () {
+            try {
+              var live = await PlanStore.get(plan.id, true);
+              ctx.plan = await PlanStore.claimIntent(live, meta.key);
+              App.context.update({ symbol: ctx.plan.symbol, goal: ctx.plan.intent,
+                thesis: ctx.plan.context.thesis, horizon: ctx.plan.context.horizonDays + 'd' });
+              await PlanStore.focus(ctx.plan, 'STRATEGY');
+            } catch (e) { UI.toast((e && e.message) || 'The goal could not be changed.', 'error'); }
+          });
+      } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb)));
+    });
+    var changeGoal = el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-change-goal',
+      'aria-expanded': 'false', onclick: function () {
+        goalChoices.hidden = !goalChoices.hidden;
+        changeGoal.setAttribute('aria-expanded', String(!goalChoices.hidden));
+      } }, 'Change goal');
+    var changeStructure = el('button', { type: 'button', class: 'btn btn-secondary',
+      id: 'plan-change-structure', onclick: function () {
+        PlanStore.ui(plan.id).strategyView = 'builder';
+        api.scrollTo('strategy');
+      } }, 'Choose structure or option type');
+    host.appendChild(el('p', { class: 'muted' }, 'Goal: ', el('b', {}, planIntentLabel(plan.intent)),
+      '. You can change the goal and structure until you record a decision.'));
+    host.appendChild(el('div', { class: 'btn-row' }, save, changeGoal, changeStructure));
+    host.appendChild(goalChoices);
     if (viewDeclared(plan)) {
       host.appendChild(el('p', { class: 'muted small' },
         'Changing the view marks evidence, proposed trades, and outcome runs from the old view stale — '
@@ -3043,14 +3092,43 @@
     App.state.activePlanId = plan.id;
     if (window.Workspace) Workspace.save();
     PlanStore.renderBar();
-    root.appendChild(planHeader(plan, false));
 
     var ctx = { plan: plan };
+    var header = planHeader(plan, false, function () { flow.reopen('view'); });
+    root.appendChild(header);
+    // Band actions that change the plan refresh the header facts in place — never a
+    // route-level repaint for a field save.
+    ctx.refreshHeader = function () {
+      var next = planHeader(ctx.plan, false, function () { flow.reopen('view'); });
+      header.replaceWith(next);
+      header = next;
+      paintPlanQuote();
+    };
+    var _pt = App.navToken;
+    function paintPlanQuote() {
+      if (!(App.Market && App.state.world && App.state.world !== 'observed')) return;
+      var row = App.Market.get(ctx.plan.symbol);
+      var wrap = document.getElementById('plan-live-quote');
+      var px = document.getElementById('plan-live-px');
+      if (!row || !wrap || !px) return;
+      wrap.hidden = false;
+      px.textContent = fmtNum(row.last);
+      var d = px.nextElementSibling;
+      if (d && d.classList.contains('delta')) d.replaceWith(UI.delta(row.last, row.prevClose));
+      else px.insertAdjacentElement('afterend', UI.delta(row.last, row.prevClose));
+    }
+    if (App.Market && App.state.world && App.state.world !== 'observed') {
+      App.Market.subscribe(function () { if (App.alive(_pt)) paintPlanQuote(); }, _pt);
+      paintPlanQuote();
+    }
     function decisionDone() {
       return ['DECIDED_CASH', 'POSITION_OPEN', 'CLOSED'].indexOf(ctx.plan.status || 'DRAFT') >= 0;
     }
     function structureReady() {
       var stages = PLAN_STAGES.map(function (s) { return s.key; });
+      // A STALE prior selection keeps the outcomes/commit bands reachable: their content is
+      // the reprice affordance, which must never hide behind the lock it exists to resolve.
+      if (ctx.selectionState === 'STALE' || ctx.selectionState === 'CURRENT') return true;
       return stages.indexOf(ctx.plan.furthestStage || 'UNDERSTAND') >= stages.indexOf('OUTCOMES');
     }
     var flow = Flow.render({ id: 'plan-flow', stateKey: 'plan:' + plan.id + ':flow', ctx: ctx, sections: [
@@ -3081,7 +3159,10 @@
         conclusion: function () { return 'Structure selected — open to compare or change it'; } },
       { key: 'outcomes', title: 'Outcomes on your structure',
         ready: function () { return structureReady(); },
-        lockedReason: function () { return 'Unlocks after you select a structure above.'; },
+        lockedReason: function () {
+          return 'Unlocks after you select a structure above — then market odds, possible futures '
+            + '(Monte Carlo), past analogs, and rule replay all run on your exact contracts.';
+        },
         complete: function () { return false; },
         render: function (host) { planOutcomesStage(host, ctx.plan, planStageByPath('outcomes')); } },
       { key: 'commit', title: 'Commit',
@@ -3102,6 +3183,18 @@
     root.appendChild(flow.el);
     var focusBand = FLOW_BANDS_BY_STAGE[rawStage];
     if (focusBand && rawStage !== 'understand') flow.scrollTo(focusBand);
+    // Async posture refinement: a stale prior selection (context bump rolled progress back)
+    // unlocks outcomes/commit so their reprice affordances are reachable. One fetch, no poll.
+    if (!decisionDone() && !structureReady()) {
+      var _ft = App.navToken;
+      PlanStore.latestOutcomes(plan.id).then(function (latest) {
+        if (!App.alive(_ft) || !latest || !latest.selectionState) return;
+        if (latest.selectionState !== 'NONE' && ctx.selectionState !== latest.selectionState) {
+          ctx.selectionState = latest.selectionState;
+          flow.refreshBand('outcomes');
+        }
+      }).catch(function () { /* posture stays conservative on fetch failure */ });
+    }
   }
 
   async function renderPlanLibrary(host, options) {

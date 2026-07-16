@@ -247,7 +247,9 @@
 
       var navRoute = Product.Routes.navOwner(route, params);
       document.querySelectorAll('#nav a, #bottom-nav a').forEach(function (a) {
-        a.classList.toggle('active', a.getAttribute('data-route') === navRoute);
+        // data-route is a token list: the Workspace item owns research, plans, and plan routes.
+        var owned = (a.getAttribute('data-route') || '').split(/\s+/);
+        a.classList.toggle('active', owned.indexOf(navRoute) >= 0);
       });
       // Route identity is part of the synchronous navigation commit. Progressive views paint
       // before their async fills finish, and their layout CSS must apply to that first frame.

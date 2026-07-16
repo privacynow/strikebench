@@ -94,8 +94,16 @@
       root.appendChild(idxBody);
       var _it = App.navToken;
       (async function fillIndex() {
+        // The Workspace owns the journeys: resuming a plan is this page's first affordance
+        // now that the separate Plans destination is folded in (Program ONE R1.3).
+        var resume = el('section', { class: 'card workspace-plan-strip', id: 'workspace-plan-strip' });
+        idxBody.appendChild(resume);
+        var resumeFill = window.ViewPlan && ViewPlan.renderLibrary
+          ? ViewPlan.renderLibrary(resume, { compact: true, removeWhenEmpty: true, title: 'Your plans' })
+          : null;
         idxBody.appendChild(universePlanScout());
         await sectorExplorer(idxBody, 'research');
+        if (resumeFill) await resumeFill;
         if (!App.alive(_it)) return;
         idxBody.appendChild(await studyToolsSection());
         if (App.state.explorerScroll != null) {
@@ -1557,7 +1565,8 @@
         out.appendChild(Scenario.decisionView(p, level));
         out.appendChild(el('div', { class: 'scenario-chart-head' },
           el('div', {}, el('h3', {}, 'How the range unfolds'),
-            el('p', { class: 'muted small' }, 'Shaded range and median by day; sample lines are illustrative paths, not forecasts to choose from.'))));
+            el('p', { class: 'muted small' }, 'Shaded range and median by day; sample lines are illustrative paths, not forecasts to choose from.')),
+          planRun && planRun.ensemble ? UI.lineageChip(planRun.ensemble, 'born here') : null));
         var chart = Scenario.fanChart(p, { onSelectSample: function (index) {
           selectedSampleIndex = index;
           var button = out.querySelector('#whatif-rehearse-selected');
@@ -1919,6 +1928,55 @@
     function windowFrom(value) { return value === '1y' ? isoYearsAgo(1) : value === 'max' ? '2000-01-01' : isoYearsAgo(3); }
     if (!protocol.from) protocol.from = windowFrom(protocol.window);
     if (!protocol.to) protocol.to = today();
+    /** Read a protocol control: R0 choice controls expose value(); raw inputs expose .value. */
+    function ctlValue(node) { return typeof node.value === 'function' ? node.value() : node.value; }
+
+    /** Client mirror of the engine's regime test (ResearchQuestionEngine.inRegime) for the
+     *  live "does today match?" note — computed from real closes or not shown at all. */
+    function logStd(closes, i, days) {
+      var sum = 0, sumSq = 0;
+      for (var j = i - days + 1; j <= i; j++) {
+        var r = Math.log(closes[j] / closes[j - 1]);
+        sum += r; sumSq += r * r;
+      }
+      var mean = sum / days;
+      return Math.sqrt(Math.max(0, sumSq / days - mean * mean));
+    }
+    function todayRegimeNote(value, closes) {
+      var i = closes.length - 1;
+      if (value === 'ABOVE_200DMA' || value === 'BELOW_200DMA') {
+        if (i < 200) return '';
+        var sum = 0;
+        for (var j = i - 199; j <= i; j++) sum += closes[j];
+        var above = closes[i] >= sum / 200;
+        return 'Today ' + symbol + ' sits ' + (above ? 'above' : 'below') + ' its 200-day average, so today '
+          + ((value === 'ABOVE_200DMA') === above ? 'matches' : 'does not match') + ' this backdrop.';
+      }
+      if (i < 60) return '';
+      var choppy = logStd(closes, i, 20) >= logStd(closes, i, 60);
+      return 'Today ' + symbol + ' is swinging ' + (choppy ? 'more' : 'less') + ' than its own recent normal, so today '
+        + ((value === 'HIGH_VOL') === choppy ? 'matches' : 'does not match') + ' this backdrop.';
+    }
+    function regimeConsequence(value) {
+      var base = {
+        ALL: 'Uses every past day in the chosen history; trigger days are compared with ' + symbol + '’s normal days.',
+        ABOVE_200DMA: 'Only past days while ' + symbol + ' sat above its 200-day average — compared against normal days from that same backdrop.',
+        BELOW_200DMA: 'Only past days while ' + symbol + ' sat below its 200-day average — compared against normal days from that same backdrop.',
+        HIGH_VOL: 'Only past days while ' + symbol + ' was swinging more than its own recent normal — compared against normal days from that same backdrop.',
+        LOW_VOL: 'Only past days while ' + symbol + ' was swinging less than its own recent normal — compared against normal days from that same backdrop.'
+      }[value] || '';
+      if (value === 'ALL') return base;
+      // Best-effort live indicator. API.prefetch is the sanctioned "never costs the user" path:
+      // a warm cache answers instantly, a cold cache asks at prefetch priority the server may
+      // decline, and any miss just leaves the plain restriction sentence — never fabricated.
+      var range = value === 'HIGH_VOL' || value === 'LOW_VOL' ? '6m' : '1y';
+      return API.prefetch('/api/research/' + symbol + '/history?range=' + range).then(function (hist) {
+        var closes = (hist && hist.candles || []).map(function (c) { return parseFloat(c.close); })
+          .filter(function (x) { return isFinite(x) && x > 0; });
+        var note = todayRegimeNote(value, closes);
+        return note ? base + ' ' + note : base;
+      }).catch(function () { return base; });
+    }
 
     function currentParams(q) {
       var params = {};
@@ -1930,25 +1988,25 @@
       params.forward = thesis.horizonDays; // the THESIS horizon is the study horizon — one truth
       params.eventSpacing = +(protocolInputs.eventSpacing ? protocolInputs.eventSpacing.value : protocol.eventSpacing || thesis.horizonDays);
       params.minSample = +(protocolInputs.minSample ? protocolInputs.minSample.value : protocol.minSample);
-      params.confidencePct = +(protocolInputs.confidencePct ? protocolInputs.confidencePct.value : protocol.confidencePct);
+      params.confidencePct = +(protocolInputs.confidencePct ? ctlValue(protocolInputs.confidencePct) : protocol.confidencePct);
       params.bootstrapSamples = +(protocolInputs.bootstrapSamples ? protocolInputs.bootstrapSamples.value : protocol.bootstrapSamples);
-      params.regime = protocolInputs.regime ? protocolInputs.regime.value : protocol.regime;
-      params.multiplicity = protocolInputs.multiplicity ? protocolInputs.multiplicity.value : protocol.multiplicity;
+      params.regime = protocolInputs.regime ? ctlValue(protocolInputs.regime) : protocol.regime;
+      params.multiplicity = protocolInputs.multiplicity ? ctlValue(protocolInputs.multiplicity) : protocol.multiplicity;
       params.splitHalf = protocolInputs.splitHalf ? protocolInputs.splitHalf.checked : protocol.splitHalf;
       return params;
     }
 
     function rememberProtocol() {
-      if (protocolInputs.window) protocol.window = protocolInputs.window.value;
+      if (protocolInputs.window) protocol.window = ctlValue(protocolInputs.window);
       if (protocolInputs.from) protocol.from = protocolInputs.from.value;
       if (protocolInputs.to) protocol.to = protocolInputs.to.value;
-      if (protocolInputs.strictness) protocol.strictness = protocolInputs.strictness.value;
-      if (protocolInputs.regime) protocol.regime = protocolInputs.regime.value;
+      if (protocolInputs.strictness) protocol.strictness = ctlValue(protocolInputs.strictness);
+      if (protocolInputs.regime) protocol.regime = ctlValue(protocolInputs.regime);
       if (protocolInputs.eventSpacing) protocol.eventSpacing = +protocolInputs.eventSpacing.value;
       if (protocolInputs.minSample) protocol.minSample = +protocolInputs.minSample.value;
-      if (protocolInputs.confidencePct) protocol.confidencePct = +protocolInputs.confidencePct.value;
+      if (protocolInputs.confidencePct) protocol.confidencePct = +ctlValue(protocolInputs.confidencePct);
       if (protocolInputs.bootstrapSamples) protocol.bootstrapSamples = +protocolInputs.bootstrapSamples.value;
-      if (protocolInputs.multiplicity) protocol.multiplicity = protocolInputs.multiplicity.value;
+      if (protocolInputs.multiplicity) protocol.multiplicity = ctlValue(protocolInputs.multiplicity);
       if (protocolInputs.splitHalf) protocol.splitHalf = protocolInputs.splitHalf.checked;
     }
 
@@ -1989,54 +2047,181 @@
         signalFields.push(UI.field((level === 'beginner' ? pr.label : pr.label + ' (' + pr.unit + ')'), inp));
       });
 
-      protocolInputs.window = el('select', { id: 'study-window' },
-        el('option', { value: '1y' }, 'Past year'), el('option', { value: '3y' }, 'Past 3 years'),
-        el('option', { value: 'max' }, 'All available history'),
-        el('option', { value: 'custom' }, 'Custom dates'));
-      protocolInputs.window.value = protocol.window;
-      protocolInputs.strictness = el('select', { id: 'study-strictness' },
-        el('option', { value: 'more' }, level === 'beginner' ? 'More examples (looser signal)' : 'Loose signal / more events'),
-        el('option', { value: 'balanced' }, 'Balanced signal'),
-        el('option', { value: 'stronger' }, level === 'beginner' ? 'Fewer, stronger examples' : 'Strict signal / fewer events'),
-        el('option', { value: 'custom' }, 'Custom thresholds'));
-      protocolInputs.strictness.value = protocol.strictness;
-      protocolInputs.regime = el('select', { id: 'study-regime' },
-        el('option', { value: 'ALL' }, 'All market conditions'),
-        el('option', { value: 'ABOVE_200DMA' }, 'Above 200-day average'),
-        el('option', { value: 'BELOW_200DMA' }, 'Below 200-day average'),
-        el('option', { value: 'HIGH_VOL' }, 'Higher-volatility regimes'),
-        el('option', { value: 'LOW_VOL' }, 'Lower-volatility regimes'));
-      protocolInputs.regime.value = protocol.regime;
+      // ---- Trigger wording shared by the selectivity control and its expert reveal ----
+      var qParams = (q.params || []).filter(function (pr) { return pr.key !== 'forward'; });
+      function thresholdsFor(mode) {
+        var v = {};
+        qParams.forEach(function (pr) {
+          v[pr.key] = mode === 'custom'
+            ? +(paramInputs[pr.key] ? paramInputs[pr.key].value : pr.def)
+            : strictValue(q.key, pr, mode);
+        });
+        return v;
+      }
+      function triggerPhrase(mode) {
+        var v = thresholdsFor(mode);
+        switch (q.key) {
+          case 'pullback_rebound': return 'counts a past day when ' + symbol + ' sat ' + v.dropPct + '%+ below its ' + v.lookback + '-day high';
+          case 'breakout_followthrough': return 'counts a past day when ' + symbol + ' closed at a new ' + v.lookback + '-day high';
+          case 'oversold_bounce': return 'counts a past day when ' + symbol + ' dropped ' + v.dropPct + '%+ in a single session';
+          case 'momentum': return 'counts a past day when ' + symbol + ' was up ' + v.thresholdPct + '%+ over the prior ' + v.lookback + ' sessions';
+          case 'up_streak': return 'counts a past day after ' + v.streak + ' up days in a row';
+          default: return 'counts a past day when the trigger below is met';
+        }
+      }
+      function strictnessDetail(mode) {
+        var v = thresholdsFor(mode);
+        return qParams.map(function (pr) {
+          return pr.key + ' ' + v[pr.key] + (pr.unit === '%' ? '%' : pr.unit === 'days' ? 'd' : '');
+        }).join(' · ') || 'no trigger numbers';
+      }
 
-      var beginnerControls = el('div', { class: 'form-grid study-beginner-controls' },
-        UI.field('History to check', protocolInputs.window),
-        UI.field('How selective?', protocolInputs.strictness),
-        UI.field('Market conditions', protocolInputs.regime));
-      picker.appendChild(beginnerControls);
+      // "How selective?" — a client-side macro over the trigger numbers beneath it. The engine
+      // never sees this value; picking an anchor VISIBLY rewrites the trigger fields, and
+      // hand-editing a trigger field flips the control to a visible fourth Custom state.
+      var strictnessHost = el('div', { class: 'study-strictness-host' });
+      function buildStrictnessControl(value) {
+        var options = [
+          { value: 'more', label: 'More examples', sub: 'looser trigger', detail: strictnessDetail('more') },
+          { value: 'balanced', label: 'Balanced', sub: 'the catalog default', detail: strictnessDetail('balanced') },
+          { value: 'stronger', label: 'Only the strongest', sub: 'fewer, clearer examples', detail: strictnessDetail('stronger') }
+        ];
+        if (value === 'custom') options.push({ value: 'custom', label: 'Custom', sub: 'hand-edited trigger', detail: strictnessDetail('custom') });
+        var ctrl = UI.segmented({
+          label: 'How selective?', info: 'studySelectivity', options: options, value: value,
+          revealDetails: 'expert',
+          consequence: function (mode) {
+            var phrase = triggerPhrase(mode);
+            return phrase.charAt(0).toUpperCase() + phrase.slice(1)
+              + ', then compares the next ' + thesis.horizonDays + ' trading days with ' + symbol + '’s normal days.';
+          },
+          onChange: function (mode) {
+            if (mode !== 'custom') qParams.forEach(function (pr) {
+              if (paramInputs[pr.key]) paramInputs[pr.key].value = strictValue(q.key, pr, mode);
+            });
+            setStrictness(mode);
+            invalidateVisible();
+          }
+        });
+        ctrl.id = 'study-strictness';
+        return ctrl;
+      }
+      function setStrictness(value) {
+        var hadFocus = protocolInputs.strictness && protocolInputs.strictness.contains
+          && protocolInputs.strictness.contains(document.activeElement);
+        strictnessHost.innerHTML = '';
+        protocolInputs.strictness = buildStrictnessControl(value);
+        strictnessHost.appendChild(protocolInputs.strictness);
+        if (hadFocus) {
+          var active = protocolInputs.strictness.querySelector('.choice-option.active');
+          if (active) active.focus();
+        }
+      }
+      setStrictness(protocol.strictness);
 
+      var triggerGroup = signalFields.length ? el('div', { class: 'study-trigger-group' },
+        el('div', { class: 'field-label' }, 'What counts as the trigger?', UI.info('studyTrigger')),
+        el('div', { class: 'form-grid study-trigger-grid' }, signalFields)) : null;
+
+      // "Market conditions" — REAL engine conditioning: the request's regime field.
+      protocolInputs.regime = UI.chipSet({
+        label: 'Market conditions', info: 'studyRegime',
+        options: [
+          { value: 'ALL', label: 'Any conditions', sub: 'every day in the window' },
+          { value: 'ABOVE_200DMA', label: 'Uptrend days', sub: 'above the 200-day average', detail: 'close ≥ 200-session mean' },
+          { value: 'BELOW_200DMA', label: 'Downtrend days', sub: 'below the 200-day average', detail: 'close < 200-session mean' },
+          { value: 'HIGH_VOL', label: 'Choppy days', sub: 'swinging more than usual', detail: '20-session σ ≥ 60-session σ' },
+          { value: 'LOW_VOL', label: 'Quiet days', sub: 'swinging less than usual', detail: '20-session σ < 60-session σ' }
+        ],
+        value: protocol.regime, revealDetails: 'expert',
+        consequence: regimeConsequence,
+        onChange: function () { invalidateVisible(); }
+      });
+      protocolInputs.regime.id = 'study-regime';
+
+      // "History to check" — the date inputs exist only on Custom; anchors write the from date.
       protocolInputs.from = el('input', { type: 'date', id: 'study-from', value: protocol.from });
       protocolInputs.to = el('input', { type: 'date', id: 'study-to', value: protocol.to, max: today() });
+      var customDates = el('div', { class: 'form-grid study-custom-dates' },
+        UI.field(level === 'beginner' ? 'Start date' : 'Sample start', protocolInputs.from),
+        UI.field(level === 'beginner' ? 'End date' : 'Sample end', protocolInputs.to));
+      function windowConsequence(value) {
+        var fromIso = value === 'custom' ? protocolInputs.from.value : windowFrom(value);
+        var toIso = protocolInputs.to.value || today();
+        return 'Checks ' + symbol + '’s sessions from ' + UI.fmtDate(fromIso + 'T12:00:00')
+          + ' through ' + UI.fmtDate(toIso + 'T12:00:00') + '.';
+      }
+      var windowHost = el('div', { class: 'study-window-host' });
+      function setWindow(value) {
+        var hadFocus = protocolInputs.window && protocolInputs.window.contains
+          && protocolInputs.window.contains(document.activeElement);
+        windowHost.innerHTML = '';
+        protocolInputs.window = UI.segmented({
+          label: 'History to check', info: 'studyWindow',
+          options: [
+            { value: '1y', label: 'Past year' },
+            { value: '3y', label: 'Past 3 years' },
+            { value: 'max', label: 'All history' },
+            { value: 'custom', label: 'Custom dates' }
+          ],
+          value: value,
+          consequence: windowConsequence,
+          onChange: function (next) {
+            if (next !== 'custom') protocolInputs.from.value = windowFrom(next);
+            setWindow(next); // repaint the consequence dates the anchor just rewrote
+            invalidateVisible();
+          }
+        });
+        protocolInputs.window.id = 'study-window';
+        windowHost.appendChild(protocolInputs.window);
+        customDates.style.display = value === 'custom' ? '' : 'none';
+        if (hadFocus) {
+          var active = protocolInputs.window.querySelector('.choice-option.active');
+          if (active) active.focus();
+        }
+      }
+      setWindow(protocol.window);
+
+      picker.appendChild(el('div', { class: 'study-protocol-controls' },
+        strictnessHost, triggerGroup, protocolInputs.regime, windowHost, customDates));
+
       protocolInputs.eventSpacing = el('input', { type: 'number', id: 'study-spacing', min: '1',
         max: String(thesis.horizonDays), value: String(Math.min(thesis.horizonDays, protocol.eventSpacing || thesis.horizonDays)) });
       protocolInputs.minSample = el('input', { type: 'number', id: 'study-min-sample', min: '5', max: '100', value: String(protocol.minSample) });
-      protocolInputs.confidencePct = el('select', { id: 'study-confidence' },
-        el('option', { value: '90' }, '90%'), el('option', { value: '95' }, '95%'), el('option', { value: '99' }, '99%'));
-      protocolInputs.confidencePct.value = String(protocol.confidencePct);
+      protocolInputs.confidencePct = UI.segmented({
+        label: 'Confidence', info: 'studyConfidence',
+        options: [
+          { value: '90', label: '90%' }, { value: '95', label: '95%' }, { value: '99', label: '99%' }
+        ],
+        value: String(protocol.confidencePct),
+        consequence: function (v) { return 'The pass bar and the shaded bands both use ' + v + '% confidence.'; },
+        onChange: function () { invalidateVisible(); }
+      });
+      protocolInputs.confidencePct.id = 'study-confidence';
       protocolInputs.bootstrapSamples = el('input', { type: 'number', id: 'study-bootstrap', min: '200', max: '10000', step: '100', value: String(protocol.bootstrapSamples) });
-      protocolInputs.multiplicity = el('select', { id: 'study-multiplicity' },
-        el('option', { value: 'CATALOG_BONFERRONI' }, level === 'beginner' ? 'Protect against lucky findings' : 'Bonferroni across question catalog'),
-        el('option', { value: 'UNADJUSTED_EXPLORATORY' }, level === 'beginner' ? 'Exploratory (more false alarms)' : 'Unadjusted exploratory'));
-      protocolInputs.multiplicity.value = protocol.multiplicity;
+      protocolInputs.multiplicity = UI.segmented({
+        label: 'Lucky-finding protection', info: 'studyMultiplicity',
+        options: [
+          { value: 'CATALOG_BONFERRONI', label: 'Protected', sub: 'stricter bar', detail: 'Bonferroni across the question catalog' },
+          { value: 'UNADJUSTED_EXPLORATORY', label: 'Exploratory', sub: 'more false alarms', detail: 'unadjusted p-values' }
+        ],
+        value: protocol.multiplicity, revealDetails: 'expert',
+        consequence: function (v) {
+          return v === 'CATALOG_BONFERRONI'
+            ? 'Raises the pass bar because every question in the catalog counts as one try — fewer lucky patterns get through.'
+            : 'Takes each result at face value — expect some patterns to be luck.';
+        },
+        onChange: function () { invalidateVisible(); }
+      });
+      protocolInputs.multiplicity.id = 'study-multiplicity';
       protocolInputs.splitHalf = el('input', { type: 'checkbox', id: 'study-split-half', checked: protocol.splitHalf ? '' : null });
 
-      var exactFields = el('div', { class: 'form-grid study-protocol-grid' }, signalFields,
-        UI.field(level === 'beginner' ? 'Start date' : 'Sample start', protocolInputs.from),
-        UI.field(level === 'beginner' ? 'End date' : 'Sample end', protocolInputs.to),
+      var exactFields = el('div', { class: 'form-grid study-protocol-grid' },
         UI.field(level === 'beginner' ? 'Days between examples' : 'Minimum event separation (days)', protocolInputs.eventSpacing),
         UI.field(level === 'beginner' ? 'Minimum examples' : 'Minimum event sample', protocolInputs.minSample),
-        UI.field('Confidence', protocolInputs.confidencePct),
+        protocolInputs.confidencePct,
         UI.field(level === 'beginner' ? 'Resamples' : 'Bootstrap draws', protocolInputs.bootstrapSamples),
-        UI.field(level === 'beginner' ? 'Lucky-finding protection' : 'Multiple-testing policy', protocolInputs.multiplicity),
+        protocolInputs.multiplicity,
         el('div', { class: 'field inline-check study-split-check' }, protocolInputs.splitHalf,
           el('label', { for: 'study-split-half' }, level === 'beginner' ? 'Check both halves of history' : 'Split-half consistency check')));
       var protocolDetails = el('details', { class: 'study-protocol', open: level === 'expert' ? '' : null },
@@ -2048,28 +2233,24 @@
       picker.appendChild(protocolDetails);
       picker.appendChild(el('p', { class: 'muted small study-description' }, q.description));
 
-      protocolInputs.window.addEventListener('change', function () {
-        if (protocolInputs.window.value !== 'custom') protocolInputs.from.value = windowFrom(protocolInputs.window.value);
-        invalidateVisible();
-      });
-      protocolInputs.strictness.addEventListener('change', function () {
-        if (protocolInputs.strictness.value === 'custom') { invalidateVisible(); return; }
-        (q.params || []).forEach(function (pr) {
-          if (pr.key !== 'forward' && paramInputs[pr.key]) paramInputs[pr.key].value = strictValue(q.key, pr, protocolInputs.strictness.value);
-        });
-        invalidateVisible();
-      });
-      [protocolInputs.regime, protocolInputs.to, protocolInputs.eventSpacing,
-        protocolInputs.minSample, protocolInputs.confidencePct, protocolInputs.bootstrapSamples,
-        protocolInputs.multiplicity, protocolInputs.splitHalf].forEach(function (node) {
+      [protocolInputs.eventSpacing, protocolInputs.minSample,
+        protocolInputs.bootstrapSamples, protocolInputs.splitHalf].forEach(function (node) {
           node.addEventListener('change', invalidateVisible);
         });
       protocolInputs.from.addEventListener('change', function () {
-        protocolInputs.window.value = 'custom'; invalidateVisible();
+        setWindow('custom'); invalidateVisible();
+      });
+      protocolInputs.to.addEventListener('change', function () {
+        setWindow(ctlValue(protocolInputs.window)); invalidateVisible();
       });
       Object.keys(paramInputs).forEach(function (key) {
         paramInputs[key].addEventListener('change', function () {
-          protocolInputs.strictness.value = 'custom'; invalidateVisible();
+          // Write-through to the owned rail: a hand-edited trigger survives level flips and
+          // context bumps exactly like a run one (flip-invariance, Program ONE §4). The run
+          // handler still overwrites with the exact params it sent.
+          f.params = f.params || {};
+          f.params[q.key] = currentParams(q);
+          setStrictness('custom'); invalidateVisible();
         });
       });
       run.disabled = false;

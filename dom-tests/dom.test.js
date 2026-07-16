@@ -180,14 +180,11 @@ async function openResearchTab(key) {
     }
     return;
   }
-  const stage = key === 'view' ? 'Evidence' : key === 'options' ? 'Strategy' : 'Understand';
   const stagePath = key === 'view' ? 'evidence' : key === 'options' ? 'strategy' : 'understand';
-  const button = page.locator('.plan-rail button').filter({ hasText: stage });
-  assert.equal(await button.count(), 1, 'Plan stage ' + stage + ' exists');
-  await button.click();
-  await page.waitForFunction(path => location.hash.endsWith('/' + path)
-    && document.getElementById('app').getAttribute('data-route') === 'plan'
-    && document.getElementById('app').getAttribute('data-ready') === 'true', stagePath);
+  const planId = await page.evaluate(() => App.state.activePlanId);
+  assert.ok(planId, 'an active Plan exists before navigating its bands');
+  await go('#/plan/' + planId + '/' + stagePath);
+  await page.waitForSelector('#plan-flow');
   if (key === 'options') {
     await page.waitForSelector('.plan-tool-selector');
     await page.locator('.plan-tool').filter({ hasText: /Option prices|Chain/ }).click();
@@ -548,13 +545,22 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   await go('#/research/AAPL');
   await page.waitForSelector('#symbol-proposed-trades');
   await page.waitForSelector('#research-hero .quote-hero');
-  assert.equal(await page.locator('.plan-rail').count(), 0,
+  assert.equal(await page.locator('#plan-flow').count(), 0,
     'opening a stock is full Research; no Plan journey exists before the user chooses a goal');
   assert.ok(await page.locator('#events-card .event-timeline').count(), 'Research shows dated events as a timeline');
   assert.equal(await page.locator('.market-facts .info-trigger').count(), 4,
     'technical market facts carry visible explanations');
   assert.equal(await page.locator('#research-hero .xp.open').count(), 1,
     'desktop Research opens useful market detail instead of hiding it');
+  // The journey's open beginning owns price history, dated events and source-backed news;
+  // the Plan flow carries the declared view forward instead of re-rendering the market overview.
+  await page.waitForSelector('#history-card');
+  assert.ok(await page.locator('#news-overview-card').count(), 'the open beginning owns source-backed news');
+  await page.waitForFunction(() => /fabricated|No headline/i.test(document.getElementById('news-overview-card')?.textContent || ''));
+  assert.match(await page.textContent('#news-overview-card'), /Teaching catalysts.*fabricated/i,
+    'Demo headlines are explicitly teaching prompts rather than apparent company news');
+  assert.equal(await page.locator('#news-overview-card a.news-headline').count(), 0,
+    'fabricated Demo catalysts never link to an apparent external article');
   await page.selectOption('#symbol-proposed-goal', 'INCOME');
   await page.click('#symbol-find-proposed');
   await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/strategy$/.test(location.hash));
@@ -565,8 +571,8 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   assert.match(await page.textContent('#plan-header'), /AAPL.*Earn income.*Demo market/s);
   assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + planHash.split('/')[2] + '"]').count(), 1,
     'the promoted durable plan appears exactly once even when other plans are open');
-  assert.equal((await page.locator('#nav a.active').textContent()).trim(), 'Plans',
-    'the primary navigation names the Plan workspace while its journey is open');
+  assert.equal((await page.locator('#nav a.active').textContent()).trim(), 'Workspace',
+    'the primary navigation names the Workspace while a journey is open');
   assert.match(await page.textContent('#lane-chip'), /DEMO/,
     'the active execution market remains visible inside every Plan stage');
   await page.waitForSelector('#toast-region .toast-message');
@@ -574,38 +580,33 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'creating a Plan is announced before the journey continues');
   assert.match(planHash, /\/strategy$/,
     'an explicit goal has one canonical destination: Strategy');
-  await page.locator('.plan-rail button').filter({ hasText: 'Understand' }).click();
-  await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/understand$/.test(location.hash));
-  await page.waitForSelector('#plan-stage-understand .plan-stage-carry');
-  assert.match(await page.textContent('#plan-stage-understand .plan-stage-carry'), /AAPL.*Earn income.*21 trading sessions.*Demo market/s,
-    'Understand keeps the saved Plan context in the shared stage frame');
+  await go(planHash.replace('/strategy', '/understand'));
+  await page.waitForSelector('#plan-flow');
+  await page.waitForSelector('#plan-stage-evidence .plan-stage-carry');
+  assert.match(await page.textContent('#plan-stage-evidence .plan-stage-carry'), /AAPL.*Earn income.*21 trading sessions.*Demo market/s,
+    'the flow keeps the saved Plan context in the shared stage frame');
   assert.equal(await page.locator('#plan-understand-scope').count(), 0,
-    'Understand does not repeat the same Plan context in a second scope card');
-  await page.waitForSelector('#research-symbol');
-  assert.equal(await page.locator('.plan-rail li').count(), 6, 'the full six-stage journey appears after Plan creation');
-  assert.equal(await page.locator('.plan-rail li').last().locator('button').isDisabled(), true,
+    'the flow does not repeat the same Plan context in a second scope card');
+  assert.equal(await page.locator('#plan-flow > .flow-band').count(), 6, 'the full six-band journey appears after Plan creation');
+  assert.equal(await page.locator('[data-band="live"]').getAttribute('data-posture'), 'locked',
     'Manage & Review is gated before a decision');
+  assert.match(await page.textContent('[data-band="live"] .flow-band-locked'), /once you commit/i,
+    'the locked live band keeps its title and states what unlocks it');
   assert.equal(await page.locator('#plan-archive').count(), 1,
     'a working Plan can be archived without deleting its evidence or history');
-  await page.waitForSelector('#history-card');
   assert.equal(await page.locator('#research-workspace-tabs').count(), 0,
-    'the old Research-local workspace is gone; the Plan rail owns navigation');
-  assert.ok(await page.locator('#events-card').count(), 'Understand owns dated events');
-  assert.ok(await page.locator('#news-overview-card').count(), 'Understand owns source-backed news');
-  await page.waitForFunction(() => /fabricated|No headline/i.test(document.getElementById('news-overview-card')?.textContent || ''));
-  assert.match(await page.textContent('#news-overview-card'), /Teaching catalysts.*fabricated/i,
-    'Demo headlines are explicitly teaching prompts rather than apparent company news');
-  assert.equal(await page.locator('#news-overview-card a.news-headline').count(), 0,
-    'fabricated Demo catalysts never link to an apparent external article');
+    'the old Research-local workspace is gone; the flow bands own navigation');
 
   await page.click('#plan-edit-context');
-  assert.match(await page.textContent('#plan-context-editor'), /Goal:.*Earn income.*change the goal and structure/s,
+  await page.waitForSelector('[data-band="view"] #plan-declare-view');
+  assert.match(await page.textContent('[data-band="view"]'), /Goal:.*Earn income.*change the goal and structure/s,
     'a pre-decision Plan exposes editable goal, structure and assumptions');
   assert.ok(await page.locator('#plan-change-goal').count(), 'goal edit is available before a decision');
   assert.ok(await page.locator('#plan-change-structure').count(), 'structure and option type return through Strategy');
+  await page.locator('[data-band="view"] .choice-segmented .choice-option').filter({ hasText: 'Custom' }).click();
   await page.fill('#plan-horizon-days', '45');
-  await page.selectOption('#plan-thesis', 'bearish');
-  await page.click('#plan-save-context');
+  await page.locator('#plan-thesis .choice-option').filter({ hasText: 'Down' }).click();
+  await page.click('#plan-declare-view');
   await page.waitForFunction(() => /45 trading sessions/.test(document.getElementById('plan-header')?.textContent || ''));
   await page.reload();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
@@ -618,30 +619,34 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p2-understand-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(500);
-  const mobileRail = await page.evaluate(() => {
-    const rail = document.querySelector('.plan-rail').getBoundingClientRect();
-    return Array.from(document.querySelectorAll('.plan-rail button')).map(button => {
-      const r = button.getBoundingClientRect();
-      return { label: button.textContent.trim(), left: r.left, right: r.right,
-        top: r.top, bottom: r.bottom, railLeft: rail.left, railRight: rail.right };
+  const mobileFlow = await page.evaluate(() => {
+    const flow = document.querySelector('#plan-flow').getBoundingClientRect();
+    return Array.from(document.querySelectorAll('#plan-flow > .flow-band')).map(band => {
+      const r = band.getBoundingClientRect();
+      const title = band.querySelector('.flow-band-title').getBoundingClientRect();
+      return { band: band.dataset.band, left: r.left, right: r.right,
+        titleLeft: title.left, titleRight: title.right, flowLeft: flow.left, flowRight: flow.right };
     });
   });
-  assert.equal(mobileRail.length, 6, 'all six Plan stages remain rendered on mobile');
-  for (const stage of mobileRail) {
-    assert.ok(stage.left >= stage.railLeft - 1 && stage.right <= stage.railRight + 1,
-      'mobile stage is fully visible rather than clipped: ' + JSON.stringify(stage));
+  assert.equal(mobileFlow.length, 6, 'all six journey bands remain rendered on mobile');
+  for (const band of mobileFlow) {
+    assert.ok(band.left >= band.flowLeft - 1 && band.right <= band.flowRight + 1
+      && band.titleLeft >= band.left - 1 && band.titleRight <= band.right + 1,
+      'mobile band is fully visible rather than clipped: ' + JSON.stringify(band));
   }
-  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p2-mobile-rail.png'), fullPage: true });
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p2-mobile-flow.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
 
   // The 45-day edit above proves context persistence. Use a short evidence window for the
   // event-study assertion so the fixture has enough independent signal episodes to evaluate.
   await page.click('#plan-edit-context');
+  await page.waitForSelector('[data-band="view"] #plan-declare-view');
+  await page.locator('[data-band="view"] .choice-segmented .choice-option').filter({ hasText: 'Custom' }).click();
   await page.fill('#plan-horizon-days', '10');
-  await page.click('#plan-save-context');
+  await page.click('#plan-declare-view');
   await page.waitForFunction(() => /10 trading sessions/.test(document.getElementById('plan-header')?.textContent || ''));
 
-  await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
+  await go(planHash.replace('/strategy', '/evidence'));
   await page.waitForSelector('#test-your-view');
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
   await page.click('#study-run');
@@ -737,47 +742,50 @@ test('a pre-decision Plan can change goal and returns to Strategy without forkin
     'changing structure opens the full visual catalog instead of reloading the same ranked view');
 });
 
-test('Plan stages orient both levels without hiding capabilities or stealing the journey', async () => {
+test('Plan flow orients both levels without hiding capabilities or stealing the journey', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
   const plan = await openPlan('TSLA', 'understand');
-  await page.waitForSelector('#plan-stage-understand');
-  assert.equal(await page.locator('.plan-rail button').count(), 6, 'the whole Plan remains visible');
+  await page.waitForSelector('#plan-flow');
+  assert.equal(await page.locator('#plan-flow > .flow-band').count(), 6,
+    'the whole journey stays visible as bands');
+  assert.match(await page.textContent('[data-band="view"] .flow-band-conclusion'),
+    /TSLA.*Up.*30 sessions/s,
+    'a declared view band concludes with the view itself, not bare chrome');
+  assert.match(await page.textContent('[data-band="outcomes"] .flow-band-locked'),
+    /select a structure/i, 'locked bands state what unlocks them');
+  assert.match(await page.textContent('[data-band="live"] .flow-band-locked'),
+    /once you commit/i, 'the live band explains when it appears');
+  await page.waitForSelector('#plan-stage-evidence');
   assert.match(await page.textContent('.plan-stage-carry'), /TSLA.*Demo market/s,
-    'the stage names the context carried into it');
-  assert.match(await page.textContent('.plan-stage-heading'), /What is this market doing.*Understand TSLA/s,
-    'the stage states the question it answers');
-  assert.equal(await page.locator('.plan-next-action[data-recommended-next="EVIDENCE"]').count(), 1,
-    'Beginner sees one highlighted forward action from Understand');
+    'the evidence band names the context carried into it');
 
   const beforeViewOnlyNavigation = await page.evaluate(id => API.getFresh('/api/plans/' + id), plan.id);
-  await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
+  await go('#/plan/' + plan.id + '/evidence');
   await page.waitForSelector('#plan-stage-evidence');
   const afterViewOnlyNavigation = await page.evaluate(id => API.getFresh('/api/plans/' + id), plan.id);
   assert.equal(afterViewOnlyNavigation.version, beforeViewOnlyNavigation.version,
-    'viewing another stage never competes with assumption or decision writes');
+    'viewing another band never competes with assumption or decision writes');
   assert.equal(afterViewOnlyNavigation.furthestStage, beforeViewOnlyNavigation.furthestStage,
-    'the rail changes URL state without rewriting durable progress');
-  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id),
-    'plan-stage-title-evidence', 'a stage change moves focus to the destination heading');
-  assert.equal(await page.locator('.plan-rail [aria-current="step"]').count(), 1);
-  assert.equal(await page.locator('.plan-next-action[data-recommended-next="STRATEGY"]').count(), 1);
+    'deep links move attention, not durable progress');
 
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
-  await page.waitForSelector('#plan-stage-evidence');
+  await page.waitForSelector('#plan-flow');
+  assert.equal(await page.locator('#plan-flow > .flow-band').count(), 6,
+    'Expert and Beginner see the same bands — level is a lens, not a fork');
   assert.equal(await page.locator('.plan-header-receipt, .plan-stage-carry-receipt').count(), 0,
     'transport versions never appear in Plan chrome');
   assert.doesNotMatch(await page.textContent('#plan-header'), /Plan v\d+|Context r\d+/i,
     'the Plan header speaks in user decisions rather than revision counters');
   await assertNoInternalChrome('#app');
-  assert.equal(await page.locator('.plan-rail button').count(), 6,
-    'Expert and Beginner have the same stage reachability');
 
-  await page.locator('.plan-rail button').filter({ hasText: 'Strategy' }).click();
   await page.waitForSelector('#plan-strategy-body');
   assert.equal(await page.locator('.plan-tool').count(), 5,
     'Compare, Build, Your trade, Chain, and Scout stay reachable from the Plan');
-  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id),
-    'plan-stage-title-strategy');
+
+  await page.click('[data-band="view"] .flow-band-conclusion');
+  await page.waitForSelector('[data-band="view"] #plan-declare-view');
+  assert.ok(await page.locator('[data-band="view"] .choice-group').count() > 0,
+    'revisiting the concluded view band reopens the declaration controls');
 });
 
 test('Plan Evidence changes analysis history in place without changing its execution market', async () => {
@@ -1308,28 +1316,26 @@ test('Plan Outcomes gives an exact-contract prerequisite instead of a dead empty
     App.context.update({ symbol: 'TSLA', goal: 'DIRECTIONAL', thesis: 'neutral', horizon: '58d' });
   });
   const plan = await openPlan('TSLA', 'outcomes', 'DIRECTIONAL', 'neutral', '58d');
-  await page.waitForSelector('#plan-outcomes-prerequisite');
-  assert.match(await page.textContent('#plan-outcomes-prerequisite'),
-    /Choose exact contracts.*Market-implied lens.*POP \+ after-cost EV.*Possible futures \(Monte Carlo\).*p5.*median.*p95.*Historical lens.*No-look-ahead replay/s,
-    'the empty state explains which contract-dependent results are waiting');
-  assert.equal(await page.locator('#plan-outcomes-prerequisite .btn').count(), 1,
-    'the prerequisite presents one clear next action');
-  const geometry = await page.locator('#plan-outcomes-prerequisite').evaluate(card => {
+  await page.waitForSelector('#plan-flow');
+  assert.equal(await page.locator('[data-band="outcomes"]').getAttribute('data-posture'), 'locked',
+    'Outcomes without exact contracts is a locked band, never a dead empty stage');
+  assert.match(await page.textContent('[data-band="outcomes"] .flow-band-title'), /Outcomes on your structure/,
+    'the locked band keeps its title visible instead of hiding the capability');
+  assert.match(await page.textContent('[data-band="outcomes"] .flow-band-locked'), /select a structure/i,
+    'the locked state explains that choosing exact contracts unlocks the outcome lenses');
+  const geometry = await page.locator('[data-band="outcomes"]').evaluate(card => {
     const box = card.getBoundingClientRect();
     return { height: box.height, pageWidth: document.documentElement.scrollWidth, viewport: innerWidth };
   });
   assert.ok(geometry.height < 360 && geometry.pageWidth <= geometry.viewport,
-    'the prerequisite is compact and cannot widen the page: ' + JSON.stringify(geometry));
-  assert.equal(await page.locator('#plan-outcomes-nav [role="tab"]').count(), 4,
-    'all four outcome lenses remain visible while setup is missing');
-  assert.match(await page.textContent('#plan-outcomes-nav'), /Possible futures \(Monte Carlo\)/,
-    'the modeled path lens uses the discoverable Monte Carlo name');
-  assert.equal(await page.locator('.plan-rail button[aria-label^="Outcomes"]').isDisabled(), true,
-    'the rail names Outcomes as locked until a structure is selected');
-  assert.equal(await page.locator('.plan-rail button[aria-label^="Decide"]').isDisabled(), true,
-    'the rail names Decide as locked until a structure is selected');
-  await page.getByRole('button', { name: 'Choose contracts in Strategy', exact: true }).click();
-  await page.waitForFunction(id => location.hash === '#/plan/' + id + '/strategy', plan.id);
+    'the locked band is compact and cannot widen the page: ' + JSON.stringify(geometry));
+  assert.equal(await page.locator('[data-band="commit"]').getAttribute('data-posture'), 'locked',
+    'Commit stays locked until a structure is selected');
+  assert.match(await page.textContent('[data-band="commit"] .flow-band-locked'), /select a structure/i,
+    'the locked Commit band names the same unlock condition');
+  assert.equal(await page.locator('[data-band="strategy"]').getAttribute('data-posture'), 'active',
+    'the flow leaves Strategy open as the one clear next action while outcomes wait');
+  await go('#/plan/' + plan.id + '/strategy');
   await page.waitForSelector('#plan-stage-strategy');
   await page.evaluate(async id => {
     const live = await PlanStore.get(id, true);
@@ -1355,7 +1361,7 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   });
   assert.ok(receipt.id && receipt.fingerprint, 'Evidence saves the exact ensemble before Outcomes uses it');
 
-  await page.locator('.plan-rail button').filter({ hasText: 'Strategy' }).click();
+  await go('#/plan/' + plan.id + '/strategy');
   await page.waitForSelector('#plan-run-strategy');
   await page.click('#plan-run-strategy');
   await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
@@ -1372,8 +1378,10 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   }, plan.id);
   await page.waitForSelector('#plan-strategy-results button:has-text("Continue to Outcomes")');
 
-  await page.locator('.plan-rail button').filter({ hasText: 'Outcomes' }).click();
+  await go('#/plan/' + plan.id + '/outcomes');
   await page.waitForSelector('#plan-outcomes');
+  assert.match(await page.textContent('#plan-outcomes-nav'), /Possible futures \(Monte Carlo\)/,
+    'the modeled path lens uses the discoverable Monte Carlo name');
   await assertNamedControls('#plan-outcomes');
   await assertTabContracts('#plan-outcomes');
   assert.match(await page.textContent('.plan-outcome-position'), /Exact position being tested.*PLAN OWNED/s);
@@ -1452,7 +1460,7 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   await reviewTrade.click();
   await page.waitForSelector('#plan-stage-strategy .plan-return-focus', { timeout: 15000 });
   assert.match(await page.evaluate(() => location.hash), new RegExp('/plan/' + plan.id + '/strategy$'));
-  await page.locator('.plan-rail button').filter({ hasText: 'Outcomes' }).click();
+  await go('#/plan/' + plan.id + '/outcomes');
   await page.click('#plan-outcomes-basis-model');
   await page.waitForSelector('.plan-proposal-comparison-result');
 
@@ -1688,7 +1696,7 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   await page.waitForFunction(world => App.state.world === world && App.Market.world === world, ids.worldId,
     { timeout: 20000 });
   await page.waitForFunction(id => location.hash.includes('/plan/' + id + '/'), ids.simOne);
-  await page.waitForSelector('.plan-rail');
+  await page.waitForSelector('#plan-flow');
   assert.equal(await page.locator('#plan-bar-root .plan-chip').count(), 2,
     'returning to the simulated market restores its two-Plan open collection');
 
@@ -1696,17 +1704,20 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   assert.equal(await page.locator('#plan-picker').isVisible(), true, 'mobile uses a dedicated Plan picker');
   assert.equal(await page.locator('#plan-picker option').count(), 2, 'every current-market Plan is reachable');
   const mobile = await page.evaluate(() => {
-    const rail = document.querySelector('.plan-rail').getBoundingClientRect();
+    const flow = document.querySelector('#plan-flow').getBoundingClientRect();
     return { overflow: document.documentElement.scrollWidth - innerWidth,
-      stages: Array.from(document.querySelectorAll('.plan-rail button')).map(button => {
-        const r = button.getBoundingClientRect(); return { left: r.left, right: r.right,
-          top: r.top, bottom: r.bottom, railLeft: rail.left, railRight: rail.right };
+      bands: Array.from(document.querySelectorAll('#plan-flow > .flow-band')).map(band => {
+        const r = band.getBoundingClientRect();
+        const title = band.querySelector('.flow-band-title').getBoundingClientRect();
+        return { band: band.dataset.band, left: r.left, right: r.right,
+          titleLeft: title.left, titleRight: title.right, flowLeft: flow.left, flowRight: flow.right };
       }) };
   });
   assert.ok(mobile.overflow <= 0, 'parallel-Plan chrome does not widen the mobile viewport');
-  assert.equal(mobile.stages.length, 6);
-  mobile.stages.forEach(stage => assert.ok(stage.left >= stage.railLeft - 1 && stage.right <= stage.railRight + 1,
-    'all six stages remain fully visible in the 2-column mobile grid: ' + JSON.stringify(stage)));
+  assert.equal(mobile.bands.length, 6);
+  mobile.bands.forEach(band => assert.ok(band.left >= band.flowLeft - 1 && band.right <= band.flowRight + 1
+    && band.titleLeft >= band.left - 1 && band.titleRight <= band.right + 1,
+    'all six journey bands remain fully visible on mobile: ' + JSON.stringify(band)));
   await page.waitForTimeout(4200);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-picker-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
@@ -1922,7 +1933,7 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
     await App.render();
     return candidate.qty || 1;
   }, plan.id);
-  await page.locator('.plan-rail button').filter({ hasText: 'Decide' }).click();
+  await go('#/plan/' + plan.id + '/decide');
   await page.waitForSelector('#plan-review-order');
   assert.equal(Number(await page.inputValue('#plan-decision-qty')), selectedQty,
     'Decide inherits the engine-sized quantity of the exact selected package');
@@ -1978,6 +1989,7 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
     'editing a decided Plan creates a linked revision instead of rewriting the frozen decision');
   assert.match(await page.textContent('#plan-context-editor'), /linked revision preserves that history/i);
   await page.click('#plan-edit-context');
+  await page.waitForSelector('#plan-stage-manage-review button:has-text("Refresh marks")', { timeout: 15000 });
   assert.match(await page.textContent('#plan-stage-manage-review'), /Refresh marks/);
   assert.equal(await page.locator('#plan-stage-manage-review a[href^="#/trade"], #plan-stage-manage-review .plan-stage-transition').count(), 0,
     'Manage stays inside the Plan instead of linking to a standalone Trade detail');
@@ -2012,30 +2024,32 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   assert.match(await page.textContent('#greeks-card'), /How this position reacts/,
     'Beginner receives a plain-language entry to the same position sensitivities');
   await page.locator('#greeks-card .xp-head:has-text("Exact sensitivities by leg")').click();
-  assert.match(await page.textContent('#greeks-card'), /Net Δ.*Θ\/day/s,
+  assert.match(await page.textContent('#greeks-card'), /Net delta.*Theta \/ day/s,
     'Beginner can inspect exact aggregate Greeks');
   assert.ok(await page.locator('#greeks-card tbody tr').count() >= 1,
     'Beginner can inspect the same per-leg Greek rows');
 
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
   await page.waitForSelector('#greeks-card');
-  assert.match(await page.textContent('#greeks-card'), /Net Δ.*Θ\/day/s,
+  assert.match(await page.textContent('#greeks-card'), /Net delta.*Theta \/ day/s,
     'Expert retains aggregate and per-leg position Greeks in Plan management');
   assert.ok(await page.locator('#greeks-card tbody tr').count() >= 1, 'per-leg Greek rows remain auditable');
   await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
 
-  await page.locator('.plan-rail button').filter({ hasText: 'Decide' }).click();
+  await go('#/plan/' + plan.id + '/decide');
+  // A frozen decision collapses the commit band to its conclusion; reopening it is one tap.
+  await page.click('[data-band="commit"] .flow-band-conclusion');
   await page.waitForSelector('.plan-decision-facts');
   assert.match(await page.textContent('#plan-stage-decide'), /Decision frozen/);
   assert.match(await page.textContent('#plan-stage-decide'), /Market EV after costs/);
 
-  await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
+  await go('#/plan/' + plan.id + '/evidence');
   await page.waitForSelector('#test-your-view');
   assert.equal(await page.locator('#tv-view:disabled, #tv-setup:disabled, #tv-horizon:disabled').count(), 3,
     'a frozen decision never presents mutable evidence assumptions');
   assert.match(await page.textContent('.plan-frozen-context'), /linked revision.*without rewriting/i);
 
-  await page.locator('.plan-rail button').filter({ hasText: 'Manage' }).click();
+  await go('#/plan/' + plan.id + '/manage-review');
   await page.click('#roll-btn');
   await page.waitForSelector('.position-roll-workbench:not([hidden]) .position-editor');
   await page.click('.position-roll-workbench [data-position-command="analyze"]');
@@ -2076,8 +2090,8 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   await page.waitForSelector('#plans-library .home-plan-tile');
   assert.equal((await page.locator('#app h1').textContent()).trim(), 'Plans',
     'Plans have one canonical product home instead of borrowing Portfolio');
-  assert.equal(await page.locator('#nav a[data-route="plans"]').evaluate(node => node.classList.contains('active')), true,
-    'the canonical Plans destination stays visibly selected');
+  assert.equal(await page.locator('#nav a[data-route~="plans"]').evaluate(node => node.classList.contains('active')), true,
+    'the Workspace item owns the plan-library destination');
   assert.match(await page.textContent('#plans-library'), /AAPL/);
   assert.match(await page.textContent('#plans-library'), /Review Plan/);
   const libraryCardText = await page.locator('#plans-library .home-plan-tile').first().innerText();
@@ -2635,8 +2649,8 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   assert.match(await page.textContent('#events-card'), /OPTION EXPIRY/i);
   assert.equal(await page.locator('.research-local-tabs [role="tab"]').count(), 3,
     'read-only Research owns one compact Overview, Evidence and Options workspace');
-  assert.equal(await page.locator('.plan-rail').count(), 0,
-    'inspecting a symbol never mints a Plan or borrows the Plan journey rail');
+  assert.equal(await page.locator('#plan-flow').count(), 0,
+    'inspecting a symbol never mints a Plan or borrows the Plan journey flow');
   await page.waitForSelector('#news-overview-card .news-tile');
   assert.ok(await page.locator('#news-overview-card .news-tile').count() >= 1,
     'latest news remains part of the market overview');
@@ -3127,12 +3141,14 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
     symbol: 'AAPL', goal: 'ACQUIRE', horizon: 'quarter', thesis: 'neutral'
   }));
   const plan = await openPlan('AAPL', 'understand', 'ACQUIRE', 'neutral');
-  await page.waitForSelector('.quote-hero');
+  await page.waitForSelector('#plan-flow');
   const durablePlanRoute = await page.evaluate(() => location.hash);
   await page.click('#plan-edit-context');
+  await page.waitForSelector('[data-band="view"] #plan-declare-view');
+  await page.locator('[data-band="view"] .choice-segmented .choice-option').filter({ hasText: 'Custom' }).click();
   await page.fill('#plan-horizon-days', '63');
   await page.fill('#plan-target-price', '245');
-  await page.click('#plan-save-context');
+  await page.click('#plan-declare-view');
   await page.waitForFunction(() => /63 trading sessions/.test(document.getElementById('plan-header')?.textContent || ''));
   // Persist presentation state now (the interval/pagehide path does this in normal use).
   const beforeSave = await page.evaluate(async id => ({
@@ -3370,7 +3386,8 @@ test('every scenario story runs at both levels (the Big-news-shock crash class)'
 test('research symbol page: ONE Test-your-view section — thesis-driven, symbol-inherited, keyed results', async () => {
   await page.click('#level-switch button[data-level="beginner"]');
   const researchPlan = await openPlan('AAPL');
-  assert.ok(await page.locator('#history-card').count(), 'Understand owns the market history');
+  assert.equal(await page.locator('#history-card').count(), 0,
+    'the flow leaves the market chart to the public research page — evidence inherits without duplicating');
   await openResearchTab('view');
   await page.waitForSelector('#test-your-view');
   // The stage selection PERSISTS by design — pick Past evidence explicitly for this walk.
@@ -3396,9 +3413,14 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   assert.ok(await page.locator('#study-bootstrap').count(),
     'full statistical capability remains mounted behind progressive disclosure');
   const beforeStrict = await page.inputValue('#study-param-dropPct');
-  await page.selectOption('#study-strictness', 'stronger');
+  await page.locator('#study-strictness .choice-option').filter({ hasText: 'Only the strongest' }).click();
   assert.notEqual(await page.inputValue('#study-param-dropPct'), beforeStrict,
     'plain-language selectivity changes the real signal threshold');
+  assert.match(await page.textContent('#study-strictness .control-consequence'),
+    /below its \d+-day high|drop|threshold|streak|lookback/i,
+    'the selectivity control states the concrete trigger it wrote');
+  assert.equal(await page.locator('#what-has-happened select, .study-protocol-controls select').count(), 0,
+    'no listbox remains in the study protocol panel');
   // Run the study; the conclusion is decision-useful (evidence strength + confidence guidance + handoff).
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
   await page.click('#study-run');
@@ -3437,8 +3459,8 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
   assert.ok(await page.locator('.study-protocol[open] #study-bootstrap:visible').count(),
     'expert protocol opens with bootstrap, dates, dependence, confidence and multiplicity controls');
-  await page.selectOption('#study-confidence', '99');
-  await page.selectOption('#study-multiplicity', 'UNADJUSTED_EXPLORATORY');
+  await page.locator('#study-confidence .choice-option').filter({ hasText: '99' }).click();
+  await page.locator('#study-multiplicity .choice-option').filter({ hasText: 'Exploratory' }).click();
   await page.click('#study-run');
   await page.waitForSelector('#study-results .alert', { timeout: 20000 });
   assert.match(await page.textContent('#study-results'), /99% CI \(avg\)/);
@@ -3641,11 +3663,11 @@ test('Beginner keeps exact book sensitivity through progressive disclosure', asy
   await page.waitForSelector('#portfolio-greeks');
   assert.match(await page.textContent('#portfolio-greeks'), /How your open positions react/);
   await page.locator('#portfolio-greeks .xp-head').click();
-  assert.match(await page.textContent('#portfolio-greeks'), /Book greeks.*Net Δ.*Vega\/pt.*Book heat.*Theoretical max loss/s,
+  assert.match(await page.textContent('#portfolio-greeks'), /Book greeks.*Net delta.*Vega \/ vol pt.*Book heat.*Theoretical max loss/s,
     'Beginner sees the primary sensitivities inline and can inspect the same exact book heat');
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
   await page.waitForSelector('#portfolio-greeks');
-  assert.match(await page.textContent('#portfolio-greeks'), /Book greeks.*Net Δ/s,
+  assert.match(await page.textContent('#portfolio-greeks'), /Book greeks.*Net delta/s,
     'Expert keeps the dense inline presentation');
   await page.unroute('**/api/portfolio/greeks');
   await page.unroute('**/api/portfolio/heat');
@@ -5161,7 +5183,8 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
   await page.click('#symbol-find-proposed');
   await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/strategy$/.test(location.hash)
     && document.getElementById('app').getAttribute('data-ready') === 'true', null, { timeout: 15000 });
-  await page.locator('.plan-rail button').filter({ hasText: 'Evidence' }).click();
+  const promotedPlanId = await page.evaluate(() => location.hash.split('/')[2]);
+  await go('#/plan/' + promotedPlanId + '/evidence');
   await page.waitForSelector('#test-your-view', { timeout: 15000 });
   assert.match(await page.evaluate(() => window.location.hash), /^#\/plan\/plan_[^/]+\/evidence$/);
   assert.match(await page.textContent('#plan-header'), /AAPL/,
@@ -5954,7 +5977,7 @@ test('simulated market: product creator, loud live band, world-routed research, 
   // The Plan is world-routed. The control room owns the moving tape; the focused Plan keeps
   // a compact shell so sticky market chrome does not bury its journey rail.
   await openPlan('ACME');
-  await page.waitForSelector('.quote-hero');
+  await page.waitForSelector('#plan-flow');
   assert.match(await page.textContent('#plan-header'), /ACME.*Simulated market/s,
     'the persistent Plan header names the execution market');
   // The universe schema is STABLE across modes: active.symbols exists and carries the world.
@@ -5962,19 +5985,23 @@ test('simulated market: product creator, loud live band, world-routed research, 
   assert.ok(uni.active && Array.isArray(uni.active.symbols), 'one UniverseView schema in world mode');
   assert.ok(uni.active.symbols.includes('ACME'), 'world symbols drive the universe');
   assert.ok(Array.isArray(uni.sectors) && uni.sectors.length >= 1, 'sectors present (the session)');
-  const badges = await page.$$eval('.quote-hero .badge', els => els.map(e => e.textContent).join(' '));
-  assert.match(badges, /SIMULATED/, 'sim quotes carry the SIMULATED label');
-  const px0 = await page.textContent('#research-px');
+  assert.match(await page.textContent('#plan-header .badge'), /Simulated market/,
+    'the plan header badge names the simulated lane');
+  await page.waitForFunction(() => {
+    const el2 = document.getElementById('plan-live-px');
+    return el2 && el2.textContent.trim() !== '';
+  }, { timeout: 15000 });
+  const px0 = await page.textContent('#plan-live-px');
   // Step the world several times via the band. Each step publishes a REAL world.tick SSE hint;
   // the app's own handler must move the hero price. NO fallback: the old catch wrote the price
   // into the DOM itself, which masked a dead SSE path (weekend-handoff review M5).
   for (let i = 0; i < 12; i++) await page.click('#world-step');
   await page.waitForFunction((prev) => {
-    const el2 = document.getElementById('research-px');
+    const el2 = document.getElementById('plan-live-px');
     return el2 && el2.textContent !== prev;
   }, px0, { timeout: 20000 });
-  const px1 = await page.textContent('#research-px');
-  assert.notEqual(px1, px0, 'the app’s own SSE handler moved the price on screen');
+  const px1 = await page.textContent('#plan-live-px');
+  assert.notEqual(px1, px0, 'the app’s own SSE handler moved the in-plan price on screen');
 
   // The simulation account is the account inside the world.
   const simAcct = await page.evaluate(async () => (await API.getFresh('/api/account')).account.id);

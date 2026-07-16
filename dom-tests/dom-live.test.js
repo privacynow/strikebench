@@ -322,7 +322,7 @@ test('live: Plan Decide places and Manage unwinds a paper trade at real marks', 
     assertClean('ticket-nocandidates');
     return;
   }
-  await page.locator('.plan-rail button').filter({ hasText: 'Decide' }).click();
+  await go('#/plan/' + plan.id + '/decide');
   await page.waitForSelector('#plan-review-order');
   await page.click('#plan-review-order');
   await page.waitForSelector('#plan-decision-review .plan-decision-math', { timeout: 60000 });
@@ -363,7 +363,7 @@ test('live: observed backtest never substitutes demo history', async () => {
     assertClean('backtest-no-position');
     return;
   }
-  await page.locator('.plan-rail button').filter({ hasText: 'Outcomes' }).click();
+  await go('#/plan/' + plan.id + '/outcomes');
   await page.waitForSelector('#plan-outcomes');
   await page.click('#plan-outcomes-basis-backtest');
   await page.getByRole('button', { name: 'Run historical replay' }).click();

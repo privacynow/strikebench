@@ -114,9 +114,13 @@ final class PlanStrategyController {
     private static RecommendationEngine.Request planStrategyRequest(
             io.liftandshift.strikebench.plan.Plan.View plan, PlanStrategyRunRequest controls) {
         var c = plan.context();
-        // The view is user-declared, never imposed: ranking against an unstated view would
-        // silently substitute one. Refuse loudly; the Workspace keeps this band locked anyway.
-        if (c.thesis() == null || c.thesis().isBlank()) {
+        // The view is user-declared, never imposed: ranking a direction-dependent goal against
+        // an unstated view would silently substitute one. INCOME and HEDGE rank on their declared
+        // objective — direction there is genuinely optional (a shares-agnostic income stance is
+        // a coherent declared view, not a missing one).
+        boolean directionRequired = plan.intent() == null
+                || !java.util.Set.of("INCOME", "HEDGE").contains(plan.intent());
+        if (directionRequired && (c.thesis() == null || c.thesis().isBlank())) {
             throw new IllegalArgumentException(
                     "Declare the Plan's view (direction and horizon) before ranking the field.");
         }

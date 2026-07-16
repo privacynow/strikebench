@@ -88,6 +88,12 @@
         var target = root.querySelector('#band-' + key);
         if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
       },
+      /** Reopen a concluded band for revision and bring it into view. */
+      reopen: function (key) {
+        openOverrides[key] = 'open';
+        api.refreshBand(key);
+        api.scrollTo(key);
+      },
       posture: function (key) {
         var index = sections.findIndex(function (s) { return s.key === key; });
         return index >= 0 ? postureOf(sections[index], index) : null;
