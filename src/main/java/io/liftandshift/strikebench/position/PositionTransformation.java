@@ -9,10 +9,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -20,6 +23,8 @@ import java.util.Set;
  * existing evaluator; this class only compares structure identity, obligations, and evaluated risk.
  */
 public final class PositionTransformation {
+    public static final String MODEL_VERSION = "position-transform-1";
+
     private PositionTransformation() {}
 
     public enum Action {
@@ -46,6 +51,7 @@ public final class PositionTransformation {
         if (request.after() != null && sameComposition(request.before(), request.after())) {
             throw new IllegalArgumentException("the proposed action does not change the position");
         }
+        validateActionShape(request);
 
         StrategyCatalog.PositionIdentity beforeIdentity = StrategyCatalog.identify(request.before());
         StrategyCatalog.PositionIdentity afterIdentity = StrategyCatalog.identify(request.after());
@@ -203,6 +209,114 @@ public final class PositionTransformation {
         return a.equals(b);
     }
 
+    private static void validateActionShape(Request request) {
+        PositionPackage before = request.before();
+        PositionPackage after = request.after();
+        LegChanges changes = legChanges(before, after);
+        switch (request.action()) {
+            case CLOSE -> require(after == null, "CLOSE cannot leave a surviving position");
+            case PARTIAL_CLOSE -> {
+                require(after != null, "PARTIAL_CLOSE requires a surviving position");
+                require(after.packageQuantity() < before.packageQuantity(),
+                        "PARTIAL_CLOSE must reduce the package quantity");
+                require(changes.added().isEmpty() && changes.stockChanged().isEmpty()
+                                && changes.removedOptions() > 0,
+                        "PARTIAL_CLOSE can only reduce the existing option package");
+                require(changes.beforeKeys().equals(changes.afterKeys()),
+                        "PARTIAL_CLOSE must preserve the surviving contracts; use LEG_CLOSE for a leg removal");
+            }
+            case LEG_CLOSE, REMOVE_LEG -> requireOnlyOptionRemoval(changes, request.action());
+            case ADD_LEG -> {
+                require(after != null && changes.addedOptions() > 0,
+                        "ADD_LEG must add option quantity");
+                require(changes.removed().isEmpty() && changes.stockChanged().isEmpty(),
+                        "ADD_LEG cannot remove contracts or change stock");
+            }
+            case ADD_STOCK -> {
+                require(after != null && changes.addedStock() > 0,
+                        "ADD_STOCK must add long or short stock quantity");
+                require(changes.removed().isEmpty() && changes.optionChanged().isEmpty(),
+                        "ADD_STOCK cannot change option contracts");
+            }
+            case REMOVE_STOCK -> {
+                require(after != null && changes.removedStock() > 0,
+                        "REMOVE_STOCK must reduce stock quantity");
+                require(changes.added().isEmpty() && changes.optionChanged().isEmpty(),
+                        "REMOVE_STOCK cannot change option contracts");
+            }
+            case ROLL -> {
+                require(after != null, "ROLL requires a replacement position");
+                require(changes.removedOptions() > 0 && changes.addedOptions() > 0,
+                        "ROLL must close at least one option contract and open a different option contract");
+                require(changes.stockChanged().isEmpty(), "ROLL cannot silently change the stock position");
+            }
+            case ASSIGNMENT, EXERCISE -> {
+                require(changes.removedOptions() > 0,
+                        request.action() + " must remove exercised or assigned option quantity");
+                require(after == null || !changes.stockChanged().isEmpty(),
+                        request.action() + " must show the resulting stock change when a position survives");
+                require(changes.addedOptions() == 0,
+                        request.action() + " cannot silently open a new option contract");
+            }
+            case EXPIRATION -> {
+                require(changes.removedOptions() > 0, "EXPIRATION must remove expired option quantity");
+                require(changes.added().isEmpty() && changes.stockChanged().isEmpty(),
+                        "EXPIRATION cannot add contracts or change stock; use ASSIGNMENT or EXERCISE");
+            }
+        }
+    }
+
+    private static void requireOnlyOptionRemoval(LegChanges changes, Action action) {
+        require(changes.removedOptions() > 0, action + " must reduce option quantity");
+        require(changes.added().isEmpty() && changes.stockChanged().isEmpty(),
+                action + " cannot add contracts or change stock");
+    }
+
+    private static void require(boolean condition, String message) {
+        if (!condition) throw new IllegalArgumentException(message);
+    }
+
+    private static LegChanges legChanges(PositionPackage before, PositionPackage after) {
+        Map<String, LegAmount> beforeAmounts = amounts(before);
+        Map<String, LegAmount> afterAmounts = amounts(after);
+        Set<String> keys = new LinkedHashSet<>(beforeAmounts.keySet());
+        keys.addAll(afterAmounts.keySet());
+        List<LegDelta> added = new ArrayList<>();
+        List<LegDelta> removed = new ArrayList<>();
+        List<LegDelta> stockChanged = new ArrayList<>();
+        List<LegDelta> optionChanged = new ArrayList<>();
+        for (String key : keys) {
+            LegAmount prior = beforeAmounts.get(key);
+            LegAmount next = afterAmounts.get(key);
+            long beforeQuantity = prior == null ? 0 : prior.quantity();
+            long afterQuantity = next == null ? 0 : next.quantity();
+            if (beforeQuantity == afterQuantity) continue;
+            PositionPackage.Leg leg = prior != null ? prior.leg() : next.leg();
+            LegDelta delta = new LegDelta(leg, beforeQuantity, afterQuantity);
+            if (afterQuantity > beforeQuantity) added.add(delta); else removed.add(delta);
+            if (stock(leg)) stockChanged.add(delta); else optionChanged.add(delta);
+        }
+        return new LegChanges(Set.copyOf(beforeAmounts.keySet()), Set.copyOf(afterAmounts.keySet()),
+                List.copyOf(added), List.copyOf(removed), List.copyOf(stockChanged), List.copyOf(optionChanged));
+    }
+
+    private static Map<String, LegAmount> amounts(PositionPackage position) {
+        Map<String, LegAmount> out = new LinkedHashMap<>();
+        if (position == null) return out;
+        for (PositionPackage.Leg leg : position.legs()) {
+            String key = contractKey(leg);
+            LegAmount old = out.get(key);
+            out.put(key, new LegAmount(leg, Math.addExact(old == null ? 0 : old.quantity(), leg.quantity())));
+        }
+        return out;
+    }
+
+    private static String contractKey(PositionPackage.Leg leg) {
+        return String.join("|", upper(leg.action()), upper(leg.instrumentType()), upper(leg.optionType()),
+                decimal(leg.strike()), leg.expiration() == null ? "" : leg.expiration().toString(),
+                String.valueOf(leg.multiplier()));
+    }
+
     private static String legKey(PositionPackage.Leg leg) {
         return String.join("|", upper(leg.action()), upper(leg.instrumentType()), upper(leg.optionType()),
                 leg.strike() == null ? "" : leg.strike().stripTrailingZeros().toPlainString(),
@@ -213,10 +327,33 @@ public final class PositionTransformation {
     private static String fingerprint(Request request) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(Json.canonical(request).getBytes(StandardCharsets.UTF_8)));
+            StableRequest stable = new StableRequest(request.action(), stable(request.before()), stable(request.after()),
+                    stable(request.beforeRisk()), stable(request.afterRisk()), request.realizedClosingCents());
+            return HexFormat.of().formatHex(digest.digest(Json.canonical(stable).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("cannot fingerprint transformation preview", e);
         }
+    }
+
+    private static StablePackage stable(PositionPackage position) {
+        if (position == null) return null;
+        List<StableLeg> legs = position.legs().stream().map(leg -> new StableLeg(
+                        upper(leg.action()), upper(leg.instrumentType()), upper(leg.symbol()), upper(leg.optionType()),
+                        decimal(leg.strike()), leg.expiration() == null ? null : leg.expiration().toString(),
+                        leg.quantity(), leg.multiplier(), decimal(leg.price()), leg.priceAuthority()))
+                .sorted(Comparator.comparing(StableLeg::sortKey)).toList();
+        return new StablePackage(position.source(), position.lane(), upper(position.symbol()),
+                position.packageQuantity(), position.exactPackageCashCents(), legs);
+    }
+
+    private static StableRisk stable(RiskSnapshot risk) {
+        if (risk == null) return null;
+        return new StableRisk(risk.maxLossCents(), risk.reserveCents(), risk.maxProfitCents(),
+                risk.mechanicallyEligible(), risk.blockReasons().stream().sorted().toList(), risk.evidenceBasis());
+    }
+
+    private static String decimal(BigDecimal value) {
+        return value == null ? "" : value.stripTrailingZeros().toPlainString();
     }
 
     private static String contract(PositionPackage.Leg leg) {
@@ -261,4 +398,34 @@ public final class PositionTransformation {
                           Delta delta, boolean identityChanged, boolean applicable,
                           Long realizedClosingCents, List<String> warnings,
                           String fingerprint) {}
+
+    private record LegAmount(PositionPackage.Leg leg, long quantity) {}
+    private record LegDelta(PositionPackage.Leg leg, long beforeQuantity, long afterQuantity) {
+        long increase() { return Math.max(0, afterQuantity - beforeQuantity); }
+        long decrease() { return Math.max(0, beforeQuantity - afterQuantity); }
+    }
+    private record LegChanges(Set<String> beforeKeys, Set<String> afterKeys,
+                              List<LegDelta> added, List<LegDelta> removed,
+                              List<LegDelta> stockChanged, List<LegDelta> optionChanged) {
+        long addedOptions() { return added.stream().filter(d -> !stock(d.leg())).mapToLong(LegDelta::increase).sum(); }
+        long removedOptions() { return removed.stream().filter(d -> !stock(d.leg())).mapToLong(LegDelta::decrease).sum(); }
+        long addedStock() { return added.stream().filter(d -> stock(d.leg())).mapToLong(LegDelta::increase).sum(); }
+        long removedStock() { return removed.stream().filter(d -> stock(d.leg())).mapToLong(LegDelta::decrease).sum(); }
+    }
+    private record StableRequest(Action action, StablePackage before, StablePackage after,
+                                 StableRisk beforeRisk, StableRisk afterRisk, Long realizedClosingCents) {}
+    private record StablePackage(PositionDomain.PackageSource source, PositionDomain.ExecutionLane lane,
+                                 String symbol, long packageQuantity, Long exactPackageCashCents,
+                                 List<StableLeg> legs) {}
+    private record StableLeg(String action, String instrumentType, String symbol, String optionType,
+                             String strike, String expiration, long quantity, int multiplier,
+                             String price, PositionDomain.PriceAuthority priceAuthority) {
+        String sortKey() {
+            return String.join("|", action, instrumentType, symbol, optionType, strike,
+                    Objects.toString(expiration, ""), String.valueOf(quantity), String.valueOf(multiplier),
+                    price, Objects.toString(priceAuthority, ""));
+        }
+    }
+    private record StableRisk(Long maxLossCents, long reserveCents, Long maxProfitCents,
+                              boolean mechanicallyEligible, List<String> blockReasons, String evidenceBasis) {}
 }

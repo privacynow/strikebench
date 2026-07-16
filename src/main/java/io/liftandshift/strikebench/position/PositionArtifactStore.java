@@ -69,10 +69,10 @@ public final class PositionArtifactStore {
                 input.contextRevision(), input.portfolioAccountId(), revisionId, input.decisionId(),
                 input.transactionId(), input.marksAsOf(), input.evidenceLevel().name(), input.modelVersion());
         if (input.receiptLegs() != null) for (ReceiptLeg leg : input.receiptLegs()) {
-            Db.execOn(c, "INSERT INTO position_receipt_leg(receipt_id,leg_no,instrument_type,action,symbol,"
+            Db.execOn(c, "INSERT INTO position_receipt_leg(receipt_id,position_phase,leg_no,instrument_type,action,symbol,"
                             + "option_type,strike,expiration,quantity,multiplier,bid,ask,mid,fill_price,price_authority) "
-                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    receiptId, leg.legNo(), leg.instrumentType(), leg.action(), symbol(leg.symbol()),
+                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    receiptId, leg.positionPhase(), leg.legNo(), leg.instrumentType(), leg.action(), symbol(leg.symbol()),
                     leg.optionType(), leg.strike(), leg.expiration(), leg.quantity(), leg.multiplier(), leg.bid(),
                     leg.ask(), leg.mid(), leg.fillPrice(), leg.priceAuthority().name());
         }
@@ -80,6 +80,83 @@ public final class PositionArtifactStore {
                         + "VALUES(?,?,?,?,?,?)", actionId, input.planId(), revisionId, input.transactionId(),
                 receiptId, input.role().name());
         return new ArtifactSet(structureId, revisionId, receiptId, actionId);
+    }
+
+    /** Writes the frozen before/after artifact inside the same transaction as a Practice mutation. */
+    public String recordPracticeTransformation(Connection c, PracticeTransformationAction input)
+            throws SQLException {
+        if (c == null || input == null) throw new IllegalArgumentException("practice transformation is required");
+        String userId = OwnerScope.id(input.userId());
+        requireExists(c, "SELECT 1 ok FROM trades t JOIN accounts a ON a.id=t.account_id "
+                        + "WHERE t.id=? AND a.user_id=?", "owned Practice trade", input.practiceTradeId(), userId);
+        if (input.planId() != null) {
+            requireExists(c, "SELECT 1 ok FROM plans WHERE id=? AND user_id=?", "Plan", input.planId(), userId);
+            requireExists(c, "SELECT 1 ok FROM plan_context_revision WHERE plan_id=? AND rev=?",
+                    "Plan context revision", input.planId(), input.contextRevision());
+        }
+        PositionTransformation.Preview preview = input.preview();
+        Db.execOn(c, "INSERT INTO position_receipt(id,user_id,kind,authority,execution_lane,position_state,"
+                        + "plan_id,plan_context_rev,practice_trade_id,marks_as_of,evidence_level,model_version,"
+                        + "transformation_action,preview_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                input.receiptId(), userId, PositionDomain.ReceiptKind.TRANSFORMATION.name(),
+                PositionDomain.ReceiptAuthority.SYSTEM_ANALYSIS.name(), PositionDomain.ExecutionLane.PRACTICE.name(),
+                input.positionState().name(), input.planId(), input.planId() == null ? null : input.contextRevision(),
+                input.practiceTradeId(), input.marksAsOf(), input.evidenceLevel().name(), input.modelVersion(),
+                preview.action().name(), preview.fingerprint());
+        insertPackageLegs(c, input.receiptId(), "BEFORE", input.before());
+        insertPackageLegs(c, input.receiptId(), "AFTER", input.after());
+        insertTextMetric(c, input.receiptId(), "before_identity", preview.beforeIdentity().label());
+        insertTextMetric(c, input.receiptId(), "after_identity", preview.afterIdentity().label());
+        insertCentsMetric(c, input.receiptId(), "before_max_loss", preview.beforeRisk().maxLossCents());
+        insertCentsMetric(c, input.receiptId(), "after_max_loss",
+                preview.afterRisk() == null ? 0L : preview.afterRisk().maxLossCents());
+        insertCentsMetric(c, input.receiptId(), "before_reserve", preview.beforeRisk().reserveCents());
+        insertCentsMetric(c, input.receiptId(), "after_reserve",
+                preview.afterRisk() == null ? 0L : preview.afterRisk().reserveCents());
+        insertCentsMetric(c, input.receiptId(), "before_assignment_cash",
+                preview.beforeObligations().putAssignmentCashCents());
+        insertCentsMetric(c, input.receiptId(), "after_assignment_cash",
+                preview.afterObligations().putAssignmentCashCents());
+        insertNumberMetric(c, input.receiptId(), "before_call_delivery_shares",
+                preview.beforeObligations().callDeliveryShares());
+        insertNumberMetric(c, input.receiptId(), "after_call_delivery_shares",
+                preview.afterObligations().callDeliveryShares());
+        insertCentsMetric(c, input.receiptId(), "realized_closing",
+                input.realizedCents() == null ? preview.realizedClosingCents() : input.realizedCents());
+        return input.receiptId();
+    }
+
+    private static void insertPackageLegs(Connection c, String receiptId, String phase, PositionPackage position)
+            throws SQLException {
+        if (position == null) return;
+        for (PositionPackage.Leg leg : position.legs()) {
+            Db.execOn(c, "INSERT INTO position_receipt_leg(receipt_id,position_phase,leg_no,instrument_type,action,"
+                            + "symbol,option_type,strike,expiration,quantity,multiplier,mid,fill_price,price_authority) "
+                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    receiptId, phase, leg.index(), leg.instrumentType(), leg.action(), symbol(leg.symbol()),
+                    leg.optionType(), leg.strike(), leg.expiration(), leg.quantity(), leg.multiplier(), leg.price(),
+                    leg.priceAuthority() == PositionDomain.PriceAuthority.BROKER_REPORTED
+                            || leg.priceAuthority() == PositionDomain.PriceAuthority.USER_REPORTED ? leg.price() : null,
+                    leg.priceAuthority().name());
+        }
+    }
+
+    private static void insertCentsMetric(Connection c, String receiptId, String key, Long value)
+            throws SQLException {
+        if (value != null) Db.execOn(c, "INSERT INTO position_receipt_metric(receipt_id,metric_key,value_cents) VALUES(?,?,?)",
+                receiptId, key, value);
+    }
+
+    private static void insertNumberMetric(Connection c, String receiptId, String key, long value)
+            throws SQLException {
+        Db.execOn(c, "INSERT INTO position_receipt_metric(receipt_id,metric_key,value_number) VALUES(?,?,?)",
+                receiptId, key, (double) value);
+    }
+
+    private static void insertTextMetric(Connection c, String receiptId, String key, String value)
+            throws SQLException {
+        if (value != null) Db.execOn(c, "INSERT INTO position_receipt_metric(receipt_id,metric_key,value_text) VALUES(?,?,?)",
+                receiptId, key, value);
     }
 
     private static void requireExists(Connection c, String sql, String label, Object... params) throws SQLException {
@@ -114,10 +191,26 @@ public final class PositionArtifactStore {
     }
 
     public record Allocation(String lotId, long quantity, String legRole) {}
-    public record ReceiptLeg(int legNo, String instrumentType, String action, String symbol,
+    public record ReceiptLeg(String positionPhase, int legNo, String instrumentType, String action, String symbol,
                              String optionType, BigDecimal strike, LocalDate expiration,
                              long quantity, int multiplier, BigDecimal bid, BigDecimal ask,
                              BigDecimal mid, BigDecimal fillPrice,
                              PositionDomain.PriceAuthority priceAuthority) {}
+    public record PracticeTransformationAction(String userId, String receiptId, String planId,
+                                               Integer contextRevision, String practiceTradeId,
+                                               PositionDomain.PositionState positionState,
+                                               OffsetDateTime marksAsOf, EvidenceLevel evidenceLevel,
+                                               String modelVersion, PositionPackage before,
+                                               PositionPackage after, PositionTransformation.Preview preview,
+                                               Long realizedCents) {
+        public PracticeTransformationAction {
+            if (receiptId == null || receiptId.isBlank() || practiceTradeId == null || practiceTradeId.isBlank()
+                    || positionState == null || marksAsOf == null || evidenceLevel == null
+                    || modelVersion == null || modelVersion.isBlank() || before == null || preview == null
+                    || planId != null && (contextRevision == null || contextRevision <= 0)) {
+                throw new IllegalArgumentException("complete Practice transformation provenance is required");
+            }
+        }
+    }
     public record ArtifactSet(String structureId, String revisionId, String receiptId, String actionId) {}
 }

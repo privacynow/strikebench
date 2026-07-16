@@ -308,6 +308,9 @@ public final class ApiServer {
                 planStrategy, planOutcomes, planRehearsals, planDecisions, planManagement,
                 pathEnsembles, simEngine, discoveryController, outcomeController, tradeController,
                 this::currentAccount, this::ownerId, this::activeWorld, this::analysisCtx);
+        PositionTransformationController positionTransformations = new PositionTransformationController(
+                clock, trades, tradeController, planController, planSvc, planManagement,
+                new io.liftandshift.strikebench.position.PositionArtifactStore(db));
         SparklineController sparklineController = new SparklineController(clock, market, universe,
                 evaluations, this::activeWorld, this::analysisCtx);
         dataJobs.setDataChangedHook(sparklineController::invalidate);
@@ -407,6 +410,8 @@ public final class ApiServer {
             coreController.register(c, telemetry);
 
             planController.register(c);
+
+            positionTransformations.register(c);
 
             dataController.register(c);
 

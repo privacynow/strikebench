@@ -10,7 +10,7 @@ public final class PositionDomain {
         PENDING, OPEN, PARTIALLY_CLOSED, ASSIGNED, EXERCISED, EXPIRED, CLOSED
     }
     public enum ReceiptKind { DECISION, ADOPTION, TRANSFORMATION, RESOLUTION }
-    public enum ReceiptAuthority { SYSTEM_OBSERVED, BROKER_REPORTED, USER_ALLOCATED }
+    public enum ReceiptAuthority { SYSTEM_ANALYSIS, BROKER_REPORTED, USER_ALLOCATED }
     public enum Objective { INCOME, ACCUMULATE, HEDGE, DIRECTIONAL, CAPITAL_PRESERVATION }
     public enum Direction { BULLISH, BEARISH, NEUTRAL, NON_DIRECTIONAL }
     public enum AssignmentPreference { AVOID, ACCEPT, PREFER_BELOW_BASIS, SEEK }

@@ -209,6 +209,16 @@ public final class ApiResponses {
     public record TradeDetail<T, U, V, W>(T trade, U current, V marksHistory, W audit,
                                            List<PayoffPoint> payoff) {}
     public record ClosedTrade<T>(T trade, long realizedPnlCents, long decisionPnlCents) {}
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record PositionTransformationPreview<T>(
+            io.liftandshift.strikebench.position.PositionTransformation.Preview transformation,
+            T before, T after, Long closingCashCents, Long closingFeesCents,
+            String previewToken, String expiresAt) {}
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record PositionTransformationApplied<T, U, V>(
+            String receiptId,
+            io.liftandshift.strikebench.position.PositionTransformation.Preview transformation,
+            T trade, U plan, V management, long realizedPnlCents) {}
     public record Trade<T>(T trade) {}
     public record BrokerPreview<T>(String localId, T preview, String confirmTextRequired) {}
     public record CancelRequested(boolean cancelRequested, String note) {}
