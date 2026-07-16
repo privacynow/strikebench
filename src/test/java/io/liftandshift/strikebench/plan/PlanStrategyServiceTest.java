@@ -43,7 +43,7 @@ class PlanStrategyServiceTest {
                    "strategy":"IRON_CONDOR","displayName":"Iron condor","structureGroup":"RANGE",
                    "label":"SELL 245P / BUY 240P / SELL 265C / BUY 270C","qty":1,
                    "entryNetPremiumCents":12500,"maxProfitCents":12500,"maxLossCents":37500,
-                   "breakevens":[243.75,266.25],"pop":0.61,"expectedValueCents":-1200,
+                   "breakevens":["243.75","266.25"],"pop":0.61,"expectedValueCents":-1200,
                    "liquidityScore":0.82,"freshness":"FIXTURE","warnings":["Teaching data"],
                    "confidence":0.7,"whyConsidered":"Range view","bestUpside":"Time decay",
                    "biggestRisk":"Large move","wouldInvalidate":"Breakout","beginnerExplanation":"A range trade",
@@ -80,7 +80,11 @@ class PlanStrategyServiceTest {
 
         PlanStrategyService.SavedRun restored = strategies.latestCompetition(null, plan.id());
         assertThat(restored.result().at("/candidates/0/legs")).isEqualTo(saved.result().at("/candidates/0/legs"));
-        assertThat(restored.result().at("/candidates/0/breakevens")).isEqualTo(saved.result().at("/candidates/0/breakevens"));
+        assertThat(saved.result().at("/candidates/0/breakevens/0").isTextual()).isTrue();
+        assertThat(restored.result().at("/candidates/0/breakevens/0").decimalValue())
+                .isEqualByComparingTo("243.75");
+        assertThat(restored.result().at("/candidates/0/breakevens/1").decimalValue())
+                .isEqualByComparingTo("266.25");
         assertThat(restored.result().at("/candidates/0/evaluation/assessment/economics/reasons/0").asText())
                 .isEqualTo("Scenario positive");
         assertThat(restored.result().at("/candidates/0/economics").isMissingNode()).isTrue();
