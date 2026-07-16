@@ -1017,6 +1017,142 @@ class PlanApiIntegrationTest {
                 .containsExactly(1L);
     }
 
+    @Test void planAssignmentKeepsTheHedgeAndWritesOneAtomicLifecycleSet() throws Exception {
+        assertThat(put("/api/account/risk-context", """
+                {"nlvCents":10000000,"cashBpCents":10000000,"riskCapitalCents":1000000}
+                """).statusCode()).isBetween(200, 299);
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"plan-assignment-lifecycle","symbol":"AAPL","intent":"ACQUIRE",
+                 "title":"Assignment with hedge","thesis":"bullish","horizonDays":30,
+                 "riskMode":"conservative"}
+                """));
+        String planId = plan.get("id").asText();
+        String expiration = json(get("/api/research/AAPL/expirations")).at("/expirations/2").asText();
+        var custom = Json.MAPPER.createObjectNode();
+        custom.put("expectedVersion", plan.get("version").asLong());
+        custom.set("position", Json.parse("""
+                {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,
+                 "fillNature":"PROPOSED","legs":[
+                   {"action":"SELL","type":"PUT","strike":"260","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"},
+                   {"action":"BUY","type":"PUT","strike":"250","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(expiration, expiration)));
+        JsonNode selected = json(post("/api/plans/" + planId + "/strategy/custom", custom.toString()));
+        long selectedVersion = selected.at("/plan/version").asLong();
+        JsonNode decisionPreview = json(post("/api/plans/" + planId + "/decision/preview",
+                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":1}"));
+        var order = Json.MAPPER.createObjectNode();
+        order.put("expectedVersion", selectedVersion);
+        order.put("qty", 1);
+        order.put("proposedNetCents", decisionPreview.at("/order/proposedNetCents").asLong());
+        if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
+        var openingAcks = order.putArray("acknowledgedRisks");
+        decisionPreview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
+        JsonNode opened = json(post("/api/plans/" + planId + "/decision/trade", order.toString()));
+        String tradeId = opened.at("/trade/id").asText();
+        long openVersion = opened.at("/plan/version").asLong();
+
+        var request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("planId", planId);
+        request.put("expectedPlanVersion", openVersion);
+        request.put("action", "ASSIGNMENT");
+        request.put("legIndex", 0);
+        JsonNode lifecyclePreview = json(post("/api/position-transformations/preview", request.toString()));
+        assertThat(lifecyclePreview.at("/transformation/afterIdentity/family").asText())
+                .isEqualTo("PROTECTIVE_PUT");
+        request.put("previewToken", lifecyclePreview.get("previewToken").asText());
+        JsonNode applied = json(post("/api/position-transformations/apply", request.toString()));
+        String receiptId = applied.get("receiptId").asText();
+
+        assertThat(applied.at("/trade/id").asText()).isEqualTo(tradeId);
+        assertThat(applied.at("/trade/status").asText()).isEqualTo("ACTIVE");
+        assertThat(applied.at("/trade/strategy").asText()).isEqualTo("PROTECTIVE_PUT");
+        assertThat(applied.at("/plan/status").asText()).isEqualTo("POSITION_OPEN");
+        assertThat(applied.at("/plan/version").asLong()).isEqualTo(openVersion + 1);
+        assertThat(applied.at("/management/activeTradeId").asText()).isEqualTo(tradeId);
+        assertThat(applied.at("/management/actions/0/kind").asText()).isEqualTo("ASSIGNMENT");
+        assertThat(inspectDb.query("SELECT COUNT(*) n FROM position_receipt WHERE id=? AND plan_id=? "
+                        + "AND position_state='ASSIGNED' AND transformation_action='ASSIGNMENT'",
+                row -> row.lng("n"), receiptId, planId)).containsExactly(1L);
+        assertThat(inspectDb.query("SELECT COUNT(*) n FROM plan_management_action WHERE plan_id=? "
+                        + "AND receipt_id=? AND kind='ASSIGNMENT'",
+                row -> row.lng("n"), planId, receiptId)).containsExactly(1L);
+        assertThat(inspectDb.query("SELECT COUNT(*) n FROM plan_link WHERE plan_id=? AND trade_id=? "
+                        + "AND role='ASSIGNMENT'", row -> row.lng("n"), planId, tradeId))
+                .containsExactly(1L);
+        assertThat(inspectDb.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=? "
+                        + "AND type IN ('SETTLEMENT','STOCK_BUY')", row -> row.lng("n"), tradeId))
+                .containsExactly(2L);
+    }
+
+    @Test void planAssignmentToSharesUsesTheFrozenReceiptAsItsCurrentManagePosition() throws Exception {
+        assertThat(put("/api/account/risk-context", """
+                {"nlvCents":10000000,"cashBpCents":10000000,"riskCapitalCents":1000000}
+                """).statusCode()).isBetween(200, 299);
+        long sharesBefore = 0;
+        for (JsonNode position : json(get("/api/positions")).withArray("positions")) {
+            if ("AAPL".equals(position.path("symbol").asText())) sharesBefore = position.path("shares").asLong();
+        }
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"plan-assignment-shares","symbol":"AAPL","intent":"ACQUIRE",
+                 "title":"Acquire shares through assignment","thesis":"bullish","horizonDays":30,
+                 "riskMode":"conservative"}
+                """));
+        String planId = plan.get("id").asText();
+        String expiration = json(get("/api/research/AAPL/expirations")).at("/expirations/2").asText();
+        var custom = Json.MAPPER.createObjectNode();
+        custom.put("expectedVersion", plan.get("version").asLong());
+        custom.set("position", Json.parse("""
+                {"symbol":"AAPL","strategy":"CASH_SECURED_PUT","qty":1,
+                 "fillNature":"PROPOSED","legs":[
+                   {"action":"SELL","type":"PUT","strike":"260","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(expiration)));
+        JsonNode selected = json(post("/api/plans/" + planId + "/strategy/custom", custom.toString()));
+        long selectedVersion = selected.at("/plan/version").asLong();
+        JsonNode decisionPreview = json(post("/api/plans/" + planId + "/decision/preview",
+                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":1}"));
+        var order = Json.MAPPER.createObjectNode();
+        order.put("expectedVersion", selectedVersion);
+        order.put("qty", 1);
+        order.put("proposedNetCents", decisionPreview.at("/order/proposedNetCents").asLong());
+        if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
+        var openingAcks = order.putArray("acknowledgedRisks");
+        decisionPreview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
+        JsonNode opened = json(post("/api/plans/" + planId + "/decision/trade", order.toString()));
+        String tradeId = opened.at("/trade/id").asText();
+        long openVersion = opened.at("/plan/version").asLong();
+
+        var request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("planId", planId);
+        request.put("expectedPlanVersion", openVersion);
+        request.put("action", "ASSIGNMENT");
+        request.put("legIndex", 0);
+        JsonNode preview = json(post("/api/position-transformations/preview", request.toString()));
+        assertThat(preview.at("/transformation/afterIdentity/label").asText()).isEqualTo("Long shares");
+        request.put("previewToken", preview.get("previewToken").asText());
+        JsonNode applied = json(post("/api/position-transformations/apply", request.toString()));
+
+        assertThat(applied.at("/trade/status").asText()).isEqualTo("EXPIRED");
+        assertThat(applied.at("/plan/status").asText()).isEqualTo("POSITION_OPEN");
+        assertThat(applied.at("/management/activeTradeId").isMissingNode()
+                || applied.at("/management/activeTradeId").isNull()).isTrue();
+        assertThat(applied.at("/management/currentPosition/identity").asText()).isEqualTo("Long shares");
+        assertThat(applied.at("/management/currentPosition/holdingShares").asLong()).isEqualTo(sharesBefore + 100);
+        assertThat(applied.at("/management/currentPosition/legs").size()).isEqualTo(1);
+        assertThat(applied.at("/management/currentPosition/legs/0/instrumentType").asText()).isEqualTo("STOCK");
+
+        JsonNode manage = json(get("/api/plans/" + planId + "/manage"));
+        assertThat(manage.has("trade") && !manage.get("trade").isNull()).isFalse();
+        assertThat(manage.at("/management/currentPosition/identity").asText()).isEqualTo("Long shares");
+        assertThat(manage.at("/management/currentPosition/legs/0/quantity").asLong()).isEqualTo(100);
+    }
+
     @Test void voidingAPlanTradeIsRecordedAsVoidRatherThanAnOrdinaryClose() throws Exception {
         JsonNode plan = json(post("/api/plans", """
                 {"clientRequestId":"decision-void-plan","symbol":"AAPL","intent":"DIRECTIONAL",

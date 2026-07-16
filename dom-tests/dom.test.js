@@ -2054,6 +2054,157 @@ test('Practice position adjustment reuses the shared editor and preserves exact 
   await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
 });
 
+test('Practice option lifecycle reviews assignment before atomically preserving the surviving hedge', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const created = await page.evaluate(async () => {
+    const beforeShares = (await API.getFresh('/api/positions')).positions
+      .find(position => position.symbol === 'AAPL')?.shares || 0;
+    const expiration = (await API.getFresh('/api/research/AAPL/expirations')).expirations[2];
+    const order = { symbol: 'AAPL', strategy: 'CREDIT_PUT_SPREAD', qty: 1,
+      thesis: 'bullish', horizon: 'month', riskMode: 'balanced', intent: 'ACQUIRE',
+      source: 'DOM_OPTION_LIFECYCLE', fillNature: 'PROPOSED', legs: [
+        { action: 'SELL', type: 'PUT', strike: '260', expiration: expiration,
+          ratio: 1, multiplier: 100, positionEffect: 'OPEN' },
+        { action: 'BUY', type: 'PUT', strike: '250', expiration: expiration,
+          ratio: 1, multiplier: 100, positionEffect: 'OPEN' }
+      ] };
+    const preview = await API.post('/api/trades/preview', order);
+    if (preview.requiredAcks && preview.requiredAcks.length) {
+      order.acknowledgedRisks = preview.requiredAcks.map(item => item.id);
+      order.ackToken = preview.ackToken;
+    }
+    return { trade: (await API.post('/api/trades', order)).trade, beforeShares: beforeShares };
+  });
+
+  await go('#/portfolio/trade/' + created.trade.id);
+  await page.waitForSelector('#option-lifecycle-btn');
+  assert.equal(await page.locator('#settle-btn').count(), 0,
+    'the visible flow uses the exact leg lifecycle review rather than a whole-position settle shortcut');
+  await page.click('#option-lifecycle-btn');
+  await page.waitForSelector('.position-lifecycle-workbench:not([hidden]) .position-lifecycle-leg');
+  assert.equal(await page.locator('.position-lifecycle-leg').count(), 2,
+    'every current option contract remains individually reviewable');
+  await page.locator('.position-lifecycle-leg').first().getByRole('button', { name: 'Review assignment' }).click();
+  await page.waitForSelector('#apply-option-lifecycle-btn', { timeout: 30000 });
+  assert.equal(await page.locator('.position-lifecycle-leg.is-selected').count(), 1,
+    'the chosen contract remains visibly selected beside its review');
+  const beginnerReview = await page.textContent('#option-lifecycle-preview');
+  assert.match(beginnerReview, /Assignment reviewed.*Nothing has changed yet/s);
+  assert.match(beginnerReview, /Before.*After/s);
+  assert.match(beginnerReview, /Selected contract.*260 PUT/s);
+  assert.match(beginnerReview, /100 shares acquired at the strike/);
+  assert.match(beginnerReview, /SETTLEMENT BASIS.*active lane mark/s);
+  assert.match(beginnerReview, /See exact option accounting and reserve changes/,
+    'Beginner keeps the exact accounting through progressive disclosure');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(300);
+  const mobile = await page.evaluate(() => ({ width: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    buttons: Array.from(document.querySelectorAll('.position-lifecycle-workbench button')).map(node => {
+      const r = node.getBoundingClientRect();
+      return { left: r.left, right: r.right, width: r.width, text: node.textContent.trim() };
+    }).filter(item => item.width > 0) }));
+  assert.ok(mobile.scrollWidth <= mobile.width + 1,
+    'the lifecycle workbench fits the mobile viewport: ' + JSON.stringify(mobile));
+  assert.ok(mobile.buttons.every(item => item.left >= -1 && item.right <= mobile.width + 1),
+    'every lifecycle command remains fully visible on mobile: ' + JSON.stringify(mobile.buttons));
+  await page.locator('.position-lifecycle-workbench').evaluate(node => node.scrollIntoView({ block: 'start' }));
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: path.join(__dirname, 'shots/trader-own-p5-lifecycle-beginner-mobile.png') });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.click('#option-lifecycle-btn');
+  await page.waitForSelector('.position-lifecycle-workbench:not([hidden]) .position-lifecycle-leg');
+  await page.locator('.position-lifecycle-leg').first().getByRole('button', { name: 'Review assignment' }).click();
+  await page.waitForSelector('#apply-option-lifecycle-btn', { timeout: 30000 });
+  const expertReview = await page.textContent('#option-lifecycle-preview');
+  assert.match(expertReview, /Option result realized.*Realized on position to date/s);
+  assert.match(expertReview, /Strike cash used.*Practice cash after/s);
+  assert.match(expertReview, /Broker reserve before.*Broker reserve after/s,
+    'Expert receives the same reviewed action with dense exact accounting');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(__dirname, 'shots/trader-own-p5-lifecycle-expert.png'), fullPage: true });
+
+  const applyResponse = page.waitForResponse(response => response.url().endsWith('/api/position-transformations/apply')
+    && response.request().method() === 'POST');
+  await page.click('#apply-option-lifecycle-btn');
+  const applied = await (await applyResponse).json();
+  assert.equal(applied.transformation.action, 'ASSIGNMENT');
+  assert.equal(applied.trade.id, created.trade.id, 'assignment preserves the position identity');
+  assert.equal(applied.trade.status, 'ACTIVE', 'the surviving hedge remains managed');
+  assert.equal(applied.trade.strategy, 'PROTECTIVE_PUT');
+  assert.equal(applied.trade.intent, 'HEDGE');
+  assert.equal(applied.trade.legs.length, 1);
+  assert.equal(applied.trade.legs[0].action, 'BUY');
+  assert.equal(applied.trade.legs[0].type, 'PUT');
+  await page.waitForFunction(id => location.hash === '#/portfolio/trade/' + id
+    && /Protective put/i.test(document.querySelector('.quote-hero')?.textContent || ''), created.trade.id,
+  { timeout: 30000 });
+  const afterShares = await page.evaluate(async () => (await API.getFresh('/api/positions')).positions
+    .find(position => position.symbol === 'AAPL')?.shares || 0);
+  assert.equal(afterShares, created.beforeShares + 100,
+    'the assigned shares enter the existing Practice holdings book exactly once');
+  await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
+});
+
+test('Plan Manage keeps assigned shares visible when no option leg survives', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const result = await page.evaluate(async () => {
+    const plan = await API.post('/api/plans', {
+      clientRequestId: 'dom-plan-assignment-shares-' + Date.now(), symbol: 'AAPL', intent: 'ACQUIRE',
+      title: 'Acquire shares through assignment', thesis: 'bullish', horizonDays: 30,
+      riskMode: 'conservative'
+    });
+    const expiration = (await API.getFresh('/api/research/AAPL/expirations')).expirations[2];
+    const selected = await API.post('/api/plans/' + plan.id + '/strategy/custom', {
+      expectedVersion: plan.version,
+      position: { symbol: 'AAPL', strategy: 'CASH_SECURED_PUT', qty: 1, fillNature: 'PROPOSED', legs: [
+        { action: 'SELL', type: 'PUT', strike: '260', expiration: expiration,
+          ratio: 1, multiplier: 100, positionEffect: 'OPEN' }
+      ] }
+    });
+    const reviewed = await API.post('/api/plans/' + plan.id + '/decision/preview', {
+      expectedVersion: selected.plan.version, qty: 1
+    });
+    const order = { expectedVersion: selected.plan.version, qty: 1,
+      proposedNetCents: reviewed.order.proposedNetCents,
+      acknowledgedRisks: (reviewed.requiredAcks || []).map(item => item.id) };
+    if (reviewed.ackToken) order.ackToken = reviewed.ackToken;
+    const opened = await API.post('/api/plans/' + plan.id + '/decision/trade', order);
+    const request = { source: 'PRACTICE_TRADE', sourceId: opened.trade.id, planId: plan.id,
+      expectedPlanVersion: opened.plan.version, action: 'ASSIGNMENT', legIndex: 0 };
+    const lifecycle = await API.post('/api/position-transformations/preview', request);
+    request.previewToken = lifecycle.previewToken;
+    const applied = await API.post('/api/position-transformations/apply', request);
+    return { planId: plan.id, tradeStatus: applied.trade.status,
+      currentIdentity: applied.management.currentPosition.identity,
+      currentLegs: applied.management.currentPosition.legs };
+  });
+
+  assert.equal(result.tradeStatus, 'EXPIRED', 'the option contract is complete');
+  assert.equal(result.currentIdentity, 'Long shares');
+  assert.equal(result.currentLegs.length, 1);
+  assert.equal(result.currentLegs[0].instrumentType, 'STOCK');
+  await go('#/plan/' + result.planId + '/manage-review');
+  await page.waitForSelector('.plan-current-receipt-position');
+  const text = await page.textContent('#app');
+  assert.match(text, /Current Plan position.*Long shares.*Account shares.*ASSIGNMENT/s);
+  assert.doesNotMatch(text, /linked position is unavailable/i);
+  await page.screenshot({ path: path.join(__dirname, 'shots/trader-own-p5-assigned-shares-plan-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobile = await page.evaluate(() => ({ client: document.documentElement.clientWidth,
+    scroll: document.documentElement.scrollWidth }));
+  assert.ok(mobile.scroll <= mobile.client + 1,
+    'receipt-backed Plan position remains contained on mobile: ' + JSON.stringify(mobile));
+  await page.locator('.plan-current-receipt-position').evaluate(node => node.scrollIntoView({ block: 'start' }));
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(__dirname, 'shots/trader-own-p5-assigned-shares-plan-mobile.png') });
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
 test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {
   const safety = await page.evaluate(() => ({
     money: UI.fmtMoney(Number.NaN), compact: UI.fmtMoneyCompact(Infinity),

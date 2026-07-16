@@ -179,7 +179,8 @@ final class PlanDecisionController {
         root.requireActivePlanMarket(ctx, plan);
         ObjectNode management = planManagement.latest(root.ownerId(ctx), plan.id());
         String tradeId = management.path("activeTradeId").asText(null);
-        if (tradeId == null) {
+        boolean receiptPositionSurvives = management.path("currentPosition").path("legs").size() > 0;
+        if (tradeId == null && !receiptPositionSurvives) {
             for (JsonNode link : management.withArray("links")) {
                 if (link.hasNonNull("tradeId")) tradeId = link.get("tradeId").asText();
             }

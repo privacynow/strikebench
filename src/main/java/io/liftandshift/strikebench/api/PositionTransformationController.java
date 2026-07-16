@@ -76,7 +76,8 @@ final class PositionTransformationController {
         if (request.action() != PositionTransformation.Action.CLOSE
                 && request.action() != PositionTransformation.Action.PARTIAL_CLOSE
                 && request.action() != PositionTransformation.Action.ROLL
-                && !adjustmentAction(request.action())) {
+                && !adjustmentAction(request.action())
+                && !lifecycleAction(request.action())) {
             throw new IllegalStateException("This transformation can be analyzed, but its atomic Practice apply path is not active yet.");
         }
 
@@ -118,6 +119,32 @@ final class PositionTransformationController {
                     request.closeQuantity(), true, atomicArtifacts, prepared.partial().closingCashCents(),
                     prepared.partial().closingFeesCents(), expectedPosition(prepared));
             responseTrade = result.trade();
+            actionRealized = result.actionRealizedPnlCents();
+            realizedToDate = result.realizedPnlCents();
+        } else if (lifecycleAction(request.action())) {
+            if (prepared.lifecycle() == null || request.legIndex() == null) {
+                throw new IllegalArgumentException("a lifecycle conversion requires its reviewed option leg");
+            }
+            PositionDomain.PositionState state = switch (request.action()) {
+                case ASSIGNMENT -> PositionDomain.PositionState.ASSIGNED;
+                case EXERCISE -> PositionDomain.PositionState.EXERCISED;
+                case EXPIRATION -> PositionDomain.PositionState.EXPIRED;
+                default -> throw new IllegalStateException("unsupported lifecycle action");
+            };
+            boolean positionSurvives = prepared.after() != null;
+            TradeService.LifecycleHook planHook = prepared.plan() == null ? null
+                    : management.optionLifecycleHook(ownerId, prepared.plan().id(),
+                            request.expectedPlanVersion(), request.action().name(),
+                            positionSurvives, receiptId);
+            TradeService.LifecycleHook atomicArtifacts = (connection, changed, actionDelta, lifetimeTotal) -> {
+                recordPracticeArtifact(connection, ownerId, receiptId, prepared, changed.id(), state, actionDelta);
+                if (planHook != null) planHook.afterMutation(connection, changed, actionDelta, lifetimeTotal);
+            };
+            TradeService.LifecycleResult result = trades.applyLifecycleConversion(request.sourceId(),
+                    request.action(), request.legIndex(), true, atomicArtifacts,
+                    expectedPosition(prepared), expectedLifecycle(prepared.lifecycle()));
+            responseTrade = result.trade();
+            if (!positionSurvives) resolvedTrade = result.trade();
             actionRealized = result.actionRealizedPnlCents();
             realizedToDate = result.realizedPnlCents();
         } else if (adjustmentAction(request.action())) {
@@ -211,6 +238,14 @@ final class PositionTransformationController {
                 prepared.before().risk().reserveCents());
     }
 
+    private static TradeService.ExpectedLifecycle expectedLifecycle(TradeService.LifecycleAssessment lifecycle) {
+        return new TradeService.ExpectedLifecycle(lifecycle.settlementUnderlyingCents(),
+                lifecycle.optionSettlementCashCents(), lifecycle.stockCashCents(), lifecycle.sharesDelta(),
+                lifecycle.allocatedEntryBasisCents(), lifecycle.allocatedOpenFeesCents(),
+                lifecycle.reserveAfterCents(), lifecycle.heldShareContextAfter(),
+                lifecycle.sharesLockedAfter(), lifecycle.exactStateFingerprint());
+    }
+
     private Prepared prepare(Context ctx, Request request) {
         if (request.source() != PositionDomain.PackageSource.PRACTICE_TRADE) {
             throw new IllegalArgumentException("source must be PRACTICE_TRADE for this Practice transformation path");
@@ -225,6 +260,7 @@ final class PositionTransformationController {
                     "This endpoint transforms Practice positions only; use the tracked-account position workflow for broker records");
         }
         Plan.View plan = requirePlanContext(ctx, request, trade);
+        boolean lifecycleAction = lifecycleAction(request.action());
         if (request.action() == PositionTransformation.Action.PARTIAL_CLOSE) {
             if (request.closeQuantity() == null) {
                 throw new IllegalArgumentException("closeQuantity is required for a partial close");
@@ -235,15 +271,28 @@ final class PositionTransformationController {
         } else if (request.closeQuantity() != null) {
             throw new IllegalArgumentException("closeQuantity applies only to a partial close");
         }
+        if (lifecycleAction) {
+            if (request.legIndex() == null) {
+                throw new IllegalArgumentException("legIndex is required for assignment, exercise, or expiration");
+            }
+            if (request.after() != null) {
+                throw new IllegalArgumentException("the server derives the lifecycle survivor from the selected option leg");
+            }
+        } else if (request.legIndex() != null) {
+            throw new IllegalArgumentException("legIndex applies only to assignment, exercise, or expiration");
+        }
         TradeService.PartialCloseAssessment partial = request.action() == PositionTransformation.Action.PARTIAL_CLOSE
                 ? trades.previewPartialClose(trade.id(), request.closeQuantity()) : null;
-        TradeService.PositionAssessment before = partial == null
-                ? trades.analyzeActivePosition(trade.id()) : partial.current();
+        TradeService.LifecycleAssessment lifecycle = lifecycleAction
+                ? trades.previewLifecycleConversion(trade.id(), request.action(), request.legIndex()) : null;
+        TradeService.PositionAssessment before = lifecycle != null ? lifecycle.current()
+                : partial == null ? trades.analyzeActivePosition(trade.id()) : partial.current();
         TradeService.UnwindAssessment unwind = switch (request.action()) {
             case CLOSE, ROLL -> trades.previewUnwind(trade.id());
             default -> null;
         };
-        TradeService.PositionAssessment after = partial == null ? null : partial.survivor();
+        TradeService.PositionAssessment after = lifecycle != null ? lifecycle.survivor()
+                : partial == null ? null : partial.survivor();
         TradeService.OpenRequest afterRequest = null;
         ApiResponses.TradePreviewResponse afterReview = null;
         TradeService.AdjustmentAssessment adjustment = null;
@@ -278,11 +327,6 @@ final class PositionTransformationController {
                 after = new TradeService.PositionAssessment(after.position(), after.preview(), risk);
             }
         }
-        if (request.action() == PositionTransformation.Action.ASSIGNMENT
-                || request.action() == PositionTransformation.Action.EXERCISE
-                || request.action() == PositionTransformation.Action.EXPIRATION) {
-            throw new IllegalStateException("Lifecycle conversion preview requires the lane-clock settlement projection.");
-        }
         PositionTransformation.Preview preview = PositionTransformation.preview(new PositionTransformation.Request(
                 request.action(), before.position(), after == null ? null : after.position(),
                 before.risk(), after == null ? null : after.risk(),
@@ -291,9 +335,10 @@ final class PositionTransformationController {
                         : request.action() == PositionTransformation.Action.ROLL
                             ? unwind.actionRealizedPnlCents()
                             : adjustment != null ? adjustment.actionRealizedPnlCents()
+                            : lifecycle != null ? lifecycle.actionRealizedPnlCents()
                             : partial == null ? null : partial.actionRealizedPnlCents()));
         return new Prepared(trade, plan, before, after, afterRequest, afterReview, projection, unwind,
-                partial, adjustment, preview);
+                partial, adjustment, lifecycle, preview);
     }
 
     private Plan.View requirePlanContext(Context ctx, Request request, TradeRecord trade) {
@@ -334,21 +379,44 @@ final class PositionTransformationController {
         }
         Long openingCash = prepared.adjustment() == null ? null : prepared.adjustment().openingCashCents();
         Long openingFees = prepared.adjustment() == null ? null : prepared.adjustment().openingFeesCents();
-        Long allocatedEntryBasis = prepared.adjustment() == null
-                ? null : prepared.adjustment().allocatedEntryBasisCents();
-        Long allocatedOpenFees = prepared.adjustment() == null
-                ? null : prepared.adjustment().allocatedOpenFeesCents();
+        Long allocatedEntryBasis = null;
+        Long allocatedOpenFees = null;
+        if (prepared.adjustment() != null) {
+            allocatedEntryBasis = prepared.adjustment().allocatedEntryBasisCents();
+            allocatedOpenFees = prepared.adjustment().allocatedOpenFeesCents();
+        } else if (prepared.lifecycle() != null) {
+            allocatedEntryBasis = prepared.lifecycle().allocatedEntryBasisCents();
+            allocatedOpenFees = prepared.lifecycle().allocatedOpenFeesCents();
+        }
+        if (prepared.lifecycle() != null) {
+            actionRealized = prepared.lifecycle().actionRealizedPnlCents();
+        }
         Long realizedToDate = actionRealized == null ? null
                 : prepared.adjustment() != null ? prepared.adjustment().realizedPnlToDateCents()
+                : prepared.lifecycle() != null ? prepared.lifecycle().realizedPnlToDateCents()
                 : prepared.partial() == null
                     ? prepared.unwind().realizedPnlToDateCents()
                     : Math.addExact(prepared.trade().realizedPnlCents() == null
                             ? 0 : prepared.trade().realizedPnlCents(), actionRealized);
+        List<String> basisNotes = prepared.adjustment() != null ? prepared.adjustment().basisNotes()
+                : prepared.lifecycle() != null ? prepared.lifecycle().basisNotes() : null;
+        ApiResponses.OptionLifecycleProjection lifecycle = prepared.lifecycle() == null ? null
+                : new ApiResponses.OptionLifecycleProjection(prepared.lifecycle().action().name(),
+                        prepared.lifecycle().legIndex(), prepared.lifecycle().contract(),
+                        prepared.lifecycle().expiration().toString(),
+                        prepared.lifecycle().settlementUnderlyingCents(),
+                        prepared.lifecycle().settlementPriceBasis(),
+                        prepared.lifecycle().optionSettlementCashCents(),
+                        prepared.lifecycle().stockCashCents(), prepared.lifecycle().sharesDelta(),
+                        prepared.lifecycle().reserveBeforeCents(), prepared.lifecycle().reserveAfterCents(),
+                        prepared.lifecycle().projectedCashAfterCents(),
+                        prepared.lifecycle().projectedReservedAfterCents(),
+                        prepared.lifecycle().basisNotes());
         return new ApiResponses.PositionTransformationPreview<>(prepared.preview(),
                 prepared.before().preview(), prepared.afterReview(),
                 closingCash, closingFees, openingCash, openingFees,
                 allocatedEntryBasis, allocatedOpenFees, actionRealized, realizedToDate,
-                prepared.adjustment() == null ? null : prepared.adjustment().basisNotes(), token, expiresAt);
+                basisNotes, lifecycle, token, expiresAt);
     }
 
     private String token(Context ctx, Request request, PositionTransformation.Preview preview, long issuedAt) {
@@ -381,7 +449,7 @@ final class PositionTransformationController {
             mac.init(new SecretKeySpec(previewSecret, "HmacSHA256"));
             String payload = ownerId + "|" + request.source() + "|" + request.sourceId() + "|"
                     + request.planId() + "|" + request.expectedPlanVersion() + "|" + request.action() + "|"
-                    + request.closeQuantity() + "|" + fingerprint + "|" + issuedAt;
+                    + request.closeQuantity() + "|" + request.legIndex() + "|" + fingerprint + "|" + issuedAt;
             return HexFormat.of().formatHex(mac.doFinal(payload.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("cannot sign transformation preview", e);
@@ -390,7 +458,8 @@ final class PositionTransformationController {
 
     record Request(PositionDomain.PackageSource source, String sourceId, String planId,
                    Long expectedPlanVersion, PositionTransformation.Action action,
-                   Integer closeQuantity, TradeOpenRequest after, String previewToken) {}
+                   Integer closeQuantity, Integer legIndex,
+                   TradeOpenRequest after, String previewToken) {}
 
     private record Prepared(TradeRecord trade, Plan.View plan,
                             TradeService.PositionAssessment before,
@@ -401,6 +470,7 @@ final class PositionTransformationController {
                             TradeService.UnwindAssessment unwind,
                             TradeService.PartialCloseAssessment partial,
                             TradeService.AdjustmentAssessment adjustment,
+                            TradeService.LifecycleAssessment lifecycle,
                             PositionTransformation.Preview preview) {}
 
     private static boolean adjustmentAction(PositionTransformation.Action action) {
@@ -409,5 +479,11 @@ final class PositionTransformationController {
                 || action == PositionTransformation.Action.ADD_LEG
                 || action == PositionTransformation.Action.ADD_STOCK
                 || action == PositionTransformation.Action.REMOVE_STOCK;
+    }
+
+    private static boolean lifecycleAction(PositionTransformation.Action action) {
+        return action == PositionTransformation.Action.ASSIGNMENT
+                || action == PositionTransformation.Action.EXERCISE
+                || action == PositionTransformation.Action.EXPIRATION;
     }
 }

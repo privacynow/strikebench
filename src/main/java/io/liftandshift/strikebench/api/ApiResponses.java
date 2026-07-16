@@ -209,6 +209,13 @@ public final class ApiResponses {
     public record TradeDetail<T, U, V, W>(T trade, U current, V marksHistory, W audit,
                                            List<PayoffPoint> payoff) {}
     public record ClosedTrade<T>(T trade, long realizedPnlCents, long decisionPnlCents) {}
+    public record OptionLifecycleProjection(String action, int legIndex, String contract,
+                                            String expiration, long settlementUnderlyingCents,
+                                            String settlementPriceBasis,
+                                            long optionSettlementCashCents, long stockCashCents,
+                                            long sharesDelta, long reserveBeforeCents,
+                                            long reserveAfterCents, long projectedCashAfterCents,
+                                            long projectedReservedAfterCents, List<String> basisNotes) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PositionTransformationPreview<T, U>(
             io.liftandshift.strikebench.position.PositionTransformation.Preview transformation,
@@ -216,7 +223,7 @@ public final class ApiResponses {
             Long openingCashCents, Long openingFeesCents,
             Long allocatedEntryBasisCents, Long allocatedOpenFeesCents,
             Long actionRealizedPnlCents, Long realizedPnlToDateCents,
-            List<String> basisNotes,
+            List<String> basisNotes, OptionLifecycleProjection lifecycle,
             String previewToken, String expiresAt) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PositionTransformationApplied<T, U, V>(

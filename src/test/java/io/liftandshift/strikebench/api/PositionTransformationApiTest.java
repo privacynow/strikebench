@@ -116,6 +116,95 @@ class PositionTransformationApiTest {
     }
 
     @Test
+    void earlyAssignmentUsesTheSignedTransformationPathAndKeepsTheHedge() throws Exception {
+        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
+                .at("/expirations/2").asText();
+        String order = """
+                {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,
+                 "thesis":"bullish","horizon":"month","riskMode":"conservative","intent":"ACQUIRE",
+                 "source":"POSITION_TRANSFORMATION_LIFECYCLE_TEST","fillNature":"PROPOSED",
+                 "legs":[
+                   {"action":"SELL","type":"PUT","strike":"260","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"},
+                   {"action":"BUY","type":"PUT","strike":"250","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(expiration, expiration);
+        JsonNode created = Json.parse(createAcknowledged(order).body());
+        String tradeId = created.at("/trade/id").asText();
+        JsonNode accountBefore = Json.parse(get("/api/account").body()).get("account");
+        long reserveBefore = outstandingReserve(tradeId);
+
+        ObjectNode request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("action", "ASSIGNMENT");
+        request.put("legIndex", 0);
+        HttpResponse<String> previewResponse = post("/api/position-transformations/preview", request.toString());
+        assertThat(previewResponse.statusCode()).withFailMessage(previewResponse.body()).isEqualTo(200);
+        JsonNode preview = Json.parse(previewResponse.body());
+        assertThat(preview.at("/lifecycle/action").asText()).isEqualTo("ASSIGNMENT");
+        assertThat(preview.at("/lifecycle/sharesDelta").asLong()).isEqualTo(100);
+        assertThat(preview.at("/lifecycle/stockCashCents").asLong()).isEqualTo(-2_600_000L);
+        assertThat(preview.at("/lifecycle/reserveAfterCents").asLong()).isZero();
+        assertThat(preview.at("/transformation/afterIdentity/family").asText())
+                .isEqualTo("PROTECTIVE_PUT");
+        assertThat(preview.at("/transformation/applicable").asBoolean()).isTrue();
+        assertThat(preview.at("/transformation/warnings").toString()).contains("leaves another option");
+
+        request.put("previewToken", preview.get("previewToken").asText());
+        HttpResponse<String> appliedResponse = post("/api/position-transformations/apply", request.toString());
+        assertThat(appliedResponse.statusCode()).withFailMessage(appliedResponse.body()).isEqualTo(200);
+        JsonNode applied = Json.parse(appliedResponse.body());
+        String receiptId = applied.get("receiptId").asText();
+        assertThat(applied.at("/trade/id").asText()).isEqualTo(tradeId);
+        assertThat(applied.at("/trade/status").asText()).isEqualTo("ACTIVE");
+        assertThat(applied.at("/trade/strategy").asText()).isEqualTo("PROTECTIVE_PUT");
+        assertThat(applied.at("/trade/intent").asText()).isEqualTo("HEDGE");
+        assertThat(applied.at("/trade/legs").size()).isEqualTo(1);
+        assertThat(applied.at("/trade/legs/0/action").asText()).isEqualTo("BUY");
+        assertThat(new java.math.BigDecimal(applied.at("/trade/legs/0/strike").asText()))
+                .isEqualByComparingTo("250");
+
+        JsonNode accountAfter = Json.parse(get("/api/account").body()).get("account");
+        assertThat(accountAfter.get("cashCents").asLong())
+                .isEqualTo(accountBefore.get("cashCents").asLong() - 2_600_000L);
+        assertThat(accountAfter.get("reservedCents").asLong()).isEqualTo(
+                accountBefore.get("reservedCents").asLong() - reserveBefore
+                        + preview.at("/lifecycle/reserveAfterCents").asLong());
+        assertThat(outstandingReserve(tradeId)).isEqualTo(preview.at("/lifecycle/reserveAfterCents").asLong());
+        JsonNode positions = Json.parse(get("/api/positions").body());
+        assertThat(positions.at("/positions/0/symbol").asText()).isEqualTo("AAPL");
+        assertThat(positions.at("/positions/0/shares").asLong()).isEqualTo(100);
+        assertThat(positions.at("/positions/0/avgCostCents").asLong()).isEqualTo(26_000);
+        assertThat(db.query("SELECT transformation_action,position_state FROM position_receipt WHERE id=?",
+                row -> row.str("transformation_action") + "|" + row.str("position_state"), receiptId))
+                .containsExactly("ASSIGNMENT|ASSIGNED");
+        assertThat(db.query("SELECT position_phase,COUNT(*) n FROM position_receipt_leg WHERE receipt_id=? "
+                        + "GROUP BY position_phase ORDER BY position_phase",
+                row -> row.str("position_phase") + "|" + row.lng("n"), receiptId))
+                .containsExactly("AFTER|2", "BEFORE|2");
+        assertThat(db.query("SELECT type FROM ledger WHERE trade_id=? AND type IN ('SETTLEMENT','STOCK_BUY') ORDER BY id",
+                row -> row.str("type"), tradeId)).containsExactly("SETTLEMENT", "STOCK_BUY");
+    }
+
+    @Test
+    void lifecyclePreviewRequiresAnExplicitOptionLeg() throws Exception {
+        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
+                .at("/expirations/2").asText();
+        String tradeId = Json.parse(createAcknowledged(creditPutSpread(expiration, 1,
+                "POSITION_TRANSFORMATION_LIFECYCLE_VALIDATION").toString()).body()).at("/trade/id").asText();
+        ObjectNode request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("action", "ASSIGNMENT");
+
+        HttpResponse<String> response = post("/api/position-transformations/preview", request.toString());
+
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(response.body()).get("detail").asText()).contains("legIndex is required");
+    }
+
+    @Test
     void applyRejectsATamperedPreviewWithoutChangingTheTrade() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
                 .at("/expirations/2").asText();

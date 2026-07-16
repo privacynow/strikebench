@@ -84,6 +84,13 @@ public final class StrategyCatalog {
         List<PositionPackage.Leg> stocks = position.legs().stream().filter(StrategyCatalog::stock).toList();
         List<PositionPackage.Leg> options = position.legs().stream().filter(l -> !stock(l)).toList();
 
+        if (stocks.size() == 1 && options.isEmpty()) {
+            PositionPackage.Leg stock = stocks.getFirst();
+            return customIdentity(buy(stock) ? "Long shares" : "Short shares",
+                    buy(stock)
+                            ? "The position now consists only of owned shares."
+                            : "The position now consists only of short shares.", false);
+        }
         if (stocks.size() == 1 && buy(stocks.getFirst())) {
             long shares = units(stocks.getFirst());
             if (options.size() == 1 && sell(options.getFirst()) && call(options.getFirst())

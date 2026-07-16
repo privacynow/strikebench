@@ -93,6 +93,10 @@ class PaperCoreTest {
             scalarUnderlyingCalls.incrementAndGet();
             return Optional.of(underlying);
         }
+        @Override public Optional<io.liftandshift.strikebench.model.DataEvidence> underlyingEvidence(
+                String symbol, String worldId) {
+            return Optional.ofNullable(evidenceOverride);
+        }
         @Override public Map<String, BigDecimal> underlyingMarks(List<String> symbols, String worldId) {
             batchUnderlyingCalls.incrementAndGet();
             Map<String, BigDecimal> out = new java.util.LinkedHashMap<>();
@@ -803,6 +807,20 @@ class PaperCoreTest {
         return new TradeService.ExpectedPositionState(trade.qty(), trade.entryNetPremiumCents(),
                 trade.feesOpenCents(), trade.maxLossCents(), trade.maxProfitCents(), trade.sharesLocked(),
                 trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(), current.risk().reserveCents());
+    }
+
+    private static TradeService.ExpectedPositionState expectedState(TradeRecord trade, long reserveCents) {
+        return new TradeService.ExpectedPositionState(trade.qty(), trade.entryNetPremiumCents(),
+                trade.feesOpenCents(), trade.maxLossCents(), trade.maxProfitCents(), trade.sharesLocked(),
+                trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(), reserveCents);
+    }
+
+    private static TradeService.ExpectedLifecycle expectedLifecycle(TradeService.LifecycleAssessment preview) {
+        return new TradeService.ExpectedLifecycle(preview.settlementUnderlyingCents(),
+                preview.optionSettlementCashCents(), preview.stockCashCents(), preview.sharesDelta(),
+                preview.allocatedEntryBasisCents(), preview.allocatedOpenFeesCents(),
+                preview.reserveAfterCents(), preview.heldShareContextAfter(),
+                preview.sharesLockedAfter(), preview.exactStateFingerprint());
     }
 
     private static TradeService.ExpectedAdjustment expectedAdjustment(TradeService.AdjustmentAssessment preview) {
@@ -1645,6 +1663,266 @@ class PaperCoreTest {
         assertThat(view.unrealizedCents()).isEqualTo(-100_000); // marked at today's $90
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START + credit - fees - 1_000_000);
         assertThat(accounts.get(acct.id()).reservedCents()).isZero();
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void earlyPutAssignmentKeepsTheLiveHedgeAndSameTradeIdentity() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(acct.id(), 1));
+        long reserveBefore = accounts.get(acct.id()).reservedCents();
+        long cashBefore = accounts.get(acct.id()).cashCents();
+        marks.underlying = new BigDecimal("90.00");
+
+        TradeService.LifecycleAssessment preview = trades.previewLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0);
+
+        assertThat(preview.contract()).contains("100").containsIgnoringCase("put");
+        assertThat(preview.settlementPriceBasis()).contains("early assignment");
+        assertThat(preview.sharesDelta()).isEqualTo(100);
+        assertThat(preview.stockCashCents()).isEqualTo(-1_000_000);
+        assertThat(preview.survivor()).isNotNull();
+        assertThat(io.liftandshift.strikebench.strategy.StrategyCatalog
+                .identify(preview.survivor().position()).family()).isEqualTo("PROTECTIVE_PUT");
+        assertThat(preview.survivor().position().legs()).anySatisfy(leg -> {
+            assertThat(leg.instrumentType()).isEqualTo("STOCK");
+            assertThat(leg.quantity()).isEqualTo(100);
+        });
+        assertThat(preview.reserveAfterCents()).isZero();
+
+        TradeService.LifecycleResult applied = trades.applyLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0, true,
+                null, expectedState(opened, reserveBefore), expectedLifecycle(preview));
+
+        assertThat(applied.trade().id()).isEqualTo(opened.id());
+        assertThat(applied.trade().status()).isEqualTo(TradeRecord.ACTIVE);
+        assertThat(applied.trade().strategy()).isEqualTo("PROTECTIVE_PUT");
+        assertThat(applied.trade().intent()).isEqualTo("HEDGE");
+        assertThat(applied.trade().legs()).singleElement().satisfies(leg -> {
+            assertThat(leg.action()).isEqualTo(LegAction.BUY);
+            assertThat(leg.type()).isEqualTo(OptionType.PUT);
+            assertThat(leg.strike()).isEqualByComparingTo("95");
+            assertThat(leg.entryPrice()).isEqualByComparingTo(opened.legs().get(1).entryPrice());
+        });
+        assertThat(positions.get(acct.id(), "AAPL").shares()).isEqualTo(100);
+        assertThat(positions.get(acct.id(), "AAPL").avgCostCents()).isEqualTo(10_000);
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore - 1_000_000);
+        assertThat(accounts.get(acct.id()).reservedCents()).isZero();
+        long reserveAfter = db.with(c -> TradeService.outstandingReserve(c, opened.id()));
+        assertThat(reserveAfter).isZero();
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void lifecyclePreviewCountsThisPositionsShareLockButStillNamesTheNakedCallTransition() {
+        Account acct = accounts.getOrCreateDefault();
+        positions.buy(acct.id(), "AAPL", 100);
+        TradeRecord collar = trades.create(openRequest(acct.id(), "AAPL", "PROTECTIVE_COLLAR", 1,
+                List.of(put(LegAction.BUY, "95", "0"), call(LegAction.SELL, "105", "0")),
+                "bullish", "month", "balanced", "HEDGE", true));
+        assertThat(collar.sharesLocked()).isEqualTo(100);
+        marks.underlying = new BigDecimal("90.00");
+
+        TradeService.LifecycleAssessment preview = trades.previewLifecycleConversion(collar.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXERCISE, 0);
+
+        assertThat(preview.sharesDelta()).isEqualTo(-100);
+        assertThat(preview.survivor()).isNotNull();
+        assertThat(preview.survivor().risk().mechanicallyEligible()).isFalse();
+        assertThat(preview.survivor().risk().blockReasons())
+                .anySatisfy(reason -> assertThat(reason.toLowerCase()).containsAnyOf("uncovered", "undefined"));
+        assertThat(positions.get(acct.id(), "AAPL").shares()).isEqualTo(100);
+        assertThat(trades.get(collar.id()).legs()).hasSize(2);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void earlyLifecycleConversionRefusesUnderlyingEvidenceFromTheWrongLane() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord put = trades.create(openRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
+                List.of(put(LegAction.SELL, "100", "0")), "neutral", "month", "balanced",
+                "ACQUIRE", null));
+        marks.underlying = new BigDecimal("90.00");
+        marks.evidenceOverride = new io.liftandshift.strikebench.model.DataEvidence(
+                io.liftandshift.strikebench.model.DataProvenance.OBSERVED,
+                io.liftandshift.strikebench.model.DataAge.STALE, "test-stale-observed");
+
+        assertThatThrownBy(() -> trades.previewLifecycleConversion(put.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("Cannot apply an early assignment")
+                .hasMessageContaining("DEMO market");
+        assertThat(positions.list(acct.id())).isEmpty();
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void longCallExerciseCreatesSharesAtStrikeAndKeepsOptionPnlSeparate() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord call = trades.create(openRequest(acct.id(), "AAPL", "LONG_CALL", 1,
+                List.of(call(LegAction.BUY, "100", "0")), "bullish", "month", "balanced"));
+        long cashBeforeExercise = accounts.get(acct.id()).cashCents();
+        long reserveBefore = accounts.get(acct.id()).reservedCents();
+        marks.underlying = new BigDecimal("110.00");
+
+        TradeService.LifecycleAssessment preview = trades.previewLifecycleConversion(call.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXERCISE, 0);
+        assertThat(preview.sharesDelta()).isEqualTo(100);
+        assertThat(preview.stockCashCents()).isEqualTo(-1_000_000);
+        assertThat(preview.survivor()).isNotNull();
+        assertThat(preview.survivor().position().legs()).singleElement().satisfies(leg ->
+                assertThat(leg.instrumentType()).isEqualTo("STOCK"));
+        assertThat(preview.actionRealizedPnlCents())
+                .isEqualTo(call.entryNetPremiumCents() - call.feesOpenCents());
+        assertThat(preview.decisionPnlDeltaCents())
+                .isEqualTo(preview.actionRealizedPnlCents() + 100_000);
+
+        TradeService.LifecycleResult result = trades.applyLifecycleConversion(call.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXERCISE, 0, true,
+                null, expectedState(call, reserveBefore), expectedLifecycle(preview));
+
+        assertThat(result.trade().status()).isEqualTo(TradeRecord.EXPIRED);
+        assertThat(result.trade().closeReason()).contains("EXERCISE");
+        assertThat(result.actionRealizedPnlCents()).isEqualTo(preview.actionRealizedPnlCents());
+        assertThat(positions.get(acct.id(), "AAPL").shares()).isEqualTo(100);
+        assertThat(positions.get(acct.id(), "AAPL").avgCostCents()).isEqualTo(10_000);
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBeforeExercise - 1_000_000);
+        assertThat(db.query("SELECT amount_cents FROM ledger WHERE trade_id=? AND type='SETTLEMENT'",
+                row -> row.lng("amount_cents"), call.id())).containsExactly(0L);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void assignedCallSpreadCannotFabricateAShortStockSettlement() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord spread = trades.create(openRequest(acct.id(), "AAPL", "CREDIT_CALL_SPREAD", 1,
+                List.of(call(LegAction.SELL, "100", "0"), call(LegAction.BUY, "105", "0")),
+                "bearish", "month", "balanced"));
+        marks.underlying = new BigDecimal("110.00");
+
+        assertThatThrownBy(() -> trades.previewLifecycleConversion(spread.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("not backed by 100 shares")
+                .hasMessageContaining("not disguise a short-stock assignment");
+        assertThat(positions.list(acct.id())).isEmpty();
+        assertThat(trades.get(spread.id()).status()).isEqualTo(TradeRecord.ACTIVE);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void lifecycleApplyRejectsAChangedLaneMarkWithoutAnyMutation() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord spread = trades.create(creditPutSpread(acct.id(), 1));
+        long reserveBefore = accounts.get(acct.id()).reservedCents();
+        long cashBefore = accounts.get(acct.id()).cashCents();
+        marks.underlying = new BigDecimal("90.00");
+        TradeService.LifecycleAssessment preview = trades.previewLifecycleConversion(spread.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0);
+        marks.underlying = new BigDecimal("91.00");
+
+        assertThatThrownBy(() -> trades.applyLifecycleConversion(spread.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0, true,
+                null, expectedState(spread, reserveBefore), expectedLifecycle(preview)))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("changed after preview");
+        assertThat(trades.get(spread.id()).legs()).hasSize(2);
+        assertThat(positions.list(acct.id())).isEmpty();
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore);
+        assertThat(accounts.get(acct.id()).reservedCents()).isEqualTo(reserveBefore);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void expirationCannotRunBeforeTheLaneClosingBell() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord call = trades.create(openRequest(acct.id(), "AAPL", "LONG_CALL", 1,
+                List.of(call(LegAction.BUY, "105", "0")), "bullish", "month", "balanced"));
+
+        assertThatThrownBy(() -> trades.previewLifecycleConversion(call.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXPIRATION, 0))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("still alive")
+                .hasMessageContaining("4:00pm ET");
+        assertThat(trades.get(call.id()).status()).isEqualTo(TradeRecord.ACTIVE);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void weekendExpiryUsesTheFridayCloseAndFreezesTheOptionResult() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(openRequest(acct.id(), "AAPL", "LONG_CALL", 1,
+                List.of(call(LegAction.BUY, "105", "0")), "bullish", "month", "balanced"));
+        long reserveBefore = accounts.get(acct.id()).reservedCents();
+        long cashBefore = accounts.get(acct.id()).cashCents();
+        marks.closesByDate.put(EXP, new BigDecimal("99.00"));
+        marks.underlying = new BigDecimal("130.00");
+        Clock weekend = Clock.fixed(Instant.parse("2026-08-22T16:00:00Z"),
+                ZoneId.of("America/New_York"));
+        TradeService weekendTrades = new TradeService(db, cfg, marks, audit, weekend);
+
+        TradeService.LifecycleAssessment preview = weekendTrades.previewLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXPIRATION, 0);
+
+        assertThat(preview.settlementUnderlyingCents()).isEqualTo(9_900);
+        assertThat(preview.settlementPriceBasis()).contains("2026-08-21 expiration-day close");
+        assertThat(preview.survivor()).isNull();
+        assertThat(preview.sharesDelta()).isZero();
+        assertThat(preview.actionRealizedPnlCents())
+                .isEqualTo(opened.entryNetPremiumCents() - opened.feesOpenCents());
+
+        TradeService.LifecycleResult applied = weekendTrades.applyLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXPIRATION, 0, true,
+                null, expectedState(opened, reserveBefore), expectedLifecycle(preview));
+
+        assertThat(applied.trade().status()).isEqualTo(TradeRecord.EXPIRED);
+        assertThat(applied.trade().closeReason()).contains("EXPIRATION");
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore);
+        assertThat(accounts.get(acct.id()).reservedCents()).isZero();
+        assertThat(db.query("SELECT memo FROM ledger WHERE trade_id=? AND type='SETTLEMENT'",
+                row -> row.str("memo"), opened.id())).singleElement()
+                .asString().contains("2026-08-21 expiration-day close");
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void broadBasedIndexExpiryCashSettlesIntrinsicWithoutFabricatingShares() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(openRequest(acct.id(), "SPXW", "LONG_CALL", 1,
+                List.of(call(LegAction.BUY, "100", "0")), "bullish", "month", "balanced"));
+        long cashBefore = accounts.get(acct.id()).cashCents();
+        long reserveBefore = accounts.get(acct.id()).reservedCents();
+
+        assertThatThrownBy(() -> trades.previewLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXERCISE, 0))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("cash-settled broad-based index option")
+                .hasMessageContaining("cannot deliver shares");
+
+        marks.closesByDate.put(EXP, new BigDecimal("110.00"));
+        Clock weekend = Clock.fixed(Instant.parse("2026-08-22T16:00:00Z"),
+                ZoneId.of("America/New_York"));
+        TradeService weekendTrades = new TradeService(db, cfg, marks, audit, weekend);
+        TradeService.LifecycleAssessment preview = weekendTrades.previewLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXPIRATION, 0);
+
+        assertThat(preview.optionSettlementCashCents()).isEqualTo(100_000);
+        assertThat(preview.stockCashCents()).isZero();
+        assertThat(preview.sharesDelta()).isZero();
+        assertThat(preview.actionRealizedPnlCents())
+                .isEqualTo(opened.entryNetPremiumCents() - opened.feesOpenCents() + 100_000);
+        assertThat(preview.basisNotes())
+                .anySatisfy(note -> assertThat(note).contains("settles intrinsic value in cash"));
+
+        TradeService.LifecycleResult applied = weekendTrades.applyLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXPIRATION, 0, true,
+                null, expectedState(opened, reserveBefore), expectedLifecycle(preview));
+
+        assertThat(applied.trade().status()).isEqualTo(TradeRecord.EXPIRED);
+        assertThat(positions.list(acct.id())).isEmpty();
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore + 100_000);
+        assertThat(db.query("SELECT amount_cents FROM ledger WHERE trade_id=? AND type='SETTLEMENT'",
+                row -> row.lng("amount_cents"), opened.id())).containsExactly(100_000L);
         assertLedgerInvariants(acct.id());
     }
 

@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.model.BroadBasedIndexOptions;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
@@ -136,6 +137,38 @@ public final class TradeService {
 
     public record AdjustmentResult(TradeRecord trade, long actionRealizedPnlCents,
                                    long realizedPnlCents) {}
+
+    /**
+     * One option lifecycle event projected against the account's own lane clock. The option
+     * accounting result and the physical stock cash are deliberately separate: assignment or
+     * exercise is not a closing fill, and the strike cash is not option P/L.
+     */
+    public record LifecycleAssessment(PositionAssessment current, PositionAssessment survivor,
+                                      OpenRequest exactSurvivorRequest,
+                                      PositionTransformation.Action action, int legIndex,
+                                      String contract, LocalDate expiration,
+                                      long settlementUnderlyingCents, String settlementPriceBasis,
+                                      long optionSettlementCashCents, long stockCashCents,
+                                      long sharesDelta, long allocatedEntryBasisCents,
+                                      long allocatedOpenFeesCents, long actionRealizedPnlCents,
+                                      long decisionPnlDeltaCents, long realizedPnlToDateCents,
+                                      long reserveBeforeCents,
+                                      long reserveAfterCents, long heldShareContextAfter,
+                                      long sharesLockedAfter, long projectedCashAfterCents,
+                                      long projectedReservedAfterCents, List<String> basisNotes,
+                                      String exactStateFingerprint) {}
+
+    public record LifecycleResult(TradeRecord trade, long actionRealizedPnlCents,
+                                  long realizedPnlCents, long sharesDelta,
+                                  long stockCashCents) {}
+
+    public record ExpectedLifecycle(long settlementUnderlyingCents,
+                                    long optionSettlementCashCents,
+                                    long stockCashCents, long sharesDelta,
+                                    long allocatedEntryBasisCents,
+                                    long allocatedOpenFeesCents,
+                                    long reserveAfterCents, long heldShareContextAfter,
+                                    long sharesLockedAfter, String exactStateFingerprint) {}
 
     public record ExpectedAdjustment(long closingCashCents, long openingCashCents,
                                      long closingFeesCents, long openingFeesCents,
@@ -483,6 +516,227 @@ public final class TradeService {
                 actionRealized, realizedToDate, reserveBefore, exactPlan.reserve(), exactPlan.sharesToLock(),
                 projectedCash, projectedReserved, placementCashBefore, placementReservedBefore,
                 List.copyOf(notes));
+    }
+
+    /** Projects one assignment, exercise, or expiry through the same lane clock and pricing spine as settlement. */
+    public LifecycleAssessment previewLifecycleConversion(String tradeId,
+                                                          PositionTransformation.Action action,
+                                                          int legIndex) {
+        return db.with(c -> {
+            TradeRecord trade = getOn(c, tradeId);
+            requirePracticeTransformation(trade);
+            if (!TradeRecord.ACTIVE.equals(trade.status())) {
+                throw new IllegalStateException("trade is " + trade.status()
+                        + "; only ACTIVE trades can convert an option lifecycle event");
+            }
+            return projectLifecycleConversion(c, trade, action, legIndex);
+        });
+    }
+
+    private LifecycleAssessment projectLifecycleConversion(Connection c, TradeRecord trade,
+                                                            PositionTransformation.Action action,
+                                                            int legIndex) throws SQLException {
+        if (!lifecycleAction(action)) {
+            throw new IllegalArgumentException("action must be ASSIGNMENT, EXERCISE, or EXPIRATION");
+        }
+        if (legIndex < 0 || legIndex >= trade.legs().size()) {
+            throw new IllegalArgumentException("legIndex must identify one current option leg");
+        }
+        Leg selected = trade.legs().get(legIndex);
+        if (selected.isStock()) throw new IllegalArgumentException("option lifecycle actions require an option leg");
+        boolean cashSettled = BroadBasedIndexOptions.isKnownRoot(trade.symbol());
+
+        String world = worldOf(trade.accountId());
+        Instant laneNow = nowFor(world);
+        SettlementReference reference = settlementReference(trade, selected, action, world, laneNow);
+        BigDecimal intrinsic = selected.intrinsicPerShare(reference.underlying());
+        if (cashSettled && action != PositionTransformation.Action.EXPIRATION) {
+            throw new TradeRejectedException(List.of(trade.symbol()
+                    + " is a cash-settled broad-based index option. It cannot deliver shares through assignment or exercise; record its expiration settlement instead."));
+        }
+        if (!cashSettled && action == PositionTransformation.Action.EXPIRATION && intrinsic.signum() != 0) {
+            throw new TradeRejectedException(List.of("This " + legDesc(selected)
+                    + " finished in the money. Review assignment or exercise instead of treating it as worthless."));
+        }
+        if (action == PositionTransformation.Action.ASSIGNMENT && selected.action() != LegAction.SELL) {
+            throw new IllegalArgumentException("ASSIGNMENT requires a short option leg");
+        }
+        if (action == PositionTransformation.Action.EXERCISE && selected.action() != LegAction.BUY) {
+            throw new IllegalArgumentException("EXERCISE requires a long option leg");
+        }
+        if (action != PositionTransformation.Action.EXPIRATION && intrinsic.signum() <= 0) {
+            throw new TradeRejectedException(List.of("This " + legDesc(selected)
+                    + " has no intrinsic value at the lane's current price; physical conversion would be uneconomic."));
+        }
+
+        List<LegLot> allLots = lotsFromTrade(trade);
+        LegLot removed = allLots.get(legIndex);
+        List<LegLot> retained = new ArrayList<>(allLots);
+        retained.remove(legIndex);
+        long removedUnits = removed.quantity();
+        long deliverableShares = Math.multiplyExact(removedUnits, (long) selected.multiplier());
+        long sharesDelta = switch (action) {
+            case ASSIGNMENT -> selected.type() == io.liftandshift.strikebench.model.OptionType.PUT
+                    ? deliverableShares : -deliverableShares;
+            case EXERCISE -> selected.type() == io.liftandshift.strikebench.model.OptionType.CALL
+                    ? deliverableShares : -deliverableShares;
+            case EXPIRATION -> 0;
+            default -> throw new IllegalStateException("unreachable lifecycle action");
+        };
+        long optionSettlementCash = cashSettled
+                ? closeSign(selected) * Money.centsFromPrice(intrinsic, deliverableShares) : 0;
+
+        PositionsService.Position holding = PositionsService.find(c, trade.accountId(), trade.symbol());
+        long heldShares = holding == null ? 0 : holding.shares();
+        long lockedShares = PositionsService.lockedShares(c, trade.accountId(), trade.symbol());
+        if (sharesDelta < 0) {
+            long needed = -sharesDelta;
+            if (action == PositionTransformation.Action.ASSIGNMENT) {
+                if (trade.sharesLocked() < needed) {
+                    throw new TradeRejectedException(List.of("This short call is not backed by " + needed
+                            + " shares locked to this Practice position. StrikeBench will not disguise a short-stock assignment as cash settlement."));
+                }
+            } else {
+                // Shares pledged to THIS package are exactly the shares its long put is entitled
+                // to deliver. Only locks owned by other active positions reduce availability.
+                long otherPositionLocks = Math.max(0, lockedShares - trade.sharesLocked());
+                long free = heldShares - otherPositionLocks;
+                if (free < needed) {
+                    throw new TradeRejectedException(List.of("Exercising this put would deliver " + needed
+                            + " shares, but only " + Math.max(0, free)
+                            + " are free after other position locks. Close the conflicting obligation first."));
+                }
+            }
+        }
+
+        long strikePerShareCents = Money.toCents(selected.strike());
+        long stockCash = sharesDelta == 0 ? 0
+                : -Math.multiplyExact(sharesDelta, strikePerShareCents);
+        ProjectedHolding projectedHolding = projectHolding(holding, sharesDelta, strikePerShareCents);
+        long heldContextBefore = heldShareContextShares(trade);
+        long heldContextAfter = Math.max(0, Math.addExact(heldContextBefore, sharesDelta));
+
+        long totalBasisUnits = basisUnits(allLots);
+        long currentLegCash = cashForLots(allLots);
+        long packageAdjustment = Math.subtractExact(trade.entryNetPremiumCents(), currentLegCash);
+        long allocatedPackageAdjustment = allocatedPrefix(packageAdjustment, totalBasisUnits, removedUnits);
+        long allocatedEntryBasis = Math.addExact(cashForLots(List.of(removed)), allocatedPackageAdjustment);
+        long allocatedOpenFees = allocatedPrefix(trade.feesOpenCents(), totalBasisUnits, removedUnits);
+        long actionRealized = Math.addExact(
+                Math.subtractExact(allocatedEntryBasis, allocatedOpenFees), optionSettlementCash);
+        long realizedToDate = Math.addExact(trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(),
+                actionRealized);
+        long remainingPackageAdjustment = Math.subtractExact(packageAdjustment, allocatedPackageAdjustment);
+        long remainingOpenFees = Math.subtractExact(trade.feesOpenCents(), allocatedOpenFees);
+
+        Account account = AccountService.get(c, trade.accountId());
+        long reserveBefore = outstandingReserve(c, trade.id());
+        long projectedCash = Math.addExact(Math.addExact(account.cashCents(), optionSettlementCash), stockCash);
+        long reservedWithoutCurrent = Math.subtractExact(account.reservedCents(), reserveBefore);
+        OpenRequest exactAfter = null;
+        Plan exactAfterPlan = null;
+        long reserveAfter = 0;
+        long sharesLockedAfter = 0;
+        if (!retained.isEmpty()) {
+            int quantity = canonicalQuantity(retained);
+            String strategyAfter = lifecycleStrategy(trade.symbol(), retained, heldContextAfter,
+                    projectedHolding.afterBasisCents());
+            String intentAfter = lifecycleIntent(strategyAfter, trade.intent());
+            exactAfter = new OpenRequest(trade.accountId(), trade.symbol(), strategyAfter, quantity,
+                    canonicalLegs(retained), trade.thesis(), trade.horizon(), trade.riskMode(), intentAfter,
+                    heldContextAfter > 0, Math.addExact(cashForLots(retained), remainingPackageAdjustment),
+                    remainingOpenFees, "POSITION_TRANSFORMATION", "EXECUTED");
+            exactAfterPlan = computePlan(exactAfter, true, world, true, laneFor(world), true);
+            reserveAfter = exactAfterPlan.reserve();
+            sharesLockedAfter = exactAfterPlan.sharesToLock();
+        }
+        long projectedReserved = Math.addExact(reservedWithoutCurrent, reserveAfter);
+
+        PositionAssessment current = lifecycleAssessment(c, trade, allLots, heldContextBefore,
+                holding == null ? trade.entryUnderlyingCents() : holding.avgCostCents(),
+                packageAdjustment, trade.feesOpenCents(), account.cashCents(), reservedWithoutCurrent,
+                reserveBefore, world);
+        PositionAssessment survivor = null;
+        if (!retained.isEmpty() || heldContextAfter > 0) {
+            survivor = lifecycleAssessment(c, trade, retained, heldContextAfter,
+                    projectedHolding.afterBasisCents(), remainingPackageAdjustment, remainingOpenFees,
+                    projectedCash, reservedWithoutCurrent, reserveAfter, world);
+            List<String> blocks = new ArrayList<>(survivor.risk().blockReasons());
+            if (exactAfterPlan != null) blocks.addAll(exactAfterPlan.blocks());
+            if (action == PositionTransformation.Action.EXERCISE
+                    && projectedCash - projectedReserved < 0) {
+                blocks.add("Exercise needs " + Money.fmt(-stockCash)
+                        + " of strike cash and would exceed current Practice buying power.");
+            }
+            var risk = new PositionTransformation.RiskSnapshot(survivor.risk().maxLossCents(),
+                    reserveAfter, survivor.risk().maxProfitCents(), blocks.isEmpty(),
+                    blocks.stream().distinct().toList(), survivor.risk().evidenceBasis());
+            survivor = new PositionAssessment(survivor.position(), survivor.preview(), risk);
+        }
+
+        long optionIntrinsicCash = closeSign(selected)
+                * Money.centsFromPrice(intrinsic, deliverableShares);
+        long contextConverted = Math.min(heldContextBefore, Math.max(0, -sharesDelta));
+        long decisionDelta = cashSettled ? actionRealized : Math.addExact(actionRealized, optionIntrinsicCash);
+        if (contextConverted > 0 && trade.entryUnderlyingCents() > 0) {
+            decisionDelta = Math.addExact(decisionDelta, Math.multiplyExact(
+                    reference.underlyingCents() - trade.entryUnderlyingCents(), contextConverted));
+        }
+        List<String> notes = new ArrayList<>();
+        notes.add(cashSettled
+                ? "The option leg settles its intrinsic value in cash; no stock delivery or strike purchase is fabricated."
+                : "The option leg converts at the contract strike; strike cash is shown separately from option P/L.");
+        notes.add("Surviving option quantities keep their exact stored fills and opening-fee basis.");
+        if (cashSettled) {
+            notes.add("This broad-based index option settles intrinsic value in cash and never creates or delivers shares.");
+        } else if (action == PositionTransformation.Action.EXERCISE
+                && !io.liftandshift.strikebench.market.MarketHours.contractDead(selected.expiration(), laneNow)) {
+            notes.add("Early exercise gives up any remaining extrinsic value. Compare an executable option sale before applying this event.");
+        } else if (action == PositionTransformation.Action.ASSIGNMENT
+                && !io.liftandshift.strikebench.market.MarketHours.contractDead(selected.expiration(), laneNow)) {
+            notes.add("Early assignment is an event you are recording, not a prediction from the current mark.");
+        }
+        if (!reference.exact()) notes.add(reference.basis());
+        if (action != PositionTransformation.Action.EXPIRATION
+                && !io.liftandshift.strikebench.market.MarketHours.contractDead(selected.expiration(), laneNow)) {
+            notes.add("This is an early " + action.name().toLowerCase(java.util.Locale.ROOT)
+                    + " event against the active lane mark, not an expiration forecast.");
+        }
+        String fingerprint = lifecycleStateFingerprint(trade, action, legIndex,
+                reference.underlyingCents(), optionSettlementCash, stockCash, heldContextAfter, exactAfter);
+        return new LifecycleAssessment(current, survivor, exactAfter, action, legIndex,
+                legDesc(selected), selected.expiration(), reference.underlyingCents(), reference.basis(),
+                optionSettlementCash, stockCash, sharesDelta, allocatedEntryBasis, allocatedOpenFees,
+                actionRealized, decisionDelta, realizedToDate, reserveBefore, reserveAfter, heldContextAfter,
+                sharesLockedAfter, projectedCash, projectedReserved, List.copyOf(notes), fingerprint);
+    }
+
+    private PositionAssessment lifecycleAssessment(Connection c, TradeRecord trade,
+                                                   List<LegLot> optionLots, long contextShares,
+                                                   long stockBasisCents, long packageAdjustment,
+                                                   long optionFees, long projectedCash,
+                                                   long reservedWithoutCurrent, long exactReserve,
+                                                   String world) throws SQLException {
+        List<LegLot> combined = new ArrayList<>(optionLots);
+        if (contextShares > 0) {
+            combined.add(new LegLot(Leg.stockShares(LegAction.BUY, 1,
+                    BigDecimal.valueOf(stockBasisCents, 2)), contextShares));
+        }
+        if (combined.isEmpty()) throw new IllegalArgumentException("a lifecycle assessment needs a surviving position");
+        int quantity = canonicalQuantity(combined);
+        List<Leg> legs = canonicalLegs(combined);
+        OpenRequest request = new OpenRequest(trade.accountId(), trade.symbol(), trade.strategy(), quantity,
+                legs, trade.thesis(), trade.horizon(), trade.riskMode(), trade.intent(), false,
+                Math.addExact(cashForLots(combined), packageAdjustment), optionFees,
+                "POSITION_TRANSFORMATION", "EXECUTED");
+        Plan plan = computePlan(request, true, world, true, laneFor(world), true);
+        long placementCash = Math.addExact(Math.subtractExact(projectedCash, plan.entryNet()), plan.fees());
+        TradePreview preview = previewFromPlan(request, plan, placementCash, reservedWithoutCurrent, 0);
+        PositionAssessment assessment = assessmentFromPlan(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
+                PositionDomain.ExecutionLane.PRACTICE, request, plan, preview);
+        var risk = new PositionTransformation.RiskSnapshot(plan.maxLoss(), exactReserve, plan.maxProfit(),
+                plan.blocks().isEmpty(), plan.blocks(), assessment.risk().evidenceBasis());
+        return new PositionAssessment(assessment.position(), assessment.preview(), risk);
     }
 
     private static OpenRequest activePositionRequest(TradeRecord trade, int quantity, long sharesLocked) {
@@ -1019,6 +1273,115 @@ public final class TradeService {
         });
         auditSafe(result.trade().accountId(), result.trade().id(), "TRADE_POSITION_ADJUSTED", "INFO",
                 Map.of("action", action.name(), "actionRealizedPnlCents", result.actionRealizedPnlCents(),
+                        "realizedPnlToDateCents", result.realizedPnlCents()));
+        return result;
+    }
+
+    /** Applies one reviewed option lifecycle conversion and its physical share delivery atomically. */
+    public LifecycleResult applyLifecycleConversion(String tradeId,
+                                                     PositionTransformation.Action action,
+                                                     int legIndex, boolean confirm,
+                                                     LifecycleHook hook,
+                                                     ExpectedPositionState expectedPosition,
+                                                     ExpectedLifecycle expectedLifecycle) {
+        requireConfirm(confirm, "option lifecycle conversion");
+        if (!lifecycleAction(action) || expectedLifecycle == null) {
+            throw new IllegalArgumentException("a reviewed assignment, exercise, or expiry is required");
+        }
+        markMemo.invalidate(tradeId);
+        accountSnapshot.invalidateAll();
+        LifecycleResult result = db.tx(c -> {
+            LockedTrade locked = lockTradeAndAccount(c, tradeId, TradeRecord.ACTIVE);
+            TradeRecord trade = locked.trade();
+            requirePracticeTransformation(trade);
+            long reserveBefore = outstandingReserve(c, trade.id());
+            requireExpectedPosition(trade, reserveBefore, expectedPosition);
+            LifecycleAssessment projected = projectLifecycleConversion(c, trade, action, legIndex);
+            requireExpectedLifecycle(projected, expectedLifecycle);
+            if (projected.survivor() != null && !projected.survivor().risk().mechanicallyEligible()) {
+                throw new TradeRejectedException(projected.survivor().risk().blockReasons());
+            }
+
+            Account account = locked.account();
+            long cash = Math.addExact(account.cashCents(), projected.optionSettlementCashCents());
+            long reserved = account.reservedCents();
+            String at = now();
+            ledgerRow(c, account.id(), trade.id(), at, "SETTLEMENT", projected.optionSettlementCashCents(), cash, reserved,
+                    action + " of " + projected.contract() + " at " + projected.settlementPriceBasis());
+            if (projected.sharesDelta() > 0) {
+                PositionsService.addAssigned(c, account.id(), trade.symbol(), projected.sharesDelta(),
+                        strikePerShareCents(trade, legIndex), at);
+                cash = Math.addExact(cash, projected.stockCashCents());
+                ledgerRow(c, account.id(), trade.id(), at, "STOCK_BUY", projected.stockCashCents(), cash, reserved,
+                        action + ": acquired " + projected.sharesDelta() + " sh " + trade.symbol()
+                                + " at the contract strike; option premium remains separate");
+            } else if (projected.sharesDelta() < 0) {
+                long shares = -projected.sharesDelta();
+                long stockRealized = PositionsService.removeAssigned(c, account.id(), trade.symbol(), shares,
+                        strikePerShareCents(trade, legIndex), at);
+                cash = Math.addExact(cash, projected.stockCashCents());
+                ledgerRow(c, account.id(), trade.id(), at, "STOCK_SELL", projected.stockCashCents(), cash, reserved,
+                        action + ": delivered " + shares + " sh " + trade.symbol()
+                                + " at the contract strike (stock P/L vs basis " + Money.fmt(stockRealized) + ")");
+            }
+
+            long reserveDelta = Math.subtractExact(projected.reserveAfterCents(), reserveBefore);
+            if (reserveDelta < 0) {
+                reserved = Math.addExact(reserved, reserveDelta);
+                ledgerRow(c, account.id(), trade.id(), at, "RESERVE_RELEASE", reserveDelta, cash, reserved,
+                        action + " reserve reduction");
+            } else if (reserveDelta > 0) {
+                reserved = Math.addExact(reserved, reserveDelta);
+                ledgerRow(c, account.id(), trade.id(), at, "RESERVE_HOLD", reserveDelta, cash, reserved,
+                        action + " reserve increase");
+            }
+            if (action == PositionTransformation.Action.EXERCISE && cash - reserved < 0) {
+                throw new TradeRejectedException(List.of("Exercise exceeds current Practice buying power."));
+            }
+
+            long totalRealized = Math.addExact(trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(),
+                    projected.actionRealizedPnlCents());
+            long totalDecision = Math.addExact(trade.decisionPnlCents() == null ? 0 : trade.decisionPnlCents(),
+                    projected.decisionPnlDeltaCents());
+            if (projected.exactSurvivorRequest() == null) {
+                Db.execOn(c, "UPDATE trades SET status=?,close_reason=?,realized_pnl_cents=?,decision_pnl_cents=?,"
+                                + "shares_locked=0,closed_at=?,updated_at=? WHERE id=?",
+                        TradeRecord.EXPIRED, action + " — option lifecycle complete",
+                        totalRealized, totalDecision, at, at, trade.id());
+            } else {
+                OpenRequest exactAfter = projected.exactSurvivorRequest();
+                String world = worldOf(trade.accountId());
+                Plan exactPlan = computePlan(exactAfter, true, world, true, laneFor(world), true);
+                if (!exactPlan.blocks().isEmpty()) throw new TradeRejectedException(exactPlan.blocks());
+                String snapshot = lifecycleEntrySnapshot(trade, exactPlan, action, at,
+                        projected.allocatedEntryBasisCents(), projected.allocatedOpenFeesCents(),
+                        projected.heldShareContextAfter());
+                Db.execOn(c, "UPDATE trades SET strategy=?,intent=?,qty=?,legs_json=?::jsonb,entry_net_premium_cents=?,"
+                                + "max_loss_cents=?,max_profit_cents=?,breakevens_json=?::jsonb,pop_entry=?,"
+                                + "fees_open_cents=?,realized_pnl_cents=?,decision_pnl_cents=?,shares_locked=?,"
+                                + "proposed_net_cents=?,entry_snapshot_json=?::jsonb,data_provenance=?,data_age=?,"
+                                + "data_source=?,updated_at=? WHERE id=?",
+                        exactAfter.strategy(), exactAfter.intent(), exactAfter.qty(), Json.write(exactPlan.filledLegs()), exactPlan.entryNet(),
+                        exactPlan.maxLoss(), exactPlan.maxProfit(), Json.write(exactPlan.breakevens()), exactPlan.pop(),
+                        exactPlan.fees(), totalRealized, totalDecision, exactPlan.sharesToLock(), exactPlan.entryNet(),
+                        snapshot, entryEvidence(trade.accountId(), exactPlan.freshness()).provenance().name(),
+                        entryEvidence(trade.accountId(), exactPlan.freshness()).age().name(),
+                        entryEvidence(trade.accountId(), exactPlan.freshness()).source(), at, trade.id());
+            }
+            Db.execOn(c, "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?",
+                    cash, reserved, at, account.id());
+            TradeRecord changed = getOn(c, trade.id());
+            if (outstandingReserve(c, trade.id()) != projected.reserveAfterCents()) {
+                throw new IllegalStateException("Lifecycle conversion reserve did not reconcile.");
+            }
+            if (hook != null) hook.afterMutation(c, changed, projected.actionRealizedPnlCents(), totalRealized);
+            return new LifecycleResult(changed, projected.actionRealizedPnlCents(), totalRealized,
+                    projected.sharesDelta(), projected.stockCashCents());
+        });
+        auditSafe(result.trade().accountId(), result.trade().id(), "TRADE_OPTION_LIFECYCLE", "INFO",
+                Map.of("action", action.name(), "legIndex", legIndex,
+                        "sharesDelta", result.sharesDelta(),
+                        "actionRealizedPnlCents", result.actionRealizedPnlCents(),
                         "realizedPnlToDateCents", result.realizedPnlCents()));
         return result;
     }
@@ -2503,6 +2866,145 @@ public final class TradeService {
         }
     }
 
+    private SettlementReference settlementReference(TradeRecord trade, Leg leg,
+                                                    PositionTransformation.Action action,
+                                                    String world, Instant laneNow) {
+        boolean dead = io.liftandshift.strikebench.market.MarketHours.contractDead(leg.expiration(), laneNow);
+        if (action == PositionTransformation.Action.EXPIRATION && !dead) {
+            throw new TradeRejectedException(List.of("This contract is still alive in its market lane until 4:00pm ET on "
+                    + leg.expiration() + "."));
+        }
+        if (!dead) {
+            var lane = laneFor(world);
+            var evidence = marks.underlyingEvidence(trade.symbol(), world).orElse(null);
+            if (evidence != null && !evidence.executableIn(lane)) {
+                throw new TradeRejectedException(List.of("Cannot apply an early "
+                        + action.name().toLowerCase(java.util.Locale.ROOT) + " in the " + lane
+                        + " market using " + evidence.provenance() + " underlying data ("
+                        + evidence.source() + ", " + evidence.age() + "). Refresh the lane-owned quote first."));
+            }
+            BigDecimal mark = marks.underlyingMark(trade.symbol(), world)
+                    .orElseThrow(() -> new TradeRejectedException(List.of(
+                            "No lane-owned underlying mark is available for this early lifecycle event.")));
+            return new SettlementReference(mark,
+                    "current " + laneFor(world) + " underlying mark for an early " + action.name().toLowerCase(java.util.Locale.ROOT),
+                    true);
+        }
+        BigDecimal close = marks.closeOn(trade.symbol(), leg.expiration(), world).orElse(null);
+        if (close != null) {
+            return new SettlementReference(close, leg.expiration() + " expiration-day close", true);
+        }
+        long expirations = trade.legs().stream().filter(candidate -> !candidate.isStock())
+                .map(Leg::expiration).distinct().count();
+        if (expirations > 1) {
+            throw new TradeRejectedException(List.of("The " + leg.expiration()
+                    + " expiration-day close is missing for this multi-expiration position. "
+                    + "Backfill that exact close before converting one leg; a current price cannot stand in for an earlier expiry."));
+        }
+        LocalDate today = LocalDate.ofInstant(laneNow,
+                io.liftandshift.strikebench.market.MarketHours.EASTERN);
+        if (!today.isAfter(leg.expiration())) {
+            throw new TradeRejectedException(List.of("The expiration-day closing price is not available yet — retry after the next session"
+                    + " or configure a candle source for exact settlement."));
+        }
+        BigDecimal fallback = marks.underlyingMark(trade.symbol(), world)
+                .orElseThrow(() -> new TradeRejectedException(List.of(
+                        "No underlying price is available for the disclosed settlement fallback.")));
+        return new SettlementReference(fallback,
+                "expiration close unavailable — current lane mark used as a labeled fallback; value may differ from true settlement",
+                false);
+    }
+
+    private static ProjectedHolding projectHolding(PositionsService.Position holding, long sharesDelta,
+                                                   long strikePerShareCents) {
+        long beforeShares = holding == null ? 0 : holding.shares();
+        long beforeBasis = holding == null ? 0 : holding.avgCostCents();
+        long afterShares = Math.addExact(beforeShares, sharesDelta);
+        if (afterShares < 0) throw new IllegalStateException("physical delivery cannot create an untracked short share position");
+        if (afterShares == 0) return new ProjectedHolding(beforeShares, beforeBasis, 0, 0);
+        if (sharesDelta <= 0) return new ProjectedHolding(beforeShares, beforeBasis, afterShares, beforeBasis);
+        long oldCost = Math.multiplyExact(beforeBasis, beforeShares);
+        long addedCost = Math.multiplyExact(strikePerShareCents, sharesDelta);
+        long afterBasis = BigDecimal.valueOf(Math.addExact(oldCost, addedCost))
+                .divide(BigDecimal.valueOf(afterShares), 0, java.math.RoundingMode.HALF_UP)
+                .longValueExact();
+        return new ProjectedHolding(beforeShares, beforeBasis, afterShares, afterBasis);
+    }
+
+    private static String lifecycleStrategy(String symbol, List<LegLot> optionLots,
+                                            long contextShares, long stockBasisCents) {
+        List<LegLot> identityLots = new ArrayList<>(optionLots);
+        if (contextShares > 0) {
+            identityLots.add(new LegLot(Leg.stockShares(LegAction.BUY, 1,
+                    BigDecimal.valueOf(stockBasisCents, 2)), contextShares));
+        }
+        var identity = io.liftandshift.strikebench.strategy.StrategyCatalog.identify(symbol,
+                canonicalQuantity(identityLots), canonicalLegs(identityLots));
+        if (identity.family() != null) return identity.family();
+        if (identity.template() != null) return identity.template();
+        return "CUSTOM";
+    }
+
+    private static String lifecycleIntent(String strategy, String priorIntent) {
+        if ("PROTECTIVE_PUT".equals(strategy) || "PROTECTIVE_COLLAR".equals(strategy)) return "HEDGE";
+        if ("COVERED_CALL".equals(strategy)) return "EXIT".equals(priorIntent) ? "EXIT" : "INCOME";
+        return priorIntent;
+    }
+
+    private static boolean lifecycleAction(PositionTransformation.Action action) {
+        return action == PositionTransformation.Action.ASSIGNMENT
+                || action == PositionTransformation.Action.EXERCISE
+                || action == PositionTransformation.Action.EXPIRATION;
+    }
+
+    private static long strikePerShareCents(TradeRecord trade, int legIndex) {
+        if (legIndex < 0 || legIndex >= trade.legs().size() || trade.legs().get(legIndex).isStock()) {
+            throw new IllegalArgumentException("legIndex must identify one current option leg");
+        }
+        return Money.toCents(trade.legs().get(legIndex).strike());
+    }
+
+    private static String lifecycleStateFingerprint(TradeRecord trade,
+                                                    PositionTransformation.Action action,
+                                                    int legIndex, long settlementUnderlyingCents,
+                                                    long optionSettlementCashCents,
+                                                    long stockCashCents, long heldContextAfter,
+                                                    OpenRequest exactAfter) {
+        try {
+            Map<String, Object> stable = new LinkedHashMap<>();
+            stable.put("tradeId", trade.id());
+            stable.put("action", action.name());
+            stable.put("legIndex", legIndex);
+            stable.put("selectedContract", contractKey(trade.legs().get(legIndex)));
+            stable.put("settlementUnderlyingCents", settlementUnderlyingCents);
+            stable.put("optionSettlementCashCents", optionSettlementCashCents);
+            stable.put("stockCashCents", stockCashCents);
+            stable.put("heldShareContextAfter", heldContextAfter);
+            stable.put("survivor", exactAfter == null ? null : exactPositionFingerprint(exactAfter));
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(
+                    Json.canonical(stable).getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new IllegalStateException("cannot fingerprint option lifecycle conversion", e);
+        }
+    }
+
+    private static void requireExpectedLifecycle(LifecycleAssessment actual, ExpectedLifecycle expected) {
+        if (actual.settlementUnderlyingCents() != expected.settlementUnderlyingCents()
+                || actual.optionSettlementCashCents() != expected.optionSettlementCashCents()
+                || actual.stockCashCents() != expected.stockCashCents()
+                || actual.sharesDelta() != expected.sharesDelta()
+                || actual.allocatedEntryBasisCents() != expected.allocatedEntryBasisCents()
+                || actual.allocatedOpenFeesCents() != expected.allocatedOpenFeesCents()
+                || actual.reserveAfterCents() != expected.reserveAfterCents()
+                || actual.heldShareContextAfter() != expected.heldShareContextAfter()
+                || actual.sharesLockedAfter() != expected.sharesLockedAfter()
+                || !Objects.equals(actual.exactStateFingerprint(), expected.exactStateFingerprint())) {
+            throw new TradeRejectedException(List.of(
+                    "The lane mark, option state, stock delivery, or surviving collateral changed after preview. Review the lifecycle conversion again."));
+        }
+    }
+
     private static boolean adjustmentAction(PositionTransformation.Action action) {
         return action == PositionTransformation.Action.LEG_CLOSE
                 || action == PositionTransformation.Action.REMOVE_LEG
@@ -2670,11 +3172,29 @@ public final class TradeService {
         return debit ? "STOCK_BUY" : credit ? "STOCK_SELL" : "ADJUSTMENT";
     }
 
-    @SuppressWarnings("unchecked")
     private static String adjustedEntrySnapshot(TradeRecord trade, Plan exactPlan,
                                                 PositionTransformation.Action action, String at,
                                                 long allocatedPackageAdjustment,
                                                 long allocatedOpenFees) {
+        return transformedEntrySnapshot(trade, exactPlan, action, at,
+                allocatedPackageAdjustment, allocatedOpenFees, null);
+    }
+
+    private static String lifecycleEntrySnapshot(TradeRecord trade, Plan exactPlan,
+                                                 PositionTransformation.Action action, String at,
+                                                 long allocatedPackageAdjustment,
+                                                 long allocatedOpenFees,
+                                                 long heldShareContextAfter) {
+        return transformedEntrySnapshot(trade, exactPlan, action, at,
+                allocatedPackageAdjustment, allocatedOpenFees, heldShareContextAfter);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String transformedEntrySnapshot(TradeRecord trade, Plan exactPlan,
+                                                   PositionTransformation.Action action, String at,
+                                                   long allocatedPackageAdjustment,
+                                                   long allocatedOpenFees,
+                                                   Long heldShareContextAfter) {
         Map<String, Object> snapshot = new LinkedHashMap<>(Json.read(exactPlan.snapshotJson(), Map.class));
         Map<String, Object> prior = Json.read(trade.entrySnapshotJson(), Map.class);
         List<Map<String, Object>> history = new ArrayList<>();
@@ -2692,6 +3212,12 @@ public final class TradeService {
         snapshot.put("transformationHistory", history);
         snapshot.put("basis", "retained exact fills plus executable transformation fills");
         snapshot.put("originalOpenedAt", prior.getOrDefault("originalOpenedAt", trade.createdAt()));
+        if (heldShareContextAfter != null) {
+            if (heldShareContextAfter > 0) snapshot.put("heldShareContextShares", heldShareContextAfter);
+            else snapshot.remove("heldShareContextShares");
+            if (exactPlan.sharesToLock() > 0) snapshot.put("coveredByHeldShares", exactPlan.sharesToLock());
+            else snapshot.remove("coveredByHeldShares");
+        }
         snapshot.remove("feeOverridePerSideCents");
         return Json.write(snapshot);
     }
@@ -2738,6 +3264,13 @@ public final class TradeService {
             if (leg == null || quantity <= 0) throw new IllegalArgumentException("leg lot quantity must be positive");
         }
     }
+
+    private record SettlementReference(BigDecimal underlying, String basis, boolean exact) {
+        long underlyingCents() { return Money.toCents(underlying); }
+    }
+
+    private record ProjectedHolding(long beforeShares, long beforeBasisCents,
+                                    long afterShares, long afterBasisCents) {}
 
     private record ReconciledLots(List<LegLot> retained, List<LegLot> removed, List<LegLot> added) {}
 
