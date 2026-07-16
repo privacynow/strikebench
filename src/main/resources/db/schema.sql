@@ -1410,6 +1410,7 @@ CREATE TABLE public.plan_strategy_run (
     risk_mode text NOT NULL,
     intent text NOT NULL,
     risk_budget_cents bigint,
+    spot_cents bigint,
     ranking_policy text,
     economic_message text,
     favorable_count integer DEFAULT 0 NOT NULL,

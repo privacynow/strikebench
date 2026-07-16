@@ -151,10 +151,14 @@ class JourneySurfaceTest {
         String workspace = source("js/workspace.js");
         String contracts = source("js/contracts.js");
 
-        for (String route : List.of("home", "research", "plans", "portfolio", "data")) {
-            assertThat(html).contains("data-route=\"" + route + "\"");
+        // Program ONE nav: four destinations; the Workspace item owns research, plans and plan
+        // routes as a token list. Every route keeps exactly one visible nav owner.
+        for (String owner : List.of("data-route=\"home\"", "data-route=\"research plans plan\"",
+                "data-route=\"portfolio\"", "data-route=\"data\"")) {
+            assertThat(html).contains(owner);
         }
-        assertThat(html).doesNotContain("data-route=\"trade\"");
+        assertThat(html).doesNotContain("data-route=\"trade\"", "data-route=\"plans\"",
+                ">Plans<", ">Research<");
         assertThat(views).doesNotContain("async function trade(", "trade: trade", "#/trade/");
         assertThat(views).doesNotContain("#/plan/new", "id === 'new'");
         assertThat(app).doesNotContain("#/plan/new");

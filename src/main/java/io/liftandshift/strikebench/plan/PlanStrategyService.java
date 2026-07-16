@@ -53,12 +53,13 @@ public final class PlanStrategyService {
                 Db.execOn(c, "UPDATE plan_candidate SET state='STALE' WHERE plan_id=? AND state='CURRENT'", plan.id());
             }
             Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
-                            "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
+                            "risk_mode,intent,risk_budget_cents,spot_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
                             "unfavorable_count,unavailable_count,disclaimer,request_snapshot,input_hash,engine_version,state,created_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?)",
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?)",
                     runId, plan.id(), plan.context().rev(), "COMPETITION", "PLAN",
                     text(result, "thesis"), text(result, "horizon"),
                     text(result, "riskMode"), text(result, "intent"), longOrNull(result, "riskBudgetCents"),
+                    longOrNull(result, "spotCents"),
                     text(result, "ranking"), text(result, "economicMessage"), integer(result, "favorableCount"),
                     integer(result, "mixedCount"), integer(result, "unfavorableCount"),
                     integer(result, "unavailableCount"), text(result, "disclaimer"), requestSnapshot(request), inputHash,
@@ -80,13 +81,13 @@ public final class PlanStrategyService {
     public SavedRun latestCompetition(String userId, String planId) {
         return db.with(c -> {
             CurrentPlan plan = ownedPlanOn(c, planId, userId, false);
-            List<RunRow> runs = Db.queryOn(c, "SELECT id,thesis,horizon,risk_mode,intent,risk_budget_cents," +
+            List<RunRow> runs = Db.queryOn(c, "SELECT id,thesis,horizon,risk_mode,intent,risk_budget_cents,spot_cents," +
                             "ranking_policy,economic_message,favorable_count,mixed_count,unfavorable_count," +
                             "unavailable_count,disclaimer,state,created_at::text created_at FROM plan_strategy_run " +
                             "WHERE plan_id=? AND context_rev=? AND run_kind='COMPETITION' AND state='CURRENT' " +
                             "ORDER BY created_at DESC LIMIT 1",
                     r -> new RunRow(r.str("id"), r.str("thesis"), r.str("horizon"), r.str("risk_mode"),
-                            r.str("intent"), r.lngOrNull("risk_budget_cents"), r.str("ranking_policy"),
+                            r.str("intent"), r.lngOrNull("risk_budget_cents"), r.lngOrNull("spot_cents"), r.str("ranking_policy"),
                             r.str("economic_message"), r.intv("favorable_count"), r.intv("mixed_count"),
                             r.intv("unfavorable_count"), r.intv("unavailable_count"), r.str("disclaimer"),
                             r.str("state"), r.str("created_at")), planId, plan.contextRev());
@@ -96,6 +97,7 @@ public final class PlanStrategyService {
             result.put("symbol", plan.symbol()); put(result, "thesis", run.thesis());
             put(result, "horizon", run.horizon()); put(result, "riskMode", run.riskMode());
             put(result, "intent", run.intent()); put(result, "riskBudgetCents", run.riskBudgetCents());
+            put(result, "spotCents", run.spotCents());
             put(result, "ranking", run.ranking()); put(result, "economicMessage", run.economicMessage());
             result.put("favorableCount", run.favorable()); result.put("mixedCount", run.mixed());
             result.put("unfavorableCount", run.unfavorable()); result.put("unavailableCount", run.unavailable());
@@ -157,13 +159,13 @@ public final class PlanStrategyService {
         String scope = normalizeScope(rawScope);
         return db.with(c -> {
             CurrentPlan plan = ownedPlanOn(c, planId, userId, false);
-            List<RunRow> runs = Db.queryOn(c, "SELECT id,thesis,horizon,risk_mode,intent,risk_budget_cents," +
+            List<RunRow> runs = Db.queryOn(c, "SELECT id,thesis,horizon,risk_mode,intent,risk_budget_cents,spot_cents," +
                             "ranking_policy,economic_message,favorable_count,mixed_count,unfavorable_count," +
                             "unavailable_count,disclaimer,state,created_at::text created_at FROM plan_strategy_run " +
                             "WHERE plan_id=? AND context_rev=? AND run_kind='SCOUT' AND scope_kind=? AND state='CURRENT' " +
                             "ORDER BY created_at DESC LIMIT 1",
                     r -> new RunRow(r.str("id"), r.str("thesis"), r.str("horizon"), r.str("risk_mode"),
-                            r.str("intent"), r.lngOrNull("risk_budget_cents"), r.str("ranking_policy"),
+                            r.str("intent"), r.lngOrNull("risk_budget_cents"), r.lngOrNull("spot_cents"), r.str("ranking_policy"),
                             r.str("economic_message"), r.intv("favorable_count"), r.intv("mixed_count"),
                             r.intv("unfavorable_count"), r.intv("unavailable_count"), r.str("disclaimer"),
                             r.str("state"), r.str("created_at")), planId, plan.contextRev(), scope);
@@ -712,7 +714,7 @@ public final class PlanStrategyService {
 
     private record CurrentPlan(String symbol, int contextRev, long version) {}
     private record RunRow(String id, String thesis, String horizon, String riskMode, String intent,
-                          Long riskBudgetCents, String ranking, String economicMessage, int favorable,
+                          Long riskBudgetCents, Long spotCents, String ranking, String economicMessage, int favorable,
                           int mixed, int unfavorable, int unavailable, String disclaimer, String state,
                           String createdAt) {}
     private record LegRow(String action, String type, BigDecimal strikePrice, String expiration, int ratio,
