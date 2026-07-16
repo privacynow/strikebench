@@ -614,7 +614,8 @@ class JourneySurfaceTest {
                 "Possible futures", "Past evidence");
         assertThat(builder).contains(
                 "Every strategy, shown by payoff shape", "Fit to my limits", "Size this synthetic long by exposure",
-                "id: 'builder-add-leg'", "UI.vocabulary('theoreticalMaxLoss')", "Theoretical max profit");
+                "id: 'builder-add-leg'", "UI.vocabulary('theoreticalMaxLoss')",
+                "UI.vocabulary('theoreticalMaxProfit'");
         assertThat(plans).contains(
                 "/strategy/run", "/strategy/fit", "/strategy/custom", "/scout/run", "/outcomes/run",
                 "/outcomes/compare",

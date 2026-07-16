@@ -101,6 +101,7 @@ public final class ApiServer {
     private final String startedAt = java.time.Instant.now().toString();
     private WorldTransitionService worldTransitions;
     private TradeController tradeController;
+    private TradeController.ExactAssessment exactAssessmentOverride;
     private DiscoveryController discoveryController;
     private OutcomeController outcomeController;
     private PlanController planController;
@@ -288,13 +289,20 @@ public final class ApiServer {
         return new io.liftandshift.strikebench.auth.AuthService(cfg, db, clock, provider);
     }
 
+    ApiServer exactAssessmentForTest(TradeController.ExactAssessment assessment) {
+        if (tradeController != null) throw new IllegalStateException("server already started");
+        this.exactAssessmentOverride = assessment;
+        return this;
+    }
+
     public Javalin start(int port) {
         accounts.getOrCreateDefault();
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
                 portfolioExports, positions, trades, evaluations, this::ownerId, this::currentAccount);
         tradeController = new TradeController(cfg, clock, db, accounts, market, eventCalendar, audit,
                 trades, positions, evaluations, snapshots, auth, this::currentAccount,
-                this::ownerId, this::activeWorld, this::analysisCtx, this::requireAdmin);
+                this::ownerId, this::activeWorld, this::analysisCtx, this::requireAdmin,
+                exactAssessmentOverride);
         var marketVolatility = new io.liftandshift.strikebench.sim.MarketVolatilityResolver(market, clock);
         var opportunityScanner = new io.liftandshift.strikebench.recommend.OpportunityScanner(engine, evaluations);
         discoveryController = new DiscoveryController(db, market, evaluations, opportunityScanner, engine, auto,

@@ -1161,7 +1161,10 @@
   function maxProfitLabel(strategy, structureGroup, value, beginner, legs) {
     var kind = profitCeilingKind(strategy, structureGroup, value, legs);
     if (kind === 'finite') return fmtMoney(value);
-    if (kind === 'model-dependent') return 'model-dependent';
+    if (kind === 'model-dependent') {
+      return beginner ? 'No single dollar ceiling'
+        : 'No fixed front-expiry ceiling';
+    }
     return beginner ? 'no fixed ceiling' : 'uncapped';
   }
 

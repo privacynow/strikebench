@@ -148,10 +148,6 @@
     var lifecycle = preview.lifecycle;
     var stockCash = Number(lifecycle.stockCashCents || 0);
     return el('div', { class: 'position-transformation-facts position-lifecycle-accounting' },
-      transformationFact('Option result realized', fmtMoney(preview.actionRealizedPnlCents, { plus: true }),
-        Number(preview.actionRealizedPnlCents) >= 0 ? 'gain' : 'loss'),
-      transformationFact('Realized on position to date', fmtMoney(preview.realizedPnlToDateCents, { plus: true }),
-        Number(preview.realizedPnlToDateCents) >= 0 ? 'gain' : 'loss'),
       Number(lifecycle.optionSettlementCashCents || 0) !== 0
         ? transformationFact('Option settlement cash', fmtMoney(lifecycle.optionSettlementCashCents, { plus: true })) : null,
       transformationFact(stockCash < 0 ? 'Strike cash used' : stockCash > 0 ? 'Strike cash received' : 'Strike cash',
@@ -167,6 +163,11 @@
     host.innerHTML = '';
     var lifecycle = preview.lifecycle;
     var change = preview.transformation;
+    var realizedFacts = el('div', { class: 'position-transformation-facts position-lifecycle-result' },
+      transformationFact('Option result realized', fmtMoney(preview.actionRealizedPnlCents, { plus: true }),
+        Number(preview.actionRealizedPnlCents) >= 0 ? 'gain' : 'loss'),
+      transformationFact('Realized on position to date', fmtMoney(preview.realizedPnlToDateCents, { plus: true }),
+        Number(preview.realizedPnlToDateCents) >= 0 ? 'gain' : 'loss'));
     var primaryFacts = el('div', { class: 'position-transformation-facts' },
       transformationFact('Event', lifecycleActionLabel(action)),
       transformationFact('Selected contract', lifecycle.contract),
@@ -181,6 +182,7 @@
         el('span', { class: 'position-transformation-arrow', 'aria-hidden': 'true' }, '→'),
         transformationState('After', change.afterIdentity, 'Cash / no remaining position')),
       primaryFacts,
+      realizedFacts,
       Learn.currentLevel() === 'expert' ? accounting
         : UI.expandable('See exact option accounting and reserve changes', function () { return accounting; }),
       el('div', { class: 'position-lifecycle-basis' },
@@ -2790,7 +2792,7 @@
         t.sharesLocked > 0 && t.maxLossCents === 0
           ? chip('New cash at risk', '$0 (covered)')
           : chip(UI.vocabulary('theoreticalMaxLoss'), el('span', { class: 'loss' }, fmtMoney(t.maxLossCents))),
-        chip('Theoretical max profit', UI.maxProfitLabel(t.strategy, null, t.maxProfitCents,
+        chip(UI.vocabulary('theoreticalMaxProfit'), UI.maxProfitLabel(t.strategy, null, t.maxProfitCents,
           Learn.currentLevel() === 'beginner', t.legs)),
         chip('Breakeven', (t.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
         chip('POP entry', fmtPct(t.popEntry)),
