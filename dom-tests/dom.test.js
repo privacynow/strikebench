@@ -3447,10 +3447,21 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   assert.equal(await page.getByRole('tab', { name: 'Activity', exact: true }).getAttribute('aria-selected'), 'true',
     'tracked-account tabs use the shared roving keyboard contract');
   await assertNamedControls('#app');
+  assert.equal(await page.getByRole('button', { name: 'Tax contract classification', exact: true }).count(), 0,
+    'Beginner records broker facts without a tax-contract override control');
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForFunction(() => Learn.currentLevel() === 'expert'
+    && document.getElementById('app').getAttribute('data-ready') === 'true');
+  await page.waitForSelector('.book-shared-position-editor .position-editor');
+  await page.getByRole('button', { name: 'Visual', exact: true }).click();
   await page.getByRole('button', { name: 'Tax contract classification', exact: true }).click();
   assert.match(await page.textContent('.book-record-card'),
     /Other Section 1256 contract[\s\S]*SPX, SPXW, SPXpm, XSP, NDX, NDXP, VIX, VIXW, RUT, RUTW, DJX, OEX, XEO/,
-    'manual entry names the complete automatic broad-based index taxonomy');
+    'Expert retains the exceptional manual override and names the automatic taxonomy');
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.waitForFunction(() => Learn.currentLevel() === 'beginner'
+    && document.getElementById('app').getAttribute('data-ready') === 'true');
+  await page.waitForSelector('.book-record-card');
   await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('ASSIGNMENT');
   await page.waitForTimeout(50);
   const assignmentEditorState = await page.evaluate(() => ({
@@ -3481,7 +3492,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   'returning to an activity type restores its exact contract draft');
   await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('TRADE');
   await page.waitForSelector('.book-shared-position-editor .position-editor');
-  await page.locator('.book-shared-position-editor input[type="datetime-local"]').fill('2026-07-15T10:30');
+  await page.getByRole('textbox', { name: 'When it happened', exact: true }).fill('2026-07-15T10:30');
   await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
   await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("RECORD requires")');
   assert.match(await page.textContent('.book-shared-position-editor .position-editor-result'),
@@ -3493,8 +3504,9 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await leg.getByRole('spinbutton', { name: 'Shares', exact: true }).fill('10');
   await leg.getByRole('spinbutton', { name: 'Exact fill $', exact: true }).fill('100');
   await page.getByRole('spinbutton', { name: 'Total fees $', exact: true }).fill('1');
-  await page.getByRole('combobox', { name: 'Record source', exact: true }).selectOption('BROKER');
-  await page.getByRole('textbox', { name: 'Stable broker reference', exact: true }).fill('dom-stock-open-1');
+  assert.equal(await page.getByRole('combobox', { name: 'Record source', exact: true }).count(), 0,
+    'record source is derived instead of restated at Beginner');
+  await page.getByRole('textbox', { name: 'Broker reference', exact: true }).fill('dom-stock-open-1');
   await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
   await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("Recorded in")');
   assert.match(await page.locator('.book-shared-position-editor .position-editor-result').innerText(),
@@ -3559,8 +3571,8 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('button', { name: 'Roll position', exact: true }).click();
   const rollDialog = page.getByRole('dialog');
   await rollDialog.waitFor();
-  assert.equal(await rollDialog.getByRole('checkbox', { name: /Section 1256 contract/ }).isDisabled(), true,
-    'the linked roll preserves rather than silently changes the position tax classification');
+  assert.equal(await rollDialog.getByRole('checkbox', { name: /Section 1256 contract/ }).count(), 0,
+    'the linked roll preserves classification without exposing a Beginner tax override');
   await rollDialog.getByRole('spinbutton', { name: 'Exact closing price $', exact: true }).fill('7');
   await rollDialog.getByRole('spinbutton', { name: 'Replacement strike $', exact: true }).fill('510');
   await rollDialog.getByRole('textbox', { name: 'Replacement expiration', exact: true }).fill('2027-09-17');
@@ -3588,6 +3600,8 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.waitForSelector('.book-import-result');
   assert.match(await page.textContent('.book-import-result'), /Imported 1 transaction from 2 rows\. 1 row quarantined\./,
     'a malformed row cannot discard the valid transaction');
+  assert.match(await page.textContent('.book-import-result'), /Realized P\/L[\s\S]*Unrealized P\/L[\s\S]*Cash in this book/,
+    'an import answers with refreshed profit and cash instead of only a ledger acknowledgement');
   await page.locator('.book-import-result button').filter({ hasText: 'Review quarantined rows' }).click();
   assert.match(await page.textContent('.book-import-rejects'), /Line 3[\s\S]*dom-import-bad[\s\S]*quantity must be an integer/,
     'the rejected row keeps its line, transaction reference, and reason');
@@ -3638,6 +3652,13 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await captureSettled('p110-accounting-performance-desktop.png');
 
   await go('#/portfolio/book/settings');
+  assert.equal(await page.getByRole('spinbutton', { name: 'Short-term scenario rate %', exact: true }).count(), 0,
+    'Beginner account settings keep optional tax-rate scenarios out of the critical path');
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForFunction(() => Learn.currentLevel() === 'expert'
+    && document.getElementById('app').getAttribute('data-ready') === 'true');
+  await page.waitForSelector('.portfolio-account-form');
+  await page.getByRole('button', { name: 'Tax scenario (optional)', exact: true }).click();
   assert.match(await page.textContent('.portfolio-account-form'), /Not tax advice/,
     'the tax-rate settings carry the required tax-advice boundary');
   await page.getByRole('spinbutton', { name: 'Short-term scenario rate %', exact: true }).fill('32');
@@ -3658,12 +3679,20 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     await record('dom-tax-loss-open', 'BUY', 'OPEN', 100);
     await record('dom-tax-loss-close', 'SELL', 'CLOSE', 90);
   }, trackedId);
+  await page.evaluate(() => Learn.setLevel('beginner'));
   await go('#/portfolio/book/tax');
   assert.equal(await page.locator('#route-error').count(), 0,
     'the tracked-book tax route renders: ' + await page.textContent('#app'));
   assert.match(await page.textContent('.book-tax-heading'), /Not tax advice/,
     'the tax report carries the required tax-advice boundary before any scenario');
-  assert.match(await page.textContent('#app'), /Tracked tax basis and reconciliation[\s\S]*Tax rules not reviewed for 2026[\s\S]*user-rate scenario is withheld/,
+  assert.equal(await page.getByRole('tab', { name: 'Records & export', exact: true }).getAttribute('aria-selected'), 'true',
+    'Beginner names the surface for its primary records-and-export job');
+  assert.match(await page.textContent('#app'), /Records and tax summary[\s\S]*Tax summary[\s\S]*Short-term gain \/ loss[\s\S]*Long-term gain \/ loss[\s\S]*Interest \+ dividends/,
+    'Beginner receives the compact recorded-book tax summary first');
+  assert.equal(await page.locator('.book-tax-reconciliation').count(), 0,
+    'broker-form and lot machinery stays secondary until requested');
+  await page.getByRole('button', { name: 'Tax detail and lot reconciliation', exact: true }).click();
+  assert.match(await page.textContent('#app'), /Tax rules not reviewed for 2026[\s\S]*user-rate scenario is withheld/,
     'the current provisional year preserves recorded facts while withholding an unreviewed tax scenario');
   assert.equal(await page.locator('.book-tax-sources a').count(), 4,
     'the worksheet exposes the primary tax-rule sources instead of asking users to trust an opaque ruleset');
@@ -3718,7 +3747,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     'the disabled command names the action that restores recording');
   await go('#/portfolio/book/settings');
   await page.getByRole('button', { name: 'Restore account', exact: true }).click();
-  await page.waitForSelector('.book-account-status:has-text("ACTIVE")');
+  await page.waitForSelector('.book-account-status:has-text("Open")');
 
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
@@ -3737,6 +3766,17 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
       await captureSettled('p110-accounting-activity-mobile.png');
     }
     await go('#/portfolio/book/tax');
+    const detailToggle = page.getByRole('button', { name: 'Tax detail and lot reconciliation', exact: true });
+    if (await detailToggle.getAttribute('aria-expanded') === 'true') await detailToggle.click();
+    const summaryGeometry = await page.locator('.book-tax-summary').evaluate(card => {
+      const box = card.getBoundingClientRect();
+      return { left: box.left, right: box.right, body: document.documentElement.scrollWidth, viewport: innerWidth };
+    });
+    assert.ok(summaryGeometry.body <= summaryGeometry.viewport && summaryGeometry.left >= 0
+      && summaryGeometry.right <= summaryGeometry.viewport,
+    width + 'px Beginner tax summary remains fully visible: ' + JSON.stringify(summaryGeometry));
+    if (width === 390) await captureSettled('p110-accounting-tax-mobile.png');
+    await ensureExpanded(detailToggle);
     const taxGeometry = await page.evaluate(() => {
       const card = document.querySelector('.book-tax-reconciliation');
       const box = card.getBoundingClientRect();
@@ -3753,7 +3793,6 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     assert.ok(taxGeometry.cardLeft >= 0 && taxGeometry.cardRight <= taxGeometry.viewport
         && taxGeometry.comparisonOverflow <= 1 && !taxGeometry.controls,
       width + 'px reconciliation card and controls remain fully visible: ' + JSON.stringify(taxGeometry));
-    if (width === 390) await captureSettled('p110-accounting-tax-mobile.png');
   }
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.evaluate(() => Learn.setLevel('expert'));
@@ -5003,16 +5042,13 @@ test('shared editor records exact broker facts in the tracked book without touch
   await page.locator('.book-shared-position-editor .position-terminal').fill(
     '-1 AAPL ' + listed.expiration + ' ' + listed.high + 'P @3.10\n'
       + '+1 AAPL ' + listed.expiration + ' ' + listed.low + 'P @1.35');
-  await page.getByRole('textbox', { name: 'Executed / analyzed at', exact: true }).fill('2026-07-13T12:00');
+  for (const label of ['Record source', 'Price meaning', 'Package net $', 'Fee treatment']) {
+    assert.equal(await page.getByLabel(label, { exact: true }).count(), 0,
+      label + ' is derived rather than asked of a Beginner recording a factual trade');
+  }
+  await page.getByRole('textbox', { name: 'When it happened', exact: true }).fill('2026-07-13T12:00');
   await page.getByRole('spinbutton', { name: 'Total fees $', exact: true }).fill('2.00');
-  await page.getByRole('combobox', { name: 'Record source', exact: true }).selectOption('BROKER');
-  await page.getByRole('textbox', { name: 'Stable broker reference', exact: true }).fill('DOM-SHARED-EDITOR-001');
-  await page.getByRole('combobox', { name: 'Price meaning', exact: true }).selectOption('PROPOSED');
-  await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
-  await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("executed broker facts only")');
-  assert.match(await page.textContent('.book-shared-position-editor .position-editor-result'), /use ANALYZE for a proposal/i,
-    'the Record command refuses a proposed draft before it can reach the factual ledger');
-  await page.getByRole('combobox', { name: 'Price meaning', exact: true }).selectOption('EXECUTED');
+  await page.getByRole('textbox', { name: 'Broker reference', exact: true }).fill('DOM-SHARED-EDITOR-001');
   const analysisResponsePromise = page.waitForResponse(response => response.url().endsWith(
     '/api/portfolio/accounts/' + account.id + '/analyze') && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Analyze this trade', exact: true }).click();
@@ -5027,7 +5063,7 @@ test('shared editor records exact broker facts in the tracked book without touch
     'tracked Analyze never nets a Practice impact into the Real account');
   assert.ok(Number.isFinite(trackedAnalysis.evaluation.participation.localParticipationBps),
     'tracked Analyze returns the same participation metric as a proposed Plan trade');
-  assert.match(await page.textContent('.book-shared-position-editor .position-editor-result'), /demo market/i,
+  assert.match(await page.textContent('.book-shared-position-editor .position-editor-result'), /demo evidence/i,
     'the account and actual evidence lane are visible beside the analysis');
   assert.match(await page.textContent('.book-shared-position-editor .position-editor-result'),
     /Portfolio impact[\s\S]*Recorded at broker impact[\s\S]*Practice[\s\S]*No Practice destination/i,
@@ -5044,6 +5080,11 @@ test('shared editor records exact broker facts in the tracked book without touch
     '/api/portfolio/accounts/' + account.id + '/transactions') && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
   const response = await createResponse;
+  const recordedRequest = response.request().postDataJSON();
+  assert.equal(recordedRequest.fillNature, 'EXECUTED', 'Record fixes the factual price meaning internally');
+  assert.equal(recordedRequest.source, 'BROKER', 'a stable broker reference derives broker provenance');
+  assert.equal(recordedRequest.cashAmountCents, 17300,
+    'the exact $175 package credit less $2 fees is derived from the two leg fills');
   const responseText = await response.text();
   assert.equal(response.status(), 201, 'tracked broker package was refused: ' + responseText);
   await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("Recorded in")');
