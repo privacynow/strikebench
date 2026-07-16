@@ -348,7 +348,10 @@ test('live: Plan Decide places and Manage unwinds a paper trade at real marks', 
   await page.click('#refresh-btn');
   await page.waitForSelector('text=Marks history', { timeout: 30000 });
   await page.click('#unwind-btn');
-  await page.waitForSelector('[role="dialog"]');
+  await page.waitForSelector('#close-transformation-preview');
+  assert.match(await page.textContent('#close-transformation-preview'),
+    /Cash \/ no position.*Closing cash flow.*Final position P\/L/s,
+    'the observed close uses the same reviewed before/after transformation contract');
   await page.getByRole('button', { name: 'Close position' }).click();
   await page.waitForSelector('#plan-stage-manage-review .plan-review-results', { timeout: 60000 });
   assertClean('ticket-lifecycle');

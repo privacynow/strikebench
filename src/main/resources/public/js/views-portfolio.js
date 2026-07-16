@@ -15,6 +15,71 @@
   var guideBlock = window.ViewPlan.guideBlock,
       planMarketLabel = window.ViewPlan.marketLabel;
 
+  function practiceTransformationRequest(trade, plan, action, previewToken) {
+    var request = {
+      source: 'PRACTICE_TRADE', sourceId: trade.id, action: action
+    };
+    if (plan) {
+      request.planId = plan.id;
+      request.expectedPlanVersion = plan.version;
+    }
+    if (previewToken) request.previewToken = previewToken;
+    return request;
+  }
+
+  function transformationState(label, identity, state) {
+    return el('div', { class: 'position-transformation-state' },
+      el('span', { class: 'eyebrow' }, label),
+      el('strong', {}, identity && identity.label ? identity.label : state),
+      identity && identity.summary ? el('span', { class: 'muted small' }, identity.summary) : null);
+  }
+
+  function transformationFact(label, value, valueClass) {
+    return el('div', { class: 'position-transformation-fact' },
+      el('span', { class: 'muted small' }, label),
+      el('strong', { class: valueClass || '' }, value));
+  }
+
+  function closeTransformationBody(preview) {
+    var change = preview.transformation;
+    var beforeRisk = change.beforeRisk || {};
+    var afterRisk = change.afterRisk || { maxLossCents: 0, reserveCents: 0 };
+    return el('div', { id: 'close-transformation-preview' },
+      el('div', { class: 'position-transformation-route', 'aria-label': 'Position before and after closing' },
+        transformationState('Before', change.beforeIdentity, 'Open position'),
+        el('span', { class: 'position-transformation-arrow', 'aria-hidden': 'true' }, '→'),
+        transformationState('After', change.afterIdentity, 'Cash / no position')),
+      el('div', { class: 'position-transformation-facts' },
+        transformationFact('Closing cash flow', fmtMoney(preview.closingCashCents, { plus: true })),
+        transformationFact('Close fees', fmtMoney(preview.closingFeesCents)),
+        transformationFact('Final position P/L', fmtMoney(change.realizedClosingCents, { plus: true }),
+          Number(change.realizedClosingCents) >= 0 ? 'gain' : 'loss'),
+        transformationFact('Broker reserve released', fmtMoney(beforeRisk.reserveCents || 0)),
+        transformationFact('Theoretical max loss open now', fmtMoney(beforeRisk.maxLossCents)),
+        transformationFact('Theoretical max loss after', fmtMoney(afterRisk.maxLossCents || 0))),
+      change.warnings && change.warnings.length
+        ? alertBox('warn', 'Review what changes', change.warnings) : null,
+      el('p', { class: 'muted small position-transformation-note' },
+        'Closing cash flow is not profit. Final position P/L includes the opening premium, opening fees, executable closing prices, and close fees.'));
+  }
+
+  async function openCloseTransformation(trade, managedPlan, button) {
+    var request = practiceTransformationRequest(trade, managedPlan, 'CLOSE');
+    var preview = await visibleCommand(button, function () {
+      return API.post('/api/position-transformations/preview', request);
+    }, 'The current position could not be priced for closing.');
+    if (!preview) return;
+    UI.confirmModal('Close this position?', closeTransformationBody(preview), 'Close position', async function () {
+      var applied = await API.post('/api/position-transformations/apply',
+        practiceTransformationRequest(trade, managedPlan, 'CLOSE', preview.previewToken));
+      if (managedPlan && applied.plan) {
+        await PlanStore.focus(applied.plan, 'MANAGE_REVIEW');
+      } else {
+        await App.render();
+      }
+    });
+  }
+
   // ---- Shared position controls ----
 
   function stockOrderModal(side, symbol, maxShares) {
@@ -1983,25 +2048,8 @@
             }
           }, 'Refresh marks'),
           el('button', {
-            class: 'btn', id: 'unwind-btn', onclick: function () {
-              var est = d.current && d.current.closeCostCents !== null && d.current.closeCostCents !== undefined
-                ? 'Closing now brings ' + fmtMoney(d.current.closeCostCents, { plus: true }) + ' before close fees. '
-                  + 'This uses executable closing sides: sell longs at bid and buy shorts at ask. '
-                  + 'The header P/L uses those same closing sides and also includes the opening premium and opening fees, so it is not the same number as this close cash flow. ' : '';
-              UI.confirmModal('Close (unwind) this trade?',
-                el('div', {},
-                  el('p', {}, est + 'The broker reserve for this trade is released and the result becomes final.'),
-                  explain('Unwinding = doing the opposite of every leg at current prices.')),
-                'Close position',
-                async function () {
-                  if (managedPlan) {
-                    var out = await PlanStore.manage(managedPlan, 'unwind', { confirm: true });
-                    await PlanStore.focus(out.plan, 'MANAGE_REVIEW');
-                  } else {
-                    await API.post('/api/trades/' + id + '/unwind', { confirm: true });
-                    App.render();
-                  }
-                });
+            class: 'btn', id: 'unwind-btn', onclick: function (ev) {
+              openCloseTransformation(t, managedPlan, ev.currentTarget);
             }
           }, 'Unwind…', el('span', { class: 'btn-sub' }, 'close now at market')),
           el('button', {
